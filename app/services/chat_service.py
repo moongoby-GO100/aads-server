@@ -5173,6 +5173,7 @@ _anthropic = get_client()
 # ─── Workspace CRUD ───────────────────────────────────────────────────────────
 
 _CORE_ROLE_ORDER = ("CEO", "CTO", "PM", "Developer", "QA", "Ops")
+_CUSTOMER_ROLE = "GeneralAssistant"
 
 
 def _workspace_project_key(workspace_name: str) -> str:
@@ -5208,12 +5209,20 @@ async def list_workspace_roles(workspace_id: str, tenant_id: Optional[str] = Non
     tenant_uuid = _require_tenant_uuid(tenant_id, "list_workspace_roles")
     async with get_pool().acquire() as conn:
         ws_row = await conn.fetchrow(
-            "SELECT name FROM chat_workspaces WHERE id = $1 AND tenant_id = $2",
+            """
+            SELECT w.name, w.settings, t.kind AS tenant_kind
+              FROM chat_workspaces w
+              JOIN tenants t ON t.id = w.tenant_id
+             WHERE w.id = $1
+               AND w.tenant_id = $2
+            """,
             uuid.UUID(workspace_id),
             tenant_uuid,
         )
         if not ws_row:
             return []
+        if str(ws_row["tenant_kind"] or "").lower() == "customer":
+            return [{"value": _CUSTOMER_ROLE, "role": _CUSTOMER_ROLE, "label": "General Assistant / 일반 작업 도우미", "display_name_ko": "일반 작업 도우미"}]
 
         project_key = _workspace_project_key(ws_row["name"] or "")
         table_exists = await conn.fetchval("SELECT to_regclass('public.role_profiles')")
@@ -5398,18 +5407,21 @@ async def create_session(data: Dict[str, Any], tenant_id: Optional[str] = None) 
     tenant_uuid = _require_tenant_uuid(tenant_id, "create_session")
     async with get_pool().acquire() as conn:
         ws_id = uuid.UUID(str(data["workspace_id"]))
-        workspace_tenant_id = await conn.fetchval(
+        workspace_row = await conn.fetchrow(
             """
-            SELECT tenant_id
-              FROM chat_workspaces
-             WHERE id = $1
-               AND tenant_id = $2
+            SELECT w.tenant_id, w.settings, t.kind AS tenant_kind
+              FROM chat_workspaces w
+              JOIN tenants t ON t.id = w.tenant_id
+             WHERE w.id = $1
+               AND w.tenant_id = $2
             """,
             ws_id,
             tenant_uuid,
         )
-        if not workspace_tenant_id:
+        if not workspace_row:
             raise ValueError("workspace_not_found_for_tenant")
+        workspace_tenant_id = workspace_row["tenant_id"]
+        workspace_is_customer = str(workspace_row["tenant_kind"] or "").lower() == "customer"
         title = data.get("title")
 
         # 버전 관리형 세션명 자동 생성
@@ -5419,19 +5431,11 @@ async def create_session(data: Dict[str, Any], tenant_id: Optional[str] = None) 
         current_model = data.get("current_model")
         role_key = (data.get("role_key") or "").strip() or None
         if not role_key:
-            ws_settings_row = await conn.fetchrow(
-                """
-                SELECT settings
-                  FROM chat_workspaces
-                 WHERE id = $1
-                   AND tenant_id = $2
-                """,
-                ws_id,
-                workspace_tenant_id,
-            )
-            ws_settings = _row_to_dict(ws_settings_row).get("settings") if ws_settings_row else {}
+            ws_settings = _row_to_dict(workspace_row).get("settings") if workspace_row else {}
             if isinstance(ws_settings, dict):
                 role_key = str(ws_settings.get("default_role_key") or "").strip() or None
+        if workspace_is_customer:
+            role_key = _CUSTOMER_ROLE
         row = await conn.fetchrow(
             """
             INSERT INTO chat_sessions (tenant_id, workspace_id, title, current_model, role_key)
@@ -7440,7 +7444,11 @@ async def send_message_stream(
         _mentioned_projects: list = []
         if _mention_matches:
             _mentioned_projects = list(dict.fromkeys(p.upper() for p in _mention_matches))
-            logger.info(f"[MENTION] session={session_id[:8]} projects={_mentioned_projects}")
+            if str((tenant_scope or {}).get("kind") or "").lower() == "customer":
+                logger.info(f"[MENTION] customer tenant ignored internal project mentions session={session_id[:8]} projects={_mentioned_projects}")
+                _mentioned_projects = []
+            else:
+                logger.info(f"[MENTION] session={session_id[:8]} projects={_mentioned_projects}")
 
         # Persist only the user's visible input. Reply/resume context may be
         # injected into the LLM prompt below, but must not pollute chat history.
@@ -7693,8 +7701,10 @@ async def send_message_stream(
             if _customer_scope_block:
                 system_prompt = system_prompt + _customer_scope_block
 
-            # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입
-            if _mentioned_projects:
+            # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입.
+            # Customer tenants must not be steered into CEO/internal projects.
+            _is_customer_tenant = str((tenant_scope or {}).get("kind") or "").lower() == "customer"
+            if _mentioned_projects and not _is_customer_tenant:
                 _mention_desc = {
                     "KIS": "KIS AI 자동매매 시스템 (서버62, /root/kis/)",
                     "GO100": "GO100 백억이 투자분석 플랫폼 (서버211, /root/kis-autotrade-v4/)",

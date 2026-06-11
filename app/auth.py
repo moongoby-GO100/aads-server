@@ -550,7 +550,80 @@ async def create_tenant_for_user(
             )
     out = dict(tenant)
     out["membership"] = dict(membership) if membership else None
+    out["workspace"] = await ensure_default_customer_workspace(
+        tenant_id=str(tenant["tenant_id"]),
+        tenant_name=str(tenant["name"]),
+    )
     return out
+
+
+async def ensure_default_customer_workspace(*, tenant_id: str, tenant_name: str = "") -> Optional[dict]:
+    """Ensure a customer tenant has an isolated chat workspace.
+
+    New SaaS tenants only had tenant_memberships, so the chat UI had no workspace
+    to create sessions under. Keep this helper in auth.py to avoid importing the
+    large chat service during signup/onboarding.
+    """
+    await require_saas_schema_ready()
+    tenant_uuid = str(tenant_id or "").strip()
+    if not tenant_uuid:
+        return None
+    display_name = str(tenant_name or "내 작업공간").strip() or "내 작업공간"
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        tenant = await conn.fetchrow(
+            """
+            SELECT id::text AS tenant_id, name, kind
+              FROM tenants
+             WHERE id = $1::uuid
+               AND status = 'active'
+               AND deleted_at IS NULL
+            """,
+            tenant_uuid,
+        )
+        if not tenant or str(tenant["kind"]).lower() != "customer":
+            return None
+        existing = await conn.fetchrow(
+            """
+            SELECT id::text, name
+              FROM chat_workspaces
+             WHERE tenant_id = $1::uuid
+             ORDER BY created_at ASC
+             LIMIT 1
+            """,
+            tenant_uuid,
+        )
+        if existing:
+            return dict(existing)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO chat_workspaces (tenant_id, name, system_prompt, files, settings, color, icon)
+            VALUES (
+                $1::uuid,
+                $2,
+                $3,
+                '[]'::jsonb,
+                jsonb_build_object(
+                    'project_key', 'CUSTOMER',
+                    'default_role_key', 'GeneralAssistant',
+                    'allowed_roles', ARRAY['GeneralAssistant']::text[],
+                    'role_routing_enabled', false,
+                    'customer_default', true
+                ),
+                '#2563EB',
+                '💬'
+            )
+            RETURNING id::text, name
+            """,
+            tenant_uuid,
+            f"[WORK] {display_name}",
+            (
+                "이 워크스페이스는 고객 tenant 전용 작업공간입니다. "
+                "답변은 이 조직의 프로젝트, 팀, 산출물, 사용량 범위로 제한하고 "
+                "AADS 내부 운영/CEO 프로젝트를 기본 안내하지 마세요."
+            ),
+        )
+    return dict(row) if row else None
 
 
 async def finalize_customer_tenant_onboarding(
@@ -620,6 +693,10 @@ async def finalize_customer_tenant_onboarding(
         "role": row["role"],
         "status": row["membership_status"],
     }
+    out["workspace"] = await ensure_default_customer_workspace(
+        tenant_id=str(tenant["tenant_id"]),
+        tenant_name=str(tenant["name"]),
+    )
     return out
 
 
@@ -664,7 +741,12 @@ async def ensure_customer_tenant_for_user(
                 existing["tenant_id"],
                 user_id,
             )
-            return dict(existing)
+            out = dict(existing)
+            out["workspace"] = await ensure_default_customer_workspace(
+                tenant_id=str(existing["tenant_id"]),
+                tenant_name=str(existing["name"]),
+            )
+            return out
 
     workspace_name = (name and f"{name} Workspace") or f"{str(email).split('@')[0]} Workspace"
     return await create_tenant_for_user(
@@ -926,10 +1008,15 @@ async def accept_tenant_invite(
                 "SELECT id, email, name FROM saas_users WHERE id = $1",
                 user_id,
             )
+    workspace = await ensure_default_customer_workspace(
+        tenant_id=str(invite["tenant_id"]),
+        tenant_name="팀 작업공간",
+    )
     return {
         "user": dict(user_row) if user_row else {"id": user_id, "email": email, "name": name},
         "tenant_id": invite["tenant_id"],
         "membership": dict(membership) if membership else None,
+        "workspace": workspace,
     }
 
 
