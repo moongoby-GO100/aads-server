@@ -545,21 +545,17 @@ async def _generate_project_insights(conn, project: str) -> int:
 - 마크다운 코드블록 없이 JSON만 반환"""
 
     try:
-        from app.core.auth_provider import has_valid_token
-        if not has_valid_token():
-            logger.warning("sleep_agent_no_token", project=project, hint="R-AUTH: no valid token")
-            return 0
+        from app.core.anthropic_client import call_llm_with_fallback
 
-        from app.core.anthropic_client import get_client
-        client = get_client()
-
-        response = await client.messages.create(
+        text = await call_llm_with_fallback(
+            prompt,
             model=_HAIKU_MODEL,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
         )
-
-        text = response.content[0].text.strip()
+        if not text:
+            logger.warning("sleep_agent_no_llm_response", project=project)
+            return 0
+        text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
         if text.endswith("```"):
@@ -691,21 +687,14 @@ async def _analyze_quality_and_optimize(conn) -> int:
 교정 지시만 반환하세요 (설명 불필요)."""
 
         try:
-            from app.core.auth_provider import has_valid_token as _hvt
-            if not _hvt():
-                logger.warning("sleep_agent_c2_no_token", workspace=workspace)
-                continue
+            from app.core.anthropic_client import call_llm_with_fallback
 
-            from app.core.anthropic_client import get_client
-            client = get_client()
-
-            response = await client.messages.create(
+            instruction = await call_llm_with_fallback(
+                prompt,
                 model=_HAIKU_MODEL,
                 max_tokens=256,
-                messages=[{"role": "user", "content": prompt}],
             )
-
-            instruction = response.content[0].text.strip()
+            instruction = (instruction or "").strip()
             if not instruction:
                 continue
 
