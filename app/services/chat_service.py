@@ -1554,6 +1554,138 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
     )
 
 
+def _clean_assistant_final_content(content: str) -> str:
+    clean_content = content or ""
+    if clean_content:
+        for tag in ("function_calls", "function_response", "function_results", "tool_results", "tool_call", "tool_response"):
+            clean_content = re.sub(rf'<{tag}>.*?</{tag}>', '', clean_content, flags=re.DOTALL)
+            clean_content = re.sub(rf'<{tag}>.*', '', clean_content, flags=re.DOTALL)
+        clean_content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', clean_content, flags=re.DOTALL)
+        clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
+        clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
+        clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
+        clean_content = clean_content.strip()
+    return clean_content
+
+
+def _format_recent_user_context(raw_messages: Optional[List[Dict[str, Any]]]) -> str:
+    if not raw_messages:
+        return ""
+    user_items: List[str] = []
+    for item in raw_messages[-8:]:
+        if item.get("role") != "user":
+            continue
+        value = item.get("content") or ""
+        if isinstance(value, list):
+            value = "\n".join(
+                str(part.get("text") or part.get("content") or "")
+                for part in value
+                if isinstance(part, dict)
+            )
+        text = str(value).strip()
+        if text:
+            user_items.append(text[-800:])
+    return "\n\n".join(user_items[-3:])
+
+
+def _customer_tenant_prompt_block(tenant_scope: Optional[Dict[str, Any]]) -> str:
+    """Restrict customer tenants to their own workspace even if global AADS assets are present."""
+    if not tenant_scope:
+        return ""
+    if str(tenant_scope.get("kind") or "").lower() != "customer":
+        return ""
+    tenant_name = str(tenant_scope.get("name") or "고객 작업공간").strip()
+    tenant_slug = str(tenant_scope.get("slug") or "").strip()
+    return (
+        "\n\n<customer_tenant_scope>\n"
+        f"tenant_name={tenant_name}\n"
+        f"tenant_slug={tenant_slug}\n"
+        "이 사용자는 AADS 내부 운영자/CEO가 아니라 고객 tenant 사용자다.\n"
+        "답변은 반드시 현재 tenant의 프로젝트, 팀원, 사용량, 아티팩트, 아젠다 범위로 제한한다.\n"
+        "AADS 내부 프로젝트(AADS/KIS/GO100/SF/NTV2/NAS), 서버 운영, CEO 의사결정, 내부 러너/배포 현황은 기본 안내로 제공하지 않는다.\n"
+        "사용자가 '프로젝트'라고 말하면 내부 6개 프로젝트가 아니라 이 tenant의 프로젝트를 의미한다.\n"
+        "사용법 문의에는 가입 후 첫 사용 흐름, 채팅 작성법, 아티팩트 확인, 팀원 초대, 권한 역할, 사용량 확인을 안내한다.\n"
+        "</customer_tenant_scope>"
+    )
+
+
+async def _rewrite_incomplete_final_report_once(
+    content: str,
+    *,
+    session_id: uuid.UUID,
+    execution_id: Optional[uuid.UUID],
+    raw_messages: Optional[List[Dict[str, Any]]],
+    tools_called: List[Dict[str, Any]],
+) -> str:
+    clean_content = _clean_assistant_final_content(content)
+    if (
+        not _looks_like_incomplete_progress_tail(clean_content)
+        or not _has_meaningful_partial_content(clean_content)
+    ):
+        return clean_content
+
+    recent_user_context = _format_recent_user_context(raw_messages)
+    tool_names = [
+        str(item.get("name") or item.get("tool") or item.get("tool_name") or item.get("type") or "")
+        for item in tools_called[-20:]
+        if isinstance(item, dict)
+    ]
+    prompt = (
+        "아래 AI 응답은 최종 저장 직전 진행형 문장으로 끝나 완료보고로 인정되지 않았습니다.\n"
+        "새로운 사실을 만들지 말고, 이미 작성된 내용과 도구 실행 맥락만 사용해 CEO에게 보낼 최종 보고로 1회 재작성하세요.\n"
+        "반드시 한국어 존댓말로 쓰고, 마지막 문장은 다음 작업 예고가 아니라 현재 완료/미완료 상태로 끝내세요.\n"
+        "가능하면 `수행 내역`, `검증`, `미완료/주의`, `다음 단계`를 짧게 포함하세요.\n\n"
+        f"[최근 사용자 지시]\n{recent_user_context or '(없음)'}\n\n"
+        f"[최근 도구]\n{', '.join(tool_names) or '(없음)'}\n\n"
+        f"[미완성 응답]\n{clean_content[-6000:]}"
+    )
+    try:
+        from app.core.anthropic_client import call_llm_with_fallback
+
+        timeout_sec = float(os.getenv("AADS_FINAL_REPORT_REWRITE_TIMEOUT_SEC", "35"))
+        rewritten = await _heartbeat_asyncio.wait_for(
+            call_llm_with_fallback(
+                prompt,
+                model=os.getenv("AADS_FINAL_REPORT_REWRITE_MODEL", "qwen-turbo"),
+                max_tokens=int(os.getenv("AADS_FINAL_REPORT_REWRITE_MAX_TOKENS", "1800")),
+                system=(
+                    "You rewrite incomplete operational chat responses into concise final reports. "
+                    "Do not invent verification, commits, deployments, or measurements."
+                ),
+            ),
+            timeout=timeout_sec,
+        ) or ""
+    except Exception as exc:
+        logger.warning(
+            "final_report_rewrite_failed session=%s execution=%s error=%s",
+            str(session_id)[:8],
+            str(execution_id or "")[:8],
+            str(exc)[:160],
+        )
+        return clean_content
+
+    rewritten_clean = _clean_assistant_final_content(rewritten)
+    if not rewritten_clean or _looks_like_incomplete_progress_tail(rewritten_clean):
+        logger.warning(
+            "final_report_rewrite_rejected session=%s execution=%s original_len=%s rewritten_len=%s tail=%r",
+            str(session_id)[:8],
+            str(execution_id or "")[:8],
+            len(clean_content),
+            len(rewritten_clean or ""),
+            (rewritten_clean or "")[-180:],
+        )
+        return clean_content
+
+    logger.info(
+        "final_report_rewrite_applied session=%s execution=%s original_len=%s rewritten_len=%s",
+        str(session_id)[:8],
+        str(execution_id or "")[:8],
+        len(clean_content),
+        len(rewritten_clean),
+    )
+    return rewritten_clean
+
+
 def _get_live_streaming_session_ids() -> set[str]:
     active_sessions = {
         sid for sid, task in list(_active_bg_tasks.items())
@@ -6285,6 +6417,13 @@ async def _save_and_update_session(
     if _execution_uuid is None:
         _execution_id_str = _current_execution_id.get(None)
         _execution_uuid = uuid.UUID(_execution_id_str) if _execution_id_str else None
+    content = await _rewrite_incomplete_final_report_once(
+        content,
+        session_id=sid,
+        execution_id=_execution_uuid,
+        raw_messages=raw_messages,
+        tools_called=normalized_tools_called,
+    )
     async with get_pool().acquire() as conn:
         async with conn.transaction():
             content, _todo_gate = await _apply_todo_completion_gate(
@@ -6381,16 +6520,7 @@ async def _save_and_update_session(
             if placeholder_id:
                 # placeholder → 최종 응답으로 전환 (같은 row, atomic)
                 # content 정리 (XML 태그, placeholder 마커 제거)
-                clean_content = content
-                if clean_content:
-                    for tag in ("function_calls", "function_response", "function_results", "tool_results", "tool_call", "tool_response"):
-                        clean_content = re.sub(rf'<{tag}>.*?</{tag}>', '', clean_content, flags=re.DOTALL)
-                        clean_content = re.sub(rf'<{tag}>.*', '', clean_content, flags=re.DOTALL)
-                    clean_content = re.sub(r'<invoke\s+name=[^>]*>.*?</invoke>', '', clean_content, flags=re.DOTALL)
-                    clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
-                    clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
-                    clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
-                    clean_content = clean_content.strip()
+                clean_content = _clean_assistant_final_content(content)
                 if _execution_uuid and _looks_like_incomplete_progress_tail(clean_content):
                     logger.warning(
                         "final_save_blocked_incomplete_progress_tail session=%s execution=%s content_len=%s tool_count=%s tail=%r",

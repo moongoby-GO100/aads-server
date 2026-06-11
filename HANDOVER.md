@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-11 09:35 KST) - Chat final-save incomplete tail rewrite guard
+- 배경: CEO가 `final_save_blocked_incomplete_progress_tail` 전에 “최종보고 재작성 1회 시도 → 실패 시 interrupted_partial 보존” P0 패치 적용을 지시했다.
+- 조치:
+  - `app/services/chat_service.py`: 최종 저장 진입 직후 미완성 진행문 꼬리를 감지하면 기존 `call_llm_with_fallback()`으로 최종보고 재작성 1회를 시도한다.
+  - 재작성 호출은 `AADS_FINAL_REPORT_REWRITE_TIMEOUT_SEC` 기본 35초로 제한하고, 기본 모델은 `AADS_FINAL_REPORT_REWRITE_MODEL=qwen-turbo`, 최대 토큰은 `AADS_FINAL_REPORT_REWRITE_MAX_TOKENS=1800`로 조정 가능하게 했다.
+  - 재작성 결과가 비어 있거나 여전히 진행형 꼬리이면 기존 `completion_guard_incomplete_progress_tail:*` 경로가 그대로 실행되어 `interrupted_partial`로 보존된다.
+  - 최종 assistant content 정리 로직을 `_clean_assistant_final_content()`로 분리해 placeholder promote 경로에서 재사용한다.
+  - `tests/unit/test_chat_service.py`: 헬퍼 단위 테스트에 더해 실제 `_save_and_update_session()` 저장 경로에서 재작성 성공 시 최종 저장으로 승격되고, 재작성 실패 시 `completion_guard_incomplete_progress_tail:final_save`로 보존되는 회귀 테스트를 추가했다.
+- 검증:
+  - `JWT_SECRET_KEY=test-secret-key pytest tests/unit/test_chat_service.py -q` 결과 51 passed, 1 warning.
+  - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 통과.
+- 상태:
+  - 코드/테스트/HANDOVER 수정 완료.
+  - 커밋/푸시/배포는 아직 수행하지 않았다.
+  - 작업트리에는 이번 변경 외 기존 unrelated 변경이 남아 있어 선별 커밋 필요.
+
 ## 현재 진행 상태 (2026-06-10 19:01 KST) - NewTalk V1 admin AADS chat widget E2E fix
 - 배경: CEO가 `https://pick.newtalk.kr/root/members` 및 전체 V1 관리자 페이지에 AADS 채팅 아이콘이 반영되지 않는 문제를 지적했고, 최종 완료보고 조건 재충족을 지시했다.
 - 실측 원인:

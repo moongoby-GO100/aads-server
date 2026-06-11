@@ -33,6 +33,14 @@ class _Pool:
         return _AcquireCtx(self._conn)
 
 
+class _TransactionCtx:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 @pytest.mark.asyncio
 async def test_get_last_html_artifact():
     session_id = str(uuid.uuid4())
@@ -639,6 +647,148 @@ def test_final_report_tail_is_completion_candidate():
         "검증: pytest 통과.\n"
         "미완료: 브라우저 E2E는 미실행입니다."
     )
+
+
+@pytest.mark.asyncio
+async def test_rewrite_incomplete_final_report_once_accepts_complete_rewrite():
+    session_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    incomplete = "핵심 파일을 확인하고 DB 상태를 추가 조회하겠습니다."
+    rewritten = (
+        "수행 내역: 핵심 파일 확인과 DB 상태 점검을 진행했습니다.\n"
+        "검증: 단위 테스트는 아직 실행하지 않았습니다.\n"
+        "미완료/주의: 배포는 수행하지 않았습니다.\n"
+        "다음 단계: 테스트 실행 후 배포 여부를 판단하면 됩니다."
+    )
+
+    with patch(
+        "app.core.anthropic_client.call_llm_with_fallback",
+        new=AsyncMock(return_value=rewritten),
+    ):
+        result = await chat_service._rewrite_incomplete_final_report_once(
+            incomplete,
+            session_id=session_id,
+            execution_id=execution_id,
+            raw_messages=[{"role": "user", "content": "원인 파악하고 보고해"}],
+            tools_called=[{"name": "run_remote_command"}],
+        )
+
+    assert result == rewritten
+    assert not chat_service._looks_like_incomplete_progress_tail(result)
+
+
+@pytest.mark.asyncio
+async def test_rewrite_incomplete_final_report_once_keeps_original_when_rewrite_still_incomplete():
+    session_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    incomplete = "핵심 파일을 확인하고 DB 상태를 추가 조회하겠습니다."
+
+    with patch(
+        "app.core.anthropic_client.call_llm_with_fallback",
+        new=AsyncMock(return_value="이제 추가 로그를 확인하겠습니다."),
+    ):
+        result = await chat_service._rewrite_incomplete_final_report_once(
+            incomplete,
+            session_id=session_id,
+            execution_id=execution_id,
+            raw_messages=[],
+            tools_called=[],
+        )
+
+    assert result == incomplete
+    assert chat_service._looks_like_incomplete_progress_tail(result)
+
+
+@pytest.mark.asyncio
+async def test_save_and_update_session_rewrites_incomplete_tail_before_final_save_guard():
+    session_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    placeholder_id = uuid.uuid4()
+    incomplete = "핵심 파일을 확인하고 DB 상태를 추가 조회하겠습니다."
+    rewritten = (
+        "수행 내역: 핵심 파일 확인과 DB 상태 점검을 진행했습니다.\n"
+        "검증: 단위 테스트는 이 테스트에서 저장 경로까지 확인했습니다.\n"
+        "미완료/주의: 배포는 수행하지 않았습니다."
+    )
+    conn = AsyncMock()
+    conn.transaction = lambda: _TransactionCtx()
+    conn.fetchrow = AsyncMock(return_value={"status": "running", "completed_at": None})
+    conn.fetchval = AsyncMock(return_value=placeholder_id)
+    conn.execute = AsyncMock()
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch(
+            "app.services.chat_service._rewrite_incomplete_final_report_once",
+            new=AsyncMock(return_value=rewritten),
+        ) as rewrite,
+        patch(
+            "app.services.chat_service._apply_todo_completion_gate",
+            new=AsyncMock(return_value=(rewritten, {"all_completed": True})),
+        ),
+        patch("app.services.chat_service._execution_has_newer_user_message", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service._archive_interrupted_siblings_for_completed_execution", new=AsyncMock()),
+        patch("app.services.chat_service._mark_execution_interrupted", new=AsyncMock()) as mark_interrupted,
+        patch("app.services.chat_service._extract_artifacts", new=AsyncMock()),
+    ):
+        await chat_service._save_and_update_session(
+            session_id,
+            incomplete,
+            execution_id=execution_id,
+            raw_messages=[{"role": "user", "content": "원인 파악하고 보고해"}],
+            model_used="gpt-5.5",
+            tools_called=[{"name": "run_remote_command"}],
+        )
+
+    rewrite.assert_awaited_once()
+    mark_interrupted.assert_not_awaited()
+    promoted = [
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_messages" in call.args[0] and "SET content = $1" in call.args[0]
+    ]
+    assert promoted
+    assert promoted[0].args[1] == rewritten
+
+
+@pytest.mark.asyncio
+async def test_save_and_update_session_preserves_interrupted_partial_when_rewrite_fails():
+    session_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    placeholder_id = uuid.uuid4()
+    incomplete = "핵심 파일을 확인하고 DB 상태를 추가 조회하겠습니다."
+    conn = AsyncMock()
+    conn.transaction = lambda: _TransactionCtx()
+    conn.fetchrow = AsyncMock(return_value={"status": "running", "completed_at": None})
+    conn.fetchval = AsyncMock(return_value=placeholder_id)
+    conn.execute = AsyncMock()
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch(
+            "app.services.chat_service._rewrite_incomplete_final_report_once",
+            new=AsyncMock(return_value=incomplete),
+        ),
+        patch(
+            "app.services.chat_service._apply_todo_completion_gate",
+            new=AsyncMock(return_value=(incomplete, {"all_completed": True})),
+        ),
+        patch("app.services.chat_service._execution_has_newer_user_message", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service._mark_execution_interrupted", new=AsyncMock()) as mark_interrupted,
+        patch("app.services.chat_service._extract_artifacts", new=AsyncMock()),
+    ):
+        await chat_service._save_and_update_session(
+            session_id,
+            incomplete,
+            execution_id=execution_id,
+            raw_messages=[{"role": "user", "content": "원인 파악하고 보고해"}],
+            model_used="gpt-5.5",
+            tools_called=[{"name": "run_remote_command"}],
+        )
+
+    mark_interrupted.assert_awaited_once()
+    assert mark_interrupted.await_args.args[3] == "completion_guard_incomplete_progress_tail:final_save"
+    assert mark_interrupted.await_args.kwargs["partial_content"] == incomplete
+    assert str(mark_interrupted.await_args.kwargs["placeholder_id"]) == str(placeholder_id)
 
 
 @pytest.mark.asyncio
