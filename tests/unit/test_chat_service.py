@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import uuid
@@ -638,6 +639,38 @@ def test_final_report_tail_is_completion_candidate():
         "검증: pytest 통과.\n"
         "미완료: 브라우저 E2E는 미실행입니다."
     )
+
+
+@pytest.mark.asyncio
+async def test_mark_execution_interrupted_records_quality_details():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+    placeholder_id = str(uuid.uuid4())
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+
+    with patch(
+        "app.services.chat_service._schedule_interrupted_auto_resume",
+        new=AsyncMock(return_value=False),
+    ):
+        await chat_service._mark_execution_interrupted(
+            conn,
+            session_id,
+            execution_id,
+            "completion_guard_incomplete_progress_tail:final_save",
+            partial_content="DB를 추가 확인합니다.\n\n⏳ _생성 중..._",
+            placeholder_id=placeholder_id,
+        )
+
+    execution_update = next(
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_turn_executions" in call.args[0]
+    )
+    assert "quality_details" in execution_update.args[0]
+    details = json.loads(execution_update.args[5])
+    assert details["interruption_reason_group"] == "completion_guard_incomplete_progress_tail"
+    assert details["interrupted_partial_len"] == len("DB를 추가 확인합니다.")
+    assert details["interrupted_has_placeholder"] is True
 
 
 @pytest.mark.asyncio

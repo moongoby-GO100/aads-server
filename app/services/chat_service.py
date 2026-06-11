@@ -2204,6 +2204,14 @@ async def _mark_execution_interrupted(
         )
 
     clean_partial = _strip_streaming_progress_markers(partial_content)
+    interruption_quality_details = {
+        "interruption_reason": reason[:500],
+        "interruption_reason_group": reason.split(":", 1)[0][:160],
+        "interrupted_partial_len": len(clean_partial or ""),
+        "interrupted_has_placeholder": bool(pid),
+        "interrupted_delete_empty_placeholder": bool(delete_empty_placeholder),
+        "interrupted_superseded": bool(is_superseded_cancel),
+    }
     final_content = clean_partial
     assistant_message_id = pid
     if pid:
@@ -2337,6 +2345,7 @@ async def _mark_execution_interrupted(
             END,
             status = 'interrupted',
             error_message = $3,
+            quality_details = COALESCE(quality_details, '{}'::jsonb) || $5::jsonb,
             completed_at = COALESCE(completed_at, NOW()),
             updated_at = NOW()
         WHERE id = $1
@@ -2346,6 +2355,7 @@ async def _mark_execution_interrupted(
         assistant_message_id,
         reason[:1000],
         bool(delete_empty_placeholder and assistant_message_id is None),
+        json.dumps(interruption_quality_details, ensure_ascii=False),
     )
     await conn.execute(
         """
