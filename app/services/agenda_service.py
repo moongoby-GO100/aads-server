@@ -98,6 +98,8 @@ class AgendaService:
         source_session_id: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
+        tenant_id: Optional[str] = None,
+        include_global: bool = True,
     ) -> Dict[str, Any]:
         """아젠다 목록 조회 (페이지네이션 포함).
 
@@ -128,6 +130,16 @@ class AgendaService:
         if source_session_id is not None:
             params.append(source_session_id)
             conditions.append(f"source_session_id = ${len(params)}")
+        if tenant_id and not include_global:
+            params.append(tenant_id)
+            conditions.append(
+                "source_session_id IS NOT NULL "
+                "AND EXISTS ("
+                "SELECT 1 FROM chat_sessions s "
+                "WHERE s.id::text = ceo_agenda.source_session_id "
+                f"AND s.tenant_id = ${len(params)}::uuid"
+                ")"
+            )
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         count_query = f"SELECT COUNT(*) FROM ceo_agenda {where_clause}"
@@ -152,7 +164,12 @@ class AgendaService:
             "items": [_row_to_dict(r) for r in rows],
         }
 
-    async def get_agenda(self, agenda_id: int) -> Optional[Dict[str, Any]]:
+    async def get_agenda(
+        self,
+        agenda_id: int,
+        tenant_id: Optional[str] = None,
+        include_global: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         """아젠다 단건 조회.
 
         Args:
@@ -160,9 +177,27 @@ class AgendaService:
         """
         pool = get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM ceo_agenda WHERE id = $1", agenda_id
-            )
+            if tenant_id and not include_global:
+                row = await conn.fetchrow(
+                    """
+                    SELECT *
+                      FROM ceo_agenda ca
+                     WHERE ca.id = $1
+                       AND ca.source_session_id IS NOT NULL
+                       AND EXISTS (
+                           SELECT 1
+                             FROM chat_sessions s
+                            WHERE s.id::text = ca.source_session_id
+                              AND s.tenant_id = $2::uuid
+                       )
+                    """,
+                    agenda_id,
+                    tenant_id,
+                )
+            else:
+                row = await conn.fetchrow(
+                    "SELECT * FROM ceo_agenda WHERE id = $1", agenda_id
+                )
         return _row_to_dict(row) if row else None
 
     async def update_agenda(
@@ -286,11 +321,31 @@ class AgendaService:
     async def list_sessions(
         self,
         project: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        include_global: bool = True,
     ) -> List[str]:
         """아젠다에 연결된 고유 세션 ID 목록 반환."""
         pool = get_pool()
         async with pool.acquire() as conn:
-            if project:
+            if tenant_id and not include_global:
+                params: List[Any] = [tenant_id]
+                project_filter = ""
+                if project:
+                    params.append(project)
+                    project_filter = f"AND ca.project = ${len(params)}"
+                rows = await conn.fetch(
+                    f"""
+                    SELECT DISTINCT ca.source_session_id
+                    FROM ceo_agenda ca
+                    JOIN chat_sessions s ON s.id::text = ca.source_session_id
+                    WHERE ca.source_session_id IS NOT NULL
+                      AND s.tenant_id = $1::uuid
+                      {project_filter}
+                    ORDER BY ca.source_session_id
+                    """,
+                    *params,
+                )
+            elif project:
                 rows = await conn.fetch(
                     """
                     SELECT DISTINCT source_session_id
@@ -316,6 +371,8 @@ class AgendaService:
         keyword: str,
         project: Optional[str] = None,
         limit: int = 20,
+        tenant_id: Optional[str] = None,
+        include_global: bool = True,
     ) -> List[Dict[str, Any]]:
         """title/summary/tags 텍스트 검색.
 
@@ -325,40 +382,37 @@ class AgendaService:
             limit: 최대 결과 수
         """
         pattern = f"%{keyword}%"
+        conditions = [
+            "(title ILIKE $1 OR summary ILIKE $1 "
+            "OR EXISTS (SELECT 1 FROM unnest(tags) AS t(tag) WHERE t.tag ILIKE $1))"
+        ]
+        params: List[Any] = [pattern]
+        if project:
+            params.append(project)
+            conditions.append(f"project = ${len(params)}")
+        if tenant_id and not include_global:
+            params.append(tenant_id)
+            conditions.append(
+                "source_session_id IS NOT NULL "
+                "AND EXISTS ("
+                "SELECT 1 FROM chat_sessions s "
+                "WHERE s.id::text = ceo_agenda.source_session_id "
+                f"AND s.tenant_id = ${len(params)}::uuid"
+                ")"
+            )
+        params.append(limit)
+        where_clause = " AND ".join(conditions)
         pool = get_pool()
         async with pool.acquire() as conn:
-            if project:
-                rows = await conn.fetch(
-                    """
-                    SELECT * FROM ceo_agenda
-                    WHERE project = $1
-                      AND (title ILIKE $2 OR summary ILIKE $2
-                           OR EXISTS (
-                               SELECT 1 FROM unnest(tags) AS t(tag) WHERE t.tag ILIKE $2
-                           ))
-                    ORDER BY created_at DESC
-                    LIMIT $3
-                    """,
-                    project,
-                    pattern,
-                    limit,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    SELECT * FROM ceo_agenda
-                    WHERE
-                        title ILIKE $1
-                        OR summary ILIKE $1
-                        OR EXISTS (
-                            SELECT 1 FROM unnest(tags) AS t(tag) WHERE t.tag ILIKE $1
-                        )
-                    ORDER BY created_at DESC
-                    LIMIT $2
-                    """,
-                    pattern,
-                    limit,
-                )
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM ceo_agenda
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ${len(params)}
+                """,
+                *params,
+            )
         return [_row_to_dict(r) for r in rows]
 
 

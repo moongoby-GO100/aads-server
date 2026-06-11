@@ -5,9 +5,11 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-router = APIRouter()
+from app.auth import require_internal_admin
+
+router = APIRouter(dependencies=[Depends(require_internal_admin)])
 
 
 def _iso(value: Any) -> str | None:

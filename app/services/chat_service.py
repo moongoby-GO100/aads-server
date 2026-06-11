@@ -7169,8 +7169,28 @@ async def send_message_stream(
         from app.services.tool_executor import current_chat_session_id, current_tenant_id, resolve_bound_tenant_id
         current_chat_session_id.set(session_id)
         resolved_tenant_id = tenant_id or await resolve_bound_tenant_id(explicit_session_id=session_id)
+        tenant_scope: Optional[Dict[str, Any]] = None
         if resolved_tenant_id:
             current_tenant_id.set(resolved_tenant_id)
+            try:
+                async with get_pool().acquire() as _tenant_conn:
+                    _tenant_row = await _tenant_conn.fetchrow(
+                        """
+                        SELECT id::text, slug, name, kind, status
+                          FROM tenants
+                         WHERE id = $1::uuid
+                           AND deleted_at IS NULL
+                        """,
+                        resolved_tenant_id,
+                    )
+                tenant_scope = dict(_tenant_row) if _tenant_row else None
+            except Exception as _tenant_scope_err:
+                logger.warning(
+                    "tenant_scope_lookup_failed session=%s tenant_id=%s error=%s",
+                    session_id[:8],
+                    str(resolved_tenant_id)[:8],
+                    str(_tenant_scope_err)[:160],
+                )
 
         from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
@@ -7620,6 +7640,9 @@ async def send_message_stream(
                 + _response_mode_prompt_block(response_mode)
                 + _runner_fast_path_prompt_block()
             )
+            _customer_scope_block = _customer_tenant_prompt_block(tenant_scope)
+            if _customer_scope_block:
+                system_prompt = system_prompt + _customer_scope_block
 
             # P2-7: 멘션된 프로젝트 컨텍스트를 system_prompt에 주입
             if _mentioned_projects:
@@ -8469,6 +8492,15 @@ async def send_message_stream(
                 logger.warning(f"[PROMPT_COMPILER] provenance_insert_failed: {_prov_err}")
         except Exception as _prompt_compile_err:
             logger.warning(f"[PROMPT_COMPILER] failed: {_prompt_compile_err}")
+
+        _customer_scope_block = _customer_tenant_prompt_block(tenant_scope)
+        if _customer_scope_block and "<customer_tenant_scope>" not in system_prompt:
+            system_prompt = system_prompt + _customer_scope_block
+            logger.info(
+                "customer_tenant_scope_prompt_injected session=%s tenant=%s",
+                session_id[:8],
+                str((tenant_scope or {}).get("id") or "")[:8],
+            )
 
         # 8.5. 복잡 인텐트 → AutonomousExecutor (max_iterations=25) (AADS-186E-3)
         _AUTONOMOUS_INTENTS = frozenset({

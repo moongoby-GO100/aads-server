@@ -11,13 +11,22 @@ from __future__ import annotations
 import structlog
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.auth import TenantRole, require_tenant_role
 from app.services.agenda_service import get_agenda_service
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
+
+
+def _agenda_scope(context: dict) -> tuple[Optional[str], bool]:
+    user = context.get("user") or {}
+    tenant = context.get("tenant") or {}
+    tenant_id = tenant.get("id")
+    include_global = bool(user.get("is_internal_admin"))
+    return tenant_id, include_global
 
 
 # ─── 요청/응답 모델 ─────────────────────────────────────────────────────────
@@ -56,8 +65,11 @@ class AgendaDecideRequest(BaseModel):
 
 
 @router.post("/", operation_id="add_agenda", summary="아젠다 등록")
-async def create_agenda(req: AgendaCreateRequest):
+async def create_agenda(req: AgendaCreateRequest, context: dict = Depends(require_tenant_role(TenantRole.MEMBER))):
     """아젠다 등록."""
+    _, include_global = _agenda_scope(context)
+    if not include_global and not req.source_session_id:
+        raise HTTPException(status_code=403, detail="일반 사용자는 세션에 연결된 아젠다만 등록할 수 있습니다.")
     svc = get_agenda_service()
     try:
         result = await svc.add_agenda(
@@ -66,7 +78,7 @@ async def create_agenda(req: AgendaCreateRequest):
             summary=req.summary,
             priority=req.priority,
             tags=req.tags,
-            created_by=req.created_by,
+            created_by=req.created_by if include_global else str(context.get("user", {}).get("email") or req.created_by),
             source_session_id=req.source_session_id,
             related_task_id=req.related_task_id,
         )
@@ -80,20 +92,32 @@ async def search_agendas(
     keyword: str = Query(..., description="검색 키워드"),
     project: Optional[str] = Query(None, description="프로젝트 필터"),
     limit: int = Query(20, ge=1, le=100),
+    context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
 ):
     """title/summary/tags 키워드 검색."""
     svc = get_agenda_service()
-    items = await svc.search_agendas(keyword=keyword, project=project, limit=limit)
+    tenant_id, include_global = _agenda_scope(context)
+    if not include_global:
+        return {"query": keyword, "count": 0, "items": []}
+    items = await svc.search_agendas(
+        keyword=keyword,
+        project=project,
+        limit=limit,
+        tenant_id=tenant_id,
+        include_global=include_global,
+    )
     return {"query": keyword, "count": len(items), "items": items}
 
 
 @router.get("/sessions", operation_id="list_agenda_sessions", summary="아젠다 세션 목록 조회")
 async def list_agenda_sessions(
     project: Optional[str] = Query(None, description="프로젝트 필터 (없으면 전체)"),
+    context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
 ):
     """아젠다에 연결된 고유 세션 ID 목록 반환."""
     svc = get_agenda_service()
-    sessions = await svc.list_sessions(project=project)
+    tenant_id, include_global = _agenda_scope(context)
+    sessions = await svc.list_sessions(project=project, tenant_id=tenant_id, include_global=include_global)
     return {"sessions": sessions}
 
 
@@ -106,9 +130,13 @@ async def list_agendas(
     source_session_id: Optional[str] = Query(None, description="세션 ID 필터"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
 ):
     """아젠다 목록 조회. project=None이면 전체(CEO용), 지정 시 해당 프로젝트만(CTO용)."""
     svc = get_agenda_service()
+    tenant_id, include_global = _agenda_scope(context)
+    if not include_global and not source_session_id:
+        return {"total": 0, "limit": limit, "offset": offset, "items": []}
     return await svc.list_agendas(
         project=project,
         status=status,
@@ -117,31 +145,38 @@ async def list_agendas(
         source_session_id=source_session_id,
         limit=limit,
         offset=offset,
+        tenant_id=tenant_id,
+        include_global=include_global,
     )
 
 
 @router.get("/{agenda_id}", operation_id="get_agenda", summary="아젠다 단건 조회")
-async def get_agenda(agenda_id: int):
+async def get_agenda(agenda_id: int, context: dict = Depends(require_tenant_role(TenantRole.VIEWER))):
     """아젠다 단건 조회."""
     svc = get_agenda_service()
-    result = await svc.get_agenda(agenda_id)
+    tenant_id, include_global = _agenda_scope(context)
+    result = await svc.get_agenda(agenda_id, tenant_id=tenant_id, include_global=include_global)
     if result is None:
         raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}를 찾을 수 없습니다.")
     return result
 
 
 @router.patch("/{agenda_id}", operation_id="update_agenda", summary="아젠다 수정")
-async def update_agenda(agenda_id: int, req: AgendaUpdateRequest):
+async def update_agenda(agenda_id: int, req: AgendaUpdateRequest, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
     """아젠다 상태/내용 업데이트.
     - CEO: 모든 필드 수정 가능
     - CTO: 자기 프로젝트만, 논의중↔보류 전환만
     """
     svc = get_agenda_service()
+    tenant_id, include_global = _agenda_scope(context)
     try:
+        scoped = await svc.get_agenda(agenda_id, tenant_id=tenant_id, include_global=include_global)
+        if scoped is None:
+            raise HTTPException(status_code=404, detail=f"아젠다 {agenda_id}를 찾을 수 없습니다.")
         result = await svc.update_agenda(
             agenda_id,
-            caller_role=req.caller_role,
-            caller_project=req.caller_project,
+            caller_role=req.caller_role if include_global else "CTO",
+            caller_project=req.caller_project if include_global else scoped.get("project"),
             title=req.title,
             summary=req.summary,
             status=req.status,
@@ -160,8 +195,10 @@ async def update_agenda(agenda_id: int, req: AgendaUpdateRequest):
 
 
 @router.post("/{agenda_id}/decide", operation_id="decide_agenda", summary="CEO 결정 등록")
-async def decide_agenda(agenda_id: int, req: AgendaDecideRequest):
+async def decide_agenda(agenda_id: int, req: AgendaDecideRequest, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
     """CEO 결정 기록 — status='결정', decision 저장. CEO만 가능."""
+    if not context.get("user", {}).get("is_internal_admin"):
+        raise HTTPException(status_code=403, detail="결정(decide)은 internal admin만 수행할 수 있습니다.")
     svc = get_agenda_service()
     try:
         result = await svc.decide_agenda(

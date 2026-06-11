@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-11 09:34 KST) - SaaS 일반 사용자 안내/브리핑/아젠다 범위 분리
+- 배경: CEO가 일반 사용자가 첫 로그인 후 사용법을 모르고, 시스템 자동 브리핑/아젠다/프로젝트 안내가 CEO 내부 프로젝트 기준으로 보이는 문제를 지적했다.
+- 조치:
+  - `app/api/agenda.py`, `app/services/agenda_service.py`: 아젠다 API에 tenant 인증을 붙이고, 일반 사용자는 현재 세션에 연결된 아젠다만 조회되도록 제한했다.
+  - `app/api/briefing.py`: customer tenant 사용자는 운영 브리핑 대신 내 조직 브리핑을 받도록 분리했다.
+  - `app/services/chat_service.py`: customer tenant 세션에는 `<customer_tenant_scope>` 프롬프트 가드를 주입해 내부 AADS/KIS/GO100/SF/NTV2/NAS 프로젝트 안내를 기본 답변으로 내보내지 않게 했다.
+  - `src/app/chat/page.tsx`, `src/components/chat/ActionChips.tsx`: 첫 화면과 빠른 질문을 일반 사용자 기준의 사용법/내 작업공간/팀원 초대 안내로 변경했다.
+  - `src/app/chat/ChatArtifactPanel.tsx`: 아젠다 탭을 현재 세션 ID 기준으로 조회하도록 변경했다.
+  - `src/middleware.ts`, `src/components/ClientLayout.tsx`, `src/components/Sidebar.tsx`: 일반 사용자 홈/어드민 접근 및 메뉴 노출을 차단하는 기존 변경과 함께 동작한다.
+  - `docs/SAAS_USER_ACCESS_AND_BRIEFING_POLICY.md`: SaaS 사용자 접근/브리핑 정책을 문서화했다.
+- 검증 예정:
+  - 백엔드 문법 검증: `python3 -m py_compile app/api/agenda.py app/api/briefing.py app/services/agenda_service.py app/services/chat_service.py`.
+  - 대시보드 타입/린트 범위 검증: 변경 파일 대상 `npx eslint`.
+  - API/브라우저 폴백 검증: `/api/v1/health`, 대시보드 빌드 또는 lint 통과 후 배포 상태 확인.
+- 상태:
+  - 코드/문서 변경 적용 중. 선별 커밋/푸시/배포는 검증 후 진행 대상이다.
+
 ## 현재 진행 상태 (2026-06-11 09:35 KST) - Chat final-save incomplete tail rewrite guard
 - 배경: CEO가 `final_save_blocked_incomplete_progress_tail` 전에 “최종보고 재작성 1회 시도 → 실패 시 interrupted_partial 보존” P0 패치 적용을 지시했다.
 - 조치:

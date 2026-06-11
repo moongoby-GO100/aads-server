@@ -7,11 +7,13 @@ from datetime import datetime, timedelta
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.auth import require_internal_admin
+
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal_admin)])
 
 _TASK_BOARD_STATUSES = {
     "queued",
