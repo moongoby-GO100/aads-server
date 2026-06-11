@@ -650,26 +650,6 @@ case "$MODE" in
             fi
         fi
 
-        # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기 (최대 60초)
-        ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
-        if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
-            echo "[deploy.sh] ⏳ 현재 슬롯 :${CURRENT_PORT} 활성 스트림 ${ACTIVE_STREAMS}건 — 최대 60초 대기"
-            DRAIN_ELAPSED=0
-            while [[ $DRAIN_ELAPSED -lt 60 ]]; do
-                sleep 5
-                DRAIN_ELAPSED=$((DRAIN_ELAPSED + 5))
-                ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
-                if [[ "$ACTIVE_STREAMS" == "0" || -z "$ACTIVE_STREAMS" ]]; then
-                    echo "[deploy.sh] ✅ 활성 스트림 0건 — 전환 진행 (${DRAIN_ELAPSED}초 대기)"
-                    break
-                fi
-                echo "[deploy.sh]   대기중... active=${ACTIVE_STREAMS} (${DRAIN_ELAPSED}/60초)"
-            done
-            if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
-                echo "[deploy.sh] ⚠️ ${ACTIVE_STREAMS}건 스트림 아직 활성 — nginx graceful reload로 전환 진행 (기존 worker가 스트림 유지)"
-            fi
-        fi
-
         # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)
         echo "[deploy.sh] ③ upstream 전환: :${CURRENT_PORT} → :${NEW_PORT}"
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
@@ -704,7 +684,7 @@ case "$MODE" in
         fi
 
         # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
-        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화 시작"
+        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화 백그라운드 예약"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
@@ -712,8 +692,9 @@ case "$MODE" in
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
-        echo "[deploy.sh] ✅ Blue-Green 완전 무중단 배포 완료: :${NEW_PORT} 활성"
-        notify "✅ Blue-Green 완전 무중단 배포: :${CURRENT_PORT} → :${NEW_PORT}"
+        echo "[deploy.sh] ✅ Blue-Green active 전환 완료: :${NEW_PORT} 활성"
+        echo "[deploy.sh] ℹ️ standby 동기화는 old slot drain 후 백그라운드에서 별도 완료/skip 로그를 남깁니다."
+        notify "✅ Blue-Green active 전환 완료: :${CURRENT_PORT} → :${NEW_PORT}"
         ;;
     *)
         echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|code|reload|build 사용"
