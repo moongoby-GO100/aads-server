@@ -1373,6 +1373,46 @@ def _stream_interrupt_diagnostic_reason(
     return " ".join(part for part in parts if part)[:1000]
 
 
+def _producer_interruption_diagnostic_reason(state: Dict[str, Any]) -> str:
+    """Preserve the top-level producer exit while exposing the concrete subreason."""
+    raw_reason = (
+        str(state.get("_producer_exception_type") or "")
+        or str(state.get("_producer_incomplete_exit") or "")
+        or ("rate_limited" if state.get("_rate_limited") else "")
+        or "missing_done_event"
+    )
+    if raw_reason.startswith("background_producer_incomplete_exit"):
+        base_reason = raw_reason
+    else:
+        base_reason = f"background_producer_incomplete_exit:{_diagnostic_token(raw_reason, limit=120)}"
+    return _stream_interrupt_diagnostic_reason(base_reason, state)
+
+
+def _parse_interrupt_diagnostic_reason(reason: str) -> Dict[str, Any]:
+    """Extract compact key/value fields from chat_turn_executions.error_message."""
+    text = str(reason or "")
+    head = text.split(" ", 1)[0]
+    group, _, subreason = head.partition(":")
+    details: Dict[str, Any] = {
+        "interruption_reason_group": group[:160],
+    }
+    if subreason:
+        details["interruption_subreason"] = subreason[:160]
+    for token in text.split()[1:]:
+        key, sep, value = token.partition("=")
+        if sep != "=" or not key:
+            continue
+        if value in ("True", "False"):
+            details[f"interrupted_{key}"] = value == "True"
+        elif value.endswith("s") and value[:-1].isdigit():
+            details[f"interrupted_{key}_seconds"] = int(value[:-1])
+        elif value.isdigit():
+            details[f"interrupted_{key}"] = int(value)
+        else:
+            details[f"interrupted_{key}"] = value[:160]
+    return details
+
+
 async def _resolve_stream_execution_binding(
     conn,
     session_id: uuid.UUID,
@@ -2338,12 +2378,12 @@ async def _mark_execution_interrupted(
     clean_partial = _strip_streaming_progress_markers(partial_content)
     interruption_quality_details = {
         "interruption_reason": reason[:500],
-        "interruption_reason_group": reason.split(":", 1)[0][:160],
         "interrupted_partial_len": len(clean_partial or ""),
         "interrupted_has_placeholder": bool(pid),
         "interrupted_delete_empty_placeholder": bool(delete_empty_placeholder),
         "interrupted_superseded": bool(is_superseded_cancel),
     }
+    interruption_quality_details.update(_parse_interrupt_diagnostic_reason(reason))
     final_content = clean_partial
     assistant_message_id = pid
     if pid:
@@ -3896,11 +3936,12 @@ async def with_background_completion(
                     operation=_ensure_execution_completed_in_db,
                 )
             else:
+                _producer_interruption_reason = _producer_interruption_diagnostic_reason(state)
                 logger.warning(
-                    "bg_producer_incomplete_exit session=%s execution=%s exception=%s rate_limited=%s",
+                    "bg_producer_incomplete_exit session=%s execution=%s reason=%s rate_limited=%s",
                     session_id[:8],
                     str(state.get("execution_id") or "")[:8],
-                    state.get("_producer_exception_type") or state.get("_producer_incomplete_exit") or "",
+                    _producer_interruption_reason[:500],
                     state.get("_rate_limited", False),
                 )
                 if not state.get("_rate_limited", False) and state.get("execution_id"):
@@ -3911,9 +3952,7 @@ async def with_background_completion(
                                 _conn,
                                 session_id,
                                 str(state.get("execution_id")),
-                                state.get("_producer_exception_type")
-                                or state.get("_producer_incomplete_exit")
-                                or "background_producer_incomplete_exit",
+                                _producer_interruption_reason,
                                 partial_content=state.get("content", ""),
                                 delete_empty_placeholder=False,
                             )
@@ -3940,7 +3979,7 @@ async def with_background_completion(
                                     await _save_interrupted_partial_message(
                                         session_id,
                                         _partial_clean,
-                                        reason="background_producer_incomplete_exit",
+                                        reason=_producer_interruption_reason,
                                         execution_id=str(_eid),
                                         placeholder_id=str(_ph_id) if _ph_id else None,
                                     )

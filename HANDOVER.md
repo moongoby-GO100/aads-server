@@ -1,5 +1,53 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-11 10:32 KST) - Chat interruption diagnostics subreason logging
+- 배경: CEO가 `background_producer_incomplete_exit`, 장시간 `running`, `client_gone` 원인을 정확히 추적할 수 있도록 로그를 도입하고 적용/검증까지 이어가라고 지시했다.
+- 조치:
+  - `app/services/chat_service.py`: background producer가 `done` 이벤트 없이 종료될 때 `background_producer_incomplete_exit:<subreason>` 형식으로 `missing_done_event`, `client_gone_auto_cancel`, 예외 타입을 보존하도록 변경했다.
+  - 같은 진단 문자열에 `age`, `idle`, `timeout`, `tool_count`, `last_tool`, `content_len`, `saw_done`, `first_response`, `last_event`, `client_gone`, `queue_drops`를 포함해 `chat_turn_executions.error_message`와 Docker 로그에서 바로 추적 가능하게 했다.
+  - `chat_messages.quality_details`에는 `interruption_subreason`, `interrupted_age_seconds`, `interrupted_idle_seconds`, `interrupted_tool_count`, `interrupted_client_gone`, `interrupted_last_tool` 등 파싱된 필드를 병행 저장하도록 보강했다.
+  - 기존 장시간 running 정리 경로(`active_stream_hard_timeout_after_*`)도 동일 parser를 통과해 quality details에 timeout/age/tool/client 상태가 남는다.
+  - `tests/unit/test_chat_service.py`: `missing_done_event`와 `client_gone_auto_cancel` 하위 원인이 보존되는 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 통과.
+  - `JWT_SECRET_KEY=test-secret-key pytest tests/unit/test_chat_service.py -q` 결과 53 passed, 1 warning.
+  - `curl http://localhost:8100/api/v1/health` 응답 `status=ok`.
+- 상태:
+  - 코드/테스트/HANDOVER 수정 완료.
+  - 선별 커밋/푸시/배포 진행 대상이다.
+  - 기존 unrelated dirty 파일은 보존한다.
+
+## 현재 진행 상태 (2026-06-11 10:28 KST) - Yeoljeong transfer contract active-cooperation clause refresh
+- 배경: CEO가 열정국밥 중화점 영업양수도계약서에 체크리스트 기준 양도인 적극 협조 의무를 반영해 계속 진행하라고 지시했다.
+- 조치:
+  - `scripts/generate_yeoljeong_transfer_contract.py`의 제5조 및 협조표에 `사업자등록 완료 전 폐업신고 금지`를 명시했다.
+  - DOCX를 재생성해 `exports/contracts/영업양수도계약서_열정국밥_중화점.docx`와 `app/static/docs/contracts/영업양수도계약서_열정국밥_중화점.docx`에 반영했다.
+  - 재생성 후 SELinux 컨텍스트가 `admin_home_t`로 돌아가 외부 다운로드가 403이 되었고, 정적 파일만 `httpd_sys_content_t`로 보정했다.
+- 검증:
+  - `python3 scripts/generate_yeoljeong_transfer_contract.py` 통과, DOCX 크기 45,208 bytes.
+  - DOCX 내부 문구 검증: `양도인의 적극 협조 의무`, `주인 권한 위임`, `국세·지방세 완납증명서`, `계약금의 배액`, `사업자등록 완료 전 폐업신고 금지` 모두 확인.
+  - 외부 URL `https://aads.newtalk.kr/static/docs/contracts/영업양수도계약서_열정국밥_중화점.docx?v=20260611-active-coop4` HTTP 200, 다운로드 SHA256 `fef45709bcd56cc2e717764ac1e7980b3515ec60171d9566bda7727962dd9ed4`.
+- 상태:
+  - 계약서 파일과 생성 스크립트 수정 완료.
+  - 커밋/푸시/배포는 수행하지 않았다.
+
+## 현재 진행 상태 (2026-06-11 10:16 KST) - AI review git diff classification DB migration closeout
+- 배경: CEO가 AI 리뷰가 `git diff`를 실행 못하는 환경 문제 원인 확인과 조치를 지시했다.
+- 실측:
+  - `scripts/pipeline-runner.sh`와 `scripts/pipeline-runner.sh.local`에는 실행 전 `pre_exec_sha` 캡처, committed/uncommitted diff 결합, zero-diff 승인 차단, `INVALID_GIT_DIFF` precheck guard가 동기화되어 있었다.
+  - `app/services/tool_executor.py`에는 Chat-Direct AI review용 AADS 로컬 `git diff` fallback이 이미 들어가 있었다.
+  - 운영 DB `code_reviews`에는 migration 041 컬럼(`flag_category`, `failure_stage`, `needs_retry`)이 누락되어 리뷰 실패 분류가 구버전 스키마로 저장되고 있었다.
+- 조치:
+  - 운영 DB에 `migrations/041_code_review_flag_classification.sql`을 적용하고 `checkpoint_migrations(v=41)`을 기록했다.
+  - `/api/v1/review/code-diff`에 `fatal: not a git repository` 검증 payload를 넣어 `GIT_DIFF_FAILURE`, `git_diff_capture`, `needs_retry=true` 반환과 저장 경로를 확인했다.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` 통과.
+  - `pytest -q tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_code_reviewer_flag_classification.py` 결과 5 passed.
+  - `python3 -m py_compile app/services/tool_executor.py app/services/code_reviewer.py app/api/ceo_chat_tools.py` 통과.
+- 상태:
+  - 코드 변경 없음. 운영 DB migration 적용 완료.
+  - 배포/재시작 없음. 기존 unrelated dirty 파일은 보존했다.
+
 ## 현재 진행 상태 (2026-06-11 10:00 KST) - Chat interruption quality_details schema fix
 - 배경: CEO가 현재 채팅 세션 마지막 응답 버블이 완료가 아니라 `응답중단`으로 바뀌는 문제의 계속 조치/검증/완료보고를 지시했다.
 - 실측 원인:
@@ -2403,3 +2451,29 @@
   - DB 확인: `moongoby@gmail.com`은 internal tenant owner active, `moongoby@naver.com`은 customer tenant owner active 상태를 확인했다.
   - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
 - 주의: 서버 저장소의 기존 `app/static/gallery/manifest.json` 변경은 이번 조치와 무관해 커밋에서 제외한다.
+
+## 2026-06-11 10:31 KST - Auth routing active verification follow-up
+- 배경: 서버 재시작으로 직전 완료 보고가 중단되어 CEO admin 메뉴 복구와 일반 사용자 `/chat` 라우팅의 실제 운영 반영 상태를 재검증했다.
+- 확인 결과:
+  - active API는 `.active_port=8102`, `.active_container=aads-server-green`이며 health OK다.
+  - active dashboard는 `.active_port=3101`이며 `/login` HTTP 200 OK다.
+  - public `https://aads.newtalk.kr/api/v1/auth/me`는 실제 DB user id 기반 JWT 검증에서 `moongoby@gmail.com`에 `is_internal_admin=true`, `tenant_kind=internal`, `tenant_role=owner`, `user_role=system`을 반환했다.
+  - 일반 사용자 샘플 `e2e_verify@aads.kr`는 public `/auth/me`에서 `is_internal_admin=false`, `tenant_kind=customer`, `tenant_role=owner`, `user_role=user`를 반환했다.
+- 보류:
+  - standby blue 동기화 재배포는 `/api/v1/ops/active-streams` 기준 active stream 6건, blue raw executing 1건이 있어 수행하지 않았다. 강제 재배포는 진행 중 응답 중단 위험이 있으므로 stream drain 후 재시도한다.
+- 문서/커밋 상태:
+  - 이 follow-up 문서 기록은 아직 커밋하지 않았다. 대시보드 저장소는 clean이며, 서버 저장소에는 배포 산출물과 기존 계약서/정산/문서 작업 dirty 파일이 남아 있다.
+
+## 2026-06-11 10:27 KST - Yeoljeong Gukbap transfer contract active cooperation clauses
+- 배경: CEO가 열정국밥 중화점 인수 체크리스트 기준으로 영업양수도계약서의 양도자 적극 협조사항을 상세히 반영하라고 지시했다.
+- 조치:
+  - `scripts/generate_yeoljeong_transfer_contract.py`를 수정해 사업자등록 전 포괄양수도, 폐업신고 순서, 임대인 동의와 법인 임대차 전환, 네이버플레이스/스마트주문/네이버페이, 배달앱/POS/VAN/정산계좌 전환, 체납/행정처분/리스/직원 채무 고지 및 보증, 계약금 배액 위약 조항을 계약서 본문과 특약에 반영했다.
+  - `app/static/docs/contracts/영업양수도계약서_열정국밥_중화점.docx`와 `exports/contracts/영업양수도계약서_열정국밥_중화점.docx`를 재생성했다.
+  - 정적 다운로드가 403으로 막히던 파일 컨텍스트/권한 문제를 보정해 외부 URL로 내려받을 수 있게 했다.
+- 검증:
+  - `python3` DOCX 내부 XML 검사 기준 `양도인의 적극 협조 의무`, `주인 권한 위임`, `국세·지방세 완납증명서`, `계약금의 배액`, `사업자등록`, `폐업신고`, `네이버플레이스`, `배달앱` 문구가 모두 존재한다.
+  - `curl -I -L https://aads.newtalk.kr/static/docs/contracts/...` 결과 `HTTP/1.1 200 OK`, `Content-Length: 45191`, `Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document` 확인.
+  - static 문서와 exports 문서 SHA256은 `366d6dd0764c96540a8586d2dca87afce563f16c3cd34eec9df6ca0977f52bdd`로 일치한다.
+- 주의:
+  - 계약 최종 서명 전 `집기·비품 목록`, `재고 실사표`, `거래처/리스/렌탈 현황표`, `임대인 동의서`, `본사 가맹승계 승인`은 별첨으로 확보해야 한다.
+  - 커밋/푸시/배포는 수행하지 않았다.

@@ -633,6 +633,48 @@ def test_incomplete_progress_tail_is_not_completion_candidate():
     assert chat_service._looks_like_incomplete_progress_tail(
         "핵심 파일을 즉시 읽고 수정합니다. MCP 도구를 로드합니다."
     )
+
+
+def test_producer_interruption_reason_preserves_missing_done_subreason():
+    state = {
+        "content": "부분 응답",
+        "started_at": chat_service._bg_time.monotonic() - 120,
+        "last_event_at": chat_service._bg_time.monotonic() - 30,
+        "tool_count": 2,
+        "last_tool": "run_remote_command",
+        "saw_done_event": False,
+        "client_gone": False,
+    }
+
+    reason = chat_service._producer_interruption_diagnostic_reason(state)
+    details = chat_service._parse_interrupt_diagnostic_reason(reason)
+
+    assert reason.startswith("background_producer_incomplete_exit:missing_done_event")
+    assert "tool_count=2" in reason
+    assert "last_tool=run_remote_command" in reason
+    assert details["interruption_reason_group"] == "background_producer_incomplete_exit"
+    assert details["interruption_subreason"] == "missing_done_event"
+    assert details["interrupted_tool_count"] == 2
+    assert details["interrupted_client_gone"] is False
+
+
+def test_producer_interruption_reason_preserves_client_gone_subreason():
+    state = {
+        "_producer_incomplete_exit": "client_gone_auto_cancel",
+        "content": "브라우저 연결이 끊긴 뒤 보존된 부분 응답",
+        "started_at": chat_service._bg_time.monotonic() - 80,
+        "last_event_at": chat_service._bg_time.monotonic() - 70,
+        "client_gone": True,
+        "saw_done_event": False,
+    }
+
+    reason = chat_service._producer_interruption_diagnostic_reason(state)
+    details = chat_service._parse_interrupt_diagnostic_reason(reason)
+
+    assert reason.startswith("background_producer_incomplete_exit:client_gone_auto_cancel")
+    assert "client_gone=True" in reason
+    assert details["interruption_subreason"] == "client_gone_auto_cancel"
+    assert details["interrupted_client_gone"] is True
     assert chat_service._looks_like_incomplete_progress_tail(
         "DB 상태를 추가 확인하겠습니다."
     )
