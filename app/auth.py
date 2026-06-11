@@ -1004,6 +1004,7 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
                 'role': TenantRole.OWNER.value,
                 'status': 'active',
             },
+            'user_role': 'system',
         }
 
     pool = await _ensure_pool()
@@ -1065,6 +1066,7 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
             'role': row['role'],
             'status': row['membership_status'],
         },
+        'user_role': row['user_role'],
     }
 
 
@@ -1093,6 +1095,15 @@ async def get_current_user(
     current_user['current_membership'] = context['membership']
     current_user['tenant_id'] = context['tenant']['id']
     current_user['tenant_role'] = context['membership']['role']
+    current_user['user_role'] = context.get('user_role')
+    current_user['is_internal_admin'] = bool(
+        current_user.get('is_admin')
+        or (
+            str(context['tenant'].get('kind') or '').lower() == 'internal'
+            and str(context['membership'].get('role') or '').lower() in {TenantRole.OWNER.value, TenantRole.ADMIN.value}
+            and _is_internal_tenant_principal(current_user.get('email'), context.get('user_role'))
+        )
+    )
     return current_user
 
 
@@ -1112,3 +1123,10 @@ def require_tenant_role(minimum: TenantRole) -> Callable:
         return context
 
     return _dependency
+
+
+async def require_internal_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """CEO/admin/system allowlist 전용 API 보호."""
+    if not current_user.get('is_internal_admin'):
+        raise HTTPException(status_code=403, detail='Internal admin access required')
+    return current_user

@@ -6,7 +6,7 @@ from typing import Optional
 import logging
 
 import app.auth as auth_module
-from app.auth import TenantRole, require_tenant_role
+from app.auth import TenantRole, get_current_user, require_tenant_role
 from app.services.tenant_usage_limits import get_tenant_usage_summary
 
 router = APIRouter()
@@ -445,19 +445,16 @@ window.location.href = '{safe_redirect}';
 
 
 @router.get("/auth/me")
-async def get_me(authorization: Optional[str] = Header(None)):
+async def get_me(current_user: dict = Depends(get_current_user)):
     """현재 로그인 사용자 정보"""
-    if not auth_module.JWT_AVAILABLE:
-        raise HTTPException(status_code=503, detail="JWT 인증 모듈 미설치")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authorization 헤더가 없습니다")
-    token = authorization[7:]
-    payload = auth_module.verify_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
     return {
-        "user_id": payload.get("sub"),
-        "email": payload.get("email"),
-        "is_admin": payload.get("is_admin", False),
-        "tenant_id": payload.get("tenant_id"),
+        "user_id": current_user.get("user_id"),
+        "email": current_user.get("email"),
+        "is_admin": current_user.get("is_admin", False),
+        "is_internal_admin": current_user.get("is_internal_admin", False),
+        "tenant_id": current_user.get("tenant_id"),
+        "tenant_role": current_user.get("tenant_role"),
+        "user_role": current_user.get("user_role"),
+        "tenant": current_user.get("current_tenant"),
+        "membership": current_user.get("current_membership"),
     }

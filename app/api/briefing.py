@@ -15,8 +15,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.auth import TenantRole, require_tenant_role
+from app.services.tenant_usage_limits import get_tenant_usage_summary
 from app.memory.store import memory_store
 
 router = APIRouter()
@@ -328,12 +330,124 @@ def _format_briefing(
     return "\n".join(lines)
 
 
+async def _fetch_customer_briefing_stats(pool, tenant_id: str) -> dict[str, Any]:
+    """Fetch lightweight tenant-scoped stats for non-internal users."""
+    stats: dict[str, Any] = {
+        "members": 0,
+        "pending_invites": 0,
+        "sessions": 0,
+        "messages": 0,
+        "artifacts": 0,
+        "usage": None,
+    }
+    if not tenant_id:
+        return stats
+    try:
+        async with pool.acquire() as conn:
+            columns_rows = await conn.fetch(
+                """
+                SELECT table_name, column_name
+                  FROM information_schema.columns
+                 WHERE table_schema = 'public'
+                   AND table_name = ANY($1::text[])
+                """,
+                ["tenant_memberships", "tenant_invites", "chat_sessions", "chat_messages", "chat_artifacts"],
+            )
+            columns: dict[str, set[str]] = {}
+            for row in columns_rows:
+                columns.setdefault(str(row["table_name"]), set()).add(str(row["column_name"]))
+
+            if {"tenant_id", "status"}.issubset(columns.get("tenant_memberships", set())):
+                deleted_filter = "AND deleted_at IS NULL" if "deleted_at" in columns["tenant_memberships"] else ""
+                stats["members"] = int(await conn.fetchval(
+                    f"""
+                    SELECT COUNT(*)::int
+                      FROM tenant_memberships
+                     WHERE tenant_id = $1::uuid
+                       AND status = 'active'
+                       {deleted_filter}
+                    """,
+                    tenant_id,
+                ) or 0)
+
+            if {"tenant_id", "status"}.issubset(columns.get("tenant_invites", set())):
+                deleted_filter = "AND deleted_at IS NULL" if "deleted_at" in columns["tenant_invites"] else ""
+                expires_filter = "AND (expires_at IS NULL OR expires_at > now())" if "expires_at" in columns["tenant_invites"] else ""
+                stats["pending_invites"] = int(await conn.fetchval(
+                    f"""
+                    SELECT COUNT(*)::int
+                      FROM tenant_invites
+                     WHERE tenant_id = $1::uuid
+                       AND status = 'pending'
+                       {deleted_filter}
+                       {expires_filter}
+                    """,
+                    tenant_id,
+                ) or 0)
+
+            if "tenant_id" in columns.get("chat_sessions", set()):
+                stats["sessions"] = int(await conn.fetchval(
+                    "SELECT COUNT(*)::int FROM chat_sessions WHERE tenant_id = $1::uuid",
+                    tenant_id,
+                ) or 0)
+
+            if "tenant_id" in columns.get("chat_messages", set()):
+                stats["messages"] = int(await conn.fetchval(
+                    "SELECT COUNT(*)::int FROM chat_messages WHERE tenant_id = $1::uuid",
+                    tenant_id,
+                ) or 0)
+
+            if "tenant_id" in columns.get("chat_artifacts", set()):
+                stats["artifacts"] = int(await conn.fetchval(
+                    "SELECT COUNT(*)::int FROM chat_artifacts WHERE tenant_id = $1::uuid",
+                    tenant_id,
+                ) or 0)
+    except Exception as e:
+        logger.warning("customer_briefing_stats_failed", error=str(e), tenant_id=tenant_id)
+    try:
+        stats["usage"] = await get_tenant_usage_summary(tenant_id)
+    except Exception as e:
+        logger.warning("customer_briefing_usage_failed", error=str(e), tenant_id=tenant_id)
+    return stats
+
+
+def _format_customer_briefing(context: dict, stats: Optional[dict[str, Any]] = None) -> str:
+    tenant = context.get("tenant") or {}
+    membership = context.get("membership") or {}
+    tenant_name = tenant.get("name") or "내 조직"
+    tenant_role = membership.get("role") or "viewer"
+    stats = stats or {}
+    usage = stats.get("usage") or {}
+    usage_data = usage.get("usage") or {}
+    plan = usage.get("plan") or {}
+    lines = [
+        "## 내 조직 브리핑",
+        "",
+        f"- 현재 조직: **{tenant_name}**",
+        f"- 내 역할: **{tenant_role}**",
+        f"- 팀 구성: 활성 멤버 **{int(stats.get('members') or 0)}명**, 대기 초대 **{int(stats.get('pending_invites') or 0)}건**",
+        f"- 내 작업공간: 세션 **{int(stats.get('sessions') or 0)}건**, 메시지 **{int(stats.get('messages') or 0)}건**, 아티팩트 **{int(stats.get('artifacts') or 0)}건**",
+        f"- 이번 달 사용량: 호출 **{int(usage_data.get('calls') or 0)}회**, 토큰 **{int(usage_data.get('total_tokens') or 0):,}개**, 비용 **${usage_data.get('cost_usd') or '0'}**",
+        f"- 현재 플랜: **{plan.get('plan_key') or 'free'}**",
+        "- 시작 화면: 채팅, 팀 관리, 조직 사용량 중심으로 제공됩니다.",
+        "- 팀원 초대와 권한 관리는 `/team`에서 처리합니다.",
+        "- 채팅, 아티팩트, 아젠다는 현재 조직 및 현재 세션 범위 안에서만 표시됩니다.",
+    ]
+    if str(tenant.get("kind") or "").lower() == "customer":
+        lines.extend([
+            "- 운영 서버, CEO 의사결정, 전체 프로젝트 지표, 사용자 현황은 internal admin 전용으로 분리됩니다.",
+            "- 조직 사용량/플랜 안내는 tenant 권한 기준으로 별도 화면에서 제공됩니다.",
+        ])
+    return "\n".join(lines)
+
+
 # ── API 엔드포인트 ────────────────────────────────────────────────────
 
 
 @router.get("/briefing")
 async def get_briefing(
     session_id: Optional[str] = Query(None, description="현재 세션 ID"),
+    context: dict = Depends(require_tenant_role(TenantRole.VIEWER)),
 ):
     """
     CEO 접속 시 프로액티브 브리핑 데이터를 반환.
@@ -341,10 +455,24 @@ async def get_briefing(
     has_briefing이 false면 프론트엔드에서 아무것도 표시하지 않는다.
     """
     try:
+        if not context.get("user", {}).get("is_internal_admin"):
+            pool = memory_store.pool
+            tenant_id = str((context.get("tenant") or {}).get("id") or "")
+            stats = await _fetch_customer_briefing_stats(pool, tenant_id)
+            briefing_message = _format_customer_briefing(context, stats)
+            return {
+                "has_briefing": bool(briefing_message),
+                "briefing_message": briefing_message,
+                "alert_count": {"emergency": 0, "warning": 0, "info": 0},
+                "directive_pending_count": 0,
+                "error_count_since_last": 0,
+                "scope": "customer_tenant",
+            }
+
         pool = memory_store.pool
         async with pool.acquire() as conn:
             # 마지막 브리핑 시간 조회 (sequential — single conn is fine)
-            last_briefing = await _get_last_briefing_at(conn)
+            last_briefing = await _get_last_briefing_at(conn, str(context.get("user", {}).get("user_id") or "ceo"))
 
         # 병렬로 데이터 수집 (각 함수가 자체 conn을 pool에서 획득)
         alerts_task = _fetch_pending_alerts(pool, since=last_briefing)
@@ -370,7 +498,7 @@ async def get_briefing(
 
         # 브리핑 시간 기록
         async with pool.acquire() as conn:
-            await _update_last_briefing_at(conn)
+            await _update_last_briefing_at(conn, str(context.get("user", {}).get("user_id") or "ceo"))
 
         logger.info(
             "briefing_served",
@@ -390,6 +518,7 @@ async def get_briefing(
             },
             "directive_pending_count": directive_count,
             "error_count_since_last": error_count,
+            "scope": "internal_admin",
         }
     except Exception as e:
         logger.error("briefing_failed", error=str(e))
