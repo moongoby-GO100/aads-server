@@ -1084,10 +1084,14 @@ async def get_current_user(
     payload = verify_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail='Invalid token')
+    email = payload.get('email', '')
+    is_admin_principal = bool(payload.get('is_admin', False)) or (
+        _normalize_email(email) == _normalize_email(ADMIN_EMAIL)
+    )
     current_user = {
         'user_id': payload.get('sub'),
-        'email': payload.get('email', ''),
-        'is_admin': payload.get('is_admin', False),
+        'email': email,
+        'is_admin': is_admin_principal,
         'tenant_id': payload.get('tenant_id'),
     }
     context = await _load_tenant_context(current_user, requested_tenant_id=x_tenant_id)

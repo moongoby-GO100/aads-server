@@ -2392,3 +2392,14 @@
   - `npx eslint src/app/admin/users/page.tsx` 통과.
   - `npx tsc --noEmit --pretty false` 통과.
 - 주의: 전체 `api.ts` lint는 기존 `no-explicit-any` 부채로 실패한다. 이번 신규 페이지 단독 lint와 TypeScript 검증은 통과했다.
+
+## 2026-06-11 10:03 KST - CEO admin menu restore and public login routing
+- 배경: CEO가 `moongoby@gmail.com` 계정에서 홈/어드민 메뉴가 사라졌고, 일반 사용자는 로그인 직후 바로 채팅 화면으로 들어가야 한다고 지시했다.
+- 조치:
+  - `app/auth.py`에서 `AADS_ADMIN_EMAIL`과 일치하는 JWT principal은 `is_admin=true`로 보정해 어떤 인증 경로로 들어와도 internal admin context를 받도록 했다.
+  - 운영 DB에 `moongoby@gmail.com` SaaS user를 `role='ceo'`, internal tenant owner membership으로 복구했다. 비밀번호 해시는 기존 CEO 계정 인증값을 내부 복사했으며 평문/해시는 문서에 남기지 않는다.
+  - 대시보드 `src/app/login/page.tsx`에서 로그인 기본 이동 경로를 internal admin은 `/`, 일반 사용자는 `/chat`으로 명시했다. 일반 사용자가 admin 경로 redirect를 들고 와도 `/chat`으로 보낸다.
+- 검증:
+  - DB 확인: `moongoby@gmail.com`은 internal tenant owner active, `moongoby@naver.com`은 customer tenant owner active 상태를 확인했다.
+  - `python3 -m py_compile app/auth.py app/api/auth.py` 통과.
+- 주의: 서버 저장소의 기존 `app/static/gallery/manifest.json` 변경은 이번 조치와 무관해 커밋에서 제외한다.
