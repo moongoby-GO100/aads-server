@@ -2,6 +2,9 @@
 최종 업데이트: 2026-06-11
 
 ## 2026-06-11
+- SaaS customer chat isolation closeout: active customer tenants missing chat workspaces were backfilled with default `[WORK] {tenant}` workspaces (`project_key=CUSTOMER`, `allowed_roles=["GeneralAssistant"]`, `role_routing_enabled=false`). Customer tenant login/onboarding/invite acceptance now ensures a default workspace exists.
+- Customer users are forced to `GeneralAssistant` in customer workspaces, including when the client sends an internal role key, and internal project mentions are ignored for customer tenants so AADS/KIS/GO100/SF/NTV2/NAS context does not bleed into customer chats.
+- Blueshop verification: `objgood@naver.com` in tenant `블루샵` now sees one workspace, one available role (`GeneralAssistant`), can create a session, and an API smoke message completed with SSE `done=true`; the user and assistant messages were stored only under the Blueshop tenant.
 - Blue-green deploy reporting correction: `deploy.sh` now removes the duplicated pre-switch active-stream drain wait and reports `active 전환 완료` separately from old-slot standby sync. Standby rebuild remains a background drain-following task and emits its own complete/skip log, so final reports no longer imply standby sync is finished when it is only scheduled.
 - Verification: `bash -n deploy.sh` passed. Runtime check at 2026-06-11 10:42 KST showed `.active_port=8102`, `.active_container=aads-server-green`, both `8100` and `8102` health endpoints OK, and both API containers healthy. Existing unrelated dirty/static files were left untouched.
 
