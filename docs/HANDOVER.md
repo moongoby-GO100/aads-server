@@ -1,5 +1,9 @@
 # AADS HANDOVER
-최종 업데이트: 2026-06-10
+최종 업데이트: 2026-06-11
+
+## 2026-06-11
+- Blue-green deploy reporting correction: `deploy.sh` now removes the duplicated pre-switch active-stream drain wait and reports `active 전환 완료` separately from old-slot standby sync. Standby rebuild remains a background drain-following task and emits its own complete/skip log, so final reports no longer imply standby sync is finished when it is only scheduled.
+- Verification: `bash -n deploy.sh` passed. Runtime check at 2026-06-11 10:42 KST showed `.active_port=8102`, `.active_container=aads-server-green`, both `8100` and `8102` health endpoints OK, and both API containers healthy. Existing unrelated dirty/static files were left untouched.
 
 ## 2026-06-10
 - Chat completed-execution terminal-only repair: session `efccec7c-0788-4564-a2cf-265c63d075f0` showed a completed execution (`0a5a3a4a-2164-4b1b-89fa-8c9a22a1cb3a`) whose visible assistant row remained `interrupted_partial`, so the chat bubble changed from completed to interrupted. `app/services/chat_service.py` now repairs completed executions by keeping one final assistant row and archiving duplicate `streaming_placeholder/interrupted_partial/interruption_notice` siblings as `_archived_partial` instead of deleting them.
