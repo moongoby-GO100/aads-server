@@ -2468,6 +2468,18 @@ async def _mark_execution_interrupted(
                 sid,
             )
 
+    if assistant_message_id:
+        await conn.execute(
+            """
+            UPDATE chat_messages
+            SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb,
+                edited_at = NOW()
+            WHERE id = $1
+            """,
+            assistant_message_id,
+            json.dumps(interruption_quality_details, ensure_ascii=False),
+        )
+
     await conn.execute(
         """
         UPDATE chat_turn_executions
@@ -2477,7 +2489,6 @@ async def _mark_execution_interrupted(
             END,
             status = 'interrupted',
             error_message = $3,
-            quality_details = COALESCE(quality_details, '{}'::jsonb) || $5::jsonb,
             completed_at = COALESCE(completed_at, NOW()),
             updated_at = NOW()
         WHERE id = $1
@@ -2487,7 +2498,6 @@ async def _mark_execution_interrupted(
         assistant_message_id,
         reason[:1000],
         bool(delete_empty_placeholder and assistant_message_id is None),
-        json.dumps(interruption_quality_details, ensure_ascii=False),
     )
     await conn.execute(
         """

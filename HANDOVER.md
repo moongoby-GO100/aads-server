@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-11 10:00 KST) - Chat interruption quality_details schema fix
+- 배경: CEO가 현재 채팅 세션 마지막 응답 버블이 완료가 아니라 `응답중단`으로 바뀌는 문제의 계속 조치/검증/완료보고를 지시했다.
+- 실측 원인:
+  - `chat_turn_executions` 실제 스키마에는 `quality_details` 컬럼이 없다.
+  - `_mark_execution_interrupted()`가 실행 원장 업데이트 시 `quality_details = ...`를 포함해 `UndefinedColumnError: column "quality_details" does not exist`를 발생시켰다.
+  - 이 예외가 background producer 종료로 이어져 assistant placeholder가 `interrupted_partial`로 남았다.
+- 조치:
+  - `app/services/chat_service.py`: 중단 세부 메타데이터는 실제 버블인 `chat_messages.quality_details`에 기록하고, `chat_turn_executions`에는 `status/error_message/assistant_message_id/completed_at/updated_at`만 기록하도록 분리했다.
+  - `tests/unit/test_chat_service.py`: 실행 원장에는 `quality_details`를 쓰지 않고, 메시지 row에만 중단 quality details가 기록되는 계약으로 회귀 테스트를 수정했다.
+- 검증:
+  - `JWT_SECRET_KEY=test-secret-key pytest tests/unit/test_chat_service.py -q` 결과 51 passed, 1 warning.
+  - `python3 -m py_compile app/services/chat_service.py` 통과.
+- 상태:
+  - 코드/테스트/HANDOVER 수정 완료.
+  - 선별 커밋/푸시/blue-green 배포 진행 대상이다.
+  - 기존 unrelated dirty 파일은 포함하지 않는다.
+
 ## 현재 진행 상태 (2026-06-11 09:34 KST) - SaaS 일반 사용자 안내/브리핑/아젠다 범위 분리
 - 배경: CEO가 일반 사용자가 첫 로그인 후 사용법을 모르고, 시스템 자동 브리핑/아젠다/프로젝트 안내가 CEO 내부 프로젝트 기준으로 보이는 문제를 지적했다.
 - 조치:

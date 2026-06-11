@@ -812,15 +812,20 @@ async def test_mark_execution_interrupted_records_quality_details():
             placeholder_id=placeholder_id,
         )
 
+    message_quality_update = next(
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_messages" in call.args[0] and "quality_details" in call.args[0]
+    )
+    details = json.loads(message_quality_update.args[2])
+    assert details["interruption_reason_group"] == "completion_guard_incomplete_progress_tail"
+    assert details["interrupted_partial_len"] == len("DB를 추가 확인합니다.")
+    assert details["interrupted_has_placeholder"] is True
+
     execution_update = next(
         call for call in conn.execute.await_args_list
         if "UPDATE chat_turn_executions" in call.args[0]
     )
-    assert "quality_details" in execution_update.args[0]
-    details = json.loads(execution_update.args[5])
-    assert details["interruption_reason_group"] == "completion_guard_incomplete_progress_tail"
-    assert details["interrupted_partial_len"] == len("DB를 추가 확인합니다.")
-    assert details["interrupted_has_placeholder"] is True
+    assert "quality_details" not in execution_update.args[0]
 
 
 @pytest.mark.asyncio
