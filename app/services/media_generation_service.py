@@ -1098,8 +1098,13 @@ class MediaGenerationService:
             logger.info("gemini_native_ref_images_received count=%d urls=%s", len(reference_images), reference_images)
             for img_url in reference_images[:3]:
                 try:
+                    ref_headers: dict[str, str] = {}
+                    if "aads.newtalk.kr" in str(img_url):
+                        mk = os.getenv("AADS_MONITOR_KEY", "")
+                        if mk:
+                            ref_headers["X-Monitor-Key"] = mk
                     async with httpx.AsyncClient(timeout=15.0) as http_client:
-                        img_resp = await http_client.get(str(img_url))
+                        img_resp = await http_client.get(str(img_url), headers=ref_headers)
                         img_resp.raise_for_status()
                     mime = img_resp.headers.get("content-type", "image/jpeg").split(";")[0]
                     contents.append(types.Part.from_bytes(data=img_resp.content, mime_type=mime))
@@ -1107,32 +1112,51 @@ class MediaGenerationService:
                 except Exception as e:
                     logger.error("gemini_native_ref_image_failed url=%s error=%s", img_url, e)
 
-        client = genai.Client(api_key=_secret_value(self.settings, "GOOGLE_API_KEY"))
+        api_keys = [_secret_value(self.settings, "GOOGLE_API_KEY")]
+        fallback_key = os.getenv("GEMINI_API_KEY_2", "")
+        if fallback_key:
+            api_keys.append(fallback_key)
+
         loop = asyncio.get_event_loop()
         _contents = contents
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model=model_id,
-                contents=_contents,
-                config=types.GenerateContentConfig(**gen_config),
-            ),
-        )
-        if not response.candidates:
-            raise ValueError(f"No candidates returned from Gemini {model_id}")
-        candidate = response.candidates[0]
-        if not candidate.content or not candidate.content.parts:
-            finish_reason = getattr(candidate, "finish_reason", None)
-            raise ValueError(
-                f"Gemini {model_id} returned candidate without image content"
-                f" (finish_reason={finish_reason})"
-            )
-        for part in candidate.content.parts:
-            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                b64 = base64.b64encode(part.inline_data.data).decode()
-                mime = part.inline_data.mime_type
-                return {"url": f"data:{mime};base64,{b64}", "provider": model_id, "prompt": original}
-        raise ValueError(f"No image part found in Gemini {model_id} response")
+        last_error: Exception | None = None
+        for key_idx, api_key in enumerate(api_keys):
+            try:
+                client = genai.Client(api_key=api_key)
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: client.models.generate_content(
+                        model=model_id,
+                        contents=_contents,
+                        config=types.GenerateContentConfig(**gen_config),
+                    ),
+                )
+                if not response.candidates:
+                    raise ValueError(f"No candidates returned from Gemini {model_id}")
+                candidate = response.candidates[0]
+                if not candidate.content or not candidate.content.parts:
+                    finish_reason = getattr(candidate, "finish_reason", None)
+                    raise ValueError(
+                        f"Gemini {model_id} returned candidate without image content"
+                        f" (finish_reason={finish_reason})"
+                    )
+                for part in candidate.content.parts:
+                    if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                        b64 = base64.b64encode(part.inline_data.data).decode()
+                        mime = part.inline_data.mime_type
+                        if key_idx > 0:
+                            logger.info("gemini_fallback_key_succeeded key_index=%d", key_idx)
+                        return {"url": f"data:{mime};base64,{b64}", "provider": model_id, "prompt": original}
+                raise ValueError(f"No image part found in Gemini {model_id} response")
+            except Exception as exc:
+                err_str = str(exc)
+                if ("RESOURCE_EXHAUSTED" in err_str or "429" in err_str) and key_idx < len(api_keys) - 1:
+                    logger.warning("gemini_key_exhausted key_index=%d, retrying with fallback", key_idx)
+                    last_error = exc
+                    continue
+                raise
+        if last_error:
+            raise last_error
 
     @staticmethod
     def _kling_base_url() -> str:
