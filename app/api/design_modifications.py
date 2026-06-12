@@ -10,14 +10,18 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_internal_admin
 from app.core.db_pool import get_pool
 from app.services.design_context_builder import DesignContextRequestNotFound
 from app.services.design_context_builder import build_context_pack
 from app.services.design_qa_scorer import DesignModificationRequestNotFoundError
 from app.services.design_qa_scorer import score_modification
 
-router = APIRouter(prefix="/admin/design", tags=["design-modifications"])
+router = APIRouter(
+    prefix="/admin/design",
+    tags=["design-modifications"],
+    dependencies=[Depends(require_internal_admin)],
+)
 
 _REQUEST_STATUSES = {
     "draft",
