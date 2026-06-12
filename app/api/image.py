@@ -6,15 +6,16 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, RedirectResponse
 from pydantic import BaseModel, Field
 
+from app.auth import require_internal_admin
 from app.services.media_generation_service import media_generation_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal_admin)])
 
 
 class ImageRequest(BaseModel):

@@ -5,9 +5,10 @@ import logging
 from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from app.auth import require_internal_admin
 from app.core.credential_vault import decrypt_value, encrypt_value
 from app.core.db_pool import get_pool
 from app.core.llm_key_provider import invalidate_key_cache
@@ -15,7 +16,11 @@ from app.services.model_registry import append_key_audit_log, invalidate_registr
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/llm-keys", tags=["llm-keys"])
+router = APIRouter(
+    prefix="/llm-keys",
+    tags=["llm-keys"],
+    dependencies=[Depends(require_internal_admin)],
+)
 
 
 class LlmKeyCreate(BaseModel):

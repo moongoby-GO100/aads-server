@@ -2737,15 +2737,19 @@ async def export_artifact(
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/chat/drive", response_model=List[DriveFileOut], tags=["chat-drive"])
-async def list_drive(workspace_id: UUID = Query(...)):
+async def list_drive(
+    workspace_id: UUID = Query(...),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """파일 목록."""
-    return await svc.list_drive_files(str(workspace_id))
+    return await svc.list_drive_files(str(workspace_id), tenant_id=_tenant_id(context))
 
 
 @router.post("/chat/drive/upload", response_model=DriveFileOut, status_code=201, tags=["chat-drive"])
 async def upload_file(
     workspace_id: UUID = Query(...),
     file: UploadFile = File(...),
+    context: TenantContext = Depends(require_tenant_member),
 ):
     """파일 업로드 (multipart)."""
     _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
@@ -2753,28 +2757,38 @@ async def upload_file(
     if len(file_bytes) > _MAX_UPLOAD_SIZE:
         raise HTTPException(status_code=413, detail=f"파일 크기 초과: {len(file_bytes)} bytes > {_MAX_UPLOAD_SIZE} bytes (50MB 제한)")
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
-    result = await svc.save_drive_file(
-        workspace_id=str(workspace_id),
-        filename=file.filename or "unknown",
-        file_bytes=file_bytes,
-        file_type=ext or None,
-    )
+    try:
+        result = await svc.save_drive_file(
+            workspace_id=str(workspace_id),
+            filename=file.filename or "unknown",
+            file_bytes=file_bytes,
+            file_type=ext or None,
+            tenant_id=_tenant_id(context),
+        )
+    except ValueError:
+        raise _NOT_FOUND("workspace")
     return result
 
 
 @router.delete("/chat/drive/{file_id}", status_code=204, tags=["chat-drive"])
-async def delete_drive_file(file_id: UUID):
+async def delete_drive_file(
+    file_id: UUID,
+    context: TenantContext = Depends(require_tenant_admin),
+):
     """파일 삭제."""
-    ok = await svc.delete_drive_file(str(file_id))
+    ok = await svc.delete_drive_file(str(file_id), tenant_id=_tenant_id(context))
     if not ok:
         raise _NOT_FOUND("file")
 
 
 @router.get("/chat/drive/{file_id}/download", tags=["chat-drive"])
-async def download_file(file_id: UUID):
+async def download_file(
+    file_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """파일 다운로드."""
     from pathlib import Path
-    meta = await svc.get_drive_file(str(file_id))
+    meta = await svc.get_drive_file(str(file_id), tenant_id=_tenant_id(context))
     if not meta:
         raise _NOT_FOUND("file")
     path = Path(meta["file_path"])

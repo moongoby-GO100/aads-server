@@ -10005,8 +10005,22 @@ async def export_artifact(artifact_id: str, fmt: str, tenant_id: Optional[str] =
 UPLOAD_DIR = Path(os.getenv("CHAT_UPLOAD_DIR", "/root/aads/uploads/chat"))
 
 
-async def list_drive_files(workspace_id: str) -> List[Dict[str, Any]]:
+async def list_drive_files(workspace_id: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
+        if tenant_id:
+            rows = await conn.fetch(
+                """
+                SELECT f.*
+                  FROM chat_drive_files f
+                  JOIN chat_workspaces w ON w.id = f.workspace_id
+                 WHERE f.workspace_id = $1
+                   AND w.tenant_id = $2
+                 ORDER BY f.created_at DESC
+                """,
+                uuid.UUID(workspace_id),
+                _require_tenant_uuid(tenant_id, "list_drive_files"),
+            )
+            return [_row_to_dict(r) for r in rows]
         rows = await conn.fetch(
             "SELECT * FROM chat_drive_files WHERE workspace_id = $1 ORDER BY created_at DESC",
             uuid.UUID(workspace_id),
@@ -10020,6 +10034,7 @@ async def save_drive_file(
     file_bytes: bytes,
     file_type: Optional[str],
     uploaded_by: str = "user",
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = f"{uuid.uuid4()}_{filename}"
@@ -10027,6 +10042,14 @@ async def save_drive_file(
     file_path.write_bytes(file_bytes)
 
     async with get_pool().acquire() as conn:
+        if tenant_id:
+            workspace_exists = await conn.fetchval(
+                "SELECT 1 FROM chat_workspaces WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(workspace_id),
+                _require_tenant_uuid(tenant_id, "save_drive_file"),
+            )
+            if not workspace_exists:
+                raise ValueError("workspace not found")
         row = await conn.fetchrow(
             """
             INSERT INTO chat_drive_files (workspace_id, filename, file_path, file_type, file_size, uploaded_by)
@@ -10043,12 +10066,26 @@ async def save_drive_file(
         return _row_to_dict(row)
 
 
-async def delete_drive_file(file_id: str) -> bool:
+async def delete_drive_file(file_id: str, tenant_id: Optional[str] = None) -> bool:
     async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            "DELETE FROM chat_drive_files WHERE id = $1 RETURNING file_path",
-            uuid.UUID(file_id),
-        )
+        if tenant_id:
+            row = await conn.fetchrow(
+                """
+                DELETE FROM chat_drive_files f
+                 USING chat_workspaces w
+                 WHERE f.id = $1
+                   AND f.workspace_id = w.id
+                   AND w.tenant_id = $2
+                 RETURNING f.file_path
+                """,
+                uuid.UUID(file_id),
+                _require_tenant_uuid(tenant_id, "delete_drive_file"),
+            )
+        else:
+            row = await conn.fetchrow(
+                "DELETE FROM chat_drive_files WHERE id = $1 RETURNING file_path",
+                uuid.UUID(file_id),
+            )
         if not row:
             return False
         path = Path(row["file_path"])
@@ -10057,8 +10094,21 @@ async def delete_drive_file(file_id: str) -> bool:
         return True
 
 
-async def get_drive_file(file_id: str) -> Optional[Dict[str, Any]]:
+async def get_drive_file(file_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
+        if tenant_id:
+            row = await conn.fetchrow(
+                """
+                SELECT f.*
+                  FROM chat_drive_files f
+                  JOIN chat_workspaces w ON w.id = f.workspace_id
+                 WHERE f.id = $1
+                   AND w.tenant_id = $2
+                """,
+                uuid.UUID(file_id),
+                _require_tenant_uuid(tenant_id, "get_drive_file"),
+            )
+            return _row_to_dict(row) if row else None
         row = await conn.fetchrow(
             "SELECT * FROM chat_drive_files WHERE id = $1",
             uuid.UUID(file_id),
