@@ -2,6 +2,10 @@
 최종 업데이트: 2026-06-12
 
 ## 2026-06-12
+- Codex usage bar recovery: `/api/v1/ops/codex-usage` now returns a stable `codex_cli` fallback limit when the Codex app-server relay responds with `ok=false` or `limits=[]`.
+- Root cause: the chat `UsageBar` renders Codex only when `codex.ok` and `limits[0]` exist; the live relay currently returns HTTP 200 with an empty limits array, so the GPT/Codex bar disappeared while Claude still rendered.
+- Fallback source: `oauth_usage_log` Codex/GPT-5.x rows for 5h/7d windows. When no Codex rows exist, it returns 0% usage with `fallback_reason=relay_empty_limits` so the UI remains visible and debuggable.
+- Verification: `python3 -m py_compile app/api/ops.py` passed before commit/deploy.
 - SaaS admin/customer isolation audit: operating DB has 1 active internal tenant, 34 active customer tenants, 33 active customer users, and 0 active non-deleted users without `default_tenant_id`. Core chat tables (`chat_workspaces`, `chat_sessions`, `chat_messages`, `chat_artifacts`, `e2e_credentials`) are tenant-scoped.
 - Admin API lockdown: `/api/v1/admin/users/overview` and `/api/v1/admin/design/projects/AADS/screens` were verified as 403 for a customer token and 200 for an internal admin token after commit `e986cde`.
 - Additional P0 exposure fixed: `/api/v1/llm-keys`, `/api/v1/image/*`, and `/api/v1/chat/drive*` could expose shared/internal resources to customer tokens. `app/api/llm_keys.py` and `app/api/image.py` now require `require_internal_admin`; chat drive routes now require tenant membership and verify the target workspace tenant before list/upload/download/delete.

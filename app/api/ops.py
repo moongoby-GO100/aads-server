@@ -1841,6 +1841,87 @@ _CODEX_USAGE_PROXY_CACHE = {"ts": 0, "payload": None}
 _CODEX_USAGE_PROXY_TTL = int(os.getenv("CODEX_USAGE_PROXY_TTL_SEC", "30"))
 
 
+async def _build_codex_usage_fallback(*, now_epoch: float, reason: str, detail: str = "") -> Dict[str, Any]:
+    """Return a stable Codex usage shape when Codex app-server has no live limits."""
+    from app.core.db_pool import get_pool as _get_pool
+
+    row_5h = None
+    row_1w = None
+    try:
+        async with _get_pool().acquire() as conn:
+            row_5h = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS calls,
+                       COALESCE(SUM(input_tokens + output_tokens), 0) AS total_tok,
+                       COALESCE(SUM(cost_usd), 0) AS cost
+                FROM oauth_usage_log
+                WHERE created_at >= NOW() - INTERVAL '5 hours'
+                  AND error_code IS NULL
+                  AND (
+                    model ILIKE '%codex%'
+                    OR model ILIKE '%gpt-5.5%'
+                    OR model ILIKE '%gpt-5.4%'
+                    OR model ILIKE '%gpt-5.3-codex%'
+                  )
+                """
+            )
+            row_1w = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS calls,
+                       COALESCE(SUM(input_tokens + output_tokens), 0) AS total_tok,
+                       COALESCE(SUM(cost_usd), 0) AS cost
+                FROM oauth_usage_log
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+                  AND error_code IS NULL
+                  AND (
+                    model ILIKE '%codex%'
+                    OR model ILIKE '%gpt-5.5%'
+                    OR model ILIKE '%gpt-5.4%'
+                    OR model ILIKE '%gpt-5.3-codex%'
+                  )
+                """
+            )
+    except Exception as exc:
+        logger.warning("codex_usage_fallback_db_failed", error=str(exc)[:160])
+
+    plan_limit_5h = int(os.getenv("CODEX_CLI_5H_TOKEN_LIMIT", "5000000"))
+    plan_limit_1w = int(os.getenv("CODEX_CLI_1W_TOKEN_LIMIT", "50000000"))
+    tok_5h = int(row_5h["total_tok"]) if row_5h else 0
+    tok_1w = int(row_1w["total_tok"]) if row_1w else 0
+    used_pct_5h = round(min(tok_5h / plan_limit_5h, 1.0) * 100, 1) if plan_limit_5h else 0
+    used_pct_1w = round(min(tok_1w / plan_limit_1w, 1.0) * 100, 1) if plan_limit_1w else 0
+
+    return {
+        "ok": True,
+        "source": "db_fallback",
+        "fallback_reason": reason,
+        "fallback_detail": detail[:200] if detail else "",
+        "plan_type": os.getenv("CODEX_CLI_PLAN_TYPE", "codex_cli"),
+        "limits": [{
+            "limit_id": "codex_cli",
+            "plan_type": os.getenv("CODEX_CLI_PLAN_TYPE", "codex_cli"),
+            "primary": {
+                "used_percent": used_pct_5h,
+                "window_minutes": 300,
+                "resets_at_epoch": int(now_epoch + 5 * 60 * 60),
+                "resets_in_sec": 5 * 60 * 60,
+                "calls": int(row_5h["calls"]) if row_5h else 0,
+                "total_tokens": tok_5h,
+                "cost_usd": float(row_5h["cost"]) if row_5h else 0.0,
+            },
+            "secondary": {
+                "used_percent": used_pct_1w,
+                "window_minutes": 10080,
+                "resets_at_epoch": int(now_epoch + 7 * 24 * 60 * 60),
+                "resets_in_sec": 7 * 24 * 60 * 60,
+                "calls": int(row_1w["calls"]) if row_1w else 0,
+                "total_tokens": tok_1w,
+                "cost_usd": float(row_1w["cost"]) if row_1w else 0.0,
+            },
+        }],
+    }
+
+
 @router.get("/ops/codex-usage")
 async def get_codex_usage():
     """Codex CLI app-server 실시간 rate-limit 조회 → 마스킹/캐시된 응답.
@@ -1863,11 +1944,24 @@ async def get_codex_usage():
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
             resp = await client.get(f"{relay_url}/codex-usage", headers=headers)
         if resp.status_code != 200:
-            return {"ok": False, "error": "relay_returned_non_200",
-                    "status": resp.status_code, "detail": resp.text[:200]}
+            out = await _build_codex_usage_fallback(
+                now_epoch=now,
+                reason="relay_returned_non_200",
+                detail=f"{resp.status_code}: {resp.text[:180]}",
+            )
+            _CODEX_USAGE_PROXY_CACHE["payload"] = out
+            _CODEX_USAGE_PROXY_CACHE["ts"] = now
+            return {"cached": False, "ttl_sec": _CODEX_USAGE_PROXY_TTL, **out}
         payload = resp.json()
     except Exception as exc:
-        return {"ok": False, "error": "relay_call_failed", "detail": str(exc)[:200]}
+        out = await _build_codex_usage_fallback(
+            now_epoch=now,
+            reason="relay_call_failed",
+            detail=str(exc)[:200],
+        )
+        _CODEX_USAGE_PROXY_CACHE["payload"] = out
+        _CODEX_USAGE_PROXY_CACHE["ts"] = now
+        return {"cached": False, "ttl_sec": _CODEX_USAGE_PROXY_TTL, **out}
     # limits 가공 — Unix epoch → ISO + 남은 시간(초)
     from datetime import datetime, timezone
     enriched_limits = []
@@ -1884,11 +1978,20 @@ async def get_codex_usage():
         enriched_limits.append(new_limit)
     out = {
         "ok": payload.get("ok", False),
+        "source": "codex_relay",
         "plan_type": payload.get("raw_plan_type"),
         "limits": enriched_limits,
         "fetched_at": payload.get("fetched_at"),
         "relay_cached": payload.get("cached", False),
     }
+    if not out["limits"]:
+        out = await _build_codex_usage_fallback(
+            now_epoch=now,
+            reason="relay_empty_limits",
+            detail=json.dumps({k: payload.get(k) for k in ("ok", "raw_plan_type", "error", "parse_warning")}, ensure_ascii=False),
+        )
+        out["relay_cached"] = payload.get("cached", False)
+        out["fetched_at"] = payload.get("fetched_at")
     _CODEX_USAGE_PROXY_CACHE["payload"] = out
     _CODEX_USAGE_PROXY_CACHE["ts"] = now
     return {"cached": False, "ttl_sec": _CODEX_USAGE_PROXY_TTL, **out}
