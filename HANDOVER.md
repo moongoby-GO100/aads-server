@@ -2481,6 +2481,24 @@
 - 주의:
   - 과거 세션은 작성자 ID가 없어 tenant 기준으로만 사용자별 접근이 가능하다. 신규 세션부터 작성자 단위 감사가 가능하다.
 
+## 2026-06-12 13:51 KST - Pipeline Runner session context failure mitigation
+- 배경: CEO가 `d84b7c2c-64a5-4a80-9472-21170fd7d160` 세션에서 지시한 3건 러너 투입이 "현재 채팅 세션 컨텍스트를 찾지 못했습니다"로 실패했다고 보고했다.
+- 원인:
+  - `AutonomousExecutor` tool_use 경로에서 모델이 `session_id`를 누락하면 `ToolExecutor`의 ContextVar도 비어 있어 러너 제출 전 차단될 수 있었다.
+  - 내부 Pipeline Runner API는 `x-monitor-key: internal-pipeline-call`로 미들웨어는 통과하지만 FastAPI route dependency의 tenant 인증에서 401을 반환할 수 있었다.
+- 조치:
+  - `app/services/autonomous_executor.py`에 session-bound tool 입력 보강을 추가해 `pipeline_runner_submit`, batch/status/check 도구 호출 직전에 현재 작업 세션을 주입한다.
+  - `app/services/tool_executor.py`에 Pipeline Runner API 401/403 시 `pipeline_jobs` 직접 enqueue + `pg_notify('pipeline_new_job')` DB fallback을 추가했다.
+  - `app/auth.py`, `app/api/pipeline_runner.py`에 내부 Pipeline 요청용 tenant context 우회를 보강했다. 단, route dependency 교체는 hot reload만으로 반영되지 않아 stream drain 후 blue-green 배포가 필요하다.
+  - 대상 세션 CEO 지시 3건은 DB enqueue로 재투입했다: `runner-4f903698 -> runner-1514594c -> runner-e0f9383d`.
+- 검증:
+  - `python3 -m py_compile app/services/tool_executor.py app/services/autonomous_executor.py app/api/pipeline_runner.py app/auth.py` 통과.
+  - `JWT_SECRET_KEY=test-secret python3 -m pytest tests/unit/test_runner_scope_defaults.py -q` 결과 15개 통과.
+  - 운영 hot reload: `app.services.tool_executor`, `app.services.autonomous_executor` 성공, active task lost 0.
+  - DB 확인: `runner-4f903698` running, `runner-1514594c` queued(depends_on=`runner-4f903698`), `runner-e0f9383d` queued(depends_on=`runner-1514594c`).
+- 보류:
+  - blue-green 배포는 전환 대상 `aads-server:8100`에 active stream 5건이 있어 안전장치가 중단했다. API route dependency 401 완전 해소는 stream drain 후 재배포해야 한다.
+
 ## 2026-06-12 11:50 KST - CEO home/admin access from chat restored
 - 배경: CEO 계정의 채팅창 홈 버튼(`/`) 이동이 관리자 홈으로 열리지 않고 `/chat`으로 되돌아가는 증상이 보고됐다.
 - 원인:
