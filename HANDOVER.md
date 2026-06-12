@@ -8,7 +8,9 @@
 - 조치:
   - `app/services/autonomous_executor.py`: `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_c_start`, 상태조회 도구 실행 직전에 현재 작업 `session_id`를 바인딩하는 `_bind_session_to_tool_input()` 추가.
   - `app/auth.py`: `/api/v1/pipeline/*` 내부 호출에서 `x-monitor-key: internal-pipeline-call`일 때 internal tenant context를 반환하는 좁은 우회 추가.
-  - `tests/unit/test_runner_scope_defaults.py`: 자율 실행 루프의 러너 제출 세션 바인딩 회귀 테스트 추가.
+  - `app/api/pipeline_runner.py`: Pipeline Runner 라우터 전용 tenant dependency를 추가해 내부 `x-monitor-key` 호출은 internal tenant context로 처리하도록 보강.
+  - `app/services/tool_executor.py`: 내부 Pipeline Runner HTTP API가 401/403을 반환할 경우 `pipeline_jobs`에 직접 enqueue하고 `pg_notify('pipeline_new_job', job_id)`를 발행하는 DB fallback 추가.
+  - `tests/unit/test_runner_scope_defaults.py`, `tests/unit/test_pipeline_runner_reliability.py`: 자율 실행 루프의 러너 제출 세션 바인딩과 tenant-scoped runner helper 회귀 테스트 보정.
   - API 의존성 reload가 즉시 적용되지 않아, 해당 세션에는 DB enqueue 방식으로 GO100 러너 3건을 수동 투입하고 `pg_notify('pipeline_new_job', job_id)` 발행.
 - 러너 투입 결과:
   - `runner-4f903698` — `GO100-SCALPING-WS-DYNAMIC-001`, `running/claude_code_work`.
@@ -16,7 +18,7 @@
   - `runner-e0f9383d` — `GO100-SCALPING-RUNNER-WIRING-003`, `queued`, depends_on `runner-1514594c`.
 - 검증:
   - `python3 -m py_compile app/auth.py app/services/autonomous_executor.py app/services/tool_executor.py app/api/ceo_chat_tools.py app/api/pipeline_runner.py` 통과.
-  - `python3 -m pytest tests/unit/test_runner_scope_defaults.py -q` 결과 15 passed.
+  - `JWT_SECRET_KEY=test-secret-key python3 -m pytest tests/unit/test_runner_scope_defaults.py tests/unit/test_pipeline_runner_reliability.py -q` 결과 24 passed.
   - `docker exec aads-server-green bash /app/scripts/reload-api.sh` 성공, health `http://localhost:8102/api/v1/health` status ok.
   - blue-green 배포는 코드 검증까지 통과했으나 전환 대상 `aads-server:8100` 활성 스트림 5건으로 정책상 중단. 강제 배포는 하지 않았다.
 - 상태:

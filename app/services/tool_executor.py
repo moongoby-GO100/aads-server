@@ -4117,6 +4117,135 @@ class ToolExecutor:
 
     _INTERNAL_HEADERS = {"x-monitor-key": "internal-pipeline-call"}
 
+    async def _pipeline_runner_submit_db_fallback(self, payload: Dict[str, Any], reason: str) -> Any:
+        """Fallback when the internal Pipeline Runner HTTP API is unavailable."""
+        import hashlib
+        import uuid
+
+        from app.core.db_pool import get_pool
+
+        project = payload.get("project", "AADS")
+        instruction = payload.get("instruction", "")
+        session_id = payload.get("session_id", "")
+        if not instruction or not session_id:
+            return {"error": "DB fallback requires instruction and session_id", "fallback_reason": reason}
+
+        job_id = f"runner-{uuid.uuid4().hex[:8]}"
+        instruction_hash = hashlib.sha256(f"{project}:{instruction}".encode()).hexdigest()[:16]
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            tenant_id = await conn.fetchval(
+                "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid",
+                session_id,
+            )
+            if not tenant_id:
+                return {"error": "세션을 찾을 수 없습니다", "fallback_reason": reason}
+            existing = await conn.fetchrow(
+                """
+                SELECT job_id, status, phase
+                  FROM pipeline_jobs
+                 WHERE project = $1
+                   AND instruction_hash = $2
+                   AND tenant_id = $3::uuid
+                   AND status = ANY($4::text[])
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                project,
+                instruction_hash,
+                tenant_id,
+                [
+                    "queued",
+                    "claimed",
+                    "running",
+                    "awaiting_approval",
+                    "approved",
+                    "deploying",
+                    "rolling_back",
+                ],
+            )
+            if existing:
+                return {
+                    "job_id": existing["job_id"],
+                    "status": "dedup_blocked",
+                    "message": f"기존 작업을 계속 진행합니다: {existing['job_id']}",
+                    "fallback_reason": reason,
+                }
+            await conn.execute(
+                """
+                INSERT INTO pipeline_jobs
+                  (job_id, project, instruction, instruction_hash, chat_session_id,
+                   status, phase, max_cycles, size, worker_model,
+                   model_override_reason, parallel_group, depends_on,
+                   logs, created_at, updated_at, tenant_id)
+                VALUES ($1, $2, $3, $4, $5,
+                        'queued', 'queued', $6, $7, $8,
+                        $9, $10, $11,
+                        jsonb_build_array(jsonb_build_object(
+                            'ts', NOW()::text,
+                            'event', 'tool_executor_db_fallback',
+                            'reason', $12
+                        )),
+                        NOW(), NOW(), $13::uuid)
+                """,
+                job_id,
+                project,
+                instruction,
+                instruction_hash,
+                session_id,
+                int(payload.get("max_cycles", 3)),
+                payload.get("size", "M"),
+                payload.get("worker_model") or None,
+                payload.get("worker_model_reason") or None,
+                payload.get("parallel_group") or None,
+                payload.get("depends_on") or None,
+                reason,
+                tenant_id,
+            )
+            await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Pipeline Runner API 인증 실패로 DB fallback enqueue를 수행했습니다.",
+            "fallback_reason": reason,
+        }
+
+    async def _pipeline_runner_submit_batch_db_fallback(self, payload: Dict[str, Any], reason: str) -> Any:
+        project = payload.get("project", "AADS")
+        session_id = payload.get("session_id", "")
+        parallel_group = payload.get("parallel_group", "")
+        max_cycles = int(payload.get("max_cycles", 3))
+        key_to_job_id: Dict[str, str] = {}
+        results = []
+
+        for item in payload.get("jobs", []) or []:
+            depends_on = key_to_job_id.get(item.get("depends_on_key", ""))
+            result = await self._pipeline_runner_submit_db_fallback(
+                {
+                    "project": project,
+                    "instruction": item.get("instruction", ""),
+                    "session_id": session_id,
+                    "max_cycles": max_cycles,
+                    "size": item.get("size", "M"),
+                    "worker_model": item.get("worker_model", ""),
+                    "worker_model_reason": item.get("worker_model_reason", ""),
+                    "parallel_group": parallel_group,
+                    "depends_on": depends_on,
+                },
+                reason,
+            )
+            key = item.get("key", "")
+            if key and result.get("job_id"):
+                key_to_job_id[key] = result["job_id"]
+            results.append({"key": key, **result})
+
+        return {
+            "status": "queued",
+            "message": "Pipeline Runner API 인증 실패로 DB fallback batch enqueue를 수행했습니다.",
+            "jobs": results,
+            "fallback_reason": reason,
+        }
+
     async def _pipeline_runner_submit(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner로 작업 제출."""
         # 1순위: 현재 채팅 ContextVar
@@ -4131,23 +4260,29 @@ class ToolExecutor:
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
+        payload = {
+            "project": inp.get("project", "AADS"),
+            "instruction": inp.get("instruction", ""),
+            "session_id": _session_id,
+            "max_cycles": int(inp.get("max_cycles", 3)),
+            "size": inp.get("size", "M"),
+            **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
+            **({"worker_model_reason": inp["worker_model_reason"]} if inp.get("worker_model_reason") else {}),
+            **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),
+            **({"depends_on": inp["depends_on"]} if inp.get("depends_on") else {}),
+        }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 get_pipeline_runner_api_url("jobs"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={
-                    "project": inp.get("project", "AADS"),
-                    "instruction": inp.get("instruction", ""),
-                    "session_id": _session_id,
-                    "max_cycles": int(inp.get("max_cycles", 3)),
-                    "size": inp.get("size", "M"),
-                    **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
-                    **({"worker_model_reason": inp["worker_model_reason"]} if inp.get("worker_model_reason") else {}),
-                    **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),
-                    **({"depends_on": inp["depends_on"]} if inp.get("depends_on") else {}),
-                },
+                json=payload,
                 timeout=10,
             )
+            if getattr(resp, "status_code", 200) in {401, 403}:
+                return await self._pipeline_runner_submit_db_fallback(
+                    payload,
+                    f"http_{resp.status_code}: {resp.text[:200]}",
+                )
             return resp.json()
 
     async def _pipeline_runner_submit_batch(self, inp: Dict[str, Any]) -> Any:
@@ -4160,19 +4295,25 @@ class ToolExecutor:
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
+        payload = {
+            "project": inp.get("project", "AADS"),
+            "session_id": _session_id,
+            "jobs": inp.get("jobs", []),
+            "parallel_group": inp.get("parallel_group", ""),
+            "max_cycles": int(inp.get("max_cycles", 3)),
+        }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 get_pipeline_runner_api_url("jobs/batch"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={
-                    "project": inp.get("project", "AADS"),
-                    "session_id": _session_id,
-                    "jobs": inp.get("jobs", []),
-                    "parallel_group": inp.get("parallel_group", ""),
-                    "max_cycles": int(inp.get("max_cycles", 3)),
-                },
+                json=payload,
                 timeout=15,
             )
+            if getattr(resp, "status_code", 200) in {401, 403}:
+                return await self._pipeline_runner_submit_batch_db_fallback(
+                    payload,
+                    f"http_{resp.status_code}: {resp.text[:200]}",
+                )
             return resp.json()
 
     async def _pipeline_runner_status(self, inp: Dict[str, Any]) -> Any:

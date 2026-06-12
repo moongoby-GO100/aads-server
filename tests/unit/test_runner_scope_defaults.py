@@ -10,9 +10,10 @@ _SESSION_ID = "11111111-1111-1111-1111-111111111111"
 
 
 class _FakeResponse:
-    def __init__(self, *, text: str = "[]", payload=None) -> None:
+    def __init__(self, *, text: str = "[]", payload=None, status_code: int = 200) -> None:
         self.text = text
         self._payload = [] if payload is None else payload
+        self.status_code = status_code
 
     def json(self):
         return self._payload

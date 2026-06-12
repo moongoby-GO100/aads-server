@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 
+_TENANT_ID = "2d701a8c-9596-4757-8588-faa4f7837112"
+
+
 class _FakeConn:
     def __init__(self, *, fetchrow_result=None, fetch_result=None) -> None:
         self.fetchrow_result = fetchrow_result
@@ -78,6 +81,7 @@ async def test_find_active_file_conflict_detects_overlapping_instruction_files()
         conn,
         project="AADS",
         target_files={"server:app/api/pipeline_runner.py"},
+        tenant_id=_TENANT_ID,
     )
 
     assert conflict == {
@@ -126,6 +130,7 @@ async def test_record_dedup_blocked_persists_terminal_blocked_job():
         req=req,
         instruction_hash="hash123",
         existing={"job_id": "runner-live", "status": "running", "phase": "claude_code_work"},
+        tenant_id=_TENANT_ID,
     )
 
     query, args = conn.execute_calls[0]
