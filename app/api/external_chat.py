@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,13 +10,12 @@ from app.services import external_chat_gateway as gateway
 
 router = APIRouter(prefix="/external/chat", tags=["external-chat"])
 
-Provider = Literal["newtalk"]
-ServiceKey = Literal["v1_old", "v1_new", "v2"]
+EXTERNAL_KEY_PATTERN = r"^[a-zA-Z0-9_-]{1,80}$"
 
 
 class ExternalSessionRequest(BaseModel):
-    provider: Provider = "newtalk"
-    service: ServiceKey
+    provider: str = Field(default="newtalk", pattern=EXTERNAL_KEY_PATTERN)
+    service: str = Field(..., pattern=EXTERNAL_KEY_PATTERN)
     external_user_id: str = Field(..., min_length=1, max_length=200)
     display_name: str = Field(default="", max_length=200)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -38,7 +37,9 @@ async def require_external_chat_auth(request: Request) -> None:
 
     token = request.headers.get("x-aads-external-token", "")
     auth = request.headers.get("authorization", "")
-    if gateway.verify_service_token(token, settings) or gateway.verify_service_token(auth, settings):
+    if gateway.verify_service_token(token, settings) or gateway.verify_service_token(
+        auth, settings
+    ):
         return
 
     signature = request.headers.get("x-aads-signature", "")
@@ -55,13 +56,45 @@ async def require_external_chat_auth(request: Request) -> None:
     raise HTTPException(status_code=401, detail="invalid_external_chat_credentials")
 
 
-@router.get("/config")
-async def get_external_chat_config(
-    provider: Provider = Query("newtalk"),
-    service: ServiceKey = Query(...),
+def _value_error_status(detail: str) -> int:
+    if detail.endswith("_required") or detail.endswith("_invalid") or detail.endswith("_too_long"):
+        return 400
+    if detail == "external_chat_service_not_allowed":
+        return 403
+    if detail == "external_chat_tenant_not_configured":
+        return 503
+    return 404
+
+
+@router.get("/services")
+async def list_external_chat_services(
     _: None = Depends(require_external_chat_auth),
 ):
-    return gateway.widget_config(provider, service)
+    return {
+        "services": [
+            {
+                "provider": profile.provider,
+                "service": profile.service,
+                "workspace_name": profile.workspace_name,
+                "admin_only": gateway.get_settings().admin_only
+                if profile.admin_only is None
+                else profile.admin_only,
+            }
+            for profile in gateway.list_service_profiles()
+        ]
+    }
+
+
+@router.get("/config")
+async def get_external_chat_config(
+    provider: str = Query("newtalk", pattern=EXTERNAL_KEY_PATTERN),
+    service: str = Query(..., pattern=EXTERNAL_KEY_PATTERN),
+    _: None = Depends(require_external_chat_auth),
+):
+    try:
+        return gateway.widget_config(provider, service)
+    except ValueError as exc:
+        raise HTTPException(status_code=_value_error_status(str(exc)), detail=str(exc)) from exc
 
 
 @router.post("/sessions", status_code=201)
@@ -79,8 +112,7 @@ async def create_external_chat_session(
         )
     except ValueError as exc:
         detail = str(exc)
-        status = 400 if detail.endswith("_required") else 503
-        raise HTTPException(status_code=status, detail=detail) from exc
+        raise HTTPException(status_code=_value_error_status(detail), detail=detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -118,8 +150,7 @@ async def send_external_chat_message(
         )
     except ValueError as exc:
         detail = str(exc)
-        status = 400 if detail.endswith("_required") else 404
-        raise HTTPException(status_code=status, detail=detail) from exc
+        raise HTTPException(status_code=_value_error_status(detail), detail=detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PermissionError as exc:

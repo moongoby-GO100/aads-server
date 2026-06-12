@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, AsyncGenerator, Literal
+from typing import Any, AsyncGenerator
 
 import asyncpg
 import structlog
@@ -24,11 +24,8 @@ from app.services.tenant_usage_limits import (
 
 logger = structlog.get_logger(__name__)
 
-Provider = Literal["newtalk"]
-ServiceKey = Literal["v1_old", "v1_new", "v2"]
-
-DEFAULT_PROVIDER: Provider = "newtalk"
-DEFAULT_SERVICES: tuple[ServiceKey, ...] = ("v1_old", "v1_new", "v2")
+DEFAULT_PROVIDER = "newtalk"
+DEFAULT_SERVICES: tuple[str, ...] = ("v1_old", "v1_new", "v2")
 DEFAULT_WORKSPACE_NAME = "[NTV2] NewTalk V2"
 DEFAULT_SYSTEM_PROMPT = (
     "You are AADS AI embedded in NewTalk. Help operators improve service, "
@@ -36,6 +33,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "Do not expose internal secrets or perform destructive actions."
 )
 DEFAULT_DIRECT_MODEL = "qwen-turbo"
+DEFAULT_COLOR = "#06B6D4"
+DEFAULT_ICON = "AI"
 
 
 @dataclass(frozen=True)
@@ -52,6 +51,18 @@ class ExternalChatSettings:
     allowed_origins: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ExternalServiceProfile:
+    provider: str
+    service: str
+    workspace_name: str
+    system_prompt: str
+    session_title_prefix: str
+    color: str = DEFAULT_COLOR
+    icon: str = DEFAULT_ICON
+    admin_only: bool | None = None
+
+
 def _truthy(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -60,6 +71,18 @@ def _truthy(value: str | None, *, default: bool = False) -> bool:
 
 def _csv_env(name: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in os.getenv(name, "").split(",") if part.strip())
+
+
+def _normalize_external_key(value: str, *, field: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        raise ValueError(f"{field}_required")
+    if len(normalized) > 80:
+        raise ValueError(f"{field}_too_long")
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+    if any(ch not in allowed for ch in normalized):
+        raise ValueError(f"{field}_invalid")
+    return normalized
 
 
 def get_settings() -> ExternalChatSettings:
@@ -75,7 +98,9 @@ def get_settings() -> ExternalChatSettings:
         tokens=tuple(dict.fromkeys(tokens)),
         hmac_secret=os.getenv("AADS_EXTERNAL_CHAT_HMAC_SECRET", "").strip(),
         tenant_id=os.getenv("AADS_EXTERNAL_CHAT_TENANT_ID", "").strip(),
-        workspace_name=os.getenv("AADS_EXTERNAL_CHAT_WORKSPACE_NAME", DEFAULT_WORKSPACE_NAME).strip()
+        workspace_name=os.getenv(
+            "AADS_EXTERNAL_CHAT_WORKSPACE_NAME", DEFAULT_WORKSPACE_NAME
+        ).strip()
         or DEFAULT_WORKSPACE_NAME,
         model=os.getenv("AADS_EXTERNAL_CHAT_MODEL", "").strip(),
         unlimited_first=_truthy(os.getenv("AADS_EXTERNAL_CHAT_UNLIMITED_FIRST"), default=True),
@@ -89,6 +114,138 @@ def _direct_model(settings: ExternalChatSettings) -> str:
         or os.getenv("AADS_EXTERNAL_CHAT_DIRECT_MODEL", "").strip()
         or DEFAULT_DIRECT_MODEL
     )
+
+
+def _default_service_profiles(
+    settings: ExternalChatSettings | None = None,
+) -> dict[tuple[str, str], ExternalServiceProfile]:
+    cfg = settings or get_settings()
+    profiles: dict[tuple[str, str], ExternalServiceProfile] = {}
+    for service in DEFAULT_SERVICES:
+        profiles[(DEFAULT_PROVIDER, service)] = ExternalServiceProfile(
+            provider=DEFAULT_PROVIDER,
+            service=service,
+            workspace_name=cfg.workspace_name,
+            system_prompt=DEFAULT_SYSTEM_PROMPT,
+            session_title_prefix=f"NewTalk {service}",
+            color="#06B6D4",
+            icon="NT",
+        )
+    return profiles
+
+
+def _profile_from_mapping(
+    *,
+    provider: str,
+    service: str,
+    raw: dict[str, Any] | None,
+    settings: ExternalChatSettings,
+) -> ExternalServiceProfile:
+    data = raw or {}
+    return ExternalServiceProfile(
+        provider=provider,
+        service=service,
+        workspace_name=str(
+            data.get("workspace_name")
+            or data.get("workspace")
+            or f"[{provider.upper()}] {service} AI"
+        ).strip(),
+        system_prompt=str(data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT).strip()
+        or DEFAULT_SYSTEM_PROMPT,
+        session_title_prefix=str(
+            data.get("session_title_prefix") or f"{provider.upper()} {service}"
+        ).strip(),
+        color=str(data.get("color") or DEFAULT_COLOR).strip()[:20] or DEFAULT_COLOR,
+        icon=str(data.get("icon") or provider[:2].upper() or DEFAULT_ICON).strip()[:8]
+        or DEFAULT_ICON,
+        admin_only=data.get("admin_only") if isinstance(data.get("admin_only"), bool) else None,
+    )
+
+
+def _load_registry_profiles(
+    settings: ExternalChatSettings,
+) -> dict[tuple[str, str], ExternalServiceProfile]:
+    profiles = _default_service_profiles(settings)
+
+    for item in _csv_env("AADS_EXTERNAL_CHAT_ALLOWED_SERVICES"):
+        if ":" not in item:
+            logger.warning("external_chat.allowed_service_invalid", item=item)
+            continue
+        provider_raw, service_raw = item.split(":", 1)
+        try:
+            provider = _normalize_external_key(provider_raw, field="provider")
+            service = _normalize_external_key(service_raw, field="service")
+        except ValueError:
+            logger.warning("external_chat.allowed_service_invalid", item=item)
+            continue
+        profiles[(provider, service)] = _profile_from_mapping(
+            provider=provider,
+            service=service,
+            raw=None,
+            settings=settings,
+        )
+
+    registry_raw = os.getenv("AADS_EXTERNAL_CHAT_SERVICE_REGISTRY", "").strip()
+    if not registry_raw:
+        return profiles
+    try:
+        registry = json.loads(registry_raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("external_chat.registry_json_invalid", error=str(exc))
+        return profiles
+
+    entries: list[dict[str, Any]] = []
+    if isinstance(registry, dict):
+        for key, value in registry.items():
+            entry = value if isinstance(value, dict) else {}
+            if ":" in str(key):
+                provider_raw, service_raw = str(key).split(":", 1)
+                entries.append({"provider": provider_raw, "service": service_raw, **entry})
+            elif isinstance(value, dict):
+                for service_key, service_value in value.items():
+                    service_entry = service_value if isinstance(service_value, dict) else {}
+                    entries.append({"provider": key, "service": service_key, **service_entry})
+    elif isinstance(registry, list):
+        entries = [entry for entry in registry if isinstance(entry, dict)]
+
+    for entry in entries:
+        try:
+            provider = _normalize_external_key(str(entry.get("provider") or ""), field="provider")
+            service = _normalize_external_key(str(entry.get("service") or ""), field="service")
+        except ValueError:
+            logger.warning("external_chat.registry_entry_invalid", entry=entry)
+            continue
+        profiles[(provider, service)] = _profile_from_mapping(
+            provider=provider,
+            service=service,
+            raw=entry,
+            settings=settings,
+        )
+    return profiles
+
+
+def list_service_profiles(
+    settings: ExternalChatSettings | None = None,
+) -> list[ExternalServiceProfile]:
+    cfg = settings or get_settings()
+    return sorted(
+        _load_registry_profiles(cfg).values(),
+        key=lambda item: (item.provider, item.service),
+    )
+
+
+def resolve_service_profile(
+    provider: str,
+    service: str,
+    settings: ExternalChatSettings | None = None,
+) -> ExternalServiceProfile:
+    cfg = settings or get_settings()
+    provider_key = _normalize_external_key(provider, field="provider")
+    service_key = _normalize_external_key(service, field="service")
+    profile = _load_registry_profiles(cfg).get((provider_key, service_key))
+    if not profile:
+        raise ValueError("external_chat_service_not_allowed")
+    return profile
 
 
 def verify_service_token(token: str, settings: ExternalChatSettings | None = None) -> bool:
@@ -185,7 +342,7 @@ async def resolve_workspace_id(
     conn: asyncpg.Connection,
     *,
     tenant_id: str,
-    workspace_name: str,
+    profile: ExternalServiceProfile,
 ) -> str:
     row = await conn.fetchrow(
         """
@@ -196,7 +353,7 @@ async def resolve_workspace_id(
          LIMIT 1
         """,
         tenant_id,
-        workspace_name,
+        profile.workspace_name,
     )
     if row:
         return str(row["id"])
@@ -206,21 +363,25 @@ async def resolve_workspace_id(
         INSERT INTO chat_workspaces
             (tenant_id, name, system_prompt, files, settings, color, icon)
         VALUES
-            ($1::uuid, $2, $3, '[]'::jsonb, $4::jsonb, '#06B6D4', 'NT')
+            ($1::uuid, $2, $3, '[]'::jsonb, $4::jsonb, $5, $6)
         RETURNING id::text
         """,
         tenant_id,
-        workspace_name,
-        DEFAULT_SYSTEM_PROMPT,
-        json.dumps({"external_chat": True, "provider": DEFAULT_PROVIDER}),
+        profile.workspace_name,
+        profile.system_prompt,
+        json.dumps(
+            {"external_chat": True, "provider": profile.provider, "service": profile.service}
+        ),
+        profile.color,
+        profile.icon,
     )
     return str(row["id"])
 
 
 async def create_or_resume_session(
     *,
-    provider: Provider,
-    service: ServiceKey,
+    provider: str,
+    service: str,
     external_user_id: str,
     display_name: str = "",
     metadata: dict[str, Any] | None = None,
@@ -229,11 +390,12 @@ async def create_or_resume_session(
     cfg = settings or get_settings()
     if cfg.kill_switch:
         raise RuntimeError("external_chat_disabled_by_kill_switch")
+    profile = resolve_service_profile(provider, service, cfg)
 
     clean_user_id = external_user_id.strip()
     if not clean_user_id:
         raise ValueError("external_user_id_required")
-    assert_admin_context(metadata or {}, cfg)
+    assert_admin_context(metadata or {}, cfg, admin_only=profile.admin_only)
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -250,8 +412,8 @@ async def create_or_resume_session(
                AND tenant_id = $4::uuid
              LIMIT 1
             """,
-            provider,
-            service,
+            profile.provider,
+            profile.service,
             clean_user_id,
             tenant_id,
         )
@@ -276,9 +438,9 @@ async def create_or_resume_session(
         workspace_id = await resolve_workspace_id(
             conn,
             tenant_id=tenant_id,
-            workspace_name=cfg.workspace_name,
+            profile=profile,
         )
-        title = f"NewTalk {service} - {clean_user_id[:80]}"
+        title = f"{profile.session_title_prefix} - {clean_user_id[:80]}"
         chat_session = await chat_service.create_session(
             {
                 "workspace_id": workspace_id,
@@ -297,8 +459,8 @@ async def create_or_resume_session(
             RETURNING id::text, aads_session_id::text, tenant_id::text, provider, service,
                       external_user_id, display_name, metadata, created_at, updated_at, last_seen_at
             """,
-            provider,
-            service,
+            profile.provider,
+            profile.service,
             clean_user_id,
             display_name.strip() or None,
             str(chat_session["id"]),
@@ -354,10 +516,13 @@ async def send_message(
     session = await get_external_session(external_session_id)
     if not session:
         raise ValueError("external_session_not_found")
+    profile = resolve_service_profile(session["provider"], session["service"], cfg)
     clean_content = content.strip()
     if not clean_content:
         raise ValueError("content_required")
-    assert_admin_context(session.get("metadata") or metadata or {}, cfg)
+    assert_admin_context(
+        session.get("metadata") or metadata or {}, cfg, admin_only=profile.admin_only
+    )
 
     usage_status = "not_checked"
     soft_bypass = False
@@ -393,6 +558,7 @@ async def send_message(
             content=clean_content,
             metadata=metadata or {},
             settings=cfg,
+            profile=profile,
         )
         return {
             "external_session_id": session["id"],
@@ -438,12 +604,16 @@ async def send_direct_message(
     content: str,
     metadata: dict[str, Any],
     settings: ExternalChatSettings,
+    profile: ExternalServiceProfile | None = None,
 ) -> tuple[str, str]:
     model = _direct_model(settings)
+    service_profile = profile or resolve_service_profile(
+        session["provider"], session["service"], settings
+    )
     service = str(session.get("service") or "")
-    display_name = str(session.get("display_name") or "NewTalk admin")
+    display_name = str(session.get("display_name") or "External admin")
     system = (
-        f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+        f"{service_profile.system_prompt}\n\n"
         "Respond in Korean unless the user asks otherwise. "
         "Keep the answer concise and operational. "
         "If an action is risky or requires unavailable credentials, say so directly."
@@ -550,12 +720,14 @@ async def record_usage_event(
         )
 
 
-def widget_config(provider: Provider, service: ServiceKey) -> dict[str, Any]:
+def widget_config(provider: str, service: str) -> dict[str, Any]:
     cfg = get_settings()
+    profile = resolve_service_profile(provider, service, cfg)
     return {
-        "provider": provider,
-        "service": service,
+        "provider": profile.provider,
+        "service": profile.service,
         "enabled": cfg.enabled and not cfg.kill_switch,
+        "workspace_name": profile.workspace_name,
         "features": {
             "history": True,
             "message_send": True,
@@ -565,16 +737,25 @@ def widget_config(provider: Provider, service: ServiceKey) -> dict[str, Any]:
         },
         "policy": {
             "usage_mode": "soft_telemetry" if cfg.unlimited_first else "hard_limit",
-            "admin_only": cfg.admin_only,
+            "admin_only": cfg.admin_only if profile.admin_only is None else profile.admin_only,
             "requires_server_proxy": True,
-            "supported_services": list(DEFAULT_SERVICES),
+            "supported_services": [
+                {"provider": item.provider, "service": item.service}
+                for item in list_service_profiles(cfg)
+            ],
         },
     }
 
 
-def assert_admin_context(metadata: dict[str, Any] | str | None, settings: ExternalChatSettings | None = None) -> None:
+def assert_admin_context(
+    metadata: dict[str, Any] | str | None,
+    settings: ExternalChatSettings | None = None,
+    *,
+    admin_only: bool | None = None,
+) -> None:
     cfg = settings or get_settings()
-    if not cfg.admin_only:
+    require_admin = cfg.admin_only if admin_only is None else admin_only
+    if not require_admin:
         return
     if metadata_has_admin_context(metadata or {}):
         return

@@ -27,6 +27,12 @@
 - 검증 보안: 비로그인 `/aads-chat/config?service=v1_new` 호출은 `Unauthenticated`로 차단됐고, `auth_code=80` 테스트 세션의 `/aads-chat/config?service=v1_new`는 `403 Forbidden`으로 차단됐다. 임시 `PHPSESSIDaads*` 테스트 세션은 검증 후 삭제했고 잔여 0건을 확인했다.
 - 운영 주의: `/home/newpigup3` 레거시 저장소는 기존 대량 dirty 상태이며, `routes.php`/`head.php` diff에는 이번 AADS chat 외 기존 입점상담/푸시/카카오 가드 변경이 섞여 있어 선별 커밋은 보류했다. `application/config/aads_chat.php`는 토큰 가능성이 있어 커밋 대상에서 제외해야 한다.
 
+## 2026-06-12
+- External Chat Gateway 범용화: 뉴톡 전용 `Literal["newtalk"]` / `v1_old|v1_new|v2` 제한을 제거하고, `AADS_EXTERNAL_CHAT_ALLOWED_SERVICES` CSV 또는 `AADS_EXTERNAL_CHAT_SERVICE_REGISTRY` JSON으로 외부 서비스별 `provider:service`를 등록할 수 있게 했다. 미등록 서비스는 `external_chat_service_not_allowed`로 403 차단된다.
+- 등록 서비스별 워크스페이스명, 시스템 프롬프트, 세션 제목 prefix, 색상, 아이콘, `admin_only` override를 지원한다. 기본 뉴톡 3개 서비스는 기존 호환성을 유지한다.
+- API 보강: `/api/v1/external/chat/services`가 토큰/HMAC 인증 후 등록된 외부 서비스 목록을 반환하고, `/config`, `/sessions`, `/messages`는 범용 provider/service 문자열을 받되 안전한 key 패턴과 등록 검증을 통과해야 한다.
+- 검증: `python3 -m py_compile app/services/external_chat_gateway.py app/api/external_chat.py`, `python3 -m pytest tests/unit/test_external_chat_gateway.py -q` 12개 통과. 운영 컨테이너 `aads-server-green`에서 `sf:ops` 등록 config import 검증 통과. 컨테이너 내부 pytest는 tests 디렉터리 미마운트 상태라 기존 컨테이너 내 8개 테스트만 실행됨.
+
 ## 2026-06-10
 - Chat completed-execution terminal-only repair: session `efccec7c-0788-4564-a2cf-265c63d075f0` showed a completed execution (`0a5a3a4a-2164-4b1b-89fa-8c9a22a1cb3a`) whose visible assistant row remained `interrupted_partial`, so the chat bubble changed from completed to interrupted. `app/services/chat_service.py` now repairs completed executions by keeping one final assistant row and archiving duplicate `streaming_placeholder/interrupted_partial/interruption_notice` siblings as `_archived_partial` instead of deleting them.
 - Live DB backfill: 26 completed executions that had only terminal placeholder/interrupted rows and no final assistant row were repaired; 5 sibling terminal rows were archived; follow-up verification returned `remaining_completed_execs_with_terminal_only=0`. Target session `efccec7c...` now has `assistant_message_id=47338bf2-d6b1-42c9-b570-03a37fcd79ab`, `intent=NULL`, `model_used=gpt-5.5`.

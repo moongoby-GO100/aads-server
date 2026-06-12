@@ -28,13 +28,54 @@ def test_external_chat_token_and_hmac_verification(monkeypatch):
     assert not gateway.verify_hmac_signature(body=body, signature="sha256=bad", settings=settings)
 
 
+def test_external_chat_service_registry_allows_non_newtalk_service(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.setenv(
+        "AADS_EXTERNAL_CHAT_SERVICE_REGISTRY",
+        '{"go100:admin":{"workspace_name":"[GO100] AI Ops","session_title_prefix":"GO100 Admin","admin_only":false}}',
+    )
+
+    profile = gateway.resolve_service_profile("GO100", "ADMIN")
+    assert profile.provider == "go100"
+    assert profile.service == "admin"
+    assert profile.workspace_name == "[GO100] AI Ops"
+    assert profile.admin_only is False
+
+    config = gateway.widget_config("go100", "admin")
+    assert config["provider"] == "go100"
+    assert config["service"] == "admin"
+    assert config["policy"]["admin_only"] is False
+    assert {"provider": "go100", "service": "admin"} in config["policy"]["supported_services"]
+
+
+def test_external_chat_rejects_unregistered_service(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.delenv("AADS_EXTERNAL_CHAT_ALLOWED_SERVICES", raising=False)
+    monkeypatch.delenv("AADS_EXTERNAL_CHAT_SERVICE_REGISTRY", raising=False)
+
+    with pytest.raises(ValueError, match="external_chat_service_not_allowed"):
+        gateway.resolve_service_profile("unknown", "admin")
+
+
+def test_external_chat_allowed_services_csv_creates_profile(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_ALLOWED_SERVICES", "sf:ops, go100:admin")
+
+    profiles = {(item.provider, item.service): item for item in gateway.list_service_profiles()}
+    assert ("sf", "ops") in profiles
+    assert profiles[("sf", "ops")].workspace_name == "[SF] ops AI"
+    assert ("go100", "admin") in profiles
+
+
 @pytest.mark.asyncio
 async def test_external_chat_config_requires_service_token(monkeypatch):
     monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         rejected = await client.get("/api/v1/external/chat/config?provider=newtalk&service=v2")
         accepted = await client.get(
             "/api/v1/external/chat/config?provider=newtalk&service=v2",
@@ -50,12 +91,40 @@ async def test_external_chat_config_requires_service_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_external_chat_config_supports_registered_service(monkeypatch):
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
+    monkeypatch.setenv("AADS_EXTERNAL_CHAT_ALLOWED_SERVICES", "sf:ops")
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        accepted = await client.get(
+            "/api/v1/external/chat/config?provider=sf&service=ops",
+            headers={"X-AADS-External-Token": "secret-token"},
+        )
+        rejected = await client.get(
+            "/api/v1/external/chat/config?provider=sf&service=unknown",
+            headers={"X-AADS-External-Token": "secret-token"},
+        )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["provider"] == "sf"
+    assert accepted.json()["service"] == "ops"
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"] == "external_chat_service_not_allowed"
+
+
+@pytest.mark.asyncio
 async def test_external_chat_session_requires_admin_context(monkeypatch):
     monkeypatch.setenv("AADS_EXTERNAL_CHAT_TOKEN", "secret-token")
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         response = await client.post(
             "/api/v1/external/chat/sessions",
             headers={"X-AADS-External-Token": "secret-token"},
