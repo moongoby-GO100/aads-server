@@ -2441,6 +2441,20 @@
   - `npx tsc --noEmit --pretty false` 통과.
 - 주의: 전체 `api.ts` lint는 기존 `no-explicit-any` 부채로 실패한다. 이번 신규 페이지 단독 lint와 TypeScript 검증은 통과했다.
 
+## 2026-06-12 13:26 KST - Admin user session audit API and attribution
+- 배경: CEO가 어드민 메뉴 이동 지연과 관리자 사용자별 세션 접근 가능 여부를 확인·조치하라고 지시했다.
+- 조치:
+  - `app/api/admin.py`의 `/api/v1/admin/sessions`를 tenant/user/email/search 필터 가능하게 확장하고 tenant, 사용자/멤버 이메일, 최근 user/assistant 메시지 preview를 반환한다.
+  - `/api/v1/admin/sessions/{session_id}` 관리자 전용 메시지 상세 조회 API를 추가했다.
+  - `migrations/109_chat_sessions_user_attribution.sql`로 `chat_sessions.user_id` nullable 컬럼과 user/tenant-user 인덱스를 추가했다.
+  - `app/routers/chat.py`와 `app/services/chat_service.py`에서 신규 세션 생성 시 현재 로그인 사용자 ID를 저장한다. 기존 세션은 `user_id`가 없으므로 active tenant membership 기준으로 관리자 조회한다.
+- 검증:
+  - `python3 -m py_compile app/api/admin.py app/routers/chat.py app/services/chat_service.py` 통과.
+  - 운영 DB migration 적용 확인: `chat_sessions.user_id` 컬럼, `idx_chat_sessions_user_updated`, `idx_chat_sessions_tenant_user_updated` 인덱스 생성 확인.
+  - 직접 함수 검증: 관리자 세션 목록 3건 조회, 세션 상세 메시지 2건 반환, 블루샵 사용자 `objgood@naver.com` 기준 tenant 세션 3건 조회 확인.
+- 주의:
+  - 과거 세션은 작성자 ID가 없어 tenant 기준으로만 사용자별 접근이 가능하다. 신규 세션부터 작성자 단위 감사가 가능하다.
+
 ## 2026-06-12 11:50 KST - CEO home/admin access from chat restored
 - 배경: CEO 계정의 채팅창 홈 버튼(`/`) 이동이 관리자 홈으로 열리지 않고 `/chat`으로 되돌아가는 증상이 보고됐다.
 - 원인:

@@ -5403,7 +5403,11 @@ async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] =
         return [_row_to_dict(r) for r in rows]
 
 
-async def create_session(data: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
+async def create_session(
+    data: Dict[str, Any],
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
     tenant_uuid = _require_tenant_uuid(tenant_id, "create_session")
     async with get_pool().acquire() as conn:
         ws_id = uuid.UUID(str(data["workspace_id"]))
@@ -5436,18 +5440,43 @@ async def create_session(data: Dict[str, Any], tenant_id: Optional[str] = None) 
                 role_key = str(ws_settings.get("default_role_key") or "").strip() or None
         if workspace_is_customer:
             role_key = _CUSTOMER_ROLE
-        row = await conn.fetchrow(
+        has_user_id = bool(await conn.fetchval(
             """
-            INSERT INTO chat_sessions (tenant_id, workspace_id, title, current_model, role_key)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING *
-            """,
-            workspace_tenant_id,
-            ws_id,
-            title,
-            current_model,
-            role_key,
-        )
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'chat_sessions'
+              AND column_name = 'user_id'
+            LIMIT 1
+            """
+        ))
+        if has_user_id:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_sessions (tenant_id, user_id, workspace_id, title, current_model, role_key)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING *
+                """,
+                workspace_tenant_id,
+                user_id,
+                ws_id,
+                title,
+                current_model,
+                role_key,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_sessions (tenant_id, workspace_id, title, current_model, role_key)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING *
+                """,
+                workspace_tenant_id,
+                ws_id,
+                title,
+                current_model,
+                role_key,
+            )
         return _row_to_dict(row)
 
 

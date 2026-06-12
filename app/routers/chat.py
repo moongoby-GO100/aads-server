@@ -63,6 +63,10 @@ def _tenant_id(context: TenantContext) -> str:
     return str(context["tenant"]["id"])
 
 
+def _user_id(context: TenantContext) -> str:
+    return str(context["user"]["user_id"])
+
+
 def _NOT_FOUND(name: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{name} not found")
 
@@ -894,7 +898,11 @@ async def create_session(
 ):
     """세션 생성."""
     try:
-        return await svc.create_session(req.model_dump(), tenant_id=_tenant_id(context))
+        return await svc.create_session(
+            req.model_dump(),
+            tenant_id=_tenant_id(context),
+            user_id=_user_id(context),
+        )
     except ValueError as e:
         if str(e) == "workspace_not_found_for_tenant":
             raise _NOT_FOUND("workspace")

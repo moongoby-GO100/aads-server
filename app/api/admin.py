@@ -1683,9 +1683,18 @@ async def get_admin_agent(role: str):
 
 @router.get("/admin/sessions")
 async def list_admin_sessions(
-    limit: int = Query(200, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=500),
+    user_id: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    tenant_id: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
 ):
-    """Chat sessions summary for the admin session replay page."""
+    """Chat sessions summary for the admin session replay page.
+
+    Sessions created before SaaS user attribution may not have chat_sessions.user_id.
+    Those rows are still visible through their tenant membership so admins can audit
+    customer activity without crossing tenant data in the normal user API.
+    """
     from app.core.db_pool import get_pool
 
     pool = get_pool()
@@ -1695,6 +1704,10 @@ async def list_admin_sessions(
 
         has_workspaces = await _admin_table_exists(conn, "chat_workspaces")
         has_messages = await _admin_table_exists(conn, "chat_messages")
+        has_tenants = await _admin_table_exists(conn, "tenants")
+        has_users = await _admin_table_exists(conn, "saas_users")
+        has_memberships = await _admin_table_exists(conn, "tenant_memberships")
+        has_session_user_id = await _admin_column_exists(conn, "chat_sessions", "user_id")
         workspace_join = (
             "LEFT JOIN chat_workspaces cw ON cw.id = s.workspace_id"
             if has_workspaces else ""
@@ -1703,33 +1716,151 @@ async def list_admin_sessions(
             "COALESCE(cw.name, s.workspace_id::text)"
             if has_workspaces else "s.workspace_id::text"
         )
+        tenant_join = "LEFT JOIN tenants t ON t.id = s.tenant_id" if has_tenants else ""
+        tenant_name_expr = "COALESCE(t.name, s.tenant_id::text)" if has_tenants else "s.tenant_id::text"
+        tenant_kind_expr = "COALESCE(t.kind, '')" if has_tenants else "''"
         message_count_expr = (
             "(SELECT COUNT(*)::int FROM chat_messages m WHERE m.session_id = s.id)"
             if has_messages else "0::int"
         )
+        latest_user_expr = (
+            """
+            (SELECT LEFT(m.content, 180)
+               FROM chat_messages m
+              WHERE m.session_id = s.id AND m.role = 'user'
+              ORDER BY m.created_at DESC NULLS LAST
+              LIMIT 1)
+            """
+            if has_messages else "NULL::text"
+        )
+        latest_assistant_expr = (
+            """
+            (SELECT LEFT(m.content, 180)
+               FROM chat_messages m
+              WHERE m.session_id = s.id AND m.role = 'assistant'
+              ORDER BY m.created_at DESC NULLS LAST
+              LIMIT 1)
+            """
+            if has_messages else "NULL::text"
+        )
+        user_join = ""
+        user_select_expr = "NULL::text AS user_id, NULL::text AS user_email, NULL::text AS user_name"
+        user_group_expr = "NULL::text AS member_emails"
+        if has_users and has_session_user_id:
+            user_join = "LEFT JOIN saas_users su ON su.id = s.user_id"
+            user_select_expr = "su.id::text AS user_id, su.email AS user_email, su.name AS user_name"
+        if has_users and has_memberships:
+            user_join += """
+            LEFT JOIN tenant_memberships tm
+              ON tm.tenant_id = s.tenant_id
+             AND tm.status = 'active'
+             AND tm.deleted_at IS NULL
+            LEFT JOIN saas_users member_u ON member_u.id = tm.user_id
+            """
+            user_group_expr = "STRING_AGG(DISTINCT member_u.email, ', ' ORDER BY member_u.email) AS member_emails"
+
+        params: list[Any] = []
+        filters: list[str] = []
+
+        def add_param(value: Any) -> str:
+            params.append(value)
+            return f"${len(params)}"
+
+        if tenant_id:
+            filters.append(f"s.tenant_id::text = {add_param(tenant_id)}")
+        if user_id:
+            token = add_param(user_id)
+            user_filters = []
+            if has_session_user_id:
+                user_filters.append(f"s.user_id::text = {token}")
+            if has_memberships:
+                user_filters.append(
+                    "EXISTS (SELECT 1 FROM tenant_memberships ftm "
+                    f"WHERE ftm.tenant_id = s.tenant_id AND ftm.user_id::text = {token} "
+                    "AND ftm.status = 'active' AND ftm.deleted_at IS NULL)"
+                )
+            if user_filters:
+                filters.append("(" + " OR ".join(user_filters) + ")")
+        if email and has_users:
+            token = add_param(email.strip().lower())
+            email_filters = []
+            if has_session_user_id:
+                email_filters.append(
+                    "EXISTS (SELECT 1 FROM saas_users fsu "
+                    f"WHERE fsu.id = s.user_id AND LOWER(fsu.email) = {token})"
+                )
+            if has_memberships:
+                email_filters.append(
+                    "EXISTS (SELECT 1 FROM tenant_memberships etm "
+                    "JOIN saas_users esu ON esu.id = etm.user_id "
+                    f"WHERE etm.tenant_id = s.tenant_id AND LOWER(esu.email) = {token} "
+                    "AND etm.status = 'active' AND etm.deleted_at IS NULL)"
+                )
+            if email_filters:
+                filters.append("(" + " OR ".join(email_filters) + ")")
+        if search:
+            token = add_param(f"%{search.strip().lower()}%")
+            search_filters = [f"LOWER(COALESCE(s.title, '')) LIKE {token}"]
+            if has_workspaces:
+                search_filters.append(f"LOWER(COALESCE(cw.name, '')) LIKE {token}")
+            if has_tenants:
+                search_filters.append(f"LOWER(COALESCE(t.name, '')) LIKE {token}")
+            if has_users and has_memberships:
+                search_filters.append(
+                    "EXISTS (SELECT 1 FROM tenant_memberships stm "
+                    "JOIN saas_users ssu ON ssu.id = stm.user_id "
+                    f"WHERE stm.tenant_id = s.tenant_id AND LOWER(COALESCE(ssu.email, '')) LIKE {token} "
+                    "AND stm.status = 'active' AND stm.deleted_at IS NULL)"
+                )
+            filters.append("(" + " OR ".join(search_filters) + ")")
+
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        limit_token = add_param(limit)
 
         rows = await conn.fetch(
             f"""
             SELECT
                 s.id::text AS session_id,
+                s.tenant_id::text AS tenant_id,
+                {tenant_name_expr} AS tenant_name,
+                {tenant_kind_expr} AS tenant_kind,
                 {workspace_expr} AS workspace,
                 s.title,
                 s.role_key,
                 s.current_model,
                 s.created_at,
                 s.updated_at,
-                {message_count_expr} AS message_count
+                {message_count_expr} AS message_count,
+                {latest_user_expr} AS latest_user_message,
+                {latest_assistant_expr} AS latest_assistant_message,
+                {user_select_expr},
+                {user_group_expr}
             FROM chat_sessions s
             {workspace_join}
+            {tenant_join}
+            {user_join}
+            {where_sql}
+            GROUP BY s.id, s.tenant_id, s.workspace_id, s.title, s.role_key,
+                     s.current_model, s.created_at, s.updated_at
+                     {', cw.name' if has_workspaces else ''}
+                     {', t.name, t.kind' if has_tenants else ''}
+                     {', su.id, su.email, su.name' if has_users and has_session_user_id else ''}
             ORDER BY COALESCE(s.updated_at, s.created_at) DESC NULLS LAST
-            LIMIT $1
+            LIMIT {limit_token}
             """,
-            limit,
+            *params,
         )
 
     sessions = [
         {
             "session_id": row["session_id"],
+            "tenant_id": row["tenant_id"],
+            "tenant_name": row["tenant_name"] or "-",
+            "tenant_kind": row["tenant_kind"] or "",
+            "user_id": row["user_id"],
+            "user_email": row["user_email"] or "",
+            "user_name": row["user_name"] or "",
+            "member_emails": row["member_emails"] or "",
             "workspace": row["workspace"] or "-",
             "title": row["title"] or "",
             "role_key": row["role_key"] or "",
@@ -1737,10 +1868,117 @@ async def list_admin_sessions(
             "created_at": _admin_iso(row["created_at"]),
             "updated_at": _admin_iso(row["updated_at"]),
             "message_count": int(row["message_count"] or 0),
+            "latest_user_message": row["latest_user_message"] or "",
+            "latest_assistant_message": row["latest_assistant_message"] or "",
         }
         for row in rows
     ]
     return {"sessions": sessions, "total": len(sessions)}
+
+
+@router.get("/admin/sessions/{session_id}")
+async def get_admin_session_detail(
+    session_id: str,
+    limit: int = Query(80, ge=1, le=300),
+):
+    """Admin-only session detail with recent messages."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if not await _admin_table_exists(conn, "chat_sessions"):
+            raise HTTPException(404, "session not found")
+
+        has_workspaces = await _admin_table_exists(conn, "chat_workspaces")
+        has_tenants = await _admin_table_exists(conn, "tenants")
+        has_messages = await _admin_table_exists(conn, "chat_messages")
+        has_users = await _admin_table_exists(conn, "saas_users")
+        has_session_user_id = await _admin_column_exists(conn, "chat_sessions", "user_id")
+
+        workspace_join = "LEFT JOIN chat_workspaces cw ON cw.id = s.workspace_id" if has_workspaces else ""
+        tenant_join = "LEFT JOIN tenants t ON t.id = s.tenant_id" if has_tenants else ""
+        user_join = "LEFT JOIN saas_users su ON su.id = s.user_id" if has_users and has_session_user_id else ""
+        workspace_expr = "COALESCE(cw.name, s.workspace_id::text)" if has_workspaces else "s.workspace_id::text"
+        tenant_name_expr = "COALESCE(t.name, s.tenant_id::text)" if has_tenants else "s.tenant_id::text"
+        user_expr = (
+            "su.id::text AS user_id, su.email AS user_email, su.name AS user_name"
+            if has_users and has_session_user_id
+            else "NULL::text AS user_id, NULL::text AS user_email, NULL::text AS user_name"
+        )
+
+        session = await conn.fetchrow(
+            f"""
+            SELECT
+                s.id::text AS session_id,
+                s.tenant_id::text AS tenant_id,
+                {tenant_name_expr} AS tenant_name,
+                {workspace_expr} AS workspace,
+                s.title,
+                s.role_key,
+                s.current_model,
+                s.created_at,
+                s.updated_at,
+                s.message_count,
+                {user_expr}
+            FROM chat_sessions s
+            {workspace_join}
+            {tenant_join}
+            {user_join}
+            WHERE s.id = $1::uuid
+            """,
+            session_id,
+        )
+        if not session:
+            raise HTTPException(404, "session not found")
+
+        messages = []
+        if has_messages:
+            rows = await conn.fetch(
+                """
+                SELECT id::text AS message_id, role, content, model_used, intent,
+                       cost, tokens_in, tokens_out, created_at
+                FROM chat_messages
+                WHERE session_id = $1::uuid
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT $2
+                """,
+                session_id,
+                limit,
+            )
+            messages = [
+                {
+                    "message_id": row["message_id"],
+                    "role": row["role"] or "",
+                    "content": row["content"] or "",
+                    "model_used": row["model_used"] or "",
+                    "intent": row["intent"] or "",
+                    "cost": float(row["cost"] or 0),
+                    "tokens_in": int(row["tokens_in"] or 0),
+                    "tokens_out": int(row["tokens_out"] or 0),
+                    "created_at": _admin_iso(row["created_at"]),
+                }
+                for row in reversed(rows)
+            ]
+
+    return {
+        "session": {
+            "session_id": session["session_id"],
+            "tenant_id": session["tenant_id"],
+            "tenant_name": session["tenant_name"] or "-",
+            "workspace": session["workspace"] or "-",
+            "title": session["title"] or "",
+            "role_key": session["role_key"] or "",
+            "current_model": session["current_model"] or "",
+            "created_at": _admin_iso(session["created_at"]),
+            "updated_at": _admin_iso(session["updated_at"]),
+            "message_count": int(session["message_count"] or 0),
+            "user_id": session["user_id"],
+            "user_email": session["user_email"] or "",
+            "user_name": session["user_name"] or "",
+        },
+        "messages": messages,
+        "total": len(messages),
+    }
 
 
 @router.get("/admin/tasks")
