@@ -1222,6 +1222,44 @@ async def get_current_user(
             'user_role': 'system',
             'is_internal_admin': True,
         }
+    _service_mk = os.getenv('AADS_MONITOR_KEY', '')
+    if monitor_key and _service_mk and hmac.compare_digest(monitor_key, _service_mk):
+        pool = await _ensure_pool()
+        async with pool.acquire() as conn:
+            tenant = await conn.fetchrow(
+                """
+                SELECT id::text AS id, slug, name, kind, status
+                  FROM tenants
+                 WHERE slug = 'internal'
+                   AND deleted_at IS NULL
+                 LIMIT 1
+                """
+            )
+        if not tenant:
+            raise HTTPException(status_code=503, detail='Internal tenant is not initialized')
+        return {
+            'user_id': 'system:service-api',
+            'email': 'system@aads.internal',
+            'is_admin': True,
+            'tenant_id': tenant['id'],
+            'current_tenant': {
+                'id': tenant['id'],
+                'slug': tenant['slug'],
+                'name': tenant['name'],
+                'kind': tenant['kind'],
+                'status': tenant['status'],
+            },
+            'current_membership': {
+                'id': 'service-monitor-key',
+                'tenant_id': tenant['id'],
+                'user_id': 'system:service-api',
+                'role': TenantRole.OWNER.value,
+                'status': 'active',
+            },
+            'tenant_role': TenantRole.OWNER.value,
+            'user_role': 'system',
+            'is_internal_admin': True,
+        }
     if not authorization or not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Authorization header missing')
     token = authorization[7:]
