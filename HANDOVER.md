@@ -1,5 +1,29 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-12 13:45 KST) - Pipeline Runner session binding and internal auth hotfix
+- 배경: CEO가 세션 `d84b7c2c-64a5-4a80-9472-21170fd7d160`에서 CEO 지시 3건을 러너로 투입하려 했으나 `현재 채팅 세션 컨텍스트를 찾지 못했습니다` 오류로 실패했다고 원인 파악과 즉시 조치를 지시했다.
+- 원인:
+  - `AutonomousExecutor` 반복 루프가 LLM tool_use 입력을 실행할 때 세션 범위 도구에 `session_id`를 최종 강제 바인딩하지 않아, relay/model 경계에서 누락된 입력이 그대로 `ToolExecutor._pipeline_runner_submit()`까지 전달될 수 있었다.
+  - Pipeline Runner API는 내부 호출용 `x-monitor-key: internal-pipeline-call`를 미들웨어에서 통과시키지만, endpoint dependency `require_tenant_member`가 다시 Bearer 인증을 요구해 내부 API 호출이 `Authorization header missing`으로 실패했다.
+- 조치:
+  - `app/services/autonomous_executor.py`: `pipeline_runner_submit`, `pipeline_runner_submit_batch`, `pipeline_c_start`, 상태조회 도구 실행 직전에 현재 작업 `session_id`를 바인딩하는 `_bind_session_to_tool_input()` 추가.
+  - `app/auth.py`: `/api/v1/pipeline/*` 내부 호출에서 `x-monitor-key: internal-pipeline-call`일 때 internal tenant context를 반환하는 좁은 우회 추가.
+  - `tests/unit/test_runner_scope_defaults.py`: 자율 실행 루프의 러너 제출 세션 바인딩 회귀 테스트 추가.
+  - API 의존성 reload가 즉시 적용되지 않아, 해당 세션에는 DB enqueue 방식으로 GO100 러너 3건을 수동 투입하고 `pg_notify('pipeline_new_job', job_id)` 발행.
+- 러너 투입 결과:
+  - `runner-4f903698` — `GO100-SCALPING-WS-DYNAMIC-001`, `running/claude_code_work`.
+  - `runner-1514594c` — `GO100-SCALPING-ORDER-GUARD-002`, `queued`, depends_on `runner-4f903698`.
+  - `runner-e0f9383d` — `GO100-SCALPING-RUNNER-WIRING-003`, `queued`, depends_on `runner-1514594c`.
+- 검증:
+  - `python3 -m py_compile app/auth.py app/services/autonomous_executor.py app/services/tool_executor.py app/api/ceo_chat_tools.py app/api/pipeline_runner.py` 통과.
+  - `python3 -m pytest tests/unit/test_runner_scope_defaults.py -q` 결과 15 passed.
+  - `docker exec aads-server-green bash /app/scripts/reload-api.sh` 성공, health `http://localhost:8102/api/v1/health` status ok.
+  - blue-green 배포는 코드 검증까지 통과했으나 전환 대상 `aads-server:8100` 활성 스트림 5건으로 정책상 중단. 강제 배포는 하지 않았다.
+- 상태:
+  - 코드 패치와 러너 재투입 완료.
+  - 내부 Pipeline API 401 수정은 코드/테스트 완료이나, FastAPI dependency 객체 교체가 필요해 다음 안전 배포 창에서 blue-green 재시도 필요.
+  - 기존 unrelated dirty 파일과 배포 상태 파일은 보존한다.
+
 ## 현재 진행 상태 (2026-06-11 10:32 KST) - Chat interruption diagnostics subreason logging
 - 배경: CEO가 `background_producer_incomplete_exit`, 장시간 `running`, `client_gone` 원인을 정확히 추적할 수 있도록 로그를 도입하고 적용/검증까지 이어가라고 지시했다.
 - 조치:

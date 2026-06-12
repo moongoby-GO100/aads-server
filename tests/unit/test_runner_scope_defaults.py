@@ -353,3 +353,17 @@ def test_model_selector_binds_current_session_before_tool_display():
     assert submit_input["session_id"] == _SESSION_ID
     assert status_input["session_id"] == _SESSION_ID
     assert global_input["session_id"] is None
+
+
+def test_autonomous_executor_binds_session_before_runner_execution():
+    from app.services.autonomous_executor import _bind_session_to_tool_input
+
+    session_id = "33333333-3333-3333-3333-333333333333"
+
+    submit_input = _bind_session_to_tool_input("pipeline_runner_submit", {}, session_id)
+    status_input = _bind_session_to_tool_input("check_task_status", {"session_id": None}, session_id)
+    global_input = _bind_session_to_tool_input("check_task_status", {"scope": "all"}, session_id)
+
+    assert submit_input["session_id"] == session_id
+    assert status_input["session_id"] == session_id
+    assert "session_id" not in global_input

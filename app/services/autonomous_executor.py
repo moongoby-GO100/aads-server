@@ -33,6 +33,14 @@ _COST_LIMIT_PER_TASK = 10.0  # USD
 _DANGEROUS_TOOLS = frozenset({
     "submit_directive", "directive_create",  # 파이프라인 재귀 방지만 유지
 })
+_SESSION_BOUND_TOOLS = frozenset({
+    "pipeline_runner_submit",
+    "pipeline_runner_submit_batch",
+    "pipeline_c_start",
+    "pipeline_runner_status",
+    "check_task_status",
+    "check_directive_status",
+})
 
 # M1: LLM 재시도 설정
 _LLM_MAX_RETRIES = 3
@@ -48,6 +56,19 @@ def _sse(event_type: str, payload: Any) -> str:
     else:
         data = {"type": event_type, **payload}
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _bind_session_to_tool_input(tool_name: str, tool_input: Any, session_id: str) -> Dict[str, Any]:
+    """Bind session-scoped tool calls before autonomous execution."""
+    bound = dict(tool_input or {})
+    active_session = str(session_id or "").strip()
+    if not active_session or tool_name not in _SESSION_BOUND_TOOLS:
+        return bound
+
+    scope = str(bound.get("scope") or "").strip().lower()
+    if scope not in {"all", "global", "*"}:
+        bound["session_id"] = active_session
+    return bound
 
 
 # ─── 비용 계산 ────────────────────────────────────────────────────────────────
@@ -304,7 +325,7 @@ class AutonomousExecutor:
             tool_results: List[Dict[str, Any]] = []
             for tc in iter_tool_calls:
                 tool_name = tc["name"]
-                tool_input = tc["input"]
+                tool_input = _bind_session_to_tool_input(tool_name, tc.get("input"), session_id or "")
                 tool_id = tc["id"]
 
                 # 실시간 로그 발행
