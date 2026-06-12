@@ -2441,6 +2441,21 @@
   - `npx tsc --noEmit --pretty false` 통과.
 - 주의: 전체 `api.ts` lint는 기존 `no-explicit-any` 부채로 실패한다. 이번 신규 페이지 단독 lint와 TypeScript 검증은 통과했다.
 
+## 2026-06-12 11:50 KST - CEO home/admin access from chat restored
+- 배경: CEO 계정의 채팅창 홈 버튼(`/`) 이동이 관리자 홈으로 열리지 않고 `/chat`으로 되돌아가는 증상이 보고됐다.
+- 원인:
+  - 대시보드 홈(`/`)은 internal admin 전용이며 Next middleware가 `/api/v1/auth/me`의 `is_internal_admin`으로 접근을 판단한다.
+  - `moongoby@gmail.com`은 internal tenant owner로 정상이나, `moongoby@naver.com`처럼 CEO role이면서 기본 tenant가 customer인 토큰은 기존 로직에서 `is_internal_admin=false`가 될 수 있었다.
+- 조치:
+  - `app/auth.py`의 로그인 tenant 선택을 유효한 internal membership이 있을 때만 internal로 시작하도록 보정했다.
+  - `get_current_user()`에서 `ceo/admin/system` principal은 현재 tenant가 customer여도 `is_internal_admin=true`가 되도록 보강했다. 일반 사용자 `role=user`는 계속 `false`다.
+- 검증:
+  - `python3 -m py_compile app/auth.py` 통과.
+  - 컨테이너 기준 `python -m py_compile /app/app/auth.py` 통과.
+  - 함수 검증: `moongoby@gmail.com -> internal owner/system/is_internal_admin=true`, `moongoby@naver.com -> customer owner/ceo/is_internal_admin=true`, `objgood@naver.com -> customer owner/user/is_internal_admin=false`.
+- 배포:
+  - 선별 커밋/푸시 및 blue-green 배포 후 `/auth/me`와 `/` 접근을 재검증해야 한다.
+
 ## 2026-06-11 10:03 KST - CEO admin menu restore and public login routing
 - 배경: CEO가 `moongoby@gmail.com` 계정에서 홈/어드민 메뉴가 사라졌고, 일반 사용자는 로그인 직후 바로 채팅 화면으로 들어가야 한다고 지시했다.
 - 조치:

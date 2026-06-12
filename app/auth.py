@@ -763,8 +763,12 @@ async def resolve_login_tenant_for_user(user: dict) -> Optional[str]:
         raise HTTPException(status_code=401, detail="Invalid user")
 
     default_tenant_id = str(user.get("tenant_id") or user.get("default_tenant_id") or "").strip() or None
-    if _is_internal_tenant_principal(user.get("email"), user.get("role")) and default_tenant_id:
-        return default_tenant_id
+    if _is_internal_tenant_principal(user.get("email"), user.get("role")):
+        for tenant in await list_user_tenants(user_id):
+            if str(tenant.get("kind") or "").lower() == "internal":
+                return str(tenant.get("tenant_id") or "") or default_tenant_id
+        if default_tenant_id:
+            return default_tenant_id
 
     tenant = await ensure_customer_tenant_for_user(
         user_id=user_id,
@@ -1187,12 +1191,14 @@ async def get_current_user(
     current_user['tenant_id'] = context['tenant']['id']
     current_user['tenant_role'] = context['membership']['role']
     current_user['user_role'] = context.get('user_role')
+    internal_principal = _is_internal_tenant_principal(current_user.get('email'), context.get('user_role'))
     current_user['is_internal_admin'] = bool(
         current_user.get('is_admin')
+        or internal_principal
         or (
             str(context['tenant'].get('kind') or '').lower() == 'internal'
             and str(context['membership'].get('role') or '').lower() in {TenantRole.OWNER.value, TenantRole.ADMIN.value}
-            and _is_internal_tenant_principal(current_user.get('email'), context.get('user_role'))
+            and internal_principal
         )
     )
     return current_user
