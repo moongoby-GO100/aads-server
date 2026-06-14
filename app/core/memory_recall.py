@@ -402,6 +402,36 @@ async def _build_quality_booster(session_id: Optional[str] = None) -> str:
         return ""
 
 
+async def _build_quality_booster(session_id: Optional[str] = None) -> str:
+    """Self-Refine 품질 부스터 — 직전 응답 저품질 시 다음 턴 타겟 교정 주입.
+    세션 기반으로 가장 최근 부스터 1건만 조회. 품질 회복 시 자동 삭제됨."""
+    if not session_id:
+        return ""
+    try:
+        async with _get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT value FROM ai_meta_memory
+                   WHERE category = 'quality_booster'
+                     AND key = $1
+                     AND updated_at > NOW() - interval '2 hours'""",
+                f"booster:{session_id[:16]}",
+            )
+            if not row:
+                return ""
+            import json as _json
+            val = row["value"]
+            if isinstance(val, str):
+                try:
+                    val = _json.loads(val)
+                except Exception:
+                    return ""
+            booster = val.get("booster", "") if isinstance(val, dict) else str(val)
+            return booster[:300] if booster else ""
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="quality_booster", error=str(e))
+        return ""
+
+
 async def _build_strategy_updates(project_id: Optional[str] = None) -> str:
     """## 전략 수정 내역 섹션 — ai_meta_memory strategy_update 최근 3건.
     auto_reflexion_loop가 3회 연속 실패 감지 시 생성한 전략 갱신 지시를 별도 섹션으로 주입.
@@ -629,6 +659,11 @@ async def build_memory_context(
     used_ids = prefs_ids + tools_ids + disc_ids
     if used_ids and session_id:
         asyncio.create_task(_log_memory_usage(session_id, used_ids))
+
+    # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최우선 주입 (corrections보다 먼저)
+    if quality_booster:
+        blocks.append(f"<quality_booster>\n{quality_booster}\n</quality_booster>")
+        logger.info("quality_booster_injected", chars=len(quality_booster))
 
     # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최우선 주입 (corrections보다 먼저)
     if quality_booster:
