@@ -3536,3 +3536,27 @@ from __
 
 ## [2026-06-08 10:14:45 KST] [aads-server] migrations/104_kling_v1_video_route.sql
 - Chat-Direct 수정: run_remote_command: find /root/aads -name "fix_ops_ruff.py" 2>/dev/null
+
+## [2026-06-15 07:45:36 KST] [aads-server] app/services/self_evaluator.py
+- Chat-Direct 수정: patch:         # ── Step 2: 실패 유형 분류 + correcti→        # ── Step 2: 실패 유형 분류 + correcti
+
+## [2026-06-15 07:45:37 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch: async def _build_correction_directives()→async def _build_correction_directives(p
+
+## [2026-06-15 07:45:38 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch:         _build_correction_directives(),→        _build_correction_directives(pro
+
+## [2026-06-15 07:46:03 KST] [aads-server] app/services/self_evaluator.py
+- Chat-Direct 수정: patch:         logger.info("self_eval_complete"→        logger.info("self_eval_complete"
+
+## [2026-06-15 07:46:04 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch: async def _build_strategy_updates(projec→async def _build_quality_booster(session
+
+## [2026-06-15 07:46:11 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch:     # 10개 섹션 병렬 조회 (P2-1: visual_memorie→    # 11개 섹션 병렬 조회 (P2-1 + Self-Refine 품
+
+## [2026-06-15 07:46:19 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch:     # P2-FIX: correction_directive → 세션 →    # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최
+
+## [2026-06-15 07:47:16 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 

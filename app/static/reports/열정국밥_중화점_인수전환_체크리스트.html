@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>열정국밥 중화점 인수전환 체크리스트 (법인설립~사업자등록 상세)</title>
+<style>
+  @page { size: A4; margin: 15mm 18mm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR',sans-serif; font-size: 10pt; line-height: 1.65; color: #1a1a1a; max-width: 210mm; margin: 0 auto; padding: 18mm; background: #fff; }
+  h1 { font-size: 18pt; text-align: center; border-bottom: 3px solid #1a365d; padding-bottom: 8px; margin-bottom: 6px; color: #1a365d; }
+  .subtitle { text-align: center; font-size: 9pt; color: #555; margin-bottom: 20px; }
+  .notice-box { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; font-size: 9.5pt; }
+  .notice-box.danger { background: #fee; border-color: #dc3545; }
+  .notice-box.success { background: #e8f5e9; border-color: #4caf50; }
+  .notice-box.info { background: #e3f2fd; border-color: #2196f3; }
+  h2 { font-size: 14pt; color: #1a365d; border-left: 4px solid #2b6cb0; padding-left: 10px; margin: 24px 0 12px; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; color: #2d3748; margin: 16px 0 8px; }
+  h4 { font-size: 10.5pt; color: #4a5568; margin: 12px 0 6px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 9.5pt; }
+  th { background: #2b6cb0; color: #fff; padding: 7px 8px; text-align: left; font-weight: 600; }
+  td { border: 1px solid #cbd5e0; padding: 6px 8px; vertical-align: top; }
+  tr:nth-child(even) { background: #f7fafc; }
+  .check { width: 22px; text-align: center; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 3px; font-size: 8.5pt; font-weight: 600; }
+  .tag-done { background: #c6f6d5; color: #22543d; }
+  .tag-need { background: #fed7d7; color: #9b2c2c; }
+  .tag-wait { background: #fefcbf; color: #744210; }
+  .tag-p0 { background: #fc8181; color: #fff; }
+  .tag-p1 { background: #f6ad55; color: #fff; }
+  .tag-p2 { background: #63b3ed; color: #fff; }
+  .flow-box { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 10px 0 16px; }
+  .flow-step { background: #ebf8ff; border: 1px solid #90cdf4; border-radius: 6px; padding: 6px 12px; font-size: 9pt; font-weight: 600; color: #2b6cb0; }
+  .flow-arrow { color: #a0aec0; font-size: 14pt; }
+  .timeline { border-left: 3px solid #2b6cb0; margin: 10px 0 16px 12px; padding-left: 16px; }
+  .timeline-item { position: relative; margin-bottom: 14px; }
+  .timeline-item::before { content: ''; position: absolute; left: -22px; top: 4px; width: 10px; height: 10px; background: #2b6cb0; border-radius: 50%; border: 2px solid #fff; }
+  .timeline-date { font-weight: 700; color: #2b6cb0; font-size: 10pt; }
+  ol, ul { margin: 4px 0 8px 18px; }
+  li { margin-bottom: 3px; }
+  .cost-highlight { background: #fef3c7; padding: 2px 6px; border-radius: 3px; font-weight: 600; }
+  .separator { border: none; border-top: 1px dashed #cbd5e0; margin: 20px 0; }
+  .footer { text-align: center; font-size: 8pt; color: #999; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+  @media print { body { padding: 0; } .notice-box, .flow-box { break-inside: avoid; } h2 { break-after: avoid; } }
+</style>
+</head>
+<body>
+
+<h1>열정국밥 중화점 인수전환 체크리스트</h1>
+<div class="subtitle">
+  주식회사 윤희에프앤비 법인설립 → 영업양수도 → 인수전환 · 개정일 2026-06-11 · 전 12장 + 부록 5개<br>
+  법인: 주식회사 윤희에프앤비 · 대표이사: 오윤희 · 본점: 서울특별시 중랑구 봉화산로27길 8, 1층 (중화동)
+</div>
+
+<div class="notice-box success">✅ <strong>기존 점주 적극 협조 확인됨</strong> — 네이버플레이스 권한위임, 임대인 동의, 서류 제공, 매장 인수인계에 전면 협조 예정</div>
+
+<div class="notice-box danger">⚠️ <strong>P0 핵심 타이밍 규칙:</strong> 포괄양수도 계약은 반드시 법인 <strong>사업자등록 신청 전</strong>에 체결해야 합니다.<br>사업자등록 후 양수도 계약 시 → 일반매매 취급 → <strong>VAT 최대 880만원 추가 부담</strong>.</div>
+
+<div class="notice-box info">📍 <strong>과밀억제권역 확정:</strong> 본점 소재지(서울특별시 중랑구)는 <strong>과밀억제권역</strong>에 해당합니다. → 등록면허세 <strong>3배 중과</strong> 적용.</div>
+
+<h2>개요 — 인수 전체 흐름도</h2>
+<div class="flow-box">
+  <div class="flow-step">① 법인설립등기<br><small>등기소, 7~10일</small></div><span class="flow-arrow">→</span>
+  <div class="flow-step">② 포괄양수도 계약<br><small>⚠️ 사업자등록 전!</small></div><span class="flow-arrow">→</span>
+  <div class="flow-step">③ 법인 사업자등록<br><small>세무서, 1~3일</small></div><span class="flow-arrow">→</span>
+  <div class="flow-step">④ 영업자 지위승계<br><small>구청, 즉시~3일</small></div><span class="flow-arrow">→</span>
+  <div class="flow-step">⑤ 네이버플레이스 이전<br><small>3~5일</small></div><span class="flow-arrow">→</span>
+  <div class="flow-step">⑥ 명의변경·정산</div><span class="flow-arrow">→</span>
+  <div class="flow-step">⑦ 영업 개시</div>
+</div>
+
+<h3>핵심 일정 요약 (총 소요: D-28 ~ D+14, 약 6주)</h3>
+<table>
+  <tr><th>구간</th><th>기간</th><th>핵심 산출물</th><th>병목/리스크</th></tr>
+  <tr><td>법인설립 준비</td><td>D-28 ~ D-21 (7일)</td><td>인감 제작, 조사보고자 섭외, 보건증 신청</td><td>조사보고자 미확보 시 전체 지연</td></tr>
+  <tr><td>설립등기 신청·처리</td><td>D-21 ~ D-12 (9일)</td><td>자본금 납입, 서류 서명, 등기 접수</td><td>등기소 처리 3~7 영업일</td></tr>
+  <tr><td>포괄양수도 + 사업자등록</td><td>D-12 ~ D-7 (5일)</td><td>양수도 계약, 사업자등록증</td><td>⚠️ 순서 오류 시 VAT 880만원</td></tr>
+  <tr><td>전환 작업</td><td>D-7 ~ D-Day (7일)</td><td>명의변경, 계좌, 네이버, 통신</td><td>정산계좌 미변경</td></tr>
+  <tr><td>안정화</td><td>D+1 ~ D+14 (14일)</td><td>정산 확인, 세무 체계 구축</td><td>첫 정산일 법인통장 확인 필수</td></tr>
+</table>
+
+<h2>1장 법인설립 — 주식회사 윤희에프앤비</h2>
+
+<h3>1-1. 법인 기본 정보</h3>
+<table>
+  <tr><th>항목</th><th>내용</th><th>비고</th></tr>
+  <tr><td>상호</td><td><strong>주식회사 윤희에프앤비</strong></td><td>유사상호 조회 필요</td></tr>
+  <tr><td>대표이사</td><td>오윤희</td><td>1인 주주 겸 대표이사</td></tr>
+  <tr><td>주민등록 주소</td><td>전라북도 남원시 운봉읍 산덕옛길 24-5</td><td>개인 주소</td></tr>
+  <tr><td>연락처</td><td>010-3185-6229</td><td></td></tr>
+  <tr><td>사업 목적</td><td>음식점업, 배달업, 프랜차이즈 가맹점 운영, 식품 유통업 등</td><td>정관에 포괄 기재</td></tr>
+  <tr><td>자본금</td><td><strong>결정 필요</strong> (최소 제한 없음, 통상 1,000만~5,000만원)</td><td>과밀억제 3배 중과 고려</td></tr>
+  <tr><td>본점 소재지</td><td>서울특별시 중랑구 봉화산로27길 8, 1층 (중화동)</td><td>열정국밥 중화점 = 매장 주소</td></tr>
+  <tr><td>설립 형태</td><td>발기설립 (1인 발기인)</td><td>자본금 10억 미만 → 공증 면제</td></tr>
+</table>
+
+<div class="notice-box">💡 <strong>자본금 결정 가이드:</strong><br>
+• 1,000만원 → 등록면허세 약 14.4만원 (과밀 3배) | 대외 신용도 낮음<br>
+• 3,000만원 → 등록면허세 약 43.2만원 | 은행 대출·거래처 신용에 유리<br>
+• 5,000만원 → 등록면허세 약 72만원 | 충분한 운영자금 + 신용도 확보<br>
+→ CEO 결정 필요. 프랜차이즈 본사가 최소 자본금을 요구하는지 사전 확인 권장.</div>
+
+<h3>1-2. 법인설립 절차 — 일별 상세 (총 14~18일)</h3>
+<div class="timeline">
+
+<div class="timeline-item">
+<div class="timeline-date">Day 1 — 상호 결정 및 유사상호 조회</div>
+<table>
+  <tr><th>순서</th><th>작업</th><th>방법</th><th>소요</th></tr>
+  <tr><td>1</td><td>인터넷 등기소(iros.go.kr) 접속</td><td>등기소 계정: yh562 (이미 확보)</td><td>즉시</td></tr>
+  <tr><td>2</td><td>법인 → 상호 가조회 → "주식회사 윤희에프앤비" 검색</td><td>동일 관할(서울중앙지방법원 등기국) 동종업종 유사상호 확인</td><td>5분</td></tr>
+  <tr><td>3</td><td>중복 없으면 상호 확정</td><td>중복 시 대안: 윤희푸드, 윤희외식산업 등</td><td>-</td></tr>
+</table>
+<p><strong>주의:</strong> 같은 관할 등기소 내 동종업종에 동일·유사 상호가 있으면 사용 불가. 전국 검색이 아닌 <em>관할 등기소 단위</em>로 판단.</p>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 1~2 — 법인인감 제작</div>
+<table>
+  <tr><th>항목</th><th>내용</th></tr>
+  <tr><td>인감 종류</td><td>법인 대표이사 인감도장 1개</td></tr>
+  <tr><td>규격</td><td>1cm 이상 3cm 이내 원형</td></tr>
+  <tr><td>각인 내용</td><td>"주식회사 윤희에프앤비 대표이사 오윤희"</td></tr>
+  <tr><td>주문 방법</td><td>인터넷 주문(쿠팡/네이버) 또는 동네 인감점 방문</td></tr>
+  <tr><td>비용</td><td><span class="cost-highlight">1~3만원</span></td></tr>
+  <tr><td>소요</td><td>당일(방문) ~ 1~2일(배송)</td></tr>
+</table>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 1~2 — 조사보고자 섭외 ⚠️ P0</div>
+<div class="notice-box danger" style="margin-top:6px;">⚠️ <strong>1인 법인이라도 조사보고자 1명 필수.</strong> 미확보 시 설립등기 자체가 불가합니다.</div>
+<table>
+  <tr><th>항목</th><th>내용</th></tr>
+  <tr><td>자격</td><td>특별한 자격 불필요 — 신뢰할 수 있는 <strong>지인 1명</strong>이면 충분</td></tr>
+  <tr><td>역할</td><td>회사 설립 사항(자본금 납입, 정관 적합성 등)이 법령·정관에 적합한지 조사·보고</td></tr>
+  <tr><td>실무 방식</td><td>임시 감사로 취임 → 조사보고서 서명 → 설립등기 후 사임</td></tr>
+  <tr><td>필요 서류</td><td>①취임승낙서 ②개인 인감증명서(3개월 이내) ③주민등록초본</td></tr>
+  <tr><td>비용</td><td>무보수 (지인 부탁). 공증인 위임 시 100만원 이상이므로 지인 권장</td></tr>
+</table>
+<p><strong>섭외 방법:</strong> 가족·친척·지인에게 "법인 설립 시 서류에 서명 한 번만 해주면 된다"고 설명. 인감증명서 1통 + 주민등록초본 1통 준비 요청. 설립등기 완료 후 즉시 감사 사임 처리.</p>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 1~2 — 개인 서류 발급 (대표이사 + 조사보고자)</div>
+<table>
+  <tr><th>서류</th><th>발급처</th><th>대상</th><th>비용</th><th>유효기간</th></tr>
+  <tr><td>개인 인감증명서</td><td>주민센터 / 정부24</td><td>오윤희 1통 + 조사보고자 1통</td><td>각 600원</td><td>발급 후 3개월</td></tr>
+  <tr><td>주민등록초본</td><td>주민센터 / 정부24</td><td>오윤희 1통 + 조사보고자 1통</td><td>무료(정부24)</td><td>발급 후 3개월</td></tr>
+</table>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 2~3 — 보건증 신청 + 위생교육 수료</div>
+<table>
+  <tr><th>항목</th><th>방법</th><th>소요</th><th>비용</th></tr>
+  <tr><td>보건증 발급</td><td>중랑구 보건소 방문 → 건강진단</td><td>접수 후 <strong>3~5일</strong></td><td>약 3,000원</td></tr>
+  <tr><td>위생교육 수료</td><td>한국외식업중앙회 온라인교육 (kfoodedu.or.kr)</td><td>3시간 온라인 → 수료증 즉시 발급</td><td>약 4만원</td></tr>
+</table>
+<p>⚠️ 보건증은 영업자 지위승계 신고 시 필수이므로 <strong>법인설립과 병행</strong>하여 조기 신청.</p>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 3~4 — 정관 작성 및 발기인총회</div>
+<div class="notice-box success">✅ 정관 및 발기인총회의사록 .docx 파일 이미 생성 완료 (법무팀 세션). 서명·날인만 필요.</div>
+<table>
+  <tr><th>순서</th><th>작업</th><th>세부 내용</th></tr>
+  <tr><td>1</td><td>정관 최종 검토</td><td>자본금, 주식수, 1주 금액 확정 후 정관에 반영. 사업목적 확인.</td></tr>
+  <tr><td>2</td><td>정관 서명·날인</td><td>발기인(오윤희) 기명날인 또는 서명. <strong>자본금 10억 미만 → 공증 면제</strong></td></tr>
+  <tr><td>3</td><td>발기인총회의사록 작성</td><td>결의: 정관 승인, 이사 선임(오윤희), 본점 소재지, 자본금 확정</td></tr>
+  <tr><td>4</td><td>발기인총회의사록 서명</td><td>발기인(오윤희) + 의장(오윤희) 서명. 1인이므로 서면결의 가능</td></tr>
+</table>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 4~5 — 자본금 납입 + 잔고증명서</div>
+<table>
+  <tr><th>순서</th><th>작업</th><th>세부 내용</th></tr>
+  <tr><td>1</td><td>출자금 납입</td><td>오윤희 <strong>개인 통장</strong>에 확정 자본금 입금 (ATM/이체 모두 가능)</td></tr>
+  <tr><td>2</td><td>잔고증명서 발급</td><td>입금 후 같은 은행 창구에서 "주금납입증명용" 잔고증명서 발급<br>※ 발급 시점에 해당 금액 이상이 통장에 있어야 함</td></tr>
+  <tr><td>3</td><td>주식인수증 작성</td><td>발기인이 전체 주식 인수 확인 (✅ .docx 생성 완료)</td></tr>
+</table>
+<p><strong>비용:</strong> 잔고증명서 발급 수수료 <span class="cost-highlight">1,000~2,000원</span></p>
+<p><strong>주의:</strong> 법인 통장이 아닌 <em>개인 통장</em>에 입금합니다. 법인 통장은 설립등기 완료 후에야 개설 가능.</p>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 5~6 — 조사보고서 작성 + 취임승낙서</div>
+<div class="notice-box success">✅ 조사보고서 템플릿 .docx 이미 생성 완료. 조사보고자 인적사항 기입 + 서명만 필요.</div>
+<table>
+  <tr><th>서류</th><th>서명자</th><th>내용</th></tr>
+  <tr><td>조사보고서</td><td>조사보고자 (임시 감사)</td><td>설립 사항의 법령·정관 적합성 확인 보고</td></tr>
+  <tr><td>감사 취임승낙서</td><td>조사보고자</td><td>임시 감사 취임 동의 (인감 날인)</td></tr>
+  <tr><td>대표이사 취임승낙서</td><td>오윤희</td><td>대표이사 취임 동의 (인감 날인)</td></tr>
+</table>
+<p><strong>실무 포인트:</strong> 조사보고자와 대면하여 ①조사보고서 ②감사 취임승낙서에 함께 서명받으면 1회 만남으로 처리 가능.</p>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 6~7 — 설립등기 신청</div>
+<h4>제출 서류 체크리스트</h4>
+<table>
+  <tr><th class="check">☐</th><th>서류</th><th>상태</th><th>비고</th></tr>
+  <tr><td class="check">☐</td><td>설립등기신청서</td><td><span class="tag tag-done">✅ 생성완료</span></td><td>인터넷등기소 양식 활용 가능</td></tr>
+  <tr><td class="check">☐</td><td>정관</td><td><span class="tag tag-done">✅ 생성완료</span></td><td>발기인 서명·날인 필요</td></tr>
+  <tr><td class="check">☐</td><td>발기인총회의사록</td><td><span class="tag tag-done">✅ 생성완료</span></td><td>서명·날인 필요</td></tr>
+  <tr><td class="check">☐</td><td>주식인수증</td><td><span class="tag tag-done">✅ 생성완료</span></td><td></td></tr>
+  <tr><td class="check">☐</td><td>조사보고서</td><td><span class="tag tag-done">✅ 생성완료</span></td><td>조사보고자 서명 필요</td></tr>
+  <tr><td class="check">☐</td><td>대표이사 취임승낙서</td><td><span class="tag tag-need">📝 작성 필요</span></td><td>오윤희 인감 날인</td></tr>
+  <tr><td class="check">☐</td><td>감사 취임승낙서</td><td><span class="tag tag-need">📝 작성 필요</span></td><td>조사보고자 인감 날인</td></tr>
+  <tr><td class="check">☐</td><td>법인인감신고서</td><td><span class="tag tag-need">📝 등기소 양식</span></td><td>법인인감 제작 후 작성</td></tr>
+  <tr><td class="check">☐</td><td>주금납입 잔고증명서</td><td><span class="tag tag-need">📝 은행 발급</span></td><td>자본금 납입 후</td></tr>
+  <tr><td class="check">☐</td><td>개인 인감증명서</td><td><span class="tag tag-need">📝 발급 필요</span></td><td>대표이사 + 조사보고자 각 1통</td></tr>
+  <tr><td class="check">☐</td><td>주민등록초본</td><td><span class="tag tag-need">📝 발급 필요</span></td><td>대표이사 + 조사보고자 각 1통</td></tr>
+</table>
+
+<h4>등기 신청 방법 (택 1)</h4>
+<table>
+  <tr><th>방법</th><th>절차</th><th>장단점</th></tr>
+  <tr><td><strong>A. 인터넷 등기소 (권장)</strong></td><td>iros.go.kr → 법인등기 → 설립등기 → 전자신청</td><td>✅ 수수료 30% 감면, 방문 불필요</td></tr>
+  <tr><td><strong>B. 등기소 방문</strong></td><td>관할 등기소 방문, 서류 원본 제출</td><td>✅ 즉시 접수 확인</td></tr>
+  <tr><td><strong>C. 법무사 위임</strong></td><td>법무사에게 위임장 + 서류 전달</td><td>✅ 실수 방지 / ⚠️ 수수료 30~50만원</td></tr>
+</table>
+<p><strong>처리기간:</strong> 접수 후 <strong>3~7 영업일</strong> (서울 관할 통상 5일 내외)</p>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 7~14 — 설립등기 처리 대기 (3~7 영업일)</div>
+<p>등기소에서 서류 심사 후 등기부에 법인 등록. 이 기간 동안 병행 가능한 작업:</p>
+<table>
+  <tr><th>병행 작업</th><th>내용</th></tr>
+  <tr><td>본사 연락</td><td>열정국밥 본사에 양도양수 승인 요청 + 법인 명의 가맹계약 가능 여부 확인</td></tr>
+  <tr><td>임대인 접촉</td><td>기존 점주 협조 하에 임대인 만남 → 임차권 양도 동의 사전 요청</td></tr>
+  <tr><td>양수도 세부 협의</td><td>양도대금, 재고, 시설목록, 채무, 직원 승계 등 조건 확정</td></tr>
+  <tr><td>거래처 파악</td><td>배달대행사, 식재료 거래처, 소모품 업체 목록 인수</td></tr>
+</table>
+</div>
+
+<div class="timeline-item">
+<div class="timeline-date">Day 14~15 — 설립등기 완료 확인 + 법인 서류 발급</div>
+<table>
+  <tr><th>순서</th><th>작업</th><th>방법</th><th>비용</th></tr>
+  <tr><td>1</td><td>등기 완료 확인</td><td>인터넷 등기소 → 법인 → 열람</td><td>열람 700원</td></tr>
+  <tr><td>2</td><td>법인등기사항전부증명서 발급</td><td>인터넷 등기소 (2~3통)</td><td>통당 1,000원</td></tr>
+  <tr><td>3</td><td>법인인감증명서 발급</td><td>등기소 방문 또는 인터넷 등기소</td><td>통당 1,000원</td></tr>
+</table>
+</div>
+
+</div>
+
+<h3>1-3. 법인설립 비용 (과밀억제권역 확정 — 서울 중랑구)</h3>
+<table>
+  <tr><th>항목</th><th>자본금 1,000만원</th><th>자본금 3,000만원</th><th>자본금 5,000만원</th><th>산출 근거</th></tr>
+  <tr><td>등록면허세 (3배 중과)</td><td>12만원</td><td>36만원</td><td>60만원</td><td>자본금 × 0.4% × 3</td></tr>
+  <tr><td>지방교육세</td><td>2.4만원</td><td>7.2만원</td><td>12만원</td><td>등록면허세 × 20%</td></tr>
+  <tr><td>등기 수수료</td><td colspan="3" style="text-align:center;">약 2~3만원</td><td>인터넷 등기소</td></tr>
+  <tr><td>법인인감 제작</td><td colspan="3" style="text-align:center;">1~3만원</td><td></td></tr>
+  <tr><td>잔고증명서</td><td colspan="3" style="text-align:center;">1,000~2,000원</td><td></td></tr>
+  <tr><td>보건증 + 위생교육</td><td colspan="3" style="text-align:center;">약 4.3만원</td><td>보건소 3천 + 교육 4만</td></tr>
+  <tr style="font-weight:700; background:#ebf8ff;">
+    <td>합계 (직접 진행)</td><td><span class="cost-highlight">약 22만원</span></td><td><span class="cost-highlight">약 53만원</span></td><td><span class="cost-highlight">약 82만원</span></td><td></td>
+  </tr>
+  <tr><td>법무사 위임 시 추가</td><td colspan="3" style="text-align:center;">+30~50만원</td><td></td></tr>
+</table>
+
+<h2>2장 포괄양수도 계약 + 법인 사업자등록</h2>
+
+<div class="notice-box danger">⚠️ <strong>순서가 핵심:</strong> ① 법인설립등기 완료 → ② <strong>포괄양수도 계약 체결</strong> → ③ 사업자등록 신청 (양수도 계약서 첨부)</div>
+
+<h3>2-1. 포괄양수도 계약 체결 (Day 15~16)</h3>
+<h4>포괄양수도 3대 요건</h4>
+<ol>
+  <li>사업장의 인적·물적 조직을 <strong>포괄적으로</strong> 승계</li>
+  <li>양수인이 양도인의 <strong>사업을 그대로 계속</strong>할 것</li>
+  <li>양수인이 사업자등록을 <strong>신규로 신청</strong>하면서 양수도 사실을 함께 신고</li>
+</ol>
+
+<h4>계약서 포함 사항</h4>
+<table>
+  <tr><th>항목</th><th>내용</th><th>확인 사항</th></tr>
+  <tr><td>계약 당사자</td><td>양도인: 기존 점주 / 양수인: 주식회사 윤희에프앤비</td><td>법인 명의</td></tr>
+  <tr><td>양도 대상</td><td>시설·설비·재고·거래처·영업권·임차권 포괄 이전</td><td>시설목록 별첨</td></tr>
+  <tr><td>양도 대금</td><td>총액, 계약금/중도금/잔금 구분</td><td>CEO 결정 필요</td></tr>
+  <tr><td>기존 채무</td><td>미수금, 미지급금 처리</td><td>양도인 부담 원칙</td></tr>
+  <tr><td>종업원 승계</td><td>기존 직원 고용 승계 여부</td><td>퇴직금 정산 합의</td></tr>
+  <tr><td>임대차 승계</td><td>임차권 양도 동의서 첨부</td><td>임대인 동의 필수</td></tr>
+  <tr><td>경업 금지</td><td>양도인 동종업종 영업 금지</td><td>통상 반경 1km, 2년</td></tr>
+</table>
+<div class="notice-box success">✅ 영업양수도 계약서 .docx 이미 생성 완료 (법무팀 세션).</div>
+
+<h4>기존 점주 협조 사항 체크리스트</h4>
+<table>
+  <tr><th class="check">☐</th><th>협조 항목</th><th>내용</th><th>시점</th></tr>
+  <tr><td class="check">☐</td><td>양수도 계약 서명</td><td>포괄양수도 계약서에 양도인으로 서명·날인</td><td>등기 완료 후</td></tr>
+  <tr><td class="check">☐</td><td>기존 사업자등록증 사본 제공</td><td>양수인 사업자등록 신청 시 첨부</td><td>계약 당일</td></tr>
+  <tr><td class="check">☐</td><td>매출 자료 제공</td><td>최근 6개월 부가세 신고자료, POS 데이터</td><td>계약 전</td></tr>
+  <tr><td class="check">☐</td><td>영업신고증 원본 인계</td><td>영업자 지위승계 신고 시 필요</td><td>D-Day</td></tr>
+  <tr><td class="check">☐</td><td>임대인 동의 동행</td><td>기존 점주 + 오윤희 함께 임대인 방문</td><td>등기 완료 전후</td></tr>
+  <tr><td class="check">☐</td><td>네이버플레이스 권한 위임</td><td>스마트플레이스 로그인 후 주인 권한 이전</td><td>사업자등록 완료 후</td></tr>
+  <tr><td class="check">☐</td><td>거래처·비밀번호 인수인계</td><td>배달대행, 식재료 업체, 매장 비밀번호 등</td><td>D-Day 전후</td></tr>
+  <tr><td class="check">☐</td><td>폐업 신고 (양도인)</td><td>양수인 사업자등록 완료 후 즉시</td><td>사업자등록 후</td></tr>
+</table>
+
+<h3>2-2. 임대인 동의 확보 (Day 14~16) ⚠️ P0</h3>
+<table>
+  <tr><th>항목</th><th>내용</th></tr>
+  <tr><td>필요성</td><td>임차권 양도에 <strong>임대인 서면 동의</strong> 필수 (민법 629조). 동의 없이 양도 시 임대인 계약 해지 가능.</td></tr>
+  <tr><td>방법</td><td>기존 점주 + 오윤희(법인 대표) 함께 임대인 방문. "임차권 양도 동의서" 서명·날인.</td></tr>
+  <tr><td>최적 시점</td><td>설립등기 완료 직후 ~ 포괄양수도 계약 전</td></tr>
+</table>
+<div class="notice-box success">✅ 임대차계약서(법인 명의) .docx 이미 생성 완료.</div>
+
+<h3>2-3. 법인 사업자등록 신청 (Day 16~18)</h3>
+<p><strong>신청처:</strong> 중랑세무서 (또는 홈택스 온라인)</p>
+<table>
+  <tr><th class="check">☐</th><th>제출 서류</th><th>발급처</th><th>비고</th></tr>
+  <tr><td class="check">☐</td><td>사업자등록신청서 (법인용)</td><td>홈택스</td><td></td></tr>
+  <tr><td class="check">☐</td><td>법인등기사항전부증명서</td><td>인터넷 등기소</td><td>3개월 이내</td></tr>
+  <tr><td class="check">☐</td><td>정관 사본</td><td>자체 보관본</td><td></td></tr>
+  <tr><td class="check">☐</td><td>임대차계약서 사본</td><td>임대인</td><td>법인 명의</td></tr>
+  <tr><td class="check">☐</td><td><strong>포괄양수도 계약서</strong></td><td>양수도 당사자</td><td><strong>⚠️ 반드시 함께 제출!</strong></td></tr>
+  <tr><td class="check">☐</td><td>대표이사 신분증 사본</td><td></td><td></td></tr>
+  <tr><td class="check">☐</td><td>법인인감증명서</td><td>등기소</td><td></td></tr>
+</table>
+<p><strong>처리기간:</strong> 즉시 ~ 3 영업일 (현장 접수 시 당일 가능)</p>
+
+<h3>2-4. 사업자등록 완료 직후 처리</h3>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>장소</th><th>소요</th></tr>
+  <tr><td class="check">☐</td><td>법인 통장 개설</td><td>시중은행</td><td>당일</td></tr>
+  <tr><td class="check">☐</td><td>법인 카드 발급 (선택)</td><td>은행/카드사</td><td>1~2주</td></tr>
+  <tr><td class="check">☐</td><td>세금계산서용 공인인증서</td><td>은행</td><td>당일~2일</td></tr>
+  <tr><td class="check">☐</td><td>홈택스 법인 회원가입</td><td>홈택스</td><td>즉시</td></tr>
+  <tr><td class="check">☐</td><td>4대보험 사업장 성립신고</td><td>근로복지공단</td><td>직원 있을 시 즉시</td></tr>
+  <tr><td class="check">☐</td><td>현금영수증 가맹 등록</td><td>홈택스</td><td>즉시 (의무)</td></tr>
+</table>
+
+<h2>3장 네이버 스마트플레이스 인수</h2>
+<div class="notice-box success">✅ 기존 점주 적극 협조 → <strong>방법 A(주인 권한 위임)</strong>으로 진행.</div>
+
+<h3>3-1. 인수 절차</h3>
+<table>
+  <tr><th>Step</th><th>작업</th><th>세부 내용</th><th>소요</th></tr>
+  <tr><td>1</td><td>기존 점주 "주인 권한 위임"</td><td>smartplace.naver.com → 업체관리 → 주인 권한 관리 → 권한 위임 → CEO 네이버 ID 입력</td><td>5분</td></tr>
+  <tr><td>2</td><td>CEO 계정으로 확인</td><td>CEO 네이버 ID로 로그인 → 위임받은 업체 확인</td><td>즉시</td></tr>
+  <tr><td>3</td><td>사업자 정보 변경</td><td>법인 사업자등록증 업로드 → 대표자·사업자번호 변경, 상호 유지</td><td>심사 3~5일</td></tr>
+</table>
+
+<h3>3-2. 리뷰·별점 유지 조건</h3>
+<table>
+  <tr><th>조건</th><th>유지 여부</th></tr>
+  <tr><td>동일 주소 + 동일 업종 + 주인 변경</td><td><strong>✅ 유지됨</strong></td></tr>
+  <tr><td>업체명 동일 유지</td><td>✅ 유지됨</td></tr>
+  <tr><td style="color:#dc3545; font-weight:700;">업체 삭제 후 재등록</td><td style="color:#dc3545; font-weight:700;">❌ 전체 삭제 — 절대 금지!</td></tr>
+</table>
+
+<h3>3-3. 네이버 부가 서비스</h3>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>조치</th></tr>
+  <tr><td class="check">☐</td><td>네이버 스마트주문</td><td>기존 점주 해지 → 법인 명의 재신청. 메뉴 설정 사전 캡처.</td></tr>
+  <tr><td class="check">☐</td><td>네이버페이 가맹점</td><td>사업자 변경 또는 재가입. <strong>법인 통장 정산계좌 변경 필수.</strong></td></tr>
+  <tr><td class="check">☐</td><td>네이버 톡톡</td><td>주인 변경 시 자동 이전</td></tr>
+</table>
+
+<h2>4장 프랜차이즈 본사 확인사항</h2>
+<table>
+  <tr><th class="check">☐</th><th>확인 항목</th><th>세부 내용</th><th>우선순위</th></tr>
+  <tr><td class="check">☐</td><td>양도양수 승인</td><td>본사 서면 동의서. 법인 명의 승계 가능 여부. 최소 자본금 요구.</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>가맹비 / 교육비</td><td>양수인에게 추가 비용 발생 여부, 금액</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>가맹계약 잔여 기간</td><td>현재 만료일, 갱신 조건, 위약금</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>배달앱 이전</td><td>본사 처리 확인. 법인 명의 + 법인 통장 정산</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>영업지역 보호</td><td>반경 내 동일 브랜드 출점 제한</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>식재료 공급계약</td><td>지정 식재료 목록, 최소 주문량, 공급가</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>로열티 / 광고분담금</td><td>월 고정비 또는 매출 비례</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>본사 교육</td><td>필수 교육 일정, 장소, 기간</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>인테리어 리뉴얼</td><td>의무 리뉴얼 주기, 현재 상태</td><td><span class="tag tag-p2">P2</span></td></tr>
+</table>
+
+<h2>5장 행정·법률 전환</h2>
+<h3>5-1. 영업자 지위승계 신고 (D-Day 당일)</h3>
+<p>관할: <strong>중랑구청 위생과</strong></p>
+<p>첨부: ①양수도계약서 ②법인등기사항증명서 ③사업자등록증 ④기존 영업신고증 원본 ⑤위생교육 수료증 ⑥보건증</p>
+<div class="notice-box danger">⚠️ "폐업→신규 영업신고"가 아닌 반드시 <strong>"지위승계"</strong>로 처리. 기존 위생등급·행정이력 보존.</div>
+
+<h3>5-2. 행정 체크리스트</h3>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>장소</th><th>소요</th><th>우선순위</th></tr>
+  <tr><td class="check">☐</td><td>보건증 발급</td><td>중랑구 보건소</td><td>3~5일</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>위생교육 수료</td><td>한국외식업중앙회 온라인 (3시간)</td><td>1일</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>영업자 지위승계 신고</td><td>중랑구청 위생과</td><td>즉시~3일</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>통신판매업 신고</td><td>구청/정부24</td><td>3~5일</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>음식물폐기물 배출자 신고</td><td>중랑구청 환경과</td><td>즉시</td><td><span class="tag tag-p1">P1</span></td></tr>
+</table>
+
+<h2>6장 공과금·통신·시설 명의변경</h2>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>조치</th><th>준비물</th><th>소요</th></tr>
+  <tr><td class="check">☐</td><td>전기</td><td>한국전력 (123)</td><td>법인 사업자등록증, 이전 고객번호</td><td>즉시</td></tr>
+  <tr><td class="check">☐</td><td>수도</td><td>중랑구 수도사업소</td><td>법인 사업자등록증</td><td>즉시</td></tr>
+  <tr><td class="check">☐</td><td>도시가스</td><td>서울도시가스 (1588-5788)</td><td>법인 사업자등록증, 대표 신분증</td><td>1~2일</td></tr>
+  <tr><td class="check">☐</td><td>인터넷/전화</td><td>통신사</td><td>법인 사업자등록증</td><td>1~3일</td></tr>
+  <tr><td class="check">☐</td><td>매장 전화번호</td><td><strong>기존 번호 유지 권장</strong></td><td>명의변경</td><td>1일</td></tr>
+  <tr><td class="check">☐</td><td>CCTV/보안</td><td>보안업체 명의변경</td><td>법인 사업자등록증</td><td>1~2일</td></tr>
+  <tr><td class="check">☐</td><td>정수기/렌탈</td><td>렌탈업체</td><td>승계 or 해지 (위약금 확인)</td><td>확인 필요</td></tr>
+</table>
+
+<h2>7장 카드·POS·정산 시스템</h2>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>조치</th><th>비고</th></tr>
+  <tr><td class="check">☐</td><td>카드단말기</td><td>VAN사 법인 명의 신규 가입</td><td>정산계좌 = 법인 통장</td></tr>
+  <tr><td class="check">☐</td><td>POS 시스템</td><td>본사 지정 POS 확인 → 법인 명의 변경</td><td>메뉴·가격 데이터 이관</td></tr>
+  <tr><td class="check">☐</td><td>현금영수증</td><td>홈택스 법인 사업자번호 등록</td><td>의무</td></tr>
+  <tr><td class="check">☐</td><td>배달앱 정산계좌</td><td><strong>법인 통장</strong>으로 변경 확인</td><td>미변경 시 기존 점주에게 정산!</td></tr>
+  <tr><td class="check">☐</td><td>간편결제</td><td>법인 명의 신규 가입</td><td></td></tr>
+</table>
+<div class="notice-box danger">⚠️ 첫 정산일에 <strong>법인 통장</strong> 입금 확인 필수! 배달앱·카드·네이버페이 <strong>모든 채널</strong> 점검.</div>
+
+<h2>8장 온라인 채널 전환</h2>
+<table>
+  <tr><th class="check">☐</th><th>채널</th><th>조치</th><th>우선순위</th></tr>
+  <tr><td class="check">☐</td><td>네이버 스마트플레이스</td><td>3장 절차대로 주인 변경</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>배달의민족</td><td>본사 이전. 법인 통장 정산 확인</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>쿠팡이츠</td><td>본사 이전. 법인 통장 정산 확인</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>요기요</td><td>본사 이전</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>카카오맵</td><td>카카오맵 비즈니스 정보 수정</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>구글맵</td><td>Google Business Profile 소유권 이전</td><td><span class="tag tag-p2">P2</span></td></tr>
+  <tr><td class="check">☐</td><td>인스타그램/SNS</td><td>기존 계정 인수 또는 신규</td><td><span class="tag tag-p2">P2</span></td></tr>
+</table>
+
+<h2>9장 운영·거래처 전환</h2>
+<h3>9-1. 임대차</h3>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>조치</th></tr>
+  <tr><td class="check">☐</td><td>임대인 동의</td><td>임차권 양도 동의서 확보 (포괄양수도 전 필수)</td></tr>
+  <tr><td class="check">☐</td><td>임대차 계약</td><td>법인 명의 신규/승계 (✅ .docx 생성 완료)</td></tr>
+  <tr><td class="check">☐</td><td>보증금 정산</td><td>양수도 대금에 포함 또는 별도 정산</td></tr>
+  <tr><td class="check">☐</td><td>확정일자</td><td>법인 명의 계약서로 주민센터에서 확정일자</td></tr>
+  <tr><td class="check">☐</td><td>상가임대차보호법</td><td>환산보증금 범위, 계약갱신청구권 잔여 횟수 확인</td></tr>
+</table>
+
+<h3>9-2. 배달대행·거래처·직원·보험</h3>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>조치</th></tr>
+  <tr><td class="check">☐</td><td>배달대행</td><td>법인 명의 계약 승계/신규. 정산계좌 법인 통장.</td></tr>
+  <tr><td class="check">☐</td><td>본사 지정 식재료</td><td>공급 조건 확인, 법인 명의 전환</td></tr>
+  <tr><td class="check">☐</td><td>자체 조달 식재료</td><td>기존 거래처 인수 or 신규</td></tr>
+  <tr><td class="check">☐</td><td>기존 재고</td><td>인수일 실사, 양수도 계약에 포함 여부·금액 명시</td></tr>
+  <tr><td class="check">☐</td><td>기존 직원 승계</td><td>법인과 근로계약서 재작성. 4대보험 사업장 성립신고.</td></tr>
+  <tr><td class="check">☐</td><td>퇴직금</td><td>인수 전 퇴직금 정산 or 승계 (양수도 계약에 명시)</td></tr>
+  <tr><td class="check">☐</td><td>화재보험</td><td>의무가입. 법인 명의.</td></tr>
+  <tr><td class="check">☐</td><td>배상책임보험</td><td>음식점 영업배상책임보험 권장</td></tr>
+</table>
+
+<h2>10장 인수 일정 로드맵 (D-28 ~ D+14)</h2>
+<div class="notice-box info"><strong>D-Day = 영업 개시일 (인수일)</strong>. 기존 점주 적극 협조로 일부 단계 병행 가능 → 최적 시 3주 압축 가능.</div>
+
+<h3>Phase 1: 법인설립 준비 (D-28 ~ D-21)</h3>
+<div class="timeline">
+<div class="timeline-item"><div class="timeline-date">D-28 (착수일)</div>
+<ul><li>☐ 상호 가조회 → "주식회사 윤희에프앤비" 확정</li><li>☐ 법인인감 제작 주문</li><li>☐ 조사보고자 1명 섭외 시작</li><li>☐ 보건소 보건증 신청 (3~5일)</li><li>☐ 위생교육 신청 (온라인 3시간)</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-27 ~ D-25</div>
+<ul><li>☐ 자본금 최종 결정 (본사 요구사항 확인 후)</li><li>☐ 본사에 양도양수 승인 요청</li><li>☐ 개인 인감증명서 + 주민등록초본 발급 (대표이사, 조사보고자)</li><li>☐ 정관·발기인총회의사록 자본금 반영 + 최종 검토</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-24 ~ D-22</div>
+<ul><li>☐ 자본금 납입 (개인 통장) + 잔고증명서 발급</li><li>☐ 법인인감 수령</li><li>☐ 조사보고자 만남 → 조사보고서 + 취임승낙서 서명</li><li>☐ 대표이사 취임승낙서 서명</li><li>☐ 보건증 수령 / 위생교육 수료증 수령</li></ul></div>
+</div>
+
+<h3>Phase 2: 설립등기 (D-21 ~ D-12)</h3>
+<div class="timeline">
+<div class="timeline-item"><div class="timeline-date">D-21</div>
+<ul><li>☐ 서류 5종 최종 서명·날인 확인</li><li>☐ 인터넷 등기소 설립등기 신청</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-20 ~ D-13 (등기 처리 대기 + 병행)</div>
+<ul><li>☐ 임대인 접촉 → 양도 동의 사전 요청 (기존 점주 동행)</li><li>☐ 양수도 세부 조건 협의 (대금, 재고, 시설, 직원)</li><li>☐ 배달대행·거래처 목록 인수</li><li>☐ 본사 가맹계약 승계 조건 확인</li><li>☐ 매장 시설·장비 실사</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-12</div>
+<ul><li>☐ <strong>설립등기 완료 확인</strong></li><li>☐ 법인등기사항전부증명서 발급 (2~3통)</li><li>☐ 법인인감증명서 발급</li></ul></div>
+</div>
+
+<h3>Phase 3: 포괄양수도 + 사업자등록 (D-12 ~ D-7)</h3>
+<div class="timeline">
+<div class="timeline-item"><div class="timeline-date">D-11 ~ D-10 ⚠️ 핵심 순서</div>
+<ul><li>☐ 임대인 양도 동의서 서명</li><li>☐ <strong>⚠️ 포괄양수도 계약 체결</strong> (기존 점주 ↔ 법인)</li><li>☐ 계약금 지급</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-9 ~ D-8</div>
+<ul><li>☐ <strong>⚠️ 법인 사업자등록 신청</strong> (중랑세무서) — 양수도 계약서 첨부!</li><li>☐ 법인 통장 개설</li><li>☐ 카드단말기 / VAN사 신규 가입 신청</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-7</div>
+<ul><li>☐ 사업자등록증 수령 확인</li><li>☐ 네이버플레이스 주인 변경 신청</li><li>☐ 본사 가맹계약 승계/체결 (법인 명의)</li><li>☐ 현금영수증 가맹 등록</li></ul></div>
+</div>
+
+<h3>Phase 4: 전환 작업 (D-7 ~ D-Day)</h3>
+<div class="timeline">
+<div class="timeline-item"><div class="timeline-date">D-5 ~ D-3</div>
+<ul><li>☐ 공과금 명의변경 (전기·수도·가스)</li><li>☐ 인터넷/전화 명의변경 (기존 번호 유지)</li><li>☐ 직원 고용승계 합의서 작성</li><li>☐ 재고 실사</li><li>☐ 법인 임대차 계약 체결 + 확정일자</li><li>☐ 공인인증서 발급</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D-1</div>
+<ul><li>☐ 매장 최종 점검 (시설, 청소, 식재료, 포장재)</li><li>☐ POS 메뉴·가격 확인</li><li>☐ 배달앱 법인 전환 완료 확인</li></ul></div>
+</div>
+
+<h3>Phase 5: 인수 + 안정화 (D-Day ~ D+14)</h3>
+<div class="timeline">
+<div class="timeline-item"><div class="timeline-date">D-Day (인수일)</div>
+<ul><li>☐ 잔금 지급</li><li>☐ 영업자 지위승계 신고 (중랑구청)</li><li>☐ 열쇠/비밀번호/매장 인수</li><li>☐ 배달앱 운영·정산계좌 최종 확인</li><li>☐ 화재보험 법인 명의 가입</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D+1 ~ D+3</div>
+<ul><li>☐ 네이버플레이스 정보 업데이트</li><li>☐ 카카오맵/구글맵 정보 수정</li><li>☐ 카드단말기 작동 테스트</li><li>☐ 첫 배달 주문 테스트 (앱별 1건)</li><li>☐ 4대보험 사업장 성립신고</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D+7</div>
+<ul><li>☐ <strong>첫 정산일</strong> — 법인 통장 입금 확인 (전 채널)</li><li>☐ 네이버플레이스 심사 결과 확인</li></ul></div>
+<div class="timeline-item"><div class="timeline-date">D+14</div>
+<ul><li>☐ 전체 정산 정상화 확인</li><li>☐ 세무사 연결 → 신고 일정 확인</li><li>☐ 홈택스 전자세금계산서 발행 테스트</li><li>☐ 리뷰 관리 시작</li></ul></div>
+</div>
+
+<h2>11장 법인 세무·회계</h2>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>내용</th><th>시기</th></tr>
+  <tr><td class="check">☐</td><td>세무사 계약</td><td>법인 기장료 월 15~25만원. 설립 초기 상담 필수.</td><td>사업자등록 즉시</td></tr>
+  <tr><td class="check">☐</td><td>부가가치세</td><td>분기별 신고 (1/4/7/10월 25일). 전자세금계산서 의무.</td><td>매 분기</td></tr>
+  <tr><td class="check">☐</td><td>법인세</td><td>매년 3월 (12월 결산). 세무사 기장 권장.</td><td>매년 3월</td></tr>
+  <tr><td class="check">☐</td><td>원천세</td><td>직원 급여 지급 시 매월 10일 신고·납부</td><td>매월</td></tr>
+  <tr><td class="check">☐</td><td>대표이사 급여</td><td>법인에서 급여 지급 → 근로소득 처리. 세무사와 협의.</td><td>영업 개시</td></tr>
+  <tr><td class="check">☐</td><td>법인 통장 관리</td><td><strong>개인 비용 혼용 절대 금지</strong> — 가지급금 이슈.</td><td>상시</td></tr>
+</table>
+
+<h3>법인 세무 일정표</h3>
+<table>
+  <tr><th>월</th><th>항목</th><th>기한</th></tr>
+  <tr><td>매월</td><td>원천세</td><td>다음달 10일</td></tr>
+  <tr><td>1월</td><td>부가세 (4분기)</td><td>1월 25일</td></tr>
+  <tr><td>3월</td><td>법인세</td><td>3월 31일</td></tr>
+  <tr><td>4월</td><td>부가세 (1분기)</td><td>4월 25일</td></tr>
+  <tr><td>7월</td><td>부가세 (2분기)</td><td>7월 25일</td></tr>
+  <tr><td>8월</td><td>법인세 중간예납</td><td>8월 31일</td></tr>
+  <tr><td>10월</td><td>부가세 (3분기)</td><td>10월 25일</td></tr>
+</table>
+
+<h2>12장 추가 확인·보완 필요사항</h2>
+
+<h3>12-1. 기존 점주에게 확인 필수 사항</h3>
+<table>
+  <tr><th class="check">☐</th><th>확인 항목</th><th>세부 내용</th><th>위험도</th></tr>
+  <tr><td class="check">☐</td><td>세금 체납 여부</td><td>국세완납증명서 + 지방세완납증명서 징구</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>임대료 체납 여부</td><td>임대인에게 직접 확인</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>행정처분 이력</td><td>영업정지, 위생 위반 등. 지위승계 시 처분 효과 승계 가능.</td><td><span class="tag tag-p0">P0</span></td></tr>
+  <tr><td class="check">☐</td><td>최근 6개월 매출</td><td>부가세 신고자료 + POS 데이터</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>기존 대출·담보</td><td>사업자 대출, 시설 리스, 렌탈 잔여 개월</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>미지급 거래대금</td><td>식재료·포장재 미지급분. 양도인 부담 명시.</td><td><span class="tag tag-p1">P1</span></td></tr>
+  <tr><td class="check">☐</td><td>장비 리스/렌탈</td><td>냉장고, 튀김기, 정수기 잔여기간 + 위약금</td><td><span class="tag tag-p1">P1</span></td></tr>
+</table>
+
+<h3>12-2. 법인 vs 개인사업자 차이 (주의)</h3>
+<table>
+  <tr><th>항목</th><th>개인사업자</th><th>법인</th><th>주의</th></tr>
+  <tr><td>매출 사용</td><td>통장 = 개인</td><td><strong>법인 통장은 법인 소유</strong></td><td>개인 사용 시 가지급금 → 세무조사</td></tr>
+  <tr><td>대표 급여</td><td>인출 자유</td><td>급여 지급, 원천세 신고</td><td>세무사와 적정 금액 협의</td></tr>
+  <tr><td>세금 신고</td><td>종합소득세 (5월)</td><td>법인세 (3월) + 원천세 (매월)</td><td>세무사 기장 필수</td></tr>
+  <tr><td>4대보험</td><td>대표 선택</td><td>대표이사도 가입 대상</td><td>추가 부담 발생</td></tr>
+</table>
+
+<h3>12-3. 배달전문 식당 특수 확인</h3>
+<table>
+  <tr><th class="check">☐</th><th>항목</th><th>내용</th></tr>
+  <tr><td class="check">☐</td><td>배달앱 리뷰·평점</td><td>사업자 변경 시 초기화 가능. 각 앱 정책 확인.</td></tr>
+  <tr><td class="check">☐</td><td>배달앱 광고 설정</td><td>울트라콜/오픈리스트 세팅 인수 여부. 본사 확인.</td></tr>
+  <tr><td class="check">☐</td><td>배달 커버리지</td><td>현재 배달 가능 지역 + 대행 단가</td></tr>
+  <tr><td class="check">☐</td><td>포장재·용기</td><td>본사 지정 여부, 현 재고량, 발주 리드타임</td></tr>
+  <tr><td class="check">☐</td><td>주방 설비 상태</td><td>배달 전문 특성상 조리 효율이 매출 직결. 꼼꼼히 실사.</td></tr>
+  <tr><td class="check">☐</td><td>위생 점검 대비</td><td>최근 점검 결과. 배달 전문점은 점검 빈도 높음.</td></tr>
+</table>
+
+<hr class="separator">
+
+<h2>부록 A — 포괄양수도 타이밍</h2>
+<h3>올바른 순서 (VAT 면제)</h3>
+<table>
+  <tr><th>순서</th><th>절차</th><th>핵심</th></tr>
+  <tr><td>①</td><td>법인설립등기 완료</td><td>법인격 취득</td></tr>
+  <tr><td>②</td><td><strong>포괄양수도 계약 체결</strong></td><td>사업자등록 전에!</td></tr>
+  <tr><td>③</td><td>사업자등록 신청 (양수도 계약서 첨부)</td><td>동시 신고</td></tr>
+  <tr><td>④</td><td>영업자 지위승계</td><td>구청</td></tr>
+</table>
+<h3>잘못된 순서 (VAT 부과 ⚠️)</h3>
+<p>사업자등록 먼저 → 양수도 나중 = <strong style="color:#dc3545;">일반매매 → VAT 10% 부과</strong></p>
+
+<h2>부록 B — 양수도 계약서 특약 권장 문구</h2>
+<div style="background:#f7fafc; border:1px solid #e2e8f0; border-radius:6px; padding:12px; margin:8px 0; font-size:9.5pt;">
+<strong>제○조 (온라인 플랫폼 권한 이전)</strong><br>
+① 양도인은 양수인에게 네이버 스마트플레이스 업체 관리 권한을 인수일까지 위임한다.<br>
+② 양도인은 해당 업체 정보를 삭제하거나 변경하지 아니한다.<br>
+③ 양도인은 네이버 스마트주문, 네이버페이 해지 절차에 협조한다.<br>
+④ 비협조로 인한 영업 손실은 양도인이 배상한다.<br>
+⑤ 카카오맵, 구글맵 등 기타 플랫폼에도 동일 협조한다.
+</div>
+<div style="background:#f7fafc; border:1px solid #e2e8f0; border-radius:6px; padding:12px; margin:8px 0; font-size:9.5pt;">
+<strong>제○조 (포괄양수도)</strong><br>
+① 본 계약은 부가가치세법 제10조 제9항 제2호에 따른 포괄양수도에 해당한다.<br>
+② 양도인은 사업자등록 신청 시 필요한 서류를 제공한다.<br>
+③ 양도인은 양수인의 사업자등록 완료 시까지 폐업 신고를 하지 않는다.<br>
+④ 사업자등록 완료 후 양도인은 즉시 폐업 신고한다.
+</div>
+<div style="background:#f7fafc; border:1px solid #e2e8f0; border-radius:6px; padding:12px; margin:8px 0; font-size:9.5pt;">
+<strong>제○조 (양도인 협조 의무)</strong><br>
+① 양도인은 양수인의 법인 설립·사업자등록 완료 시까지 정상 영업을 유지한다.<br>
+② 양도인은 임대인의 양도 동의 취득에 적극 협조한다.<br>
+③ 양도인은 거래처 정보 및 운영 노하우를 성실히 인수인계한다.<br>
+④ 양도인은 인수일 전후 2주간 매장 운영 안정화에 합리적 범위 내에서 협조한다.<br>
+⑤ 양도인은 양수도 완료 후 동일 행정동 및 반경 1km 이내에서 2년간 동종 업종을 영위하지 않는다.
+</div>
+
+<h2>부록 C — 생성 완료 서류 현황</h2>
+<table>
+  <tr><th>구분</th><th>서류명</th><th>상태</th><th>남은 작업</th></tr>
+  <tr><td rowspan="5">법인설립 5종</td><td>정관.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>자본금 반영 + 서명</td></tr>
+  <tr><td>발기인총회의사록.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>서명</td></tr>
+  <tr><td>주식인수증.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>자본금 반영</td></tr>
+  <tr><td>조사보고서.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>조사보고자 정보 + 서명</td></tr>
+  <tr><td>설립등기신청서.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>검토</td></tr>
+  <tr><td rowspan="2">계약서 2종</td><td>영업양수도 계약서.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>조건 확정 후 반영</td></tr>
+  <tr><td>임대차 계약서.docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>임대인 조건 확인</td></tr>
+  <tr><td>참고</td><td>표준정관 (45조).docx</td><td><span class="tag tag-done">✅ 완료</span></td><td>참고용</td></tr>
+  <tr><td rowspan="2">미생성</td><td>대표이사 취임승낙서</td><td><span class="tag tag-need">📝 필요</span></td><td>생성 가능</td></tr>
+  <tr><td>감사 취임승낙서</td><td><span class="tag tag-need">📝 필요</span></td><td>조사보고자 확정 후</td></tr>
+</table>
+
+<h2>부록 D — 핵심 리스크 총괄</h2>
+<table>
+  <tr><th>우선순위</th><th>리스크</th><th>영향</th><th>대응</th><th>상태</th></tr>
+  <tr><td><span class="tag tag-p0">P0</span></td><td>포괄양수도 타이밍 오류</td><td>VAT 최대 880만원</td><td>사업자등록 전 양수도 체결</td><td><span class="tag tag-wait">실행 전</span></td></tr>
+  <tr><td><span class="tag tag-p0">P0</span></td><td>조사보고자 미확보</td><td>설립등기 불가</td><td>D-28에 지인 섭외</td><td><span class="tag tag-need">섭외 필요</span></td></tr>
+  <tr><td><span class="tag tag-p0">P0</span></td><td>임대인 양도 동의 미확보</td><td>인수 자체 불가</td><td>기존 점주 협조(✅) 하에 조기 접촉</td><td><span class="tag tag-wait">접촉 전</span></td></tr>
+  <tr><td><span class="tag tag-p0">P0</span></td><td>기존 점주 세금 체납</td><td>양수인에게 전가</td><td>완납증명서 징구</td><td><span class="tag tag-need">확인 필요</span></td></tr>
+  <tr><td><span class="tag tag-p1">P1</span></td><td>과밀억제권역 3배 중과</td><td>비용 증가</td><td>서울 중랑구 확정. 비용표 반영.</td><td><span class="tag tag-done">✅ 반영</span></td></tr>
+  <tr><td><span class="tag tag-p1">P1</span></td><td>정산계좌 미변경</td><td>매출 기존 점주에게 입금</td><td>D+7 전 전 채널 점검</td><td><span class="tag tag-wait">실행 전</span></td></tr>
+  <tr><td><span class="tag tag-p1">P1</span></td><td>네이버플레이스 삭제</td><td>리뷰 전체 소실</td><td>삭제 금지. 주인 변경만.</td><td><span class="tag tag-done">✅ 절차 확인</span></td></tr>
+  <tr><td><span class="tag tag-p1">P1</span></td><td>가맹계약 승계 불가</td><td>신규 가맹비 발생</td><td>본사 사전 확인</td><td><span class="tag tag-need">확인 필요</span></td></tr>
+  <tr><td><span class="tag tag-p1">P1</span></td><td>행정처분 이력 승계</td><td>영업정지 등</td><td>기존 점주에게 확인</td><td><span class="tag tag-need">확인 필요</span></td></tr>
+</table>
+
+<div class="footer">
+작성: AADS CTO AI · 2026-06-11 (개정) · 열정국밥 중화점 인수 프로젝트<br>
+법인: 주식회사 윤희에프앤비 · 대표이사: 오윤희<br>
+본 문서는 일반적인 인수전환 절차를 안내하며, 법률·세무 자문을 대체하지 않습니다.
+</div>
+
+</body>
+</html>

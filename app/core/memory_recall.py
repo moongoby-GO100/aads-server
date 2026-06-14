@@ -10,7 +10,7 @@ AADS 메모리 자동 주입 시스템 — 공유 메모리 리콜 모듈
 4. 활성 Directive (directive_lifecycle status IN pending/running, ~400 토큰) — 프로젝트 필터
 5. 이전 작업 발견 사항 (ai_observations category='discovery'|'learning', ~400 토큰) — 프로젝트+공통
 6. AI 학습 메모리 (ai_meta_memory, ~300 토큰) — CEO 선호/프로젝트 패턴
-7. 반성 지시사항 (ai_meta_memory correction_directive, ~200 토큰) — 최근 3건
+7. 반성 지시사항 (ai_meta_memory correction_directive, ~200 토큰) — 빈도 상위 5건
 
 총 토큰 예산: ~2,300 토큰 이내 (한국어 기준 1토큰 ≈ 1.5자)
 """
@@ -32,7 +32,7 @@ _BUDGET = {
     "directives": 600,              # ~400 토큰
     "discoveries": 600,             # ~400 토큰
     "learned_memory": 450,          # ~300 토큰 (ai_meta_memory)
-    "correction_directives": 300,   # ~200 토큰 (Reflexion B1 반성 지시, 최근 3건)
+    "correction_directives": 300,   # ~200 토큰 (Reflexion B1 반성 지시, 빈도 상위 5건)
     "experience_lessons": 450,      # ~300 토큰 (AADS-P1-1 실시간 교훈, 최근 5건)
     "visual_memories": 450,         # ~300 토큰 (이미지 분석 메모리, 최근 3건)
 }
@@ -301,44 +301,41 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
 
 
 async def _build_correction_directives(project_id: Optional[str] = None) -> str:
-    """Reflexion(B1/auto_reflexion_loop) correction_directive + strategy_update →
+    """Reflexion(B1/auto_reflexion_loop) correction_directive →
     다음 턴 시스템 프롬프트 강제 주입.
     MPR 구조화: fail_count 높은 순 + 프로젝트 매칭 우선 검색.
-    중복 directive 텍스트 자동 병합."""
+    failure_type/fail_count 기반 구조화 포맷."""
     try:
         async with _get_pool().acquire() as conn:
             if project_id:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value, category FROM ai_meta_memory
-                    WHERE category IN ('correction_directive', 'strategy_update')
+                    SELECT key, value FROM ai_meta_memory
+                    WHERE category = 'correction_directive'
                       AND (project = $1 OR project IS NULL)
                     ORDER BY
-                        CASE WHEN category = 'strategy_update' THEN 0 ELSE 1 END,
                         CASE WHEN project = $1 THEN 0 ELSE 1 END,
                         COALESCE((value->>'fail_count')::int, 1) DESC,
-                        COALESCE(updated_at, created_at) DESC NULLS LAST
-                    LIMIT 6
+                        updated_at DESC
+                    LIMIT 5
                     """,
                     project_id,
                 )
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT key, value, category FROM ai_meta_memory
-                    WHERE category IN ('correction_directive', 'strategy_update')
+                    SELECT key, value FROM ai_meta_memory
+                    WHERE category = 'correction_directive'
                     ORDER BY
-                        CASE WHEN category = 'strategy_update' THEN 0 ELSE 1 END,
                         COALESCE((value->>'fail_count')::int, 1) DESC,
-                        COALESCE(updated_at, created_at) DESC NULLS LAST
-                    LIMIT 6
+                        updated_at DESC
+                    LIMIT 5
                     """,
                 )
             if not rows:
                 return ""
             import json as _json
             lines = []
-            seen_directives = set()
             for r in rows:
                 val = r["value"]
                 if isinstance(val, str):
@@ -347,24 +344,12 @@ async def _build_correction_directives(project_id: Optional[str] = None) -> str:
                     except Exception:
                         pass
                 if isinstance(val, dict):
-                    if r["category"] == "strategy_update":
-                        val_str = val.get("strategy") or val.get("directive") or val.get("summary") or _json.dumps(val, ensure_ascii=False)
-                        escalation = val.get("escalation_needed", False)
-                        fc = val.get("fail_count", "")
-                        prefix = f"[전략변경⚠|{fc}회]" if escalation else f"[전략변경|{fc}회]" if fc else "[전략변경]"
-                    else:
-                        val_str = val.get("directive", "")
-                        ft = val.get("failure_type", "")
-                        fc = val.get("fail_count", 1)
-                        prefix = f"[{ft}|{fc}회]"
+                    ft = val.get("failure_type", "")
+                    fc = val.get("fail_count", 1)
+                    directive = val.get("directive", "")
+                    lines.append(f"- [{ft} {fc}회] {directive}")
                 else:
-                    val_str = str(val)
-                    ft = ""
-                    prefix = "[반성지시]" if r["category"] == "correction_directive" else "[전략변경]"
-                if val_str[:50] in seen_directives:
-                    continue
-                seen_directives.add(val_str[:50])
-                lines.append(f"- {prefix} {val_str[:150]}")
+                    lines.append(f"- [unknown 1회] {str(val)}")
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["correction_directives"])
     except Exception as e:

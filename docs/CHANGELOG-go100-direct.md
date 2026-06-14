@@ -17502,3 +17502,13 @@ SERVICES→# V4.1 + V4.2 서비스 목록 (읽기 전용 조회)
 ## [2026-06-10 16:25:11 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 2026-06-10 15:49 KST - GO100 limit-up→## 2026-06-10 16:25 KST - GO100 limit-up
 - finalize: pending
+
+## [2026-06-15 07:46:58 KST] [GO100] backend/app/services/go100/ai/data_coverage.py
+- Chat-Direct 수정: patch: 
+def _default_requirement_for_unclear_re→
+def _default_requirement_for_unclear_re
+- finalize: pending
+
+## [2026-06-15 07:47:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-06-12 19:36 KST - GO100 source-u→## 2026-06-15 07:42 KST - GO100 chat unc
+- finalize: pending

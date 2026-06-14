@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Seoul Audio 구독자 성장 상세 기획서</title>
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --ink: #191919;
+      --muted: #66645f;
+      --line: #ded9cf;
+      --panel: #ffffff;
+      --accent: #1b5e5a;
+      --accent-2: #b83d2f;
+      --gold: #c3922e;
+      --blue: #2f5d9b;
+      --soft: #ece7dc;
+      --good: #e7f4ef;
+      --warn: #fff2d7;
+      --danger: #fae4df;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      line-height: 1.62;
+    }
+
+    a { color: var(--accent); }
+
+    .hero {
+      min-height: 86vh;
+      display: grid;
+      align-items: end;
+      background:
+        linear-gradient(180deg, rgba(15, 18, 18, .26) 0%, rgba(15, 18, 18, .72) 100%),
+        url("https://i.ytimg.com/vi/RICsP_kZsZ8/hqdefault.jpg") center / cover no-repeat;
+      color: #fff;
+    }
+
+    .hero-inner {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 72px 0 64px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, .12);
+      border: 1px solid rgba(255, 255, 255, .26);
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 18px 0 16px;
+      font-size: clamp(38px, 6vw, 76px);
+      line-height: 1.04;
+      letter-spacing: 0;
+      max-width: 980px;
+    }
+
+    .hero p {
+      max-width: 850px;
+      font-size: 20px;
+      color: rgba(255, 255, 255, .88);
+      margin: 0;
+    }
+
+    .container {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 52px 0;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 14px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 31px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 19px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .note {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+    }
+
+    .metric {
+      display: grid;
+      gap: 4px;
+    }
+
+    .metric strong {
+      font-size: 30px;
+      line-height: 1;
+    }
+
+    .metric span { color: var(--muted); font-size: 13px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 11px 12px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #ebe6da;
+      font-size: 13px;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--soft);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .tag.good { background: var(--good); color: #146144; }
+    .tag.warn { background: var(--warn); color: #76500a; }
+    .tag.danger { background: var(--danger); color: #8f2418; }
+    .tag.blue { background: #e6eef8; color: var(--blue); }
+
+    .pill-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .callout {
+      border-left: 5px solid var(--accent);
+      background: #eef7f5;
+      padding: 18px 20px;
+      margin: 18px 0;
+    }
+
+    .callout.warning {
+      border-left-color: var(--gold);
+      background: var(--warn);
+    }
+
+    .timeline {
+      display: grid;
+      gap: 14px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 112px 1fr;
+      gap: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .step strong {
+      color: var(--accent-2);
+      font-size: 15px;
+    }
+
+    .bar {
+      height: 12px;
+      background: #e6e0d5;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .bar i {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+      border-radius: inherit;
+    }
+
+    .quote {
+      font-size: 24px;
+      line-height: 1.38;
+      margin: 0;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .checklist {
+      display: grid;
+      gap: 9px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .checklist li {
+      position: relative;
+      padding-left: 24px;
+    }
+
+    .checklist li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: .62em;
+      width: 9px;
+      height: 9px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+
+    .source-list {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .source-list li { margin-bottom: 6px; }
+
+    .footer {
+      background: #191919;
+      color: rgba(255, 255, 255, .78);
+      padding: 34px 0;
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .section-title { display: block; }
+      .step { grid-template-columns: 1fr; }
+      table { font-size: 13px; }
+      th, td { padding: 9px; }
+      .hero { min-height: 78vh; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">YouTube Subscriber Growth Plan · Seoul Audio</div>
+      <h1>Seoul Audio 구독자 성장 상세 기획서</h1>
+      <p>서울의 현장감, 도시 소리, 음악적 분위기를 하나의 브랜드로 묶어 46명 초기 채널을 180일 안에 구독 기반 채널로 전환하는 실행 계획입니다.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="container">
+      <div class="section-title">
+        <div>
+          <h2>요약 판단</h2>
+          <div class="note">작성 기준: 2026-06-12 11:42:48 KST · AADS DB 시각, 공개 YouTube 페이지, oEmbed, RSS 재검증 기준</div>
+        </div>
+        <span class="tag good">실행 우선순위 P0</span>
+      </div>
+
+      <div class="grid grid-4">
+        <div class="card metric">
+          <strong>46명</strong>
+          <span>구독자 수 [YouTube 페이지 파싱]</span>
+        </div>
+        <div class="card metric">
+          <strong>14개</strong>
+          <span>공개 영상 수 [YouTube 페이지 파싱]</span>
+        </div>
+        <div class="card metric">
+          <strong>10,902회</strong>
+          <span>RSS 노출 14개 영상 조회 합산 [RSS]</span>
+        </div>
+        <div class="card metric">
+          <strong>779회</strong>
+          <span>영상당 평균 조회수 [RSS 산출]</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p class="quote">결론: 지금은 음악 채널이 아니라, "서울의 소리와 장면을 기록하는 글로벌 시티 사운드 채널"로 재정의해야 구독 전환이 빨라집니다.</p>
+        <p>조회 성과는 서울 현장/관광/도시 기록형 Shorts가 음악 믹스보다 강합니다. 음악은 채널의 분위기와 체류 시간을 담당하고, Shorts는 발견과 구독 전환을 담당하는 구조로 나누는 것이 맞습니다.</p>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3>핵심 문제</h3>
+          <p>콘텐츠가 "카페 음악", "서울 관광", "현장 기록", "사회 이슈"로 흩어져 있습니다. 신규 방문자가 왜 구독해야 하는지 3초 안에 이해하기 어렵습니다.</p>
+        </div>
+        <div class="card">
+          <h3>핵심 기회</h3>
+          <p>조회 상위권은 대부분 서울의 실제 장면을 담은 Shorts입니다. 소규모 채널임에도 1,000회 이상 영상이 다수 발생해 발견 가능성은 이미 확인됐습니다.</p>
+        </div>
+        <div class="card">
+          <h3>핵심 처방</h3>
+          <p>채널 홈, 제목, 썸네일, 재생목록, 고정 댓글을 모두 "Seoul real moments + Seoul sound"로 통일하고, Shorts에서 장기 영상으로 이어지는 구독 퍼널을 설계합니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>현재 데이터 진단</h2>
+        <span class="tag blue">공개 데이터 기반</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 34%">영상</th>
+            <th>형식/소재</th>
+            <th>게시일 UTC</th>
+            <th>조회수</th>
+            <th>판정</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>서울 경복궁 수문장 교대식, 시간을 거슬러</td>
+            <td>서울 관광/현장 Shorts</td>
+            <td>2026-05-25</td>
+            <td>1,754</td>
+            <td><span class="tag good">상위 성과</span></td>
+          </tr>
+          <tr>
+            <td>서울 한강 드론쇼, 하늘이 움직인다</td>
+            <td>서울 이벤트 Shorts</td>
+            <td>2026-05-25</td>
+            <td>1,630</td>
+            <td><span class="tag good">상위 성과</span></td>
+          </tr>
+          <tr>
+            <td>서울 한강 버스, 새로운 리듬시작</td>
+            <td>서울 교통/도시 Shorts</td>
+            <td>2026-05-25</td>
+            <td>1,629</td>
+            <td><span class="tag good">상위 성과</span></td>
+          </tr>
+          <tr>
+            <td>서울 코엑스 인근 신호 기다리는 선거 로봇</td>
+            <td>도시 해프닝 Shorts</td>
+            <td>2026-05-27</td>
+            <td>1,355</td>
+            <td><span class="tag good">상위 성과</span></td>
+          </tr>
+          <tr>
+            <td>Voices at Olympic Park — A Generation Calling for Fairness and Justice</td>
+            <td>현장 기록 Shorts</td>
+            <td>2026-06-10</td>
+            <td>1,129</td>
+            <td><span class="tag good">상위 성과</span></td>
+          </tr>
+          <tr>
+            <td>2026.06.11, 공정과 정의를 외치는 대한민국</td>
+            <td>현장 기록 Shorts</td>
+            <td>2026-06-11</td>
+            <td>1,103</td>
+            <td><span class="tag good">상승 중</span></td>
+          </tr>
+          <tr>
+            <td>Seoul Audio | Cozy Cafe Music K-Pop (40 Min)</td>
+            <td>음악 믹스 Long-form</td>
+            <td>2026-05-16</td>
+            <td>763</td>
+            <td><span class="tag warn">검색형 자산</span></td>
+          </tr>
+          <tr>
+            <td>600 years old and lowkey outshining everyone here</td>
+            <td>서울 문화 Shorts</td>
+            <td>2026-05-30</td>
+            <td>553</td>
+            <td><span class="tag warn">개선 여지</span></td>
+          </tr>
+          <tr>
+            <td>Sunset in Jamsil</td>
+            <td>서울 야경/시티팝 Shorts</td>
+            <td>2026-06-07</td>
+            <td>384</td>
+            <td><span class="tag warn">소재는 적합</span></td>
+          </tr>
+          <tr>
+            <td>Seoul Audio | Cozy Cafe Music K-Pop (30 Min)</td>
+            <td>음악 믹스 Long-form</td>
+            <td>2026-05-23</td>
+            <td>258</td>
+            <td><span class="tag warn">썸네일/키워드 보강</span></td>
+          </tr>
+          <tr>
+            <td>Seoul Audio | Cozy Cafe Music R&amp;B (60 Min)</td>
+            <td>음악 믹스 Long-form</td>
+            <td>2026-05-26</td>
+            <td>145</td>
+            <td><span class="tag danger">전환 약함</span></td>
+          </tr>
+          <tr>
+            <td>Voices at Olympic Park | Seoul, June 11, 2026</td>
+            <td>현장 기록 Long-form</td>
+            <td>2026-06-11</td>
+            <td>92</td>
+            <td><span class="tag warn">Shorts 연계 필요</span></td>
+          </tr>
+          <tr>
+            <td>10 Songs from Jamsil · Korean Synthwave &amp; City Pop</td>
+            <td>음악 믹스 Long-form</td>
+            <td>2026-06-07</td>
+            <td>79</td>
+            <td><span class="tag danger">검색 패키징 약함</span></td>
+          </tr>
+          <tr>
+            <td>The Korean Flag Painted in the Sky Black Eagles Airshow</td>
+            <td>서울 이벤트 Shorts</td>
+            <td>2026-06-06</td>
+            <td>28</td>
+            <td><span class="tag danger">훅 재편집 필요</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="grid grid-2" style="margin-top: 16px;">
+        <div class="card">
+          <h3>성과 분류</h3>
+          <p>도시 기록/현장형 콘텐츠 10개 합산 조회수는 9,656회, 평균 966회입니다. 음악 믹스 4개 합산 조회수는 1,245회, 평균 311회입니다.</p>
+          <div class="bar"><i style="width: 88%"></i></div>
+          <div class="note">도시 기록형 조회 비중: 약 88.6% [RSS 산출]</div>
+        </div>
+        <div class="card">
+          <h3>해석</h3>
+          <p>구독자를 늘리는 첫 동력은 음악 BGM보다 "서울에서 지금 일어나는 장면"입니다. 다만 채널명이 Seoul Audio이므로, 현장음/도시음/음악 큐레이션을 연결해야 브랜드 일관성이 생깁니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>브랜드 포지셔닝</h2>
+        <span class="tag good">즉시 반영</span>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h3>추천 채널 정의</h3>
+          <p class="quote">Seoul Audio records the sound, mood, and real moments of Seoul.</p>
+          <p>한국어 보조 문구: "서울의 장면과 소리를 기록합니다." 이 문구를 채널 배너, 설명, 고정 댓글, 영상 설명 첫 줄에 반복 사용합니다.</p>
+        </div>
+        <div class="card">
+          <h3>피해야 할 정의</h3>
+          <p>"음악 올리는 채널", "서울 여행 쇼츠 채널", "이슈 영상 채널" 중 하나로만 보이면 콘텐츠 확장성이 줄어듭니다. Seoul Audio는 세 가지를 묶는 상위 개념이어야 합니다.</p>
+        </div>
+      </div>
+
+      <table style="margin-top: 16px;">
+        <thead>
+          <tr>
+            <th>브랜드 요소</th>
+            <th>현재 문제</th>
+            <th>변경안</th>
+            <th>목적</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>채널 한 줄 소개</td>
+            <td>공개 메타 설명 공백 또는 일반 문구</td>
+            <td>Seoul sounds, city moments, cafe music, and field recordings.</td>
+            <td>첫 방문자에게 구독 이유 제시</td>
+          </tr>
+          <tr>
+            <td>배너 문구</td>
+            <td>정체성 전달 부족</td>
+            <td>REAL SEOUL, RECORDED IN SOUND</td>
+            <td>글로벌 타겟 즉시 이해</td>
+          </tr>
+          <tr>
+            <td>프로필 이미지</td>
+            <td>식별성 미확인</td>
+            <td>SA 워드마크 + 녹음 파형 + 서울 실루엣</td>
+            <td>Shorts 피드에서 채널 기억 강화</td>
+          </tr>
+          <tr>
+            <td>재생목록</td>
+            <td>콘텐츠 분류 약함</td>
+            <td>Real Seoul Moments / Seoul Cafe Music / Seoul Night Drive / Field Voices</td>
+            <td>시청 세션 연장</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>성장 목표</h2>
+        <span class="tag warn">전략 목표 · 실측 아님</span>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3>30일 목표</h3>
+          <div class="metric"><strong>500명</strong><span>구독자</span></div>
+          <p>Shorts 업로드 빈도와 외부 배포를 높여 발견량을 확보합니다. 1,000회 이상 Shorts를 8개 이상 만드는 것이 1차 목표입니다.</p>
+        </div>
+        <div class="card">
+          <h3>90일 목표</h3>
+          <div class="metric"><strong>2,000명</strong><span>구독자</span></div>
+          <p>상위 포맷을 시리즈화하고, 장기 영상과 플레이리스트로 체류 시간을 만듭니다. 구독 전환율을 영상 조회 대비 1.5% 이상으로 관리합니다.</p>
+        </div>
+        <div class="card">
+          <h3>180일 목표</h3>
+          <div class="metric"><strong>10,000명</strong><span>구독자</span></div>
+          <p>서울 도시 기록 아카이브로 자리 잡고, 인스타그램·틱톡·레딧·커뮤니티 유입을 정기화합니다. 협업과 제보 기반 콘텐츠를 시작합니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>콘텐츠 전략</h2>
+        <span class="tag blue">4개 축 운영</span>
+      </div>
+
+      <div class="grid grid-4">
+        <div class="card">
+          <h3>1. Real Seoul Moments</h3>
+          <p>서울에서 실제로 벌어지는 짧은 장면. 조회수 확보용 핵심 포맷입니다.</p>
+          <div class="pill-row">
+            <span class="tag">15-35초</span>
+            <span class="tag">일 1-2개</span>
+            <span class="tag">Shorts</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>2. Field Voices</h3>
+          <p>현장 목소리, 도시 소음, 집회, 행사, 거리 분위기를 편집 최소화로 기록합니다.</p>
+          <div class="pill-row">
+            <span class="tag">45-180초</span>
+            <span class="tag">주 2개</span>
+            <span class="tag">시의성</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>3. Seoul Cafe Music</h3>
+          <p>카페, 한강, 광화문, 잠실 등 장소 기반 BGM. 검색 유입과 체류 시간 담당입니다.</p>
+          <div class="pill-row">
+            <span class="tag">30-60분</span>
+            <span class="tag">주 1개</span>
+            <span class="tag">Evergreen</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>4. Sound of the Week</h3>
+          <p>한 주간 가장 서울다웠던 소리 5개를 묶은 큐레이션. 구독 이유를 만듭니다.</p>
+          <div class="pill-row">
+            <span class="tag">3-5분</span>
+            <span class="tag">주 1개</span>
+            <span class="tag">구독 전환</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout warning">
+        <h3>운영 원칙</h3>
+        <p>모든 영상은 첫 2초에 장소와 사건이 보여야 합니다. 음악 채널처럼 천천히 시작하면 Shorts 피드에서 이탈이 큽니다. YouTube 공식 가이드도 제목은 정확하고 간결해야 하며, 중요한 단어를 앞에 두는 방식을 권장합니다.</p>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>구독 전환 퍼널</h2>
+        <span class="tag good">Shorts 중심</span>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3>발견</h3>
+          <p>Shorts 피드, 검색, 외부 커뮤니티에서 유입됩니다. 제목 앞단에 장소명과 장면을 배치합니다.</p>
+          <ul class="checklist">
+            <li>Seoul / Jamsil / Hangang / Gyeongbokgung 등 장소 선점</li>
+            <li>영상 첫 프레임에 가장 강한 장면 배치</li>
+            <li>#Seoul #Korea #Shorts + 소재 태그 2개</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>체류</h3>
+          <p>상위 Shorts의 고정 댓글에서 관련 긴 영상 또는 재생목록으로 이동시킵니다.</p>
+          <ul class="checklist">
+            <li>고정 댓글: "More Seoul sounds here"</li>
+            <li>관련 재생목록 1개만 링크</li>
+            <li>영상 설명 첫 줄에 채널 정체성 반복</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>구독</h3>
+          <p>구독 CTA는 영상 말미보다 고정 댓글, 채널 홈, 시리즈 구조에서 반복합니다.</p>
+          <ul class="checklist">
+            <li>매주 같은 요일 "Sound of the Week" 발행</li>
+            <li>채널 홈 첫 섹션을 Real Seoul Moments로 고정</li>
+            <li>구독 이유: "서울의 실제 장면을 놓치지 않기"</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>제목·썸네일·설명 템플릿</h2>
+        <span class="tag blue">바로 적용 가능</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>콘텐츠</th>
+            <th>제목 공식</th>
+            <th>예시</th>
+            <th>썸네일/첫 프레임</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>서울 현장 Shorts</td>
+            <td>[장소] + [가장 이상한/아름다운 장면] + Seoul</td>
+            <td>Jamsil Went Quiet for This Moment | Seoul</td>
+            <td>사람/장면 중심, 텍스트 2-4단어</td>
+          </tr>
+          <tr>
+            <td>정치/사회 현장</td>
+            <td>[날짜] + Voices from [장소] + 핵심 감정</td>
+            <td>June 11, 2026: Voices from Olympic Park</td>
+            <td>과격한 선동 표현 금지, 현장성 중심</td>
+          </tr>
+          <tr>
+            <td>서울 관광/문화</td>
+            <td>[장소] Looks Different at [시간/상황]</td>
+            <td>Gyeongbokgung Feels Like Time Travel at Noon</td>
+            <td>랜드마크가 한눈에 보이는 프레임</td>
+          </tr>
+          <tr>
+            <td>카페 음악</td>
+            <td>Seoul [장소/무드] Music for [상황]</td>
+            <td>Seoul Rainy Cafe Music for Deep Work</td>
+            <td>실제 서울 이미지 + 무드 단어</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="grid grid-2" style="margin-top: 16px;">
+        <div class="card">
+          <h3>영상 설명 첫 3줄 템플릿</h3>
+          <p>Seoul Audio records the sound, mood, and real moments of Seoul.<br />Recorded at [장소], [날짜].<br />Subscribe for real Seoul moments, city sounds, and cafe music.</p>
+        </div>
+        <div class="card">
+          <h3>고정 댓글 템플릿</h3>
+          <p>More real Seoul sounds here: [재생목록 링크]<br />What part of Seoul should we record next?</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>30일 콘텐츠 캘린더</h2>
+        <span class="tag good">주 10-12개 발행</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>요일</th>
+            <th>업로드</th>
+            <th>소재</th>
+            <th>목표</th>
+            <th>체크 지표</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>월</td>
+            <td>Shorts 2개</td>
+            <td>출근길, 지하철, 한강, 거리 소리</td>
+            <td>발견량 확보</td>
+            <td>24시간 조회수, 평균 시청 지속률</td>
+          </tr>
+          <tr>
+            <td>화</td>
+            <td>Shorts 1개 + 커뮤니티 1개</td>
+            <td>서울 작은 해프닝, 투표형 게시물</td>
+            <td>댓글/반응 확보</td>
+            <td>댓글 수, 좋아요율</td>
+          </tr>
+          <tr>
+            <td>수</td>
+            <td>Long-form 1개</td>
+            <td>Seoul Cafe Music / Seoul Night Drive</td>
+            <td>체류 시간 확보</td>
+            <td>평균 시청 시간, 검색 유입</td>
+          </tr>
+          <tr>
+            <td>목</td>
+            <td>Shorts 2개</td>
+            <td>랜드마크, 행사, 거리 공연</td>
+            <td>신규 노출</td>
+            <td>구독 전환 수</td>
+          </tr>
+          <tr>
+            <td>금</td>
+            <td>Field Voices 1개</td>
+            <td>현장음, 시민 목소리, 도시 분위기</td>
+            <td>브랜드 차별화</td>
+            <td>댓글 품질, 공유 수</td>
+          </tr>
+          <tr>
+            <td>토</td>
+            <td>Shorts 2-3개</td>
+            <td>이벤트, 야경, 관광 명소</td>
+            <td>주말 트래픽</td>
+            <td>조회 상승 속도</td>
+          </tr>
+          <tr>
+            <td>일</td>
+            <td>Sound of the Week 1개</td>
+            <td>주간 베스트 장면 5개</td>
+            <td>구독 이유 강화</td>
+            <td>재방문 시청자, 구독 전환율</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>배포 전략</h2>
+        <span class="tag blue">외부 유입</span>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3>국내 커뮤니티</h3>
+          <p>서울 현장성 콘텐츠는 커뮤니티 공유와 궁합이 좋습니다. 단, 정치 현장 영상은 채널 이미지가 과격하게 고정되지 않도록 사실 기록 문구로 배포합니다.</p>
+          <ul class="checklist">
+            <li>에펨코리아, 클리앙, 더쿠, 디시 지역/이슈 게시판</li>
+            <li>제목: "서울 올림픽공원 현장음 기록"</li>
+            <li>본문: 평가보다 기록 중심</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>글로벌 커뮤니티</h3>
+          <p>해외 시청자는 서울의 실제 분위기와 K-culture 주변 장면에 반응합니다. 영어 제목과 간단한 맥락 설명이 필요합니다.</p>
+          <ul class="checklist">
+            <li>Reddit r/korea, r/seoul, r/travel</li>
+            <li>X 해시태그: #Seoul #Korea #SeoulTravel</li>
+            <li>Instagram Reels 교차 업로드</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>자체 채널</h3>
+          <p>검색 결과상 Instagram 계정이 확인됩니다. 기존 팔로워를 YouTube 구독자로 옮기는 구조를 만들어야 합니다.</p>
+          <ul class="checklist">
+            <li>인스타 프로필 링크를 YouTube 재생목록으로 변경</li>
+            <li>Reels 설명 첫 줄에 YouTube 원본 링크 안내</li>
+            <li>스토리 하이라이트: Seoul Sounds</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>실행 로드맵</h2>
+        <span class="tag good">P0/P1/P2</span>
+      </div>
+
+      <div class="timeline">
+        <div class="step">
+          <strong>D+0 to D+2</strong>
+          <div>
+            <h3>P0. 채널 패키징 정리</h3>
+            <p>채널 설명, 배너 문구, 재생목록, 고정 댓글 템플릿을 즉시 교체합니다. 조회 상위 5개 Shorts의 제목과 설명을 영어/한국어 혼합형으로 정리합니다.</p>
+            <ul class="checklist">
+              <li>채널 설명 입력: Seoul sounds, city moments, cafe music, and field recordings.</li>
+              <li>상위 Shorts 5개 고정 댓글 추가</li>
+              <li>재생목록 4개 생성</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="step">
+          <strong>D+3 to D+7</strong>
+          <div>
+            <h3>P0. 상위 영상 리패키징</h3>
+            <p>1,000회 이상 나온 영상의 소재를 같은 포맷으로 10개 복제합니다. 같은 장소라도 다른 소리, 다른 시간대, 다른 감정으로 시리즈화합니다.</p>
+            <ul class="checklist">
+              <li>Gyeongbokgung / Hangang / Jamsil / Olympic Park 후속 Shorts 제작</li>
+              <li>첫 2초 무음 또는 약한 장면 제거</li>
+              <li>모든 Shorts에 장소명 영문 우선 배치</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="step">
+          <strong>D+8 to D+30</strong>
+          <div>
+            <h3>P1. 정기 편성 구축</h3>
+            <p>주 10-12개 업로드 리듬을 고정합니다. 업로드보다 중요한 것은 24시간 후 데이터 판정입니다. 성과가 낮은 영상은 제목과 첫 프레임을 바꿔 재편집합니다.</p>
+            <ul class="checklist">
+              <li>Shorts 8-10개, Long-form 1개, 커뮤니티 2개</li>
+              <li>상위 20% 포맷만 다음 주에 반복</li>
+              <li>구독 전환율 낮은 영상은 CTA 교체</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="step">
+          <strong>D+31 to D+90</strong>
+          <div>
+            <h3>P1. 시리즈화와 협업</h3>
+            <p>반응이 검증된 포맷을 시리즈명으로 고정합니다. 서울 카페, 로컬 공간, 거리 공연, 행사 주최자와 협업해 촬영 접근성과 공유 동기를 확보합니다.</p>
+            <ul class="checklist">
+              <li>Series: Sounds of Seoul, Seoul at Night, Field Voices</li>
+              <li>월 2회 로컬 공간 협업</li>
+              <li>시청자 제보 장소 모집</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="step">
+          <strong>D+91 to D+180</strong>
+          <div>
+            <h3>P2. 미디어 브랜드화</h3>
+            <p>Seoul Audio를 단순 유튜브 채널이 아니라 "서울 분위기 아카이브"로 확장합니다. 뉴스레터, 지도형 아카이브, 플레이리스트 상품화를 검토합니다.</p>
+            <ul class="checklist">
+              <li>월간 Seoul Sound Map 제작</li>
+              <li>저작권 정리된 음악/현장음 라이브러리화</li>
+              <li>관광/공간 브랜드 협찬 패키지 설계</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>KPI 대시보드</h2>
+        <span class="tag warn">YouTube Studio로 매주 검증</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>지표</th>
+            <th>현재 확인값</th>
+            <th>30일 기준</th>
+            <th>90일 기준</th>
+            <th>조치 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>구독자</td>
+            <td>46명 [YouTube 페이지]</td>
+            <td>500명</td>
+            <td>2,000명</td>
+            <td>주간 순증 50명 미만이면 외부 배포 강화</td>
+          </tr>
+          <tr>
+            <td>Shorts 24시간 조회수</td>
+            <td>상위권 1,000회 이상 [RSS]</td>
+            <td>평균 800회</td>
+            <td>평균 2,000회</td>
+            <td>300회 미만이면 훅/제목 재편집</td>
+          </tr>
+          <tr>
+            <td>구독 전환율</td>
+            <td>미확인 [Studio 필요]</td>
+            <td>조회 대비 1.0%</td>
+            <td>조회 대비 1.5%</td>
+            <td>0.5% 미만이면 CTA/고정 댓글 수정</td>
+          </tr>
+          <tr>
+            <td>평균 시청 지속률</td>
+            <td>미확인 [Studio 필요]</td>
+            <td>Shorts 80% 이상</td>
+            <td>Shorts 90% 이상</td>
+            <td>60% 미만이면 첫 2초 제거</td>
+          </tr>
+          <tr>
+            <td>CTR</td>
+            <td>미확인 [Studio 필요]</td>
+            <td>Long-form 4% 이상</td>
+            <td>Long-form 6% 이상</td>
+            <td>2% 미만이면 제목/썸네일 교체</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>즉시 수정안</h2>
+        <span class="tag good">오늘 적용</span>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h3>대상 영상: Voices at Olympic Park</h3>
+          <p>현재 제목은 기록성은 좋지만 클릭 동기가 약합니다. Shorts와 Long-form의 역할을 분리해 제목을 다르게 가져가야 합니다.</p>
+          <table>
+            <tbody>
+              <tr>
+                <th>Long-form</th>
+                <td>Voices from Olympic Park, Seoul | June 11, 2026 Field Recording</td>
+              </tr>
+              <tr>
+                <th>Shorts</th>
+                <td>Olympic Park Was Filled With Voices | Seoul #Shorts</td>
+              </tr>
+              <tr>
+                <th>설명 첫 줄</th>
+                <td>Recorded in Seoul on June 11, 2026: real voices, real atmosphere.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>상위 영상 재활용</h3>
+          <p>경복궁, 한강 드론쇼, 한강 버스는 이미 검증된 소재입니다. 다음 7일간 같은 포맷을 장소·시간·소리만 바꿔 반복해야 합니다.</p>
+          <ul class="checklist">
+            <li>Gyeongbokgung at Sunset</li>
+            <li>Hangang Night Sounds</li>
+            <li>Jamsil After Rain</li>
+            <li>Seoul Subway Morning Rush</li>
+            <li>Olympic Park After the Crowd</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>리스크와 대응</h2>
+        <span class="tag danger">관리 필요</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>리스크</th>
+            <th>영향</th>
+            <th>대응</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>정치/사회 현장 콘텐츠로 채널 이미지 고정</td>
+            <td>광고/협업/장기 브랜딩에 부담</td>
+            <td>평가성 문구보다 "field recording", "voices", "Seoul record" 중심으로 표현</td>
+          </tr>
+          <tr>
+            <td>음악 콘텐츠와 현장 콘텐츠의 분리감</td>
+            <td>구독 이유 약화</td>
+            <td>모든 콘텐츠를 "서울의 소리"라는 상위 브랜드로 연결</td>
+          </tr>
+          <tr>
+            <td>저작권 음악 사용</td>
+            <td>수익화 제한, 영상 차단 가능</td>
+            <td>자체 제작/라이선스 확인 음원만 사용, 출처 관리표 작성</td>
+          </tr>
+          <tr>
+            <td>촬영 대상 초상권/민감 현장</td>
+            <td>신고, 삭제, 댓글 리스크</td>
+            <td>공개장소 원경 중심, 특정 개인 클로즈업 최소화, 요청 시 블러 처리</td>
+          </tr>
+          <tr>
+            <td>업로드 빈도 과부하</td>
+            <td>품질 저하, 지속 실패</td>
+            <td>촬영 1회에서 Shorts 5개, Long-form 1개, 커뮤니티 1개로 분해</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>최종 실행 체크리스트</h2>
+        <span class="tag good">운영표</span>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3>채널 세팅</h3>
+          <ul class="checklist">
+            <li>채널 설명 교체</li>
+            <li>배너 문구 교체</li>
+            <li>재생목록 4개 생성</li>
+            <li>인스타 링크 정리</li>
+            <li>채널 홈 첫 섹션 Shorts 배치</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>영상 운영</h3>
+          <ul class="checklist">
+            <li>상위 5개 영상 제목 보정</li>
+            <li>고정 댓글 템플릿 적용</li>
+            <li>주 10개 Shorts 제작</li>
+            <li>주 1개 음악 Long-form 제작</li>
+            <li>주 1개 주간 큐레이션 제작</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>측정</h3>
+          <ul class="checklist">
+            <li>매일 24시간 조회수 기록</li>
+            <li>매주 구독 전환율 확인</li>
+            <li>CTR 2% 미만 영상 썸네일 교체</li>
+            <li>Shorts 유지율 60% 미만 재편집</li>
+            <li>상위 20% 포맷 반복 제작</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="container">
+      <div class="section-title">
+        <h2>근거와 출처</h2>
+        <span class="tag blue">검증 구분</span>
+      </div>
+      <ul class="source-list">
+        <li>AADS DB: 기준 시각 2026-06-12 11:42:48 KST 확인. 쿼리: SELECT NOW() AT TIME ZONE 'Asia/Seoul'.</li>
+        <li>YouTube oEmbed: 대상 영상 제목, 채널명, 채널 URL, 썸네일 확인. URL: https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=RICsP_kZsZ8&amp;format=json</li>
+        <li>YouTube 채널 페이지 파싱: Seoul Audio, @seoulaudio_official, 46 subscribers, 14 videos 재확인. URL: https://www.youtube.com/@seoulaudio_official</li>
+        <li>YouTube RSS: 최근 공개 영상 14개, 조회수 합산 10,902회, 대상 영상 92회 재확인. URL: https://www.youtube.com/feeds/videos.xml?channel_id=UClHiF_e8ANipoT9Xw4Wt8Gw</li>
+        <li>YouTube Help: 제목은 정확하고 간결해야 하며 중요한 단어를 앞에 두라는 공식 권장사항 참고. URL: https://support.google.com/youtube/answer/12340300</li>
+        <li>YouTube Creators: 댓글 관리와 시청자 피드백 대응이 커뮤니티 성장에 중요하다는 공식 가이드 참고. URL: https://www.youtube.com/intl/en_us/creators/how-things-work/building-community/</li>
+        <li>YouTube Help: 노출 클릭률은 노출 대비 시청 전환을 보여주는 지표라는 공식 설명 참고. URL: https://support.google.com/youtube/answer/7628154</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container" style="padding: 0;">
+      Seoul Audio Subscriber Growth Plan · Prepared for CEO · 2026-06-12 KST
+    </div>
+  </footer>
+</body>
+</html>

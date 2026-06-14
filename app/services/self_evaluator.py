@@ -659,18 +659,18 @@ async def auto_reflexion_loop(
                    WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
                 normalized_project, directive_key,
             )
-            prev_fail = 1
+            prev_count = 1
             prev_success = 0
             if existing and existing["value"]:
                 prev_data = existing["value"] if isinstance(existing["value"], dict) else _json.loads(str(existing["value"]))
-                prev_fail = int(prev_data.get("fail_count", 0)) + 1
+                prev_count = int(prev_data.get("fail_count", 0)) + 1
                 prev_success = int(prev_data.get("success_count", 0))
             directive_value = _json.dumps({
                 "directive": directive_text,
                 "failure_type": failure_type,
                 "score": round(score, 3),
                 "project": normalized_project,
-                "fail_count": prev_fail,
+                "fail_count": prev_count,
                 "success_count": prev_success,
                 "last_triggered": int(time.time()),
             })
