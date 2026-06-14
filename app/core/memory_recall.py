@@ -37,8 +37,9 @@ _BUDGET = {
     "visual_memories": 450,         # ~300 토큰 (이미지 분석 메모리, 최근 3건)
     "experience_memory": 450,       # ~300 토큰 (구조화 경험 메모리, RIF 기반 상위 3건)
     "procedural_memory": 450,       # ~300 토큰 (절차 메모리, 성공률 상위 3건)
+    "knowledge_graph": 450,          # ~300 토큰 (P2 지식그래프, 핵심 엔티티+관계)
 }
-_TOTAL_CHAR_LIMIT = 4000  # ~2700 토큰 (correction_directive 이중 배치 + 세션노트 통합분 반영)
+_TOTAL_CHAR_LIMIT = 4500  # ~3000 토큰 (P2 지식그래프 섹션 추가분 반영)
 
 # #14: 카테고리별 confidence 임계값 (환경변수 오버라이드 가능)
 _CONFIDENCE = {
@@ -907,6 +908,18 @@ async def _log_memory_usage(session_id: str, observation_ids: list[int]):
 
 # ── 메인 빌더 ────────────────────────────────────────────────────────────────
 
+async def _build_knowledge_graph_context(project_id: Optional[str] = None) -> str:
+    """섹션 12: 지식그래프 — 프로젝트 핵심 엔티티 허브 + 관계 요약.
+    kg_entities/kg_relations에서 mention_count 상위 엔티티와 1-hop 관계를 주입."""
+    try:
+        from app.core.knowledge_graph import query_graph_context
+        text = await query_graph_context(project=project_id, top_k=5)
+        return _truncate(text, _BUDGET["knowledge_graph"]) if text else ""
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="knowledge_graph", error=str(e))
+        return ""
+
+
 async def build_memory_context(
     session_id: Optional[str] = None,
     project_id: Optional[str] = None,
@@ -920,11 +933,11 @@ async def build_memory_context(
     project_id = _normalize_project(project_id)
     blocks: List[str] = []
 
-    # 13개 섹션 병렬 조회 (P1: experience_memory + procedural_memory 추가)
+    # 14개 섹션 병렬 조회 (P2: knowledge_graph 추가)
     (
         notes, prefs_result, tools_result, dirs,
         disc_result, learned, corrections, exp_lessons, visual_mems, strategy,
-        quality_booster, exp_memory, proc_memory,
+        quality_booster, exp_memory, proc_memory, kg_context,
     ) = await asyncio.gather(
         _build_session_notes(session_id, project_id),
         _build_preferences(),
@@ -939,6 +952,7 @@ async def build_memory_context(
         _build_quality_booster(session_id),
         _build_experience_memory(project_id),
         _build_procedural_memory(project_id),
+        _build_knowledge_graph_context(project_id),
     )
 
     # tuple unpacking: (text, used_ids)
@@ -991,6 +1005,8 @@ async def build_memory_context(
         blocks.append(f"<experience_memory>\n## 구조화 경험\n{exp_memory}\n</experience_memory>")
     if proc_memory:
         blocks.append(f"<procedural_memory>\n## 절차 메모리\n{proc_memory}\n</procedural_memory>")
+    if kg_context:
+        blocks.append(f"<knowledge_graph>\n## 지식그래프\n{kg_context}\n</knowledge_graph>")
 
     result = "\n\n".join(blocks).strip() if blocks else ""
 
