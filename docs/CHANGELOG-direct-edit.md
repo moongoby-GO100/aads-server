@@ -3560,3 +3560,24 @@ from __
 
 ## [2026-06-15 07:47:16 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py 
+
+## [2026-06-15 07:52:00 KST] [aads-server] app/services/self_evaluator.py
+- Chat-Direct 수정: patch: _FAILURE_KEYWORDS: dict[str, list[str]] →_FAILURE_KEYWORDS: dict[str, list[str]] 
+
+## [2026-06-15 07:53:31 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch: async def _build_quality_booster(session→async def _build_quality_booster(session
+
+## [2026-06-15 07:53:51 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch:     # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최→    # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최
+
+## [2026-06-15 07:56:39 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && python3 -c "import ast; ast.parse(open('app/core/me
+
+## [2026-06-15 07:59:47 KST] [aads-server] app/services/self_evaluator.py
+- Chat-Direct 수정: patch: _FAILURE_KEYWORDS: dict[str, list[str]] →_FAILURE_KEYWORDS: dict[str, list[str]] 
+
+## [2026-06-15 08:00:25 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch: async def _build_quality_booster(session→async def _build_quality_booster(session
+
+## [2026-06-15 08:00:26 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: patch:     # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최→    # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최

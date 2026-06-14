@@ -17512,3 +17512,19 @@ def _default_requirement_for_unclear_re
 ## [2026-06-15 07:47:51 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 2026-06-12 19:36 KST - GO100 source-u→## 2026-06-15 07:42 KST - GO100 chat unc
 - finalize: pending
+
+## [2026-06-15 07:54:44 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-06-15 07:41 KST - GO100 data cov→## 2026-06-15 07:54 KST - GO100 realtime
+- finalize: pending
+
+## [2026-06-15 07:54:46 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: journalctl -u go100 -n 30 --no-pager
+- finalize: pending
+
+## [2026-06-15 07:59:19 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # GO100 인수인계서 v18.2 — #126 종가매매 카드 기반 진입→# GO100 인수인계서 v18.3 — 실시간 데이터/매매 게이트 최종 
+- finalize: pending
+
+## [2026-06-15 07:59:24 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8002/health
+- finalize: pending

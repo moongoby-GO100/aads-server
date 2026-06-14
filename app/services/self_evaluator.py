@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
 
@@ -21,6 +21,8 @@ logger = structlog.get_logger(__name__)
 _ENABLED = os.getenv("SELF_EVAL_ENABLED", "true").lower() == "true"
 _MIN_RESPONSE_LEN = int(os.getenv("SELF_EVAL_MIN_LEN", "1"))
 _HAIKU_MODEL = os.getenv("SELF_EVAL_MODEL", "qwen-turbo")
+_SELF_REFINE_FAIL_THRESHOLD = 0.5
+_SELF_REFINE_SUCCESS_THRESHOLD = 0.65
 
 _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
 
@@ -133,6 +135,15 @@ async def evaluate_response(
         )
         overall = min(1.0, max(0.0, overall))
         details["overall"] = round(overall, 3)
+        eval_failure_type = _classify_failure_type(user_message, ai_response)
+        eval_hint = _build_improvement_hint(eval_failure_type, user_message, ai_response, overall, details)
+        details["failure_type"] = eval_failure_type
+        details["score"] = round(overall, 3)
+        details["improvement_hint"] = eval_hint
+        if overall < _SELF_REFINE_FAIL_THRESHOLD:
+            details["last_outcome"] = "fail"
+        elif overall >= _SELF_REFINE_SUCCESS_THRESHOLD:
+            details["last_outcome"] = "success"
 
         # DB 저장
         from app.core.db_pool import get_pool
@@ -485,10 +496,25 @@ async def _check_repeated_errors(
                 if directive:
                     # 키에 타임스탬프를 포함하여 고유성 보장
                     import time
+                    now_ts = int(time.time())
                     directive_key = f"반복오류교정:{project}:{int(time.time())}"
                     # value는 jsonb 컬럼이므로 JSON 객체로 감싸서 저장
                     import json as _json
-                    directive_json = _json.dumps({"directive": directive[:500], "similar_count": count, "project": project})
+                    directive_json = _json.dumps({
+                        "directive": directive[:500],
+                        "failure_type": "반복오류",
+                        "score": None,
+                        "project": project,
+                        "improvement_hint": directive[:220],
+                        "fail_count": count,
+                        "trigger_count": count,
+                        "success_count": 0,
+                        "last_outcome": "fail",
+                        "directive_strength": _directive_strength(count, 0, "fail"),
+                        "similar_count": count,
+                        "last_triggered": now_ts,
+                        "last_failure_at": now_ts,
+                    }, ensure_ascii=False)
                     await conn.execute(
                         """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
                            VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())
@@ -535,26 +561,10 @@ _FAILURE_DIRECTIVES: dict[str, str] = {
 
 # 실패 유형 분류 키워드 (우선순위 순: 지시_위반 > 도구_오류 > 형식_부적합 > 정보_부족)
 _FAILURE_KEYWORDS: dict[str, list[str]] = {
-    "지시_위반": [
-        "절대", "반드시", "금지", "하지 마", "하지마", "안돼", "안 돼",
-        "말했잖", "지시했", "지시를 따르", "지시 위반", "따르지 못", "어겼",
-        "규칙 위반", "약속을", "왜 안", "지키지", "이행하지", "준수하지",
-    ],
-    "도구_오류": [
-        "오류", "에러", "error", "실패", "timeout", "타임아웃",
-        "연결 실패", "접근 불가", "tool", "도구 호출", "exception",
-        "traceback", "failed", "could not", "unable to",
-    ],
-    "형식_부적합": [
-        "표로", "코드로", "목록으로", "형식으로", "json으로", "markdown",
-        "마크다운", "번호로", "포맷", "format", "양식", "구조가",
-        "보기 어렵", "정리해", "정렬", "맞지 않", "형식이",
-    ],
-    "정보_부족": [
-        "구체적", "자세히", "더 알려", "정확히", "수치", "통계",
-        "데이터", "근거", "출처", "정보가 없", "정보를 찾지", "모르겠",
-        "확인 불가", "알 수 없", "검색 실패", "찾지 못",
-    ],
+    "지시_위반": ["절대", "반드시", "금지", "하지 마", "하지마", "안돼", "안 돼", "말했잖", "지시했"],
+    "도구_오류": ["오류", "에러", "error", "실패", "timeout", "타임아웃", "연결 실패", "접근 불가", "tool"],
+    "형식_부적합": ["표로", "코드로", "목록으로", "형식으로", "json으로", "markdown", "마크다운", "번호로"],
+    "정보_부족": ["구체적", "자세히", "더 알려", "정확히", "수치", "통계", "데이터", "근거", "출처"],
 }
 
 
@@ -592,93 +602,185 @@ def _calc_keyword_score(query: str, response: str) -> float:
     return round(min(1.0, max(0.0, base)), 3)
 
 
-def _detect_failure_type(query: str, response: str) -> Optional[str]:
+def _classify_failure_type(query: str, response: str) -> str:
     """
     쿼리와 응답 텍스트에서 실패 유형을 분류한다.
     매칭 우선순위: 지시_위반 > 도구_오류 > 형식_부적합 > 정보_부족
 
-    Returns: "정보_부족" | "도구_오류" | "형식_부적합" | "지시_위반" | None
+    Returns: "정보_부족" | "도구_오류" | "형식_부적합" | "지시_위반"
     """
     combined = query + " " + response
     for failure_type in ["지시_위반", "도구_오류", "형식_부적합", "정보_부족"]:
         keywords = _FAILURE_KEYWORDS[failure_type]
         if any(kw in combined for kw in keywords):
             return failure_type
-    return None
-
-
-def _classify_failure_type(query: str, response: str) -> str:
-    """
-    실패 유형을 반환한다. 매칭되는 신호가 없으면 정보_부족으로 귀결한다.
-    """
-    detected = _detect_failure_type(query, response)
-    if detected:
-        return detected
     return "정보_부족"  # 기본값
 
 
-def _build_improvement_hint(failure_type: str, query: str, response: str, score: float) -> str:
-    """LLM 추가 호출 없이 다음 턴 개선 힌트를 짧게 생성한다."""
-    if failure_type == "도구_오류":
-        return "실패한 도구와 대안 도구를 분리해 보고하고, 가능한 폴백 검증까지 수행하십시오."
-    if failure_type == "형식_부적합":
-        return "CEO가 요구한 표/목록/보고서 형식을 먼저 고정하고 그 구조로만 답하십시오."
-    if failure_type == "지시_위반":
-        return "응답 전 명시적 금지/필수 지시를 내부 체크리스트로 대조하십시오."
-    if len(response.strip()) < 120 or score < 0.4:
-        return "도구/DB/파일 근거를 확보한 뒤 구체 수치와 출처를 포함하십시오."
-    return "확인한 사실과 추론을 분리하고 미검증 항목을 명시하십시오."
+_DIM_IMPROVEMENT_HINTS: dict[str, str] = {
+    "context_awareness": "이전 대화의 결정/제약을 먼저 반영하라.",
+    "accuracy": "사실 주장 전 도구/DB 근거를 확인하라.",
+    "completeness": "요청 항목을 빠짐없이 체크하고 누락분을 보완하라.",
+    "tool_grounding": "도구가 필요한 질문은 실측 조회 후 답하라.",
+    "relevance": "질문의 핵심 의도에서 벗어난 설명을 줄이라.",
+    "actionability": "다음 실행 단계와 판단 기준을 구체화하라.",
+}
 
 
-def _coerce_meta_value(value) -> dict:
+def _json_value_to_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        return value
+        return dict(value)
     if isinstance(value, str):
         try:
-            loaded = json.loads(value)
-            return loaded if isinstance(loaded, dict) else {}
+            parsed = json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {"directive": value}
         except Exception:
-            return {}
+            return {"directive": value}
     return {}
 
 
-async def _record_reflexion_success(
-    pool,
-    project: str,
-    failure_type: Optional[str],
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _compact_hint(text: str, limit: int = 180) -> str:
+    compacted = " ".join(str(text or "").split())
+    return compacted[:limit].rstrip()
+
+
+def _build_improvement_hint(
+    failure_type: str,
+    query: str,
+    response: str,
     score: float,
-) -> bool:
-    """고품질 응답이면 기존 correction_directive에 success_count를 누적한다."""
-    if not failure_type:
-        return False
-    directive_key = f"reflexion:{project}:{failure_type}"
+    details: Optional[dict[str, Any]] = None,
+) -> str:
+    """추가 LLM 호출 없이 실패유형/평가차원 기반 개선 힌트를 만든다."""
+    hints: list[str] = []
+    if details:
+        weak_dims = []
+        for dim_name, hint in _DIM_IMPROVEMENT_HINTS.items():
+            try:
+                dim_score = float(details.get(dim_name, 0.5))
+            except (TypeError, ValueError):
+                dim_score = 0.5
+            if dim_score < 0.5:
+                weak_dims.append((dim_score, hint))
+        hints.extend(hint for _, hint in sorted(weak_dims, key=lambda item: item[0])[:2])
+
+    if not hints and len(response.strip()) < 80:
+        hints.append("짧은 결론만 내지 말고 근거와 실행 단계를 함께 제시하라.")
+    if any(pattern in response for pattern in _NEGATIVE_PATTERNS):
+        hints.append("불확실/실패 표현 뒤에 대안 도구, 확인 경로, 다음 조치를 제시하라.")
+    if not hints:
+        hints.append(_FAILURE_DIRECTIVES.get(failure_type, "응답 품질을 전반적으로 개선하라."))
+
+    return _compact_hint(" ".join(hints), 220)
+
+
+def _directive_strength(fail_count: int, success_count: int, last_outcome: str) -> str:
+    if last_outcome == "success" and success_count >= 2:
+        return "relaxed"
+    if fail_count >= 8 and fail_count >= success_count * 2:
+        return "critical"
+    if fail_count >= 3 and fail_count > success_count:
+        return "strong"
+    return "normal"
+
+
+async def _record_self_refine_outcome(
+    pool,
+    project: Optional[str],
+    query: str,
+    response: str,
+    score: float,
+    details: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
+    """
+    Self-Refine 경량 루프: 같은 failure_type의 성공/실패 카운터를 JSONB value에 누적한다.
+    성공은 기존 reflexion 레코드가 있을 때만 회복 신호로 반영한다.
+    """
+    normalized_project = _normalize_project(project)
+    if not pool or not normalized_project:
+        return None
+
+    if score < _SELF_REFINE_FAIL_THRESHOLD:
+        outcome = "fail"
+    elif score >= _SELF_REFINE_SUCCESS_THRESHOLD:
+        outcome = "success"
+    else:
+        return None
+
+    import time
+
+    failure_type = _classify_failure_type(query, response)
+    directive_key = f"reflexion:{normalized_project}:{failure_type}"
+    now_ts = int(time.time())
+
     async with pool.acquire() as conn:
         existing = await conn.fetchrow(
             """SELECT value FROM ai_meta_memory
                WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
-            project,
+            normalized_project,
             directive_key,
         )
-        if not existing or not existing["value"]:
-            return False
-        prev_data = _coerce_meta_value(existing["value"])
-        prev_data.update({
+        prev_data = _json_value_to_dict(existing["value"]) if existing and existing["value"] else {}
+        if outcome == "success" and not prev_data:
+            return {
+                "failure_type": failure_type,
+                "score": round(score, 3),
+                "last_outcome": "success",
+                "saved": False,
+            }
+
+        fail_count = _safe_int(prev_data.get("fail_count", prev_data.get("trigger_count")), 0)
+        success_count = _safe_int(prev_data.get("success_count"), 0)
+        if outcome == "fail":
+            fail_count += 1
+            improvement_hint = _build_improvement_hint(failure_type, query, response, score, details)
+            last_failure_at = now_ts
+            last_success_at = prev_data.get("last_success_at")
+        else:
+            success_count += 1
+            improvement_hint = _compact_hint(prev_data.get("improvement_hint", ""))
+            last_failure_at = prev_data.get("last_failure_at")
+            last_success_at = now_ts
+
+        directive_text = prev_data.get("directive") or _FAILURE_DIRECTIVES.get(
+            failure_type,
+            "응답 품질을 전반적으로 개선하라.",
+        )
+        value = {
+            "directive": directive_text,
             "failure_type": failure_type,
             "score": round(score, 3),
-            "project": project,
-            "success_count": int(prev_data.get("success_count", 0)) + 1,
-            "last_outcome": "success",
-            "last_success_score": round(score, 3),
-        })
+            "project": normalized_project,
+            "improvement_hint": improvement_hint,
+            "fail_count": fail_count,
+            "trigger_count": fail_count,
+            "success_count": success_count,
+            "last_outcome": outcome,
+            "directive_strength": _directive_strength(fail_count, success_count, outcome),
+            "last_triggered": now_ts,
+            "last_failure_at": last_failure_at,
+            "last_success_at": last_success_at,
+        }
         await conn.execute(
-            """UPDATE ai_meta_memory
-               SET value = $3::jsonb, updated_at = NOW()
-               WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
-            project,
+            """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
+               VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())
+               ON CONFLICT (project, category, key)
+               DO UPDATE SET value = $3::jsonb, updated_at = NOW()""",
+            normalized_project,
             directive_key,
-            json.dumps(prev_data, ensure_ascii=False),
+            json.dumps(value, ensure_ascii=False),
         )
-    return True
+    value["saved"] = True
+    return value
 
 
 async def auto_reflexion_loop(
@@ -715,8 +817,6 @@ async def auto_reflexion_loop(
         return None
 
     try:
-        import json as _json
-        import time
         from app.core.db_pool import get_pool as _get_pool
 
         if pool is None:
@@ -728,6 +828,8 @@ async def auto_reflexion_loop(
 
         # ── Step 1: 키워드/패턴 기반 품질 점수 계산 (LLM 호출 없음) ─────────
         score = _calc_keyword_score(query, response)
+        failure_type = _classify_failure_type(query, response)
+        improvement_hint = _build_improvement_hint(failure_type, query, response, score)
 
         logger.info(
             "auto_reflexion_loop_score",
@@ -735,61 +837,49 @@ async def auto_reflexion_loop(
             project=normalized_project,
         )
 
-        # score >= 0.65 이면 기존 실패 유형의 회복 신호만 기록하고 종료
-        if score >= 0.65:
-            success_type = _detect_failure_type(query, response)
-            success_saved = await _record_reflexion_success(
+        # score >= 0.65 이면 기존 실패유형의 회복 신호만 갱신
+        if score >= _SELF_REFINE_SUCCESS_THRESHOLD:
+            recorded = await _record_self_refine_outcome(
                 pool=pool,
                 project=normalized_project,
-                failure_type=success_type,
+                query=query,
+                response=response,
                 score=score,
             )
-            return {"score": score, "failure_type": success_type, "saved": success_saved, "outcome": "success"}
+            return {
+                "score": score,
+                "failure_type": failure_type,
+                "improvement_hint": improvement_hint,
+                "last_outcome": "success",
+                "saved": bool(recorded and recorded.get("saved")),
+                "success_count": recorded.get("success_count", 0) if recorded else 0,
+                "fail_count": recorded.get("fail_count", 0) if recorded else 0,
+            }
+
+        # 중간 점수는 실패 카운터를 증가시키지 않는다.
+        if score >= _SELF_REFINE_FAIL_THRESHOLD:
+            return {
+                "score": score,
+                "failure_type": failure_type,
+                "improvement_hint": improvement_hint,
+                "saved": False,
+            }
 
         # ── Step 2: 실패 유형 분류 + correction_directive 저장 (MPR 구조화) ──
-        failure_type = _classify_failure_type(query, response)
-        directive_text = _FAILURE_DIRECTIVES.get(failure_type, "응답 품질을 전반적으로 개선하라.")
-        directive_key = f"reflexion:{normalized_project}:{failure_type}"
-        async with pool.acquire() as conn:
-            existing = await conn.fetchrow(
-                """SELECT value FROM ai_meta_memory
-                   WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
-                normalized_project, directive_key,
-            )
-            prev_count = 1
-            prev_success = 0
-            if existing and existing["value"]:
-                prev_data = _coerce_meta_value(existing["value"])
-                prev_count = int(prev_data.get("fail_count", 0)) + 1
-                prev_success = int(prev_data.get("success_count", 0))
-            improvement_hint = _build_improvement_hint(failure_type, query, response, score)
-            directive_value = _json.dumps({
-                "directive": directive_text,
-                "failure_type": failure_type,
-                "score": round(score, 3),
-                "project": normalized_project,
-                "fail_count": prev_count,
-                "success_count": prev_success,
-                "trigger_count": prev_count + prev_success,
-                "last_outcome": "fail",
-                "improvement_hint": improvement_hint,
-                "last_triggered": int(time.time()),
-            }, ensure_ascii=False)
-            await conn.execute(
-                """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
-                   VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())
-                   ON CONFLICT (project, category, key)
-                   DO UPDATE SET value = $3::jsonb, updated_at = NOW()""",
-                normalized_project,
-                directive_key,
-                directive_value,
-            )
+        recorded = await _record_self_refine_outcome(
+            pool=pool,
+            project=normalized_project,
+            query=query,
+            response=response,
+            score=score,
+        )
+        fail_count = _safe_int(recorded.get("fail_count") if recorded else None, 1)
         logger.info(
             "auto_reflexion_correction_saved",
             project=normalized_project,
             failure_type=failure_type,
             score=round(score, 3),
-            key=directive_key,
+            fail_count=fail_count,
         )
 
         # ── Step 3: 연속 실패 카운터 확인 → strategy_update 저장 ─────────────
@@ -798,9 +888,18 @@ async def auto_reflexion_loop(
             project=normalized_project,
             failure_type=failure_type,
             score=score,
+            trigger_count=fail_count,
         )
 
-        return {"score": score, "failure_type": failure_type, "saved": True, "outcome": "fail"}
+        return {
+            "score": score,
+            "failure_type": failure_type,
+            "improvement_hint": improvement_hint,
+            "last_outcome": "fail",
+            "saved": bool(recorded and recorded.get("saved")),
+            "fail_count": fail_count,
+            "success_count": recorded.get("success_count", 0) if recorded else 0,
+        }
 
     except Exception as e:
         logger.debug("auto_reflexion_loop_error", error=str(e))
@@ -812,6 +911,7 @@ async def _check_strategy_update(
     project: str,
     failure_type: str,
     score: float,
+    trigger_count: Optional[int] = None,
 ) -> None:
     """
     연속 실패 카운터 관리 — DB 조회 기반, LLM 호출 없음.
@@ -855,7 +955,7 @@ async def _check_strategy_update(
                      AND updated_at > NOW() - interval '7 days'""",
                 project,
             )
-            count = int(recent_count or 0)
+            count = max(int(recent_count or 0), _safe_int(trigger_count, 0))
 
             if count < 3:
                 logger.debug(

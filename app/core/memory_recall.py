@@ -87,6 +87,33 @@ def _truncate(text: str, char_limit: int) -> str:
     return "\n".join(result)
 
 
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        import json as _json
+        try:
+            parsed = _json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {"directive": value}
+        except Exception:
+            return {"directive": value}
+    return {}
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _compact_inline(text: Any, limit: int) -> str:
+    compacted = " ".join(str(text or "").split())
+    return compacted[:limit].rstrip()
+
+
 # ── 섹션 빌더 ────────────────────────────────────────────────────────────────
 
 async def _build_session_notes(
@@ -303,8 +330,8 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
 async def _build_correction_directives(project_id: Optional[str] = None) -> str:
     """Reflexion(B1/auto_reflexion_loop) correction_directive →
     다음 턴 시스템 프롬프트 강제 주입.
-    MPR 구조화: fail_count 높은 순 + 프로젝트 매칭 우선 검색.
-    failure_type/fail_count 기반 구조화 포맷."""
+    MPR 구조화: fail_count 높은 순 + 최근 성공 항목 완화.
+    failure_type/fail_count/success_count/improvement_hint 기반 구조화 포맷."""
     try:
         async with _get_pool().acquire() as conn:
             if project_id:
@@ -317,12 +344,17 @@ async def _build_correction_directives(project_id: Optional[str] = None) -> str:
                         CASE WHEN project = $1 THEN 0 ELSE 1 END,
                         CASE
                             WHEN value->>'last_outcome' = 'success'
-                             AND COALESCE((value->>'success_count')::int, 0) >= COALESCE((value->>'fail_count')::int, 1)
+                             AND COALESCE(NULLIF(value->>'success_count', '')::int, 0) >= 2
                             THEN 1 ELSE 0
                         END,
-                        COALESCE((value->>'fail_count')::int, 1) DESC,
+                        GREATEST(
+                            COALESCE(NULLIF(value->>'fail_count', '')::int, NULLIF(value->>'trigger_count', '')::int, 1)
+                            - COALESCE(NULLIF(value->>'success_count', '')::int, 0),
+                            0
+                        ) DESC,
+                        COALESCE(NULLIF(value->>'fail_count', '')::int, NULLIF(value->>'trigger_count', '')::int, 1) DESC,
                         updated_at DESC
-                    LIMIT 5
+                    LIMIT 7
                     """,
                     project_id,
                 )
@@ -334,41 +366,48 @@ async def _build_correction_directives(project_id: Optional[str] = None) -> str:
                     ORDER BY
                         CASE
                             WHEN value->>'last_outcome' = 'success'
-                             AND COALESCE((value->>'success_count')::int, 0) >= COALESCE((value->>'fail_count')::int, 1)
+                             AND COALESCE(NULLIF(value->>'success_count', '')::int, 0) >= 2
                             THEN 1 ELSE 0
                         END,
-                        COALESCE((value->>'fail_count')::int, 1) DESC,
+                        GREATEST(
+                            COALESCE(NULLIF(value->>'fail_count', '')::int, NULLIF(value->>'trigger_count', '')::int, 1)
+                            - COALESCE(NULLIF(value->>'success_count', '')::int, 0),
+                            0
+                        ) DESC,
+                        COALESCE(NULLIF(value->>'fail_count', '')::int, NULLIF(value->>'trigger_count', '')::int, 1) DESC,
                         updated_at DESC
-                    LIMIT 5
+                    LIMIT 7
                     """,
                 )
             if not rows:
                 return ""
-            import json as _json
             lines = []
             for r in rows:
-                val = r["value"]
-                if isinstance(val, str):
-                    try:
-                        val = _json.loads(val)
-                    except Exception:
-                        pass
-                if isinstance(val, dict):
-                    ft = val.get("failure_type", "")
-                    fc = int(val.get("fail_count", 1) or 1)
-                    sc = int(val.get("success_count", 0) or 0)
-                    outcome = val.get("last_outcome", "fail")
-                    directive = val.get("directive", "")
-                    hint = val.get("improvement_hint", "")
-                    prefix = f"[{ft} 실패 {fc}회/성공 {sc}회]"
-                    if outcome == "success" and sc >= fc:
-                        prefix = f"{prefix} 최근 회복"
-                    line = f"- {prefix} {directive}"
-                    if hint and not (outcome == "success" and sc >= fc):
-                        line = f"{line} 개선힌트: {hint}"
-                    lines.append(line)
-                else:
-                    lines.append(f"- [unknown 1회] {str(val)}")
+                val = _json_dict(r["value"])
+                if not val:
+                    val = {"directive": str(r["value"])}
+                ft = val.get("failure_type") or str(r["key"]).split(":")[-1] or "unknown"
+                fc = _safe_int(val.get("fail_count", val.get("trigger_count")), 1)
+                sc = _safe_int(val.get("success_count"), 0)
+                last_outcome = str(val.get("last_outcome") or "")
+                strength = str(val.get("directive_strength") or "")
+                directive = _compact_inline(val.get("directive") or str(r["value"]), 90)
+                hint = _compact_inline(val.get("improvement_hint"), 70)
+
+                suffix = ""
+                prefix = ""
+                if last_outcome == "success" and sc >= 2:
+                    suffix = ", 최근 성공"
+                    prefix = "유지점검: "
+                elif strength == "critical":
+                    prefix = "강제교정: "
+                elif strength == "strong":
+                    prefix = "강화교정: "
+
+                line = f"- [{ft} 실패 {fc}회/성공 {sc}회{suffix}] {prefix}{directive}"
+                if hint:
+                    line += f" 개선힌트: {hint}"
+                lines.append(line)
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["correction_directives"])
     except Exception as e:
@@ -644,7 +683,8 @@ async def build_memory_context(
     # 별도 블록(최우선) + 세션 노트 내부 이중 배치로 절대 누락 방지
     if corrections:
         blocks.append(f"<corrections>\n⚠️ 반성지시:\n{corrections}\n</corrections>")
-        logger.info("correction_directive_injected", count=corrections.count("[반성지시]"), chars=len(corrections))
+        correction_count = sum(1 for line in corrections.splitlines() if line.startswith("- "))
+        logger.info("correction_directive_injected", count=correction_count, chars=len(corrections))
     # 세션 노트에 correction_directive 상단 강제 주입 (Layer2 통합)
     _correction_header = f"⚠️ 즉시반영:\n{corrections}" if corrections else ""
     if _correction_header and notes:
