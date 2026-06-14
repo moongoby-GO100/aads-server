@@ -187,6 +187,22 @@ async def _update_knowledge_graph(facts: List[Dict], project: Optional[str] = No
         logger.debug("kg_update_error", error=str(e))
 
 
+async def _update_knowledge_graph(facts: List[Dict], project: Optional[str] = None) -> None:
+    """추출된 사실을 지식그래프(kg_entities/kg_relations)에 반영."""
+    try:
+        from app.core.knowledge_graph import process_fact_for_graph
+        for fact in facts:
+            await process_fact_for_graph(
+                fact_id=fact["id"],
+                category=fact["category"],
+                subject=fact["subject"],
+                detail=fact.get("detail", ""),
+                project=_normalize_project(project),
+            )
+    except Exception as e:
+        logger.debug("kg_update_error", error=str(e))
+
+
 async def _embed_facts(facts: List[Dict]) -> None:
     """memory_facts에 임베딩 벡터 생성."""
     try:

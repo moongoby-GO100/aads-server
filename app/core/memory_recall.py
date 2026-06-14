@@ -920,6 +920,18 @@ async def _build_knowledge_graph_context(project_id: Optional[str] = None) -> st
         return ""
 
 
+async def _build_knowledge_graph_context(project_id: Optional[str] = None) -> str:
+    """섹션 12: 지식그래프 — 프로젝트 핵심 엔티티 허브 + 관계 요약.
+    kg_entities/kg_relations에서 mention_count 상위 엔티티와 1-hop 관계를 주입."""
+    try:
+        from app.core.knowledge_graph import query_graph_context
+        text = await query_graph_context(project=project_id, top_k=5)
+        return _truncate(text, _BUDGET["knowledge_graph"]) if text else ""
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="knowledge_graph", error=str(e))
+        return ""
+
+
 async def build_memory_context(
     session_id: Optional[str] = None,
     project_id: Optional[str] = None,
