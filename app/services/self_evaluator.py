@@ -247,6 +247,62 @@ async def evaluate_response(
 
         logger.info("self_eval_complete", score=overall, message=message_id[:8])
 
+        # B2: Self-Refine 품질 부스터 — 저품질 응답 감지 시 다음 턴 타겟 교정 주입
+        if overall < 0.4 and session_id:
+            try:
+                dim_scores = {
+                    "context_awareness": float(details.get("context_awareness", 0.5)),
+                    "accuracy": float(details.get("accuracy", 0.5)),
+                    "completeness": float(details.get("completeness", 0.5)),
+                    "tool_grounding": float(details.get("tool_grounding", 0.5)),
+                    "relevance": float(details.get("relevance", 0.5)),
+                    "actionability": float(details.get("actionability", 0.5)),
+                }
+                _DIM_LABELS = {
+                    "context_awareness": "이전 대화 맥락을 정확히 반영하여 답변",
+                    "accuracy": "사실적 정확성을 도구/DB 조회로 검증",
+                    "completeness": "요청의 모든 항목에 빠짐없이 답변",
+                    "tool_grounding": "반드시 도구를 호출하여 실측 데이터로 뒷받침",
+                    "relevance": "질문의 핵심 의도에 집중하여 답변",
+                    "actionability": "구체적인 다음 단계와 실행 가능한 조치를 제시",
+                }
+                worst_dims = sorted(dim_scores.items(), key=lambda x: x[1])[:2]
+                booster_parts = [f"⚠️ 직전 응답 품질 {overall:.0%} — 다음 사항을 반드시 개선:"]
+                for dim_name, dim_val in worst_dims:
+                    if dim_val < 0.5:
+                        booster_parts.append(f"- {_DIM_LABELS.get(dim_name, dim_name)} ({dim_name}: {dim_val:.0%}→목표 70%+)")
+                if len(booster_parts) > 1:
+                    booster_text = "\n".join(booster_parts)
+                    async with pool.acquire() as conn_boost:
+                        await conn_boost.execute(
+                            """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
+                               VALUES ($1, 'quality_booster', $2, $3::jsonb, NOW())
+                               ON CONFLICT (project, category, key)
+                               DO UPDATE SET value = $3::jsonb, updated_at = NOW()""",
+                            _normalize_project(project) or "AADS",
+                            f"booster:{session_id[:16]}",
+                            json.dumps({
+                                "booster": booster_text,
+                                "score": round(overall, 3),
+                                "weak_dims": [d[0] for d in worst_dims if d[1] < 0.5],
+                                "session_id": session_id,
+                            }),
+                        )
+                    logger.info("b2_quality_booster_saved", score=overall, dims=[d[0] for d in worst_dims])
+            except Exception as e_boost:
+                logger.debug("b2_quality_booster_error", error=str(e_boost))
+        elif overall >= 0.6 and session_id:
+            # 품질 회복 시 부스터 자동 해제
+            try:
+                async with pool.acquire() as conn_clear:
+                    await conn_clear.execute(
+                        """DELETE FROM ai_meta_memory
+                           WHERE category = 'quality_booster' AND key = $1""",
+                        f"booster:{session_id[:16]}",
+                    )
+            except Exception:
+                pass
+
         # P3: Reflexion 효과 검증 — 반성 후 실제 품질 개선 여부 추적
         if session_id and pool:
             try:
@@ -593,17 +649,31 @@ async def auto_reflexion_loop(
         if score >= 0.65:
             return {"score": score, "failure_type": None, "saved": False}
 
-        # ── Step 2: 실패 유형 분류 + correction_directive 저장 ───────────────
+        # ── Step 2: 실패 유형 분류 + correction_directive 저장 (MPR 구조화) ──
         failure_type = _classify_failure_type(query, response)
         directive_text = _FAILURE_DIRECTIVES.get(failure_type, "응답 품질을 전반적으로 개선하라.")
-        directive_key = f"reflexion:{normalized_project}:{int(time.time())}"
-        directive_value = _json.dumps({
-            "directive": directive_text,
-            "failure_type": failure_type,
-            "score": round(score, 3),
-            "project": normalized_project,
-        })
+        directive_key = f"reflexion:{normalized_project}:{failure_type}"
         async with pool.acquire() as conn:
+            existing = await conn.fetchrow(
+                """SELECT value FROM ai_meta_memory
+                   WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
+                normalized_project, directive_key,
+            )
+            prev_fail = 1
+            prev_success = 0
+            if existing and existing["value"]:
+                prev_data = existing["value"] if isinstance(existing["value"], dict) else _json.loads(str(existing["value"]))
+                prev_fail = int(prev_data.get("fail_count", 0)) + 1
+                prev_success = int(prev_data.get("success_count", 0))
+            directive_value = _json.dumps({
+                "directive": directive_text,
+                "failure_type": failure_type,
+                "score": round(score, 3),
+                "project": normalized_project,
+                "fail_count": prev_fail,
+                "success_count": prev_success,
+                "last_triggered": int(time.time()),
+            })
             await conn.execute(
                 """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
                    VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())

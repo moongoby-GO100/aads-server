@@ -300,25 +300,45 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
         return "", []
 
 
-async def _build_correction_directives() -> str:
+async def _build_correction_directives(project_id: Optional[str] = None) -> str:
     """Reflexion(B1/auto_reflexion_loop) correction_directive + strategy_update →
     다음 턴 시스템 프롬프트 강제 주입.
-    ai_meta_memory에서 correction_directive 최근 3건 + strategy_update 최근 3건 조회.
-    P2-FIX: COALESCE(updated_at, created_at)로 NULL 안전 정렬, 즉시 반영 보장."""
+    MPR 구조화: fail_count 높은 순 + 프로젝트 매칭 우선 검색.
+    중복 directive 텍스트 자동 병합."""
     try:
         async with _get_pool().acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT key, value, category FROM ai_meta_memory
-                WHERE category IN ('correction_directive', 'strategy_update')
-                ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
-                LIMIT 6
-                """,
-            )
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value, category FROM ai_meta_memory
+                    WHERE category IN ('correction_directive', 'strategy_update')
+                      AND (project = $1 OR project IS NULL)
+                    ORDER BY
+                        CASE WHEN category = 'strategy_update' THEN 0 ELSE 1 END,
+                        CASE WHEN project = $1 THEN 0 ELSE 1 END,
+                        COALESCE((value->>'fail_count')::int, 1) DESC,
+                        COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 6
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value, category FROM ai_meta_memory
+                    WHERE category IN ('correction_directive', 'strategy_update')
+                    ORDER BY
+                        CASE WHEN category = 'strategy_update' THEN 0 ELSE 1 END,
+                        COALESCE((value->>'fail_count')::int, 1) DESC,
+                        COALESCE(updated_at, created_at) DESC NULLS LAST
+                    LIMIT 6
+                    """,
+                )
             if not rows:
                 return ""
             import json as _json
             lines = []
+            seen_directives = set()
             for r in rows:
                 val = r["value"]
                 if isinstance(val, str):
@@ -327,22 +347,58 @@ async def _build_correction_directives() -> str:
                     except Exception:
                         pass
                 if isinstance(val, dict):
-                    # strategy_update: strategy 필드 우선, escalation 표시
                     if r["category"] == "strategy_update":
                         val_str = val.get("strategy") or val.get("directive") or val.get("summary") or _json.dumps(val, ensure_ascii=False)
                         escalation = val.get("escalation_needed", False)
-                        prefix = "[전략변경⚠]" if escalation else "[전략변경]"
+                        fc = val.get("fail_count", "")
+                        prefix = f"[전략변경⚠|{fc}회]" if escalation else f"[전략변경|{fc}회]" if fc else "[전략변경]"
                     else:
-                        val_str = val.get("directive") or val.get("summary") or val.get("description") or _json.dumps(val, ensure_ascii=False)
-                        prefix = "[반성지시]"
+                        val_str = val.get("directive", "")
+                        ft = val.get("failure_type", "")
+                        fc = val.get("fail_count", 1)
+                        prefix = f"[{ft}|{fc}회]"
                 else:
                     val_str = str(val)
+                    ft = ""
                     prefix = "[반성지시]" if r["category"] == "correction_directive" else "[전략변경]"
-                lines.append(f"- {prefix} {r['key']}: {val_str[:150]}")
+                if val_str[:50] in seen_directives:
+                    continue
+                seen_directives.add(val_str[:50])
+                lines.append(f"- {prefix} {val_str[:150]}")
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["correction_directives"])
     except Exception as e:
         logger.warning("memory_recall_section_failed", section="correction_directives", error=str(e))
+        return ""
+
+
+async def _build_quality_booster(session_id: Optional[str] = None) -> str:
+    """Self-Refine 품질 부스터 — 직전 응답 저품질 시 다음 턴 타겟 교정 주입.
+    세션 기반으로 가장 최근 부스터 1건만 조회. 품질 회복 시 자동 삭제됨."""
+    if not session_id:
+        return ""
+    try:
+        async with _get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT value FROM ai_meta_memory
+                   WHERE category = 'quality_booster'
+                     AND key = $1
+                     AND updated_at > NOW() - interval '2 hours'""",
+                f"booster:{session_id[:16]}",
+            )
+            if not row:
+                return ""
+            import json as _json
+            val = row["value"]
+            if isinstance(val, str):
+                try:
+                    val = _json.loads(val)
+                except Exception:
+                    return ""
+            booster = val.get("booster", "") if isinstance(val, dict) else str(val)
+            return booster[:300] if booster else ""
+    except Exception as e:
+        logger.warning("memory_recall_section_failed", section="quality_booster", error=str(e))
         return ""
 
 
@@ -545,10 +601,11 @@ async def build_memory_context(
     project_id = _normalize_project(project_id)
     blocks: List[str] = []
 
-    # 10개 섹션 병렬 조회 (P2-1: visual_memories + strategy_updates 섹션 추가)
+    # 11개 섹션 병렬 조회 (P2-1 + Self-Refine 품질 부스터 추가)
     (
         notes, prefs_result, tools_result, dirs,
         disc_result, learned, corrections, exp_lessons, visual_mems, strategy,
+        quality_booster,
     ) = await asyncio.gather(
         _build_session_notes(session_id, project_id),
         _build_preferences(),
@@ -556,10 +613,11 @@ async def build_memory_context(
         _build_active_directives(project_id),
         _build_discoveries(project_id),
         _build_learned_memory(project_id),
-        _build_correction_directives(),
+        _build_correction_directives(project_id),
         _build_experience_lessons(project_id),
         _build_visual_memories(project_id),
         _build_strategy_updates(project_id),
+        _build_quality_booster(session_id),
     )
 
     # tuple unpacking: (text, used_ids)
@@ -571,6 +629,11 @@ async def build_memory_context(
     used_ids = prefs_ids + tools_ids + disc_ids
     if used_ids and session_id:
         asyncio.create_task(_log_memory_usage(session_id, used_ids))
+
+    # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최우선 주입 (corrections보다 먼저)
+    if quality_booster:
+        blocks.append(f"<quality_booster>\n{quality_booster}\n</quality_booster>")
+        logger.info("quality_booster_injected", chars=len(quality_booster))
 
     # P2-FIX: correction_directive → 세션 노트(Layer2) 상단 강제 주입
     # 반성 지시사항이 세션 맥락과 함께 전달되어 행동 변화 유도력 향상
