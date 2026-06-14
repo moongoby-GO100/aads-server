@@ -3581,3 +3581,12 @@ from __
 
 ## [2026-06-15 08:00:26 KST] [aads-server] app/core/memory_recall.py
 - Chat-Direct 수정: patch:     # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최→    # Self-Refine 품질 부스터 — 직전 저품질 응답 시 최
+
+## [2026-06-15 08:00:40 KST] [aads-server] app/core/memory_recall.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server bash /app/scripts/reload-api.sh
+
+## [2026-06-15 08:00:42 KST] [aads-server] app/services/self_evaluator.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server bash /app/scripts/reload-api.sh
+
+## [2026-06-15 08:00:43 KST] [aads-server] tests/unit/test_self_refine_loop.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server bash /app/scripts/reload-api.sh
