@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 현재 진행 상태 (2026-06-15 07:55 KST) - AI evolution P0 Reflexion/Self-Refine applied
+- 배경: CEO가 AI 지식·지혜화·진화 최신 기술 보고서의 다음 단계 진행을 지시했다. P0-1 Reflexion 구조화 러너(`runner-ead5d8c5`)를 승인했고, P0-2 러너(`runner-6f908c3f`)는 로그 0건/PID 종료로 스톨 확인 후 종료했다.
+- 조치:
+  - `app/services/self_evaluator.py`에서 `auto_reflexion_loop()`가 `reflexion:{project}:{failure_type}` 기준으로 `fail_count`, `success_count`, `trigger_count`, `last_outcome`, `improvement_hint`를 JSONB value에 저장하도록 확장했다.
+  - 고품질 응답(score >= 0.65)은 기존 correction directive가 있을 때 `success_count`와 `last_outcome='success'`를 갱신해 회복 신호를 누적한다.
+  - `app/core/memory_recall.py`에서 correction directive 주입을 실패/성공 카운트와 개선힌트 기반 포맷으로 바꾸고, 최근 성공이 실패 이상인 항목은 주입 우선순위를 낮춘다.
+  - 중복 `_build_quality_booster()`와 중복 `<quality_booster>` 주입 블록을 제거했다.
+  - `tests/unit/test_self_refine_loop.py`를 추가해 실패유형 감지, 개선힌트, JSONB value 파싱 계약을 고정했다.
+- 검증:
+  - `python3 -m py_compile app/services/self_evaluator.py app/core/memory_recall.py tests/unit/test_self_refine_loop.py` 통과.
+  - `JWT_SECRET_KEY=test-secret python3 -m pytest tests/unit/test_self_refine_loop.py tests/ -k "reflexion or self_eval or memory_recall or self_refine" -v` 결과 5개 통과, 1,212개 deselected, warning 1건(`Query(regex=...)` deprecation).
+  - DB 확인: `ai_meta_memory`의 `correction_directive`는 total 37건, project+failure_type 고유 37건으로 중복 없음.
+- 보류:
+  - 이번 직접 수정분은 아직 커밋/푸시/배포하지 않았다. 기존 unrelated dirty 문서 `docs/CHANGELOG-direct-edit.md`, `docs/CHANGELOG-go100-direct.md`는 건드리지 않았다.
+
 ## 현재 진행 상태 (2026-06-12 13:45 KST) - Pipeline Runner session binding and internal auth hotfix
 - 배경: CEO가 세션 `d84b7c2c-64a5-4a80-9472-21170fd7d160`에서 CEO 지시 3건을 러너로 투입하려 했으나 `현재 채팅 세션 컨텍스트를 찾지 못했습니다` 오류로 실패했다고 원인 파악과 즉시 조치를 지시했다.
 - 원인:

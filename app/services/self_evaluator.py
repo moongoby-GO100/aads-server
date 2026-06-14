@@ -535,10 +535,26 @@ _FAILURE_DIRECTIVES: dict[str, str] = {
 
 # 실패 유형 분류 키워드 (우선순위 순: 지시_위반 > 도구_오류 > 형식_부적합 > 정보_부족)
 _FAILURE_KEYWORDS: dict[str, list[str]] = {
-    "지시_위반": ["절대", "반드시", "금지", "하지 마", "하지마", "안돼", "안 돼", "말했잖", "지시했"],
-    "도구_오류": ["오류", "에러", "error", "실패", "timeout", "타임아웃", "연결 실패", "접근 불가", "tool"],
-    "형식_부적합": ["표로", "코드로", "목록으로", "형식으로", "json으로", "markdown", "마크다운", "번호로"],
-    "정보_부족": ["구체적", "자세히", "더 알려", "정확히", "수치", "통계", "데이터", "근거", "출처"],
+    "지시_위반": [
+        "절대", "반드시", "금지", "하지 마", "하지마", "안돼", "안 돼",
+        "말했잖", "지시했", "지시를 따르", "지시 위반", "따르지 못", "어겼",
+        "규칙 위반", "약속을", "왜 안", "지키지", "이행하지", "준수하지",
+    ],
+    "도구_오류": [
+        "오류", "에러", "error", "실패", "timeout", "타임아웃",
+        "연결 실패", "접근 불가", "tool", "도구 호출", "exception",
+        "traceback", "failed", "could not", "unable to",
+    ],
+    "형식_부적합": [
+        "표로", "코드로", "목록으로", "형식으로", "json으로", "markdown",
+        "마크다운", "번호로", "포맷", "format", "양식", "구조가",
+        "보기 어렵", "정리해", "정렬", "맞지 않", "형식이",
+    ],
+    "정보_부족": [
+        "구체적", "자세히", "더 알려", "정확히", "수치", "통계",
+        "데이터", "근거", "출처", "정보가 없", "정보를 찾지", "모르겠",
+        "확인 불가", "알 수 없", "검색 실패", "찾지 못",
+    ],
 }
 
 
@@ -576,19 +592,93 @@ def _calc_keyword_score(query: str, response: str) -> float:
     return round(min(1.0, max(0.0, base)), 3)
 
 
-def _classify_failure_type(query: str, response: str) -> str:
+def _detect_failure_type(query: str, response: str) -> Optional[str]:
     """
     쿼리와 응답 텍스트에서 실패 유형을 분류한다.
     매칭 우선순위: 지시_위반 > 도구_오류 > 형식_부적합 > 정보_부족
 
-    Returns: "정보_부족" | "도구_오류" | "형식_부적합" | "지시_위반"
+    Returns: "정보_부족" | "도구_오류" | "형식_부적합" | "지시_위반" | None
     """
     combined = query + " " + response
     for failure_type in ["지시_위반", "도구_오류", "형식_부적합", "정보_부족"]:
         keywords = _FAILURE_KEYWORDS[failure_type]
         if any(kw in combined for kw in keywords):
             return failure_type
+    return None
+
+
+def _classify_failure_type(query: str, response: str) -> str:
+    """
+    실패 유형을 반환한다. 매칭되는 신호가 없으면 정보_부족으로 귀결한다.
+    """
+    detected = _detect_failure_type(query, response)
+    if detected:
+        return detected
     return "정보_부족"  # 기본값
+
+
+def _build_improvement_hint(failure_type: str, query: str, response: str, score: float) -> str:
+    """LLM 추가 호출 없이 다음 턴 개선 힌트를 짧게 생성한다."""
+    if failure_type == "도구_오류":
+        return "실패한 도구와 대안 도구를 분리해 보고하고, 가능한 폴백 검증까지 수행하십시오."
+    if failure_type == "형식_부적합":
+        return "CEO가 요구한 표/목록/보고서 형식을 먼저 고정하고 그 구조로만 답하십시오."
+    if failure_type == "지시_위반":
+        return "응답 전 명시적 금지/필수 지시를 내부 체크리스트로 대조하십시오."
+    if len(response.strip()) < 120 or score < 0.4:
+        return "도구/DB/파일 근거를 확보한 뒤 구체 수치와 출처를 포함하십시오."
+    return "확인한 사실과 추론을 분리하고 미검증 항목을 명시하십시오."
+
+
+def _coerce_meta_value(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+async def _record_reflexion_success(
+    pool,
+    project: str,
+    failure_type: Optional[str],
+    score: float,
+) -> bool:
+    """고품질 응답이면 기존 correction_directive에 success_count를 누적한다."""
+    if not failure_type:
+        return False
+    directive_key = f"reflexion:{project}:{failure_type}"
+    async with pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            """SELECT value FROM ai_meta_memory
+               WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
+            project,
+            directive_key,
+        )
+        if not existing or not existing["value"]:
+            return False
+        prev_data = _coerce_meta_value(existing["value"])
+        prev_data.update({
+            "failure_type": failure_type,
+            "score": round(score, 3),
+            "project": project,
+            "success_count": int(prev_data.get("success_count", 0)) + 1,
+            "last_outcome": "success",
+            "last_success_score": round(score, 3),
+        })
+        await conn.execute(
+            """UPDATE ai_meta_memory
+               SET value = $3::jsonb, updated_at = NOW()
+               WHERE project = $1 AND category = 'correction_directive' AND key = $2""",
+            project,
+            directive_key,
+            json.dumps(prev_data, ensure_ascii=False),
+        )
+    return True
 
 
 async def auto_reflexion_loop(
@@ -645,9 +735,16 @@ async def auto_reflexion_loop(
             project=normalized_project,
         )
 
-        # score >= 0.65 이면 이후 단계 불필요
+        # score >= 0.65 이면 기존 실패 유형의 회복 신호만 기록하고 종료
         if score >= 0.65:
-            return {"score": score, "failure_type": None, "saved": False}
+            success_type = _detect_failure_type(query, response)
+            success_saved = await _record_reflexion_success(
+                pool=pool,
+                project=normalized_project,
+                failure_type=success_type,
+                score=score,
+            )
+            return {"score": score, "failure_type": success_type, "saved": success_saved, "outcome": "success"}
 
         # ── Step 2: 실패 유형 분류 + correction_directive 저장 (MPR 구조화) ──
         failure_type = _classify_failure_type(query, response)
@@ -662,9 +759,10 @@ async def auto_reflexion_loop(
             prev_count = 1
             prev_success = 0
             if existing and existing["value"]:
-                prev_data = existing["value"] if isinstance(existing["value"], dict) else _json.loads(str(existing["value"]))
+                prev_data = _coerce_meta_value(existing["value"])
                 prev_count = int(prev_data.get("fail_count", 0)) + 1
                 prev_success = int(prev_data.get("success_count", 0))
+            improvement_hint = _build_improvement_hint(failure_type, query, response, score)
             directive_value = _json.dumps({
                 "directive": directive_text,
                 "failure_type": failure_type,
@@ -672,8 +770,11 @@ async def auto_reflexion_loop(
                 "project": normalized_project,
                 "fail_count": prev_count,
                 "success_count": prev_success,
+                "trigger_count": prev_count + prev_success,
+                "last_outcome": "fail",
+                "improvement_hint": improvement_hint,
                 "last_triggered": int(time.time()),
-            })
+            }, ensure_ascii=False)
             await conn.execute(
                 """INSERT INTO ai_meta_memory (project, category, key, value, updated_at)
                    VALUES ($1, 'correction_directive', $2, $3::jsonb, NOW())
@@ -699,7 +800,7 @@ async def auto_reflexion_loop(
             score=score,
         )
 
-        return {"score": score, "failure_type": failure_type, "saved": True}
+        return {"score": score, "failure_type": failure_type, "saved": True, "outcome": "fail"}
 
     except Exception as e:
         logger.debug("auto_reflexion_loop_error", error=str(e))
