@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.os.Build;
 import android.util.Log;
 
 public final class AadsNetworkReceiver extends BroadcastReceiver {
@@ -21,7 +22,15 @@ public final class AadsNetworkReceiver extends BroadcastReceiver {
             Log.i(TAG, "Network restored — nudging reconnect");
             Intent nudge = new Intent(context, AadsForegroundService.class);
             nudge.setAction(AadsForegroundService.ACTION_NETWORK_RESTORED);
-            context.startService(nudge);
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(nudge);
+                } else {
+                    context.startService(nudge);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to start foreground service on network restore", e);
+            }
         }
     }
 }

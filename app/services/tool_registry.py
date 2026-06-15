@@ -897,9 +897,9 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "pc_execute",
         "description": (
             "연결된 PC Agent에 명령을 전송하고 결과를 수신합니다. "
-            "지원 명령: shell, screenshot, file_list, file_read, file_write, process_list, "
+            "지원 명령: shell, cmd, powershell, screenshot, file_list, file_read, file_write, process_list, "
             "kakao_send, kakao_read, browser_auto, input_control, window_control, macro, "
-            "system_info, screen_stream"
+            "system_info, app_launch, screen_stream"
         ),
         "input_schema": {
             "type": "object",
@@ -911,9 +911,9 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "command_type": {
                     "type": "string",
                     "description": (
-                        "실행할 명령 유형 (shell, screenshot, file_list, file_read, file_write, "
+                        "실행할 명령 유형 (shell, cmd, powershell, screenshot, file_list, file_read, file_write, "
                         "process_list, kakao_send, kakao_read, browser_auto, input_control, "
-                        "window_control, macro, system_info 등)"
+                        "window_control, macro, system_info, app_launch 등)"
                     ),
                 },
                 "params": {
@@ -979,12 +979,16 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "device_execute": {
         "name": "device_execute",
-        "description": "연결된 디바이스(PC/Android/iOS)에 명령을 실행합니다. 디바이스가 1대면 agent_id 생략 가능.",
+        "description": (
+            "연결된 디바이스(PC/Android/iOS)에 명령을 실행합니다. "
+            "PC 명령은 shell/cmd/powershell/system_info/process_list/file_list/file_read/file_write/app_launch를 포함합니다. "
+            "디바이스가 1대면 agent_id 생략 가능."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "agent_id": {"type": "string", "description": "대상 디바이스 ID (1대 연결 시 생략 가능)"},
-                "command_type": {"type": "string", "description": "실행할 명령 타입 (shell, screenshot, sms_send, location, camera_photo, battery, clipboard_get, adb_tap 등)"},
+                "command_type": {"type": "string", "description": "실행할 명령 타입 (shell, cmd, powershell, system_info, process_list, file_list, file_read, file_write, app_launch, screenshot, sms_send, location, camera_photo, battery, clipboard_get, adb_tap 등)"},
                 "params": {"type": "object", "description": "명령 파라미터", "default": {}},
                 "timeout": {"type": "number", "description": "응답 대기 시간(초)", "default": 30},
             },

@@ -16,6 +16,7 @@ class AgentInfo(BaseModel):
     hostname: str = ""
     os_info: str = ""
     capabilities: list[str] = Field(default_factory=list)
+    command_types: list[str] = Field(default_factory=list)
     connected_at: datetime = Field(default_factory=datetime.utcnow)
     last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
 

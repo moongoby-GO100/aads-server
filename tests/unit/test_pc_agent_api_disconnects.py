@@ -16,6 +16,11 @@ class _DummyTask:
         return None
 
 
+class _DummyRequest:
+    def __init__(self, headers: dict[str, str] | None = None) -> None:
+        self.headers = headers or {}
+
+
 class _TimeoutWebSocket:
     def __init__(self) -> None:
         self.close_calls: list[tuple[int, str]] = []
@@ -171,3 +176,68 @@ async def test_ws_pc_agent_records_disconnect_when_server_ping_fails(monkeypatch
     assert disconnected_calls[0].kwargs["reason"] == "server_ping_failed"
     assert disconnected_calls[0].kwargs["metadata"]["reason_source"] == "server_ping"
     assert ws.close_calls[-1] == (1011, "server_ping_failed")
+
+
+@pytest.mark.asyncio
+async def test_pc_agent_status_uses_peer_fallback_when_local_backend_is_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "list_agent_statuses", Mock(return_value=[]))
+    monkeypatch.setattr(
+        pc_agent,
+        "_request_peer_fallback_json",
+        AsyncMock(
+            return_value={
+                "status": "online",
+                "online_count": 1,
+                "agents": [
+                    {
+                        "agent_id": "peer-pc",
+                        "status": "online",
+                        "heartbeat_age_seconds": 1.2,
+                        "capabilities": ["pc_control"],
+                        "command_types": ["shell", "cmd", "powershell"],
+                        "last_seen": "2026-06-15T00:00:00Z",
+                        "reconnect_guidance": "WebSocket heartbeat healthy.",
+                    }
+                ],
+                "backend_source": "peer",
+            }
+        ),
+    )
+
+    result = await pc_agent.pc_agent_status(_DummyRequest())
+
+    assert result["backend_source"] == "peer"
+    assert result["agents"][0]["agent_id"] == "peer-pc"
+
+
+@pytest.mark.asyncio
+async def test_route_execute_uses_peer_fallback_on_local_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pc_agent.pc_agent_manager,
+        "execute_routed_command",
+        AsyncMock(return_value={"status": "error", "error_code": "PC_AGENT_OFFLINE", "message": "no online PC agent"}),
+    )
+    monkeypatch.setattr(
+        pc_agent,
+        "_request_peer_fallback_json",
+        AsyncMock(
+            return_value={
+                "status": "success",
+                "command_id": "peer-cmd-1",
+                "result": {"status": "success", "result": {"ok": True}},
+                "backend_source": "peer",
+            }
+        ),
+    )
+
+    request = pc_agent.RoutedCommandRequest(command_type="system_info", params={})
+    result = await pc_agent.route_execute_command(request, _DummyRequest())
+
+    assert result["status"] == "success"
+    assert result["command_id"] == "peer-cmd-1"
+    assert result["backend_source"] == "peer"

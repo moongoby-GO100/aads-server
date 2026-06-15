@@ -72,9 +72,7 @@ final class AadsWebSocketClient {
     void stop() {
         running.set(false);
         cancelHeartbeat();
-        if (reconnectFuture != null) {
-            reconnectFuture.cancel(true);
-        }
+        cancelReconnect();
         if (webSocket != null) {
             webSocket.close(1000, "stopped");
             webSocket = null;
@@ -87,21 +85,20 @@ final class AadsWebSocketClient {
     void nudgeReconnect() {
         if (!running.get()) return;
         Log.i(TAG, "Nudge reconnect — cancelling pending backoff, connecting now");
-        if (reconnectFuture != null) {
-            reconnectFuture.cancel(false);
-        }
+        cancelReconnect();
         if (webSocket != null) {
             try { webSocket.close(1000, "nudge"); } catch (Exception ignored) {}
             webSocket = null;
         }
         attempt = 0;
-        scheduler.execute(this::connectNow);
+        reconnectFuture = scheduler.schedule(this::connectNow, 0, TimeUnit.MILLISECONDS);
     }
 
     private void connectNow() {
         if (!running.get()) {
             return;
         }
+        reconnectFuture = null;
         listener.onState(AgentStateStore.STATUS_CONNECTING, "");
         try {
             Request request = new Request.Builder()
@@ -146,11 +143,19 @@ final class AadsWebSocketClient {
             if (!running.get()) {
                 return;
             }
-            JSONObject msg = new JSONObject();
-            ResultJson.put(msg, "type", "heartbeat");
-            ResultJson.put(msg, "id", UUID.randomUUID().toString());
-            ResultJson.put(msg, "payload", new JSONObject());
-            socket.send(msg.toString());
+            try {
+                JSONObject msg = new JSONObject();
+                ResultJson.put(msg, "type", "heartbeat");
+                ResultJson.put(msg, "id", UUID.randomUUID().toString());
+                ResultJson.put(msg, "payload", new JSONObject());
+                if (!socket.send(msg.toString())) {
+                    Log.w(TAG, "Heartbeat send queue rejected — scheduling reconnect");
+                    scheduleReconnect("heartbeat send queue rejected");
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Heartbeat send failed — scheduling reconnect", e);
+                scheduleReconnect("heartbeat send failed");
+            }
         }, 0, 25, TimeUnit.SECONDS);
     }
 
@@ -161,11 +166,25 @@ final class AadsWebSocketClient {
         }
     }
 
+    private void cancelReconnect() {
+        if (reconnectFuture != null) {
+            reconnectFuture.cancel(false);
+            reconnectFuture = null;
+        }
+    }
+
     private void scheduleReconnect(String reason) {
         if (!running.get()) {
             return;
         }
         cancelHeartbeat();
+        if (reconnectFuture != null && !reconnectFuture.isDone()) {
+            return;
+        }
+        if (webSocket != null) {
+            try { webSocket.close(1000, "reconnect"); } catch (Exception ignored) {}
+            webSocket = null;
+        }
         listener.onState(AgentStateStore.STATUS_DISCONNECTED, reason);
         int delay = BACKOFF_SECONDS[Math.min(attempt, BACKOFF_SECONDS.length - 1)];
         attempt++;
@@ -201,6 +220,7 @@ final class AadsWebSocketClient {
         @Override
         public void onOpen(WebSocket socket, Response response) {
             attempt = 0;
+            cancelReconnect();
             sendRegister(socket);
             scheduleHeartbeat(socket);
         }
@@ -229,11 +249,17 @@ final class AadsWebSocketClient {
 
         @Override
         public void onClosed(WebSocket socket, int code, String reason) {
+            if (webSocket == socket) {
+                webSocket = null;
+            }
             scheduleReconnect(reason == null || reason.isEmpty() ? "closed" : reason);
         }
 
         @Override
         public void onFailure(WebSocket socket, Throwable t, Response response) {
+            if (webSocket == socket) {
+                webSocket = null;
+            }
             String message = t == null || t.getMessage() == null ? "websocket failure" : t.getMessage();
             scheduleReconnect(message);
         }

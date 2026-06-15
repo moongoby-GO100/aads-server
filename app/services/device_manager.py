@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Set
@@ -27,6 +28,7 @@ class DeviceManager:
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResponse] = {}
         self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}
+        self._heartbeat_timeout_seconds = float(os.getenv("AADS_DEVICE_HEARTBEAT_TIMEOUT_SECONDS", "90") or "90")
 
     def register_device(
         self,
@@ -60,9 +62,25 @@ class DeviceManager:
             result.append(conn.info.model_dump())
         return result
 
+    def list_device_statuses(self, device_type: str | None = None) -> list[dict[str, Any]]:
+        now = self._now()
+        items: list[dict[str, Any]] = []
+        for conn in self._devices.values():
+            if device_type and conn.info.device_type != device_type:
+                continue
+            items.append(self._status_payload(conn.info, now))
+        items.sort(key=lambda item: (item["status"] != "online", item["heartbeat_age_seconds"], item["agent_id"]))
+        return items
+
     def get_device(self, agent_id: str) -> DeviceInfo | None:
         conn = self._devices.get(agent_id)
         return conn.info if conn else None
+
+    def get_device_status(self, agent_id: str) -> dict[str, Any] | None:
+        conn = self._devices.get(agent_id)
+        if conn is None:
+            return None
+        return self._status_payload(conn.info, self._now())
 
     def get_device_capabilities(self, agent_id: str) -> list[str]:
         conn = self._devices.get(agent_id)
@@ -137,7 +155,7 @@ class DeviceManager:
     def update_heartbeat(self, agent_id: str) -> None:
         conn = self._devices.get(agent_id)
         if conn:
-            conn.info.connected_at = datetime.now(timezone.utc)
+            conn.info.last_heartbeat = self._now()
 
     def add_stream_subscriber(self, agent_id: str, ws: WebSocket) -> None:
         if agent_id not in self._streaming_subscribers:
@@ -169,6 +187,38 @@ class DeviceManager:
             subs.discard(ws)
         if dead and not subs:
             del self._streaming_subscribers[agent_id]
+
+    def _now(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _status_payload(self, info: DeviceInfo, now: datetime) -> dict[str, Any]:
+        heartbeat_at = getattr(info, "last_heartbeat", None) or info.connected_at
+        heartbeat_age_seconds = max(0.0, (now - heartbeat_at).total_seconds())
+        online = heartbeat_age_seconds <= self._heartbeat_timeout_seconds
+        return {
+            "agent_id": info.agent_id,
+            "device_type": info.device_type,
+            "hostname": info.hostname,
+            "os_info": info.os_info,
+            "capabilities": list(info.capabilities),
+            "status": "online" if online else "offline",
+            "connection_state": "connected" if online else "disconnected",
+            "connected_at": info.connected_at.isoformat() if info.connected_at else None,
+            "last_heartbeat": heartbeat_at.isoformat() if heartbeat_at else None,
+            "last_seen": heartbeat_at.isoformat() if heartbeat_at else None,
+            "heartbeat_age_seconds": round(heartbeat_age_seconds, 1),
+            "reconnect_guidance": self._reconnect_guidance(info.device_type, online),
+        }
+
+    def _reconnect_guidance(self, device_type: str, online: bool) -> str:
+        if online:
+            return "Heartbeat healthy."
+        if device_type == "android":
+            return (
+                "Keep the foreground service running and let BOOT_COMPLETED/network reconnect restart the WebSocket. "
+                "If the app task was removed, reopen the app once to restore the sticky service."
+            )
+        return "Verify the device agent process and allow its reconnect loop to restore the WebSocket session."
 
 
 device_manager = DeviceManager()

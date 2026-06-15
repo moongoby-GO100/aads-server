@@ -1,5 +1,6 @@
 package kr.newtalk.aads.agent;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -73,14 +74,23 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             return START_NOT_STICKY;
         }
         if (ACTION_NETWORK_RESTORED.equals(action)) {
-            if (client != null && AgentStateStore.STATUS_DISCONNECTED.equals(currentStatus)) {
+            if (client == null) {
+                Log.i(TAG, "Network restored — client missing, starting foreground client");
+                startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                startClient();
+                startWatchdog();
+            } else if (AgentStateStore.STATUS_DISCONNECTED.equals(currentStatus)) {
                 Log.i(TAG, "Network restored — nudging immediate reconnect");
                 client.nudgeReconnect();
             }
             return START_STICKY;
         }
         if (ACTION_WATCHDOG_RECONNECT.equals(action)) {
-            if (client != null) {
+            if (client == null) {
+                startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                startClient();
+                startWatchdog();
+            } else {
                 client.nudgeReconnect();
             }
             return START_STICKY;
@@ -96,6 +106,12 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         stopWatchdog();
         stopClient();
         super.onDestroy();
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        scheduleServiceRestart("task_removed");
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override
@@ -171,6 +187,38 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             } catch (Exception e) {
                 Log.w(TAG, "Battery optimization exemption request failed", e);
             }
+        }
+    }
+
+    private void scheduleServiceRestart(String reason) {
+        AgentConfig config = AgentPrefs.load(this);
+        if (!config.isPairingReady()) {
+            Log.i(TAG, "Skip restart schedule (" + reason + "): pairing not ready");
+            return;
+        }
+        Intent restart = new Intent(getApplicationContext(), AadsForegroundService.class);
+        restart.setAction(ACTION_START);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pendingIntent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? PendingIntent.getForegroundService(getApplicationContext(), 1, restart, flags)
+                : PendingIntent.getService(getApplicationContext(), 1, restart, flags);
+        AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+        long triggerAt = System.currentTimeMillis() + 2_000L;
+        try {
+            if (alarmManager != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
+                } else {
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(restart);
+            } else {
+                startService(restart);
+            }
+            Log.i(TAG, "Scheduled foreground service restart: " + reason);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to schedule service restart: " + reason, e);
         }
     }
 

@@ -248,7 +248,7 @@ async def _require_admin(current_user: dict = Depends(get_current_user)) -> dict
 
 @router.get("/devices")
 async def list_devices(device_type: str = Query(None)):
-    devices = device_manager.get_devices(device_type)
+    devices = device_manager.list_device_statuses(device_type)
     return {"devices": devices, "count": len(devices)}
 
 
@@ -262,16 +262,36 @@ async def execute_command(req: CommandRequest):
 
 @router.get("/devices/{agent_id}/status")
 async def device_status(agent_id: str):
-    info = device_manager.get_device(agent_id)
-    if info is None:
-        return {"status": "disconnected", "agent_id": agent_id}
-    return {"status": "connected", **info.model_dump()}
+    status = device_manager.get_device_status(agent_id)
+    if status is None:
+        return {
+            "agent_id": agent_id,
+            "status": "offline",
+            "connection_state": "disconnected",
+            "heartbeat_age_seconds": None,
+            "capabilities": [],
+            "last_seen": None,
+            "reconnect_guidance": (
+                "No active device WebSocket session. For Android, reopen the app or wait for boot/network reconnect "
+                "to restart the foreground service."
+            ),
+        }
+    return status
 
 
 @router.get("/devices/{agent_id}/capabilities")
 async def device_capabilities(agent_id: str):
     caps = device_manager.get_device_capabilities(agent_id)
-    return {"agent_id": agent_id, "capabilities": caps}
+    status = device_manager.get_device_status(agent_id)
+    return {
+        "agent_id": agent_id,
+        "capabilities": caps,
+        "status": status.get("status", "offline") if status else "offline",
+        "heartbeat_age_seconds": status.get("heartbeat_age_seconds") if status else None,
+        "reconnect_guidance": status.get("reconnect_guidance") if status else (
+            "No active device WebSocket session. Reopen the agent app or wait for its reconnect path."
+        ),
+    }
 
 
 @router.get("/devices/android/manifest")

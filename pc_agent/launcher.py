@@ -401,6 +401,12 @@ def run_agent(cfg: dict):
             def is_connected(self) -> bool:
                 return bool(self._agent and getattr(self._agent, 'is_connected', False))
 
+            @property
+            def seconds_since_server_message(self) -> float | None:
+                if not self._agent:
+                    return None
+                return getattr(self._agent, "seconds_since_server_message", None)
+
             def poll(self) -> int | None:
                 if self._t.is_alive():
                     return None
@@ -582,6 +588,7 @@ def main() -> None:
     # 4) 에이전트 프로세스 감시 + 주기적 업데이트 확인
     UPDATE_INTERVAL = 3600  # 1시간마다 업데이트 확인
     RECONNECT_WATCHDOG_TIMEOUT = 120  # 120초 이상 미연결 시 강제 재시작
+    WORKER_ACTIVITY_TIMEOUT = 120  # 트레이만 살아 있고 WebSocket worker가 멈춘 상태 감지
     last_update_check = time.time()
     disconnected_since = None
     _set_crash_count(0)  # 정상 시작 시 크래시 카운터 리셋
@@ -765,7 +772,29 @@ def main() -> None:
                     logger.warning("주기적 업데이트 실패: %s", e)
 
             # 연결 상태 watchdog — 장기 미연결 시 에이전트 강제 재시작
-            if hasattr(proc, 'is_connected') and not proc.is_connected:
+            if hasattr(proc, 'is_connected') and proc.is_connected:
+                worker_stale_seconds = getattr(proc, "seconds_since_server_message", None)
+                if worker_stale_seconds is not None and worker_stale_seconds > WORKER_ACTIVITY_TIMEOUT:
+                    logger.warning(
+                        "에이전트 worker activity %d초 정지 — 강제 재시작",
+                        int(worker_stale_seconds),
+                    )
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except Exception:
+                        pass
+                    disconnected_since = None
+                    _set_crash_count(0)
+                    time.sleep(3)
+                    try:
+                        proc = run_agent(cfg)
+                    except SystemExit:
+                        logger.error("worker-stale run_agent() SystemExit — mutex 충돌, 재시도")
+                        proc = None
+                    if proc is None:
+                        continue
+            elif hasattr(proc, 'is_connected') and not proc.is_connected:
                 if disconnected_since is None:
                     disconnected_since = time.time()
                 elif time.time() - disconnected_since > RECONNECT_WATCHDOG_TIMEOUT:

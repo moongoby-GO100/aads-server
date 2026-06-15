@@ -89,6 +89,10 @@ _DEFAULT_MAX_CONCURRENCY_BY_JOB = {
     "local_model_install": 1,
     "local_media_job": 1,
 }
+_PC_AGENT_COMMAND_ALIASES = {
+    "cmd": "shell",
+    "powershell": "shell",
+}
 
 
 @dataclass
@@ -164,23 +168,23 @@ class PCAgentManager:
     ) -> AgentInfo:
         """에이전트 등록."""
         capabilities = self._normalize_capabilities(info.get("capabilities"))
-        command_types = info.get("command_types")
-        if isinstance(command_types, list):
-            command_type_set = {str(item).strip().lower() for item in command_types if str(item).strip()}
-            if "browser_launch" in command_type_set:
-                capabilities.update({"chrome_cdp", "interactive_browser"})
+        command_type_set = self._normalize_command_types(info.get("command_types"))
+        if "browser_launch" in command_type_set:
+            capabilities.update({"chrome_cdp", "interactive_browser"})
         agent_info = AgentInfo(
             agent_id=agent_id,
             hostname=info.get("hostname", ""),
             os_info=info.get("os_info", ""),
             capabilities=sorted(capabilities),
+            command_types=sorted(command_type_set),
         )
         self._agents[agent_id] = _AgentConnection(agent_id, websocket, agent_info)
         logger.info(
-            "pc_agent_registered agent_id=%s hostname=%s capabilities=%s",
+            "pc_agent_registered agent_id=%s hostname=%s capabilities=%s command_types=%s",
             agent_id,
             agent_info.hostname,
             ",".join(agent_info.capabilities),
+            ",".join(agent_info.command_types),
         )
         return agent_info
 
@@ -221,6 +225,7 @@ class PCAgentManager:
         if conn is None:
             raise ValueError(f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
 
+        normalized_command_type, normalized_params = self._normalize_command_request(command_type, params)
         command_id = str(uuid.uuid4())
 
         # 결과 대기용 이벤트 생성
@@ -235,7 +240,7 @@ class PCAgentManager:
         msg = WSMessage(
             type="command",
             id=command_id,
-            payload={"command_type": command_type, "params": params},
+            payload={"command_type": normalized_command_type, "params": normalized_params},
         )
         try:
             await conn.websocket.send_json(msg.model_dump(mode="json"))
@@ -245,8 +250,8 @@ class PCAgentManager:
             self._untrack_command(command_id, agent_id)
             raise
         logger.info(
-            "pc_agent_command_sent agent_id=%s command_id=%s type=%s",
-            agent_id, command_id, command_type,
+            "pc_agent_command_sent agent_id=%s command_id=%s type=%s dispatched_type=%s",
+            agent_id, command_id, command_type, normalized_command_type,
         )
         return command_id
 
@@ -406,6 +411,18 @@ class PCAgentManager:
         """연결된 에이전트 목록."""
         return [conn.info for conn in self._agents.values()]
 
+    def list_agent_statuses(self) -> list[dict[str, Any]]:
+        now = self._now()
+        items = [self._build_agent_status(conn, now) for conn in self._agents.values()]
+        items.sort(key=lambda item: (item["status"] != "online", item["heartbeat_age_seconds"], item["agent_id"]))
+        return items
+
+    def get_agent_status(self, agent_id: str) -> dict[str, Any] | None:
+        conn = self._agents.get(agent_id)
+        if conn is None:
+            return None
+        return self._build_agent_status(conn, self._now())
+
     def get_agent(self, agent_id: str) -> Optional[AgentInfo]:
         """특정 에이전트 정보 조회."""
         conn = self._agents.get(agent_id)
@@ -413,6 +430,10 @@ class PCAgentManager:
 
     def connected_count(self) -> int:
         return len(self._agents)
+
+    def online_agents_count(self) -> int:
+        now = self._now()
+        return sum(1 for conn in self._agents.values() if self._is_online_locked(conn.agent_id, now))
 
     # ── Routing / Lease / Queue ───────────────────────────────────────
 
@@ -427,6 +448,18 @@ class PCAgentManager:
             cap = str(raw or "").strip().lower().replace("-", "_")
             if cap:
                 normalized.add(cap)
+        return normalized
+
+    def _normalize_command_types(self, value: Any) -> set[str]:
+        if not isinstance(value, (list, tuple, set)):
+            return set()
+        normalized: set[str] = set()
+        for raw in value:
+            command_type = str(raw or "").strip().lower().replace("-", "_")
+            if command_type:
+                normalized.add(command_type)
+        if "shell" in normalized:
+            normalized.update(_PC_AGENT_COMMAND_ALIASES.keys())
         return normalized
 
     def _normalize_job_type(self, value: str) -> str:
@@ -457,6 +490,39 @@ class PCAgentManager:
         param_timeout = self._coerce_timeout_seconds(raw_param_timeout, default=route_timeout)
         # route-execute timeout is authoritative upper bound.
         return min(route_timeout, param_timeout)
+
+    def _normalize_command_request(
+        self,
+        command_type: str,
+        params: Dict[str, Any] | None,
+    ) -> tuple[str, Dict[str, Any]]:
+        normalized_command_type = str(command_type or "").strip().lower().replace("-", "_")
+        normalized_params = dict(params or {})
+        dispatched_type = _PC_AGENT_COMMAND_ALIASES.get(normalized_command_type, normalized_command_type)
+
+        if normalized_command_type == "cmd":
+            raw_command = str(
+                normalized_params.get("command")
+                or normalized_params.get("cmd")
+                or normalized_params.get("script")
+                or ""
+            ).strip()
+            if raw_command and not raw_command.lower().startswith("cmd"):
+                normalized_params["command"] = f"cmd.exe /c {raw_command}"
+        elif normalized_command_type == "powershell":
+            raw_command = str(
+                normalized_params.get("command")
+                or normalized_params.get("script")
+                or normalized_params.get("cmd")
+                or ""
+            ).strip()
+            if raw_command and not raw_command.lower().startswith("powershell"):
+                normalized_params["command"] = (
+                    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+                    f"{raw_command}"
+                )
+
+        return dispatched_type, normalized_params
 
     async def _cleanup_browser_session_on_timeout(
         self,
@@ -556,6 +622,32 @@ class PCAgentManager:
         ts = now or self._now()
         delta = (ts - conn.info.last_heartbeat).total_seconds()
         return delta <= self._heartbeat_timeout_seconds
+
+    def _build_agent_status(self, conn: _AgentConnection, now: datetime) -> dict[str, Any]:
+        heartbeat_age_seconds = max(0.0, (now - conn.info.last_heartbeat).total_seconds())
+        online = heartbeat_age_seconds <= self._heartbeat_timeout_seconds
+        command_types = list(getattr(conn.info, "command_types", []) or [])
+        return {
+            "agent_id": conn.info.agent_id,
+            "hostname": conn.info.hostname,
+            "os_info": conn.info.os_info,
+            "status": "online" if online else "offline",
+            "heartbeat_age_seconds": round(heartbeat_age_seconds, 1),
+            "capabilities": list(conn.info.capabilities),
+            "command_types": command_types,
+            "connected_at": conn.info.connected_at.isoformat() if conn.info.connected_at else None,
+            "last_heartbeat": conn.info.last_heartbeat.isoformat() if conn.info.last_heartbeat else None,
+            "last_seen": conn.info.last_heartbeat.isoformat() if conn.info.last_heartbeat else None,
+            "reconnect_guidance": self._reconnect_guidance(online),
+        }
+
+    def _reconnect_guidance(self, online: bool) -> str:
+        if online:
+            return "WebSocket heartbeat healthy."
+        return (
+            "Verify the launcher/agent WebSocket reconnect loop. "
+            "If this request hit a standby or public backend, retry the active backend or peer fallback path."
+        )
 
     def _max_concurrency_for_job(self, job_type: str) -> int:
         return max(1, int(self._job_max_concurrency.get(job_type, self._default_max_concurrency)))

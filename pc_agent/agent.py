@@ -11,6 +11,7 @@ import logging
 import os
 import platform
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict
@@ -177,6 +178,13 @@ def _collect_capabilities() -> list[str]:
     return sorted(caps)
 
 
+def _collect_command_types() -> list[str]:
+    command_types = {str(key).strip().lower() for key in COMMAND_HANDLERS.keys() if str(key).strip()}
+    if "shell" in command_types:
+        command_types.update({"cmd", "powershell"})
+    return sorted(command_types)
+
+
 class PCAgent:
     """PC 제어 에이전트 클라이언트."""
 
@@ -200,6 +208,7 @@ class PCAgent:
                 self.os_info = ""
                 self._loop = None
                 self._ws = None
+                self._last_server_message_monotonic = None
                 return
         self._init_ok = True
         self.agent_id = _get_persistent_agent_id()
@@ -210,6 +219,7 @@ class PCAgent:
         self.is_connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
+        self._last_server_message_monotonic: float | None = None
 
     def _get_version(self) -> str:
         """VERSION 파일에서 에이전트 버전 읽기."""
@@ -330,7 +340,7 @@ class PCAgent:
                         "os_info": self.os_info,
                         "version": self._get_version(),
                         "capabilities": _collect_capabilities(),
-                        "command_types": sorted(COMMAND_HANDLERS.keys()),
+                        "command_types": _collect_command_types(),
                     },
                 }))
 
@@ -354,6 +364,7 @@ class PCAgent:
                     logger.warning("네트워크 정보 전송 실패 (무시): %s", e)
 
                 self.is_connected = True
+                self._mark_server_message()
                 logger.info("서버 등록 완료 — WebSocket 연결 활성")
 
                 # 하트비트 + 자동 업데이트 태스크 시작
@@ -362,6 +373,7 @@ class PCAgent:
 
                 try:
                     async for raw in ws:
+                        self._mark_server_message()
                         try:
                             msg = json.loads(raw)
                         except json.JSONDecodeError:
@@ -381,6 +393,7 @@ class PCAgent:
                     update_task.cancel()
                     self._ws = None
                     self.is_connected = False
+                    self._last_server_message_monotonic = None
                     logger.info("WebSocket 연결 해제")
 
         except websockets.ConnectionClosedError as e:
@@ -514,6 +527,15 @@ class PCAgent:
             return {"status": "error", "data": {"error": f"지원하지 않는 명령: {command_type}"}}
 
         return await handler(params)
+
+    def _mark_server_message(self) -> None:
+        self._last_server_message_monotonic = time.monotonic()
+
+    @property
+    def seconds_since_server_message(self) -> float | None:
+        if self._last_server_message_monotonic is None:
+            return None
+        return max(0.0, time.monotonic() - self._last_server_message_monotonic)
 
     def stop(self) -> None:
         """에이전트 종료."""

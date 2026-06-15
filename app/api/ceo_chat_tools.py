@@ -857,6 +857,63 @@ TOOL_DEFINITIONS: List[Dict] = [
             "required": ["message"],
         },
     },
+    {
+        "name": "pc_execute",
+        "description": (
+            "연결된 PC Agent에 명령을 전송하고 결과를 수신합니다. "
+            "주요 명령: shell, cmd, powershell, system_info, process_list, file_list, file_read, file_write, app_launch."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "대상 PC Agent ID (1대만 연결 시 생략 가능)",
+                },
+                "command_type": {
+                    "type": "string",
+                    "description": "실행할 명령 유형 (shell, cmd, powershell, system_info, process_list, file_list, file_read, file_write, app_launch 등)",
+                },
+                "params": {
+                    "type": "object",
+                    "description": "명령 파라미터",
+                    "default": {},
+                },
+            },
+            "required": ["command_type"],
+        },
+    },
+    {
+        "name": "device_execute",
+        "description": (
+            "연결된 디바이스(PC/Android/iOS)에 명령을 실행합니다. "
+            "PC 명령은 shell/cmd/powershell/system_info/process_list/file_list/file_read/file_write/app_launch를 포함합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "대상 디바이스 ID (1대면 생략 가능)",
+                },
+                "command_type": {
+                    "type": "string",
+                    "description": "실행할 명령 타입",
+                },
+                "params": {
+                    "type": "object",
+                    "description": "명령 파라미터",
+                    "default": {},
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "응답 대기 시간(초)",
+                    "default": 30,
+                },
+            },
+            "required": ["command_type"],
+        },
+    },
     # ── Pipeline Runner 도구 (호스트 독립 실행 — 권장) ─────────────────────
     {
         "name": "pipeline_runner_submit",
@@ -4702,6 +4759,11 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
         )
+    elif name in {"pc_execute", "device_execute"}:
+        from app.services.tool_executor import ToolExecutor
+
+        result = await ToolExecutor()._dispatch(name, params)
+        return json.dumps(result, ensure_ascii=False)
     # ── SSH 원격 접근 도구 (AADS-165) ────────────────────────────────────────
     elif name == "list_remote_dir":
         return await tool_list_remote_dir(

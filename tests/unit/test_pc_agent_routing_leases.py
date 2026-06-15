@@ -52,6 +52,46 @@ async def test_execute_routed_command_returns_no_capable_agent() -> None:
     assert result["error_code"] == "NO_CAPABLE_AGENT"
 
 
+def test_register_agent_status_exposes_shell_alias_command_types() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {
+            "hostname": "ceo",
+            "capabilities": ["pc_control"],
+            "command_types": ["shell", "system_info", "app_launch"],
+        },
+    )
+
+    status = manager.get_agent_status("ceo-pc")
+
+    assert status is not None
+    assert status["status"] == "online"
+    assert {"shell", "cmd", "powershell", "system_info", "app_launch"} <= set(status["command_types"])
+    assert status["heartbeat_age_seconds"] >= 0
+    assert status["last_seen"]
+
+
+@pytest.mark.asyncio
+async def test_send_command_normalizes_powershell_alias() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["pc_control"], "command_types": ["shell"]},
+    )
+
+    await manager.send_command("ceo-pc", "powershell", {"command": "Get-Process"})
+
+    assert ws.messages
+    payload = ws.messages[0]["payload"]
+    assert payload["command_type"] == "shell"
+    assert payload["params"]["command"].startswith("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ")
+
+
 @pytest.mark.asyncio
 async def test_vvic_queue_serializes_per_agent_and_promotes_next() -> None:
     manager = PCAgentManager()

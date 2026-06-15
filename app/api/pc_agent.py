@@ -9,10 +9,12 @@ import json
 import logging
 import os
 import sys as _sys_reload
+import urllib.error
+import urllib.request
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from app.models.pc_agent import CommandRequest, RoutedCommandRequest, StreamConfig, WSMessage
 from app.services.pc_agent_manager import pc_agent_manager
@@ -22,6 +24,8 @@ router = APIRouter()
 
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
+_PEER_FALLBACK_HEADER = "x-aads-pc-agent-peer-fallback"
+_PEER_RETRYABLE_ERROR_CODES = {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
 
 # hot-reload 시 기존 WebSocket 연결 상태 보존
 _prev_mod = _sys_reload.modules.get(__name__)
@@ -408,24 +412,208 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
 # ── REST API ──────────────────────────────────────────────────────────
 
-@router.get("/pc-agent/status")
-async def pc_agent_status():
-    """PC Agent 연결 상태 요약 조회."""
-    await _flush_pending_reload_disconnects()
-    agents = pc_agent_manager.list_agents()
+def _top_level_reconnect_guidance(online_count: int) -> str:
+    if online_count > 0:
+        return "At least one PC agent heartbeat is healthy."
+    return (
+        "No healthy PC agent heartbeat is visible on this backend. "
+        "If this is a standby/public node, retry the active backend or allow peer fallback to resolve the active agent."
+    )
+
+
+def _local_pc_agent_status_payload() -> dict[str, Any]:
+    agents = pc_agent_manager.list_agent_statuses()
+    online_count = sum(1 for agent in agents if agent.get("status") == "online")
     return {
-        "status": "online" if agents else "offline",
-        "online_count": len(agents),
-        "agents": [a.model_dump(mode="json") for a in agents],
+        "status": "online" if online_count else "offline",
+        "online_count": online_count,
+        "agents": agents,
+        "reconnect_guidance": _top_level_reconnect_guidance(online_count),
+        "backend_source": "local",
     }
 
 
+def _active_api_ports() -> list[str]:
+    ports: list[str] = []
+    active_port = _active_api_port()
+    for candidate in (active_port, "8100", "8102"):
+        if candidate and candidate.isdigit() and candidate not in ports:
+            ports.append(candidate)
+    return ports
+
+
+def _active_api_port() -> str:
+    for candidate in (
+        os.getenv("AADS_ACTIVE_PORT", ""),
+        "/root/aads/aads-server/.active_port",
+        ".active_port",
+    ):
+        value = candidate.strip()
+        if not value:
+            continue
+        if value.isdigit():
+            return value
+        try:
+            with open(value, "r", encoding="utf-8") as fh:
+                port = fh.read().strip()
+        except OSError:
+            continue
+        if port.isdigit():
+            return port
+    return ""
+
+
+def _active_container_name() -> str:
+    for candidate in (
+        os.getenv("AADS_ACTIVE_CONTAINER", ""),
+        "/root/aads/aads-server/.active_container",
+        "/app/.active_container",
+        ".active_container",
+    ):
+        value = candidate.strip()
+        if not value:
+            continue
+        if "/" not in value and "." not in value:
+            return value
+        try:
+            with open(value, "r", encoding="utf-8") as fh:
+                name = fh.read().strip()
+        except OSError:
+            continue
+        if name:
+            return name
+    return ""
+
+
+def _peer_fallback_urls(path: str) -> list[str]:
+    urls: list[str] = []
+    active_container = _active_container_name()
+    for active_port in _active_api_ports():
+        urls.append(f"http://127.0.0.1:{active_port}{path}")
+        if active_port == "8100":
+            urls.append(f"http://aads-server:8080{path}")
+        elif active_port == "8102":
+            urls.append(f"http://aads-server-green:8080{path}")
+        if active_container:
+            urls.append(f"http://{active_container}:8080{path}")
+    deduped: list[str] = []
+    for url in urls:
+        if url not in deduped:
+            deduped.append(url)
+    return deduped
+
+
+def _peer_fallback_allowed(request: Request) -> bool:
+    return request.headers.get(_PEER_FALLBACK_HEADER, "") != "1"
+
+
+async def _request_peer_fallback_json(
+    *,
+    request: Request,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not _peer_fallback_allowed(request):
+        return None
+
+    urls = _peer_fallback_urls(path)
+    if not urls:
+        return None
+
+    def _send() -> dict[str, Any] | None:
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {_PEER_FALLBACK_HEADER: "1"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+
+        for url in urls:
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=180 if body is not None else 10) as resp:
+                    raw = resp.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                try:
+                    parsed_error = json.loads(exc.read().decode("utf-8", errors="ignore"))
+                except Exception:
+                    logger.warning("pc_agent_peer_fallback_http_failed url=%s err=%s", url, exc)
+                    continue
+                detail = parsed_error.get("detail") if isinstance(parsed_error, dict) else None
+                if isinstance(detail, dict):
+                    error_code = str(detail.get("error_code") or "")
+                    if error_code in _PEER_RETRYABLE_ERROR_CODES:
+                        logger.warning(
+                            "pc_agent_peer_fallback_retryable_error url=%s error_code=%s",
+                            url,
+                            error_code,
+                        )
+                        continue
+                    detail.setdefault("backend_source", "peer")
+                    return detail
+                logger.warning("pc_agent_peer_fallback_http_bad_detail url=%s err=%s", url, exc)
+                continue
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                logger.warning("pc_agent_peer_fallback_failed url=%s err=%s", url, exc)
+                continue
+
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.warning("pc_agent_peer_fallback_bad_json url=%s err=%s", url, exc)
+                continue
+
+            if not isinstance(parsed, dict):
+                continue
+            if method == "GET":
+                online_count = int(parsed.get("online_count", 0) or 0)
+                if path.endswith("/status") and online_count <= 0:
+                    continue
+                if path.endswith("/agents") and not parsed.get("agents"):
+                    continue
+            else:
+                if parsed.get("status") == "error" and str(parsed.get("error_code") or "") in _PEER_RETRYABLE_ERROR_CODES:
+                    continue
+            parsed.setdefault("backend_source", "peer")
+            return parsed
+        return None
+
+    return await asyncio.to_thread(_send)
+
+@router.get("/pc-agent/status")
+async def pc_agent_status(request: Request):
+    """PC Agent 연결 상태 요약 조회."""
+    await _flush_pending_reload_disconnects()
+    local_payload = _local_pc_agent_status_payload()
+    if local_payload["online_count"] <= 0:
+        peer_payload = await _request_peer_fallback_json(
+            request=request,
+            method="GET",
+            path="/api/v1/pc-agent/status",
+        )
+        if peer_payload is not None:
+            return peer_payload
+    return local_payload
+
+
 @router.get("/pc-agent/agents")
-async def list_agents():
+async def list_agents(request: Request):
     """연결된 에이전트 목록 조회."""
     await _flush_pending_reload_disconnects()
-    agents = pc_agent_manager.list_agents()
-    return {"agents": [a.model_dump(mode="json") for a in agents]}
+    agents = pc_agent_manager.list_agent_statuses()
+    online_count = sum(1 for agent in agents if agent.get("status") == "online")
+    if online_count <= 0:
+        peer_payload = await _request_peer_fallback_json(
+            request=request,
+            method="GET",
+            path="/api/v1/pc-agent/agents",
+        )
+        if peer_payload is not None:
+            return peer_payload
+    return {
+        "agents": agents,
+        "online_count": online_count,
+        "backend_source": "local",
+    }
 
 
 @router.post("/pc-agent/graceful-shutdown")
@@ -456,7 +644,7 @@ async def execute_command(req: CommandRequest):
 
 
 @router.post("/pc-agent/route-execute")
-async def route_execute_command(req: RoutedCommandRequest):
+async def route_execute_command(req: RoutedCommandRequest, request: Request):
     """Capability 기반 라우팅 + lease/queue 제어로 명령 실행."""
     params = dict(req.params or {})
     effective_command_timeout_seconds = float(req.command_timeout_seconds)
@@ -488,6 +676,26 @@ async def route_execute_command(req: RoutedCommandRequest):
         lease_ttl_seconds=req.lease_ttl_seconds,
         command_timeout_seconds=effective_command_timeout_seconds,
     )
+    if result.get("status") == "error" and str(result.get("error_code") or "") in _PEER_RETRYABLE_ERROR_CODES:
+        peer_result = await _request_peer_fallback_json(
+            request=request,
+            method="POST",
+            path="/api/v1/pc-agent/route-execute",
+            payload={
+                "command_type": req.command_type,
+                "params": params,
+                "agent_id": req.agent_id,
+                "job_type": req.job_type,
+                "required_capabilities": req.required_capabilities,
+                "queue_if_busy": req.queue_if_busy,
+                "wait_for_turn": req.wait_for_turn,
+                "queue_wait_timeout_seconds": req.queue_wait_timeout_seconds,
+                "lease_ttl_seconds": req.lease_ttl_seconds,
+                "command_timeout_seconds": effective_command_timeout_seconds,
+            },
+        )
+        if peer_result is not None:
+            result = peer_result
     if result.get("status") == "error":
         error_code = str(result.get("error_code", "") or "")
         status_code = 409 if error_code in {"AGENT_BUSY", "LEASE_EXPIRED"} else 503
@@ -781,4 +989,3 @@ async def ingest_client_log(payload: dict[str, Any]):
         logger.debug("client_log_db_insert_failed: %s", e)
 
     return {"ok": True}
-
