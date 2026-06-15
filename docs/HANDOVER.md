@@ -6,6 +6,7 @@
 - Generation scripts added/kept for reproducibility: `scripts/gen_incorporation_all.py`, `scripts/generate_yeoljeong_landlord_and_corp_lease.py`, `scripts/fix_duplicate_accumulate.py`.
 - `app/services/self_evaluator.py` 중복 `_accumulate_experience()` 정의와 중복 호출 블록을 제거해 Experience Memory 축적 로직이 1회만 실행되도록 정리했다.
 - Verification at 2026-06-15 13:36 KST: `python3 -m py_compile app/services/self_evaluator.py scripts/gen_incorporation_all.py scripts/fix_duplicate_accumulate.py scripts/generate_yeoljeong_landlord_and_corp_lease.py` passed. `curl -fsS http://127.0.0.1:8100/health` returned `status=ok`. Static DOCX URL for `주식회사 윤희에프엔비_정관.docx` returned HTTP 200 with DOCX content type.
+- Public URL follow-up: Cloudflare returned 403 for percent-encoded Korean DOCX paths, while local static serving returned 200. ASCII aliases were added for all 10 contract files, including `yhfnb_articles.docx`, `yhfnb_incorporation_minutes.docx`, `yeoljeong_corp_lease_junghwa.docx`, `yeoljeong_landlord_consent_junghwa.docx`, and `yeoljeong_transfer_junghwa.docx`; public `https://aads.newtalk.kr/static/docs/contracts/yhfnb_articles.docx` returned HTTP 200.
 - Commit scope note: `.active_container` and `.active_port` are runtime state files and must remain unstaged unless explicitly changing blue/green active slot metadata.
 
 ## 2026-06-12

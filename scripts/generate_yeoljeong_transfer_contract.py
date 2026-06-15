@@ -17,6 +17,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = BASE_DIR / "exports" / "contracts"
 STATIC_DIR = BASE_DIR / "app" / "static" / "docs" / "contracts"
 FILENAME = "영업양수도계약서_열정국밥_중화점.docx"
+ASCII_ALIAS = "yeoljeong_transfer_junghwa.docx"
 
 
 def set_cell_shading(cell, fill: str) -> None:
@@ -382,6 +383,7 @@ def main() -> None:
     doc = build_contract()
     doc.save(output)
     shutil.copy2(output, static_output)
+    shutil.copy2(output, STATIC_DIR / ASCII_ALIAS)
     print(output)
     print(static_output)
     print(output.stat().st_size)

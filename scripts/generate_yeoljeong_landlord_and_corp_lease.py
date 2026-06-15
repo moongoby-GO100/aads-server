@@ -17,6 +17,10 @@ STATIC_DIR = Path("app/static/docs/contracts")
 
 LANDLORD_CONSENT = "임대인동의서_주식회사_윤희에프엔비_열정국밥_중화점.docx"
 CORP_LEASE = "법인_부동산임대차계약서_열정국밥_중화점.docx"
+ASCII_ALIASES = {
+    LANDLORD_CONSENT: "yeoljeong_landlord_consent_junghwa.docx",
+    CORP_LEASE: "yeoljeong_corp_lease_junghwa.docx",
+}
 
 
 DATA = {
@@ -128,6 +132,11 @@ def save_doc(doc, filename):
     static_path = STATIC_DIR / filename
     doc.save(export_path)
     shutil.copy2(export_path, static_path)
+    alias = ASCII_ALIASES.get(filename)
+    if alias:
+        alias_path = STATIC_DIR / alias
+        shutil.copy2(export_path, alias_path)
+        os.chmod(alias_path, 0o644)
     os.chmod(export_path, 0o644)
     os.chmod(static_path, 0o644)
     return export_path, static_path

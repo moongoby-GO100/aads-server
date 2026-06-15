@@ -42,6 +42,16 @@ AUDITOR = '오병용'
 AUDITOR_SSN = '760511-1531614'
 AUDITOR_ADDR = '서울특별시 노원구 덕릉로 753, 101동 805호 (상계동, 노원롯데캐슬시그니쳐)'
 
+ASCII_ALIASES = {
+    f'{CORP}_정관.docx': 'yhfnb_articles.docx',
+    f'{CORP}_발기인총회의사록.docx': 'yhfnb_incorporation_minutes.docx',
+    f'{CORP}_주식인수증.docx': 'yhfnb_share_subscription.docx',
+    f'{CORP}_조사보고서.docx': 'yhfnb_investigation_report.docx',
+    f'{CORP}_취임승낙서.docx': 'yhfnb_appointment_acceptance.docx',
+    f'{CORP}_주주명부.docx': 'yhfnb_shareholder_registry.docx',
+    f'{CORP}_인감신고서.docx': 'yhfnb_seal_registration.docx',
+}
+
 
 def new_doc():
     doc = Document()
@@ -497,5 +507,10 @@ if __name__ == '__main__':
         dst = os.path.join(STATIC_DIR, os.path.basename(r))
         shutil.copy2(r, dst)
         print(f'  -> {dst}')
+        alias = ASCII_ALIASES.get(os.path.basename(r))
+        if alias:
+            alias_dst = os.path.join(STATIC_DIR, alias)
+            shutil.copy2(r, alias_dst)
+            print(f'  -> {alias_dst}')
     print('=' * 50)
     print('완료')
