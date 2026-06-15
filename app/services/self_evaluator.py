@@ -324,16 +324,6 @@ async def evaluate_response(
             except Exception as e_exp:
                 logger.debug("p1_experience_accumulate_error", error=str(e_exp))
 
-        # P1: Experience Memory 축적 — 고품질 응답 패턴을 experience_memory에 저장
-        if overall >= 0.75 and session_id and project:
-            try:
-                await _accumulate_experience(
-                    pool, session_id, _normalize_project(project),
-                    user_message, ai_response, overall, details,
-                )
-            except Exception as e_exp:
-                logger.debug("p1_experience_accumulate_error", error=str(e_exp))
-
         # P3: Reflexion 효과 검증 — 반성 후 실제 품질 개선 여부 추적
         if session_id and pool:
             try:
@@ -1034,76 +1024,6 @@ async def _check_strategy_update(
         )
     except Exception as e:
         logger.debug("check_strategy_update_error", error=str(e))
-
-
-async def _accumulate_experience(
-    pool,
-    session_id: str,
-    project: Optional[str],
-    user_message: str,
-    ai_response: str,
-    score: float,
-    details: dict,
-) -> None:
-    """P1: 고품질 응답 패턴을 experience_memory에 축적.
-    10턴 이상 간격으로 중복 방지, RIF score 1.0으로 시작."""
-    import hashlib
-
-    msg_hash = hashlib.md5(user_message[:100].encode()).hexdigest()[:12]
-    title = f"success:{project or 'AADS'}:{msg_hash}"
-
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval(
-            "SELECT id FROM experience_memory WHERE title = $1", title
-        )
-        if exists:
-            await conn.execute(
-                """UPDATE experience_memory
-                   SET rif_score = LEAST(1.0, rif_score + 0.05),
-                       access_count = access_count + 1,
-                       updated_at = NOW()
-                   WHERE id = $1""",
-                exists,
-            )
-            return
-
-        recent_count = await conn.fetchval(
-            """SELECT count(*) FROM experience_memory
-               WHERE domain = $1 AND created_at > NOW() - interval '1 hour'""",
-            (project or "AADS").lower(),
-        )
-        if (recent_count or 0) >= 3:
-            return
-
-        exp_type = "success_pattern"
-        if details.get("tool_needed"):
-            exp_type = "tool_success"
-        elif score >= 0.9:
-            exp_type = "exemplar"
-
-        content = json.dumps({
-            "summary": f"Q: {user_message[:100]} → 품질 {score:.0%} 달성",
-            "score": round(score, 3),
-            "strong_dims": [
-                k for k, v in details.items()
-                if isinstance(v, (int, float)) and v >= 0.8
-            ],
-            "pattern": ai_response[:200],
-        }, ensure_ascii=False)
-
-        domain_map = {
-            "AADS": "aads", "KIS": "kis", "GO100": "go100",
-            "SF": "sf", "NTV2": "ntv2", "NAS": "nas",
-        }
-        domain = domain_map.get(project or "AADS", "aads")
-
-        await conn.execute(
-            """INSERT INTO experience_memory
-               (experience_type, title, content, domain, rif_score, tags)
-               VALUES ($1, $2, $3::jsonb, $4, 1.0, ARRAY[$5])""",
-            exp_type, title, content, domain, project or "AADS",
-        )
-    logger.info("p1_experience_accumulated", title=title[:50], score=score, project=project)
 
 
 async def _accumulate_experience(

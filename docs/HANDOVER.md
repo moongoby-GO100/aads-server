@@ -1,5 +1,12 @@
 # AADS HANDOVER
-최종 업데이트: 2026-06-12
+최종 업데이트: 2026-06-15
+
+## 2026-06-15
+- AADS docs/static contract closeout: 법인 설립 서류 7종, 열정국밥 중화점 법인 부동산임대차계약서, 임대인동의서, 영업양수도계약서를 `app/static/docs/contracts/`에 공개 산출물로 정리했다.
+- Generation scripts added/kept for reproducibility: `scripts/gen_incorporation_all.py`, `scripts/generate_yeoljeong_landlord_and_corp_lease.py`, `scripts/fix_duplicate_accumulate.py`.
+- `app/services/self_evaluator.py` 중복 `_accumulate_experience()` 정의와 중복 호출 블록을 제거해 Experience Memory 축적 로직이 1회만 실행되도록 정리했다.
+- Verification at 2026-06-15 13:36 KST: `python3 -m py_compile app/services/self_evaluator.py scripts/gen_incorporation_all.py scripts/fix_duplicate_accumulate.py scripts/generate_yeoljeong_landlord_and_corp_lease.py` passed. `curl -fsS http://127.0.0.1:8100/health` returned `status=ok`. Static DOCX URL for `주식회사 윤희에프엔비_정관.docx` returned HTTP 200 with DOCX content type.
+- Commit scope note: `.active_container` and `.active_port` are runtime state files and must remain unstaged unless explicitly changing blue/green active slot metadata.
 
 ## 2026-06-12
 - Codex usage bar recovery: `/api/v1/ops/codex-usage` now returns a stable `codex_cli` fallback limit when the Codex app-server relay responds with `ok=false` or `limits=[]`.
