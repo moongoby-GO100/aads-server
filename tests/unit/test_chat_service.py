@@ -1425,6 +1425,37 @@ async def test_deferred_interrupt_rewrites_no_tool_stream_before_save():
     assert saved.await_args.args[1] == "수정본 답변"
 
 
+@pytest.mark.asyncio
+async def test_collect_queued_interrupts_recovers_db_saved_interrupt_without_memory_queue():
+    session_id = str(uuid.uuid4())
+    interrupt_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[
+        {
+            "id": interrupt_id,
+            "content": "[추가 지시] 검증 결과를 표로 다시 보고해",
+            "attachments": [{"type": "text", "name": "note.txt"}],
+        }
+    ])
+    conn.execute = AsyncMock()
+
+    try:
+        with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+            recovered = await chat_service._collect_queued_interrupts(session_id)
+    finally:
+        interrupt_queue.pop_interrupts(session_id)
+        interrupt_queue.pop_pending_interrupts(session_id)
+
+    assert recovered == [
+        {
+            "content": "검증 결과를 표로 다시 보고해",
+            "attachments": [{"type": "text", "name": "note.txt"}],
+        }
+    ]
+    conn.execute.assert_awaited_once()
+    assert "interrupt_applied" in conn.execute.await_args.args[0]
+
+
 def test_keyword_fallback_routes_only_explicit_discussion_queries():
     from app.services.intent_router import _keyword_fallback, is_explicit_debate_request
 

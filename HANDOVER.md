@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-06-15 14:24 KST - Chat in-stream additional instruction recovery patch
+- 배경: CEO가 응답 중 추가지시를 보내도 현재 응답에 반영되지 않거나, 다음 새로고침/다음 턴에서야 회수되는 문제를 보고했다.
+- 원인:
+  - 프론트는 응답 중 입력을 `/chat/sessions/{id}/interrupt`로 보내며, 백엔드는 메모리 `interrupt_queue`와 DB `chat_messages`에 `[추가 지시]`를 저장한다.
+  - 기존 최종 반영 경로는 주로 프로세스 로컬 메모리 큐를 보므로, 스트림 예외 종료/체크 지점 누락/프로세스 전환 시 DB에 저장된 추가지시가 현재 turn 최종 답변에 반영되지 못하고 다음 turn의 orphan recovery까지 밀릴 수 있었다.
+- 조치:
+  - `app/routers/chat.py`: `/interrupt` 저장 row에 `intent='queued_interrupt'`를 기록해 접수 상태를 명시했다.
+  - `app/services/chat_service.py`: 최종 저장 전 `_collect_queued_interrupts()`가 메모리 큐와 DB 저장 interrupt를 함께 회수하도록 추가했다. DB row는 반영 시 `intent='interrupt_applied'`로 바꿔 중복 반영을 막는다.
+  - `tests/unit/test_chat_service.py`: 메모리 큐 없이 DB에만 남은 추가지시를 회수하는 단위 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 통과.
+  - `JWT_SECRET_KEY=test-secret pytest -q tests/unit/test_chat_service.py -k 'deferred_interrupt or collect_queued_interrupts'` 결과 2개 통과, 52개 deselected, 기존 FastAPI deprecation warning 1건.
+  - `git diff --check -- app/services/chat_service.py app/routers/chat.py tests/unit/test_chat_service.py` 통과.
+  - active API health: `http://127.0.0.1:8102/api/v1/health` OK.
+- 배포/커밋:
+  - 아직 커밋/푸시/배포하지 않았다. 운영 반영 전에는 기존 unrelated dirty 파일과 분리해 선별 커밋/배포해야 한다.
+- 남은 리스크:
+  - 긴 단일 LLM 호출 또는 장시간 도구 실행 중에는 즉시 interrupt를 읽지 못하고 “다음 체크 지점/최종 저장 전”에 반영된다. 즉시 반영까지 보장하려면 tool heartbeat마다 DB interrupt count를 확인하거나 장시간 작업을 runner로 전환하는 추가 P1이 필요하다.
+
 ## 2026-06-15 13:26 KST - Electronic contract SaaS strategy added
 - 배경: CEO가 전자계약을 모두싸인처럼 별도 서비스로 진행하는 방향을 검토하고, 기존 전자계약 기획서의 다음 단계 보완을 지시했다.
 - 조치:

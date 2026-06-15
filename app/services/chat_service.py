@@ -889,15 +889,7 @@ async def _apply_deferred_interrupts_to_state(
     from app.services.model_selector import call_stream
 
     for interrupt_pass in range(2):
-        try:
-            from app.core.interrupt_queue import has_interrupt, pop_interrupts
-
-            if not session_id or not has_interrupt(session_id):
-                break
-            interrupts = pop_interrupts(session_id)
-        except Exception as intr_check_err:
-            logger.warning("deferred_interrupt_check_failed session=%s: %s", session_id[:8], intr_check_err)
-            break
+        interrupts = await _collect_queued_interrupts(session_id, limit=5)
 
         if not interrupts:
             break
@@ -1073,6 +1065,122 @@ async def _apply_deferred_interrupts_to_state(
             )
 
         state["full_response"] = interrupt_response.strip() and interrupt_response or previous_response
+
+
+def _normalize_interrupt_content(content: Any) -> str:
+    return re.sub(r"^\[추가 지시\]\s*", "", str(content or "")).strip()
+
+
+async def _fetch_persisted_interrupts(
+    session_id: str,
+    *,
+    seen_contents: Optional[set[str]] = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Load DB-saved interrupts that were not consumed from the in-memory queue.
+
+    The browser writes an interrupt to ``chat_messages`` before pushing the
+    process-local queue. If the stream exits before the in-memory queue is
+    checked, the DB row must still be applied before final save.
+    """
+    if not session_id:
+        return []
+
+    seen = seen_contents or set()
+    sid = uuid.UUID(str(session_id))
+    rows: list[Any] = []
+    try:
+        async with get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, content, attachments
+                  FROM chat_messages m
+                 WHERE m.session_id = $1
+                   AND m.role = 'user'
+                   AND m.content LIKE '[추가 지시]%%'
+                   AND COALESCE(m.intent, '') IN ('', 'queued_interrupt')
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM chat_turn_executions te
+                        WHERE te.user_message_id = m.id
+                   )
+                 ORDER BY m.created_at ASC
+                 LIMIT $2
+                """,
+                sid,
+                limit,
+            )
+            if rows:
+                await conn.execute(
+                    """
+                    UPDATE chat_messages
+                       SET intent = 'interrupt_applied',
+                           edited_at = NOW()
+                     WHERE id = ANY($1::uuid[])
+                    """,
+                    [r["id"] for r in rows],
+                )
+    except Exception as exc:
+        logger.warning(
+            "persisted_interrupt_fetch_failed session=%s error=%s",
+            str(session_id)[:8],
+            str(exc)[:160],
+        )
+        return []
+
+    interrupts: list[dict[str, Any]] = []
+    duplicate_count = 0
+    for row in rows:
+        content = _normalize_interrupt_content(row["content"])
+        if not content:
+            continue
+        if content in seen:
+            duplicate_count += 1
+            continue
+        attachments = row["attachments"] or []
+        if isinstance(attachments, str):
+            try:
+                attachments = json.loads(attachments)
+            except Exception:
+                attachments = []
+        interrupts.append({"content": content, "attachments": attachments})
+        seen.add(content)
+
+    if rows:
+        logger.info(
+            "persisted_interrupts_recovered session=%s applied=%s duplicates=%s",
+            str(session_id)[:8],
+            len(interrupts),
+            duplicate_count,
+        )
+    return interrupts
+
+
+async def _collect_queued_interrupts(session_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
+    interrupts: list[dict[str, Any]] = []
+    seen_contents: set[str] = set()
+
+    try:
+        from app.core.interrupt_queue import has_interrupt, pop_interrupts
+
+        if session_id and has_interrupt(session_id):
+            interrupts = pop_interrupts(session_id)
+            seen_contents = {
+                _normalize_interrupt_content(item.get("content"))
+                for item in interrupts
+                if _normalize_interrupt_content(item.get("content"))
+            }
+    except Exception as intr_check_err:
+        logger.warning("deferred_interrupt_check_failed session=%s: %s", session_id[:8], intr_check_err)
+
+    persisted = await _fetch_persisted_interrupts(
+        session_id,
+        seen_contents=seen_contents,
+        limit=max(0, limit - len(interrupts)),
+    )
+    if persisted:
+        interrupts.extend(persisted)
+    return interrupts
 
 
 def _stream_id_for_state(session_id: str, state: Dict[str, Any]) -> str:
@@ -8904,14 +9012,7 @@ async def send_message_stream(
         # 도구 루프가 없는 긴 텍스트 스트림에서는 model_selector 내부 인터럽트 체크 지점이 없다.
         # 이 경우 최종 저장 전에 남은 CEO 추가 지시를 한 번 더 반영해 현재 버블을 교체한다.
         for _deferred_interrupt_pass in range(2):
-            try:
-                from app.core.interrupt_queue import has_interrupt as _has_interrupt, pop_interrupts as _pop_interrupts
-                if not session_id or not _has_interrupt(session_id):
-                    break
-                _deferred_interrupts = _pop_interrupts(session_id)
-            except Exception as _intr_check_err:
-                logger.warning(f"deferred_interrupt_check_failed session={session_id[:8]}: {_intr_check_err}")
-                break
+            _deferred_interrupts = await _collect_queued_interrupts(session_id, limit=5)
             if not _deferred_interrupts:
                 break
 

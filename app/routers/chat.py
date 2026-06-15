@@ -2189,8 +2189,8 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
             async with pool.acquire() as conn:
                 await conn.execute(
                     """INSERT INTO chat_messages
-                       (session_id, role, content, attachments)
-                       VALUES ($1, 'user', $2, $3::jsonb)""",
+                       (session_id, role, content, intent, attachments)
+                       VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)""",
                     session_id,
                     f"[추가 지시] {req.content}",
                     _json.dumps(req.attachments or []),
@@ -2199,7 +2199,7 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
                     "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
                     session_id,
                 )
-            logger.info("interrupt_saved_to_db", session_id=sid, content=req.content[:100])
+            logger.info("interrupt_saved_to_db", session_id=sid, intent="queued_interrupt", content=req.content[:100])
         except Exception as e:
             logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
 
