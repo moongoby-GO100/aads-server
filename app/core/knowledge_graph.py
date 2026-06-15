@@ -318,6 +318,143 @@ async def query_graph_context(
         return ""
 
 
+# ── 시맨틱 검색 (임베딩 기반) ──────────────────────────────────────────────────
+
+async def search_entities_by_text(
+    query_text: str,
+    project: Optional[str] = None,
+    top_k: int = 5,
+) -> str:
+    """쿼리 텍스트와 벡터 유사도가 높은 엔티티 + 1-hop 관계를 반환.
+    엔티티 embedding이 없으면 mention_count 기반 fallback."""
+    try:
+        from app.services.chat_embedding_service import embed_texts
+        embeddings = await embed_texts([query_text[:500]])
+        if not embeddings or not embeddings[0]:
+            return await query_graph_context(project=project, top_k=top_k)
+
+        query_vec = str(embeddings[0])
+        async with _get_pool().acquire() as conn:
+            has_embeddings = await conn.fetchval(
+                "SELECT COUNT(*) FROM kg_entities WHERE embedding IS NOT NULL"
+            )
+            if not has_embeddings:
+                return await query_graph_context(project=project, top_k=top_k)
+
+            if project:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, entity_type, name, mention_count,
+                           1 - (embedding <=> $1::vector) AS similarity
+                    FROM kg_entities
+                    WHERE embedding IS NOT NULL
+                      AND (project = $2 OR project IS NULL)
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT $3
+                    """,
+                    query_vec, project, top_k,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, entity_type, name, mention_count,
+                           1 - (embedding <=> $1::vector) AS similarity
+                    FROM kg_entities
+                    WHERE embedding IS NOT NULL
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT $2
+                    """,
+                    query_vec, top_k,
+                )
+
+            if not rows:
+                return await query_graph_context(project=project, top_k=top_k)
+
+            lines = []
+            hub_ids = [r["id"] for r in rows]
+
+            relations = await conn.fetch(
+                """
+                SELECT s.name AS src_name, t.name AS tgt_name,
+                       r.relation_type, r.weight
+                FROM kg_relations r
+                JOIN kg_entities s ON s.id = r.source_entity_id
+                JOIN kg_entities t ON t.id = r.target_entity_id
+                WHERE r.source_entity_id = ANY($1::int[])
+                   OR r.target_entity_id = ANY($1::int[])
+                ORDER BY r.weight DESC
+                LIMIT 10
+                """,
+                hub_ids,
+            )
+
+            for e in rows:
+                sim_pct = int(float(e["similarity"]) * 100)
+                lines.append(
+                    f"- [{e['entity_type']}] {e['name']} "
+                    f"(유사도 {sim_pct}%, 언급 {e['mention_count']}회)"
+                )
+
+            if relations:
+                lines.append("연결:")
+                for r in relations:
+                    lines.append(
+                        f"  {r['src_name']} —[{r['relation_type']}]→ {r['tgt_name']}"
+                    )
+
+            return "\n".join(lines)
+
+    except Exception as e:
+        logger.warning("kg_semantic_search_failed", error=str(e))
+        return await query_graph_context(project=project, top_k=top_k)
+
+
+# ── 엔티티 임베딩 배치 생성 ──────────────────────────────────────────────────
+
+async def embed_all_entities() -> Dict[str, int]:
+    """embedding이 없는 모든 kg_entities에 임베딩 벡터를 생성."""
+    try:
+        from app.services.chat_embedding_service import embed_texts
+
+        async with _get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, entity_type, name, description
+                FROM kg_entities
+                WHERE embedding IS NULL
+                ORDER BY mention_count DESC
+                LIMIT 200
+                """,
+            )
+
+            if not rows:
+                return {"embedded": 0, "total": 0}
+
+            texts = [
+                f"{r['entity_type']}: {r['name']} — {r['description'] or ''}"[:200]
+                for r in rows
+            ]
+            embeddings = await embed_texts(texts)
+
+            updated = 0
+            for row, emb in zip(rows, embeddings):
+                if emb:
+                    await conn.execute(
+                        "UPDATE kg_entities SET embedding = $1 WHERE id = $2",
+                        str(emb), row["id"],
+                    )
+                    updated += 1
+
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM kg_entities WHERE embedding IS NOT NULL"
+            )
+            return {"embedded": updated, "total": total}
+
+    except Exception as e:
+        logger.warning("kg_embed_entities_failed", error=str(e))
+        return {"embedded": 0, "total": 0, "error": str(e)}
+
+
 # ── 통계 ──────────────────────────────────────────────────────────────────────
 
 async def get_graph_stats() -> Dict[str, Any]:
@@ -328,13 +465,15 @@ async def get_graph_stats() -> Dict[str, Any]:
                 SELECT
                     (SELECT COUNT(*) FROM kg_entities) AS entity_count,
                     (SELECT COUNT(*) FROM kg_relations) AS relation_count,
-                    (SELECT COUNT(DISTINCT entity_type) FROM kg_entities) AS type_count
+                    (SELECT COUNT(DISTINCT entity_type) FROM kg_entities) AS type_count,
+                    (SELECT COUNT(*) FROM kg_entities WHERE embedding IS NOT NULL) AS embedded_count
             """)
             return {
                 "entities": row["entity_count"] if row else 0,
                 "relations": row["relation_count"] if row else 0,
                 "types": row["type_count"] if row else 0,
+                "embedded": row["embedded_count"] if row else 0,
             }
     except Exception as e:
         logger.warning("kg_stats_failed", error=str(e))
-        return {"entities": 0, "relations": 0, "types": 0}
+        return {"entities": 0, "relations": 0, "types": 0, "embedded": 0}

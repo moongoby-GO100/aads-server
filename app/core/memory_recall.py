@@ -1028,7 +1028,9 @@ async def get_evolution_stats(db) -> dict:
                 (SELECT COUNT(*) FROM ai_observations) AS obs_count,
                 (SELECT COUNT(*) FROM memory_facts WHERE category = 'error_pattern') AS error_count,
                 (SELECT COUNT(*) FROM chat_messages WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '7 days') AS quality_count,
-                (SELECT ROUND(AVG(quality_score)::numeric, 1) FROM chat_messages WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '7 days') AS avg_quality
+                (SELECT ROUND(AVG(quality_score)::numeric, 1) FROM chat_messages WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '7 days') AS avg_quality,
+                (SELECT COUNT(*) FROM kg_entities) AS kg_entity_count,
+                (SELECT COUNT(*) FROM kg_relations) AS kg_relation_count
             """
         )
         avg_q = row["avg_quality"] if row and row["avg_quality"] is not None else "?"
@@ -1039,6 +1041,8 @@ async def get_evolution_stats(db) -> dict:
             "avg_quality": f"{float(avg_q)*100:.0f}%" if avg_q != "?" else "?",
             "quality_count": q_cnt,
             "error_pattern_count": row["error_count"] if row else "?",
+            "kg_entities": row["kg_entity_count"] if row else 0,
+            "kg_relations": row["kg_relation_count"] if row else 0,
         }
     except Exception as e:
         logger.warning("get_evolution_stats_failed", error=str(e))
