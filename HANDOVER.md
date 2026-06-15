@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-06-15 17:48 KST - MCP search tool exposure and PC Agent runtime verification
+- 배경: CEO가 SearXNG + 크롤링 통합 검색 도구(`search_crawl_match`) 기획과 함께 MCP 도구 검색 노출 여부, PC Agent 자동 재연결/Windows 접근 가능 여부를 즉시 확인·조치하라고 지시했다.
+- 실측:
+  - `runner-66aad892`, `runner-7a0f0eb9`는 `rejected_done`, 최소 재작업 `runner-61e0f0ae`는 `error`였고 로그는 `강제 종료: AI 판단에 의한 강제 종료` 1건이었다.
+  - `https://aads.newtalk.kr/api/v1/pc-agent/status`는 `online_count=1`, agent `2e9379a1-fed`, capability `chrome_cdp`, `interactive_browser`, `local_model_manager`, `pc_control`, `pc_ollama`를 반환했다.
+  - 운영 경로 `route-execute`로 `shell` 명령 `echo AADS_RECHECK`를 실행해 `exit_code=0`, output `AADS_RECHECK`를 확인했다.
+  - 비활성/로컬 슬롯 `http://127.0.0.1:8100/api/v1/pc-agent/status`는 offline이라 blue/green 상태 오판 리스크가 남아 있다.
+- 조치:
+  - `mcp_servers/aads_tools_bridge.py`에서 legacy `ceo_chat_tools.TOOL_DEFINITIONS`만 노출하던 MCP tool list를 `ToolRegistry`와 병합하도록 변경했다.
+  - 이로써 `search_crawl_match`, `search_searxng`, `jina_read`, `crawl4ai_fetch`, `device_execute`, `pc_execute`가 MCP bridge list에 포함된다.
+- 검증:
+  - `python3 -m py_compile mcp_servers/aads_tools_bridge.py` 통과.
+  - `_get_tool_definitions()` 기준 노출 도구 수가 `81 -> 134`로 증가했고 위 6개 도구가 모두 `True`로 확인됐다.
+  - PC Agent 운영 경로 shell 테스트 2회(`AADS_PC_AGENT_TEST`, `AADS_RECHECK`) 모두 성공했다.
+- 권장:
+  - SearXNG + 크롤링 최종 종합 LLM은 품질 최우선 기준 `gpt-5.5`를 기본값으로 유지하고, 장문 상호검증 옵션으로 `claude-opus-46` 또는 `gemini-3.1-pro-preview`를 보조 평가 모델로 둔다.
+  - PC Agent 끊김 완전 방지는 불가능하지만, 운영 도메인 기준 자동 재연결은 동작 중이다. 남은 과제는 blue/green inactive 슬롯 status 오판을 도구 경로에서 제거하는 것이다.
+- 배포/커밋:
+  - 현재는 코드 패치와 로컬 검증까지 완료했다. 커밋/푸시/blue-green 배포는 아직 수행하지 않았다.
+
 ## 2026-06-15 14:24 KST - Chat in-stream additional instruction recovery patch
 - 배경: CEO가 응답 중 추가지시를 보내도 현재 응답에 반영되지 않거나, 다음 새로고침/다음 턴에서야 회수되는 문제를 보고했다.
 - 원인:

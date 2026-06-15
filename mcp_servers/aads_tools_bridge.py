@@ -80,11 +80,38 @@ async def _heartbeat(interval: float = 30.0):
 
 
 def _get_tool_definitions():
-    """TOOL_DEFINITIONS 로드 (지연)."""
+    """TOOL_DEFINITIONS 로드 (지연).
+
+    Legacy ``ceo_chat_tools.TOOL_DEFINITIONS`` is not the canonical full
+    catalog anymore. Merge ToolRegistry so MCP clients can discover newer
+    tools such as search_crawl_match/search_searxng while preserving legacy
+    aliases and schemas.
+    """
     global _tool_definitions
     if _tool_definitions is None:
         from app.api.ceo_chat_tools import TOOL_DEFINITIONS
-        _tool_definitions = TOOL_DEFINITIONS
+        merged: dict[str, dict] = {
+            str(td.get("name")): dict(td)
+            for td in TOOL_DEFINITIONS
+            if isinstance(td, dict) and td.get("name")
+        }
+        try:
+            from app.services.tool_registry import ToolRegistry
+
+            registry = ToolRegistry()
+            exclude_keys = {"input_examples", "defer_loading", "allowed_callers"}
+            for name in registry.list_all():
+                td = registry.get_tool(name)
+                if not isinstance(td, dict) or not td.get("name"):
+                    continue
+                tool_type = str(td.get("type", "") or "")
+                if tool_type and tool_type != "tool":
+                    continue
+                normalized = {k: v for k, v in td.items() if k not in exclude_keys}
+                merged.setdefault(str(normalized["name"]), normalized)
+        except Exception as exc:
+            logger.warning("tool_registry_merge_failed: %s", exc)
+        _tool_definitions = list(merged.values())
     return _tool_definitions
 
 
