@@ -249,6 +249,9 @@ def _classify(name: str, path: str) -> str:
     nl = name.lower()
     pl = path.lower()
 
+    if any(key in pl for key in ("contract", "contracts", "agreement", "agreements", "계약")) or \
+            any(key in nl for key in ("contract", "agreement", "계약", "근로계약", "입점계약", "프리랜서")):
+        return "contract"
     if any(key in pl for key in ("ceo-documents", "directive", "directives", "policy", "rule")) or \
             any(key in nl for key in ("directive", "directives", "policy", "rules")):
         return "directive"

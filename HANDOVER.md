@@ -1,5 +1,79 @@
 # AADS HANDOVER
 
+## 2026-06-15 13:26 KST - Electronic contract SaaS strategy added
+- 배경: CEO가 전자계약을 모두싸인처럼 별도 서비스로 진행하는 방향을 검토하고, 기존 전자계약 기획서의 다음 단계 보완을 지시했다.
+- 조치:
+  - `reports/20260615_e_contract_system_plan.md`에 `## 16. 별도 SaaS 서비스화 전략`을 추가했다.
+  - 별도 서비스 임시명은 `NewSign`으로 두고, `ContractOS`, `SignFlow` 후보와 비교했다.
+  - 범용 전자계약 복제가 아니라 "입점/외주/근로계약 운영을 업무 권한과 연결하는 도메인 특화 계약 OS"로 포지셔닝했다.
+  - 서비스 포지션, 경쟁 서비스 근거, 제품 모듈, 멀티테넌트 SaaS 아키텍처, 요금제 초안, MVP 출시 순서, go-to-market, 리스크 대응을 보완했다.
+  - `/docs` 노출용 `docs/reports/20260615_전자계약_시스템_기획서.md`와 `/root/aads/aads-docs/reports/20260615_전자계약_시스템_기획서.md`에 동일 내용을 동기화했다.
+- 근거:
+  - 모두싸인 API 연동 기능 소개, 모두싸인 API 기능 페이지, 모두싸인 개발자 문서(Webhook), 이폼사인 2025 요금 안내를 웹 검색으로 확인했다.
+  - 모두싸인은 API/Webhook/metadata/내부 시스템 연동을 강조하고, 이폼사인은 API 제공 및 본인확인·타임스탬프·장기보존 공개 단가를 안내한다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'` 결과 `2026-06-15 13:26:51 KST`.
+  - `wc -l -c` 기준 원본/`docs/reports`/`aads-docs/reports` 3개 파일이 모두 `783 lines`, `43,694 bytes`로 동기화됨을 확인했다.
+  - `rg -n "## 16\\. 별도 SaaS 서비스화 전략|NewSign|업무 게이트형 계약 OS|요금제 초안|MVP-1 NewSign Core"`로 3개 경로 모두 hit 확인했다.
+  - 보완 후 보고서 말미에 `## 20. 별도 SaaS 서비스화 보완 검증 로그`를 추가했다.
+- 주의:
+  - 법무·노무 전문가 최종 검토, 외부 전자계약 서비스 실제 견적 요청, 본인확인/TSA/WORM API 계약 검증은 아직 미수행이다.
+  - 커밋/푸시/배포는 CEO가 명시 요청하지 않아 수행하지 않았다.
+
+## 2026-06-15 12:41 KST - Electronic contract docs exposed on /docs and self-build direction applied
+- 배경: CEO가 `https://aads.newtalk.kr/docs`에 전자계약 기획서가 보이지 않는 문제를 지적하고, 근로계약서/프리랜서 계약서/뉴톡 입점계약서 3종 실제 템플릿 초안과 자체 전자계약서비스 구축 방향 보완을 지시했다.
+- 조치:
+  - `/docs` 스캔 대상인 `docs/reports`, `docs/contracts`, `/root/aads/aads-docs/reports`, `/root/aads/aads-docs/docs/contracts`에 전자계약 기획서와 템플릿 3종을 반영했다.
+  - `docs/reports/20260615_전자계약_시스템_기획서.md`의 방향을 "외부 전자계약 서비스 우선"에서 "AADS/뉴톡 자체 전자계약 서비스 구축 우선"으로 수정했다.
+  - 외부 서비스는 주 계약 엔진이 아니라 휴대폰 본인확인, 알림톡/문자, 신뢰시각확인, WORM/장기보존 같은 보조 인프라로 제한했다.
+  - `docs/reports/20260615_전자계약서_3종_템플릿_초안.md`의 링크를 `/docs`에서 노출되는 `docs/contracts/*.md` 경로로 정정했다.
+  - `app/api/project_docs.py`에 계약/전자계약 문서 유형 `contract` 분류를 추가해 계약서가 일반문서로 묻히지 않게 했다.
+  - `/root/aads/aads-dashboard/src/app/docs/page.tsx`에 `계약/전자계약` 필터 라벨과 전자계약 문서 고정 섹션을 추가했다.
+- 생성/보완 파일:
+  - `docs/reports/20260615_전자계약_시스템_기획서.md`
+  - `docs/reports/20260615_전자계약서_3종_템플릿_초안.md`
+  - `docs/contracts/20260615_직원_근로계약서_전자계약_초안.md`
+  - `docs/contracts/20260615_프리랜서_외주계약서_전자계약_초안.md`
+  - `docs/contracts/20260615_뉴톡_입점계약서_전자계약_초안.md`
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'` 결과 `2026-06-15 12:41:53 KST`.
+  - `python3 -m py_compile app/api/project_docs.py` 및 `docker exec aads-server python3 -m py_compile /app/app/api/project_docs.py` 통과.
+  - `npx eslint src/app/docs/page.tsx` 통과.
+  - `docker exec aads-server python3 -c ... scan_all_docs(force=True)` 결과 AADS 전체 문서 `4,534`개 중 전자계약 관련 hit `10`개 확인.
+  - hit에는 `/app/docs/reports/20260615_전자계약_시스템_기획서.md`, `/app/docs/reports/20260615_전자계약서_3종_템플릿_초안.md`, `/app/docs/contracts/*전자계약_초안.md` 3종과 `/root/aads/aads-docs` 미러 경로가 포함됐다.
+  - 동일 스캔에서 위 5개 문서의 `type`이 모두 `contract`로 분류되는 것을 확인했다.
+  - 공식 근거는 고용노동부 2025-03-07 개정 표준근로계약서, 고용노동부 전자근로계약서 가이드라인, 공정거래위원회 표준유통거래계약서 페이지를 웹 검색으로 재확인했다.
+- 주의:
+  - 브라우저 `/docs` 화면은 인증 리다이렉트(`/login?redirect=%2Fdocs`) 때문에 비로그인 curl로 직접 렌더 확인하지 못했다. API 스캔 함수 직접 호출로 노출 경로를 검증했다.
+  - 법무·노무 전문가 최종 검토는 미수행이다.
+
+## 2026-06-15 12:04 KST - Electronic contract system planning report
+- 배경: CEO가 직원 근로계약서, 프리랜서 계약서, 뉴톡 입점계약서 등 전자계약 반영을 위한 기획 보고서를 요청했다.
+- 조치:
+  - `reports/20260615_e_contract_system_plan.md`를 신규 작성했다.
+  - 범위는 직원 근로계약, 프리랜서/외주, 뉴톡 입점계약, NDA/개인정보처리위탁/정산 부속합의서다.
+  - 권장 구조는 외부 전자계약 서비스 MVP와 내부 계약관리 허브 병행이며, 자체 전자서명 엔진은 2단계 이후로 미루는 안이다.
+- 근거:
+  - 고용노동부 전자근로계약서 가이드라인, 국가법령정보센터 전자문서법/전자서명법/근로기준법, 공정거래위원회 표준유통거래계약서 기준을 보고서에 출처 URL로 기록했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'` 결과 `2026-06-15 12:04:24 KST`.
+  - `ls -l reports/20260615_e_contract_system_plan.md`로 파일 존재 확인.
+  - `wc -c reports/20260615_e_contract_system_plan.md` 결과 `22,972` bytes.
+  - `rg -n "전자계약|근로계약|프리랜서|입점계약|20260615_e_contract" HANDOVER.md docs/HANDOVER.md reports/20260615_e_contract_system_plan.md`로 보고서 주요 항목 확인.
+- 주의:
+  - 법무·노무 전문가 최종 검토는 미수행이다.
+  - 커밋/푸시/배포는 CEO가 요청하지 않아 수행하지 않았다.
+- 후속 재검증:
+  - CEO의 완료보고 조건 재확인 지시에 따라 `2026-06-15 12:07:57 KST`에 보고서 파일, 본문 핵심 섹션, 저장 로그, HANDOVER 기록, git 상태를 재확인했다.
+  - `reports/20260615_e_contract_system_plan.md`에 "후속 완료조건 재검증 로그" 섹션을 추가했다.
+  - 고용노동부 전자근로계약서 가이드라인 페이지는 웹 열람으로 제목·등록일·첨부 PDF 존재를 재확인했다.
+  - `curl -L -I` 기반 헤더 확인은 TLS 오류(code 35)로 실패해 웹 열람 결과와 보고서 내 공식 URL 보존으로 대체했다.
+- 최종 완료보고 검증:
+  - CEO의 `document_report_unverified_by_ledger` 지적 후 `2026-06-15 12:09:29 KST`에 재검증했다.
+  - `wc -l -c reports/20260615_e_contract_system_plan.md`로 보고서 파일 크기를 재측정했고, 보고서에 "최종 완료보고 검증 로그"를 추가했다.
+  - `git status --short` 기준 보고서 파일은 신규 미추적, `HANDOVER.md`는 수정 상태다.
+  - 커밋/푸시/배포는 CEO가 요청하지 않아 미수행이다.
+
 ## 현재 진행 상태 (2026-06-15 07:55 KST) - AI evolution P0 Reflexion/Self-Refine applied
 - 배경: CEO가 AI 지식·지혜화·진화 최신 기술 보고서의 다음 단계 진행을 지시했다. P0-1 Reflexion 구조화 러너(`runner-ead5d8c5`)를 승인했고, P0-2 러너(`runner-6f908c3f`)는 로그 0건/PID 종료로 스톨 확인 후 종료했다.
 - 조치:
