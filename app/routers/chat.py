@@ -1400,8 +1400,20 @@ async def get_streaming_status(session_id: UUID):
                           SELECT te_latest.id
                           FROM chat_turn_executions te_latest
                           WHERE te_latest.session_id = s.id
-                            AND te_latest.status IN ('running', 'retrying')
-                          ORDER BY te_latest.updated_at DESC
+                            AND (
+                                te_latest.status IN ('running', 'retrying')
+                                OR (
+                                    te_latest.status = 'completed'
+                                    AND te_latest.completed_at IS NOT NULL
+                                    AND te_latest.updated_at > NOW() - interval '5 minutes'
+                                )
+                            )
+                          ORDER BY
+                              CASE
+                                  WHEN te_latest.status IN ('running', 'retrying') THEN 0
+                                  ELSE 1
+                              END,
+                              te_latest.updated_at DESC
                           LIMIT 1
                       )
                   )
