@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-06-16 18:39 KST - Chat stopped bubble completion verification for b0bdd28a
+- 배경: CEO가 `https://aads.newtalk.kr/chat#b0bdd28a-589a-4440-9fcf-8ff84560544c` 세션에서 응답이 바로 끊김으로 보이는 현상에 대해 원인 파악, 개선안, 최종 완료보고 재검증을 지시했다.
+- 원인:
+  - DB 원장 기준 해당 세션 최신 실행 `0e1be3a3-5636-4469-9fe0-9ce535525e9c`는 `completed`이고 assistant 최종 메시지 `ec6074ad-8944-4267-8cbc-8041b06d397b`도 저장되어 있었다.
+  - 실제 원인은 응답 생성 실패가 아니라 완료 직후 프론트 로컬 `stopped-*` 버블이 서버 최종 assistant 버블로 즉시 교체되지 않는 표시 동기화 문제로 판정했다.
+- 조치:
+  - 서버 커밋 `67526de fix(chat): surface completed response in streaming status`로 `streaming-status`가 완료된 assistant 응답을 노출하도록 반영되어 있음을 확인했다.
+  - 대시보드 커밋 `fd22791 fix(chat): replace stopped bubble with completed response`로 로컬 stopped 버블을 서버 완료 버블로 교체하는 경로가 반영되어 있음을 확인했다.
+- 검증:
+  - `date '+%F %T %Z (%z)'` 결과 `2026-06-16 18:36:00 KST`.
+  - `git rev-parse HEAD origin/main` 결과 서버 `67526dec432fb74bac32d0d81060b3ab70c61c11`, 대시보드 `fd2279191b1369d1345fb58019c1add80a6186c2`로 로컬/원격 일치.
+  - `docker ps` 및 `docker inspect` 기준 `aads-server`, `aads-dashboard`, `aads-postgres` healthy.
+  - `docker exec aads-server python -m py_compile /app/app/routers/chat.py /app/app/services/chat_service.py` 통과.
+  - `JWT_SECRET_KEY=test-secret pytest tests/unit/test_chat_service.py -q` 결과 54 passed, 1 warning.
+  - `curl http://127.0.0.1:8100/health` 결과 HTTP 200, `curl http://127.0.0.1:3100/chat` 결과 HTTP 307.
+  - 백엔드 blue/green 컨테이너의 `/app/app/routers/chat.py`, `/app/app/services/chat_service.py` SHA256 해시가 일치했다.
+- 남은 리스크:
+  - 인증 세션이 없는 CLI 환경이라 `streaming-status` JSON 본문과 실제 브라우저 화면은 직접 E2E 확인하지 못했다. DB/API/컨테이너 검증으로 대체했다.
+  - 대시보드 전체 `npm run lint`는 기존 전역 lint 오류 264건/경고 67건으로 실패했다. 이번 변경 파일 단독 신규 오류로 판정하지 않았다.
+
 ## 2026-06-15 17:48 KST - MCP search tool exposure and PC Agent runtime verification
 - 배경: CEO가 SearXNG + 크롤링 통합 검색 도구(`search_crawl_match`) 기획과 함께 MCP 도구 검색 노출 여부, PC Agent 자동 재연결/Windows 접근 가능 여부를 즉시 확인·조치하라고 지시했다.
 - 실측:
