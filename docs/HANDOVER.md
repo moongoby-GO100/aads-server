@@ -8,11 +8,14 @@
 - 작업 전에는 인덱스의 금지사항과 읽기 순서를 먼저 확인한다.
 
 ## 2026-06-18
-- AADS Voice Command MVP 기획 보고를 문서화했다. 현재 본체에는 `audio` 모델 라우팅 후보만 있고 실제 STT/TTS API, 대시보드 마이크 UI, 답변 TTS 재생 UI는 미구현 상태다.
+- Jarvis/voice implementation ledger correction: voice backend is no longer only a plan. Server commits `3fd1ce0`, `294f8f2`, and `023f937` wired `/api/v1/voice/*`, tenant-scoped memory/session recall, and high-risk approval policy. Dashboard commit `9fb9046` added internal-admin-only voice input and Personal Assistant empty-state prompts in chat.
+- Current verification basis: server targeted py_compile/pytest passed for voice, tenant RBAC, and memory/approval policy paths; dashboard targeted eslint passed and dashboard build passed in the prior verification. Browser microphone permission and real provider STT response remain a manual E2E follow-up.
+- Runner caveat: not all Jarvis runners succeeded. The implementation state comes from direct main-branch correction commits, while several runner jobs ended as `error`, `rejected_done`, `dedup_blocked`, or `no_changes`.
+- AADS Voice Command MVP는 기획 문서에서 백엔드 MVP 구현 상태로 갱신됐다. 현재 `/api/v1/voice/health`, `/api/v1/voice/transcribe`, `/api/v1/voice/speech`가 서버에 연결됐고, 대시보드 채팅 입력창에는 내부 관리자 전용 음성 입력 버튼이 추가됐다. 답변 TTS 자동 재생 UI와 브라우저 실사용 E2E는 후속 검증 대상이다.
 - 신규 문서: `docs/plans/AADS-VOICE-COMMAND-MVP.md`.
 - `runner-9dae6d37` 상태를 확인했다. 결과는 `error`이며 root 환경에서 `--dangerously-skip-permissions` 사용 차단으로 Claude Code 실행이 실패했다. `git_diff`는 비어 있어 코드 산출물은 없다.
 - 권장 구현 흐름: `/api/v1/voice/transcribe`, `/api/v1/voice/speech`, `/api/v1/voice/health` 추가, 기존 JWT/tenant 인증 재사용, 음성 STT 결과는 기존 chat send 경로로 넘겨 도구 실행 정책을 유지한다.
-- 구현은 아직 수행하지 않았다. 재투입 시 특정 Claude worker model 강제보다 Runner 기본 모델 설정 사용 또는 root 권한 플래그 문제 선조치가 필요하다.
+- 구현은 직접 보정 커밋으로 수행됐다. 재투입 시에는 특정 Claude worker model 강제보다 Runner 기본 모델 설정 사용 또는 root 권한 플래그 문제 선조치가 필요하다.
 - 검증: `date`, `git status --short`, `rg` 기반 구현 흔적 확인, `pipeline_runner_status(job_id=runner-9dae6d37, scope=all)` 확인.
 
 ## 2026-06-15

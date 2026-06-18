@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-06-18 10:44 KST - Jarvis completion ledger correction
+- 배경: CEO가 이전 완료보고가 실제 커밋/배포/문서 ledger와 충돌한다고 지적했고, 최종 완료보고 전에 문서 상태를 현재 main 기준으로 재정렬하라고 지시했다.
+- 정정:
+  - server `HEAD`와 `origin/main`은 현재 `cffb002 fix(deploy): exclude generated media from api image`까지 일치한다.
+  - Jarvis/SaaS isolation 기능 반영 커밋은 `3fd1ce0`, `294f8f2`, `023f937`이며, 이후 문서 보정 `019a265`와 Docker context 보정 `cffb002`가 추가됐다.
+  - `.active_container`, `.active_port`, `nginx-aads-upstream.conf*` 변경은 배포 runtime 상태 파일이며 기능 커밋 대상이 아니다.
+- 남은 확인:
+  - Docker context 보정 후 backend blue-green 재배포와 health 검증을 완료했다. active API는 `aads-server-green:8102`다.
+  - 브라우저 로그인 기반 마이크/STT provider E2E는 별도 실브라우저 세션에서 확인해야 한다.
+
 ## 2026-06-18 10:41 KST - Backend deploy context hotfix
 - 배경: Jarvis/SaaS isolation 후속 배포 중 Docker build context가 `static/media/generated`까지 포함되어 2.8GB로 커졌고, `/var/lib/docker/.../app/static/media/generated/image/...jpg: no space left on device` 오류로 backend blue-green 전환 전 실패했다.
 - 조치:
@@ -15,7 +25,7 @@
 - 정정:
   - 러너 전체가 성공한 것은 아니다. `runner-add13a05`만 done이고, voice/assistant/saas audit/memory 관련 다수 러너는 `rejected_done`, `error`, `dedup_blocked`로 종료됐다.
   - 실제 main 반영은 직접 보정 커밋 기준이다: `3fd1ce0 feat: wire voice backend and assistant policy docs`, `294f8f2 fix: scope chat memory by tenant`, `023f937 fix(agent): separate high risk approval policy`.
-  - server `HEAD`와 `origin/main`은 `023f937b333518e1c7f5ebc8c99731e3c1a88913`으로 일치한다.
+  - 이 시점의 핵심 기능 반영 커밋은 `023f937b333518e1c7f5ebc8c99731e3c1a88913`까지였고, 이후 문서 보정과 Docker context 보정 커밋이 추가됐다.
 - 최종 검증:
   - `python3 -m py_compile app/api/voice.py app/main.py app/services/voice_service.py app/auth.py app/services/chat_service.py app/core/memory_recall.py app/services/workspace_preloader.py app/services/agent_hooks.py app/core/prompts/system_prompt_v2.py app/routers/chat.py` 통과.
   - `python3 -m pytest tests/unit/test_voice_service.py tests/unit/test_tenant_rbac_policy.py -q` 결과 19 passed, 1 warning.
