@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-06-18 14:56 KST - Deleted SaaS user default tenant hygiene backfill
+- 배경: 자비스화 P0 후속으로 기존 전체 사용자 기준 `default_tenant_id` 누락 7건을 닫으라는 CEO 지시가 있었다.
+- 실측:
+  - 적용 전 운영 DB `saas_users` 44명 중 `default_tenant_id IS NULL` 7건, 활성 사용자 누락 0건, 삭제 사용자 누락 7건이었다.
+  - 7건은 모두 `status='deleted'`, `deleted_at IS NOT NULL` 사용자였고 customer tenant 또는 customer membership이 없었다.
+- 조치:
+  - `migrations/112_deleted_saas_user_default_tenant_backfill.sql`: 삭제 사용자 전용 archived customer tombstone tenant를 만들고, removed membership을 붙인 뒤 `saas_users.default_tenant_id`를 채우는 멱등 마이그레이션을 추가했다.
+  - 운영 DB에 마이그레이션을 적용했다. 1차 적용에서 사용자 7건이 업데이트됐고, 멱등 조건 보정 후 재적용으로 removed membership 7건이 보강됐다.
+  - `tests/unit/test_saas_multitenant_migration.py`: migration 112가 삭제 사용자만 대상으로 archived/removed tombstone을 사용하는지 회귀 테스트를 추가했다.
+- 검증:
+  - `pytest -q tests/unit/test_saas_multitenant_migration.py tests/unit/test_admin_users_audit.py` 결과 9 passed.
+  - 운영 DB 실측: `saas_users` 44명 중 `default_tenant_id IS NULL` 0건, 활성 사용자 누락 0건, 삭제 사용자 누락 0건.
+  - 운영 DB 실측: migration 112 tombstone tenants 7건 모두 `status='archived'` 및 `deleted_at IS NOT NULL`.
+  - 운영 DB 실측: tombstone memberships 7건 모두 `status='removed'` 및 `deleted_at IS NOT NULL`, active tombstone membership 0건.
+  - `curl http://127.0.0.1:8100/health`는 `status=ok`, `graph_ready=true`.
+- 남은 제한:
+  - 기존 미커밋 `.active_container`, `.active_port`, `app/static/gallery/manifest.json`는 이번 조치와 무관해 보존한다.
+
 ## 2026-06-18 14:49 KST - Pipeline Runner read-only completion schema fix
 - 배경: CEO가 러너 복구 작업을 이어서 진행하라고 지시했다. AADS read-only smoke `runner-f68f7af9`는 `pwd/date` 출력까지 성공했지만 DB에는 `cancelled/no_changes`로 남았고, `runner-ec03a99d`도 완료 시각이 비어 있었다.
 - 원인:

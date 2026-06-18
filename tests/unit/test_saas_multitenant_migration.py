@@ -70,3 +70,16 @@ def test_saas_user_status_active_consistency_migration():
     assert "COALESCE(status, 'active') = 'suspended'" in sql
     assert "is_active = FALSE" in sql
     assert "deleted_at = COALESCE(deleted_at, now())" in sql
+
+
+def test_deleted_saas_user_default_tenant_backfill_uses_archived_tombstones():
+    sql = Path("migrations/112_deleted_saas_user_default_tenant_backfill.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "u.default_tenant_id IS NULL" in sql
+    assert "u.deleted_at IS NOT NULL" in sql
+    assert "'deleted-user-' || substr(md5" in sql
+    assert "'archived'" in sql
+    assert "'removed'" in sql
+    assert "UPDATE saas_users" in sql
