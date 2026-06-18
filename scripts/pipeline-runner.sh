@@ -428,7 +428,7 @@ promote_next_queued() {
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아닌 queued 작업은 스킵
     local next_job
     next_job=$(db_exec "SELECT job_id FROM pipeline_jobs
-                        WHERE project='${project}' AND status='queued' AND phase='queued'
+                        WHERE project='${project}' AND status='queued' AND phase IN ('queued','coding')
                           AND (depends_on IS NULL OR EXISTS (
                                SELECT 1 FROM pipeline_jobs dep
                                WHERE dep.job_id = pipeline_jobs.depends_on AND dep.status = 'done'))
@@ -449,7 +449,7 @@ cleanup_blocked_dependencies() {
                                 FROM pipeline_jobs dep
                                 WHERE p.depends_on = dep.job_id
                                   AND p.status='queued'
-                                  AND p.phase='queued'
+                                  AND p.phase IN ('queued','coding')
                                   AND dep.status IN ('error','rejected','rejected_done','cancelled')
                                 RETURNING p.job_id;" 2>/dev/null) || true
     blocked_missing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
@@ -458,7 +458,7 @@ cleanup_blocked_dependencies() {
                                review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 DB에 없어 자동 진행 불가 — blocked_dependency로 종결',
                                updated_at=NOW()
                                WHERE p.status='queued'
-                                 AND p.phase='queued'
+                                 AND p.phase IN ('queued','coding')
                                  AND p.depends_on IS NOT NULL
                                  AND NOT EXISTS (
                                      SELECT 1 FROM pipeline_jobs dep
@@ -631,7 +631,7 @@ claim_queued_job() {
     db_exec "UPDATE pipeline_jobs SET status='claimed', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
-                WHERE p.status='queued' AND p.phase='queued' $filter
+                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter
                   AND (p.depends_on IS NULL OR EXISTS (
                        SELECT 1 FROM pipeline_jobs dep
                        WHERE dep.job_id = p.depends_on AND dep.status = 'done'))

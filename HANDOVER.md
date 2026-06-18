@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-06-18 12:38 KST - Runner queued/coding phase pickup sync after blue-green deploy
+- 배경: CEO 승인으로 `main` push와 서버68 blue-green 배포를 진행했다. 배포 후 확인에서 새 컨테이너에 `phase='coding'` 레거시 queued job 픽업 보정이 포함됐으나 git에는 아직 커밋되지 않은 상태가 확인되어, 배포된 코드와 원격 git을 동기화한다.
+- 조치:
+  - `scripts/pipeline-runner.sh`: queued 작업 claim, 다음 queued 승격, blocked dependency 정리 조건을 `phase='queued'` 단일값에서 `phase IN ('queued','coding')`로 확장했다.
+  - `scripts/pipeline-runner.sh.local`: 주 러너 스크립트와 동일하게 동기화했다.
+  - `tests/unit/test_pipeline_runner_script_guards.py`: 레거시 `coding` phase queued job을 러너가 픽업하는지 문자열 가드 테스트를 추가했다.
+- 검증:
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py -q` 결과 4 passed.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` 결과 active 슬롯이 `:8100`으로 전환되고 Health/DB/채팅/LLM 검증이 통과했다.
+  - `curl http://localhost:8100/health`는 `status=ok`, `graph_ready=true` 응답.
+  - 익명 `GET /api/v1/assistant/readiness`는 401로 차단됨.
+- 남은 제한:
+  - `.active_container`, `.active_port`는 배포 runtime 상태 파일로 변경됐다.
+  - `app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md`는 이번 러너 배포 동기화 범위 밖 미커밋 변경으로 남긴다.
+
 ## 2026-06-18 12:18 KST - Jarvis progress continuation and runner CLI guard fix
 - 배경: CEO가 AADS를 개인 인공지능 자비스처럼 만드는 작업을 이어서 빠르게 진행하라고 지시했다. 최근 R10 러너들은 root 권한에서 `--dangerously-skip-permissions`를 사용할 수 없어 error/blocked_dependency로 종료됐고, 본선 직접 검증과 보강으로 전환했다.
 - 현황:

@@ -35,3 +35,10 @@ def test_pipeline_runner_cli_invocation_avoids_known_noninteractive_failures():
     assert "if [[ \"${EUID:-$(id -u)}\" -ne 0 ]]; then" in script
     assert "claude_args+=(--dangerously-skip-permissions)" in script
     assert "claude --model \"$current_model\" --dangerously-skip-permissions" not in script
+
+
+def test_pipeline_runner_claims_legacy_coding_phase_queue_items():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "p.status='queued' AND p.phase IN ('queued','coding')" in script
+    assert "status='queued' AND phase IN ('queued','coding')" in script
