@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-06-18 12:50 KST - Pipeline Runner Claude smoke/auth/model guard
+- 배경: KIS/GO100/SF/NTV2 read-only smoke에서 `Invalid API key`, `claude-sonnet-4-6` invalid model, diff 0건으로 인한 cancelled 처리가 반복됐다.
+- 원인:
+  - 셸 러너가 Claude Code OAuth 토큰을 주입하면서 `ANTHROPIC_BASE_URL`을 제거하지 않아 LiteLLM 프록시 환경과 충돌할 수 있었다.
+  - DB/내부 모델 ID(`claude-sonnet-4-6`, `claude-haiku-*`, `claude-opus-*`)가 Claude Code CLI `--model` 인자로 그대로 전달될 수 있었다.
+  - read-only smoke는 변경사항이 없어야 정상인데, 기존 no-diff guard가 모든 0 diff 작업을 승인 대기 차단/cancelled로 처리했다.
+- 조치:
+  - `scripts/pipeline-runner.sh`와 `scripts/pipeline-runner.sh.local`에 Claude CLI 모델 별칭 정규화(`sonnet/haiku/opus`)와 `ANTHROPIC_BASE_URL` unset을 추가했다.
+  - read-only/no-modify 지시가 있고 실행 출력이 있으면 diff 0건을 `done`으로 저장하고 채팅에 결과를 남기도록 분기했다.
+  - `app/services/pipeline_runner_service.py`의 Python 오케스트레이터 경로에도 같은 CLI 모델 정규화와 read-only done 처리를 추가했다.
+  - `tests/unit/test_pipeline_runner_script_guards.py`에 OAuth env, CLI 모델 별칭, read-only no-diff 완료 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/services/pipeline_runner_service.py` 통과.
+  - `bash -n scripts/pipeline-runner.sh` 및 `bash -n scripts/pipeline-runner.sh.local` 통과.
+  - `pytest -q tests/unit/test_pipeline_runner_script_guards.py` 결과 7개 통과.
+  - `JWT_SECRET_KEY=test-secret pytest -q tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py` 결과 16개 통과.
+  - 직접 함수 검증: `claude-sonnet-4-6 -> sonnet`, `claude-haiku-4-5-20251001 -> haiku`, `claude-opus-4-8 -> opus`, read-only 지시 판정 `True`.
+- 주의:
+  - 기존 작업트리의 `.active_container`, `.active_port`, `app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md` 변경은 이번 조치와 무관해 보존하고 커밋에서 제외한다.
+  - 배포 후 실제 Pipeline Runner smoke를 재제출해 원격 서버별 실행 결과를 확인해야 한다.
+
 ## 2026-06-18 12:38 KST - Runner queued/coding phase pickup sync after blue-green deploy
 - 배경: CEO 승인으로 `main` push와 서버68 blue-green 배포를 진행했다. 배포 후 확인에서 새 컨테이너에 `phase='coding'` 레거시 queued job 픽업 보정이 포함됐으나 git에는 아직 커밋되지 않은 상태가 확인되어, 배포된 코드와 원격 git을 동기화한다.
 - 조치:

@@ -74,6 +74,33 @@ _LITELLM_FALLBACK_MODELS = {
 _CODEX_AVAILABLE_MODELS = {"default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
 
 
+def _normalize_claude_cli_model(model: str) -> str:
+    """Map internal/provider model ids to Claude Code CLI model aliases."""
+    value = (model or "").strip()
+    if not value:
+        return ""
+    if value == "sonnet" or value.startswith("claude-sonnet"):
+        return "sonnet"
+    if value == "haiku" or value.startswith("claude-haiku"):
+        return "haiku"
+    if value == "opus" or value.startswith("claude-opus"):
+        return "opus"
+    return value
+
+
+def _is_read_only_instruction(instruction: str) -> bool:
+    text = (instruction or "").lower()
+    markers = (
+        "read-only",
+        "do not modify",
+        "no file changes",
+        "파일 수정 금지",
+        "수정하지",
+        "변경하지",
+    )
+    return any(marker in text for marker in markers)
+
+
 # AADS-290: 프로젝트별 litellm_runner.py 경로 매핑
 _LITELLM_RUNNER_PATH: Dict[str, str] = {
     "AADS":  "/app/scripts/litellm_runner.py",            # 컨테이너 내부
@@ -433,6 +460,23 @@ class PipelineCJob:
 
                 # git diff 가져오기
                 self.git_diff = (await self._ssh_command("git diff HEAD"))[:_MAX_DIFF_CHARS]
+
+                if (
+                    not self.git_diff.strip()
+                    and _is_read_only_instruction(self.instruction)
+                    and self.result_output.strip()
+                ):
+                    self._log("read_only_done", "read-only 작업 완료 — 변경사항 0건이 정상 조건")
+                    self.status = "done"
+                    self.review_feedback = "PASS: read-only 작업 완료, 변경사항 없음"
+                    await self._save_to_db()
+                    await self._post_to_chat(
+                        f"✅ **[Pipeline Runner read-only 완료]** `{self.job_id}`\n"
+                        f"프로젝트: **{self.project}**\n"
+                        f"변경사항 없이 실행 결과를 저장했습니다.\n\n"
+                        f"```\n{self.result_output[-2000:]}\n```"
+                    )
+                    return
 
                 # AI 검수
                 self._log("ai_review", f"[{self.cycle}차] AI 검수 중...")
@@ -966,7 +1010,8 @@ class PipelineCJob:
                 # [Fix-D] continue_session 무관하게 항상 새 세션으로 실행
                 # '--session-id -c' 조합은 Claude CLI 오류 유발 → 플래그 제거
                 # 재지시 시 이전 컨텍스트는 instruction 텍스트에 포함됨
-                _model_flag = f" --model {self.model}" if self.model else ""
+                _cli_model = _normalize_claude_cli_model(self.model)
+                _model_flag = f" --model {shlex.quote(_cli_model)}" if _cli_model else ""
                 claude_cmd = (
                     f"claude -p --output-format text"
                     f"{_model_flag} "
@@ -1074,7 +1119,8 @@ class PipelineCJob:
 
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
         self.claude_session_id = str(uuid.uuid4())
-        _model_flag = f" --model {self.model}" if self.model else ""
+        _cli_model = _normalize_claude_cli_model(self.model)
+        _model_flag = f" --model {shlex.quote(_cli_model)}" if _cli_model else ""
         # [Fix D-2] continue_session 분기 제거 - 항상 새 세션
         claude_cmd = (
             f"claude -p --output-format text"
@@ -1300,7 +1346,7 @@ class PipelineCJob:
         self._log("model_attempt", f"DB 모델 시도: {spec}")
         family = "opus" if "opus" in spec else ("haiku" if "haiku" in spec else "sonnet")
         self.actual_model = f"claude:{family}"
-        self.model = family
+        self.model = _normalize_claude_cli_model(spec)
         return await self._run_claude_code(instruction, continue_session=False)
 
     # ─── AI 검수 ────────────────────────────────────────────────────────────

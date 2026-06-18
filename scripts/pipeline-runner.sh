@@ -222,6 +222,29 @@ normalize_runner_model() {
     esac
 }
 
+normalize_claude_cli_model() {
+    local model="${1:-}"
+    case "$model" in
+        claude-sonnet*|sonnet)
+            echo "sonnet"
+            ;;
+        claude-haiku*|haiku)
+            echo "haiku"
+            ;;
+        claude-opus*|opus)
+            echo "opus"
+            ;;
+        *)
+            echo "$model"
+            ;;
+    esac
+}
+
+is_read_only_instruction() {
+    local instruction="${1:-}"
+    printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
+}
+
 # P1: DB 연결 실패 감지 및 텔레그램 알림
 _notify_db_failure() {
     local err_msg="$1"
@@ -850,10 +873,12 @@ run_job() {
         if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
             export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
             unset ANTHROPIC_API_KEY 2>/dev/null || true
+            unset ANTHROPIC_BASE_URL 2>/dev/null || true
             log "  TOKEN_SWITCH job=$job_id → 계정2 via CLAUDE_CODE_OAUTH_TOKEN"
         else
             export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_1"
             unset ANTHROPIC_API_KEY 2>/dev/null || true
+            unset ANTHROPIC_BASE_URL 2>/dev/null || true
             [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지 via CLAUDE_CODE_OAUTH_TOKEN"
         fi
 
@@ -946,7 +971,9 @@ ${safe_instruction}"
             local claude_pid=$!
         else
             # AADS-242/AADS-Runner-Root: root/sudo 환경에서는 --dangerously-skip-permissions 자체가 CLI 보안 차단을 유발한다.
-            local claude_args=(--model "$current_model" -p --output-format text)
+            local claude_cli_model
+            claude_cli_model=$(normalize_claude_cli_model "$current_model")
+            local claude_args=(--model "$claude_cli_model" -p --output-format text)
             if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
                 claude_args+=(--dangerously-skip-permissions)
             fi
@@ -1113,6 +1140,33 @@ ${_uncommitted}"
     fi
 
     if [[ -z "${git_diff//[[:space:]]/}" ]]; then
+        if is_read_only_instruction "$instruction" && [[ -n "${output//[[:space:]]/}" ]]; then
+            log "  NO_CHANGES_READ_ONLY job=$job_id target=$target_repo — done 처리"
+            db_update "UPDATE pipeline_jobs SET status='done', phase='done',
+                       error_detail=NULL,
+                       result_output=$(sql_escape "$output"),
+                       git_diff='',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] read-only 작업 완료 — 변경사항 0건이 정상 조건',
+                       updated_at=NOW(), completed_at=NOW()
+                       WHERE job_id='${job_id}';"
+            post_to_chat "$session_id" "✅ [Pipeline Runner] read-only 작업 완료: $job_id — 변경사항 없이 실행 결과를 저장했습니다.
+
+\`\`\`
+${output:0:1500}
+\`\`\`"
+            _release_work_lock "$project" "$job_id"
+            _cleanup_artifacts "$job_id"
+            if [[ -d "$worktree_dir" ]]; then
+                cd "${main_workdir:-/tmp}"
+                git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+                log "  WORKTREE_CLEANUP: $worktree_dir"
+            fi
+            promote_next_queued "$project"
+            _current_job_id=""
+            _current_session_id=""
+            rm -f /tmp/.pipeline_current_job
+            return 0
+        fi
         log "  NO_CHANGES job=$job_id target=$target_repo — awaiting_approval 차단, cancelled 처리"
         local no_change_reason="no_changes"
         if [[ -f "$output_file" ]]; then
