@@ -277,6 +277,46 @@ def test_jarvis_external_surfaces_are_internal_or_tenant_scoped():
     assert "AND tenant_id = $2::uuid" in artifact_source
 
 
+def test_assistant_readiness_api_allows_internal_admin_and_blocks_customer(monkeypatch):
+    class _FakePcAgentManager:
+        def list_agent_statuses(self):
+            return [{"status": "online"}]
+
+    monkeypatch.setattr(assistant_router, "pc_agent_manager", _FakePcAgentManager())
+
+    app = FastAPI()
+    app.include_router(assistant_router.router, prefix="/api/v1")
+
+    async def internal_context():
+        return {
+            "user": {"is_internal_admin": True},
+            "tenant": {"kind": "internal", "slug": "internal"},
+            "membership": {"role": "owner"},
+        }
+
+    app.dependency_overrides[auth_module.get_current_tenant_context] = internal_context
+    internal_response = TestClient(app).get("/api/v1/assistant/readiness")
+
+    assert internal_response.status_code == 200
+    internal_payload = internal_response.json()
+    assert internal_payload["mode"] == "personal_assistant"
+    assert internal_payload["summary"]["ready"] >= 3
+    assert internal_payload["connectors"]["pc_agent"]["ready"] is True
+
+    async def customer_context():
+        return {
+            "user": {"is_internal_admin": False},
+            "tenant": {"kind": "customer", "slug": "customer"},
+            "membership": {"role": "owner"},
+        }
+
+    app.dependency_overrides[auth_module.get_current_tenant_context] = customer_context
+    customer_response = TestClient(app).get("/api/v1/assistant/readiness")
+
+    assert customer_response.status_code == 403
+    assert customer_response.json()["detail"] == "Personal Assistant Hub is internal-admin only"
+
+
 def test_memory_context_route_and_service_are_tenant_scoped():
     route_source = inspect.getsource(chat_router.get_memory_context)
     service_source = inspect.getsource(chat_service.get_memory_context_info)
