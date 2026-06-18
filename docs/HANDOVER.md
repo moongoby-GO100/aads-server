@@ -1,5 +1,13 @@
 # AADS HANDOVER
-최종 업데이트: 2026-06-15
+최종 업데이트: 2026-06-18
+
+## 2026-06-18
+- AADS Voice Command MVP 기획 보고를 문서화했다. 현재 본체에는 `audio` 모델 라우팅 후보만 있고 실제 STT/TTS API, 대시보드 마이크 UI, 답변 TTS 재생 UI는 미구현 상태다.
+- 신규 문서: `docs/plans/AADS-VOICE-COMMAND-MVP.md`.
+- `runner-9dae6d37` 상태를 확인했다. 결과는 `error`이며 root 환경에서 `--dangerously-skip-permissions` 사용 차단으로 Claude Code 실행이 실패했다. `git_diff`는 비어 있어 코드 산출물은 없다.
+- 권장 구현 흐름: `/api/v1/voice/transcribe`, `/api/v1/voice/speech`, `/api/v1/voice/health` 추가, 기존 JWT/tenant 인증 재사용, 음성 STT 결과는 기존 chat send 경로로 넘겨 도구 실행 정책을 유지한다.
+- 구현은 아직 수행하지 않았다. 재투입 시 특정 Claude worker model 강제보다 Runner 기본 모델 설정 사용 또는 root 권한 플래그 문제 선조치가 필요하다.
+- 검증: `date`, `git status --short`, `rg` 기반 구현 흔적 확인, `pipeline_runner_status(job_id=runner-9dae6d37, scope=all)` 확인.
 
 ## 2026-06-15
 - AADS docs/static contract closeout: 법인 설립 서류 7종, 열정국밥 중화점 법인 부동산임대차계약서, 임대인동의서, 영업양수도계약서를 `app/static/docs/contracts/`에 공개 산출물로 정리했다.
