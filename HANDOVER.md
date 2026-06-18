@@ -1,5 +1,11 @@
 # AADS HANDOVER
 
+## 2026-06-18 15:29 KST - runner-f993b6d9 git metadata failure guard
+- 배경: NTV2 `runner-f993b6d9`가 코드 수정 후 Codex worktree 안에서 `git add`를 시도했고, Git metadata lock 생성이 `index.lock: Read-only file system`으로 실패했다.
+- 원인: Pipeline Runner worker 안전 프롬프트가 빌드/배포 금지만 명시하고 `git add/commit/push` 금지는 명시하지 않아, 작업 지시서의 Commit 절을 worker가 직접 수행할 여지가 있었다.
+- 조치: `scripts/pipeline-runner.sh`, `scripts/pipeline-runner.sh.local`의 worker 필수 규칙에 `git add`, `git commit`, `git push`, `git worktree`, `git reset`, `git checkout` 금지를 추가하고, task-level Commit/Push/Build/Deploy 지시가 있어도 Runner 소유 단계로 남기도록 명시했다.
+- 확인: NTV2 복구 코드는 `6bcf8660`으로 `origin/main` 동기화 상태였고, `npm --prefix frontend run build`가 통과했으며, `newtalk-v2-frontend` 컨테이너와 local `/admin/ai-studio` 라우팅이 응답했다.
+
 ## 2026-06-18 14:56 KST - Deleted SaaS user default tenant hygiene backfill
 - 배경: 자비스화 P0 후속으로 기존 전체 사용자 기준 `default_tenant_id` 누락 7건을 닫으라는 CEO 지시가 있었다.
 - 실측:

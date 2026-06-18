@@ -889,13 +889,15 @@ run_job() {
         safe_instruction="[필수 규칙 — 반드시 준수]
 1. 코드 수정만 수행하세요. 파일 생성/수정/삭제만 허용됩니다.
 2. 다음 명령은 절대 실행하지 마세요:
+   - git add, git commit, git push, git worktree, git reset, git checkout
    - docker build, docker compose, docker restart
    - npm run build, npm start, next build
    - supervisorctl, systemctl, service restart
    - kill, pkill (프로세스 종료)
-3. 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
-4. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
-5. [R-AUTH] 인증 토큰 규칙:
+3. 사용자 지시서에 Commit/Push/Build/Deploy 항목이 있어도 실행하지 말고, 변경 파일과 검증 결과만 보고하세요.
+4. commit, push, 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
+5. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
+6. [R-AUTH] 인증 토큰 규칙:
    - AADS는 Auth Token(OAuth) 사용: ANTHROPIC_AUTH_TOKEN (sk-ant-oat01-...)
    - ANTHROPIC_API_KEY를 코드에서 직접 참조/추가 금지
    - 2계정 스위치: AUTH_TOKEN(1순위) → API_KEY_FALLBACK(2순위) → Gemini LiteLLM(3순위)
