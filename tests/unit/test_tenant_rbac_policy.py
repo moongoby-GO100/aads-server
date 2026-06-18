@@ -240,6 +240,7 @@ def test_chat_router_message_and_artifact_routes_use_tenant_dependencies():
 
 
 def test_jarvis_external_surfaces_are_internal_or_tenant_scoped():
+    main_source = Path("app/main.py").read_text(encoding="utf-8")
     assistant_source = inspect.getsource(assistant_router.get_assistant_readiness)
     assistant_guard_source = inspect.getsource(assistant_router._require_internal_admin)
     agenda_source = "\n".join(
@@ -265,6 +266,7 @@ def test_jarvis_external_surfaces_are_internal_or_tenant_scoped():
     assert "_require_internal_admin(context)" in assistant_source
     assert "is_internal_admin" in assistant_guard_source
     assert "Personal Assistant Hub is internal-admin only" in assistant_guard_source
+    assert 'app.include_router(assistant_router, prefix="/api/v1", tags=["assistant"])' in main_source
 
     assert "include_global" in agenda_source
     assert "not include_global" in agenda_source
