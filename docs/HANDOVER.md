@@ -1,6 +1,12 @@
 # AADS HANDOVER
 최종 업데이트: 2026-06-18
 
+## 신규 러너 시작점
+- 1차: `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md`
+- 2차: `docs/knowledge/CTO-SYSTEM-MAP.md`
+- 3차: 루트 `HANDOVER.md`
+- 작업 전에는 인덱스의 금지사항과 읽기 순서를 먼저 확인한다.
+
 ## 2026-06-18
 - AADS Voice Command MVP 기획 보고를 문서화했다. 현재 본체에는 `audio` 모델 라우팅 후보만 있고 실제 STT/TTS API, 대시보드 마이크 UI, 답변 TTS 재생 UI는 미구현 상태다.
 - 신규 문서: `docs/plans/AADS-VOICE-COMMAND-MVP.md`.

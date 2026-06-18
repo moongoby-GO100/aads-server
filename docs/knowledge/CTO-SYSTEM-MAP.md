@@ -1,6 +1,9 @@
 # CTO-SYSTEM-MAP: AADS 시스템 전체 아키텍처 지도
 _생성: 2026-03-30 | 갱신: 2026-05-03 | Phase 2 운영 — LLM DB화(AADS-188/189/190), AADS Runner 동시 실행 6건 반영_
 
+> 신규 러너/에이전트 시작점: `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md`
+> 이 문서는 전체 아키텍처 맵이고, 위 인덱스가 읽기 순서를 고정한다.
+
 ## 인프라 (서버68, Docker Compose)
 
 | 컨테이너 | 이미지 | 포트 | 역할 |
@@ -181,6 +184,7 @@ CEO Chat 구성: ChatInput.tsx, ChatSidebar.tsx, ChatArtifactPanel.tsx, Markdown
 
 ## 관련 문서
 
+- AADS-3STEP-SYSTEM-INDEX: `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md` — 신규 러너 3단계 읽기 순서
 - HANDOVER.md: `/root/aads/aads-docs/HANDOVER.md` (v14.0, 67KB) — 메인 인수인계서
 - CEO-DIRECTIVES: `/root/aads/aads-docs/CEO-DIRECTIVES.md` (35KB) — CEO 규칙 전체
 - AADS-KNOWLEDGE: `docs/knowledge/AADS-KNOWLEDGE.md` — 파이프라인/교차검증/함정

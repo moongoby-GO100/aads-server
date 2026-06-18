@@ -17528,3 +17528,30 @@ def _default_requirement_for_unclear_re
 ## [2026-06-15 07:59:24 KST] [GO100] docs/HANDOVER.md
 - Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8002/health
 - finalize: pending
+
+## [2026-06-18 09:54:53 KST] [GO100] frontend/src/go100/api/go100Api.ts
+- Chat-Direct 수정: run_remote_command: cat >> /root/kis-autotrade-v4/frontend/src/go100/api/go100Api.ts << 'APIEOF'
+
+//
+- finalize: pending
+
+## [2026-06-18 09:56:02 KST] [GO100] frontend/src/go100/api/cardTradesApi.ts
+- Chat-Direct 수정: write: frontend/src/go100/api/cardTradesApi.ts
+- finalize: pending
+
+## [2026-06-18 09:57:07 KST] [GO100] frontend/src/go100/components/strategy-detail/TradesTab.tsx
+- Chat-Direct 수정: write: frontend/src/go100/components/strategy-detail/TradesTab.tsx
+- finalize: pending
+
+## [2026-06-18 09:58:55 KST] [GO100] frontend/src/go100/components/strategy-detail/TradesTab.tsx
+- Chat-Direct 수정: write: frontend/src/go100/components/strategy-detail/TradesTab.tsx
+- finalize: pending
+
+## [2026-06-18 10:05:32 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+path = '/root/kis-autotrade-v4/frontend/src/app/(protected)/go100/s
+- finalize: pending
+
+## [2026-06-18 10:05:33 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/page.tsx
+- Chat-Direct 수정: run_remote_command: grep -n test_portfolio_scope_mismatch backend/tests/test_go100_ai_router_regress
+- finalize: pending
