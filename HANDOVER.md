@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 2026-06-18 10:01 KST - Jarvis/P0 runner recovery and voice backend MVP wiring
+- 배경: CEO가 AADS를 개인 인공지능 비서처럼 만들기 위한 P0/P1 작업을 러너에 즉시 투입하고 완료 보고를 지시했다. 기존 runner `runner-66bc9ffc`는 `INVALID_GIT_DIFF`/강제 종료 로그로 반려했고, R6 러너 5건은 `dead_local_pid`와 `empty_task_logs`로 스톨 판정되어 종료했다.
+- 조치:
+  - `app/main.py`: 미커밋 상태로 남아 있던 `app/api/voice.py` 라우터를 `/api/v1/voice/*`에 실제 연결했다.
+  - `docs/plans/AADS-VOICE-COMMAND-MVP.md`: 음성 백엔드 MVP 상태를 "미구현"에서 "백엔드 구현/대시보드 UI 미구현"으로 정정했다.
+  - `docs/knowledge/AADS-SYSTEM-ONBOARDING-3STEP.md`: 신규 러너/에이전트가 읽을 3단계 시스템 파악 문서를 추가했다.
+  - `docs/SAAS_USER_ACCESS_AND_BRIEFING_POLICY.md`: Personal Assistant Mode 고위험 실행 승인 정책을 추가했다.
+- 검증:
+  - `python3 -m py_compile app/main.py app/api/voice.py app/services/voice_service.py` 통과.
+  - `pytest -q tests/unit/test_voice_service.py` 결과 5 passed.
+  - `git diff --check -- app/main.py app/api/voice.py app/services/voice_service.py tests/unit/test_voice_service.py docs/plans/AADS-VOICE-COMMAND-MVP.md docs/knowledge/AADS-SYSTEM-ONBOARDING-3STEP.md docs/SAAS_USER_ACCESS_AND_BRIEFING_POLICY.md HANDOVER.md` 통과.
+
 ## 2026-06-16 18:39 KST - Chat stopped bubble completion verification for b0bdd28a
 - 배경: CEO가 `https://aads.newtalk.kr/chat#b0bdd28a-589a-4440-9fcf-8ff84560544c` 세션에서 응답이 바로 끊김으로 보이는 현상에 대해 원인 파악, 개선안, 최종 완료보고 재검증을 지시했다.
 - 원인:

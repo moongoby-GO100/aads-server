@@ -43,6 +43,7 @@ from app.api.quality import router as quality_router
 from app.api.memory_monitor import router as memory_monitor_router
 from app.api.pc_agent import router as pc_agent_router
 from app.api.pc_ollama_bridge import router as pc_ollama_bridge_router
+from app.api.voice import router as voice_router
 from app.api.local_models import router as local_models_router
 from app.api.local_media_router import router as local_media_router
 from app.api.device import router as device_router
@@ -1801,6 +1802,7 @@ app.include_router(quality_router, prefix="/api/v1", tags=["quality"])
 app.include_router(memory_monitor_router, prefix="/api/v1", tags=["memory-monitor"])
 app.include_router(pc_agent_router, prefix="/api/v1", tags=["pc-agent"])
 app.include_router(pc_ollama_bridge_router)
+app.include_router(voice_router, prefix="/api/v1", tags=["voice"])
 app.include_router(local_models_router, prefix="/api/v1", tags=["local-models"])
 app.include_router(device_router, prefix="/api/v1", tags=["device"])
 app.include_router(kakao_bot_router, prefix="/api/v1", tags=["kakao-bot"])

@@ -1,6 +1,7 @@
 # AADS Voice Command MVP Plan
 
 작성 시각: 2026-06-18 09:16 KST
+갱신 시각: 2026-06-18 10:01 KST
 
 ## 결론
 
@@ -20,9 +21,9 @@ AADS에 음성으로 지시하고 음성으로 답변을 듣는 기능은 구현
 | 영역 | 현재 상태 | 근거 |
 |---|---|---|
 | `audio` 모델 라우팅 | 후보 시드 있음 | `app/api/llm_models.py`, `migrations/095_local_multimodal_model_bridge.sql` |
-| STT API | 미구현 | `/api/v1/voice/transcribe` 없음 |
-| TTS API | 미구현 | `/api/v1/voice/speech` 없음 |
-| 음성 헬스체크 | 미구현 | `/api/v1/voice/health` 없음 |
+| STT API | 백엔드 MVP 구현 | `app/api/voice.py`, `app/services/voice_service.py` |
+| TTS API | 백엔드 MVP 구현 | `app/api/voice.py`, `app/services/voice_service.py` |
+| 음성 헬스체크 | 백엔드 MVP 구현 | `/api/v1/voice/health`, provider 설정 여부 masking |
 | 대시보드 마이크 UI | 미구현 | 음성 관련 컴포넌트 파일 없음 |
 | 기존 채팅 도구 연동 | 가능 | 음성을 텍스트로 변환 후 기존 chat send 경로 사용 |
 | 구현 러너 `runner-9dae6d37` | 실패 | root 환경에서 `--dangerously-skip-permissions` 차단, diff 0건 |
@@ -155,6 +156,13 @@ MODE: code_modify
 - git diff 민감값 없음 확인
 ```
 
-## 최종 판정
+## 2026-06-18 10:01 KST 갱신 판정
 
-지금 단계에서 완료된 것은 기획/구현계획 문서화다. 실제 음성 기능은 아직 구현, 커밋, 배포, E2E 검증되지 않았다.
+백엔드 MVP는 `app/api/voice.py`, `app/services/voice_service.py`, `tests/unit/test_voice_service.py`로 구현되어 있고
+`app/main.py`에 `/api/v1/voice/*` 라우터가 연결됐다.
+
+남은 항목:
+
+- 대시보드 마이크/STT 입력 UI는 아직 미구현이다.
+- 답변별 TTS 재생 버튼은 아직 미구현이다.
+- 운영 배포와 브라우저 E2E는 별도 승인/배포 후 확인해야 한다.

@@ -35,3 +35,17 @@ CEO/admin/system users keep access to the internal tenant and AADS operating vie
 - Non-internal chat briefing does not mention AADS operating tasks, CEO decisions, or internal project status.
 - Artifact agenda tab only shows agendas tied to the current session.
 - Asking "사용법 알려줘" returns first-use guidance for the user's own workspace.
+
+## Personal Assistant Mode Action Policy
+
+Personal Assistant Mode may prepare or recommend actions, but high-risk actions must require an explicit CEO/admin approval step.
+
+High-risk actions:
+
+- deploy, restart, docker, SSH, server process control
+- git push, force operations, release promotion
+- DB schema/data destructive changes
+- external payment, credential changes, secret rotation
+- sending messages outside AADS such as Telegram alerts to third parties
+
+General customer users may request work inside their tenant workspace, but they must not trigger internal AADS operations or see internal project state by default.
