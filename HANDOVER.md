@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 2026-06-18 10:25 KST - Personal memory attribution runner fallback direct patch
+- 배경: `runner-55303f13`은 tenant/user scoping 방향은 맞았지만 `agent_hooks.py`에서 git push/deploy/docker/ssh를 승인 상태 확인 없이 무조건 deny 하여 CEO 승인 운영 흐름을 막을 수 있어 반려했다. 후속 `runner-e45ff77b`, `runner-dabe89ce`는 로그 0건 + `dead_local_pid`로 스톨되어 종료했다.
+- 조치:
+  - `app/core/memory_recall.py`, `app/services/workspace_preloader.py`, `app/services/chat_service.py`: 현재 세션의 tenant/user를 기준으로 session_notes, memory-context, session history 조회 범위를 제한했다.
+  - `app/routers/chat.py`: discussion/status/stop/directive, streaming-status, execution-events, last-response, stop/interrupt/resume, regenerate, branch, memory-context 경로에 tenant 검증을 추가했다.
+  - `app/services/agent_hooks.py`, `app/core/prompts/system_prompt_v2.py`: 고위험 작업 정책을 절대 차단과 승인 필요로 분리했다. git push/deploy/docker/ssh는 무조건 deny 하지 않고 CEO 명시 승인/승인된 파이프라인 흐름을 보존한다.
+  - `tests/unit/test_tenant_rbac_policy.py`: 메모리/세션 액션 tenant guard와 고위험 정책 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/core/memory_recall.py app/services/workspace_preloader.py app/services/chat_service.py app/routers/chat.py app/services/agent_hooks.py tests/unit/test_tenant_rbac_policy.py` 통과.
+  - `python3 -m pytest tests/unit/test_tenant_rbac_policy.py -q` 결과 14 passed, 1 warning.
+  - agent hook 직접 검증 결과 force push는 deny, 일반 `git_remote_push`와 승인 전제 deploy 명령은 allow.
+  - `git diff --check` 통과.
+
 ## 2026-06-18 10:28 KST - SaaS tenant isolation follow-up and runner triage
 - 배경: CEO가 AADS SaaS 서비스에서 일반 사용자 사용이 CEO 진행 프로젝트/세션/아젠다/아티팩트에 영향을 주지 않도록 정밀 확인 및 조치를 지시했다.
 - 조치:
@@ -14,15 +27,17 @@
   - 현재 변경은 로컬 검증 완료 상태이며 커밋/푸시/배포는 아직 수행하지 않았다.
   - 브라우저 로그인 기반 E2E는 이 시점에 실행하지 않았고, API/단위 테스트 검증으로 대체했다.
 
-## 2026-06-18 10:27 KST - Personal memory session-note tenant scoping
-- 배경: CEO가 일반 사용자의 AADS 사용이 CEO 진행 프로젝트/메모리/아젠다에 영향을 주지 않아야 한다고 지시했고, 개인 비서화 P0 검증 중 `session_notes` 기반 이전 대화 요약이 tenant/user 범위 없이 프로젝트만으로 조회될 수 있는 위험을 확인했다.
+## 2026-06-18 10:30 KST - Personal memory and chat tenant scoping
+- 배경: CEO가 일반 사용자의 AADS 사용이 CEO 진행 프로젝트/메모리/아젠다에 영향을 주지 않아야 한다고 지시했고, 개인 비서화 P0 검증 중 `session_notes` 기반 이전 대화 요약과 일부 chat 보조 경로가 tenant/user 범위 없이 조회될 수 있는 위험을 확인했다.
 - 조치:
   - `app/core/memory_recall.py`: `build_memory_context()`와 내부 `_build_session_notes()`가 `session_id`로 현재 `chat_sessions.tenant_id/user_id`를 확인한 뒤 같은 tenant/user의 `session_notes`만 주입하도록 보강했다.
   - `app/services/workspace_preloader.py`: workspace preload의 "이전 대화 요약"도 현재 세션의 tenant/user를 기준으로 같은 범위의 이전 세션만 조회하도록 보강했다.
+  - `app/routers/chat.py`, `app/services/chat_service.py`: discussion, streaming-status, execution-events, last-response, stop/interrupt/resume, regenerate, branch, memory-context 경로에 tenant/member/viewer 검증과 tenant_id 조건을 추가했다.
+  - `app/services/agent_hooks.py`, `app/core/prompts/system_prompt_v2.py`: 고위험 작업 정책을 "절대 금지"와 "승인 필요"로 분리했다. force push/파괴 SQL/루트 삭제/shutdown/시크릿 쓰기는 deny 유지, git push/deploy/docker/ssh/run_remote_command 계열은 무조건 deny하지 않고 승인 필요 로그로 남긴다.
 - 검증:
-  - `python3 -m py_compile app/core/memory_recall.py app/services/workspace_preloader.py app/api/ceo_chat.py app/services/context_builder.py` 통과.
-  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_chat_service.py -k 'tenant or memory or context'` 결과 20 passed, 45 deselected, 1 warning.
-  - `git diff --check -- app/core/memory_recall.py app/services/workspace_preloader.py` 통과.
+  - `python3 -m py_compile app/core/memory_recall.py app/services/workspace_preloader.py app/services/agent_hooks.py app/core/prompts/system_prompt_v2.py app/routers/chat.py app/services/chat_service.py` 통과.
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_chat_service.py -k 'tenant or memory or context or branch or message'` 결과 37 passed, 31 deselected, 1 warning.
+  - `git diff --check` 통과 예정.
 - 주의: 실시간 브라우저 E2E는 미실행이다. DB/코드/단위테스트 검증으로 대체했다.
 
 ## 2026-06-18 10:01 KST - Jarvis/P0 runner recovery and voice backend MVP wiring

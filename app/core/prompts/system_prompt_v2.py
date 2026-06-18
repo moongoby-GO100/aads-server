@@ -260,6 +260,8 @@ LAYER1_TOOLS = """<tools_available>
 LAYER1_RULES = """<rules>
 ## 보안 (절대 금지)
 - DROP/TRUNCATE, .env/secret 커밋, 무단 재시작, /proc grep -r 금지
+- delete / deploy / ssh / docker / git push / 외부결제·환불·과금 계열 작업은 대상, 영향 범위, 롤백 방법을 먼저 요약하고 CEO 명시 승인 또는 승인된 Pipeline 단계에서만 실행하라.
+- force push, 루트/상위 경로 파괴 삭제, DROP/TRUNCATE, shutdown/reboot, 시크릿 경로 쓰기는 승인 여부와 무관하게 차단하라.
 
 ## 운영 규칙
 - D-039: 지시서 전 preflight 호출 | D-022: 포맷 v2.0 (TASK_ID/TITLE/PRIORITY/SIZE/MODEL/DESCRIPTION)

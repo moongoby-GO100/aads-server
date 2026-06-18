@@ -52,6 +52,50 @@ _SENSITIVE_WRITE_PATHS: List[str] = [
     ".netrc",
 ]
 
+# ─── 고위험 작업 승인 정책 ───────────────────────────────────────────────────
+
+_HIGH_RISK_ACTION_APPROVAL_POLICY = {
+    "approval_required": {
+        "git_push": "git push는 CEO 명시 승인 또는 Pipeline Runner 승인 이후에만 실행",
+        "deploy": "배포/재시작/컨테이너 전환은 CEO 명시 승인 또는 승인된 배포 단계에서만 실행",
+        "ssh": "SSH 원격 실행은 대상/영향 범위가 명확한 CEO 요청이 있을 때만 실행",
+        "docker": "docker build/run/exec/restart/pull/push는 승인된 운영 작업에서만 실행",
+        "payment": "외부결제/환불/과금 작업은 별도 CEO 확인 없이는 실행 금지",
+    },
+    "always_deny": {
+        "force_push": "force push는 차단",
+        "destructive_delete": "루트/상위 경로 파괴 삭제는 차단",
+        "destructive_sql": "DROP/TRUNCATE 등 파괴 SQL은 차단",
+        "shutdown": "shutdown/reboot/halt 계열은 차단",
+        "secret_write": "시크릿 경로 쓰기는 차단",
+    },
+}
+
+_APPROVAL_REQUIRED_COMMAND_PATTERNS: List[tuple[str, tuple[str, ...]]] = [
+    ("git_push", (r"\bgit\s+push\b",)),
+    ("deploy", (r"\bdeploy\.sh\b", r"\bsystemctl\s+restart\b", r"\bsupervisorctl\s+restart\b")),
+    ("docker", (r"\bdocker\s+(?:build|run|exec|restart|start|stop|pull|push)\b", r"\bdocker\s+compose\b")),
+    ("ssh", (r"\bssh\b",)),
+    ("payment", (r"\bpayment\b", r"\b결제\b", r"\brefund\b", r"\bcharge\b", r"\bbilling\b", r"\binvoice\b")),
+]
+
+
+def _detect_approval_required_action(tool_name: str, tool_input: dict[str, Any]) -> tuple[str, str] | None:
+    command = ""
+    if isinstance(tool_input, dict):
+        command = str(tool_input.get("command", "") or tool_input.get("cmd", "") or "").strip()
+    if tool_name == "git_remote_push":
+        return "git_push", command or tool_name
+    if tool_name not in ("Bash", "run_remote_command"):
+        return None
+    if not command:
+        return None
+    for category, patterns in _APPROVAL_REQUIRED_COMMAND_PATTERNS:
+        for pattern in patterns:
+            if re.search(pattern, command, re.IGNORECASE):
+                return category, command[:160]
+    return None
+
 
 # ─── PreToolUse Hook (SDK PermissionRequest 자동 승인) ──────────────────────
 
@@ -90,6 +134,11 @@ async def pre_tool_use_hook(
                 reason = f"위험 Bash 명령 차단: {command[:120]}"
                 logger.warning(f"pre_tool_use: {reason}")
                 return {"behavior": "deny", "message": reason}
+        approval_required = _detect_approval_required_action(tool_name, tool_input if isinstance(tool_input, dict) else {})
+        if approval_required:
+            category, preview = approval_required
+            policy = _HIGH_RISK_ACTION_APPROVAL_POLICY["approval_required"].get(category, "고위험 작업은 승인 필요")
+            logger.warning(f"pre_tool_use: approval_required_but_allowed_by_context | {policy}: {preview[:120]}")
 
     # ── Write/Edit 민감 경로 차단 ───────────────────────────────────────────
     if tool_name in ("Write", "Edit"):
@@ -129,11 +178,17 @@ async def pre_tool_use_hook(
             reason = f"force push 차단: {command[:120]}"
             logger.warning(f"pre_tool_use: {reason}")
             return {"behavior": "deny", "message": reason}
+        approval_required = _detect_approval_required_action(tool_name, tool_input if isinstance(tool_input, dict) else {})
+        if approval_required:
+            category, preview = approval_required
+            policy = _HIGH_RISK_ACTION_APPROVAL_POLICY["approval_required"].get(category, "고위험 작업은 승인 필요")
+            logger.warning(f"pre_tool_use: approval_required_but_allowed_by_context | {policy}: {preview[:120]}")
         logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name} cmd={command[:80]}")
 
     # ── git_remote_push force push 차단 ──────────────────────────────────
     if tool_name == "git_remote_push":
-        logger.info(f"pre_tool_use: Yellow 도구 자동 승인 | tool={tool_name}")
+        policy = _HIGH_RISK_ACTION_APPROVAL_POLICY["approval_required"]["git_push"]
+        logger.warning(f"pre_tool_use: approval_required_but_allowed_by_context | {policy} | tool={tool_name}")
 
     # ── query_project_database SQL 검증 ──────────────────────────────────
     if tool_name == "query_project_database":

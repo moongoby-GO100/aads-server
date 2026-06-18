@@ -8,7 +8,10 @@ os.environ.setdefault("E2B_API_KEY", "unit-test-e2b-key")
 import app.auth as auth_module
 from app.auth import TenantRole, tenant_role_allows
 from app.api import auth as auth_router
+import app.core.memory_recall as memory_recall
 from app.routers import chat as chat_router
+import app.services.workspace_preloader as workspace_preloader
+from app.services import agent_hooks
 from app.services import chat_service
 
 
@@ -226,6 +229,74 @@ def test_chat_router_message_and_artifact_routes_use_tenant_dependencies():
     assert all("tenant_id=_tenant_id(context)" in source for source in message_sources)
     assert all("Depends(require_tenant_" in source for source in artifact_sources)
     assert all("tenant_id=_tenant_id(context)" in source for source in artifact_sources)
+
+
+def test_memory_context_route_and_service_are_tenant_scoped():
+    route_source = inspect.getsource(chat_router.get_memory_context)
+    service_source = inspect.getsource(chat_service.get_memory_context_info)
+    memory_source = inspect.getsource(memory_recall)
+    preload_source = inspect.getsource(workspace_preloader)
+
+    assert "Depends(require_tenant_viewer)" in route_source
+    assert "tenant_id=_tenant_id(context)" in route_source
+    assert "user_id=_user_id(context)" in route_source
+
+    assert "tenant_id" in inspect.signature(chat_service.get_memory_context_info).parameters
+    assert "s.tenant_id = $2::uuid" in service_source
+    assert "cs.tenant_id = $2::uuid" in service_source
+    assert "cs.user_id = $3::text" in service_source
+
+    assert "tenant_id: Optional[str] = None" in memory_source
+    assert "cs.tenant_id = $1::uuid" in memory_source
+    assert "cs.user_id = ${len(params)}::text" in memory_source
+
+    assert "tenant_id = str(scope_row[\"tenant_id\"]) if scope_row[\"tenant_id\"] else None" in preload_source
+    assert "cs.tenant_id = $2::uuid" in preload_source
+    assert "cs.user_id = $3::text" in preload_source
+
+
+def test_high_risk_action_policy_does_not_unconditionally_block_approved_ops():
+    source = inspect.getsource(agent_hooks)
+
+    assert "_HIGH_RISK_ACTION_APPROVAL_POLICY" in source
+    assert "_APPROVAL_REQUIRED_COMMAND_PATTERNS" in source
+    assert "_detect_approval_required_action" in source
+    assert "force push 차단" in source
+    assert "git push는 CEO 명시 승인" in source
+    assert "approval_required_but_allowed_by_context" in source
+    assert 'if tool_name == "git_remote_push":' in source
+    assert 'return {"behavior": "deny", "message": reason}' not in inspect.getsource(agent_hooks.pre_tool_use_hook).split('if tool_name == "git_remote_push":', 1)[1].split("# ── query_project_database", 1)[0]
+
+
+def test_chat_router_session_action_routes_are_tenant_guarded():
+    viewer_sources = [
+        inspect.getsource(chat_router.execution_events),
+        inspect.getsource(chat_router.get_streaming_status),
+        inspect.getsource(chat_router.get_last_response),
+        inspect.getsource(chat_router.get_multi_discussion_status),
+        inspect.getsource(chat_router.list_branches),
+    ]
+    member_sources = [
+        inspect.getsource(chat_router.start_multi_discussion),
+        inspect.getsource(chat_router.continue_multi_discussion),
+        inspect.getsource(chat_router.stop_multi_discussion),
+        inspect.getsource(chat_router.inject_discussion_directive),
+        inspect.getsource(chat_router.stop_session_streaming),
+        inspect.getsource(chat_router.interrupt_session),
+        inspect.getsource(chat_router.resume_interrupted),
+        inspect.getsource(chat_router.regenerate_message),
+        inspect.getsource(chat_router.create_branch),
+    ]
+
+    assert all("Depends(require_tenant_viewer)" in source for source in viewer_sources)
+    assert all("Depends(require_tenant_member)" in source for source in member_sources)
+    assert all("tenant_id=_tenant_id(context)" in source or "tenant_id = _tenant_id(context)" in source for source in viewer_sources)
+    assert all("tenant_id=_tenant_id(context)" in source or "tenant_id = _tenant_id(context)" in source for source in member_sources)
+    assert "svc.get_execution" in inspect.getsource(chat_router.execution_events)
+    assert "svc.get_session" in inspect.getsource(chat_router.get_last_response)
+    assert "UPDATE chat_messages SET intent = 'regenerated' WHERE id = $1 AND tenant_id = $2::uuid" in inspect.getsource(chat_router.regenerate_message)
+    assert "INSERT INTO chat_messages" in inspect.getsource(chat_router.create_branch)
+    assert "AND tenant_id = $2::uuid" in inspect.getsource(chat_router.list_branches)
 
 
 def test_tenant_isolation_migration_scopes_high_risk_tables_without_rls():
