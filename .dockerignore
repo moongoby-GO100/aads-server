@@ -13,6 +13,10 @@ backup
 browser-bridge-state
 .browser_bridge_state
 app/static/gallery
+static/media/generated
+app/static/media/generated
+static/media/uploads
+app/static/media/uploads
 *.bak
 *.bak_*
 *.tmp

@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-06-18 10:41 KST - Backend deploy context hotfix
+- 배경: Jarvis/SaaS isolation 후속 배포 중 Docker build context가 `static/media/generated`까지 포함되어 2.8GB로 커졌고, `/var/lib/docker/.../app/static/media/generated/image/...jpg: no space left on device` 오류로 backend blue-green 전환 전 실패했다.
+- 조치:
+  - `.dockerignore`: `static/media/generated`, `app/static/media/generated`, `static/media/uploads`, `app/static/media/uploads`를 제외해 생성 미디어가 API 이미지 빌드 컨텍스트에 포함되지 않도록 했다.
+- 검증:
+  - `git diff --check -- .dockerignore` 통과.
+  - 실패 당시 active API는 `aads-server:8100`으로 유지됐고 `/api/v1/health`는 200 응답했다.
+- 주의:
+  - Docker build cache 회수 가능 용량은 `11.53GB`로 확인됐다. 재배포 전 build cache 정리를 수행한다.
+
 ## 2026-06-18 10:39 KST - Jarvis/SaaS isolation final verification correction
 - 배경: CEO가 이전 완료보고의 커밋/푸시/배포/문서 상태가 ledger와 충돌한다고 지적했고, AADS 개인비서화 P0/P1 러너 투입 결과와 일반 사용자 격리 상태를 최종 재검증하라고 지시했다.
 - 정정:
