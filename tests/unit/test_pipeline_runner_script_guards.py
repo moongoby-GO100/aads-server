@@ -25,3 +25,13 @@ def test_local_pipeline_runner_template_stays_synced_with_primary_runner():
     local_template = _read_script("pipeline-runner.sh.local")
 
     assert local_template == primary
+
+
+def test_pipeline_runner_cli_invocation_avoids_known_noninteractive_failures():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "exec --sandbox workspace-write --ephemeral -C \"$workdir\"" in script
+    assert "exec --full-auto --ephemeral -C \"$workdir\"" not in script
+    assert "if [[ \"${EUID:-$(id -u)}\" -ne 0 ]]; then" in script
+    assert "claude_args+=(--dangerously-skip-permissions)" in script
+    assert "claude --model \"$current_model\" --dangerously-skip-permissions" not in script

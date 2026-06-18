@@ -886,7 +886,7 @@ ${safe_instruction}"
             esac
             effective_model="codex:${codex_model_name}"
             log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
-            local codex_args=(exec --full-auto --ephemeral -C "$workdir")
+            local codex_args=(exec --sandbox workspace-write --ephemeral -C "$workdir")
             # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
             [[ "$codex_model_name" != "default" ]] && codex_args+=(-m "$codex_model_name")
             timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
@@ -921,9 +921,12 @@ ${safe_instruction}"
             fi
             local claude_pid=$!
         else
-            # AADS-242: --dangerously-skip-permissions 추가 (비대화형 -p 모드에서 Write/Bash 권한 prompt 차단 방지)
-            # 원인: 권한 prompt 모드로 실행되면 Write/Bash가 모두 차단되어 result_output에 "권한 필요" 메시지만 남음
-            timeout "$MAX_RUNTIME" claude --model "$current_model" --dangerously-skip-permissions -p --output-format text "$safe_instruction" \
+            # AADS-242/AADS-Runner-Root: root/sudo 환경에서는 --dangerously-skip-permissions 자체가 CLI 보안 차단을 유발한다.
+            local claude_args=(--model "$current_model" -p --output-format text)
+            if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+                claude_args+=(--dangerously-skip-permissions)
+            fi
+            timeout "$MAX_RUNTIME" claude "${claude_args[@]}" "$safe_instruction" \
                 > "$output_file" 2> "$err_file" &
             local claude_pid=$!
         fi
