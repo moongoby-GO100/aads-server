@@ -1271,7 +1271,7 @@ _notify_ai() {
     local notify_http_code
     notify_http_code=$(curl -4 -s -o /dev/null -w "%{http_code}" \
          -X POST "${AADS_API_URL}/api/v1/pipeline/jobs/${job_id}/notify" \
-         -H "x-monitor-key: internal" \
+         -H "x-monitor-key: internal-pipeline-call" \
          --max-time 10 2>/dev/null) || notify_http_code="fail"
     log "  NOTIFY_AI job=$job_id http=$notify_http_code"
 }

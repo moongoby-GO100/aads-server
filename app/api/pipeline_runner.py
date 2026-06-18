@@ -447,7 +447,7 @@ async def _get_model_for_size(conn, size: str) -> str:
                 return executable[0]
     # DB 조회 실패 시 안전망
     return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
-            "M": "claude-sonnet-4-6", "L": "claude-opus-4-6",
+            "M": "claude-sonnet-4-6", "L": "claude-sonnet-4-6",
             "XL": "claude-opus-4-6"}.get(_size, "claude-sonnet-4-6")
 
 
@@ -1083,10 +1083,10 @@ async def notify_completion(job_id: str):
         terminal_row = await conn.fetchrow(
             "SELECT status FROM pipeline_jobs WHERE job_id = $1", job_id
         )
-    if not terminal_row or terminal_row["status"] in ("done", "rejected_done", "error", "cancelled"):
+    if not terminal_row:
         return {
             "status": "skipped",
-            "reason": terminal_row["status"] if terminal_row else "not_found",
+            "reason": "not_found",
         }
 
     async with pool.acquire() as conn:

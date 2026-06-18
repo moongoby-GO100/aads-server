@@ -3590,3 +3590,6 @@ from __
 
 ## [2026-06-15 08:00:43 KST] [aads-server] tests/unit/test_self_refine_loop.py
 - Chat-Direct 수정: run_remote_command: docker exec aads-server bash /app/scripts/reload-api.sh
+
+## [2026-06-18 12:26:49 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: run_remote_command: python3 -c "p='/root/aads/aads-server/scripts/pipeline-runner.sh'; s=open(p).rea

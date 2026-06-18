@@ -20,6 +20,22 @@
   - 서버 작업트리에 생성 파일 `app/static/gallery/manifest.json` 변경이 남아 있으나 이번 자비스/러너 보강 범위 밖이다.
   - git push와 배포는 CEO 명시 승인 후 진행한다.
 
+## 2026-06-18 12:29 KST - Runner guard verification and tracked secret cleanup
+- 배경: 자비스 후속 작업 재개 중 기존 Pipeline Runner push 실패 원인과 root 권한 CLI 오류 재발 가능성을 재검증했다.
+- 조치:
+  - `scripts/tg-approval-bot.service`: 추적 파일에 직접 포함돼 있던 Telegram 환경값을 제거하고 `/root/.config/aads-telegram.env` `EnvironmentFile` 참조로 전환했다.
+- 검증:
+  - `python3 -m pytest -q tests/unit/test_pipeline_runner_script_guards.py` 결과 3 passed.
+  - `python3 -m pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_voice_service.py tests/unit/test_pipeline_runner_script_guards.py` 결과 23 passed, 1 warning.
+  - `python3 -m py_compile app/api/pipeline_runner.py app/services/pipeline_runner_service.py` 통과.
+  - `curl http://localhost:8100/health`는 `status=ok`, `graph_ready=true` 응답.
+  - 익명 `GET /api/v1/assistant/readiness`는 401로 차단됨.
+  - 운영 DB 기준 `chat_sessions` 190건, `chat_messages` 43,228건, `chat_artifacts` 21,913건 모두 `tenant_id IS NULL` 0건이다.
+- 남은 제한:
+  - 기존 `saas_users` 44명 중 `default_tenant_id` 누락 7건은 운영 데이터 보정 대상이다. 로그인 시 자동 보정 로직은 있으나, DB 잔존값은 별도 보정 작업으로 닫아야 한다.
+  - `npm run lint`는 대시보드 기존 전역 lint 부채 261 errors/67 warnings로 실패했다.
+  - git push와 배포는 아직 수행하지 않았다.
+
 ## 2026-06-18 11:49 KST - Personal Assistant Hub readiness API
 - 배경: CEO가 AADS를 개인 인공지능 자비스처럼 만드는 진행상황 보고와 빠른 구현 진행을 지시했다. Pipeline Runner R9/R10 일부는 root 권한의 `--dangerously-skip-permissions` 제한으로 실패했고, `runner-781aa1ee`는 승인 후 문서 내 테스트 env 예시 오탐으로 commit_fail이 발생했다.
 - 반영:
