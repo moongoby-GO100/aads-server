@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 2026-06-18 18:45 KST - Jarvis assistant readiness route closeout
+- 배경: CEO가 AADS를 개인 인공지능 자비스처럼 만드는 작업의 다음 단계를 이어서 진행하고, 최종 완료보고에서 커밋/푸시/배포/문서 상태를 실제 ledger와 맞추라고 지시했다.
+- 조치:
+  - `app/main.py`에 `assistant_router`를 `/api/v1` prefix로 등록해 `/api/v1/assistant/readiness`가 운영 FastAPI 앱에 노출되도록 보정했다.
+  - `tests/unit/test_tenant_rbac_policy.py`에 본선 앱 라우터 등록 고정 검사를 추가해, Assistant Hub API가 파일만 존재하고 FastAPI 앱에는 빠지는 회귀를 막았다.
+- 검증:
+  - `python3 -m py_compile app/main.py app/api/assistant.py` 통과.
+  - `JWT_SECRET_KEY=test-secret-key pytest -q tests/unit/test_tenant_rbac_policy.py` 결과 18 passed, 1 warning.
+- 남은 제한:
+  - Google Calendar/Gmail/Kakao OAuth 실연동, 브라우저 마이크 권한 기반 voice E2E, 답변 TTS 자동 재생 UI는 아직 P1/P2 후속이다.
+  - 기존 미커밋 `app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md`는 이번 자비스 closeout 범위 밖이라 보존한다.
+
 ## 2026-06-18 15:29 KST - runner-f993b6d9 git metadata failure guard
 - 배경: NTV2 `runner-f993b6d9`가 코드 수정 후 Codex worktree 안에서 `git add`를 시도했고, Git metadata lock 생성이 `index.lock: Read-only file system`으로 실패했다.
 - 원인: Pipeline Runner worker 안전 프롬프트가 빌드/배포 금지만 명시하고 `git add/commit/push` 금지는 명시하지 않아, 작업 지시서의 Commit 절을 worker가 직접 수행할 여지가 있었다.
