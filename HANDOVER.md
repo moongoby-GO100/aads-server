@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-06-18 11:49 KST - Personal Assistant Hub readiness API
+- 배경: CEO가 AADS를 개인 인공지능 자비스처럼 만드는 진행상황 보고와 빠른 구현 진행을 지시했다. Pipeline Runner R9/R10 일부는 root 권한의 `--dangerously-skip-permissions` 제한으로 실패했고, `runner-781aa1ee`는 승인 후 문서 내 테스트 env 예시 오탐으로 commit_fail이 발생했다.
+- 반영:
+  - `app/api/assistant.py`를 추가해 내부 관리자 전용 `/api/v1/assistant/readiness` API를 제공한다. 응답은 PC Agent, Google Calendar, Gmail, Kakao, 파일함, 승인 정책의 준비 상태만 반환하며 시크릿은 노출하지 않는다.
+  - `app/main.py`에 assistant router를 등록했다.
+  - `tests/unit/test_tenant_rbac_policy.py`에 Personal Assistant Hub, agenda, artifact 외부 표면이 internal-admin 또는 tenant scope로 제한되는지 확인하는 회귀 테스트를 추가했다.
+  - `HANDOVER.md`의 테스트 환경변수 예시 문구를 placeholder 서술로 바꿔 커밋 시크릿 스캐너 오탐을 줄였다.
+- 검증:
+  - `python3 -m py_compile app/api/assistant.py app/main.py tests/unit/test_tenant_rbac_policy.py` 통과.
+  - 테스트용 env placeholder를 주입해 `python3 -m pytest tests/unit/test_tenant_rbac_policy.py -q` 실행 결과 15 passed, 1 warning.
+  - 운영 DB 기준 `chat_sessions`, `chat_messages`, `chat_artifacts`의 `tenant_id IS NULL`은 모두 0건이다.
+- 주의:
+  - 이번 항목의 커밋/푸시/배포는 아직 수행 전이다.
+  - 대시보드 `/assistant` 화면 반영은 `/root/aads/aads-dashboard` 저장소에서 별도 커밋/배포가 필요하다.
+
 ## 2026-06-18 10:44 KST - Jarvis completion ledger correction
 - 배경: CEO가 이전 완료보고가 실제 커밋/배포/문서 ledger와 충돌한다고 지적했고, 최종 완료보고 전에 문서 상태를 현재 main 기준으로 재정렬하라고 지시했다.
 - 정정:

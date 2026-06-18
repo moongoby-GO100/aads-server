@@ -7,6 +7,9 @@ os.environ.setdefault("E2B_API_KEY", "unit-test-e2b-key")
 
 import app.auth as auth_module
 from app.auth import TenantRole, tenant_role_allows
+from app.api import agenda as agenda_router
+from app.api import artifacts as artifacts_router
+from app.api import assistant as assistant_router
 from app.api import auth as auth_router
 import app.core.memory_recall as memory_recall
 from app.routers import chat as chat_router
@@ -229,6 +232,44 @@ def test_chat_router_message_and_artifact_routes_use_tenant_dependencies():
     assert all("tenant_id=_tenant_id(context)" in source for source in message_sources)
     assert all("Depends(require_tenant_" in source for source in artifact_sources)
     assert all("tenant_id=_tenant_id(context)" in source for source in artifact_sources)
+
+
+def test_jarvis_external_surfaces_are_internal_or_tenant_scoped():
+    assistant_source = inspect.getsource(assistant_router.get_assistant_readiness)
+    assistant_guard_source = inspect.getsource(assistant_router._require_internal_admin)
+    agenda_source = "\n".join(
+        inspect.getsource(fn)
+        for fn in [
+            agenda_router.list_agendas,
+            agenda_router.search_agendas,
+            agenda_router.get_agenda,
+            agenda_router.update_agenda,
+            agenda_router.decide_agenda,
+        ]
+    )
+    artifact_source = "\n".join(
+        inspect.getsource(fn)
+        for fn in [
+            artifacts_router.create_artifact,
+            artifacts_router.list_artifacts,
+            artifacts_router.get_artifact,
+        ]
+    )
+
+    assert "Depends(require_tenant_role(TenantRole.VIEWER))" in assistant_source
+    assert "_require_internal_admin(context)" in assistant_source
+    assert "is_internal_admin" in assistant_guard_source
+    assert "Personal Assistant Hub is internal-admin only" in assistant_guard_source
+
+    assert "include_global" in agenda_source
+    assert "not include_global" in agenda_source
+    assert "tenant_id=tenant_id" in agenda_source
+    assert "결정(decide)은 internal admin만 수행할 수 있습니다." in agenda_source
+
+    assert "Depends(require_tenant_member)" in artifact_source
+    assert "Depends(require_tenant_viewer)" in artifact_source
+    assert "tenant_id = $1::uuid" in artifact_source
+    assert "AND tenant_id = $2::uuid" in artifact_source
 
 
 def test_memory_context_route_and_service_are_tenant_scoped():

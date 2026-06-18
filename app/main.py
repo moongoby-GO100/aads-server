@@ -49,6 +49,7 @@ from app.api.local_media_router import router as local_media_router
 from app.api.device import router as device_router
 from app.api.kakao_bot import router as kakao_bot_router
 from app.api.agenda import router as agenda_router
+from app.api.assistant import router as assistant_router
 from app.api.hot_reload import router as hot_reload_router
 from app.api.credential_vault import router as credential_vault_router
 from app.api.llm_keys import router as llm_keys_router
