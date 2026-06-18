@@ -1147,7 +1147,7 @@ ${_uncommitted}"
                        result_output=$(sql_escape "$output"),
                        git_diff='',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] read-only 작업 완료 — 변경사항 0건이 정상 조건',
-                       updated_at=NOW(), completed_at=NOW()
+                       updated_at=NOW()
                        WHERE job_id='${job_id}';"
             post_to_chat "$session_id" "✅ [Pipeline Runner] read-only 작업 완료: $job_id — 변경사항 없이 실행 결과를 저장했습니다.
 

@@ -79,4 +79,5 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "is_read_only_instruction()" in script
     assert "NO_CHANGES_READ_ONLY job=$job_id" in script
     assert "status='done', phase='done'" in script
+    assert "completed_at=NOW()" not in script
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script

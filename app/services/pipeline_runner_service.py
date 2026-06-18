@@ -72,6 +72,12 @@ _LITELLM_FALLBACK_MODELS = {
 
 # Codex CLI 가용 모델 (Codex catalog, 2026-04-28)
 _CODEX_AVAILABLE_MODELS = {"default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_TERMINAL_JOB_STATUSES = {
+    "done",
+    "error",
+    "cancelled",
+    "rejected_done",
+}
 
 
 def _normalize_claude_cli_model(model: str) -> str:
@@ -1514,8 +1520,8 @@ class PipelineCJob:
                         (job_id, chat_session_id, project, instruction, claude_session_id,
                          phase, cycle, max_cycles, status, logs, result_output, git_diff,
                          review_feedback, worker_model, parallel_group, depends_on,
-                         actual_model, size, updated_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
+                         actual_model, size, updated_at, completed_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),$19)
                     ON CONFLICT (job_id) DO UPDATE SET
                         phase = EXCLUDED.phase,
                         cycle = EXCLUDED.cycle,
@@ -1526,7 +1532,12 @@ class PipelineCJob:
                         review_feedback = EXCLUDED.review_feedback,
                         actual_model = EXCLUDED.actual_model,
                         size = EXCLUDED.size,
-                        updated_at = now()
+                        updated_at = now(),
+                        completed_at = CASE
+                            WHEN EXCLUDED.completed_at IS NOT NULL THEN COALESCE(pipeline_jobs.completed_at, EXCLUDED.completed_at)
+                            WHEN EXCLUDED.status NOT IN ('done','error','cancelled','rejected_done') THEN NULL
+                            ELSE pipeline_jobs.completed_at
+                        END
                 """,
                     self.job_id, self.chat_session_id, self.project,
                     self.instruction, self.claude_session_id,
@@ -1540,6 +1551,7 @@ class PipelineCJob:
                     self.depends_on or None,
                     self.actual_model or None,
                     getattr(self, "size", "M"),
+                    datetime.now() if self.status in _TERMINAL_JOB_STATUSES else None,
                 )
             # 작업 완료/실패 이벤트
             if self.status in ("done", "error"):

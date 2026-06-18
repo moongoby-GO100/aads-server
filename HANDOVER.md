@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-06-18 14:49 KST - Pipeline Runner read-only completion schema fix
+- 배경: CEO가 러너 복구 작업을 이어서 진행하라고 지시했다. AADS read-only smoke `runner-f68f7af9`는 `pwd/date` 출력까지 성공했지만 DB에는 `cancelled/no_changes`로 남았고, `runner-ec03a99d`도 완료 시각이 비어 있었다.
+- 원인:
+  - 운영 DB의 `pipeline_jobs`에는 `completed_at` 컬럼이 없었다.
+  - 셸 러너 read-only 완료 분기가 `completed_at=NOW()`를 쓰는 버전에서는 UPDATE 실패 위험이 있었고, Python runner 저장 경로도 terminal job 완료 시각을 기록하지 않았다.
+- 조치:
+  - `migrations/111_pipeline_jobs_completed_at.sql`: `pipeline_jobs.completed_at`와 완료시각 인덱스를 추가했다.
+  - 운영 DB에 `completed_at` 컬럼과 `idx_pipeline_jobs_completed_at` 인덱스를 적용했다.
+  - `app/services/pipeline_runner_service.py`: `done/error/cancelled/rejected_done` terminal 상태 저장 시 `completed_at`을 보존 기록하도록 수정했다.
+  - 운영 DB에서 성공 출력이 확인된 `runner-f68f7af9`, `runner-ec03a99d`를 `done/done` 및 `completed_at` 보유 상태로 보정했다.
+- 검증:
+  - `python3 -m py_compile app/services/pipeline_runner_service.py` 통과.
+  - `pytest -q tests/unit/test_pipeline_runner_script_guards.py` 결과 8 passed.
+  - DB 실측: `pipeline_jobs.completed_at` 컬럼 존재 확인, `runner-f68f7af9` 완료시각 `2026-06-18 14:43:58 KST`, `runner-ec03a99d` 완료시각 `2026-06-18 14:48:26 KST`.
+- 남은 제한:
+  - 기존 미커밋 `app/static/gallery/manifest.json` 변경은 이번 조치 범위 밖이라 보존한다.
+
 ## 2026-06-18 14:35 KST - Jarvis tenant isolation smoke audit continuation
 - 배경: CEO가 AADS 개인 인공지능 자비스화 작업을 이어서 빠르게 진행하라고 지시했다. `runner-781aa1ee`는 유효한 감사 보강 diff를 만들었지만 push 단계에서 중단됐고, `runner-0043093e`는 러너 종료로 닫혔다.
 - 조치:
