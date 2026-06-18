@@ -1255,8 +1255,14 @@ class DiscussionDirectiveRequest(BaseModel):
 
 
 @router.post("/chat/sessions/{session_id}/discussion/start", tags=["discussion"])
-async def start_multi_discussion(session_id: UUID, req: MultiDiscussionStartRequest):
+async def start_multi_discussion(
+    session_id: UUID,
+    req: MultiDiscussionStartRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """멀티-LLM 토론 시작 — SSE 스트리밍."""
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.services.discussion_orchestrator import orchestrator, DiscussionMode
     mode = DiscussionMode.AUTO if req.mode == "auto" else DiscussionMode.MANUAL
     gen = orchestrator.start_discussion(
@@ -1280,8 +1286,14 @@ async def start_multi_discussion(session_id: UUID, req: MultiDiscussionStartRequ
 
 
 @router.post("/chat/sessions/{session_id}/discussion/continue", tags=["discussion"])
-async def continue_multi_discussion(session_id: UUID, req: MultiDiscussionContinueRequest):
+async def continue_multi_discussion(
+    session_id: UUID,
+    req: MultiDiscussionContinueRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """CEO 개입/계속/종료 — SSE 스트리밍."""
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.services.discussion_orchestrator import orchestrator
     gen = orchestrator.continue_discussion(str(session_id), req.message)
     return StreamingResponse(
@@ -1296,8 +1308,13 @@ async def continue_multi_discussion(session_id: UUID, req: MultiDiscussionContin
 
 
 @router.get("/chat/sessions/{session_id}/discussion/status", tags=["discussion"])
-async def get_multi_discussion_status(session_id: UUID):
+async def get_multi_discussion_status(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """활성 토론 상태 조회."""
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.services.discussion_orchestrator import orchestrator
     state = orchestrator.get_active_discussion(str(session_id))
     if state is None:
@@ -1307,8 +1324,13 @@ async def get_multi_discussion_status(session_id: UUID):
 
 
 @router.post("/chat/sessions/{session_id}/discussion/stop", tags=["discussion"])
-async def stop_multi_discussion(session_id: UUID):
+async def stop_multi_discussion(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """토론 강제 취소."""
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.services.discussion_orchestrator import orchestrator
     state = orchestrator.get_active_discussion(str(session_id))
     if state is None:
@@ -1318,8 +1340,14 @@ async def stop_multi_discussion(session_id: UUID):
 
 
 @router.post("/chat/sessions/{session_id}/discussion/directive", tags=["discussion"])
-async def inject_discussion_directive(session_id: UUID, req: DiscussionDirectiveRequest):
+async def inject_discussion_directive(
+    session_id: UUID,
+    req: DiscussionDirectiveRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """자동 모드 중 CEO 지시 주입."""
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.services.discussion_orchestrator import orchestrator
     state = orchestrator.get_active_discussion(str(session_id))
     if state is None:
@@ -1336,7 +1364,10 @@ async def list_discussion_presets():
 
 
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
-async def get_streaming_status(session_id: UUID):
+async def get_streaming_status(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용).
 
     메모리에 상태가 없을 때 DB에서 streaming_placeholder 존재 여부도 확인
@@ -1345,6 +1376,9 @@ async def get_streaming_status(session_id: UUID):
     (클라이언트가 메시지를 다시 로드하도록 트리거).
     응답에는 revision 필드가 포함되며, 클라이언트는 이전 값과 같으면 /messages 재조회를 생략할 수 있다.
     """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
+
     def _looks_terminal_interrupt(content: str) -> bool:
         content = str(content or "")
         return (
@@ -1723,8 +1757,11 @@ async def execution_events(
     execution_id: UUID,
     last_event_id: Optional[str] = None,
     request: Request = None,
+    context: TenantContext = Depends(require_tenant_viewer),
 ):
     """execution 단위 SSE attach/replay."""
+    if not await svc.get_execution(str(execution_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("execution")
     _last_id = last_event_id
     if not _last_id and request:
         _last_id = request.headers.get("Last-Event-ID")
@@ -1903,11 +1940,16 @@ async def stream_resume(
 
 
 @router.get("/chat/sessions/{session_id}/last-response", tags=["chat-session"])
-async def get_last_response(session_id: UUID):
+async def get_last_response(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """SSE 끊김 시 마지막 AI 응답 복구용.
 
     클라이언트가 네트워크 끊김 후 서버에서 완성된 응답이 있는지 확인.
     """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.core.db_pool import get_pool
     _has_live_runtime = _has_live_streaming_runtime(session_id)
     pool = get_pool()
@@ -2083,12 +2125,17 @@ async def get_last_response(session_id: UUID):
 
 
 @router.post("/chat/sessions/{session_id}/stop", tags=["chat-session"])
-async def stop_session_streaming(session_id: UUID):
+async def stop_session_streaming(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """세션의 진행 중인 AI 응답 생성을 강제 중단.
 
     현재까지 생성된 내용과 도구 호출 수를 반환.
     프론트엔드 '중단' 버튼에서 호출하여 백엔드 프로세스까지 완전히 중단.
     """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     result = await svc.stop_session_streaming(str(session_id))
     return result
 
@@ -2103,7 +2150,11 @@ class InterruptRequest(BaseModel):
 
 
 @router.post("/chat/sessions/{session_id}/interrupt", tags=["chat-session"])
-async def interrupt_session(session_id: UUID, req: InterruptRequest):
+async def interrupt_session(
+    session_id: UUID,
+    req: InterruptRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """스트리밍(AI 응답 생성) 중 CEO 추가 지시를 큐에 삽입.
 
     is_streaming() 상태일 때만 interrupt_queue에 push.
@@ -2112,6 +2163,8 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
     AADS-FIX: 인터럽트 메시지를 DB에도 즉시 저장 (유실 방지)
     """
     sid = str(session_id)
+    if not await svc.get_session(sid, tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
 
     if is_streaming(sid):
         accepts_interrupt = False
@@ -2224,12 +2277,17 @@ async def interrupt_session(session_id: UUID, req: InterruptRequest):
 
 
 @router.post("/chat/sessions/{session_id}/resume", tags=["chat-session"])
-async def resume_interrupted(session_id: UUID):
+async def resume_interrupted(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """서버 재시작으로 중단된 응답을 수동으로 이어서 생성 요청.
 
     streaming_placeholder가 남아있는 세션에서만 동작.
     이미 이어서 생성 중이면 중복 실행 방지.
     """
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
     from app.services.chat_service import _resume_single_stream, get_streaming_status
     import re
 
@@ -2415,15 +2473,27 @@ async def resume_interrupted(session_id: UUID):
 
 
 @router.post("/chat/messages/{message_id}/regenerate", tags=["chat-message"])
-async def regenerate_message(message_id: UUID, request: Request, mode: str = "regenerate"):
+async def regenerate_message(
+    message_id: UUID,
+    request: Request,
+    mode: str = "regenerate",
+    context: TenantContext = Depends(require_tenant_member),
+):
     """AI 응답 재생성 또는 이어서 생성. mode=continue: 중단 지점부터 이어서 생성."""
     from app.core.db_pool import get_pool
     pool = get_pool()
+    tenant_id = _tenant_id(context)
 
     async with pool.acquire() as conn:
         ai_msg = await conn.fetchrow(
-            "SELECT id, session_id, role, created_at, content FROM chat_messages WHERE id = $1",
+            """
+            SELECT m.id, m.session_id, m.role, m.created_at, m.content
+            FROM chat_messages m
+            WHERE m.id = $1
+              AND m.tenant_id = $2::uuid
+            """,
             message_id,
+            tenant_id,
         )
         if not ai_msg:
             raise HTTPException(status_code=404, detail="message not found")
@@ -2432,22 +2502,27 @@ async def regenerate_message(message_id: UUID, request: Request, mode: str = "re
 
         user_msg = await conn.fetchrow(
             """SELECT id, content, attachments FROM chat_messages
-               WHERE session_id = $1 AND created_at < $2 AND role = 'user'
+               WHERE session_id = $1
+                 AND created_at < $2
+                 AND tenant_id = $3::uuid
+                 AND role = 'user'
                ORDER BY created_at DESC LIMIT 1""",
-            ai_msg["session_id"], ai_msg["created_at"],
+            ai_msg["session_id"], ai_msg["created_at"], tenant_id,
         )
         if not user_msg:
             raise HTTPException(status_code=404, detail="이전 사용자 메시지를 찾을 수 없습니다")
 
         if mode == "continue":
             await conn.execute(
-                "UPDATE chat_messages SET intent = 'continued' WHERE id = $1",
+                "UPDATE chat_messages SET intent = 'continued' WHERE id = $1 AND tenant_id = $2::uuid",
                 message_id,
+                tenant_id,
             )
         else:
             await conn.execute(
-                "UPDATE chat_messages SET intent = 'regenerated' WHERE id = $1",
+                "UPDATE chat_messages SET intent = 'regenerated' WHERE id = $1 AND tenant_id = $2::uuid",
                 message_id,
+                tenant_id,
             )
 
     session_id_str = str(ai_msg["session_id"])
@@ -2556,17 +2631,28 @@ async def get_message_detail(
 # ─── P2-2: 대화 분기 (Branch) API ─────────────────────────────────────────────
 
 @router.post("/chat/messages/{message_id}/branch", tags=["chat-message"])
-async def create_branch(message_id: UUID, req: BranchCreateRequest):
+async def create_branch(
+    message_id: UUID,
+    req: BranchCreateRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
     """특정 메시지 시점에서 새로운 분기 생성 — SSE 스트리밍 응답."""
     import uuid as _uuid
     from app.core.db_pool import get_pool
 
     pool = get_pool()
+    tenant_id = _tenant_id(context)
     async with pool.acquire() as conn:
         # 1) 분기 기준 메시지 조회
         origin_msg = await conn.fetchrow(
-            "SELECT id, session_id, role, created_at FROM chat_messages WHERE id = $1",
+            """
+            SELECT id, session_id, role, created_at
+            FROM chat_messages
+            WHERE id = $1
+              AND tenant_id = $2::uuid
+            """,
             message_id,
+            tenant_id,
         )
         if not origin_msg:
             raise HTTPException(status_code=404, detail="메시지를 찾을 수 없습니다")
@@ -2577,8 +2663,9 @@ async def create_branch(message_id: UUID, req: BranchCreateRequest):
         # 2) 분기점 이전 메시지(자신 포함)만으로 히스토리 구성하여 user 메시지 저장
         await conn.execute(
             """INSERT INTO chat_messages
-                (session_id, role, content, model_used, attachments, branch_id, branch_point_id)
-            VALUES ($1, 'user', $2, $3, $4::jsonb, $5, $6)""",
+                (tenant_id, session_id, role, content, model_used, attachments, branch_id, branch_point_id)
+            VALUES ($1::uuid, $2, 'user', $3, $4, $5::jsonb, $6, $7)""",
+            tenant_id,
             origin_msg["session_id"],
             req.content,
             req.model_override,
@@ -2587,8 +2674,9 @@ async def create_branch(message_id: UUID, req: BranchCreateRequest):
             message_id,
         )
         await conn.execute(
-            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2::uuid",
             origin_msg["session_id"],
+            tenant_id,
         )
 
     # 3) send_message_stream 호출 — branch_point 이전 히스토리만 사용
@@ -2613,22 +2701,31 @@ async def create_branch(message_id: UUID, req: BranchCreateRequest):
 
 
 @router.get("/chat/sessions/{session_id}/branches", tags=["chat-message"])
-async def list_branches(session_id: UUID):
+async def list_branches(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """세션 내 분기 목록 조회."""
     from app.core.db_pool import get_pool
     pool = get_pool()
+    tenant_id = _tenant_id(context)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT DISTINCT branch_id, branch_point_id,
                       MIN(created_at) AS branched_at,
                       (SELECT content FROM chat_messages m2
-                       WHERE m2.branch_id = cm.branch_id AND m2.role = 'user'
+                       WHERE m2.branch_id = cm.branch_id
+                         AND m2.role = 'user'
+                         AND m2.tenant_id = $2::uuid
                        ORDER BY m2.created_at ASC LIMIT 1) AS first_message
                FROM chat_messages cm
-               WHERE session_id = $1 AND branch_id IS NOT NULL
+               WHERE session_id = $1
+                 AND tenant_id = $2::uuid
+                 AND branch_id IS NOT NULL
                GROUP BY branch_id, branch_point_id
                ORDER BY MIN(created_at) DESC""",
             session_id,
+            tenant_id,
         )
         return [
             {
@@ -2911,9 +3008,16 @@ class ErrorReportOut(BaseModel):
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/chat/sessions/{session_id}/memory-context", tags=["chat-memory"])
-async def get_memory_context(session_id: UUID):
+async def get_memory_context(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
     """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
-    result = await svc.get_memory_context_info(str(session_id))
+    result = await svc.get_memory_context_info(
+        str(session_id),
+        tenant_id=_tenant_id(context),
+        user_id=_user_id(context),
+    )
     if not result or "error" in result:
         raise _NOT_FOUND("session or memory context")
     return result

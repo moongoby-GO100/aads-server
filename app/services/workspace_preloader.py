@@ -5,6 +5,7 @@ Layer 2.5로 주입, ~1000 tokens.
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Optional
 
 import structlog
@@ -223,16 +224,52 @@ async def _get_last_session_summary(project: str, current_session_id: Optional[s
         pool = get_pool()
 
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT summary, key_decisions, created_at
-                FROM session_notes
-                WHERE $1 = ANY(projects_discussed)
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                project.upper(),
-            )
+            scope_tenant_id = None
+            scope_user_id = None
+            current_uuid = None
+            if current_session_id:
+                try:
+                    current_uuid = uuid.UUID(str(current_session_id))
+                except (TypeError, ValueError):
+                    current_uuid = None
+                if current_uuid is not None:
+                    scope_row = await conn.fetchrow(
+                        "SELECT tenant_id, user_id FROM chat_sessions WHERE id = $1",
+                        current_uuid,
+                    )
+                    if scope_row:
+                        scope_tenant_id = str(scope_row["tenant_id"]) if scope_row["tenant_id"] else None
+                        scope_user_id = str(scope_row["user_id"]) if scope_row["user_id"] else None
+
+            if scope_tenant_id or scope_user_id or current_uuid is not None:
+                row = await conn.fetchrow(
+                    """
+                    SELECT sn.summary, sn.key_decisions, sn.created_at
+                    FROM session_notes sn
+                    JOIN chat_sessions cs ON sn.session_id = cs.id
+                    WHERE $1 = ANY(sn.projects_discussed)
+                      AND ($2::uuid IS NULL OR cs.tenant_id = $2::uuid)
+                      AND ($3::text IS NULL OR cs.user_id = $3::text)
+                      AND ($4::uuid IS NULL OR cs.id <> $4::uuid)
+                    ORDER BY sn.created_at DESC
+                    LIMIT 1
+                    """,
+                    project.upper(),
+                    scope_tenant_id,
+                    scope_user_id,
+                    current_uuid,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    SELECT summary, key_decisions, created_at
+                    FROM session_notes
+                    WHERE $1 = ANY(projects_discussed)
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    project.upper(),
+                )
             if not row:
                 return ""
 

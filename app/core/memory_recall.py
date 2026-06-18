@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import uuid
 import structlog
 from typing import Any, List, Optional
 
@@ -122,11 +123,55 @@ def _compact_inline(text: Any, limit: int) -> str:
 async def _build_session_notes(
     session_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     """섹션 1: 이전 대화 요약 (session_notes 최근 3개, 해당 프로젝트 우선)."""
     try:
         async with _get_pool().acquire() as conn:
-            if project_id:
+            scope_tenant_id = tenant_id
+            scope_user_id = user_id
+            session_uuid: Optional[uuid.UUID] = None
+            if session_id:
+                try:
+                    session_uuid = uuid.UUID(str(session_id))
+                except (TypeError, ValueError):
+                    session_uuid = None
+            if session_uuid is not None and (scope_tenant_id is None or scope_user_id is None):
+                scope_row = await conn.fetchrow(
+                    "SELECT tenant_id, user_id FROM chat_sessions WHERE id = $1",
+                    session_uuid,
+                )
+                if scope_row:
+                    if scope_tenant_id is None and scope_row["tenant_id"]:
+                        scope_tenant_id = str(scope_row["tenant_id"])
+                    if scope_user_id is None and scope_row["user_id"]:
+                        scope_user_id = str(scope_row["user_id"])
+
+            if scope_tenant_id:
+                params: list[Any] = [scope_tenant_id]
+                where_clauses = ["cs.tenant_id = $1::uuid"]
+                if scope_user_id:
+                    params.append(scope_user_id)
+                    where_clauses.append(f"cs.user_id = ${len(params)}::text")
+                if project_id:
+                    params.append(project_id)
+                    project_param = len(params)
+                    order_clause = f"ORDER BY CASE WHEN ${project_param} = ANY(sn.projects_discussed) THEN 0 ELSE 1 END, sn.created_at DESC"
+                else:
+                    order_clause = "ORDER BY sn.created_at DESC"
+                rows = await conn.fetch(
+                    f"""
+                    SELECT sn.summary, sn.key_decisions, sn.created_at, sn.projects_discussed
+                    FROM session_notes sn
+                    JOIN chat_sessions cs ON sn.session_id = cs.id
+                    WHERE {' AND '.join(where_clauses)}
+                    {order_clause}
+                    LIMIT 3
+                    """,
+                    *params,
+                )
+            elif project_id:
                 rows = await conn.fetch(
                     """
                     SELECT summary, key_decisions, created_at, projects_discussed
@@ -787,6 +832,8 @@ async def _build_knowledge_graph_context(project_id: Optional[str] = None) -> st
 async def build_memory_context(
     session_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     """
     매 턴마다 호출하여 시스템 프롬프트에 주입할 메모리 블록을 조립.
@@ -803,7 +850,7 @@ async def build_memory_context(
         disc_result, learned, corrections, exp_lessons, visual_mems, strategy,
         quality_booster, exp_memory, proc_memory, kg_context,
     ) = await asyncio.gather(
-        _build_session_notes(session_id, project_id),
+        _build_session_notes(session_id, project_id, tenant_id, user_id),
         _build_preferences(),
         _build_tool_strategy(project_id),
         _build_active_directives(project_id),

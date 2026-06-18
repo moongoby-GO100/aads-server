@@ -1,5 +1,30 @@
 # AADS HANDOVER
 
+## 2026-06-18 10:28 KST - SaaS tenant isolation follow-up and runner triage
+- 배경: CEO가 AADS SaaS 서비스에서 일반 사용자 사용이 CEO 진행 프로젝트/세션/아젠다/아티팩트에 영향을 주지 않도록 정밀 확인 및 조치를 지시했다.
+- 조치:
+  - `runner-b16cbb2e`는 audit 작업임에도 코드 수정 diff를 생성했고 로그가 `강제 종료: AI 판단에 의한 강제 종료`로 끝나 반려했다.
+  - `app/routers/chat.py`: discussion, execution events, streaming status, last response, stop, interrupt, resume 경로가 요청 tenant의 세션/실행인지 확인하도록 보강했다.
+  - `app/core/memory_recall.py`, `app/services/chat_service.py`, `app/services/workspace_preloader.py`: 메모리/세션 요약 조회가 tenant/user 범위를 우선 적용하도록 보강했다.
+- 검증:
+  - `python3 -m py_compile app/core/memory_recall.py app/routers/chat.py app/services/chat_service.py app/services/workspace_preloader.py` 통과.
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_tenant_usage_limits.py tests/unit/test_chat_service.py` 결과 70 passed, 1 warning.
+  - `git diff --check` 통과.
+- 남은 리스크:
+  - 현재 변경은 로컬 검증 완료 상태이며 커밋/푸시/배포는 아직 수행하지 않았다.
+  - 브라우저 로그인 기반 E2E는 이 시점에 실행하지 않았고, API/단위 테스트 검증으로 대체했다.
+
+## 2026-06-18 10:27 KST - Personal memory session-note tenant scoping
+- 배경: CEO가 일반 사용자의 AADS 사용이 CEO 진행 프로젝트/메모리/아젠다에 영향을 주지 않아야 한다고 지시했고, 개인 비서화 P0 검증 중 `session_notes` 기반 이전 대화 요약이 tenant/user 범위 없이 프로젝트만으로 조회될 수 있는 위험을 확인했다.
+- 조치:
+  - `app/core/memory_recall.py`: `build_memory_context()`와 내부 `_build_session_notes()`가 `session_id`로 현재 `chat_sessions.tenant_id/user_id`를 확인한 뒤 같은 tenant/user의 `session_notes`만 주입하도록 보강했다.
+  - `app/services/workspace_preloader.py`: workspace preload의 "이전 대화 요약"도 현재 세션의 tenant/user를 기준으로 같은 범위의 이전 세션만 조회하도록 보강했다.
+- 검증:
+  - `python3 -m py_compile app/core/memory_recall.py app/services/workspace_preloader.py app/api/ceo_chat.py app/services/context_builder.py` 통과.
+  - `pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_chat_service.py -k 'tenant or memory or context'` 결과 20 passed, 45 deselected, 1 warning.
+  - `git diff --check -- app/core/memory_recall.py app/services/workspace_preloader.py` 통과.
+- 주의: 실시간 브라우저 E2E는 미실행이다. DB/코드/단위테스트 검증으로 대체했다.
+
 ## 2026-06-18 10:01 KST - Jarvis/P0 runner recovery and voice backend MVP wiring
 - 배경: CEO가 AADS를 개인 인공지능 비서처럼 만들기 위한 P0/P1 작업을 러너에 즉시 투입하고 완료 보고를 지시했다. 기존 runner `runner-66bc9ffc`는 `INVALID_GIT_DIFF`/강제 종료 로그로 반려했고, R6 러너 5건은 `dead_local_pid`와 `empty_task_logs`로 스톨 판정되어 종료했다.
 - 조치:

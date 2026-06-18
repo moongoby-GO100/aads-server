@@ -10297,12 +10297,18 @@ def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
 
 # ─── 메모리 컨텍스트 뷰어 API (AADS 메모리 & 맥락 뷰어) ─────────────────────
 
-async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
+async def get_memory_context_info(
+    session_id: str,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
     pool = get_pool()
     async with pool.acquire() as conn:
       try:
         # 1) 세션 + 워크스페이스 기본 정보
+        tenant_uuid = _require_tenant_uuid(tenant_id, "get_memory_context_info") if tenant_id else None
+        session_uuid = uuid.UUID(session_id)
         session_row = await conn.fetchrow(
             """
             SELECT s.id, s.title, s.message_count, s.cost_total, s.summary,
@@ -10311,8 +10317,12 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             FROM chat_sessions s
             LEFT JOIN chat_workspaces w ON s.workspace_id = w.id
             WHERE s.id = $1
+              AND ($2::uuid IS NULL OR s.tenant_id = $2::uuid)
+              AND ($3::text IS NULL OR s.user_id = $3::text)
             """,
-            uuid.UUID(session_id),
+            session_uuid,
+            tenant_uuid,
+            user_id,
         )
         if not session_row:
             return {}
@@ -10331,8 +10341,10 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
                    COUNT(*) AS msg_count
             FROM chat_messages
             WHERE session_id = $1
+              AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
             """,
-            uuid.UUID(session_id),
+            session_uuid,
+            tenant_uuid,
         )
 
         message_count = int(token_row["msg_count"]) if token_row else 0
@@ -10415,9 +10427,13 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             FROM session_notes sn
             JOIN chat_sessions cs ON sn.session_id = cs.id
             WHERE cs.workspace_id = $1
+              AND ($2::uuid IS NULL OR cs.tenant_id = $2::uuid)
+              AND ($3::text IS NULL OR cs.user_id = $3::text)
             ORDER BY sn.created_at DESC
             """,
             workspace_id,
+            tenant_uuid,
+            user_id,
         )
         session_summaries = []
         ss_text_len = 0
@@ -10495,12 +10511,17 @@ async def get_memory_context_info(session_id: str) -> Dict[str, Any]:
             """
             SELECT s.id, s.title, s.summary, s.message_count, s.created_at
             FROM chat_sessions s
-            WHERE s.workspace_id = $1 AND s.id != $2
+            WHERE s.workspace_id = $1
+              AND s.id != $2
+              AND ($3::uuid IS NULL OR s.tenant_id = $3::uuid)
+              AND ($4::text IS NULL OR s.user_id = $4::text)
             ORDER BY s.updated_at DESC
             LIMIT 10
             """,
             workspace_id,
-            uuid.UUID(session_id),
+            session_uuid,
+            tenant_uuid,
+            user_id,
         )
         session_history = []
         for r in history_rows:
