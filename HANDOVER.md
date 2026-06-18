@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-06-18 18:58 KST - GO100 blue/green deploy verification continuation
+- 배경: CEO가 GO100 다음 단계 진행, 커밋/푸시/기록/무중단 배포까지 이어서 진행하라고 지시했다.
+- 실측:
+  - GO100 원격 git status는 clean.
+  - 백엔드 `go100` systemd는 active.
+  - legacy `go100-frontend`는 inactive지만 blue/green 전환 후 `go100-frontend-blue`, `go100-frontend-green`은 모두 active.
+  - active frontend는 blue port 3000, BUILD_ID `3vHmEncGtP-8oRUEWmc99`, 빌드 시각 `2026-06-18 18:56:46 KST`.
+- 조치:
+  - 이미 진행 중이던 두 번째 GO100 blue/green 배포를 중복 실행하지 않고 완료까지 추적했다.
+  - 배포 로그 기준 Nginx upstream이 green(3001)에서 blue(3000)로 전환됐고, `nginx -t`와 reload가 성공했다.
+  - GO100 외부 `/auth/login`은 HTTP 200, 외부 `/go100/command-center`는 HTTP 307, 내부 backend `/api/go100/data-status/summary`는 HTTP 200으로 확인했다.
+- 남은 제한:
+  - 브라우저 로그인 기반 채팅 E2E는 이번 이어받기에서 수행하지 않았다. HTTP/API 폴백 검증으로 배포 정상성을 확인했다.
+  - 서버 저장소의 기존 `app/static/gallery/manifest.json` 런타임 변경은 이번 문서 커밋 범위에서 제외한다.
+
 ## 2026-06-18 18:45 KST - Jarvis assistant readiness route closeout
 - 배경: CEO가 AADS를 개인 인공지능 자비스처럼 만드는 작업의 다음 단계를 이어서 진행하고, 최종 완료보고에서 커밋/푸시/배포/문서 상태를 실제 ledger와 맞추라고 지시했다.
 - 조치:
