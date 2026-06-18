@@ -1196,7 +1196,8 @@ class PipelineCJob:
         cmd_parts = [
             "codex",
             "exec",
-            "--full-auto",
+            "--sandbox",
+            "workspace-write",
             "--ephemeral",
             "-C",
             self.workdir,

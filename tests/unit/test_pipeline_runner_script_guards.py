@@ -37,6 +37,14 @@ def test_pipeline_runner_cli_invocation_avoids_known_noninteractive_failures():
     assert "claude --model \"$current_model\" --dangerously-skip-permissions" not in script
 
 
+def test_pipeline_runner_service_codex_invocation_avoids_deprecated_full_auto():
+    service = (ROOT / "app" / "services" / "pipeline_runner_service.py").read_text(encoding="utf-8")
+
+    assert '"--sandbox",' in service
+    assert '"workspace-write",' in service
+    assert '"--full-auto",' not in service
+
+
 def test_pipeline_runner_claims_legacy_coding_phase_queue_items():
     script = _read_script("pipeline-runner.sh")
 

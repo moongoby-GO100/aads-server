@@ -8,6 +8,8 @@
 - 작업 전에는 인덱스의 금지사항과 읽기 순서를 먼저 확인한다.
 
 ## 2026-06-18
+- Pipeline Runner CLI guard follow-up at 2026-06-18 14:35 KST: `scripts/pipeline-runner.sh` and `.local` already use Codex `exec --sandbox workspace-write --ephemeral -C "$workdir"` and omit Claude `--dangerously-skip-permissions` when running as root. The backend DB runner path in `app/services/pipeline_runner_service.py` was brought into line by replacing deprecated Codex `--full-auto` with `--sandbox workspace-write`.
+- Regression coverage: `tests/unit/test_pipeline_runner_script_guards.py` now also checks the backend service path so future direct/chat runner invocations cannot reintroduce `--full-auto`. This is intended to reduce false runner failure fallback from deprecated Codex options and root-blocked Claude flags.
 - Jarvis/voice implementation ledger correction: voice backend is no longer only a plan. Server commits `3fd1ce0`, `294f8f2`, and `023f937` wired `/api/v1/voice/*`, tenant-scoped memory/session recall, and high-risk approval policy. Dashboard commit `9fb9046` added internal-admin-only voice input and Personal Assistant empty-state prompts in chat.
 - Current verification basis: server targeted py_compile/pytest passed for voice, tenant RBAC, and memory/approval policy paths; dashboard targeted eslint passed and dashboard build passed in the prior verification. Browser microphone permission and real provider STT response remain a manual E2E follow-up.
 - Runner caveat: not all Jarvis runners succeeded. The implementation state comes from direct main-branch correction commits, while several runner jobs ended as `error`, `rejected_done`, `dedup_blocked`, or `no_changes`.
