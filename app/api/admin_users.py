@@ -132,6 +132,65 @@ async def _chat_totals(conn, days: int) -> dict[str, Any]:
     }
 
 
+async def _tenant_isolation_audit(
+    conn,
+    *,
+    user_columns: set[str],
+    tables: dict[str, bool],
+) -> dict[str, Any]:
+    deleted_expr = "deleted_at IS NOT NULL" if "deleted_at" in user_columns else "FALSE"
+    not_deleted_expr = "deleted_at IS NULL" if "deleted_at" in user_columns else "TRUE"
+    status_expr = (
+        "COALESCE(status, CASE WHEN COALESCE(is_active, TRUE) THEN 'active' ELSE 'suspended' END)"
+        if "status" in user_columns or "is_active" in user_columns
+        else "'active'"
+    )
+
+    active_missing = _int(
+        await conn.fetchval(
+            f"""
+            SELECT COUNT(*)::int
+              FROM saas_users
+             WHERE {not_deleted_expr}
+               AND {status_expr} = 'active'
+               AND default_tenant_id IS NULL
+            """
+        )
+    )
+    deleted_missing = _int(
+        await conn.fetchval(
+            f"""
+            SELECT COUNT(*)::int
+              FROM saas_users
+             WHERE {deleted_expr}
+               AND default_tenant_id IS NULL
+            """
+        )
+    )
+
+    warning_count = active_missing
+    chat_null_counts: dict[str, int] = {}
+    for table_name in ("chat_sessions", "chat_messages", "chat_artifacts"):
+        key = f"{table_name}_tenant_id_null"
+        if not tables.get(table_name):
+            chat_null_counts[key] = 0
+            continue
+        count = _int(
+            await conn.fetchval(
+                f"SELECT COUNT(*)::int FROM {table_name} WHERE tenant_id IS NULL"
+            )
+        )
+        chat_null_counts[key] = count
+        warning_count += count
+
+    return {
+        **chat_null_counts,
+        "active_users_missing_default_tenant_id": active_missing,
+        "deleted_users_missing_default_tenant_id": deleted_missing,
+        "warning_count": warning_count,
+    }
+
+
 async def _user_rows(conn, days: int, limit: int) -> list[dict[str, Any]]:
     required = (
         await _table_exists(conn, "saas_users")
@@ -260,6 +319,7 @@ async def get_admin_users_overview(
                 "tenant_invites",
                 "chat_sessions",
                 "chat_messages",
+                "chat_artifacts",
                 "oauth_usage_log",
                 "bg_llm_usage_log",
             )
@@ -269,13 +329,27 @@ async def get_admin_users_overview(
             return {
                 "generated_at": now.isoformat(),
                 "window_days": days,
-                "summary": {"total_users": 0, "active_users": 0, "new_users_7d": 0, "new_users_30d": 0},
+                "summary": {
+                    "total_users": 0,
+                    "active_users": 0,
+                    "new_users_7d": 0,
+                    "new_users_30d": 0,
+                    "tenant_isolation_warnings": 0,
+                },
                 "tables": tables,
                 "plans": [],
                 "membership_roles": [],
                 "tenants": [],
                 "users": [],
                 "daily": [],
+                "tenant_isolation": {
+                    "chat_sessions_tenant_id_null": 0,
+                    "chat_messages_tenant_id_null": 0,
+                    "chat_artifacts_tenant_id_null": 0,
+                    "active_users_missing_default_tenant_id": 0,
+                    "deleted_users_missing_default_tenant_id": 0,
+                    "warning_count": 0,
+                },
             }
 
         user_columns = await _columns(conn, "saas_users")
@@ -427,6 +501,11 @@ async def get_admin_users_overview(
         )
 
         users = await _user_rows(conn, days, limit)
+        tenant_isolation = await _tenant_isolation_audit(
+            conn,
+            user_columns=user_columns,
+            tables=tables,
+        )
 
     summary = {
         "total_users": _int(user_summary["total_users"]),
@@ -452,6 +531,7 @@ async def get_admin_users_overview(
         "chat_messages_window": chat["messages"],
         "chat_tokens_window": chat["tokens"],
         "chat_cost_window": chat["cost_usd"],
+        "tenant_isolation_warnings": _int(tenant_isolation["warning_count"]),
     }
 
     return {
@@ -464,4 +544,5 @@ async def get_admin_users_overview(
         "tenants": tenants,
         "users": users,
         "daily": [{"day": row["day"], "signups": _int(row["signups"])} for row in daily_rows],
+        "tenant_isolation": tenant_isolation,
     }

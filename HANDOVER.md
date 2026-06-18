@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-06-18 14:35 KST - Jarvis tenant isolation smoke audit continuation
+- 배경: CEO가 AADS 개인 인공지능 자비스화 작업을 이어서 빠르게 진행하라고 지시했다. `runner-781aa1ee`는 유효한 감사 보강 diff를 만들었지만 push 단계에서 중단됐고, `runner-0043093e`는 러너 종료로 닫혔다.
+- 조치:
+  - `app/api/admin_users.py`: 내부 관리자 사용자 현황 API에 tenant 격리 감사 값을 추가했다. `chat_sessions`, `chat_messages`, `chat_artifacts`의 `tenant_id` 누락과 활성 사용자 `default_tenant_id` 누락을 `tenant_isolation` 및 `summary.tenant_isolation_warnings`로 반환한다.
+  - 삭제 사용자 `default_tenant_id` 누락은 위생 지표로만 보고하고, 운영 경고 수에는 활성 사용자 누락과 채팅/아티팩트 tenant 누락만 반영한다.
+  - `tests/unit/test_admin_users_audit.py`: 감사 계산과 고객 tenant의 `/admin/users/overview` 차단 회귀 테스트를 추가했다.
+  - `tests/unit/test_tenant_rbac_policy.py`: 관리자 현황 API가 tenant 격리 감사를 계속 포함하는지 정책 테스트를 보강했다.
+- 검증:
+  - `python3 -m py_compile app/api/admin_users.py tests/unit/test_admin_users_audit.py tests/unit/test_tenant_rbac_policy.py` 통과.
+  - JWT/E2B 테스트용 환경값을 unit placeholder로 설정한 뒤 `pytest -q tests/unit/test_admin_users_audit.py tests/unit/test_tenant_rbac_policy.py` 실행 결과 19 passed, 1 warning.
+  - `git diff --check -- app/api/admin_users.py tests/unit/test_admin_users_audit.py tests/unit/test_tenant_rbac_policy.py` 통과.
+  - 운영 DB 실측: `chat_sessions`, `chat_messages`, `chat_artifacts` tenant 누락 0건, 활성 사용자 기본 tenant 누락 0건. 전체 기본 tenant 누락 7건은 삭제/비활성 계정 위생 항목으로 분리한다.
+- 남은 제한:
+  - 전체 사용자 기준 기본 tenant 누락 7건은 데이터 위생 보정 또는 로그인 자동 보정 실측으로 별도 닫아야 한다.
+  - 이번 커밋에는 기존 미커밋 `app/static/gallery/manifest.json`, `docs/CHANGELOG-go100-direct.md` 변경을 포함하지 않는다.
+
 ## 2026-06-18 12:50 KST - Pipeline Runner Claude smoke/auth/model guard
 - 배경: KIS/GO100/SF/NTV2 read-only smoke에서 `Invalid API key`, `claude-sonnet-4-6` invalid model, diff 0건으로 인한 cancelled 처리가 반복됐다.
 - 원인:

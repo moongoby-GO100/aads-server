@@ -2,10 +2,15 @@ import inspect
 import os
 from pathlib import Path
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret")
 os.environ.setdefault("E2B_API_KEY", "unit-test-e2b-key")
 
+from app.api import admin_users as admin_users_api
 import app.auth as auth_module
+from app.auth import get_current_user
 from app.auth import TenantRole, tenant_role_allows
 from app.api import agenda as agenda_router
 from app.api import artifacts as artifacts_router
@@ -348,6 +353,9 @@ def test_tenant_isolation_migration_scopes_high_risk_tables_without_rls():
         assert "ADD COLUMN IF NOT EXISTS tenant_id UUID" in sql
         assert f"idx_{table.split('_')[0]}" in sql or table in {"e2e_credentials", "directive_lifecycle"}
 
+    assert "UPDATE chat_artifacts a" in sql
+    assert "ALTER COLUMN tenant_id SET NOT NULL" in sql
+    assert "UPDATE chat_artifacts" in sql
     assert "ENABLE ROW LEVEL SECURITY" not in sql
     assert "idx_e2e_cred_tenant_service_project_label" in sql
     assert "fk_chat_artifacts_session_tenant" in sql
@@ -360,3 +368,27 @@ def test_internal_allowlist_cleanup_migration_removes_legacy_owner_access():
     assert "NOT IN ('ceo', 'admin', 'system')" in sql
     assert "default_tenant_id = NULL" in sql
     assert "status = 'removed'" in sql
+
+
+def test_admin_users_overview_audits_tenant_isolation_and_active_only_warnings():
+    source = inspect.getsource(admin_users_api.get_admin_users_overview)
+    assert "_tenant_isolation_audit" in source
+    assert "chat_artifacts" in source
+    assert "tenant_isolation_warnings" in source
+    assert "deleted_users_missing_default_tenant_id" in inspect.getsource(admin_users_api._tenant_isolation_audit)
+
+
+def test_admin_users_api_is_blocked_for_customer_tenant():
+    app = FastAPI()
+    app.include_router(admin_users_api.router, prefix="/api/v1")
+    app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "customer-1",
+        "email": "customer@example.com",
+        "tenant_id": "customer-tenant",
+        "is_internal_admin": False,
+    }
+
+    response = TestClient(app).get("/api/v1/admin/users/overview")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Internal admin access required"
