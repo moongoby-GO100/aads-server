@@ -196,7 +196,30 @@ get_db_model_cycle() {
     local result
     result=$(db_exec "SELECT m.value FROM runner_model_config c, jsonb_array_elements_text(c.models) WITH ORDINALITY m(value, ord) WHERE c.size='${size}' ORDER BY m.ord;" 2>/dev/null) || return 1
     [[ -z "$result" ]] && return 1
-    echo "$result"
+    while IFS= read -r model; do
+        normalize_runner_model "$model"
+    done <<< "$result"
+}
+
+normalize_runner_model() {
+    local model="${1:-}"
+    case "$model" in
+        claude-sonnet|claude-sonnet-4-5|claude-sonnet-4-6-*)
+            echo "claude-sonnet-4-6"
+            ;;
+        claude-haiku|claude-haiku-4-5)
+            echo "claude-haiku-4-5-20251001"
+            ;;
+        claude-opus|claude-opus-4-6|claude-opus-4-7|claude-opus-4-8)
+            echo "claude-opus-4-6"
+            ;;
+        "")
+            echo "auto"
+            ;;
+        *)
+            echo "$model"
+            ;;
+    esac
 }
 
 # P1: DB 연결 실패 감지 및 텔레그램 알림
@@ -746,6 +769,7 @@ run_job() {
     # AADS-211: DB runner_model_config 기반 모델 선택 (CEO 대시보드 연동)
     # FIX-4: 빈 모델명 가드
     [[ "$job_model" == "litellm:" || -z "$job_model" ]] && { log "  EMPTY_MODEL job=$job_id — fallback to auto"; job_model="auto"; }
+    job_model=$(normalize_runner_model "$job_model")
 
     local MODEL_CYCLE
     if [[ "$job_model" == "auto" ]]; then
@@ -821,16 +845,16 @@ run_job() {
         local cycle_num=$(( attempt / 2 + 1 ))
 
         # 계정 스위치: 토큰 교체 (R-AUTH)
-        # OAuth 토큰을 ANTHROPIC_API_KEY로 전달 → CLI가 x-api-key 헤더로 전송
-        # CLAUDE_CODE_OAUTH_TOKEN 사용 금지 → OAuth Bearer flow 트리거 → 401
+        # Claude Code CLI는 OAuth 토큰을 CLAUDE_CODE_OAUTH_TOKEN으로 받아야 한다.
+        # oat 토큰을 ANTHROPIC_API_KEY에 넣으면 x-api-key 경로로 전송되어 Invalid API key가 발생한다.
         if [[ "$token_slot" == "2" && -n "$TOKEN_2" ]]; then
-            export ANTHROPIC_API_KEY="$TOKEN_2"
-            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
-            log "  TOKEN_SWITCH job=$job_id → 계정2(Naver) via API_KEY"
+            export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_2"
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            log "  TOKEN_SWITCH job=$job_id → 계정2 via CLAUDE_CODE_OAUTH_TOKEN"
         else
-            export ANTHROPIC_API_KEY="$TOKEN_1"
-            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
-            [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지"
+            export CLAUDE_CODE_OAUTH_TOKEN="$TOKEN_1"
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            [[ "$token_slot" == "2" ]] && log "  TOKEN_SWITCH job=$job_id → 계정2 없음, 계정1 유지 via CLAUDE_CODE_OAUTH_TOKEN"
         fi
 
         # H6: instruction 크기 제한 (50KB)

@@ -210,8 +210,8 @@ normalize_runner_model() {
         claude-haiku|claude-haiku-4-5)
             echo "claude-haiku-4-5-20251001"
             ;;
-        claude-opus|claude-opus-4-6|claude-opus-4-7)
-            echo "claude-sonnet-4-6"
+        claude-opus|claude-opus-4-6|claude-opus-4-7|claude-opus-4-8)
+            echo "claude-opus-4-6"
             ;;
         "")
             echo "auto"
