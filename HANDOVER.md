@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-06-18 10:39 KST - Jarvis/SaaS isolation final verification correction
+- 배경: CEO가 이전 완료보고의 커밋/푸시/배포/문서 상태가 ledger와 충돌한다고 지적했고, AADS 개인비서화 P0/P1 러너 투입 결과와 일반 사용자 격리 상태를 최종 재검증하라고 지시했다.
+- 정정:
+  - 러너 전체가 성공한 것은 아니다. `runner-add13a05`만 done이고, voice/assistant/saas audit/memory 관련 다수 러너는 `rejected_done`, `error`, `dedup_blocked`로 종료됐다.
+  - 실제 main 반영은 직접 보정 커밋 기준이다: `3fd1ce0 feat: wire voice backend and assistant policy docs`, `294f8f2 fix: scope chat memory by tenant`, `023f937 fix(agent): separate high risk approval policy`.
+  - server `HEAD`와 `origin/main`은 `023f937b333518e1c7f5ebc8c99731e3c1a88913`으로 일치한다.
+- 최종 검증:
+  - `python3 -m py_compile app/api/voice.py app/main.py app/services/voice_service.py app/auth.py app/services/chat_service.py app/core/memory_recall.py app/services/workspace_preloader.py app/services/agent_hooks.py app/core/prompts/system_prompt_v2.py app/routers/chat.py` 통과.
+  - `python3 -m pytest tests/unit/test_voice_service.py tests/unit/test_tenant_rbac_policy.py -q` 결과 19 passed, 1 warning.
+  - 운영 DB: active tenants는 customer 35건, internal 1건이고 active 일반 사용자의 internal membership은 0건, active user의 default_tenant_id 누락은 0건, chat_workspaces/chat_sessions/chat_messages/chat_artifacts tenant_id null은 모두 0건.
+  - 블루샵 tenant `66640697-5704-412d-af81-eb46de4ec65c`는 customer tenant, active member 1명, workspace 1건, session 3건으로 확인했다.
+  - 양 API 슬롯 `aads-server`, `aads-server-green` route table에 `/api/v1/voice/health` 존재를 확인했고, 비로그인 HTTP 호출은 401로 보호된다.
+  - `/health`는 8100/8102 모두 200, 컨테이너 health는 API blue/green 및 dashboard blue/green 모두 healthy.
+- 남은 제한:
+  - 브라우저 로그인 기반 E2E와 실제 마이크 권한/STT provider 동작은 미검증이다.
+  - server 작업트리에는 배포 런타임 파일(`.active_container`, `.active_port`, nginx upstream 파일)과 기존 `docs/CHANGELOG-go100-direct.md` 미커밋 변경이 남아 있으며 이번 기능 코드와 별도다.
+
 ## 2026-06-18 10:25 KST - Personal memory attribution runner fallback direct patch
 - 배경: `runner-55303f13`은 tenant/user scoping 방향은 맞았지만 `agent_hooks.py`에서 git push/deploy/docker/ssh를 승인 상태 확인 없이 무조건 deny 하여 CEO 승인 운영 흐름을 막을 수 있어 반려했다. 후속 `runner-e45ff77b`, `runner-dabe89ce`는 로그 0건 + `dead_local_pid`로 스톨되어 종료했다.
 - 조치:
