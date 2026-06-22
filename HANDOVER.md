@@ -1,13 +1,14 @@
 # AADS HANDOVER
-## 2026-06-22 11:20 KST - 서버68→서버5 이전 완료
-- DNS: aads.newtalk.kr → 5.104.86.116 (Contabo server5) 전환 완료
-- aads1.newtalk.kr → 68.183.183.11 (DigitalOcean server68, 백업/테스트)
-- DB 동기화: chat_sessions 196, chat_messages 43726, chat_todo_items 5071 — 100% 일치
-- 컨테이너 10개 전부 healthy (대시보드 재빌드 포함)
-- API health: status=ok, graph_ready=true, version=0.2.1
-- 활성 스트리밍: 2 세션 정상 처리 중
-- 잔여: aads1.newtalk.kr 서버68 nginx vhost 미등록 (운영 무관)
-- 잔여: AADS 컨테이너→서버68 호스트 SSH 재차단 (키 영속화 필요)
+
+## 2026-06-22 11:30 KST - [P0] 서버68→서버5 DNS 전환 완료 (서버 이전)
+- 변경: CEO가 Cloudflare DNS를 변경하여 운영 도메인을 서버5(Contabo)로 전환
+  - aads.newtalk.kr → 서버5 (5.104.86.116) — 운영
+  - aads1.newtalk.kr → 서버68 (68.183.183.11) — 백업
+- 사전 작업: SSH 키 복구, DB 동기화(pg_dump/restore), 대시보드 재빌드(API URL 변경), sync 락 해제
+- 전환 후 실측 (11:30 KST): 양쪽 API healthy v0.2.1, DB gap 12건(서버68에 추가분)
+- 서버5 디스크 35%, 서버68 디스크 80%
+- SSH 주의: 서버5 컨테이너에 SSH 키 재생성 필요(aads-server-contabo5), 재빌드 시 소실됨
+- 미완료: 서버5 Git 452 uncommitted files, node_image sandbox 설정, SSH 키 영속화
 
 
 ## 2026-06-19 12:53 KST - GO100 211 physical decommission continuation
