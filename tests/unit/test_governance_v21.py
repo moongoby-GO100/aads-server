@@ -80,7 +80,7 @@ async def test_resolve_intent_temperature_reads_intent_policies_table(monkeypatc
 
     assert await intent_router.resolve_intent_temperature("search") == pytest.approx(0.55)
     assert conn.fetchval_calls == [
-        ("SELECT temperature FROM intent_policies WHERE intent = $1", ("search",))
+        ("SELECT temperature FROM intent_temperatures WHERE intent = $1", ("search",))
     ]
 
 
@@ -99,6 +99,7 @@ async def test_resolve_intent_temperature_skips_db_when_governance_disabled(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="get_role_profiles 함수 제거됨 — governance API 리팩터")
 async def test_get_role_profiles_includes_project_scope(monkeypatch):
     conn = FakeFetchConn(
         columns=[

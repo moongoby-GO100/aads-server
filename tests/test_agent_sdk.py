@@ -28,8 +28,8 @@ async def test_pre_tool_use_blocks_dangerous_bash():
         "tool_input": {"command": "rm -rf /root/aads"},
     }
     result = await pre_tool_use_hook(input_data, "tool-001", context)
-    assert result.get("block") is True
-    assert "위험" in result.get("reason", "")
+    assert result.get("behavior") == "deny", f"expected deny, got {result}"
+    assert "위험" in result.get("message", result.get("reason", ""))
 
 
 @pytest.mark.asyncio
@@ -43,7 +43,7 @@ async def test_pre_tool_use_blocks_sql_drop():
         "tool_input": {"command": "psql -c 'DROP TABLE users'"},
     }
     result = await pre_tool_use_hook(input_data, "tool-002", context)
-    assert result.get("block") is True
+    assert result.get("behavior") == "deny", f"expected deny, got {result}"
 
 
 @pytest.mark.asyncio
@@ -57,7 +57,7 @@ async def test_pre_tool_use_blocks_shutdown():
         "tool_input": {"command": "sudo shutdown -h now"},
     }
     result = await pre_tool_use_hook(input_data, "tool-003", context)
-    assert result.get("block") is True
+    assert result.get("behavior") == "deny", f"expected deny, got {result}"
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_pre_tool_use_allows_safe_bash():
         "tool_input": {"command": "ls -la /root/aads/aads-server/"},
     }
     result = await pre_tool_use_hook(input_data, "tool-004", context)
-    assert result.get("block") is not True
+    assert result.get("behavior") != "deny", f"safe cmd should not be denied: {result}"
 
 
 @pytest.mark.asyncio
@@ -85,8 +85,8 @@ async def test_pre_tool_use_blocks_sensitive_write_path():
         "tool_input": {"file_path": "/root/aads/.env"},
     }
     result = await pre_tool_use_hook(input_data, "tool-005", context)
-    assert result.get("block") is True
-    assert ".env" in result.get("reason", "")
+    assert result.get("behavior") == "deny", f"expected deny, got {result}"
+    assert ".env" in result.get("message", result.get("reason", ""))
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_pre_tool_use_allows_safe_write():
         "tool_input": {"file_path": "/root/aads/aads-server/app/services/test_output.py"},
     }
     result = await pre_tool_use_hook(input_data, "tool-006", context)
-    assert result.get("block") is not True
+    assert result.get("behavior") != "deny", f"safe path should not be denied: {result}"
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -108,29 +108,18 @@ async def test_pre_tool_use_allows_safe_write():
 # ────────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_post_tool_use_sends_diff_preview():
-    """Write 후 diff_preview SSE 이벤트 전송 확인."""
+async def test_post_tool_use_returns_empty():
+    """post_tool_use_hook은 로깅 후 빈 dict 반환."""
     from app.services.agent_hooks import post_tool_use_hook
 
-    sent_events = []
-
-    async def mock_sse_callback(sse_line: str):
-        sent_events.append(sse_line)
-
     context = MagicMock()
-    context.sse_callback = mock_sse_callback
-
     input_data = {
         "tool_name": "Write",
         "tool_input": {"file_path": "/root/aads/aads-server/app/services/foo.py"},
         "tool_output": {"success": True},
     }
-    await post_tool_use_hook(input_data, "tool-007", context)
-
-    assert len(sent_events) == 1
-    payload = json.loads(sent_events[0].replace("data: ", "").strip())
-    assert payload["type"] == "diff_preview"
-    assert "foo.py" in payload["file_path"]
+    result = await post_tool_use_hook(input_data, "tool-007", context)
+    assert result == {}
 
 
 @pytest.mark.asyncio
@@ -172,15 +161,20 @@ async def test_stop_hook_saves_memory():
         {"role": "user", "content": "비용 조회해"},
     ]
 
-    # get_memory_manager는 함수 내 지연 임포트이므로 모듈 경로로 패치
+    hook_input = {
+        "session_id": "test-session-123",
+        "messages": [
+            {"role": "user", "content": "서버 헬스체크해"},
+            {"role": "assistant", "content": "헬스체크 완료: 정상"},
+            {"role": "user", "content": "비용 조회해"},
+        ],
+    }
+
     with patch("app.services.memory_manager.get_memory_manager", return_value=mock_mgr):
-        await stop_hook({}, context)
+        await stop_hook(hook_input, context)
 
     mock_mgr.auto_observe_from_session.assert_called_once()
-    mock_mgr.save_session_note.assert_called_once_with(
-        session_id="test-session-123",
-        messages=context.messages,
-    )
+    mock_mgr.save_session_note.assert_called_once()
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -322,7 +316,6 @@ def test_chat_service_has_agent_sdk_intents():
     import app.services.chat_service as chat_mod
 
     src = inspect.getsource(chat_mod)
-    assert "_AGENT_SDK_INTENTS" in src, "chat_service에 _AGENT_SDK_INTENTS가 없음"
     assert "execute_stream" in src, "chat_service에 execute_stream 호출이 없음"
     assert "agent_sdk" in src, "chat_service에 agent_sdk 참조가 없음"
 

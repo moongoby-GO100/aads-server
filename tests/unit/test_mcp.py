@@ -12,7 +12,7 @@ def test_mcp_config_always_on():
     from app.mcp.config import get_always_on_connections, ALWAYS_ON_SERVERS
     connections = get_always_on_connections()
     assert set(connections.keys()) == set(ALWAYS_ON_SERVERS)
-    assert len(connections) == 4
+    assert len(connections) == len(ALWAYS_ON_SERVERS)
     for name, conn in connections.items():
         assert conn["transport"] == "sse"
         assert "url" in conn

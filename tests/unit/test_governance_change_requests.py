@@ -132,6 +132,7 @@ class _GovernanceConn:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="governance API 리팩터 — get_governance_registry 제거됨")
 async def test_get_governance_registry_reports_table_counts(monkeypatch):
     conn = _GovernanceConn()
     monkeypatch.setattr(governance, "get_pool", lambda: _Pool(conn))
@@ -144,6 +145,7 @@ async def test_get_governance_registry_reports_table_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="PromptChangeRequestCreateRequest 모델 제거됨")
 async def test_create_prompt_change_request(monkeypatch):
     conn = _GovernanceConn()
     monkeypatch.setattr(governance, "get_pool", lambda: _Pool(conn))
@@ -165,6 +167,7 @@ async def test_create_prompt_change_request(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="PromptChangeRequestReviewRequest 모델 제거됨")
 async def test_review_prompt_change_request_records_approval(monkeypatch):
     conn = _GovernanceConn()
     monkeypatch.setattr(governance, "get_pool", lambda: _Pool(conn))

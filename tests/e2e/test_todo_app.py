@@ -20,6 +20,10 @@ async def test_health():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.getenv("AADS_AUTH_TOKEN"),
+    reason="AADS_AUTH_TOKEN 미설정 — 인증 필요 E2E 테스트 스킵",
+)
 async def test_todo_app_flow():
     async with httpx.AsyncClient(timeout=120.0) as client:
         # 1. 프로젝트 생성

@@ -5,7 +5,7 @@ Phase 1.5: auto_approve=True (자동 승인 모드).
 """
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -38,11 +38,11 @@ class CheckpointLog:
         self.auto_approved = auto_approved
         self.feedback = feedback
         self.metadata = metadata or {}
-        self.created_at = datetime.utcnow().isoformat()
+        self.created_at = datetime.now(timezone.utc).isoformat()
         self.approved_at: Optional[str] = None
 
     def approve(self, feedback: str = ""):
-        self.approved_at = datetime.utcnow().isoformat()
+        self.approved_at = datetime.now(timezone.utc).isoformat()
         self.feedback = feedback or self.feedback
         return self
 
