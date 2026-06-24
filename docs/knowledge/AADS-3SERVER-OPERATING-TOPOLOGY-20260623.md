@@ -1,6 +1,6 @@
 # AADS 3-Server Operating Topology
 
-Last verified: 2026-06-24 09:24 KST
+Last verified: 2026-06-24 09:30 KST
 
 ## Canonical servers
 
@@ -123,3 +123,4 @@ When `server-14` runner was enabled, it immediately claimed pending GO100 job `r
   - GO100 on `server-14`: `runner-71b967fc`, `done/done`.
   - NTV2 on `server-114`: `runner-1d2c039d`, `done/done`.
 - During the AADS smoke, the runner temporarily stashed the dirty main worktree as `pipeline-runner-auto-stash-runner-5d7d1c24`; the tracked worktree changes were restored after the smoke verification.
+- Local commit `df1e823` recorded this topology and related mapping corrections. API hot-reload succeeded with 74 modules reloaded. GitHub push is blocked by the current deploy key write permission.

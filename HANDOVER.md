@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-06-24 09:30 KST - 3-server topology commit, hot-reload, and push gate
+- 배경: CEO가 이전 완료보고의 commit/push/deploy/document ledger 충돌을 지적해 최종 상태를 다시 고정했다.
+- 커밋: `df1e823 docs: finalize three-server operations topology`를 생성했다. 포함 파일은 `HANDOVER.md`, `docs/HANDOVER.md`, `docs/knowledge/AADS-3SERVER-OPERATING-TOPOLOGY-20260623.md`, `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`, `app/core/project_config.py`, `app/services/server_registry.py`, `app/services/chat_tools.py`다.
+- 검증: pre-commit Python 검수 통과, 관련 단위 테스트 56 passed, `python3 -m py_compile` 대상 파일 통과, `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` 통과, 3서버 SSH/Claude/Codex/Runner smoke 재확인 완료.
+- 운영 반영: `bash /root/aads/aads-server/scripts/reload-api.sh`로 API hot-reload 성공(`재로드=74개`). API 컨테이너 재생성이나 대시보드 재배포는 수행하지 않았다.
+- push 상태: `git push origin main`은 `Permission to moongoby-GO100/aads-server.git denied to deploy key`로 실패했다. 현재 로컬 main은 원격보다 이 커밋 1개 앞서 있으며, GitHub deploy key 쓰기 권한 보강 후 같은 커밋을 push해야 한다.
+
 ## 2026-06-24 09:21 KST - 3-server runner E2E smoke completion
 - 배경: CEO가 이전 응답의 완료보고 ledger 충돌을 지적해, 3서버 운영 문서/SSH/CLI/Runner 조치의 남은 검증을 실제 완료 상태로 재고정했다.
 - 추가 실측:

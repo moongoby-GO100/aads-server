@@ -8,6 +8,7 @@
 - 작업 전에는 인덱스의 금지사항과 읽기 순서를 먼저 확인한다.
 
 ## 2026-06-24
+- 09:30 KST 3서버 topology 최종 원장 보정: 로컬 커밋 `df1e823 docs: finalize three-server operations topology` 생성 후 API hot-reload 성공(`재로드=74개`). `git push origin main`은 `Permission to moongoby-GO100/aads-server.git denied to deploy key`로 실패해 GitHub 원격 반영은 미완료다.
 - 09:02 KST Antigravity Google OAuth relay 활성화 완료: 서버116(`5.104.86.116`)의 `antigravity-test` 컨테이너 내부 `agy` OAuth 세션에 CEO 제공 authorization code를 입력했고, `docker exec antigravity-test /root/.local/bin/agy models`가 Gemini/Claude/GPT-OSS 모델 목록을 반환했다.
 - 운영 DB `llm_models`에서 `antigravity`, `antigravity-flash`, `antigravity-pro` 3개 모델은 `is_active=true`, `is_selectable=true`, `is_executable=true`, `verification_status='verified'` 상태다. 인증 포함 모델 API와 chat-preferences에서도 선택 가능 상태를 확인했다.
 - 릴레이 검증: `http://127.0.0.1:8199/health`는 `status=ok`, `antigravity_cmd_mode=docker_exec`, `active_leases.antigravity=0`, `token_available=true`를 반환했다. `/antigravity-stream`은 `antigravity-flash` 스모크 요청에 `OK` 응답을 반환했다.
