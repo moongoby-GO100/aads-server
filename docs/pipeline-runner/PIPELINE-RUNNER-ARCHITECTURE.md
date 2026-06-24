@@ -104,8 +104,10 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 - 엔드포인트: `POST /api/v1/pipeline/jobs`, `POST /api/v1/pipeline/jobs/batch`
 - 입력 검증: 프로젝트 화이트리스트, UUID 세션 ID, size 패턴 검사
 - 중복 처리:
+  - 동일 `instruction_hash` 제출은 `pg_advisory_xact_lock`으로 직렬화
   - 동일 `instruction_hash` + 활성 상태면 기존 job 재사용
   - 동일 `instruction_hash` + 최근 2시간 내 `error`면 `queued`로 리셋 후 재시도
+  - DB partial unique index `uq_pipeline_jobs_active_instruction_hash`로 active 중복 row 생성을 최종 차단
 - 모델 결정:
   - `worker_model`이 있으면 그대로 사용
   - 없으면 `_parse_size_from_instruction()` 또는 `_estimate_size()` 후 `_get_model_for_size()` 호출
@@ -224,7 +226,7 @@ queued → claimed → running → awaiting_approval → approved → deploying 
 
 - 같은 `parallel_group`이면 동일 프로젝트 내에서도 동시 실행 허용
 - 다른 그룹 또는 그룹 없음이면 프로젝트 단위 동시 실행 제한 적용
-- 현재 프로젝트당 동시 실행 상한: `MAX_CONCURRENT_PER_PROJECT=3`
+- 현재 프로젝트당 동시 실행 상한: `MAX_CONCURRENT_PER_PROJECT=6`
 
 ### depends_on
 
@@ -405,11 +407,11 @@ RETURNING ...
 
 | 프로젝트 | 서버 | workdir |
 |----------|------|---------|
-| AADS | 68 | `/root/aads/aads-server` |
-| KIS | 211 | `/root/webapp` |
-| GO100 | 211 | `/root/kis-autotrade-v4` |
-| SF | 114 | `/data/shortflow` |
-| NTV2 | 114 | `/srv/newtalk-v2` |
+| AADS | server-116 / `5.104.86.116` | `/root/aads/aads-server` |
+| KIS | server-211 legacy / `211.188.51.113` | `/root/webapp` |
+| GO100 | server-14 / `5.104.86.14` | `/root/kis-autotrade-v4` |
+| SF | server-114 / `114.207.244.86:7916` | `/data/shortflow` |
+| NTV2 | server-114 / `114.207.244.86:7916` | `/srv/newtalk-v2` |
 
 ### LiteLLM Runner 경로
 
@@ -487,7 +489,7 @@ RETURNING ...
 | `POLL_INTERVAL` | 5초 | `pipeline-runner.sh` |
 | `MAX_RUNTIME` | 7200초 | `pipeline-runner.sh` |
 | `MAX_JOB_RUNTIME` | 3600초 | `pipeline-runner.sh` |
-| `MAX_CONCURRENT_PER_PROJECT` | 3 | `pipeline-runner.sh` |
+| `MAX_CONCURRENT_PER_PROJECT` | 6 | `pipeline-runner.sh` |
 | `APPROVAL_TIMEOUT_HOURS` | 24 | `pipeline-runner.sh` |
 | `WATCHDOG_INTERVAL` | 300초 | `pipeline-runner.sh` |
 | `_SSH_MAX_RETRIES` | 3 | `pipeline_runner_service.py` |

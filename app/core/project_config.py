@@ -16,10 +16,10 @@ from typing import Dict
 # lang: 주 프로그래밍 언어
 PROJECT_MAP: Dict[str, Dict[str, str]] = {
     "KIS":   {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
-    "GO100": {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
+    "GO100": {"server": "5.104.86.14", "workdir": "/root/kis-autotrade-v4", "lang": "python", "alias": "contabo14"},
     "SF":    {"server": "114.207.244.86", "port": "7916", "workdir": "/",                     "lang": "python"},
-    "NTV2":  {"server": "114.207.244.86", "port": "7916", "workdir": "/",              "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
-    "AADS":  {"server": "host.docker.internal", "workdir": "/root", "lang": "python"},
+    "NTV2":  {"server": "114.207.244.86", "port": "7916", "workdir": "/srv/newtalk-v2", "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
+    "AADS":  {"server": "5.104.86.116", "workdir": "/root/aads/aads-server", "lang": "python", "alias": "server-116"},
 }
 
 ALL_PROJECTS = list(PROJECT_MAP.keys())
@@ -39,10 +39,16 @@ def get_server(project: str) -> str:
 
 
 def get_server_by_number(server_num: str) -> dict:
-    """서버 번호(211, 114, 68) → {server, workdir} 매핑."""
+    """서버 번호/별칭(116, 14, 114, legacy 68/211) → {server, workdir} 매핑."""
     _SERVER_NUM_MAP = {
-        "68": {"server": "host.docker.internal", "workdir": "/root"},
+        "116": {"server": "5.104.86.116", "workdir": "/root/aads/aads-server"},
+        "server-116": {"server": "5.104.86.116", "workdir": "/root/aads/aads-server"},
+        "68": {"server": "68.183.183.11", "workdir": "/root/aads/aads-server", "status": "legacy"},
         "211": {"server": "211.188.51.113", "workdir": "/root"},
+        "14": {"server": "5.104.86.14", "workdir": "/root/kis-autotrade-v4"},
+        "server-14": {"server": "5.104.86.14", "workdir": "/root/kis-autotrade-v4"},
+        "contabo14": {"server": "5.104.86.14", "workdir": "/root/kis-autotrade-v4"},
         "114": {"server": "114.207.244.86", "port": "7916", "workdir": "/"},
+        "server-114": {"server": "114.207.244.86", "port": "7916", "workdir": "/"},
     }
     return _SERVER_NUM_MAP.get(server_num, {"server": "", "workdir": "/root"})

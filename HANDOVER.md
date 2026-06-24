@@ -1,14 +1,246 @@
 # AADS HANDOVER
 
-## 2026-06-22 11:30 KST - [P0] 서버68→서버5 DNS 전환 완료 (서버 이전)
-- 변경: CEO가 Cloudflare DNS를 변경하여 운영 도메인을 서버5(Contabo)로 전환
-  - aads.newtalk.kr → 서버5 (5.104.86.116) — 운영
-  - aads1.newtalk.kr → 서버68 (68.183.183.11) — 백업
-- 사전 작업: SSH 키 복구, DB 동기화(pg_dump/restore), 대시보드 재빌드(API URL 변경), sync 락 해제
-- 전환 후 실측 (11:30 KST): 양쪽 API healthy v0.2.1, DB gap 12건(서버68에 추가분)
-- 서버5 디스크 35%, 서버68 디스크 80%
-- SSH 주의: 서버5 컨테이너에 SSH 키 재생성 필요(aads-server-contabo5), 재빌드 시 소실됨
-- 미완료: 서버5 Git 452 uncommitted files, node_image sandbox 설정, SSH 키 영속화
+## 2026-06-24 09:21 KST - 3-server runner E2E smoke completion
+- 배경: CEO가 이전 응답의 완료보고 ledger 충돌을 지적해, 3서버 운영 문서/SSH/CLI/Runner 조치의 남은 검증을 실제 완료 상태로 재고정했다.
+- 추가 실측:
+  - KST: `2026-06-24 09:16:41 KST` 이후 재검증.
+  - 현재 AADS 호스트: `vmi3267555`, IP `5.104.86.116`.
+  - 6방향 SSH mesh 재검증 성공: `116→14`, `116→114`, `14→116`, `14→114`, `114→116`, `114→14`.
+  - Claude CLI smoke 성공: `AADS_CLAUDE_OK`, `GO100_CLAUDE_OK`, `NTV2_CLAUDE_OK`.
+  - Codex CLI smoke 성공: `AADS_CODEX_OK`, `GO100_CODEX_OK`, `NTV2_CODEX_OK`; 서버114는 bubblewrap 경고 후 bundled bubblewrap으로 성공.
+  - Claude 설정 금지항목 확인: 세 서버 모두 `~/.claude/settings.json`의 `ANTHROPIC_BASE_URL` 없음, `~/.claude/current.env`의 `export ANTHROPIC_API_KEY=` 없음, `/usr/local/bin/claude` OAuth wrapper 존재.
+  - Runner E2E smoke: AADS `runner-5d7d1c24`, GO100 `runner-71b967fc`, NTV2 `runner-1d2c039d` 모두 `done/done`, `NO_CHANGES_READ_ONLY`.
+- 조치:
+  - AADS runner smoke 중 dirty worktree 보호를 위해 생성된 `pipeline-runner-auto-stash-runner-5d7d1c24`를 확인했고, 원래 tracked 변경을 다시 적용해 작업트리 가시성을 복원했다.
+  - 기술문서 `docs/knowledge/AADS-3SERVER-OPERATING-TOPOLOGY-20260623.md`의 Last verified와 Runner smoke 결과를 09:21 KST 기준으로 갱신했다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_tools.py app/services/server_registry.py app/core/project_config.py app/api/ceo_chat_tools.py app/core/prompts/system_prompt_v2.py` 통과.
+  - `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` 통과.
+  - `curl https://aads.newtalk.kr/api/v1/health` -> HTTP 200, `status=ok`, `graph_ready=true`.
+  - Docker: `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres`, `aads-litellm`, `aads-redis` healthy.
+- 커밋/푸시/배포:
+  - 이 항목 작성 시점에는 아직 신규 commit/push를 수행하지 않았다.
+  - 운영 서버 systemd/SSH/CLI/Runner 조치는 이미 실행·검증됐고, API/대시보드 재배포는 이번 smoke 때문에 새로 수행하지 않았다.
+
+## 2026-06-24 09:14 KST - 3-server CLI/SSH/Runner final recheck and health label correction
+- 배경: 이전 완료보고가 중간 보고로 끝났다는 CEO 지적에 따라 3서버 문서/SSH/CLI/Runner 상태를 재실측하고 완료 상태를 ledger와 맞췄다.
+- 실측:
+  - KST: `2026-06-24 09:11:48 KST`.
+  - 6방향 SSH mesh 재검증 성공: `116→14`, `116→114`, `14→116`, `14→114`, `114→116`, `114→14`.
+  - Claude CLI smoke 재검증 성공: `AADS_CLAUDE_OK`, `GO100_CLAUDE_OK`, `NTV2_CLAUDE_OK`.
+  - Codex CLI smoke 재검증 성공: `AADS_CODEX_OK`, `GO100_CODEX_OK`, `NTV2_CODEX_OK`.
+  - Runner/systemd: `server-116` `aads-pipeline-runner` active/enabled, `server-14`/`server-114` `aads-db-tunnel` 및 `aads-pipeline-runner` active/enabled.
+  - 원격 DB 터널 TCP 확인: `GO100_DB_TUNNEL_OK`, `NTV2_DB_TUNNEL_OK`.
+  - AADS 공개 health: `https://aads.newtalk.kr/api/v1/health` HTTP 200, `status=ok`, `graph_ready=true`.
+- 조치:
+  - `app/services/chat_tools.py`의 `health_check` 응답 라벨을 `server_68`에서 `server_116`으로 수정하고, `server_14`/`server_114`/`server_211 legacy` 메모를 반영했다.
+  - Fresh import 검증 기준 `health_check`는 `server_116`을 반환한다. 현재 MCP 세션 도구 프로세스는 이전 코드를 캐시할 수 있어 다음 프로세스 재기동 전까지 구 라벨이 보일 수 있다.
+- 검증:
+  - `python3 -m py_compile app/services/chat_tools.py` 통과.
+  - `docker exec aads-server python -m py_compile app/services/chat_tools.py` 통과.
+  - `docker exec aads-server python -c "... health_check ..."` 결과 `server_116`, `server_14`, `server_114`, `server_211` 반환 확인.
+- 커밋/푸시/배포:
+  - 이번 재검증 및 라벨 패치는 아직 git commit/push하지 않았다.
+  - API 컨테이너 재생성/배포는 수행하지 않았다. 현재 fresh import와 파일 검증은 통과했지만, 장기 실행 MCP 도구 캐시는 재시작 전까지 이전 값을 반환할 수 있다.
+
+## 2026-06-24 09:07 KST - 3-server CLI/SSH/Runner recheck and Claude CLI-only correction
+- 배경: CEO가 운영 서버를 `server-116`(AADS), `server-14`(GO100), `server-114`(NewTalk/SF/NAS) 3대로 고정하고 각 서버 기술문서, 크로스 SSH, Claude CLI/Codex CLI, Runner 작동 조치를 이어서 진행하라고 지시했다.
+- 실측:
+  - 현재 AADS 호스트는 `5.104.86.116`, 공개 health `https://aads.newtalk.kr/api/v1/health`는 HTTP 200.
+  - `server-14`는 `5.104.86.14`, `server-114`는 `114.207.244.86:7916`으로 SSH 접속 성공.
+  - 6방향 크로스 SSH(`116→14/114`, `14→116/114`, `114→116/14`) `hostname -I` 검증 성공.
+  - Runner: `server-116` `aads-pipeline-runner` active/enabled, `server-14`/`server-114` `aads-db-tunnel` 및 `aads-pipeline-runner` active.
+- 조치:
+  - 세 서버의 `~/.claude/settings.json`에서 구 서버68 LiteLLM `ANTHROPIC_BASE_URL` 및 `apiKeyHelper` 경로를 제거했다.
+  - 세 서버의 `~/.claude/current.env`에서 `ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"` 직접 export를 제거했다.
+  - 세 서버의 `/usr/local/bin/claude`를 `CLAUDE_CODE_OAUTH_TOKEN` 주입 후 `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`을 unset하고 `/usr/bin/claude`를 실행하는 래퍼로 통일했다.
+  - 중앙 매핑/프롬프트/도구 설명을 `AADS→server-116`, `GO100→server-14`, `SF/NTV2/NAS→server-114`, `KIS/211→legacy` 기준으로 수정했다.
+  - 기술문서 `docs/knowledge/AADS-3SERVER-OPERATING-TOPOLOGY-20260623.md`를 2026-06-24 검증값으로 갱신했다.
+- 검증:
+  - Claude CLI smoke: `AADS_CLAUDE_OK`, `GO100_CLAUDE_OK`, `NTV2_CLAUDE_OK`.
+  - Codex CLI smoke: `AADS_CODEX_OK`, `GO100_CODEX_OK`, `NTV2_CODEX_OK`.
+  - 서버114 Codex는 bubblewrap prerequisite warning을 냈지만 bundled bubblewrap으로 정상 완료.
+- 커밋/푸시/배포:
+  - 이번 시점에는 시스템 설정과 코드/문서 파일을 수정했으며, 애플리케이션 재배포와 git commit/push는 아직 수행하지 않았다.
+
+## 2026-06-24 08:53 KST - Antigravity Google OAuth re-auth and model reactivation
+- 배경: CEO가 Google OAuth authorization code를 제공했고, 서버116(`5.104.86.116`)의 Antigravity CLI 월정액 릴레이 인증 완료 여부 확인과 복구를 지시했다.
+- 조치:
+  - 서버116 `antigravity-test` 컨테이너 내부 `agy` OAuth 세션에 코드를 입력했다.
+  - `docker exec antigravity-test /root/.local/bin/agy models`가 모델 목록을 반환해 인증 완료를 확인했다.
+  - 운영 DB `llm_models`에서 provider `antigravity`의 `antigravity`, `antigravity-pro`, `antigravity-flash` 3건을 `is_active=true`, `is_selectable=true`, `is_executable=true`로 재활성화했다.
+  - OAuth 입력용 `tmux` 세션은 정리했다.
+- 검증:
+  - Relay health: `http://127.0.0.1:8199/health` -> `status=ok`, `antigravity_cmd_mode=docker_exec`, `token_available=true`, `active_leases.antigravity=0`.
+  - CLI models: `Gemini 3.5 Flash`, `Gemini 3.1 Pro`, Claude/GPT-OSS 모델 목록 반환.
+  - Relay smoke: `/antigravity-stream`에서 `antigravity`, `antigravity-pro`, `antigravity-flash` 모두 `OK` 응답.
+  - API model list: 인증 토큰 기준 `/api/v1/llm-models?provider=antigravity&active_only=true` -> 3건 노출.
+  - Internal routing smoke: `model_selector.call_stream(model_override='antigravity')` -> `text=OK`, `done=True`.
+  - AADS API health: `http://127.0.0.1:8100/api/v1/health` -> `status=ok`.
+- 커밋/푸시/배포:
+  - 운영 DB 상태 변경과 OAuth 인증 조치만 수행했다.
+  - 애플리케이션 재배포, git commit/push는 수행하지 않았다.
+
+## 2026-06-23 10:29 KST - AADS SaaS user access audit, deployment, and migration closeout
+- 배경: SaaS 활성화 테스트 전 사용자 운영 접속, 팀원 관리자 권한, P0~P2 보안/운영 개선 조치의 완료 상태를 재검수했다.
+- 조치: `app/auth.py`, `app/api/auth.py`, `app/api/admin_users.py`, `app/main.py`, `migrations/113_saas_auth_security_and_admin_access.sql`, `tests/unit/test_tenant_rbac_policy.py`, `tests/unit/test_admin_users_audit.py` 기준으로 비밀번호 재설정, 이메일 검증, 서버 로그아웃 토큰 폐기, auth rate limit, tenant RBAC, 내부 팀 관리자 권한 API, admin user overview를 보강했다. 운영 대시보드 `/root/aads/aads-dashboard`에는 Admin Users 화면, 내부 접근 토글, reset token action, team/auth API helper가 반영되어 있다.
+- 추가 발견/수정: `/auth/password-reset/*`, `/auth/email/verify`, `/auth/invites/accept`가 라우터상 공개인데 글로벌 JWT 미들웨어에서 차단되는 문제를 발견해 `_AUTH_EXEMPT_PREFIXES`에 추가했다. `get_current_user()`도 `auth_revoked_tokens` 폐기 여부를 확인하도록 보강했다.
+- 검증: `docker exec aads-server python -m py_compile app/auth.py app/api/auth.py app/api/admin_users.py app/main.py` 통과. `docker exec aads-server python -m pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_admin_users_audit.py` 20 passed, 2 warnings. `/root/aads/aads-dashboard`에서 `npx eslint src/app/admin/users/page.tsx src/lib/auth.ts` 통과. API health HTTP 200, 공개 `POST /api/v1/auth/password-reset/request` HTTP 200, invalid email verify token은 인증 차단이 아닌 token-not-found 응답, 무토큰 `/api/v1/admin/users/overview` HTTP 401 확인. 주요 컨테이너 healthy/running, DB 보안 테이블 및 `email_verified_at` 컬럼 존재, active 사용자 default tenant 누락 0건, `chat_sessions.user_id`/`tenant_id` null 0건 확인.
+- 배포/이력: AADS API blue-green 반영 후 active `aads-server:8100` health OK. `checkpoint_migrations(v=113)` 이력도 중복 방지 INSERT로 기록 완료.
+- 미완료/주의: commit/push는 수행하지 않았다. 워크트리에 기존 대규모 unrelated 변경이 섞여 있어 이번 SaaS 범위만 분리 보고해야 한다.
+- 상세 보고서: `reports/20260623_AADS_SAAS_USER_ACCESS_AUDIT.md`.
+
+## 2026-06-23 10:02 KST - Gemini monthly CLI relay readiness check
+- 배경: CEO가 Gemini API Prepay 대신 Claude/Codex CLI relay처럼 Google 월정액만으로 Gemini를 쓰는 방법과 현재 반영 상태를 재확인 요청했다.
+- 확인:
+  - 공식 문서 기준 Antigravity CLI는 Google 계정 인증 기반 CLI이며, Gemini API Key 과금과 별도 경로다.
+  - 서버116 릴레이 `/health`는 `antigravity_cmd_mode=docker_exec`를 노출하고 `/antigravity-stream` 라우트가 배포되어 있다.
+  - 운영 DB에는 `antigravity`, `antigravity-flash`, `antigravity-pro` 모델이 등록되어 있었다.
+  - 서버116에는 `agy` 바이너리, `/root/.gemini/antigravity-cli`, `antigravity-test` Docker 컨테이너가 없어서 실제 월정액 CLI 호출은 불가했다.
+  - 직접 호출 `POST http://127.0.0.1:8199/antigravity-stream` 결과는 `No such container: antigravity-test` 오류였다.
+- 조치:
+  - 실행 불가 모델이 채팅 모델 목록에 노출되어 사용자가 실패 모델을 선택하지 않도록 운영 DB에서 provider `antigravity` 모델 3건을 `is_active=false`로 비활성화했다.
+- 검증:
+  - `SELECT model_id, provider, is_active FROM llm_models WHERE provider='antigravity'` 결과 3건 모두 `false`.
+  - `curl --resolve aads.newtalk.kr:443:5.104.86.116 https://aads.newtalk.kr/api/v1/health`는 `status=ok`.
+  - `curl http://127.0.0.1:8199/health`는 `status=ok`, Claude/Codex relay lease 정상, `antigravity` active lease 0.
+- 남은 항목:
+  - Google 월정액 기반 실제 사용을 위해서는 Antigravity CLI 설치, CEO Google 계정 인증, headless/컨테이너 실행 방식 검증이 필요하다.
+  - 인증 완료 후 provider `antigravity` 모델 3건을 `is_active=true`로 되돌려 활성화하면 된다.
+- 커밋/푸시/배포:
+  - 이번 기록 시점에는 git commit/push를 수행하지 않았다.
+  - 애플리케이션 재배포는 수행하지 않았고, 운영 DB 모델 활성 상태만 조정했다.
+
+## 2026-06-23 09:38 KST - AADS/GO100/NTV2 3-server operations mesh
+- 배경: CEO가 신규 운영 기준을 서버116(Contabo, AADS), 서버14(Contabo, GO100), 서버114(Cafe24, NewTalk) 3대로 고정하고, 기술문서 정리/크로스 SSH/Claude CLI/Codex CLI/Runner 작동 조치를 지시했다.
+- 조치:
+  - 중앙 기술문서 `docs/knowledge/AADS-3SERVER-OPERATING-TOPOLOGY-20260623.md`를 추가했다.
+  - 서버116/14/114의 SSH mesh 표준 별칭(`server-116`, `server-14`, `server-114`)을 정리했고 6방향 `hostname -I` 접속을 확인했다.
+  - 서버14 공개키를 서버116 `authorized_keys`에 추가했다. 비밀키는 복사하지 않았다.
+  - Claude CLI는 116/114를 `2.1.183`으로 맞추고, 116/114에 `/usr/local/bin/claude` 래퍼를 추가해 `/root/.claude/get_api_key.sh` 기반 `ANTHROPIC_AUTH_TOKEN`을 주입하도록 했다. 서버14 Claude는 기존 정상 상태를 유지했다.
+  - Codex CLI는 서버116 정상 `auth.json`을 14/114에 백업 후 동기화했고, GO100 기본 모델을 `gpt-5.5`로 수정했다.
+  - 서버14에 `/root/scripts/pipeline-runner.sh`, `/etc/systemd/system/aads-pipeline-runner.service`를 설치해 GO100 Runner를 신설했다.
+  - 서버14/114에는 `aads-db-tunnel.service`를 추가해 `127.0.0.1:15433 -> server116:127.0.0.1:5433` SSH DB 터널을 사용하게 했다. PostgreSQL 공개 포트는 열지 않았다.
+  - 서버114 Runner의 구 서버68 API 참조를 제거하고, 원격 Runner API URL은 `https://aads.newtalk.kr`로 맞췄다.
+  - 서버116/14/114의 `aads-pipeline-runner.service`를 enable/restart 했다.
+- 검증:
+  - SSH: 116→14, 116→114, 14→116, 14→114, 114→116, 114→14 모두 `hostname -I` 성공.
+  - Claude: `AADS_CLAUDE_OK`, `GO100_CLAUDE_OK`, `NTV2_CLAUDE_OK` 실호출 성공.
+  - Codex: `AADS_CODEX_OK`, `GO100_CODEX_OK`, `NTV2_CODEX_OK` 실호출 성공.
+  - DB: 서버14/114에서 SSH 터널 경유 `SELECT 1` 성공.
+  - Runner: 서버116/14/114 모두 `systemctl is-active aads-pipeline-runner` active. 서버14는 pending GO100 작업 `runner-25df30f7`을 실제 claim해 실행 중.
+- 주의:
+  - 서버14 Runner 시작 직후 `runner-25df30f7`이 실행 중이므로 별도 결과 확인이 필요하다.
+  - 서버114 Runner 재시작 중 과거 running 작업 `runner-15f4facd`가 stale/error 정리되었다.
+  - 이번 조치는 운영 서버 파일/systemd/SSH 설정 변경이며, 이 기록 작성 시점에는 git commit/push 및 애플리케이션 배포를 수행하지 않았다.
+
+## 2026-06-23 09:20 KST - GO100 contabo14 SSH key recovery
+- 배경: CEO가 GO100 운영 서버 contabo14(`5.104.86.14`) SSH 키 복구를 우선 지시했다. AADS 서버 로컬 `contabo14` 별칭과 GO100 MCP SSH가 `Permission denied (publickey,password)`로 실패했다.
+- 조치:
+  - AADS 서버 로컬 SSH 설정은 `Host contabo14 5.104.86.14 go100`, `User root`, `IdentityFile /root/.ssh/id_ed25519`, `IdentitiesOnly yes`로 확인했다.
+  - CEO PC Agent `2e9379a1-fed`에서 `ssh contabo14 hostname`이 성공하는 것을 확인하고, PC 경유 SSH를 복구 채널로 사용했다.
+  - contabo14 `/root/.ssh/authorized_keys`에 AADS 서버 공개키 `/root/.ssh/id_ed25519.pub`와 뉴톡 공통 공개키 `/root/.ssh/id_ed25519_newtalk.pub`를 중복 없이 추가했다. 기존 authorized key는 삭제하지 않았다.
+  - 권한은 `/root/.ssh=700`, `/root/.ssh/authorized_keys=600`으로 맞췄다.
+- 검증:
+  - PC 경유 반영 결과: `added=2`, `authorized_keys_lines=5`.
+  - AADS 서버 로컬 `ssh -o BatchMode=yes -o ConnectTimeout=8 contabo14 'hostname; date +%Y-%m-%d_%H:%M:%S_%Z'` -> `contabo14`, `2026-06-23_09:19:46_KST`.
+  - AADS 서버 로컬 `ssh -i /root/.ssh/id_ed25519_newtalk -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 root@5.104.86.14 'hostname'` -> `contabo14`.
+  - GO100 MCP `run_remote_command(project=GO100, command=date)` -> exit 0, `Tue Jun 23 09:19:48 KST 2026`.
+- 커밋/푸시/배포:
+  - SSH 복구는 서버 인증키 운영 조치이며 애플리케이션 배포는 수행하지 않았다.
+  - 이 기록 작성 시점에는 git commit/push를 수행하지 않았다.
+
+## 2026-06-23 09:01 KST - Dashboard chat freeze mitigation deployed
+- 배경: CEO가 채팅 중 PC가 멈추는 현상 완화 조치를 승인했고, 실제 운영 대시보드 소스(`/root/aads/aads-dashboard`) 기준으로 패치 포함 blue-green 재배포를 수행했다.
+- 조치:
+  - 실제 배포 context가 서버 저장소 하위 `aads-dashboard/`가 아니라 `/root/aads/aads-dashboard`임을 확인했다.
+  - `/root/aads/aads-dashboard/src/app/chat/page.tsx`의 도구 상세 hydration을 스트리밍/백그라운드 응답 중에는 지연하고, 한 번에 1건만 처리하도록 보강했다.
+  - SSE 토큰 drain은 30ms 단일 토큰 렌더가 아니라 운영 소스 기준 250ms 배치 렌더로 완화된 상태임을 확인했다.
+  - `bash /root/aads/aads-dashboard/deploy.sh`로 대시보드 blue-green 재배포를 수행했다.
+- 검증:
+  - 배포 로그 `/root/aads/aads-dashboard/deploy-logs/dashboard-deploy-20260623-085641.log`: blue 슬롯 기동, nginx upstream blue 전환, external health, standby-green 헬스체크 및 동기화 성공.
+  - 현재 활성 dashboard upstream은 `127.0.0.1:3100`, standby는 `127.0.0.1:3101 backup`.
+  - Docker: `aads-dashboard`와 `aads-dashboard-green` 모두 `healthy`.
+  - `curl -I https://aads.newtalk.kr/login`은 HTTP 200.
+  - `curl -I https://aads.newtalk.kr/chat`은 미로그인 기준 `/login?redirect=%2Fchat` HTTP 307.
+  - `curl https://aads.newtalk.kr/api/v1/health`는 `status=ok`, `graph_ready=true`.
+  - 대시보드 컨테이너 최근 로그는 Next.js Ready만 있고 기동 오류는 없다.
+- 주의:
+  - 배포 스크립트 내장 프론트엔드 QA는 `Step 7` 시작 로그만 남기고 별도 PASS/FAIL 결과를 기록하지 않았다. 따라서 최종 판정은 수동 HTTP/컨테이너/로그 검증 기준이다.
+  - `/root/aads/aads-dashboard`는 별도 git 저장소가 아니며, 서버 저장소에는 기존 대량 dirty 상태와 이번 관련 사본/문서 변경이 섞여 있다. 선별 커밋 전 `git diff -- aads-dashboard/src/app/chat/page.tsx HANDOVER.md docs/HANDOVER.md`를 기준으로 범위를 재확인해야 한다.
+- 커밋/푸시:
+  - 이 기록 작성 시점에는 git commit/push를 수행하지 않았다.
+
+## 2026-06-23 08:50 KST - Server68 AADS cleanup after 5.104.86.116 cutover
+- 배경: `aads.newtalk.kr` 운영 도메인이 5.104.86.116으로 전환된 뒤, 구 서버68(68.183.183.11)을 정리해도 되는지 CEO가 확인 요청했다.
+- 조치/확인:
+  - 서버68 직접 SSH 기준 `aads-pipeline-runner.service`는 `disabled`이며, `systemctl is-active`는 `unknown`으로 러너 유닛이 현재 활성 실행 상태가 아님을 확인했다.
+  - 서버68에서 `pgrep -af pipeline-runner`와 `pgrep -af auto_trigger`는 미검출됐다.
+  - 서버68 root crontab의 `/root/aads/`, `/root/.genspark/` 기반 AADS 자동 실행 항목은 `DISABLED_20260623_MIGRATED_TO_5_104_86_116`로 비활성화되어 있다.
+  - 서버68에는 `aads-api.service`, `aads-dashboard.service`, `claude-relay.service`, `session_watchdog.service`가 아직 active 상태로 남아 있다. 이는 즉시 롤백 대비 잔류이며, 삭제/중지는 별도 폐기 승인 전에는 수행하지 않는다.
+  - 서버68 디스크는 `/` 기준 160G 중 143G 사용, 18G 여유, 89% 사용률이다.
+- 운영 서버 검증:
+  - `curl --resolve aads.newtalk.kr:443:5.104.86.116 https://aads.newtalk.kr/api/v1/health`는 HTTP 200, `status=ok`, `graph_ready=true`.
+  - `curl --resolve aads.newtalk.kr:443:5.104.86.116 https://aads.newtalk.kr/api/v1/pc-agent/status`는 `online_count=1`, agent `2e9379a1-fed`, Windows 10, heartbeat healthy.
+- 판정:
+  - 서버68의 AADS 쓰기 자동화/러너는 정리 완료.
+  - 서버68 전체 폐기 또는 AADS API/DB/대시보드 중지는 아직 미수행. 24-48시간 116 운영 안정성 확인 후 스냅샷 백업, 방화벽 차단, 잔류 서비스 중지, VPS 폐기 순서로 진행한다.
+- 커밋/푸시/배포:
+  - 이 기록 작성 시점에는 코드 배포, git commit, git push를 수행하지 않았다.
+
+## 2026-06-22 20:08 KST - Server5 5.104.86.116 API-base correction and final smoke
+- 배경: CEO가 이전 완료보고의 commit/push/deploy/document ledger 충돌을 지적하고, AADS 이전 대상은 `5.104.86.116`, `5.104.86.14`는 GO100 서버라고 재확인했다.
+- 조치:
+  - 서버5 테스트 도메인 `aads1.newtalk.kr`에서 대시보드가 운영 도메인 `aads.newtalk.kr` API로 우회할 수 있는 설정을 수정했다.
+  - `/root/aads/aads-server/docker-compose.prod.yml`의 `aads-dashboard`, `aads-dashboard-green` 환경변수 `NEXT_PUBLIC_API_URL`을 `/api/v1`로 변경했다.
+  - `/root/aads/aads-dashboard/docker-compose.yml`도 `NEXT_PUBLIC_API_URL=/api/v1`로 변경했다.
+  - 서버5의 `/root/aads/aads-dashboard/.env.local`을 `NEXT_PUBLIC_API_URL=/api/v1`로 맞췄다.
+  - 서버5 대시보드를 blue-green 재배포했고 active slot은 `green`, standby `blue`까지 재빌드했다.
+- 검증:
+  - 서버5 컨테이너 env: `aads-dashboard`와 `aads-dashboard-green` 모두 `NEXT_PUBLIC_API_URL=/api/v1`.
+  - `curl --resolve aads1.newtalk.kr:443:5.104.86.116 https://aads1.newtalk.kr/chat` HTTP 200.
+  - `curl --resolve aads1.newtalk.kr:443:5.104.86.116 https://aads1.newtalk.kr/api/v1/health` HTTP 200, `status=ok`, `graph_ready=true`.
+  - `curl --resolve aads1.newtalk.kr:443:5.104.86.14 https://aads1.newtalk.kr/api/v1/health` HTTP 502로 GO100 서버가 AADS를 제공하지 않음을 재확인.
+  - 서버5 LiteLLM 실제 호출: `deepseek-v4-flash`, `deepseek-chat`, `kimi-k2.6` 모두 `AADS_OK` 응답. `gemini-2.5-flash-lite`는 Google 프로젝트 `CONSUMER_SUSPENDED` 403으로 실패.
+  - 인증 포함 API: `/api/v1/llm-models` HTTP 200, `/api/v1/chat/sessions/{sid}/todos` HTTP 200, `/api/v1/chat/workspaces` HTTP 200, 테스트 세션 생성 HTTP 201.
+  - 실제 채팅 SSE: `deepseek-chat` 모델로 테스트 세션 `ade1ae49-ce39-4384-b8c9-df824f7bca6d`에 `안녕이라고만 답해` 전송 시 `stream_start`, `delta`, `done` 이벤트 수신.
+- 판정:
+  - 서버5(`5.104.86.116`)의 AADS 테스트 도메인 기준 API/대시보드/DB/LLM/채팅 SSE는 작동한다.
+  - 운영 DNS `aads.newtalk.kr`는 아직 전환하지 않았다.
+  - 실제 운영 DNS 전환 직전에는 서버68 신규 쓰기 정지 또는 짧은 maintenance window 후 최종 DB sync를 1회 더 수행해야 한다.
+- 미완료/주의:
+  - Gemini 계열은 배포 문제가 아니라 현재 Google 프로젝트 suspend로 실패한다.
+  - 테스트 중 첫 `status_check` 프롬프트는 연결은 성공했지만 output validator가 `FABRICATED_DATA_TABLE`로 차단했다. 일반 대화형 SSE는 정상 `done` 처리됐다.
+  - 이 항목 작성 시점의 커밋/푸시 상태는 별도 git 상태 확인 기준으로 보고해야 한다.
+
+## 2026-06-22 19:29 KST - Server5 5.104.86.116 final deployment verification
+- 배경: CEO가 AADS 이전 대상은 `5.104.86.116`이고 `5.104.86.14`는 GO100 서버라고 재지정했으며, 이전 완료보고 ledger 충돌을 지적했다.
+- 조치:
+  - 서버68 -> 서버5(`5.104.86.116`) 동기화 스크립트 `scripts/sync-to-contabo.sh`를 재실행했다.
+  - 서버5 API hot-reload 완료: 57 modules.
+  - 서버5 dashboard blue-green 배포 완료: active slot `green`, `aads-dashboard` 및 `aads-dashboard-green` healthy.
+  - 서버5 DB atomic restore 완료: `/tmp/contabo-sync.log` 기준 `OK:count=43783`, `DB sync done (atomic swap OK)`.
+- 검증:
+  - 서버5 Docker: `aads-server`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres`, `aads-litellm`, `aads-redis`, `aads-searxng` healthy/running.
+  - `https://aads1.newtalk.kr/api/v1/health` OK, `--resolve aads1.newtalk.kr:443:5.104.86.116` OK.
+  - `--resolve aads1.newtalk.kr:443:5.104.86.14`는 502로 AADS 정상 제공 대상이 아님.
+  - `5.104.86.14`는 `/root/kis-autotrade-v4`가 존재하는 GO100 서버이고, AADS 컨테이너는 exited 상태.
+  - LiteLLM server5 직접 호출: `deepseek-chat` completion 200, response `OK only`.
+  - DB count after restore: server5 `chat_messages=43783`, `chat_todo_items=5112`; server68는 ongoing live writes로 `chat_messages=43785`, `chat_todo_items=5112`.
+- 판정:
+  - 서버5 AADS 배포/대시보드/DB/LLM/API 검증은 완료.
+  - 운영 DNS `aads.newtalk.kr`는 이번 조치에서 변경하지 않았다.
+  - 서버68이 계속 쓰기를 받는 동안 DB lag가 다시 생기므로, 실제 DNS cutover 직전에는 짧은 write freeze 또는 maintenance window 후 마지막 DB sync를 1회 더 수행해야 한다.
+- 미완료/주의:
+  - 브라우저 스크린샷/E2E는 PC Agent offline으로 실패해 API/HTML/컨테이너/LLM 검증으로 대체했다.
+  - local git commit/push는 수행하지 않았다. 작업트리에는 기존 dirty 파일과 이번 운영 문서 변경이 섞여 있어 별도 정리 필요.
+
+## 2026-06-22 11:30 KST - [P0] server68 to server5 DNS migration complete (superseded by 19:29 recheck)
+- DNS changed by CEO: aads.newtalk.kr -> server5 (5.104.86.116), aads1.newtalk.kr -> server68 (68.183.183.11)
+- Pre-work: SSH key restore, DB sync (pg_dump/restore), dashboard rebuild, sync lock release
+- Post-switch (11:30 KST): both APIs healthy v0.2.1, DB gap 12 msgs
+- Server5 disk 35%, Server68 disk 80%
+- SSH note: server5 container needs SSH key regen on rebuild (aads-server-contabo5)
 
 
 ## 2026-06-19 12:53 KST - GO100 211 physical decommission continuation
@@ -3061,3 +3293,201 @@
 - 주의:
   - 계약 최종 서명 전 `집기·비품 목록`, `재고 실사표`, `거래처/리스/렌탈 현황표`, `임대인 동의서`, `본사 가맹승계 승인`은 별첨으로 확보해야 한다.
   - 커밋/푸시/배포는 수행하지 않았다.
+
+## 2026-06-22 17:46 KST - Server5 AADS cutover-ready deployment
+- 배경: CEO가 서버5에서 AADS 전체가 이상 없이 작동하도록 완전 배포하고, 운영 DNS 전환 전 테스트 가능한 상태로 만들라고 지시했다.
+- 조치:
+  - 정정: 서버5는 `5.104.86.116`이며, `5.104.86.14`는 GO100 운영 서버다. AADS 테스트 도메인 `aads1.newtalk.kr`은 서버5(`5.104.86.116`)로 연결한다.
+  - 서버5(`5.104.86.116`)에 AADS 핵심 컨테이너를 구동하고 `aads1.newtalk.kr` 테스트 도메인을 서버5로 연결했다.
+  - 서버5 대시보드를 `NEXT_PUBLIC_API_URL=https://aads1.newtalk.kr/api/v1` 기준으로 재빌드하고 `aads-dashboard`를 compose 관리 컨테이너로 교체했다.
+  - 서버5 nginx에 `aads1.newtalk.kr` server_name을 추가하고 reload했다.
+  - 프론트가 호출하는 세션 TODO HTTP 경로가 백엔드에 없어 `app/api/chat.py`에 `/chat/sessions/{session_id}/todos` CRUD/clear/retry 라우트를 기존 `chat_todo_service`에 연결했다.
+- 검증:
+  - `python3 -m py_compile app/api/chat.py` 통과.
+  - `https://aads1.newtalk.kr/api/v1/health` HTTP 200 OK, body `status=ok`, `graph_ready=true`, sandbox docker/python/node ready 확인.
+  - 서버5 컨테이너 확인: `aads-dashboard`, `aads-redis`, `aads-searxng`, `aads-server`, `aads-litellm`, `aads-socket-proxy`, `aads-postgres` 실행 중.
+  - `/chat`은 미로그인 기준 `/login?redirect=%2Fchat` 307 응답으로 정상 라우팅 확인.
+  - 이전 스모크에서 외부 `aads1` 기준 세션 TODO 200, DeepSeek 계열 LiteLLM 실제 응답, `/chat/messages/send` SSE `stream_start/delta`를 확인했다.
+- 주의:
+  - 운영 `aads.newtalk.kr` DNS는 아직 서버68을 보고 있으며 전환하지 않았다.
+  - Gemini 계열은 키/크레딧 문제로 실패했고, DeepSeek 계열은 정상 응답을 확인했다.
+  - `Origin: https://aads1.newtalk.kr` 헬스 요청에도 응답 헤더의 `Access-Control-Allow-Origin`이 `https://aads.newtalk.kr`로 내려와 브라우저 CORS 추가 검증/보정이 필요하다.
+  - 로컬 작업트리에는 이번 작업과 무관한 dirty 파일이 남아 있어 커밋 범위에서 제외해야 한다.
+
+## 2026-06-22 18:56 KST - Server5 IP correction and deployment retry
+- 배경: CEO가 AADS 이전 대상은 `5.104.86.116`이며 `5.104.86.14`는 GO100 서버라고 정정했다. 직전 보고의 IP 혼선 가능성을 폐기하고 실측 기준으로 재검증했다.
+- 확인:
+  - Cloudflare A 레코드: `aads1.newtalk.kr -> 5.104.86.116`, `aads.newtalk.kr -> 68.183.183.11`; 운영 DNS는 아직 미전환.
+  - `5.104.86.14`에는 GO100 디렉터리(`/root/kis-autotrade-v4`)가 있고, AADS 컨테이너들은 `restart=no`, `status=exited`; `/root/aads` 잔재 디렉터리는 남아 있다.
+  - `5.104.86.116`에는 AADS 컨테이너가 실행 중이며 public `https://aads1.newtalk.kr/api/v1/health`와 `--resolve ...:5.104.86.116` health가 모두 OK다.
+- 조치:
+  - 서버68의 현재 `aads-server`/`aads-dashboard` 소스를 서버5(`5.104.86.116`)로 rsync 동기화했다. 서버별 `.env`, active slot marker, build cache는 제외했다.
+  - 서버5 대시보드 `.env.local`을 테스트 도메인 기준 `NEXT_PUBLIC_API_URL=https://aads1.newtalk.kr/api/v1`로 보정하고 대시보드를 재빌드했다.
+  - 서버5 구조가 nginx 컨테이너(`aads-nginx`)인데 `deploy.sh`가 호스트 `nginx/systemctl`을 호출해 blue-green 전환이 실패했다. `deploy.sh`에 `nginx_test`/`nginx_reload` fallback을 추가해 `docker exec aads-nginx nginx -t` 및 `nginx -s reload`를 사용하도록 수정했다.
+  - 수정된 `deploy.sh`를 서버5에 반영하고 `bash deploy.sh bluegreen`을 재실행했다.
+- 검증:
+  - `bash -n deploy.sh` 통과.
+  - 서버5 배포 로그 기준 Phase 0.5 코드 검증, health, DB 스키마, 채팅 테이블, LLM 서비스 검증 통과. Frontend QA API는 응답 없음으로 non-blocking skip.
+  - 서버5 active backend는 `.active_port=8100`, `.active_container=aads-server`, Docker 상태 `aads-server Up (healthy)`.
+  - `docker exec aads-nginx nginx -t` 성공.
+  - DB count: `chat_sessions=200`, `chat_messages=43777`, `llm_models=479`, `chat_todo_items=5110`.
+  - LiteLLM 직접 호출: `deepseek-v4-flash` 200, `OK` 응답 확인.
+  - 인증 포함 API: `/llm-models`, `/chat/workspaces`, `/chat/sessions/{id}/todos`, `/ops/usage-stats` 200; 새 채팅 세션 생성 201; `/chat/messages/send` SSE `stream_start` 및 `OK` delta 확인.
+- 주의:
+  - 스크린샷 캡처는 PC Agent offline으로 실패했다. API/HTML/컨테이너/LLM 검증으로 대체했다.
+  - 운영 DNS `aads.newtalk.kr` 전환은 아직 하지 않았다. CEO 승인 후 `68.183.183.11 -> 5.104.86.116`로 Cloudflare A 레코드 변경 가능하다.
+  - `5.104.86.14`의 `/root/aads` 잔재 삭제는 GO100 서버 영향 가능성이 있어 별도 승인 후 수행한다.
+
+## 2026-06-22 19:45 KST - Server5 final correction after completion-report audit
+- 배경: CEO가 직전 완료보고가 커밋/푸시/배포/문서 원장과 충돌한다고 지적했고, AADS 이전 대상은 `5.104.86.116`, `5.104.86.14`는 GO100 서버임을 다시 확인하라고 지시했다.
+- 조치:
+  - 서버68의 현재 `aads-server` 및 `aads-dashboard` 워킹트리를 서버5(`5.104.86.116`)에 재동기화했다. 서버별 `.env`, `.env.local`, `.git`, `node_modules`, `.next`, active marker, 로그/캐시는 보존 또는 제외했다.
+  - 서버5 백엔드는 `scripts/reload-api.sh`로 hot reload를 수행했고, 58개 모듈 재로드가 성공했다.
+  - 서버5 대시보드는 `aads1.newtalk.kr` 테스트 도메인 기준으로 `npm ci`, `npm run build`, `bash deploy.sh`를 수행했다. blue-green 배포 결과 active slot은 `aads-dashboard-green:3101`이며 standby blue도 재빌드됐다.
+  - GO100 서버(`5.104.86.14`)의 잘못 배포된 AADS 잔재 `/root/aads`는 실행 프로세스/컨테이너 미사용 확인 후 삭제하지 않고 `/root/aads_quarantine_wrong_server_20260622_1945`로 격리했다. 롤백은 해당 디렉터리를 `/root/aads`로 되돌리면 된다.
+  - 남은 소스 차이로 확인된 `app/static/gallery/manifest.json` 1개를 추가 rsync해 서버68과 서버5 파일을 맞췄다.
+- 검증:
+  - 서버5 핵심 소스 해시 확인: `app/main.py`, `app/services/model_selector.py`, `litellm-config.yaml`, `docker-compose.yml`, `deploy.sh`, 대시보드 `src/lib/api.ts`, `src/app/chat/page.tsx`, `package.json`이 서버68과 일치했다.
+  - 서버5 Docker: `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres`, `aads-litellm`, `aads-redis`, `aads-searxng`, `aads-socket-proxy`, `aads-nginx` 실행 중이며 핵심 컨테이너는 healthy다.
+  - `https://aads1.newtalk.kr/api/v1/health`를 `--resolve ...:5.104.86.116`로 강제 접속해 HTTP 200과 `status=ok`, `graph_ready=true`를 확인했다.
+  - 같은 요청을 `--resolve ...:5.104.86.14`로 강제 접속하면 HTTP 502로 AADS 서비스가 GO100 서버에서 제공되지 않음을 확인했다.
+  - 서버5 인증 포함 API 스모크: CEO 로그인 200, 워크스페이스 29개, `/api/v1/llm-models?active_only=true` 100개, `deepseek-chat` 존재, 세션 생성 201, TODO 조회 200, `/chat/messages/send` SSE `stream_start` 확인.
+  - LLM 실제 생성 확인: 테스트 세션 `4407d7a2-7251-4e11-9dea-2cbf1d2bf0ba`에서 `deepseek-chat` 요청 후 DB streaming status에 partial content 1,216자 이상과 tool_count 28이 기록됐고, 비용 방지를 위해 stop 처리 후 `is_streaming=false`, `just_completed=true`를 확인했다.
+  - DB 카운트: 서버5 `chat_sessions=199`, `chat_messages=43785`, `chat_todo_items=5113`, `llm_models=479`.
+- 남은 상태:
+  - 운영 DNS `aads.newtalk.kr`는 전환하지 않았다. 현재 검증 완료 대상은 테스트 도메인 `aads1.newtalk.kr -> 5.104.86.116`이다.
+  - 이 기록과 관련 작업트리는 아직 커밋/푸시하지 않았다. 서버 저장소는 `main...origin/main [ahead 15]`이며, 대시보드 저장소는 `main...origin/main [ahead 6]` 상태다.
+  - 서버5 대시보드 `npm ci` 결과 npm audit 취약점 9건(2 low, 4 moderate, 3 high)이 남아 있다. 이전 차단 항목은 아니지만 별도 보안 정비가 필요하다.
+
+## 2026-06-23 08:58 KST - AADS production DNS cutover verification on 5.104.86.116
+- 배경: CEO가 `aads.newtalk.kr` DNS를 AADS 이전 대상 `5.104.86.116`으로 변경한 뒤, 서비스 운영 이상 여부와 서버68 정리 가능 상태를 재검수하라고 지시했다.
+- 조치:
+  - Cloudflare API 기준 `aads.newtalk.kr` A 레코드가 `5.104.86.116`, `proxied=true`임을 확인했다. `5.104.86.14`는 GO100 서버로 유지한다.
+  - 운영 도메인 `https://aads.newtalk.kr` 및 원본 강제 접속(`--resolve aads.newtalk.kr:443:5.104.86.116`)을 분리 검증했다.
+  - Google Gemini 계열 실제 호출이 `CONSUMER_SUSPENDED` 403으로 실패해 운영 모델 선택 장애를 막기 위해 `llm_models.provider='gemini'` 13개 행을 `is_active=false`, `is_selectable=false`, `is_executable=false`, `verification_status='disabled_provider_suspended'`로 임시 비활성화했다.
+  - 서버68의 `aads-pipeline-runner.service`는 `disabled`이고 loaded unit이 없음을 확인했다. 서버68 AADS 컨테이너는 백업/관찰용으로 계속 실행 중이다.
+- 검증:
+  - `curl https://aads.newtalk.kr/api/v1/health` 결과 `status=ok`, `graph_ready=true`, sandbox docker/python/node ready.
+  - `/chat`은 미로그인 기준 `/login?redirect=%2Fchat` 307로 정상 라우팅된다.
+  - 116 Docker: `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres`, `aads-litellm`, `aads-redis`, `aads-searxng`, `aads-socket-proxy`, host nginx가 실행 중이며 핵심 컨테이너는 healthy다.
+  - DB count: `chat_sessions=201`, `chat_messages=43823`, `chat_todo_items=5149`.
+  - LiteLLM 인증 포함 모델 목록은 64개이며, 실제 생성은 `deepseek-v4-flash`, `deepseek-v4-pro`, `kimi-k2.6` 모두 `OK` 응답을 반환했다.
+  - PC Agent API는 `online_count=1`, agent `2e9379a1-fed`, Windows 10, heartbeat healthy로 확인됐다.
+  - 모델 선택 DB 재조회: `gemini active=0 selectable=0`, `deepseek active=4`, `kimi active=6`, `codex active=4`.
+- 남은 상태:
+  - Gemini는 키/Google 프로젝트 정지 해제 전까지 비활성 유지한다. 복구 시 provider `gemini` 행의 active/selectable/executable 및 verification status를 되돌리고 실제 호출을 재검증해야 한다.
+  - 서버68 전체 폐기/컨테이너 중지는 아직 수행하지 않았다. 116 운영 안정성 관찰 후 `스냅샷 백업 -> 방화벽 차단 -> 잔류 서비스 중지 -> VPS 폐기` 순서로 별도 승인 후 진행한다.
+  - 이 문서 기록은 커밋/푸시하지 않았다.
+
+## 2026-06-23 09:34 KST - Gemini API billing verification after completion-report audit
+- 배경: CEO가 Google AI Pro 월정액으로 Gemini를 사용 중인데 AADS Gemini 키가 왜 실패하는지 재확인하고, 이전 완료보고의 커밋/배포/문서 상태 충돌을 바로잡으라고 지시했다.
+- 실측:
+  - 운영 서버는 `5.104.86.116`이며 `aads-litellm`, `aads-server`, `aads-dashboard`, `aads-postgres`, `aads-nginx` 등 핵심 컨테이너가 healthy 상태다.
+  - `https://aads.newtalk.kr/api/v1/health`를 `--resolve aads.newtalk.kr:443:5.104.86.116`로 강제 접속해 HTTP 200, `status=ok`, `graph_ready=true`를 확인했다.
+  - LiteLLM config에는 Gemini 모델들이 `GEMINI_API_KEY` 및 `GEMINI_API_KEY_2`를 참조하도록 등록되어 있고, 두 환경변수와 `LITELLM_MASTER_KEY`가 컨테이너에 주입되어 있다. 키 값은 출력하지 않았다.
+  - Google Generative Language API를 두 키로 직접 호출한 결과 모두 HTTP 429 `RESOURCE_EXHAUSTED`, 메시지 `Your prepayment credits are depleted`를 반환했다.
+  - LiteLLM 인증 포함 `/v1/models`는 HTTP 200, 모델 64개를 반환했다.
+  - LiteLLM 실제 생성 검증에서 `deepseek-v4-flash`는 HTTP 200 및 `OK` 응답을 반환했고, `gemini-2.5-flash`는 429 cooldown으로 실패했다.
+  - 운영 기본 LLM 라우팅은 `model_routing_preferences` 기준 `codex:gpt-5.5`가 default이며 Gemini default는 0건이다. 따라서 Gemini 크레딧 고갈은 Gemini를 직접 선택할 때만 장애가 된다.
+  - `docker exec aads-server python -m pytest tests/unit/test_model_selector_dynamic_routing.py -q` 결과 22개 테스트가 통과했다.
+- 조치:
+  - Gemini 직접 선택 장애를 막기 위해 `llm_models.provider='gemini'` 63개 행을 `is_active=false`, `is_selectable=false`, `is_executable=false`, `verification_status='disabled_billing_depleted'`로 전환했다.
+  - `chat_model_preferences`의 Gemini 및 legacy Gemini 항목 36개를 `is_hidden=true`, `is_favorite=false`, `is_pinned=false`로 전환했다.
+  - `model_routing_preferences`의 `route_key='llm'`, `provider='gemini'` 후보 1건을 `is_enabled=false`로 전환했다.
+- 조치 후 검증:
+  - `llm_models` 재조회 결과 Gemini는 `active=0`, `selectable=0`, `executable=0`; DeepSeek/Kimi/Codex는 기존 활성 상태를 유지했다.
+  - `chat_model_preferences` 재조회 결과 visible Gemini preference는 0건이다.
+  - `model_routing_preferences` 재조회 결과 기본값은 계속 `codex:gpt-5.5`, Gemini 후보는 `is_enabled=false`다.
+  - `https://aads.newtalk.kr/api/v1/health`를 `--resolve aads.newtalk.kr:443:5.104.86.116`로 최종 재검증해 HTTP 200, `status=ok`, `graph_ready=true`를 확인했다.
+- 판정:
+  - AADS 라우팅/키 주입/LiteLLM 모델 등록 문제는 아니다.
+  - 원인은 Google AI Studio Gemini API 결제 계정의 Prepay credit depleted 상태다. Google AI Pro 월정액은 Gemini 앱/Google One 혜택과 별개이며, API는 AI Studio Billing의 Prepay/Postpay 상태를 따른다.
+- 남은 상태:
+  - Google AI Studio Billing에서 해당 API 키 프로젝트의 Prepay credit 충전 또는 Postpay 전환/정상화가 필요하다. 이 조치는 CEO Google 계정 콘솔 권한이 필요해 서버에서 대행할 수 없다.
+  - Gemini 복구 시 롤백 기준: `llm_models`의 Gemini 행을 active/selectable/executable true로 되돌리고, 필요한 `chat_model_preferences` hidden 값을 false로 복구한 뒤 직접 Google API 및 LiteLLM 호출을 재검증한다.
+  - 이번 기록은 로컬 문서 변경이며 아직 커밋/푸시하지 않았다.
+
+## 2026-06-23 10:10 KST - AADS SaaS auth/user-ops P0-P2 direct remediation
+- 배경: CEO가 SaaS 활성화 테스트 중 사용자 운영 접속 전수 검수 결과의 P0~P2 조치와, 현재 사용자 중 팀원 관리자에게 모든 AADS 내부 프로젝트 접근권을 줄 수 있는 운영 기능을 요청했다. 세션 규칙에 Pipeline Runner 추가 제출 중단 지시가 남아 있어 러너 투입 대신 직접 수정으로 처리했다.
+- 조치:
+  - `app/auth.py`, `app/api/auth.py`, `app/main.py`: 로그인/회원가입 rate limit, 이메일 검증 토큰, 비밀번호 재설정 토큰, 서버 측 logout 토큰 폐기(`jti`)를 추가했다.
+  - `app/api/admin_users.py`: 내부 관리자 권한 부여/회수 API와 운영자용 비밀번호 재설정 토큰 발급 API를 추가했다. 내부 권한은 `saas_users.role='admin'` 및 internal tenant admin membership으로 판정된다.
+  - `aads-dashboard/src/app/admin/users/page.tsx`, `src/lib/auth.ts`, `src/lib/api.ts`: 사용자 현황 화면에서 내부 관리자 권한 토글, 재설정 토큰 발급, 서버 logout 호출을 연결했다.
+  - `migrations/113_saas_auth_security_and_admin_access.sql`: `email_verified_at`, `password_reset_tokens`, `email_verification_tokens`, `auth_revoked_tokens`를 추가하고 `chat_sessions.user_id` NULL을 백필했다.
+  - 운영 DB에 migration 113을 적용했다. 적용 결과 `email_verified_at` 내부 사용자 2건 업데이트, `chat_sessions.user_id` 179건 백필이 수행됐다.
+- 검증:
+  - DB 재조회: `chat_sessions_total=188`, `user_id_null=0`, `tenant_id_null=0`.
+  - DB 재조회: `saas_users users=44`, `internal_role_users=2`, `active_missing_tenant=0`.
+  - 신규 보안 테이블 count 확인: `password_reset_tokens=0`, `email_verification_tokens=0`, `auth_revoked_tokens=0`.
+  - `python3 -m py_compile app/auth.py app/api/auth.py app/api/admin_users.py app/main.py` 성공.
+  - `docker exec aads-server python -m pytest -q tests/unit/test_tenant_rbac_policy.py tests/unit/test_saas_multitenant_migration.py` 결과 25 passed, warnings 2.
+  - 대시보드 변경 파일 한정 lint: `npx eslint src/app/admin/users/page.tsx src/lib/auth.ts` 성공.
+  - 전체 `npm run lint`는 기존 코드베이스의 `any`/React hook 규칙 위반 261 errors, 66 warnings로 실패했다. 이번 변경 파일 한정 검증은 통과했다.
+  - 서버68 health_check: HEALTHY, DB latency 104ms, disk 52%, pipeline running 0.
+- 남은 상태:
+  - 코드 변경은 아직 배포하지 않았다. 배포는 blue-green/reload 영향이 있어 CEO 승인 후 수행한다.
+  - 이 기록과 코드 변경은 아직 커밋/푸시하지 않았다.
+
+## 2026-06-23 10:21 KST - Antigravity CLI relay/DB state verification on 5.104.86.116
+- 배경: CEO가 Antigravity CLI 설치와 Google 계정 인증을 이전에 진행했는데 운영 DB에 반영되지 않은 것인지 재확인하라고 지시했다.
+- 실측:
+  - 운영 서버 `5.104.86.116`의 AADS 핵심 컨테이너는 healthy 상태이며, `https://aads.newtalk.kr/api/v1/health`를 `--resolve aads.newtalk.kr:443:5.104.86.116`로 검증해 HTTP 200, `status=ok`, `graph_ready=true`를 확인했다.
+  - DB `llm_models`에는 `antigravity`, `antigravity-pro`, `antigravity-flash` 3개와 Gemini provider의 `antigravity-preview-05-2026` 1개가 존재했다. 따라서 DB row 자체는 반영되어 있었다.
+  - 서버68에는 `/usr/local/bin/agy`, `/root/.local/bin/agy`, `/root/.gemini/antigravity-cli` 설치 흔적이 있었지만 직접 실행 시 Google OAuth 로그인을 다시 요구했다. 유효 인증 세션은 확인되지 않았다.
+  - 서버116에는 Antigravity CLI/OAuth 파일과 `antigravity-test` 컨테이너가 없었다.
+- 조치:
+  - 서버68의 `agy` CLI 바이너리와 wrapper를 서버116으로 복사했다.
+  - 서버116에 `antigravity-test` 컨테이너를 생성했고, 컨테이너 내부 `/root/.local/bin/agy --help` 실행을 확인했다.
+  - 운영 릴레이는 `CLAUDE_RELAY_URL=http://host.docker.internal:8199` 및 `antigravity_cmd_mode=docker_exec`로 설정되어 있음을 확인했다.
+  - 인증 전 모델 선택 장애를 막기 위해 Antigravity 관련 4개 DB row를 `is_active=false`, `is_selectable=false`, `is_executable=false`, `verification_status='auth_required'`, `discovery_source='antigravity_cli'`로 정정했다.
+- 검증:
+  - DB 재조회 결과 `provider='antigravity'` 3개 row 모두 `active=0`, `selectable=0`, `executable=0`, `verification_status='auth_required'`다.
+  - `antigravity-test` 컨테이너는 running 상태이고 CLI 실행 파일은 정상 인식된다.
+  - 컨테이너 내부 `agy --print` 직접 실행은 Google OAuth 인증 URL을 출력하고 인증 대기 상태로 진입했다. 즉 서버 실행 골격은 복구됐지만 Google 계정 재인증 없이는 응답 생성이 불가하다.
+  - 릴레이 `/antigravity-stream`은 현재 Claude/Codex active lease 5개로 슬롯이 포화되어 `relay_semaphore_timeout`을 반환했다. 운영 중 요청을 강제 종료하지 않았다.
+- 판정:
+  - "DB 미반영"이 아니라 "DB row는 존재하나 이전 과정에서 CLI 실행 컨테이너와 유효 Google OAuth 세션이 116에 없어서 안전 비활성화된 상태"다.
+- 남은 상태:
+  - CEO가 Google OAuth 인증 URL에서 로그인 후 authorization code를 서버116의 `agy` 초기 인증 흐름에 입력해야 실제 월정액 CLI 릴레이가 활성화된다. 이 단계는 Google 계정 대화형 인증이라 서버에서 대행할 수 없다.
+  - 인증 완료 후 `antigravity-test` 내부 `agy --print` 성공, `/antigravity-stream` 성공, DB `is_active/is_selectable/is_executable=true` 전환, AADS 채팅 모델 선택 스모크 테스트 순서로 복구한다.
+  - 이번 운영 조치와 문서 기록은 아직 커밋/푸시하지 않았다.
+
+## 2026-06-24 09:02 KST - Antigravity Google OAuth relay activation completed on 5.104.86.116
+- 배경: CEO가 Google OAuth authorization code를 제공했고, 이전 완료보고가 문서 ledger와 충돌한다는 지적에 따라 인증/DB/API/채팅 경로를 재검증했다.
+- 조치:
+  - 서버116 `antigravity-test` 컨테이너 내부의 `agy` OAuth 입력 대기 세션에 CEO 제공 코드를 입력해 Google 계정 인증을 완료했다.
+  - 운영 DB `llm_models`에서 `antigravity`, `antigravity-flash`, `antigravity-pro` 3개를 `is_active=true`, `is_selectable=true`, `is_executable=true`, `verification_status='verified'`, `last_verified_at=NOW()` 상태로 정정했다.
+  - 과거 인증 대기 상태의 잔여값을 제거하기 위해 위 3개 row의 `metadata.activation_blocked_reason` 및 `retired_at`을 정리했다.
+- 검증:
+  - `docker exec antigravity-test /root/.local/bin/agy models`가 Gemini/Claude/GPT-OSS 모델 목록을 정상 반환했다.
+  - `http://127.0.0.1:8199/health`가 `status=ok`, `antigravity_cmd_mode=docker_exec`, `active_leases.antigravity=0`, `token_available=true`를 반환했다.
+  - `/antigravity-stream`에 `model=antigravity-flash`, `messages_text='Reply OK only'`를 POST해 `OK` 응답을 확인했다.
+  - 인증 포함 `/api/v1/llm-models?active_only=true`가 Antigravity 3개 모델을 active/selectable/executable=true, verification_status=verified, metadata `{"billing_mode":"google_account_cli_relay"}`, retired_at=null로 반환했다.
+  - 인증 포함 `/api/v1/llm-models/chat-preferences`가 `antigravity`, `antigravity-flash`, `antigravity-pro`를 `is_hidden=false`로 반환했다.
+  - 실제 `/api/v1/chat/messages/send` 경로에서 임시 세션 `69baa895-32f5-4921-81ec-5298358c40d6`에 `model_override=antigravity-flash`로 SSE 전송했고, assistant 메시지 `OKOK. (2026-06-24 09:01 KST 기준 스모크 테스트 완료 [파일 조회])`가 저장됐다. 이후 streaming-status는 `is_streaming=false`, `just_completed=true`로 확인됐다.
+  - `docker exec aads-server python -m pytest -q tests/unit/test_model_selector_dynamic_routing.py` 결과 22 passed.
+- 남은 상태:
+  - 이번 조치는 운영 DB/OAuth/릴레이 활성화이며 Git 커밋/푸시/재배포는 수행하지 않았다.
+  - 테스트 세션 1개가 운영 DB에 남아 있다. 삭제하지 않았으며, 추적용으로 보존했다.
+
+## 2026-06-24 09:16 KST - Antigravity activation final recheck after ledger conflict warning
+- 배경: CEO가 이전 완료보고가 ledger/document 상태와 충돌한다고 지적해, 서버116 운영 상태를 다시 실측하고 완료/미완료 항목을 분리했다.
+- 재검증:
+  - 원격 명령 대상이 `5.104.86.116`임을 `curl -4 -s ifconfig.me`로 확인했다.
+  - `docker exec antigravity-test /root/.local/bin/agy models`가 Antigravity 컨테이너 내부에서 모델 목록을 반환했다.
+  - `docker exec antigravity-test /root/.local/bin/agy --print ping`이 `pong! How can I help you today?`를 반환해 Google OAuth 인증과 CLI 실행을 확인했다.
+  - `http://127.0.0.1:8199/health`는 `status=ok`, `antigravity_cmd_mode=docker_exec`, `token_available=true`를 반환했다.
+  - `/antigravity-stream` 직접 POST 스모크 테스트는 `model=antigravity-flash`, `messages_text='Reply OK only'`에서 `OK` 결과를 반환했다.
+  - 인증 포함 `/api/v1/llm-models?active_only=true`에서 `antigravity`, `antigravity-flash`, `antigravity-pro` 3개가 `is_selectable=true`, `is_executable=true`, `verification_status=verified`, `retired_at=null`로 노출됨을 확인했다.
+  - 인증 포함 `/api/v1/llm-models/chat-preferences`에서 위 3개 모델이 `is_hidden=false`로 노출됨을 확인했다.
+- 추가 확인/조치:
+  - 새 검증 세션 `e0433fd6-7790-4367-8b62-c0ea92cffde1`로 `/api/v1/chat/messages/send`를 호출했고, SSE는 `stream_start`와 `model_info=Antigravity Flash (Gemini 3.5 Flash)`까지 반환했다.
+  - 이후 공유 CLI 릴레이 전역 슬롯 5개가 Claude/Codex lease로 포화되어 `antigravity_relay_busy / relay_semaphore_timeout`가 발생했다. `/leases` 조회 결과 5개 lease는 모두 `stale=false`라 강제 종료하지 않았다.
+  - 검증 세션은 `/stop`으로 중지해 `is_streaming=false`로 정리했고, DB에는 assistant `model_used=stopped`, content `OK\n\n_(응답이 중지되었습니다)_`가 저장됐다.
+- 판정:
+  - Antigravity Google OAuth/CLI/DB/API 모델 노출/직접 릴레이는 운영 가능 상태다.
+  - 다만 AADS 채팅 경로는 Claude/Codex/Antigravity가 공유하는 전역 릴레이 슬롯이 포화되면 일시적으로 `relay_busy`가 발생할 수 있다. 이는 인증 실패가 아니라 동시 실행 슬롯 정책 문제다.
+- 남은 상태:
+  - 코드 변경/배포는 수행하지 않았다.
+  - 이 문서 기록은 로컬 작업트리 변경이며 아직 커밋/푸시하지 않았다.
+  - 후속 개선안은 Antigravity 전용 슬롯 분리 또는 릴레이 max_concurrent 증설이다. 운영 중인 stale=false lease를 무단 종료하지 않았다.

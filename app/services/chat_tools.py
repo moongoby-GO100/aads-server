@@ -135,17 +135,18 @@ async def health_check(message: str, workspace_id: str) -> Dict[str, Any]:
         return {
             "status": quick.get("status", "UNKNOWN"),
             "checked_at": quick.get("checked_at", datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")),
-            "server_68": {
+            "server_116": {
                 "ok": True,
-                "role": "AADS Backend+Dashboard (현재 서버)",
+                "role": "AADS Backend+Dashboard (server-116 / 5.104.86.116)",
                 "db_ok": db_res.get("ok", False),
                 "db_latency_ms": db_res.get("latency_ms", "?"),
                 "disk_usage_pct": disk_res.get("usage_pct", "?"),
                 "disk_used": disk_res.get("used", "?"),
                 "disk_total": disk_res.get("total", "?"),
             },
-            "server_211": {"note": "Hub/bridge — SSH 체크 제외 (별도 모니터링)"},
-            "server_114": {"note": "SF/NTV2/NAS — SSH 체크 제외 (별도 모니터링)"},
+            "server_14": {"note": "GO100 — SSH/Runner는 3-server topology 검증 기준으로 별도 모니터링"},
+            "server_114": {"note": "SF/NTV2/NAS — SSH/Runner는 3-server topology 검증 기준으로 별도 모니터링"},
+            "server_211": {"note": "legacy/KIS — 신규 AADS/GO100 운영 서버 아님"},
             "directives": {
                 "pending": pending_scan.get("count", 0),
                 "running": running_scan.get("count", 0),
