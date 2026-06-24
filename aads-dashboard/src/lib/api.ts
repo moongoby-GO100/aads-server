@@ -1,6 +1,122 @@
 // T-072: Flat API response types
 export interface DirectiveItem { task_id: string; title: string; project: string; status: string; error_type: string | null; started_at: string; completed_at: string | null; duration_seconds: number | null; created_at: string; file_path: string; }
 export interface DirectivesResponse { status: string; total: number; running: number; completed: number; error: number; error_breakdown: Record<string, number>; project_breakdown: Record<string, number>; summary: Record<string, number>; items: DirectiveItem[]; directives: DirectiveItem[]; }
+export interface ChatWorkspaceRoleOption {
+  value: string;
+  role?: string;
+  label: string;
+  display_name_ko?: string | null;
+  project_scope?: string[];
+  role_category?: string | null;
+  role_category_label_ko?: string | null;
+  role_group_order?: number | null;
+  lifecycle_stage?: string | null;
+  when_to_use?: string[] | null;
+  how_to_instruct?: string[] | null;
+  instruction_template?: string | null;
+}
+export interface ChatWorkspaceRolesResponse { roles: ChatWorkspaceRoleOption[]; total: number; }
+export interface AdminDeployStatusResponse {
+  servers: Array<{
+    id: string;
+    name: string;
+    ip: string;
+    projects: Array<{
+      name: string;
+      status: "ok" | "error" | "unknown";
+      last_commit: string | null;
+      last_deploy_at: string | null;
+    }>;
+  }>;
+}
+export interface AdminSessionItem {
+  [key: string]: unknown;
+  session_id: string;
+  tenant_id?: string;
+  tenant_name?: string;
+  tenant_kind?: string;
+  user_id?: string | null;
+  user_email?: string;
+  user_name?: string;
+  member_emails?: string;
+  workspace: string;
+  title?: string;
+  role_key?: string;
+  current_model?: string;
+  created_at: string | null;
+  updated_at?: string | null;
+  message_count: number;
+  latest_user_message?: string;
+  latest_assistant_message?: string;
+}
+export interface AdminSessionMessage {
+  message_id: string;
+  role: string;
+  content: string;
+  model_used: string;
+  intent: string;
+  cost: number;
+  tokens_in: number;
+  tokens_out: number;
+  created_at: string | null;
+}
+export interface AdminSessionDetailResponse {
+  session: AdminSessionItem;
+  messages: AdminSessionMessage[];
+  total: number;
+}
+export interface AdminUsersOverviewResponse {
+  generated_at: string;
+  window_days: number;
+  summary: Record<string, number>;
+  tables: Record<string, boolean>;
+  plans: Array<{ plan: string; users: number }>;
+  membership_roles: Array<{ role: string; status: string; memberships: number }>;
+  tenants: Array<{
+    tenant_id: string;
+    slug: string;
+    name: string;
+    kind: string;
+    status: string;
+    active_members: number;
+    pending_invites: number;
+    created_at: string | null;
+  }>;
+  users: Array<{
+    user_id: string;
+    email: string;
+    name: string;
+    role: string;
+    status: string;
+    plan: string;
+    default_tenant_name: string;
+    tenant_count: number;
+    sessions_30d: number;
+    messages_30d: number;
+    tokens_30d: number;
+    cost_30d: number;
+    created_at: string | null;
+    updated_at: string | null;
+    last_seen_at: string | null;
+    has_internal_access?: boolean;
+  }>;
+  daily: Array<{ day: string; signups: number }>;
+}
+
+export interface AdminInternalAccessResponse {
+  user_id: string;
+  email: string;
+  name?: string | null;
+  role: string;
+  default_tenant_id?: string | null;
+  has_internal_access: boolean;
+  membership?: {
+    membership_id: string;
+    tenant_id: string;
+    role: string;
+    status: string;
+  } | null;
+}
 
 import type {
   HealthResponse,
@@ -25,9 +141,37 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-// AADS-AUTH-401: 401 응답 시 토큰 정리 + 로그인 페이지 리다이렉트 (중복 실행 방지)
+// AADS-AUTH-REFRESH: 401 시 토큰 갱신 시도 → 실패 시 로그인 리다이렉트
 let _redirecting401 = false;
-function handle401Redirect(): void {
+let _refreshingToken = false;
+
+async function tryRefreshToken(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  if (_refreshingToken) return false;
+  _refreshingToken = true;
+  try {
+    const token = localStorage.getItem("aads_token");
+    if (!token) return false;
+    const res = await fetch(`${BASE_URL}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.token) {
+      localStorage.setItem("aads_token", data.token);
+      document.cookie = `aads_token=${data.token}; path=/; max-age=604800; SameSite=Lax`;
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    _refreshingToken = false;
+  }
+}
+
+function forceLogout(): void {
   if (typeof window === "undefined") return;
   if (_redirecting401) return;
   _redirecting401 = true;
@@ -42,6 +186,23 @@ function handle401Redirect(): void {
   }
 }
 
+// Proactive token renewal: check every 5 min, refresh if < 24h remaining
+if (typeof window !== "undefined") {
+  setInterval(async () => {
+    const token = localStorage.getItem("aads_token");
+    if (!token) return;
+    try {
+      const parts = token.split(".");
+      if (parts.length < 2) return;
+      const payload = JSON.parse(atob(parts[1]));
+      const remaining = (payload.exp || 0) - Date.now() / 1000;
+      if (remaining > 0 && remaining < 86400) {
+        await tryRefreshToken();
+      }
+    } catch {}
+  }, 300_000);
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
@@ -52,7 +213,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     },
   });
   if (res.status === 401) {
-    handle401Redirect();
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      const retry = await fetch(`${BASE_URL}${path}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+          ...options?.headers,
+        },
+      });
+      if (retry.ok) return retry.json() as Promise<T>;
+    }
+    forceLogout();
     throw new Error("401: 세션이 만료되었습니다. 다시 로그인해주세요.");
   }
   if (!res.ok) {
@@ -161,6 +334,7 @@ export const api = {
   getOpsDirectiveLifecycle: (limit = 20) => request<any>(`/ops/directive-lifecycle?limit=${limit}`),
   getOpsCostSummary: () => request<any>("/ops/cost/summary"),
   getOpsAccountUsage: () => request<any>("/ops/account-usage"),
+  getOpsCodexUsage: () => request<any>("/ops/codex-usage"),
   getOpsEnvHistory: (serverId: number | string) => request<any>(`/ops/env-history/${serverId}`),
   getOpsBridgeLog: (limit = 30) => request<any>(`/ops/bridge-log?limit=${limit}`),
 
@@ -230,7 +404,9 @@ export const api = {
 
   // AADS-170: Chat-First System API
   getChatWorkspaces: () => request<any>("/chat/workspaces"),
-  createChatWorkspace: (data: { name: string; description?: string; icon?: string; color?: string }) =>
+  getChatWorkspaceRoles: (workspaceId: string) =>
+    request<ChatWorkspaceRolesResponse>(`/chat/workspaces/${encodeURIComponent(workspaceId)}/roles`),
+  createChatWorkspace: (data: { name: string; description?: string; icon?: string; color?: string; settings?: Record<string, unknown> }) =>
     request<any>("/chat/workspaces", { method: "POST", body: JSON.stringify(data) }),
   updateChatWorkspace: (id: string, data: Record<string, unknown>) =>
     request<any>(`/chat/workspaces/${id}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -241,9 +417,9 @@ export const api = {
     request<any>(`/chat/sessions${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`),
   getChatSession: (sessionId: string) =>
     request<any>(`/chat/sessions/${encodeURIComponent(sessionId)}`),
-  createChatSession: (data: { workspace_id: string; title?: string; current_model?: string }) =>
+  createChatSession: (data: { workspace_id: string; title?: string; current_model?: string; role_key?: string }) =>
     request<any>("/chat/sessions", { method: "POST", body: JSON.stringify(data) }),
-  updateChatSession: (id: string, data: { title?: string; pinned?: boolean }) =>
+  updateChatSession: (id: string, data: { title?: string; pinned?: boolean; tags?: string[]; current_model?: string; role_key?: string }) =>
     request<any>(`/chat/sessions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteChatSession: (id: string) =>
     request<any>(`/chat/sessions/${id}`, { method: "DELETE" }),
@@ -263,8 +439,8 @@ export const api = {
   toggleChatBookmark: (messageId: string) =>
     request<any>(`/chat/messages/${messageId}/bookmark`, { method: "PUT" }),
 
-  getChatArtifacts: (sessionId: string) =>
-    request<any>(`/chat/artifacts?session_id=${sessionId}`),
+  getChatArtifacts: (sessionId: string, limit = 60, offset = 0) =>
+    request<unknown[]>(`/chat/artifacts?session_id=${encodeURIComponent(sessionId)}&limit=${limit}&offset=${offset}`),
   getChatArtifact: (id: string) => request<any>(`/chat/artifacts/${id}`),
   updateChatArtifact: (id: string, data: Record<string, unknown>) =>
     request<any>(`/chat/artifacts/${id}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -297,6 +473,22 @@ export const api = {
     }),
   stopPCStream: (agent_id: string) =>
     request<any>(`/pc-agent/stream/${encodeURIComponent(agent_id)}/stop`, { method: "POST" }),
+
+  // Device / Android Agent
+  getDevices: (deviceType?: string) =>
+    request<unknown>(`/devices${deviceType ? `?device_type=${encodeURIComponent(deviceType)}` : ""}`),
+  getAndroidAgentManifest: () => request<unknown>("/devices/android/manifest"),
+  createAndroidPairing: (data: { agent_id?: string; label?: string; device_type?: "android" | "pc" | "ios"; expires_hours?: number }) =>
+    request<unknown>("/devices/android/pairing", {
+      method: "POST",
+      body: JSON.stringify({
+        device_type: "android",
+        expires_hours: 24,
+        ...data,
+      }),
+    }),
+  revokeAndroidPairing: (agentId: string) =>
+    request<unknown>(`/devices/android/pairing/${encodeURIComponent(agentId)}/revoke`, { method: "POST" }),
 
   // Memory Evolution Dashboard
   getOpsMemoryStats: () => request<any>("/ops/memory/stats"),
@@ -359,15 +551,51 @@ export const api = {
   getTokenProfile: () => request<any>("/admin/prompts/token-profile"),
   getGovernance: () => request<any>("/admin/governance"),
   getGovernanceLayers: () => request<any>("/admin/governance/layers"),
+  getGovernanceIntentPolicies: () => request<any>("/governance/intent-policies"),
+  getGovernanceFeatureFlags: () => request<any>("/governance/feature-flags"),
+  updateGovernanceFeatureFlag: (flagKey: string, enabled: boolean) =>
+    request<any>(`/governance/feature-flags/${encodeURIComponent(flagKey)}`, {
+      method: "POST",
+      body: JSON.stringify({ enabled, changed_by: "admin_dashboard" }),
+    }),
+  getGovernanceAuditLog: (limit = 100) => request<any>(`/governance/audit-log?limit=${limit}`),
   getModelParity: () => request<any>("/admin/model-parity"),
   getModelParityIntentMap: () => request<any>("/admin/model-parity/intent-map"),
   getDeployStatus: () => request<any>("/admin/deploy/status"),
+  getAdminDeployStatus: () => request<AdminDeployStatusResponse>("/admin/deploy/status"),
   getEmergencyStatus: () => request<any>("/admin/emergency"),
   postEmergencyAction: (action: string, reason: string) =>
     request<any>("/admin/emergency", { method: "POST", body: JSON.stringify({ action, reason }) }),
   getAdminAgents: () => request<any>("/admin/agents"),
   getAdminAgent: (role: string) => request<any>(`/admin/agents/${encodeURIComponent(role)}`),
   getAdminAgentStats: () => request<any>("/admin/agents/stats"),
+  getAdminSessions: (params?: { limit?: number; user_id?: string; email?: string; tenant_id?: string; search?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.user_id) q.set("user_id", params.user_id);
+    if (params?.email) q.set("email", params.email);
+    if (params?.tenant_id) q.set("tenant_id", params.tenant_id);
+    if (params?.search) q.set("search", params.search);
+    return request<{ sessions: AdminSessionItem[]; total: number }>(`/admin/sessions${q.size ? `?${q.toString()}` : ""}`);
+  },
+  getAdminSessionDetail: (sessionId: string, limit = 80) =>
+    request<AdminSessionDetailResponse>(`/admin/sessions/${encodeURIComponent(sessionId)}?limit=${limit}`),
+  getAdminUsersOverview: (params?: { days?: number; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.days) q.set("days", String(params.days));
+    if (params?.limit) q.set("limit", String(params.limit));
+    return request<AdminUsersOverviewResponse>(`/admin/users/overview${q.size ? `?${q.toString()}` : ""}`);
+  },
+  updateAdminUserInternalAccess: (userId: string, enabled: boolean) =>
+    request<AdminInternalAccessResponse>(`/admin/users/${encodeURIComponent(userId)}/internal-access`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  createAdminUserPasswordResetToken: (userId: string) =>
+    request<{ user_id: string; email: string; reset_token: string; expires_at: string }>(
+      `/admin/users/${encodeURIComponent(userId)}/password-reset-token`,
+      { method: "POST" },
+    ),
   getAdminTasks: (params?: { status?: string; page?: number; page_size?: number }) => {
     const q = new URLSearchParams();
     if (params?.status) q.set("status", params.status);
@@ -377,6 +605,29 @@ export const api = {
   },
   getAdminTask: (jobId: string) => request<any>(`/admin/tasks/${encodeURIComponent(jobId)}`),
   getAdminTaskStats: () => request<any>("/admin/tasks/stats"),
+
+  // Design Modification Studio
+  getDesignScreens: (projectKey = "AADS") =>
+    request<any>(`/admin/design/projects/${encodeURIComponent(projectKey)}/screens`),
+  getDesignModificationRequests: (projectKey = "AADS", params?: { status?: string; screen_id?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.screen_id) q.set("screen_id", params.screen_id);
+    const qs = q.toString();
+    return request<any>(`/admin/design/projects/${encodeURIComponent(projectKey)}/modification-requests${qs ? `?${qs}` : ""}`);
+  },
+  createDesignModificationRequest: (data: Record<string, unknown>) =>
+    request<any>("/admin/design/modification-requests", { method: "POST", body: JSON.stringify(data) }),
+  getDesignModificationRequest: (requestId: string) =>
+    request<any>(`/admin/design/modification-requests/${encodeURIComponent(requestId)}`),
+  buildDesignContextPack: (requestId: string) =>
+    request<any>(`/admin/design/modification-requests/${encodeURIComponent(requestId)}/build-context`, { method: "POST" }),
+  getDesignContextPacks: (requestId: string) =>
+    request<any>(`/admin/design/modification-requests/${encodeURIComponent(requestId)}/context-packs`),
+  getDesignContextPackPreview: (contextPackId: string) =>
+    request<any>(`/admin/design/context-packs/${encodeURIComponent(contextPackId)}/preview`),
+  scoreDesignModification: (requestId: string) =>
+    request<any>(`/admin/design/modification-requests/${encodeURIComponent(requestId)}/score`, { method: "POST" }),
 
   // LLM API 키 관리 (AADS-188)
   getLlmKeys: () => request<any[]>("/llm-keys"),
@@ -396,6 +647,35 @@ export const api = {
   },
   getLlmProviderTimeline: (provider: string, limit = 20) =>
     request<any>(`/llm-models/providers/${encodeURIComponent(provider)}/timeline?limit=${limit}`),
+  getLlmModelSummary: () => request<any>("/llm-models/providers/summary"),
+  getLlmModelDiscoveryRuns: (limit = 20) => request<any>(`/llm-models/discovery-runs?limit=${limit}`),
+  syncLlmModelRegistry: () => request<any>("/llm-models/sync", { method: "POST" }),
+  getChatModelPreferences: () => request<any>("/llm-models/chat-preferences"),
+  updateChatModelPreferences: (
+    items: Array<{
+      preference_key?: string;
+      provider?: string;
+      model_id: string;
+      display_order: number;
+      is_hidden: boolean;
+      is_favorite: boolean;
+      is_pinned: boolean;
+    }>,
+  ) => request<any>("/llm-models/chat-preferences", { method: "PUT", body: JSON.stringify(items) }),
+  getModelRoutingPreferences: () => request<any>("/llm-models/routing-preferences"),
+  updateModelRoutingPreferences: (preferences: Array<{
+    route_key: string;
+    provider: string;
+    model_id: string;
+    display_order: number;
+    is_enabled: boolean;
+    is_default: boolean;
+    notes?: string;
+  }>) =>
+    request<any>("/llm-models/routing-preferences", {
+      method: "PUT",
+      body: JSON.stringify({ preferences }),
+    }),
 
   // Prompt Assets (5-Layer System)
   getPromptAssets: (layer?: number) =>
