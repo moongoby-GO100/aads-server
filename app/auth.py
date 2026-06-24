@@ -94,7 +94,7 @@ def verify_token(token: str) -> Optional[dict]:
         return None
 
 
-REFRESH_GRACE_SECONDS = 3600
+REFRESH_GRACE_SECONDS = 86400  # 24h — 토큰 만료 후에도 24시간 내 리프레시 허용
 
 
 def refresh_token(token: str) -> Optional[str]:

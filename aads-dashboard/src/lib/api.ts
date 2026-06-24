@@ -144,6 +144,7 @@ function getAuthHeaders(): Record<string, string> {
 // AADS-AUTH-REFRESH: 401 시 토큰 갱신 시도 → 실패 시 로그인 리다이렉트
 let _redirecting401 = false;
 let _refreshingToken = false;
+let _authDead = false;
 
 async function tryRefreshToken(): Promise<boolean> {
   if (typeof window === "undefined") return false;
@@ -175,6 +176,7 @@ function forceLogout(): void {
   if (typeof window === "undefined") return;
   if (_redirecting401) return;
   _redirecting401 = true;
+  _authDead = true;
   try {
     localStorage.removeItem("aads_token");
     document.cookie = "aads_token=; path=/; max-age=0";
@@ -197,13 +199,17 @@ if (typeof window !== "undefined") {
       const payload = JSON.parse(atob(parts[1]));
       const remaining = (payload.exp || 0) - Date.now() / 1000;
       if (remaining > 0 && remaining < 86400) {
-        await tryRefreshToken();
+        const ok = await tryRefreshToken();
+        if (!ok && remaining < 7200) {
+          setTimeout(() => tryRefreshToken(), 30000);
+        }
       }
     } catch {}
   }, 300_000);
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  if (_authDead) throw new Error("401: 세션이 만료되었습니다. 다시 로그인해주세요.");
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
