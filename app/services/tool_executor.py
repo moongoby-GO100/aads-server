@@ -8,9 +8,14 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import hashlib
+import inspect
 import json
 import logging
 import os
+import re
+import shlex
+import shutil
+import subprocess
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime
@@ -19,6 +24,115 @@ from typing import Any, Dict, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _active_api_port() -> str:
+    for candidate in (
+        os.getenv("AADS_ACTIVE_PORT", ""),
+        "/root/aads/aads-server/.active_port",
+        ".active_port",
+    ):
+        value = str(candidate or "").strip()
+        if not value:
+            continue
+        if value.isdigit():
+            return value
+        try:
+            with open(value, "r", encoding="utf-8") as fh:
+                port = fh.read().strip()
+        except OSError:
+            continue
+        if port.isdigit():
+            return port
+    return ""
+
+
+def _active_api_ports() -> list[str]:
+    ports: list[str] = []
+    for candidate in (_active_api_port(), "8100", "8102"):
+        if candidate and candidate.isdigit() and candidate not in ports:
+            ports.append(candidate)
+    return ports
+
+
+def _active_api_urls(path: str) -> list[str]:
+    urls: list[str] = []
+    for port in _active_api_ports():
+        urls.append(f"http://127.0.0.1:{port}{path}")
+        if port == "8100":
+            urls.append(f"http://aads-server:8080{path}")
+        elif port == "8102":
+            urls.append(f"http://aads-server-green:8080{path}")
+    deduped: list[str] = []
+    for url in urls:
+        if url not in deduped:
+            deduped.append(url)
+    return deduped
+
+
+async def _pc_agent_get_via_active_api(path: str) -> dict[str, Any] | None:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for url in _active_api_urls(path):
+            try:
+                resp = await client.get(url)
+            except httpx.HTTPError as exc:
+                logger.warning("pc_agent_active_api_get_failed url=%s err=%s", url, exc)
+                continue
+            if resp.status_code >= 400:
+                logger.warning("pc_agent_active_api_get_http_error url=%s status=%s", url, resp.status_code)
+                continue
+            try:
+                body = resp.json()
+            except ValueError as exc:
+                logger.warning("pc_agent_active_api_get_bad_json url=%s err=%s", url, exc)
+                continue
+            if isinstance(body, dict):
+                body.setdefault("backend_source", "active_api")
+                return body
+    return None
+
+
+async def _pc_agent_route_via_active_api(payload: dict[str, Any]) -> dict[str, Any] | None:
+    timeout = float(payload.get("command_timeout_seconds") or 120.0)
+    queue_timeout = float(payload.get("queue_wait_timeout_seconds") or 120.0)
+    request_timeout = max(10.0, min(300.0, timeout + queue_timeout + 5.0))
+    async with httpx.AsyncClient(timeout=request_timeout) as client:
+        for url in _active_api_urls("/api/v1/pc-agent/route-execute"):
+            try:
+                resp = await client.post(url, json=payload)
+            except httpx.HTTPError as exc:
+                logger.warning("pc_agent_active_api_route_failed url=%s err=%s", url, exc)
+                continue
+            try:
+                body = resp.json()
+            except ValueError as exc:
+                logger.warning("pc_agent_active_api_route_bad_json url=%s err=%s", url, exc)
+                continue
+            if resp.status_code >= 400:
+                detail = body.get("detail") if isinstance(body, dict) else None
+                if isinstance(detail, dict):
+                    error_code = str(detail.get("error_code") or "")
+                    if error_code in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+                        continue
+                    detail.setdefault("backend_source", "active_api")
+                    return detail
+                logger.warning("pc_agent_active_api_route_http_error url=%s status=%s", url, resp.status_code)
+                continue
+            if isinstance(body, dict):
+                body.setdefault("backend_source", "active_api")
+                return body
+    return None
+
+
+class _DryRunRollback(Exception):
+    def __init__(self, plan: list):
+        self.plan = plan
+
+
+class _MaxAffectedExceeded(Exception):
+    def __init__(self, actual: int, limit: int):
+        self.actual = actual
+        self.limit = limit
 
 
 def _json_default(obj: Any) -> Any:
@@ -31,10 +145,58 @@ def _json_default(obj: Any) -> Any:
         return f"<binary {len(obj)} bytes>"
     return str(obj)
 
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
 # Pipeline Runner 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
 )
+current_tenant_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_tenant_id", default=""
+)
+
+
+def _resolve_bound_chat_session_id(explicit_session_id: Any = "") -> str:
+    """Resolve the chat session bound to the current request."""
+    session_id = str(current_chat_session_id.get("") or explicit_session_id or "").strip()
+    if session_id:
+        return session_id
+    try:
+        from app.services.agent_sdk_service import get_active_chat_session_id
+
+        return get_active_chat_session_id()
+    except Exception:
+        return ""
+
+
+async def resolve_bound_tenant_id(explicit_tenant_id: Any = "", explicit_session_id: Any = "") -> str:
+    tenant_id = str(current_tenant_id.get("") or explicit_tenant_id or "").strip()
+    if tenant_id:
+        return tenant_id
+    session_id = _resolve_bound_chat_session_id(explicit_session_id)
+    if not session_id:
+        return ""
+    try:
+        from app.services.tenant_usage_limits import resolve_tenant_id_for_session
+
+        return await resolve_tenant_id_for_session(session_id) or ""
+    except Exception:
+        return ""
+
+
+_GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
@@ -43,12 +205,22 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내로 응답 보장
+_BROWSER_TOOL_TIMEOUT = 210.0  # Browser Bridge CDP/PC Agent 명령(최대 180s) + 여유
+_BROWSER_TOOLS = frozenset({
+    "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
+    "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
+    "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
+})
 _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
     "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
-    "pc_execute", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
-    "generate_image", "search_all_projects", "deep_crawl",
+    "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
+    "generate_image", "edit_image", "generate_video", "video_download",
+    "local_model_install_test", "generate_music", "generate_three_d_asset",
+    "search_all_projects", "deep_crawl", "deploy_safe",
+    "search_crawl_match",
+    "credential_test_login",
 })
 
 # ── 파일별 동시 수정 방지 잠금 ─────────────────────────────────────────────
@@ -84,6 +256,22 @@ _PROJECT_SCOPED_TOOLS = frozenset({
     "pipeline_runner_submit",
 })
 _PROJECT_KEYS = ("GO100", "NTV2", "KIS", "SF", "NAS", "KAKAOBOT", "AADS")
+
+_DEPLOY_SAFE_ALLOWED_MODES = frozenset({"reload", "bluegreen", "restart-single"})
+_DEPLOY_SAFE_RELOAD_CMD = ["bash", "/root/aads/aads-server/scripts/reload-api.sh"]
+_DEPLOY_SAFE_CONTAINER_RELOAD_CMD = ["bash", "/app/scripts/reload-api.sh"]
+_DEPLOY_SAFE_BLUEGREEN_CMD = ["bash", "/root/aads/aads-server/deploy.sh", "bluegreen"]
+_DEPLOY_SAFE_RESTART_BASE_CMD = [
+    "docker", "compose", "-f", "/root/aads/aads-server/docker-compose.prod.yml", "restart",
+]
+_DEPLOY_SAFE_HEALTH_ARGS = ["curl", "-fsS", f"{_AADS_API_BASE}/api/v1/ops/health-check"]
+_DEPLOY_SAFE_HEALTH_COMMAND = " ".join(shlex.quote(part) for part in _DEPLOY_SAFE_HEALTH_ARGS)
+_DEPLOY_SAFE_FORBIDDEN_PATTERNS = (
+    "docker compose up -d",
+    "docker-compose up -d",
+    "supervisorctl restart aads-api",
+    "--force",
+)
 
 
 async def _get_file_lock(lock_key: str) -> asyncio.Lock:
@@ -130,6 +318,18 @@ def _project_from_workspace_name(name: str) -> str:
         if any(token in upper or token in name for token in tokens):
             return project
     return ""
+
+
+def _resolve_task_scope(inp: Dict[str, Any]) -> tuple[str, str]:
+    """작업 상태 조회 기본 범위를 현재 채팅 세션으로 고정한다."""
+    scope = str(inp.get("scope", "") or "").strip().lower()
+    if scope in _GLOBAL_TASK_SCOPES:
+        return "all", ""
+
+    session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+    if session_id:
+        return "current_session", session_id
+    return "all", ""
 
 
 async def _infer_project_from_session(session_id: str) -> str:
@@ -180,6 +380,7 @@ class ToolExecutor:
         # execution_id별 읽기 도구 결과 캐시 (executor 생명주기 = execution 생명주기)
         self._execution_cache: dict[str, OrderedDict[str, str]] = {}
         self._session_execution_ids: dict[str, str] = {}
+        self._registry: Optional[Any] = None
 
     async def _resolve_execution_id(self, tool_input: Dict[str, Any]) -> str:
         execution_id = str(tool_input.get("execution_id", "") or "").strip()
@@ -276,6 +477,42 @@ class ToolExecutor:
         """
         try:
             tool_input = dict(tool_input or {})
+            tenant_id = await resolve_bound_tenant_id(
+                tool_input.get("tenant_id", ""),
+                tool_input.get("session_id", ""),
+            )
+            if tenant_id:
+                from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
+
+                try:
+                    await check_tenant_usage_limit(
+                        tenant_id,
+                        operation=f"tool:{tool_name}",
+                        projected_calls=1,
+                    )
+                except TenantUsageLimitExceeded as e:
+                    return json.dumps(
+                        {
+                            "error": "tenant_usage_limit_exceeded",
+                            "status": e.decision.status,
+                            "limit": e.decision.limit_name,
+                            "message": e.decision.message,
+                        },
+                        ensure_ascii=False,
+                    )
+                tool_input["tenant_id"] = tenant_id
+            if tool_name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
+                current_session = str(current_chat_session_id.get("") or "").strip()
+                supplied_session = str(tool_input.get("session_id", "") or "").strip()
+                if current_session:
+                    tool_input["session_id"] = current_session
+                    if supplied_session and supplied_session != current_session:
+                        logger.warning(
+                            "runner_session_override: tool=%s supplied=%s current=%s",
+                            tool_name,
+                            supplied_session[:8],
+                            current_session[:8],
+                        )
             if tool_name in _PROJECT_SCOPED_TOOLS and not str(tool_input.get("project") or "").strip():
                 session_id = str(tool_input.get("session_id", "") or current_chat_session_id.get("")).strip()
                 inferred_project = await _infer_project_from_session(session_id)
@@ -310,7 +547,10 @@ class ToolExecutor:
                             decorated_result = decorated_result[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
                         return decorated_result
 
-            _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
+            if tool_name in _BROWSER_TOOLS:
+                _timeout = _BROWSER_TOOL_TIMEOUT
+            else:
+                _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
             result = await asyncio.wait_for(
                 self._dispatch(tool_name, tool_input),
                 timeout=_timeout,
@@ -342,18 +582,26 @@ class ToolExecutor:
         """도구 이름 → 실제 함수 매핑."""
         dispatch = {
             "health_check":           self._health_check,
+            "todo_write":             self._todo_write,
             "dashboard_query":        self._dashboard_query,
             "task_history":           self._task_history,
             "server_status":          self._server_status,
             "directive_create":       self._directive_create,
+            "create_design_modification_request": self._create_design_modification_request,
             "read_github_file":       self._read_github_file,
             "query_database":         self._query_database,
+            # Backward-compatible alias for legacy prompts/tool-call traces.
+            "query_db":               self._query_database,
             "query_project_database": self._query_project_database,
             "list_project_databases": self._list_project_databases,
             "read_remote_file":       self._read_remote_file,
             "write_remote_file":      self._write_remote_file,
             "patch_remote_file":      self._patch_remote_file,
             "run_remote_command":     self._run_remote_command,
+            "deploy_safe":            self._deploy_safe,
+            "db_safe_write":          self._db_safe_write,
+            "notify_channel":         self._notify_channel,
+            "tool_layer_audit":       self._tool_layer_audit,
             "git_remote_add":         self._git_remote_add,
             "git_remote_commit":      self._git_remote_commit,
             "git_remote_push":        self._git_remote_push,
@@ -364,6 +612,7 @@ class ToolExecutor:
             "web_search_brave":       self._web_search,
             "web_search":             self._web_search,
             "search_searxng":         self._search_searxng,
+            "search_crawl_match":     self._search_crawl_match,
             "web_search_naver":       self._web_search_naver,
             "web_search_kakao":       self._web_search_kakao,
             "web_search_google":      self._web_search_google,
@@ -395,11 +644,17 @@ class ToolExecutor:
             "delegate_to_agent":      self._delegate_to_agent,
             "delegate_to_research":   self._delegate_to_research,
             # AADS-159: 브라우저 도구 (Playwright 기반)
+            "browser_connect":        self._browser_connect,
             "browser_navigate":       self._browser_navigate,
             "browser_snapshot":       self._browser_snapshot,
             "browser_screenshot":     self._browser_screenshot,
             "browser_click":          self._browser_click,
             "browser_fill":           self._browser_fill,
+            "browser_press_key":      self._browser_press_key,
+            "browser_select_option":  self._browser_select_option,
+            "browser_check":          self._browser_check,
+            "browser_upload_file":    self._browser_upload_file,
+            "browser_download":       self._browser_download,
             "browser_tab_list":       self._browser_tab_list,
             # AADS-190 Phase2-A: 서브에이전트
             "spawn_subagent":         self._spawn_subagent,
@@ -428,6 +683,19 @@ class ToolExecutor:
             "list_agendas": self._list_agendas,
             "search_agendas": self._search_agendas,
             "update_agenda": self._update_agenda,
+            # 자동 추가 (check_tool_consistency --fix)
+            "credential_delete": self._credential_delete,
+            "credential_list": self._credential_list,
+            "credential_register": self._credential_register,
+            "credential_test_login": self._credential_test_login,
+            "get_e2e_login_url": self._get_e2e_login_url,
+            "google_sheets_register": self._google_sheets_register,
+            "google_sheets_read": self._google_sheets_read,
+            "google_sheets_update": self._google_sheets_update,
+            "google_sheets_append": self._google_sheets_append,
+            "google_sheets_write_records": self._google_sheets_write_records,
+            "google_sheets_clear": self._google_sheets_clear,
+            "google_sheets_create": self._google_sheets_create,
             # 첨부파일 재읽기
             "read_uploaded_file":     self._read_uploaded_file,
             # 작업 모니터
@@ -438,15 +706,26 @@ class ToolExecutor:
             # Memory Upgrade: F5 + F12 + C4
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
+            "tool_metrics":           self._tool_metrics,
             "query_decision_graph":   self._query_decision_graph,
             # AADS-195 Phase 3: PC Agent 도구
             "pc_execute":             self._pc_execute,
             "pc_list_agents":         self._pc_list_agents,
             # AADS-230: 통합 디바이스 도구
+            "device_command":         self._device_command,
             "device_execute":         self._device_execute,
             "device_list":            self._device_list,
             # 유령 도구 해소 (Claude+Gemini 양쪽 경로 통일)
             "generate_image":          self._generate_image,
+            "edit_image":              self._edit_image,
+            "generate_video":          self._generate_video,
+            "video_status":            self._video_status,
+            "video_download":          self._video_download,
+            "local_model_queue_status": self._local_model_queue_status,
+            "local_model_install_test": self._local_model_install_test,
+            "generate_music":          self._generate_music,
+            "generate_three_d_asset":       self._generate_three_d_asset,
+            "media_job_status":        self._media_job_status,
             "send_telegram":           self._send_telegram,
             "fact_check":              self._fact_check,
             "fact_check_multiple":     self._fact_check_multiple,
@@ -465,6 +744,164 @@ class ToolExecutor:
         return await fn(tool_input)
 
     # ── system 도구 ─────────────────────────────────────────────────────────
+
+    async def _todo_write(self, inp: Dict[str, Any]) -> Any:
+        """Manage the current chat session TODO list from tool-use."""
+        from app.services.chat_todo_service import (
+            TODO_ACTIVE_STATUSES,
+            TODO_STATUS_COMPLETED,
+            TODO_STATUS_FAILED,
+            TODO_STATUS_IN_PROGRESS,
+            TODO_STATUS_PENDING,
+            TODO_STATUS_SKIPPED,
+            TODO_TERMINAL_STATUSES,
+            TODO_VALID_STATUSES,
+            create_todo_items,
+            list_todo_items,
+            update_session_todo_item,
+        )
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        if not session_id:
+            return {"error": "missing_session_id", "message": "todo_write requires a bound chat session"}
+
+        action = str(inp.get("action") or "").strip().lower()
+        status_map = {
+            "start": TODO_STATUS_IN_PROGRESS,
+            "complete": TODO_STATUS_COMPLETED,
+            "fail": TODO_STATUS_FAILED,
+            "skip": TODO_STATUS_SKIPPED,
+        }
+        if action not in {"list", "create", "start", "complete", "fail", "skip", "update"}:
+            return {"error": "invalid_action", "allowed": ["list", "create", "start", "complete", "fail", "skip", "update"]}
+
+        async def _promote_next_if_needed() -> Optional[Dict[str, Any]]:
+            active = await list_todo_items(
+                session_id=session_id,
+                statuses=TODO_ACTIVE_STATUSES,
+                include_completed=False,
+            )
+            if any(item.get("status") == TODO_STATUS_IN_PROGRESS for item in active):
+                return None
+            pending = next((item for item in active if item.get("status") == TODO_STATUS_PENDING), None)
+            if not pending:
+                return None
+            return await update_session_todo_item(
+                session_id=session_id,
+                todo_id=str(pending["id"]),
+                status=TODO_STATUS_IN_PROGRESS,
+                metadata={"promoted_by": "todo_write"},
+                source="assistant_tool",
+            )
+
+        async def _resolve_target() -> Optional[Dict[str, Any]]:
+            todo_id = str(inp.get("todo_id") or "").strip()
+            items = await list_todo_items(session_id=session_id, include_completed=True)
+            if todo_id:
+                return next((item for item in items if str(item.get("id")) == todo_id), None)
+
+            title = str(inp.get("title") or "").strip()
+            normalized_title = re.sub(r"\s+", " ", title).strip().lower()
+            if normalized_title:
+                exact = [
+                    item for item in items
+                    if re.sub(r"\s+", " ", str(item.get("title") or "")).strip().lower() == normalized_title
+                ]
+                if exact:
+                    return exact[0]
+                partial = [
+                    item for item in items
+                    if normalized_title in re.sub(r"\s+", " ", str(item.get("title") or "")).strip().lower()
+                    or re.sub(r"\s+", " ", str(item.get("title") or "")).strip().lower() in normalized_title
+                ]
+                if partial:
+                    return partial[0]
+
+            if _coerce_bool(inp.get("current"), False) or not (todo_id or title):
+                in_progress = next((item for item in items if item.get("status") == TODO_STATUS_IN_PROGRESS), None)
+                if in_progress:
+                    return in_progress
+                return next((item for item in items if item.get("status") == TODO_STATUS_PENDING), None)
+            return None
+
+        if action == "list":
+            items = await list_todo_items(session_id=session_id, include_completed=True)
+            return {"session_id": session_id, "count": len(items), "items": items[:50]}
+
+        if action == "create":
+            titles = inp.get("titles")
+            if not isinstance(titles, list):
+                titles = []
+            prepared_titles = [str(title).strip() for title in titles if str(title).strip()]
+            single_title = str(inp.get("title") or "").strip()
+            if single_title:
+                prepared_titles.insert(0, single_title)
+            if not prepared_titles:
+                return {"error": "missing_title", "message": "create requires title or titles"}
+            rows = await create_todo_items(
+                session_id=session_id,
+                titles=prepared_titles,
+                source="assistant_tool",
+                metadata={
+                    "created_from": "todo_write",
+                    "reason": str(inp.get("reason") or "")[:500],
+                },
+            )
+            requested_status = str(inp.get("status") or "").strip()
+            if requested_status and requested_status in TODO_VALID_STATUSES:
+                updated_rows = []
+                for row in rows:
+                    updated = await update_session_todo_item(
+                        session_id=session_id,
+                        todo_id=str(row["id"]),
+                        status=requested_status,
+                        metadata={"status_set_by": "todo_write"},
+                        source="assistant_tool",
+                    )
+                    updated_rows.append(updated or row)
+                rows = updated_rows
+            return {"session_id": session_id, "action": action, "count": len(rows), "items": rows}
+
+        target = await _resolve_target()
+        if not target:
+            return {
+                "error": "todo_not_found",
+                "message": "No matching TODO was found for todo_id/title/current.",
+                "session_id": session_id,
+            }
+
+        next_status = status_map.get(action)
+        if action == "update":
+            requested_status = str(inp.get("status") or "").strip()
+            next_status = requested_status or None
+            if next_status and next_status not in TODO_VALID_STATUSES:
+                return {"error": "invalid_status", "allowed": sorted(TODO_VALID_STATUSES)}
+
+        next_title = str(inp.get("title") or "").strip() or None
+        if action != "update":
+            next_title = None
+
+        updated = await update_session_todo_item(
+            session_id=session_id,
+            todo_id=str(target["id"]),
+            status=next_status,
+            title=next_title,
+            metadata={
+                "updated_from": "todo_write",
+                "reason": str(inp.get("reason") or "")[:500],
+                "action": action,
+            },
+            source="assistant_tool",
+        )
+        promoted = None
+        if updated and updated.get("status") in TODO_TERMINAL_STATUSES:
+            promoted = await _promote_next_if_needed()
+        return {
+            "session_id": session_id,
+            "action": action,
+            "item": updated,
+            "promoted_next": promoted,
+        }
 
     async def _health_check(self, inp: Dict[str, Any]) -> Any:
         try:
@@ -536,6 +973,116 @@ class ToolExecutor:
             f"\nDESCRIPTION: {description}\n"
             f">>>DIRECTIVE_END"
         )
+
+    async def _create_design_modification_request(self, inp: Dict[str, Any]) -> Any:
+        """Create a Design Studio request card from chat/tool use."""
+        project_key = str(inp.get("project_key") or "AADS").strip().upper()
+        user_prompt = str(inp.get("user_prompt") or "").strip()
+        if not user_prompt:
+            return {"error": "user_prompt 필수"}
+        if project_key not in {"AADS", "KIS", "GO100", "SF", "NTV2"}:
+            return {"error": "project_key는 AADS/KIS/GO100/SF/NTV2 중 하나여야 합니다."}
+
+        request_type = str(inp.get("request_type") or "other").strip().lower() or "other"
+        allowed_request_types = {
+            "spacing", "spacing_density", "visual_hierarchy", "color", "color_brand",
+            "typography", "component", "component_consistency", "responsive",
+            "interaction", "content_clarity", "workflow_layout", "flow", "other",
+        }
+        if request_type not in allowed_request_types:
+            request_type = "other"
+
+        def _list_from(value: Any) -> list[str]:
+            if isinstance(value, list):
+                return [str(item).strip() for item in value if str(item).strip()]
+            if isinstance(value, str):
+                return [line.strip() for line in value.splitlines() if line.strip()]
+            return []
+
+        screen_id = str(inp.get("screen_id") or "").strip()
+        screen_route = str(inp.get("screen_route") or "").strip()
+        build_context = _coerce_bool(inp.get("build_context"), default=True)
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+
+        try:
+            from app.core.db_pool import get_pool
+
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                if not screen_id and screen_route:
+                    screen_id = str(await conn.fetchval(
+                        """
+                        SELECT id::text
+                        FROM design_screens
+                        WHERE project_key = $1
+                          AND (route = $2 OR name ILIKE $3)
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """,
+                        project_key,
+                        screen_route,
+                        f"%{screen_route}%",
+                    ) or "")
+
+                normalized_card = {
+                    "source": "chat_ai_tool",
+                    "chat_session_id": session_id or None,
+                    "screen_route": screen_route or None,
+                    "request_type": request_type,
+                    "summary": user_prompt[:240],
+                }
+                row = await conn.fetchrow(
+                    """
+                    WITH inserted AS (
+                        INSERT INTO design_modification_requests (
+                            project_key, screen_id, user_prompt, normalized_card,
+                            request_type, allowed_scope, forbidden_scope,
+                            acceptance_criteria, status
+                        )
+                        VALUES (
+                            $1, NULLIF($2, '')::uuid, $3, $4::jsonb,
+                            $5, $6::jsonb, $7::jsonb,
+                            $8::jsonb, 'ready'
+                        )
+                        RETURNING id, project_key, screen_id, user_prompt,
+                                  request_type, status, created_at
+                    )
+                    SELECT i.id::text AS id, i.project_key, i.screen_id::text AS screen_id,
+                           i.user_prompt, i.request_type, i.status, i.created_at,
+                           s.route AS screen_route, s.name AS screen_name
+                    FROM inserted i
+                    LEFT JOIN design_screens s ON s.id = i.screen_id
+                    """,
+                    project_key,
+                    screen_id,
+                    user_prompt,
+                    json.dumps(normalized_card, ensure_ascii=False),
+                    request_type,
+                    json.dumps({"notes": _list_from(inp.get("allowed_scope"))}, ensure_ascii=False),
+                    json.dumps({"notes": _list_from(inp.get("forbidden_scope"))}, ensure_ascii=False),
+                    json.dumps(_list_from(inp.get("acceptance_criteria")), ensure_ascii=False),
+                )
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        request_id = str(row["id"])
+        context_pack = None
+        if build_context:
+            try:
+                from app.services.design_context_builder import build_context_pack
+                context_pack = await build_context_pack(uuid.UUID(request_id))
+            except Exception as exc:
+                context_pack = {"error": str(exc)}
+
+        return {
+            "status": "created",
+            "request": dict(row),
+            "context_pack": context_pack,
+            "urls": {
+                "context": f"/design/modifications/{request_id}/context",
+                "workbench": f"/design/modifications/{request_id}/workbench",
+            },
+        }
 
     async def _read_github_file(self, inp: Dict[str, Any]) -> Any:
         repo = (inp.get("repo") or "").strip()
@@ -753,22 +1300,13 @@ class ToolExecutor:
         """
         import uuid as _uuid
 
-        # git diff -- <file> 로 working tree 변경 내용 획득
-        # file_path를 git 레포 루트 기준 상대경로로 정규화 (절대경로 전달 시 대비)
-        _rel_path = file_path
-        for _prefix in ("/root/aads/aads-server/", "/app/app/", "/app/"):
-            if _rel_path.startswith(_prefix):
-                _rel_path = _rel_path[len(_prefix):]
-                break
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            diff_result = await tool_run_remote_command(
-                project,
-                f"cd /root/aads/aads-server && git diff -- {_rel_path}",
-            )
-            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
-        except Exception as _de:
-            logger.warning(f"ai_review_git_diff_skip: {_de}")
+        diff_text = await self._capture_review_diff(
+            project=project,
+            repo="aads-server",
+            file_path=file_path,
+        )
+        if diff_text.startswith("[ERROR]"):
+            logger.warning(f"ai_review_git_diff_skip: {diff_text[:300]}")
             return
 
         if not diff_text or not diff_text.strip():
@@ -863,15 +1401,13 @@ class ToolExecutor:
         파일 경로는 상대경로 그대로 사용한다.
         """
         import uuid as _uuid
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            diff_result = await tool_run_remote_command(
-                "GO100",
-                f"git diff -- {file_path}",
-            )
-            diff_text = diff_result if isinstance(diff_result, str) else str(diff_result)
-        except Exception as _de:
-            logger.warning(f"ai_review_git_diff_skip: project=GO100 {_de}")
+        diff_text = await self._capture_review_diff(
+            project="GO100",
+            repo="kis-autotrade-v4",
+            file_path=file_path,
+        )
+        if diff_text.startswith("[ERROR]"):
+            logger.warning(f"ai_review_git_diff_skip: project=GO100 {diff_text[:300]}")
             return
 
         if not diff_text or not diff_text.strip():
@@ -948,6 +1484,139 @@ class ToolExecutor:
             )
         except Exception as _dbe:
             logger.warning(f"ai_review_warning_db_skip: project=GO100 {_dbe}")
+
+    async def _run_local_git(self, repo_dir: str, args: list[str], timeout: float = 10.0) -> str:
+        """컨테이너/로컬 실행 환경에서 git 결과를 직접 수집한다."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                repo_dir,
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except FileNotFoundError:
+            return "[ERROR] git 실행 파일 없음"
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return f"[ERROR] local git timeout: repo={repo_dir}"
+        except Exception as exc:
+            return f"[ERROR] local git 실행 실패: {exc}"
+
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            return f"[ERROR] local git exit={proc.returncode}: {err[:1000]}"
+        return out
+
+    @staticmethod
+    def _remote_git_failed(result: str) -> bool:
+        text = (result or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        return (
+            text.startswith("[ERROR]")
+            or "명령어 파싱 실패" in text
+            or "timed out" in lowered
+            or "timeout" in lowered
+            or "fatal:" in lowered
+            or "[stderr]" in lowered
+        )
+
+    @staticmethod
+    def _strip_remote_command_wrapper(result: str) -> str:
+        """run_remote_command의 실행 헤더/에코를 제거하고 실제 stdout만 남긴다."""
+        lines: list[str] = []
+        for line in (result or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("[") or stripped.startswith("$ "):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _aads_repo_root(repo: str) -> str:
+        if repo == "aads-dashboard":
+            return "/root/aads/aads-dashboard"
+        return "/root/aads/aads-server"
+
+    @staticmethod
+    def _repo_relative_path(file_path: str, repo_root: str) -> str:
+        rel_path = (file_path or "").strip()
+        prefixes = (
+            f"{repo_root.rstrip('/')}/",
+            "/root/aads/aads-server/",
+            "/root/aads/aads-dashboard/",
+            "/app/app/",
+            "/app/",
+        )
+        for prefix in prefixes:
+            if rel_path.startswith(prefix):
+                rel_path = rel_path[len(prefix):]
+                break
+        return rel_path
+
+    async def _capture_review_diff(self, project: str, repo: str, file_path: str) -> str:
+        """AI 리뷰용 working-tree diff 수집.
+
+        1차는 기존 SSH 기반 run_remote_command를 사용하고, AADS 로컬 레포는 SSH/host.docker
+        환경 문제가 나면 현재 실행 환경의 git으로 한 번 더 시도한다.
+        """
+        rel_path = self._repo_relative_path(file_path, self._aads_repo_root(repo))
+        if not rel_path:
+            return "[ERROR] diff 대상 파일 경로 없음"
+
+        quoted_path = shlex.quote(rel_path)
+        remote_result = ""
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            if project == "AADS":
+                repo_root = self._aads_repo_root(repo)
+                command = f"cd {shlex.quote(repo_root)} && git diff -- {quoted_path}"
+            else:
+                command = f"git diff -- {quoted_path}"
+            diff_result = await tool_run_remote_command(project, command)
+            remote_result = diff_result if isinstance(diff_result, str) else str(diff_result)
+        except Exception as exc:
+            remote_result = f"[ERROR] remote git diff 실행 실패: {exc}"
+
+        if remote_result and not self._remote_git_failed(remote_result):
+            return self._strip_remote_command_wrapper(remote_result)
+
+        if project != "AADS":
+            return remote_result or "[ERROR] remote git diff 결과 없음"
+
+        repo_root = self._aads_repo_root(repo)
+        local_candidates = [repo_root]
+        if repo == "aads-server":
+            local_candidates.append("/app")
+
+        local_errors: list[str] = []
+        for candidate in local_candidates:
+            if not os.path.isdir(candidate):
+                continue
+            local_result = await self._run_local_git(candidate, ["diff", "--", rel_path])
+            if local_result and not local_result.startswith("[ERROR]"):
+                if remote_result:
+                    logger.warning(
+                        "ai_review_git_diff_remote_failed_local_ok: remote=%s",
+                        remote_result[:200],
+                    )
+                return local_result
+            if local_result:
+                local_errors.append(local_result[:300])
+
+        detail = remote_result or "; ".join(local_errors) or "git diff 결과 없음"
+        return f"[ERROR] AI review git diff capture failed: {detail[:1000]}"
 
     async def _write_remote_file(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 파일 쓰기 (SSH, 자동 백업). Yellow 등급.
@@ -1056,16 +1725,9 @@ class ToolExecutor:
 
         실패 시 빈 집합 반환 (Hook을 무력화시키지 않도록 best-effort).
         """
-        try:
-            from app.api.ceo_chat_tools import tool_run_remote_command
-            r1 = await tool_run_remote_command(
-                "AADS", f"cd {repo_dir} && git diff --name-only HEAD"
-            )
-            r2 = await tool_run_remote_command(
-                "AADS", f"cd {repo_dir} && git ls-files --others --exclude-standard"
-            )
+        def _collect(texts: tuple[str, str]) -> set[str]:
             files: set[str] = set()
-            for text in (str(r1), str(r2)):
+            for text in texts:
                 for line in text.splitlines():
                     _ls = line.strip()
                     if not _ls:
@@ -1080,8 +1742,27 @@ class ToolExecutor:
                         _ls = _ls[1:-1]
                     files.add(_ls)
             return files
+
+        try:
+            from app.api.ceo_chat_tools import tool_run_remote_command
+            quoted_repo = shlex.quote(repo_dir)
+            r1 = await tool_run_remote_command(
+                "AADS", f"cd {quoted_repo} && git diff --name-only HEAD"
+            )
+            r2 = await tool_run_remote_command(
+                "AADS", f"cd {quoted_repo} && git ls-files --others --exclude-standard"
+            )
+            if self._remote_git_failed(str(r1)) or self._remote_git_failed(str(r2)):
+                raise RuntimeError(f"remote git status failed: {str(r1)[:120]} {str(r2)[:120]}")
+            return _collect((str(r1), str(r2)))
         except Exception as _e:
             logger.warning(f"git_status_snapshot_skip: repo={repo_dir} err={_e}")
+            if os.path.isdir(repo_dir):
+                r1 = await self._run_local_git(repo_dir, ["diff", "--name-only", "HEAD"])
+                r2 = await self._run_local_git(repo_dir, ["ls-files", "--others", "--exclude-standard"])
+                if not r1.startswith("[ERROR]") and not r2.startswith("[ERROR]"):
+                    logger.warning(f"git_status_snapshot_local_fallback_ok: repo={repo_dir}")
+                    return _collect((r1, r2))
             return set()
 
     async def _git_status_snapshot_aads(self) -> set[str]:
@@ -1294,10 +1975,13 @@ class ToolExecutor:
         # 노이즈 필터: 민감/빌드 산출물/백업 제외 (공통)
         _skip_prefixes = (".git/", "node_modules/", ".next/", "__pycache__/", ".venv/", "venv/", "dist/", "build/")
         _skip_suffixes = (".bak_aads", ".pyc", ".pyo", ".log", ".lock")
+        _skip_exact = {".active_container", ".active_port"}
 
         def _filter(paths: set[str]) -> list[str]:
             out: list[str] = []
             for p in sorted(paths):
+                if p in _skip_exact:
+                    continue
                 if any(p.startswith(pre) for pre in _skip_prefixes):
                     continue
                 if p.endswith(_skip_suffixes):
@@ -1372,6 +2056,299 @@ class ToolExecutor:
                 logger.warning(f"run_cmd_mark_deployed_skip: project={project} err={_de}")
 
         return result
+
+    @staticmethod
+    def _deploy_safe_join_command(parts: list[str]) -> str:
+        return " ".join(shlex.quote(str(part)) for part in parts)
+
+    @staticmethod
+    def _deploy_safe_block_reason(text: str) -> str:
+        lowered = (text or "").lower()
+        for pattern in _DEPLOY_SAFE_FORBIDDEN_PATTERNS:
+            if pattern in lowered:
+                return f"금지 패턴 감지: {pattern}"
+        if ("docker compose up" in lowered or "docker-compose up" in lowered) and "--no-deps" not in lowered:
+            return "금지 패턴 감지: --no-deps 없는 전체 up"
+        return ""
+
+    @staticmethod
+    def _deploy_safe_in_container() -> bool:
+        return os.path.exists("/.dockerenv")
+
+    @staticmethod
+    def _deploy_safe_host_context_available() -> bool:
+        return (
+            shutil.which("docker") is not None
+            and os.path.exists("/root/aads/aads-server/deploy.sh")
+            and os.path.exists("/root/aads/aads-server/docker-compose.prod.yml")
+        )
+
+    def _deploy_safe_resolve_command(self, mode: str, service: str) -> tuple[list[str] | None, str, str]:
+        """Return command parts, description, and an optional unavailable reason."""
+        in_container = self._deploy_safe_in_container()
+        host_context = self._deploy_safe_host_context_available()
+
+        if mode == "reload":
+            if in_container:
+                if os.path.exists("/app/scripts/reload-api.sh"):
+                    return (
+                        list(_DEPLOY_SAFE_CONTAINER_RELOAD_CMD),
+                        "Python 코드만 변경된 경우 컨테이너 내부 API reload (0ms 다운타임)",
+                        "",
+                    )
+                return None, "Python 코드만 변경된 경우 API reload (0ms 다운타임)", "컨테이너 내부 reload 스크립트가 없습니다"
+            return list(_DEPLOY_SAFE_RELOAD_CMD), "Python 코드만 변경된 경우 API reload (0ms 다운타임)", ""
+
+        if mode == "bluegreen":
+            if in_container and not host_context:
+                return None, "이미지 리빌드가 필요한 경우 bluegreen 배포 (무중단)", "bluegreen은 호스트 docker CLI와 /root/aads/aads-server/deploy.sh가 필요합니다"
+            return list(_DEPLOY_SAFE_BLUEGREEN_CMD), "이미지 리빌드가 필요한 경우 bluegreen 배포 (무중단)", ""
+
+        if in_container and not host_context:
+            return None, "단일 서비스 안전 재시작", "restart-single은 호스트 docker compose 실행 컨텍스트가 필요합니다"
+        return [*_DEPLOY_SAFE_RESTART_BASE_CMD, service], "단일 서비스 안전 재시작", ""
+
+    async def _deploy_safe_run_subprocess(self, parts: list[str]) -> Dict[str, Any]:
+        command = self._deploy_safe_join_command(parts)
+        try:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                parts,
+                capture_output=True,
+                text=True,
+                shell=False,
+                check=False,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "command": command,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": str(exc),
+            }
+        return {
+            "ok": completed.returncode == 0,
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": (completed.stdout or "").strip(),
+            "stderr": (completed.stderr or "").strip(),
+        }
+
+    async def _deploy_safe(self, inp: Dict[str, Any]) -> Any:
+        """AADS 무중단 배포 표준 도구 (reload/bluegreen/restart-single)."""
+        mode = str(inp.get("mode") or "").strip().lower()
+        if mode not in _DEPLOY_SAFE_ALLOWED_MODES:
+            return {"error": "mode 필수: reload, bluegreen, restart-single 중 하나"}
+
+        dry_run_input = inp.get("dry_run", True)
+        if isinstance(dry_run_input, str):
+            dry_run = dry_run_input.strip().lower() not in {"false", "0", "no"}
+        else:
+            dry_run = True if dry_run_input is None else bool(dry_run_input)
+
+        service = str(inp.get("service") or "").strip()
+        block_reason = self._deploy_safe_block_reason(f"{mode} {service}")
+        if block_reason:
+            return {"error": block_reason}
+
+        if mode == "restart-single":
+            if not service:
+                return {"error": "restart-single 모드에서는 service 필수"}
+            if service == "aads-server":
+                return {"error": "aads-server는 reload 또는 bluegreen 모드를 사용하세요"}
+            if any(ch.isspace() for ch in service) or any(ch in ";|&`$()<>\\\n\r\t" for ch in service):
+                return {"error": "service 값에 허용되지 않는 문자가 포함되어 있습니다"}
+
+        command_parts, description, unavailable_reason = self._deploy_safe_resolve_command(mode, service)
+        if command_parts is None:
+            return {
+                "mode": mode,
+                "dry_run": dry_run,
+                "success": False,
+                "error": unavailable_reason,
+                "description": description,
+                "health_check_command": _DEPLOY_SAFE_HEALTH_COMMAND,
+            }
+
+        command = self._deploy_safe_join_command(command_parts)
+        command_block_reason = self._deploy_safe_block_reason(command)
+        if command_block_reason:
+            return {"error": command_block_reason}
+
+        base = {
+            "mode": mode,
+            "dry_run": dry_run,
+            "command": command,
+            "description": description,
+            "health_check_command": _DEPLOY_SAFE_HEALTH_COMMAND,
+        }
+
+        if dry_run:
+            return base
+
+        pre_health = await self._deploy_safe_run_subprocess(list(_DEPLOY_SAFE_HEALTH_ARGS))
+        if not pre_health.get("ok"):
+            return {
+                **base,
+                "success": False,
+                "error": "배포 전 health-check 실패",
+                "pre_health": pre_health,
+            }
+
+        deploy_result = await self._deploy_safe_run_subprocess(command_parts)
+        post_health = {"ok": False, "command": _DEPLOY_SAFE_HEALTH_COMMAND, "returncode": -1, "stdout": "", "stderr": "not checked"}
+        for attempt in range(36):
+            await asyncio.sleep(5)
+            post_health = await self._deploy_safe_run_subprocess(list(_DEPLOY_SAFE_HEALTH_ARGS))
+            post_health["attempt"] = attempt + 1
+            if post_health.get("ok"):
+                break
+
+        success = bool(deploy_result.get("ok") and post_health.get("ok"))
+        result = {
+            **base,
+            "success": success,
+            "pre_health": pre_health,
+            "deploy_result": deploy_result,
+            "post_health": post_health,
+        }
+        if not success:
+            result["error"] = "deploy_safe 실행 실패"
+        return result
+
+    # ── db_safe_write ─────────────────────────────────────────────────────────
+
+    _DB_SAFE_BLOCKED_KEYWORDS = {"DROP", "CREATE", "ALTER", "TRUNCATE", "GRANT", "REVOKE", "VACUUM", "REINDEX"}
+
+    async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
+        """안전한 DB 쓰기 — 트랜잭션 + DDL 차단 + max_affected 검증."""
+        sql = (inp.get("sql") or "").strip()
+        params = inp.get("params") or []
+        dry_run = inp.get("dry_run", True)
+        max_affected = inp.get("max_affected", 1000)
+
+        if not sql:
+            return {"error": "sql 파라미터 필수"}
+
+        sql_upper = sql.upper().split()
+        if not sql_upper:
+            return {"error": "빈 SQL"}
+
+        first_keyword = sql_upper[0]
+        if first_keyword not in ("INSERT", "UPDATE", "DELETE"):
+            return {"error": f"INSERT/UPDATE/DELETE만 허용 (입력: {first_keyword})"}
+
+        for kw in self._DB_SAFE_BLOCKED_KEYWORDS:
+            if kw in sql.upper():
+                return {"error": f"차단된 키워드: {kw}"}
+
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    if dry_run:
+                        explain = await conn.fetch(f"EXPLAIN {sql}", *params)
+                        plan = [dict(r) for r in explain]
+                        raise _DryRunRollback(plan)
+
+                    result = await conn.execute(sql, *params)
+                    affected = int(result.split()[-1]) if result else 0
+
+                    if affected > max_affected:
+                        raise _MaxAffectedExceeded(affected, max_affected)
+
+                    return {
+                        "success": True,
+                        "affected_rows": affected,
+                        "sql": sql,
+                        "dry_run": False,
+                    }
+        except _DryRunRollback as e:
+            return {
+                "success": True,
+                "dry_run": True,
+                "explain_plan": e.plan,
+                "sql": sql,
+                "message": "dry_run 완료 — 실제 실행하려면 dry_run=false",
+            }
+        except _MaxAffectedExceeded as e:
+            return {
+                "success": False,
+                "error": f"max_affected 초과: {e.actual} > {e.limit} — 롤백됨",
+                "sql": sql,
+            }
+        except Exception as e:
+            return {"error": f"DB 오류: {str(e)[:200]}"}
+
+    # ── notify_channel ───────────────────────────────────────────────────────
+
+    _notify_dedup_cache: Dict[str, float] = {}
+    _NOTIFY_DEDUP_TTL = 300.0
+
+    async def _notify_channel(self, inp: Dict[str, Any]) -> Any:
+        """다중 채널 알림 — severity 기반 라우팅 + dedup."""
+        import time
+        import hashlib
+
+        message = (inp.get("message") or "").strip()
+        severity = (inp.get("severity") or "info").lower()
+        channel = inp.get("channel")
+        dedup_key = inp.get("dedup_key")
+
+        if not message:
+            return {"error": "message 파라미터 필수"}
+        if severity not in ("info", "warning", "critical"):
+            return {"error": "severity는 info/warning/critical 중 하나"}
+
+        now = time.time()
+        self._notify_dedup_cache = {
+            k: v for k, v in self._notify_dedup_cache.items()
+            if now - v < self._NOTIFY_DEDUP_TTL
+        }
+
+        if dedup_key:
+            h = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
+            if h in self._notify_dedup_cache:
+                return {"success": True, "deduped": True, "message": "중복 — 이미 전송됨"}
+            self._notify_dedup_cache[h] = now
+
+        sent_channels = []
+
+        if channel:
+            targets = [channel]
+        elif severity == "info":
+            targets = ["system"]
+        elif severity == "warning":
+            targets = ["telegram"]
+        else:
+            targets = ["telegram", "system"]
+
+        for target in targets:
+            if target == "telegram":
+                try:
+                    from app.services.telegram_bot import get_telegram_bot
+                    bot = get_telegram_bot()
+                    if bot and bot.is_ready:
+                        await bot.send_message(f"[{severity.upper()}] {message}")
+                        sent_channels.append("telegram")
+                    else:
+                        sent_channels.append("telegram:unavailable")
+                except Exception as e:
+                    sent_channels.append(f"telegram:error({str(e)[:50]})")
+            elif target == "system":
+                import logging
+                _logger = logging.getLogger("notify_channel")
+                _logger.info("[%s] %s", severity.upper(), message)
+                sent_channels.append("system")
+
+        return {
+            "success": True,
+            "severity": severity,
+            "channels": sent_channels,
+            "deduped": False,
+        }
 
     async def _git_remote_add(self, inp: Dict[str, Any]) -> Any:
         """원격 서버 git add."""
@@ -1623,6 +2600,32 @@ class ToolExecutor:
             count=inp.get("count", 10),
         )
 
+    async def _search_crawl_match(self, inp: Dict[str, Any]) -> Any:
+        """SearXNG 검색 + 선택 크롤링 + 본문 근거 매칭 + 종합 보고서."""
+        query = str(inp.get("query", "") or "").strip()
+        if not query:
+            return {"error": "query 필수"}
+
+        from app.services.smart_search_service import search_crawl_match
+
+        synthesis_model = (
+            inp.get("synthesis_model")
+            or inp.get("model_override")
+            or inp.get("selected_model")
+            or inp.get("_selected_model")
+        )
+        if str(synthesis_model or "").strip().lower() in {"", "auto", "mixture"}:
+            synthesis_model = None
+
+        return await search_crawl_match(
+            query=query,
+            max_results=inp.get("max_results"),
+            crawl_limit=inp.get("crawl_limit"),
+            depth=inp.get("depth"),
+            synthesis_model=synthesis_model,
+            synthesize=_coerce_bool(inp.get("synthesize"), default=True),
+        )
+
     async def _web_search_all(self, query: str, count: int = 5) -> Any:
         """3개 검색 엔진 병렬 실행 → 통합 결과."""
         inp = {"query": query, "count": count}
@@ -1762,7 +2765,7 @@ class ToolExecutor:
         services = {
             "AADS": f"{_AADS_API_BASE}/api/v1/ops/health-check",
             "KIS":  "http://211.188.51.113:8082/health",
-            "GO100":"http://211.188.51.113:8083/health",
+            "GO100":"https://go100.newtalk.kr/api/go100/health",
             "SF":   "http://116.120.58.155:7916/health",
             "NTV2": "http://116.120.58.155:8080/health",
             "NAS":  "http://cafe24-nas-placeholder/health",
@@ -2207,44 +3210,103 @@ class ToolExecutor:
         """활성/최근 작업 목록 조회 (Pipeline B/C)."""
         try:
             from app.core.db_pool import get_pool
+
+            scope, session_id = _resolve_task_scope(inp)
             pool = get_pool()
             async with pool.acquire() as conn:
-                # Pipeline Runner (pipeline_c_jobs)
-                pc_rows = await conn.fetch(
-                    """
-                    SELECT job_id AS task_id, project, instruction AS title,
-                           'pipeline_c' AS pipeline, phase, status, created_at
-                    FROM pipeline_jobs
-                    WHERE status IN ('running','awaiting_approval','queued')
-                       OR updated_at > NOW() - interval '1 hour'
-                    ORDER BY created_at DESC LIMIT 10
-                    """
-                )
-                # Pipeline B
-                pb_rows = await conn.fetch(
-                    """
-                    SELECT task_id, project, title,
-                           'pipeline_b' AS pipeline, status AS phase, status, created_at
-                    FROM directive_lifecycle
-                    WHERE executor = 'autonomous_executor'
-                      AND (status = 'in_progress' OR completed_at > NOW() - interval '1 hour')
-                    ORDER BY created_at DESC LIMIT 10
-                    """
-                )
+                if scope == "current_session" and session_id:
+                    pc_rows = await conn.fetch(
+                        """
+                        SELECT job_id AS task_id, project, instruction AS title,
+                               'pipeline_c' AS pipeline, phase, status, error_detail, created_at
+                        FROM pipeline_jobs
+                        WHERE chat_session_id = $1
+                          AND (
+                              status IN ('running','awaiting_approval','queued')
+                              OR updated_at > NOW() - interval '1 hour'
+                          )
+                        ORDER BY created_at DESC LIMIT 10
+                        """,
+                        session_id,
+                    )
+                    pb_rows = []
+                    pipeline_b_included = False
+                else:
+                    pc_rows = await conn.fetch(
+                        """
+                        SELECT job_id AS task_id, project, instruction AS title,
+                               'pipeline_c' AS pipeline, phase, status, error_detail, created_at
+                        FROM pipeline_jobs
+                        WHERE status IN ('running','awaiting_approval','queued')
+                           OR updated_at > NOW() - interval '1 hour'
+                        ORDER BY created_at DESC LIMIT 10
+                        """
+                    )
+                    pb_rows = await conn.fetch(
+                        """
+                        SELECT task_id, project, title,
+                               'pipeline_b' AS pipeline, status AS phase, status, created_at
+                        FROM directive_lifecycle
+                        WHERE executor = 'autonomous_executor'
+                          AND (status = 'in_progress' OR completed_at > NOW() - interval '1 hour')
+                        ORDER BY created_at DESC LIMIT 10
+                        """
+                    )
+                    pipeline_b_included = True
             tasks = []
             for r in list(pc_rows) + list(pb_rows):
+                phase = r["phase"] or ""
+                status = r["status"] or ""
+                error_detail = ""
+                try:
+                    error_detail = r["error_detail"] or ""
+                except (KeyError, IndexError):
+                    error_detail = ""
+                display_status = phase if phase in {
+                    "no_changes", "dedup_blocked", "blocked_dependency",
+                    "build_fail", "deploy_failed", "review_failed",
+                    "auth_unavailable", "tool_timeout",
+                } else (error_detail.split(":", 1)[0] if error_detail else status)
+                if display_status not in {
+                    "no_changes", "dedup_blocked", "blocked_dependency",
+                    "build_fail", "deploy_failed", "review_failed",
+                    "auth_unavailable", "tool_timeout",
+                }:
+                    display_status = status
+                if display_status == "no_changes":
+                    status_group = "complete"
+                elif display_status in {"dedup_blocked", "blocked_dependency"}:
+                    status_group = "blocked"
+                elif display_status in {"build_fail", "deploy_failed", "review_failed", "auth_unavailable", "tool_timeout"}:
+                    status_group = "action_required"
+                elif status in {"running", "claimed", "queued"}:
+                    status_group = "active"
+                elif status in {"done", "approved", "rejected_done"}:
+                    status_group = "complete"
+                else:
+                    status_group = "action_required" if status == "error" else "unknown"
                 tasks.append({
                     "task_id": r["task_id"],
                     "project": r["project"] or "",
                     "title": (r["title"] or "")[:150],
                     "pipeline": r["pipeline"],
-                    "phase": r["phase"] or "",
-                    "status": r["status"] or "",
+                    "phase": phase,
+                    "status": status,
+                    "display_status": display_status,
+                    "status_group": status_group,
+                    "error_detail": error_detail,
                 })
             # stall 감지
             from app.services.task_logger import get_stalled_tasks
             stalled = get_stalled_tasks(300)
-            return {"tasks": tasks, "stalled_tasks": stalled, "count": len(tasks)}
+            return {
+                "tasks": tasks,
+                "stalled_tasks": stalled,
+                "count": len(tasks),
+                "scope": scope,
+                "session_id": session_id or None,
+                "pipeline_b_included": pipeline_b_included,
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -2285,8 +3347,15 @@ class ToolExecutor:
         if not url:
             return {"error": "url 필수"}
         full_page = inp.get("full_page", False)
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_capture_screenshot
-        return await tool_capture_screenshot(url, full_page)
+        return await tool_capture_screenshot(
+            url,
+            full_page,
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
         """스톨된 작업을 강제 종료. Pipeline Runner는 원격 PID kill, Pipeline B는 DB 상태 변경."""
@@ -2364,6 +3433,246 @@ class ToolExecutor:
             limit=min(int(inp.get("limit", 5) or 5), 20),
         )
 
+    async def _tool_metrics(self, inp: Dict[str, Any]) -> Any:
+        """도구 사용 통계 조회 (호출 수, 실패율, 지연시간)."""
+        period = str(inp.get("period", "24h") or "24h").strip().lower()
+        tool_name = str(inp.get("tool_name", "") or "").strip()
+
+        interval_map = {
+            "24h": "24 hours",
+            "7d": "7 days",
+            "30d": "30 days",
+        }
+        interval_value = interval_map.get(period)
+        if not interval_value:
+            return {"error": "period must be one of: 24h, 7d, 30d"}
+
+        try:
+            from app.core.db_pool import get_pool
+
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        tool_name,
+                        COUNT(*) AS total_calls,
+                        COUNT(*) FILTER (WHERE success = false) AS failed_calls,
+                        AVG(latency_ms) AS avg_latency_ms,
+                        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms
+                    FROM tool_results_archive
+                    WHERE created_at >= NOW() - ($1::interval)
+                      AND ($2::text = '' OR tool_name = $2)
+                    GROUP BY tool_name
+                    ORDER BY total_calls DESC, tool_name ASC
+                    """,
+                    interval_value,
+                    tool_name,
+                )
+        except Exception as e:
+            return {"error": str(e)}
+
+        metrics = []
+        total_calls = 0
+        total_failed = 0
+        for row in rows:
+            calls = int(row["total_calls"] or 0)
+            failed = int(row["failed_calls"] or 0)
+            failure_rate_pct = round((failed * 100.0 / calls), 2) if calls > 0 else 0.0
+            avg_latency_ms = round(float(row["avg_latency_ms"]), 2) if row["avg_latency_ms"] is not None else None
+            p95_latency_ms = round(float(row["p95_latency_ms"]), 2) if row["p95_latency_ms"] is not None else None
+
+            metrics.append(
+                {
+                    "tool_name": row["tool_name"],
+                    "calls": calls,
+                    "failed_calls": failed,
+                    "failure_rate_pct": failure_rate_pct,
+                    "avg_latency_ms": avg_latency_ms,
+                    "p95_latency_ms": p95_latency_ms,
+                }
+            )
+            total_calls += calls
+            total_failed += failed
+
+        slowest_tools_top3 = sorted(
+            [item for item in metrics if item["p95_latency_ms"] is not None],
+            key=lambda item: float(item["p95_latency_ms"]),
+            reverse=True,
+        )[:3]
+
+        total_failure_rate_pct = round((total_failed * 100.0 / total_calls), 2) if total_calls > 0 else 0.0
+        return {
+            "period": period,
+            "tool_name": tool_name or None,
+            "summary": {
+                "total_calls": total_calls,
+                "failed_calls": total_failed,
+                "failure_rate_pct": total_failure_rate_pct,
+                "slowest_tools_top3": slowest_tools_top3,
+            },
+            "metrics": metrics,
+        }
+
+    # ── tool_layer_audit 헬퍼 ────────────────────────────────────────────────
+
+    def _get_dispatch_tool_names(self) -> set[str]:
+        try:
+            source = inspect.getsource(self._dispatch)
+        except Exception as e:
+            logger.warning("tool_layer_audit_dispatch_source_error: %s", e)
+            return set()
+        pattern = r'^\s*"([^"]+)":\s*self\._[A-Za-z0-9_]+'
+        return {m.group(1) for m in re.finditer(pattern, source, re.MULTILINE)}
+
+    def _get_mcp_tool_names(self) -> set[str]:
+        try:
+            from app.api import ceo_chat_tools
+        except Exception as e:
+            logger.warning("tool_layer_audit_mcp_import_error: %s", e)
+            return set()
+        tool_defs = getattr(ceo_chat_tools, "CEO_CHAT_TOOLS", None)
+        if not tool_defs:
+            tool_defs = getattr(ceo_chat_tools, "TOOL_DEFINITIONS", [])
+        names: set[str] = set()
+        for item in tool_defs or []:
+            name = ""
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+            elif isinstance(item, str):
+                name = item.strip()
+            else:
+                name = str(getattr(item, "name", "") or "").strip()
+            if name:
+                names.add(name)
+        return names
+
+    async def _tool_layer_audit(self, inp: Dict[str, Any]) -> Any:
+        """MCP/Registry/Executor 3-Layer 도구 정합성 검사."""
+        fix = bool(inp.get("fix", False))
+        if self._registry is None:
+            from app.services.tool_registry import ToolRegistry
+            self._registry = ToolRegistry()
+        registry_tools = set(self._registry.get_all_tools().keys())
+        executor_tools = self._get_dispatch_tool_names()
+        mcp_tools = self._get_mcp_tool_names()
+        registry_only = sorted(registry_tools - executor_tools)
+        executor_only = sorted(executor_tools - registry_tools)
+        mcp_only = sorted(mcp_tools - (registry_tools | executor_tools))
+        not_in_mcp = sorted((registry_tools | executor_tools) - mcp_tools)
+        all_aligned = not registry_only and not executor_only and not mcp_only
+        if fix:
+            logger.info("tool_layer_audit_fix_requested: registry_only=%s executor_only=%s mcp_only=%s", registry_only, executor_only, mcp_only)
+        return {
+            "all_aligned": all_aligned,
+            "total_registry": len(registry_tools),
+            "total_executor": len(executor_tools),
+            "total_mcp": len(mcp_tools),
+            "registry_only": registry_only,
+            "executor_only": executor_only,
+            "mcp_only": mcp_only,
+            "not_in_mcp": not_in_mcp,
+            "fix": fix,
+            "fix_applied": False,
+        }
+
+    # ── db_safe_write ────────────────────────────────────────────────────────
+
+    async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
+        """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run)."""
+        sql = str(inp.get("sql", "") or "").strip()
+        params_raw = inp.get("params") or []
+        dry_run = bool(inp.get("dry_run", False))
+        if not sql:
+            return {"error": "sql 파라미터 필수"}
+        sql_upper = sql.upper().strip()
+        for kw in ("DROP ", "TRUNCATE ", "ALTER ", "CREATE DATABASE", "DROP DATABASE"):
+            if kw in sql_upper:
+                return {"error": f"차단된 명령: {kw.strip()}"}
+        if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
+            return {"error": "INSERT/UPDATE/DELETE만 허용"}
+        table_name = ""
+        if sql_upper.startswith("INSERT"):
+            parts = sql_upper.split("INTO", 1)
+            if len(parts) > 1:
+                table_name = parts[1].strip().split()[0].strip("(").lower()
+        elif sql_upper.startswith("UPDATE"):
+            table_name = sql_upper.split()[1].strip().lower()
+        elif sql_upper.startswith("DELETE"):
+            parts = sql_upper.split("FROM", 1)
+            if len(parts) > 1:
+                table_name = parts[1].strip().split()[0].lower()
+        if table_name and not re.match(r'^[a-z_][a-z0-9_.]*$', table_name):
+            table_name = ""
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                pre_count = None
+                if table_name:
+                    try:
+                        row = await conn.fetchrow(f'SELECT COUNT(*) AS cnt FROM "{table_name}"')
+                        pre_count = int(row["cnt"]) if row else None
+                    except Exception:
+                        pass
+                if dry_run:
+                    return {"dry_run": True, "sql": sql[:500], "table": table_name, "pre_count": pre_count, "message": "dry_run — 실행하지 않음"}
+                async with conn.transaction():
+                    result = await conn.execute(sql, *params_raw)
+                post_count = None
+                if table_name:
+                    try:
+                        row = await conn.fetchrow(f'SELECT COUNT(*) AS cnt FROM "{table_name}"')
+                        post_count = int(row["cnt"]) if row else None
+                    except Exception:
+                        pass
+                return {
+                    "success": True,
+                    "result": str(result),
+                    "table": table_name,
+                    "pre_count": pre_count,
+                    "post_count": post_count,
+                    "diff": (post_count - pre_count) if pre_count is not None and post_count is not None else None,
+                }
+        except Exception as e:
+            return {"error": str(e), "sql": sql[:200]}
+
+    # ── notify_channel ───────────────────────────────────────────────────────
+
+    async def _notify_channel(self, inp: Dict[str, Any]) -> Any:
+        """다중 채널 알림 통합 (텔레그램/슬랙 + 중복방지)."""
+        import time as _time
+        message = str(inp.get("message", "") or "").strip()
+        channel = str(inp.get("channel", "telegram") or "telegram").strip().lower()
+        level = str(inp.get("level", "info") or "info").strip().lower()
+        dedup_key = str(inp.get("dedup_key", "") or "").strip()
+        if not message:
+            return {"error": "message 파라미터 필수"}
+        if channel not in ("telegram", "slack", "all"):
+            return {"error": "channel은 telegram/slack/all 중 하나"}
+        msg_hash = dedup_key or hashlib.sha256(f"{channel}:{message[:200]}".encode()).hexdigest()[:16]
+        cache_key = f"notify_dedup:{msg_hash}"
+        if not hasattr(self, '_notify_dedup_cache'):
+            self._notify_dedup_cache: dict[str, float] = {}
+        now = _time.time()
+        self._notify_dedup_cache = {k: v for k, v in self._notify_dedup_cache.items() if now - v < 300}
+        if cache_key in self._notify_dedup_cache:
+            return {"skipped": True, "reason": "dedup — 5분 이내 동일 메시지", "dedup_key": msg_hash}
+        prefix = {"info": "ℹ️", "warn": "⚠️", "error": "🔴", "success": "✅"}.get(level, "")
+        formatted = f"{prefix} {message}" if prefix else message
+        results = {}
+        if channel in ("telegram", "all"):
+            try:
+                from app.api.ceo_chat_tools import tool_send_telegram
+                tg_result = await tool_send_telegram(formatted)
+                results["telegram"] = {"success": True, "result": str(tg_result)[:200]}
+            except Exception as e:
+                results["telegram"] = {"success": False, "error": str(e)}
+        if channel in ("slack", "all"):
+            results["slack"] = {"success": False, "error": "슬랙 미구현 — 텔레그램으로 전송됨"}
+        self._notify_dedup_cache[cache_key] = now
+        return {"sent": True, "channel": channel, "level": level, "dedup_key": msg_hash, "results": results}
+
     async def _query_decision_graph(self, inp: Dict[str, Any]) -> Any:
         """C4: 결정 의존관계 그래프 탐색."""
         from app.api.ceo_chat_tools import tool_query_decision_graph
@@ -2379,35 +3688,53 @@ class ToolExecutor:
         """PC Agent에 명령 전송 및 결과 수신."""
         from app.services.pc_agent_manager import pc_agent_manager
 
-        agent_id = inp.get("agent_id", "")
-        command_type = inp.get("command_type", "")
+        def _as_bool(value: Any, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return default
+            return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        agent_id = str(inp.get("agent_id", "") or "").strip()
+        command_type = str(inp.get("command_type", "") or "").strip()
         params = inp.get("params", {})
-
-        if not agent_id:
-            # 연결된 에이전트가 1개면 자동 선택
-            agents = pc_agent_manager.list_agents()
-            if len(agents) == 1:
-                agent_id = agents[0].agent_id
-            elif len(agents) == 0:
-                return {"error": "연결된 PC Agent가 없습니다. PC에서 에이전트를 실행해주세요."}
-            else:
-                return {
-                    "error": "agent_id를 지정해주세요.",
-                    "available_agents": [
-                        {"agent_id": a.agent_id, "hostname": a.hostname}
-                        for a in agents
-                    ],
-                }
-
         if not command_type:
-            return {"error": "command_type 필수 (shell, screenshot, file_list, process_list, file_read, file_write, kakao_send, kakao_read, system_info)"}
+            return {"error": "command_type 필수 (shell, cmd, powershell, screenshot, file_list, process_list, file_read, file_write, kakao_send, kakao_read, system_info, app_launch)"}
 
-        try:
-            command_id = await pc_agent_manager.send_command(agent_id, command_type, params)
-            result = await pc_agent_manager.get_result(command_id, timeout=60.0)
-            return result.model_dump(mode="json")
-        except ValueError as e:
-            return {"error": str(e)}
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            return {"error": "params는 object여야 합니다."}
+
+        route_payload = {
+            "command_type": command_type,
+            "params": params,
+            "agent_id": agent_id,
+            "job_type": str(inp.get("job_type", "general") or "general"),
+            "required_capabilities": inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
+            "queue_if_busy": _as_bool(inp.get("queue_if_busy", True), default=True),
+            "wait_for_turn": _as_bool(inp.get("wait_for_turn", True), default=True),
+            "queue_wait_timeout_seconds": float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
+            "lease_ttl_seconds": int(inp.get("lease_ttl_seconds", 180) or 180),
+            "command_timeout_seconds": float(inp.get("timeout", inp.get("command_timeout_seconds", 120.0)) or 120.0),
+        }
+        routed = await pc_agent_manager.execute_routed_command(
+            command_type=command_type,
+            params=params,
+            agent_id=agent_id,
+            job_type=route_payload["job_type"],
+            required_capabilities=route_payload["required_capabilities"],
+            queue_if_busy=route_payload["queue_if_busy"],
+            wait_for_turn=route_payload["wait_for_turn"],
+            queue_wait_timeout_seconds=route_payload["queue_wait_timeout_seconds"],
+            lease_ttl_seconds=route_payload["lease_ttl_seconds"],
+            command_timeout_seconds=route_payload["command_timeout_seconds"],
+        )
+        if routed.get("status") == "error" and str(routed.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+            active_routed = await _pc_agent_route_via_active_api(route_payload)
+            if active_routed is not None:
+                routed = active_routed
+        return routed
 
     async def _pc_list_agents(self, inp: Dict[str, Any]) -> Any:
         """연결된 PC Agent 목록 조회."""
@@ -2415,6 +3742,9 @@ class ToolExecutor:
 
         agents = pc_agent_manager.list_agents()
         if not agents:
+            active_payload = await _pc_agent_get_via_active_api("/api/v1/pc-agent/agents")
+            if active_payload and active_payload.get("agents"):
+                return active_payload
             return {"agents": [], "message": "연결된 PC Agent가 없습니다."}
         return {
             "agents": [a.model_dump(mode="json") for a in agents],
@@ -2424,14 +3754,56 @@ class ToolExecutor:
     async def _device_execute(self, inp: Dict[str, Any]) -> Any:
         """통합 디바이스(PC/Android/iOS) 명령 실행."""
         from app.services.device_manager import device_manager
+        from app.services.pc_agent_manager import pc_agent_manager
 
-        agent_id = inp.get("agent_id", "")
-        command_type = inp.get("command_type", "")
+        def _as_bool(value: Any, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return default
+            return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        agent_id = str(inp.get("agent_id", "") or "").strip()
+        command_type = str(inp.get("command_type", "") or "").strip()
         params = inp.get("params", {})
         timeout = float(inp.get("timeout", 30))
+        normalized_command_type = command_type.lower().replace("-", "_")
+        target_device = device_manager.get_device(agent_id) if agent_id else None
+        pc_command_types = {
+            "shell",
+            "cmd",
+            "powershell",
+            "screenshot",
+            "system_info",
+            "process_list",
+            "file_list",
+            "file_read",
+            "file_write",
+            "app_launch",
+        }
 
         if not command_type:
             return {"error": "command_type 필수"}
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            return {"error": "params는 object여야 합니다."}
+
+        if target_device is None and normalized_command_type in pc_command_types:
+            pc_result = await pc_agent_manager.execute_routed_command(
+                command_type=command_type,
+                params=params,
+                agent_id=agent_id,
+                job_type=str(inp.get("job_type", "general") or "general"),
+                required_capabilities=inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
+                queue_if_busy=_as_bool(inp.get("queue_if_busy", True), default=True),
+                wait_for_turn=_as_bool(inp.get("wait_for_turn", True), default=True),
+                queue_wait_timeout_seconds=float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
+                lease_ttl_seconds=int(inp.get("lease_ttl_seconds", 180) or 180),
+                command_timeout_seconds=float(inp.get("command_timeout_seconds", timeout) or timeout),
+            )
+            if pc_result.get("status") != "error" or pc_agent_manager.online_agents_count() > 0 or agent_id:
+                return pc_result
 
         try:
             result = await device_manager.send_command(
@@ -2450,6 +3822,25 @@ class ToolExecutor:
         if not devices:
             return {"devices": [], "message": "연결된 디바이스가 없습니다."}
         return {"devices": devices, "count": len(devices)}
+
+    async def _device_command(self, inp: Dict[str, Any]) -> Any:
+        """Android 통합 device_command 실행."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        device_id = str(inp.get("device_id", "") or "").strip()
+        command = str(inp.get("command", "") or "").strip()
+        args = inp.get("args", {})
+
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return {"status": "error", "error": "args는 object여야 합니다."}
+
+        return await pc_agent_manager.execute_device_command(
+            device_id=device_id,
+            command=command,
+            args=args,
+        )
 
     async def _delegate_to_agent(self, inp: Dict[str, Any]) -> Any:
         """
@@ -2886,72 +4277,203 @@ class ToolExecutor:
 
     _INTERNAL_HEADERS = {"x-monitor-key": "internal-pipeline-call"}
 
+    async def _pipeline_runner_submit_db_fallback(self, payload: Dict[str, Any], reason: str) -> Any:
+        """Fallback when the internal Pipeline Runner HTTP API is unavailable."""
+        import hashlib
+        import uuid
+
+        from app.core.db_pool import get_pool
+
+        project = payload.get("project", "AADS")
+        instruction = payload.get("instruction", "")
+        session_id = payload.get("session_id", "")
+        if not instruction or not session_id:
+            return {"error": "DB fallback requires instruction and session_id", "fallback_reason": reason}
+
+        job_id = f"runner-{uuid.uuid4().hex[:8]}"
+        instruction_hash = hashlib.sha256(f"{project}:{instruction}".encode()).hexdigest()[:16]
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            tenant_id = await conn.fetchval(
+                "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid",
+                session_id,
+            )
+            if not tenant_id:
+                return {"error": "세션을 찾을 수 없습니다", "fallback_reason": reason}
+            existing = await conn.fetchrow(
+                """
+                SELECT job_id, status, phase
+                  FROM pipeline_jobs
+                 WHERE project = $1
+                   AND instruction_hash = $2
+                   AND tenant_id = $3::uuid
+                   AND status = ANY($4::text[])
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                project,
+                instruction_hash,
+                tenant_id,
+                [
+                    "queued",
+                    "claimed",
+                    "running",
+                    "awaiting_approval",
+                    "approved",
+                    "deploying",
+                    "rolling_back",
+                ],
+            )
+            if existing:
+                return {
+                    "job_id": existing["job_id"],
+                    "status": "dedup_blocked",
+                    "message": f"기존 작업을 계속 진행합니다: {existing['job_id']}",
+                    "fallback_reason": reason,
+                }
+            await conn.execute(
+                """
+                INSERT INTO pipeline_jobs
+                  (job_id, project, instruction, instruction_hash, chat_session_id,
+                   status, phase, max_cycles, size, worker_model,
+                   model_override_reason, parallel_group, depends_on,
+                   logs, created_at, updated_at, tenant_id)
+                VALUES ($1, $2, $3, $4, $5,
+                        'queued', 'queued', $6, $7, $8,
+                        $9, $10, $11,
+                        jsonb_build_array(jsonb_build_object(
+                            'ts', NOW()::text,
+                            'event', 'tool_executor_db_fallback',
+                            'reason', $12
+                        )),
+                        NOW(), NOW(), $13::uuid)
+                """,
+                job_id,
+                project,
+                instruction,
+                instruction_hash,
+                session_id,
+                int(payload.get("max_cycles", 3)),
+                payload.get("size", "M"),
+                payload.get("worker_model") or None,
+                payload.get("worker_model_reason") or None,
+                payload.get("parallel_group") or None,
+                payload.get("depends_on") or None,
+                reason,
+                tenant_id,
+            )
+            await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Pipeline Runner API 인증 실패로 DB fallback enqueue를 수행했습니다.",
+            "fallback_reason": reason,
+        }
+
+    async def _pipeline_runner_submit_batch_db_fallback(self, payload: Dict[str, Any], reason: str) -> Any:
+        project = payload.get("project", "AADS")
+        session_id = payload.get("session_id", "")
+        parallel_group = payload.get("parallel_group", "")
+        max_cycles = int(payload.get("max_cycles", 3))
+        key_to_job_id: Dict[str, str] = {}
+        results = []
+
+        for item in payload.get("jobs", []) or []:
+            depends_on = key_to_job_id.get(item.get("depends_on_key", ""))
+            result = await self._pipeline_runner_submit_db_fallback(
+                {
+                    "project": project,
+                    "instruction": item.get("instruction", ""),
+                    "session_id": session_id,
+                    "max_cycles": max_cycles,
+                    "size": item.get("size", "M"),
+                    "worker_model": item.get("worker_model", ""),
+                    "worker_model_reason": item.get("worker_model_reason", ""),
+                    "parallel_group": parallel_group,
+                    "depends_on": depends_on,
+                },
+                reason,
+            )
+            key = item.get("key", "")
+            if key and result.get("job_id"):
+                key_to_job_id[key] = result["job_id"]
+            results.append({"key": key, **result})
+
+        return {
+            "status": "queued",
+            "message": "Pipeline Runner API 인증 실패로 DB fallback batch enqueue를 수행했습니다.",
+            "jobs": results,
+            "fallback_reason": reason,
+        }
+
     async def _pipeline_runner_submit(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner로 작업 제출."""
-        # 1순위: 도구 호출 시 명시적으로 전달된 session_id
-        # 2순위: ContextVar (일반 대화에서는 정확함)
-        # 3순위: DB에서 최근 활성 세션 자동 탐지 (디폴트 동작)
-        _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
+        # 1순위: 현재 채팅 ContextVar
+        # 2순위: 도구 호출 시 명시적으로 전달된 session_id (외부 직접 호출 fallback)
+        # 3순위: Agent SDK active chat binding (SDK callback 경로 보강)
+        # 다른 채팅창 오보고 방지를 위해 프로젝트 최근 활성 세션 fallback은 금지한다.
+        _session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         if not _session_id:
-            try:
-                from app.services.pipeline_runner_service import _find_recent_session
-                _session_id = await _find_recent_session(inp.get("project", "AADS"))
-            except Exception:
-                pass
-        if not _session_id:
-            return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
+            return {"error": "현재 채팅 세션 컨텍스트를 찾지 못했습니다. 같은 채팅창에서 다시 요청해 주세요."}
         import httpx
         from app.services.pipeline_runner_client import (
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
+        payload = {
+            "project": inp.get("project", "AADS"),
+            "instruction": inp.get("instruction", ""),
+            "session_id": _session_id,
+            "max_cycles": int(inp.get("max_cycles", 3)),
+            "size": inp.get("size", "M"),
+            **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
+            **({"worker_model_reason": inp["worker_model_reason"]} if inp.get("worker_model_reason") else {}),
+            **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),
+            **({"depends_on": inp["depends_on"]} if inp.get("depends_on") else {}),
+        }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 get_pipeline_runner_api_url("jobs"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={
-                    "project": inp.get("project", "AADS"),
-                    "instruction": inp.get("instruction", ""),
-                    "session_id": _session_id,
-                    "max_cycles": int(inp.get("max_cycles", 3)),
-                    "size": inp.get("size", "M"),
-                    **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
-                    **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),
-                    **({"depends_on": inp["depends_on"]} if inp.get("depends_on") else {}),
-                },
+                json=payload,
                 timeout=10,
             )
+            if getattr(resp, "status_code", 200) in {401, 403}:
+                return await self._pipeline_runner_submit_db_fallback(
+                    payload,
+                    f"http_{resp.status_code}: {resp.text[:200]}",
+                )
             return resp.json()
 
     async def _pipeline_runner_submit_batch(self, inp: Dict[str, Any]) -> Any:
         """Pipeline Runner 배치 제출 — 여러 작업을 병렬 실행."""
-        _session_id = inp.get("session_id", "") or current_chat_session_id.get("")
+        _session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         if not _session_id:
-            try:
-                from app.services.pipeline_runner_service import _find_recent_session
-                _session_id = await _find_recent_session(inp.get("project", "AADS"))
-            except Exception:
-                pass
-        if not _session_id:
-            return {"error": "활성 세션을 찾을 수 없습니다. session_id를 명시하세요."}
+            return {"error": "현재 채팅 세션 컨텍스트를 찾지 못했습니다. 같은 채팅창에서 다시 요청해 주세요."}
         import httpx
         from app.services.pipeline_runner_client import (
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
+        payload = {
+            "project": inp.get("project", "AADS"),
+            "session_id": _session_id,
+            "jobs": inp.get("jobs", []),
+            "parallel_group": inp.get("parallel_group", ""),
+            "max_cycles": int(inp.get("max_cycles", 3)),
+        }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 get_pipeline_runner_api_url("jobs/batch"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={
-                    "project": inp.get("project", "AADS"),
-                    "session_id": _session_id,
-                    "jobs": inp.get("jobs", []),
-                    "parallel_group": inp.get("parallel_group", ""),
-                    "max_cycles": int(inp.get("max_cycles", 3)),
-                },
+                json=payload,
                 timeout=15,
             )
+            if getattr(resp, "status_code", 200) in {401, 403}:
+                return await self._pipeline_runner_submit_batch_db_fallback(
+                    payload,
+                    f"http_{resp.status_code}: {resp.text[:200]}",
+                )
             return resp.json()
 
     async def _pipeline_runner_status(self, inp: Dict[str, Any]) -> Any:
@@ -2962,6 +4484,7 @@ class ToolExecutor:
             get_pipeline_runner_api_url,
         )
         job_id = inp.get("job_id", "")
+        scope, session_id = _resolve_task_scope(inp)
         async with httpx.AsyncClient() as client:
             if job_id:
                 resp = await client.get(
@@ -2973,6 +4496,8 @@ class ToolExecutor:
                 params = {"limit": "10"}
                 if inp.get("status"):
                     params["status"] = inp["status"]
+                if scope == "current_session" and session_id:
+                    params["session_id"] = session_id
                 resp = await client.get(
                     get_pipeline_runner_api_url("jobs"),
                     headers=INTERNAL_PIPELINE_HEADERS,
@@ -3016,31 +4541,67 @@ class ToolExecutor:
 
     # ── AADS-159: 브라우저 도구 (Playwright — ceo_chat_tools 래퍼) ────────────
 
+    async def _browser_connect(self, inp: Dict[str, Any]) -> Any:
+        """Browser Bridge pairing/status/session selection."""
+        from app.api.ceo_chat_tools import tool_browser_connect
+        return await tool_browser_connect(
+            action=inp.get("action", "status"),
+            session_id=inp.get("session_id", ""),
+            label=inp.get("label", "CEO local Chrome"),
+            agent_id=inp.get("agent_id", ""),
+            url=inp.get("url", "about:blank"),
+            preferred_port=inp.get("preferred_port"),
+            activate=bool(inp.get("activate", False)),
+            work_key=inp.get("work_key", ""),
+        )
+
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:
         """브라우저로 URL 이동."""
         url = inp.get("url", "")
         if not url:
             return {"error": "url 필수"}
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_browser_navigate
-        return await tool_browser_navigate(url)
+        return await tool_browser_navigate(
+            url,
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
 
     async def _browser_snapshot(self, inp: Dict[str, Any]) -> Any:
         """현재 페이지 접근성 트리 추출 (텍스트 기반 UI 분석)."""
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_browser_snapshot
-        return await tool_browser_snapshot()
+        return await tool_browser_snapshot(
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
 
     async def _browser_screenshot(self, inp: Dict[str, Any]) -> Any:
         """현재 페이지 PNG 스크린샷 촬영."""
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_browser_screenshot
-        return await tool_browser_screenshot()
+        return await tool_browser_screenshot(
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
 
     async def _browser_click(self, inp: Dict[str, Any]) -> Any:
         """CSS selector로 요소 클릭."""
         selector = inp.get("selector", "")
         if not selector:
             return {"error": "selector 필수"}
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_browser_click
-        return await tool_browser_click(selector)
+        return await tool_browser_click(
+            selector,
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
 
     async def _browser_fill(self, inp: Dict[str, Any]) -> Any:
         """입력 필드에 텍스트 채우기."""
@@ -3048,13 +4609,92 @@ class ToolExecutor:
         value = inp.get("value", "")
         if not selector:
             return {"error": "selector 필수"}
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_browser_fill
-        return await tool_browser_fill(selector, value)
+        return await tool_browser_fill(
+            selector,
+            value,
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
+
+    async def _browser_press_key(self, inp: Dict[str, Any]) -> Any:
+        """브라우저 키 입력."""
+        key = inp.get("key", "")
+        if not key:
+            return {"error": "key 필수"}
+        from app.api.ceo_chat_tools import tool_browser_press_key
+        return await tool_browser_press_key(
+            key,
+            selector=inp.get("selector", ""),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_select_option(self, inp: Dict[str, Any]) -> Any:
+        """select 옵션 선택."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_select_option
+        return await tool_browser_select_option(
+            selector,
+            inp.get("value", ""),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_check(self, inp: Dict[str, Any]) -> Any:
+        """체크박스/라디오 상태 설정."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_check
+        return await tool_browser_check(
+            selector,
+            checked=bool(inp.get("checked", True)),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_upload_file(self, inp: Dict[str, Any]) -> Any:
+        """file input에 파일 지정."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_upload_file
+        return await tool_browser_upload_file(
+            selector,
+            file_paths=inp.get("file_paths"),
+            file_path=inp.get("file_path", ""),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
+
+    async def _browser_download(self, inp: Dict[str, Any]) -> Any:
+        """브라우저 다운로드 실행."""
+        selector = inp.get("selector", "")
+        if not selector:
+            return {"error": "selector 필수"}
+        from app.api.ceo_chat_tools import tool_browser_download
+        return await tool_browser_download(
+            selector,
+            download_dir=inp.get("download_dir", ""),
+            timeout_seconds=float(inp.get("timeout_seconds", 60) or 60),
+            browser_session_id=inp.get("browser_session_id", ""),
+            browser_work_key=inp.get("browser_work_key", ""),
+        )
 
     async def _browser_tab_list(self, inp: Dict[str, Any]) -> Any:
         """열린 탭 목록 반환."""
+        browser_session_id = inp.get("browser_session_id", "")
+        browser_work_key = inp.get("browser_work_key", "")
         from app.api.ceo_chat_tools import tool_browser_tab_list
-        return await tool_browser_tab_list()
+        return await tool_browser_tab_list(
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+        )
 
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:
         """AADS-188B: ChromaDB 벡터 기반 시맨틱 코드 검색."""
@@ -3213,9 +4853,112 @@ class ToolExecutor:
 
     async def _generate_image(self, inp: Dict[str, Any]) -> Any:
         """이미지 생성."""
-        from app.services.image_service import image_service
-        result = await image_service.generate(inp.get("prompt", ""), inp.get("size", "1024x1024"))
-        return result
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.generate_image(
+            inp.get("prompt", ""),
+            inp.get("size", "1024x1024"),
+            model_id=inp.get("model_id"),
+            provider=inp.get("provider"),
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _edit_image(self, inp: Dict[str, Any]) -> Any:
+        """이미지 편집."""
+        from app.services.media_generation_service import media_generation_service
+
+        input_refs = {
+            key: inp.get(key)
+            for key in ("image_path", "image_url", "image_data", "mask_path", "input_image_path")
+            if inp.get(key)
+        }
+        return await media_generation_service.edit_image(
+            inp.get("prompt", ""),
+            input_refs=input_refs,
+            size=inp.get("size", "1024x1024"),
+            model_id=inp.get("model_id"),
+            provider=inp.get("provider"),
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _generate_video(self, inp: Dict[str, Any]) -> Any:
+        """비동기 동영상 생성 job 생성."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.generate_video(
+            inp.get("prompt", ""),
+            input_refs=inp.get("input_refs") or {},
+            model_id=inp.get("model_id"),
+            provider=inp.get("provider"),
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _video_status(self, inp: Dict[str, Any]) -> Any:
+        """동영상 생성 job 상태 조회."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.video_status(inp.get("job_id", ""))
+
+    async def _video_download(self, inp: Dict[str, Any]) -> Any:
+        """동영상 결과 저장/메타데이터 반환."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.video_download(
+            inp.get("job_id", ""),
+            output_dir=inp.get("output_dir"),
+        )
+
+    async def _local_model_queue_status(self, inp: Dict[str, Any]) -> Any:
+        """CEO PC 로컬 모델 설치 큐/연결 상태 조회."""
+        from app.services.local_model_manager import local_model_manager
+
+        return await local_model_manager.queue_status(
+            agent_id=inp.get("agent_id", ""),
+            include_items=bool(inp.get("include_items", True)),
+        )
+
+    async def _local_model_install_test(self, inp: Dict[str, Any]) -> Any:
+        """단일 로컬 모델 큐 항목 prepare/install/test."""
+        from app.services.local_model_manager import local_model_manager
+
+        return await local_model_manager.run_install_test(
+            item_id=inp.get("item_id", ""),
+            action=inp.get("action", "prepare"),
+            agent_id=inp.get("agent_id", ""),
+            allow_install=bool(inp.get("allow_install", False)),
+            allow_download=bool(inp.get("allow_download", False)),
+            timeout_seconds=float(inp.get("timeout_seconds", 900) or 900),
+        )
+
+    async def _generate_music(self, inp: Dict[str, Any]) -> Any:
+        """local_music 비동기 job 생성."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.generate_music(
+            inp.get("prompt", ""),
+            input_refs=inp.get("input_refs") or {},
+            model_id=inp.get("model_id"),
+            provider=inp.get("provider") or "pc_local",
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _generate_three_d_asset(self, inp: Dict[str, Any]) -> Any:
+        """local_3d 비동기 job 생성."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.generate_3d(
+            inp.get("prompt", ""),
+            input_refs=inp.get("input_refs") or {},
+            model_id=inp.get("model_id"),
+            provider=inp.get("provider") or "pc_local",
+            session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+        )
+
+    async def _media_job_status(self, inp: Dict[str, Any]) -> Any:
+        """공통 media_generation_jobs 상태 조회."""
+        from app.services.media_generation_service import media_generation_service
+
+        return await media_generation_service.media_status(inp.get("job_id", ""))
 
     async def _send_telegram(self, inp: Dict[str, Any]) -> Any:
         """텔레그램 메시지 전송."""
@@ -3324,13 +5067,81 @@ class ToolExecutor:
             limit=inp.get("limit", 10),
         )
 
+
+    async def _credential_delete(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_delete", inp, "", "")
+
+    async def _credential_list(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_list", inp, "", "")
+
+    async def _credential_register(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_register", inp, "", "")
+
+    async def _credential_test_login(self, inp: Dict[str, Any]) -> Any:
+        """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("credential_test_login", inp, "", "")
+
+    async def _get_e2e_login_url(self, inp: Dict[str, Any]) -> Any:
+        """E2E 브라우저 자동 로그인 URL 생성."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("get_e2e_login_url", inp, "", "")
+
+    async def _google_sheets_register(self, inp: Dict[str, Any]) -> Any:
+        """Register a Google Sheets service-account credential."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_register", inp, "", session_id)
+
+    async def _google_sheets_read(self, inp: Dict[str, Any]) -> Any:
+        """Read a Google Sheets range."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_read", inp, "", session_id)
+
+    async def _google_sheets_update(self, inp: Dict[str, Any]) -> Any:
+        """Update a Google Sheets range."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_update", inp, "", session_id)
+
+    async def _google_sheets_append(self, inp: Dict[str, Any]) -> Any:
+        """Append rows to Google Sheets."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_append", inp, "", session_id)
+
+    async def _google_sheets_write_records(self, inp: Dict[str, Any]) -> Any:
+        """Write records to Google Sheets."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_write_records", inp, "", session_id)
+
+    async def _google_sheets_clear(self, inp: Dict[str, Any]) -> Any:
+        """Clear a Google Sheets range."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_clear", inp, "", session_id)
+
+    async def _google_sheets_create(self, inp: Dict[str, Any]) -> Any:
+        """Create a Google Spreadsheet."""
+        from app.api.ceo_chat_tools import execute_tool
+        session_id = str(inp.get("session_id") or current_chat_session_id.get("") or "").strip()
+        return await execute_tool("google_sheets_create", inp, "", session_id)
+
 # ─── 하위 호환성 ─────────────────────────────────────────────────────────────
 
 _INTENT_TOOL_MAP: Dict[str, list] = {
     "health_check":        ["health_check"],
     "dashboard":           ["dashboard_query"],
     "diagnosis":           ["dashboard_query", "health_check"],
-    "search":              ["web_search"],
+    "search":              ["search_crawl_match", "search_searxng", "web_search"],
     "memory_recall":       ["read_github_file", "query_database"],
     "directive_gen":       ["directive_create", "generate_directive"],
     "execute":             ["directive_create"],
@@ -3359,8 +5170,8 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "task_query":             ["check_directive_status"],
     "status_check":           ["check_directive_status"],
     # AADS-159: 브라우저 인텐트
-    "browser":                ["browser_navigate", "browser_snapshot"],
-    "browser_action":         ["browser_navigate", "browser_snapshot", "browser_screenshot"],
+    "browser":                ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser_action":         ["browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
     # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
     "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
     "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],
