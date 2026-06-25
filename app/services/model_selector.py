@@ -20,26 +20,32 @@ from datetime import datetime, timezone
 
 _ctx_temperature: contextvars.ContextVar[float] = contextvars.ContextVar('_ctx_temperature', default=0.2)
 
-import asyncpg
-import httpx
-from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError
-from app.config import Settings
-from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys
-from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids
-from app.services.model_registry import list_registered_models as _list_registered_models
-from app.services.intent_router import IntentResult
+import asyncpg  # noqa: E402
+import httpx  # noqa: E402
+from anthropic import AsyncAnthropic, APIStatusError, APIConnectionError, RateLimitError  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys  # noqa: E402
+from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids  # noqa: E402
+from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
+from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
+from app.services.intent_router import IntentResult  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 settings = Settings()
 
+_CLI_NO_RESUME_HISTORY_WINDOW = int(os.getenv("AADS_CLI_HISTORY_WINDOW", "80"))
+_CLI_RESUME_CONTINUITY_WINDOW = int(os.getenv("AADS_CLI_RESUME_CONTINUITY_WINDOW", "12"))
+
 _CODEX_PROJECT_KEYS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "KAKAOBOT")
 _CODEX_PROJECT_CACHE_TTL_SECONDS = 30.0
 _CODEX_PROJECT_CACHE: Dict[str, tuple[str, float]] = {}
+_RELAY_RETRY_INTERVAL_SECONDS = float(os.getenv("AADS_RELAY_RETRY_INTERVAL_SECONDS", "3"))
+_RELAY_RETRY_MAX_RETRIES = int(os.getenv("AADS_RELAY_RETRY_MAX_RETRIES", "30"))
 _PROJECT_RUNTIME_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard",
     "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4",
-    "GO100": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; separate GO100 impact from KIS impact",
+    "GO100": "remote_server=contabo14; remote_ip=5.104.86.14; remote_workdir=/root/kis-autotrade-v4; separate GO100 impact from KIS impact; legacy server-211 is pending GO100 decommission",
     "SF": "remote_server=server-114; use project=SF for remote tools",
     "NTV2": "remote_server=server-114; use project=NTV2 for remote tools",
     "NAS": "remote_server=server-114; use project=NAS or native SSH when remote tools do not expose NAS",
@@ -124,17 +130,70 @@ _CLAUDE_RELAY_NAVER_FIRST = os.getenv("CLAUDE_RELAY_NAVER_FIRST", "false").lower
 _SLOT_COOLDOWN: Dict[str, float] = {}  # {slot: expire_timestamp}
 _COOLDOWN_SECS = 300  # 5분
 
+import re as _re_mod  # noqa: E402
+
+def _parse_quota_reset_seconds(error_msg: str) -> int:
+    """에러 메시지에서 쿼터 복구 시간(초)을 파싱. 못 찾으면 _COOLDOWN_SECS 반환."""
+    if not error_msg:
+        return _COOLDOWN_SECS
+    low = error_msg.lower()
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(hour|hr|시간)', low)
+    if m:
+        return int(m.group(1)) * 3600
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(week|주)', low)
+    if m:
+        return int(m.group(1)) * 7 * 86400
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(minute|min|분)', low)
+    if m:
+        return int(m.group(1)) * 60
+    m = _re_mod.search(r'resets?\s+in\s+(\d+)\s*(day|일)', low)
+    if m:
+        return int(m.group(1)) * 86400
+    # Codex CLI 고정시각 패턴: "resets 3am (Asia/Seoul)", "resets at 3:00 AM"
+    m = _re_mod.search(r'resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(?\s*(?:asia/seoul|kst)\s*\)?)?', low)
+    if m:
+        import datetime as _dt
+        _KST = _dt.timezone(_dt.timedelta(hours=9))
+        now_kst = _dt.datetime.now(_KST)
+        h = int(m.group(1))
+        mi = int(m.group(2)) if m.group(2) else 0
+        if m.group(3) == 'pm' and h != 12:
+            h += 12
+        elif m.group(3) == 'am' and h == 12:
+            h = 0
+        target = now_kst.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if target <= now_kst:
+            target += _dt.timedelta(days=1)
+        return max(int((target - now_kst).total_seconds()), 60)
+    if "exceeded your current quota" in low or "billing details" in low:
+        return 86400
+    return _COOLDOWN_SECS
+
+def _format_reset_kst(seconds: int) -> str:
+    """복구까지 남은 초를 KST 시각 문자열로 변환."""
+    import datetime as _dt
+    reset_at = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9))) + _dt.timedelta(seconds=seconds)
+    if seconds >= 86400:
+        return f"약 {seconds // 86400}일 후 ({reset_at.strftime('%m/%d %H:%M')} KST)"
+    if seconds >= 3600:
+        return f"약 {seconds // 3600}시간 후 ({reset_at.strftime('%H:%M')} KST)"
+    return f"약 {seconds // 60}분 후 ({reset_at.strftime('%H:%M')} KST)"
+
 def _parse_rl_reset_ms(headers=None):
     if not headers:
         return None
     ra = headers.get("retry-after") or headers.get("Retry-After")
     if ra:
-        try: return _time_mod.time() + float(ra)
-        except (ValueError, TypeError): pass
+        try:
+            return _time_mod.time() + float(ra)
+        except (ValueError, TypeError):
+            pass
     rr = headers.get("x-ratelimit-reset") or headers.get("X-RateLimit-Reset")
     if rr:
-        try: return float(rr)
-        except (ValueError, TypeError): pass
+        try:
+            return float(rr)
+        except (ValueError, TypeError):
+            pass
     return None
 
 def _mark_slot_cooldown(slot: str, headers=None, duration_override: int = None) -> None:
@@ -158,14 +217,14 @@ def _is_slot_available(slot: str) -> bool:
     return False
 
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
-from app.core.auth_provider import (
+from app.core.auth_provider import (  # noqa: E402
     get_oauth_tokens as _ap_get_tokens,
     get_oauth_key_records_async as _ap_get_key_records_async,
     get_token_labels as _ap_get_labels,
     set_token_order as _ap_set_order,
 )
-from app.core.llm_key_provider import mark_key_rate_limited as _mark_key_rate_limited
-from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage
+from app.core.llm_key_provider import mark_key_rate_limited as _mark_key_rate_limited  # noqa: E402
+from app.services.oauth_usage_tracker import log_usage as _log_oauth_usage  # noqa: E402
 
 
 def get_key_order() -> List[Dict[str, str]]:
@@ -213,6 +272,46 @@ def _is_db_slot_rate_limited(record: Optional[Dict[str, Any]]) -> bool:
 # AADS session_id → CLI session_id 매핑 (대화 이어가기용)
 _cli_session_map: Dict[str, str] = {}  # {aads_session_id: cli_session_id}
 
+_SESSION_BOUND_TOOLS = {
+    "pipeline_runner_submit",
+    "pipeline_runner_submit_batch",
+    "pipeline_c_start",
+    "pipeline_runner_status",
+    "check_task_status",
+    "check_directive_status",
+}
+
+
+def _bind_tool_session_input(
+    tool_name: str,
+    tool_input: Optional[Dict[str, Any]],
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    """Attach the active AADS chat session before displaying/executing tools."""
+    bound = dict(tool_input or {})
+    active_session = str(session_id or "").strip()
+    if not active_session or tool_name not in _SESSION_BOUND_TOOLS:
+        return bound
+
+    scope = str(bound.get("scope") or "").strip().lower()
+    if scope in {"all", "global", "*"}:
+        return bound
+
+    supplied_session = str(bound.get("session_id") or "").strip()
+    if tool_name in {"pipeline_runner_submit", "pipeline_runner_submit_batch", "pipeline_c_start"}:
+        if supplied_session and supplied_session != active_session:
+            logger.warning(
+                "runner_session_override_before_tool_call: tool=%s supplied=%s current=%s",
+                tool_name,
+                supplied_session[:8],
+                active_session[:8],
+            )
+        bound["session_id"] = active_session
+    elif not supplied_session:
+        bound["session_id"] = active_session
+
+    return bound
+
 _INTENT_POLICY_CACHE_TTL_SECONDS = 300
 _INTENT_POLICY_CACHE: Dict[str, Any] = {"expires_at": 0.0, "policies": {}}
 _INTENT_POLICY_MODEL_ALIASES = {
@@ -236,6 +335,46 @@ _SONNET_INTENTS = {
 def _normalize_intent_policy_model(model: Any) -> str:
     model_name = str(model or "").strip()
     return _INTENT_POLICY_MODEL_ALIASES.get(model_name, model_name)
+
+
+# mixture/auto 기본 모델 DB 캐시 (TTL 60초)
+_LLM_DEFAULT_CACHE: Dict[str, Any] = {"expires_at": 0.0, "model": None}
+
+
+async def _get_default_llm_model_from_db() -> Optional[str]:
+    """DB model_routing_preferences 에서 route_key="llm", is_default=True, is_enabled=True 인
+    기본 모델을 조회한다. TTL 60초 캐시 적용. 실패 시 None 반환 (폴백은 호출자에서 처리)."""
+    now = _time_mod.monotonic()
+    cached_expires = float(_LLM_DEFAULT_CACHE.get("expires_at") or 0.0)
+    cached_model = _LLM_DEFAULT_CACHE.get("model")
+    if cached_expires > now and cached_model is not None:
+        return cached_model
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT provider, model_id FROM model_routing_preferences "
+                "WHERE route_key = 'llm' AND is_default = TRUE AND is_enabled = TRUE "
+                "LIMIT 1"
+            )
+        if row:
+            provider = (row["provider"] or "").strip().lower()
+            model_id = (row["model_id"] or "").strip()
+            result = model_id if provider == "anthropic" else f"{provider}:{model_id}"
+            _LLM_DEFAULT_CACHE["model"] = result
+            _LLM_DEFAULT_CACHE["expires_at"] = now + 60.0
+            logger.info("llm_default_from_db: provider=%s model_id=%s → %s", provider, model_id, result)
+            return result
+    except Exception as e:
+        logger.warning("llm_default_db_lookup_failed: %s", e)
+    return None
+
+
+_AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
 
 
 def invalidate_intent_policy_cache() -> None:
@@ -655,17 +794,51 @@ _CODEX_MODEL_DISPLAY = {
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
 }
+_CODEX_MODEL_ALIASES = {
+    "codex:gpt-5.5": "gpt-5.5",
+    "gpt-5.5 (codex cli)": "gpt-5.5",
+    "codex:gpt-5.4": "gpt-5.4",
+    "gpt-5.4 (codex cli)": "gpt-5.4",
+    "codex:gpt-5.4-mini": "gpt-5.4-mini",
+    "gpt-5.4 mini (codex cli)": "gpt-5.4-mini",
+    "codex:gpt-5.3-codex": "gpt-5.3-codex",
+    "gpt-5.3 codex (codex cli)": "gpt-5.3-codex",
+}
+
+# Antigravity CLI 모델 (Google Pro OAuth, relay /antigravity-stream 경유)
+_ANTIGRAVITY_MODELS = {"antigravity", "antigravity-pro", "antigravity-flash"}
+_ANTIGRAVITY_MODEL_DISPLAY = {
+    "antigravity": "Antigravity (Gemini 3.5 Flash)",
+    "antigravity-pro": "Antigravity Pro (Gemini 3.1 Pro)",
+    "antigravity-flash": "Antigravity Flash (Gemini 3.5 Flash)",
+}
+
+
+def _canonical_codex_model_id(model: Any) -> str:
+    value = str(model or "").strip()
+    return _CODEX_MODEL_ALIASES.get(value.lower(), value)
 
 # DeepSeek 모델 (LiteLLM 경유)
 _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-chat": "deepseek-v4-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
 }
+_DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
+    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-v4-pro": "deepseek-v4-pro",
+    "deepseek-chat": "deepseek-chat",
+    "deepseek-reasoner": "deepseek-reasoner",
+}
 _DEEPSEEK_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
 
 
 def _canonical_deepseek_model_id(model: str) -> str:
     return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model, model)
+
+
+def _litellm_deepseek_model_id(model: str) -> str:
+    """Return the model id actually registered in LiteLLM for DeepSeek routes."""
+    return _DEEPSEEK_LITELLM_RUNTIME_ALIASES.get(model, model)
 
 # OpenRouter 모델 (LiteLLM 경유, openrouter/ prefix)
 _OPENROUTER_MODELS = {
@@ -677,7 +850,7 @@ _OPENROUTER_MODELS = {
 }
 
 # Kimi 모델 (Moonshot AI, LiteLLM 경유)
-_KIMI_MODELS = {"kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
+_KIMI_MODELS = {"kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
 
 # MiniMax 모델 (LiteLLM 경유)
 _MINIMAX_MODELS = {"minimax-m2.7", "minimax-m2.5"}
@@ -725,7 +898,7 @@ _ALIBABA_MODELS = {
 }
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS
+_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _OPENAI_MODELS | _CODEX_MODELS | _ANTIGRAVITY_MODELS
 
 _OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "openrouter", "qwen", "kimi", "minimax"}
 _DIRECT_PROVIDER_BASE_URLS = {
@@ -792,12 +965,39 @@ def _split_provider_qualified_model(model_id: str) -> tuple[str | None, str]:
 async def _get_registered_model_row(model_id: str, provider: str | None = None) -> Optional[Dict[str, Any]]:
     rows = await _list_registered_models(active_only=False)
     normalized_provider = str(provider or "").strip().lower()
+    target_model = str(model_id or "").strip()
+
+    def _candidate_ids(row: Dict[str, Any]) -> set[str]:
+        metadata = _coerce_metadata(row.get("metadata"))
+        aliases = {
+            str(row.get("model_id") or "").strip(),
+            str(row.get("execution_model_id") or "").strip(),
+            str(metadata.get("execution_model_id") or "").strip(),
+            str(metadata.get("canonical_model") or "").strip(),
+        }
+        extra_aliases = metadata.get("aliases") or []
+        if isinstance(extra_aliases, list):
+            aliases.update(str(alias or "").strip() for alias in extra_aliases)
+        accepted_aliases = metadata.get("accepted_aliases") or []
+        if isinstance(accepted_aliases, list):
+            aliases.update(str(alias or "").strip() for alias in accepted_aliases)
+        aliases.discard("")
+        return aliases
+
     if normalized_provider:
         for row in rows:
-            if row.get("provider") == normalized_provider and row.get("model_id") == model_id:
+            if row.get("provider") == normalized_provider and str(row.get("model_id") or "").strip() == target_model:
+                return row
+        for row in rows:
+            if row.get("provider") != normalized_provider:
+                continue
+            if target_model in _candidate_ids(row):
                 return row
     for row in rows:
-        if row.get("model_id") == model_id:
+        if str(row.get("model_id") or "").strip() == target_model:
+            return row
+    for row in rows:
+        if target_model in _candidate_ids(row):
             return row
     return None
 
@@ -827,9 +1027,62 @@ def _coerce_metadata(value: Any) -> Dict[str, Any]:
 def _route_metadata(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     metadata = _coerce_metadata((row or {}).get("metadata"))
     backend = str(metadata.get("execution_backend") or "").strip()
-    if backend in {"openai_compatible_direct", "litellm_proxy"}:
+    execution_model_id = str(
+        (row or {}).get("execution_model_id")
+        or metadata.get("execution_model_id")
+        or metadata.get("canonical_model")
+        or (row or {}).get("model_id")
+        or ""
+    ).strip()
+    if execution_model_id:
+        metadata["execution_model_id"] = execution_model_id
+    if backend in {"openai_compatible_direct", "litellm_proxy", "pc_ollama", "codex_cli", "claude_cli_relay"}:
         return metadata
     return {}
+
+
+def _registered_model_aliases(row: Optional[Dict[str, Any]]) -> list[str]:
+    metadata = _coerce_metadata((row or {}).get("metadata"))
+    aliases: list[str] = []
+    for value in (
+        (row or {}).get("model_id"),
+        (row or {}).get("execution_model_id"),
+        metadata.get("execution_model_id"),
+        metadata.get("canonical_model"),
+    ):
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    for value in metadata.get("aliases") or []:
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    for value in metadata.get("accepted_aliases") or []:
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+async def _resolve_registered_model_alias(
+    model_id: str,
+    *,
+    provider: str | None = None,
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    target_model = str(model_id or "").strip()
+    if not target_model:
+        return target_model, None
+
+    normalized_provider = _normalize_registry_provider(provider or "")
+    try:
+        row = await _get_registered_model_row(target_model, provider=normalized_provider)
+    except Exception as exc:
+        logger.debug("registered_model_alias_lookup_failed: model=%s error=%s", target_model, exc)
+        row = None
+    if row:
+        return str(row.get("model_id") or target_model), row
+
+    return target_model, None
 
 
 async def _get_direct_provider_api_key(provider: str) -> str:
@@ -869,7 +1122,89 @@ async def _stream_direct_openai_provider(
         yield event
 
 
-def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> str:
+async def _stream_pc_ollama_provider(
+    display_model: str,
+    metadata: Dict[str, Any],
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Route a chat turn through the connected CEO PC's local Ollama runtime."""
+    del tools, session_id
+    from app.services.pc_agent_manager import pc_agent_manager
+
+    request_model = str(
+        metadata.get("canonical_model")
+        or metadata.get("execution_model_id")
+        or display_model
+    ).strip() or display_model
+    agent_id = str(metadata.get("agent_id") or "").strip()
+    try:
+        timeout_seconds = float(metadata.get("timeout_seconds") or 300)
+    except (TypeError, ValueError):
+        timeout_seconds = 300.0
+    timeout_seconds = max(1.0, min(timeout_seconds, 900.0))
+    try:
+        max_tokens = int(metadata.get("max_tokens") or 2048)
+    except (TypeError, ValueError):
+        max_tokens = 2048
+
+    clean_msgs = [m for m in messages if m.get("role") != "system"]
+    ollama_messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for msg in clean_msgs:
+        role = str(msg.get("role") or "user")
+        if role not in {"system", "user", "assistant", "tool"}:
+            role = "user"
+        content = _convert_content_for_openai(msg.get("content", ""))
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        if role == "tool":
+            role = "user"
+            content = f"[tool_result]\n{content}"
+        ollama_messages.append({"role": role, "content": content})
+
+    result = await pc_agent_manager.execute_routed_command(
+        command_type="ollama_chat",
+        params={
+            "model": request_model,
+            "messages": ollama_messages,
+            "temperature": _ctx_temperature.get(0.2),
+            "max_tokens": max_tokens,
+            "timeout_seconds": timeout_seconds,
+            "think": bool(metadata.get("think", False)),
+        },
+        agent_id=agent_id,
+        job_type="pc_ollama",
+        required_capabilities=["pc_ollama"],
+        queue_if_busy=True,
+        wait_for_turn=True,
+        queue_wait_timeout_seconds=min(timeout_seconds, 120.0),
+        lease_ttl_seconds=int(timeout_seconds) + 30,
+        command_timeout_seconds=timeout_seconds,
+    )
+    if result.get("status") != "success":
+        detail = result.get("message") or result.get("detail") or result.get("error_code") or "pc_ollama route failed"
+        yield {"type": "error", "content": f"PC Ollama {display_model} unavailable: {detail}"}
+        return
+
+    payload = (result.get("result") or {}).get("result") or {}
+    content = str(payload.get("content") or "")
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    if not content:
+        yield {"type": "error", "content": "PC Ollama empty_response"}
+        return
+    yield {"type": "delta", "content": content}
+    yield {
+        "type": "done",
+        "model": display_model,
+        "cost": "$0",
+        "input_tokens": int(raw.get("prompt_eval_count") or 0),
+        "output_tokens": int(raw.get("eval_count") or 0),
+    }
+
+
+def _fallback_for_unavailable_model_legacy(model: str, available_models: set[str]) -> str:
     groups = [
         [candidate for candidate in ("claude-sonnet", "claude-haiku", "claude-opus", "claude-opus-46") if candidate in available_models],
         [candidate for candidate in ("gemini-2.5-flash", "gemini-flash", "gemini-3-flash-preview", "gemini-2.5-pro") if candidate in available_models],
@@ -881,6 +1216,69 @@ def _fallback_for_unavailable_model(model: str, available_models: set[str]) -> s
         if candidates:
             return candidates[0]
     return next(iter(sorted(available_models))) if available_models else model
+
+
+def _fallback_cost_distance(requested: Optional[Dict[str, Any]], candidate: Dict[str, Any]) -> float:
+    if not requested:
+        return 0.0
+
+    requested_input = requested.get("input_cost")
+    requested_output = requested.get("output_cost")
+    candidate_input = candidate.get("input_cost")
+    candidate_output = candidate.get("output_cost")
+    if requested_input is None or requested_output is None or candidate_input is None or candidate_output is None:
+        return 1_000_000.0
+    return float(abs(requested_input - candidate_input) + abs(requested_output - candidate_output))
+
+
+async def _fallback_for_unavailable_model(
+    model: str,
+    available_models: set[str],
+    *,
+    requested_row: Optional[Dict[str, Any]] = None,
+) -> str:
+    try:
+        active_rows = await _list_registered_models(active_only=True)
+    except Exception as exc:
+        logger.debug("registered_model_fallback_lookup_failed: model=%s error=%s", model, exc)
+        return _fallback_for_unavailable_model_legacy(model, available_models)
+    candidate_rows = [
+        row
+        for row in active_rows
+        if row.get("model_id") != model and _is_model_runtime_available(str(row.get("model_id") or ""), available_models)
+    ]
+    if not candidate_rows:
+        return _fallback_for_unavailable_model_legacy(model, available_models)
+
+    if requested_row is None:
+        _, requested_row = await _resolve_registered_model_alias(model)
+
+    def _candidate_rank(row: Dict[str, Any]) -> tuple[int, int, int, int, float, str]:
+        if requested_row:
+            provider_match = int(row.get("provider") == requested_row.get("provider"))
+            family_match = int(row.get("family") == requested_row.get("family"))
+            category_match = int(row.get("category") == requested_row.get("category"))
+            capability_match = sum(
+                int(row.get(key) == requested_row.get(key))
+                for key in ("supports_tools", "supports_thinking", "supports_vision", "supports_coding")
+            )
+            cost_distance = _fallback_cost_distance(requested_row, row)
+        else:
+            provider_match = 0
+            family_match = 0
+            category_match = 0
+            capability_match = 0
+            cost_distance = 1_000_000.0
+        return (
+            provider_match,
+            family_match,
+            category_match,
+            capability_match,
+            -cost_distance,
+            str(row.get("model_id") or ""),
+        )
+
+    return str(max(candidate_rows, key=_candidate_rank).get("model_id") or model)
 
 
 def _estimate_cost(model: str, in_tokens: int, out_tokens: int) -> Decimal:
@@ -979,6 +1377,7 @@ async def call_stream(
     tools: Optional[List[Dict[str, Any]]] = None,
     model_override: Optional[str] = None,
     session_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     인텐트 결과에 따라 LiteLLM 또는 Anthropic SDK로 SSE 스트리밍.
@@ -1007,41 +1406,73 @@ async def call_stream(
     # 그렇지 않으면 model_override or intent 가 "mixture" 문자열이 되어 unknown → claude-sonnet 고정 등 오동작.
     _effective_override = (
         model_override
-        if model_override and str(model_override).strip() not in ("mixture", "auto", "")
+        if model_override
+        and str(model_override).strip() not in ("mixture", "auto", "")
+        and str(model_override).strip() not in _AUTO_ROUTED_DB_DEFAULT_MODELS
         else None
     )
     model = _effective_override or intent_result.model
 
-    # FIX-4: 빈 모델명 가드 — model이 None/빈문자열이면 기본값 적용
+    _db_default_applied = False
+    if not _effective_override and str(model or "").strip() in _AUTO_ROUTED_DB_DEFAULT_MODELS:
+        _db_default = await _get_default_llm_model_from_db()
+        if _db_default:
+            logger.info(
+                "auto_routed_model_db_default: intent=%s model=%s -> %s",
+                getattr(intent_result, "intent", ""),
+                model,
+                _db_default,
+            )
+            model = _db_default
+            _db_default_applied = True
+        else:
+            logger.warning("auto_routed_model_db_default_unavailable: keeping model=%s", model)
+
+    # FIX-4: 빈 모델명 가드 — model이 None/빈문자열이면 DB 기본값 조회 후 폴백
     if not model or not str(model).strip():
-        logger.warning("empty_model_fallback: model is empty/None → 'claude-sonnet'")
-        model = "claude-sonnet"
+        _db_default = await _get_default_llm_model_from_db()
+        if _db_default:
+            logger.info("empty_model_fallback: using DB default → '%s'", _db_default)
+            model = _db_default
+        else:
+            logger.warning("empty_model_fallback: DB lookup failed → 'claude-sonnet'")
+            model = "claude-sonnet"
     _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
     if _qualified_provider:
         model = _qualified_model
+    model = _canonical_codex_model_id(model)
+    resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
+    if resolved_model and resolved_model != model:
+        logger.info("registered_model_alias_resolved: '%s' -> '%s'", model, resolved_model)
+        model = resolved_model
+        _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
 
-    # model_override가 구체적 모델명(claude-sonnet-4-6 등)이면 LiteLLM alias로 변환
-    _OVERRIDE_TO_ALIAS = {
-        "claude-sonnet-4-6": "claude-sonnet", "claude-sonnet-4-5": "claude-sonnet",
-        "claude-opus-4-7": "claude-opus",
-        "claude-opus-4-6": "claude-opus-46", "claude-opus-4-5": "claude-opus",
-        "claude-haiku-4-5": "claude-haiku",
-        "claude-haiku-4-5-20251001": "claude-haiku",
-        "claude-3-5-sonnet-20241022": "claude-sonnet",
-        "claude-3-5-haiku-20241022":  "claude-haiku",
-        "claude-3-opus-20240229":     "claude-opus",
-        "claude-3-sonnet-20240229":   "claude-sonnet",
-        "claude-3-haiku-20240307":    "claude-haiku",
-        "claude-2.1":                 "claude-sonnet",
-        "auto": "claude-sonnet",    # 레거시: 실제 auto 는 _effective_override None 으로 처리됨
-    }
-    if model in _OVERRIDE_TO_ALIAS:
-        model = _OVERRIDE_TO_ALIAS[model]
+    try:
+        from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
+        from app.services.tool_executor import resolve_bound_tenant_id
+
+        resolved_tenant_id = tenant_id or await resolve_bound_tenant_id(explicit_session_id=session_id or "")
+        if resolved_tenant_id:
+            await check_tenant_usage_limit(
+                resolved_tenant_id,
+                operation=f"model:{model}",
+                projected_calls=1,
+            )
+    except TenantUsageLimitExceeded as e:
+        yield {
+            "type": "error",
+            "content": e.decision.message,
+            "code": "tenant_usage_limit_exceeded",
+            "limit": e.decision.limit_name,
+        }
+        return
+    except Exception as e:
+        logger.warning("tenant_usage_preflight_failed: model=%s error=%s", model, str(e)[:120])
 
     # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
-    if not _effective_override and not _model_locked:
+    if not _effective_override and not _model_locked and not _db_default_applied:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
             current_model=model,
@@ -1050,26 +1481,48 @@ async def call_stream(
         if _policy_model:
             logger.info(f"cascade_downgrade: {_intent} → {_policy_model} ({_policy_reason})")
             model = _policy_model
+            resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
+            if resolved_model and resolved_model != model:
+                logger.info("registered_model_alias_resolved_after_policy: '%s' -> '%s'", model, resolved_model)
+                model = resolved_model
+            _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
     else:
         if _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
+        elif _db_default_applied:
+            logger.info(
+                "cascade_skip: DB default model '%s' selected for auto-routed intent='%s'",
+                model,
+                _intent,
+            )
 
     from app.services.intent_router import resolve_intent_temperature as _rit
     _ctx_temperature.set(await _rit(_intent))
 
     runtime_available_models = await get_available_model_ids()
+    registered_row = resolved_row or await _get_registered_model_row(model, provider=_qualified_provider)
     if runtime_available_models and not _is_model_runtime_available(model, runtime_available_models):
-        fallback_model = _fallback_for_unavailable_model(model, runtime_available_models)
+        fallback_model = await _fallback_for_unavailable_model(
+            model,
+            runtime_available_models,
+            requested_row=registered_row,
+        )
         logger.warning("registry_model_unavailable: '%s' -> '%s'", model, fallback_model)
         model = fallback_model
         _qualified_provider = None
-
-    registered_row = await _get_registered_model_row(model, provider=_qualified_provider)
+        resolved_model, resolved_row = await _resolve_registered_model_alias(model)
+        if resolved_model:
+            model = resolved_model
+        registered_row = resolved_row or await _get_registered_model_row(model)
     route_metadata = _route_metadata(registered_row)
-    if model not in _LITELLM_OPENAI_MODELS and model not in _ANTHROPIC_MODEL_ID and not route_metadata:
+    model_is_known_runtime = bool(runtime_available_models) and _is_model_runtime_available(model, runtime_available_models)
+    if not registered_row and not route_metadata and not model_is_known_runtime:
         logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
         model = "claude-sonnet"
-        registered_row = await _get_registered_model_row(model)
+        resolved_model, resolved_row = await _resolve_registered_model_alias(model)
+        if resolved_model:
+            model = resolved_model
+        registered_row = resolved_row or await _get_registered_model_row(model)
         route_metadata = _route_metadata(registered_row)
 
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
@@ -1097,12 +1550,12 @@ async def call_stream(
     if route_metadata:
         provider = str((registered_row or {}).get("provider") or "")
         backend = str(route_metadata.get("execution_backend") or "").strip()
-        if provider == "deepseek" and backend == "openai_compatible_direct":
+        if provider == "deepseek":
             backend = "litellm_proxy"
             route_metadata = {
                 **route_metadata,
                 "execution_backend": backend,
-                "execution_model_id": _canonical_deepseek_model_id(model),
+                "execution_model_id": _litellm_deepseek_model_id(model),
                 "execution_base_url": "",
             }
         if backend == "openai_compatible_direct":
@@ -1116,6 +1569,7 @@ async def call_stream(
                 session_id=session_id,
             ):
                 yield event
+            return
         elif backend == "litellm_proxy":
             request_model = str(route_metadata.get("execution_model_id") or model).strip() or model
             async for event in _stream_litellm_openai(
@@ -1128,7 +1582,58 @@ async def call_stream(
                 cost_model=model,
             ):
                 yield event
-        return
+            return
+        elif backend == "pc_ollama":
+            async for event in _stream_pc_ollama_provider(
+                model,
+                route_metadata,
+                system_prompt,
+                messages,
+                tools=tools,
+                session_id=session_id,
+            ):
+                yield event
+            return
+        elif backend == "codex_cli":
+            _codex_had_error = False
+            _codex_error_content = ""
+            async for event in _stream_codex_relay(
+                model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
+                if event.get("type") == "error":
+                    _codex_had_error = True
+                    _codex_error_content = event.get("content", "")
+                    break
+                yield event
+            if not _codex_had_error:
+                return
+            _CODEX_FB = {
+                "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
+                "gpt-5.4": ["claude-sonnet", "gemini-2.5-flash"],
+                "gpt-5.4-mini": ["claude-haiku", "gemini-3.1-flash-lite-preview"],
+            }
+            for _cfb in _CODEX_FB.get(model, []):
+                try:
+                    yield {"type": "delta", "content": f"\n\n⚠️ _{model} 장애 — {_cfb}로 전환합니다._\n\n"}
+                    _cfb_err = False
+                    if _cfb in _ANTHROPIC_MODEL_ID:
+                        _cfb_stream = _stream_cli_relay(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
+                    else:
+                        _cfb_stream = _stream_litellm(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
+                    async for ev in _cfb_stream:
+                        if isinstance(ev, dict) and ev.get("type") == "error":
+                            _cfb_err = True
+                            logger.warning(f"codex_fb_failed: {model}→{_cfb}: {ev.get('content', '')[:80]}")
+                            break
+                        yield ev
+                    if not _cfb_err:
+                        return
+                except Exception as _cfb_exc:
+                    logger.warning(f"codex_fb_exc: {model}→{_cfb}: {_cfb_exc}")
+            yield {"type": "error", "content": _codex_error_content}
+            return
+
+    route_backend = str(route_metadata.get("execution_backend") or "").strip()
 
     # Claude 모델 → DB priority 기반 계정 교차 폴백 (rate limit은 계정별)
     _slot_records = await _get_claude_slot_records()
@@ -1144,16 +1649,24 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-opus": ["gpt-5.4", "gemini-3.1-pro-preview"],
-        "claude-sonnet": ["gpt-5.4", "gemini-3-flash-preview"],
-        "claude-haiku": ["gpt-5.4-mini", "gemini-3.1-flash-lite-preview"],
+        "claude-opus": ["gpt-5.5", "gemini-3.1-pro-preview"],
+        "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
+        "claude-haiku": ["gpt-5.4-mini", "deepseek-v4-flash", "gemini-3.1-flash-lite-preview"],
     }
     _GEMINI_SAMEGRADE = {
+        "gemini-3.1-pro-preview": "claude-opus",
         "gemini-2.5-pro": "claude-opus",
         "gemini-2.5-flash": "claude-sonnet",
+        "gemini-3.1-flash-lite-preview": "claude-haiku",
         "gemini-2.0-flash": "claude-haiku",
     }
-    if model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID:
+    # CLI Relay 비활성화 환경(CLAUDE_CLI_ENABLED=false, server5 등) → LiteLLM 직접 라우팅
+    if not _CLAUDE_CLI_ENABLED and (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
+        async for event in _stream_litellm(model, system_prompt, messages, tools=tools, session_id=session_id):
+            yield event
+        return
+
+    if route_backend == "claude_cli_relay" or (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
         _original_model = model
         _downgrade = _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
@@ -1181,10 +1694,12 @@ async def call_stream(
                         _err_msg = event.get("content", "")
                         logger.warning(f"relay_err: {_target_model}/slot{_slot}[{_si}] — {_err_msg[:80]}")
                         if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
-                            _mark_slot_cooldown(_slot)
+                            _reset_secs = _parse_quota_reset_seconds(_err_msg)
+                            _mark_slot_cooldown(_slot, duration_override=_reset_secs)
                             _slot_key = _slot_records.get(_slot, {}).get("key_name")
                             if _slot_key:
-                                await _mark_key_rate_limited(_slot_key, seconds=_COOLDOWN_SECS)
+                                await _mark_key_rate_limited(_slot_key, seconds=_reset_secs)
+                            logger.warning("quota_reset_parsed: slot=%s seconds=%d msg=%s", _slot, _reset_secs, _err_msg[:120])
                         break
                     yield event
                 if not _err:
@@ -1224,12 +1739,14 @@ async def call_stream(
                     _err_msg = event.get("content", "")
                     logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {_err_msg[:80]}")
                     _err_lower = _err_msg.lower()
-                    # 429/한도/크레딧 오류 → 기존 쿨다운 등록
+                    # 429/한도/크레딧 오류 → 복구 시간 파싱 후 쿨다운 등록
                     if any(k in _err_lower for k in ("429", "rate", "limit", "overloaded", "quota")):
-                        _mark_slot_cooldown(_fs)
+                        _reset_secs = _parse_quota_reset_seconds(_err_msg)
+                        _mark_slot_cooldown(_fs, duration_override=_reset_secs)
                         _slot_key = _slot_records.get(_fs, {}).get("key_name")
                         if _slot_key:
-                            await _mark_key_rate_limited(_slot_key, seconds=_COOLDOWN_SECS)
+                            await _mark_key_rate_limited(_slot_key, seconds=_reset_secs)
+                        logger.warning("quota_reset_parsed: slot=%s seconds=%d msg=%s", _fs, _reset_secs, _err_msg[:120])
                     # CLI exit 반복 실패는 짧은 고정 쿨다운 적용
                     elif any(k in _err_lower for k in ("cli exited", "exit code", "exited with code")):
                         _mark_slot_cooldown(_fs, duration_override=60)
@@ -1237,6 +1754,11 @@ async def call_stream(
                 yield event
             if not _err:
                 return
+
+            _STRUCTURAL_ERR = ("preflight_failed", "missing_binary", "relay unreachable", "no such file", "failed to start")
+            if any(k in _err_lower for k in _STRUCTURAL_ERR):
+                logger.warning("structural_error_skip_slots: %s → LiteLLM/samegrade", _err_msg[:120])
+                break
 
             await _relay_clear_aads_session_for_oauth_fallback(session_id)
 
@@ -1254,6 +1776,18 @@ async def call_stream(
                     return
 
             logger.warning(f"tier_exhausted: {_fm}/slot{_fs}[{_fi}]")
+
+        # Tier3: CLI Relay 오프라인 환경(server5 등) → LiteLLM으로 같은 모델 직접 시도
+        _litellm_direct_err = False
+        logger.info(f"litellm_direct_fallback: trying {_original_model} via LiteLLM after relay failure")
+        async for event in _stream_litellm(_original_model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                _litellm_direct_err = True
+                logger.warning(f"litellm_direct_fallback_failed: {_original_model}: {event.get('content', '')[:80]}")
+                break
+            yield event
+        if not _litellm_direct_err:
+            return
 
         # 모든 Claude 모델×계정 실패 → 동급 외부 모델 순차 시도
         try:
@@ -1333,7 +1867,7 @@ async def call_stream(
     # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Gemini Flash 폴백)
     if model in _GROQ_MODELS or model in _DEEPSEEK_MODELS:
         _had_error = False
-        _request_model = _canonical_deepseek_model_id(model) if model in _DEEPSEEK_MODELS else model
+        _request_model = _litellm_deepseek_model_id(model) if model in _DEEPSEEK_MODELS else model
         async for event in _stream_litellm_openai(
             _request_model,
             system_prompt,
@@ -1416,7 +1950,7 @@ async def call_stream(
         return
 
     # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Gemini Flash 폴백)
-    if model in _CODEX_MODELS:
+    if route_backend == "codex_cli" or model in _CODEX_MODELS:
         _had_error = False
         async for event in _stream_codex_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
@@ -1430,6 +1964,16 @@ async def call_stream(
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
+        return
+
+    # Antigravity CLI 모델 → Relay /antigravity-stream 경유 (Google Pro OAuth).
+    # 월정액 CLI 경로가 실패했을 때 Gemini API로 자동 우회하면 Prepay/Postpay 과금 경로가
+    # 섞이므로 오류를 그대로 반환한다.
+    if model in _ANTIGRAVITY_MODELS:
+        async for event in _stream_antigravity_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                logger.warning(f"antigravity_failed_no_api_fallback: {model} {str(event.get('content', ''))[:120]}")
+            yield event
         return
 
     # OpenAI 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
@@ -1649,9 +2193,10 @@ async def _stream_litellm_anthropic(
                 tool_results = []
                 from app.api.ceo_chat_tools import execute_tool as _exec_tool
                 for tu in _tool_uses:
-                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tu["input"]}
+                    tool_input = _bind_tool_session_input(tu["name"], tu["input"], session_id)
+                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tool_input}
                     try:
-                        result = await _exec_tool(tu["name"], tu["input"], "", session_id or "")
+                        result = await _exec_tool(tu["name"], tool_input, "", session_id or "")
                         yield {"type": "tool_result", "tool_name": tu["name"], "content": str(result)[:3000]}
                         tool_results.append({
                             "type": "tool_result",
@@ -1754,7 +2299,7 @@ async def _stream_litellm_openai(
         "groq-kimi-k2": 32768, "groq-llama-70b": 8192, "groq-llama-8b": 8192,
         "groq-llama4-scout": 16384, "groq-qwen3-32b": 32768,
         "groq-gpt-oss-120b": 16384, "groq-compound": 32768,
-        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-latest": 8192,
+        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-k2.6": 8192, "kimi-latest": 8192,
         "kimi-128k": 8192, "kimi-8k": 8192,
         "minimax-m2.7": 16384, "minimax-m2.5": 16384,
     }
@@ -1763,6 +2308,10 @@ async def _stream_litellm_openai(
     extra_params: Dict[str, Any] = {}
     if is_thinking:
         extra_params["reasoning_effort"] = "low"
+    # DeepSeek V4 Pro/Flash: thinking 활성 시 content가 비고 reasoning_content만 내려오는
+    # 케이스가 있어 채팅 본문 안정성을 위해 기본 채팅 경로에서는 thinking을 끈다.
+    if model in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+        extra_params["extra_body"] = {"thinking": {"type": "disabled"}}
     # Qwen3 계열: thinking 모드 비활성화 → 도구 호출 우선 (thinking 활성 시 도구 무시됨)
     if "qwen3" in model.lower() and "thinking" not in model.lower():
         extra_params["extra_body"] = {"enable_thinking": False}
@@ -1781,8 +2330,10 @@ async def _stream_litellm_openai(
                     }
                 })
 
-    MAX_TOOL_LOOPS = 500  # Claude 동일 수준 (CEO 지시)
+    MAX_TOOL_LOOPS = int(os.getenv("LITELLM_MAX_TOOL_LOOPS", "30"))
+    MAX_TOOL_CALLS = int(os.getenv("CHAT_MAX_TOOL_CALLS", "25"))
     _consecutive_fail = 0  # 연속 도구 실패 카운터 (AADS-225-D)
+    _tool_calls_made = 0
 
     for _loop_iter in range(MAX_TOOL_LOOPS + 1):
         # 이번 턴의 tool_calls 누적 (index → {id, name, args_buf})
@@ -1914,6 +2465,7 @@ async def _stream_litellm_openai(
                 _args = json.loads(tc["args_buf"]) if isinstance(tc["args_buf"], str) else tc["args_buf"]
             except Exception:
                 _args = {}
+            _args = _bind_tool_session_input(tc["name"], _args, session_id)
             try:
                 _res = await _exec_tool(tc["name"], _args, "", session_id or "")
                 return {"id": tc["id"], "name": tc["name"], "args": _args, "result": str(_res)[:4000], "ok": True}
@@ -1931,9 +2483,11 @@ async def _stream_litellm_openai(
                 _args = json.loads(tc["args_buf"]) if isinstance(tc["args_buf"], str) else tc["args_buf"]
             except Exception:
                 _args = {}
+            _args = _bind_tool_session_input(tc["name"], _args, session_id)
             yield {"type": "tool_use", "tool_name": tc["name"], "tool_use_id": tc["id"], "tool_input": _args}
 
         _exec_results = await asyncio.gather(*[_run_one(tc) for tc in _sorted_tcs])
+        _tool_calls_made += len(_exec_results)
 
         # 실행 결과만 yield + tool 메시지 추가
         for _er in _exec_results:
@@ -1961,6 +2515,22 @@ async def _stream_litellm_openai(
                 break
         else:
             _consecutive_fail = 0
+
+        if _tool_calls_made >= MAX_TOOL_CALLS:
+            logger.warning(
+                "litellm_tool_call_cap_reached: session=%s model=%s calls=%d cap=%d",
+                (session_id or "")[:8], model, _tool_calls_made, MAX_TOOL_CALLS,
+            )
+            loop_msgs.append({
+                "role": "user",
+                "content": (
+                    "[시스템] 채팅 응답의 도구 호출 상한에 도달했습니다. "
+                    "추가 도구 호출 없이 지금까지 확인한 사실, 완료/미완료 항목, "
+                    "다음 조치를 최종 답변으로 간결하게 정리하세요. "
+                    "장기 작업은 Pipeline Runner 또는 백그라운드 작업으로 넘기라고 안내하세요."
+                ),
+            })
+            _oai_tools = []
 
         logger.info(f"gemini_tool_loop: iter={_loop_iter+1} tools={[e['name'] for e in _exec_results]}")
         # loop_iter 증가 후 재호출
@@ -1995,7 +2565,7 @@ async def _stream_claude_sonnet_fallback(
         yield event
 
 
-async def _stream_cli_relay(
+async def _stream_cli_relay_once(
     model: str,
     system_prompt: str,
     messages: List[Dict[str, Any]],
@@ -2136,6 +2706,21 @@ async def _stream_cli_relay(
     except httpx.ReadTimeout:
         yield {"type": "error", "content": "CLI Relay timeout (600s)"}
         return
+    except asyncio.CancelledError:
+        # [2026-05-20] 상류 SSE 단절(httpcore 내부) vs 외부 task cancel 구분:
+        # cancelling() > 0이면 부모가 명시적으로 cancel한 것 → 그대로 전파.
+        # cancelling() == 0이면 내부 네트워크 중단 → retryable error로 변환하여
+        # 상위 _stream_cli_relay 재시도 루프가 동일 모델로 이어서 응답하게 한다.
+        _curr_task = asyncio.current_task()
+        if _curr_task is not None and _curr_task.cancelling() > 0:
+            raise
+        logger.warning(
+            "cli_relay_stream_cancelled (upstream disconnect): model=%s session=%s",
+            model,
+            (session_id or "default")[:8],
+        )
+        yield {"type": "error", "content": "CLI Relay stream connection aborted (upstream disconnect)"}
+        return
     except Exception as e:
         logger.error(f"cli_relay_error: {e}")
         yield {"type": "error", "content": str(e)}
@@ -2147,12 +2732,18 @@ async def _stream_cli_relay(
         logger.info(f"cli_relay_session_map: aads={session_id[:8]} -> cli={_captured_cli_sid[:8]}")
 
 
-_CODEX_RETRY_DELAYS = (2.0, 5.0)
-_CODEX_RETRYABLE_ERROR_MARKERS = (
+_RELAY_RETRY_DELAYS = tuple(_RELAY_RETRY_INTERVAL_SECONDS for _ in range(_RELAY_RETRY_MAX_RETRIES))
+_RELAY_RETRYABLE_ERROR_MARKERS = (
+    "429",
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
     "timeout",
     "temporarily unavailable",
     "temporary failure",
     "temporarily overloaded",
+    "try again later",
+    "retry later",
     "relay unreachable",
     "not healthy: 5",
     "relay 500",
@@ -2166,25 +2757,174 @@ _CODEX_RETRYABLE_ERROR_MARKERS = (
     "econnreset",
     "network is unreachable",
 )
-_CODEX_NON_RETRYABLE_ERROR_MARKERS = (
+_RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     "401",
     "403",
     "404",
+    "cli relay unreachable",  # 헬스체크 연결 실패 → 즉시 포기, 재시도 불필요
+    "preflight_failed",  # MCP preflight 실패 → 구조적 문제, 재시도 무의미
+    "missing_binary",  # python 바이너리 누락 → 재시도 불필요
+    "you've hit your limit",
+    "you have hit your limit",
+    "resets ",
+    "current quota",
+    "billing details",
+    "insufficient quota",
     "unauthorized",
     "forbidden",
     "invalid api key",
     "authentication",
     "permission denied",
 )
+_CODEX_RETRY_DELAYS = _RELAY_RETRY_DELAYS
+_CLI_RETRY_DELAYS = _RELAY_RETRY_DELAYS
+_CODEX_RETRYABLE_ERROR_MARKERS = _RELAY_RETRYABLE_ERROR_MARKERS
+_CODEX_NON_RETRYABLE_ERROR_MARKERS = _RELAY_NON_RETRYABLE_ERROR_MARKERS
 
 
-def _is_codex_retryable_error(error_content: str) -> bool:
+def _is_relay_retryable_error(error_content: str) -> bool:
     lowered = str(error_content or "").lower()
     if not lowered:
         return False
-    if any(marker in lowered for marker in _CODEX_NON_RETRYABLE_ERROR_MARKERS):
+    if any(marker in lowered for marker in _RELAY_NON_RETRYABLE_ERROR_MARKERS):
         return False
-    return any(marker in lowered for marker in _CODEX_RETRYABLE_ERROR_MARKERS)
+    return any(marker in lowered for marker in _RELAY_RETRYABLE_ERROR_MARKERS)
+
+
+def _is_codex_retryable_error(error_content: str) -> bool:
+    return _is_relay_retryable_error(error_content)
+
+
+def _is_cli_retryable_error(error_content: str) -> bool:
+    return _is_relay_retryable_error(error_content)
+
+
+def _build_cli_retry_messages(messages: List[Dict[str, Any]], partial_content: str) -> List[Dict[str, Any]]:
+    retry_messages = [dict(message) for message in messages]
+    partial = (partial_content or "").strip()
+    if not partial:
+        return retry_messages
+    retry_messages.append(
+        {
+            "role": "assistant",
+            "content": partial[-6000:],
+        }
+    )
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": (
+                "직전 Claude CLI 응답이 연결 문제로 중단되었습니다. "
+                "위 assistant 초안의 마지막 문장 다음부터 자연스럽게 이어서 답변하고, "
+                "이미 작성한 내용은 반복하지 마세요."
+            ),
+        }
+    )
+    return retry_messages
+
+
+async def _stream_cli_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+    oauth_slot: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    retry_messages = messages
+    partial_content = ""
+
+    for attempt_idx in range(len(_CLI_RETRY_DELAYS) + 1):
+        last_error: Optional[str] = None
+        async for event in _stream_cli_relay_once(
+            model,
+            system_prompt,
+            retry_messages,
+            tools=tools,
+            session_id=session_id,
+            oauth_slot=oauth_slot,
+        ):
+            event_type = event.get("type")
+            if event_type == "delta":
+                partial_content += event.get("content", "")
+                yield event
+                continue
+            if event_type == "error":
+                last_error = str(event.get("content", "CLI relay error"))
+                break
+            yield event
+            if event_type == "done":
+                return
+
+        if not last_error:
+            return
+
+        if attempt_idx >= len(_CLI_RETRY_DELAYS) or not _is_cli_retryable_error(last_error):
+            yield {"type": "error", "content": last_error}
+            return
+
+        retry_delay = _CLI_RETRY_DELAYS[attempt_idx]
+        logger.warning(
+            "cli_relay_retry_same_model: model=%s session=%s attempt=%s/%s error=%s",
+            model,
+            (session_id or "default")[:8],
+            attempt_idx + 1,
+            len(_CLI_RETRY_DELAYS),
+            last_error[:200],
+        )
+        yield {
+            "type": "retry_progress",
+            "attempt": attempt_idx + 1,
+            "max_attempts": len(_CLI_RETRY_DELAYS),
+            "content": f"⏳ 재시도 중 ({attempt_idx + 1}/{len(_CLI_RETRY_DELAYS)})...",
+        }
+        await asyncio.sleep(retry_delay)
+        retry_messages = _build_cli_retry_messages(messages, partial_content)
+
+
+def _extract_codex_prompt_and_images(
+    formatted: Union[str, List[Dict[str, Any]]],
+) -> tuple[str, List[Dict[str, str]]]:
+    """Convert Anthropic-style content blocks into Codex prompt + image payloads."""
+    if not isinstance(formatted, list):
+        return str(formatted or ""), []
+
+    text_parts: List[str] = []
+    image_attachments: List[Dict[str, str]] = []
+    for idx, block in enumerate(formatted, start=1):
+        if not isinstance(block, dict):
+            text_parts.append(str(block))
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            text_parts.append(str(block.get("text", "")))
+            continue
+        if block_type != "image":
+            continue
+        source = block.get("source") or {}
+        if not isinstance(source, dict):
+            continue
+        raw_data = str(source.get("data", "") or "")
+        if not raw_data:
+            continue
+        image_attachments.append({
+            "name": str(block.get("name") or "image_%d" % idx),
+            "media_type": str(source.get("media_type", "") or "image/png"),
+            "data": raw_data,
+        })
+
+    prompt = "\n".join(part for part in text_parts if part)
+    if image_attachments:
+        prompt = (
+            prompt.rstrip()
+            + "\n\n[첨부 이미지]\n"
+            + "\n".join(
+                "- image_%d: %s" % (idx, img.get("media_type", "image"))
+                for idx, img in enumerate(image_attachments, start=1)
+            )
+            + "\n위 이미지를 함께 분석해 답변하세요."
+        ).strip()
+    return prompt, image_attachments
 
 
 def _build_codex_retry_messages(messages: List[Dict[str, Any]], partial_content: str) -> List[Dict[str, Any]]:
@@ -2214,8 +2954,7 @@ async def _stream_codex_relay_once(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Codex CLI Relay (/codex-stream) 경유 GPT 스트리밍. ChatGPT Plus OAuth."""
     formatted = _format_messages_for_llm(messages, has_resume=False)
-    if isinstance(formatted, list):
-        formatted = "\n".join(b.get("text", "") for b in formatted if isinstance(b, dict))
+    formatted, image_attachments = _extract_codex_prompt_and_images(formatted)
     relay_project = await _resolve_codex_project(session_id)
     req_body = {
         "model": model,
@@ -2234,6 +2973,8 @@ async def _stream_codex_relay_once(
             if t.get("name")
         ],
     }
+    if image_attachments:
+        req_body["image_attachments"] = image_attachments
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
@@ -2264,17 +3005,38 @@ async def _stream_codex_relay_once(
                     evt_type = event.get("type", "")
                     if evt_type == "assistant" and event.get("subtype") == "text":
                         yield {"type": "delta", "content": event.get("text", "")}
+                    elif evt_type == "thinking":
+                        yield {"type": "thinking", "thinking": event.get("thinking", "")}
                     elif evt_type == "tool_use":
+                        tool_name = event.get("tool_name", "")
+                        if _is_internal_cli_command_tool(tool_name):
+                            command = event.get("tool_input", {}).get("command", "")
+                            yield {
+                                "type": "thinking",
+                                "thinking": "[명령 실행 관찰] %s" % str(command)[:240],
+                            }
+                            continue
                         yield {
                             "type": "tool_use",
-                            "tool_name": event.get("tool_name", ""),
+                            "tool_name": tool_name,
                             "tool_use_id": event.get("tool_use_id", ""),
                             "tool_input": event.get("tool_input", {}),
                         }
                     elif evt_type == "tool_result":
+                        tool_name = event.get("tool_name", "")
+                        if _is_internal_cli_command_tool(tool_name):
+                            status = "실패" if event.get("is_error") else "완료"
+                            yield {
+                                "type": "thinking",
+                                "thinking": "[명령 실행 %s] %s" % (
+                                    status,
+                                    str(event.get("content", ""))[:500],
+                                ),
+                            }
+                            continue
                         tool_event = {
                             "type": "tool_result",
-                            "tool_name": event.get("tool_name", ""),
+                            "tool_name": tool_name,
                             "tool_use_id": event.get("tool_use_id", ""),
                             "content": event.get("content", ""),
                             "is_error": bool(event.get("is_error")),
@@ -2368,15 +3130,89 @@ async def _stream_codex_relay(
             last_error[:200],
         )
         yield {
-            "type": "delta",
-            "content": (
-                f"\n\n⚠️ _{display_model} 연결이 일시 중단되어 "
-                f"{retry_delay:.0f}초 후 동일 모델로 다시 이어갑니다 ({attempt_idx + 1}/{len(_CODEX_RETRY_DELAYS)})._"
-                "\n\n"
-            ),
+            "type": "retry_progress",
+            "attempt": attempt_idx + 1,
+            "max_attempts": len(_CODEX_RETRY_DELAYS),
+            "content": f"⏳ 재시도 중 ({attempt_idx + 1}/{len(_CODEX_RETRY_DELAYS)})...",
         }
         await asyncio.sleep(retry_delay)
         retry_messages = _build_codex_retry_messages(messages, partial_content)
+
+
+async def _stream_antigravity_relay_once(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Antigravity CLI Relay (/antigravity-stream) 경유 Gemini 스트리밍. Google Pro OAuth."""
+    formatted = _format_messages_for_llm(messages, has_resume=False)
+    req_body = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "messages_text": formatted,
+        "session_id": session_id or "",
+    }
+    display_model = _ANTIGRAVITY_MODEL_DISPLAY.get(model, model)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            try:
+                hc = await client.get(f"{_CLAUDE_RELAY_URL}/health", timeout=5.0)
+                if hc.status_code != 200:
+                    yield {"type": "error", "content": f"Antigravity Relay not healthy: {hc.status_code}"}
+                    return
+            except Exception as hc_err:
+                yield {"type": "error", "content": f"Antigravity Relay unreachable: {hc_err}"}
+                return
+            async with client.stream(
+                "POST", f"{_CLAUDE_RELAY_URL}/antigravity-stream",
+                json=req_body, timeout=httpx.Timeout(300.0, connect=10.0),
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    yield {"type": "error", "content": f"Antigravity Relay {resp.status_code}: {body.decode()[:200]}"}
+                    return
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    evt_type = event.get("type", "")
+                    if evt_type == "assistant" and event.get("subtype") == "text":
+                        yield {"type": "delta", "content": event.get("text", "")}
+                    elif evt_type == "error":
+                        yield {"type": "error", "content": event.get("content", "Antigravity error")}
+                        return
+                    elif evt_type == "result":
+                        in_tok = event.get("input_tokens", 0)
+                        out_tok = event.get("output_tokens", 0)
+                        cost = _estimate_cost(model, in_tok, out_tok)
+                        yield {"type": "done", "model": display_model, "cost": str(cost),
+                               "input_tokens": in_tok, "output_tokens": out_tok}
+    except httpx.ConnectError as e:
+        yield {"type": "error", "content": f"Antigravity Relay connect failed: {e}"}
+    except httpx.ReadTimeout:
+        yield {"type": "error", "content": "Antigravity Relay timeout (300s)"}
+    except Exception as e:
+        logger.error(f"antigravity_relay_error: {e}")
+        yield {"type": "error", "content": str(e)}
+
+
+async def _stream_antigravity_relay(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    display_model = _ANTIGRAVITY_MODEL_DISPLAY.get(model, model)
+    yield {"type": "model_info", "model": display_model}
+    async for event in _stream_antigravity_relay_once(model, system_prompt, messages, tools=tools, session_id=session_id):
+        yield event
 
 
 async def _stream_agent_sdk(
@@ -2559,11 +3395,14 @@ async def _run_agent_sdk_with_key(
                         if tool_id and tool_name:
                             _tool_id_to_name[tool_id] = tool_name
                         tools_called_list.append(tool_name)
+                        tool_input = block.input if hasattr(block, "input") else {}
+                        if isinstance(tool_input, dict):
+                            tool_input = _bind_tool_session_input(tool_name, tool_input, session_id)
                         yield {
                             "type": "tool_use",
                             "tool_name": tool_name,
                             "tool_use_id": tool_id,
-                            "tool_input": block.input if hasattr(block, "input") else {},
+                            "tool_input": tool_input,
                         }
                     elif block_type == "ThinkingBlock":
                         thinking = getattr(block, "thinking", "")
@@ -2628,12 +3467,20 @@ async def _run_agent_sdk_with_key(
     # Agent SDK 경로: 헤더 없지만 토큰 사용량은 기록
     _sdk_tokens = _ap_get_tokens()
     _sdk_token = _sdk_tokens[0] if _sdk_tokens else ""
+    _tenant_id = ""
+    try:
+        from app.services.tool_executor import resolve_bound_tenant_id
+
+        _tenant_id = await resolve_bound_tenant_id(explicit_session_id=session_id or "")
+    except Exception:
+        _tenant_id = ""
     _log_oauth_usage(
         token=_sdk_token, model=sdk_model,
         input_tokens=in_tokens, output_tokens=out_tokens,
         cost_usd=cost,
         call_source="model_selector_sdk",
         session_id=session_id or "",
+        tenant_id=_tenant_id or None,
     )
     yield {
         "type": "done",
@@ -2648,9 +3495,15 @@ async def _run_agent_sdk_with_key(
 def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = False) -> str:
     """메시지 배열 → 텍스트 변환.
 
-    has_resume=True: CLI가 이전 대화를 기억하므로 최신 user 메시지만 전달.
-    has_resume=False: 대화 기록 포함 (최근 40개 메시지, CLI에 컨텍스트 제공).
+    has_resume=True: CLI resume이 있더라도 최근 대화 압축본을 함께 전달한다.
+    has_resume=False: 대화 기록 포함 (기본 최근 80개 메시지, CLI에 컨텍스트 제공).
     """
+
+    def _strip_mcp_prefix(name: str) -> str:
+        """MCP 접두사 제거: mcp__aads-tools__query_db → query_db"""
+        if name.startswith("mcp__") and "__" in name[5:]:
+            return name.split("__", 2)[-1]
+        return name
 
     def _extract_text(content) -> str:
         if isinstance(content, list):
@@ -2668,7 +3521,7 @@ def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = 
                                 if isinstance(b, dict) and b.get("type") == "text":
                                     parts.append("[도구결과] %s" % b.get("text", "")[:500])
                     elif block.get("type") == "tool_use":
-                        parts.append("[도구호출: %s]" % block.get("name", ""))
+                        parts.append("[도구호출: %s]" % _strip_mcp_prefix(block.get("name", "")))
                 elif isinstance(block, str):
                     parts.append(block)
             return "\n".join(parts)
@@ -2676,30 +3529,42 @@ def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = 
             return content
         return str(content)
 
-    # --resume 있으면: 최신 user 메시지만
-    if has_resume:
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                text = _extract_text(msg.get("content", ""))
-                if text.strip():
-                    return text
-
-    # --resume 없으면: 최근 대화 기록 포함 (최대 40개 메시지)
-    recent = messages[-40:] if len(messages) > 40 else messages
-    parts = []
-    for msg in recent:
-        role = msg.get("role", "user")
-        if role == "system":
-            continue
-        content = _extract_text(msg.get("content", ""))
-        if not content.strip():
-            continue
-        # 긴 응답은 축소
+    def _compact(role: str, content: str) -> str:
         if role == "assistant" and len(content) > 1000:
-            content = content[:800] + "\n...[응답 축소]..." + content[-200:]
-        role_label = "CEO" if role == "user" else "AI"
-        parts.append("[%s]\n%s" % (role_label, content))
-    return "\n\n".join(parts)
+            return content[:800] + "\n...[응답 축소]..." + content[-200:]
+        if role == "user" and len(content) > 1600:
+            return content[:1300] + "\n...[지시 축소]..." + content[-300:]
+        return content
+
+    def _render_history(history: List[Dict[str, Any]]) -> str:
+        parts = []
+        for msg in history:
+            role = msg.get("role", "user")
+            if role == "system":
+                continue
+            content = _extract_text(msg.get("content", ""))
+            if not content.strip():
+                continue
+            role_label = "CEO" if role == "user" else "AI"
+            parts.append("[%s]\n%s" % (role_label, _compact(role, content)))
+        return "\n\n".join(parts)
+
+    # --resume 있으면: CLI 자체 대화상태만 믿지 않고 최근 턴을 명시 주입한다.
+    # 모델 변경, CLI session map 누락/오염, 긴 러너 보고 뒤 후속지시에서 이전 응답 누락을 방어한다.
+    if has_resume:
+        recent = messages[-_CLI_RESUME_CONTINUITY_WINDOW:] if len(messages) > _CLI_RESUME_CONTINUITY_WINDOW else messages
+        rendered = _render_history(recent)
+        if rendered.strip():
+            return (
+                "[AADS 대화 연속성 컨텍스트]\n"
+                "CLI resume 상태가 있더라도 아래 최근 대화와 CEO의 최신 지시를 우선 참고하세요. "
+                "이 컨텍스트는 모델 변경 또는 resume 상태 손실 시 맥락 유지를 위한 안전장치입니다.\n\n"
+                f"{rendered}"
+            )
+
+    # --resume 없으면: 최근 대화 기록 포함
+    recent = messages[-_CLI_NO_RESUME_HISTORY_WINDOW:] if len(messages) > _CLI_NO_RESUME_HISTORY_WINDOW else messages
+    return _render_history(recent)
 
 
 def _format_messages_for_llm(
@@ -2753,14 +3618,35 @@ def _format_messages_for_llm(
                             if isinstance(tb, dict) and tb.get("type") == "text":
                                 blocks.append({"type": "text", "text": "[도구결과] %s" % tb.get("text", "")[:500]})
                 elif b.get("type") == "tool_use":
-                    blocks.append({"type": "text", "text": "[도구호출: %s]" % b.get("name", "")})
+                    _bn = b.get("name", "")
+                    if _bn.startswith("mcp__") and "__" in _bn[5:]:
+                        _bn = _bn.split("__", 2)[-1]
+                    blocks.append({"type": "text", "text": "[도구호출: %s]" % _bn})
             elif isinstance(b, str):
                 blocks.append({"type": "text", "text": b})
         return blocks
 
-    # has_resume=True: 최신 user 메시지만 (이미지 포함)
+    # has_resume=True: 최근 텍스트 히스토리 + 최신 이미지 메시지를 함께 전달
     if has_resume:
-        return _content_to_blocks(content)
+        blocks: List[Dict[str, Any]] = []
+        history_msgs = [m for m in messages if m is not latest_user_msg]
+        recent_history = (
+            history_msgs[-_CLI_RESUME_CONTINUITY_WINDOW:]
+            if len(history_msgs) > _CLI_RESUME_CONTINUITY_WINDOW
+            else history_msgs
+        )
+        history_text = _format_messages_as_text(recent_history, has_resume=False)
+        if history_text.strip():
+            blocks.append({
+                "type": "text",
+                "text": (
+                    "[AADS 대화 연속성 컨텍스트]\n"
+                    "CLI resume 상태가 있더라도 아래 최근 대화를 참고하세요.\n\n"
+                    f"{history_text}\n\n[CEO 최신 메시지]"
+                ),
+            })
+        blocks.extend(_content_to_blocks(content))
+        return blocks
 
     # has_resume=False: 대화 이력(텍스트) + 최신 메시지(이미지 포함)
     blocks: List[Dict[str, Any]] = []
@@ -2803,6 +3689,20 @@ def _classify_relay_tool_result(
             ),
         }
     return {}
+
+
+def _is_internal_cli_command_tool(tool_name: Any) -> bool:
+    """Detect local shell execution events emitted by CLI relays.
+
+    These are observations about commands already run by the relay process, not
+    AADS chat tools. Passing them through as tool_use makes the chat tool loop
+    try to execute a non-existent "bash" tool.
+    """
+    return str(tool_name or "").strip().lower() in {
+        "bash",
+        "shell",
+        "command_execution",
+    }
 
 
 def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
@@ -2924,7 +3824,6 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
             break
 
         # result 텍스트 (CLI가 최종 결과를 result 필드에도 넣음)
-        result_text = event.get("result", "")
         events = []
         # result에 텍스트가 있고 아직 delta로 안 보냈으면 보내기
         # (보통 assistant 이벤트에서 이미 보냄 — 중복 방지를 위해 스킵)
@@ -3096,9 +3995,11 @@ async def _stream_anthropic(
     output_tokens = 0
 
     # Tool Use 루프 — 절대 상한 + wall-clock 타임아웃
-    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "500"))
-    _TOOL_TURN_EXTEND = 50  # 자동 연장 턴
-    _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "1800"))  # 30분 절대 타임아웃
+    _MAX_TOOL_TURNS = int(os.getenv("MAX_TOOL_TURNS", "30"))
+    _MAX_TOOL_CALLS = int(os.getenv("CHAT_MAX_TOOL_CALLS", "25"))
+    _AUTO_EXTEND_TOOL_TURNS = os.getenv("AUTO_EXTEND_TOOL_TURNS", "false").lower() in {"1", "true", "yes"}
+    _TOOL_TURN_EXTEND = 50  # 명시적으로 AUTO_EXTEND_TOOL_TURNS=true일 때만 사용
+    _WALL_CLOCK_TIMEOUT = int(os.getenv("TOOL_LOOP_TIMEOUT_SEC", "600"))  # 채팅 응답 표면 기본 10분
     _wall_clock_start = __import__("time").monotonic()
     # 방어: messages에서 role="system" 필터링 — Claude API는 system을 top-level 파라미터로만 허용
     current_messages = [m for m in messages if m.get("role") != "system"]
@@ -3125,7 +4026,7 @@ async def _stream_anthropic(
         "write_remote_file", "patch_remote_file", "run_remote_command",
         "git_remote_add", "git_remote_commit", "git_remote_push",
         "git_remote_create_branch", "deep_crawl", "deep_research",
-        "spawn_subagent", "spawn_parallel_subagents",
+        "spawn_subagent", "spawn_parallel_subagents", "device_command",
     }
     _YELLOW_CONSECUTIVE_LIMIT = 100  # 전체 턴 상한(100)과 동일 — 사실상 무제한
     _effective_max_turns = _MAX_TOOL_TURNS
@@ -3236,10 +4137,9 @@ async def _stream_anthropic(
                     _preview = str(_m.get("content", ""))[:80] if isinstance(_m.get("content"), str) else f"[{_ct}] len={len(_m.get('content', []))}" if isinstance(_m.get("content"), list) else str(type(_m.get("content")))
                     logger.info(f"anthropic_msg[{_mi}]: role={_m.get('role')} content_type={_ct} preview={_preview}")
 
-        # 재시도 로직: 일시적 에러(400/429/529/503/네트워크)는 최대 10회 재시도
-        # 400: Anthropic API 간헐적 invalid_request_error (2026-03 발생, ~50% 실패율)
+        # 재시도 로직: 429는 3초×30회, 그 외 일시적 에러는 최대 10회 재시도
         _RETRYABLE_STATUS = {400, 403, 429, 503, 529}
-        _MAX_RETRIES = 10
+        _MAX_RETRIES = 30
         _retry_attempt = 0
         _last_error = None
         final_msg = None
@@ -3274,7 +4174,7 @@ async def _stream_anthropic(
                     logger.warning("oat_switch_on_rate_limit: rotated OAuth / direct client, retrying")
                     _retry_attempt -= 1  # 스위치 후 재시도 카운트 차감
                 if _retry_attempt <= _MAX_RETRIES:
-                    _wait = min(2 ** _retry_attempt, 10)
+                    _wait = 3 if _status == 429 else min(2 ** _retry_attempt, 10)
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s, error={str(e)[:100]}")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
@@ -3291,8 +4191,7 @@ async def _stream_anthropic(
                     logger.warning("oat_switch_on_quota_class: status=%s, rotated OAuth / direct client", _status)
                     _retry_attempt -= 1
                 if _status in _RETRYABLE_STATUS and _retry_attempt <= _MAX_RETRIES:
-                    # 400: 간헐적 에러 → 짧은 대기, 429/503: rate limit → 지수 백오프
-                    _wait = 0.3 if _status == 400 else min(2 ** _retry_attempt, 10)
+                    _wait = 0.3 if _status == 400 else (3 if _status == 429 else min(2 ** _retry_attempt, 10))
                     logger.warning(f"claude_retry: attempt {_retry_attempt}/{_MAX_RETRIES}, status={_status}, wait={_wait}s")
                     yield {"type": "heartbeat"}
                     await asyncio.sleep(_wait)
@@ -3375,20 +4274,33 @@ async def _stream_anthropic(
                 # 제한 리셋 (경고 후 계속 진행 — 프론트에서 차단 UI 표시)
                 _consecutive_yellow = 0
 
+            tool_calls_made.append(tu.name)
+
+            tool_input = _bind_tool_session_input(tu.name, tu.input, session_id)
             yield {
                 "type": "tool_use",
                 "tool_name": tu.name,
-                "tool_input": tu.input,
+                "tool_input": tool_input,
                 "tool_use_id": tu.id,
             }
-            tool_calls_made.append(tu.name)
+            if tu.name == "search_crawl_match" and not tool_input.get("synthesis_model"):
+                selected_model = str(model_id or "").strip()
+                if selected_model and selected_model.lower() not in {"auto", "mixture"}:
+                    tool_input["_selected_model"] = selected_model
 
             # 도구 실행 — 별도 asyncio.Task + Event 기반 heartbeat (P0-FIX: shield→Event 전환)
             # asyncio.shield 패턴 대신 Event + done_callback으로 도구 블로킹과 heartbeat 완전 분리
-            _LONG_TOOLS = {"deep_research", "deep_crawl", "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute"}
+            _LONG_TOOLS = {
+                "deep_research", "deep_crawl", "search_crawl_match",
+                "spawn_subagent", "spawn_parallel_subagents", "pipeline_c_execute",
+                "browser_connect", "browser_navigate", "browser_snapshot",
+                "browser_screenshot", "browser_click", "browser_fill",
+                "browser_press_key", "browser_select_option", "browser_check",
+                "browser_upload_file", "browser_download", "browser_tab_list",
+            }
             _tool_timeout = 600 if tu.name in _LONG_TOOLS else 120
             _HB_TOOL_SEC = 8.0  # heartbeat 간격 (초)
-            task = asyncio.create_task(executor.execute(tu.name, tu.input))
+            task = asyncio.create_task(executor.execute(tu.name, tool_input))
             _tool_start = __import__("time").monotonic()
 
             # Event 기반: 도구 완료 시 콜백으로 이벤트 설정 → heartbeat 루프 즉시 탈출
@@ -3523,6 +4435,22 @@ async def _stream_anthropic(
             {"role": "user", "content": tool_results},
         ]
 
+        if len(tool_calls_made) >= _MAX_TOOL_CALLS and tools:
+            logger.warning(
+                "anthropic_tool_call_cap_reached: session=%s model=%s calls=%d cap=%d",
+                (session_id or "")[:8], model_id, len(tool_calls_made), _MAX_TOOL_CALLS,
+            )
+            current_messages.append({
+                "role": "user",
+                "content": (
+                    "[시스템] 채팅 응답의 도구 호출 상한에 도달했습니다. "
+                    "추가 도구 호출 없이 지금까지 확인한 사실, 완료/미완료 항목, "
+                    "다음 조치를 최종 답변으로 간결하게 정리하세요. "
+                    "장기 작업은 Pipeline Runner 또는 백그라운드 작업으로 넘기라고 안내하세요."
+                ),
+            })
+            tools = None
+
         # Layer A: 도구 루프 토큰 예산 관리 (120K)
         current_messages = _trim_tool_loop_context(current_messages, _turn)
 
@@ -3558,21 +4486,35 @@ async def _stream_anthropic(
 
         _turn += 1
 
-        # 도구 턴 한도 도달 시 CEO 승인 요청 이벤트 발행 + 자동 연장
+        # 도구 턴 한도 도달 시 기본은 자동 연장하지 않고 최종 응답으로 닫는다.
         if _turn >= _effective_max_turns and tool_use_blocks:
-            logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
-            _effective_max_turns += _TOOL_TURN_EXTEND
-            # 무제한 — compaction이 컨텍스트 자동 관리
-            yield {
-                "type": "tool_turn_limit",
-                "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",
-                "current_turn": _turn,
-                "extended_to": _effective_max_turns,
-            }
+            if _AUTO_EXTEND_TOOL_TURNS:
+                logger.warning(f"tool_turn_limit: {_turn}/{_effective_max_turns} turns used, extending by {_TOOL_TURN_EXTEND}")
+                _effective_max_turns += _TOOL_TURN_EXTEND
+                yield {
+                    "type": "tool_turn_limit",
+                    "content": f"도구 호출이 {_turn}회에 도달했습니다. {_TOOL_TURN_EXTEND}턴 자동 연장합니다.",
+                    "current_turn": _turn,
+                    "extended_to": _effective_max_turns,
+                }
+            else:
+                logger.warning(f"tool_turn_limit_stop: {_turn}/{_effective_max_turns} turns used, forcing final answer")
+                current_messages.append({
+                    "role": "user",
+                    "content": (
+                        "[시스템] 도구 턴 한도에 도달했습니다. 추가 도구 호출 없이 "
+                        "현재까지 확인한 내용을 최종 답변으로 정리하세요."
+                    ),
+                })
+                tools = None
 
     cost = _estimate_cost(model_alias, input_tokens, output_tokens)
     # 프론트 표시용: alias(claude-opus) → 실제 모델ID(claude-opus-4-6)
     _display_model = _ANTHROPIC_MODEL_ID.get(model_alias, model_alias)
+    if use_thinking:
+        logger.info(f"anthropic_thinking_result: model={model_id} thinking_len={len(thinking_text)} turns={_turn}")
+    if use_thinking:
+        logger.info(f"anthropic_thinking_result: model={model_id} thinking_len={len(thinking_text)} turns={_turn}")
     yield {
         "type": "done",
         "model": _display_model,

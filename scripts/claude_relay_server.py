@@ -13,10 +13,13 @@ AADS Docker -> (httpx) -> 이 릴레이 -> claude CLI subprocess
 호환: Python 3.6+ (호스트 CentOS 7)
 """
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
 import os
+import signal
 import re
 import shutil
 import sys
@@ -50,7 +53,7 @@ MCP_TEMPLATE = Path(os.getenv(
 ))
 _MCP_BRIDGE_MODE = (os.getenv("AADS_MCP_BRIDGE_MODE", "auto") or "auto").strip().lower()
 _MCP_BRIDGE_PYTHON = (os.getenv("AADS_MCP_BRIDGE_PYTHON", "python3.11") or "python3.11").strip()
-_MCP_PREFLIGHT_TIMEOUT_SEC = float(os.getenv("AADS_MCP_PREFLIGHT_TIMEOUT_SEC", "1.5"))
+_MCP_PREFLIGHT_TIMEOUT_SEC = float(os.getenv("AADS_MCP_PREFLIGHT_TIMEOUT_SEC", "3.0"))
 _MCP_PREFLIGHT_CACHE_TTL = float(os.getenv("AADS_MCP_PREFLIGHT_CACHE_TTL", "15"))
 _MCP_PREFLIGHT_CACHE = {}
 _CODEX_SANDBOX_MODE = (os.getenv("AADS_CODEX_SANDBOX_MODE", "danger-full-access") or "danger-full-access").strip()
@@ -73,7 +76,32 @@ _CODEX_CWD_MAP = {
 # 2GB급 호스트에서 Claude/Codex 동시 실행 3개는 메모리 압박으로 137(OOM성 종료)을 유발할 수 있다.
 # 운영자가 명시적으로 override하지 않으면 보수적으로 1개만 허용한다.
 _MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "1"))
+_ANTIGRAVITY_MAX_CONCURRENT = int(os.getenv("AADS_ANTIGRAVITY_RELAY_MAX_CONCURRENT", "1"))
+_SEMAPHORE_ACQUIRE_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_ACQUIRE_TIMEOUT_SEC", "20"))
 _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
+_antigravity_semaphore = None
+
+# AADS-191: 세마포어 leak 진단/방지용 활성 lease 카운터
+_ACTIVE_LEASES = {"claude": 0, "codex": 0, "antigravity": 0}
+_STDERR_READ_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_STDERR_READ_TIMEOUT_SEC", "3"))
+
+# AADS-191B: lease registry — 세션별 슬롯 점유 현황 추적 (운영 가시성)
+_LEASE_REGISTRY = {}  # lease_id -> {relay, session_id, started_at, proc_pid, cli_model}
+_LEASE_ID_COUNTER = 0
+
+def _next_lease_id():
+    global _LEASE_ID_COUNTER
+    _LEASE_ID_COUNTER += 1
+    return _LEASE_ID_COUNTER
+
+# AADS-191B: hard timeout — 90분 초과 시 강제 종료 (정상 작업의 99% 차지하는 30분 이하 영향 없음)
+# 데이터 근거: 7일간 2834건 중 30분 이하 98.87%, 60분+ 4건 전부 interrupted(비정상)
+_MAX_LEASE_SEC = float(os.getenv("CLAUDE_RELAY_MAX_LEASE_SEC", "5400"))
+
+# AADS-191B-8B: docker exec를 coreutils timeout으로 감싸기 (OS 레벨 안전망)
+# python wait_for가 실패하거나 relay가 죽어도 OS가 강제 kill
+_OS_TIMEOUT_BIN = os.getenv("CLAUDE_RELAY_OS_TIMEOUT_BIN", "/usr/bin/timeout")
+_OS_TIMEOUT_ENABLED = os.getenv("CLAUDE_RELAY_OS_TIMEOUT_ENABLED", "1") == "1"
 
 # --- Direct OAuth ---
 _DIRECT_OAUTH_ENABLED = os.getenv("AADS_CLAUDE_DIRECT_OAUTH", "0") == "1"
@@ -94,6 +122,83 @@ _last_429_slot = 0
 
 _session_map = {}  # type: dict
 _SESSION_MAP_FILE = Path("/tmp/claude_relay_sessions.json")
+
+
+class _SemaphoreLease:
+    """Acquire the global relay semaphore with a bounded wait.
+
+    Without this, a stale long-running CLI request can keep the single relay
+    slot occupied while every new chat request hangs before the CLI starts.
+    """
+
+    def __init__(self, semaphore, timeout_sec, relay_name, session_id):
+        self._semaphore = semaphore
+        self._timeout_sec = timeout_sec
+        self._relay_name = relay_name
+        self._session_id = session_id or ""
+        self._acquired = False
+        # AADS-191B: lease registry 식별자 + proc 정보
+        self._lease_id = None
+        self._proc_pid = None
+        self._cli_model = None
+
+    def attach_proc(self, pid, model=""):
+        """handle_stream이 subprocess 생성 후 호출 — registry에 PID 기록."""
+        self._proc_pid = pid
+        self._cli_model = model
+        entry = _LEASE_REGISTRY.get(self._lease_id)
+        if entry is not None:
+            entry["proc_pid"] = pid
+            entry["cli_model"] = model
+
+    async def __aenter__(self):
+        # AADS-191: wait_for + Semaphore.acquire race condition 방지.
+        # acquire() task를 직접 만들어 cancel 시점에 slot leak이 없도록 처리.
+        acquire_task = asyncio.ensure_future(self._semaphore.acquire())
+        try:
+            await asyncio.wait_for(asyncio.shield(acquire_task), timeout=self._timeout_sec)
+        except asyncio.TimeoutError:
+            # wait_for가 timeout 시 acquire_task는 shield로 살아있음.
+            # 이미 acquire 성공 직후일 수 있으므로 callback에서 release 보장.
+            def _release_if_acquired(task):
+                if not task.cancelled() and task.exception() is None:
+                    try:
+                        self._semaphore.release()
+                    except Exception:
+                        pass
+            acquire_task.add_done_callback(_release_if_acquired)
+            acquire_task.cancel()
+            logger.error(
+                "%s_relay_busy: session=%s acquire_timeout=%.1fs active_leases=%s",
+                self._relay_name,
+                _short_session(self._session_id),
+                self._timeout_sec,
+                dict(_ACTIVE_LEASES),
+            )
+            raise
+        self._acquired = True
+        _ACTIVE_LEASES[self._relay_name] = _ACTIVE_LEASES.get(self._relay_name, 0) + 1
+        # AADS-191B: lease registry 등록
+        self._lease_id = _next_lease_id()
+        _LEASE_REGISTRY[self._lease_id] = {
+            "lease_id": self._lease_id,
+            "relay": self._relay_name,
+            "session_id": _short_session(self._session_id),
+            "started_at": time.time(),
+            "proc_pid": None,
+            "cli_model": None,
+        }
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._acquired:
+            self._semaphore.release()
+            _ACTIVE_LEASES[self._relay_name] = max(0, _ACTIVE_LEASES.get(self._relay_name, 0) - 1)
+            self._acquired = False
+        # AADS-191B: lease registry 해제 (acquire 실패 시 self._lease_id=None이라 안전)
+        if self._lease_id is not None:
+            _LEASE_REGISTRY.pop(self._lease_id, None)
+        return False
 
 _MODEL_MAP = {
     "claude-opus": "claude-opus-4-6",
@@ -407,14 +512,11 @@ def _inject_session_into_cfg(cfg, session_id):
 def _build_docker_bridge_cfg(session_id, base_cfg=None):
     safe_sid = session_id or "default"
     cfg = {
-        "command": shutil.which("docker") or "docker",
-        "args": [
-            "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
-            "aads-server", "python3", "-m", "mcp_servers.aads_tools_bridge",
-        ],
+        "command": str(_REPO_ROOT / "scripts" / "mcp-active-bridge.sh"),
+        "args": [],
         "cwd": None,
         "env": dict((base_cfg or {}).get("env", {}) or {}),
-        "_path_mode": "docker_exec",
+        "_path_mode": "active_docker_exec",
     }
     cfg["env"]["AADS_SESSION_ID"] = safe_sid
     return cfg
@@ -526,6 +628,7 @@ async def _preflight_mcp_server(name, cfg):
         proc = await asyncio.create_subprocess_exec(
             cfg.get("command", ""),
             *list(cfg.get("args", []) or []),
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cfg.get("cwd") or None,
@@ -697,9 +800,10 @@ def _load_mcp_template(session_id):
     if MCP_TEMPLATE.exists():
         template = json.loads(MCP_TEMPLATE.read_text())
     else:
-        template = {"mcpServers": {"aads-tools": {"command": "docker", "args": [
-            "exec", "-i", "-e", "AADS_SESSION_ID=" + safe_sid,
-            "aads-server", "python3", "-m", "mcp_servers.aads_tools_bridge"]}}}
+        template = {"mcpServers": {"aads-tools": {
+            "command": str(_REPO_ROOT / "scripts" / "mcp-active-bridge.sh"),
+            "args": [],
+        }}}
     servers = template.get("mcpServers", {})
     for name, cfg in servers.items():
         injected = _inject_session_into_cfg(cfg, safe_sid)
@@ -758,7 +862,7 @@ def _parse_codex_tool_event(event, session_id=""):
     Codex 실제 스키마 (2026-04-17 실측):
       - item.started  + item.type=='mcp_tool_call'         → tool_use
       - item.completed + item.type=='mcp_tool_call'        → tool_result
-      - item.completed + item.type=='command_execution'    → tool_result (bash)
+      - item.started/completed + item.type=='command_execution' → thinking
       - item.completed + item.type=='function_call'        → tool_use (구버전 호환)
       - item.completed + item.type=='function_call_output' → tool_result (구버전 호환)
     """
@@ -827,14 +931,24 @@ def _parse_codex_tool_event(event, session_id=""):
             )
         return payload
 
-    # --- bash/shell 실행 (command_execution) ---
-    if evt_type == "item.completed" and item_type == "command_execution":
+    # --- shell 실행 이벤트 ---
+    # Codex command_execution is already executed by Codex itself. It must not be
+    # replayed as an AADS tool_use, because AADS has no "bash" chat tool and the
+    # frontend/tool loop would surface unknown_tool:bash errors.
+    if evt_type == "item.started" and item_type == "command_execution":
+        command = item.get("input", "") or item.get("command", "")
         return {
-            "type": "tool_result",
-            "tool_name": "bash",
-            "tool_use_id": item.get("id", ""),
-            "content": item.get("aggregated_output", "") or "",
-            "is_error": bool(item.get("exit_code", 0)),
+            "type": "thinking",
+            "thinking": "[명령 실행 시작] %s" % str(command)[:240],
+        }
+
+    if evt_type == "item.completed" and item_type == "command_execution":
+        output = item.get("aggregated_output", "") or ""
+        exit_code = item.get("exit_code", 0)
+        status = "실패" if exit_code else "완료"
+        return {
+            "type": "thinking",
+            "thinking": "[명령 실행 %s] exit=%s output=%s" % (status, exit_code, str(output)[:500]),
         }
 
     # --- 구버전 호환 (function_call / function_call_output) ---
@@ -991,7 +1105,12 @@ async def handle_stream(request):
 
     mcp_config_path = None
     try:
-        async with _semaphore:
+        async with _SemaphoreLease(
+            _semaphore,
+            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            "claude",
+            aads_session_id,
+        ) as _lease:
             claude_meta = _resolve_cli_command("claude")
             claude_preflight = _preflight_cli_command(claude_meta)
             if not claude_preflight.get("ok"):
@@ -1086,9 +1205,20 @@ async def handle_stream(request):
                         (mcp_diag or {}).get("path_mode", "unknown"))
 
             cli_env = _build_claude_env(token)
+            # AADS-191B-8B: coreutils timeout으로 cmd 감싸기 — OS 레벨 hard kill 안전망
+            # Python wait_for가 실패해도, relay가 crash해도, 시간 초과 시 자식 프로세스가 자체 종료됨.
+            if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
+                # --kill-after=10: SIGTERM 보낸 후 10초 안에 안 죽으면 SIGKILL
+                # signal=TERM: 먼저 SIGTERM (정상 cleanup 기회)
+                effective_cmd = [_OS_TIMEOUT_BIN, "--kill-after=10", "--signal=TERM",
+                                 str(int(_MAX_LEASE_SEC))] + cmd
+            else:
+                effective_cmd = cmd
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                *effective_cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=cli_env)
+            # AADS-191B: lease registry에 PID/모델 등록
+            _lease.attach_proc(proc.pid, cli_model)
 
             proc.stdin.write(_stdin_data.encode("utf-8"))
             await proc.stdin.drain()
@@ -1140,20 +1270,45 @@ async def handle_stream(request):
                 except ConnectionResetError:
                     logger.info("CLI stream error write skipped: client already closed aads=%s", aads_session_id[:8])
             finally:
+                # AADS-191: docker exec subprocess가 SIGTERM/SIGKILL 후에도 pipe를 끊지 않아
+                # stderr.read()가 영원히 block되는 leak을 방지한다.
                 if proc.returncode is None:
                     try:
                         proc.terminate()
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
                 if proc.stderr:
-                    stderr_bytes = await proc.stderr.read()
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC
+                        )
+                    except asyncio.TimeoutError:
+                        stderr_bytes = b""
+                        logger.warning(
+                            "CLI stderr_read_timeout: aads=%s — forcing pipe close to prevent slot leak",
+                            aads_session_id[:8] if aads_session_id else "none",
+                        )
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, Exception):
+                            pass
                     if stderr_bytes:
                         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
                         if proc.returncode not in (None, 0):
                             logger.warning("CLI stderr(exit=%s): %s", proc.returncode, stderr_text[:1200])
                         else:
                             logger.info("CLI stderr: %s", stderr_text[:500])
+                # AADS-191: subprocess transport 강제 close로 fd leak 차단
+                try:
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
 
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
@@ -1174,6 +1329,12 @@ async def handle_stream(request):
             except ConnectionResetError:
                 logger.info("CLI write_eof skipped: client already closed aads=%s", aads_session_id[:8])
             return response
+    except asyncio.TimeoutError:
+        return web.json_response({
+            "error": "claude_relay_busy",
+            "error_type": "relay_semaphore_timeout",
+            "detail": "No Claude relay slot became available within %.1f seconds" % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+        }, status=503)
     finally:
         if mcp_config_path:
             try:
@@ -1189,10 +1350,16 @@ _CODEX_MODEL_MAP = {
     "gpt-5.3-codex": "gpt-5.3-codex",
 }
 
+_ANTIGRAVITY_MODEL_MAP = {
+    "antigravity": "gemini-3.5-flash",
+    "antigravity-pro": "gemini-3.1-pro-preview",
+    "antigravity-flash": "gemini-3.5-flash",
+}
+
 _CODEX_PROJECT_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard; deploy=bash /root/aads/aads-server/deploy.sh or dashboard deploy.sh as requested",
     "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=KIS for commit/push/deploy",
-    "GO100": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=GO100 and separate GO100 impact from KIS impact",
+    "GO100": "remote_server=contabo14; remote_ip=5.104.86.14; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=GO100 and separate GO100 impact from KIS impact; legacy server-211 is pending GO100 decommission",
     "SF": "remote_server=server-114; use SSH/MCP project=SF for code, commit, push, deploy, and service checks",
     "NTV2": "remote_server=server-114; use SSH/MCP project=NTV2 for code, commit, push, deploy, and service checks",
     "NAS": "remote_server=server-114; use SSH/native shell for NAS code, commit, push, deploy, and service checks",
@@ -1227,6 +1394,71 @@ def _resolve_codex_cwd(project):
     return fallback
 
 
+def _codex_image_suffix(media_type, name):
+    value = (media_type or "").lower().split(";", 1)[0].strip()
+    if value in ("image/jpeg", "image/jpg"):
+        return ".jpg"
+    if value == "image/png":
+        return ".png"
+    ext = Path(str(name or "")).suffix.lower()
+    if ext in (".jpg", ".jpeg", ".png"):
+        return ".jpg" if ext == ".jpeg" else ext
+    return ext or ".png"
+
+
+def _convert_image_bytes_for_codex(data):
+    """Codex CLI image input is safest with PNG/JPEG. Convert other formats to PNG."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+
+        image = Image.open(BytesIO(data))
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA")
+        if image.mode == "RGBA":
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])
+            image = background
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue(), ".png"
+    except Exception as exc:
+        logger.warning("codex_image_convert_failed: %s", exc)
+        return data, ".png"
+
+
+def _materialize_codex_image_attachments(image_attachments, session_id):
+    if not isinstance(image_attachments, list):
+        return []
+    safe_session = re.sub(r"[^a-zA-Z0-9_.-]+", "_", session_id or "default")[:80]
+    root = Path(tempfile.gettempdir()) / "aads-codex-images" / safe_session
+    root.mkdir(parents=True, exist_ok=True)
+    image_paths = []
+    for idx, image in enumerate(image_attachments, start=1):
+        if not isinstance(image, dict):
+            continue
+        raw_data = str(image.get("data", "") or "").strip()
+        if not raw_data:
+            continue
+        if "," in raw_data and raw_data.lower().startswith("data:"):
+            raw_data = raw_data.split(",", 1)[1]
+        try:
+            data = base64.b64decode(raw_data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            logger.warning("codex_image_decode_failed: index=%s err=%s", idx, exc)
+            continue
+        suffix = _codex_image_suffix(image.get("media_type"), image.get("name"))
+        if suffix not in (".png", ".jpg", ".jpeg"):
+            data, suffix = _convert_image_bytes_for_codex(data)
+        path = root / ("image_%02d%s" % (idx, ".jpg" if suffix == ".jpeg" else suffix))
+        try:
+            path.write_bytes(data)
+            image_paths.append(str(path))
+        except Exception as exc:
+            logger.warning("codex_image_write_failed: path=%s err=%s", path, exc)
+    return image_paths
+
+
 async def handle_codex_stream(request):
     """Codex CLI subprocess -> NDJSON pseudo-streaming. ChatGPT Plus OAuth."""
     try:
@@ -1237,6 +1469,7 @@ async def handle_codex_stream(request):
     messages_text = body.get("messages_text", "")
     tool_names = body.get("tool_names", [])
     tool_schemas = body.get("tool_schemas", [])
+    image_attachments = body.get("image_attachments", [])
     model = body.get("model", "gpt-5.5")
     session_id = body.get("session_id", "")
     if not messages_text:
@@ -1275,7 +1508,12 @@ async def handle_codex_stream(request):
         + prompt
     )
     try:
-        async with _semaphore:
+        async with _SemaphoreLease(
+            _semaphore,
+            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            "codex",
+            session_id,
+        ) as _lease:
             codex_meta = _resolve_cli_command("codex")
             codex_preflight = _preflight_cli_command(codex_meta)
             if not codex_preflight.get("ok"):
@@ -1325,6 +1563,7 @@ async def handle_codex_stream(request):
                 return response
             codex_home = _build_codex_home(session_id, mcp_cfg=mcp_template)
             _codex_cwd = _resolve_codex_cwd(codex_project)
+            codex_image_paths = _materialize_codex_image_attachments(image_attachments, session_id)
             cmd = list(codex_meta.get("argv", []) or []) + [
                 "exec", "--json",
                 "--sandbox", _CODEX_SANDBOX_MODE,
@@ -1332,16 +1571,19 @@ async def handle_codex_stream(request):
             ]
             for add_dir in _CODEX_ADD_DIRS:
                 cmd.extend(["--add-dir", add_dir])
+            for image_path in codex_image_paths:
+                cmd.extend(["--image", image_path])
             if codex_model:
                 cmd.extend(["-m", codex_model])
             cmd.append(prompt)
             logger.info(
-                "Codex: project=%s cwd=%s model=%s prompt_len=%d tools=%d cmd_mode=%s mcp_mode=%s sandbox=%s approval=%s add_dirs=%s",
+                "Codex: project=%s cwd=%s model=%s prompt_len=%d tools=%d images=%d cmd_mode=%s mcp_mode=%s sandbox=%s approval=%s add_dirs=%s",
                 codex_project,
                 _codex_cwd,
                 codex_model,
                 len(prompt),
                 len(tool_names),
+                len(codex_image_paths),
                 codex_meta.get("mode", "unknown"),
                 (mcp_diag or {}).get("path_mode", "unknown"),
                 _CODEX_SANDBOX_MODE,
@@ -1355,10 +1597,18 @@ async def handle_codex_stream(request):
             proc_env["AADS_SESSION_ID"] = session_id or "default"
             proc_env["HOME"] = codex_home
             proc_env.setdefault("TMPDIR", "/tmp")
+            # AADS-191B-8B: OS 레벨 timeout 안전망 (Claude와 동일)
+            if _OS_TIMEOUT_ENABLED and os.path.isfile(_OS_TIMEOUT_BIN):
+                effective_cmd = [_OS_TIMEOUT_BIN, "--kill-after=10", "--signal=TERM",
+                                 str(int(_MAX_LEASE_SEC))] + cmd
+            else:
+                effective_cmd = cmd
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdin=asyncio.subprocess.PIPE,
+                *effective_cmd, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=proc_env)
+            # AADS-191B: lease registry에 PID/모델 등록
+            _lease.attach_proc(proc.pid, codex_model or "")
             proc.stdin.close()
             full_text = ""
             input_tokens = output_tokens = 0
@@ -1433,20 +1683,44 @@ async def handle_codex_stream(request):
                 except ConnectionResetError:
                     logger.info("Codex stream error write skipped: client already closed session=%s", (session_id or "default")[:8])
             finally:
+                # AADS-191: Codex CLI도 동일한 pipe leak 가능성 차단
                 if proc.returncode is None:
                     try:
                         proc.terminate()
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
                 if proc.stderr:
-                    stderr_bytes = await proc.stderr.read()
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC
+                        )
+                    except asyncio.TimeoutError:
+                        stderr_bytes = b""
+                        logger.warning(
+                            "Codex stderr_read_timeout: session=%s — forcing pipe close to prevent slot leak",
+                            (session_id or "default")[:8],
+                        )
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, Exception):
+                            pass
                     if stderr_bytes:
                         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
                         if "ERROR" in stderr_text or "Forbidden" in stderr_text or "Unauthorized" in stderr_text:
                             logger.warning("Codex stderr: %s", stderr_text[:800])
                         else:
                             logger.info("Codex stderr: %s", stderr_text[:500])
+                # AADS-191: subprocess transport 강제 close로 fd leak 차단
+                try:
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
             try:
                 await _stream_write(response, json.dumps({
                     "type": "result", "result": full_text,
@@ -1459,6 +1733,12 @@ async def handle_codex_stream(request):
             except ConnectionResetError:
                 logger.info("Codex write_eof skipped: client already closed session=%s", (session_id or "default")[:8])
             return response
+    except asyncio.TimeoutError:
+        return web.json_response({
+            "error": "codex_relay_busy",
+            "error_type": "relay_semaphore_timeout",
+            "detail": "No Codex relay slot became available within %.1f seconds" % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+        }, status=503)
     except Exception as e:
         if _is_client_disconnect_error(e):
             logger.info("Codex handler client disconnected: session=%s", (session_id or "default")[:8])
@@ -1467,16 +1747,371 @@ async def handle_codex_stream(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_antigravity_stream(request):
+    """Antigravity CLI (docker exec antigravity-test) -> NDJSON pseudo-streaming."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    system_prompt = body.get("system_prompt", "")
+    messages_text = body.get("messages_text", "")
+    model = body.get("model", "antigravity")
+    session_id = body.get("session_id", "")
+    if not messages_text:
+        return web.json_response({"error": "messages_text required"}, status=400)
+    agy_model = _ANTIGRAVITY_MODEL_MAP.get(model, "gemini-3.5-flash")
+    prompt = messages_text
+    if system_prompt:
+        prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
+    try:
+        async with _SemaphoreLease(
+            _antigravity_semaphore,
+            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            "antigravity",
+            session_id,
+        ) as _lease:
+            response = web.StreamResponse(status=200, reason="OK", headers={
+                "Content-Type": "application/x-ndjson",
+                "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            try:
+                await _stream_prepare(response, request)
+            except ConnectionResetError:
+                logger.info(
+                    "Antigravity response prepare skipped: client already closed session=%s",
+                    (session_id or "default")[:8],
+                )
+                return response
+            antigravity_container = os.getenv("AADS_ANTIGRAVITY_CONTAINER", "antigravity-test")
+            antigravity_cli = os.getenv("AADS_ANTIGRAVITY_CLI", "/root/.local/bin/agy")
+            cmd = [
+                "docker", "exec", antigravity_container,
+                antigravity_cli,
+                "--print", prompt,
+                "--print-timeout", "5m",
+            ]
+            logger.info(
+                "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",
+                model, agy_model, len(prompt), (session_id or "default")[:8],
+            )
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE)
+            _lease.attach_proc(proc.pid, agy_model or "")
+            proc.stdin.close()
+            full_text = ""
+            return_code = None
+            stderr_text = ""
+            try:
+                async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=360):
+                    line_text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                    if not line_text:
+                        continue
+                    for i in range(0, len(line_text), 40):
+                        chunk = line_text[i:i + 40]
+                        await _stream_write(
+                            response,
+                            json.dumps({"type": "assistant", "subtype": "text",
+                                        "text": chunk}).encode() + b"\n",
+                        )
+                        await asyncio.sleep(0.015)
+                    full_text += line_text + "\n"
+            except ConnectionResetError:
+                logger.info("Antigravity relay client disconnected: session=%s",
+                            (session_id or "default")[:8])
+            except asyncio.TimeoutError:
+                logger.error("Antigravity timeout (360s): model=%s", agy_model)
+                try:
+                    await _stream_write(response,
+                        json.dumps({"type": "error",
+                                    "content": "Antigravity CLI timeout"}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Antigravity timeout write skipped: session=%s",
+                                (session_id or "default")[:8])
+                proc.kill()
+            except Exception as exc:
+                logger.error("Antigravity stream error: %s", exc)
+                try:
+                    await _stream_write(response,
+                        json.dumps({"type": "error",
+                                    "content": str(exc)}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Antigravity stream error write skipped: session=%s",
+                                (session_id or "default")[:8])
+            finally:
+                if proc.returncode is None:
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=1)
+                    except (asyncio.TimeoutError, ProcessLookupError):
+                        try:
+                            proc.terminate()
+                            await asyncio.wait_for(proc.wait(), timeout=5)
+                        except (asyncio.TimeoutError, ProcessLookupError):
+                            try:
+                                proc.kill()
+                            except ProcessLookupError:
+                                pass
+                return_code = proc.returncode
+                if proc.stderr:
+                    try:
+                        stderr_bytes = await asyncio.wait_for(
+                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC)
+                    except asyncio.TimeoutError:
+                        stderr_bytes = b""
+                        logger.warning(
+                            "Antigravity stderr_read_timeout: session=%s — forcing pipe close",
+                            (session_id or "default")[:8])
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, Exception):
+                            pass
+                    if stderr_bytes:
+                        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+                        logger.info("Antigravity stderr: %s", stderr_text[:500])
+                try:
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
+            full_text = full_text.rstrip("\n")
+            if return_code not in (0, None) and not full_text:
+                error_text = stderr_text.strip() or "Antigravity CLI exited with code %s" % return_code
+                try:
+                    await _stream_write(response, json.dumps({
+                        "type": "error",
+                        "content": error_text[:500],
+                    }).encode() + b"\n")
+                    await _stream_write_eof(response)
+                except ConnectionResetError:
+                    logger.info("Antigravity error write skipped: session=%s",
+                                (session_id or "default")[:8])
+                return response
+            try:
+                await _stream_write(response, json.dumps({
+                    "type": "result", "result": full_text,
+                    "input_tokens": 0,
+                    "output_tokens": len(full_text) // 4,
+                    "model": model,
+                }).encode() + b"\n")
+            except ConnectionResetError:
+                logger.info("Antigravity result write skipped: session=%s",
+                            (session_id or "default")[:8])
+            try:
+                await _stream_write_eof(response)
+            except ConnectionResetError:
+                logger.info("Antigravity write_eof skipped: session=%s",
+                            (session_id or "default")[:8])
+            return response
+    except asyncio.TimeoutError:
+        return web.json_response({
+            "error": "antigravity_relay_busy",
+            "error_type": "relay_semaphore_timeout",
+            "detail": "No Antigravity relay slot became available within %.1f seconds"
+                      % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+        }, status=503)
+    except Exception as e:
+        if _is_client_disconnect_error(e):
+            logger.info("Antigravity handler client disconnected: session=%s",
+                        (session_id or "default")[:8])
+            return web.Response(status=499)
+        logger.error("Antigravity handler error: %s", e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_health(request):
+    # AADS-191: 세마포어 leak 가시성을 위해 active_leases / semaphore_value 노출
+    sem_value = None
+    antigravity_sem_value = None
+    try:
+        if _semaphore is not None:
+            sem_value = _semaphore._value
+    except Exception:
+        pass
+    try:
+        if _antigravity_semaphore is not None:
+            antigravity_sem_value = _antigravity_semaphore._value
+    except Exception:
+        pass
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
               "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),
-              "mcp_bridge_mode": _MCP_BRIDGE_MODE}
+              "antigravity_cmd_mode": "docker_exec",
+              "mcp_bridge_mode": _MCP_BRIDGE_MODE,
+              "max_concurrent": _MAX_CONCURRENT,
+              "antigravity_max_concurrent": _ANTIGRAVITY_MAX_CONCURRENT,
+              "semaphore_available": sem_value,
+              "antigravity_semaphore_available": antigravity_sem_value,
+              "active_leases": dict(_ACTIVE_LEASES),
+              "lease_count": len(_LEASE_REGISTRY),
+              "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC,
+              "max_lease_sec": _MAX_LEASE_SEC,
+              "os_timeout_enabled": _OS_TIMEOUT_ENABLED}
     if _DIRECT_OAUTH_ENABLED:
         token, slot, label = _pick_token()
         health.update({"oauth_slot": slot, "oauth_label": label, "token_available": bool(token)})
     return web.json_response(health)
+
+
+async def handle_leases(request):
+    """AADS-191B: 현재 슬롯 점유 중인 lease 목록 (운영 가시성)."""
+    now = time.time()
+    leases = []
+    for entry in list(_LEASE_REGISTRY.values()):
+        age = now - entry.get("started_at", now)
+        leases.append({
+            "lease_id": entry.get("lease_id"),
+            "relay": entry.get("relay"),
+            "session_id": entry.get("session_id"),
+            "proc_pid": entry.get("proc_pid"),
+            "cli_model": entry.get("cli_model"),
+            "age_sec": round(age, 1),
+            "stale": age > _MAX_LEASE_SEC,
+        })
+    return web.json_response({
+        "total": len(leases),
+        "max_lease_sec": _MAX_LEASE_SEC,
+        "leases": leases,
+    })
+
+
+# AADS-193: Codex app-server JSON-RPC를 통한 rate-limit 조회
+_CODEX_USAGE_CACHE = {"ts": 0, "payload": None}
+_CODEX_USAGE_CACHE_TTL = int(os.getenv("CODEX_USAGE_CACHE_TTL_SEC", "60"))
+_CODEX_USAGE_RPC_TIMEOUT = float(os.getenv("CODEX_USAGE_RPC_TIMEOUT_SEC", "8"))
+
+
+async def _query_codex_rate_limits():
+    """codex app-server JSON-RPC로 account/rateLimits/read 호출.
+
+    호스트 ~/.codex/auth.json 사용 (auth_mode=chatgpt). 응답 파싱은 방어적으로
+    처리하여 codex CLI 업데이트로 스키마 변경 시에도 빈 응답으로 안전하게 fallback.
+    """
+    codex_meta = _resolve_cli_command("codex")
+    codex_argv = list(codex_meta.get("argv") or []) or ["codex"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *(codex_argv + ["app-server"]),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        return {"error": "codex_bin_not_found", "detail": str(exc)}
+
+    async def _do_rpc():
+        # 1) initialize
+        proc.stdin.write((json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "aads", "title": "AADS", "version": "1.0"},
+                       "capabilities": {}}
+        }) + "\n").encode())
+        await proc.stdin.drain()
+        # init 응답 대기 (notification은 무시)
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                raise RuntimeError("codex_app_server_eof_before_init")
+            try:
+                msg = json.loads(line.decode(errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 1:
+                break  # init response 받음
+        # 2) notifications/initialized
+        proc.stdin.write((json.dumps({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        }) + "\n").encode())
+        await proc.stdin.drain()
+        # 3) account/rateLimits/read
+        proc.stdin.write((json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}
+        }) + "\n").encode())
+        await proc.stdin.drain()
+        # 응답 대기
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                raise RuntimeError("codex_app_server_eof_before_response")
+            try:
+                msg = json.loads(line.decode(errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 2:
+                return msg.get("result", {})
+
+    try:
+        result = await asyncio.wait_for(_do_rpc(), timeout=_CODEX_USAGE_RPC_TIMEOUT)
+    except asyncio.TimeoutError:
+        return {"error": "codex_rpc_timeout", "timeout_sec": _CODEX_USAGE_RPC_TIMEOUT}
+    except Exception as exc:
+        return {"error": "codex_rpc_failed", "detail": str(exc)[:200]}
+    finally:
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=2)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+    # 응답 정규화 — 변경 위험 대응 (try/except로 감싸 부분 성공 허용)
+    out = {"ok": True, "raw_plan_type": None, "limits": []}
+    try:
+        rate = result.get("rateLimits", {})
+        out["raw_plan_type"] = rate.get("planType")
+        by_id = result.get("rateLimitsByLimitId") or {"_default": rate}
+        for limit_id, entry in by_id.items():
+            primary = entry.get("primary") or {}
+            secondary = entry.get("secondary") or {}
+            credits = entry.get("credits") or {}
+            out["limits"].append({
+                "limit_id": entry.get("limitId") or limit_id,
+                "plan_type": entry.get("planType"),
+                "primary": {
+                    "used_percent": primary.get("usedPercent"),
+                    "window_minutes": primary.get("windowDurationMins"),
+                    "resets_at_epoch": primary.get("resetsAt"),
+                },
+                "secondary": {
+                    "used_percent": secondary.get("usedPercent"),
+                    "window_minutes": secondary.get("windowDurationMins"),
+                    "resets_at_epoch": secondary.get("resetsAt"),
+                },
+                "credits": {
+                    "has_credits": credits.get("hasCredits"),
+                    "unlimited": credits.get("unlimited"),
+                    "balance": credits.get("balance"),
+                },
+            })
+    except Exception as parse_exc:
+        out["parse_warning"] = str(parse_exc)[:200]
+    return out
+
+
+async def handle_codex_usage(request):
+    """AADS-193: /codex-usage — shared secret 보호 + 60초 캐시."""
+    # shared secret 검증
+    secret_expected = _load_relay_secret()
+    if secret_expected:
+        provided = request.headers.get("X-Claude-Relay-Secret", "")
+        if provided != secret_expected:
+            return web.json_response({"error": "invalid relay secret"}, status=403)
+    # 캐시 확인
+    now = time.time()
+    cached = _CODEX_USAGE_CACHE.get("payload")
+    cache_ts = _CODEX_USAGE_CACHE.get("ts", 0)
+    if cached and (now - cache_ts) < _CODEX_USAGE_CACHE_TTL:
+        return web.json_response({"cached": True, "age_sec": round(now - cache_ts, 1),
+                                  "ttl_sec": _CODEX_USAGE_CACHE_TTL, **cached})
+    # 라이브 호출
+    payload = await _query_codex_rate_limits()
+    payload["fetched_at"] = int(now)
+    _CODEX_USAGE_CACHE["payload"] = payload
+    _CODEX_USAGE_CACHE["ts"] = now
+    return web.json_response({"cached": False, "ttl_sec": _CODEX_USAGE_CACHE_TTL, **payload})
 
 
 async def handle_oauth_switch(request):
@@ -1518,11 +2153,56 @@ async def handle_reset_session(request):
     return web.json_response({"error": "not found"}, status=404)
 
 
+async def _lease_watchdog():
+    """AADS-191B: 60초마다 stale lease 감지 후 강제 종료.
+
+    OS-level `timeout` 명령(8-B)이 이미 hard kill을 보장하지만,
+    relay 내부 lease 상태도 일관성 유지 + 운영 로그 가시성을 위해 병행.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            now = time.time()
+            for entry in list(_LEASE_REGISTRY.values()):
+                age = now - entry.get("started_at", now)
+                if age <= _MAX_LEASE_SEC:
+                    continue
+                pid = entry.get("proc_pid")
+                logger.warning(
+                    "lease_watchdog: stale lease_id=%s relay=%s session=%s age=%.0fs pid=%s — SIGKILL",
+                    entry.get("lease_id"), entry.get("relay"),
+                    entry.get("session_id"), age, pid,
+                )
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as kill_err:
+                        logger.warning("lease_watchdog kill failed pid=%s: %s", pid, kill_err)
+        except asyncio.CancelledError:
+            logger.info("lease_watchdog cancelled — exiting")
+            return
+        except Exception as exc:
+            logger.error("lease_watchdog loop error: %s", exc)
+
+
 async def _on_startup(app):
     """앱 시작 시 실제 이벤트 루프에서 Semaphore 생성 (Python 3.6 호환)."""
-    global _semaphore
+    global _semaphore, _antigravity_semaphore
     _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
-    logger.info("Semaphore created: max_concurrent=%d", _MAX_CONCURRENT)
+    _antigravity_semaphore = asyncio.Semaphore(_ANTIGRAVITY_MAX_CONCURRENT)
+    logger.info(
+        "Semaphore created: max_concurrent=%d antigravity_max_concurrent=%d",
+        _MAX_CONCURRENT,
+        _ANTIGRAVITY_MAX_CONCURRENT,
+    )
+    # AADS-191B: lease watchdog 시작
+    app["_lease_watchdog_task"] = asyncio.create_task(_lease_watchdog())
+    logger.info(
+        "Lease watchdog started: max_lease_sec=%.0f os_timeout=%s stderr_read_timeout=%.1f",
+        _MAX_LEASE_SEC, _OS_TIMEOUT_ENABLED, _STDERR_READ_TIMEOUT_SEC,
+    )
 
 
 def create_app():
@@ -1530,7 +2210,10 @@ def create_app():
     app.on_startup.append(_on_startup)
     app.router.add_post("/stream", handle_stream)
     app.router.add_post("/codex-stream", handle_codex_stream)
+    app.router.add_post("/antigravity-stream", handle_antigravity_stream)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/leases", handle_leases)
+    app.router.add_get("/codex-usage", handle_codex_usage)
     app.router.add_post("/oauth/switch", handle_oauth_switch)
     app.router.add_get("/sessions", handle_sessions)
     app.router.add_delete("/sessions/{aads_session_id}", handle_reset_session)
