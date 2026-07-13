@@ -787,14 +787,23 @@ _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-lla
 _OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_MODELS = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
 _CODEX_MODEL_DISPLAY = {
+    "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
+    "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
+    "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
     "gpt-5.5": "GPT-5.5 (Codex CLI)",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
 }
 _CODEX_MODEL_ALIASES = {
+    "codex:gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-5.6 sol (codex cli)": "gpt-5.6-sol",
+    "codex:gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6 terra (codex cli)": "gpt-5.6-terra",
+    "codex:gpt-5.6-luna": "gpt-5.6-luna",
+    "gpt-5.6 luna (codex cli)": "gpt-5.6-luna",
     "codex:gpt-5.5": "gpt-5.5",
     "gpt-5.5 (codex cli)": "gpt-5.5",
     "codex:gpt-5.4": "gpt-5.4",
