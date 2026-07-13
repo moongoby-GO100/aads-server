@@ -126,6 +126,8 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "claude-opus-46": (_decimal(5.0), _decimal(25.0)),
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
     "claude-haiku": (_decimal(1.0), _decimal(5.0)),
+    "claude-sonnet-5": (_decimal(3.0), _decimal(15.0)),
+    "claude-fable-5": (_decimal(10.0), _decimal(50.0)),
     "gemini-flash": (_decimal(0.075), _decimal(0.3)),
     "gemini-flash-lite": (_decimal(0.01), _decimal(0.04)),
     "gemini-pro": (_decimal(1.25), _decimal(5.0)),
@@ -148,6 +150,10 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "o3": (_decimal(2.0), _decimal(8.0)),
     "o3-mini": (_decimal(1.1), _decimal(4.4)),
     "o3-pro": (_decimal(20.0), _decimal(80.0)),
+    "gpt-5.6-sol": (_decimal(5.0), _decimal(30.0)),
+    "gpt-5.6-terra": (_decimal(2.5), _decimal(15.0)),
+    "gpt-5.6-luna": (_decimal(1.0), _decimal(6.0)),
+    "gpt-5.5": (_decimal(2.0), _decimal(12.0)),
     "gpt-5.4": (_decimal(2.5), _decimal(15.0)),
     "gpt-5.4-mini": (_decimal(0.75), _decimal(4.5)),
     "gpt-5.3-codex": (_decimal(1.75), _decimal(14.0)),
@@ -201,6 +207,8 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
 }
 
 _THINKING_MODELS = {
+    "claude-sonnet-5",
+    "claude-fable-5",
     "gemini-pro",
     "gemini-flash",
     "gemini-3-flash-preview",
@@ -213,12 +221,17 @@ _THINKING_MODELS = {
     "deepseek-reasoner",
     "qwen3-235b-thinking",
     "qwq-plus",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "o3",
     "o3-mini",
     "o3-pro",
 }
 
 _VISION_MODELS = {
+    "claude-sonnet-5",
+    "claude-fable-5",
     "gpt-4o",
     "gpt-4o-mini",
     "gemini-2.5-flash-image",
@@ -234,11 +247,16 @@ _CODING_MODELS = {
     "claude-opus-46",
     "claude-sonnet",
     "claude-haiku",
+    "claude-sonnet-5",
+    "claude-fable-5",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.3-codex",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "o3",
     "o3-mini",
@@ -254,9 +272,14 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-opus-46": "Claude Opus 4.6",
     "claude-sonnet": "Claude Sonnet",
     "claude-haiku": "Claude Haiku",
+    "claude-sonnet-5": "Claude Sonnet 5",
+    "claude-fable-5": "Claude Fable 5",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
+    "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
+    "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
+    "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
     "gpt-5.5": "GPT-5.5 (Codex CLI)",
     "deepseek-v4-flash": "DeepSeek V4 Flash",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
@@ -271,7 +294,14 @@ _DISPLAY_NAME_OVERRIDES = {
 }
 
 _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("claude-opus", "claude-opus-46", "claude-sonnet", "claude-haiku"),
+    "anthropic": (
+        "claude-fable-5",
+        "claude-opus",
+        "claude-opus-46",
+        "claude-sonnet",
+        "claude-sonnet-5",
+        "claude-haiku",
+    ),
     "gemini": (
         "gemini-flash",
         "gemini-flash-lite",
@@ -297,7 +327,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "groq-compound",
     ),
     "openai": ("gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"),
-    "codex": ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "codex": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
         "openrouter-grok-4-fast",
@@ -1784,4 +1814,3 @@ async def clear_expired_rate_limits() -> dict[str, Any]:
     except Exception:
         logger.exception("clear_expired_rate_limits.sync_failed")
         return {"cleared": len(cleared_keys), "synced": False, "keys": cleared_keys, "error": "sync_failed"}
-
