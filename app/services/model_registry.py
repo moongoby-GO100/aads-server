@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 30
 _DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("LLM_MODEL_DISCOVERY_TIMEOUT_SECONDS", "8"))
+_AUTO_REFRESH_MIN_INTERVAL_SECONDS = max(15, int(os.getenv("LLM_MODEL_REGISTRY_AUTO_REFRESH_SECONDS", "15")))
 _cache: dict[str, tuple[Any, float]] = {}
+_auto_refresh_attempts: dict[str, float] = {}
 
 _PROVIDER_ALIASES = {
     "anthropic": "anthropic",
@@ -124,6 +126,8 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "claude-opus-46": (_decimal(5.0), _decimal(25.0)),
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
     "claude-haiku": (_decimal(1.0), _decimal(5.0)),
+    "claude-sonnet-5": (_decimal(3.0), _decimal(15.0)),
+    "claude-fable-5": (_decimal(10.0), _decimal(50.0)),
     "gemini-flash": (_decimal(0.075), _decimal(0.3)),
     "gemini-flash-lite": (_decimal(0.01), _decimal(0.04)),
     "gemini-pro": (_decimal(1.25), _decimal(5.0)),
@@ -146,6 +150,10 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "o3": (_decimal(2.0), _decimal(8.0)),
     "o3-mini": (_decimal(1.1), _decimal(4.4)),
     "o3-pro": (_decimal(20.0), _decimal(80.0)),
+    "gpt-5.6-sol": (_decimal(5.0), _decimal(30.0)),
+    "gpt-5.6-terra": (_decimal(2.5), _decimal(15.0)),
+    "gpt-5.6-luna": (_decimal(1.0), _decimal(6.0)),
+    "gpt-5.5": (_decimal(2.0), _decimal(12.0)),
     "gpt-5.4": (_decimal(2.5), _decimal(15.0)),
     "gpt-5.4-mini": (_decimal(0.75), _decimal(4.5)),
     "gpt-5.3-codex": (_decimal(1.75), _decimal(14.0)),
@@ -188,6 +196,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "qwen3-vl-235b": (_decimal(0.6), _decimal(2.4)),
     "qwen-omni-turbo": (_decimal(0.02), _decimal(0.06)),
     "dashscope-deepseek-v3.2": (_decimal(0.28), _decimal(0.42)),
+    "kimi-k2.6": (_decimal(0.6), _decimal(2.4)),
     "kimi-k2.5": (_decimal(0.6), _decimal(2.4)),
     "kimi-k2": (_decimal(0.6), _decimal(2.4)),
     "kimi-latest": (_decimal(0.02), _decimal(0.06)),
@@ -198,6 +207,8 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
 }
 
 _THINKING_MODELS = {
+    "claude-sonnet-5",
+    "claude-fable-5",
     "gemini-pro",
     "gemini-flash",
     "gemini-3-flash-preview",
@@ -210,12 +221,17 @@ _THINKING_MODELS = {
     "deepseek-reasoner",
     "qwen3-235b-thinking",
     "qwq-plus",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "o3",
     "o3-mini",
     "o3-pro",
 }
 
 _VISION_MODELS = {
+    "claude-sonnet-5",
+    "claude-fable-5",
     "gpt-4o",
     "gpt-4o-mini",
     "gemini-2.5-flash-image",
@@ -231,11 +247,16 @@ _CODING_MODELS = {
     "claude-opus-46",
     "claude-sonnet",
     "claude-haiku",
+    "claude-sonnet-5",
+    "claude-fable-5",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.3-codex",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "o3",
     "o3-mini",
@@ -251,9 +272,14 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-opus-46": "Claude Opus 4.6",
     "claude-sonnet": "Claude Sonnet",
     "claude-haiku": "Claude Haiku",
+    "claude-sonnet-5": "Claude Sonnet 5",
+    "claude-fable-5": "Claude Fable 5",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
+    "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
+    "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
+    "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
     "gpt-5.5": "GPT-5.5 (Codex CLI)",
     "deepseek-v4-flash": "DeepSeek V4 Flash",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
@@ -268,7 +294,14 @@ _DISPLAY_NAME_OVERRIDES = {
 }
 
 _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("claude-opus", "claude-opus-46", "claude-sonnet", "claude-haiku"),
+    "anthropic": (
+        "claude-fable-5",
+        "claude-opus",
+        "claude-opus-46",
+        "claude-sonnet",
+        "claude-sonnet-5",
+        "claude-haiku",
+    ),
     "gemini": (
         "gemini-flash",
         "gemini-flash-lite",
@@ -294,7 +327,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "groq-compound",
     ),
     "openai": ("gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"),
-    "codex": ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "codex": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
         "openrouter-grok-4-fast",
@@ -335,16 +368,50 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "qwen-omni-turbo",
         "dashscope-deepseek-v3.2",
     ),
-    "kimi": ("kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"),
+    "kimi": ("kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"),
     "minimax": ("minimax-m2.7", "minimax-m2.5"),
 }
 
-_KEYLESS_PROVIDERS = {"codex"}
+_KEYLESS_PROVIDERS = {"codex", "antigravity"}  # relay 서버 경유, 별도 API key 불필요
 
 _DEEPSEEK_ALIAS_DEPRECATION_DATE = "2026-07-24"
 _DEEPSEEK_COMPATIBILITY_ALIASES = {
     "deepseek-chat": "deepseek-v4-flash",
     "deepseek-reasoner": "deepseek-v4-pro",
+}
+_DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
+    "deepseek-v4-flash": "deepseek-v4-flash",
+    "deepseek-v4-pro": "deepseek-v4-pro",
+    "deepseek-chat": "deepseek-chat",
+    "deepseek-reasoner": "deepseek-reasoner",
+}
+_ANTHROPIC_RUNTIME_MODEL_IDS = {
+    "claude-sonnet": "claude-sonnet-4-6",
+    "claude-opus": "claude-opus-4-8",
+    "claude-opus-46": "claude-opus-4-6",
+    "claude-haiku": "claude-haiku-4-5-20251001",
+}
+_MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
+    "claude-sonnet": (
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-sonnet-20240229",
+        "claude-2.1",
+    ),
+    "claude-opus": (
+        "claude-opus-4-8",
+        "claude-opus-4-8",
+        "claude-opus-4-5",
+        "claude-3-opus-20240229",
+    ),
+    "claude-opus-46": ("claude-opus-4-6",),
+    "claude-haiku": (
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+        "claude-3-5-haiku-20241022",
+        "claude-3-haiku-20240307",
+    ),
 }
 
 _DISCOVERY_REQUIREMENTS = {
@@ -360,6 +427,7 @@ _PROVIDER_META = {
     "groq": {"display_name": "Groq", "manual_review": False},
     "openai": {"display_name": "OpenAI", "manual_review": False},
     "codex": {"display_name": "Codex CLI", "manual_review": False},
+    "antigravity": {"display_name": "Antigravity CLI", "manual_review": False},
     "deepseek": {"display_name": "DeepSeek", "manual_review": False},
     "openrouter": {"display_name": "OpenRouter", "manual_review": False},
     "qwen": {"display_name": "Qwen / DashScope", "manual_review": False},
@@ -416,6 +484,12 @@ def _canonical_model_id(model_id: str) -> str:
     return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id, model_id)
 
 
+def _runtime_model_id(provider: str, model_id: str) -> str:
+    if provider == "deepseek":
+        return _DEEPSEEK_LITELLM_RUNTIME_ALIASES.get(model_id, model_id)
+    return _canonical_model_id(model_id)
+
+
 def _compatibility_alias_metadata(model_id: str) -> dict[str, Any]:
     canonical_model = _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id)
     if not canonical_model:
@@ -425,6 +499,15 @@ def _compatibility_alias_metadata(model_id: str) -> dict[str, Any]:
         "deprecation_date": _DEEPSEEK_ALIAS_DEPRECATION_DATE,
         "compatibility_alias": True,
     }
+
+
+def _accepted_alias_metadata(provider: str, model_id: str) -> dict[str, Any]:
+    aliases: list[str] = []
+    if provider == "anthropic":
+        aliases.extend(_MODEL_ACCEPTED_ALIASES.get(model_id, ()))
+    if not aliases:
+        return {}
+    return {"accepted_aliases": aliases}
 
 
 def _family_for(provider: str, model_id: str) -> str:
@@ -459,7 +542,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
     category = _category_for(model_id)
     execution_backend = None
     execution_base_url = None
-    execution_model_id = _canonical_model_id(model_id)
+    execution_model_id = _runtime_model_id(provider, model_id)
     if provider == "deepseek":
         execution_backend = "litellm_proxy"
     elif provider in _DIRECT_PROVIDER_BASE_URLS:
@@ -469,6 +552,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         execution_backend = "codex_cli"
     elif provider == "anthropic":
         execution_backend = "claude_cli_relay"
+        execution_model_id = _ANTHROPIC_RUNTIME_MODEL_IDS.get(model_id, execution_model_id)
     elif provider == "gemini":
         execution_backend = "litellm_proxy"
     return ModelTemplate(
@@ -618,6 +702,22 @@ def _build_key_state(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]
     return state
 
 
+def _collect_provider_normalizations(key_state: dict[str, dict[str, Any]]) -> dict[str, int]:
+    """원본 provider 별칭이 정규화된 경우 최근 sync 메타데이터로 남긴다."""
+    normalized_counts: dict[str, int] = {}
+    for provider, state in key_state.items():
+        for raw_provider in state.get("raw_providers", set()):
+            raw = str(raw_provider or "").strip()
+            if not raw:
+                continue
+            normalized = normalize_provider(raw)
+            if not normalized or normalized == raw:
+                continue
+            rule = f"{raw}->{provider or normalized}"
+            normalized_counts[rule] = normalized_counts.get(rule, 0) + 1
+    return normalized_counts
+
+
 def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> bool:
     lowered = model_id.lower()
     excluded = (
@@ -633,6 +733,10 @@ def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, 
     )
     if any(token in lowered for token in excluded):
         return False
+    if provider == "anthropic":
+        return lowered.startswith("claude-")
+    if provider == "anthropic":
+        return lowered.startswith("claude-")
     if provider == "openai":
         return lowered.startswith(("gpt-", "o"))
     if provider == "gemini":
@@ -681,6 +785,7 @@ def _discovered_model_row(
         "raw": raw or {},
     }
     metadata.update(_compatibility_alias_metadata(model_id))
+    metadata.update(_accepted_alias_metadata(provider, model_id))
     return {
         "provider": provider,
         "model_id": model_id,
@@ -760,9 +865,12 @@ async def _get_anthropic_models_api_key_and_runtime_state() -> tuple[str, bool]:
 
 
 async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # [INTENTIONALLY_DISABLED] OpenAI 계열 전체 비활성 — API 키 미등록 상태가 아니라 의도적으로 미사용.
+    # 향후 OpenAI 계열(gpt-5, o3 등) 도입 시 이 주석 제거 후 DB에 API 키 등록 필요.
+    # 재활성 절차: 1) llm_provider_keys 테이블에 openai API 키 등록 → 2) sync 트리거 → 3) is_active=true 확인
     api_key = await _get_first_provider_key("openai")
     if not api_key:
-        return [], {"status": "skipped", "error": "missing_key"}
+        return [], {"status": "skipped", "error": "intentionally_disabled_no_key"}
     async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
         response = await client.get(
             "https://api.openai.com/v1/models",
@@ -846,6 +954,28 @@ async def _fetch_litellm_models() -> tuple[list[dict[str, Any]], dict[str, Any]]
     return rows, {"status": "ok", "count": len(rows)}
 
 
+async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    key = await _get_first_provider_key("kimi")
+    if not key:
+        return [], {"status": "skipped", "error": "no_kimi_key", "count": 0}
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+            resp = await client.get(
+                "https://api.moonshot.ai/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        return [], {"status": "failed", "error": str(exc)[:200], "count": 0}
+    rows = [
+        {"model_id": item["id"], "display_name": item.get("id", ""), "raw": item}
+        for item in data.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    return rows, {"status": "ok", "count": len(rows), "model_source": "discovery"}
+
+
 async def discover_provider_model_rows(
     key_rows: Iterable[dict[str, Any]],
     *,
@@ -862,6 +992,7 @@ async def discover_provider_model_rows(
         "anthropic": _fetch_anthropic_models,
         "gemini": _fetch_gemini_models,
         "litellm": _fetch_litellm_models,
+        "kimi": _fetch_kimi_models,
     }
     all_rows: list[dict[str, Any]] = []
     run_results: list[dict[str, Any]] = []
@@ -996,6 +1127,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "execution_base_url": template.execution_base_url,
             }
             metadata.update(_compatibility_alias_metadata(template.model_id))
+            metadata.update(_accepted_alias_metadata(provider, template.model_id))
             model_rows.append(
                 {
                     "provider": provider,
@@ -1023,6 +1155,39 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                     "is_executable": has_runtime_models,
                 }
             )
+
+            for alias_id in _MODEL_ACCEPTED_ALIASES.get(template.model_id, ()):
+                alias_template = _build_template(provider, alias_id)
+                alias_metadata = dict(metadata)
+                alias_metadata["alias_of"] = template.model_id
+                alias_metadata["model_source"] = "accepted_alias"
+                model_rows.append(
+                    {
+                        "provider": provider,
+                        "model_id": alias_id,
+                        "display_name": alias_template.display_name or _display_name_for_provider(provider, alias_id),
+                        "family": alias_template.family or template.family,
+                        "category": alias_template.category or template.category,
+                        "supports_tools": template.supports_tools,
+                        "supports_thinking": template.supports_thinking,
+                        "supports_vision": template.supports_vision,
+                        "supports_coding": template.supports_coding,
+                        "input_cost": template.input_cost,
+                        "output_cost": template.output_cost,
+                        "is_active": has_runtime_models,
+                        "activation_source": activation_source,
+                        "linked_key_name": linked_key_name,
+                        "metadata": alias_metadata,
+                        "execution_model_id": alias_template.execution_model_id or alias_id,
+                        "discovery_source": "accepted_alias",
+                        "verification_status": "verified" if has_runtime_models else "unknown",
+                        "last_verified_at": state.get("last_verified_at"),
+                        "capabilities": _model_capabilities(provider, alias_id),
+                        "pricing": _pricing_for(alias_id),
+                        "is_selectable": has_runtime_models,
+                        "is_executable": has_runtime_models,
+                    }
+                )
 
         provider_rows.append(
             {
@@ -1184,6 +1349,82 @@ async def list_registered_models(*, provider: str | None = None, active_only: bo
         normalized_row["pricing"] = _coerce_json_object(normalized_row.get("pricing"))
         filtered.append(normalized_row)
     return _cache_set(cache_key, filtered)
+
+
+async def ensure_runtime_models_fresh(*, provider: str | None = None, active_only: bool = False) -> dict[str, Any]:
+    """active_only 조회 직전 stale runtime registry를 짧게 자동 복구한다."""
+    if not active_only:
+        return {"checked": False, "triggered": False, "reason": "inactive_request"}
+
+    normalized_provider = normalize_provider(provider or "")
+    scope = normalized_provider or "*"
+    now_ts = time.time()
+    last_attempt = _auto_refresh_attempts.get(scope, 0.0)
+    if now_ts - last_attempt < _AUTO_REFRESH_MIN_INTERVAL_SECONDS:
+        return {"checked": False, "triggered": False, "reason": "cooldown", "provider": normalized_provider or None}
+
+    # 만료된 rate limit 즉시 정리 → 복구 re-sync
+    try:
+        rl_result = await clear_expired_rate_limits()
+        if rl_result.get("cleared", 0) > 0 and rl_result.get("synced"):
+            _auto_refresh_attempts[scope] = now_ts
+            return {
+                "checked": True,
+                "triggered": True,
+                "reason": "rate_limit_auto_cleared",
+                "provider": normalized_provider or None,
+                "cleared_keys": rl_result.get("keys", []),
+            }
+    except Exception:
+        logger.warning("ensure_runtime_models_fresh.rate_limit_clear_failed")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        key_rows = await _fetch_key_rows(conn)
+        registry_rows = await _fetch_registry_rows(conn) or []
+
+    key_state = _build_key_state(key_rows)
+    providers = [normalized_provider] if normalized_provider else sorted(key_state.keys())
+    stale_providers: list[str] = []
+    for provider_name in providers:
+        if not provider_name:
+            continue
+        templates = _PROVIDER_TEMPLATES.get(provider_name)
+        if not templates:
+            continue
+        if int(key_state.get(provider_name, {}).get("available_key_count", 0)) <= 0:
+            continue
+        provider_rows = [row for row in registry_rows if row.get("provider") == provider_name]
+        inactive_count = sum(1 for row in provider_rows if not row.get("is_active"))
+        if not provider_rows or inactive_count == 0:
+            continue
+        total_count = len(provider_rows)
+        if inactive_count > 0 and inactive_count >= total_count * 0.5:
+            stale_providers.append(provider_name)
+            continue
+        template_ids = {t.model_id for t in templates}
+        template_rows = [row for row in provider_rows if row.get("model_id") in template_ids]
+        if template_rows and any(bool(row.get("is_active")) for row in template_rows):
+            continue
+        stale_providers.append(provider_name)
+
+    if not stale_providers:
+        return {"checked": True, "triggered": False, "reason": "healthy", "provider": normalized_provider or None}
+
+    _auto_refresh_attempts[scope] = now_ts
+    invalidate_registry_cache()
+    result = await sync_model_registry(
+        triggered_by="llm_models_auto_refresh",
+        reason=f"active_only_stale:{','.join(stale_providers)}",
+    )
+    return {
+        "checked": True,
+        "triggered": bool(result.get("ok")),
+        "reason": "stale_runtime_catalog",
+        "provider": normalized_provider or None,
+        "stale_providers": stale_providers,
+        "sync_ok": bool(result.get("ok")),
+    }
 
 
 async def list_provider_summaries() -> list[dict[str, Any]]:
@@ -1361,8 +1602,22 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
     template_rows, provider_rows = build_registry_snapshots(key_rows)
+    key_state = _build_key_state(key_rows)
+    normalized_providers = _collect_provider_normalizations(key_state)
     discovered_rows, discovery_runs = await discover_provider_model_rows(key_rows)
     model_rows = _merge_model_rows(template_rows, discovered_rows)
+    review_required_providers = sorted(
+        {
+            row["provider"]
+            for row in provider_rows
+            if row.get("requires_admin_review")
+        }
+        | {
+            str(run.get("provider") or "").strip()
+            for run in discovery_runs
+            if run.get("status") in {"failed"}
+        }
+    )
 
     async with pool.acquire() as conn:
         try:
@@ -1472,6 +1727,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         "reason": reason,
                         "models_synced": len(model_rows),
                         "providers_seen": [row["provider"] for row in provider_rows],
+                        "normalized_providers": normalized_providers,
+                        "review_required_providers": review_required_providers,
                         "discovery": discovery_runs,
                     },
                 )
@@ -1494,7 +1751,66 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                     )
         except asyncpg.UndefinedTableError:
             logger.warning("model_registry.sync_missing_table")
-            return {"ok": False, "error": "registry_tables_missing", "models_synced": 0, "providers": provider_rows}
+            return {
+                "ok": False,
+                "error": "registry_tables_missing",
+                "models_synced": 0,
+                "providers": provider_rows,
+                "normalized_providers": normalized_providers,
+                "review_required_providers": review_required_providers,
+            }
 
     invalidate_registry_cache()
-    return {"ok": True, "models_synced": len(model_rows), "providers": provider_rows, "discovery": discovery_runs}
+    return {
+        "ok": True,
+        "models_synced": len(model_rows),
+        "providers": provider_rows,
+        "discovery": discovery_runs,
+        "normalized_providers": normalized_providers,
+        "review_required_providers": review_required_providers,
+    }
+
+
+async def clear_expired_rate_limits() -> dict[str, Any]:
+    """만료된 rate_limited_until을 NULL로 초기화하고, 변경 시 registry를 재동기화한다."""
+    pool = get_pool()
+    cleared_keys: list[str] = []
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE llm_api_keys
+                SET rate_limited_until = NULL, updated_at = NOW()
+                WHERE rate_limited_until IS NOT NULL
+                  AND rate_limited_until <= NOW()
+                RETURNING key_name, provider
+                """
+            )
+            cleared_keys = [row["key_name"] for row in rows]
+    except Exception:
+        logger.exception("clear_expired_rate_limits.db_failed")
+        return {"cleared": 0, "synced": False, "error": "db_failed"}
+
+    if not cleared_keys:
+        return {"cleared": 0, "synced": False, "reason": "none_expired"}
+
+    logger.info(
+        "clear_expired_rate_limits.cleared",
+        extra={"keys": cleared_keys, "count": len(cleared_keys)},
+    )
+    try:
+        from app.core.llm_key_provider import invalidate_key_cache
+        invalidate_key_cache()
+    except Exception:
+        pass
+
+    invalidate_registry_cache()
+    try:
+        result = await sync_model_registry(
+            triggered_by="rate_limit_auto_clear",
+            reason=f"expired_keys:{','.join(cleared_keys)}",
+        )
+        return {"cleared": len(cleared_keys), "synced": bool(result.get("ok")), "keys": cleared_keys}
+    except Exception:
+        logger.exception("clear_expired_rate_limits.sync_failed")
+        return {"cleared": len(cleared_keys), "synced": False, "keys": cleared_keys, "error": "sync_failed"}
