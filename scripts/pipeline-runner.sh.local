@@ -288,6 +288,105 @@ looks_like_git_diff() {
     return 1
 }
 
+is_remote_project() {
+    case "$1" in
+        GO100|KIS|SF|NTV2) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_git_workdir() {
+    local repo="$1"
+    [[ -n "$repo" ]] && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+git_dirty_count() {
+    local repo="$1"
+    git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' '
+}
+
+git_ahead_behind_counts() {
+    local repo="$1" base_ref="${2:-origin/main}"
+    git -C "$repo" rev-list --left-right --count "${base_ref}...HEAD" 2>/dev/null | awk '{print $2" "$1}'
+}
+
+prepare_clean_job_worktree() {
+    local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
+
+    if [[ ! "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]]; then
+        _fail_job "$job_id" "$session_id" "invalid_job_id" "worktree 생성 거부: job_id 형식 오류"
+        return 1
+    fi
+    if ! is_git_workdir "$main_workdir"; then
+        _fail_job "$job_id" "$session_id" "git_workdir_missing" "Git workdir 아님: ${main_workdir}"
+        return 1
+    fi
+
+    git -C "$main_workdir" fetch --prune origin >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "git_fetch_failed" "origin/main 최신화 실패: ${project}"
+        return 1
+    }
+    git -C "$main_workdir" rev-parse --verify origin/main^{commit} >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "origin_main_missing" "origin/main 기준 ref 없음: ${project}"
+        return 1
+    }
+
+    if [[ -e "$worktree_dir" ]]; then
+        git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
+    fi
+    git -C "$main_workdir" worktree add --detach "$worktree_dir" origin/main >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "worktree_create_failed" "clean worktree 생성 실패: ${worktree_dir}"
+        return 1
+    }
+
+    local wt_dirty
+    wt_dirty=$(git_dirty_count "$worktree_dir")
+    if [[ "${wt_dirty:-999}" -ne 0 ]]; then
+        _fail_job "$job_id" "$session_id" "worktree_not_clean" "생성된 worktree가 clean 상태가 아님: dirty=${wt_dirty}"
+        return 1
+    fi
+
+    log "  WORKTREE_CLEAN: $worktree_dir base=origin/main"
+    return 0
+}
+
+deploy_git_preflight() {
+    local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
+
+    if is_remote_project "$project"; then
+        log "  DEPLOY_PREFLIGHT_SKIP: remote project=$project"
+        return 0
+    fi
+    if ! is_git_workdir "$main_workdir"; then
+        _fail_job "$job_id" "$session_id" "deploy_git_missing" "배포 전 Git workdir 확인 실패: ${main_workdir}"
+        return 1
+    fi
+
+    git -C "$main_workdir" fetch --prune origin >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "deploy_fetch_failed" "배포 전 origin fetch 실패: ${project}"
+        return 1
+    }
+    git -C "$main_workdir" rev-parse --verify origin/main^{commit} >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "deploy_origin_missing" "배포 전 origin/main 확인 실패: ${project}"
+        return 1
+    }
+
+    local dirty ahead behind counts
+    dirty=$(git_dirty_count "$main_workdir")
+    counts=$(git_ahead_behind_counts "$main_workdir" "origin/main") || counts="999 999"
+    ahead="${counts%% *}"
+    behind="${counts##* }"
+
+    if [[ "${dirty:-999}" -ne 0 || "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
+            "배포 차단: main workdir은 clean/latest여야 함 (dirty=${dirty:-unknown}, behind=${behind:-unknown}, ahead=${ahead:-unknown})"
+        return 1
+    fi
+
+    log "  DEPLOY_PREFLIGHT_OK: dirty=0 behind=0 ahead=0"
+    return 0
+}
+
 # ── 에러 분류 ─────────────────────────────────────────────────────────
 classify_error() {
     local exit_code="$1" stderr_file="$2" stdout_file="$3"
@@ -371,7 +470,9 @@ pre_validate() {
 
     # 방안 A: 원격 프로젝트 판별 — workdir이 서버68에 없으므로 로컬 체크 스킵
     local is_remote=false
-    case "$project" in GO100|KIS|SF|NTV2) is_remote=true ;; esac
+    if is_remote_project "$project"; then
+        is_remote=true
+    fi
 
     # 1) WORKDIR 존재 여부 (로컬 프로젝트만 체크)
     if [[ "$is_remote" == "false" ]]; then
@@ -394,12 +495,14 @@ pre_validate() {
         fi
     fi
 
-    # 3) git dirty 상태 → stash 후 진행 (로컬만)
+    # 3) git dirty 상태는 절대 stash하지 않는다.
+    # 작업은 run_job에서 origin/main 기반 clean worktree로 격리한다.
     if [[ "$is_remote" == "false" ]]; then
         cd "$workdir"
-        if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-            log "  PRE_VALIDATE: git dirty → stash (job=$job_id)"
-            git stash push -m "pipeline-runner-auto-stash-${job_id}" 2>/dev/null || true
+        if is_git_workdir "$workdir"; then
+            local dirty_count
+            dirty_count=$(git_dirty_count "$workdir")
+            log "  PRE_VALIDATE: main dirty=${dirty_count:-unknown} — clean worktree enforced"
         fi
     fi
 
@@ -737,39 +840,14 @@ run_job() {
     local use_worktree=false
     local worktree_dir=""
 
-    # MAX_CONCURRENT_PER_PROJECT > 1이면 worktree 사용
-    if [[ "${MAX_CONCURRENT_PER_PROJECT}" -gt 1 ]]; then
+    # 로컬 Git 프로젝트는 항상 origin/main 기반 clean worktree에서만 실행한다.
+    # main workdir fallback은 세션 간 변경 혼입과 최신 main 이탈을 만들기 때문에 금지한다.
+    if ! is_remote_project "$project" && is_git_workdir "$workdir"; then
         worktree_dir="/tmp/aads-wt-${job_id}"
         local avail_gb
         avail_gb=$(df --output=avail -BG /tmp 2>/dev/null | tail -1 | tr -d ' G') || avail_gb=999
-        if [[ "$avail_gb" -ge 5 ]]; then
-            cd "$workdir"
-            if git worktree add "$worktree_dir" HEAD 2>/dev/null; then
-                workdir="$worktree_dir"
-                use_worktree=true
-                log "  WORKTREE: $worktree_dir 생성 (avail=${avail_gb}GB)"
-            else
-                log "  WORKTREE_FAIL: isolated worktree required; refusing main workdir fallback"
-                db_update "UPDATE pipeline_jobs SET status='error', phase='worktree_unavailable',
-                           error_detail='worktree_unavailable',
-                           review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 병렬 실행 모드에서 worktree 생성 실패 — main 작업공간 fallback 차단',
-                           updated_at=NOW() WHERE job_id='${job_id}';"
-                post_to_chat "$session_id" "❌ [Pipeline Runner] worktree 생성 실패로 작업 차단: $job_id — main 작업공간 fallback을 금지했습니다."
-                _release_work_lock "$project" "$job_id"
-                _cleanup_artifacts "$job_id"
-                promote_next_queued "$project"
-                _current_job_id=""
-                _current_session_id=""
-                rm -f /tmp/.pipeline_current_job
-                return 1
-            fi
-        else
-            log "  WORKTREE_SKIP: 디스크 부족 ${avail_gb}GB < 5GB; refusing main workdir fallback"
-            db_update "UPDATE pipeline_jobs SET status='error', phase='worktree_disk_low',
-                       error_detail='worktree_disk_low',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 병렬 실행 모드에서 worktree 디스크 여유 부족 — main 작업공간 fallback 차단',
-                       updated_at=NOW() WHERE job_id='${job_id}';"
-            post_to_chat "$session_id" "❌ [Pipeline Runner] worktree 디스크 부족으로 작업 차단: $job_id (${avail_gb}GB < 5GB)"
+        if [[ "$avail_gb" -lt 5 ]]; then
+            _fail_job "$job_id" "$session_id" "worktree_disk_low" "clean worktree 생성 공간 부족: ${avail_gb}GB < 5GB"
             _release_work_lock "$project" "$job_id"
             _cleanup_artifacts "$job_id"
             promote_next_queued "$project"
@@ -778,6 +856,26 @@ run_job() {
             rm -f /tmp/.pipeline_current_job
             return 1
         fi
+        prepare_clean_job_worktree "$job_id" "$project" "$session_id" "$workdir" "$worktree_dir" || {
+            _release_work_lock "$project" "$job_id"
+            _cleanup_artifacts "$job_id"
+            promote_next_queued "$project"
+            _current_job_id=""
+            _current_session_id=""
+            rm -f /tmp/.pipeline_current_job
+            return 1
+        }
+        workdir="$worktree_dir"
+        use_worktree=true
+    elif ! is_remote_project "$project"; then
+        _fail_job "$job_id" "$session_id" "worktree_required" "로컬 프로젝트는 Git clean worktree가 필수입니다: ${workdir:-undefined}"
+        _release_work_lock "$project" "$job_id"
+        _cleanup_artifacts "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
     fi
 
     log "▶ START job=$job_id project=$project target=${target_repo} workdir=$workdir"
@@ -1382,6 +1480,12 @@ deploy_job() {
 
     local main_workdir="$workdir"
     local worktree_dir="/tmp/aads-wt-${job_id}"
+
+    if ! deploy_git_preflight "$job_id" "$project" "$session_id" "$main_workdir"; then
+        _release_deploy_lock "$project" "$job_id"
+        promote_next_queued "$project"
+        return 1
+    fi
 
     # flock으로 같은 프로젝트 동시 배포 방지
     local lock_file="/tmp/pipeline-deploy-${project}.lock"
@@ -2032,13 +2136,7 @@ reject_job() {
         git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
         log "  REJECT_WORKTREE_CLEANUP: $worktree_dir"
     else
-        local stash_msg="reject-${job_id}-$(date +%s)"
-        git stash push -m "$stash_msg" 2>/dev/null || {
-            log "  REJECT_STASH_FAIL: $job_id — git checkout fallback"
-            git checkout -- . 2>/dev/null || true
-            git clean -fd 2>/dev/null || true
-        }
-        log "  REJECT_STASH: $stash_msg (git stash list로 복구 가능)"
+        log "  REJECT_NO_WORKTREE: $job_id — main workdir mutation skipped"
     fi
 
     db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
