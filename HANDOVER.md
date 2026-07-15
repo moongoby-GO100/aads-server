@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-07-16 05:59 KST - Yeoljeong store assistant P0/P1 closeout
+- 배경: CEO가 열정국밥 매장비서 수정 필요사항 P0~P1 즉시 조치를 지시했다.
+- 조치:
+  - `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`에 배달 수집 보조 라우트(`/sales`, `/reviews`, `/collection-status`, `/automation`)를 보존 추가했다.
+  - `app/static/apps/yeoljeong-finance/index.html` 및 대시보드 public/static 정적 HTML 2개 경로에 직원 승인 후 서버 세션 권한이 브라우저 로컬 pending 캐시보다 우선되도록 보정했다.
+  - 운영 `aads-dashboard`, `aads-dashboard-green` 컨테이너의 `/app/public/apps/yeoljeong-finance/index.html`, `/app/public/static/apps/yeoljeong-finance/index.html`을 백업 후 정적 파일만 동기화했다. 백업 파일은 각 경로의 `.bak-20260716-p0p1`.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py` 통과.
+  - 컨테이너 서비스 스모크: 직원 가입요청 `employee_pending` → 승인 후 `employee`, 계약 저장 성공, 급여 net_pay `99000`.
+  - 운영 OpenAPI `yeoljeong-finance` 라우트 27개 노출, 필수 HR/계약/급여/배달 보조 라우트 누락 0개.
+  - HTML 스크립트 문법 검사 3개 경로 모두 `node --check` 통과.
+  - `https://aads.newtalk.kr/apps/yeoljeong-finance/index.html` HTTP 200 및 `serverApprovedEmployee` 코드 4건 반영 확인.
+- 남은 제한:
+  - 이번 조치는 정적 파일 컨테이너 동기화까지 완료했지만 git commit/push는 수행하지 않았다.
+  - 기존 미커밋 `docs/CHANGELOG-direct-edit.md`, `scripts/build_dashboard_now.sh`, `scripts/fix_dashboard_auth_race.py`는 이번 범위와 무관해 보존한다.
+
 ## 2026-06-18 18:58 KST - GO100 blue/green deploy verification continuation
 - 배경: CEO가 GO100 다음 단계 진행, 커밋/푸시/기록/무중단 배포까지 이어서 진행하라고 지시했다.
 - 실측:

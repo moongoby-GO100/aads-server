@@ -599,6 +599,34 @@ def list_settlements(user: dict[str, Any], business_id: str | None = None) -> li
     return rows
 
 
+def list_sales(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    rows = _read("delivery_sales")
+    if business_id:
+        rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
+    return rows
+
+
+def list_reviews(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    rows = _read("delivery_reviews")
+    if business_id:
+        rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
+    return rows
+
+
+def list_collection_status(user: dict[str, Any]) -> list[dict[str, Any]]:
+    return _read("delivery_collection_status")
+
+
+def automation_status(user: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "mode": "browser-automation",
+        "status": "available",
+        "message": "계정 기반 수집 API와 CSV 정산서 가져오기를 사용할 수 있습니다.",
+        "checked_at": _now(),
+    }
+
+
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")

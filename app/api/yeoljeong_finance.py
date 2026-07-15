@@ -225,6 +225,26 @@ async def list_settlements(business_id: str | None = None, current_user: dict = 
     return {"settlements": svc.list_settlements(current_user, business_id)}
 
 
+@router.get("/sales")
+async def list_sales(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"sales": svc.list_sales(current_user, business_id)}
+
+
+@router.get("/reviews")
+async def list_reviews(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"reviews": svc.list_reviews(current_user, business_id)}
+
+
+@router.get("/collection-status")
+async def list_collection_status(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statuses": svc.list_collection_status(current_user)}
+
+
+@router.get("/automation")
+async def get_automation_status(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return svc.automation_status(current_user)
+
+
 @router.post("/sync")
 async def sync_delivery(payload: SyncPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return svc.sync_delivery(payload.model_dump(), current_user)

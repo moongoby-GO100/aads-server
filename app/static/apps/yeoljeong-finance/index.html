@@ -2581,10 +2581,14 @@
     function authPermissions() {
       const email = String(authSession?.user?.email || "").toLowerCase();
       const selfSignup = loadEmployeeSelfSignupMap()[email];
-      if (selfSignup && selfSignup.status !== "approved") {
+      const permissions = authSession?.permissions || fallbackPermissions;
+      const serverStatus = String(permissions.employee_request_status || "").trim().toLowerCase();
+      const serverRole = String(permissions.role || "").trim().toLowerCase();
+      const serverApprovedEmployee = serverStatus === "approved" || serverRole === "employee";
+      if (selfSignup && selfSignup.status !== "approved" && !serverApprovedEmployee) {
         return employeePendingPermissions(selfSignup.status, selfSignup.requestId);
       }
-      return authSession?.permissions || fallbackPermissions;
+      return permissions;
     }
 
     function loadEmployeeSelfSignupMap() {
@@ -4658,7 +4662,19 @@
         const payload = await financeApi("/session");
         const email = String(payload?.user?.email || "").trim().toLowerCase();
         const selfSignup = loadEmployeeSelfSignupMap()[email];
-        if (selfSignup && selfSignup.status !== "approved") {
+        const serverStatus = String(payload?.permissions?.employee_request_status || "").trim().toLowerCase();
+        const serverRole = String(payload?.permissions?.role || "").trim().toLowerCase();
+        const serverApprovedEmployee = serverStatus === "approved" || serverRole === "employee";
+        if (selfSignup && serverApprovedEmployee) {
+          const map = loadEmployeeSelfSignupMap();
+          map[email] = {
+            ...selfSignup,
+            status: "approved",
+            requestId: payload.permissions.employee_request_id || selfSignup.requestId || "",
+            approvedAt: new Date().toISOString()
+          };
+          localStorage.setItem(EMPLOYEE_SELF_SIGNUP_KEY, JSON.stringify(map));
+        } else if (selfSignup && selfSignup.status !== "approved") {
           payload.permissions = employeePendingPermissions(selfSignup.status, selfSignup.requestId);
         }
         saveAuthSession(payload);
