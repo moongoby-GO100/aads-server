@@ -1,6 +1,9 @@
 """Chat Lightweight regression tests — P1."""
 from pathlib import Path
 
+from app.services import chat_service
+from app.services.chat_service import _project_message_fields
+
 REAL_DASHBOARD_CHAT_PAGE = Path("../aads-dashboard/src/app/chat/page.tsx")
 CHAT_PAGE = REAL_DASHBOARD_CHAT_PAGE if REAL_DASHBOARD_CHAT_PAGE.exists() else Path("aads-dashboard/src/app/chat/page.tsx")
 CHAT_SERVICE = Path("app/services/chat_service.py")
@@ -28,6 +31,61 @@ def test_minimal_api_returns_tool_metadata():
     assert "tool_count" in source
     assert "tool_names" in source
     assert "is_truncated" in source
+
+
+def test_minimal_projection_preserves_polling_contract():
+    content = "x" * 400
+    messages = [{
+        "id": "message-1",
+        "content": content,
+        "tools_called": [
+            {"type": "tool_use", "tool_name": "query_database"},
+            {"type": "tool_result", "tool_name": "query_database", "content": "large result"},
+        ],
+    }]
+
+    result = _project_message_fields(messages, "minimal")[0]
+
+    assert result["content"] == content[:320]
+    assert result["content_length"] == 400
+    assert result["is_truncated"] is True
+    assert result["has_tools"] is True
+    assert result["tool_count"] == 1
+    assert result["tool_names"] == ["query_database"]
+    assert result["tools_called"] == []
+    assert messages[0]["content"] == content
+
+
+def test_full_projection_is_unchanged():
+    messages = [{"id": "message-1", "content": "full", "tools_called": []}]
+    assert _project_message_fields(messages, None) is messages
+
+
+def test_local_file_preview_returns_html_artifact(tmp_path, monkeypatch):
+    report = tmp_path / "report.html"
+    report.write_text("<html><body><h1>GO100</h1></body></html>", encoding="utf-8")
+    monkeypatch.setattr(chat_service, "_LOCAL_FILE_ALLOWED_ROOTS", (tmp_path.resolve(),))
+
+    artifact = chat_service.local_file_preview_artifact(str(report))
+
+    assert artifact["type"] == "html_preview"
+    assert artifact["title"] == "report.html"
+    assert "GO100" in artifact["content"]
+    assert artifact["metadata"]["source"] == "local_file_preview"
+    assert artifact["metadata"]["source_path"] == str(report.resolve())
+
+
+def test_local_file_preview_blocks_sensitive_names(tmp_path, monkeypatch):
+    secret_file = tmp_path / ".env"
+    secret_file.write_text("TOKEN=value", encoding="utf-8")
+    monkeypatch.setattr(chat_service, "_LOCAL_FILE_ALLOWED_ROOTS", (tmp_path.resolve(),))
+
+    try:
+        chat_service.local_file_preview_artifact(str(secret_file))
+    except PermissionError as exc:
+        assert "보안상" in str(exc)
+    else:
+        raise AssertionError("sensitive local file was not blocked")
 
 
 def test_polling_has_message_id_skip():

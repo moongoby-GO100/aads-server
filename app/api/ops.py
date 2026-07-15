@@ -9,8 +9,10 @@ import asyncio
 import hashlib
 import time as _time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Optional, List, Any, Dict
 import structlog
+import httpx
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
@@ -23,6 +25,99 @@ router = APIRouter()
 
 # 서버 시작 시 고유 빌드 해시 생성 (컨테이너 재시작 = 새 해시)
 _BUILD_HASH = hashlib.md5(f"{os.getpid()}-{_time.time()}".encode()).hexdigest()[:12]
+
+_CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199").rstrip("/")
+_RELAY_SECRET_PATHS = (
+    Path(os.getenv("CLAUDE_RELAY_SHARED_SECRET_FILE", "/app/scripts/claude_relay_secret.txt")),
+    Path("/root/aads/aads-server/scripts/claude_relay_secret.txt"),
+)
+
+
+def _load_relay_secret() -> str:
+    secret = (os.getenv("CLAUDE_RELAY_SHARED_SECRET") or "").strip()
+    if secret:
+        return secret
+    for path in _RELAY_SECRET_PATHS:
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if value:
+            return value
+    return ""
+
+
+def _normalize_codex_limit_window(window: Dict[str, Any]) -> Dict[str, Any]:
+    resets_at_epoch = window.get("resets_at_epoch")
+    resets_in_sec = window.get("resets_in_sec")
+    resets_at_iso = window.get("resets_at_iso")
+    if resets_in_sec is None and resets_at_epoch:
+        try:
+            resets_at = datetime.fromtimestamp(float(resets_at_epoch), tz=timezone.utc)
+            resets_in_sec = max(0, int((resets_at - datetime.now(timezone.utc)).total_seconds()))
+            resets_at_iso = resets_at.isoformat()
+        except Exception:
+            resets_in_sec = None
+    return {
+        "used_percent": window.get("used_percent"),
+        "window_minutes": window.get("window_minutes"),
+        "resets_in_sec": resets_in_sec,
+        "resets_at_iso": resets_at_iso,
+    }
+
+
+def _normalize_codex_usage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    limits = []
+    for item in payload.get("limits") or []:
+        if not isinstance(item, dict):
+            continue
+        limits.append({
+            "limit_id": item.get("limit_id"),
+            "plan_type": item.get("plan_type") or payload.get("plan_type") or payload.get("raw_plan_type"),
+            "primary": _normalize_codex_limit_window(item.get("primary") or {}),
+            "secondary": _normalize_codex_limit_window(item.get("secondary") or {}),
+            "credits": item.get("credits") or {},
+        })
+    return {
+        "ok": bool(payload.get("ok")) and not payload.get("error"),
+        "cached": payload.get("cached"),
+        "ttl_sec": payload.get("ttl_sec"),
+        "fetched_at": payload.get("fetched_at"),
+        "plan_type": payload.get("plan_type") or payload.get("raw_plan_type"),
+        "limits": limits,
+        "error": payload.get("error"),
+        "detail": payload.get("detail"),
+        "parse_warning": payload.get("parse_warning"),
+    }
+
+
+def _codex_usage_fallback(reason: str, detail: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "fallback": True,
+        "fallback_reason": reason,
+        "detail": detail,
+        "plan_type": "codex_cli",
+        "limits": [
+            {
+                "limit_id": "codex",
+                "plan_type": "codex_cli",
+                "primary": {
+                    "used_percent": 0,
+                    "window_minutes": 300,
+                    "resets_in_sec": 5 * 60 * 60,
+                    "resets_at_iso": (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat(),
+                },
+                "secondary": {
+                    "used_percent": 0,
+                    "window_minutes": 7 * 24 * 60,
+                    "resets_in_sec": 7 * 24 * 60 * 60,
+                    "resets_at_iso": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+                },
+                "credits": {},
+            }
+        ],
+    }
 
 
 def _short_session_id(session_id: Any) -> str:
@@ -1825,6 +1920,44 @@ async def get_oauth_usage_stats():
     """OAuth 사용량 통계 — 5시간/1주일 롤링 윈도우 + rate-limit 상태."""
     from app.services.oauth_usage_tracker import get_usage_stats
     return await get_usage_stats()
+
+
+@router.get("/ops/codex-usage")
+async def get_codex_cli_usage():
+    """Codex CLI 5시간/주간 한도 — Claude Relay의 codex app-server 조회를 프록시."""
+    headers = {}
+    secret = _load_relay_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=2.0)) as client:
+            resp = await client.get(f"{_CLAUDE_RELAY_URL}/codex-usage", headers=headers)
+    except httpx.TimeoutException:
+        return _codex_usage_fallback(
+            "codex_usage_timeout",
+            "Codex CLI 한도 조회가 시간 초과되었습니다.",
+        )
+    except httpx.HTTPError as exc:
+        return _codex_usage_fallback("codex_usage_relay_unreachable", str(exc)[:200])
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {"error": "invalid_relay_response", "detail": resp.text[:200]}
+
+    normalized = _normalize_codex_usage_payload(payload if isinstance(payload, dict) else {})
+    if resp.status_code >= 400:
+        return _codex_usage_fallback(
+            normalized.get("error") or f"relay_http_{resp.status_code}",
+            normalized.get("detail"),
+        )
+    if not normalized.get("ok") or not normalized.get("limits"):
+        return _codex_usage_fallback(
+            normalized.get("error") or "relay_empty_limits",
+            normalized.get("detail"),
+        )
+    return normalized
 
 
 # ─── 계정별 LLM 사용량 현황 API (AADS-190C) ──────────────────────────────

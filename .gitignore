@@ -19,6 +19,7 @@ build/
 
 # Virtual envs
 .venv/
+.venv-playwright/
 venv/
 env/
 
@@ -37,6 +38,7 @@ htmlcov/
 # Logs
 logs/
 *.log
+tmp/google-oauth-*.png
 
 # OS
 .DS_Store
