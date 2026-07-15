@@ -1,0 +1,97 @@
+{
+  "store_name": "열정국밥",
+  "automation_sources": [
+    {
+      "source_type": "bank",
+      "name": "은행 입출금",
+      "method": "CSV/XLSX 업로드 우선",
+      "status": "ready",
+      "next_step": "은행 간편조회/오픈뱅킹 커넥터 연결 전까지 파일 업로드 자동분류"
+    },
+    {
+      "source_type": "card",
+      "name": "카드사용 내역",
+      "method": "카드사/쿠팡/배달앱 명세 업로드",
+      "status": "ready",
+      "next_step": "카드 승인내역 API 또는 카드사 엑셀 정기 수집으로 확장"
+    },
+    {
+      "source_type": "other",
+      "name": "기타 입력사항",
+      "method": "수기 등록 + 증빙 첨부 원장화",
+      "status": "ready",
+      "next_step": "세금계산서/현금영수증/급여 자료 커넥터 추가"
+    }
+  ],
+  "category_rules": [
+    {
+      "category": "식자재",
+      "keywords": [
+        "쌀",
+        "백미",
+        "고춧가루",
+        "소스",
+        "김치",
+        "대파",
+        "양파",
+        "고기",
+        "식자재"
+      ]
+    },
+    {
+      "category": "배달앱",
+      "keywords": [
+        "배민",
+        "배달의민족",
+        "요기요",
+        "쿠팡이츠",
+        "정산"
+      ]
+    },
+    {
+      "category": "임차료",
+      "keywords": [
+        "월세",
+        "임대료",
+        "관리비"
+      ]
+    },
+    {
+      "category": "인건비",
+      "keywords": [
+        "급여",
+        "4대보험",
+        "고용",
+        "알바",
+        "직원"
+      ]
+    },
+    {
+      "category": "공과금",
+      "keywords": [
+        "전기",
+        "가스",
+        "수도",
+        "통신",
+        "인터넷"
+      ]
+    },
+    {
+      "category": "카드수수료",
+      "keywords": [
+        "카드수수료",
+        "수수료"
+      ]
+    },
+    {
+      "category": "비품",
+      "keywords": [
+        "비품",
+        "소모품",
+        "주방",
+        "용기",
+        "포장"
+      ]
+    }
+  ]
+}

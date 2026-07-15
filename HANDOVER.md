@@ -2958,3 +2958,21 @@
 - 주의:
   - 계약 최종 서명 전 `집기·비품 목록`, `재고 실사표`, `거래처/리스/렌탈 현황표`, `임대인 동의서`, `본사 가맹승계 승인`은 별첨으로 확보해야 한다.
   - 커밋/푸시/배포는 수행하지 않았다.
+
+## 2026-07-16 05:49 KST - Yeoljeong employee flow and contract preview verification
+- 배경: CEO가 직원 회원가입 → 입사서류 등록 → 관리자 승인 → 계약서 작성/미리보기 → 급여내역서 흐름의 현재 구현과 보강 기획을 요청했다.
+- 확인:
+  - 대시보드 정적 앱 기준 계약서 화면에는 승인 직원 선택, 4대보험/3.3% 구분, 외국인 채용 여부, 근무조건, 임금조건, 보안/위생, 프리랜서 조항, 계약서 미리보기 카드가 구현돼 있다.
+  - 백엔드 OpenAPI에는 `/api/v1/yeoljeong-finance/employees/*`, `/onboarding/documents`, `/contracts`, `/contracts/signing`, `/payroll` 경로가 등록돼 있고, 비인증 호출은 401로 차단된다.
+  - `fb.newtalk.kr`가 `/static/apps/yeoljeong-finance/index.html`로 리다이렉트되지만 백엔드 정적 파일이 없어 404가 발생하던 상태를 확인했다.
+- 조치:
+  - `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`을 `app/static/apps/yeoljeong-finance/index.html`에 동기화했다.
+  - 동일 파일을 `aads-server`, `aads-server-green` 컨테이너의 `/app/app/static/apps/yeoljeong-finance/index.html`에 동기화했다.
+- 검증:
+  - `curl -L https://fb.newtalk.kr/` 결과 `200 text/html`.
+  - `curl https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 결과 `200 text/html`.
+  - active/green 컨테이너 정적 파일 해시 모두 `042d2adcd1883c6f4d47458c9ed5599f3b5098ddc6fdcdb7c5cad9c1755c6a92`.
+  - `curl http://127.0.0.1:8100/api/v1/health` 결과 `status=ok`.
+- 남은 상태:
+  - `HANDOVER.md`는 Git index 기준 기존 병합 충돌 상태가 남아 있어 별도 정리 필요.
+  - 커밋/푸시는 수행하지 않았다.

@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>열정국밥 매장비서 재무·회계관리</title>
+  <style>
+    :root {
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --line: #dfe3e6;
+      --text: #172026;
+      --muted: #65727c;
+      --accent: #0f766e;
+      --accent-soft: #d9f4ef;
+      --danger: #b42318;
+      --warn: #9a5b00;
+      --ready: #146c43;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+    header {
+      background: #152126;
+      color: #fff;
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 22px; font-weight: 750; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    main { max-width: 1440px; margin: 0 auto; padding: 20px; }
+    .tabs, .segment {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    button, .button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font-weight: 650;
+      text-decoration: none;
+      font-size: 14px;
+      line-height: 1.2;
+    }
+    button.active, button.primary, .button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .grid { display: grid; gap: 14px; }
+    .grid.stats { grid-template-columns: repeat(4, minmax(160px, 1fr)); }
+    .grid.two { grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .stat .label { color: var(--muted); font-size: 13px; }
+    .stat .value { margin-top: 6px; font-size: 24px; font-weight: 800; }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin: 14px 0;
+    }
+    input, select {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 10px;
+      min-height: 38px;
+      background: #fff;
+      color: var(--text);
+    }
+    input[type="file"] { max-width: 360px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    th { background: #eef2f3; color: #263238; font-weight: 750; }
+    .muted { color: var(--muted); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #eef2f3;
+      color: #263238;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .badge.ready { background: #dff4e8; color: var(--ready); }
+    .badge.review { background: #fff4dd; color: var(--warn); }
+    .notice {
+      margin: 12px 0;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #b8dad5;
+      background: var(--accent-soft);
+      color: #16443f;
+      font-size: 14px;
+    }
+    .error { border-color: #f3b8b2; background: #fff1ef; color: var(--danger); }
+    .hidden { display: none; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .form-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
+    .full { grid-column: 1 / -1; }
+    @media (max-width: 900px) {
+      main { padding: 14px; }
+      .grid.stats, .grid.two, .form-grid { grid-template-columns: 1fr; }
+      header { padding: 16px; }
+      h1 { font-size: 19px; }
+      .table-wrap { overflow-x: auto; }
+      table { min-width: 980px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>열정국밥 매장비서 재무·회계관리</h1>
+      <div class="muted" style="color:#b9c5cb;margin-top:4px;">P0 원장 구조 + P1 은행·카드 업로드 자동분류 적용 화면</div>
+    </div>
+    <div class="tabs" aria-label="주요 메뉴">
+      <button class="active" data-page="dashboard">대시보드</button>
+      <button data-page="import">자료수집</button>
+      <button data-page="ledger">통합원장</button>
+      <button data-page="manual">수기입력</button>
+      <button data-page="settings">자동화설정</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="message" class="notice hidden"></div>
+
+    <section id="dashboard" class="page active">
+      <div class="grid stats">
+        <div class="panel stat"><div class="label">원장 건수</div><div class="value" id="stat-count">0건</div></div>
+        <div class="panel stat"><div class="label">입금 합계</div><div class="value" id="stat-income">0원</div></div>
+        <div class="panel stat"><div class="label">출금 합계</div><div class="value" id="stat-expense">0원</div></div>
+        <div class="panel stat"><div class="label">검토 필요</div><div class="value" id="stat-review">0건</div></div>
+      </div>
+      <div class="grid two" style="margin-top:14px;">
+        <div class="panel">
+          <h2>자동화 적용 현황</h2>
+          <div id="automation-list" class="grid"></div>
+        </div>
+        <div class="panel">
+          <h2>최근 업로드</h2>
+          <div class="table-wrap"><table><thead><tr><th>파일</th><th>구분</th><th>반영</th><th>중복</th><th>검토</th></tr></thead><tbody id="imports-body"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="import" class="page">
+      <div class="panel">
+        <h2>은행·카드 파일 업로드 자동분류</h2>
+        <div class="toolbar">
+          <select id="source-type">
+            <option value="auto">자동 판별</option>
+            <option value="bank">은행 입출금</option>
+            <option value="card">카드사용 내역</option>
+            <option value="other">기타 자료</option>
+          </select>
+          <input id="upload-file" type="file" accept=".csv,.xlsx">
+          <button class="primary" id="upload-button">업로드 반영</button>
+          <a class="button" href="/api/v1/yeoljeong-finance/export">엑셀 다운로드</a>
+        </div>
+        <p class="muted">지원 컬럼: 거래일시/거래일자, 입금액, 출금액, 금액, 상품명, 가맹점명, 승인번호, 주문번호, 계좌명, 카드종류 등. CSV는 UTF-8/CP949를 자동 처리합니다.</p>
+        <div id="import-result" class="notice hidden"></div>
+      </div>
+    </section>
+
+    <section id="ledger" class="page">
+      <div class="panel">
+        <div class="toolbar">
+          <h2 style="margin-right:auto;">통합 재무 원장</h2>
+          <select id="filter-source">
+            <option value="">전체</option>
+            <option value="bank">은행</option>
+            <option value="card">카드</option>
+            <option value="manual">수기</option>
+            <option value="other">기타</option>
+          </select>
+          <select id="filter-status">
+            <option value="">전체 상태</option>
+            <option value="ready">분류완료</option>
+            <option value="needs_review">검토필요</option>
+          </select>
+          <button id="reload-button">새로고침</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>일시</th><th>구분</th><th>입출금</th><th>금액</th><th>내용</th><th>거래처</th><th>분류</th><th>상태</th></tr></thead>
+            <tbody id="ledger-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="manual" class="page">
+      <div class="panel">
+        <h2>기타 입력사항 수기 원장 등록</h2>
+        <div class="form-grid">
+          <select id="manual-source"><option value="manual">수기</option><option value="bank">은행</option><option value="card">카드</option><option value="other">기타</option></select>
+          <input id="manual-date" placeholder="거래일시 예: 2026-07-14 12:00:00">
+          <select id="manual-direction"><option value="expense">출금/비용</option><option value="income">입금/매출</option></select>
+          <input id="manual-amount" type="number" min="0" placeholder="금액">
+          <input id="manual-desc" class="full" placeholder="내용/상품명/적요">
+          <input id="manual-counterparty" placeholder="거래처">
+          <input id="manual-category" placeholder="계정/분류">
+          <input id="manual-tax" placeholder="세무구분 taxable/tax_free">
+          <input id="manual-memo" placeholder="메모">
+        </div>
+        <div class="toolbar"><button class="primary" id="manual-save">원장 등록</button></div>
+      </div>
+    </section>
+
+    <section id="settings" class="page">
+      <div class="grid two">
+        <div class="panel">
+          <h2>외부 자동화 확장 로드맵</h2>
+          <table><thead><tr><th>자료</th><th>현재</th><th>다음 연결</th></tr></thead><tbody id="settings-sources"></tbody></table>
+        </div>
+        <div class="panel">
+          <h2>자동분류 규칙</h2>
+          <table><thead><tr><th>분류</th><th>키워드</th></tr></thead><tbody id="rules-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API = "/api/v1/yeoljeong-finance";
+    const state = { rows: [], summary: {}, settings: {}, imports: [] };
+    const token = localStorage.getItem("aads_token") || localStorage.getItem("token") || localStorage.getItem("authToken") || "";
+
+    function headers(extra = {}) {
+      return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+    }
+    function won(value) {
+      return `${Number(value || 0).toLocaleString("ko-KR")}원`;
+    }
+    function show(message, isError = false) {
+      const el = document.getElementById("message");
+      el.textContent = message;
+      el.className = `notice ${isError ? "error" : ""}`;
+    }
+    async function api(path, options = {}) {
+      const response = await fetch(`${API}${path}`, { ...options, headers: headers(options.headers || {}) });
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(response.status === 401 ? "로그인 세션이 필요합니다." : detail);
+      }
+      return response.json();
+    }
+    async function loadAll() {
+      try {
+        const [automation, ledger] = await Promise.all([api("/automation"), api("/ledger")]);
+        state.summary = ledger.summary;
+        state.rows = ledger.rows;
+        state.settings = automation.settings;
+        state.imports = automation.imports || [];
+        render();
+        document.getElementById("message").className = "notice hidden";
+      } catch (error) {
+        show(error.message, true);
+      }
+    }
+    function render() {
+      document.getElementById("stat-count").textContent = `${state.summary.count || 0}건`;
+      document.getElementById("stat-income").textContent = won(state.summary.income_total);
+      document.getElementById("stat-expense").textContent = won(state.summary.expense_total);
+      document.getElementById("stat-review").textContent = `${state.summary.needs_review || 0}건`;
+      renderAutomation();
+      renderImports();
+      renderLedger();
+      renderSettings();
+    }
+    function renderAutomation() {
+      const html = (state.settings.automation_sources || []).map(item => `
+        <div class="panel" style="padding:12px;background:#fbfcfc;">
+          <h3>${item.name} <span class="badge ready">${item.status}</span></h3>
+          <div class="muted">${item.method}</div>
+          <div style="margin-top:6px;">${item.next_step}</div>
+        </div>`).join("");
+      document.getElementById("automation-list").innerHTML = html || "<p class='muted'>설정 없음</p>";
+    }
+    function renderImports() {
+      document.getElementById("imports-body").innerHTML = (state.imports || []).map(row => `
+        <tr><td>${row.filename}</td><td>${row.source_type}</td><td>${row.imported_rows}</td><td>${row.duplicate_rows}</td><td>${row.needs_review}</td></tr>
+      `).join("") || "<tr><td colspan='5' class='muted'>업로드 이력 없음</td></tr>";
+    }
+    function renderLedger() {
+      const source = document.getElementById("filter-source").value;
+      const status = document.getElementById("filter-status").value;
+      const rows = state.rows.filter(row => (!source || row.source_type === source) && (!status || row.status === status));
+      document.getElementById("ledger-body").innerHTML = rows.map(row => `
+        <tr>
+          <td>${row.transaction_date || ""}</td>
+          <td>${row.source_type || ""}</td>
+          <td>${row.direction === "income" ? "입금" : "출금"}</td>
+          <td>${won(row.amount)}</td>
+          <td>${row.description || ""}</td>
+          <td>${row.counterparty || ""}</td>
+          <td>${row.category || "미분류"}</td>
+          <td><span class="badge ${row.status === "ready" ? "ready" : "review"}">${row.status === "ready" ? "완료" : "검토"}</span></td>
+        </tr>
+      `).join("") || "<tr><td colspan='8' class='muted'>원장 데이터 없음</td></tr>";
+    }
+    function renderSettings() {
+      document.getElementById("settings-sources").innerHTML = (state.settings.automation_sources || []).map(row => `
+        <tr><td>${row.name}</td><td>${row.method}</td><td>${row.next_step}</td></tr>
+      `).join("");
+      document.getElementById("rules-body").innerHTML = (state.settings.category_rules || []).map(row => `
+        <tr><td>${row.category}</td><td>${(row.keywords || []).join(", ")}</td></tr>
+      `).join("");
+    }
+    document.querySelectorAll("[data-page]").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-page]").forEach(item => item.classList.remove("active"));
+        document.querySelectorAll(".page").forEach(page => page.classList.remove("active"));
+        button.classList.add("active");
+        document.getElementById(button.dataset.page).classList.add("active");
+      });
+    });
+    document.getElementById("upload-button").addEventListener("click", async () => {
+      const input = document.getElementById("upload-file");
+      if (!input.files.length) return show("업로드할 CSV/XLSX 파일을 선택하세요.", true);
+      const form = new FormData();
+      form.append("file", input.files[0]);
+      try {
+        const source = document.getElementById("source-type").value;
+        const result = await api(`/imports?source_type=${encodeURIComponent(source)}`, { method: "POST", body: form });
+        document.getElementById("import-result").className = "notice";
+        document.getElementById("import-result").textContent = `반영 ${result.import.imported_rows}건, 중복 ${result.import.duplicate_rows}건, 검토 ${result.import.needs_review}건`;
+        await loadAll();
+      } catch (error) {
+        show(error.message, true);
+      }
+    });
+    document.getElementById("manual-save").addEventListener("click", async () => {
+      const payload = {
+        source_type: document.getElementById("manual-source").value,
+        transaction_date: document.getElementById("manual-date").value,
+        direction: document.getElementById("manual-direction").value,
+        amount: Number(document.getElementById("manual-amount").value || 0),
+        description: document.getElementById("manual-desc").value,
+        counterparty: document.getElementById("manual-counterparty").value,
+        category: document.getElementById("manual-category").value,
+        tax_type: document.getElementById("manual-tax").value,
+        memo: document.getElementById("manual-memo").value
+      };
+      try {
+        await api("/ledger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        show("수기 원장 1건을 등록했습니다.");
+        await loadAll();
+      } catch (error) {
+        show(error.message, true);
+      }
+    });
+    document.getElementById("reload-button").addEventListener("click", loadAll);
+    document.getElementById("filter-source").addEventListener("change", renderLedger);
+    document.getElementById("filter-status").addEventListener("change", renderLedger);
+    loadAll();
+  </script>
+</body>
+</html>
