@@ -3443,3 +3443,36 @@
 - 완료 판정:
   - 매장비서 개발환경 언어 보고, 기술문서 HTML 저장, 아키텍처·디자인 기획 HTML 저장, 관리자 총괄 링크 연결은 파일/URL 기준 완료.
   - 커밋/푸시/정식 `deploy.sh`/대시보드 번들 재빌드·재시작은 수행하지 않았다.
+
+## 2026-07-16 11:38 KST - Yeoljeong store assistant final completion verification
+- 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger` 조건을 충족하지 못했다고 재지적해, 문서/커밋/공개 URL/DB/문법 상태를 다시 실측했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:38:05 KST`.
+- 커밋/원격 상태:
+  - 현재 HEAD: `ec8bdc9a docs: verify yeoljeong store assistant closeout`.
+  - `main...origin/main [ahead 4]`: 로컬 커밋은 4개 앞서 있으나 원격 push는 수행하지 않았다.
+  - HEAD 커밋 포함 파일: `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`.
+  - 문서/DB전환/모듈화 본문 커밋: `7c481fd4 docs: document yeoljeong store assistant architecture`.
+- 공개 URL 재검증:
+  - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`: HTTP 200.
+  - `curl -A 'Mozilla/5.0'` 본문 마커 검증: 앱/문서/기술/디자인/DB전환 5개 모두 `ok`.
+- 코드/문법 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - HTML parser: 매장비서 앱 HTML 및 `20260716_yeoljeong_store_assistant*.html` 6개 통과.
+  - `node --check /tmp/yeoljeong-finance-inline.js`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -q`: 실패. 사유는 호스트에 `pytest` 모듈 미설치.
+- DB 상태:
+  - PostgreSQL 실제 테이블: `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`.
+  - 실측 건수: businesses 3, branches 3, settings 1.
+  - HR/계약/급여 전체 원장은 아직 PostgreSQL 이관 완료가 아니며 JSON 파일 저장소를 계속 사용한다.
+- 워킹트리 제한:
+  - 현재 미커밋 변경/미추적 파일이 남아 있다: `.active_container`, `.active_port`, `app/data/yeoljeong_finance/*.json`, `uploads/`, 일부 dashboard/nginx/script 변경.
+  - 위 변경에는 운영 데이터/다른 세션 변경이 포함되어 있어 이 작업에서 되돌리거나 일괄 커밋하지 않았다.
+- 완료 판정:
+  - 매장비서 개발환경 언어 보고, HTML 기술문서 저장, 아키텍처·디자인 기획문서 저장, DB전환 설계문서 저장, 관리자 총괄 링크, 1차 모듈 파일 분리는 파일/URL/커밋 기준 완료.
+  - 원격 push, 정식 deploy, 대시보드 재빌드, HR/계약/급여 전체 DB 이관, 단일 HTML 전체 모듈화는 아직 미완료다.

@@ -3673,3 +3673,6 @@ from __
 
 ## [2026-07-16 11:31:21 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: CEO의 `document_report_unverified_by_ledger` 재지적에 따라 매장비서 문서/기획/DB전환 링크, 공개 URL 9개, HTML/JS/Python 문법검사, git 커밋·푸시 제한 사유를 최종 완료보고용 ledger에 추가 기록.
+
+## [2026-07-16 11:38:05 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: 매장비서 개발환경/기술문서/아키텍처·디자인/DB전환/관리자 링크 작업에 대해 공개 URL 5개, 본문 마커, Python/JS/HTML 문법, PostgreSQL 테이블/건수, git ahead 상태, 미완료 push/deploy/DB 이관 범위를 최종 완료보고용 ledger에 재기록.
