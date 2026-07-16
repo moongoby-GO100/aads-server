@@ -3016,7 +3016,6 @@ async def get_memory_context(
     result = await svc.get_memory_context_info(
         str(session_id),
         tenant_id=_tenant_id(context),
-        user_id=_user_id(context),
     )
     if not result or "error" in result:
         raise _NOT_FOUND("session or memory context")
