@@ -1,5 +1,33 @@
 # AADS HANDOVER
 
+## 2026-07-16 11:31 KST - Yeoljeong store assistant documentation final closeout verification
+- 배경: CEO가 이전 응답이 최종 완료보고 조건과 `document_report_unverified_by_ledger`를 만족하지 못했다고 지적해, 매장비서 개발환경/기술문서/기획문서/관리자 링크 작업을 다시 실측하고 완료 상태를 확정했다.
+- 조치:
+  - 매장비서 관리자 앱 상단의 `문서`, `기획`, `DB전환` 링크가 원본 HTML과 대시보드 공개 복사본 2개에 모두 존재함을 확인했다.
+  - 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB 전환 설계서가 `fb.newtalk.kr/static/reports`와 `aads.newtalk.kr/public/reports` 양쪽에서 열리는지 확인했다.
+  - 앱 원본과 대시보드 public/static 복사본, 대시보드 public/apps 복사본, `app-config.js` 복사본의 동기화 상태를 확인했다.
+  - 커밋 상태를 확인한 결과 `origin/main` 대비 미푸시 커밋은 `7c481fd4 docs: document yeoljeong store assistant architecture`, `a8618074 docs: record yeoljeong store assistant follow-up`, `68f1a3c5 fix: stabilize chat completion and auth recovery` 3건이다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:31:21 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - `node --check /root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - 앱 inline script `node --check /tmp/yeoljeong-finance-inline-final.js` 통과.
+  - HTML parser 검증: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처 기획서, DB 전환 설계서 모두 통과.
+  - 공개 URL HTTP 200 확인:
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+- 제한:
+  - `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py`는 현재 호스트에 `pytest` 모듈이 없어 실행 불가였다.
+  - `git push`는 수행하지 않았다. 현재 브랜치에는 매장비서 문서화 2커밋 외 채팅 안정화 커밋 1건이 함께 앞서 있어, 전체 push 시 요청 범위 밖 변경이 같이 배포된다.
+  - 워킹트리에는 운영 데이터 JSON, nginx 설정, dashboard changelog, 임시 스크립트 등 기존 변경이 남아 있어 이번 완료보고에서는 건드리지 않았다.
+
 ## 2026-07-16 11:29 KST - AADS chat stability P0/P1/P2 follow-up
 - 배경: CEO가 채팅창 잔여 개선 우선순위 `todo_completion_gate_missing`, 보조 API 401 오판, interrupted 원인 분류/자동복구, 대시보드 Git 관리, `page.tsx` 분리를 우선순위순 즉시 조치하라고 지시했다.
 - 조치:
