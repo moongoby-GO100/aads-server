@@ -214,6 +214,16 @@ async def list_accounts(current_user: dict = Depends(get_current_user)) -> dict[
     return {"accounts": svc.list_accounts(current_user)}
 
 
+@router.get("/settings")
+async def get_settings(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc.get_settings_persisted(current_user)
+
+
+@router.put("/settings")
+async def save_settings(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc.save_settings_persisted(payload.model_dump(), current_user)
+
+
 @router.post("/accounts")
 async def upsert_account(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     account = svc.upsert_account(payload.model_dump(), current_user)

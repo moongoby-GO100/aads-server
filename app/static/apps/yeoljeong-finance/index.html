@@ -57,6 +57,23 @@
     button.danger { color: var(--red); }
     button.share { color: #3b1e1e; border-color: #f5d84f; background: #fee500; }
     button.icon { width: 38px; padding: 0; }
+    .doc-link {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-weight: 800;
+      font-size: 13px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .doc-link:hover { border-color: #9fb0b8; }
     button:disabled {
       cursor: not-allowed;
       opacity: .52;
@@ -897,6 +914,9 @@
           </div>
         </div>
         <div class="top-actions">
+          <a class="doc-link app-only hidden" data-doc-key="index" href="/static/reports/20260716_yeoljeong_store_assistant_docs_index.html" target="_blank" rel="noopener noreferrer">문서</a>
+          <a class="doc-link app-only hidden" data-doc-key="architecture" href="/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html" target="_blank" rel="noopener noreferrer">기획</a>
+          <a class="doc-link app-only hidden" data-doc-key="dbTransition" href="/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html" target="_blank" rel="noopener noreferrer">DB전환</a>
           <button id="sampleBtn" class="app-only hidden" title="샘플 데이터 다시 불러오기">샘플</button>
           <button id="importBtn" class="app-only hidden" title="CSV 또는 JSON 파일 가져오기">가져오기</button>
           <button id="exportBtn" class="app-only hidden" title="현재 데이터를 JSON으로 저장">내보내기</button>
@@ -937,7 +957,7 @@
             </div>
             <div>
               <strong>사업자/지점</strong>
-              <span>개인사업자 2개와 법인사업자 1개를 분리 설정</span>
+              <span>열정국밥 중화점, 성신여대점, 미아점 3개 사업자를 분리 설정</span>
             </div>
           </div>
         </div>
@@ -1581,7 +1601,7 @@
                   <textarea name="confidentialityTerms" placeholder="고객정보, 매출자료, 레시피, 위생수칙, 보건증 유지 등"></textarea>
                 </label>
                 <label>사용자 상호
-                  <input name="employerName" placeholder="예: 열정국밥 법인">
+                  <input name="employerName" placeholder="예: 열정국밥 중화점">
                 </label>
                 <label>사업자등록번호
                   <input name="employerRegistrationNo" placeholder="예: 000-00-00000">
@@ -2113,6 +2133,7 @@
     </section>
   </div>
 
+  <script src="/static/apps/yeoljeong-finance/modules/app-config.js"></script>
   <script>
     const STORE_KEY = "yeoljeong-finance-v1";
     const AUTH_USER_KEY = "yeoljeong-finance-auth-user";
@@ -2330,24 +2351,12 @@
           openedAt: "",
           address: "",
           memo: "개인사업자 3"
-        },
-        {
-          id: "biz-corp",
-          entityType: "corporation",
-          name: "열정국밥 법인",
-          registrationNo: "기초등록 필요",
-          representative: "미등록",
-          taxType: "일반과세",
-          openedAt: "",
-          address: "",
-          memo: "법인사업자"
         }
       ],
       branches: [
         { id: "branch-junghwa", name: "중화점", businessId: "biz-junghwa", status: "active", phone: "", address: "" },
         { id: "branch-sungshin", name: "성신여대점", businessId: "biz-sungshin", status: "active", phone: "", address: "" },
-        { id: "branch-gangbuk-mia", name: "열정국밥 강북미아점", businessId: "biz-mia", status: "active", phone: "", address: "" },
-        { id: "branch-common", name: "공통", businessId: "biz-corp", status: "active", phone: "", address: "" }
+        { id: "branch-gangbuk-mia", name: "열정국밥_미아점", businessId: "biz-mia", status: "active", phone: "", address: "" }
       ],
       accounts: [],
       staff: [],
@@ -2359,7 +2368,7 @@
           loginUrl: "https://biz-member.baemin.com/login",
           username: "mimi77",
           businessId: "biz-mia",
-          branch: "열정국밥 강북미아점",
+          branch: "열정국밥_미아점",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -2373,7 +2382,7 @@
           loginUrl: "https://store.coupangeats.com/merchant/login",
           username: "mimi77",
           businessId: "biz-mia",
-          branch: "열정국밥 강북미아점",
+          branch: "열정국밥_미아점",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -2387,7 +2396,7 @@
           loginUrl: "https://ceo.yogiyo.co.kr/login",
           username: "mimi77",
           businessId: "biz-mia",
-          branch: "열정국밥 강북미아점",
+          branch: "열정국밥_미아점",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -2401,7 +2410,7 @@
           loginUrl: "https://boss.ddangyo.com/",
           username: "mimi77",
           businessId: "biz-mia",
-          branch: "열정국밥 강북미아점",
+          branch: "열정국밥_미아점",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -2414,8 +2423,8 @@
           label: "메이트포스",
           loginUrl: "https://www.matetech.co.kr/login",
           username: "a8742102160",
-          businessId: "biz-corp",
-          branch: "공통",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
           passwordMasked: "********",
           collectionMode: "pos-export",
           status: "vault-ready",
@@ -2428,8 +2437,8 @@
           label: "마켓봄",
           loginUrl: "https://marketbom.com/",
           username: "01037680511",
-          businessId: "biz-corp",
-          branch: "공통",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -2524,9 +2533,27 @@
       return merged;
     }
 
+    const CANONICAL_BUSINESS_IDS = new Set(defaultSettings.businesses.map(item => item.id));
+    const CANONICAL_BRANCH_IDS = new Set(defaultSettings.branches.map(item => item.id));
+    const CANONICAL_BRANCH_NAMES = new Set(defaultSettings.branches.map(item => item.name));
     const MIA_BUSINESS_ID = "biz-mia";
-    const MIA_BRANCH_NAME = "열정국밥 강북미아점";
+    const MIA_BRANCH_NAME = "열정국밥_미아점";
     const MIA_DELIVERY_SERVICES = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+
+    function normalizeBusinessScope(next) {
+      next.businesses = next.businesses.filter(item => CANONICAL_BUSINESS_IDS.has(item.id));
+      next.branches = next.branches.filter(item => CANONICAL_BRANCH_IDS.has(item.id));
+      next.accounts.forEach(item => {
+        if (!CANONICAL_BUSINESS_IDS.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
+        if (item.branch && !CANONICAL_BRANCH_NAMES.has(item.branch)) item.branch = MIA_BRANCH_NAME;
+      });
+      next.integrations.forEach(item => {
+        if (!CANONICAL_BUSINESS_IDS.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
+        if (item.business_id && !CANONICAL_BUSINESS_IDS.has(item.business_id)) item.business_id = item.businessId;
+        if (item.branch && !CANONICAL_BRANCH_NAMES.has(item.branch)) item.branch = MIA_BRANCH_NAME;
+      });
+      return next;
+    }
 
     function normalizeMiaBusinessLinks(next) {
       const miaBranch = next.branches.find(item => item.id === "branch-gangbuk-mia");
@@ -2543,19 +2570,19 @@
 
     function mergeSettings(settings) {
       const base = structuredClone(defaultSettings);
-      if (!settings || typeof settings !== "object") return base;
+      if (!settings || typeof settings !== "object") return normalizeBusinessScope(base);
       const branches = mergeCollectionById(settings.branches, base.branches);
       const branchIds = new Set(branches.map(item => item.id));
       base.branches.forEach(item => {
         if (!branchIds.has(item.id)) branches.push(structuredClone(item));
       });
-      return normalizeMiaBusinessLinks({
+      return normalizeBusinessScope(normalizeMiaBusinessLinks({
         businesses: mergeCollectionById(settings.businesses, base.businesses),
         branches,
         accounts: mergeCollectionById(settings.accounts, base.accounts),
         staff: mergeCollectionById(settings.staff, base.staff),
         integrations: mergeCollectionById(settings.integrations, base.integrations)
-      });
+      }));
     }
 
     function saveState() {
@@ -2659,6 +2686,10 @@
       return hasServerAuth() && Boolean(authPermissions().can_manage_onboarding);
     }
 
+    function canManageSettings() {
+      return hasServerAuth() && Boolean(authPermissions().can_manage_settings || authPermissions().can_manage_automation);
+    }
+
     function isEmployeeExperience() {
       const permissions = authPermissions();
       const role = String(permissions.role || "").trim().toLowerCase();
@@ -2697,6 +2728,53 @@
 
     function visibleOnboardingDocuments() {
       return isEmployeeExperience() ? onboardingDocuments.filter(isCurrentEmployeeRecord) : onboardingDocuments;
+    }
+
+    function requiredOnboardingDocumentTypes() {
+      const types = Array.isArray(onboardingDocumentTypes) && onboardingDocumentTypes.length
+        ? onboardingDocumentTypes
+        : defaultOnboardingDocTypes;
+      return types.filter(item => item.requirement === "필수");
+    }
+
+    function mergeOnboardingMissingRows(documents, employees) {
+      const rows = Array.isArray(documents) ? documents.slice() : [];
+      const existingKeys = new Set(rows.map(row => {
+        const email = String(row.employee_email || row.employeeEmail || row.email || "").trim().toLowerCase();
+        const documentType = String(row.document_type || row.documentType || "").trim();
+        return `${email}::${documentType}`;
+      }));
+      const requiredTypes = requiredOnboardingDocumentTypes();
+      (Array.isArray(employees) ? employees : []).forEach(employee => {
+        const email = String(employee.email || employee.employee_email || employee.employeeEmail || "").trim().toLowerCase();
+        if (!email) return;
+        requiredTypes.forEach(meta => {
+          const documentType = meta.type;
+          const key = `${email}::${documentType}`;
+          if (existingKeys.has(key)) return;
+          existingKeys.add(key);
+          rows.push({
+            id: `missing-${employee.id || email}-${documentType}`,
+            employee_request_id: employee.id || "",
+            employee_name: employee.name || employee.employee_name || employee.employeeName || "",
+            employee_email: email,
+            employee_email_masked: employee.email_masked || employee.employee_email_masked || maskedEmail(email),
+            branch: employee.branch || "",
+            document_type: documentType,
+            document_label: meta.label,
+            requirement: meta.requirement,
+            status: "missing",
+            status_label: "작성 필요",
+            original_filename: "",
+            size_bytes: 0,
+            uploaded_at: "",
+            updated_at: employee.reviewed_at || employee.updated_at || employee.requested_at || "",
+            is_placeholder: true,
+            missing_document: true
+          });
+        });
+      });
+      return rows;
     }
 
     function visibleContracts() {
@@ -3153,16 +3231,18 @@
       }
       els.employeeDocumentReviewRows.innerHTML = docs.slice(0, 8).map(doc => {
         const status = doc.status || "uploaded";
-        const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : (status === "needs_fix" ? "warn" : "info"));
+        const isMissing = Boolean(doc.missing_document || doc.is_placeholder || status === "missing");
+        const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : (status === "needs_fix" || isMissing ? "warn" : "info"));
+        const statusLabel = isMissing ? "작성 필요" : status;
         const canReview = canManageOnboarding();
         return `
           <tr>
             <td>${escapeHtml(doc.employee_name || "-")}<br><span class="muted">${escapeHtml(doc.employee_email_masked || doc.employee_email || "")}</span></td>
             <td>${escapeHtml(doc.document_label || onboardingDocTypeLabels[doc.document_type] || doc.document_type)}<br><span class="muted">${escapeHtml(doc.original_filename || "")}</span></td>
-            <td><span class="badge ${statusClass}">${escapeHtml(status)}</span></td>
+            <td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span></td>
             <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
-              <button data-download-onboarding="${escapeHtml(doc.id)}">열기</button>
-              ${canReview ? `<button data-review-doc="${escapeHtml(doc.id)}" data-review-status="approved">승인</button><button data-review-doc="${escapeHtml(doc.id)}" data-review-status="needs_fix">보완</button>` : ""}
+              ${isMissing ? `<span class="muted">업로드 대기</span>` : `<button data-download-onboarding="${escapeHtml(doc.id)}">열기</button>`}
+              ${canReview && !isMissing ? `<button data-review-doc="${escapeHtml(doc.id)}" data-review-status="approved">승인</button><button data-review-doc="${escapeHtml(doc.id)}" data-review-status="needs_fix">보완</button>` : ""}
             </td>
           </tr>`;
       }).join("");
@@ -3176,25 +3256,28 @@
         els.onboardingRows.innerHTML = `<tr><td colspan="7"><div class="empty">회원가입 또는 로그인 후 입사서류를 업로드할 수 있습니다.</div></td></tr>`;
         return;
       }
+      const missingCount = docs.filter(item => item.missing_document || item.is_placeholder || item.status === "missing").length;
+      const uploadedCount = docs.length - missingCount;
       const requiredCount = docs.filter(item => item.requirement === "필수").length;
-      els.onboardingSummary.textContent = `서류 ${docs.length}건 / 필수 ${requiredCount}건`;
-      els.onboardingSummary.className = docs.length ? "badge good" : "badge warn";
+      els.onboardingSummary.textContent = `업로드 ${uploadedCount}건 / 작성필요 ${missingCount}건 / 필수 ${requiredCount}건`;
+      els.onboardingSummary.className = missingCount ? "badge warn" : (uploadedCount ? "badge good" : "badge warn");
       els.onboardingRows.innerHTML = docs.length ? docs.map(doc => {
-        const uploadedAt = String(doc.uploaded_at || "").slice(0, 10) || "-";
-        const sizeKb = Math.max(1, Math.round((Number(doc.size_bytes) || 0) / 1024));
         const status = doc.status || "uploaded";
-        const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : (status === "needs_fix" ? "warn" : "info"));
+        const isMissing = Boolean(doc.missing_document || doc.is_placeholder || status === "missing");
+        const uploadedAt = isMissing ? "미제출" : (String(doc.uploaded_at || "").slice(0, 10) || "-");
+        const sizeKb = Math.max(1, Math.round((Number(doc.size_bytes) || 0) / 1024));
+        const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : (status === "needs_fix" || isMissing ? "warn" : "info"));
+        const statusLabel = isMissing ? "작성 필요" : status;
         return `
           <tr>
             <td>${escapeHtml(uploadedAt)}</td>
             <td>${escapeHtml(doc.employee_name || "-")}<br><span class="muted">${escapeHtml(doc.employee_email_masked || doc.employee_email || "")}</span></td>
             <td>${escapeHtml(doc.branch || "-")}</td>
             <td>${escapeHtml(doc.document_label || onboardingDocTypeLabels[doc.document_type] || doc.document_type)}<br><span class="badge ${doc.requirement === "필수" ? "good" : "info"}">${escapeHtml(doc.requirement || "선택")}</span></td>
-            <td>${escapeHtml(doc.original_filename || "-")}<br><span class="muted">${sizeKb.toLocaleString("ko-KR")}KB</span></td>
-            <td><span class="badge ${statusClass}">${escapeHtml(status)}</span>${doc.review_memo ? `<br><span class="muted">${escapeHtml(doc.review_memo)}</span>` : ""}</td>
+            <td>${isMissing ? `<span class="muted">업로드 필요</span>` : `${escapeHtml(doc.original_filename || "-")}<br><span class="muted">${sizeKb.toLocaleString("ko-KR")}KB</span>`}</td>
+            <td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span>${doc.review_memo ? `<br><span class="muted">${escapeHtml(doc.review_memo)}</span>` : ""}</td>
             <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
-              <button data-download-onboarding="${escapeHtml(doc.id)}">열기</button>
-              <button class="icon danger" data-delete-onboarding="${escapeHtml(doc.id)}" title="삭제">-</button>
+              ${isMissing ? `<span class="muted">서류 업로드 대기</span>` : `<button data-download-onboarding="${escapeHtml(doc.id)}">열기</button><button class="icon danger" data-delete-onboarding="${escapeHtml(doc.id)}" title="삭제">-</button>`}
             </td>
           </tr>`;
       }).join("") : `<tr><td colspan="7"><div class="empty">아직 업로드된 입사서류가 없습니다.</div></td></tr>`;
@@ -3986,6 +4069,14 @@
       })[char]);
     }
 
+    function maskedEmail(email) {
+      const normalized = String(email || "").trim().toLowerCase();
+      if (!normalized.includes("@")) return normalized;
+      const [local, domain] = normalized.split("@");
+      const head = local.length <= 2 ? local.slice(0, 1) : local.slice(0, 2);
+      return `${head}${"*".repeat(Math.max(1, local.length - head.length))}@${domain}`;
+    }
+
     function parseCsv(text) {
       const rows = [];
       let row = [];
@@ -4140,6 +4231,42 @@
       return token ? { Authorization: `Bearer ${token}` } : {};
     }
 
+    function hasMeaningfulSettings(payload) {
+      return Boolean(payload && typeof payload === "object" && (
+        Array.isArray(payload.businesses) ||
+        Array.isArray(payload.branches) ||
+        Array.isArray(payload.accounts) ||
+        Array.isArray(payload.staff) ||
+        Array.isArray(payload.integrations)
+      ));
+    }
+
+    async function loadServerSettings() {
+      if (!hasServerAuth()) return null;
+      const payload = await financeApi("/settings");
+      if (hasMeaningfulSettings(payload.settings)) {
+        state.settings = mergeSettings(payload.settings);
+        saveState();
+        initSelects();
+        renderAll();
+      }
+      return payload;
+    }
+
+    async function persistSettingsToServer() {
+      if (!hasServerAuth() || !canManageSettings()) return null;
+      return financeApi("/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settings: settings() })
+      });
+    }
+
+    function syncSettingsToServer() {
+      persistSettingsToServer().catch(err => {
+        showToast(`서버 기초설정 저장 실패: ${err.message}`);
+      });
+    }
+
     async function loadOnboardingDocumentTypes() {
       if (!hasServerAuth()) return;
       const payload = await financeApi("/onboarding/document-types");
@@ -4156,7 +4283,25 @@
         return;
       }
       const payload = await financeApi("/onboarding/documents");
-      onboardingDocuments = payload.documents || [];
+      let documents = payload.documents || [];
+      if (canManageOnboarding()) {
+        try {
+          const employeesPayload = await financeApi("/employees/approved");
+          approvedEmployees = employeesPayload.employees || [];
+          refreshApprovedEmployeeSelects();
+        } catch (error) {
+          console.warn("승인 직원 조회 실패", error);
+        }
+        documents = mergeOnboardingMissingRows(documents, approvedEmployees);
+      } else if (isEmployeeExperience()) {
+        documents = mergeOnboardingMissingRows(documents, [{
+          id: authPermissions().employee_request_id || currentEmployeeEmail(),
+          name: currentEmployeeName(),
+          email: currentEmployeeEmail(),
+          branch: authPermissions().branch || ""
+        }]);
+      }
+      onboardingDocuments = documents;
       renderOnboarding();
       renderEmployees();
     }
@@ -4539,15 +4684,17 @@
       localStorage.setItem("aads_token", payload.token);
       document.cookie = `aads_token=${payload.token}; path=/; max-age=604800; SameSite=Lax`;
       saveAuthSession(sessionFromAuthPayload(payload));
-      await refreshFinanceSession();
       els.loginModal.classList.add("hidden");
       els.loginForm.reset();
       els.gateLoginForm.reset();
-      if (pendingPhoneInviteToken) {
-        await acceptPendingPhoneInvite(email);
-      }
       setView(defaultView());
+      renderAuthState();
+      refreshFinanceSessionInBackground();
       showToast("로그인되었습니다.");
+      if (pendingPhoneInviteToken) {
+        acceptPendingPhoneInvite(email).catch(err => showToast(`초대 처리 실패: ${err.message}`));
+      }
+      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
       if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       loadOnboardingDocumentTypes().catch(() => {});
       loadOnboardingDocuments().catch(() => {});
@@ -4608,6 +4755,7 @@
 	      els.signupForm.organizationName.value = "열정국밥 운영관리";
 	      els.gateSignupForm.reset();
 	      els.gateSignupForm.organizationName.value = "열정국밥 운영관리";
+	      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
 	      if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       loadOnboardingDocumentTypes().catch(() => {});
       loadOnboardingDocuments().catch(() => {});
@@ -4684,6 +4832,12 @@
       }
     }
 
+    function refreshFinanceSessionInBackground() {
+      refreshFinanceSession()
+        .then(() => renderAuthState())
+        .catch(() => renderAuthState());
+    }
+
     function renderAuthState() {
       if (!els.authState) return;
       const permissions = authPermissions();
@@ -4752,6 +4906,7 @@
         else list.push(next);
       });
       saveState();
+      syncSettingsToServer();
       renderAll();
     }
 
@@ -5182,6 +5337,7 @@
         setSelectedSettingsBusinessId(next.id);
         delete els.businessForm.dataset.editId;
         saveState();
+        syncSettingsToServer();
         els.businessForm.reset();
         initSelects();
         renderAll();
@@ -5221,6 +5377,7 @@
         }
         delete els.branchForm.dataset.editId;
         saveState();
+        syncSettingsToServer();
         els.branchForm.reset();
         initSelects();
         renderAll();
@@ -5238,6 +5395,7 @@
           businessId: data.businessId
         });
         saveState();
+        syncSettingsToServer();
         els.accountForm.reset();
         initSelects();
         renderAll();
@@ -5255,6 +5413,7 @@
           employmentType: data.employmentType
         });
         saveState();
+        syncSettingsToServer();
         els.staffMasterForm.reset();
         setDefaults();
         initSelects();
@@ -5309,6 +5468,7 @@
           memo: data.memo.trim()
         });
         saveState();
+        syncSettingsToServer();
         els.integrationForm.reset();
         renderAll();
         showToast("외부계정 연결 정보를 저장했습니다.");
@@ -5551,6 +5711,7 @@
           state.settings.staff = settings().staff.filter(item => !branchNames.includes(item.branch));
           setSelectedSettingsBusinessId(state.settings.businesses[0]?.id || "");
           saveState();
+          syncSettingsToServer();
           initSelects();
           renderAll();
           showToast("사업자 기초정보를 삭제했습니다.");
@@ -5560,6 +5721,7 @@
           state.settings.branches = settings().branches.filter(item => item.id !== branchId);
           state.settings.staff = settings().staff.filter(item => item.branch !== branch?.name);
           saveState();
+          syncSettingsToServer();
           initSelects();
           renderAll();
           showToast("지점 기초정보를 삭제했습니다.");
@@ -5567,18 +5729,21 @@
         if (accountId) {
           state.settings.accounts = settings().accounts.filter(item => item.id !== accountId);
           saveState();
+          syncSettingsToServer();
           renderAll();
           showToast("계좌를 삭제했습니다.");
         }
         if (staffId) {
           state.settings.staff = settings().staff.filter(item => item.id !== staffId);
           saveState();
+          syncSettingsToServer();
           renderAll();
           showToast("직원 기본정보를 삭제했습니다.");
         }
         if (integrationId) {
           state.settings.integrations = settings().integrations.filter(item => item.id !== integrationId);
           saveState();
+          syncSettingsToServer();
           renderAll();
           showToast("외부계정 연결 정보를 삭제했습니다.");
         }
@@ -5647,7 +5812,9 @@
       renderAll();
       readInviteTokenFromUrl();
       handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
-      await refreshFinanceSession();
+      renderAuthState();
+      refreshFinanceSessionInBackground();
+      if (hasServerAuth()) loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
       if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       if (hasServerAuth()) loadDeliverySettlements().catch(() => {});
       if (canManageOnboarding()) loadEmployeeInvites().catch(() => {});
@@ -5657,7 +5824,6 @@
         loadEmployeeJoinRequests().catch(() => {});
         loadEmployeeContracts().catch(() => {});
       }
-      renderAuthState();
     }
 
     init();

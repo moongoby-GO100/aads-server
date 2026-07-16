@@ -61,3 +61,224 @@ def test_env_data_dir_does_not_leak(tmp_path, monkeypatch):
     service.create_transaction({"transaction_date": "2026-07-14", "amount": 1, "description": "테스트"})
 
     assert os.path.exists(tmp_path / "transactions.json")
+
+
+def test_save_settings_persists_ui_settings_without_overwriting_automation_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"store_name": "열정국밥", "category_rules": [{"category": "식자재"}]}', encoding="utf-8")
+
+    user = {"email": "owner@example.com", "is_admin": True}
+    payload = {
+        "settings": {
+            "businesses": [{"id": "biz-junghwa", "name": "오입력", "registrationNo": "123-45-67890"}],
+            "branches": [{"id": "branch-common", "name": "공통", "businessId": "biz-corp"}],
+            "accounts": [],
+            "staff": [],
+            "integrations": [],
+            "ignored": [{"id": "not-saved"}],
+        }
+    }
+
+    saved = service.save_settings(payload, user)
+    loaded = service.get_settings(user)
+
+    assert saved["settings"]["businesses"][0]["registrationNo"] == "123-45-67890"
+    assert [item["id"] for item in loaded["settings"]["businesses"]] == ["biz-junghwa", "biz-sungshin", "biz-mia"]
+    assert [item["businessId"] for item in loaded["settings"]["branches"]] == ["biz-junghwa", "biz-sungshin", "biz-mia"]
+    raw = settings_path.read_text(encoding="utf-8")
+    assert "category_rules" in raw
+    assert "biz-corp" not in raw
+    assert "ignored" not in raw
+
+
+def test_save_settings_keeps_only_three_canonical_businesses(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    user = {"email": "owner@example.com", "is_admin": True}
+    payload = {
+        "settings": {
+            "businesses": [
+                {"id": "biz-junghwa", "name": "오입력", "registrationNo": "111-11-11111"},
+                {"id": "biz-corp", "name": "열정국밥 법인", "registrationNo": "222-22-22222"},
+            ],
+            "branches": [
+                {"id": "branch-common", "name": "공통", "businessId": "biz-corp"},
+            ],
+            "accounts": [{"id": "acct-corp", "businessId": "biz-corp", "branch": "공통"}],
+            "staff": [],
+            "integrations": [{"id": "int-corp", "service": "matepos", "businessId": "biz-corp", "branch": "공통"}],
+        }
+    }
+
+    saved = service.save_settings(payload, user)
+    settings = saved["settings"]
+
+    assert [item["name"] for item in settings["businesses"]] == [
+        "열정국밥 중화점",
+        "열정국밥 성신여대점",
+        "열정국밥_미아점",
+    ]
+    assert {item["id"] for item in settings["businesses"]} == {"biz-junghwa", "biz-sungshin", "biz-mia"}
+    assert {item["businessId"] for item in settings["branches"]} == {"biz-junghwa", "biz-sungshin", "biz-mia"}
+    assert settings["accounts"][0]["businessId"] == "biz-mia"
+    assert settings["integrations"][0]["businessId"] == "biz-mia"
+
+
+def test_save_settings_requires_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    try:
+        service.save_settings({"settings": {"businesses": []}}, {"email": "staff@example.com", "is_admin": False})
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 403
+    else:
+        raise AssertionError("non-admin settings save should fail")
+
+
+def test_upsert_account_stores_encrypted_password_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+
+    saved = service.upsert_account(
+        {
+            "service": "baemin",
+            "label": "배민셀프서비스",
+            "login_url": "https://biz-member.baemin.com/login",
+            "username": "mimi77",
+            "password": "plain-secret",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    raw = service._read("platform_accounts")
+
+    assert saved["password_masked"] == "********"
+    assert "password" not in saved
+    assert "password_enc" not in saved
+    assert raw[0]["password_enc"] == "encrypted:plain-secret"
+    assert "password" not in raw[0]
+
+
+def test_list_accounts_migrates_legacy_plain_password(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "legacy",
+                "service": "baemin",
+                "username": "mimi77",
+                "password": "legacy-secret",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+
+    listed = service.list_accounts({"email": "owner@example.com", "is_admin": True})
+    raw = service._read("platform_accounts")
+
+    assert listed[0]["password_masked"] == "********"
+    assert "password" not in listed[0]
+    assert "password_enc" not in listed[0]
+    assert raw[0]["password_enc"] == "encrypted:legacy-secret"
+    assert "password" not in raw[0]
+
+
+def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    saved = service.save_contract(
+        {
+            "employee_name": "E2E 테스트직원",
+            "employee_email": "e2e.employee@example.com",
+            "branch": "열정국밥_미아점",
+            "contract_type": "regular",
+            "employment_tax_type": "four_insurance",
+            "start_date": "2026-07-16",
+            "wage": 2800000,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert saved["document_kind"] == "standard_employment_contract"
+    assert saved["template_version"] == "majangbiseo-employment-2026-07-a4"
+    assert saved["print_title"] == "표준근로계약서"
+
+
+def test_save_freelancer_contract_adds_a4_service_template_meta(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    saved = service.save_contract(
+        {
+            "employee_name": "E2E 프리랜서",
+            "employee_email": "e2e.freelancer@example.com",
+            "branch": "열정국밥_미아점",
+            "contract_type": "freelancer",
+            "employment_tax_type": "freelancer_33",
+            "freelancer_scope": "홍보 콘텐츠 제작 및 배달앱 리뷰 응대 지원",
+            "wage": 500000,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert saved["document_kind"] == "freelancer_service_contract"
+    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-a4"
+    assert saved["print_title"] == "3.3% 프리랜서 용역계약서"
+
+
+def test_onboarding_documents_include_missing_required_rows_for_approved_employee(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
+    service._write(
+        "employee_join_requests",
+        [
+            {
+                "id": "join-1",
+                "name": "하영훈",
+                "email": "du-test@example.com",
+                "email_masked": "du***@example.com",
+                "branch": "중화점",
+                "status": "approved",
+                "reviewed_at": "2026-07-16T10:22:49+09:00",
+            }
+        ],
+    )
+    service._write("onboarding_documents", [])
+
+    rows = service.list_onboarding_documents({"email": "owner@example.com", "is_admin": True})
+
+    missing = [row for row in rows if row["employee_name"] == "하영훈" and row["status"] == "missing"]
+    assert {row["document_type"] for row in missing} == {
+        "resident_register",
+        "id_card",
+        "bankbook",
+        "health_certificate",
+    }
+    assert all(row["missing_document"] is True for row in missing)
+
+
+def test_onboarding_documents_do_not_include_pending_rows_for_admin(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
+    service._write(
+        "employee_join_requests",
+        [
+            {
+                "id": "join-pending",
+                "name": "대기직원",
+                "email": "pending@example.com",
+                "branch": "중화점",
+                "status": "pending",
+                "requested_at": "2026-07-16T10:22:49+09:00",
+            }
+        ],
+    )
+    service._write("onboarding_documents", [])
+
+    rows = service.list_onboarding_documents({"email": "owner@example.com", "is_admin": True})
+
+    assert all(row["employee_email"] != "pending@example.com" for row in rows)

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 기술문서</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f7f8; --panel:#fff; --ink:#182024; --muted:#64727a; --line:#d8e0e4; --accent:#0f766e; --warn:#b45309; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height:1.65; }
+    main { max-width:1120px; margin:0 auto; padding:42px 18px 72px; }
+    header, section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:20px; margin-bottom:14px; }
+    .kicker { color:var(--accent); font-weight:900; font-size:13px; }
+    h1 { margin:6px 0 8px; font-size:34px; line-height:1.16; letter-spacing:0; }
+    h2 { margin:0 0 12px; font-size:20px; }
+    h3 { margin:18px 0 8px; font-size:16px; }
+    p { margin:0 0 12px; }
+    ul { margin:0; padding-left:20px; }
+    li { margin:6px 0; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { border-bottom:1px solid var(--line); padding:10px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; }
+    code { background:#eef3f5; border-radius:5px; padding:2px 6px; }
+    pre { margin:10px 0 0; padding:14px; background:#102a2d; color:#eef8f6; border-radius:8px; overflow:auto; font-size:13px; }
+    .muted { color:var(--muted); }
+    .badge { display:inline-flex; min-height:24px; align-items:center; border-radius:999px; padding:0 10px; background:#e6f4f1; color:var(--accent); font-size:12px; font-weight:900; }
+    .warn { color:var(--warn); }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">TECHNICAL SPEC</div>
+      <h1>매장비서 기술문서</h1>
+      <p class="muted">작성/갱신 기준: 2026-07-16 11:23:56 KST. 이 문서는 매장비서의 현재 개발환경, 저장 경로, API, 업데이트 관리 기준을 고정합니다.</p>
+      <p><a href="./20260716_yeoljeong_store_assistant_docs_index.html">문서 인덱스로 돌아가기</a></p>
+    </header>
+
+    <section>
+      <h2>1. 현재 개발환경</h2>
+      <table>
+        <thead><tr><th>구분</th><th>현재 사용</th><th>근거 파일</th></tr></thead>
+        <tbody>
+          <tr><td>프론트 언어</td><td><code>HTML</code>, <code>CSS</code>, <code>Vanilla JavaScript</code></td><td><code>app/static/apps/yeoljeong-finance/index.html</code></td></tr>
+          <tr><td>백엔드</td><td><code>Python</code>, <code>FastAPI</code>, <code>Pydantic</code></td><td><code>app/api/yeoljeong_finance.py</code>, <code>app/services/yeoljeong_finance_service.py</code></td></tr>
+          <tr><td>운영 서버</td><td>AADS 서버68, FastAPI 정적 서빙 <code>/static</code></td><td><code>app/main.py</code>의 <code>StaticFiles</code> mount</td></tr>
+          <tr><td>저장소</td><td>JSON 파일 기반 원장 + 일부 PostgreSQL 설정 우선</td><td><code>app/data/yeoljeong_finance/*.json</code>, <code>migrations/113_yeoljeong_finance_settings.sql</code></td></tr>
+          <tr><td>테스트</td><td>Python compile, inline script parser, 직접 서비스 검증</td><td><code>tests/unit/test_yeoljeong_finance_service.py</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>2. 파일/URL 기준</h2>
+      <table>
+        <thead><tr><th>목적</th><th>소스 경로</th><th>운영 접근 경로</th></tr></thead>
+        <tbody>
+          <tr><td>매장비서 앱 원본</td><td><code>app/static/apps/yeoljeong-finance/index.html</code></td><td><code>/static/apps/yeoljeong-finance/index.html</code></td></tr>
+          <tr><td>프론트 모듈 매니페스트</td><td><code>app/static/apps/yeoljeong-finance/modules/app-config.js</code></td><td><code>/static/apps/yeoljeong-finance/modules/app-config.js</code></td></tr>
+          <tr><td>대시보드 공개 복사본</td><td><code>/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html</code></td><td><code>/apps/yeoljeong-finance/index.html</code></td></tr>
+          <tr><td>문서 원본</td><td><code>app/static/reports/20260716_yeoljeong_store_assistant_*.html</code></td><td><code>/static/reports/20260716_yeoljeong_store_assistant_*.html</code></td></tr>
+          <tr><td>대시보드 문서 복사본</td><td><code>/root/aads/aads-dashboard/public/reports/20260716_yeoljeong_store_assistant_*.html</code></td><td><code>/public/reports/20260716_yeoljeong_store_assistant_*.html</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>3. 기능 구성</h2>
+      <ul>
+        <li><span class="badge">인증</span> 로그인, 회원가입, 직원 가입요청, 초대 수락, 서버 세션 갱신</li>
+        <li><span class="badge">운영관리</span> 거래입력, 근태, 직원관리, 입사서류, 계약서, 급여내역서, 월마감, 설정</li>
+        <li><span class="badge">계약</span> 표준근로계약서, 3.3% 프리랜서 용역계약서, A4 인쇄/PDF 화면 프리뷰</li>
+        <li><span class="badge">데이터</span> 승인 직원 원장과 입사서류/계약/급여 원장을 조합해 미등록 상태를 화면에 표시</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>4. 업데이트 관리 절차</h2>
+      <ol>
+        <li>앱 수정은 <code>app/static/apps/yeoljeong-finance/index.html</code>을 기준으로 진행합니다.</li>
+        <li>기능 분리는 <code>modules/app-config.js</code>에 대상 모듈을 먼저 등록한 뒤, 인증/설정/직원/계약/급여/배달 수집 순서로 외부 모듈 파일로 이동합니다.</li>
+        <li>운영 노출 복사본 <code>/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html</code>과 <code>/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html</code>을 동기화합니다.</li>
+        <li>문서 수정은 <code>app/static/reports</code> 원본을 먼저 갱신한 뒤 <code>public/reports</code>로 복사합니다.</li>
+        <li>검증은 최소 <code>python3 -m py_compile</code>, HTML inline script parser, 공개 URL 마커 확인을 수행합니다.</li>
+        <li>작업 내역은 <code>HANDOVER.md</code>에 KST 시각과 함께 남깁니다.</li>
+      </ol>
+      <pre>python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py
+node --check /tmp/yeoljeong-finance-script.js
+curl -fsSL https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html</pre>
+    </section>
+
+    <section>
+      <h2>5. 현재 한계와 전환 기준</h2>
+      <table>
+        <thead><tr><th>한계</th><th>영향</th><th>권장 전환 기준</th></tr></thead>
+        <tbody>
+          <tr><td>단일 HTML 파일 비대화</td><td>기능 추가 시 회귀 위험 증가</td><td>화면/모달이 더 늘면 Next.js 또는 최소 모듈 번들 구조로 분리</td></tr>
+          <tr><td>JSON 원장</td><td>동시 승인/수정, 감사로그, 백업 정책이 약함</td><td>실사용 직원/관리자 동시 접속 전 PostgreSQL 테이블 전환</td></tr>
+          <tr><td>브라우저 E2E 제한</td><td>화면 클릭 흐름 검증이 수동/부분 자동화에 의존</td><td>Playwright 시나리오와 테스트 계정 Vault 고정</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

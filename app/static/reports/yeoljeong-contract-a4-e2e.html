@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 A4 계약서 출력 E2E</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #eef2f7; color: #111827; }
+    header { max-width: 1100px; margin: 0 auto; padding: 28px 20px 12px; }
+    h1 { margin: 0 0 8px; font-size: 24px; letter-spacing: 0; }
+    .summary { color: #4b5563; margin: 0; line-height: 1.6; }
+    .sheet-wrap { display: grid; gap: 28px; padding: 20px; }
+    .paper {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 18mm 16mm;
+      background: #fff;
+      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
+      box-sizing: border-box;
+      font-size: 10.5pt;
+      line-height: 1.52;
+    }
+    h2 { margin: 0 0 8px; text-align: center; font-size: 21px; letter-spacing: 0; }
+    .meta { text-align: center; color: #6b7280; margin: 0 0 12px; font-size: 9.5pt; }
+    .notice { border: 1px solid #cbd5e1; background: #f8fafc; padding: 9px; margin: 10px 0; color: #1f2937; }
+    .section-title { margin-top: 14px; padding: 6px 8px; border: 1px solid #111827; background: #f8fafc; font-weight: 800; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 10px; table-layout: fixed; }
+    th, td { border: 1px solid #222; padding: 6px 7px; vertical-align: top; overflow-wrap: anywhere; }
+    th { width: 27%; background: #f3f4f6; text-align: left; }
+    ol { margin: 8px 0 0 18px; padding: 0; }
+    li { margin: 6px 0; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+    .signature-box { min-height: 82px; border: 1px solid #222; padding: 10px; }
+    @page { size: A4; margin: 12mm; }
+    @media print {
+      body { background: #fff; }
+      header { display: none; }
+      .sheet-wrap { padding: 0; gap: 0; }
+      .paper { width: 100%; min-height: auto; margin: 0; padding: 0; box-shadow: none; page-break-after: always; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>매장비서 직원계약서 A4 출력 디자인 E2E</h1>
+    <p class="summary">2026-07-16 10:07 KST 기준 테스트 계정에 저장된 계약서 2건입니다. 앱 본 화면의 A4 미리보기와 같은 문서 구조로 표준근로계약서와 3.3% 프리랜서 용역계약서를 검증합니다.</p>
+  </header>
+  <main class="sheet-wrap">
+    <section class="paper">
+      <h2>표준근로계약서</h2>
+      <p class="meta">계약 ID b306224b-d01a-4254-a675-3fe224abcee6 · 템플릿 majangbiseo-employment-2026-07-a4 · 상태 서명요청</p>
+      <div class="notice">고용노동부 표준근로계약서 필수 기재 축인 임금, 소정근로시간, 휴일, 휴가, 근무장소, 업무내용, 사회보험을 A4 출력용 문서에 반영합니다.</div>
+      <div class="section-title">1. 근로계약 당사자</div>
+      <table><tbody>
+        <tr><th>사용자</th><td>열정국밥_미아점 / 대표 미등록</td></tr>
+        <tr><th>사업자등록번호</th><td>기초등록 필요</td></tr>
+        <tr><th>사업장 주소</th><td>서울특별시 강북구 미아동 테스트 사업장</td></tr>
+        <tr><th>근로자</th><td>E2E A4근로 20260716100721 / e2e-a4-employment-20260716100721@example.test</td></tr>
+        <tr><th>근로자 주소</th><td>서울특별시 강북구 테스트로 1</td></tr>
+        <tr><th>계약 체결일</th><td>2026-07-16</td></tr>
+      </tbody></table>
+      <div class="section-title">2. 근로조건</div>
+      <table><tbody>
+        <tr><th>계약 기간</th><td>2026-07-16부터 기간의 정함 없음까지</td></tr>
+        <tr><th>근무 장소</th><td>열정국밥 강북미아점 영업장</td></tr>
+        <tr><th>담당 업무</th><td>홀/주방 운영, 마감 정산 보조, 위생관리</td></tr>
+        <tr><th>소정근로시간</th><td>10:00-22:00 중 지점 근무표에 따른 8시간 / 주 40시간</td></tr>
+        <tr><th>휴게시간</th><td>근로시간 8시간 기준 60분</td></tr>
+        <tr><th>임금</th><td>월급 2,800,000원 / 지급일: 매월 10일 / 지급방법: 직원 명의 계좌이체</td></tr>
+        <tr><th>사회보험/세금</th><td>4대보험 취득 신고 및 근로소득 원천징수</td></tr>
+      </tbody></table>
+      <h3>상세 조항</h3>
+      <ol>
+        <li><b>연장·야간·휴일근로</b><br>연장·야간·휴일근로는 사전 승인 및 법정수당 기준 적용</li>
+        <li><b>휴가, 결근, 근태</b><br>연차·결근·지각·조퇴는 근태기록과 법정 기준에 따라 처리</li>
+        <li><b>식대, 유니폼, 보건증</b><br>식사 제공 여부, 유니폼 지급/반납, 보건증 갱신 기준 준수</li>
+        <li><b>퇴직 및 계약 해지</b><br>퇴직 또는 계약 종료 30일 전 통보를 원칙으로 하며 중대한 위반 시 해지 가능</li>
+        <li><b>계약서 교부 및 전자서명</b><br>전자서명 요청 링크로 직원에게 교부하며 서명 완료본을 보관합니다.</li>
+      </ol>
+      <div class="signatures">
+        <div class="signature-box"><b>사용자 서명</b><br>열정국밥_미아점<br>대표: 미등록<br><br>서명: __________</div>
+        <div class="signature-box"><b>근로자 서명</b><br>E2E A4근로 20260716100721<br>e2e-a4-employment-20260716100721@example.test<br><br>서명: __________</div>
+      </div>
+    </section>
+    <section class="paper">
+      <h2>3.3% 프리랜서 용역계약서</h2>
+      <p class="meta">계약 ID c485c3da-9cd0-47d2-ad27-4519081b3c79 · 템플릿 majangbiseo-freelancer-2026-07-a4 · 상태 서명요청</p>
+      <div class="notice">본 문서는 3.3% 사업소득 원천징수 대상 독립 용역계약 기준입니다. 실제 운영이 근로자성에 해당하면 근로계약서로 전환 검토합니다.</div>
+      <div class="section-title">1. 계약 당사자</div>
+      <table><tbody>
+        <tr><th>발주자</th><td>열정국밥_미아점 / 대표 미등록</td></tr>
+        <tr><th>발주자 사업자번호</th><td>기초등록 필요</td></tr>
+        <tr><th>발주자 주소</th><td>서울특별시 강북구 미아동 테스트 사업장</td></tr>
+        <tr><th>수급자</th><td>E2E 3.3프리랜서 20260716100721 / e2e-a4-freelancer-20260716100721@example.test</td></tr>
+        <tr><th>수급자 주소</th><td>서울특별시 강북구 테스트로 1</td></tr>
+      </tbody></table>
+      <div class="section-title">2. 용역 조건</div>
+      <table><tbody>
+        <tr><th>계약 기간</th><td>2026-07-16부터 용역 완료 또는 별도 합의일까지</td></tr>
+        <tr><th>용역 장소/방식</th><td>열정국밥 강북미아점 영업장</td></tr>
+        <tr><th>업무 범위</th><td>홍보 콘텐츠 초안 4건, 리뷰 응대 문안 정리, 배달앱 운영 개선 메모 제출</td></tr>
+        <tr><th>용역비</th><td>건별/용역비 500,000원 / 지급일: 검수 완료 후 익월 10일 / 지급방법: 수급자 명의 계좌이체</td></tr>
+        <tr><th>세무 처리</th><td>3.3% 프리랜서 원천징수</td></tr>
+        <tr><th>정산/검수</th><td>검수 완료 후 용역비 500,000원에서 3.3% 사업소득 원천징수 후 지급</td></tr>
+      </tbody></table>
+      <h3>상세 조항</h3>
+      <ol>
+        <li><b>독립 계약자 지위</b><br>수급자는 근로자가 아니며 업무 수행 방식과 시간 배분을 자율적으로 정합니다.</li>
+        <li><b>검수 및 수정</b><br>수급자는 합의된 기한까지 업무 결과를 제출하고 발주자는 검수 후 승인 또는 수정 요청을 통지합니다.</li>
+        <li><b>3.3% 원천징수</b><br>사업소득 3.3% 원천징수 기준을 적용합니다.</li>
+        <li><b>비밀유지 및 자료보호</b><br>매출자료, 고객정보, 레시피, 정산자료, 계정정보, 운영 매뉴얼을 외부에 공개하지 않습니다.</li>
+        <li><b>계약 변경 및 해지</b><br>업무 범위, 납기, 대금 변경은 전자문서 합의로 처리합니다.</li>
+      </ol>
+      <div class="signatures">
+        <div class="signature-box"><b>발주자 서명</b><br>열정국밥_미아점<br>대표: 미등록<br><br>서명: __________</div>
+        <div class="signature-box"><b>수급자 서명</b><br>E2E 3.3프리랜서 20260716100721<br>e2e-a4-freelancer-20260716100721@example.test<br><br>서명: __________</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

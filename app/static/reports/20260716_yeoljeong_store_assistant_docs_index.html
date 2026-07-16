@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 문서 인덱스</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f7f8; --panel:#fff; --ink:#182024; --muted:#64727a; --line:#d8e0e4; --accent:#0f766e; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }
+    main { max-width: 1080px; margin: 0 auto; padding: 42px 18px 64px; }
+    header { margin-bottom: 24px; }
+    .kicker { color: var(--accent); font-weight: 900; font-size: 13px; }
+    h1 { margin: 6px 0 8px; font-size: 34px; line-height: 1.16; letter-spacing: 0; }
+    h2 { margin: 0 0 12px; font-size: 19px; }
+    p { margin: 0 0 12px; }
+    .muted { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 24px 0; }
+    .card, section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+    .card { display: grid; gap: 10px; align-content: start; text-decoration: none; color: inherit; min-height: 190px; }
+    .card:hover { border-color: var(--accent); }
+    .card strong { font-size: 18px; }
+    .btn { display: inline-flex; width: fit-content; min-height: 36px; align-items: center; justify-content: center; border-radius: 6px; padding: 0 12px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 800; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; }
+    code { background: #eef3f5; border-radius: 5px; padding: 2px 6px; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 28px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">YEOLJEONG STORE ASSISTANT DOCUMENTS</div>
+      <h1>매장비서 문서 인덱스</h1>
+      <p class="muted">작성/갱신 기준: 2026-07-16 11:23:56 KST. 매장비서 운영 문서를 HTML 파일로 고정해 관리자 총괄 화면과 AADS 사이드바에서 바로 접근할 수 있게 관리합니다.</p>
+    </header>
+
+    <div class="grid" aria-label="문서 바로가기">
+      <a class="card" href="./20260716_yeoljeong_store_assistant_technical.html">
+        <strong>기술문서</strong>
+        <span class="muted">개발환경, 언어, 프레임워크, 저장소, API, 배포/업데이트 관리 기준</span>
+        <span class="btn">열기</span>
+      </a>
+      <a class="card" href="./20260716_yeoljeong_store_assistant_architecture_design_plan.html">
+        <strong>아키텍처·디자인 기획서</strong>
+        <span class="muted">화면 구조, 모달/문서 프리뷰, 권한별 UX, 개선 로드맵</span>
+        <span class="btn">열기</span>
+      </a>
+      <a class="card" href="./20260716_yeoljeong_store_assistant_db_transition_plan.html">
+        <strong>JSON 원장 DB 전환 설계</strong>
+        <span class="muted">직원, 입사서류, 계약서, 급여, 배달앱 계정 원장을 PostgreSQL로 옮기는 단계별 설계</span>
+        <span class="btn">열기</span>
+      </a>
+      <a class="card" href="https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html">
+        <strong>매장비서 앱</strong>
+        <span class="muted">열정국밥 운영관리 실사용 화면. 로그인 후 직원/계약/급여/정산 관리</span>
+        <span class="btn">앱 열기</span>
+      </a>
+    </div>
+
+    <section>
+      <h2>현재 진행 방식 요약</h2>
+      <table>
+        <thead><tr><th>영역</th><th>현재 구현</th><th>판정</th></tr></thead>
+        <tbody>
+          <tr><td>프론트</td><td>단일 정적 SPA, <code>HTML/CSS/Vanilla JS</code></td><td>빠른 검증과 운영 반영에는 적합하나, 기능이 계속 커지면 컴포넌트 분리가 필요합니다.</td></tr>
+          <tr><td>백엔드</td><td><code>FastAPI</code> API + <code>Pydantic</code> 스키마</td><td>AADS 서버 구조와 잘 맞고, 운영 API 확장에 적합합니다.</td></tr>
+          <tr><td>저장소</td><td>HR/계약/급여 원장은 JSON 파일, 설정 일부는 PostgreSQL 우선 + JSON 폴백</td><td>초기 MVP에는 충분하지만, 동시 사용과 감사 추적을 위해 DB 전환이 필요합니다.</td></tr>
+          <tr><td>문서관리</td><td>정적 HTML 문서를 <code>app/static/reports</code>와 대시보드 <code>public/reports</code>에 저장</td><td>관리자 접근성과 버전 고정에는 적합합니다.</td></tr>
+          <tr><td>프론트 모듈화</td><td><code>modules/app-config.js</code> 매니페스트를 먼저 붙이고 단일 HTML 기능을 단계적으로 분리</td><td>대형 파일 회귀를 줄이기 위한 1차 구조가 적용됐습니다.</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

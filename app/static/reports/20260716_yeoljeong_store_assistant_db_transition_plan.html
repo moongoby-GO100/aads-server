@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 JSON 원장 DB 전환 설계</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f7f8; --panel:#fff; --ink:#182024; --muted:#64727a; --line:#d8e0e4; --accent:#0f766e; --warn:#b45309; --bad:#b91c1c; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height:1.65; }
+    main { max-width:1120px; margin:0 auto; padding:42px 18px 72px; }
+    header, section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:20px; margin-bottom:14px; }
+    .kicker { color:var(--accent); font-weight:900; font-size:13px; }
+    h1 { margin:6px 0 8px; font-size:34px; line-height:1.16; letter-spacing:0; }
+    h2 { margin:0 0 12px; font-size:20px; }
+    p { margin:0 0 12px; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { border-bottom:1px solid var(--line); padding:10px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; }
+    code { background:#eef3f5; border-radius:5px; padding:2px 6px; }
+    ul, ol { margin:0; padding-left:20px; }
+    li { margin:6px 0; }
+    .muted { color:var(--muted); }
+    .badge { display:inline-flex; min-height:24px; align-items:center; border-radius:999px; padding:0 10px; background:#e6f4f1; color:var(--accent); font-size:12px; font-weight:900; }
+    .warn { color:var(--warn); font-weight:800; }
+    .bad { color:var(--bad); font-weight:800; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">DATABASE TRANSITION PLAN</div>
+      <h1>매장비서 JSON 원장 DB 전환 설계</h1>
+      <p class="muted">작성/갱신 기준: 2026-07-16 11:23:56 KST. 다른 세션의 DB 작업과 충돌하지 않도록 기존 JSON 원장을 즉시 삭제하지 않고, DB 우선 + JSON 폴백 + 마이그레이션 검증 순서로 전환합니다.</p>
+      <p><a href="./20260716_yeoljeong_store_assistant_docs_index.html">문서 인덱스로 돌아가기</a></p>
+    </header>
+
+    <section>
+      <h2>1. 현재 판정</h2>
+      <table>
+        <thead><tr><th>영역</th><th>현재 저장 방식</th><th>전환 판정</th></tr></thead>
+        <tbody>
+          <tr><td>사업자/지점/설정</td><td><code>yeoljeong_businesses</code>, <code>yeoljeong_branches</code>, <code>yeoljeong_settings</code> DB 우선 + JSON 폴백</td><td><span class="badge">1차 DB 전환 진행중</span></td></tr>
+          <tr><td>직원 가입/승인</td><td><code>employee_join_requests.json</code></td><td><span class="warn">DB 전환 필요</span></td></tr>
+          <tr><td>입사서류</td><td><code>onboarding_documents.json</code> + <code>uploads/</code> 파일</td><td><span class="warn">메타 DB 전환, 파일은 object/file store 유지</span></td></tr>
+          <tr><td>계약서/서명</td><td><code>contracts.json</code></td><td><span class="bad">감사로그 때문에 P0 전환</span></td></tr>
+          <tr><td>급여내역서</td><td><code>payroll_statements.json</code></td><td><span class="bad">동시 수정·교부 이력 때문에 P0 전환</span></td></tr>
+          <tr><td>배달앱 계정/수집</td><td><code>platform_accounts.json</code> 등 JSON 원장</td><td><span class="warn">암호화 저장 유지 후 DB Vault 연동</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>2. 권장 테이블</h2>
+      <table>
+        <thead><tr><th>테이블</th><th>핵심 컬럼</th><th>목적</th></tr></thead>
+        <tbody>
+          <tr><td><code>yeoljeong_employee_requests</code></td><td><code>id</code>, <code>name</code>, <code>email</code>, <code>branch_id</code>, <code>status</code>, <code>reviewed_by</code>, <code>reviewed_at</code></td><td>직원 가입요청과 관리자 승인 원장</td></tr>
+          <tr><td><code>yeoljeong_onboarding_documents</code></td><td><code>id</code>, <code>employee_request_id</code>, <code>document_type</code>, <code>file_path</code>, <code>status</code>, <code>reviewed_at</code></td><td>입사서류 제출, 미제출 placeholder, 승인/반려 이력</td></tr>
+          <tr><td><code>yeoljeong_contracts</code></td><td><code>id</code>, <code>employee_request_id</code>, <code>contract_type</code>, <code>document_kind</code>, <code>status</code>, <code>sign_token_hash</code>, <code>data</code></td><td>A4 계약서, 표준근로계약서, 3.3% 용역계약서 저장</td></tr>
+          <tr><td><code>yeoljeong_payroll_statements</code></td><td><code>id</code>, <code>employee_request_id</code>, <code>period</code>, <code>gross_pay</code>, <code>deductions</code>, <code>net_pay</code>, <code>data</code></td><td>급여내역서 작성, 교부, 수령확인</td></tr>
+          <tr><td><code>yeoljeong_platform_accounts</code></td><td><code>id</code>, <code>business_id</code>, <code>branch_id</code>, <code>platform</code>, <code>username</code>, <code>secret_ref</code>, <code>status</code></td><td>배달앱/POS/리뷰 계정 연결. 비밀번호 원문 저장 금지</td></tr>
+          <tr><td><code>yeoljeong_audit_events</code></td><td><code>id</code>, <code>actor_email</code>, <code>event_type</code>, <code>entity_type</code>, <code>entity_id</code>, <code>payload</code>, <code>created_at</code></td><td>승인, 수정, 삭제, 서명요청, 급여교부 감사로그</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>3. 전환 순서</h2>
+      <ol>
+        <li><strong>P0 스키마 추가:</strong> 기존 <code>migrations/113_yeoljeong_finance_settings.sql</code>와 충돌하지 않는 신규 migration으로 HR/계약/급여 테이블을 추가합니다.</li>
+        <li><strong>읽기 경로 이중화:</strong> DB 테이블이 있으면 DB를 읽고, 없으면 기존 JSON을 읽습니다.</li>
+        <li><strong>쓰기 경로 전환:</strong> 신규/수정은 DB에 쓰고, 초기 1주 동안 JSON 백업 스냅샷을 함께 남깁니다.</li>
+        <li><strong>마이그레이션 검증:</strong> JSON row count와 DB row count, 직원 이메일 마스킹, 계약서 상태, 급여 금액 합계를 비교합니다.</li>
+        <li><strong>폴백 유지:</strong> 운영 장애 시 DB 읽기 실패를 JSON read-only 폴백으로 전환하되, 삭제/수정은 중단합니다.</li>
+        <li><strong>JSON 쓰기 종료:</strong> 검증 완료 후 JSON은 백업 입력으로만 유지하고 API 기본 저장소는 PostgreSQL로 고정합니다.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>4. 완료 기준</h2>
+      <ul>
+        <li>직원가입 → 서류등록 → 승인 → 계약서 저장/서명요청 → 급여내역서 저장 E2E가 DB row로 남습니다.</li>
+        <li>관리자 총괄 화면의 직원/입사서류/계약서/급여 탭이 DB 조회 기준으로 동일하게 렌더링됩니다.</li>
+        <li>계정 비밀번호는 평문 컬럼에 저장하지 않고 암호화 ref 또는 Vault 참조만 남깁니다.</li>
+        <li>감사로그에서 누가, 언제, 어떤 직원/계약/급여 데이터를 변경했는지 추적됩니다.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
