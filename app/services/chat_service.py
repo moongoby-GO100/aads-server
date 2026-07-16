@@ -6286,12 +6286,22 @@ async def get_html_edit_context_state(session_id: str, user_content: str) -> Dic
 
 async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: uuid.UUID = None) -> None:
     """AI 응답에서 아티팩트 자동 추출 → chat_artifacts 저장.
-    감지 유형: 코드, 보고서, 기획서, 계획서, 분석, 지시서, 체크리스트, 테이블, 이미지, 차트, 파일
+    감지 유형: 코드, 보고서, 기획서, 계획서, 분석, 지시서, 체크리스트, 테이블, 이미지, 영상, 차트, 파일
     """
-    if not content or len(content) < 100:
+    if not content:
         return
 
     import re as _re
+
+    media_hint = _re.search(
+        r'!\[[^\]]*\]\([^)]+\)|'
+        r'\[[^\]]+\]\([^)]+\.(?:png|jpe?g|gif|webp|svg|mp4|webm|mov|m4v|ogg)(?:[?#][^)]*)?\)|'
+        r'(?:https?://|/api/v1/|/static/)[^\s<>)]+(?:\.(?:png|jpe?g|gif|webp|svg|mp4|webm|mov|m4v|ogg)(?:[?#][^\s<>)]+)?|/(?:image|video)(?:[?#][^\s<>)]+)?)',
+        content,
+        _re.IGNORECASE,
+    )
+    if len(content) < 100 and not media_hint:
+        return
 
     artifacts = []
     extraction_ctx = _artifact_extraction_context.get() or {}
@@ -6428,11 +6438,56 @@ async def _extract_artifacts(session_id: uuid.UUID, content: str, workspace_id: 
                 first_line = num_text.strip().split('\n')[0].strip()
                 artifacts.append(("report", first_line[:100] or "구조화 문서", num_text, {"subtype": "numbered_list"}))
 
-    # 7) 이미지 URL 감지 (generate_image 결과 등)
-    img_pattern = _re.findall(r'!\[([^\]]*)\]\((https?://[^\)]+\.(?:png|jpg|jpeg|gif|webp|svg)[^\)]*)\)', content)
-    for alt_text, img_url in img_pattern:
-        if not any(a[2] == img_url for a in artifacts):
-            artifacts.append(("image", alt_text or "이미지", img_url, {"url": img_url}))
+    # 7) 이미지/영상 URL 감지 (generate_image/generate_video 결과 등)
+    def _clean_media_url(raw_url: str) -> str:
+        return str(raw_url or "").strip().strip("<>").rstrip(".,;")
+
+    def _media_kind(url: str) -> str | None:
+        lowered = url.lower()
+        path_part = lowered.split("?", 1)[0].split("#", 1)[0]
+        if lowered.startswith("data:image/"):
+            return "image"
+        if lowered.startswith("data:video/"):
+            return "video"
+        if _re.search(r'\.(?:png|jpe?g|gif|webp|svg)$', path_part):
+            return "image"
+        if _re.search(r'\.(?:mp4|webm|mov|m4v|ogg)$', path_part):
+            return "video"
+        if "/image/" in lowered or path_part.endswith("/image"):
+            return "image"
+        if "/video/" in lowered or path_part.endswith("/video"):
+            return "video"
+        return None
+
+    media_candidates: list[tuple[str, str]] = []
+    media_candidates.extend(
+        (alt_text or "미디어", _clean_media_url(url))
+        for alt_text, url in _re.findall(r'!\[([^\]]*)\]\(([^)\s]+)\)', content)
+    )
+    media_candidates.extend(
+        (label or "미디어", _clean_media_url(url))
+        for label, url in _re.findall(
+            r'\[([^\]]+)\]\(((?:https?://|/api/v1/|/static/)[^)\s]+)\)',
+            content,
+            _re.IGNORECASE,
+        )
+    )
+    media_candidates.extend(
+        ("미디어", _clean_media_url(url))
+        for url in _re.findall(
+            r'(?<!\]\()((?:https?://|/api/v1/|/static/)[^\s<>)]+)',
+            content,
+            _re.IGNORECASE,
+        )
+    )
+    for title, media_url in media_candidates:
+        kind = _media_kind(media_url)
+        if not kind:
+            continue
+        if kind == "image" and media_url.startswith("data:") and len(media_url) > 45000:
+            continue
+        if not any(a[2] == media_url and a[0] == kind for a in artifacts):
+            artifacts.append((kind, title or ("영상" if kind == "video" else "이미지"), media_url, {"url": media_url}))
 
     # 8) Mermaid 다이어그램 감지
     mermaid_match = _re.findall(r'```mermaid\s*\n(.*?)```', content, _re.DOTALL)
