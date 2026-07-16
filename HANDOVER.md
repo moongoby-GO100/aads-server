@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-07-16 11:29 KST - AADS chat stability P0/P1/P2 follow-up
+- 배경: CEO가 채팅창 잔여 개선 우선순위 `todo_completion_gate_missing`, 보조 API 401 오판, interrupted 원인 분류/자동복구, 대시보드 Git 관리, `page.tsx` 분리를 우선순위순 즉시 조치하라고 지시했다.
+- 조치:
+  - `app/services/chat_service.py`: TODO completion gate가 누락 TODO를 발견해도 실행을 `interrupted`로 막지 않도록 non-blocking 처리로 변경했다. 누락 TODO는 기존처럼 TODO 상태와 응답 하단 안내로 남긴다.
+  - `app/services/chat_service.py`: 자동 복구 대상 reason prefix에 `resume_task_cancelled`, `task_escaped:`, `force_interrupted_stale_`를 추가했다.
+  - `app/main.py`: 대시보드 보조 API 401 오판을 줄이기 위해 `/api/v1/ops/version`을 읽기전용 인증 면제에 추가하고, EventSource/direct fetch처럼 Authorization 헤더가 없는 브라우저 전송을 위해 `aads_token` 쿠키 인증 fallback을 추가했다.
+  - `app/main.py`: 실행 복구 scanner의 retry hard cap을 `> 5`에서 `>= 5`로 수정해 6회차 초과 retry가 더 이상 발생하지 않게 했다.
+  - `/root/aads/aads-dashboard`: Git 저장소를 신규 초기화하고 `afc396b chore: restore dashboard git tracking baseline`, `ffb1ae7 refactor: extract chat url session state helper` 커밋을 생성했다.
+  - `/root/aads/aads-dashboard/src/app/chat/urlState.ts`: 새 탭/해시 세션 복원 진입점 `getRequestedChatSessionId()`를 `page.tsx`에서 분리했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:22:19 KST`.
+  - DB 7일 실행 상태: `completed 141`, `interrupted 14`, `running 2`.
+  - DB 7일 interrupted reason: superseded 계열 10건, 복구 대상/실패 계열 4건.
+  - `python3 -m py_compile app/main.py app/services/chat_service.py` 통과.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+- 제한:
+  - 서버 변경은 아직 커밋/푸시 전이다. 기존 Yeoljeong 관련 dirty 변경이 같은 서버 저장소에 섞여 있어 커밋은 파일 단위로 신중히 분리해야 한다.
+  - 대시보드 Git은 로컬 저장소 복구와 로컬 커밋까지만 완료했다. 원격 remote/push는 아직 설정하지 않았다.
+
 ## 2026-07-16 11:26 KST - Yeoljeong store assistant priority follow-up closeout
 - 배경: CEO가 매장비서 다음 단계를 모두 우선순위대로 진행하라고 지시해, 문서 인덱스/DB 전환 설계/프론트 모듈화 매니페스트/공개 복사본/운영 URL 반영 상태를 이어서 확인했다.
 - 조치:

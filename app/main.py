@@ -1243,7 +1243,7 @@ async def lifespan(app: FastAPI):
                         )
                         logger.info("stale_force_interrupt: session=%s execution=%s stale=%ds", sid[:8], execution_id[:8], _stale_sec)
                         continue
-                    if (row.get("retry_count") or 0) > 5:
+                    if (row.get("retry_count") or 0) >= 5:
                         await _mei_exec(
                             conn,
                             sid,
@@ -1697,6 +1697,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/browser-bridge/sessions/register",
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
+    "/api/v1/ops/version",  # 대시보드 배포 버전 체크 (읽기전용)
     "/api/v1/image/gallery",  # AI 모델 이미지 갤러리 (공개 읽기전용)
     "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
@@ -1737,7 +1738,16 @@ async def jwt_auth_middleware(request: Request, call_next):
             request.state.user = payload
             return await call_next(request)
 
-    # 5) X-Monitor-Key 헤더가 있으면 통과 (내부 서비스 간 호출)
+    # 5) Browser-only transports such as EventSource cannot attach Authorization
+    # headers. Accept the dashboard cookie as an equivalent bearer token.
+    cookie_token = request.cookies.get("aads_token")
+    if cookie_token:
+        payload = _auth_mod.verify_token(cookie_token)
+        if payload:
+            request.state.user = payload
+            return await call_next(request)
+
+    # 6) X-Monitor-Key 헤더가 있으면 통과 (내부 서비스 간 호출)
     if request.headers.get("x-monitor-key"):
         return await call_next(request)
 

@@ -69,6 +69,9 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
     "todo_completion_gate_missing",
     "retroactive_final_report_missing_after_audit",
     "background_producer_incomplete_exit",
+    "resume_task_cancelled",
+    "task_escaped:",
+    "force_interrupted_stale_",
 )
 
 _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES = (
@@ -6627,20 +6630,11 @@ async def _save_and_update_session(
             if _execution_uuid and _todo_gate and not _todo_gate.get("all_completed", True):
                 _missing_titles = _todo_gate.get("missing_titles") or []
                 logger.warning(
-                    "todo_completion_gate_blocked_completed session=%s execution=%s missing=%s",
+                    "todo_completion_gate_missing_non_blocking session=%s execution=%s missing=%s",
                     str(sid)[:8],
                     str(_execution_uuid)[:8],
                     _missing_titles[:5],
                 )
-                await _mark_execution_interrupted(
-                    conn,
-                    str(sid),
-                    str(_execution_uuid),
-                    "todo_completion_gate_missing",
-                    partial_content=content,
-                    delete_empty_placeholder=False,
-                )
-                return
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
@@ -10305,7 +10299,6 @@ def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
 async def get_memory_context_info(
     session_id: str,
     tenant_id: Optional[str] = None,
-    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
     pool = get_pool()
