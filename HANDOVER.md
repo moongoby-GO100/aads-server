@@ -3515,3 +3515,32 @@
   - `curl https://aads.newtalk.kr/api/v1/ops/version`: HTTP 200.
   - `curl https://aads.newtalk.kr/api/v1/image/gallery?limit=1`: HTTP 200.
   - `POST https://aads.newtalk.kr/api/v1/image/generate` without auth: HTTP 401, 쓰기성 API 보호 유지.
+
+## 2026-07-16 11:58 KST - Chat stability final ledger recheck
+- 배경: CEO가 이전 완료보고가 commit/push/deploy/document ledger와 충돌한다고 지적해 실제 상태를 재조회했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:58:42 KST`.
+- 코드/검증:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/main.py`: 통과.
+  - `/root/aads/aads-dashboard`에서 `npx tsc --noEmit`: 통과.
+  - active 포인터: `.active_container=aads-server-green`, `.active_port=8102`.
+  - NGINX upstream: active API green 8102, blue 8100 backup.
+  - `curl http://127.0.0.1:8102/api/v1/image/gallery?limit=1`: HTTP 200.
+  - `curl http://127.0.0.1:8102/api/v1/image/gallery/media-8ef71fb4839949a0/image`: HTTP 200.
+  - `curl http://127.0.0.1:8102/api/v1/ops/version`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/image/gallery?limit=1`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/ops/version`: HTTP 200.
+- DB/로그:
+  - 최근 24시간 `chat_turn_executions`: completed 35, interrupted 4.
+  - 최근 24시간 interrupted 원인: `execution_resume_attempt_limit_exceeded`, `final_save_missing_placeholder_preserved`, `resume_claimed_by:*`, `superseded while preserving partial response` 각 1건.
+  - 최근 로그에서 `memory-context`는 active/public 경로 기준 200 응답 확인.
+  - `todo_completion_gate_missing`은 응답 저장 차단이 아니라 `todo_completion_gate_missing_non_blocking` 경고 로그로 완화되어 있다.
+- Git/배포 ledger:
+  - 서버 저장소는 `main...origin/main [ahead 7]`로 원격 push 미수행.
+  - ahead 7에는 채팅 안정화 커밋과 Yeoljeong 문서 커밋이 함께 있어 이 재검증에서 일괄 push하지 않았다.
+  - 서버 워크트리에는 Yeoljeong 운영 데이터/임시 스크립트/대시보드 백업 변경이 남아 있어 이 작업에서 되돌리거나 일괄 커밋하지 않았다.
+  - 대시보드 저장소는 Git 추적 복구 상태이고 현재 dirty file 없음. 원격 remote는 설정되어 있지 않아 push 대상 없음.
+  - 별도 신규 deploy.sh 실행은 수행하지 않았다. 현재 운영 반영은 green active/NGINX/curl/health 기준으로 확인했다.
+- 잔존:
+  - P1 7일 interrupted 자동 복구 고도화와 P2 `page.tsx` 대형 파일 분리는 별도 구조개선 과제로 남아 있다.
+  - 브라우저 E2E는 실행하지 않았고 API/타입/컨테이너 검증으로 대체했다.
