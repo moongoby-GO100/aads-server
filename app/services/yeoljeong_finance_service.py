@@ -50,6 +50,71 @@ PLATFORM_LABELS = {
     "ddangyo": "땡겨요",
 }
 
+CONTRACT_TEMPLATE_META = {
+    "freelancer": {
+        "document_kind": "freelancer_service_contract",
+        "template_version": "majangbiseo-freelancer-2026-07-a4",
+        "print_title": "3.3% 프리랜서 용역계약서",
+    },
+    "confidentiality": {
+        "document_kind": "confidentiality_agreement",
+        "template_version": "majangbiseo-confidentiality-2026-07-a4",
+        "print_title": "보안 및 개인정보 보호 서약서",
+    },
+    "default": {
+        "document_kind": "standard_employment_contract",
+        "template_version": "majangbiseo-employment-2026-07-a4",
+        "print_title": "표준근로계약서",
+    },
+}
+
+CANONICAL_BUSINESSES: list[dict[str, Any]] = [
+    {
+        "id": "biz-junghwa",
+        "entityType": "individual",
+        "name": "열정국밥 중화점",
+        "registrationNo": "기초등록 필요",
+        "representative": "미등록",
+        "taxType": "일반과세",
+        "openedAt": "",
+        "address": "",
+        "memo": "개인사업자 1",
+    },
+    {
+        "id": "biz-sungshin",
+        "entityType": "individual",
+        "name": "열정국밥 성신여대점",
+        "registrationNo": "기초등록 필요",
+        "representative": "미등록",
+        "taxType": "일반과세",
+        "openedAt": "",
+        "address": "",
+        "memo": "개인사업자 2",
+    },
+    {
+        "id": "biz-mia",
+        "entityType": "individual",
+        "name": "열정국밥_미아점",
+        "registrationNo": "기초등록 필요",
+        "representative": "미등록",
+        "taxType": "일반과세",
+        "openedAt": "",
+        "address": "",
+        "memo": "개인사업자 3",
+    },
+]
+
+CANONICAL_BRANCHES: list[dict[str, Any]] = [
+    {"id": "branch-junghwa", "name": "중화점", "businessId": "biz-junghwa", "status": "active", "phone": "", "address": ""},
+    {"id": "branch-sungshin", "name": "성신여대점", "businessId": "biz-sungshin", "status": "active", "phone": "", "address": ""},
+    {"id": "branch-gangbuk-mia", "name": "열정국밥_미아점", "businessId": "biz-mia", "status": "active", "phone": "", "address": ""},
+]
+
+CANONICAL_BUSINESS_IDS = {item["id"] for item in CANONICAL_BUSINESSES}
+CANONICAL_BRANCH_NAMES = {item["name"] for item in CANONICAL_BRANCHES}
+MIA_BUSINESS_ID = "biz-mia"
+MIA_BRANCH_NAME = "열정국밥_미아점"
+
 
 def _now() -> str:
     return datetime.now(KST).isoformat(timespec="seconds")
@@ -78,11 +143,123 @@ def _read(name: str) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
+def _read_json_object(name: str) -> dict[str, Any]:
+    path = _path(name)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail=f"{name} 저장소 JSON이 손상되었습니다")
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_object(name: str, data: dict[str, Any]) -> None:
+    path = _path(name)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 def _write(name: str, rows: list[dict[str, Any]]) -> None:
     path = _path(name)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _merge_by_id(current_items: Any, default_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    current = {str(item.get("id")): item for item in current_items if isinstance(item, dict)} if isinstance(current_items, list) else {}
+    merged: list[dict[str, Any]] = []
+    for default_item in default_items:
+        item = {**default_item, **current.get(default_item["id"], {})}
+        item["id"] = default_item["id"]
+        merged.append(item)
+    return merged
+
+
+def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    businesses = _merge_by_id(settings.get("businesses"), CANONICAL_BUSINESSES)
+    canonical_names = {item["id"]: item["name"] for item in CANONICAL_BUSINESSES}
+    for item in businesses:
+        item["entityType"] = item.get("entityType") or "individual"
+        item["name"] = canonical_names[item["id"]]
+
+    branches = _merge_by_id(settings.get("branches"), CANONICAL_BRANCHES)
+    canonical_branch_names = {item["id"]: item["name"] for item in CANONICAL_BRANCHES}
+    canonical_branch_businesses = {item["id"]: item["businessId"] for item in CANONICAL_BRANCHES}
+    for item in branches:
+        item["name"] = canonical_branch_names[item["id"]]
+        item["businessId"] = canonical_branch_businesses[item["id"]]
+        item["status"] = item.get("status") or "active"
+
+    def normalize_business_ref(item: dict[str, Any]) -> dict[str, Any]:
+        next_item = {**item}
+        business_id = str(next_item.get("businessId") or next_item.get("business_id") or "").strip()
+        if business_id not in CANONICAL_BUSINESS_IDS:
+            business_id = MIA_BUSINESS_ID
+        next_item["businessId"] = business_id
+        if "business_id" in next_item:
+            next_item["business_id"] = business_id
+        branch = str(next_item.get("branch") or "").strip()
+        if branch and branch not in CANONICAL_BRANCH_NAMES:
+            next_item["branch"] = MIA_BRANCH_NAME
+        return next_item
+
+    return {
+        "businesses": businesses,
+        "branches": branches,
+        "accounts": [normalize_business_ref(item) for item in settings.get("accounts", []) if isinstance(item, dict)],
+        "staff": [item for item in settings.get("staff", []) if isinstance(item, dict)],
+        "integrations": [normalize_business_ref(item) for item in settings.get("integrations", []) if isinstance(item, dict)],
+    }
+
+
+def _jsonb_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _encrypt_secret(value: str) -> str:
+    try:
+        from app.core.credential_vault import encrypt_value
+
+        return encrypt_value(value)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="계정 비밀번호 암호화에 실패했습니다") from exc
+
+
+def _migrate_platform_account_secrets(rows: list[dict[str, Any]]) -> bool:
+    changed = False
+    for row in rows:
+        plaintext = str(row.get("password") or "")
+        if not plaintext:
+            continue
+        if not row.get("password_enc"):
+            row["password_enc"] = _encrypt_secret(plaintext)
+        row.pop("password", None)
+        changed = True
+    return changed
+
+
+def _has_account_secret(row: dict[str, Any]) -> bool:
+    return bool(row.get("password_enc") or row.get("password"))
+
+
+def _get_pool_or_none() -> Any | None:
+    try:
+        from app.core.db_pool import get_pool
+
+        return get_pool()
+    except Exception:
+        return None
 
 
 def _mask_email(email: str) -> str:
@@ -115,7 +292,25 @@ def _find(rows: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
 
 
 def _is_admin(user: dict[str, Any]) -> bool:
-    return bool(user.get("is_admin") or user.get("is_internal_admin"))
+    email = _email(user)
+    user_role = str(user.get("user_role") or "").strip().lower()
+    privileged_principal = bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
+    if email and not privileged_principal:
+        employee_record = next(
+            (row for row in _read("employee_join_requests") if str(row.get("email") or "").strip().lower() == email),
+            None,
+        )
+        if employee_record:
+            return False
+    tenant_role = str(user.get("tenant_role") or "").strip().lower()
+    membership_role = str((user.get("current_membership") or {}).get("role") or "").strip().lower()
+    return bool(
+        user.get("is_admin")
+        or user.get("is_internal_admin")
+        or tenant_role in {"owner", "admin"}
+        or membership_role in {"owner", "admin"}
+        or user_role in {"ceo", "admin", "system"}
+    )
 
 
 def _email(user: dict[str, Any]) -> str:
@@ -131,6 +326,10 @@ def _filter_user(rows: list[dict[str, Any]], user: dict[str, Any], *email_keys: 
 
 def _document_meta(document_type: str) -> dict[str, str]:
     return next((item for item in DOCUMENT_TYPES if item["type"] == document_type), DOCUMENT_TYPES[-1])
+
+
+def _required_document_types() -> list[dict[str, str]]:
+    return [item for item in DOCUMENT_TYPES if item.get("requirement") == "필수"]
 
 
 def list_document_types() -> list[dict[str, str]]:
@@ -309,7 +508,25 @@ def review_join_request(request_id: str, action: str, memo: str, user: dict[str,
 def list_approved_employees(user: dict[str, Any]) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
-    return [row for row in _read("employee_join_requests") if row.get("status") == "approved"]
+    docs = _read("onboarding_documents")
+    contracts = _read("contracts")
+    payroll = _read("payroll_statements")
+
+    result = []
+    for row in _read("employee_join_requests"):
+        if row.get("status") != "approved":
+            continue
+        email = str(row.get("email") or "").strip().lower()
+        employee = dict(row)
+        employee["email_masked"] = employee.get("email_masked") or _mask_email(email)
+        employee["onboarding_document_count"] = sum(1 for item in docs if str(item.get("employee_email") or "").strip().lower() == email)
+        employee["contract_count"] = sum(1 for item in contracts if str(item.get("employee_email") or "").strip().lower() == email)
+        employee["payroll_statement_count"] = sum(1 for item in payroll if str(item.get("employee_email") or "").strip().lower() == email)
+        employee["needs_onboarding_documents"] = employee["onboarding_document_count"] == 0
+        employee["needs_contract"] = employee["contract_count"] == 0
+        employee["needs_payroll"] = employee["payroll_statement_count"] == 0
+        result.append(employee)
+    return sorted(result, key=lambda row: row.get("reviewed_at") or row.get("updated_at") or row.get("requested_at") or "", reverse=True)
 
 
 async def save_onboarding_document(
@@ -373,9 +590,67 @@ async def save_onboarding_document(
     return record
 
 
+def _onboarding_missing_document_rows(
+    *,
+    existing_rows: list[dict[str, Any]],
+    user: dict[str, Any],
+) -> list[dict[str, Any]]:
+    email_filter = "" if _is_admin(user) else _email(user)
+    existing_keys = {
+        (
+            str(row.get("employee_email") or "").strip().lower(),
+            str(row.get("document_type") or "").strip(),
+        )
+        for row in existing_rows
+    }
+    rows: list[dict[str, Any]] = []
+    admin_view = _is_admin(user)
+    for employee in _read("employee_join_requests"):
+        status = str(employee.get("status") or "pending").strip().lower()
+        if status == "rejected":
+            continue
+        if admin_view and status != "approved":
+            continue
+        employee_email = str(employee.get("email") or "").strip().lower()
+        if not employee_email:
+            continue
+        if email_filter and employee_email != email_filter:
+            continue
+        employee_id = str(employee.get("id") or employee_email)
+        for meta in _required_document_types():
+            document_type = meta["type"]
+            if (employee_email, document_type) in existing_keys:
+                continue
+            rows.append(
+                {
+                    "id": f"missing-{employee_id}-{document_type}",
+                    "employee_request_id": employee_id,
+                    "employee_name": employee.get("name") or "",
+                    "employee_email": employee_email,
+                    "employee_email_masked": employee.get("email_masked") or _mask_email(employee_email),
+                    "branch": employee.get("branch") or "",
+                    "document_type": document_type,
+                    "document_label": meta["label"],
+                    "requirement": meta["requirement"],
+                    "status": "missing",
+                    "status_label": "작성 필요",
+                    "original_filename": "",
+                    "size_bytes": 0,
+                    "uploaded_at": "",
+                    "updated_at": employee.get("reviewed_at") or employee.get("updated_at") or employee.get("requested_at") or "",
+                    "is_placeholder": True,
+                    "missing_document": True,
+                    "employee_request_status": status,
+                }
+            )
+    return rows
+
+
 def list_onboarding_documents(user: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = _read("onboarding_documents")
-    return sorted(_filter_user(rows, user, "employee_email", "uploaded_by"), key=lambda row: row.get("uploaded_at", ""), reverse=True)
+    stored_rows = _read("onboarding_documents")
+    visible_rows = _filter_user(stored_rows, user, "employee_email", "uploaded_by")
+    rows = visible_rows + _onboarding_missing_document_rows(existing_rows=stored_rows, user=user)
+    return sorted(rows, key=lambda row: row.get("uploaded_at") or row.get("updated_at") or "", reverse=True)
 
 
 def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
@@ -423,9 +698,15 @@ def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     now = _now()
     contract_id = str(payload.get("id") or uuid4())
     employee_email = str(payload.get("employee_email") or payload.get("employeeEmail") or "").strip().lower()
+    contract_type = str(payload.get("contract_type") or payload.get("contractType") or "part_time")
+    meta = CONTRACT_TEMPLATE_META.get(contract_type, CONTRACT_TEMPLATE_META["default"])
     contract = {
         **payload,
         "id": contract_id,
+        "contract_type": contract_type,
+        "document_kind": str(payload.get("document_kind") or payload.get("documentKind") or meta["document_kind"]),
+        "template_version": str(payload.get("template_version") or payload.get("templateVersion") or meta["template_version"]),
+        "print_title": str(payload.get("print_title") or payload.get("printTitle") or meta["print_title"]),
         "employee_email": employee_email,
         "employee_email_masked": _mask_email(employee_email),
         "employee_name": str(payload.get("employee_name") or payload.get("employeeName") or "").strip(),
@@ -549,12 +830,219 @@ def list_accounts(user: dict[str, Any]) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
     rows = _read("platform_accounts")
+    if _migrate_platform_account_secrets(rows):
+        _write("platform_accounts", rows)
     result = []
     for row in rows:
         item = {k: v for k, v in row.items() if k not in {"password", "password_enc"}}
-        item["password_masked"] = "********" if row.get("password") or row.get("password_enc") else ""
+        item["password_masked"] = "********" if _has_account_secret(row) else ""
         result.append(item)
     return result
+
+
+def get_settings(user: dict[str, Any]) -> dict[str, Any]:
+    data = _read_json_object("settings")
+    ui_settings = data.get("ui_settings")
+    if not isinstance(ui_settings, dict):
+        ui_settings = {}
+    ui_settings = _canonicalize_ui_settings(ui_settings)
+    return {
+        "settings": ui_settings,
+        "meta": {
+            "updated_at": data.get("ui_settings_updated_at") or "",
+            "updated_by": data.get("ui_settings_updated_by") or "",
+            "source": "server-file",
+        },
+    }
+
+
+def save_settings(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="기초설정 저장 권한이 없습니다")
+    settings = payload.get("settings") if isinstance(payload, dict) else payload
+    if not isinstance(settings, dict):
+        raise HTTPException(status_code=400, detail="settings 객체가 필요합니다")
+    allowed = {"businesses", "branches", "accounts", "staff", "integrations"}
+    raw = {
+        key: value
+        for key, value in settings.items()
+        if key in allowed and isinstance(value, list)
+    }
+    cleaned = _canonicalize_ui_settings(raw)
+    data = _read_json_object("settings")
+    now = _now()
+    data["ui_settings"] = cleaned
+    data["ui_settings_updated_at"] = now
+    data["ui_settings_updated_by"] = _email(user)
+    _write_json_object("settings", data)
+    return {"settings": cleaned, "meta": {"updated_at": now, "updated_by": _email(user), "source": "server-file"}}
+
+
+async def get_settings_persisted(user: dict[str, Any]) -> dict[str, Any]:
+    pool = _get_pool_or_none()
+    if pool is None:
+        return get_settings(user)
+    try:
+        async with pool.acquire() as conn:
+            ready = await conn.fetchval("SELECT to_regclass('public.yeoljeong_businesses') IS NOT NULL")
+            if not ready:
+                return get_settings(user)
+            business_rows = await conn.fetch(
+                """
+                SELECT id, entity_type, name, registration_no, representative, tax_type,
+                       opened_at, address, memo
+                  FROM yeoljeong_businesses
+                 WHERE deleted_at IS NULL
+                 ORDER BY sort_order, id
+                """
+            )
+            branch_rows = await conn.fetch(
+                """
+                SELECT id, business_id, name, status, phone, address
+                  FROM yeoljeong_branches
+                 WHERE deleted_at IS NULL
+                 ORDER BY sort_order, id
+                """
+            )
+            extra_row = await conn.fetchrow(
+                "SELECT data, updated_at, updated_by FROM yeoljeong_settings WHERE scope = 'ui'"
+            )
+        extra = _jsonb_object(extra_row["data"]) if extra_row else {}
+        settings = {
+            "businesses": [
+                {
+                    "id": row["id"],
+                    "entityType": row["entity_type"],
+                    "name": row["name"],
+                    "registrationNo": row["registration_no"],
+                    "representative": row["representative"],
+                    "taxType": row["tax_type"],
+                    "openedAt": row["opened_at"] or "",
+                    "address": row["address"] or "",
+                    "memo": row["memo"] or "",
+                }
+                for row in business_rows
+            ],
+            "branches": [
+                {
+                    "id": row["id"],
+                    "businessId": row["business_id"],
+                    "name": row["name"],
+                    "status": row["status"],
+                    "phone": row["phone"] or "",
+                    "address": row["address"] or "",
+                }
+                for row in branch_rows
+            ],
+            "accounts": extra.get("accounts") if isinstance(extra.get("accounts"), list) else [],
+            "staff": extra.get("staff") if isinstance(extra.get("staff"), list) else [],
+            "integrations": extra.get("integrations") if isinstance(extra.get("integrations"), list) else [],
+        }
+        return {
+            "settings": _canonicalize_ui_settings(settings),
+            "meta": {
+                "updated_at": extra_row["updated_at"].isoformat(timespec="seconds") if extra_row and extra_row["updated_at"] else "",
+                "updated_by": extra_row["updated_by"] if extra_row else "",
+                "source": "database",
+            },
+        }
+    except Exception:
+        return get_settings(user)
+
+
+async def save_settings_persisted(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    file_result = save_settings(payload, user)
+    pool = _get_pool_or_none()
+    if pool is None:
+        return file_result
+    settings = file_result["settings"]
+    now = _now()
+    updated_by = _email(user)
+    try:
+        async with pool.acquire() as conn:
+            ready = await conn.fetchval("SELECT to_regclass('public.yeoljeong_businesses') IS NOT NULL")
+            if not ready:
+                return file_result
+            async with conn.transaction():
+                for sort_order, item in enumerate(settings["businesses"], start=1):
+                    await conn.execute(
+                        """
+                        INSERT INTO yeoljeong_businesses
+                            (id, entity_type, name, registration_no, representative, tax_type,
+                             opened_at, address, memo, sort_order, updated_by)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (id) DO UPDATE
+                           SET entity_type = EXCLUDED.entity_type,
+                               name = EXCLUDED.name,
+                               registration_no = EXCLUDED.registration_no,
+                               representative = EXCLUDED.representative,
+                               tax_type = EXCLUDED.tax_type,
+                               opened_at = EXCLUDED.opened_at,
+                               address = EXCLUDED.address,
+                               memo = EXCLUDED.memo,
+                               sort_order = EXCLUDED.sort_order,
+                               updated_by = EXCLUDED.updated_by,
+                               updated_at = NOW(),
+                               deleted_at = NULL
+                        """,
+                        item["id"],
+                        item.get("entityType") or "individual",
+                        item["name"],
+                        item.get("registrationNo") or "",
+                        item.get("representative") or "",
+                        item.get("taxType") or "",
+                        item.get("openedAt") or "",
+                        item.get("address") or "",
+                        item.get("memo") or "",
+                        sort_order,
+                        updated_by,
+                    )
+                for sort_order, item in enumerate(settings["branches"], start=1):
+                    await conn.execute(
+                        """
+                        INSERT INTO yeoljeong_branches
+                            (id, business_id, name, status, phone, address, sort_order, updated_by)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ON CONFLICT (id) DO UPDATE
+                           SET business_id = EXCLUDED.business_id,
+                               name = EXCLUDED.name,
+                               status = EXCLUDED.status,
+                               phone = EXCLUDED.phone,
+                               address = EXCLUDED.address,
+                               sort_order = EXCLUDED.sort_order,
+                               updated_by = EXCLUDED.updated_by,
+                               updated_at = NOW(),
+                               deleted_at = NULL
+                        """,
+                        item["id"],
+                        item["businessId"],
+                        item["name"],
+                        item.get("status") or "active",
+                        item.get("phone") or "",
+                        item.get("address") or "",
+                        sort_order,
+                        updated_by,
+                    )
+                extra = {
+                    "accounts": settings["accounts"],
+                    "staff": settings["staff"],
+                    "integrations": settings["integrations"],
+                }
+                await conn.execute(
+                    """
+                    INSERT INTO yeoljeong_settings (scope, data, updated_by)
+                    VALUES ('ui', $1::jsonb, $2)
+                    ON CONFLICT (scope) DO UPDATE
+                       SET data = EXCLUDED.data,
+                           updated_by = EXCLUDED.updated_by,
+                           updated_at = NOW()
+                    """,
+                    json.dumps(extra, ensure_ascii=False),
+                    updated_by,
+                )
+        return {"settings": settings, "meta": {"updated_at": now, "updated_by": updated_by, "source": "database"}}
+    except Exception:
+        return file_result
 
 
 def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -568,13 +1056,18 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     existing = next((row for row in rows if row.get("service") == service and row.get("username") == username and row.get("branch") == payload.get("branch")), None)
     now = _now()
     record = existing or {"id": str(uuid4()), "created_at": now}
+    incoming_password = str(payload.get("password") or "")
+    if incoming_password:
+        record["password_enc"] = _encrypt_secret(incoming_password)
+        record.pop("password", None)
+    elif record.get("password"):
+        _migrate_platform_account_secrets([record])
     record.update(
         {
             "service": service,
             "label": payload.get("label") or PLATFORM_LABELS.get(service, service),
             "login_url": payload.get("login_url") or "",
             "username": username,
-            "password": payload.get("password") or record.get("password") or "",
             "business_id": payload.get("business_id") or "",
             "branch": payload.get("branch") or "",
             "collection_mode": payload.get("collection_mode") or "browser-automation",
@@ -587,8 +1080,8 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     if not existing:
         rows.insert(0, record)
     _write("platform_accounts", rows)
-    public = {k: v for k, v in record.items() if k != "password"}
-    public["password_masked"] = "********" if record.get("password") else ""
+    public = {k: v for k, v in record.items() if k not in {"password", "password_enc"}}
+    public["password_masked"] = "********" if _has_account_secret(record) else ""
     return public
 
 
@@ -631,7 +1124,10 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
     services = payload.get("services") or []
-    accounts = [row for row in _read("platform_accounts") if not services or row.get("service") in services]
+    all_accounts = _read("platform_accounts")
+    if _migrate_platform_account_secrets(all_accounts):
+        _write("platform_accounts", all_accounts)
+    accounts = [row for row in all_accounts if not services or row.get("service") in services]
     synced_at = _now()
     summary = []
     for account in accounts:

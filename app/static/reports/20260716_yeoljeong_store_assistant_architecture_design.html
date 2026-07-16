@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 아키텍처·디자인 기획서</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f7f8; --panel:#fff; --ink:#182024; --muted:#64727a; --line:#d8e0e4; --accent:#0f766e; --blue:#2563eb; --amber:#b45309; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height:1.65; }
+    main { max-width:1120px; margin:0 auto; padding:42px 18px 72px; }
+    header, section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:20px; margin-bottom:14px; }
+    .kicker { color:var(--accent); font-weight:900; font-size:13px; }
+    h1 { margin:6px 0 8px; font-size:34px; line-height:1.16; letter-spacing:0; }
+    h2 { margin:0 0 12px; font-size:20px; }
+    h3 { margin:16px 0 8px; font-size:16px; }
+    p { margin:0 0 12px; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { border-bottom:1px solid var(--line); padding:10px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; }
+    code { background:#eef3f5; border-radius:5px; padding:2px 6px; }
+    .muted { color:var(--muted); }
+    .flow { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; }
+    .step { border:1px solid var(--line); border-radius:8px; padding:12px; background:#f8fafb; min-height:118px; }
+    .step strong { display:block; color:var(--accent); margin-bottom:6px; }
+    .tag { display:inline-flex; min-height:24px; align-items:center; border-radius:999px; padding:0 10px; background:#e6f4f1; color:var(--accent); font-size:12px; font-weight:900; }
+    @media (max-width: 860px) { .flow { grid-template-columns:1fr; } h1 { font-size:28px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">ARCHITECTURE & DESIGN PLAN</div>
+      <h1>매장비서 아키텍처·디자인 기획서</h1>
+      <p class="muted">작성/갱신 기준: 2026-07-16 10:56 KST. 화면 구조, 모달/문서 프리뷰, 권한별 UX, 향후 개선안을 관리합니다.</p>
+      <p><a href="./20260716_yeoljeong_store_assistant_docs_index.html">문서 인덱스로 돌아가기</a></p>
+    </header>
+
+    <section>
+      <h2>1. 현재 아키텍처</h2>
+      <div class="flow">
+        <div class="step"><strong>정적 SPA</strong>단일 HTML이 화면 상태, 폼, 렌더링, API 호출을 담당합니다.</div>
+        <div class="step"><strong>FastAPI</strong>로그인, 설정, 직원, 입사서류, 계약, 급여 API를 제공합니다.</div>
+        <div class="step"><strong>원장 저장</strong>JSON 파일과 일부 DB 설정을 조합해 현재 운영 데이터를 보관합니다.</div>
+        <div class="step"><strong>문서/리포트</strong>HTML 문서를 정적 경로에 저장해 관리자 화면에서 바로 엽니다.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 화면 설계</h2>
+      <table>
+        <thead><tr><th>화면</th><th>목적</th><th>현재 상태</th><th>개선 방향</th></tr></thead>
+        <tbody>
+          <tr><td>대시보드</td><td>월마감 KPI, 최근 입력, 비용 구조 확인</td><td>정적 데이터/서버 데이터 혼합 렌더</td><td>마감 예외와 미처리 업무를 우선순위 큐로 노출</td></tr>
+          <tr><td>직원관리</td><td>초대, 가입요청 승인, 승인 직원 원장 확인</td><td>관리자 권한 기준으로 승인/반려 처리</td><td>승인 후 입사서류/계약/급여 작성 상태를 한 줄에서 추적</td></tr>
+          <tr><td>입사서류</td><td>직원 서류 업로드와 관리자 검수</td><td>미제출 필수서류 placeholder 표시</td><td>서류별 만료일, 재제출 요청, 보건증 갱신 알림 추가</td></tr>
+          <tr><td>계약서</td><td>계약 작성, A4 미리보기, 서명 요청</td><td>표준근로계약서/3.3% 용역계약서 프리뷰 지원</td><td>계약 템플릿 버전 이력과 노무 검토 체크리스트 추가</td></tr>
+          <tr><td>급여내역서</td><td>승인 직원 급여 작성/확인</td><td>3.3% 원천징수 자동 제안, 4대보험 입력 지원</td><td>근태 기반 자동 산출과 월별 확정 잠금 추가</td></tr>
+          <tr><td>설정</td><td>사업자, 지점, 배달앱/POS/매입 계정 관리</td><td>3개 사업자 기준 설정 보유</td><td>계정 Vault 연동 상태와 자동 수집 스케줄을 같은 화면에서 관리</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>3. 디자인/모달 기준</h2>
+      <table>
+        <thead><tr><th>컴포넌트</th><th>현재 기준</th><th>보완 기준</th></tr></thead>
+        <tbody>
+          <tr><td>상단 바</td><td>매장비서 브랜드, 샘플/가져오기/내보내기/초기화, 인증 상태</td><td>문서 링크를 고정해 운영자 교육/업데이트 관리 진입점으로 사용</td></tr>
+          <tr><td>탭</td><td>대시보드부터 설정까지 업무별 탭</td><td>직원 권한에서는 본인 업무만 노출하고, 관리자 권한은 전체 업무 노출</td></tr>
+          <tr><td>모달</td><td>전화 초대, 계약 링크, 확인 팝업 등 단일 레이어 중심</td><td>삭제/승인/서명요청 등 irreversible action은 사유와 대상명을 명시</td></tr>
+          <tr><td>계약 프리뷰</td><td>A4 문서처럼 보이는 프리뷰와 인쇄/PDF 버튼</td><td>모바일에서는 프리뷰 축소보다 핵심 입력 검증과 PDF 열기를 우선</td></tr>
+          <tr><td>상태 배지</td><td>대기/승인/작성필요/요청됨 등 텍스트 배지</td><td>색상만으로 구분하지 않고 상태 문구를 항상 함께 표시</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>4. 현재 방식이 최선인지 판정</h2>
+      <p><span class="tag">현재 판정</span> 지금 개발된 방식은 빠른 운영 검증과 CEO 피드백 반영에는 좋은 선택입니다. 단일 정적 SPA라 배포/수정 속도가 빠르고, FastAPI API를 붙여 실제 직원·계약·급여 흐름까지 검증할 수 있습니다.</p>
+      <p>다만 장기 최선안은 아닙니다. 기능이 이미 직원 승인, 입사서류, 계약서, 급여, 배달앱 계정, 사업자 설정까지 확장되어 단일 HTML의 변경 위험이 커졌습니다. 실사용자가 늘기 전에는 저장소를 PostgreSQL 중심으로 전환하고, 프론트는 컴포넌트 기반으로 분리하는 것이 맞습니다.</p>
+    </section>
+
+    <section>
+      <h2>5. 권장 개선 로드맵</h2>
+      <table>
+        <thead><tr><th>우선순위</th><th>개선안</th><th>기대효과</th><th>완료 기준</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>직원/계약/급여/입사서류 JSON 원장 PostgreSQL 전환</td><td>동시 수정 안정성, 감사로그, 백업/복구 기준 확보</td><td>CRUD API가 DB 트랜잭션으로 동작하고 JSON은 백업/마이그레이션 입력으로만 사용</td></tr>
+          <tr><td>P0</td><td>권한/세션/이메일 마스킹 E2E 고정</td><td>직원 정보 노출과 권한 오인 방지</td><td>관리자/직원/대기직원 시나리오 Playwright 통과</td></tr>
+          <tr><td>P1</td><td>프론트 화면을 모듈 또는 Next.js 앱으로 분리</td><td>계약/급여/설정 변경 시 회귀 위험 축소</td><td>탭별 컴포넌트와 API 클라이언트가 분리되고 build 검증 통과</td></tr>
+          <tr><td>P1</td><td>계약/급여 문서 버전관리</td><td>노무·세무 기준 변경 대응</td><td>템플릿 버전, 생성일, 검토 메모가 각 문서에 저장</td></tr>
+          <tr><td>P2</td><td>배달앱/POS/마켓봄 자동 수집 스케줄러</td><td>월마감 수작업 감소</td><td>수집 성공/실패 로그와 재시도 알림이 관리자 화면에 표시</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

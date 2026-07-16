@@ -3593,3 +3593,80 @@ from __
 
 ## [2026-06-18 12:26:49 KST] [aads-server] scripts/pipeline-runner.sh
 - Chat-Direct 수정: run_remote_command: python3 -c "p='/root/aads/aads-server/scripts/pipeline-runner.sh'; s=open(p).rea
+
+## [2026-07-16 05:54:16 KST] [aads-server] scripts/build_dashboard_now.sh
+- Chat-Direct 수정: write: scripts/build_dashboard_now.sh
+
+## [2026-07-16 05:54:18 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-dashboard/src -name "ChatSidebar*" -o -name "ClientLayout*"
+
+## [2026-07-16 06:15:20 KST] [aads-server] app/api/yeoljeong_finance.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard ls -la /app/.next/BUILD_ID 2>/dev/null
+
+## [2026-07-16 06:16:15 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker logs aads-server-green --tail 30 2>&1 | grep -i "memory-context\|error\|f
+
+## [2026-07-16 06:47:17 KST] [aads-server] scripts/tmp_MemoryContextBar.tsx
+- Chat-Direct 수정: write: scripts/tmp_MemoryContextBar.tsx
+
+## [2026-07-16 06:47:43 KST] [aads-server] scripts/patch_memory_context_bar.py
+- Chat-Direct 수정: write: scripts/patch_memory_context_bar.py
+
+## [2026-07-16 06:51:34 KST] [aads-server] migrations/113_yeoljeong_finance_settings.sql
+- Chat-Direct 수정: run_remote_command: nohup docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-
+
+## [2026-07-16 06:55:10 KST] [aads-server] scripts/tmp_MemoryContextBar.tsx
+- Chat-Direct 수정: write: scripts/tmp_MemoryContextBar.tsx
+
+## [2026-07-16 09:35:10 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     result = await svc.get_memory_contex→    result = await svc.get_memory_contex
+
+## [2026-07-16 10:07:02 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         tenant_uuid = _require_tenant_uu→        tenant_uuid = _require_tenant_uu
+
+## [2026-07-16 10:10:01 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: 매장비서 계약서 미리보기를 A4 출력 문서 레이아웃으로 보강하고 표준근로계약서/3.3% 프리랜서 용역계약서 조항 분기 및 `A4 인쇄/PDF` 버튼을 추가.
+
+## [2026-07-16 10:10:01 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: 계약 저장 시 `document_kind`, `template_version`, `print_title`을 계약 유형별로 자동 보정.
+
+## [2026-07-16 10:10:01 KST] [aads-server] app/static/reports/yeoljeong-contract-a4-e2e.html
+- Chat-Direct 추가: 테스트 계정 2건 기준 A4 계약서 출력 디자인 검증용 정적 HTML 리포트 생성.
+
+## [2026-07-16 10:14:46 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: 매장비서 직원계약서 A4 출력 디자인 완료보고 보강. 공개 앱 HTML/공개 A4 리포트/컨테이너 서비스 E2E/pytest 및 스크린샷 제한 사항을 ledger에 추가 기록.
+
+## [2026-07-16 10:15:42 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         if not session_row:
+            →        if not session_row:
+
+
+## [2026-07-16 10:18:15 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server sed -i 's/    tenant_id: Optional\[str\] = None,$/    te
+
+## [2026-07-16 11:04:00 KST] [aads-dashboard] src/components/Sidebar.tsx
+- Chat-Direct 수정: 매장비서 문서 관리자 사이드바 링크를 실제 공개되는 `/public/reports/20260716_yeoljeong_store_assistant_docs_index.html` 경로로 보정.
+
+## [2026-07-16 11:04:00 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: 매장비서 기술문서/기획문서 링크 최종 검증, fb/aads 공개 URL HTTP 결과, 미배포 제한사항을 ledger에 추가 기록.
+
+## [2026-07-16 11:08:28 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html
+- Chat-Direct 수정: 매장비서 기술문서의 AADS 대시보드 공개 경로를 실제 200 응답 경로인 `/public/reports/...`로 보정.
+
+## [2026-07-16 11:08:28 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html
+- Chat-Direct 수정: 문서 인덱스의 매장비서 앱 링크를 대시보드 도메인에서도 깨지지 않도록 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`로 보정.
+
+## [2026-07-16 11:08:28 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: `document_report_unverified_by_ledger` 지적에 따른 문서/링크/URL/문법 재검증 결과와 미배포 제한사항을 ledger에 추가 기록.
+
+## [2026-07-16 11:12:51 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: 매장비서 앱 상단 `기획` 링크를 검증된 `20260716_yeoljeong_store_assistant_architecture_design_plan.html` 경로로 통일.
+
+## [2026-07-16 11:12:51 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html
+- Chat-Direct 수정: 문서 인덱스의 아키텍처·디자인 기획서 링크를 `architecture_design_plan.html`로 통일하고 대시보드 공개 복사본까지 동기화.
+
+## [2026-07-16 11:12:51 KST] [aads-dashboard] src/components/Sidebar.tsx
+- Chat-Direct 수정: 관리자 사이드바 `매장비서 문서` 링크를 운영에서 즉시 200 검증되는 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html` 절대 URL로 보정.
+
+## [2026-07-16 11:12:51 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: 매장비서 문서 완료보고 위반 사항에 대한 최종 링크 보정, 공개 URL 검증, lint/문법/동기화 결과와 커밋·배포 미수행 상태를 ledger에 추가 기록.
