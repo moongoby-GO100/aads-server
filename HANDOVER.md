@@ -8,14 +8,18 @@
   - 운영 DB에도 동일 제약 확장을 적용했다. 기존 데이터 변경은 없다.
   - `/root/aads/aads-dashboard`: `video` 아티팩트 타입, 미디어 탭, 패널/새창 `<video controls>` 렌더링, 메시지 카드/토스트 연결을 추가했다.
 - 검증:
-  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 12:07:04 KST`.
-  - `python3 -m py_compile app/services/chat_service.py` 통과.
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 12:09:59 KST`.
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/models/chat.py` 통과.
   - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+  - `/root/aads/aads-dashboard`: `npm run build` 통과, route 목록에 `/chat/artifacts/[id]` 포함.
+  - HTTP 확인: `http://127.0.0.1:8100/api/v1/health` 200, `http://127.0.0.1:3100/login` 200.
   - DB 제약 확인: `chat_artifacts_type_check`에 `video` 포함.
   - DB 롤백 smoke test: 트랜잭션 안에서 `type='video'` 아티팩트 insert 성공 후 `ROLLBACK`.
+  - 운영 컨테이너 소스 확인: `aads-server` 컨테이너의 `/app/app/services/chat_service.py`에 영상 URL 감지 코드가 보인다. 백엔드는 소스 볼륨 마운트 구조라 파일 변경은 컨테이너 파일시스템에 노출된다.
 - 제한:
-  - 코드 배포/reload는 수행하지 않았다. 운영 DB 제약은 반영됐지만, 백엔드/대시보드 코드 변경은 배포 전까지 운영 화면에는 반영되지 않는다.
-  - 커밋/푸시는 아직 수행하지 않았다. 서버 워크트리에 기존 Yeoljeong/임시 스크립트 변경이 섞여 있어 이번 변경 파일만 분리 커밋해야 한다.
+  - 서버 코드 커밋 `64bc00ac fix: render chat media artifacts` 생성 완료. 서버 `origin/main` 대비 로컬 10커밋 ahead이며 git push는 수행하지 않았다.
+  - 대시보드 코드 커밋 `3000512 fix: show media artifacts in chat` 생성 완료. 대시보드 저장소는 remote가 없어 push할 대상이 없다.
+  - dashboard build는 성공했지만 정식 blue-green deploy는 수행하지 않았다. 현재 운영 컨테이너 번들에서 새 미디어 렌더링 문자열 확인은 미완료이므로, 운영 화면 반영은 대시보드 deploy 후 확정해야 한다.
   - 로그인 브라우저 E2E는 미실행이다. 배포 후 실제 생성 이미지/영상 결과로 화면 렌더링 확인이 필요하다.
 
 ## 2026-07-16 12:01 KST - AADS chat stability follow-up completion report
