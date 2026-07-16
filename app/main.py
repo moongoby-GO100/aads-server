@@ -1697,6 +1697,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/browser-bridge/sessions/register",
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
+    "/api/v1/version",  # 대시보드 배포 버전 체크 구 경로 (읽기전용)
     "/api/v1/ops/version",  # 대시보드 배포 버전 체크 (읽기전용)
     "/api/v1/image/gallery",  # AI 모델 이미지 갤러리 (공개 읽기전용)
     "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)

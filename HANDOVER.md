@@ -3496,3 +3496,22 @@
   - 서버 컨테이너가 `/root/aads/aads-server/app`을 bind mount하고 있어 green 컨테이너 재시작 후 nginx upstream을 green 8102로 전환했다.
   - 현재 `aads-server-green`이 active, `aads-server`는 backup이며 둘 다 Docker health 상태다.
   - 대시보드는 `/root/aads/aads-dashboard/deploy.sh`로 green 3101 active 배포가 완료됐다. 배포 스크립트의 Step 7 QA는 UNKNOWN으로 남아 브라우저 E2E 대신 API/health 검증으로 대체했다.
+
+## 2026-07-16 11:52 KST - Chat stability ledger correction and version auth compatibility
+- 배경: CEO가 이전 완료보고가 커밋/배포/문서 ledger와 충돌한다고 지적해 실제 상태를 재조회했다.
+- 확인:
+  - 서버 저장소는 `origin/main` 대비 local ahead 상태이며, 원격 push는 아직 수행되지 않았다.
+  - 대시보드 저장소는 Git 추적이 복구되어 있고 현재 dirty file은 없다.
+  - active 백엔드는 `aads-server-green`/8102, active 대시보드는 green 3101이며 컨테이너 health는 정상이다.
+  - 최근 15분 `todo_completion_gate_missing` 로그는 0회, `memory-context`는 200 응답으로 확인됐다.
+- 추가 조치:
+  - `app/main.py` 인증 면제 경로에 `/api/v1/version`을 추가했다. `/api/v1/ops/version`은 이미 공개였지만, 구 경로 `/api/v1/version`이 401을 내며 구 탭/캐시에서 세션 만료 잡음으로 보일 수 있어 읽기전용 호환 경로도 공개 처리했다.
+- 검증 예정:
+  - `python3 -m py_compile app/main.py app/api/ops.py app/api/image.py app/services/chat_service.py`: 통과.
+  - `npx tsc --noEmit` in `/root/aads/aads-dashboard`: 통과.
+  - `docker restart aads-server-green` 후 health가 healthy로 복구됨.
+  - `curl https://aads.newtalk.kr/api/v1/health`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/version`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/ops/version`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/image/gallery?limit=1`: HTTP 200.
+  - `POST https://aads.newtalk.kr/api/v1/image/generate` without auth: HTTP 401, 쓰기성 API 보호 유지.
