@@ -6027,6 +6027,7 @@ async def list_messages(
     fields: str = "full",
     read_only: bool = False,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     tenant_uuid = _require_tenant_uuid(tenant_id, "list_messages")
     async with get_pool().acquire() as conn:
@@ -6072,6 +6073,7 @@ async def list_messages_cursor(
     fields: str = "full",
     read_only: bool = False,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cursor 기반 메시지 조회 — 최근 N건 또는 cursor 이전 N건 (항상 ASC 반환)."""
     tenant_uuid = _require_tenant_uuid(tenant_id, "list_messages_cursor")
@@ -7336,6 +7338,7 @@ async def send_message_stream(
     branch_point_msg_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -10014,6 +10017,7 @@ async def list_artifacts(
     session_id: str = None,
     workspace_id: str = None,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     limit: int = 60,
     offset: int = 0,
 ) -> List[Dict[str, Any]]:
@@ -10165,6 +10169,7 @@ async def save_drive_file(
     file_type: Optional[str],
     uploaded_by: str = "user",
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = f"{uuid.uuid4()}_{filename}"
@@ -10300,6 +10305,7 @@ def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
 async def get_memory_context_info(
     session_id: str,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
     pool = get_pool()
