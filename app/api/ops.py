@@ -261,6 +261,7 @@ async def get_streaming_metrics():
     }
 
 
+@router.get("/ops/version")
 @router.get("/version")
 async def get_version():
     """배포 버전 해시 반환 — 프론트엔드 자동 새로고침용"""

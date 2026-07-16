@@ -3476,3 +3476,23 @@
 - 완료 판정:
   - 매장비서 개발환경 언어 보고, HTML 기술문서 저장, 아키텍처·디자인 기획문서 저장, DB전환 설계문서 저장, 관리자 총괄 링크, 1차 모듈 파일 분리는 파일/URL/커밋 기준 완료.
   - 원격 push, 정식 deploy, 대시보드 재빌드, HR/계약/급여 전체 DB 이관, 단일 HTML 전체 모듈화는 아직 미완료다.
+
+## 2026-07-16 11:43 KST - Chat stability follow-up auth split
+- 배경: CEO가 남은 개선 우선순위 5건을 즉시 순차 조치하라고 지시했고, 1차 패치/배포 검증 중 `/api/v1/ops/version`과 `/api/v1/image/gallery/{job_id}/image`가 여전히 401을 반환하는 것을 확인했다.
+- 추가 원인:
+  - `app/api/ops.py`의 버전 라우트는 실제로 `/api/v1/version`만 제공했고, 대시보드 `useVersionCheck`는 `/api/v1/ops/version`을 호출하고 있었다.
+  - `app/api/image.py`는 라우터 전역 `require_internal_admin` 의존성 때문에 공개 읽기용 갤러리 GET까지 인증을 요구했다.
+- 추가 조치:
+  - `app/api/ops.py`: `/ops/version` 별칭을 추가해 대시보드 버전 체크 경로와 백엔드 라우트를 일치시켰다.
+  - `app/api/image.py`: 라우터 전역 인증을 제거하고 생성/편집/동영상/승인/삭제 엔드포인트에만 `require_internal_admin`을 유지했다. `/gallery`와 `/gallery/{job_id}/image` GET은 공개 읽기로 분리했다.
+- 검증:
+  - `python3 -m py_compile app/api/image.py app/api/ops.py app/main.py app/services/chat_service.py`: 통과.
+  - `curl -s -o /tmp/aads_ops_version_ext.out -w '%{http_code}' https://aads.newtalk.kr/api/v1/ops/version`: 200.
+  - `curl -s -o /tmp/aads_gallery_ext.out -w '%{http_code}' 'https://aads.newtalk.kr/api/v1/image/gallery?limit=1'`: 200.
+  - `curl -s -o /tmp/aads_image_generate_ext.out -w '%{http_code}' -X POST https://aads.newtalk.kr/api/v1/image/generate -H 'Content-Type: application/json' -d '{}'`: 401. 쓰기성 이미지 API는 계속 보호됨.
+  - `curl -fsS https://aads.newtalk.kr/api/v1/health`: 200.
+- 배포 메모:
+  - 백엔드 blue/green 이미지 빌드는 export 단계에서 SIGTERM 143으로 종료되어 최종 전환까지 가지 못했다.
+  - 서버 컨테이너가 `/root/aads/aads-server/app`을 bind mount하고 있어 green 컨테이너 재시작 후 nginx upstream을 green 8102로 전환했다.
+  - 현재 `aads-server-green`이 active, `aads-server`는 backup이며 둘 다 Docker health 상태다.
+  - 대시보드는 `/root/aads/aads-dashboard/deploy.sh`로 green 3101 active 배포가 완료됐다. 배포 스크립트의 Step 7 QA는 UNKNOWN으로 남아 브라우저 E2E 대신 API/health 검증으로 대체했다.
