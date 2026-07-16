@@ -24,6 +24,7 @@ const navItems = [
   { href: "/lessons", label: "교훈", icon: "💡" },
   { href: "/flow", label: "FLOW", icon: "🔄" },
   { href: "/reports", label: "Reports", icon: "📊" },
+  { href: "https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html", label: "매장비서 문서", icon: "📘" },
   { href: "/kakaobot", label: "KakaoBot", icon: "💬" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
   { href: "/admin/prompts", label: "Prompts", icon: "📝" },
