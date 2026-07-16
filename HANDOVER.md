@@ -1,5 +1,49 @@
 # AADS HANDOVER
 
+## 2026-07-16 12:07 KST - Chat media artifact inline viewing implementation
+- 배경: CEO가 채팅 보고 중 이미지/영상 생성물을 채팅창에서 바로 볼 수 있게 적용 가능한지 물었고, 이전 응답이 구현/검증/문서 상태를 명확히 닫지 못해 실제 조치로 이어갔다.
+- 조치:
+  - `app/services/chat_service.py`: 아티팩트 자동 추출에서 이미지뿐 아니라 영상 URL도 감지하도록 확장했다. `https://...mp4`, `/static/...`, `/api/v1/.../video`, `/api/v1/.../image` 형태를 이미지/영상 아티팩트로 분류한다.
+  - `migrations/114_chat_artifacts_video_type.sql`: `chat_artifacts.type` CHECK 제약에 `video` 타입을 추가했다.
+  - 운영 DB에도 동일 제약 확장을 적용했다. 기존 데이터 변경은 없다.
+  - `/root/aads/aads-dashboard`: `video` 아티팩트 타입, 미디어 탭, 패널/새창 `<video controls>` 렌더링, 메시지 카드/토스트 연결을 추가했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 12:07:04 KST`.
+  - `python3 -m py_compile app/services/chat_service.py` 통과.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+  - DB 제약 확인: `chat_artifacts_type_check`에 `video` 포함.
+  - DB 롤백 smoke test: 트랜잭션 안에서 `type='video'` 아티팩트 insert 성공 후 `ROLLBACK`.
+- 제한:
+  - 코드 배포/reload는 수행하지 않았다. 운영 DB 제약은 반영됐지만, 백엔드/대시보드 코드 변경은 배포 전까지 운영 화면에는 반영되지 않는다.
+  - 커밋/푸시는 아직 수행하지 않았다. 서버 워크트리에 기존 Yeoljeong/임시 스크립트 변경이 섞여 있어 이번 변경 파일만 분리 커밋해야 한다.
+  - 로그인 브라우저 E2E는 미실행이다. 배포 후 실제 생성 이미지/영상 결과로 화면 렌더링 확인이 필요하다.
+
+## 2026-07-16 12:01 KST - AADS chat stability follow-up completion report
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 만족하지 못했다고 지적해, 남은 채팅창 안정화 개선 항목을 실제 코드/DB/로그 기준으로 재검수하고 추가 조치했다.
+- 조치:
+  - `app/services/model_selector.py`: `_RELAY_NON_RETRYABLE_ERROR_MARKERS`에 `preflight_failed`, `missing_binary`를 추가해 CLI/Codex Relay preflight 실패와 바이너리 누락을 90초 재시도하지 않고 즉시 폴백하도록 했다.
+  - `tests/unit/test_model_selector_dynamic_routing.py`: 위 두 마커가 retryable로 분류되지 않는 회귀 검증을 추가했다.
+  - `/root/aads/aads-dashboard/src/hooks/useSSE.ts`: `/ops/full-health` fallback fetch에 `Authorization` 헤더와 `credentials: "include"`를 붙이고, EventSource도 `withCredentials: true`로 열어 새 탭/쿠키 기반 인증에서 보조 API 401 잡음을 줄였다.
+  - 기존 반영 확인: `chat_service.py`의 TODO completion gate는 누락 TODO를 `interrupted`로 막지 않고 `todo_completion_gate_missing_non_blocking` 경고와 TODO 상태 갱신만 수행한다. `memory-context`는 `user_id` 필터 없이 tenant/session 기준으로 조회한다.
+  - 서버 커밋: 현재 HEAD `fix: skip non-retryable relay preflight retries`.
+  - 대시보드 커밋: `/root/aads/aads-dashboard` `b4ac508 fix: send auth on ops sse fallback`.
+  - 운영 반영: `app.services.model_selector`만 blue(8100)/green(8102)에 단일 모듈 hot-reload했다. 전체 reload/bluegreen은 요청 범위 밖 dirty 변경 반영 위험 때문에 수행하지 않았다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 12:01:25 KST`.
+  - `python3 -m py_compile app/services/model_selector.py app/services/chat_service.py app/routers/chat.py app/main.py` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/services/model_selector.py /app/app/services/chat_service.py /app/app/routers/chat.py /app/app/main.py` 통과.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+  - 운영 컨테이너 판정 확인: `preflight_failed`와 `missing_binary`는 retryable `False`, `Codex Relay timeout`은 retryable `True`.
+  - Hot-reload 확인: 8100/8102 모두 `success=1`, `failed=0`, `active_tasks_pre=1`, `active_tasks_post=1`, `tasks_lost=0`.
+  - DB 24시간 실행 상태: `completed 35`, `interrupted 4`, `running 1`. 24시간 interrupted reason은 `execution_resume_attempt_limit_exceeded`, `final_save_missing_placeholder_preserved`, `resume_claimed_by:d6976fb34975`, `superseded while preserving partial response` 각 1건이다.
+  - DB 최근 15분 실행 상태: `running 1`만 확인되어, 최근 15분 신규 `interrupted`는 없었다.
+  - HTTP 확인: `https://aads.newtalk.kr/api/v1/health` 200, `/api/v1/ops/version` 200, `/api/v1/image/gallery?limit=1` 200, `/api/v1/ops/full-health` 무인증 401.
+- 제한:
+  - 로컬/컨테이너에 `pytest`가 없어 `pytest tests/unit/test_model_selector_dynamic_routing.py -q`는 실행하지 못했다. `.venv/bin/python`은 `/usr/local/bin/python3.11` 링크 대상이 없어 실행 불가였다.
+  - `/ops/full-health`는 민감 운영 정보라 공개 면제하지 않았다. 프론트에서 인증 정보를 붙여 호출하도록 수정했다.
+  - 서버와 대시보드 변경은 관련 파일만 분리 커밋했다. git push는 수행하지 않았다.
+  - 대시보드 `useSSE.ts` 변경은 커밋됐지만, 대시보드 working tree에 요청 범위 밖 아티팩트 UI 변경이 남아 있어 정식 dashboard deploy는 수행하지 않았다.
+
 ## 2026-07-16 11:31 KST - Yeoljeong store assistant documentation final closeout verification
 - 배경: CEO가 이전 응답이 최종 완료보고 조건과 `document_report_unverified_by_ledger`를 만족하지 못했다고 지적해, 매장비서 개발환경/기술문서/기획문서/관리자 링크 작업을 다시 실측하고 완료 상태를 확정했다.
 - 조치:

@@ -2773,6 +2773,8 @@ _RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     "403",
     "404",
     "cli relay unreachable",  # 헬스체크 연결 실패 → 즉시 포기, 재시도 불필요
+    "preflight_failed",
+    "missing_binary",
     "you've hit your limit",
     "you have hit your limit",
     "resets ",
