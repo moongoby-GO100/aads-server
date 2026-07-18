@@ -255,17 +255,17 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
-def _pg_ts(value: Any) -> str | None:
+def _pg_ts(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(KST).isoformat()
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(KST)
     except ValueError:
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
             try:
                 parsed = datetime.strptime(text, fmt)
-                return parsed.replace(tzinfo=KST).isoformat()
+                return parsed.replace(tzinfo=KST)
             except ValueError:
                 continue
     return None
@@ -674,12 +674,20 @@ def _read(name: str) -> list[dict[str, Any]]:
     db_rows = _run_db(_db_fetch_ledger(name))
     if isinstance(db_rows, list):
         if db_rows:
+            db_ids = {str(row.get("id") or "") for row in db_rows}
+            missing_rows = [row for row in file_rows if str(row.get("id") or "") and str(row.get("id") or "") not in db_ids]
+            if missing_rows:
+                for row in missing_rows:
+                    _run_db(_db_upsert_ledger(name, row))
+                merged = _run_db(_db_fetch_ledger(name))
+                if isinstance(merged, list) and merged:
+                    return merged
             return db_rows
         if file_rows:
             for row in file_rows:
                 _run_db(_db_upsert_ledger(name, row))
             seeded = _run_db(_db_fetch_ledger(name))
-            if isinstance(seeded, list):
+            if isinstance(seeded, list) and seeded:
                 return seeded
     return file_rows
 

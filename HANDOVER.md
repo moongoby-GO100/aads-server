@@ -7,6 +7,125 @@
 - 검증: 신서버 SSH에서 `hostname=contabo14`, `/root/kis-autotrade-v4` 존재, `go100`·`go100-frontend` active, `http://5.104.86.14:8002/health` HTTP 200을 확인했다. 컨테이너 mapping assertions 및 Python compile, `git diff --check`를 통과했다. 호스트에는 pytest가 없어 전용 pytest 파일은 직접 단언으로 대체했다.
 - 완료 기준: AADS 배포 후 `run_remote_command(project=GO100, command=hostname)`가 `contabo14`를 반환해야 최종 완료로 판정한다.
 - 배포 복구: 첫 blue-green 전환에서 호스트에 `nginx` 바이너리가 없어 `nginx -t`가 실패했다. `deploy.sh`가 호스트 nginx가 없을 때 실행 중인 `aads-nginx` 컨테이너의 `nginx -t/-s reload`를 사용하도록 폴백을 추가했다.
+## 2026-07-18 09:43 KST - Yeoljeong DB ledger migration applied and seed fallback fixed
+- 배경: P1 DB 호환 러너 결과를 검수하던 중 `/tmp` worktree 변경은 오래된 기준이라 반려했고, 현재 메인 커밋 기준으로 운영 DB 적용과 fallback 검증을 직접 진행했다.
+- 조치:
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`, `migrations/116_yeoljeong_finance_delivery_ledgers.sql`를 운영 PostgreSQL에 비파괴 적용했다.
+  - `app/services/yeoljeong_finance_service.py`에서 asyncpg timestamptz 인자에 문자열이 전달되던 문제를 `datetime` 반환으로 수정했다.
+  - DB에 일부 row만 있을 때 JSON 원장의 나머지 row가 시드되지 않는 문제를 보정해, DB id와 JSON id를 비교한 뒤 누락분을 추가 upsert하도록 수정했다.
+- 검증:
+  - 기준 시각: `2026-07-18 09:43:15 KST`.
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 < migrations/115_yeoljeong_finance_hr_ledgers.sql` 성공.
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 < migrations/116_yeoljeong_finance_delivery_ledgers.sql` 성공.
+  - DB row count: `join_requests=10`, `onboarding=23`, `contracts=4`, `payroll=2`, `platform_accounts=4`, 배달 매출/정산/리뷰/수집상태는 현재 원장 데이터 0건.
+  - 서비스 응답 스모크: `join_requests=10`, `onboarding_documents=36`(업로드 23 + 필수서류 작성필요 placeholder 포함), `contracts=4`, `payroll=2`, `accounts=4`.
+  - 계정 보안 확인: `yeoljeong_platform_accounts.payload ? 'password' = 0`, `payload ? 'password_enc' = 4`, API 응답에는 `password`/`password_enc` 미포함.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 및 컨테이너 동일 경로 py_compile 통과.
+- 보류:
+  - API 프로세스 reload/deploy/push는 수행하지 않았다.
+  - 기존 미추적 JSON 원장과 업로드 파일은 운영 데이터로 간주해 커밋하지 않는다.
+
+## 2026-07-18 09:40 KST - Yeoljeong delivery ledger migration committed
+- 배경: 최종 검증 중 배달앱 계정/매출/정산/리뷰/수집상태 원장의 DB 전환 준비 스키마와 storage-status 표시 보강이 별도 커밋으로 반영됐는지 확인했다.
+- 커밋:
+  - `35738a4c feat: add yeoljeong delivery ledger migration plan`
+- 조치:
+  - `migrations/116_yeoljeong_finance_delivery_ledgers.sql` 추가: `yeoljeong_platform_accounts`, `yeoljeong_delivery_sales`, `yeoljeong_delivery_settlements`, `yeoljeong_delivery_reviews`, `yeoljeong_delivery_collection_status` 준비 스키마.
+  - `app/services/yeoljeong_finance_service.py` 저장소 상태 응답에 `delivery_ledgers`, `delivery_db_ready`, migration 116 표시를 추가했다.
+- 검증:
+  - `migrations/116_yeoljeong_finance_delivery_ledgers.sql`: `BEGIN`/`CREATE TABLE`/`CREATE INDEX`/`UPDATE 0`/`ROLLBACK` dry-run 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/main.py`: 통과.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py migrations/116_yeoljeong_finance_delivery_ledgers.sql`: 통과.
+- 보류:
+  - migration 116은 운영 DB에 적용하지 않았다. 현재는 적용 준비 파일과 fallback 코드만 커밋된 상태다.
+
+## 2026-07-18 09:39 KST - Yeoljeong store assistant API threadpool commit
+- 배경: 최종 상태 확인 중 `app/api/yeoljeong_finance.py`에 HR/계약/급여/배달 원장 호출을 FastAPI threadpool로 넘기는 안정화 변경이 미커밋 상태로 남아 있음을 확인했다.
+- 조치:
+  - 동기식 JSON/DB 파일 원장 작업을 async route에서 직접 실행하지 않도록 `run_in_threadpool`로 감쌌다.
+  - 직원가입, 입사서류, 계약서, 급여, 외부계정, 매출/정산/리뷰/수집상태, CSV import API 경로에 동일하게 적용했다.
+- 커밋:
+  - `7e2f12d8 fix: run yeoljeong ledger calls in threadpool`
+- 검증:
+  - pre-commit Python 검수 통과.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
+  - `git diff --check -- app/api/yeoljeong_finance.py`: 통과.
+- 보류:
+  - API 프로세스 reload/deploy/push는 수행하지 않았다.
+
+## 2026-07-18 09:38 KST - Yeoljeong store assistant db fallback code committed
+- 배경: 최종 검증 중 `app/services/yeoljeong_finance_service.py`에 HR/배달 원장 DB 호환 레이어가 미커밋 상태로 남아 있음을 확인해, JSON 운영 데이터는 제외하고 코드만 선별 커밋했다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`에 JSON 원장 읽기/쓰기 유지 + PostgreSQL 테이블 존재 시 DB 우선 읽기/쓰기 fallback 레이어를 보존했다.
+  - HR 원장 4종(`employee_join_requests`, `onboarding_documents`, `contracts`, `payroll_statements`)과 배달 원장 5종(`platform_accounts`, `delivery_sales`, `delivery_settlements`, `delivery_reviews`, `delivery_collection_status`)을 테이블명 매핑으로 정리했다.
+  - 운영 DB에 대상 테이블이 없으면 기존 JSON 저장소를 계속 사용하도록 처리해, 다른 세션의 DB 작업이나 현재 운영 JSON 데이터를 깨지 않게 했다.
+- 커밋:
+  - `d2e8035f feat: add yeoljeong ledger db fallback`
+- 검증:
+  - 기준 시각: `2026-07-18 09:38:19 KST`.
+  - pre-commit Python 검수 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/main.py`: 통과.
+  - `git diff --check`: 통과.
+- 보류:
+  - 운영 PostgreSQL에는 아직 HR/계약/급여/배달 원장 테이블을 적용하지 않았다.
+  - API reload, deploy, push는 수행하지 않았다.
+  - `app/data/yeoljeong_finance/*.json`, `uploads/`, `settings.json`, nginx backup, 임시 scripts는 커밋하지 않았다.
+
+## 2026-07-18 09:36 KST - Yeoljeong store assistant final verification recheck
+- 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger` 완료 조건을 충족하지 못했다고 지적해, 매장비서 문서화/업데이트 관리/DB 전환 설계 작업의 현재 상태를 다시 실측하고 최종 보고 근거를 재기록했다.
+- 재확인 결과:
+  - 매장비서 앱 원본과 문서 HTML은 로컬에 존재한다: `app/static/apps/yeoljeong-finance/index.html`, `app/static/apps/yeoljeong-finance/modules/app-config.js`, `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`, `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`, `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`, `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`.
+  - 관리자 총괄 링크는 매장비서 앱 상단 `문서`, `기술`, `기획`, `DB전환` 링크와 AADS 대시보드 사이드바 `매장비서 문서` 링크로 확인했다.
+  - 현재 구현 방식은 `HTML/CSS/Vanilla JS` 정적 SPA, `FastAPI/Pydantic` API, 설정 일부 `PostgreSQL`, HR/계약/급여/배달 원장 `JSON` 혼합 구조다.
+  - 운영 PostgreSQL에는 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재한다. HR/계약/급여/배달 원장 DB 테이블은 아직 운영 적용 전이다.
+- 재검증:
+  - 기준 시각: `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'` → `2026-07-18 09:36:47 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - 매장비서 앱 inline script 추출 후 `node --check /tmp/yeoljeong-finance-inline-final-check.js`: 통과.
+  - HTML parser 검증: 매장비서 앱과 문서 6개 모두 `<html>`/`</html>` marker 확인 및 parser 통과.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`: 호스트 파일을 PostgreSQL 표준입력으로 전달해 `BEGIN`/`CREATE TABLE`/`CREATE INDEX`/`ROLLBACK` dry-run 통과.
+  - 공개 URL HTTP 200 및 `매장비서` 마커 확인:
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html?v=202607180935`
+  - `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status` 비인증 호출은 HTTP 401로 관리자 보호가 유지된다.
+  - 원문 비밀번호 패턴 검사는 매장비서 앱/문서/API/서비스/HANDOVER 대상에서 `secret_plaintext_violations=0`이다.
+- 저장소/배포 상태:
+  - aads-server 현재 HEAD는 `cd799754 docs: update yeoljeong final ledger`이고, `origin/main` 대비 미푸시 커밋이 남아 있다.
+  - aads-dashboard 현재 HEAD는 `5631dd2 docs: link yeoljeong assistant documents`이며, 이 저장소에는 추적 파일 dirty 변경이 없다.
+  - push, deploy, restart는 수행하지 않았다. 현재 API Python 변경은 프로세스 reload 전까지 운영 메모리 반영을 단정하지 않는다.
+  - `app/data/yeoljeong_finance/*.json`, `uploads/`, 일부 scripts, nginx backup, dashboard changelog 등 기존 워킹트리 변경은 운영/테스트 데이터 또는 요청 범위 밖 변경으로 분리해 둔다.
+
+## 2026-07-18 09:31 KST - Yeoljeong store assistant final commit ledger
+- 배경: CEO가 완료보고 위반 사유 `document_report_unverified_by_ledger`를 지적하며, 남은 확인/조치/검증을 끝까지 수행하고 커밋/푸시/배포/문서/미완료 항목을 구체적으로 보고하라고 지시했다.
+- 완료 커밋:
+  - aads-server `07625054 feat: add yeoljeong storage status audit`: 저장소 상태 점검 API, HR 원장 DB 전환 준비 마이그레이션, 매장비서 상단 기술문서 링크, HANDOVER 검증 기록.
+  - aads-server `f32459ac docs: update yeoljeong store assistant docs`: 매장비서 문서 인덱스/기술문서/아키텍처·디자인 문서/모듈 매니페스트 갱신.
+  - aads-server `16c3db17 docs: add yeoljeong improvement priority report`: 현재 구현 방식 판정, 최선안, P0/P1/P2 개선 우선순위 보고서 추가 및 문서 인덱스 링크 반영.
+  - aads-dashboard `5631dd2 docs: link yeoljeong assistant documents`: 대시보드 공개 복사본의 매장비서 문서 링크와 모듈 매니페스트 갱신.
+- 최종 검증:
+  - 서버 Python 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py` 통과.
+  - 서버 JS/HTML 검증: 매장비서 inline script `node --check` 통과, 문서 HTML 6개 `<html>`/`</html>` marker 확인 통과, `app-config.js` `node --check` 통과.
+  - 대시보드 JS/HTML 검증: 공개 복사본 `app-config.js` 2개와 inline script `node --check` 통과.
+  - SQL 검증: `migrations/115_yeoljeong_finance_hr_ledgers.sql`을 `BEGIN`/`ROLLBACK`으로 dry-run 통과.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB전환 문서 HTTP 200 확인.
+  - 개선 우선순위 보고서 URL `/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html` HTTP 200 확인.
+  - API 보호: `/api/v1/yeoljeong-finance/storage-status` 비인증 호출 HTTP 401 확인.
+  - 컨테이너 import: `get_storage_status=True`, HR 전환 테이블 정의 4개, JSON 원장 정의 4개 확인.
+  - 운영 DB: `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재. HR/계약/급여 DB 테이블은 아직 운영 적용 전.
+  - 비밀값 검사: 커밋 대상 파일에서 CEO가 제공한 원문 비밀번호 패턴 미검출.
+- 미완료/보류:
+  - push, deploy, restart는 수행하지 않았다.
+  - 운영 DB 마이그레이션 적용과 HR/계약/급여 DB 쓰기 전환은 데이터 백업/백필 승인 후 별도 진행해야 한다.
+  - `app/data/yeoljeong_finance/*.json`, `settings.json`, `uploads/`는 운영/테스트 데이터라 커밋하지 않았다.
+  - 일부 무관 워킹트리 변경(`nginx-aads-upstream.conf.dashboard.bak`, dashboard changelog, 임시 scripts)은 건드리지 않았다.
+
 ## 2026-07-18 09:30 KST - Yeoljeong store assistant runner fallback final closeout
 - 배경: CEO가 러너 중간보고로 끝내지 말고 매장비서 문서화/DB 호환/업데이트 관리 후속 작업의 남은 확인, 조치, 검증을 계속 수행하고 최종 완료보고 조건을 충족하라고 지시했다.
 - 최종 조치:
