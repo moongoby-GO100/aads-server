@@ -766,3 +766,41 @@ ol
 
 ## [2026-06-05 07:54:05 KST] [aads-dashboard] src/app/login/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i 's@: {};@: { color: "#111827", backgroundColor: "#fff" };@' /root/aads/aa
+
+## [2026-07-16 06:45:00 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx
+
+## [2026-07-16 06:55:10 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx
+
+## [2026-07-16 09:40:46 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx
+- Chat-Direct 수정: patch:   useEffect(() => {
+    if (!sessionId) →  useEffect(() => {
+    if (!sessionId)
+
+## [2026-07-18 09:21:46 KST] [AADS/FOOD] 매장비서 문서 링크 및 완료조건 재검증
+- 러너 작업은 `process_died`/`superseded`/`blocked_dependency`로 취소되어 직접 fallback 조치.
+- 매장비서 관리자 총괄 상단에 기술문서 직접 링크 추가.
+- 대상: `app/static/apps/yeoljeong-finance/index.html`, 대시보드 공개 복사본 2개.
+- 검증: 문서 URL 4개 HTTP 200, 앱 URL HTTP 200, Python py_compile 통과, HTML inline script 검사 통과.
+
+## [2026-07-18 09:25:00 KST] [AADS/FOOD] 매장비서 P1 DB 호환 최소 조치
+- 스톨 러너 `runner-02bd3c91` 종료 후 의존 작업 차단 상태 확인.
+- 신규 마이그레이션 초안 `migrations/115_yeoljeong_finance_hr_ledgers.sql` 추가.
+- 관리자용 저장소 상태 API `/api/v1/yeoljeong-finance/storage-status` 추가.
+- 검증: py_compile 통과, SQL dry-run ROLLBACK 통과, 컨테이너 함수 존재 확인, 비인증 API 401 확인.
+
+## [2026-07-18 09:33:06 KST] [AADS/FOOD] 매장비서 문서 완료조건 재검증 보강
+- 신규 HTML 문서 추가: `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`.
+- 문서 인덱스에 개선 우선순위 보고서 링크 추가.
+- 대시보드 공개 경로 2곳에 문서/인덱스 복사본 반영.
+- 검증: 개선 보고서 URL HTTP 200, 문서 인덱스 링크 확인, 서버 원본/대시보드 공개 복사본 `cmp` 동일성 확인.
+- 커밋/푸시/정식 deploy는 수행하지 않음.
+
+## [2026-07-18 09:35:06 KST] [AADS/FOOD] 매장비서 문서/관리자 링크 최종 완료조건 재검증
+- 러너 상태: 현재 세션 매장비서 러너는 `error`/`cancelled`/`blocked_dependency`/`rejected_done`, 실행 중 0건.
+- 운영 URL 7개 HTTP 200 확인: 매장비서 앱, `app-config.js`, 문서 인덱스, 기술문서, 아키텍처/디자인 기획서, DB 전환 설계, 개선 우선순위 보고서.
+- DB 상태: PostgreSQL `yeoljeong_%` 테이블은 설정 3개만 존재, HR/계약/급여 DB 전환 테이블은 미적용.
+- JSON 상태: 직원가입 10건, 입사서류 23건, 계약서 4건, 급여 2건, 플랫폼 계정 4건, 평문 password row 0건.
+- 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+- 완료 판정: 개발환경/기술문서/아키텍처·디자인/DB전환/개선안 HTML 문서 관리와 관리자 총괄 링크 검증 완료. HR/계약/급여 실제 DB 쓰기 전환, 전체 프론트 모듈 분리, push, 정식 deploy는 미완료로 분리.
