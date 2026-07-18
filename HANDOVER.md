@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:43 KST - Yeoljeong DB ledger migration applied and seed fallback fixed
+- 배경: P1 DB 호환 러너 결과를 검수하던 중 `/tmp` worktree 변경은 오래된 기준이라 반려했고, 현재 메인 커밋 기준으로 운영 DB 적용과 fallback 검증을 직접 진행했다.
+- 조치:
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`, `migrations/116_yeoljeong_finance_delivery_ledgers.sql`를 운영 PostgreSQL에 비파괴 적용했다.
+  - `app/services/yeoljeong_finance_service.py`에서 asyncpg timestamptz 인자에 문자열이 전달되던 문제를 `datetime` 반환으로 수정했다.
+  - DB에 일부 row만 있을 때 JSON 원장의 나머지 row가 시드되지 않는 문제를 보정해, DB id와 JSON id를 비교한 뒤 누락분을 추가 upsert하도록 수정했다.
+- 검증:
+  - 기준 시각: `2026-07-18 09:43:15 KST`.
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 < migrations/115_yeoljeong_finance_hr_ledgers.sql` 성공.
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 < migrations/116_yeoljeong_finance_delivery_ledgers.sql` 성공.
+  - DB row count: `join_requests=10`, `onboarding=23`, `contracts=4`, `payroll=2`, `platform_accounts=4`, 배달 매출/정산/리뷰/수집상태는 현재 원장 데이터 0건.
+  - 서비스 응답 스모크: `join_requests=10`, `onboarding_documents=36`(업로드 23 + 필수서류 작성필요 placeholder 포함), `contracts=4`, `payroll=2`, `accounts=4`.
+  - 계정 보안 확인: `yeoljeong_platform_accounts.payload ? 'password' = 0`, `payload ? 'password_enc' = 4`, API 응답에는 `password`/`password_enc` 미포함.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 및 컨테이너 동일 경로 py_compile 통과.
+- 보류:
+  - API 프로세스 reload/deploy/push는 수행하지 않았다.
+  - 기존 미추적 JSON 원장과 업로드 파일은 운영 데이터로 간주해 커밋하지 않는다.
+
 ## 2026-07-18 09:40 KST - Yeoljeong delivery ledger migration committed
 - 배경: 최종 검증 중 배달앱 계정/매출/정산/리뷰/수집상태 원장의 DB 전환 준비 스키마와 storage-status 표시 보강이 별도 커밋으로 반영됐는지 확인했다.
 - 커밋:
