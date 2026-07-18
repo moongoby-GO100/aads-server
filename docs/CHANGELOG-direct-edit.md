@@ -3685,3 +3685,6 @@ from __
 
 ## [2026-07-18 09:52:01 KST] [aads-server] PostgreSQL yeoljeong_* ledgers
 - Chat-Direct 조치: 수동 회귀 테스트 중 DB fallback으로 생성된 테스트 row 3건을 `deleted_at=NOW()` soft-delete로 정리. 정리 후 active count는 가입요청 10건, 입사서류 23건, 계약 4건, 급여 2건, 플랫폼 계정 4건으로 확인.
+
+## [2026-07-18 09:55:56 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: CEO의 `document_report_unverified_by_ledger` 재지적에 따라 매장비서 최종 완료보고용 ledger를 재작성. Git ahead/dirty 상태, PostgreSQL `yeoljeong_%` 테이블 12개, active row count, 비밀번호 원문 0건, 공개 URL 200, API 401 보호, Python/JS/HTML/git diff 검증 결과와 push/deploy 보류 사유를 명시.

@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:55 KST - Yeoljeong final closeout ledger recheck
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 매장비서 문서/DB/운영 URL/보안/Git 상태를 다시 실측했다.
+- 확인:
+  - 기준 시각: `2026-07-18 09:55:56 KST`.
+  - Git: `main`은 `origin/main` 대비 `ahead 27`, `behind 0`; 미커밋 변경은 `app/data/yeoljeong_finance/settings.json`, `nginx-aads-upstream.conf.dashboard.bak`, 운영 JSON/업로드 파일, 임시 scripts로 분리했다.
+  - PostgreSQL `yeoljeong_%` 테이블 12개 존재: 설정 3종, HR/계약/급여 4종, 배달 원장 5종.
+  - active row count: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`, 배달 매출/정산/리뷰 0.
+  - 보안: `yeoljeong_platform_accounts.payload ? 'password' = 0`, `payload ? 'password_enc' = 5`; 앱/문서/API/서비스/HANDOVER/CHANGELOG 대상 비밀번호 원문 검사 0건.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 문서, DB 전환 문서, 개선 우선순위 보고서 모두 HTTP 200.
+  - API 보호: `/api/v1/yeoljeong-finance/storage-status` 비인증 호출 HTTP 401.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - 매장비서 inline script `node --check /tmp/yeoljeong-finance-inline-final.js`: 통과.
+  - HTML parser: 앱/문서 7개 `html_parse_ok 7`.
+  - `git diff --check`: 통과.
+- 완료/보류:
+  - 문서 ledger와 검증 결과는 이 항목으로 재기록했다.
+  - `git push`와 정식 deploy/reload는 수행하지 않았다. 현재 `ahead 27` 안에 매장비서 외 채팅 안정화 커밋도 섞여 있고, 워킹트리에 운영 데이터/백업/임시 scripts가 남아 있어 일괄 push/deploy는 범위 오염 리스크가 있다.
+
 ## 2026-07-18 09:50 KST - Yeoljeong storage status final verification fix
 - 배경: CEO가 이전 응답이 최종 완료보고 조건과 `document_report_unverified_by_ledger`를 충족하지 못했다고 재지적해, 매장비서 문서/DB/검증 상태를 실제 명령으로 다시 닫았다.
 - 조치:
