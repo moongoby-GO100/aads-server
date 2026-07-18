@@ -3716,6 +3716,26 @@
   - P1 안전장치인 스키마 초안과 저장소 상태 확인 API는 완료.
   - 실제 HR/계약/급여 DB 쓰기 전환은 미완료. 운영 DB 마이그레이션 적용과 데이터 백필 승인 후 별도 진행해야 한다.
 
+## 2026-07-18 09:33 KST - Yeoljeong store assistant documentation completion recheck
+- 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger`로 최종 완료 조건을 만족하지 못했다고 지적해 문서/링크/러너/검증 상태를 재조회하고 ledger를 보강했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-18 09:33:06 KST`.
+- 러너 상태:
+  - 현재 세션 러너 작업은 `runner-dc0ea80b`, `runner-02bd3c91` 등이 error/cancelled/blocked_dependency 상태이며 실행 중 작업은 0건.
+  - 서버68 health check: `HEALTHY`, DB OK, disk 51%, pending/running directives 0건.
+- 직접 보완:
+  - 신규 HTML 보고서 `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html` 추가.
+  - 문서 인덱스 `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`에 개선 우선순위 보고서 링크 추가.
+  - 대시보드 공개 경로 `/root/aads/aads-dashboard/public/reports`와 `/root/aads/aads-dashboard/public/static/reports`에 동일 문서/인덱스 복사본 반영.
+- 검증:
+  - `https://fb.newtalk.kr/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`: HTTP 200, `text/html; charset=utf-8`.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: 개선 우선순위 보고서 링크 확인.
+  - `cmp`로 서버 원본과 대시보드 공개 복사본 동일성 확인: `reports_public_match`, `docs_index_public_match`.
+- 완료/미완료:
+  - 매장비서 개발환경/기술문서/아키텍처·디자인/DB 전환/개선 우선순위 HTML 문서 관리와 관리자 링크 검증은 완료.
+  - 커밋, push, 정식 deploy.sh, 운영 DB 마이그레이션 적용은 수행하지 않았다.
+  - P1 HR/계약/급여 DB 쓰기 전환과 P2 프론트 전체 모듈화는 별도 승인/작업으로 남아 있다.
+
 ## 2026-07-18 09:29 KST - Yeoljeong store assistant docs completion recheck
 - 배경: CEO가 이전 응답이 완료보고 조건을 만족하지 못했다고 지적해 문서/관리자 링크/러너/검증 상태를 다시 닫았다.
 - 러너 상태:
@@ -3726,6 +3746,7 @@
   - `app/static/reports/20260716_yeoljeong_store_assistant_technical.html`: 업데이트 관리 절차에 `public/static/reports` 동기화 기준 추가.
   - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`: 갱신 기준을 현재 재검증 시각으로 정정.
   - `app/static/apps/yeoljeong-finance/modules/app-config.js`: `updatedAt`을 `2026-07-18 09:29:32 KST`로 정정.
+  - `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`: 현재 구현 방식 판정, 최선안, P0/P1/P2 우선순위 개선안을 HTML 보고서로 고정하고 문서 인덱스에 연결.
   - 별칭 문서 `*_technical_doc.html`, `*_architecture_design_plan.html`와 대시보드 `public/reports`, `public/static/reports` 복사본을 동일 내용으로 동기화.
 - 검증:
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
@@ -3740,7 +3761,9 @@
     - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
     - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
     - `/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+    - `/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`
   - 운영 문서 본문에서 `2026-07-18 09:29:32 KST` 마커 확인.
+  - 개선 우선순위 보고서 본문에서 `현재 구현은 빠른 MVP 검증에는 적합하지만 최종 운영 구조로는 부족합니다`, `FastAPI + PostgreSQL 원장 + 모듈화 프론트` 문구 확인.
   - PostgreSQL `yeoljeong_%` 테이블 확인: 설정 테이블 3개(`yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`)만 존재. HR/계약/급여 DB 전환 테이블은 아직 미적용.
 - 완료/미완료:
   - 문서 정정, 관리자 링크 경로, 공개 URL, 문서 ledger는 완료.
