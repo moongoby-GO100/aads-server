@@ -52,6 +52,11 @@
         <span class="muted">직원, 입사서류, 계약서, 급여, 배달앱 계정 원장을 PostgreSQL로 옮기는 단계별 설계</span>
         <span class="btn">열기</span>
       </a>
+      <a class="card" href="./20260718_yeoljeong_store_assistant_improvement_priority_report.html">
+        <strong>개선 우선순위 보고서</strong>
+        <span class="muted">현재 구현 방식 판정, 최선안, P0/P1/P2 실행 순서</span>
+        <span class="btn">열기</span>
+      </a>
       <a class="card" href="https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html">
         <strong>매장비서 앱</strong>
         <span class="muted">열정국밥 운영관리 실사용 화면. 로그인 후 직원/계약/급여/정산 관리</span>
@@ -69,6 +74,7 @@
           <tr><td>저장소</td><td>HR/계약/급여 원장은 JSON 파일, 설정 일부는 PostgreSQL 우선 + JSON 폴백</td><td>초기 MVP에는 충분하지만, 동시 사용과 감사 추적을 위해 DB 전환이 필요합니다.</td></tr>
           <tr><td>문서관리</td><td>정적 HTML 문서를 <code>app/static/reports</code>와 대시보드 <code>public/reports</code>에 저장</td><td>매장비서 관리자 상단 링크와 운영 URL 접근성은 확인됐습니다.</td></tr>
           <tr><td>프론트 모듈화</td><td><code>modules/app-config.js</code> 매니페스트를 먼저 붙이고 단일 HTML 기능을 단계적으로 분리</td><td>대형 파일 회귀를 줄이기 위한 1차 구조가 적용됐습니다.</td></tr>
+          <tr><td>개선관리</td><td><code>20260718_yeoljeong_store_assistant_improvement_priority_report.html</code> 추가</td><td>현재 방식의 한계와 우선순위별 개선안을 별도 문서로 고정했습니다.</td></tr>
         </tbody>
       </table>
     </section>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매장비서 개선 우선순위 보고서</title>
+  <style>
+    :root { color-scheme: light; --bg:#f6f7f8; --panel:#ffffff; --ink:#182024; --muted:#65737b; --line:#d8e0e4; --accent:#0f766e; --warn:#a16207; --bad:#b91c1c; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height:1.62; }
+    main { max-width:1120px; margin:0 auto; padding:42px 18px 72px; }
+    header { margin-bottom:24px; }
+    .kicker { color:var(--accent); font-weight:900; font-size:13px; }
+    h1 { margin:6px 0 10px; font-size:34px; line-height:1.16; letter-spacing:0; }
+    h2 { margin:0 0 12px; font-size:20px; }
+    p { margin:0 0 12px; }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:20px; margin:16px 0; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { border-bottom:1px solid var(--line); padding:11px 10px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; }
+    code { background:#eef3f5; border-radius:5px; padding:2px 6px; }
+    .muted { color:var(--muted); }
+    .badge { display:inline-flex; min-height:26px; align-items:center; border-radius:999px; padding:0 9px; font-size:12px; font-weight:900; background:#e6f3f1; color:#0f766e; }
+    .warn { color:var(--warn); font-weight:800; }
+    .bad { color:var(--bad); font-weight:800; }
+    @media (max-width: 780px) { h1 { font-size:28px; } table { font-size:13px; } th, td { padding:9px 7px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">YEOLJEONG STORE ASSISTANT PRIORITY REPORT</div>
+      <h1>매장비서 개선 우선순위 보고서</h1>
+      <p class="muted">작성/검증 기준: 2026-07-18 09:29:36 KST. 현재 구현 방식의 적합성, 한계, 더 좋은 대안을 우선순위별로 고정 관리합니다.</p>
+    </header>
+
+    <section>
+      <h2>결론</h2>
+      <p><strong>현재 구현은 빠른 MVP 검증에는 적합하지만 최종 운영 구조로는 부족합니다.</strong> 단일 HTML/Vanilla JS와 JSON 원장은 화면 반영 속도가 빠르지만, 직원/계약/급여/배달정산처럼 감사 추적이 필요한 데이터는 PostgreSQL 원장으로 전환해야 합니다.</p>
+      <p><span class="badge">권장 방향</span> 기존 화면을 유지하면서 API/DB부터 안정화하고, 이후 프론트를 모듈화하는 단계적 전환이 가장 안전합니다.</p>
+    </section>
+
+    <section>
+      <h2>현재 방식 판정</h2>
+      <table>
+        <thead><tr><th>영역</th><th>현재 방식</th><th>판정</th><th>이유</th></tr></thead>
+        <tbody>
+          <tr><td>프론트</td><td>단일 <code>index.html</code>, HTML/CSS/Vanilla JS</td><td class="warn">단기 적합</td><td>배포와 수정은 빠르지만 파일이 커져 회귀 위험이 높습니다.</td></tr>
+          <tr><td>백엔드</td><td>FastAPI/Pydantic</td><td>유지 권장</td><td>AADS 구조와 맞고 권한, API, 검증 로직 확장에 적합합니다.</td></tr>
+          <tr><td>설정 저장</td><td>PostgreSQL 우선 + JSON 폴백</td><td>좋은 전환 구조</td><td>다른 세션 DB 작업과 충돌을 줄이면서 점진 이관이 가능합니다.</td></tr>
+          <tr><td>HR/계약/급여</td><td>JSON 파일 원장</td><td class="bad">운영 부적합</td><td>동시 수정, 감사로그, 승인 이력, 법정문서 보관 기준에 약합니다.</td></tr>
+          <tr><td>문서관리</td><td>정적 HTML 보고서</td><td>유지 권장</td><td>CEO/관리자가 운영 화면에서 바로 열람하기 좋고 버전 고정이 쉽습니다.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>우선순위 실행안</h2>
+      <table>
+        <thead><tr><th>우선순위</th><th>작업</th><th>완료 기준</th><th>주의</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>문서 인덱스, 기술문서, 아키텍처/디자인 문서, DB 전환 문서 링크 운영 고정</td><td>공개 URL 200, 관리자 총괄 링크 확인, HANDOVER 기록</td><td>완료 상태. 향후 변경 시 같은 인덱스에 버전 추가</td></tr>
+          <tr><td>P1</td><td>HR/입사서류/계약/급여 PostgreSQL 원장 이관</td><td>마이그레이션 적용, JSON 백필, API 읽기/쓰기 DB 우선, JSON 폴백 유지</td><td>운영 DB 적용 전 백업과 ROLLBACK 계획 필요</td></tr>
+          <tr><td>P1</td><td>계약서/급여/서명 감사로그 테이블화</td><td>누가 언제 승인/서명/수정했는지 조회 가능</td><td>법정문서 출력본과 원장 버전 연결 필요</td></tr>
+          <tr><td>P2</td><td>단일 HTML 프론트 모듈화</td><td>설정, 직원, 계약, 급여, 배달정산 JS 모듈 분리</td><td>기능 회귀를 막기 위해 API E2E 먼저 고정</td></tr>
+          <tr><td>P2</td><td>매출/정산/리뷰 수집 화면 재설계</td><td>사업자/지점/플랫폼/일자별 수집 상태와 원장 차이를 한 화면에서 확인</td><td>포털 자동 로그인은 2차 인증과 접속 차단 대응 필요</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>최선안</h2>
+      <p>최선안은 <strong>FastAPI + PostgreSQL 원장 + 모듈화 프론트</strong>입니다. 현재 정적 SPA는 유지하되, 데이터 보관과 권한 판단은 서버 API와 DB가 책임지게 바꾸는 방식이 가장 안전합니다.</p>
+      <p>대안으로 Next.js 앱으로 전면 이전할 수 있지만, 지금 단계에서 전면 이전은 직원/계약/정산 기능 검증보다 리스크가 큽니다. 먼저 DB 원장과 API 계약을 확정한 뒤 화면 기술을 바꾸는 순서가 맞습니다.</p>
+    </section>
+  </main>
+</body>
+</html>
