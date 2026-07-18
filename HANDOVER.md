@@ -5,6 +5,7 @@
 - 완료 커밋:
   - aads-server `07625054 feat: add yeoljeong storage status audit`: 저장소 상태 점검 API, HR 원장 DB 전환 준비 마이그레이션, 매장비서 상단 기술문서 링크, HANDOVER 검증 기록.
   - aads-server `f32459ac docs: update yeoljeong store assistant docs`: 매장비서 문서 인덱스/기술문서/아키텍처·디자인 문서/모듈 매니페스트 갱신.
+  - aads-server `16c3db17 docs: add yeoljeong improvement priority report`: 현재 구현 방식 판정, 최선안, P0/P1/P2 개선 우선순위 보고서 추가 및 문서 인덱스 링크 반영.
   - aads-dashboard `5631dd2 docs: link yeoljeong assistant documents`: 대시보드 공개 복사본의 매장비서 문서 링크와 모듈 매니페스트 갱신.
 - 최종 검증:
   - 서버 Python 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py` 통과.
@@ -12,6 +13,7 @@
   - 대시보드 JS/HTML 검증: 공개 복사본 `app-config.js` 2개와 inline script `node --check` 통과.
   - SQL 검증: `migrations/115_yeoljeong_finance_hr_ledgers.sql`을 `BEGIN`/`ROLLBACK`으로 dry-run 통과.
   - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB전환 문서 HTTP 200 확인.
+  - 개선 우선순위 보고서 URL `/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html` HTTP 200 확인.
   - API 보호: `/api/v1/yeoljeong-finance/storage-status` 비인증 호출 HTTP 401 확인.
   - 컨테이너 import: `get_storage_status=True`, HR 전환 테이블 정의 4개, JSON 원장 정의 4개 확인.
   - 운영 DB: `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재. HR/계약/급여 DB 테이블은 아직 운영 적용 전.
