@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:59 KST - Yeoljeong final closeout ledger current-state verification
+- 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger` 조건을 만족하지 못했다고 재지적해, 최종 보고 직전 현재 상태를 다시 실측하고 ledger를 최신값으로 보강했다.
+- 확인:
+  - 기준 시각: `2026-07-18 09:59:03 KST`.
+  - Git: `main`은 `origin/main` 대비 `ahead 28`, `behind 0`; 미커밋 변경은 `app/data/yeoljeong_finance/settings.json`, `nginx-aads-upstream.conf.dashboard.bak`, 운영 JSON/업로드 파일, 임시 scripts로 분리했다.
+  - 컨테이너: `aads-server`, `aads-dashboard`, `aads-postgres` 모두 healthy.
+  - PostgreSQL `yeoljeong_%` 테이블 12개 존재.
+  - DB active row count: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`. total row count는 soft-delete 포함 `11/23/5/2/5`.
+  - 서비스 저장소 상태: 컨테이너 내부 `get_storage_status()` 호출 결과 `mode=database+json-fallback`, `settings_source=database`, `hr_source=database`, `delivery_source=database`, `hr_db_ready=true`, `delivery_db_ready=true`.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 문서, DB 전환 문서, 개선 우선순위 보고서 모두 HTTP 200.
+  - API 보호: `/api/v1/yeoljeong-finance/storage-status`, `/api/v1/yeoljeong-finance/employees/join-requests` 비인증 호출 HTTP 401.
+  - 보안: 앱/문서/API/서비스/HANDOVER/CHANGELOG/migrations 대상 CEO 제공 원문 비밀번호 패턴 검색 0건.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `git diff --check`: 통과.
+- 완료/보류:
+  - 최종 보고용 ledger는 이 항목으로 최신 실측값을 반영했다.
+  - `git push`, 정식 deploy/reload는 수행하지 않았다. 현재 브랜치가 `origin/main`보다 28커밋 앞서 있고 워킹트리에 운영 데이터/백업/임시 scripts가 남아 있어 일괄 push/deploy는 범위 오염 리스크가 있다.
+
 ## 2026-07-18 09:55 KST - Yeoljeong final closeout ledger recheck
 - 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 매장비서 문서/DB/운영 URL/보안/Git 상태를 다시 실측했다.
 - 확인:

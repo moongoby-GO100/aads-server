@@ -3688,3 +3688,6 @@ from __
 
 ## [2026-07-18 09:55:56 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: CEO의 `document_report_unverified_by_ledger` 재지적에 따라 매장비서 최종 완료보고용 ledger를 재작성. Git ahead/dirty 상태, PostgreSQL `yeoljeong_%` 테이블 12개, active row count, 비밀번호 원문 0건, 공개 URL 200, API 401 보호, Python/JS/HTML/git diff 검증 결과와 push/deploy 보류 사유를 명시.
+
+## [2026-07-18 09:59:03 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: 최종 완료보고 직전 매장비서 현재 상태를 재실측해 ledger를 최신화. Git `ahead 28`, PostgreSQL `yeoljeong_%` 12테이블, active row count 10/23/4/2/4, `get_storage_status()` database+json-fallback, 공개 URL 200, API 401 보호, 비밀번호 원문 검색 0건, py_compile/node/git diff 검증과 push/deploy 보류 사유를 기록.
