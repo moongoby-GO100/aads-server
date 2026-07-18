@@ -1,5 +1,58 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:30 KST - Yeoljeong store assistant runner fallback final closeout
+- 배경: CEO가 러너 중간보고로 끝내지 말고 매장비서 문서화/DB 호환/업데이트 관리 후속 작업의 남은 확인, 조치, 검증을 계속 수행하고 최종 완료보고 조건을 충족하라고 지시했다.
+- 최종 조치:
+  - 러너 상태를 재조회했다. `runner-c038cc78`은 `cancelled/superseded`, `error_detail=deploy_preflight_git_state`로 커밋 완료가 아니며, `runner-dc0ea80b`은 `error` 상태다. P1/P2 의존 러너는 취소 또는 의존 차단 상태다.
+  - 러너 실패 산출물을 직접 검수하고 필요한 범위만 보존했다. 매장비서 관리자 링크는 문서 인덱스, 기술문서, 기획문서, DB전환 문서로 정리되어 있다.
+  - `app/services/yeoljeong_finance_service.py`에 관리자용 저장소 상태 점검 함수 `get_storage_status()`를 추가한 상태를 확인했다.
+  - `app/api/yeoljeong_finance.py`에 관리자 보호 API `GET /api/v1/yeoljeong-finance/storage-status`가 추가된 상태를 확인했다.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`은 HR/입사서류/계약/급여 원장 DB 전환 준비 스키마로 보존한다. 운영 DB에는 적용하지 않았다.
+  - 비밀값 노출 검사를 수행했고, 매장비서 앱/문서/API/서비스/마이그레이션/HANDOVER/변경기록 대상에서 CEO가 제공한 원문 비밀번호 패턴은 검출되지 않았다.
+- 검증:
+  - 기준 시각: `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'` → `2026-07-18 09:30:34 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`: `BEGIN` 후 `CREATE TABLE/INDEX`, `ROLLBACK` dry-run 통과.
+  - `node --check`로 매장비서 HTML inline script 문법 검사 통과.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB전환 문서 모두 HTTP 200.
+  - `/api/v1/yeoljeong-finance/storage-status`: 비인증 호출 HTTP 401. 관리자 보호 정상.
+  - 컨테이너 import 검증: `get_storage_status=True`, HR 전환 테이블 정의 4개, JSON 원장 파일 정의 4개.
+  - 운영 DB 직접 조회: 현재 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재하며 HR/계약/급여 테이블은 아직 없다.
+  - `git diff --check`: aads-server, aads-dashboard 모두 통과.
+- 저장소/배포 상태:
+  - 코드/문서 선별 커밋은 이 기록 직후 수행 대상이다.
+  - push, deploy, restart는 CEO가 이번 단계에서 요구한 범위를 넘는 운영 반영이므로 수행하지 않았다.
+  - 운영 정적 URL은 현재 HTTP 200이지만, Python API 변경은 프로세스 reload 전까지 운영 메모리에 반영됐다고 단정하지 않는다.
+
+## 2026-07-18 09:26 KST - Yeoljeong store assistant follow-up runner and storage verification
+- 배경: CEO가 매장비서 문서화/DB 전환/프론트 모듈화 후속 권장조치를 러너로 진행하고, 중간보고가 아닌 최종 완료조건 기준으로 상태를 정리하라고 지시했다.
+- 조치:
+  - P0 문서/관리자 링크 반영 상태를 재검증했다. `/root/aads/aads-dashboard`는 `git status --short` 출력이 없고, 관련 마지막 커밋은 `afc396b chore: restore dashboard git tracking baseline`이다.
+  - 매장비서 문서/앱 운영 URL 4개를 확인했다: `docs_index`, `technical`, `architecture_design`, `yeoljeong-finance/index.html` 모두 HTTP 200.
+  - P1 DB/JSON 호환 레이어 작업을 `runner-02bd3c91`로 제출했으나 `2026-07-18 09:24:33 KST`에 `강제 종료: AI 판단에 의한 강제 종료` 상태가 됐다.
+  - P2 프론트 모듈화 작업은 `runner-09038aa5`로 제출했으나 실패한 P1 의존 상태라 실행 전 대기 상태다.
+  - P1 축소 재시도 `runner-610d80a0`을 Claude Sonnet 워커로 제출했으나 Runner Guard가 과거 취소 job `runner-c038cc78` 파일 충돌 의존성을 자동 부여해 즉시 실행되지 못했다.
+  - 러너 차단과 별개로 직접 저장소 감사를 수행했다. 서비스 코드에는 플랫폼 계정 평문 `password`를 `password_enc`로 마이그레이션하고, 계정 목록/API 응답에서 `password`와 `password_enc`를 제거하는 경로가 이미 존재한다.
+  - 실패한 P1 러너가 남긴 부분 변경도 확인했다. `/storage-status` 읽기 API와 `get_storage_status()` 함수, HR 원장 DB 전환 준비 스키마 `migrations/115_yeoljeong_finance_hr_ledgers.sql` 초안이 추가되어 있다. 실제 운영 DB 적용은 하지 않았다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-18 09:22:11 KST`.
+  - 공개 URL HTTP 200:
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`
+  - 운영 DB 테이블: `yeoljeong_businesses=3`, `yeoljeong_branches=3`, `yeoljeong_settings=1`.
+  - JSON 원장: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`.
+  - 플랫폼 계정 파일 보안 집계: `plain_password_fields=0`, `encrypted_fields=0`, `masked_fields=4`. 비밀번호 원문은 출력하지 않았다.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - 컨테이너 검증: `docker exec -i aads-server python` 기준 `get_storage_status` import 가능, 관리자 판정 가능. 단독 스크립트에서는 DB pool 미초기화로 `mode=json-only`, `hr_db_ready=false`, JSON 원장 10/23/4/2건을 반환했다.
+  - DB 직접 조회: HR 전환 테이블 `yeoljeong_employee_join_requests`, `yeoljeong_onboarding_documents`, `yeoljeong_contracts`, `yeoljeong_payroll_statements`는 아직 운영 DB에 없다.
+- 제한:
+  - P1/P2 러너 작업은 완료되지 않았다. 원인은 P1 1차 강제 종료와 P1 축소 재시도의 과거 취소 job 의존성 자동 부여다.
+  - DB 전환 전체 구현은 아직 미완료다. 현재 확정 상태는 설정 3개 테이블만 PostgreSQL, HR/계약/급여/배달 계정 원장은 JSON 저장소다.
+  - `/storage-status`와 migration 115는 코드/초안 수준이며, 프로세스 reload/deploy 전에는 운영 API 메모리에 반영됐다고 단정하지 않는다.
+  - 이번 기록 외 push, deploy, restart는 수행하지 않았다.
+
 ## 2026-07-16 12:07 KST - Chat media artifact inline viewing implementation
 - 배경: CEO가 채팅 보고 중 이미지/영상 생성물을 채팅창에서 바로 볼 수 있게 적용 가능한지 물었고, 이전 응답이 구현/검증/문서 상태를 명확히 닫지 못해 실제 조치로 이어갔다.
 - 조치:
@@ -3592,3 +3645,51 @@
 - 잔존:
   - P1 7일 interrupted 자동 복구 고도화와 P2 `page.tsx` 대형 파일 분리는 별도 구조개선 과제로 남아 있다.
   - 브라우저 E2E는 실행하지 않았고 API/타입/컨테이너 검증으로 대체했다.
+
+## 2026-07-18 09:21 KST - Yeoljeong store assistant docs runner fallback verification
+- 배경: CEO가 매장비서 개발환경/아키텍처/디자인/업데이트관리 문서를 HTML로 관리하고 관리자 총괄 파일에 링크하라고 지시했으며, 후속 지시에서 중간 보고가 아닌 완료 조건 재검증을 요구했다.
+- 러너 상태:
+  - `runner-c038cc78`: cancelled, `process_died`.
+  - `runner-9a8b845c`: cancelled, `superseded`.
+  - 의존 작업 `runner-3206f42d`, `runner-bcda9e77`, `runner-91582b75`, `runner-a7c60c5c`: blocked_dependency/cancelled.
+  - 대시보드 큐: pending 0, running 0.
+- 직접 보완:
+  - 매장비서 관리자 상단 문서 링크에 `기술` 직접 링크를 추가했다.
+  - 반영 파일: `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`.
+- 문서/URL 검증:
+  - `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
+  - `/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`: HTTP 200.
+  - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
+  - `/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`: HTTP 200.
+- 개발환경/저장소 판정:
+  - 프론트: HTML/CSS/Vanilla JS 단일 SPA.
+  - 백엔드: FastAPI/Pydantic.
+  - 설정 저장: PostgreSQL `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 우선 + JSON 폴백.
+  - HR/입사서류/계약/급여 원장: JSON 파일 저장소 유지.
+- 완료/미완료:
+  - 문서 파일 저장, 운영 URL 200, 관리자 총괄 문서 링크, 문서 ledger 기록은 완료.
+  - 러너 기반 커밋은 실패했으며, 직접 fallback으로 보완했다.
+  - push/deploy는 수행하지 않았다. 정적 파일은 bind/public 경로 기준 운영 URL에서 확인했다.
+  - P1 전체 HR/계약/급여 DB 이관과 P2 단일 HTML 모듈화는 별도 작업으로 남아 있다.
+
+## 2026-07-18 09:25 KST - Yeoljeong store assistant P1 DB compatibility fallback
+- 배경: CEO가 러너 중간 보고로 끝내지 말고 남은 확인/조치/검증을 계속 수행하라고 지시했다.
+- 러너 재확인:
+  - `runner-02bd3c91`: running 표기였으나 로그 0건, dead PID, suspect_stale 상태라 종료했다. 종료 결과: `terminated`, 이후 error.
+  - `runner-09038aa5`: 선행 P1 error로 blocked_dependency/cancelled.
+  - `runner-1c88c501`: 선행 P2 cancelled로 blocked_dependency/cancelled.
+  - `runner-c5d84568`: 새로 재제출했으나 로그 0건, dead PID로 즉시 스톨 징후 확인.
+- 직접 조치:
+  - 신규 마이그레이션 초안 `migrations/115_yeoljeong_finance_hr_ledgers.sql` 추가.
+  - `app/services/yeoljeong_finance_service.py`: 설정 테이블/HR 원장 테이블/JSON 원장 파일 상태를 보고하는 `get_storage_status()` 추가.
+  - `app/api/yeoljeong_finance.py`: 관리자용 읽기 API `GET /api/v1/yeoljeong-finance/storage-status` 추가.
+  - 운영 DB 적용, 재시작, push, deploy는 하지 않았다.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql` SQL dry-run: `BEGIN` 후 CREATE TABLE/INDEX, `ROLLBACK` 통과.
+  - 컨테이너 함수 존재 확인: `get_storage_status=True`, `HR_LEDGER_TABLES` 4개 확인.
+  - 컨테이너 함수 결과: mode `json-only`, settings source `json`, HR ledgers source `json`, JSON files 4개. 컨테이너 단독 함수 호출 환경에서는 DB pool이 초기화되지 않아 API 프로세스 컨텍스트와 다를 수 있다.
+  - 인증 없는 `/api/v1/yeoljeong-finance/storage-status`: HTTP 401. 관리자 보호 정상.
+- 완료/미완료:
+  - P1 안전장치인 스키마 초안과 저장소 상태 확인 API는 완료.
+  - 실제 HR/계약/급여 DB 쓰기 전환은 미완료. 운영 DB 마이그레이션 적용과 데이터 백필 승인 후 별도 진행해야 한다.
