@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:40 KST - Yeoljeong delivery ledger migration committed
+- 배경: 최종 검증 중 배달앱 계정/매출/정산/리뷰/수집상태 원장의 DB 전환 준비 스키마와 storage-status 표시 보강이 별도 커밋으로 반영됐는지 확인했다.
+- 커밋:
+  - `35738a4c feat: add yeoljeong delivery ledger migration plan`
+- 조치:
+  - `migrations/116_yeoljeong_finance_delivery_ledgers.sql` 추가: `yeoljeong_platform_accounts`, `yeoljeong_delivery_sales`, `yeoljeong_delivery_settlements`, `yeoljeong_delivery_reviews`, `yeoljeong_delivery_collection_status` 준비 스키마.
+  - `app/services/yeoljeong_finance_service.py` 저장소 상태 응답에 `delivery_ledgers`, `delivery_db_ready`, migration 116 표시를 추가했다.
+- 검증:
+  - `migrations/116_yeoljeong_finance_delivery_ledgers.sql`: `BEGIN`/`CREATE TABLE`/`CREATE INDEX`/`UPDATE 0`/`ROLLBACK` dry-run 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/main.py`: 통과.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py migrations/116_yeoljeong_finance_delivery_ledgers.sql`: 통과.
+- 보류:
+  - migration 116은 운영 DB에 적용하지 않았다. 현재는 적용 준비 파일과 fallback 코드만 커밋된 상태다.
+
 ## 2026-07-18 09:39 KST - Yeoljeong store assistant API threadpool commit
 - 배경: 최종 상태 확인 중 `app/api/yeoljeong_finance.py`에 HR/계약/급여/배달 원장 호출을 FastAPI threadpool로 넘기는 안정화 변경이 미커밋 상태로 남아 있음을 확인했다.
 - 조치:
