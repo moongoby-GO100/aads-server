@@ -795,8 +795,9 @@ def _get_pool_or_none() -> Any | None:
 async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="저장소 상태 확인 권한이 없습니다")
+    ledger_files = sorted(set(JSON_LEDGER_FILES) | GENERIC_DB_LEDGER_NAMES)
     json_ledgers = []
-    for name in JSON_LEDGER_FILES:
+    for name in ledger_files:
         path = _path(name)
         json_ledgers.append(
             {
@@ -808,7 +809,7 @@ async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
         )
 
     pool = _get_pool_or_none()
-    db_tables = {name: False for name in (*SETTINGS_TABLES, *HR_LEDGER_TABLES)}
+    db_tables = {name: False for name in (*SETTINGS_TABLES, *HR_LEDGER_TABLES, *DELIVERY_LEDGER_TABLES)}
     if pool is not None:
         try:
             async with pool.acquire() as conn:
@@ -828,9 +829,10 @@ async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
 
     settings_db_ready = all(db_tables[name] for name in SETTINGS_TABLES)
     hr_db_ready = all(db_tables[name] for name in HR_LEDGER_TABLES)
+    delivery_db_ready = all(db_tables[name] for name in DELIVERY_LEDGER_TABLES)
     return {
         "checked_at": _now(),
-        "mode": "database+json-fallback" if settings_db_ready else "json-only",
+        "mode": "database+json-fallback" if any([settings_db_ready, hr_db_ready, delivery_db_ready]) else "json-only",
         "settings": {
             "source": "database" if settings_db_ready else "json",
             "tables": {name: db_tables[name] for name in SETTINGS_TABLES},
@@ -840,11 +842,17 @@ async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
             "tables": {name: db_tables[name] for name in HR_LEDGER_TABLES},
             "json_files": json_ledgers,
         },
+        "delivery_ledgers": {
+            "source": "database" if delivery_db_ready else "json",
+            "tables": {name: db_tables[name] for name in DELIVERY_LEDGER_TABLES},
+        },
         "migration": {
             "settings": "113_yeoljeong_finance_settings.sql",
             "hr_ledgers": "115_yeoljeong_finance_hr_ledgers.sql",
+            "delivery_ledgers": "116_yeoljeong_finance_delivery_ledgers.sql",
             "hr_db_ready": hr_db_ready,
-            "note": "HR/계약/급여 API는 HR 테이블이 실제 적용되기 전까지 기존 JSON 원장을 유지합니다.",
+            "delivery_db_ready": delivery_db_ready,
+            "note": "각 DB 테이블이 실제 적용되기 전까지 해당 원장은 기존 JSON 파일을 유지합니다.",
         },
     }
 
