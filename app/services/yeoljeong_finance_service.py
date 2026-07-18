@@ -50,6 +50,20 @@ PLATFORM_LABELS = {
     "ddangyo": "땡겨요",
 }
 
+SETTINGS_TABLES = ("yeoljeong_businesses", "yeoljeong_branches", "yeoljeong_settings")
+HR_LEDGER_TABLES = (
+    "yeoljeong_employee_join_requests",
+    "yeoljeong_onboarding_documents",
+    "yeoljeong_contracts",
+    "yeoljeong_payroll_statements",
+)
+JSON_LEDGER_FILES = (
+    "employee_join_requests",
+    "onboarding_documents",
+    "contracts",
+    "payroll_statements",
+)
+
 CONTRACT_TEMPLATE_META = {
     "freelancer": {
         "document_kind": "freelancer_service_contract",
@@ -260,6 +274,63 @@ def _get_pool_or_none() -> Any | None:
         return get_pool()
     except Exception:
         return None
+
+
+async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="저장소 상태 확인 권한이 없습니다")
+    json_ledgers = []
+    for name in JSON_LEDGER_FILES:
+        path = _path(name)
+        json_ledgers.append(
+            {
+                "name": name,
+                "path": str(path),
+                "exists": path.exists(),
+                "records": len(_read(name)) if path.exists() else 0,
+            }
+        )
+
+    pool = _get_pool_or_none()
+    db_tables = {name: False for name in (*SETTINGS_TABLES, *HR_LEDGER_TABLES)}
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT table_name
+                      FROM information_schema.tables
+                     WHERE table_schema = 'public'
+                       AND table_name = ANY($1::text[])
+                    """,
+                    list(db_tables),
+                )
+            existing = {row["table_name"] for row in rows}
+            db_tables = {name: name in existing for name in db_tables}
+        except Exception:
+            pass
+
+    settings_db_ready = all(db_tables[name] for name in SETTINGS_TABLES)
+    hr_db_ready = all(db_tables[name] for name in HR_LEDGER_TABLES)
+    return {
+        "checked_at": _now(),
+        "mode": "database+json-fallback" if settings_db_ready else "json-only",
+        "settings": {
+            "source": "database" if settings_db_ready else "json",
+            "tables": {name: db_tables[name] for name in SETTINGS_TABLES},
+        },
+        "hr_ledgers": {
+            "source": "database" if hr_db_ready else "json",
+            "tables": {name: db_tables[name] for name in HR_LEDGER_TABLES},
+            "json_files": json_ledgers,
+        },
+        "migration": {
+            "settings": "113_yeoljeong_finance_settings.sql",
+            "hr_ledgers": "115_yeoljeong_finance_hr_ledgers.sql",
+            "hr_db_ready": hr_db_ready,
+            "note": "HR/계약/급여 API는 HR 테이블이 실제 적용되기 전까지 기존 JSON 원장을 유지합니다.",
+        },
+    }
 
 
 def _mask_email(email: str) -> str:

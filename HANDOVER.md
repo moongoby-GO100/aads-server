@@ -7,6 +7,306 @@
 - 검증: 신서버 SSH에서 `hostname=contabo14`, `/root/kis-autotrade-v4` 존재, `go100`·`go100-frontend` active, `http://5.104.86.14:8002/health` HTTP 200을 확인했다. 컨테이너 mapping assertions 및 Python compile, `git diff --check`를 통과했다. 호스트에는 pytest가 없어 전용 pytest 파일은 직접 단언으로 대체했다.
 - 완료 기준: AADS 배포 후 `run_remote_command(project=GO100, command=hostname)`가 `contabo14`를 반환해야 최종 완료로 판정한다.
 - 배포 복구: 첫 blue-green 전환에서 호스트에 `nginx` 바이너리가 없어 `nginx -t`가 실패했다. `deploy.sh`가 호스트 nginx가 없을 때 실행 중인 `aads-nginx` 컨테이너의 `nginx -t/-s reload`를 사용하도록 폴백을 추가했다.
+## 2026-07-18 09:30 KST - Yeoljeong store assistant runner fallback final closeout
+- 배경: CEO가 러너 중간보고로 끝내지 말고 매장비서 문서화/DB 호환/업데이트 관리 후속 작업의 남은 확인, 조치, 검증을 계속 수행하고 최종 완료보고 조건을 충족하라고 지시했다.
+- 최종 조치:
+  - 러너 상태를 재조회했다. `runner-c038cc78`은 `cancelled/superseded`, `error_detail=deploy_preflight_git_state`로 커밋 완료가 아니며, `runner-dc0ea80b`은 `error` 상태다. P1/P2 의존 러너는 취소 또는 의존 차단 상태다.
+  - 러너 실패 산출물을 직접 검수하고 필요한 범위만 보존했다. 매장비서 관리자 링크는 문서 인덱스, 기술문서, 기획문서, DB전환 문서로 정리되어 있다.
+  - `app/services/yeoljeong_finance_service.py`에 관리자용 저장소 상태 점검 함수 `get_storage_status()`를 추가한 상태를 확인했다.
+  - `app/api/yeoljeong_finance.py`에 관리자 보호 API `GET /api/v1/yeoljeong-finance/storage-status`가 추가된 상태를 확인했다.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`은 HR/입사서류/계약/급여 원장 DB 전환 준비 스키마로 보존한다. 운영 DB에는 적용하지 않았다.
+  - 비밀값 노출 검사를 수행했고, 매장비서 앱/문서/API/서비스/마이그레이션/HANDOVER/변경기록 대상에서 CEO가 제공한 원문 비밀번호 패턴은 검출되지 않았다.
+- 검증:
+  - 기준 시각: `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'` → `2026-07-18 09:30:34 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`: `BEGIN` 후 `CREATE TABLE/INDEX`, `ROLLBACK` dry-run 통과.
+  - `node --check`로 매장비서 HTML inline script 문법 검사 통과.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB전환 문서 모두 HTTP 200.
+  - `/api/v1/yeoljeong-finance/storage-status`: 비인증 호출 HTTP 401. 관리자 보호 정상.
+  - 컨테이너 import 검증: `get_storage_status=True`, HR 전환 테이블 정의 4개, JSON 원장 파일 정의 4개.
+  - 운영 DB 직접 조회: 현재 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재하며 HR/계약/급여 테이블은 아직 없다.
+  - `git diff --check`: aads-server, aads-dashboard 모두 통과.
+- 저장소/배포 상태:
+  - 코드/문서 선별 커밋은 이 기록 직후 수행 대상이다.
+  - push, deploy, restart는 CEO가 이번 단계에서 요구한 범위를 넘는 운영 반영이므로 수행하지 않았다.
+  - 운영 정적 URL은 현재 HTTP 200이지만, Python API 변경은 프로세스 reload 전까지 운영 메모리에 반영됐다고 단정하지 않는다.
+
+## 2026-07-18 09:26 KST - Yeoljeong store assistant follow-up runner and storage verification
+- 배경: CEO가 매장비서 문서화/DB 전환/프론트 모듈화 후속 권장조치를 러너로 진행하고, 중간보고가 아닌 최종 완료조건 기준으로 상태를 정리하라고 지시했다.
+- 조치:
+  - P0 문서/관리자 링크 반영 상태를 재검증했다. `/root/aads/aads-dashboard`는 `git status --short` 출력이 없고, 관련 마지막 커밋은 `afc396b chore: restore dashboard git tracking baseline`이다.
+  - 매장비서 문서/앱 운영 URL 4개를 확인했다: `docs_index`, `technical`, `architecture_design`, `yeoljeong-finance/index.html` 모두 HTTP 200.
+  - P1 DB/JSON 호환 레이어 작업을 `runner-02bd3c91`로 제출했으나 `2026-07-18 09:24:33 KST`에 `강제 종료: AI 판단에 의한 강제 종료` 상태가 됐다.
+  - P2 프론트 모듈화 작업은 `runner-09038aa5`로 제출했으나 실패한 P1 의존 상태라 실행 전 대기 상태다.
+  - P1 축소 재시도 `runner-610d80a0`을 Claude Sonnet 워커로 제출했으나 Runner Guard가 과거 취소 job `runner-c038cc78` 파일 충돌 의존성을 자동 부여해 즉시 실행되지 못했다.
+  - 러너 차단과 별개로 직접 저장소 감사를 수행했다. 서비스 코드에는 플랫폼 계정 평문 `password`를 `password_enc`로 마이그레이션하고, 계정 목록/API 응답에서 `password`와 `password_enc`를 제거하는 경로가 이미 존재한다.
+  - 실패한 P1 러너가 남긴 부분 변경도 확인했다. `/storage-status` 읽기 API와 `get_storage_status()` 함수, HR 원장 DB 전환 준비 스키마 `migrations/115_yeoljeong_finance_hr_ledgers.sql` 초안이 추가되어 있다. 실제 운영 DB 적용은 하지 않았다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-18 09:22:11 KST`.
+  - 공개 URL HTTP 200:
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`
+  - 운영 DB 테이블: `yeoljeong_businesses=3`, `yeoljeong_branches=3`, `yeoljeong_settings=1`.
+  - JSON 원장: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`.
+  - 플랫폼 계정 파일 보안 집계: `plain_password_fields=0`, `encrypted_fields=0`, `masked_fields=4`. 비밀번호 원문은 출력하지 않았다.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - 컨테이너 검증: `docker exec -i aads-server python` 기준 `get_storage_status` import 가능, 관리자 판정 가능. 단독 스크립트에서는 DB pool 미초기화로 `mode=json-only`, `hr_db_ready=false`, JSON 원장 10/23/4/2건을 반환했다.
+  - DB 직접 조회: HR 전환 테이블 `yeoljeong_employee_join_requests`, `yeoljeong_onboarding_documents`, `yeoljeong_contracts`, `yeoljeong_payroll_statements`는 아직 운영 DB에 없다.
+- 제한:
+  - P1/P2 러너 작업은 완료되지 않았다. 원인은 P1 1차 강제 종료와 P1 축소 재시도의 과거 취소 job 의존성 자동 부여다.
+  - DB 전환 전체 구현은 아직 미완료다. 현재 확정 상태는 설정 3개 테이블만 PostgreSQL, HR/계약/급여/배달 계정 원장은 JSON 저장소다.
+  - `/storage-status`와 migration 115는 코드/초안 수준이며, 프로세스 reload/deploy 전에는 운영 API 메모리에 반영됐다고 단정하지 않는다.
+  - 이번 기록 외 push, deploy, restart는 수행하지 않았다.
+
+## 2026-07-16 12:07 KST - Chat media artifact inline viewing implementation
+- 배경: CEO가 채팅 보고 중 이미지/영상 생성물을 채팅창에서 바로 볼 수 있게 적용 가능한지 물었고, 이전 응답이 구현/검증/문서 상태를 명확히 닫지 못해 실제 조치로 이어갔다.
+- 조치:
+  - `app/services/chat_service.py`: 아티팩트 자동 추출에서 이미지뿐 아니라 영상 URL도 감지하도록 확장했다. `https://...mp4`, `/static/...`, `/api/v1/.../video`, `/api/v1/.../image` 형태를 이미지/영상 아티팩트로 분류한다.
+  - `migrations/114_chat_artifacts_video_type.sql`: `chat_artifacts.type` CHECK 제약에 `video` 타입을 추가했다.
+  - 운영 DB에도 동일 제약 확장을 적용했다. 기존 데이터 변경은 없다.
+  - `/root/aads/aads-dashboard`: `video` 아티팩트 타입, 미디어 탭, 패널/새창 `<video controls>` 렌더링, 메시지 카드/토스트 연결을 추가했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 12:09:59 KST`.
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/models/chat.py` 통과.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+  - `/root/aads/aads-dashboard`: `npm run build` 통과, route 목록에 `/chat/artifacts/[id]` 포함.
+  - HTTP 확인: `http://127.0.0.1:8100/api/v1/health` 200, `http://127.0.0.1:3100/login` 200.
+  - DB 제약 확인: `chat_artifacts_type_check`에 `video` 포함.
+  - DB 롤백 smoke test: 트랜잭션 안에서 `type='video'` 아티팩트 insert 성공 후 `ROLLBACK`.
+  - 운영 컨테이너 소스 확인: `aads-server` 컨테이너의 `/app/app/services/chat_service.py`에 영상 URL 감지 코드가 보인다. 백엔드는 소스 볼륨 마운트 구조라 파일 변경은 컨테이너 파일시스템에 노출된다.
+- 제한:
+  - 서버 코드 커밋 `64bc00ac fix: render chat media artifacts` 생성 완료. 서버 `origin/main` 대비 로컬 10커밋 ahead이며 git push는 수행하지 않았다.
+  - 대시보드 코드 커밋 `3000512 fix: show media artifacts in chat` 생성 완료. 대시보드 저장소는 remote가 없어 push할 대상이 없다.
+  - dashboard build는 성공했지만 정식 blue-green deploy는 수행하지 않았다. 현재 운영 컨테이너 번들에서 새 미디어 렌더링 문자열 확인은 미완료이므로, 운영 화면 반영은 대시보드 deploy 후 확정해야 한다.
+  - 로그인 브라우저 E2E는 미실행이다. 배포 후 실제 생성 이미지/영상 결과로 화면 렌더링 확인이 필요하다.
+
+## 2026-07-16 12:01 KST - AADS chat stability follow-up completion report
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 만족하지 못했다고 지적해, 남은 채팅창 안정화 개선 항목을 실제 코드/DB/로그 기준으로 재검수하고 추가 조치했다.
+- 조치:
+  - `app/services/model_selector.py`: `_RELAY_NON_RETRYABLE_ERROR_MARKERS`에 `preflight_failed`, `missing_binary`를 추가해 CLI/Codex Relay preflight 실패와 바이너리 누락을 90초 재시도하지 않고 즉시 폴백하도록 했다.
+  - `tests/unit/test_model_selector_dynamic_routing.py`: 위 두 마커가 retryable로 분류되지 않는 회귀 검증을 추가했다.
+  - `/root/aads/aads-dashboard/src/hooks/useSSE.ts`: `/ops/full-health` fallback fetch에 `Authorization` 헤더와 `credentials: "include"`를 붙이고, EventSource도 `withCredentials: true`로 열어 새 탭/쿠키 기반 인증에서 보조 API 401 잡음을 줄였다.
+  - 기존 반영 확인: `chat_service.py`의 TODO completion gate는 누락 TODO를 `interrupted`로 막지 않고 `todo_completion_gate_missing_non_blocking` 경고와 TODO 상태 갱신만 수행한다. `memory-context`는 `user_id` 필터 없이 tenant/session 기준으로 조회한다.
+  - 서버 커밋: 현재 HEAD `fix: skip non-retryable relay preflight retries`.
+  - 대시보드 커밋: `/root/aads/aads-dashboard` `b4ac508 fix: send auth on ops sse fallback`.
+  - 운영 반영: `app.services.model_selector`만 blue(8100)/green(8102)에 단일 모듈 hot-reload했다. 전체 reload/bluegreen은 요청 범위 밖 dirty 변경 반영 위험 때문에 수행하지 않았다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 12:01:25 KST`.
+  - `python3 -m py_compile app/services/model_selector.py app/services/chat_service.py app/routers/chat.py app/main.py` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/services/model_selector.py /app/app/services/chat_service.py /app/app/routers/chat.py /app/app/main.py` 통과.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+  - 운영 컨테이너 판정 확인: `preflight_failed`와 `missing_binary`는 retryable `False`, `Codex Relay timeout`은 retryable `True`.
+  - Hot-reload 확인: 8100/8102 모두 `success=1`, `failed=0`, `active_tasks_pre=1`, `active_tasks_post=1`, `tasks_lost=0`.
+  - DB 24시간 실행 상태: `completed 35`, `interrupted 4`, `running 1`. 24시간 interrupted reason은 `execution_resume_attempt_limit_exceeded`, `final_save_missing_placeholder_preserved`, `resume_claimed_by:d6976fb34975`, `superseded while preserving partial response` 각 1건이다.
+  - DB 최근 15분 실행 상태: `running 1`만 확인되어, 최근 15분 신규 `interrupted`는 없었다.
+  - HTTP 확인: `https://aads.newtalk.kr/api/v1/health` 200, `/api/v1/ops/version` 200, `/api/v1/image/gallery?limit=1` 200, `/api/v1/ops/full-health` 무인증 401.
+- 제한:
+  - 로컬/컨테이너에 `pytest`가 없어 `pytest tests/unit/test_model_selector_dynamic_routing.py -q`는 실행하지 못했다. `.venv/bin/python`은 `/usr/local/bin/python3.11` 링크 대상이 없어 실행 불가였다.
+  - `/ops/full-health`는 민감 운영 정보라 공개 면제하지 않았다. 프론트에서 인증 정보를 붙여 호출하도록 수정했다.
+  - 서버와 대시보드 변경은 관련 파일만 분리 커밋했다. git push는 수행하지 않았다.
+  - 대시보드 `useSSE.ts` 변경은 커밋됐지만, 대시보드 working tree에 요청 범위 밖 아티팩트 UI 변경이 남아 있어 정식 dashboard deploy는 수행하지 않았다.
+
+## 2026-07-16 11:31 KST - Yeoljeong store assistant documentation final closeout verification
+- 배경: CEO가 이전 응답이 최종 완료보고 조건과 `document_report_unverified_by_ledger`를 만족하지 못했다고 지적해, 매장비서 개발환경/기술문서/기획문서/관리자 링크 작업을 다시 실측하고 완료 상태를 확정했다.
+- 조치:
+  - 매장비서 관리자 앱 상단의 `문서`, `기획`, `DB전환` 링크가 원본 HTML과 대시보드 공개 복사본 2개에 모두 존재함을 확인했다.
+  - 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB 전환 설계서가 `fb.newtalk.kr/static/reports`와 `aads.newtalk.kr/public/reports` 양쪽에서 열리는지 확인했다.
+  - 앱 원본과 대시보드 public/static 복사본, 대시보드 public/apps 복사본, `app-config.js` 복사본의 동기화 상태를 확인했다.
+  - 커밋 상태를 확인한 결과 `origin/main` 대비 미푸시 커밋은 `7c481fd4 docs: document yeoljeong store assistant architecture`, `a8618074 docs: record yeoljeong store assistant follow-up`, `68f1a3c5 fix: stabilize chat completion and auth recovery` 3건이다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:31:21 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - `node --check /root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - 앱 inline script `node --check /tmp/yeoljeong-finance-inline-final.js` 통과.
+  - HTML parser 검증: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처 기획서, DB 전환 설계서 모두 통과.
+  - 공개 URL HTTP 200 확인:
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+- 제한:
+  - `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py`는 현재 호스트에 `pytest` 모듈이 없어 실행 불가였다.
+  - `git push`는 수행하지 않았다. 현재 브랜치에는 매장비서 문서화 2커밋 외 채팅 안정화 커밋 1건이 함께 앞서 있어, 전체 push 시 요청 범위 밖 변경이 같이 배포된다.
+  - 워킹트리에는 운영 데이터 JSON, nginx 설정, dashboard changelog, 임시 스크립트 등 기존 변경이 남아 있어 이번 완료보고에서는 건드리지 않았다.
+
+## 2026-07-16 11:29 KST - AADS chat stability P0/P1/P2 follow-up
+- 배경: CEO가 채팅창 잔여 개선 우선순위 `todo_completion_gate_missing`, 보조 API 401 오판, interrupted 원인 분류/자동복구, 대시보드 Git 관리, `page.tsx` 분리를 우선순위순 즉시 조치하라고 지시했다.
+- 조치:
+  - `app/services/chat_service.py`: TODO completion gate가 누락 TODO를 발견해도 실행을 `interrupted`로 막지 않도록 non-blocking 처리로 변경했다. 누락 TODO는 기존처럼 TODO 상태와 응답 하단 안내로 남긴다.
+  - `app/services/chat_service.py`: 자동 복구 대상 reason prefix에 `resume_task_cancelled`, `task_escaped:`, `force_interrupted_stale_`를 추가했다.
+  - `app/main.py`: 대시보드 보조 API 401 오판을 줄이기 위해 `/api/v1/ops/version`을 읽기전용 인증 면제에 추가하고, EventSource/direct fetch처럼 Authorization 헤더가 없는 브라우저 전송을 위해 `aads_token` 쿠키 인증 fallback을 추가했다.
+  - `app/main.py`: 실행 복구 scanner의 retry hard cap을 `> 5`에서 `>= 5`로 수정해 6회차 초과 retry가 더 이상 발생하지 않게 했다.
+  - `/root/aads/aads-dashboard`: Git 저장소를 신규 초기화하고 `afc396b chore: restore dashboard git tracking baseline`, `ffb1ae7 refactor: extract chat url session state helper` 커밋을 생성했다.
+  - `/root/aads/aads-dashboard/src/app/chat/urlState.ts`: 새 탭/해시 세션 복원 진입점 `getRequestedChatSessionId()`를 `page.tsx`에서 분리했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:22:19 KST`.
+  - DB 7일 실행 상태: `completed 141`, `interrupted 14`, `running 2`.
+  - DB 7일 interrupted reason: superseded 계열 10건, 복구 대상/실패 계열 4건.
+  - `python3 -m py_compile app/main.py app/services/chat_service.py` 통과.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit` 통과.
+- 제한:
+  - 서버 변경은 아직 커밋/푸시 전이다. 기존 Yeoljeong 관련 dirty 변경이 같은 서버 저장소에 섞여 있어 커밋은 파일 단위로 신중히 분리해야 한다.
+  - 대시보드 Git은 로컬 저장소 복구와 로컬 커밋까지만 완료했다. 원격 remote/push는 아직 설정하지 않았다.
+
+## 2026-07-16 11:26 KST - Yeoljeong store assistant priority follow-up closeout
+- 배경: CEO가 매장비서 다음 단계를 모두 우선순위대로 진행하라고 지시해, 문서 인덱스/DB 전환 설계/프론트 모듈화 매니페스트/공개 복사본/운영 URL 반영 상태를 이어서 확인했다.
+- 조치:
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`에 DB 전환 설계서와 프론트 모듈화 현황이 연결되어 있음을 확인했다.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`에 직원 가입, 입사서류, 계약서, 급여, 배달앱 계정, 감사로그 기준 PostgreSQL 전환 설계가 정리되어 있음을 확인했다.
+  - `app/static/apps/yeoljeong-finance/modules/app-config.js` 매니페스트가 앱 문서 링크를 `data-doc-key`로 제어하고, 단일 HTML을 단계적으로 `auth/settings/employee/contracts/payroll/delivery` 모듈로 분리할 기준점으로 연결되어 있음을 확인했다.
+  - 앱 원본과 대시보드 공개 복사본 2개, 매니페스트 원본과 공개 복사본 2개, DB 전환 설계서 원본과 공개 복사본 2개가 `cmp` 기준 동일함을 확인했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:26:52 KST`.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - 앱 HTML inline script `node --check /tmp/yeoljeong-finance-inline-check.js` 통과.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - HTML parser 검증: 매장비서 앱, 문서 인덱스, DB 전환 설계서, 기술문서, 아키텍처 기획서 모두 통과.
+  - 공개 URL HTTP 200 확인: 앱 267,880 bytes, 매니페스트 1,456 bytes, 문서 인덱스 6,290 bytes, DB 전환 설계서 8,539 bytes.
+  - 공개 앱 마커 확인: `data-doc-key="index"`, `data-doc-key="architecture"`, `data-doc-key="dbTransition"`, `app-config.js`, `DB전환`.
+- 제한:
+  - 커밋/푸시/정식 `deploy.sh`는 수행하지 않았다.
+  - DB 전환은 설계 문서와 전환 기준 정리까지 완료되었고, HR/계약/급여 테이블 신규 migration 및 서비스 저장소 DB화는 다음 구현 단계로 남아 있다.
+
+## 2026-07-16 11:23 KST - Yeoljeong store assistant docs, DB transition plan, frontend module phase 1
+- 배경: CEO가 다음 단계인 `매장비서 문서화 커밋`, `JSON 원장 DB 전환 설계`, `프론트 모듈화 작업`을 우선순위순으로 모두 진행하라고 지시했다.
+- 조치:
+  - 매장비서 관리자 상단에 `문서`, `기획`, `DB전환` 링크를 노출했다.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`을 추가해 직원/입사서류/계약서/급여/배달앱 계정 JSON 원장의 PostgreSQL 전환 설계를 문서화했다.
+  - `app/static/apps/yeoljeong-finance/modules/app-config.js`를 추가해 프론트 모듈화 1차 매니페스트를 구성했다. 현재 단일 HTML 기능은 유지하고, 인증/설정/직원/계약/급여/배달수집 모듈 분리 대상만 안정적으로 등록했다.
+  - 문서 인덱스와 기술문서를 최신 KST 기준으로 갱신하고, 대시보드 공개 복사본에도 동기화했다.
+- 검증:
+  - `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'`: `2026-07-16 11:23:56 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js` 통과.
+  - 매장비서 HTML inline script `node --check /tmp/yeoljeong-finance-inline.js` 통과.
+  - 공개 앱 HTML에서 `app-config.js`, `DB전환` 링크 확인.
+  - 공개 DB 전환 설계 문서에서 `매장비서 JSON 원장 DB 전환 설계`, `yeoljeong_contracts`, `완료 기준` 마커 확인.
+- 제한:
+  - 대시보드 디렉터리는 별도 Git 상태가 전체 신규 파일로 잡혀 이번 커밋 대상에서 제외했다. 파일 복사본은 운영 공개 경로에 동기화했다.
+  - 운영 데이터 JSON과 업로드 파일은 민감/운영 데이터라 커밋 대상에서 제외한다.
+
+## 2026-07-16 11:12 KST - Yeoljeong store assistant document report ledger closeout
+- 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger` 위반이라고 지적해, 매장비서 개발환경/기술문서/기획문서/관리자 링크 작업을 중간보고로 끝내지 않고 남은 확인, 조치, 검증을 이어서 수행했다.
+- 추가 확인:
+  - 매장비서 앱 상단 `기획` 링크가 일부 복사본에서 아직 `20260716_yeoljeong_store_assistant_architecture_design.html`을 가리키는 불일치를 확인했다.
+  - AADS 대시보드 사이드바 링크가 `/public/reports/...`로 설정되어 있었으나, 운영 `aads.newtalk.kr/public/reports/...`는 실제 문서가 아니라 Next 앱 shell을 반환했다. `/reports/...`, `/static/reports/...`는 현 운영 번들 기준 404였다.
+- 조치:
+  - 매장비서 앱 원본과 대시보드 공개 복사본 2개에서 `기획` 링크를 검증된 `20260716_yeoljeong_store_assistant_architecture_design_plan.html`로 통일했다.
+  - 문서 인덱스 원본과 대시보드 공개 복사본 2개에서 아키텍처·디자인 기획서 링크를 `architecture_design_plan.html`로 통일했다.
+  - AADS 대시보드 실제 소스 `/root/aads/aads-dashboard/src/components/Sidebar.tsx`와 서버 저장소 내 보조 대시보드 소스 `aads-dashboard/src/components/Sidebar.tsx`의 `매장비서 문서` 링크를 즉시 200으로 검증되는 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html` 절대 URL로 보정했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:12:51 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - HTML parser 검증: 매장비서 앱 HTML, 문서 인덱스, 기술문서, 호환 기술문서, 아키텍처 문서, 아키텍처 plan 문서, 대시보드 공개 문서 인덱스 2개 모두 통과.
+  - 앱 HTML inline script `node --check /tmp/yeoljeong-finance-inline.js` 통과.
+  - 앱 HTML 복사본 동기화: `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html` `cmp` 통과.
+  - 문서 인덱스 복사본 동기화: `app/static/reports/...docs_index.html`, `/root/aads/aads-dashboard/public/reports/...docs_index.html`, `/root/aads/aads-dashboard/public/static/reports/...docs_index.html` `cmp` 통과.
+  - 공개 URL HTTP 200 및 `매장비서` 본문 마커 확인:
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161111`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607161112`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html?v=202607161112`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html?v=202607161111`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html?v=202607161112`
+  - `/root/aads/aads-dashboard`에서 `npx eslint src/components/Sidebar.tsx` 통과.
+- 제한:
+  - `/root/aads/aads-server/aads-dashboard`는 Git 저장소가 아니고 ESLint 설정도 없어 해당 보조 폴더에서 `npx eslint src/components/Sidebar.tsx`는 실행 불가였다.
+  - AADS 대시보드 운영 번들 재빌드/재시작은 수행하지 않았다. 다만 다음 배포 시 사이드바는 검증된 `fb.newtalk.kr` 절대 URL로 열리도록 소스 보정 완료.
+  - 커밋/푸시/정식 `deploy.sh`는 수행하지 않았다.
+
+## 2026-07-16 10:47 KST - Yeoljeong onboarding tab final verification
+- 배경: CEO가 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 입사서류 탭에 승인 직원이 표시되지 않는 문제의 조치 완료 여부를 재확인했다.
+- 최종 확인:
+  - 운영 데이터에는 `하영훈 / dudgns3738@naver.com / 중화점 / status=approved`가 존재하고, 해당 직원의 업로드 입사서류는 0건이다.
+  - 활성 `aads-server` 컨테이너 서비스 함수 기준 관리자/직원 본인 모두 하영훈 필수서류 4건을 `status=missing`, `missing_document=True`로 반환한다.
+  - 공개 정적 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에는 `mergeOnboardingMissingRows`, `작성 필요`, `업로드 대기`, `/employees/approved` 마커가 반영되어 있다.
+  - 공개 도메인 인증 API `https://fb.newtalk.kr/api/v1/yeoljeong-finance/onboarding/documents`는 관리자 토큰 기준 200이며, 하영훈 placeholder 4건을 반환한다.
+- 검증:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/services/yeoljeong_finance_service.py` 통과.
+  - HTML inline script `vm.Script` 문법 검사 통과(`html_script_syntax_ok 1`).
+- 제한:
+  - 호스트/컨테이너에 `pytest` 모듈이 없어 pytest는 실행하지 못했다.
+  - AADS 브라우저 MCP transport가 닫혀 화면 캡처는 수행하지 못했고, 공개 HTML/API 검증으로 대체했다.
+  - 커밋/푸시/정식 deploy는 수행하지 않았다.
+
+## 2026-07-16 10:45 KST - Chat memory context P0/P1/P2 fix
+- 배경: CEO가 채팅창 memory-context 로드 실패 개선안 P0(user_id 필터 제거), P1(120초 폴링 제거), P2(세션 없음/네트워크 오류 구분)를 즉시 구현하라고 지시했다.
+- 조치:
+  - `app/services/chat_service.py`의 `get_memory_context_info()` 시그니처에서 미사용 `user_id` 인자를 제거했다.
+  - `app/routers/chat.py`의 `/chat/sessions/{session_id}/memory-context` 호출부는 `tenant_id`만 전달하는 현재 구조임을 확인했다.
+  - `/root/aads/aads-dashboard/src/components/chat/MemoryContextBar.tsx`에서 `setInterval(..., 120_000)` 폴링을 제거하고, 세션 변경/탭 복귀(`visibilitychange`)/창 focus/수동 재시도에서만 재조회하도록 반영했다.
+  - 동일 컴포넌트에서 403 권한 없음, 404 세션 없음, 5xx 서버 오류, 네트워크 오류, 인증 만료를 분리 표시하도록 보강했다.
+- 검증:
+  - `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과.
+  - `/root/aads/aads-dashboard`에서 `npx tsc --noEmit` 통과.
+  - 운영 `aads-server` 컨테이너에서 `get_memory_context_info` 시그니처가 `(session_id: str, tenant_id: Optional[str] = None)`로 로드됨을 확인했다.
+  - 운영 `aads-dashboard` 번들에서 `세션을 찾을 수 없습니다`, `네트워크 오류`, `visibilitychange` 마커 확인, `120_000` 마커 없음 확인.
+  - `curl http://127.0.0.1:8100/health` 정상 JSON 반환, `curl -I http://127.0.0.1:3100/chat`는 로그인 리다이렉트 307 반환.
+- 제한:
+  - 대시보드 디렉터리는 현재 Git 저장소가 아니어서 프론트 변경은 Git diff/commit으로 묶을 수 없다.
+  - 서버 저장소에는 기존 Yeoljeong 관련 dirty 변경이 다수 있어 이번 응답에서는 커밋/푸시를 수행하지 않았다.
+
+## 2026-07-16 09:24 KST - Yeoljeong DB conflict guard and platform account secret hardening
+- 배경: CEO가 다른 세션에서 진행한 매장비서 DB 작업과 충돌하지 않도록 권장조치 진행을 지시했다.
+- 확인:
+  - 운영 PostgreSQL에는 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블이 존재하며 row count는 각각 3, 3, 1이다.
+  - `app/data/yeoljeong_finance/platform_accounts.json`은 현재 4건이며 평문 `password` 저장 0건, `password_enc` 저장 0건이다.
+  - 공개 API `https://fb.newtalk.kr/api/v1/yeoljeong-finance/session` 비인증 호출은 `401 application/json`으로 정상 차단된다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`의 플랫폼 계정 저장 로직을 보정해 신규 비밀번호는 `app.core.credential_vault.encrypt_value()`로 암호화한 `password_enc`만 저장하고 API 응답에서는 `password/password_enc`를 제거한다.
+  - 레거시 JSON에 평문 `password`가 발견되면 `list_accounts()` 또는 `sync_delivery()` 진입 시 암호화 후 평문 필드를 제거하도록 자동 마이그레이션을 추가했다.
+  - `save_settings_persisted()`에서 canonical 3개 사업자/지점 외 DB row를 soft-delete하지 않도록 변경해, 다른 세션이 추가한 DB 행을 저장 과정에서 훼손하지 않게 했다.
+  - `migrations/113_yeoljeong_finance_settings.sql`도 재실행 시 미지의 사업자/지점 행을 soft-delete하지 않도록 주석과 함께 조정했다.
+  - `tests/unit/test_yeoljeong_finance_service.py`에 비밀번호 암호화 저장 및 레거시 평문 마이그레이션 회귀 테스트를 추가했다.
+- 검증:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py` 통과.
+  - `docker exec -i aads-server python - <<'PY' ...` 스모크 테스트 통과: 신규 계정 저장 시 평문 미저장, 응답 secret 미노출, 레거시 평문 자동 암호화 확인.
+  - 운영 라우터 조회: `yeoljeong-finance` 경로 35개 로드 확인.
+- 미완료/주의:
+  - 컨테이너에 `pytest` 모듈이 없어 `python -m pytest /app/tests/unit/test_yeoljeong_finance_service.py -q`는 실행 불가.
+  - 코드 변경은 커밋/푸시/정식 배포하지 않았다. 현재 서버 워크트리에는 기존 매장비서/대시보드 관련 dirty 변경이 함께 남아 있다.
+
+## 2026-07-16 06:56 KST - Yeoljeong business master fixed to three stores
+- 배경: CEO가 저장된 사업자는 `열정국밥 중화점`, `열정국밥 성신여대점`, `열정국밥_미아점` 3건이라고 확정하고 이 기준으로 권장조치 즉시 반영을 지시했다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`에 3개 사업자/3개 지점 canonical master를 고정하고, `biz-corp`, `branch-common` 등 기준 밖 항목이 저장/조회/DB 적재 단계에서 재유입되지 않도록 정규화했다.
+  - `/api/v1/yeoljeong-finance/settings` 조회/저장을 DB 우선, JSON 폴백 구조로 연결했다.
+  - `migrations/113_yeoljeong_finance_settings.sql`을 추가하고 운영 DB에 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`를 적용했다.
+  - `app/static/apps/yeoljeong-finance/index.html`의 기본값, 화면 문구, localStorage 병합 로직을 3개 사업자 기준으로 맞췄다.
+  - `app/data/yeoljeong_finance/settings.json` seed를 3개 사업자 기준으로 정리하고 기존 외부 연동 6건은 `biz-mia` 기준으로 보존했다.
+- 검증:
+  - DB 조회: `yeoljeong_businesses` 활성 3건, `yeoljeong_branches` 활성 3건.
+  - 컨테이너 직접 함수 검증: `biz-corp` 입력 시 결과/저장 파일 모두에서 제거되고 잘못된 참조는 `biz-mia`, `열정국밥_미아점`으로 정규화됨.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 통과.
+  - `aads-server`, `aads-server-green` 컨테이너 모두 canonical 사업자 3건 import 확인.
+  - `curl http://127.0.0.1:8100/health`, `curl http://127.0.0.1:8102/api/v1/health` 모두 200 OK.
+- 보류:
+  - 호스트와 컨테이너에 `pytest` 모듈이 없어 pytest 전체 실행은 불가했다. 직접 함수 검증과 문법/DB/헬스체크로 대체했다.
+  - 커밋/푸시는 수행하지 않았다.
+
+## 2026-07-16 06:16 KST - Yeoljeong store assistant login transition hardening
+- 배경: 서버 재시작으로 직전 응답이 중단되어, 열정국밥 매장비서 로그인 후 화면 이동 정체 조치 상태를 재실측했다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`과 `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`의 로그인 성공 흐름에서 `refreshFinanceSession()` 동기 대기를 제거했다.
+  - 로그인 토큰 저장과 `saveAuthSession()` 직후 로그인 모달을 닫고 기본 화면으로 전환한 뒤, `refreshFinanceSessionInBackground()`로 권한/세션 보강을 백그라운드 처리하도록 변경했다.
+  - 운영 `aads-dashboard`, `aads-dashboard-green`, `aads-server-green` 컨테이너의 대응 정적 파일을 재시작 없이 동기화했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 06:13:54 KST`.
+  - `curl -L https://aads.newtalk.kr/apps/yeoljeong-finance`에서 `refreshFinanceSessionInBackground` 반영 확인.
+  - `docker exec aads-dashboard`, `docker exec aads-dashboard-green` 기준 `/app/public/apps/yeoljeong-finance/index.html`에 동일 수정 반영 확인.
+  - `node -e` HTML inline script parse 검증 결과 `js-parse-ok 1`.
+  - `/api/v1/yeoljeong-finance/session` 비인증 호출은 `401 application/json`으로 정상 차단된다.
+- 남은 제한:
+  - 실제 CEO 브라우저 로그인 클릭 E2E는 미실행이다. 운영 HTML/컨테이너/JS 파싱 기준으로만 검증했다.
+  - 커밋/푸시는 수행하지 않았다. 서버 저장소에는 기존 `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`, `docs/CHANGELOG-direct-edit.md`, `scripts/*` dirty 변경이 남아 있어 별도 정리 필요하다.
 
 ## 2026-07-16 05:59 KST - Yeoljeong store assistant P0/P1 closeout
 - 배경: CEO가 열정국밥 매장비서 수정 필요사항 P0~P1 즉시 조치를 지시했다.
@@ -3001,3 +3301,402 @@
 - 남은 상태:
   - `HANDOVER.md`는 Git index 기준 기존 병합 충돌 상태가 남아 있어 별도 정리 필요.
   - 커밋/푸시는 수행하지 않았다.
+
+## 2026-07-16 06:39 KST - Yeoljeong HR API E2E with virtual employee data
+- 배경: CEO가 테스트 계정으로 실제 E2E 데이터를 가상 입력해 직원가입, 서류, 승인, 계약, 급여 흐름을 끝까지 검증하라고 지시했다.
+- 실행:
+  - 운영 `aads-server` API에 실제 HTTP 요청으로 E2E 전용 SaaS 직원 계정 `yf-e2e-20260716063939@example.com`을 생성했다.
+  - 가입요청 1건, 입사서류 4건, 계약서 1건, 급여내역서 1건을 `app/data/yeoljeong_finance` 저장소에 생성했다.
+  - 직원 토큰의 관리자 행위 4종(가입승인, 서류검수, 계약서 작성, 급여내역서 작성)은 모두 403으로 차단됨을 확인했다.
+  - 관리자 승인 후 직원 세션은 `role=employee`, `is_admin=false`로 확인했다.
+- 검증:
+  - API E2E 22단계 모두 통과.
+  - 컨테이너 문법검사: `python -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py` 통과.
+  - 저장 데이터 확인: 가입요청 1건, 서류 4건, 계약 1건, 급여 1건.
+  - 공개 정적 앱 `https://aads.newtalk.kr/static/apps/yeoljeong-finance/index.html` 200 OK, 공개 헬스체크 200 OK.
+- 보류:
+  - 호스트와 컨테이너에 `pytest` 모듈이 없어 `tests/unit/test_yeoljeong_finance_service.py` pytest 실행은 불가했다.
+  - 스크린샷 캡처 도구는 localhost 연결 거부 및 공개 URL SSH 인자 길이 오류로 실패해 브라우저 시각 검증은 HTTP/API 검증으로 대체했다.
+  - 커밋/푸시는 수행하지 않았다.
+
+## 2026-07-16 10:10 KST - Yeoljeong employee contract A4 print templates
+- 배경: CEO가 직원계약서를 A4 출력 디자인으로 적용하고, 표준근로계약서와 3.3% 프리랜서 용역계약서를 테스트 계정에 실제 반영해 출력 디자인 E2E 검증을 요청했다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html` 계약서 미리보기를 A4 용지 크기(`210mm x 297mm`), 표/조항/서명란 기반 출력 문서로 변경했다.
+  - 계약서 작성 화면에 `A4 인쇄/PDF` 버튼을 추가하고 `@page size: A4` 및 print media 규칙을 적용했다.
+  - 표준근로계약서는 고용노동부 표준근로계약서 필수 기재 축인 당사자, 계약기간, 근무장소, 업무내용, 소정근로시간, 휴게, 휴일, 임금, 사회보험/세무, 휴가/퇴직/전자서명 조항을 A4 문서에 반영했다.
+  - 3.3% 프리랜서 용역계약서는 기존 `reports/contracts/20260615_freelancer_service_contract_template.md`와 `docs/contracts/20260615_프리랜서_외주계약서_전자계약_초안.md` 구조를 참고해 독립계약자 지위, 용역 범위, 검수, 3.3% 원천징수, 비밀유지, 지식재산권, 계약 변경/해지 조항을 분리했다.
+  - `app/services/yeoljeong_finance_service.py` 저장 로직에 계약 유형별 `document_kind`, `template_version`, `print_title` 자동 보정을 추가했다.
+  - `tests/unit/test_yeoljeong_finance_service.py`에 표준근로계약서/프리랜서 용역계약서 메타 저장 테스트를 추가했다.
+  - CEO 확인용 정적 리포트 `app/static/reports/yeoljeong-contract-a4-e2e.html`을 생성했다.
+- E2E 데이터:
+  - 테스트 직원 `E2E A4근로 20260716100721`, 계약 ID `b306224b-d01a-4254-a675-3fe224abcee6`, `document_kind=standard_employment_contract`, `template_version=majangbiseo-employment-2026-07-a4`, 상태 `requested`.
+  - 테스트 직원 `E2E 3.3프리랜서 20260716100721`, 계약 ID `c485c3da-9cd0-47d2-ad27-4519081b3c79`, `document_kind=freelancer_service_contract`, `template_version=majangbiseo-freelancer-2026-07-a4`, 상태 `requested`.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - `node --check /tmp/yeoljeong-inline.js` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 통과.
+  - `curl https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161010`에서 `A4 인쇄/PDF`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `3.3% 프리랜서 용역계약서` 문구 확인.
+  - `curl -I https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html` 200 OK.
+  - 정적 리포트 구조 검사: A4 paper 2개, `@page size: A4`, 표준근로계약서/3.3% 용역계약서 문구 확인.
+- 보류:
+  - 호스트와 컨테이너에 `pytest` 모듈이 없어 pytest 실행은 불가했다.
+  - `capture_screenshot`은 online PC agent 부재로 실패했다. 브라우저 이미지 검증은 HTTP/HTML/API 폴백으로 대체했다.
+  - 커밋/푸시/재시작은 수행하지 않았다.
+
+## 2026-07-16 10:14 KST - Yeoljeong employee contract A4 closeout verification
+- 배경: CEO가 직전 응답이 최종 완료보고 조건을 만족하지 못했다고 지적해, 남은 확인/검증/ledger 기록을 이어서 수행했다.
+- 추가 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 10:14:46 KST`.
+  - `git status --short`: 계약서 관련 변경 파일과 테스트 데이터가 워킹트리에 남아 있으며, unrelated 변경도 함께 존재한다.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - 공개 앱 HTML 조회: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161013` 247,889 bytes, `A4 인쇄/PDF`, `contract-paper`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 A4 리포트 조회: `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161013` 8,315 bytes, `class="paper"` 2개, `@page { size: A4`, 표준근로계약서, 3.3% 프리랜서 용역계약서, E2E 테스트 직원명 2건 확인.
+  - 컨테이너 내부 직접 서비스 E2E: `aads-server`에서 임시 `YEOLJEONG_FINANCE_DATA_DIR=/tmp/yf-contract-verify-202607161014`로 표준근로계약서와 프리랜서 용역계약서를 저장하고 서명요청까지 실행해 `DIRECT_SERVICE_E2E_OK` 확인.
+  - 운영 컨테이너 상태: `aads-server`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres` 모두 healthy.
+- 실제 데이터 확인:
+  - `app/data/yeoljeong_finance/contracts.json`에는 A4 계약서 테스트 데이터 2건이 저장되어 있다.
+  - 표준근로계약서: `b306224b-d01a-4254-a675-3fe224abcee6`, `document_kind=standard_employment_contract`, `template_version=majangbiseo-employment-2026-07-a4`, 상태 `requested`.
+  - 3.3% 프리랜서 용역계약서: `c485c3da-9cd0-47d2-ad27-4519081b3c79`, `document_kind=freelancer_service_contract`, `template_version=majangbiseo-freelancer-2026-07-a4`, 상태 `requested`.
+- 검증 제한:
+  - 호스트/컨테이너 모두 `pytest` 모듈이 없어 `python -m pytest tests/unit/test_yeoljeong_finance_service.py -q`는 실행하지 못했다.
+  - `capture_screenshot`은 `no online PC agent`로 실패했다. 독립 브라우저 이미지 캡처는 미수행이며, 공개 HTML/구조 파서/컨테이너 서비스 E2E로 대체했다.
+  - 커밋/푸시/정식 `deploy.sh`/재시작은 수행하지 않았다. 정적 HTML은 bind mount 및 공개 URL 조회로 운영 반영을 확인했다.
+
+## 2026-07-16 10:20 KST - Yeoljeong employee contract A4 final ledger reconciliation
+- 배경: CEO가 직전 응답이 `document_report_unverified_by_ledger` 위반이라고 지적해, 계약서 A4 작업의 남은 확인/조치/검증을 계속 수행했다.
+- 추가 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에는 A4 계약서 변경이 있었으나 `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`에는 이전 버전이 남아 있는 불일치를 확인했다.
+  - 운영 경로 차이에 따라 예전 계약서 화면이 보일 수 있어, A4 버전 HTML을 대시보드 public 원본에도 동기화했다.
+  - 동기화 후 두 파일의 sha256은 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`로 일치한다.
+- 최신 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 10:16:40 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 통과.
+  - 로컬 앱 HTML inline script 파서 검증: `JS_PARSE_OK 1`.
+  - 공개 앱 HTML 조회: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161020` 247,889 bytes, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 A4 리포트 조회: `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161020` 8,315 bytes, `class="paper"`, `@page { size: A4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서`, E2E 테스트 직원명 2건 확인.
+  - 운영 컨테이너 내부 직접 서비스 E2E: `DIRECT_SERVICE_E2E_OK /tmp/yf-a4-e2e-ge7910dz 79d1a169-2bad-428a-ba79-eee331ea0840 f8f5d1cf-5523-4f93-b2f4-833988a147cd`.
+- 실제 데이터:
+  - `app/data/yeoljeong_finance/contracts.json` 총 4건 중 A4 계약서 테스트 데이터 2건을 확인했다.
+  - 표준근로계약서 테스트 계약: `b306224b-d01a-4254-a675-3fe224abcee6`, `template_version=majangbiseo-employment-2026-07-a4`, `status=requested`.
+  - 3.3% 프리랜서 용역계약서 테스트 계약: `c485c3da-9cd0-47d2-ad27-4519081b3c79`, `template_version=majangbiseo-freelancer-2026-07-a4`, `status=requested`.
+- 제한:
+  - 호스트에 `pytest` 모듈이 없어 `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -q`는 실행 불가했다.
+  - 로컬에 Playwright/Chromium이 없어 실제 브라우저 스크린샷 캡처는 수행하지 못했다. 공개 URL HTML 구조 검증과 컨테이너 서비스 E2E로 대체했다.
+  - 커밋/푸시/정식 `deploy.sh`/프로세스 재시작은 수행하지 않았다.
+
+## 2026-07-16 10:23 KST - Yeoljeong employee contract A4 final report verification
+- 배경: CEO가 이전 완료보고의 ledger 검증 누락을 재지적해, 최종 보고 직전 공개 URL/컨테이너/문서 상태를 다시 확인했다.
+- 최신 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 10:23:19 KST`.
+  - `cmp -s /root/aads/aads-server/app/static/apps/yeoljeong-finance/index.html /root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html` 통과.
+  - 두 정적 앱 파일 sha256은 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`로 일치한다.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - 컨테이너 내부 직접 서비스 E2E: `DIRECT_A4_CONTRACT_E2E_OK majangbiseo-employment-2026-07-a4 majangbiseo-freelancer-2026-07-a4 requested`.
+  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161023` 다운로드 성공, 247,889 bytes, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 A4 리포트 `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161023` 다운로드 성공, 8,316 bytes, `class="paper"` 2개, `@page { size: A4`, 표준근로계약서, 3.3% 프리랜서 용역계약서, E2E 테스트 직원명 2건 확인.
+  - 운영 컨테이너 상태: `aads-server Up 3 hours (healthy)`, `aads-server-green Up 3 hours (healthy)`.
+- 남은 제한:
+  - `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py`는 호스트에 `pytest` 모듈이 없어 실행 불가했다. 동일 핵심 조건은 컨테이너 직접 서비스 E2E로 대체 검증했다.
+  - `capture_screenshot`은 `no online PC agent`로 실패했고, 로컬 Chromium/Playwright도 설치되어 있지 않아 브라우저 이미지 캡처는 미수행이다.
+  - 커밋/푸시/정식 `deploy.sh`/재시작은 수행하지 않았다.
+
+## 2026-07-16 10:24 KST - Yeoljeong employee contract A4 ledger recheck
+- 배경: completion contract가 `document_report_unverified_by_ledger`로 이전 응답을 차단해, 최종 보고 직전 실제 파일/운영 URL/테스트 데이터/문서 ledger를 다시 대조했다.
+- 재검증 결과:
+  - `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'`: `2026-07-16 10:24:41 KST`.
+  - `git status --short` 기준 계약서 관련 파일과 별도 unrelated 변경이 함께 존재한다. 이번 작업 범위 외 변경은 되돌리지 않았다.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161024`: HTTP 200, 269,485 bytes 다운로드, 저장 HTML 기준 247,889 characters, `A4 인쇄/PDF`, `210mm`, `297mm`, `@page`, `contract-paper`, `contract-table`, `majangbiseo-employment-2026-07-a4`, `majangbiseo-freelancer-2026-07-a4`, `표준근로계약서`, `3.3% 프리랜서 용역계약서` 모두 확인.
+  - 공개 A4 리포트 `https://fb.newtalk.kr/static/reports/yeoljeong-contract-a4-e2e.html?v=202607161024`: HTTP 200, 10,472 bytes 다운로드, 저장 HTML 기준 8,315 characters, `class="paper"` 2개와 `@page { size: A4`, E2E 테스트 직원명 2건 확인.
+  - 정적 앱 원본 동기화 확인: `app/static/apps/yeoljeong-finance/index.html`과 `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html` sha256 모두 `c00153e5649854b15cb893ed28ca0bc6ae6807d1060343f5a0d828b5d266c925`.
+  - `app/data/yeoljeong_finance/contracts.json`에서 테스트 계약 2건 확인: `b306224b-d01a-4254-a675-3fe224abcee6`는 `standard_employment_contract / majangbiseo-employment-2026-07-a4 / 표준근로계약서 / requested`, `c485c3da-9cd0-47d2-ad27-4519081b3c79`는 `freelancer_service_contract / majangbiseo-freelancer-2026-07-a4 / 3.3% 프리랜서 용역계약서 / requested`.
+- 남은 제한:
+  - 커밋/푸시/정식 `deploy.sh`/재시작은 수행하지 않았다.
+  - `pytest`와 브라우저 이미지 캡처는 환경 의존성 부재로 미수행이며, 공개 URL 마커 검증과 서비스/데이터 검증으로 대체했다.
+
+## 2026-07-16 10:29 KST - Yeoljeong approved employee follow-up visibility and email masking
+- 배경: CEO가 실제 직원 `하영훈 / du********@naver.com / 중화점`이 가입했는데 다른 탭에 보이지 않고, 총괄관리자 현황에 이메일 주소가 노출된다고 지적했다.
+- 원인 확인:
+  - `app/data/yeoljeong_finance/employee_join_requests.json`에는 하영훈 레코드가 `status=approved`, `requested_at=2026-07-16T10:20:00+09:00`, `reviewed_at=2026-07-16T10:22:49+09:00`로 존재한다.
+  - 동일 이메일 기준 `onboarding_documents.json`, `contracts.json`, `payroll_statements.json` 매칭은 각각 0건이다.
+  - 기존 화면은 계약서/급여/서류 탭에서 실제 원장 행만 렌더링해, 승인 완료 직원이 후속 작업 대상으로 표시되지 않았다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`의 승인 직원 API가 각 직원별 `onboarding_document_count`, `contract_count`, `payroll_statement_count`, `needs_*` 상태를 반환하도록 보강했다.
+  - `app/static/apps/yeoljeong-finance/index.html`에 공통 `maskedEmail`, `displayEmail`, `approvedEmployeesMissing` 로직을 추가했다.
+  - 직원관리 서류 검수, 계약서, 급여내역서 탭에 승인됐지만 원장이 없는 직원을 `미등록`/`작성 필요` 행으로 표시하도록 수정했다.
+  - `서류등록 안내`, `계약작성`, `급여작성` 버튼을 추가해 승인 직원 정보가 각 작성 폼에 자동 채워지도록 연결했다.
+  - 상단 인증/총괄관리자 상태 표시의 이메일은 원문 대신 마스킹 값으로 표시하도록 수정했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z (%A)'`: `2026-07-16 10:25:30 KST (Thursday)`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - `node --check /tmp/yeoljeong-finance-script.js` 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 통과.
+  - 컨테이너 서비스 직접 검증: 승인 직원 8명, 하영훈은 `onboarding_document_count=0`, `contract_count=0`, `payroll_statement_count=0`, `needs_onboarding_documents=True`, `needs_contract=True`, `needs_payroll=True`.
+  - 공개 앱 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `maskedEmail`, `작성필요`, `startContractForEmployee` 마커 확인.
+- 제한:
+  - 커밋/푸시/정식 `deploy.sh`/프로세스 재시작은 수행하지 않았다.
+  - 화면 클릭 E2E/스크린샷은 수행하지 않았고, 공개 HTML 마커와 컨테이너 서비스 검증으로 대체했다.
+
+## 2026-07-16 10:34 KST - Yeoljeong onboarding tab missing approved employee rows
+- 배경: CEO가 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 입사서류 탭 리스트에 실제 가입 직원이 나오지 않는다고 지적했다.
+- 원인 확인:
+  - `employee_join_requests.json`에는 `하영훈 / 중화점 / status=approved` 레코드가 존재한다.
+  - 동일 직원의 `onboarding_documents.json` 업로드 문서는 0건이라, 기존 `/onboarding/documents` 응답과 화면은 실제 업로드 문서만 렌더링했다.
+  - 따라서 “승인 직원이 입사서류 탭에 안 보임”은 데이터 저장 실패가 아니라 필수서류 미제출 상태를 목록 행으로 만들지 않는 설계 누락이었다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`에 승인/가입 직원별 필수 입사서류 미제출 placeholder 생성 로직을 추가했다.
+  - `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`을 동기화했다.
+  - 프론트 `loadOnboardingDocuments()`가 관리자 입사서류 탭 진입 시 승인 직원 목록을 함께 읽고, 업로드 문서가 없는 필수서류를 `작성 필요` 행으로 합치게 했다.
+  - `missing` 행은 파일 열기/삭제 버튼을 노출하지 않고 `업로드 대기`로 표시한다.
+- 검증:
+  - `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'`: `2026-07-16 10:34:34 KST`.
+  - 컨테이너 직접 서비스 검증: 하영훈 필수서류 placeholder 4건 생성 확인(`주민등록등본`, `신분증`, `통장사본`, `보건증`; 모두 `status=missing`, `missing_document=True`).
+  - 직접 테스트 스크립트: `direct_test_ok`, `missing_count 4`.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py tests/unit/test_yeoljeong_finance_service.py` 통과.
+  - HTML inline script 파서 검증: 정적 앱 3개 경로 모두 `scripts_ok 1`.
+  - 공개 HTML에서 `mergeOnboardingMissingRows`, `작성필요`, `업로드 대기` 마커 확인.
+  - 운영 API 라우트 확인: `/api/v1/yeoljeong-finance/employees/approved`, `/api/v1/yeoljeong-finance/onboarding/documents` 모두 무인증 요청 기준 `401`로 404 누락이 아님을 확인.
+- 제한:
+  - `python -m pytest`는 컨테이너에 `pytest` 모듈이 없어 실행하지 못했고, 동일 조건을 컨테이너 직접 서비스 테스트로 대체했다.
+  - 커밋/푸시/정식 `deploy.sh`/백엔드 프로세스 재시작은 수행하지 않았다. 공개 정적 HTML은 URL 조회로 즉시 반영을 확인했고, 백엔드 서비스 변경은 다음 reload 시 프로세스에 반영된다.
+
+## 2026-07-16 11:01 KST - Yeoljeong store assistant technical/design documents
+- 배경: CEO가 매장비서 개발환경 언어 보고, 기술문서 저장/업데이트 관리, 아키텍처·디자인·모달 기획 HTML 문서화, 관리자 총괄 파일 링크 연결, 현재 기술 선택의 적정성 보고를 요청했다.
+- 확인한 현재 개발환경:
+  - 프론트는 단일 정적 SPA(`app/static/apps/yeoljeong-finance/index.html`) 기반의 `HTML/CSS/Vanilla JavaScript`.
+  - 백엔드는 `FastAPI/Pydantic` 기반 API(`app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`).
+  - HR/계약/급여 원장은 `app/data/yeoljeong_finance/*.json`, 설정 일부는 PostgreSQL 우선 + JSON 폴백 구조.
+  - FastAPI는 `app/main.py`에서 `app/static`을 `/static`으로 mount한다.
+- 조치:
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html` 추가: 문서 인덱스와 현재 구현 요약.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_technical.html` 추가: 언어/프레임워크/저장소/API/업데이트 관리 절차.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html` 추가: 화면 구조, 모달/프리뷰 기준, 개선 로드맵.
+  - 호환용 기존 파일명 `20260716_yeoljeong_store_assistant_technical_doc.html`, `20260716_yeoljeong_store_assistant_architecture_design_plan.html`은 최신 문서와 같은 내용으로 동기화했다.
+  - 매장비서 상단 관리자 액션 영역에 `문서`, `기획` 링크를 추가했다.
+  - AADS 대시보드 사이드바에 `매장비서 문서` 링크를 추가했다.
+  - 대시보드 공개 경로 `/root/aads/aads-dashboard/public/reports`와 매장비서 HTML 복사본 2개를 동기화했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:01:14 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - HTML parser 검증: 매장비서 앱 HTML과 `20260716_yeoljeong_store_assistant_*.html` 5개 모두 `html_ok`.
+  - `node --check /tmp/yeoljeong-finance-script.js` 통과.
+  - 앱 HTML 원본과 대시보드 공개 복사본 2개 `cmp` 동기화 통과.
+  - 공개 문서 인덱스 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607161056`: HTTP 조회 및 핵심 링크 확인.
+  - 공개 기술문서 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html?v=202607161102`: `FastAPI`, `업데이트 관리 절차` 마커 확인.
+  - 공개 아키텍처 문서 `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html?v=202607161056`: `아키텍처·디자인 기획서`, `권장 개선 로드맵` 마커 확인.
+  - 공개 매장비서 앱 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607161102`: `문서`, `기획` 링크 마커 확인.
+- 기술 판정:
+  - 현재 방식은 빠른 MVP/운영 검증에는 적합하다.
+  - 장기 최선안은 아니다. 실사용자가 늘기 전 JSON 원장을 PostgreSQL로 전환하고, 단일 HTML은 모듈화 또는 Next.js 앱으로 분리하는 것이 권장된다.
+- 제한:
+  - 커밋/푸시/정식 `deploy.sh`/프로세스 재시작은 수행하지 않았다.
+  - 브라우저 클릭 E2E/스크린샷은 수행하지 않았고 공개 URL 마커 검증과 정적 파서 검증으로 대체했다.
+# 2026-07-16 KST - 매장비서 기술문서/기획문서 관리 링크 반영
+
+- 매장비서 개발환경을 코드 기준으로 정리했습니다.
+  - 프론트엔드: HTML/CSS/Vanilla JavaScript 단일 SPA
+  - 백엔드: Python FastAPI/Pydantic
+  - 저장소: 설정은 PostgreSQL 우선 + JSON 폴백, HR/계약/급여는 JSON 원장
+- 추가 문서:
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+  - `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+  - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+- 매장비서 앱 상단에 문서/기획 링크를 추가했습니다.
+- AADS 관리자 사이드바에 `매장비서 문서` 링크를 추가했습니다.
+- 주의: 정식 커밋/푸시/배포는 별도 승인 전 수행하지 않았습니다.
+
+## 2026-07-16 11:04 KST - Yeoljeong store assistant document links final verification
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했다고 지적해 문서/링크/검증/배포 상태를 재실측했다.
+- 추가 확인:
+  - `fb.newtalk.kr`의 매장비서 앱/문서 3개 URL은 모두 HTTP 200이었다.
+  - `aads.newtalk.kr/static/reports/...`는 HTTP 404였고, 실제 대시보드 공개 문서 경로는 `aads.newtalk.kr/public/reports/...`였다.
+- 조치:
+  - AADS 대시보드 관리자 사이드바의 `매장비서 문서` 링크를 `/static/reports/...`에서 `/public/reports/...`로 수정했다.
+  - 실제 운영 대시보드 소스(`/root/aads/aads-dashboard/src/components/Sidebar.tsx`)와 서버 저장소 내 보조 대시보드 파일(`aads-dashboard/src/components/Sidebar.tsx`)을 같은 링크로 맞췄다.
+  - 문서 원본/대시보드 공개 복사본의 HTML inline script 검증을 재수행했다.
+- 검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:01:53 KST`.
+  - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
+  - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
+  - `node` inline script parser: 매장비서 앱 HTML과 문서 HTML 6개 통과.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+- 제한:
+  - 대시보드 소스 링크는 양쪽 파일 모두 수정했지만, 운영 대시보드 번들 재빌드/재시작은 아직 수행하지 않았다. 따라서 사이드바 링크 변경은 다음 대시보드 배포 후 UI에 반영된다.
+  - 커밋/푸시/정식 `deploy.sh`는 수행하지 않았다.
+
+## 2026-07-16 11:08 KST - Yeoljeong store assistant document report ledger re-verification
+- 배경: CEO가 이전 응답의 완료보고가 `document_report_unverified_by_ledger` 조건을 충족하지 못했다고 지적해 문서/링크/검증/상태를 다시 확인했다.
+- 추가 조치:
+  - `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`의 AADS 대시보드 공개 문서 경로를 실제 200 응답 경로인 `/public/reports/...`로 보정했다.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`의 매장비서 앱 링크를 대시보드 도메인에서도 깨지지 않도록 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 절대 URL로 보정했다.
+  - 보정한 문서를 호환 파일명(`technical.html`)과 대시보드 공개 경로(`/root/aads/aads-dashboard/public/reports`, `/root/aads/aads-dashboard/public/static/reports`)에 동기화했다.
+- 재검증:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:08:28 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과.
+  - 공개 URL HTTP 200 확인:
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_technical.html`
+    - `https://aads.newtalk.kr/public/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+- 완료 판정:
+  - 매장비서 개발환경 언어 보고, 기술문서 HTML 저장, 아키텍처·디자인 기획 HTML 저장, 관리자 총괄 링크 연결은 파일/URL 기준 완료.
+  - 커밋/푸시/정식 `deploy.sh`/대시보드 번들 재빌드·재시작은 수행하지 않았다.
+
+## 2026-07-16 11:38 KST - Yeoljeong store assistant final completion verification
+- 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger` 조건을 충족하지 못했다고 재지적해, 문서/커밋/공개 URL/DB/문법 상태를 다시 실측했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:38:05 KST`.
+- 커밋/원격 상태:
+  - 현재 HEAD: `ec8bdc9a docs: verify yeoljeong store assistant closeout`.
+  - `main...origin/main [ahead 4]`: 로컬 커밋은 4개 앞서 있으나 원격 push는 수행하지 않았다.
+  - HEAD 커밋 포함 파일: `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`.
+  - 문서/DB전환/모듈화 본문 커밋: `7c481fd4 docs: document yeoljeong store assistant architecture`.
+- 공개 URL 재검증:
+  - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`: HTTP 200.
+  - `curl -A 'Mozilla/5.0'` 본문 마커 검증: 앱/문서/기술/디자인/DB전환 5개 모두 `ok`.
+- 코드/문법 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - HTML parser: 매장비서 앱 HTML 및 `20260716_yeoljeong_store_assistant*.html` 6개 통과.
+  - `node --check /tmp/yeoljeong-finance-inline.js`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -q`: 실패. 사유는 호스트에 `pytest` 모듈 미설치.
+- DB 상태:
+  - PostgreSQL 실제 테이블: `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`.
+  - 실측 건수: businesses 3, branches 3, settings 1.
+  - HR/계약/급여 전체 원장은 아직 PostgreSQL 이관 완료가 아니며 JSON 파일 저장소를 계속 사용한다.
+- 워킹트리 제한:
+  - 현재 미커밋 변경/미추적 파일이 남아 있다: `.active_container`, `.active_port`, `app/data/yeoljeong_finance/*.json`, `uploads/`, 일부 dashboard/nginx/script 변경.
+  - 위 변경에는 운영 데이터/다른 세션 변경이 포함되어 있어 이 작업에서 되돌리거나 일괄 커밋하지 않았다.
+- 완료 판정:
+  - 매장비서 개발환경 언어 보고, HTML 기술문서 저장, 아키텍처·디자인 기획문서 저장, DB전환 설계문서 저장, 관리자 총괄 링크, 1차 모듈 파일 분리는 파일/URL/커밋 기준 완료.
+  - 원격 push, 정식 deploy, 대시보드 재빌드, HR/계약/급여 전체 DB 이관, 단일 HTML 전체 모듈화는 아직 미완료다.
+
+## 2026-07-16 11:43 KST - Chat stability follow-up auth split
+- 배경: CEO가 남은 개선 우선순위 5건을 즉시 순차 조치하라고 지시했고, 1차 패치/배포 검증 중 `/api/v1/ops/version`과 `/api/v1/image/gallery/{job_id}/image`가 여전히 401을 반환하는 것을 확인했다.
+- 추가 원인:
+  - `app/api/ops.py`의 버전 라우트는 실제로 `/api/v1/version`만 제공했고, 대시보드 `useVersionCheck`는 `/api/v1/ops/version`을 호출하고 있었다.
+  - `app/api/image.py`는 라우터 전역 `require_internal_admin` 의존성 때문에 공개 읽기용 갤러리 GET까지 인증을 요구했다.
+- 추가 조치:
+  - `app/api/ops.py`: `/ops/version` 별칭을 추가해 대시보드 버전 체크 경로와 백엔드 라우트를 일치시켰다.
+  - `app/api/image.py`: 라우터 전역 인증을 제거하고 생성/편집/동영상/승인/삭제 엔드포인트에만 `require_internal_admin`을 유지했다. `/gallery`와 `/gallery/{job_id}/image` GET은 공개 읽기로 분리했다.
+- 검증:
+  - `python3 -m py_compile app/api/image.py app/api/ops.py app/main.py app/services/chat_service.py`: 통과.
+  - `curl -s -o /tmp/aads_ops_version_ext.out -w '%{http_code}' https://aads.newtalk.kr/api/v1/ops/version`: 200.
+  - `curl -s -o /tmp/aads_gallery_ext.out -w '%{http_code}' 'https://aads.newtalk.kr/api/v1/image/gallery?limit=1'`: 200.
+  - `curl -s -o /tmp/aads_image_generate_ext.out -w '%{http_code}' -X POST https://aads.newtalk.kr/api/v1/image/generate -H 'Content-Type: application/json' -d '{}'`: 401. 쓰기성 이미지 API는 계속 보호됨.
+  - `curl -fsS https://aads.newtalk.kr/api/v1/health`: 200.
+- 배포 메모:
+  - 백엔드 blue/green 이미지 빌드는 export 단계에서 SIGTERM 143으로 종료되어 최종 전환까지 가지 못했다.
+  - 서버 컨테이너가 `/root/aads/aads-server/app`을 bind mount하고 있어 green 컨테이너 재시작 후 nginx upstream을 green 8102로 전환했다.
+  - 현재 `aads-server-green`이 active, `aads-server`는 backup이며 둘 다 Docker health 상태다.
+  - 대시보드는 `/root/aads/aads-dashboard/deploy.sh`로 green 3101 active 배포가 완료됐다. 배포 스크립트의 Step 7 QA는 UNKNOWN으로 남아 브라우저 E2E 대신 API/health 검증으로 대체했다.
+
+## 2026-07-16 11:52 KST - Chat stability ledger correction and version auth compatibility
+- 배경: CEO가 이전 완료보고가 커밋/배포/문서 ledger와 충돌한다고 지적해 실제 상태를 재조회했다.
+- 확인:
+  - 서버 저장소는 `origin/main` 대비 local ahead 상태이며, 원격 push는 아직 수행되지 않았다.
+  - 대시보드 저장소는 Git 추적이 복구되어 있고 현재 dirty file은 없다.
+  - active 백엔드는 `aads-server-green`/8102, active 대시보드는 green 3101이며 컨테이너 health는 정상이다.
+  - 최근 15분 `todo_completion_gate_missing` 로그는 0회, `memory-context`는 200 응답으로 확인됐다.
+- 추가 조치:
+  - `app/main.py` 인증 면제 경로에 `/api/v1/version`을 추가했다. `/api/v1/ops/version`은 이미 공개였지만, 구 경로 `/api/v1/version`이 401을 내며 구 탭/캐시에서 세션 만료 잡음으로 보일 수 있어 읽기전용 호환 경로도 공개 처리했다.
+- 검증 예정:
+  - `python3 -m py_compile app/main.py app/api/ops.py app/api/image.py app/services/chat_service.py`: 통과.
+  - `npx tsc --noEmit` in `/root/aads/aads-dashboard`: 통과.
+  - `docker restart aads-server-green` 후 health가 healthy로 복구됨.
+  - `curl https://aads.newtalk.kr/api/v1/health`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/version`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/ops/version`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/image/gallery?limit=1`: HTTP 200.
+  - `POST https://aads.newtalk.kr/api/v1/image/generate` without auth: HTTP 401, 쓰기성 API 보호 유지.
+
+## 2026-07-16 11:58 KST - Chat stability final ledger recheck
+- 배경: CEO가 이전 완료보고가 commit/push/deploy/document ledger와 충돌한다고 지적해 실제 상태를 재조회했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-16 11:58:42 KST`.
+- 코드/검증:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/main.py`: 통과.
+  - `/root/aads/aads-dashboard`에서 `npx tsc --noEmit`: 통과.
+  - active 포인터: `.active_container=aads-server-green`, `.active_port=8102`.
+  - NGINX upstream: active API green 8102, blue 8100 backup.
+  - `curl http://127.0.0.1:8102/api/v1/image/gallery?limit=1`: HTTP 200.
+  - `curl http://127.0.0.1:8102/api/v1/image/gallery/media-8ef71fb4839949a0/image`: HTTP 200.
+  - `curl http://127.0.0.1:8102/api/v1/ops/version`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/image/gallery?limit=1`: HTTP 200.
+  - `curl https://aads.newtalk.kr/api/v1/ops/version`: HTTP 200.
+- DB/로그:
+  - 최근 24시간 `chat_turn_executions`: completed 35, interrupted 4.
+  - 최근 24시간 interrupted 원인: `execution_resume_attempt_limit_exceeded`, `final_save_missing_placeholder_preserved`, `resume_claimed_by:*`, `superseded while preserving partial response` 각 1건.
+  - 최근 로그에서 `memory-context`는 active/public 경로 기준 200 응답 확인.
+  - `todo_completion_gate_missing`은 응답 저장 차단이 아니라 `todo_completion_gate_missing_non_blocking` 경고 로그로 완화되어 있다.
+- Git/배포 ledger:
+  - 서버 저장소는 `main...origin/main [ahead 7]`로 원격 push 미수행.
+  - ahead 7에는 채팅 안정화 커밋과 Yeoljeong 문서 커밋이 함께 있어 이 재검증에서 일괄 push하지 않았다.
+  - 서버 워크트리에는 Yeoljeong 운영 데이터/임시 스크립트/대시보드 백업 변경이 남아 있어 이 작업에서 되돌리거나 일괄 커밋하지 않았다.
+  - 대시보드 저장소는 Git 추적 복구 상태이고 현재 dirty file 없음. 원격 remote는 설정되어 있지 않아 push 대상 없음.
+  - 별도 신규 deploy.sh 실행은 수행하지 않았다. 현재 운영 반영은 green active/NGINX/curl/health 기준으로 확인했다.
+- 잔존:
+  - P1 7일 interrupted 자동 복구 고도화와 P2 `page.tsx` 대형 파일 분리는 별도 구조개선 과제로 남아 있다.
+  - 브라우저 E2E는 실행하지 않았고 API/타입/컨테이너 검증으로 대체했다.
+
+## 2026-07-18 09:21 KST - Yeoljeong store assistant docs runner fallback verification
+- 배경: CEO가 매장비서 개발환경/아키텍처/디자인/업데이트관리 문서를 HTML로 관리하고 관리자 총괄 파일에 링크하라고 지시했으며, 후속 지시에서 중간 보고가 아닌 완료 조건 재검증을 요구했다.
+- 러너 상태:
+  - `runner-c038cc78`: cancelled, `process_died`.
+  - `runner-9a8b845c`: cancelled, `superseded`.
+  - 의존 작업 `runner-3206f42d`, `runner-bcda9e77`, `runner-91582b75`, `runner-a7c60c5c`: blocked_dependency/cancelled.
+  - 대시보드 큐: pending 0, running 0.
+- 직접 보완:
+  - 매장비서 관리자 상단 문서 링크에 `기술` 직접 링크를 추가했다.
+  - 반영 파일: `app/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`.
+- 문서/URL 검증:
+  - `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: HTTP 200.
+  - `/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`: HTTP 200.
+  - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`: HTTP 200.
+  - `/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`: HTTP 200.
+- 개발환경/저장소 판정:
+  - 프론트: HTML/CSS/Vanilla JS 단일 SPA.
+  - 백엔드: FastAPI/Pydantic.
+  - 설정 저장: PostgreSQL `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 우선 + JSON 폴백.
+  - HR/입사서류/계약/급여 원장: JSON 파일 저장소 유지.
+- 완료/미완료:
+  - 문서 파일 저장, 운영 URL 200, 관리자 총괄 문서 링크, 문서 ledger 기록은 완료.
+  - 러너 기반 커밋은 실패했으며, 직접 fallback으로 보완했다.
+  - push/deploy는 수행하지 않았다. 정적 파일은 bind/public 경로 기준 운영 URL에서 확인했다.
+  - P1 전체 HR/계약/급여 DB 이관과 P2 단일 HTML 모듈화는 별도 작업으로 남아 있다.
+
+## 2026-07-18 09:25 KST - Yeoljeong store assistant P1 DB compatibility fallback
+- 배경: CEO가 러너 중간 보고로 끝내지 말고 남은 확인/조치/검증을 계속 수행하라고 지시했다.
+- 러너 재확인:
+  - `runner-02bd3c91`: running 표기였으나 로그 0건, dead PID, suspect_stale 상태라 종료했다. 종료 결과: `terminated`, 이후 error.
+  - `runner-09038aa5`: 선행 P1 error로 blocked_dependency/cancelled.
+  - `runner-1c88c501`: 선행 P2 cancelled로 blocked_dependency/cancelled.
+  - `runner-c5d84568`: 새로 재제출했으나 로그 0건, dead PID로 즉시 스톨 징후 확인.
+- 직접 조치:
+  - 신규 마이그레이션 초안 `migrations/115_yeoljeong_finance_hr_ledgers.sql` 추가.
+  - `app/services/yeoljeong_finance_service.py`: 설정 테이블/HR 원장 테이블/JSON 원장 파일 상태를 보고하는 `get_storage_status()` 추가.
+  - `app/api/yeoljeong_finance.py`: 관리자용 읽기 API `GET /api/v1/yeoljeong-finance/storage-status` 추가.
+  - 운영 DB 적용, 재시작, push, deploy는 하지 않았다.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql` SQL dry-run: `BEGIN` 후 CREATE TABLE/INDEX, `ROLLBACK` 통과.
+  - 컨테이너 함수 존재 확인: `get_storage_status=True`, `HR_LEDGER_TABLES` 4개 확인.
+  - 컨테이너 함수 결과: mode `json-only`, settings source `json`, HR ledgers source `json`, JSON files 4개. 컨테이너 단독 함수 호출 환경에서는 DB pool이 초기화되지 않아 API 프로세스 컨텍스트와 다를 수 있다.
+  - 인증 없는 `/api/v1/yeoljeong-finance/storage-status`: HTTP 401. 관리자 보호 정상.
+- 완료/미완료:
+  - P1 안전장치인 스키마 초안과 저장소 상태 확인 API는 완료.
+  - 실제 HR/계약/급여 DB 쓰기 전환은 미완료. 운영 DB 마이그레이션 적용과 데이터 백필 승인 후 별도 진행해야 한다.

@@ -224,6 +224,11 @@ async def save_settings(payload: GenericPayload, current_user: dict = Depends(ge
     return await svc.save_settings_persisted(payload.model_dump(), current_user)
 
 
+@router.get("/storage-status")
+async def get_storage_status(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc.get_storage_status(current_user)
+
+
 @router.post("/accounts")
 async def upsert_account(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     account = svc.upsert_account(payload.model_dump(), current_user)
