@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:31 KST - Yeoljeong store assistant final commit ledger
+- 배경: CEO가 완료보고 위반 사유 `document_report_unverified_by_ledger`를 지적하며, 남은 확인/조치/검증을 끝까지 수행하고 커밋/푸시/배포/문서/미완료 항목을 구체적으로 보고하라고 지시했다.
+- 완료 커밋:
+  - aads-server `07625054 feat: add yeoljeong storage status audit`: 저장소 상태 점검 API, HR 원장 DB 전환 준비 마이그레이션, 매장비서 상단 기술문서 링크, HANDOVER 검증 기록.
+  - aads-server `f32459ac docs: update yeoljeong store assistant docs`: 매장비서 문서 인덱스/기술문서/아키텍처·디자인 문서/모듈 매니페스트 갱신.
+  - aads-dashboard `5631dd2 docs: link yeoljeong assistant documents`: 대시보드 공개 복사본의 매장비서 문서 링크와 모듈 매니페스트 갱신.
+- 최종 검증:
+  - 서버 Python 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py` 통과.
+  - 서버 JS/HTML 검증: 매장비서 inline script `node --check` 통과, 문서 HTML 6개 `<html>`/`</html>` marker 확인 통과, `app-config.js` `node --check` 통과.
+  - 대시보드 JS/HTML 검증: 공개 복사본 `app-config.js` 2개와 inline script `node --check` 통과.
+  - SQL 검증: `migrations/115_yeoljeong_finance_hr_ledgers.sql`을 `BEGIN`/`ROLLBACK`으로 dry-run 통과.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 기획서, DB전환 문서 HTTP 200 확인.
+  - API 보호: `/api/v1/yeoljeong-finance/storage-status` 비인증 호출 HTTP 401 확인.
+  - 컨테이너 import: `get_storage_status=True`, HR 전환 테이블 정의 4개, JSON 원장 정의 4개 확인.
+  - 운영 DB: `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재. HR/계약/급여 DB 테이블은 아직 운영 적용 전.
+  - 비밀값 검사: 커밋 대상 파일에서 CEO가 제공한 원문 비밀번호 패턴 미검출.
+- 미완료/보류:
+  - push, deploy, restart는 수행하지 않았다.
+  - 운영 DB 마이그레이션 적용과 HR/계약/급여 DB 쓰기 전환은 데이터 백업/백필 승인 후 별도 진행해야 한다.
+  - `app/data/yeoljeong_finance/*.json`, `settings.json`, `uploads/`는 운영/테스트 데이터라 커밋하지 않았다.
+  - 일부 무관 워킹트리 변경(`nginx-aads-upstream.conf.dashboard.bak`, dashboard changelog, 임시 scripts)은 건드리지 않았다.
+
 ## 2026-07-18 09:30 KST - Yeoljeong store assistant runner fallback final closeout
 - 배경: CEO가 러너 중간보고로 끝내지 말고 매장비서 문서화/DB 호환/업데이트 관리 후속 작업의 남은 확인, 조치, 검증을 계속 수행하고 최종 완료보고 조건을 충족하라고 지시했다.
 - 최종 조치:
@@ -3693,3 +3715,34 @@
 - 완료/미완료:
   - P1 안전장치인 스키마 초안과 저장소 상태 확인 API는 완료.
   - 실제 HR/계약/급여 DB 쓰기 전환은 미완료. 운영 DB 마이그레이션 적용과 데이터 백필 승인 후 별도 진행해야 한다.
+
+## 2026-07-18 09:29 KST - Yeoljeong store assistant docs completion recheck
+- 배경: CEO가 이전 응답이 완료보고 조건을 만족하지 못했다고 지적해 문서/관리자 링크/러너/검증 상태를 다시 닫았다.
+- 러너 상태:
+  - 현재 세션 `pipeline_runner_status`: 최근 P0/P1/P2 job은 `error`, `cancelled`, `blocked_dependency` 상태이며 진행 중 job 없음.
+  - `dashboard_query`: pending 0, running 0, checked_at `2026-07-18 09:29 KST`.
+- 직접 보완:
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: 갱신 기준을 `2026-07-18 09:29:32 KST`로 정정하고, 검증되지 않은 AADS 사이드바 연결 표현을 "별도 승인 후 적용"으로 수정.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_technical.html`: 업데이트 관리 절차에 `public/static/reports` 동기화 기준 추가.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`: 갱신 기준을 현재 재검증 시각으로 정정.
+  - `app/static/apps/yeoljeong-finance/modules/app-config.js`: `updatedAt`을 `2026-07-18 09:29:32 KST`로 정정.
+  - 별칭 문서 `*_technical_doc.html`, `*_architecture_design_plan.html`와 대시보드 `public/reports`, `public/static/reports` 복사본을 동일 내용으로 동기화.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - HTML inline script 추출 후 `node --check /tmp/yeoljeong-finance-inline.js`: 통과.
+  - 운영 URL HTTP 200 확인:
+    - `/static/apps/yeoljeong-finance/index.html`
+    - `/static/apps/yeoljeong-finance/modules/app-config.js`
+    - `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_technical.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+  - 운영 문서 본문에서 `2026-07-18 09:29:32 KST` 마커 확인.
+  - PostgreSQL `yeoljeong_%` 테이블 확인: 설정 테이블 3개(`yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`)만 존재. HR/계약/급여 DB 전환 테이블은 아직 미적용.
+- 완료/미완료:
+  - 문서 정정, 관리자 링크 경로, 공개 URL, 문서 ledger는 완료.
+  - 커밋/푸시/정식 deploy는 수행하지 않았다.
+  - P1 HR/계약/급여 DB 전환, P2 프론트 모듈화는 러너 장애와 승인 필요한 DB 적용 때문에 미완료로 남긴다.
