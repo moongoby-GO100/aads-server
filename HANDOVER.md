@@ -1,5 +1,35 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:36 KST - Yeoljeong store assistant final verification recheck
+- 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger` 완료 조건을 충족하지 못했다고 지적해, 매장비서 문서화/업데이트 관리/DB 전환 설계 작업의 현재 상태를 다시 실측하고 최종 보고 근거를 재기록했다.
+- 재확인 결과:
+  - 매장비서 앱 원본과 문서 HTML은 로컬에 존재한다: `app/static/apps/yeoljeong-finance/index.html`, `app/static/apps/yeoljeong-finance/modules/app-config.js`, `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, `app/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`, `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`, `app/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`, `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`.
+  - 관리자 총괄 링크는 매장비서 앱 상단 `문서`, `기술`, `기획`, `DB전환` 링크와 AADS 대시보드 사이드바 `매장비서 문서` 링크로 확인했다.
+  - 현재 구현 방식은 `HTML/CSS/Vanilla JS` 정적 SPA, `FastAPI/Pydantic` API, 설정 일부 `PostgreSQL`, HR/계약/급여/배달 원장 `JSON` 혼합 구조다.
+  - 운영 PostgreSQL에는 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개 테이블만 존재한다. HR/계약/급여/배달 원장 DB 테이블은 아직 운영 적용 전이다.
+- 재검증:
+  - 기준 시각: `TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST'` → `2026-07-18 09:36:47 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - 매장비서 앱 inline script 추출 후 `node --check /tmp/yeoljeong-finance-inline-final-check.js`: 통과.
+  - HTML parser 검증: 매장비서 앱과 문서 6개 모두 `<html>`/`</html>` marker 확인 및 parser 통과.
+  - `migrations/115_yeoljeong_finance_hr_ledgers.sql`: 호스트 파일을 PostgreSQL 표준입력으로 전달해 `BEGIN`/`CREATE TABLE`/`CREATE INDEX`/`ROLLBACK` dry-run 통과.
+  - 공개 URL HTTP 200 및 `매장비서` 마커 확인:
+    - `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html?v=202607180935`
+    - `https://fb.newtalk.kr/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html?v=202607180935`
+  - `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status` 비인증 호출은 HTTP 401로 관리자 보호가 유지된다.
+  - 원문 비밀번호 패턴 검사는 매장비서 앱/문서/API/서비스/HANDOVER 대상에서 `secret_plaintext_violations=0`이다.
+- 저장소/배포 상태:
+  - aads-server 현재 HEAD는 `cd799754 docs: update yeoljeong final ledger`이고, `origin/main` 대비 미푸시 커밋이 남아 있다.
+  - aads-dashboard 현재 HEAD는 `5631dd2 docs: link yeoljeong assistant documents`이며, 이 저장소에는 추적 파일 dirty 변경이 없다.
+  - push, deploy, restart는 수행하지 않았다. 현재 API Python 변경은 프로세스 reload 전까지 운영 메모리 반영을 단정하지 않는다.
+  - `app/data/yeoljeong_finance/*.json`, `uploads/`, 일부 scripts, nginx backup, dashboard changelog 등 기존 워킹트리 변경은 운영/테스트 데이터 또는 요청 범위 밖 변경으로 분리해 둔다.
+
 ## 2026-07-18 09:31 KST - Yeoljeong store assistant final commit ledger
 - 배경: CEO가 완료보고 위반 사유 `document_report_unverified_by_ledger`를 지적하며, 남은 확인/조치/검증을 끝까지 수행하고 커밋/푸시/배포/문서/미완료 항목을 구체적으로 보고하라고 지시했다.
 - 완료 커밋:
@@ -3771,3 +3801,25 @@
   - 문서 정정, 관리자 링크 경로, 공개 URL, 문서 ledger는 완료.
   - 커밋/푸시/정식 deploy는 수행하지 않았다.
   - P1 HR/계약/급여 DB 전환, P2 프론트 모듈화는 러너 장애와 승인 필요한 DB 적용 때문에 미완료로 남긴다.
+
+## 2026-07-18 09:35 KST - Yeoljeong store assistant final completion verification
+- 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger`로 불충분하다고 지적해 문서/링크/DB/러너/운영 URL을 다시 실측했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-18 09:35:06 KST`.
+- 러너 상태:
+  - `pipeline_runner_status(scope=current_session)`: 최근 매장비서 러너는 `error`, `cancelled`, `blocked_dependency`, `rejected_done` 상태이며 실행 중 작업 0건.
+  - `dashboard_query(filter_status=all)`: pending 0, running 0, checked_at `2026-07-18 09:35 KST`.
+- 문서/링크 확인:
+  - 매장비서 앱 상단 관리자 영역에 `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, 기술문서, 아키텍처/디자인 기획서, DB 전환 문서 링크가 존재.
+  - `app/static/apps/yeoljeong-finance/modules/app-config.js`가 문서 매니페스트와 phase-1 모듈화 매니페스트를 제공.
+  - 운영 URL 7개 HTTP 200 확인: 앱 HTML, app-config.js, 문서 인덱스, 기술문서, 아키텍처/디자인 기획서, DB 전환 설계, 개선 우선순위 보고서.
+- DB/저장소 확인:
+  - PostgreSQL `yeoljeong_%` 테이블은 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개.
+  - HR/입사서류/계약/급여 테이블은 아직 미적용이며 JSON 원장 유지.
+  - JSON 파일 집계: `employee_join_requests` 10건, `onboarding_documents` 23건, `contracts` 4건, `payroll_statements` 2건, `platform_accounts` 4건. 평문 password row 0건.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - 운영 문서/앱 URL HTTP 200 확인 완료.
+- 완료/미완료:
+  - CEO 원 요청 중 개발환경 보고, 기술문서 HTML 저장, 아키텍처/디자인/DB 전환/개선 우선순위 문서 관리, 관리자 총괄 링크, 현재 진행 방식/최선안 보고 자료는 완료.
+  - 미완료: HR/계약/급여 PostgreSQL 실제 쓰기 전환, 전체 프론트 모듈 분리, push, 정식 deploy.sh. DB 변경과 배포는 운영 영향이 있어 별도 승인 후 진행해야 한다.
