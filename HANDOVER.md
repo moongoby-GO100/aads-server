@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:39 KST - Yeoljeong store assistant API threadpool commit
+- 배경: 최종 상태 확인 중 `app/api/yeoljeong_finance.py`에 HR/계약/급여/배달 원장 호출을 FastAPI threadpool로 넘기는 안정화 변경이 미커밋 상태로 남아 있음을 확인했다.
+- 조치:
+  - 동기식 JSON/DB 파일 원장 작업을 async route에서 직접 실행하지 않도록 `run_in_threadpool`로 감쌌다.
+  - 직원가입, 입사서류, 계약서, 급여, 외부계정, 매출/정산/리뷰/수집상태, CSV import API 경로에 동일하게 적용했다.
+- 커밋:
+  - `7e2f12d8 fix: run yeoljeong ledger calls in threadpool`
+- 검증:
+  - pre-commit Python 검수 통과.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
+  - `git diff --check -- app/api/yeoljeong_finance.py`: 통과.
+- 보류:
+  - API 프로세스 reload/deploy/push는 수행하지 않았다.
+
 ## 2026-07-18 09:38 KST - Yeoljeong store assistant db fallback code committed
 - 배경: 최종 검증 중 `app/services/yeoljeong_finance_service.py`에 HR/배달 원장 DB 호환 레이어가 미커밋 상태로 남아 있음을 확인해, JSON 운영 데이터는 제외하고 코드만 선별 커밋했다.
 - 조치:
