@@ -32,7 +32,7 @@
     <header>
       <div class="kicker">TECHNICAL SPEC</div>
       <h1>매장비서 기술문서</h1>
-      <p class="muted">작성/갱신 기준: 2026-07-16 11:23:56 KST. 이 문서는 매장비서의 현재 개발환경, 저장 경로, API, 업데이트 관리 기준을 고정합니다.</p>
+      <p class="muted">작성/갱신 기준: 2026-07-18 09:29:32 KST. 이 문서는 매장비서의 현재 개발환경, 저장 경로, API, 업데이트 관리 기준을 고정합니다.</p>
       <p><a href="./20260716_yeoljeong_store_assistant_docs_index.html">문서 인덱스로 돌아가기</a></p>
     </header>
 
@@ -80,7 +80,7 @@
         <li>앱 수정은 <code>app/static/apps/yeoljeong-finance/index.html</code>을 기준으로 진행합니다.</li>
         <li>기능 분리는 <code>modules/app-config.js</code>에 대상 모듈을 먼저 등록한 뒤, 인증/설정/직원/계약/급여/배달 수집 순서로 외부 모듈 파일로 이동합니다.</li>
         <li>운영 노출 복사본 <code>/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html</code>과 <code>/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html</code>을 동기화합니다.</li>
-        <li>문서 수정은 <code>app/static/reports</code> 원본을 먼저 갱신한 뒤 <code>public/reports</code>로 복사합니다.</li>
+        <li>문서 수정은 <code>app/static/reports</code> 원본을 먼저 갱신한 뒤 <code>public/reports</code>와 <code>public/static/reports</code>로 복사합니다.</li>
         <li>검증은 최소 <code>python3 -m py_compile</code>, HTML inline script parser, 공개 URL 마커 확인을 수행합니다.</li>
         <li>작업 내역은 <code>HANDOVER.md</code>에 KST 시각과 함께 남깁니다.</li>
       </ol>

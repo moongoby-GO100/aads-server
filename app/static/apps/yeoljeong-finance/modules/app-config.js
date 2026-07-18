@@ -1,7 +1,7 @@
 (() => {
   const config = {
     appName: "매장비서",
-    updatedAt: "2026-07-16 11:23:56 KST",
+    updatedAt: "2026-07-18 09:29:32 KST",
     modulePhase: "phase-1-manifest",
     docs: {
       index: "/static/reports/20260716_yeoljeong_store_assistant_docs_index.html",

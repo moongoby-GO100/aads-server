@@ -33,7 +33,7 @@
     <header>
       <div class="kicker">YEOLJEONG STORE ASSISTANT DOCUMENTS</div>
       <h1>매장비서 문서 인덱스</h1>
-      <p class="muted">작성/갱신 기준: 2026-07-16 11:23:56 KST. 매장비서 운영 문서를 HTML 파일로 고정해 관리자 총괄 화면과 AADS 사이드바에서 바로 접근할 수 있게 관리합니다.</p>
+      <p class="muted">작성/갱신 기준: 2026-07-18 09:29:32 KST. 매장비서 운영 문서를 HTML 파일로 고정해 매장비서 관리자 총괄 화면에서 바로 접근할 수 있게 관리합니다. AADS 공용 사이드바 연결은 별도 승인 후 적용합니다.</p>
     </header>
 
     <div class="grid" aria-label="문서 바로가기">
@@ -67,7 +67,7 @@
           <tr><td>프론트</td><td>단일 정적 SPA, <code>HTML/CSS/Vanilla JS</code></td><td>빠른 검증과 운영 반영에는 적합하나, 기능이 계속 커지면 컴포넌트 분리가 필요합니다.</td></tr>
           <tr><td>백엔드</td><td><code>FastAPI</code> API + <code>Pydantic</code> 스키마</td><td>AADS 서버 구조와 잘 맞고, 운영 API 확장에 적합합니다.</td></tr>
           <tr><td>저장소</td><td>HR/계약/급여 원장은 JSON 파일, 설정 일부는 PostgreSQL 우선 + JSON 폴백</td><td>초기 MVP에는 충분하지만, 동시 사용과 감사 추적을 위해 DB 전환이 필요합니다.</td></tr>
-          <tr><td>문서관리</td><td>정적 HTML 문서를 <code>app/static/reports</code>와 대시보드 <code>public/reports</code>에 저장</td><td>관리자 접근성과 버전 고정에는 적합합니다.</td></tr>
+          <tr><td>문서관리</td><td>정적 HTML 문서를 <code>app/static/reports</code>와 대시보드 <code>public/reports</code>에 저장</td><td>매장비서 관리자 상단 링크와 운영 URL 접근성은 확인됐습니다.</td></tr>
           <tr><td>프론트 모듈화</td><td><code>modules/app-config.js</code> 매니페스트를 먼저 붙이고 단일 HTML 기능을 단계적으로 분리</td><td>대형 파일 회귀를 줄이기 위한 1차 구조가 적용됐습니다.</td></tr>
         </tbody>
       </table>
