@@ -3676,3 +3676,12 @@ from __
 
 ## [2026-07-16 11:38:05 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: 매장비서 개발환경/기술문서/아키텍처·디자인/DB전환/관리자 링크 작업에 대해 공개 URL 5개, 본문 마커, Python/JS/HTML 문법, PostgreSQL 테이블/건수, git ahead 상태, 미완료 push/deploy/DB 이관 범위를 최종 완료보고용 ledger에 재기록.
+
+## [2026-07-18 09:50:49 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: 매장비서 `/storage-status`가 DB 테이블 존재에도 `json-only`로 오판하던 문제를 보정. JSON 건수 집계는 파일만 읽고, DB pool 미초기화 시 `asyncpg` fallback으로 테이블을 확인하며, 실행 중 이벤트 루프에서 `_run_db()` 코루틴 경고가 나지 않게 닫도록 수정.
+
+## [2026-07-18 09:50:49 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: `document_report_unverified_by_ledger` 재지적에 따른 최종 검증 결과를 기록. py_compile, storage-status DB 우선 판정, DB row count, 수동 회귀 스모크, 공개 URL 200, HTML/JS parser, 비밀값 원문 검색, pytest 미설치 및 push/deploy 보류 상태를 명시.
+
+## [2026-07-18 09:52:01 KST] [aads-server] PostgreSQL yeoljeong_* ledgers
+- Chat-Direct 조치: 수동 회귀 테스트 중 DB fallback으로 생성된 테스트 row 3건을 `deleted_at=NOW()` soft-delete로 정리. 정리 후 active count는 가입요청 10건, 입사서류 23건, 계약 4건, 급여 2건, 플랫폼 계정 4건으로 확인.

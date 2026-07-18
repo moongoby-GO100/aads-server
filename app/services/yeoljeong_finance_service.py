@@ -225,8 +225,20 @@ def _run_db(coro: Any) -> Any:
             close()
         return None
     try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return None
+    try:
         return asyncio.run(coro)
     except Exception:
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
         return None
 
 
@@ -807,12 +819,13 @@ async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
     json_ledgers = []
     for name in ledger_files:
         path = _path(name)
+        file_rows = _read_file_rows(name) if path.exists() else []
         json_ledgers.append(
             {
                 "name": name,
                 "path": str(path),
                 "exists": path.exists(),
-                "records": len(_read(name)) if path.exists() else 0,
+                "records": len(file_rows),
             }
         )
 
@@ -830,6 +843,27 @@ async def get_storage_status(user: dict[str, Any]) -> dict[str, Any]:
                     """,
                     list(db_tables),
                 )
+            existing = {row["table_name"] for row in rows}
+            db_tables = {name: name in existing for name in db_tables}
+        except Exception:
+            pass
+    elif _db_available():
+        try:
+            import asyncpg
+
+            conn = await asyncpg.connect(_db_url(), timeout=5)
+            try:
+                rows = await conn.fetch(
+                    """
+                    SELECT table_name
+                      FROM information_schema.tables
+                     WHERE table_schema = 'public'
+                       AND table_name = ANY($1::text[])
+                    """,
+                    list(db_tables),
+                )
+            finally:
+                await conn.close()
             existing = {row["table_name"] for row in rows}
             db_tables = {name: name in existing for name in db_tables}
         except Exception:

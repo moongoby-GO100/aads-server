@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:50 KST - Yeoljeong storage status final verification fix
+- 배경: CEO가 이전 응답이 최종 완료보고 조건과 `document_report_unverified_by_ledger`를 충족하지 못했다고 재지적해, 매장비서 문서/DB/검증 상태를 실제 명령으로 다시 닫았다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`의 `/storage-status` 계산에서 JSON 파일 건수를 `_read()`가 아닌 `_read_file_rows()`로 집계하도록 수정했다. 이로써 상태 조회 중 DB upsert/seed 경로가 섞이지 않는다.
+  - DB pool이 초기화되지 않은 컨텍스트에서도 `DATABASE_URL`이 있으면 `asyncpg`로 직접 테이블 존재 여부를 확인하도록 fallback을 추가했다.
+  - `_run_db()`가 실행 중인 이벤트 루프 안에서 호출될 때 코루틴을 닫고 JSON fallback으로 안전하게 떨어지도록 보정해 RuntimeWarning을 제거했다.
+- 검증:
+  - 기준 시각: `2026-07-18 09:50:49 KST`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py`: 통과.
+  - `docker exec aads-server python -W error ... get_storage_status(...)`: `database+json-fallback database database database` 출력, 경고 없음.
+  - DB row count: `join_requests=10`, `onboarding=23`, `contracts=4`, `payroll=2`, `platform_accounts=4`.
+  - 서비스 회귀 스모크: 입사서류 placeholder, 계정 비밀번호 암호화 저장/응답 마스킹, 표준근로계약서 A4 메타 저장 수동 테스트 `manual_regression_ok`.
+  - 수동 회귀 테스트 중 DB fallback으로 생성된 테스트 row 3건(`join-1`, `12411b71-51cc-47f3-bcdd-623994d48f89`, `c4085938-df24-4d6b-9794-0983e647f6ca`)은 즉시 `deleted_at=NOW()` soft-delete로 정리했다.
+  - 정리 후 active row count: `join_requests=10`, `onboarding=23`, `contracts=4`, `payroll=2`, `platform_accounts=4`; 서비스 응답도 `join_requests=10`, `contracts=4`, `accounts=4`.
+  - 공개 URL: 매장비서 앱/문서 인덱스/기술문서/아키텍처·디자인/DB전환/개선 우선순위 보고서 모두 HTTP 200 확인.
+  - HTML/JS: 매장비서 inline script `inline_js_ok`, 앱/문서 6개 HTML parser `html_parse_ok 6`.
+  - 비밀값 원문 검색: 앱/문서/API/서비스/HANDOVER/CHANGELOG/migrations 대상 검출 0건.
+- 보류:
+  - `pytest`는 호스트와 컨테이너 모두 미설치라 실행하지 못했다.
+  - `git push`, 정식 deploy, API reload는 수행하지 않았다. 현재 브랜치가 `origin/main`보다 앞서 있고 기존 운영 데이터/임시 파일 dirty가 남아 있어, 일괄 배포 전 범위 정리가 필요하다.
+
 ## 2026-07-18 09:43 KST - Yeoljeong DB ledger migration applied and seed fallback fixed
 - 배경: P1 DB 호환 러너 결과를 검수하던 중 `/tmp` worktree 변경은 오래된 기준이라 반려했고, 현재 메인 커밋 기준으로 운영 DB 적용과 fallback 검증을 직접 진행했다.
 - 조치:
