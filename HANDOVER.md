@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-07-18 09:38 KST - Yeoljeong store assistant db fallback code committed
+- 배경: 최종 검증 중 `app/services/yeoljeong_finance_service.py`에 HR/배달 원장 DB 호환 레이어가 미커밋 상태로 남아 있음을 확인해, JSON 운영 데이터는 제외하고 코드만 선별 커밋했다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`에 JSON 원장 읽기/쓰기 유지 + PostgreSQL 테이블 존재 시 DB 우선 읽기/쓰기 fallback 레이어를 보존했다.
+  - HR 원장 4종(`employee_join_requests`, `onboarding_documents`, `contracts`, `payroll_statements`)과 배달 원장 5종(`platform_accounts`, `delivery_sales`, `delivery_settlements`, `delivery_reviews`, `delivery_collection_status`)을 테이블명 매핑으로 정리했다.
+  - 운영 DB에 대상 테이블이 없으면 기존 JSON 저장소를 계속 사용하도록 처리해, 다른 세션의 DB 작업이나 현재 운영 JSON 데이터를 깨지 않게 했다.
+- 커밋:
+  - `d2e8035f feat: add yeoljeong ledger db fallback`
+- 검증:
+  - 기준 시각: `2026-07-18 09:38:19 KST`.
+  - pre-commit Python 검수 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/main.py`: 통과.
+  - `git diff --check`: 통과.
+- 보류:
+  - 운영 PostgreSQL에는 아직 HR/계약/급여/배달 원장 테이블을 적용하지 않았다.
+  - API reload, deploy, push는 수행하지 않았다.
+  - `app/data/yeoljeong_finance/*.json`, `uploads/`, `settings.json`, nginx backup, 임시 scripts는 커밋하지 않았다.
+
 ## 2026-07-18 09:36 KST - Yeoljeong store assistant final verification recheck
 - 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger` 완료 조건을 충족하지 못했다고 지적해, 매장비서 문서화/업데이트 관리/DB 전환 설계 작업의 현재 상태를 다시 실측하고 최종 보고 근거를 재기록했다.
 - 재확인 결과:
