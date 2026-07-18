@@ -6,7 +6,9 @@ payroll statements, and delivery account status.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import hashlib
 import json
 import mimetypes
 import os
@@ -57,12 +59,37 @@ HR_LEDGER_TABLES = (
     "yeoljeong_contracts",
     "yeoljeong_payroll_statements",
 )
+DELIVERY_LEDGER_TABLES = (
+    "yeoljeong_platform_accounts",
+    "yeoljeong_delivery_sales",
+    "yeoljeong_delivery_settlements",
+    "yeoljeong_delivery_reviews",
+    "yeoljeong_delivery_collection_status",
+)
 JSON_LEDGER_FILES = (
     "employee_join_requests",
     "onboarding_documents",
     "contracts",
     "payroll_statements",
 )
+DB_LEDGER_TABLE_BY_NAME = {
+    "employee_join_requests": "yeoljeong_employee_join_requests",
+    "onboarding_documents": "yeoljeong_onboarding_documents",
+    "contracts": "yeoljeong_contracts",
+    "payroll_statements": "yeoljeong_payroll_statements",
+    "platform_accounts": "yeoljeong_platform_accounts",
+    "delivery_sales": "yeoljeong_delivery_sales",
+    "delivery_settlements": "yeoljeong_delivery_settlements",
+    "delivery_reviews": "yeoljeong_delivery_reviews",
+    "delivery_collection_status": "yeoljeong_delivery_collection_status",
+}
+GENERIC_DB_LEDGER_NAMES = {
+    "platform_accounts",
+    "delivery_sales",
+    "delivery_settlements",
+    "delivery_reviews",
+    "delivery_collection_status",
+}
 
 CONTRACT_TEMPLATE_META = {
     "freelancer": {
@@ -144,7 +171,7 @@ def _path(name: str) -> Path:
     return DATA_DIR / f"{name}.json"
 
 
-def _read(name: str) -> list[dict[str, Any]]:
+def _read_file_rows(name: str) -> list[dict[str, Any]]:
     path = _path(name)
     if not path.exists():
         return []
@@ -155,6 +182,13 @@ def _read(name: str) -> list[dict[str, Any]]:
     if isinstance(data, dict):
         data = data.get(name) or data.get("items") or data.get("records") or []
     return data if isinstance(data, list) else []
+
+
+def _write_file_rows(name: str, rows: list[dict[str, Any]]) -> None:
+    path = _path(name)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _read_json_object(name: str) -> dict[str, Any]:
@@ -175,11 +209,493 @@ def _write_json_object(name: str, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def _db_url() -> str:
+    url = os.getenv("DATABASE_URL", "")
+    return url.replace("postgresql://", "postgres://") if url else ""
+
+
+def _db_available() -> bool:
+    return bool(_db_url())
+
+
+def _run_db(coro: Any) -> Any:
+    if not _db_available():
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return None
+    try:
+        return asyncio.run(coro)
+    except Exception:
+        return None
+
+
+async def _db_table_exists(table: str) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        return bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}"))
+    finally:
+        await conn.close()
+
+
+def _table_ready(table: str) -> bool:
+    return bool(_run_db(_db_table_exists(table)))
+
+
+def _iso(value: Any) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat(timespec="seconds")
+        except TypeError:
+            return value.isoformat()
+    return str(value)
+
+
+def _pg_ts(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(KST).isoformat()
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                return parsed.replace(tzinfo=KST).isoformat()
+            except ValueError:
+                continue
+    return None
+
+
+def _payload_dict(value: Any) -> dict[str, Any]:
+    parsed = _jsonb_object(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
+    item = dict(row)
+    if name in GENERIC_DB_LEDGER_NAMES:
+        payload = _payload_dict(item.get("payload"))
+        return {
+            **payload,
+            "id": str(payload.get("id") or item.get("row_id") or ""),
+            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "branch": payload.get("branch") or item.get("branch") or "",
+            "created_at": payload.get("created_at") or _iso(item.get("created_at")),
+            "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+        }
+    if name == "employee_join_requests":
+        payload = _payload_dict(item.get("request_payload"))
+        email = str(payload.get("email") or item.get("employee_email") or "").strip().lower()
+        return {
+            **payload,
+            "id": str(payload.get("id") or item.get("id") or ""),
+            "email": email,
+            "email_masked": payload.get("email_masked") or item.get("employee_email_masked") or _mask_email(email),
+            "name": payload.get("name") or item.get("employee_name") or "",
+            "phone": payload.get("phone") or item.get("phone") or "",
+            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "branch": payload.get("branch") or item.get("branch") or "",
+            "role": payload.get("role") or item.get("role") or "employee",
+            "status": payload.get("status") or item.get("status") or "pending",
+            "review_memo": payload.get("review_memo") or item.get("review_memo") or "",
+            "requested_by": payload.get("requested_by") or item.get("requested_by") or "",
+            "reviewed_by": payload.get("reviewed_by") or item.get("reviewed_by") or "",
+            "requested_at": payload.get("requested_at") or _iso(item.get("requested_at")),
+            "reviewed_at": payload.get("reviewed_at") or _iso(item.get("reviewed_at")),
+            "created_at": payload.get("created_at") or _iso(item.get("created_at")),
+            "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+        }
+    if name == "onboarding_documents":
+        payload = _payload_dict(item.get("metadata"))
+        email = str(payload.get("employee_email") or item.get("employee_email") or "").strip().lower()
+        return {
+            **payload,
+            "id": str(payload.get("id") or item.get("id") or ""),
+            "employee_request_id": payload.get("employee_request_id") or item.get("employee_request_id") or "",
+            "employee_email": email,
+            "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
+            "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
+            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "branch": payload.get("branch") or item.get("branch") or "",
+            "document_type": payload.get("document_type") or item.get("document_type") or "",
+            "document_label": payload.get("document_label") or item.get("document_label") or "",
+            "requirement": payload.get("requirement") or item.get("requirement") or "",
+            "status": payload.get("status") or item.get("status") or "uploaded",
+            "original_filename": payload.get("original_filename") or item.get("original_filename") or "",
+            "stored_filename": payload.get("stored_filename") or item.get("stored_filename") or "",
+            "content_type": payload.get("content_type") or item.get("content_type") or "",
+            "size_bytes": payload.get("size_bytes") if payload.get("size_bytes") is not None else int(item.get("size_bytes") or 0),
+            "issue_date": payload.get("issue_date") or item.get("issue_date") or "",
+            "memo": payload.get("memo") or item.get("memo") or "",
+            "review_memo": payload.get("review_memo") or item.get("review_memo") or "",
+            "uploaded_by": payload.get("uploaded_by") or item.get("uploaded_by") or "",
+            "reviewed_by": payload.get("reviewed_by") or item.get("reviewed_by") or "",
+            "uploaded_at": payload.get("uploaded_at") or _iso(item.get("uploaded_at")),
+            "reviewed_at": payload.get("reviewed_at") or _iso(item.get("reviewed_at")),
+            "created_at": payload.get("created_at") or _iso(item.get("created_at")),
+            "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+        }
+    if name == "contracts":
+        payload = _payload_dict(item.get("contract_payload"))
+        email = str(payload.get("employee_email") or item.get("employee_email") or "").strip().lower()
+        return {
+            **payload,
+            "id": str(payload.get("id") or item.get("id") or ""),
+            "employee_email": email,
+            "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
+            "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
+            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "branch": payload.get("branch") or item.get("branch") or "",
+            "contract_type": payload.get("contract_type") or item.get("contract_type") or "part_time",
+            "document_kind": payload.get("document_kind") or item.get("document_kind") or "standard_employment_contract",
+            "template_version": payload.get("template_version") or item.get("template_version") or "",
+            "print_title": payload.get("print_title") or item.get("print_title") or "",
+            "status": payload.get("status") or item.get("status") or "draft",
+            "requested_at": payload.get("requested_at") or _iso(item.get("requested_at")),
+            "signed_at": payload.get("signed_at") or _iso(item.get("signed_at")),
+            "created_at": payload.get("created_at") or _iso(item.get("created_at")),
+            "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+        }
+    if name == "payroll_statements":
+        payload = _payload_dict(item.get("statement_payload"))
+        email = str(payload.get("employee_email") or item.get("employee_email") or "").strip().lower()
+        return {
+            **payload,
+            "id": str(payload.get("id") or item.get("id") or ""),
+            "employee_email": email,
+            "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
+            "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
+            "business_id": payload.get("business_id") or item.get("business_id") or "",
+            "branch": payload.get("branch") or item.get("branch") or "",
+            "payroll_month": payload.get("payroll_month") or item.get("payroll_month") or "",
+            "gross_pay": int(payload.get("gross_pay") if payload.get("gross_pay") is not None else item.get("gross_pay") or 0),
+            "tax_withholding": int(payload.get("tax_withholding") if payload.get("tax_withholding") is not None else item.get("tax_withholding") or 0),
+            "insurance_deduction": int(payload.get("insurance_deduction") if payload.get("insurance_deduction") is not None else item.get("insurance_deduction") or 0),
+            "other_deduction": int(payload.get("other_deduction") if payload.get("other_deduction") is not None else item.get("other_deduction") or 0),
+            "net_pay": int(payload.get("net_pay") if payload.get("net_pay") is not None else item.get("net_pay") or 0),
+            "status": payload.get("status") or item.get("status") or "draft",
+            "created_at": payload.get("created_at") or _iso(item.get("created_at")),
+            "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
+        }
+    return item
+
+
+async def _db_fetch_ledger(name: str) -> list[dict[str, Any]] | None:
+    import asyncpg
+
+    table = DB_LEDGER_TABLE_BY_NAME.get(name)
+    if not table:
+        return None
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
+        if not ready:
+            return None
+        key = "row_id" if name in GENERIC_DB_LEDGER_NAMES else "id"
+        rows = await conn.fetch(f"SELECT * FROM {table} WHERE deleted_at IS NULL ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, {key} DESC")
+        return [_db_row_to_record(name, row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
+    import asyncpg
+
+    table = DB_LEDGER_TABLE_BY_NAME.get(name)
+    if not table:
+        return False
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
+        if not ready:
+            return False
+        payload = json.dumps(record, ensure_ascii=False)
+        record_id = str(record.get("id") or uuid4())
+        now = _now()
+        if name in GENERIC_DB_LEDGER_NAMES:
+            await conn.execute(
+                f"""
+                INSERT INTO {table} (row_id, business_id, branch, created_at, updated_at, payload)
+                VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6::jsonb)
+                ON CONFLICT (row_id) DO UPDATE SET
+                    business_id = EXCLUDED.business_id,
+                    branch = EXCLUDED.branch,
+                    updated_at = EXCLUDED.updated_at,
+                    deleted_at = NULL,
+                    payload = EXCLUDED.payload
+                """,
+                record_id,
+                str(record.get("business_id") or ""),
+                str(record.get("branch") or ""),
+                _pg_ts(record.get("created_at") or now),
+                _pg_ts(record.get("updated_at") or now),
+                payload,
+            )
+            return True
+        if name == "employee_join_requests":
+            await conn.execute(
+                """
+                INSERT INTO yeoljeong_employee_join_requests
+                    (id, employee_email, employee_email_masked, employee_name, phone, business_id, branch, role, status,
+                     request_payload, review_memo, requested_by, reviewed_by, requested_at, reviewed_at, updated_at, deleted_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14::timestamptz, $15::timestamptz, $16::timestamptz, NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                    employee_email = EXCLUDED.employee_email,
+                    employee_email_masked = EXCLUDED.employee_email_masked,
+                    employee_name = EXCLUDED.employee_name,
+                    phone = EXCLUDED.phone,
+                    business_id = EXCLUDED.business_id,
+                    branch = EXCLUDED.branch,
+                    role = EXCLUDED.role,
+                    status = EXCLUDED.status,
+                    request_payload = EXCLUDED.request_payload,
+                    review_memo = EXCLUDED.review_memo,
+                    requested_by = EXCLUDED.requested_by,
+                    reviewed_by = EXCLUDED.reviewed_by,
+                    requested_at = EXCLUDED.requested_at,
+                    reviewed_at = EXCLUDED.reviewed_at,
+                    updated_at = EXCLUDED.updated_at,
+                    deleted_at = NULL
+                """,
+                record_id,
+                str(record.get("email") or record.get("employee_email") or "").strip().lower(),
+                str(record.get("email_masked") or record.get("employee_email_masked") or ""),
+                str(record.get("name") or record.get("employee_name") or ""),
+                str(record.get("phone") or ""),
+                str(record.get("business_id") or ""),
+                str(record.get("branch") or ""),
+                str(record.get("role") or "employee"),
+                str(record.get("status") or "pending"),
+                payload,
+                str(record.get("review_memo") or ""),
+                str(record.get("requested_by") or ""),
+                str(record.get("reviewed_by") or ""),
+                _pg_ts(record.get("requested_at") or record.get("created_at") or now),
+                _pg_ts(record.get("reviewed_at")),
+                _pg_ts(record.get("updated_at") or now),
+            )
+            return True
+        if name == "onboarding_documents":
+            await conn.execute(
+                """
+                INSERT INTO yeoljeong_onboarding_documents
+                    (id, employee_request_id, employee_email, employee_email_masked, employee_name, business_id, branch,
+                     document_type, document_label, requirement, status, original_filename, stored_filename, content_type,
+                     size_bytes, issue_date, memo, review_memo, uploaded_by, reviewed_by, uploaded_at, reviewed_at, updated_at, metadata, deleted_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                        $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::jsonb, NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                    employee_request_id = EXCLUDED.employee_request_id,
+                    employee_email = EXCLUDED.employee_email,
+                    employee_email_masked = EXCLUDED.employee_email_masked,
+                    employee_name = EXCLUDED.employee_name,
+                    business_id = EXCLUDED.business_id,
+                    branch = EXCLUDED.branch,
+                    document_type = EXCLUDED.document_type,
+                    document_label = EXCLUDED.document_label,
+                    requirement = EXCLUDED.requirement,
+                    status = EXCLUDED.status,
+                    original_filename = EXCLUDED.original_filename,
+                    stored_filename = EXCLUDED.stored_filename,
+                    content_type = EXCLUDED.content_type,
+                    size_bytes = EXCLUDED.size_bytes,
+                    issue_date = EXCLUDED.issue_date,
+                    memo = EXCLUDED.memo,
+                    review_memo = EXCLUDED.review_memo,
+                    uploaded_by = EXCLUDED.uploaded_by,
+                    reviewed_by = EXCLUDED.reviewed_by,
+                    uploaded_at = EXCLUDED.uploaded_at,
+                    reviewed_at = EXCLUDED.reviewed_at,
+                    updated_at = EXCLUDED.updated_at,
+                    metadata = EXCLUDED.metadata,
+                    deleted_at = NULL
+                """,
+                record_id,
+                str(record.get("employee_request_id") or ""),
+                str(record.get("employee_email") or "").strip().lower(),
+                str(record.get("employee_email_masked") or ""),
+                str(record.get("employee_name") or ""),
+                str(record.get("business_id") or ""),
+                str(record.get("branch") or ""),
+                str(record.get("document_type") or ""),
+                str(record.get("document_label") or ""),
+                str(record.get("requirement") or ""),
+                str(record.get("status") or "uploaded"),
+                str(record.get("original_filename") or ""),
+                str(record.get("stored_filename") or ""),
+                str(record.get("content_type") or ""),
+                int(record.get("size_bytes") or 0),
+                str(record.get("issue_date") or ""),
+                str(record.get("memo") or ""),
+                str(record.get("review_memo") or ""),
+                str(record.get("uploaded_by") or ""),
+                str(record.get("reviewed_by") or ""),
+                _pg_ts(record.get("uploaded_at") or record.get("created_at") or now),
+                _pg_ts(record.get("reviewed_at")),
+                _pg_ts(record.get("updated_at") or now),
+                payload,
+            )
+            return True
+        if name == "contracts":
+            token = str(record.get("sign_token") or "")
+            await conn.execute(
+                """
+                INSERT INTO yeoljeong_contracts
+                    (id, employee_email, employee_email_masked, employee_name, business_id, branch, contract_type,
+                     document_kind, template_version, print_title, status, sign_token_hash, requested_at, signed_at,
+                     created_by, requested_by, signer_email, signer_name, contract_payload, updated_at, deleted_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz,
+                        $15, $16, $17, $18, $19::jsonb, $20::timestamptz, NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                    employee_email = EXCLUDED.employee_email,
+                    employee_email_masked = EXCLUDED.employee_email_masked,
+                    employee_name = EXCLUDED.employee_name,
+                    business_id = EXCLUDED.business_id,
+                    branch = EXCLUDED.branch,
+                    contract_type = EXCLUDED.contract_type,
+                    document_kind = EXCLUDED.document_kind,
+                    template_version = EXCLUDED.template_version,
+                    print_title = EXCLUDED.print_title,
+                    status = EXCLUDED.status,
+                    sign_token_hash = EXCLUDED.sign_token_hash,
+                    requested_at = EXCLUDED.requested_at,
+                    signed_at = EXCLUDED.signed_at,
+                    created_by = EXCLUDED.created_by,
+                    requested_by = EXCLUDED.requested_by,
+                    signer_email = EXCLUDED.signer_email,
+                    signer_name = EXCLUDED.signer_name,
+                    contract_payload = EXCLUDED.contract_payload,
+                    updated_at = EXCLUDED.updated_at,
+                    deleted_at = NULL
+                """,
+                record_id,
+                str(record.get("employee_email") or "").strip().lower(),
+                str(record.get("employee_email_masked") or ""),
+                str(record.get("employee_name") or ""),
+                str(record.get("business_id") or ""),
+                str(record.get("branch") or ""),
+                str(record.get("contract_type") or "part_time"),
+                str(record.get("document_kind") or "standard_employment_contract"),
+                str(record.get("template_version") or ""),
+                str(record.get("print_title") or ""),
+                str(record.get("status") or "draft"),
+                hashlib.sha256(token.encode("utf-8")).hexdigest() if token else "",
+                _pg_ts(record.get("requested_at")),
+                _pg_ts(record.get("signed_at")),
+                str(record.get("created_by") or ""),
+                str(record.get("requested_by") or ""),
+                str(record.get("signer_email") or ""),
+                str(record.get("signer_name") or ""),
+                payload,
+                _pg_ts(record.get("updated_at") or now),
+            )
+            return True
+        if name == "payroll_statements":
+            await conn.execute(
+                """
+                INSERT INTO yeoljeong_payroll_statements
+                    (id, employee_email, employee_email_masked, employee_name, business_id, branch, payroll_month,
+                     gross_pay, tax_withholding, insurance_deduction, other_deduction, net_pay, status, created_by,
+                     confirmed_by, confirmed_at, statement_payload, updated_at, deleted_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz,
+                        $17::jsonb, $18::timestamptz, NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                    employee_email = EXCLUDED.employee_email,
+                    employee_email_masked = EXCLUDED.employee_email_masked,
+                    employee_name = EXCLUDED.employee_name,
+                    business_id = EXCLUDED.business_id,
+                    branch = EXCLUDED.branch,
+                    payroll_month = EXCLUDED.payroll_month,
+                    gross_pay = EXCLUDED.gross_pay,
+                    tax_withholding = EXCLUDED.tax_withholding,
+                    insurance_deduction = EXCLUDED.insurance_deduction,
+                    other_deduction = EXCLUDED.other_deduction,
+                    net_pay = EXCLUDED.net_pay,
+                    status = EXCLUDED.status,
+                    created_by = EXCLUDED.created_by,
+                    confirmed_by = EXCLUDED.confirmed_by,
+                    confirmed_at = EXCLUDED.confirmed_at,
+                    statement_payload = EXCLUDED.statement_payload,
+                    updated_at = EXCLUDED.updated_at,
+                    deleted_at = NULL
+                """,
+                record_id,
+                str(record.get("employee_email") or "").strip().lower(),
+                str(record.get("employee_email_masked") or ""),
+                str(record.get("employee_name") or ""),
+                str(record.get("business_id") or ""),
+                str(record.get("branch") or ""),
+                str(record.get("payroll_month") or ""),
+                int(record.get("gross_pay") or 0),
+                int(record.get("tax_withholding") or 0),
+                int(record.get("insurance_deduction") or 0),
+                int(record.get("other_deduction") or 0),
+                int(record.get("net_pay") or 0),
+                str(record.get("status") or "draft"),
+                str(record.get("created_by") or ""),
+                str(record.get("confirmed_by") or ""),
+                _pg_ts(record.get("confirmed_at")),
+                payload,
+                _pg_ts(record.get("updated_at") or now),
+            )
+            return True
+        return False
+    finally:
+        await conn.close()
+
+
+async def _db_delete_ledger(name: str, row_id: str) -> bool:
+    import asyncpg
+
+    table = DB_LEDGER_TABLE_BY_NAME.get(name)
+    if not table:
+        return False
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
+        if not ready:
+            return False
+        key = "row_id" if name in GENERIC_DB_LEDGER_NAMES else "id"
+        await conn.execute(f"UPDATE {table} SET deleted_at = NOW() WHERE {key} = $1", str(row_id))
+        return True
+    finally:
+        await conn.close()
+
+
+def _read(name: str) -> list[dict[str, Any]]:
+    file_rows = _read_file_rows(name)
+    if name not in DB_LEDGER_TABLE_BY_NAME:
+        return file_rows
+    db_rows = _run_db(_db_fetch_ledger(name))
+    if isinstance(db_rows, list):
+        if db_rows:
+            return db_rows
+        if file_rows:
+            for row in file_rows:
+                _run_db(_db_upsert_ledger(name, row))
+            seeded = _run_db(_db_fetch_ledger(name))
+            if isinstance(seeded, list):
+                return seeded
+    return file_rows
+
+
 def _write(name: str, rows: list[dict[str, Any]]) -> None:
-    path = _path(name)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    _write_file_rows(name, rows)
+    if name not in DB_LEDGER_TABLE_BY_NAME:
+        return
+    for row in rows:
+        _run_db(_db_upsert_ledger(name, row))
+
+
+def _delete(name: str, row_id: str) -> None:
+    _write_file_rows(name, [row for row in _read_file_rows(name) if str(row.get("id") or "") != str(row_id)])
+    if name in DB_LEDGER_TABLE_BY_NAME:
+        _run_db(_db_delete_ledger(name, row_id))
 
 
 def _merge_by_id(current_items: Any, default_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -761,8 +1277,7 @@ def delete_onboarding_document(document_id: str, user: dict[str, Any]) -> None:
         raise HTTPException(status_code=404, detail="입사서류를 찾을 수 없습니다")
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 삭제할 수 있습니다")
-    rows = [row for row in rows if row.get("id") != document_id]
-    _write("onboarding_documents", rows)
+    _delete("onboarding_documents", document_id)
 
 
 def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
@@ -851,7 +1366,7 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
 def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 삭제 권한이 없습니다")
-    _write("contracts", [row for row in _read("contracts") if row.get("id") != contract_id])
+    _delete("contracts", contract_id)
 
 
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -894,7 +1409,7 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
 def delete_payroll(statement_id: str, user: dict[str, Any]) -> None:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 삭제 권한이 없습니다")
-    _write("payroll_statements", [row for row in _read("payroll_statements") if row.get("id") != statement_id])
+    _delete("payroll_statements", statement_id)
 
 
 def list_accounts(user: dict[str, Any]) -> list[dict[str, Any]]:
