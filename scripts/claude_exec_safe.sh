@@ -23,6 +23,8 @@ if [ "$CURRENT" -ge "$MAX_CONCURRENT" ]; then
   echo "[$(date)] 동시 실행 제한 초과 ($CURRENT/$MAX_CONCURRENT) - 대기"
   exit 1
 fi
+
+_claude_permission_args_snippet='CLAUDE_PERMISSION_ARGS=""; if [ "$(id -u)" -ne 0 ] && [ -z "${SUDO_USER:-}" ]; then CLAUDE_PERMISSION_ARGS="--dangerously-skip-permissions"; fi'
 # Usage: claude_exec_safe.sh <directive_file> <project> <workdir> [timeout] [max_turns] [model] [max_budget]
 
 # === 계정 스위치 로직 (API Key 기반 — OAuth 만료 무관) ===
@@ -555,8 +557,8 @@ CTX_MONITOR_PID=$!
 #  2. 지시서 읽기 및 실행
 #  3. 결과 RESULT_FILE에 저장
 timeout --kill-after=60 ${MAX_TIMEOUT} su - claudebot -c \
-  "cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
-  --dangerously-skip-permissions --max-turns ${MAX_TURNS} --max-budget-usd ${MAX_BUDGET} --model ${MODEL} --output-format json \
+  "${_claude_permission_args_snippet}; cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
+  \${CLAUDE_PERMISSION_ARGS} --max-turns ${MAX_TURNS} --max-budget-usd ${MAX_BUDGET} --model ${MODEL} --output-format json \
   '중요: 작업 디렉토리는 ${WORKDIR} 이다. 모든 파일 생성·수정은 반드시 ${WORKDIR} 내부에서만 수행하라. /tmp, /home, ~/ 등 다른 경로에 절대 파일을 생성하지 마라. /root/.genspark/directives/pending/ 및 /root/.genspark/directives/running/ 경로의 파일을 절대 삭제·이동·수정하지 마라(파이프라인 시스템 전용). 프로세스 탐색 시 /proc, /sys 경로에 grep -r을 실행하지 마라(pgrep, ps, lsof 사용). cat ${DIRECTIVE_FILE} 파일을 읽고 지시대로 모두 실행하라. 작업 완료 후 실행한 모든 내용과 결과를 빠짐없이 원문 그대로 ${RESULT_FILE} 에 저장하라. 절대 요약하지 마라. YAML 프런트매터(project, task_id, completed_at KST)를 파일 상단에 포함하라.'" \
   > "$LOG_FILE" 2>&1
 
@@ -586,8 +588,8 @@ if [ -f "$CTX_SIGNAL" ]; then
 재시작 시각: $(date '+%Y-%m-%d %H:%M:%S KST')
 _MIDRESULT_MARKER
     timeout --kill-after=60 ${MAX_TIMEOUT} su - claudebot -c \
-      "cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
-      --dangerously-skip-permissions --max-turns ${MAX_TURNS} --max-budget-usd ${MAX_BUDGET} --model ${MODEL} --output-format json \
+      "${_claude_permission_args_snippet}; cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
+      \${CLAUDE_PERMISSION_ARGS} --max-turns ${MAX_TURNS} --max-budget-usd ${MAX_BUDGET} --model ${MODEL} --output-format json \
       '이전 세션 컨텍스트 한계로 재시작. 작업 디렉토리: ${WORKDIR}. cat ${DIRECTIVE_FILE} 읽고 미완성 작업 이어서 완료. 결과를 ${RESULT_FILE} 에 이어 저장.'" \
       >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?
@@ -630,8 +632,8 @@ $(grep -A5 'success_criteria' "${DIRECTIVE_FILE}" 2>/dev/null | head -20)
         fi
 
         echo "$_qa_prompt" | timeout 600 su - claudebot -c \
-            "\$(which claude 2>/dev/null || echo /usr/local/bin/claude) --print \
-            --dangerously-skip-permissions --model ${MODEL:-sonnet}" \
+            "${_claude_permission_args_snippet}; \$(which claude 2>/dev/null || echo /usr/local/bin/claude) --print \
+            \${CLAUDE_PERMISSION_ARGS} --model ${MODEL:-sonnet}" \
             > "$_qa_result_file" 2>&1 || true
 
         _qa_verdict=$(grep -m1 "QA_VERDICT:" "$_qa_result_file" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' || echo "UNKNOWN")
@@ -660,8 +662,8 @@ if 'qa_status:' not in c:
             _qa_feedback=$(cat "$_qa_result_file" 2>/dev/null | tail -30)
             # 재작업: Claude에게 QA 피드백 전달 + 수정 요청
             timeout --kill-after=60 ${MAX_TIMEOUT} su - claudebot -c \
-                "cd ${_qa_workdir} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
-                --dangerously-skip-permissions --max-turns 50 --max-budget-usd ${MAX_BUDGET} --model ${MODEL:-sonnet} --output-format json \
+                "${_claude_permission_args_snippet}; cd ${_qa_workdir} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
+                \${CLAUDE_PERMISSION_ARGS} --max-turns 50 --max-budget-usd ${MAX_BUDGET} --model ${MODEL:-sonnet} --output-format json \
                 'QA 검토 결과 FAIL. 다음 피드백을 반영하여 수정하라: ${_qa_feedback}
 원래 지시서: $(cat "${DIRECTIVE_FILE}" 2>/dev/null | head -40)
 수정 완료 후 git add -A && git commit -m \"[${_qa_task_id}] fix: QA 피드백 반영 (재시도 $((_qa_retry+1))/${_qa_max_retry})\" && git push origin main 을 실행하라.'" \
@@ -715,8 +717,8 @@ $(cat "${DIRECTIVE_FILE}" 2>/dev/null | head -60)
     fi
 
     echo "$_dg_prompt" | timeout 300 su - claudebot -c \
-        "\$(which claude 2>/dev/null || echo /usr/local/bin/claude) --print \
-        --dangerously-skip-permissions --model ${MODEL:-sonnet}" \
+        "${_claude_permission_args_snippet}; \$(which claude 2>/dev/null || echo /usr/local/bin/claude) --print \
+        \${CLAUDE_PERMISSION_ARGS} --model ${MODEL:-sonnet}" \
         > "$_dg_result_file" 2>&1 || true
 
     local _dg_verdict
@@ -777,8 +779,8 @@ if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 124 ] && [ $EXIT_CODE -ne 137 ]; the
   if handle_execution_error; then
     echo "[$(date +'%Y-%m-%d %H:%M:%S KST')] [RETRY] 에러 핸들링 후 재시도" >> "$LOG_FILE"
     timeout --kill-after=60 ${MAX_TIMEOUT} su - claudebot -c \
-      "cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
-      --dangerously-skip-permissions --max-turns ${MAX_TURNS} --max-budget-usd ${MAX_BUDGET} --model ${MODEL} --output-format json \
+      "${_claude_permission_args_snippet}; cd ${WORKDIR} && \$(which claude 2>/dev/null || echo /usr/local/bin/claude) -p \
+      \${CLAUDE_PERMISSION_ARGS} --max-turns ${MAX_TURNS} --max-budget-usd ${MAX_BUDGET} --model ${MODEL} --output-format json \
       '중요: 작업 디렉토리는 ${WORKDIR} 이다. cat ${DIRECTIVE_FILE} 파일을 읽고 지시대로 모두 실행하라. 결과를 ${RESULT_FILE} 에 저장하라.'" \
       >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?

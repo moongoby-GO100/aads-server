@@ -1,5 +1,15 @@
 # AADS Chat-Direct Edit Changelog (aads-server)
 
+## [2026-07-20 10:30:59 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: CEO의 `document_report_unverified_by_ledger` 재지적에 따라 러너 guard/매장비서 계정 보안 최종 closeout 원장을 추가.
+- 검증: current session 활성 작업 0건, 서버68 healthy, 공개 매장비서 HTML HTTP 200, storage-status 비인증 HTTP 401, `git diff --check` 통과, 컨테이너 수동 회귀 `manual_account_security_regression_ok`, DB 쓰기 차단 격리 회귀 `manual_account_security_regression_isolated_ok`.
+- 정리: 컨테이너 수동 회귀 중 생성된 DB 검증 부산물 2건은 `deleted_at` 소프트 삭제로 정리했고, 최종 활성 플랫폼 계정 4건 기준 원문 `password` 0건, `password_enc` 보유 0건으로 재확인.
+- 보류: `pytest` 미설치로 단위테스트 미실행. 플랫폼 계정 active 4건은 원문 `password`가 없고 `password_enc` 값도 비어 있어 자동 로그인 수집 전 비밀번호 재등록 필요.
+
+## [2026-07-20 10:26:47 KST] [aads-server] scripts/claude_exec_safe.sh
+- Chat-Direct 수정: Pipeline Runner 보조 실행 경로에서 root/sudo 환경이면 Claude CLI `--dangerously-skip-permissions` 옵션을 제외하도록 guard 추가.
+- 검증: `bash -n scripts/pipeline-runner.sh`, `bash -n scripts/claude_exec_safe.sh`, 호스트/컨테이너 `py_compile` 통과. 매장비서 플랫폼 계정 JSON/DB active 4건은 원문 `password`가 없고, 현재 `password_enc` 값도 비어 있어 자동 로그인을 위해서는 비밀번호 재등록이 필요함을 확인.
+
 ## [2026-04-29 09:35:04 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:                    OR ($1 = 'NTV2' AND '→                   OR ($1 = 'NTV2' AND '
 

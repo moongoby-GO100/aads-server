@@ -1,5 +1,51 @@
 # AADS HANDOVER
 
+## 2026-07-20 10:30 KST - Pipeline runner guard and Yeoljeong account security final closeout
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 러너/매장비서 즉시 조치 상태를 재검증하고 문서 원장을 최신값으로 닫았다.
+- 조치:
+  - `scripts/claude_exec_safe.sh`의 Claude CLI 실행 경로 6곳에 root/sudo 감지 guard를 추가한 상태를 유지했다. root/sudo 환경에서는 `--dangerously-skip-permissions`가 제외되고, 일반 `claudebot` 실행에서는 기존 자동 승인 옵션을 유지한다.
+  - `scripts/pipeline-runner.sh` 본선 경로는 이미 root일 때 `--dangerously-skip-permissions`를 제외하는 guard가 존재함을 확인했다.
+  - 매장비서 플랫폼 계정 저장/응답은 신규 입력 시 원문 `password`를 제거하고 `password_enc`로 치환하며, API 응답에서는 `password/password_enc`를 제거하고 `password_masked`만 노출하는 코드 경로를 컨테이너 수동 회귀 테스트로 확인했다.
+- 실측:
+  - 기준 시각: `2026-07-20 10:30:59 KST`.
+  - Git: `main`, `origin/main` 대비 `ahead 30`, `behind 0`. 미커밋 변경은 `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`, `scripts/claude_exec_safe.sh` 외 운영 데이터/백업/임시 파일이 섞여 있다.
+  - 러너: 현재 세션 활성 작업 0건, 최근 매장비서 DB 호환 러너 `runner-dc0ea80b`, `runner-02bd3c91`는 모두 `rejected_done`.
+  - 서버68: `HEALTHY`, DB OK, disk 50%, pending/running directive 0건.
+  - 컨테이너: `aads-server`, `aads-dashboard`, `aads-dashboard-green`, `aads-server-green`, `aads-postgres` healthy.
+  - 공개 URL: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200, 비인증 `/api/v1/yeoljeong-finance/storage-status` HTTP 401.
+  - 플랫폼 계정 저장 상태: JSON active 4건과 PostgreSQL active 4건 모두 원문 `password` 없음. 단, 현재 `password_enc` 값도 비어 있어 자동 로그인을 위해서는 비밀번호 재등록이 필요하다.
+  - 컨테이너 수동 회귀 중 DB 우선 저장소에 생성된 검증 부산물 2건(`legacy`, `7e3756f5-a3b1-429d-b752-44628bdfeb02`)은 `deleted_at` 소프트 삭제로 정리했고, 최종 활성 플랫폼 계정은 4건으로 재확인했다.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py`: 통과.
+  - 컨테이너 임시 디렉터리 수동 회귀: `manual_account_security_regression_ok`, DB 쓰기 차단 격리 회귀 `manual_account_security_regression_isolated_ok`.
+  - PostgreSQL `yeoljeong_platform_accounts` 최종 활성 4건: 원문 `password` 0건, `password_enc` 보유 0건.
+  - `git diff --check`: 통과.
+- 보류:
+  - `pytest`는 호스트/컨테이너 모두 미설치라 실행하지 못했다.
+  - 현재 계정 비밀번호 암호문 값이 비어 있어, 배달앱 자동 로그인 수집은 관리자 계정 화면/API에서 비밀번호를 다시 저장하기 전까지 진행할 수 없다.
+  - 커밋/푸시/정식 배포/reload는 수행하지 않았다. 브랜치가 이미 30커밋 앞서 있고 워킹트리에 운영 데이터/무관 임시 파일이 있어 일괄 커밋/배포는 범위 오염 리스크가 있다.
+
+## 2026-07-20 10:26 KST - Pipeline runner root permission guard and Yeoljeong account security verification
+- 배경: CEO가 매장비서 즉시 조치사항을 진행하고, 러너 문제가 있으면 러너 부분도 함께 조치하라고 지시했다.
+- 조치:
+  - `scripts/claude_exec_safe.sh`의 Claude CLI 실행 경로 6곳에 root/sudo 감지 guard를 추가했다. `id -u=0` 또는 `SUDO_USER` 환경에서는 `--dangerously-skip-permissions`를 제외하고, 일반 `claudebot` 실행에서는 기존 자동 승인 동작을 유지한다.
+  - `scripts/pipeline-runner.sh` 본선 경로는 이미 root일 때 `--dangerously-skip-permissions`를 제외하는 상태임을 확인했다.
+  - 매장비서 플랫폼 계정 저장/응답은 신규 입력 시 `password` 원문을 제거하고 `password_enc`로 치환하며, API 응답에서는 `password/password_enc`를 제거하고 `password_masked`만 노출하는 코드 경로를 재검증했다.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py`: 통과.
+  - `jq` 집계로 `app/data/yeoljeong_finance/platform_accounts.json` 4개 계정 모두 `has_password=false`, `password_enc` 키는 있으나 값은 비어 있음을 확인했다.
+  - PostgreSQL `yeoljeong_platform_accounts` active 4건도 `payload ? 'password' = 0`, `password_enc_nonempty = 0`으로 확인했다.
+- 보류:
+  - 호스트/컨테이너 모두 `pytest`가 없어 `tests/unit/test_yeoljeong_finance_service.py` 실행은 미완료다.
+  - 현재 등록 계정은 아이디/플랫폼 메타만 있고 비밀번호 암호문 값은 없다. 자동 로그인을 재개하려면 관리자 화면/API에서 비밀번호를 재등록해 암호화 저장되게 해야 한다.
+  - 커밋/푸시/정식 배포/reload는 수행하지 않았다. 워킹트리에 다른 작업 변경이 남아 있어 범위 정리 후 별도 승인 기준으로 처리해야 한다.
+
 ## 2026-07-18 09:59 KST - Yeoljeong final closeout ledger current-state verification
 - 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger` 조건을 만족하지 못했다고 재지적해, 최종 보고 직전 현재 상태를 다시 실측하고 ledger를 최신값으로 보강했다.
 - 확인:
