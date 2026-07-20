@@ -1,5 +1,11 @@
 # AADS Chat-Direct Edit Changelog (aads-server)
 
+## [2026-07-20 10:47 KST] [aads-server] runner/nginx live ops
+- Chat-Direct 운영 조치: `aads-pipeline-runner.service`를 재시작해 2026-07-20 커밋된 root/sudo permission guard를 런타임에 로드.
+- Chat-Direct 운영 조치: live `aads-nginx`의 `/etc/nginx/conf.d/aads.conf`에 `/api/yeoljeong/finance/` location 블록을 반영하고 `nginx -s reload` 실행.
+- 검증: runner active/running, 새 PID `979610`, `docker exec aads-nginx nginx -t` successful, `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status` HTTP 502 -> HTTP 401 복구, `fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status` HTTP 401 유지, 서버68 health_check HEALTHY, pipeline running/queued/awaiting_approval 0건.
+- 보류: GO100 `runner-c44b4f87`은 최종 `error`; 서버211 SSH timeout으로 원격 git 검증 불가. GO100 외부 상세 URL은 307->200, analysis API GET 미인증 401까지 확인.
+
 ## [2026-07-20 10:43 KST] [aads-server] nginx-aads.conf
 - Chat-Direct 수정: `/api/yeoljeong/finance/*` 외부 요청이 범용 `/api/` location 때문에 죽어 있는 `127.0.0.1:8001`로 전달되어 HTTP 502가 발생하는 문제를 저장소 nginx source에서 보정.
 - 조치: HTTP/HTTPS server 블록에 `location /api/yeoljeong/finance/`를 추가하고 `aads_api` upstream으로 라우팅. 범용 `/api/` location은 유지.

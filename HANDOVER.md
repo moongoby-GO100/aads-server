@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-07-20 10:47 KST - Runner reload and Yeoljeong finance live nginx route applied
+- 배경: CEO가 즉시 조치사항을 완료하고 러너 문제가 있으면 러너 부분도 조치 후 진행하라고 지시했다. 이전 closeout 중 `scripts/claude_exec_safe.sh` guard는 커밋되어 있었으나, `aads-pipeline-runner.service`가 2026-07-14부터 실행 중이라 2026-07-20 커밋된 guard를 아직 런타임에 로드하지 않은 상태였다. 또한 `nginx-aads.conf` 소스의 `/api/yeoljeong/finance/` 라우트 수정은 커밋되어 있었지만 live `aads-nginx` 설정에는 반영되지 않아 외부 `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`가 HTTP 502를 반환했다.
+- 조치:
+  - `systemctl restart aads-pipeline-runner.service`로 AADS Pipeline Runner를 재시작해 최신 guard 로직을 로드했다.
+  - live `/etc/nginx/conf.d/aads.conf`에 `/api/yeoljeong/finance/` location 블록 2개를 추가하고 `docker exec aads-nginx nginx -s reload`로 무중단 reload했다.
+  - GO100 `runner-c44b4f87` 승인/배포 흐름은 최종 DB 상태 `error`로 닫혔다. 산출물상 분석 탭은 기존 구현 확인 건이었고, 외부 URL/API smoke는 별도 통과했으나 서버211 SSH는 timeout이라 원격 git 검증은 미완료다.
+- 검증:
+  - 기준 시각: `2026-07-20 10:47:24 KST`.
+  - `aads-pipeline-runner.service`: active/running, 새 `ExecMainPID=979610`, `ActiveEnterTimestamp=Mon 2026-07-20 10:43:49 KST`.
+  - `docker exec aads-nginx nginx -t`: syntax OK, config test successful. 기존 http2 deprecation/protocol warning은 남아 있으나 테스트는 성공.
+  - `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`: HTTP 502 -> HTTP 401로 복구, 인증 보호 정상.
+  - `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status`: HTTP 401 유지.
+  - 서버68 `health_check`: `HEALTHY`, DB OK, DB latency 92ms, disk 52%, pipeline stalled 0/running_sessions 0.
+  - Pipeline Runner `running`, `queued`, `awaiting_approval`: 모두 0건.
+- 보류:
+  - GO100 서버211 SSH는 `connect to host 211.188.51.113 port 22: Connection timed out`으로 원격 git 상태 검증이 불가했다. 외부 `https://go100.newtalk.kr/go100/strategies/119`는 로그인 리다이렉트 후 HTTP 200, `GET /api/go100/strategy-cards/119/analysis` 미인증 HTTP 401로 라우트 정상까지 확인했다.
+  - AADS 브랜치는 `origin/main` 대비 ahead 상태이고 워킹트리에 unrelated 운영 데이터/보고서/nginx upstream 백업 변경이 남아 있어 전체 push/deploy는 수행하지 않았다.
+
 ## 2026-07-20 10:43 KST - Yeoljeong finance API nginx source route fix
 - 배경: 최종 재검증 중 `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`가 외부에서 HTTP 502를 반환했다. 로컬 백엔드 `http://127.0.0.1:8100/api/yeoljeong/finance/storage-status`와 green 백엔드 `http://127.0.0.1:8102/api/yeoljeong/finance/storage-status`는 모두 HTTP 401로 정상 보호되어, 앱 문제가 아니라 nginx route 문제로 분리했다.
 - 원인: 운영 nginx 설정의 범용 `location /api/`가 `/api/yeoljeong/finance/*`를 죽어 있는 `127.0.0.1:8001`로 전달하고 있었다. nginx 로그에도 `connect() failed (111: Connection refused) ... upstream: "http://127.0.0.1:8001/yeoljeong/finance/storage-status"`가 확인됐다.
