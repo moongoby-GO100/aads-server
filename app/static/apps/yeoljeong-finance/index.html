@@ -2322,14 +2322,14 @@
       businesses: [
         {
           id: "biz-junghwa",
-          entityType: "individual",
+          entityType: "corporation",
           name: "열정국밥 중화점",
-          registrationNo: "기초등록 필요",
-          representative: "미등록",
+          registrationNo: "710-86-04499",
+          representative: "오윤희",
           taxType: "일반과세",
-          openedAt: "",
-          address: "",
-          memo: "개인사업자 1"
+          openedAt: "2026-07-01",
+          address: "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)",
+          memo: "법인사업자 / 법인등록번호 110111-0961922 / 주류판매신고번호 146-5-11334"
         },
         {
           id: "biz-sungshin",
@@ -2346,12 +2346,12 @@
           id: "biz-mia",
           entityType: "individual",
           name: "열정국밥_미아점",
-          registrationNo: "기초등록 필요",
-          representative: "미등록",
+          registrationNo: "874-21-02160",
+          representative: "최미미",
           taxType: "일반과세",
-          openedAt: "",
-          address: "",
-          memo: "개인사업자 3"
+          openedAt: "2025-04-01",
+          address: "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)",
+          memo: "개인사업자 3 / 주류판매신고번호 210-5-62608"
         }
       ],
       branches: [
@@ -2359,7 +2359,17 @@
         { id: "branch-sungshin", name: "성신여대점", businessId: "biz-sungshin", status: "active", phone: "", address: "" },
         { id: "branch-gangbuk-mia", name: "열정국밥_미아점", businessId: "biz-mia", status: "active", phone: "", address: "" }
       ],
-      accounts: [],
+      accounts: [
+        {
+          id: "acct-sungshin-ibk",
+          bank: "IBK기업은행",
+          name: "성신여대점 운영계좌",
+          accountNo: "005-******-01-017",
+          businessId: "biz-sungshin",
+          holder: "김영주",
+          memo: "통장사본 기준 / 예금종류 보통예금 / 신규일 2017-06-22 / 관리점 삼양동"
+        }
+      ],
       staff: [],
       integrations: [
         {
@@ -2367,7 +2377,7 @@
           service: "baemin",
           label: "배민 셀프서비스",
           loginUrl: "https://biz-member.baemin.com/login",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥_미아점",
           passwordMasked: "********",
@@ -2381,7 +2391,7 @@
           service: "coupangeats",
           label: "쿠팡이츠 사장님",
           loginUrl: "https://store.coupangeats.com/merchant/login",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥_미아점",
           passwordMasked: "********",
@@ -2395,7 +2405,7 @@
           service: "yogiyo",
           label: "요기요 사장님",
           loginUrl: "https://ceo.yogiyo.co.kr/login",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥_미아점",
           passwordMasked: "********",
@@ -2409,7 +2419,7 @@
           service: "ddangyo",
           label: "땡겨요",
           loginUrl: "https://boss.ddangyo.com/",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥_미아점",
           passwordMasked: "********",
@@ -2423,7 +2433,7 @@
           service: "matepos",
           label: "메이트포스",
           loginUrl: "https://www.matetech.co.kr/login",
-          username: "a8742102160",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥_미아점",
           passwordMasked: "********",
@@ -2437,7 +2447,7 @@
           service: "marketbom",
           label: "마켓봄",
           loginUrl: "https://marketbom.com/",
-          username: "01037680511",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥_미아점",
           passwordMasked: "********",
@@ -2560,7 +2570,6 @@
       const miaBranch = next.branches.find(item => item.id === "branch-gangbuk-mia");
       if (miaBranch) miaBranch.businessId = MIA_BUSINESS_ID;
       next.integrations.forEach(item => {
-        if (String(item.username || "").trim() !== "mimi77") return;
         if (!MIA_DELIVERY_SERVICES.has(item.service)) return;
         item.businessId = MIA_BUSINESS_ID;
         item.business_id = MIA_BUSINESS_ID;
@@ -2899,6 +2908,17 @@
 
     function selectedBusinessBranchNames(cfg = settings()) {
       return new Set(selectedBusinessBranches(cfg).map(item => item.name));
+    }
+
+    function selectedAutomationScope() {
+      const businessId = selectedSettingsBusinessId();
+      const businessBranches = selectedBusinessBranches();
+      const currentBranch = selectedBranch();
+      const branch = businessBranches.some(item => item.name === currentBranch)
+        ? currentBranch
+        : (businessBranches[0]?.name || "");
+      if (!businessId || !branch) throw new Error("자동 수집할 사업자와 지점을 먼저 선택하십시오.");
+      return { business_id: businessId, branch };
     }
 
     function recordBusinessId(record) {
@@ -4965,9 +4985,16 @@
         showToast("총괄 운영관리자 로그인 후 서버 자동 수집을 실행할 수 있습니다.");
         return;
       }
+      const scope = selectedAutomationScope();
+      const month = selectedMonth();
       const payload = await financeApi("/sync", {
         method: "POST",
-        body: JSON.stringify({ services })
+        body: JSON.stringify({
+          services,
+          ...scope,
+          date_from: `${month}-01`,
+          date_to: new Date().toISOString().slice(0, 10)
+        })
       });
       const result = applySyncPayload(payload);
       showToast(result.recordsCount ? `자동 수집 ${result.recordsCount}건 / 정산 ${result.settlementsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
@@ -4989,7 +5016,7 @@
           service: els.settlementService.value,
           csv_text: csvText,
           filename: els.fileInput.files[0]?.name || "settlement.csv",
-          branch: selectedBranch() === "전체" ? "" : selectedBranch()
+          ...selectedAutomationScope()
         })
       });
       const records = (payload.records || []).map(entryFromRecord);

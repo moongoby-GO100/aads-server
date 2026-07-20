@@ -62,10 +62,18 @@ class ContractSignPayload(BaseModel):
 
 class SyncPayload(BaseModel):
     services: list[str] = Field(default_factory=list)
+    business_id: str = "biz-mia"
+    branch: str = "열정국밥_미아점"
+    date_from: str = ""
+    date_to: str = ""
 
 
 class CsvImportPayload(BaseModel):
+    service: str
     csv_text: str = ""
+    filename: str = "settlement.csv"
+    business_id: str = "biz-mia"
+    branch: str = "열정국밥_미아점"
 
 
 @router.get("/session")
@@ -215,8 +223,8 @@ async def delete_payroll(statement_id: str, current_user: dict = Depends(get_cur
 
 
 @router.get("/accounts")
-async def list_accounts(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"accounts": await run_in_threadpool(svc.list_accounts, current_user)}
+async def list_accounts(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"accounts": await run_in_threadpool(svc.list_accounts, current_user, business_id)}
 
 
 @router.get("/settings")
@@ -256,8 +264,8 @@ async def list_reviews(business_id: str | None = None, current_user: dict = Depe
 
 
 @router.get("/collection-status")
-async def list_collection_status(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"statuses": await run_in_threadpool(svc.list_collection_status, current_user)}
+async def list_collection_status(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statuses": await run_in_threadpool(svc.list_collection_status, current_user, business_id)}
 
 
 @router.get("/automation")
@@ -272,4 +280,14 @@ async def sync_delivery(payload: SyncPayload, current_user: dict = Depends(get_c
 
 @router.post("/settlements/import")
 async def import_settlements(payload: CsvImportPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return await run_in_threadpool(svc.import_settlement_csv, payload.csv_text, current_user)
+    return await run_in_threadpool(
+        partial(
+            svc.import_settlement_csv,
+            payload.csv_text,
+            current_user,
+            service=payload.service,
+            business_id=payload.business_id,
+            branch=payload.branch,
+            filename=payload.filename,
+        )
+    )

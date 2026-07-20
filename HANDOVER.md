@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 2026-07-20 13:59 KST - Yeoljeong delivery collectors, security, and July execution audit
+- 배경: 매장비서 우선순위 P0 조치를 중간 보고로 끝내지 않고 계정보안, 배달앱 4사 매출·정산·리뷰 수집 경로, 2026년 7월 실행, 사업자·지점 격리까지 검증했다. 선행 Pipeline Runner 3건은 첫 작업의 서버 재시작 오류와 의존 차단으로 산출물 없이 종료되어 메인 작업트리에서 기존 변경을 보존하며 최소 범위로 보완했다.
+- 변경:
+  - `app/services/yeoljeong_delivery_collectors.py`: 배민·쿠팡이츠·땡겨요·요기요 로그인, CAPTCHA/2차 인증 중단, 기간 입력, CSV/XLSX/표 파싱, 매출·정산·리뷰 정규화 어댑터를 추가했다. 자격증명·브라우저 저장상태·원본 HTML/다운로드 파일은 보존하지 않는다.
+  - `app/services/yeoljeong_finance_service.py`: 사업자-지점 연결 검증, 비관리자의 재무원장 접근 차단, 암호화 비밀번호 복호화 실행, 플랫폼별 수집상태와 오류코드, 안정적 ID 기반 upsert/idempotency를 구현했다.
+  - `app/api/yeoljeong_finance.py`: 수집 요청에 `business_id`, `branch`, `date_from`, `date_to`를 추가하고 계정·상태 조회의 사업자 필터를 지원한다.
+  - 테스트는 운영 JSON/DB에 닿지 않도록 autouse 격리 fixture를 추가했다. 격리 전 식별된 테스트 계정 2건, 가상 매출 1건, 가상 성공상태 2건은 JSON 백업 후 제거하고 DB에서 소프트 삭제했다.
+- 검증:
+  - API 컨테이너에서 관련 테스트 `14 passed, 4 deselected`, Python compile 3파일, `git diff --check` 통과.
+  - 실제 `biz-mia / 열정국밥_미아점`, 기간 `2026-07-01~2026-07-20`로 4사 수집 실행. 모두 `credential_required / CREDENTIAL_REQUIRED`, 매출·정산·리뷰 각 0건으로 기록했다. DB 재조회 결과 실데이터 원장 0/0/0건, 실제 수집상태 4건이다.
+- 보류/운영반영: 4사 실제 암호화 비밀번호가 비어 있어 포털 로그인 이후 데이터 수집은 진행할 수 없다. API 프로세스 재시작, 전체 배포, push는 dirty 작업트리와 자격증명 미등록 때문에 수행하지 않았다. 운영 반영 후 CEO가 UI에서 각 플랫폼 비밀번호를 다시 저장하고 같은 기간으로 재실행해야 실수집 완료 판정이 가능하다.
+
 ## 2026-07-20 13:57 KST - GO100 control-plane mapping migrated to contabo14
 - 배경: GO100은 2026-06-19 KST에 서버211에서 `contabo14(5.104.86.14)`로 이전됐지만 AADS 원격 도구·러너·프롬프트·상태조회 매핑에 서버211 값이 남아 원격 호출이 구 서버로 향했다.
 - 조치: `app/core/project_config.py`의 GO100 SSH 대상을 `5.104.86.14`로 변경하고 `server_name=contabo14`를 추가했다. 서버 레지스트리에서 KIS는 서버211에 유지하고 GO100을 별도 `contabo14` 서버로 분리했다. 원격 문서, 프로젝트 대시보드, 모델/relay 런타임 힌트, GO100 헬스 URL, 시스템 프롬프트, 관리자/텔레그램 서버 표시를 동일 기준으로 정정했다.
@@ -7,6 +19,150 @@
 - 검증: 신서버 SSH에서 `hostname=contabo14`, `/root/kis-autotrade-v4` 존재, `go100`·`go100-frontend` active, `http://5.104.86.14:8002/health` HTTP 200을 확인했다. 컨테이너 mapping assertions 및 Python compile, `git diff --check`를 통과했다. 호스트에는 pytest가 없어 전용 pytest 파일은 직접 단언으로 대체했다.
 - 완료 기준: AADS 배포 후 `run_remote_command(project=GO100, command=hostname)`가 `contabo14`를 반환해야 최종 완료로 판정한다.
 - 배포 복구: 첫 blue-green 전환에서 호스트에 `nginx` 바이너리가 없어 `nginx -t`가 실패했다. `deploy.sh`가 호스트 nginx가 없을 때 실행 중인 `aads-nginx` 컨테이너의 `nginx -t/-s reload`를 사용하도록 폴백을 추가했다.
+
+## 2026-07-20 10:47 KST - Runner reload and Yeoljeong finance live nginx route applied
+- 배경: CEO가 즉시 조치사항을 완료하고 러너 문제가 있으면 러너 부분도 조치 후 진행하라고 지시했다. 이전 closeout 중 `scripts/claude_exec_safe.sh` guard는 커밋되어 있었으나, `aads-pipeline-runner.service`가 2026-07-14부터 실행 중이라 2026-07-20 커밋된 guard를 아직 런타임에 로드하지 않은 상태였다. 또한 `nginx-aads.conf` 소스의 `/api/yeoljeong/finance/` 라우트 수정은 커밋되어 있었지만 live `aads-nginx` 설정에는 반영되지 않아 외부 `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`가 HTTP 502를 반환했다.
+- 조치:
+  - `systemctl restart aads-pipeline-runner.service`로 AADS Pipeline Runner를 재시작해 최신 guard 로직을 로드했다.
+  - live `/etc/nginx/conf.d/aads.conf`에 `/api/yeoljeong/finance/` location 블록 2개를 추가하고 `docker exec aads-nginx nginx -s reload`로 무중단 reload했다.
+  - GO100 `runner-c44b4f87` 승인/배포 흐름은 최종 DB 상태 `error`로 닫혔다. 산출물상 분석 탭은 기존 구현 확인 건이었고, 외부 URL/API smoke는 별도 통과했으나 서버211 SSH는 timeout이라 원격 git 검증은 미완료다.
+- 검증:
+  - 기준 시각: `2026-07-20 10:47:24 KST`.
+  - `aads-pipeline-runner.service`: active/running, 새 `ExecMainPID=979610`, `ActiveEnterTimestamp=Mon 2026-07-20 10:43:49 KST`.
+  - `docker exec aads-nginx nginx -t`: syntax OK, config test successful. 기존 http2 deprecation/protocol warning은 남아 있으나 테스트는 성공.
+  - `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`: HTTP 502 -> HTTP 401로 복구, 인증 보호 정상.
+  - `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status`: HTTP 401 유지.
+  - 서버68 `health_check`: `HEALTHY`, DB OK, DB latency 92ms, disk 52%, pipeline stalled 0/running_sessions 0.
+  - Pipeline Runner `running`, `queued`, `awaiting_approval`: 모두 0건.
+- 보류:
+  - GO100 서버211 SSH는 `connect to host 211.188.51.113 port 22: Connection timed out`으로 원격 git 상태 검증이 불가했다. 외부 `https://go100.newtalk.kr/go100/strategies/119`는 로그인 리다이렉트 후 HTTP 200, `GET /api/go100/strategy-cards/119/analysis` 미인증 HTTP 401로 라우트 정상까지 확인했다.
+  - AADS 브랜치는 `origin/main` 대비 ahead 상태이고 워킹트리에 unrelated 운영 데이터/보고서/nginx upstream 백업 변경이 남아 있어 전체 push/deploy는 수행하지 않았다.
+
+## 2026-07-20 10:43 KST - Yeoljeong finance API nginx source route fix
+- 배경: 최종 재검증 중 `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`가 외부에서 HTTP 502를 반환했다. 로컬 백엔드 `http://127.0.0.1:8100/api/yeoljeong/finance/storage-status`와 green 백엔드 `http://127.0.0.1:8102/api/yeoljeong/finance/storage-status`는 모두 HTTP 401로 정상 보호되어, 앱 문제가 아니라 nginx route 문제로 분리했다.
+- 원인: 운영 nginx 설정의 범용 `location /api/`가 `/api/yeoljeong/finance/*`를 죽어 있는 `127.0.0.1:8001`로 전달하고 있었다. nginx 로그에도 `connect() failed (111: Connection refused) ... upstream: "http://127.0.0.1:8001/yeoljeong/finance/storage-status"`가 확인됐다.
+- 조치: `nginx-aads.conf`의 HTTP/HTTPS server 블록에 `location /api/yeoljeong/finance/`를 추가하여 메인 AADS upstream `aads_api`로 라우팅하도록 저장소 소스를 수정했다. 범용 `/api/` 라우트는 변경하지 않았다.
+- 검증:
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py`: 통과.
+  - `git diff --check`: 통과.
+  - 컨테이너 상태: `aads-server`, `aads-server-green`, `aads-dashboard-green`, `aads-postgres` healthy.
+- 보류: live nginx에는 아직 적용하지 않았다. 적용하려면 `nginx-aads.conf`를 `/etc/nginx/conf.d/aads.conf`로 반영하고 `nginx -t` 후 nginx reload가 필요하다. 롤백은 해당 location 블록 2개를 제거하고 reload하면 된다.
+
+## 2026-07-20 10:40 KST - Runner guard and Yeoljeong security closeout re-verification
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 만족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 러너 guard/매장비서 계정 보안/문서 원장/운영 상태를 다시 실측했다.
+- 확인:
+  - 기준 시각: `2026-07-20 10:37:32 KST`.
+  - Git: `main`, `origin/main` 대비 `ahead 31`. 최신 커밋은 `05fd38936e186c5fe47c67ed7652935b0d6c9d59 fix: guard runner permissions and record yeoljeong closeout`.
+  - 최신 커밋 파일: `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`, `scripts/claude_exec_safe.sh`.
+  - 현재 미커밋 변경은 `app/data/yeoljeong_finance/settings.json`, 냉면 제조방법 보고서 HTML/PDF, nginx 백업, HR 테스트 JSON/uploads, 대시보드 임시 scripts 등으로 이번 러너 guard/계정 보안 커밋 범위 밖이다.
+  - 현재 세션 Pipeline Runner: `runner-dc0ea80b`, `runner-02bd3c91` 모두 `rejected_done`; 활성 Pipeline B/C 작업 0건.
+  - TODO `88ff19ae-ac74-4769-8a67-f9bfe3cb2a2a`는 완료 처리했다.
+  - 서버68 헬스체크: `HEALTHY`, DB OK, DB latency 121ms, disk 51%, pending/running directive 0건.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `git diff --check`: 통과.
+  - root 환경 guard 시뮬레이션: `CLAUDE_PERMISSION_ARGS=empty`.
+  - 공개 매장비서 HTML: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200.
+  - 비인증 storage-status API: `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status` HTTP 401.
+  - JSON `platform_accounts.json`: 총 4건, 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건, `password_masked` 4건.
+  - PostgreSQL `yeoljeong_platform_accounts`: active 4건, 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건.
+  - 컨테이너 격리 회귀: `manual_account_security_regression_ok`; 공개 응답에는 `password/password_enc` 없음, raw 저장에는 원문 `password` 없이 `password_enc`만 존재.
+- 보류:
+  - `git push`와 정식 deploy/reload는 수행하지 않았다. 현재 브랜치가 `ahead 31`이고 워킹트리에 이번 범위 밖 운영 데이터/백업/임시 파일이 남아 있어 일괄 push/deploy는 범위 오염 리스크가 있다.
+  - 플랫폼 계정 4건은 원문 비밀번호가 제거되어 있고 암호문도 비어 있으므로, 배달앱 자동 로그인 수집 전 관리자 화면/API에서 비밀번호 재등록이 필요하다.
+
+## 2026-07-20 10:30 KST - Pipeline runner guard and Yeoljeong account security final closeout
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 러너/매장비서 즉시 조치 상태를 재검증하고 문서 원장을 최신값으로 닫았다.
+- 조치:
+  - `scripts/claude_exec_safe.sh`의 Claude CLI 실행 경로 6곳에 root/sudo 감지 guard를 추가한 상태를 유지했다. root/sudo 환경에서는 `--dangerously-skip-permissions`가 제외되고, 일반 `claudebot` 실행에서는 기존 자동 승인 옵션을 유지한다.
+  - `scripts/pipeline-runner.sh` 본선 경로는 이미 root일 때 `--dangerously-skip-permissions`를 제외하는 guard가 존재함을 확인했다.
+  - 매장비서 플랫폼 계정 저장/응답은 신규 입력 시 원문 `password`를 제거하고 `password_enc`로 치환하며, API 응답에서는 `password/password_enc`를 제거하고 `password_masked`만 노출하는 코드 경로를 컨테이너 수동 회귀 테스트로 확인했다.
+- 실측:
+  - 기준 시각: `2026-07-20 10:30:59 KST`.
+  - Git: `main`, `origin/main` 대비 `ahead 30`, `behind 0`. 미커밋 변경은 `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`, `scripts/claude_exec_safe.sh` 외 운영 데이터/백업/임시 파일이 섞여 있다.
+  - 러너: 현재 세션 활성 작업 0건, 최근 매장비서 DB 호환 러너 `runner-dc0ea80b`, `runner-02bd3c91`는 모두 `rejected_done`.
+  - 서버68: `HEALTHY`, DB OK, disk 50%, pending/running directive 0건.
+  - 컨테이너: `aads-server`, `aads-dashboard`, `aads-dashboard-green`, `aads-server-green`, `aads-postgres` healthy.
+  - 공개 URL: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200, 비인증 `/api/v1/yeoljeong-finance/storage-status` HTTP 401.
+  - 플랫폼 계정 저장 상태: JSON active 4건과 PostgreSQL active 4건 모두 원문 `password` 없음. 단, 현재 `password_enc` 값도 비어 있어 자동 로그인을 위해서는 비밀번호 재등록이 필요하다.
+  - 컨테이너 수동 회귀 중 DB 우선 저장소에 생성된 검증 부산물 2건(`legacy`, `7e3756f5-a3b1-429d-b752-44628bdfeb02`)은 `deleted_at` 소프트 삭제로 정리했고, 최종 활성 플랫폼 계정은 4건으로 재확인했다.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py`: 통과.
+  - 컨테이너 임시 디렉터리 수동 회귀: `manual_account_security_regression_ok`, DB 쓰기 차단 격리 회귀 `manual_account_security_regression_isolated_ok`.
+  - PostgreSQL `yeoljeong_platform_accounts` 최종 활성 4건: 원문 `password` 0건, `password_enc` 보유 0건.
+  - `git diff --check`: 통과.
+- 보류:
+  - `pytest`는 호스트/컨테이너 모두 미설치라 실행하지 못했다.
+  - 현재 계정 비밀번호 암호문 값이 비어 있어, 배달앱 자동 로그인 수집은 관리자 계정 화면/API에서 비밀번호를 다시 저장하기 전까지 진행할 수 없다.
+  - 커밋/푸시/정식 배포/reload는 수행하지 않았다. 브랜치가 이미 30커밋 앞서 있고 워킹트리에 운영 데이터/무관 임시 파일이 있어 일괄 커밋/배포는 범위 오염 리스크가 있다.
+
+## 2026-07-20 10:26 KST - Pipeline runner root permission guard and Yeoljeong account security verification
+- 배경: CEO가 매장비서 즉시 조치사항을 진행하고, 러너 문제가 있으면 러너 부분도 함께 조치하라고 지시했다.
+- 조치:
+  - `scripts/claude_exec_safe.sh`의 Claude CLI 실행 경로 6곳에 root/sudo 감지 guard를 추가했다. `id -u=0` 또는 `SUDO_USER` 환경에서는 `--dangerously-skip-permissions`를 제외하고, 일반 `claudebot` 실행에서는 기존 자동 승인 동작을 유지한다.
+  - `scripts/pipeline-runner.sh` 본선 경로는 이미 root일 때 `--dangerously-skip-permissions`를 제외하는 상태임을 확인했다.
+  - 매장비서 플랫폼 계정 저장/응답은 신규 입력 시 `password` 원문을 제거하고 `password_enc`로 치환하며, API 응답에서는 `password/password_enc`를 제거하고 `password_masked`만 노출하는 코드 경로를 재검증했다.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py`: 통과.
+  - `jq` 집계로 `app/data/yeoljeong_finance/platform_accounts.json` 4개 계정 모두 `has_password=false`, `password_enc` 키는 있으나 값은 비어 있음을 확인했다.
+  - PostgreSQL `yeoljeong_platform_accounts` active 4건도 `payload ? 'password' = 0`, `password_enc_nonempty = 0`으로 확인했다.
+- 보류:
+  - 호스트/컨테이너 모두 `pytest`가 없어 `tests/unit/test_yeoljeong_finance_service.py` 실행은 미완료다.
+  - 현재 등록 계정은 아이디/플랫폼 메타만 있고 비밀번호 암호문 값은 없다. 자동 로그인을 재개하려면 관리자 화면/API에서 비밀번호를 재등록해 암호화 저장되게 해야 한다.
+  - 커밋/푸시/정식 배포/reload는 수행하지 않았다. 워킹트리에 다른 작업 변경이 남아 있어 범위 정리 후 별도 승인 기준으로 처리해야 한다.
+
+## 2026-07-18 09:59 KST - Yeoljeong final closeout ledger current-state verification
+- 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger` 조건을 만족하지 못했다고 재지적해, 최종 보고 직전 현재 상태를 다시 실측하고 ledger를 최신값으로 보강했다.
+- 확인:
+  - 기준 시각: `2026-07-18 09:59:03 KST`.
+  - Git: `main`은 `origin/main` 대비 `ahead 28`, `behind 0`; 미커밋 변경은 `app/data/yeoljeong_finance/settings.json`, `nginx-aads-upstream.conf.dashboard.bak`, 운영 JSON/업로드 파일, 임시 scripts로 분리했다.
+  - 컨테이너: `aads-server`, `aads-dashboard`, `aads-postgres` 모두 healthy.
+  - PostgreSQL `yeoljeong_%` 테이블 12개 존재.
+  - DB active row count: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`. total row count는 soft-delete 포함 `11/23/5/2/5`.
+  - 서비스 저장소 상태: 컨테이너 내부 `get_storage_status()` 호출 결과 `mode=database+json-fallback`, `settings_source=database`, `hr_source=database`, `delivery_source=database`, `hr_db_ready=true`, `delivery_db_ready=true`.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 문서, DB 전환 문서, 개선 우선순위 보고서 모두 HTTP 200.
+  - API 보호: `/api/v1/yeoljeong-finance/storage-status`, `/api/v1/yeoljeong-finance/employees/join-requests` 비인증 호출 HTTP 401.
+  - 보안: 앱/문서/API/서비스/HANDOVER/CHANGELOG/migrations 대상 CEO 제공 원문 비밀번호 패턴 검색 0건.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - `git diff --check`: 통과.
+- 완료/보류:
+  - 최종 보고용 ledger는 이 항목으로 최신 실측값을 반영했다.
+  - `git push`, 정식 deploy/reload는 수행하지 않았다. 현재 브랜치가 `origin/main`보다 28커밋 앞서 있고 워킹트리에 운영 데이터/백업/임시 scripts가 남아 있어 일괄 push/deploy는 범위 오염 리스크가 있다.
+
+## 2026-07-18 09:55 KST - Yeoljeong final closeout ledger recheck
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 매장비서 문서/DB/운영 URL/보안/Git 상태를 다시 실측했다.
+- 확인:
+  - 기준 시각: `2026-07-18 09:55:56 KST`.
+  - Git: `main`은 `origin/main` 대비 `ahead 27`, `behind 0`; 미커밋 변경은 `app/data/yeoljeong_finance/settings.json`, `nginx-aads-upstream.conf.dashboard.bak`, 운영 JSON/업로드 파일, 임시 scripts로 분리했다.
+  - PostgreSQL `yeoljeong_%` 테이블 12개 존재: 설정 3종, HR/계약/급여 4종, 배달 원장 5종.
+  - active row count: `employee_join_requests=10`, `onboarding_documents=23`, `contracts=4`, `payroll_statements=2`, `platform_accounts=4`, 배달 매출/정산/리뷰 0.
+  - 보안: `yeoljeong_platform_accounts.payload ? 'password' = 0`, `payload ? 'password_enc' = 5`; 앱/문서/API/서비스/HANDOVER/CHANGELOG 대상 비밀번호 원문 검사 0건.
+  - 공개 URL: 매장비서 앱, 문서 인덱스, 기술문서, 아키텍처·디자인 문서, DB 전환 문서, 개선 우선순위 보고서 모두 HTTP 200.
+  - API 보호: `/api/v1/yeoljeong-finance/storage-status` 비인증 호출 HTTP 401.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `docker exec aads-server python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py /app/app/main.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - 매장비서 inline script `node --check /tmp/yeoljeong-finance-inline-final.js`: 통과.
+  - HTML parser: 앱/문서 7개 `html_parse_ok 7`.
+  - `git diff --check`: 통과.
+- 완료/보류:
+  - 문서 ledger와 검증 결과는 이 항목으로 재기록했다.
+  - `git push`와 정식 deploy/reload는 수행하지 않았다. 현재 `ahead 27` 안에 매장비서 외 채팅 안정화 커밋도 섞여 있고, 워킹트리에 운영 데이터/백업/임시 scripts가 남아 있어 일괄 push/deploy는 범위 오염 리스크가 있다.
+
 ## 2026-07-18 09:50 KST - Yeoljeong storage status final verification fix
 - 배경: CEO가 이전 응답이 최종 완료보고 조건과 `document_report_unverified_by_ledger`를 충족하지 못했다고 재지적해, 매장비서 문서/DB/검증 상태를 실제 명령으로 다시 닫았다.
 - 조치:
@@ -3841,3 +3997,147 @@
 - 완료/미완료:
   - P1 안전장치인 스키마 초안과 저장소 상태 확인 API는 완료.
   - 실제 HR/계약/급여 DB 쓰기 전환은 미완료. 운영 DB 마이그레이션 적용과 데이터 백필 승인 후 별도 진행해야 한다.
+
+## 2026-07-20 10:58 KST - Yeoljeong finance business settings from uploaded images
+- 배경: CEO가 첨부 사진 정보 기준으로 매장비서 각 사업자 설정값 반영을 요청했다.
+- 사진 확인:
+  - `aads-server-green` 컨테이너 업로드 경로에서 `열정국밥 사업자등록증`, `사업자등록증_주)윤희에프엔비`, `통장사본_열정국밥_성신여대점` WebP 원본을 확인했다.
+  - 중화점 법인 사업자등록증: 등록번호 `710-86-04499`, 법인명 `주식회사 윤희에프엔비`, 대표자 `오윤희`, 개업일 `2026-07-01`, 법인등록번호 `110111-0961922`, 주소 `서울특별시 중랑구 봉화산로27길 8, 1층(중화동)`, 주류판매신고번호 `146-5-11334`.
+  - 미아점 사업자등록증: 등록번호 `874-21-02160`, 상호 `열정국밥_미아점`, 대표자 `최미미`, 개업일 `2025-04-01`, 주소 `서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)`, 주류판매신고번호 `210-5-62608`.
+  - 성신여대점 통장사본: IBK기업은행 `005-106576-01-017`, 예금주 `김영주`, 보통예금, 신규일 `2017-06-22`, 관리점 `삼양동`.
+- 반영:
+  - PostgreSQL `yeoljeong_businesses`: `biz-junghwa`, `biz-mia` 사업자 정보를 사진값으로 갱신.
+  - PostgreSQL `yeoljeong_settings.data.accounts`: `acct-sungshin-ibk` 계좌 1건 반영.
+  - 파일 seed 동기화: `app/services/yeoljeong_finance_service.py`, `app/data/yeoljeong_finance/settings.json`, `app/static/apps/yeoljeong-finance/index.html`.
+  - 대시보드 공개 복사본 동기화: `/root/aads/aads-dashboard/public/apps/yeoljeong-finance/index.html`, `/root/aads/aads-dashboard/public/static/apps/yeoljeong-finance/index.html`.
+  - 운영 컨테이너 동기화: `aads-dashboard`, `aads-dashboard-green`의 `/app/public/apps/...` 및 `/app/public/static/apps/...` HTML 복사. 서버 컨테이너 `aads-server`, `aads-server-green` 정적 파일은 최신값 확인.
+- 검증:
+  - `python3 -m json.tool app/data/yeoljeong_finance/settings.json`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py`: 통과.
+  - DB SELECT 기준 `biz-junghwa=710-86-04499`, `biz-mia=874-21-02160`, `acct-sungshin-ibk=005-106576-01-017` 확인.
+  - 운영 URL `https://aads.newtalk.kr/apps/yeoljeong-finance/index.html` 및 `/static/apps/yeoljeong-finance/index.html` 본문에서 `710-86-04499`, `874-21-02160`, `005-106576-01-017` 확인.
+## 2026-07-20 11:03 KST - Chat session switch loading latency investigation and local optimization
+
+- 배경: CEO가 채팅 세션 이동 시 로딩이 너무 느리다고 보고했고, 이전 완료보고가 commit/push/deploy/document ledger와 충돌해 실제 상태를 재검증했다.
+- 실측:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-20 10:58:35 KST`.
+  - `health_check(server=68)`: HEALTHY, DB latency 88ms, disk 53%, pending/running directives 0건.
+  - 대상 세션 `fb1b5a3e-4df5-43ff-83ad-8f37cddf8c4a`: `chat_messages` 48건, `chat_artifacts` 57건.
+  - 메시지 40건 조회 실행계획: Execution Time 1.069ms.
+  - 아티팩트 57건 조회 실행계획: Execution Time 0.500ms.
+  - 세션 전환 시 `MemoryContextBar`와 `SessionSummaryCard`가 동일한 `/chat/sessions/{id}/memory-context`를 중복 호출하는 구조를 확인했다.
+- 반영:
+  - `app/routers/chat.py`: `/chat/sessions/{session_id}/memory-context?summary_only=true` 경량 응답 분기 추가.
+  - `app/services/chat_service.py`: 세션 요약 카드에 필요한 `session_history/context_status`만 조회하는 `get_memory_context_summary_info()` 추가.
+- 검증:
+  - `python3 -m py_compile app/routers/chat.py app/services/chat_service.py`: 통과.
+  - `docker exec aads-server python ... get_memory_context_summary_info(...)`: `history_count=10`, `message_count=48` 반환.
+  - 경량 요약 쿼리 실행계획: Execution Time 0.447ms.
+- 상태:
+  - 로컬 코드 조치 및 검증 완료.
+  - 운영 배포, 커밋, 푸시는 수행하지 않았다.
+  - 대시보드 프론트 변경은 `/root/aads/aads-dashboard/HANDOVER.md`에 별도 기록했다.
+
+- 미완료/주의:
+  - 성신여대점 사업자등록증 사진은 이번 확인 가능 첨부에 없어서 사업자등록번호/대표자/주소는 `기초등록 필요/미등록` 상태로 유지했다.
+  - 로컬/컨테이너에 `pytest` 모듈이 없어 단위 테스트는 실행하지 못했다.
+  - 커밋, push, 정식 `deploy.sh`는 수행하지 않았다. 운영 반영은 DB 안전쓰기와 컨테이너 정적 파일 동기화로 처리했다.
+
+## 2026-07-18 09:33 KST - Yeoljeong store assistant documentation completion recheck
+- 배경: CEO가 이전 응답이 `document_report_unverified_by_ledger`로 최종 완료 조건을 만족하지 못했다고 지적해 문서/링크/러너/검증 상태를 재조회하고 ledger를 보강했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-18 09:33:06 KST`.
+- 러너 상태:
+  - 현재 세션 러너 작업은 `runner-dc0ea80b`, `runner-02bd3c91` 등이 error/cancelled/blocked_dependency 상태이며 실행 중 작업은 0건.
+  - 서버68 health check: `HEALTHY`, DB OK, disk 51%, pending/running directives 0건.
+- 직접 보완:
+  - 신규 HTML 보고서 `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html` 추가.
+  - 문서 인덱스 `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`에 개선 우선순위 보고서 링크 추가.
+  - 대시보드 공개 경로 `/root/aads/aads-dashboard/public/reports`와 `/root/aads/aads-dashboard/public/static/reports`에 동일 문서/인덱스 복사본 반영.
+- 검증:
+  - `https://fb.newtalk.kr/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`: HTTP 200, `text/html; charset=utf-8`.
+  - `https://fb.newtalk.kr/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: 개선 우선순위 보고서 링크 확인.
+  - `cmp`로 서버 원본과 대시보드 공개 복사본 동일성 확인: `reports_public_match`, `docs_index_public_match`.
+- 완료/미완료:
+  - 매장비서 개발환경/기술문서/아키텍처·디자인/DB 전환/개선 우선순위 HTML 문서 관리와 관리자 링크 검증은 완료.
+  - 커밋, push, 정식 deploy.sh, 운영 DB 마이그레이션 적용은 수행하지 않았다.
+  - P1 HR/계약/급여 DB 쓰기 전환과 P2 프론트 전체 모듈화는 별도 승인/작업으로 남아 있다.
+
+## 2026-07-18 09:29 KST - Yeoljeong store assistant docs completion recheck
+- 배경: CEO가 이전 응답이 완료보고 조건을 만족하지 못했다고 지적해 문서/관리자 링크/러너/검증 상태를 다시 닫았다.
+- 러너 상태:
+  - 현재 세션 `pipeline_runner_status`: 최근 P0/P1/P2 job은 `error`, `cancelled`, `blocked_dependency` 상태이며 진행 중 job 없음.
+  - `dashboard_query`: pending 0, running 0, checked_at `2026-07-18 09:29 KST`.
+- 직접 보완:
+  - `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`: 갱신 기준을 `2026-07-18 09:29:32 KST`로 정정하고, 검증되지 않은 AADS 사이드바 연결 표현을 "별도 승인 후 적용"으로 수정.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_technical.html`: 업데이트 관리 절차에 `public/static/reports` 동기화 기준 추가.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`: 갱신 기준을 현재 재검증 시각으로 정정.
+  - `app/static/apps/yeoljeong-finance/modules/app-config.js`: `updatedAt`을 `2026-07-18 09:29:32 KST`로 정정.
+  - `app/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`: 현재 구현 방식 판정, 최선안, P0/P1/P2 우선순위 개선안을 HTML 보고서로 고정하고 문서 인덱스에 연결.
+  - 별칭 문서 `*_technical_doc.html`, `*_architecture_design_plan.html`와 대시보드 `public/reports`, `public/static/reports` 복사본을 동일 내용으로 동기화.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/main.py`: 통과.
+  - `node --check app/static/apps/yeoljeong-finance/modules/app-config.js`: 통과.
+  - HTML inline script 추출 후 `node --check /tmp/yeoljeong-finance-inline.js`: 통과.
+  - 운영 URL HTTP 200 확인:
+    - `/static/apps/yeoljeong-finance/index.html`
+    - `/static/apps/yeoljeong-finance/modules/app-config.js`
+    - `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_technical.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_technical_doc.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`
+    - `/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html`
+    - `/static/reports/20260718_yeoljeong_store_assistant_improvement_priority_report.html`
+  - 운영 문서 본문에서 `2026-07-18 09:29:32 KST` 마커 확인.
+  - 개선 우선순위 보고서 본문에서 `현재 구현은 빠른 MVP 검증에는 적합하지만 최종 운영 구조로는 부족합니다`, `FastAPI + PostgreSQL 원장 + 모듈화 프론트` 문구 확인.
+  - PostgreSQL `yeoljeong_%` 테이블 확인: 설정 테이블 3개(`yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings`)만 존재. HR/계약/급여 DB 전환 테이블은 아직 미적용.
+- 완료/미완료:
+  - 문서 정정, 관리자 링크 경로, 공개 URL, 문서 ledger는 완료.
+  - 커밋/푸시/정식 deploy는 수행하지 않았다.
+  - P1 HR/계약/급여 DB 전환, P2 프론트 모듈화는 러너 장애와 승인 필요한 DB 적용 때문에 미완료로 남긴다.
+
+## 2026-07-18 09:35 KST - Yeoljeong store assistant final completion verification
+- 배경: CEO가 이전 완료보고가 `document_report_unverified_by_ledger`로 불충분하다고 지적해 문서/링크/DB/러너/운영 URL을 다시 실측했다.
+- 확인 시각:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-07-18 09:35:06 KST`.
+- 러너 상태:
+  - `pipeline_runner_status(scope=current_session)`: 최근 매장비서 러너는 `error`, `cancelled`, `blocked_dependency`, `rejected_done` 상태이며 실행 중 작업 0건.
+  - `dashboard_query(filter_status=all)`: pending 0, running 0, checked_at `2026-07-18 09:35 KST`.
+- 문서/링크 확인:
+  - 매장비서 앱 상단 관리자 영역에 `/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`, 기술문서, 아키텍처/디자인 기획서, DB 전환 문서 링크가 존재.
+  - `app/static/apps/yeoljeong-finance/modules/app-config.js`가 문서 매니페스트와 phase-1 모듈화 매니페스트를 제공.
+  - 운영 URL 7개 HTTP 200 확인: 앱 HTML, app-config.js, 문서 인덱스, 기술문서, 아키텍처/디자인 기획서, DB 전환 설계, 개선 우선순위 보고서.
+- DB/저장소 확인:
+  - PostgreSQL `yeoljeong_%` 테이블은 `yeoljeong_businesses`, `yeoljeong_branches`, `yeoljeong_settings` 3개.
+  - HR/입사서류/계약/급여 테이블은 아직 미적용이며 JSON 원장 유지.
+  - JSON 파일 집계: `employee_join_requests` 10건, `onboarding_documents` 23건, `contracts` 4건, `payroll_statements` 2건, `platform_accounts` 4건. 평문 password row 0건.
+- 검증:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`: 통과.
+  - 운영 문서/앱 URL HTTP 200 확인 완료.
+- 완료/미완료:
+  - CEO 원 요청 중 개발환경 보고, 기술문서 HTML 저장, 아키텍처/디자인/DB 전환/개선 우선순위 문서 관리, 관리자 총괄 링크, 현재 진행 방식/최선안 보고 자료는 완료.
+  - 미완료: HR/계약/급여 PostgreSQL 실제 쓰기 전환, 전체 프론트 모듈 분리, push, 정식 deploy.sh. DB 변경과 배포는 운영 영향이 있어 별도 승인 후 진행해야 한다.
+
+## 2026-07-20 14:12 KST - Yeoljeong P0 delivery collection and credential hardening
+
+- 배경: CEO가 개선 권장안을 우선순위별로 즉시 조치하도록 지시했다.
+- P0 코드 조치:
+  - app/services/yeoljeong_finance_service.py: 플랫폼 비밀번호 암호화 저장/응답 비노출, 기존 평문 호환 마이그레이션, 3개 사업자·지점 연결 검증, 배달 원장 관리자 권한, 63일 수집 기간 제한, 원장 결정적 ID upsert, 은행/카드 CSV 가져오기 회귀 복구.
+  - app/services/yeoljeong_delivery_collectors.py: 배민·쿠팡이츠·요기요·땡겨요 포털 어댑터, 매출·정산·리뷰 표/파일 정규화, CAPTCHA·OTP·기기인증 시 portal_action_required 중단, 임시 다운로드 정리.
+  - app/api/yeoljeong_finance.py, app/static/apps/yeoljeong-finance/index.html: 사업자·지점·기간을 자동수집/정산 CSV API에 전달하도록 계약 정합화.
+  - fallback JSON 및 공개 정적 HTML/보관본에서 실제 로그인 ID, 전체 계좌번호, 암호문을 제거하거나 마스킹했다. Git 과거 이력은 재작성하지 않았다.
+- 테스트 안전:
+  - tests/unit/test_yeoljeong_finance_service.py에 autouse 저장소/DB 격리 fixture를 추가했다.
+  - 운영 DB와 네트워크를 차단하고 소스를 read-only mount한 일회성 컨테이너에서 관련 테스트 20건 통과.
+  - ruff check, py_compile, JSON parse, git diff --check 통과.
+- 운영 DB 실측:
+  - 배달 계정 9건, 매출 1건, 정산 0건, 리뷰 0건, 수집상태 6건.
+  - 평문 password 키는 0건이나, 단위테스트 격리 전 시도에서 생성된 테스트 암호문 표식 5건과 sale-1 1건, 수집상태 6건이 확인됐다.
+  - DB 삭제/secret 제거는 파괴 조치 승인 전에는 수행하지 않았다. 권장 정리안은 테스트 표식 계정 soft-delete, canonical acct-baemin의 테스트 암호문 제거 및 credential_required 전환, sale-1/수집상태 6건 soft-delete다.
+- 러너:
+  - runner-5d83ea13은 파일 수정 뒤 상태 갱신 없이 장기 실행되어 종료했다. 후속 프로세스도 동일 작업으로 재기동되어 종료했으며 작업트리 산출물은 직접 검수·보완했다.
+- 상태:
+  - 코드/테스트/문서 기록 완료.
+  - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
+  - commit/push/deploy/restart는 수행하지 않았다.

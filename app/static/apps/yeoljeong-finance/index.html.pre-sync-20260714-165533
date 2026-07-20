@@ -2365,7 +2365,7 @@
           service: "baemin",
           label: "배민 셀프서비스",
           loginUrl: "https://biz-member.baemin.com/login",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥 강북미아점",
           passwordMasked: "********",
@@ -2379,7 +2379,7 @@
           service: "coupangeats",
           label: "쿠팡이츠 사장님",
           loginUrl: "https://store.coupangeats.com/merchant/login",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥 강북미아점",
           passwordMasked: "********",
@@ -2393,7 +2393,7 @@
           service: "yogiyo",
           label: "요기요 사장님",
           loginUrl: "https://ceo.yogiyo.co.kr/login",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥 강북미아점",
           passwordMasked: "********",
@@ -2407,7 +2407,7 @@
           service: "ddangyo",
           label: "땡겨요",
           loginUrl: "https://boss.ddangyo.com/",
-          username: "mimi77",
+          username: "",
           businessId: "biz-mia",
           branch: "열정국밥 강북미아점",
           passwordMasked: "********",
@@ -2421,7 +2421,7 @@
           service: "matepos",
           label: "메이트포스",
           loginUrl: "https://www.matetech.co.kr/login",
-          username: "a8742102160",
+          username: "",
           businessId: "biz-corp",
           branch: "공통",
           passwordMasked: "********",
@@ -2435,7 +2435,7 @@
           service: "marketbom",
           label: "마켓봄",
           loginUrl: "https://marketbom.com/",
-          username: "01037680511",
+          username: "",
           businessId: "biz-corp",
           branch: "공통",
           passwordMasked: "********",
@@ -2540,7 +2540,6 @@
       const miaBranch = next.branches.find(item => item.id === "branch-gangbuk-mia");
       if (miaBranch) miaBranch.businessId = MIA_BUSINESS_ID;
       next.integrations.forEach(item => {
-        if (String(item.username || "").trim() !== "mimi77") return;
         if (!MIA_DELIVERY_SERVICES.has(item.service)) return;
         item.businessId = MIA_BUSINESS_ID;
         item.business_id = MIA_BUSINESS_ID;

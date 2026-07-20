@@ -15,7 +15,7 @@ import os
 import re
 import secrets
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -51,6 +51,16 @@ PLATFORM_LABELS = {
     "yogiyo": "요기요",
     "ddangyo": "땡겨요",
 }
+
+DEFAULT_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("식자재", ("쌀", "백미", "고춧가루", "소스", "김치", "대파", "양파", "고기", "식자재")),
+    ("배달앱", ("배민", "배달의민족", "요기요", "쿠팡이츠", "정산")),
+    ("임차료", ("월세", "임대료", "관리비")),
+    ("인건비", ("급여", "4대보험", "고용", "알바", "직원")),
+    ("공과금", ("전기", "가스", "수도", "통신", "인터넷")),
+    ("카드수수료", ("카드수수료", "수수료")),
+    ("비품", ("비품", "소모품", "주방", "용기", "포장")),
+)
 
 SETTINGS_TABLES = ("yeoljeong_businesses", "yeoljeong_branches", "yeoljeong_settings")
 HR_LEDGER_TABLES = (
@@ -112,14 +122,14 @@ CONTRACT_TEMPLATE_META = {
 CANONICAL_BUSINESSES: list[dict[str, Any]] = [
     {
         "id": "biz-junghwa",
-        "entityType": "individual",
+        "entityType": "corporation",
         "name": "열정국밥 중화점",
-        "registrationNo": "기초등록 필요",
-        "representative": "미등록",
+        "registrationNo": "710-86-04499",
+        "representative": "오윤희",
         "taxType": "일반과세",
-        "openedAt": "",
-        "address": "",
-        "memo": "개인사업자 1",
+        "openedAt": "2026-07-01",
+        "address": "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)",
+        "memo": "법인사업자 / 법인등록번호 110111-0961922 / 주류판매신고번호 146-5-11334",
     },
     {
         "id": "biz-sungshin",
@@ -136,12 +146,12 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
         "id": "biz-mia",
         "entityType": "individual",
         "name": "열정국밥_미아점",
-        "registrationNo": "기초등록 필요",
-        "representative": "미등록",
+        "registrationNo": "874-21-02160",
+        "representative": "최미미",
         "taxType": "일반과세",
-        "openedAt": "",
-        "address": "",
-        "memo": "개인사업자 3",
+        "openedAt": "2025-04-01",
+        "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)",
+        "memo": "개인사업자 3 / 주류판매신고번호 210-5-62608",
     },
 ]
 
@@ -155,6 +165,12 @@ CANONICAL_BUSINESS_IDS = {item["id"] for item in CANONICAL_BUSINESSES}
 CANONICAL_BRANCH_NAMES = {item["name"] for item in CANONICAL_BRANCHES}
 MIA_BUSINESS_ID = "biz-mia"
 MIA_BRANCH_NAME = "열정국밥_미아점"
+BRANCH_ALIASES = {
+    "열정국밥 강북미아점": MIA_BRANCH_NAME,
+    "강북미아점": MIA_BRANCH_NAME,
+    "미아점": MIA_BRANCH_NAME,
+}
+BUSINESS_BY_BRANCH = {item["name"]: item["businessId"] for item in CANONICAL_BRANCHES}
 
 
 def _now() -> str:
@@ -786,6 +802,17 @@ def _encrypt_secret(value: str) -> str:
         raise HTTPException(status_code=500, detail="계정 비밀번호 암호화에 실패했습니다") from exc
 
 
+def _decrypt_secret(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        from app.core.credential_vault import decrypt_value
+
+        return decrypt_value(value)
+    except Exception:
+        return ""
+
+
 def _migrate_platform_account_secrets(rows: list[dict[str, Any]]) -> bool:
     changed = False
     for row in rows:
@@ -801,6 +828,17 @@ def _migrate_platform_account_secrets(rows: list[dict[str, Any]]) -> bool:
 
 def _has_account_secret(row: dict[str, Any]) -> bool:
     return bool(row.get("password_enc") or row.get("password"))
+
+
+def _normalize_delivery_scope(business_id: Any, branch: Any) -> tuple[str, str]:
+    normalized_branch = BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip())
+    normalized_business = str(business_id or "").strip()
+    expected_business = BUSINESS_BY_BRANCH.get(normalized_branch)
+    if normalized_business not in CANONICAL_BUSINESS_IDS:
+        raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+    if not expected_business or expected_business != normalized_business:
+        raise HTTPException(status_code=400, detail="사업자와 지점 연결이 일치하지 않습니다")
+    return normalized_business, normalized_branch
 
 
 def _get_pool_or_none() -> Any | None:
@@ -1462,7 +1500,135 @@ def delete_payroll(statement_id: str, user: dict[str, Any]) -> None:
     _delete("payroll_statements", statement_id)
 
 
-def list_accounts(user: dict[str, Any]) -> list[dict[str, Any]]:
+def _decode_csv(content: bytes) -> str:
+    for encoding in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise HTTPException(status_code=400, detail="CSV 문자 인코딩을 확인할 수 없습니다")
+
+
+def _amount(value: Any) -> int:
+    cleaned = re.sub(r"[^0-9.-]", "", str(value or ""))
+    if cleaned in {"", "-", ".", "-."}:
+        return 0
+    try:
+        return int(round(float(cleaned)))
+    except ValueError:
+        return 0
+
+
+def _transaction_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = text.replace("/", "-").replace(".", "-")
+    normalized = re.sub(r"\s+", " ", normalized)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S") if "%H" in fmt else parsed.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return text
+
+
+def _transaction_category(text: str) -> str:
+    lowered = str(text or "").lower()
+    for category, keywords in DEFAULT_CATEGORY_RULES:
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return category
+    return "미분류"
+
+
+def list_transactions() -> list[dict[str, Any]]:
+    return sorted(_read("transactions"), key=lambda row: str(row.get("transaction_date") or ""), reverse=True)
+
+
+def create_transaction(payload: dict[str, Any]) -> dict[str, Any]:
+    rows = _read("transactions")
+    now = _now()
+    record = {
+        **payload,
+        "id": str(payload.get("id") or uuid4()),
+        "transaction_date": _transaction_date(payload.get("transaction_date")),
+        "amount": _amount(payload.get("amount")),
+        "created_at": payload.get("created_at") or now,
+        "updated_at": now,
+    }
+    rows.insert(0, record)
+    _write("transactions", rows)
+    return record
+
+
+def import_file(filename: str, content: bytes, source_type: str) -> dict[str, Any]:
+    normalized_source = str(source_type or "other").strip().lower()
+    if normalized_source not in {"bank", "card", "other"}:
+        raise HTTPException(status_code=400, detail="source_type은 bank, card, other 중 하나여야 합니다")
+    reader = csv.DictReader(_decode_csv(content).splitlines())
+    existing = _read("transactions")
+    existing_ids = {str(row.get("id") or "") for row in existing}
+    imported: list[dict[str, Any]] = []
+    duplicate_rows = 0
+    now = _now()
+    for source_row in reader:
+        raw = {str(key or "").strip(): str(value or "").strip() for key, value in source_row.items()}
+        if not any(raw.values()):
+            continue
+        fingerprint = json.dumps({"source_type": normalized_source, "row": raw}, ensure_ascii=False, sort_keys=True)
+        record_id = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+        if record_id in existing_ids:
+            duplicate_rows += 1
+            continue
+        incoming = _amount(raw.get("입금액"))
+        outgoing = _amount(raw.get("출금액"))
+        amount = incoming or outgoing or _amount(
+            raw.get("합계금액") or raw.get("결제금액") or raw.get("거래금액") or raw.get("금액")
+        )
+        direction = "income" if incoming > 0 else "expense"
+        description = (
+            raw.get("상품명")
+            or raw.get("적요")
+            or raw.get("거래내용")
+            or raw.get("내용")
+            or raw.get("판매자상호")
+            or ""
+        )
+        searchable = " ".join([description, *raw.values()])
+        record = {
+            "id": record_id,
+            "source_type": normalized_source,
+            "source_file": Path(filename or "upload.csv").name,
+            "transaction_date": _transaction_date(
+                raw.get("거래일시") or raw.get("거래일자") or raw.get("거래일") or raw.get("일자")
+            ),
+            "description": description,
+            "amount": amount,
+            "direction": direction,
+            "category": _transaction_category(searchable),
+            "approval_number": raw.get("승인번호") or "",
+            "order_number": raw.get("주문번호") or "",
+            "account_name": raw.get("계좌명") or "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        imported.append(record)
+        existing_ids.add(record_id)
+    if imported:
+        _write("transactions", imported + existing)
+    return {
+        "import": {
+            "filename": Path(filename or "upload.csv").name,
+            "source_type": normalized_source,
+            "imported_rows": len(imported),
+            "duplicate_rows": duplicate_rows,
+        },
+        "rows": imported,
+    }
+
+
+def list_accounts(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
     rows = _read("platform_accounts")
@@ -1470,7 +1636,11 @@ def list_accounts(user: dict[str, Any]) -> list[dict[str, Any]]:
         _write("platform_accounts", rows)
     result = []
     for row in rows:
+        row_business = str(row.get("business_id") or "")
+        if business_id and row_business != business_id:
+            continue
         item = {k: v for k, v in row.items() if k not in {"password", "password_enc"}}
+        item["branch"] = BRANCH_ALIASES.get(str(item.get("branch") or ""), str(item.get("branch") or ""))
         item["password_masked"] = "********" if _has_account_secret(row) else ""
         result.append(item)
     return result
@@ -1689,7 +1859,20 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     username = str(payload.get("username") or "").strip()
     if not service or not username:
         raise HTTPException(status_code=400, detail="플랫폼과 아이디가 필요합니다")
-    existing = next((row for row in rows if row.get("service") == service and row.get("username") == username and row.get("branch") == payload.get("branch")), None)
+    if service not in PLATFORM_LABELS:
+        raise HTTPException(status_code=400, detail="지원하지 않는 배달 플랫폼입니다")
+    business_id, branch = _normalize_delivery_scope(payload.get("business_id"), payload.get("branch"))
+    existing = next(
+        (
+            row
+            for row in rows
+            if row.get("service") == service
+            and row.get("username") == username
+            and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
+            and str(row.get("business_id") or "") == business_id
+        ),
+        None,
+    )
     now = _now()
     record = existing or {"id": str(uuid4()), "created_at": now}
     incoming_password = str(payload.get("password") or "")
@@ -1704,8 +1887,8 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
             "label": payload.get("label") or PLATFORM_LABELS.get(service, service),
             "login_url": payload.get("login_url") or "",
             "username": username,
-            "business_id": payload.get("business_id") or "",
-            "branch": payload.get("branch") or "",
+            "business_id": business_id,
+            "branch": branch,
             "collection_mode": payload.get("collection_mode") or "browser-automation",
             "status": "credential_registered",
             "last_sync_status": record.get("last_sync_status") or "not_started",
@@ -1722,6 +1905,8 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
 
 
 def list_settlements(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="정산 원장 조회 권한이 없습니다")
     rows = _read("delivery_settlements")
     if business_id:
         rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
@@ -1729,6 +1914,8 @@ def list_settlements(user: dict[str, Any], business_id: str | None = None) -> li
 
 
 def list_sales(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="매출 원장 조회 권한이 없습니다")
     rows = _read("delivery_sales")
     if business_id:
         rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
@@ -1736,14 +1923,21 @@ def list_sales(user: dict[str, Any], business_id: str | None = None) -> list[dic
 
 
 def list_reviews(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="리뷰 원장 조회 권한이 없습니다")
     rows = _read("delivery_reviews")
     if business_id:
         rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
     return rows
 
 
-def list_collection_status(user: dict[str, Any]) -> list[dict[str, Any]]:
-    return _read("delivery_collection_status")
+def list_collection_status(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="수집 상태 조회 권한이 없습니다")
+    rows = _read("delivery_collection_status")
+    if business_id:
+        rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
+    return rows
 
 
 def automation_status(user: dict[str, Any]) -> dict[str, Any]:
@@ -1751,7 +1945,7 @@ def automation_status(user: dict[str, Any]) -> dict[str, Any]:
         "enabled": True,
         "mode": "browser-automation",
         "status": "available",
-        "message": "계정 기반 수집 API와 CSV 정산서 가져오기를 사용할 수 있습니다.",
+        "message": "계정 기반 포털 수집과 CSV 정산서 가져오기를 사용할 수 있습니다. CAPTCHA·2차 인증은 사용자 조치가 필요합니다.",
         "checked_at": _now(),
     }
 
@@ -1759,41 +1953,177 @@ def automation_status(user: dict[str, Any]) -> dict[str, Any]:
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
-    services = payload.get("services") or []
+    from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG, collect_account
+
+    services = [str(item) for item in (payload.get("services") or [])]
+    unsupported = sorted(set(services) - set(PORTAL_CONFIG))
+    if unsupported:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 플랫폼: {', '.join(unsupported)}")
+    today = datetime.now(KST).date()
+    default_from = today.replace(day=1).isoformat()
+    date_from_text = str(payload.get("date_from") or default_from)
+    date_to_text = str(payload.get("date_to") or today.isoformat())
+    try:
+        date_from = date.fromisoformat(date_from_text)
+        date_to = date.fromisoformat(date_to_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="수집 기간은 YYYY-MM-DD 형식이어야 합니다") from exc
+    if date_from > date_to or (date_to - date_from).days > 62:
+        raise HTTPException(status_code=400, detail="수집 기간은 시작일 이후 최대 63일입니다")
+    requested_business = str(payload.get("business_id") or MIA_BUSINESS_ID)
+    requested_branch = str(payload.get("branch") or MIA_BRANCH_NAME)
+    business_id, branch = _normalize_delivery_scope(requested_business, requested_branch)
+
     all_accounts = _read("platform_accounts")
     if _migrate_platform_account_secrets(all_accounts):
         _write("platform_accounts", all_accounts)
-    accounts = [row for row in all_accounts if not services or row.get("service") in services]
+    candidates = [
+        row
+        for row in all_accounts
+        if (not services or row.get("service") in services)
+        and str(row.get("business_id") or "") == business_id
+        and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
+    ]
+    candidates.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+    accounts_by_service: dict[str, dict[str, Any]] = {}
+    for service in sorted(PORTAL_CONFIG):
+        service_rows = [row for row in candidates if str(row.get("service") or "") == service]
+        canonical = next((row for row in service_rows if str(row.get("id") or "") == f"acct-{service}"), None)
+        if canonical:
+            accounts_by_service[service] = canonical
+        elif service_rows:
+            accounts_by_service[service] = next((row for row in service_rows if _has_account_secret(row)), service_rows[0])
+    requested_services = services or sorted(PORTAL_CONFIG)
     synced_at = _now()
     summary = []
-    for account in accounts:
-        summary.append(
+    ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
+    ledgers = {name: _read(name) for name in ledger_names.values()}
+    statuses = _read("delivery_collection_status")
+
+    for service in requested_services:
+        account = accounts_by_service.get(service)
+        run_id = str(uuid4())
+        status_record = {
+            "id": run_id,
+            "service": service,
+            "business_id": business_id,
+            "branch": branch,
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "status": "running",
+            "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+            "error_code": "",
+            "started_at": synced_at,
+            "created_at": synced_at,
+            "updated_at": synced_at,
+        }
+        statuses.insert(0, status_record)
+        if not account:
+            result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
+        else:
+            secret = _decrypt_secret(str(account.get("password_enc") or ""))
+            result = collect_account(account, secret, date_from.isoformat(), date_to.isoformat())
+
+        counts = {"sales": 0, "settlements": 0, "reviews": 0}
+        for kind, ledger_name in ledger_names.items():
+            incoming = result.get("records", {}).get(kind) or []
+            by_id = {str(row.get("id") or ""): row for row in ledgers[ledger_name] if row.get("id")}
+            for record in incoming:
+                by_id[str(record["id"])] = record
+            ledgers[ledger_name] = list(by_id.values())
+            counts[kind] = len(incoming)
+        finished_at = _now()
+        status_record.update(
             {
-                "service": account.get("service"),
-                "status": "portal_action_required",
-                "portal_status": "portal_action_required",
-                "portal_message": "포털 직접 로그인/2차 인증 또는 정산 CSV 업로드가 필요합니다.",
-                "message": "계정은 등록되어 있으나 서버 헤드리스 포털 수집은 확인이 필요합니다.",
+                "status": result.get("status") or "failed",
+                "counts": counts,
+                "error_code": result.get("error_code") or "",
+                "diagnostics": result.get("diagnostics") or {},
+                "finished_at": finished_at,
+                "updated_at": finished_at,
             }
         )
-    return {"synced_at": synced_at, "records": [], "settlements": list_settlements(user), "summary": summary}
+        summary.append(
+            {
+                "service": service,
+                "status": status_record["status"],
+                "error_code": status_record["error_code"],
+                "counts": counts,
+                "run_id": run_id,
+            }
+        )
+
+    for name, rows in ledgers.items():
+        _write(name, rows)
+    _write("delivery_collection_status", statuses)
+    return {
+        "synced_at": synced_at,
+        "business_id": business_id,
+        "branch": branch,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "summary": summary,
+        "totals": {
+            "sales": sum(item["counts"]["sales"] for item in summary),
+            "settlements": sum(item["counts"]["settlements"] for item in summary),
+            "reviews": sum(item["counts"]["reviews"] for item in summary),
+        },
+    }
 
 
-def import_settlement_csv(text: str, user: dict[str, Any]) -> dict[str, Any]:
+def import_settlement_csv(
+    text: str,
+    user: dict[str, Any],
+    *,
+    service: str,
+    business_id: str,
+    branch: str,
+    filename: str = "settlement.csv",
+) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="정산서 가져오기 권한이 없습니다")
+    from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG, normalize_record
+
+    normalized_service = str(service or "").strip()
+    if normalized_service not in PORTAL_CONFIG:
+        raise HTTPException(status_code=400, detail="지원하지 않는 배달 플랫폼입니다")
+    normalized_business, normalized_branch = _normalize_delivery_scope(business_id, branch)
     rows = _read("delivery_settlements")
     reader = csv.DictReader(text.splitlines())
-    imported = []
+    by_id = {str(row.get("id") or ""): row for row in rows if row.get("id")}
+    imported: list[dict[str, Any]] = []
+    duplicate_rows = 0
     now = _now()
     for raw in reader:
-        record = {str(k or "").strip(): v for k, v in raw.items()}
-        record.setdefault("id", str(uuid4()))
-        record.setdefault("created_at", now)
+        source_row = {str(key or "").strip(): value for key, value in raw.items()}
+        if not any(str(value or "").strip() for value in source_row.values()):
+            continue
+        record = normalize_record(
+            normalized_service,
+            "settlements",
+            source_row,
+            normalized_business,
+            normalized_branch,
+        )
+        record["source_file"] = Path(filename or "settlement.csv").name
+        record["created_at"] = now
+        record["updated_at"] = now
+        if str(record["id"]) in by_id:
+            duplicate_rows += 1
+            continue
+        by_id[str(record["id"])] = record
         imported.append(record)
-    rows = imported + rows
-    _write("delivery_settlements", rows)
-    return {"imported": len(imported), "settlements": imported}
+    if imported:
+        _write("delivery_settlements", list(by_id.values()))
+    return {
+        "imported": len(imported),
+        "duplicate_rows": duplicate_rows,
+        "business_id": normalized_business,
+        "branch": normalized_branch,
+        "service": normalized_service,
+        "records": imported,
+        "settlements": imported,
+    }
 
 
 def reset_data_for_tests() -> None:
