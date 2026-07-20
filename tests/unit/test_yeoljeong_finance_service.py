@@ -2,12 +2,22 @@ import os
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 _SERVICE_PATH = Path(__file__).resolve().parents[2] / "app" / "services" / "yeoljeong_finance_service.py"
 _SPEC = importlib.util.spec_from_file_location("yeoljeong_finance_service", _SERVICE_PATH)
 service = importlib.util.module_from_spec(_SPEC)
 assert _SPEC and _SPEC.loader
 _SPEC.loader.exec_module(service)
+
+
+@pytest.fixture(autouse=True)
+def isolate_yeoljeong_storage(tmp_path, monkeypatch):
+    """Never let unit tests read or write the mounted operational ledgers."""
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
+    monkeypatch.setattr(service, "_db_url", lambda: "")
 
 
 def test_import_card_csv_maps_and_classifies(tmp_path, monkeypatch):
@@ -145,7 +155,7 @@ def test_upsert_account_stores_encrypted_password_only(tmp_path, monkeypatch):
             "service": "baemin",
             "label": "배민셀프서비스",
             "login_url": "https://biz-member.baemin.com/login",
-            "username": "mimi77",
+            "username": "test-user",
             "password": "plain-secret",
             "business_id": "biz-mia",
             "branch": "열정국밥_미아점",
@@ -171,7 +181,7 @@ def test_list_accounts_migrates_legacy_plain_password(tmp_path, monkeypatch):
             {
                 "id": "legacy",
                 "service": "baemin",
-                "username": "mimi77",
+                "username": "test-user",
                 "password": "legacy-secret",
                 "branch": "열정국밥_미아점",
             }
@@ -186,6 +196,136 @@ def test_list_accounts_migrates_legacy_plain_password(tmp_path, monkeypatch):
     assert "password_enc" not in listed[0]
     assert raw[0]["password_enc"] == "encrypted:legacy-secret"
     assert "password" not in raw[0]
+
+
+def test_upsert_account_rejects_cross_business_branch_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    try:
+        service.upsert_account(
+            {
+                "service": "baemin",
+                "username": "scope-test",
+                "password": "secret",
+                "business_id": "biz-junghwa",
+                "branch": "열정국밥_미아점",
+            },
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400
+    else:
+        raise AssertionError("cross-business account scope should fail")
+
+
+def test_delivery_ledger_requires_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    try:
+        service.list_sales({"email": "staff@example.com", "is_admin": False})
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 403
+    else:
+        raise AssertionError("employee must not read financial ledgers")
+
+
+def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "decrypted-secret")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "stale-duplicate",
+                "service": "baemin",
+                "username": "test-user",
+                "password_enc": "stale-ciphertext",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "updated_at": "2026-07-20T13:30:00+09:00",
+            },
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "test-user",
+                "password_enc": "ciphertext",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "updated_at": "2026-07-20T13:00:00+09:00",
+            }
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fake_collect(account, password, date_from, date_to):
+        assert password == "decrypted-secret"
+        assert account["id"] == "acct-baemin"
+        assert account["business_id"] == "biz-mia"
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "sale-1",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "occurred_on": "2026-07-01",
+                        "gross_amount": 12000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+            },
+            "diagnostics": {"sales": "fixture"},
+        }
+
+    monkeypatch.setattr(collectors, "collect_account", fake_collect)
+    user = {"email": "owner@example.com", "is_admin": True}
+    payload = {
+        "services": ["baemin"],
+        "business_id": "biz-mia",
+        "branch": "열정국밥_미아점",
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-20",
+    }
+
+    first = service.sync_delivery(payload, user)
+    second = service.sync_delivery(payload, user)
+
+    assert first["totals"]["sales"] == 1
+    assert second["totals"]["sales"] == 1
+    assert len(service.list_sales(user, "biz-mia")) == 1
+    statuses = service.list_collection_status(user, "biz-mia")
+    assert len(statuses) == 2
+    assert all(row["status"] == "succeeded" for row in statuses)
+
+
+def test_import_settlement_csv_is_scoped_and_idempotent():
+    user = {"email": "owner@example.com", "is_admin": True}
+    csv_text = (
+        "정산번호,정산일,매출액,수수료,부가세,정산금액,상태\n"
+        "SET-1,2026-07-10,15000,1000,100,13900,지급완료\n"
+    )
+    kwargs = {
+        "service": "baemin",
+        "business_id": "biz-mia",
+        "branch": "미아점",
+        "filename": "settlement.csv",
+    }
+
+    first = service.import_settlement_csv(csv_text, user, **kwargs)
+    second = service.import_settlement_csv(csv_text, user, **kwargs)
+
+    assert first["imported"] == 1
+    assert first["settlements"][0]["business_id"] == "biz-mia"
+    assert first["settlements"][0]["branch"] == "열정국밥_미아점"
+    assert first["settlements"][0]["settlement_amount"] == 13900
+    assert second["imported"] == 0
+    assert second["duplicate_rows"] == 1
+    assert len(service.list_settlements(user, "biz-mia")) == 1
 
 
 def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monkeypatch):
