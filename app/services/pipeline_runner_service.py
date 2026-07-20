@@ -110,7 +110,7 @@ def _is_read_only_instruction(instruction: str) -> bool:
 # AADS-290: 프로젝트별 litellm_runner.py 경로 매핑
 _LITELLM_RUNNER_PATH: Dict[str, str] = {
     "AADS":  "/app/scripts/litellm_runner.py",            # 컨테이너 내부
-    "GO100": "/root/kis-autotrade-v4/litellm_runner.py",  # 211 서버
+    "GO100": "/root/kis-autotrade-v4/litellm_runner.py",  # contabo14
     "KIS":   "/root/kis-autotrade-v4/litellm_runner.py",  # 211 서버
     "SF":    "/root/scripts/litellm_runner.py",           # 114 서버
     "NTV2":  "/root/scripts/litellm_runner.py",           # 114 서버
@@ -796,12 +796,12 @@ class PipelineCJob:
 
     async def _run_frontend_qa_if_needed(self):
         """AADS/GO100 프로젝트 프론트엔드 변경 시 BG 배포 자동 실행."""
-        # GO100: frontend/ 변경 시 서버211 BG 배포 트리거
+        # GO100: frontend/ 변경 시 contabo14 BG 배포 트리거
         if self.project == "GO100":
             if "frontend/" not in (self.git_diff or ""):
                 return
             try:
-                self._log("go100_frontend_deploy", "GO100 frontend/ 변경 감지 — 서버211 BG 배포 트리거...")
+                self._log("go100_frontend_deploy", "GO100 frontend/ 변경 감지 — contabo14 BG 배포 트리거...")
                 await self._post_to_chat(
                     f"🔨 **[GO100 프론트 배포 시작]** `{self.job_id}`\n"
                     f"frontend/ 변경 감지. Blue-Green 배포를 실행합니다..."

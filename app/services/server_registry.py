@@ -1,6 +1,6 @@
 """
 AADS-181: 서버 레지스트리
-3대 서버(68/211/114) 접근 정보 및 프로젝트 매핑 정의.
+서버별 접근 정보 및 프로젝트 매핑 정의.
 """
 from typing import Dict, List, Any
 
@@ -17,13 +17,24 @@ SERVER_REGISTRY: Dict[str, Dict[str, Any]] = {
     "211": {
         "host": "211.188.51.113",
         "type": "ssh",
-        "projects": ["KIS", "GO100"],
+        "projects": ["KIS"],
         "directive_base": "/root/.genspark/directives",
         "http_health_urls": [
             "http://211.188.51.113:8200/health",
             "http://211.188.51.113:8100/api/v1/health",
         ],
-        "display_name": "서버 211 (Hub/KIS/GO100)",
+        "display_name": "서버 211 (Hub/KIS)",
+    },
+    "contabo14": {
+        "host": "5.104.86.14",
+        "type": "ssh",
+        "projects": ["GO100"],
+        "directive_base": "/root/.genspark/directives",
+        "http_health_urls": [
+            "http://5.104.86.14:8002/health",
+            "https://go100.newtalk.kr/health",
+        ],
+        "display_name": "contabo14 (GO100)",
     },
     "114": {
         "host": "116.120.58.155",
@@ -42,7 +53,7 @@ SERVER_REGISTRY: Dict[str, Dict[str, Any]] = {
 PROJECT_TO_SERVER: Dict[str, str] = {
     "AADS": "68",
     "KIS": "211",
-    "GO100": "211",
+    "GO100": "contabo14",
     "SF": "114",
     "NTV2": "114",
     "NAS": "114",

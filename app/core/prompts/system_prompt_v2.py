@@ -29,7 +29,7 @@ _PROJECT_INFO: Dict[str, tuple] = {
     "AADS": ("자율 AI 개발 시스템 본체", "서버68", "AADS-xxx"),
     "SF": ("ShortFlow 숏폼 동영상 자동화", "서버114:7916", "SF-xxx"),
     "KIS": ("자동매매 시스템", "서버211", "KIS-xxx"),
-    "GO100": ("백억이 투자분석", "서버211", "GO100-xxx"),
+    "GO100": ("백억이 투자분석", "contabo14", "GO100-xxx"),
     "NTV2": ("NewTalk V2 소셜플랫폼", "서버114", "NT-xxx"),
     "NAS": ("이미지처리", "Cafe24", "NAS-xxx"),
 }
@@ -96,7 +96,7 @@ Task ID: KIS-xxx.
     "GO100": f"""<role>
 **GO100(백억이) 투자분석 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
 백억이 투자분석 시스템을 총괄한다.
-서버211 (211.188.51.113). Task ID: GO100-xxx.
+contabo14 (5.104.86.14). Task ID: GO100-xxx.
 **핵심 책임**: 투자 데이터 분석, 종목 선별, 전략 설계, 백테스트, 가설 검증.
 **AI 파이프라인**: INTENT→UNDERSTAND→DESIGN→EVALUATE→OPTIMIZE→REPLY (6단계).
 **의도 분류(12개)**: stock_analysis(종목분석)   strategy_design(전략설계)   backtest(백테스트)   hypothesis(가설검증)   market_regime(시장레짐)   earnings_analysis(실적분석)   rebalancing(리밸런싱)   news_impact(뉴스영향)   portfolio(포트폴리오)   risk_management(리스크관리)   general_chat(일반대화)   system_command(시스템명령)
@@ -159,13 +159,14 @@ _CAPABILITIES_FULL = """<capabilities>
 | AADS | 자율 AI 개발 시스템 본체 | 서버68 | AADS-xxx |
 | SF | ShortFlow 숏폼 동영상 자동화 | 서버114:7916 | SF-xxx |
 | KIS | 자동매매 시스템 | 서버211 | KIS-xxx |
-| GO100 | 백억이 투자분석 | 서버211 | GO100-xxx |
+| GO100 | 백억이 투자분석 | contabo14 | GO100-xxx |
 | NTV2 | NewTalk V2 소셜플랫폼 | 서버114 | NT-xxx |
 | NAS | 이미지처리 | Cafe24 | NAS-xxx |
 
 ## 3개 서버
 - 서버68 (68.183.183.11): AADS Backend(FastAPI 0.115) + Dashboard(Next.js 16) + PostgreSQL 15
-- 서버211 (211.188.51.113): Hub, Bridge, KIS/GO100 실행 환경
+- 서버211 (211.188.51.113): Hub, Bridge, KIS 실행 환경
+- contabo14 (5.104.86.14): GO100 실행 환경
 - 서버114 (116.120.58.155): SF/NTV2/NAS 실행 환경 (포트 7916)
 </capabilities>"""
 
@@ -182,7 +183,7 @@ WS_CAPABILITIES: Dict[str, str] = {
 </capabilities>""",
     "GO100": f"""<capabilities>
 ## 현재 프로젝트: GO100 백억이 투자분석
-- 서버211 (211.188.51.113). WORKDIR: /root/kis-autotrade-v4
+- contabo14 (5.104.86.14). WORKDIR: /root/kis-autotrade-v4
 - FastAPI 백엔드 (포트 8002, systemd go100) + Next.js 프론트 (포트 3000, systemd go100-frontend)
 - DB: PostgreSQL kisautotrade (KIS와 공유) / kis_admin / localhost:5432
 - AI 엔진: 10개 멀티에이전트 파이프라인 (INTENT→UNDERSTAND→DESIGN→EVALUATE→OPTIMIZE→REPLY)

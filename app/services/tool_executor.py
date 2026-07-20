@@ -1154,7 +1154,7 @@ class ToolExecutor:
             except Exception as _re:
                 logger.warning(f"post_hook_ai_review_skip: {_re}")
 
-        # ── GO100 프로젝트 (서버211, /root/kis-autotrade-v4 원격 레포) ──
+        # ── GO100 프로젝트 (contabo14, /root/kis-autotrade-v4 원격 레포) ──
         # GO100은 ledger만 기록하고, commit/push/restart는 finalize/preflight에서만 수행
         if project == "GO100":
             try:
@@ -1838,7 +1838,7 @@ class ToolExecutor:
 
         # git diff 기반 Hook 활성화 조건:
         # - AADS: aads-server / aads-dashboard 레포 자동 감시
-        # - GO100: /root/kis-autotrade-v4 원격 레포 감시 (서버211)
+        # - GO100: /root/kis-autotrade-v4 원격 레포 감시 (contabo14)
         # - git 명령 자체는 제외 (사용자 수동 git 경로는 그대로 유지)
         # - systemctl restart go100 도 제외 (변경 감지 noise 방지)
         _cmd_stripped = command.strip()
@@ -2666,7 +2666,7 @@ class ToolExecutor:
         services = {
             "AADS": f"{_AADS_API_BASE}/api/v1/ops/health-check",
             "KIS":  "http://211.188.51.113:8082/health",
-            "GO100":"http://211.188.51.113:8083/health",
+            "GO100":"http://5.104.86.14:8002/health",
             "SF":   "http://116.120.58.155:7916/health",
             "NTV2": "http://116.120.58.155:8080/health",
             "NAS":  "http://cafe24-nas-placeholder/health",

@@ -1356,7 +1356,7 @@ _ANTIGRAVITY_MODEL_MAP = {
 _CODEX_PROJECT_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard; deploy=bash /root/aads/aads-server/deploy.sh or dashboard deploy.sh as requested",
     "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=KIS for commit/push/deploy",
-    "GO100": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=GO100 and separate GO100 impact from KIS impact",
+    "GO100": "remote_server=contabo14; remote_host=5.104.86.14; remote_workdir=/root/kis-autotrade-v4; use SSH/MCP project=GO100 and separate GO100 impact from KIS impact",
     "SF": "remote_server=server-114; use SSH/MCP project=SF for code, commit, push, deploy, and service checks",
     "NTV2": "remote_server=server-114; use SSH/MCP project=NTV2 for code, commit, push, deploy, and service checks",
     "NAS": "remote_server=server-114; use SSH/native shell for NAS code, commit, push, deploy, and service checks",

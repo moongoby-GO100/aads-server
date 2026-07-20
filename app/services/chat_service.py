@@ -7847,7 +7847,7 @@ async def send_message_stream(
             if _mentioned_projects and not _is_customer_tenant:
                 _mention_desc = {
                     "KIS": "KIS AI 자동매매 시스템 (서버62, /root/kis/)",
-                    "GO100": "GO100 백억이 투자분석 플랫폼 (서버211, /root/kis-autotrade-v4/)",
+                    "GO100": "GO100 백억이 투자분석 플랫폼 (contabo14, /root/kis-autotrade-v4/)",
                     "AADS": "AADS 자율 AI 개발 시스템 (서버68, /root/aads/)",
                     "SF": "SmartFarm 스마트팜 시스템 (서버65, /root/sf/)",
                     "NTV2": "NTV2 뉴톡 v2 서비스 (서버65, /root/ntv2/)",

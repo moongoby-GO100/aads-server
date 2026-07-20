@@ -45,7 +45,7 @@ _RELAY_RETRY_MAX_RETRIES = int(os.getenv("AADS_RELAY_RETRY_MAX_RETRIES", "30"))
 _PROJECT_RUNTIME_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard",
     "KIS": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4",
-    "GO100": "remote_server=server-211; remote_workdir=/root/kis-autotrade-v4; separate GO100 impact from KIS impact",
+    "GO100": "remote_server=contabo14; remote_host=5.104.86.14; remote_workdir=/root/kis-autotrade-v4; separate GO100 impact from KIS impact",
     "SF": "remote_server=server-114; use project=SF for remote tools",
     "NTV2": "remote_server=server-114; use project=NTV2 for remote tools",
     "NAS": "remote_server=server-114; use project=NAS or native SSH when remote tools do not expose NAS",

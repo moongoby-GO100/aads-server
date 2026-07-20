@@ -1,6 +1,6 @@
 """
 프로젝트별 문서 통합 조회 API.
-3개 서버(68/211/114)의 docs, reports 디렉토리를 스캔하여
+프로젝트 서버의 docs, reports 디렉토리를 스캔하여
 프로젝트별로 분류된 문서 목록과 내용을 제공한다.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ SERVER_CONFIG = {
         ],
     },
     "GO100": {
-        "host": "server-211",
+        "host": "contabo14",
         "paths": [
             {"base": "/root/kis-autotrade-v4/report", "label": "리포트"},
             {"base": "/root/kis-autotrade-v4/reports", "label": "리포트"},

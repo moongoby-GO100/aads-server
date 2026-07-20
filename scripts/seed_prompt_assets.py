@@ -21,7 +21,7 @@ ASSETS = [
      "## KIS 자동매매 시스템\n- 서버: 211 (PostgreSQL, Redis)\n- 핵심: 실시간 주식 자동매매, 한국투자증권 API 연동\n- 주의: 매매 로직 변경 시 반드시 백테스트 확인. 실거래 영향 최소화.\n- 배포: SSH 기반, 서비스 재시작 시 포지션 확인 필수",
      ["KIS"], ["*"], ["*"], ["*"], 10),
     ("project-go100-context", "GO100 프로젝트 컨텍스트", 2,
-     "## GO100 실행 기준\nGO100은 211 서버의 /root/kis-autotrade-v4를 사용하는 투자 분석·포트폴리오 프로젝트다. KIS와 물리 서버·코드베이스·PostgreSQL DB를 공유할 수 있으나 업무 판단과 보고는 GO100 도메인 기준으로 분리한다. GO100 세션에서 개발·분석·오류 확인 요청이 오면 read_remote_file/list_remote_dir 호출 시 project='GO100'을 사용하고, DB는 query_project_database(project='GO100')로 조회한다. 경로는 /root/kis-autotrade-v4 기준 상대경로를 우선 사용한다. KIS와 공유되는 파일을 읽더라도 보고서는 GO100 영향, KIS 영향, 공통 위험을 분리한다. 금융 데이터, 수익률, 포트폴리오, 추천 로직은 실제 코드와 DB를 확인한 뒤만 결론을 낸다.",
+     "## GO100 실행 기준\nGO100은 contabo14(5.104.86.14)의 /root/kis-autotrade-v4를 사용하는 투자 분석·포트폴리오 프로젝트다. 2026-06-19 KST 기준 GO100 운영은 서버211에서 이전 완료됐으며 KIS는 서버211에 유지된다. GO100 세션에서 개발·분석·오류 확인 요청이 오면 read_remote_file/list_remote_dir 호출 시 project='GO100'을 사용하고, DB는 query_project_database(project='GO100')로 조회한다. 경로는 /root/kis-autotrade-v4 기준 상대경로를 우선 사용한다. KIS와 공유되는 파일을 읽더라도 보고서는 GO100 영향, KIS 영향, 공통 위험을 분리한다. 금융 데이터, 수익률, 포트폴리오, 추천 로직은 실제 코드와 DB를 확인한 뒤만 결론을 낸다.",
      ["GO100"], ["*"], ["*"], ["*"], 10),
     ("project-remote-access-contract", "원격 프로젝트 접근 계약", 2,
      "## 원격 프로젝트 접근 계약\nKIS/GO100/SF/NTV2 세션에서 코드, DB, 서버 상태, 오류, 개발, 수정, 배포, 원인분석 요청이 들어오면 기억이나 추정으로 답하지 않는다. 현재 세션의 프로젝트를 active_project로 간주하고 도구 호출 시 반드시 project 값을 명시한다. 코드 확인은 list_remote_dir 또는 read_remote_file을 먼저 사용하고, DB 확인은 query_database가 아니라 query_project_database를 사용한다. 파일 경로는 WORKDIR 기준 상대경로를 우선 사용한다. 프로젝트가 명시되지 않아도 워크스페이스 이름에서 active_project를 해석한다. 접근 실패 시 사용한 project/path/query와 오류를 보고하고, 확인하지 못한 내용을 사실처럼 단정하지 않는다.",

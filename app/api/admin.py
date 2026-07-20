@@ -58,7 +58,8 @@ _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
 )
 _DEPLOY_SERVER_GROUPS = (
     {"id": "68", "name": "서버68", "ip": "68.183.183.11", "projects": ("AADS",)},
-    {"id": "211", "name": "서버211", "ip": "211.188.51.113", "projects": ("KIS", "GO100")},
+    {"id": "211", "name": "서버211", "ip": "211.188.51.113", "projects": ("KIS",)},
+    {"id": "contabo14", "name": "contabo14", "ip": "5.104.86.14", "projects": ("GO100",)},
     {"id": "114", "name": "서버114", "ip": "116.120.58.155", "projects": ("SF", "NTV2")},
 )
 _DEPLOY_STATUS_OK = {"done"}

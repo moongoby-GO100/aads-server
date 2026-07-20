@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-07-20 13:57 KST - GO100 control-plane mapping migrated to contabo14
+- 배경: GO100은 2026-06-19 KST에 서버211에서 `contabo14(5.104.86.14)`로 이전됐지만 AADS 원격 도구·러너·프롬프트·상태조회 매핑에 서버211 값이 남아 원격 호출이 구 서버로 향했다.
+- 조치: `app/core/project_config.py`의 GO100 SSH 대상을 `5.104.86.14`로 변경하고 `server_name=contabo14`를 추가했다. 서버 레지스트리에서 KIS는 서버211에 유지하고 GO100을 별도 `contabo14` 서버로 분리했다. 원격 문서, 프로젝트 대시보드, 모델/relay 런타임 힌트, GO100 헬스 URL, 시스템 프롬프트, 관리자/텔레그램 서버 표시를 동일 기준으로 정정했다.
+- KIS 영향: KIS SSH 매핑 `211.188.51.113`, 문서 호스트 `server-211`, 서버 레지스트리 `211`은 유지했다.
+- 검증: 신서버 SSH에서 `hostname=contabo14`, `/root/kis-autotrade-v4` 존재, `go100`·`go100-frontend` active, `http://5.104.86.14:8002/health` HTTP 200을 확인했다. 컨테이너 mapping assertions 및 Python compile, `git diff --check`를 통과했다. 호스트에는 pytest가 없어 전용 pytest 파일은 직접 단언으로 대체했다.
+- 완료 기준: AADS 배포 후 `run_remote_command(project=GO100, command=hostname)`가 `contabo14`를 반환해야 최종 완료로 판정한다.
+
 ## 2026-07-16 05:59 KST - Yeoljeong store assistant P0/P1 closeout
 - 배경: CEO가 열정국밥 매장비서 수정 필요사항 P0~P1 즉시 조치를 지시했다.
 - 조치:
