@@ -1,5 +1,30 @@
 # AADS HANDOVER
 
+## 2026-07-20 10:40 KST - Runner guard and Yeoljeong security closeout re-verification
+- 배경: CEO가 이전 응답이 최종 완료보고 조건을 만족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 러너 guard/매장비서 계정 보안/문서 원장/운영 상태를 다시 실측했다.
+- 확인:
+  - 기준 시각: `2026-07-20 10:37:32 KST`.
+  - Git: `main`, `origin/main` 대비 `ahead 31`. 최신 커밋은 `05fd38936e186c5fe47c67ed7652935b0d6c9d59 fix: guard runner permissions and record yeoljeong closeout`.
+  - 최신 커밋 파일: `HANDOVER.md`, `docs/CHANGELOG-direct-edit.md`, `scripts/claude_exec_safe.sh`.
+  - 현재 미커밋 변경은 `app/data/yeoljeong_finance/settings.json`, 냉면 제조방법 보고서 HTML/PDF, nginx 백업, HR 테스트 JSON/uploads, 대시보드 임시 scripts 등으로 이번 러너 guard/계정 보안 커밋 범위 밖이다.
+  - 현재 세션 Pipeline Runner: `runner-dc0ea80b`, `runner-02bd3c91` 모두 `rejected_done`; 활성 Pipeline B/C 작업 0건.
+  - TODO `88ff19ae-ac74-4769-8a67-f9bfe3cb2a2a`는 완료 처리했다.
+  - 서버68 헬스체크: `HEALTHY`, DB OK, DB latency 121ms, disk 51%, pending/running directive 0건.
+- 검증:
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `git diff --check`: 통과.
+  - root 환경 guard 시뮬레이션: `CLAUDE_PERMISSION_ARGS=empty`.
+  - 공개 매장비서 HTML: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200.
+  - 비인증 storage-status API: `https://fb.newtalk.kr/api/v1/yeoljeong-finance/storage-status` HTTP 401.
+  - JSON `platform_accounts.json`: 총 4건, 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건, `password_masked` 4건.
+  - PostgreSQL `yeoljeong_platform_accounts`: active 4건, 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건.
+  - 컨테이너 격리 회귀: `manual_account_security_regression_ok`; 공개 응답에는 `password/password_enc` 없음, raw 저장에는 원문 `password` 없이 `password_enc`만 존재.
+- 보류:
+  - `git push`와 정식 deploy/reload는 수행하지 않았다. 현재 브랜치가 `ahead 31`이고 워킹트리에 이번 범위 밖 운영 데이터/백업/임시 파일이 남아 있어 일괄 push/deploy는 범위 오염 리스크가 있다.
+  - 플랫폼 계정 4건은 원문 비밀번호가 제거되어 있고 암호문도 비어 있으므로, 배달앱 자동 로그인 수집 전 관리자 화면/API에서 비밀번호 재등록이 필요하다.
+
 ## 2026-07-20 10:30 KST - Pipeline runner guard and Yeoljeong account security final closeout
 - 배경: CEO가 이전 응답이 최종 완료보고 조건을 충족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 러너/매장비서 즉시 조치 상태를 재검증하고 문서 원장을 최신값으로 닫았다.
 - 조치:

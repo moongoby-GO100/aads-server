@@ -1,5 +1,11 @@
 # AADS Chat-Direct Edit Changelog (aads-server)
 
+## [2026-07-20 10:40 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: CEO의 최종 완료보고 미충족 재지적에 따라 러너 guard/매장비서 계정 보안/문서 원장/운영 상태를 최신 실측값으로 재기록.
+- 검증: `main` ahead 31, HEAD `05fd38936e186c5fe47c67ed7652935b0d6c9d59`, current session runner 활성 0건, TODO 완료, 서버68 healthy, 공개 매장비서 HTML HTTP 200, storage-status 비인증 HTTP 401.
+- 보안 확인: JSON active 4건과 PostgreSQL active 4건 모두 원문 `password` 0건, `password_enc` 비어 있지 않은 값 0건. 컨테이너 격리 회귀 `manual_account_security_regression_ok`.
+- 보류: 브랜치 ahead 31 및 워킹트리의 범위 밖 운영 데이터/백업/임시 파일 때문에 push/deploy/reload는 수행하지 않음. 배달앱 자동 로그인 수집 전 플랫폼 계정 비밀번호 재등록 필요.
+
 ## [2026-07-20 10:30:59 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: CEO의 `document_report_unverified_by_ledger` 재지적에 따라 러너 guard/매장비서 계정 보안 최종 closeout 원장을 추가.
 - 검증: current session 활성 작업 0건, 서버68 healthy, 공개 매장비서 HTML HTTP 200, storage-status 비인증 HTTP 401, `git diff --check` 통과, 컨테이너 수동 회귀 `manual_account_security_regression_ok`, DB 쓰기 차단 격리 회귀 `manual_account_security_regression_isolated_ok`.
