@@ -6,6 +6,7 @@
 - KIS 영향: KIS SSH 매핑 `211.188.51.113`, 문서 호스트 `server-211`, 서버 레지스트리 `211`은 유지했다.
 - 검증: 신서버 SSH에서 `hostname=contabo14`, `/root/kis-autotrade-v4` 존재, `go100`·`go100-frontend` active, `http://5.104.86.14:8002/health` HTTP 200을 확인했다. 컨테이너 mapping assertions 및 Python compile, `git diff --check`를 통과했다. 호스트에는 pytest가 없어 전용 pytest 파일은 직접 단언으로 대체했다.
 - 완료 기준: AADS 배포 후 `run_remote_command(project=GO100, command=hostname)`가 `contabo14`를 반환해야 최종 완료로 판정한다.
+- 배포 복구: 첫 blue-green 전환에서 호스트에 `nginx` 바이너리가 없어 `nginx -t`가 실패했다. `deploy.sh`가 호스트 nginx가 없을 때 실행 중인 `aads-nginx` 컨테이너의 `nginx -t/-s reload`를 사용하도록 폴백을 추가했다.
 
 ## 2026-07-16 05:59 KST - Yeoljeong store assistant P0/P1 closeout
 - 배경: CEO가 열정국밥 매장비서 수정 필요사항 P0~P1 즉시 조치를 지시했다.
