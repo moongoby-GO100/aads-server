@@ -60,6 +60,19 @@ class ContractSignPayload(BaseModel):
     signer_email: str = ""
 
 
+class AccountUpsertPayload(BaseModel):
+    model_config = {"extra": "allow"}
+    service: str
+    username: str = ""
+    password: str = ""  # write-only: stored encrypted, never returned in responses
+    label: str = ""
+    login_url: str = ""
+    business_id: str = "biz-mia"
+    branch: str = "열정국밥_미아점"
+    collection_mode: str = "browser-automation"
+    memo: str = ""
+
+
 class SyncPayload(BaseModel):
     services: list[str] = Field(default_factory=list)
     business_id: str = "biz-mia"
@@ -243,7 +256,7 @@ async def get_storage_status(current_user: dict = Depends(get_current_user)) -> 
 
 
 @router.post("/accounts")
-async def upsert_account(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     account = await run_in_threadpool(svc.upsert_account, payload.model_dump(), current_user)
     return {"account": account}
 

@@ -1,5 +1,43 @@
 # tests/ 보안 제어 검증 레코드
 
+## 2026-07-20 (검수 피드백 재수정) - 보안 상수 도입 및 API 모델 명시화
+
+### 변경 파일 및 목적
+
+| 파일 | 변경 내용 | 목적 |
+|---|---|---|
+| `app/services/yeoljeong_finance_service.py` | `_ACCOUNT_SECRET_FIELDS` 상수 추가 (L833), `list_accounts`·`upsert_account`의 하드코딩 집합 교체 | 민감 필드 목록을 단일 선언으로 중앙화 — 변경 시 두 경로를 동시에 갱신 |
+| `app/api/yeoljeong_finance.py` | `AccountUpsertPayload` 모델 추가, `/accounts` POST 엔드포인트에 적용 | `password` 필드가 write-only임을 스키마 수준에서 선언, API 계약을 명시화 |
+
+### `_ACCOUNT_SECRET_FIELDS` 상수 (service L833)
+
+```python
+_ACCOUNT_SECRET_FIELDS: frozenset[str] = frozenset({"password", "password_enc"})
+```
+
+이전에는 `list_accounts`와 `upsert_account` 두 곳에 `{"password", "password_enc"}` 리터럴이 중복됐다. 상수로 중앙화하면 새 민감 필드가 생겨도 한 줄만 수정하면 된다.
+
+### `AccountUpsertPayload` 모델 (api L63)
+
+```python
+class AccountUpsertPayload(BaseModel):
+    model_config = {"extra": "allow"}
+    service: str
+    username: str = ""
+    password: str = ""  # write-only: stored encrypted, never returned in responses
+    ...
+```
+
+`GenericPayload`를 그대로 사용하면 `password` 필드가 API 스키마에 명시되지 않아 Swagger/OpenAPI 문서에 노출 여부가 불명확했다. 명시적 모델로 교체하면 `password`가 입력 전용임이 스키마에 기록된다.
+
+### 검증
+
+```
+tests/unit/test_yeoljeong_finance_service.py  17 passed  (2026-07-20 재실행, 변경 후)
+tests/unit/test_tools_and_pipeline.py         56 passed  (회귀 확인)
+python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py  # OK
+```
+
 ## 2026-07-20 - yeoljeong platform_accounts 보안 제어 테스트 기록
 
 ### 격리 픽스처 (autouse)

@@ -830,6 +830,10 @@ def _has_account_secret(row: dict[str, Any]) -> bool:
     return bool(row.get("password_enc") or row.get("password"))
 
 
+# Fields that must never appear in API responses or logs.
+_ACCOUNT_SECRET_FIELDS: frozenset[str] = frozenset({"password", "password_enc"})
+
+
 def _normalize_delivery_scope(business_id: Any, branch: Any) -> tuple[str, str]:
     normalized_branch = BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip())
     normalized_business = str(business_id or "").strip()
@@ -1639,7 +1643,7 @@ def list_accounts(user: dict[str, Any], business_id: str | None = None) -> list[
         row_business = str(row.get("business_id") or "")
         if business_id and row_business != business_id:
             continue
-        item = {k: v for k, v in row.items() if k not in {"password", "password_enc"}}
+        item = {k: v for k, v in row.items() if k not in _ACCOUNT_SECRET_FIELDS}
         item["branch"] = BRANCH_ALIASES.get(str(item.get("branch") or ""), str(item.get("branch") or ""))
         item["password_masked"] = "********" if _has_account_secret(row) else ""
         result.append(item)
@@ -1899,7 +1903,7 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     if not existing:
         rows.insert(0, record)
     _write("platform_accounts", rows)
-    public = {k: v for k, v in record.items() if k not in {"password", "password_enc"}}
+    public = {k: v for k, v in record.items() if k not in _ACCOUNT_SECRET_FIELDS}
     public["password_masked"] = "********" if _has_account_secret(record) else ""
     return public
 
