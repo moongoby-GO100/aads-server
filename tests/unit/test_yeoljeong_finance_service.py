@@ -14,10 +14,16 @@ _SPEC.loader.exec_module(service)
 
 @pytest.fixture(autouse=True)
 def isolate_yeoljeong_storage(tmp_path, monkeypatch):
-    """Never let unit tests read or write the mounted operational ledgers."""
+    """Never let unit tests read or write operational files or PostgreSQL."""
+    def disable_db(coroutine):
+        close = getattr(coroutine, "close", None)
+        if close:
+            close()
+        return None
+
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
-    monkeypatch.setattr(service, "_db_url", lambda: "")
+    monkeypatch.setattr(service, "_run_db", disable_db)
 
 
 def test_import_card_csv_maps_and_classifies(tmp_path, monkeypatch):

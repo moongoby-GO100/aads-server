@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-07-20 15:07 KST - 매장비서 P0 러너 오염 반려 및 테스트/계정보안 보강
+- `runner-5d83ea13`의 승인 diff가 매장비서 대상 파일이 아니라 nginx/relay/prompt 파일을 포함해 반려했다. 해당 diff는 승인·푸시·배포하지 않았다.
+- `app/api/yeoljeong_finance.py`:
+  - `AccountUpsertPayload`의 미정의 필드를 금지해 `password_enc` 등 임의 필드 주입을 차단했다.
+  - `password`를 OpenAPI `writeOnly` 및 Pydantic `repr=False`로 선언했다.
+- `tests/unit/test_yeoljeong_finance_service.py`:
+  - 기존 `_db_url = ""` 격리는 asyncpg가 기본 PostgreSQL에 연결할 수 있어 운영 DB 오염을 막지 못했다.
+  - autouse fixture가 `_run_db`를 차단하고 생성된 coroutine을 닫도록 변경해 테스트가 파일과 PostgreSQL 모두에서 격리되게 했다.
+- 실측/검증:
+  - 수정 테스트를 `aads-server` 컨테이너에 임시 복사한 뒤 관련 테스트 `17 passed`.
+  - 테스트 전후 DB 행 수는 sales 1, settlements 0, reviews 0, collection_status 6으로 동일해 신규 DB 쓰기가 없음을 확인했다.
+  - API 모델 검사: extra forbid, password writeOnly, password repr 비노출 모두 True.
+  - DB의 sales 1건과 succeeded collection_status 2건은 `diagnostics.sales=fixture`인 테스트 데이터다. 나머지 4사 실행은 모두 `credential_required`다.
+  - 런타임 안전 집계 결과: 배민 암호문 계정 2건 모두 복호화 불가, 쿠팡이츠·땡겨요·요기요는 유효 암호문 0건. 비밀번호 원문은 출력하지 않았다.
+- 남은 조치:
+  - fixture DB 행 삭제는 파괴적 변경이므로 CEO 승인 후 대상 ID를 재확인해 제거한다.
+  - 4사 계정 비밀번호를 운영 암호화키로 재등록한 뒤 실제 포털 로그인/CAPTCHA·OTP 처리와 7월 매출·정산·리뷰 실수집 E2E를 수행해야 한다.
+  - push/deploy/restart는 수행하지 않았다.
+
 ## 2026-07-20 (검수 피드백 대응) - platform_accounts 보안 제어 코드 증거 및 tests/HANDOVER.md 신설
 
 ### 검수 피드백 4개 항목 해소

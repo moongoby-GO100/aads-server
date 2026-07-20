@@ -61,10 +61,14 @@ class ContractSignPayload(BaseModel):
 
 
 class AccountUpsertPayload(BaseModel):
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "forbid"}
     service: str
     username: str = ""
-    password: str = ""  # write-only: stored encrypted, never returned in responses
+    password: str = Field(
+        default="",
+        repr=False,
+        json_schema_extra={"writeOnly": True},
+    )
     label: str = ""
     login_url: str = ""
     business_id: str = "biz-mia"
