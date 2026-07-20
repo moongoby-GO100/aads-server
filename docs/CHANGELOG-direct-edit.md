@@ -1,5 +1,11 @@
 # AADS Chat-Direct Edit Changelog (aads-server)
 
+## [2026-07-20 10:43 KST] [aads-server] nginx-aads.conf
+- Chat-Direct 수정: `/api/yeoljeong/finance/*` 외부 요청이 범용 `/api/` location 때문에 죽어 있는 `127.0.0.1:8001`로 전달되어 HTTP 502가 발생하는 문제를 저장소 nginx source에서 보정.
+- 조치: HTTP/HTTPS server 블록에 `location /api/yeoljeong/finance/`를 추가하고 `aads_api` upstream으로 라우팅. 범용 `/api/` location은 유지.
+- 검증: 로컬 blue/green 백엔드 storage-status HTTP 401, 외부 aads.newtalk.kr 기존 경로 HTTP 502 및 nginx upstream connection refused 로그 확인, `bash -n`, `py_compile`, `docker exec py_compile`, `git diff --check` 통과.
+- 보류: live nginx copy/reload는 수행하지 않음. 적용 절차는 `nginx-aads.conf` 반영 후 `nginx -t`와 reload, 롤백은 추가 location 2개 제거 후 reload.
+
 ## [2026-07-20 10:40 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: CEO의 최종 완료보고 미충족 재지적에 따라 러너 guard/매장비서 계정 보안/문서 원장/운영 상태를 최신 실측값으로 재기록.
 - 검증: `main` ahead 31, HEAD `05fd38936e186c5fe47c67ed7652935b0d6c9d59`, current session runner 활성 0건, TODO 완료, 서버68 healthy, 공개 매장비서 HTML HTTP 200, storage-status 비인증 HTTP 401.

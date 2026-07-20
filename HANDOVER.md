@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 2026-07-20 10:43 KST - Yeoljeong finance API nginx source route fix
+- 배경: 최종 재검증 중 `https://aads.newtalk.kr/api/yeoljeong/finance/storage-status`가 외부에서 HTTP 502를 반환했다. 로컬 백엔드 `http://127.0.0.1:8100/api/yeoljeong/finance/storage-status`와 green 백엔드 `http://127.0.0.1:8102/api/yeoljeong/finance/storage-status`는 모두 HTTP 401로 정상 보호되어, 앱 문제가 아니라 nginx route 문제로 분리했다.
+- 원인: 운영 nginx 설정의 범용 `location /api/`가 `/api/yeoljeong/finance/*`를 죽어 있는 `127.0.0.1:8001`로 전달하고 있었다. nginx 로그에도 `connect() failed (111: Connection refused) ... upstream: "http://127.0.0.1:8001/yeoljeong/finance/storage-status"`가 확인됐다.
+- 조치: `nginx-aads.conf`의 HTTP/HTTPS server 블록에 `location /api/yeoljeong/finance/`를 추가하여 메인 AADS upstream `aads_api`로 라우팅하도록 저장소 소스를 수정했다. 범용 `/api/` 라우트는 변경하지 않았다.
+- 검증:
+  - `bash -n scripts/claude_exec_safe.sh`: 통과.
+  - `bash -n scripts/pipeline-runner.sh`: 통과.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/yeoljeong_finance_service.py /app/app/api/yeoljeong_finance.py`: 통과.
+  - `git diff --check`: 통과.
+  - 컨테이너 상태: `aads-server`, `aads-server-green`, `aads-dashboard-green`, `aads-postgres` healthy.
+- 보류: live nginx에는 아직 적용하지 않았다. 적용하려면 `nginx-aads.conf`를 `/etc/nginx/conf.d/aads.conf`로 반영하고 `nginx -t` 후 nginx reload가 필요하다. 롤백은 해당 location 블록 2개를 제거하고 reload하면 된다.
+
 ## 2026-07-20 10:40 KST - Runner guard and Yeoljeong security closeout re-verification
 - 배경: CEO가 이전 응답이 최종 완료보고 조건을 만족하지 못했고 `document_report_unverified_by_ledger` 위반이라고 재지적해, 러너 guard/매장비서 계정 보안/문서 원장/운영 상태를 다시 실측했다.
 - 확인:
