@@ -10625,6 +10625,84 @@ async def get_memory_context_info(
         return {"error": str(e)}
 
 
+async def get_memory_context_summary_info(
+    session_id: str,
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Lightweight memory-context variant for session-switch summary cards."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        try:
+            tenant_uuid = _require_tenant_uuid(tenant_id, "get_memory_context_summary_info") if tenant_id else None
+            session_uuid = uuid.UUID(session_id)
+            session_row = await conn.fetchrow(
+                """
+                SELECT s.id, s.title, s.message_count, s.summary,
+                       s.workspace_id, w.name AS workspace_name
+                FROM chat_sessions s
+                LEFT JOIN chat_workspaces w ON s.workspace_id = w.id
+                WHERE s.id = $1
+                  AND ($2::uuid IS NULL OR s.tenant_id = $2::uuid)
+                """,
+                session_uuid,
+                tenant_uuid,
+            )
+            if not session_row:
+                return {}
+
+            history_rows = await conn.fetch(
+                """
+                SELECT s.id, s.title, s.summary, s.message_count, s.created_at
+                FROM chat_sessions s
+                WHERE s.workspace_id = $1
+                  AND s.id != $2
+                  AND ($3::uuid IS NULL OR s.tenant_id = $3::uuid)
+                ORDER BY s.updated_at DESC
+                LIMIT 10
+                """,
+                session_row["workspace_id"],
+                session_uuid,
+                tenant_uuid,
+            )
+            session_history = []
+            for r in history_rows:
+                session_history.append({
+                    "session_id": str(r["id"]),
+                    "date": r["created_at"].strftime("%Y-%m-%d") if r["created_at"] else "",
+                    "title": r["title"] or "",
+                    "summary": (r["summary"] or "")[:200],
+                    "message_count": r["message_count"] or 0,
+                })
+
+            message_count = int(session_row["message_count"] or 0)
+            compaction_threshold = 30
+            compaction_needed = message_count >= compaction_threshold
+            has_summary = bool(session_row["summary"])
+            if compaction_needed and not has_summary:
+                health = "danger"
+            elif compaction_needed:
+                health = "warning"
+            else:
+                health = "normal"
+
+            return {
+                "session_id": session_id,
+                "workspace_name": session_row["workspace_name"] or "",
+                "context_status": {
+                    "session_title": session_row["title"] or "",
+                    "message_count": message_count,
+                    "compaction_needed": compaction_needed,
+                    "compaction_threshold": compaction_threshold,
+                    "has_summary": has_summary,
+                    "health": health,
+                },
+                "session_history": session_history,
+            }
+        except Exception as e:
+            logger.error(f"get_memory_context_summary_info failed: {e}")
+            return {"error": str(e)}
+
+
 # ─── Chat Files (파일 첨부 시스템 Phase 1) ──────────────────────────────────
 
 CHAT_FILES_DIR = Path(os.getenv("CHAT_FILES_DIR", "/root/aads/uploads/chat/files"))

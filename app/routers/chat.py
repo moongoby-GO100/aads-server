@@ -3010,9 +3010,18 @@ class ErrorReportOut(BaseModel):
 @router.get("/chat/sessions/{session_id}/memory-context", tags=["chat-memory"])
 async def get_memory_context(
     session_id: UUID,
+    summary_only: bool = Query(False, description="이전 세션 요약 카드용 경량 응답"),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """세션의 주입 메모리 + 맥락 상태 + 이전 세션 요약 조회."""
+    if summary_only:
+        result = await svc.get_memory_context_summary_info(
+            str(session_id),
+            tenant_id=_tenant_id(context),
+        )
+        if not result or "error" in result:
+            raise _NOT_FOUND("session or memory context")
+        return result
     result = await svc.get_memory_context_info(
         str(session_id),
         tenant_id=_tenant_id(context),
