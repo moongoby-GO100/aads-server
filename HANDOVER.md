@@ -1,5 +1,61 @@
 # AADS HANDOVER
 
+## 2026-07-20 (검수 피드백 대응) - platform_accounts 보안 제어 코드 증거 및 tests/HANDOVER.md 신설
+
+### 검수 피드백 4개 항목 해소
+
+**[1] 암호화 로직·마이그레이션이 명확히 기록되지 않았다**
+- 암호화: `app/services/yeoljeong_finance_service.py` L796-802
+  ```python
+  def _encrypt_secret(value: str) -> str:
+      from app.core.credential_vault import encrypt_value
+      return encrypt_value(value)
+  ```
+- 평문→암호문 마이그레이션: L816-826
+  ```python
+  def _migrate_platform_account_secrets(rows):
+      for row in rows:
+          plaintext = str(row.get("password") or "")
+          if not plaintext:
+              continue
+          if not row.get("password_enc"):
+              row["password_enc"] = _encrypt_secret(plaintext)
+          row.pop("password", None)
+  ```
+- DB 마이그레이션: `migrations/116_yeoljeong_finance_delivery_ledgers.sql` L65-67
+  ```sql
+  UPDATE yeoljeong_platform_accounts SET payload = payload - 'password' WHERE payload ? 'password';
+  ```
+- 커밋 귀속: 암호화 함수는 `a6578cfb`, 마이그레이션 강화는 `591388ab`
+
+**[2] 비밀번호가 API 응답에 출력되지 않음을 보장하는 코드 변경이 확인되지 않는다**
+- `list_accounts()` — L1642 (커밋 `a6578cfb` 도입, `591388ab` 강화):
+  ```python
+  item = {k: v for k, v in row.items() if k not in {"password", "password_enc"}}
+  item["password_masked"] = "********" if _has_account_secret(row) else ""
+  ```
+- `upsert_account()` — L1902-1903 (커밋 `591388ab`):
+  ```python
+  public = {k: v for k, v in record.items() if k not in {"password", "password_enc"}}
+  public["password_masked"] = "********" if _has_account_secret(record) else ""
+  ```
+- 단위 테스트 직접 검증 (`test_upsert_account_stores_encrypted_password_only`, L149):
+  ```python
+  assert "password" not in saved
+  assert "password_enc" not in saved
+  assert saved["password_masked"] == "********"
+  assert raw[0]["password_enc"] == "encrypted:plain-secret"
+  assert "password" not in raw[0]
+  ```
+
+**[3] migration/tests/HANDOVER.md 변경 사항이 명확히 기록되지 않았다**
+- `tests/HANDOVER.md` 신설 (이번 커밋). 내용: autouse 격리 픽스처 설명, 보안 테스트 4건과 코드 1:1 대응 표, 핵심 보안 제어 코드 스니펫 전문, 커밋 귀속.
+
+**[4] 보안 제어가 실제 코드에 적용되었는지 확인할 수 있는 구체적인 수정 사항이 부족하다**
+- 위 [1][2]의 코드 스니펫이 현재 HEAD 코드 (`app/services/yeoljeong_finance_service.py`)에 존재하며 `grep -n`으로 확인 가능.
+- `docker exec aads-server python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -v` → **17 passed** (2026-07-20 재실행).
+- `tests/HANDOVER.md`에 코드-테스트-커밋 3방향 증거를 문서화.
+
 ## 2026-07-20 (검수 재검증) - 보안 제어 코드 레벨 검증 (AADS-FOOD-P0-SECURITY-REVERIFY)
 - 배경: 검수 피드백에서 "대상 파일 변경사항이 보이지 않음, 비밀번호 보호·마이그레이션·소유권 필터 구현 여부 불확실"이라는 문제 제기를 받아 직접 실행 검증을 수행했다.
 - 보안 제어 코드 존재 확인 (591388ab 커밋에 포함, 소스 코드 grep + 런타임 실행으로 이중 검증):
