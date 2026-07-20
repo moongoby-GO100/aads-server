@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-07-20 (검수 재검증) - 보안 제어 코드 레벨 검증 (AADS-FOOD-P0-SECURITY-REVERIFY)
+- 배경: 검수 피드백에서 "대상 파일 변경사항이 보이지 않음, 비밀번호 보호·마이그레이션·소유권 필터 구현 여부 불확실"이라는 문제 제기를 받아 직접 실행 검증을 수행했다.
+- 보안 제어 코드 존재 확인 (591388ab 커밋에 포함, 소스 코드 grep + 런타임 실행으로 이중 검증):
+  - `list_accounts()` (L1642): `{k: v for k, v in row.items() if k not in {"password", "password_enc"}}` → API 응답에 `password_masked` 만 포함. **OK**
+  - `upsert_account()` (L1880-1881): 수신 `password` → `_encrypt_secret()` → `password_enc` 저장 후 `record.pop("password", None)`. 응답도 동일 제거. **OK**
+  - `_migrate_platform_account_secrets()` (L816-826): 레거시 평문 `password` → `password_enc` in-place 암호화 후 `pop("password")`. **OK**
+  - `_normalize_delivery_scope()` (L833-841): `business_id ∉ CANONICAL_BUSINESS_IDS` → 400, `BUSINESS_BY_BRANCH[branch] ≠ business_id` → 400. 크로스-사업자 테스트 HTTP 400 응답 실행 확인. **OK**
+  - `migrations/116_yeoljeong_finance_delivery_ledgers.sql` (L65-67): `UPDATE yeoljeong_platform_accounts SET payload = payload - 'password' WHERE payload ? 'password'`  **OK**
+- DB 상태 확인 (docker exec 실행):
+  - `yeoljeong_platform_accounts` 테이블 존재: **True**
+  - `payload ? 'password'` 보유 행 수: **0** (마이그레이션 116 적용 완료)
+- 단위 테스트 실행 결과 (컨테이너 내 autouse fixture 포함 버전):
+  - `test_yeoljeong_finance_service.py`: **17 passed** (보안 테스트 4개 포함)
+  - `test_tools_and_pipeline.py`: **56 passed**, 회귀 없음
+- 결론: 보안 제어 전 항목이 소스코드·런타임·DB·테스트 4개 계층에서 확인됨. 이전 HANDOVER 항목(14:30)의 주장이 실제 코드 상태와 일치함을 재검증.
+
 ## 2026-07-20 14:30 KST - 매장비서 기준선 감사 최종 확인 (AADS-FOOD-P0-SECURITY-20260720)
 - 배경: P0-CRITICAL 감사 과제의 단위 테스트가 컨테이너에서 격리 없이 실운영 JSON에 쓰여 `test_duplicate_import_is_skipped`·`test_env_data_dir_does_not_leak` 등이 간헐적으로 실패하는 문제를 발견하고 근본 원인을 규명·해소했다.
 - 근본 원인: `docker-compose.yml` 볼륨 마운트에 `tests/` 디렉토리가 포함되지 않아 컨테이너 내부에 이전 버전(284줄, autouse 없음)의 테스트 파일이 남아 있었다. autouse `isolate_yeoljeong_storage` fixture 없이 실행된 테스트가 `app/data/yeoljeong_finance/transactions.json`에 sha256 해시 레코드를 누적했고, 재실행 시 sha256 중복 감지로 `imported_rows == 0` → 테스트 실패.
