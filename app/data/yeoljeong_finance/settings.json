@@ -93,5 +93,90 @@
         "포장"
       ]
     }
-  ]
+  ],
+  "ui_settings": {
+    "businesses": [
+      {
+        "id": "biz-junghwa",
+        "entityType": "corporation",
+        "name": "열정국밥 중화점",
+        "registrationNo": "710-86-04499",
+        "representative": "오윤희",
+        "taxType": "일반과세",
+        "openedAt": "2026-07-01",
+        "address": "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)",
+        "memo": "법인사업자 / 법인등록번호 110111-0961922 / 주류판매신고번호 146-5-11334"
+      },
+      {
+        "id": "biz-sungshin",
+        "entityType": "individual",
+        "name": "열정국밥 성신여대점",
+        "registrationNo": "기초등록 필요",
+        "representative": "미등록",
+        "taxType": "일반과세",
+        "openedAt": "",
+        "address": "",
+        "memo": "개인사업자 2"
+      },
+      {
+        "id": "biz-mia",
+        "entityType": "individual",
+        "name": "열정국밥_미아점",
+        "registrationNo": "874-21-02160",
+        "representative": "최미미",
+        "taxType": "일반과세",
+        "openedAt": "2025-04-01",
+        "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)",
+        "memo": "개인사업자 3 / 주류판매신고번호 210-5-62608"
+      }
+    ],
+    "branches": [
+      {
+        "id": "branch-junghwa",
+        "name": "중화점",
+        "businessId": "biz-junghwa",
+        "status": "active",
+        "phone": "",
+        "address": "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)"
+      },
+      {
+        "id": "branch-sungshin",
+        "name": "성신여대점",
+        "businessId": "biz-sungshin",
+        "status": "active",
+        "phone": "",
+        "address": ""
+      },
+      {
+        "id": "branch-gangbuk-mia",
+        "name": "열정국밥_미아점",
+        "businessId": "biz-mia",
+        "status": "active",
+        "phone": "",
+        "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)"
+      }
+    ],
+    "accounts": [
+      {
+        "id": "acct-sungshin-ibk",
+        "bank": "IBK기업은행",
+        "memo": "통장사본 기준 / 예금종류 보통예금 / 신규일 2017-06-22 / 관리점 삼양동",
+        "name": "성신여대점 운영계좌",
+        "holder": "김영주",
+        "accountNo": "005-106576-01-017",
+        "businessId": "biz-sungshin"
+      }
+    ],
+    "staff": [],
+    "integrations": [
+      {
+        "id": "int-corp",
+        "service": "matepos",
+        "businessId": "biz-mia",
+        "branch": "열정국밥_미아점"
+      }
+    ]
+  },
+  "ui_settings_updated_at": "2026-07-20T14:18:14+09:00",
+  "ui_settings_updated_by": "owner@example.com"
 }
