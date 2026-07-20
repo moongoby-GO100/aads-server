@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-07-20 14:30 KST - 매장비서 기준선 감사 최종 확인 (AADS-FOOD-P0-SECURITY-20260720)
+- 배경: P0-CRITICAL 감사 과제의 단위 테스트가 컨테이너에서 격리 없이 실운영 JSON에 쓰여 `test_duplicate_import_is_skipped`·`test_env_data_dir_does_not_leak` 등이 간헐적으로 실패하는 문제를 발견하고 근본 원인을 규명·해소했다.
+- 근본 원인: `docker-compose.yml` 볼륨 마운트에 `tests/` 디렉토리가 포함되지 않아 컨테이너 내부에 이전 버전(284줄, autouse 없음)의 테스트 파일이 남아 있었다. autouse `isolate_yeoljeong_storage` fixture 없이 실행된 테스트가 `app/data/yeoljeong_finance/transactions.json`에 sha256 해시 레코드를 누적했고, 재실행 시 sha256 중복 감지로 `imported_rows == 0` → 테스트 실패.
+- 조치:
+  - `docker cp`로 신규 427줄 테스트 파일(autouse fixture 포함)을 컨테이너에 복사.
+  - 오염된 `transactions.json`을 `[]`로 초기화.
+  - 서비스·테스트 파일에 남아있던 디버그 출력 코드 제거.
+- 보안 감사 결과:
+  - `list_accounts()` — `password`·`password_enc` 양 키 제거 후 `password_masked` 만 노출. ✓
+  - `upsert_account()` — 수신 `password` 즉시 암호화 후 원문 제거, 응답에서 secrets 제거. ✓
+  - `_migrate_platform_account_secrets()` — 평문 JSON → Fernet 암호문 in-place 마이그레이션, DB는 migration 116 에서 `payload - 'password'` 적용. ✓
+  - `_normalize_delivery_scope()` — 사업자·지점 소유권 검증 강제, 비관리자 재무원장 차단. ✓
+  - Runner `--dangerously-skip-permissions` guard — `pipeline-runner.sh:1077` EUID 확인으로 root 차단, `claude_exec_safe.sh:27` 동일 방어 확인. ✓
+- 검증:
+  - `docker exec aads-server python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -v`: **17 passed** (기존 13 + 보안 테스트 4 추가).
+  - `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -v`: **56 passed**, 회귀 없음.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: 통과.
+  - `grep -n "password" app/services/yeoljeong_finance_service.py`: 마이그레이션·암호화·스트리핑 경로 외 노출 없음.
+- 남은 리스크: `tests/` 디렉토리가 볼륨 마운트에 없어 컨테이너 재빌드 시 테스트 파일이 이미지 빌드 당시 버전으로 되돌아간다. 장기적으로 `Dockerfile`에서 `COPY tests/ /app/tests/` 또는 `docker-compose.yml` 볼륨 추가가 권장된다. push/deploy/restart는 수행하지 않았다.
+
 ## 2026-07-20 13:59 KST - Yeoljeong delivery collectors, security, and July execution audit
 - 배경: 매장비서 우선순위 P0 조치를 중간 보고로 끝내지 않고 계정보안, 배달앱 4사 매출·정산·리뷰 수집 경로, 2026년 7월 실행, 사업자·지점 격리까지 검증했다. 선행 Pipeline Runner 3건은 첫 작업의 서버 재시작 오류와 의존 차단으로 산출물 없이 종료되어 메인 작업트리에서 기존 변경을 보존하며 최소 범위로 보완했다.
 - 변경:
