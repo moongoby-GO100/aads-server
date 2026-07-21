@@ -290,6 +290,56 @@ async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
 
 
 @pytest.mark.asyncio
+async def test_list_messages_render_keeps_content_and_omits_heavy_detail_fields():
+    session_id = str(uuid.uuid4())
+    tenant_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
+    message_id = uuid.uuid4()
+    content = "완성된 보고서 본문" * 100
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=None)
+    conn.fetch = AsyncMock(return_value=[{
+        "id": message_id,
+        "session_id": uuid.UUID(session_id),
+        "execution_id": None,
+        "role": "assistant",
+        "content": content,
+        "intent": None,
+        "model_used": "test-model",
+        "created_at": created_at,
+        "tools_called": [],
+        "has_tools": True,
+        "tool_count": 3,
+        "tool_names": ["query_database"],
+        "status": "completed",
+    }])
+    conn.execute = AsyncMock()
+
+    with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)):
+        result = await chat_service.list_messages(
+            session_id,
+            limit=5,
+            sort="desc",
+            fields="render",
+            tenant_id=tenant_id,
+        )
+
+    query = " ".join(conn.fetch.await_args.args[0].split())
+    assert "role, content, model_used" in query
+    assert "'[]'::jsonb AS tools_called" in query
+    assert "AS has_tools" in query
+    assert "AS tool_count" in query
+    assert "AS tool_names" in query
+    assert "thinking_summary" not in query
+    assert "quality_details" not in query
+    assert "embedding" not in query
+    assert result[0]["content"] == content
+    assert result[0]["has_tools"] is True
+    assert result[0]["tool_count"] == 3
+
+
+@pytest.mark.asyncio
 async def test_repair_completed_execution_message_flags_clears_interrupted_badge():
     message_id = uuid.uuid4()
     execution_id = uuid.uuid4()

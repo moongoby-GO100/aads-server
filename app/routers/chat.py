@@ -1014,7 +1014,7 @@ async def get_messages(
     offset: Optional[int] = Query(None, ge=0),
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
-    fields: str = Query("full", pattern="^(full|minimal)$"),
+    fields: str = Query("full", pattern="^(full|minimal|render)$"),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """메시지 목록 — cursor 기반 페이지네이션 (offset 레거시 호환 유지)."""
@@ -1043,7 +1043,7 @@ async def get_workspace_session_messages(
     offset: Optional[int] = Query(None, ge=0),
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     include_streaming: bool = Query(False, description="진행 중 streaming_placeholder 포함 여부"),
-    fields: str = Query("full", pattern="^(full|minimal)$"),
+    fields: str = Query("full", pattern="^(full|minimal|render)$"),
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """워크스페이스 경로 메시지 목록 — 기존 /chat/messages와 동일한 응답 계약."""
