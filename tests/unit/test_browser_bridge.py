@@ -155,6 +155,40 @@ def test_e2e_config_reports_missing_pinned_session(tmp_path) -> None:
     assert "browser bridge session not found: bb-missing" in config["error"]
 
 
+def test_e2e_config_retires_offline_local_agent_and_falls_back_headless(
+    monkeypatch, tmp_path
+) -> None:
+    from app.services.pc_agent_manager import pc_agent_manager
+
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    local = service.register_trusted_session(
+        label="Offline CEO PC",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9222", "endpoint_kind": "local_agent"},
+        work_key="aads-e2e",
+        activate=True,
+    )
+    monkeypatch.setattr(pc_agent_manager, "get_agent_status", lambda _agent_id: None)
+
+    config = service.e2e_config()
+
+    assert config["mode"] == "headless"
+    assert config["headless_fallback"] is True
+    assert config["fallback_reason"] == "PC_AGENT_OFFLINE"
+    assert config["retired_session_id"] == local.session_id
+    assert config["fallback_chain"] == [
+        "pc_bridge", "headless", "http_api", "container_health"
+    ]
+    retired = service.sessions.get(local.session_id)
+    assert retired is not None
+    assert retired.endpoint.metadata["stale"] is True
+    assert retired.work_key == ""
+
+
 def test_session_registry_persists_sessions_and_leases(tmp_path) -> None:
     first = SessionRegistry(state_dir=tmp_path)
     service = BrowserBridgeService(

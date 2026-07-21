@@ -85,7 +85,12 @@ async def _api_fallback_qa(deploy_url: str, pages: list[str]) -> dict:
     except Exception as e:
         logger.warning("api_fallback_qa_error", error=str(e))
     all_ok = all(c["ok"] for c in checks) if checks else False
-    return {"checks": checks, "all_ok": all_ok, "method": "api_fallback"}
+    return {
+        "checks": checks,
+        "all_ok": all_ok,
+        "method": "http_api_container_health_fallback",
+        "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
+    }
 
 
 # ---------------------------------------------------------------------------

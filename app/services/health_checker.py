@@ -155,13 +155,13 @@ async def check_pipeline_status() -> Dict[str, Any]:
     )
     remote_211 = await _check_remote_211()
 
-    server_68 = {}
+    server_116 = {}
     for i, proc_name in enumerate(processes):
         key = proc_name.replace(".", "_")
         if isinstance(local_results[i], Exception):
-            server_68[key] = {"running": False, "error": str(local_results[i])}
+            server_116[key] = {"running": False, "error": str(local_results[i])}
         else:
-            server_68[key] = local_results[i]
+            server_116[key] = local_results[i]
 
     # overall 판정
     critical_procs = ["bridge_py", "auto_trigger"]
@@ -181,7 +181,8 @@ async def check_pipeline_status() -> Dict[str, Any]:
 
     return {
         "server_211": remote_211,
-        "server_68": server_68,
+        "server_116": server_116,
+        "server_68": {"retired": True, "role": "종료됨 — 운영 조회 대상 아님"},
         "overall": overall,
     }
 

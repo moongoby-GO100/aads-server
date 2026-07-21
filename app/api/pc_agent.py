@@ -9,9 +9,10 @@ import json
 import logging
 import os
 import sys as _sys_reload
+import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -40,6 +41,7 @@ else:
     _EVENT_TABLE_READY = False
     _EVENT_RECORD_FAILURE_COUNT = 0
 _RELOAD_DISCONNECT_FLUSH_TASK: asyncio.Task[Any] | None = None
+_LAST_TELEMETRY_EVENT_AT: dict[str, float] = {}
 # 같은 agent_id 동시 등록 시 레이스 컨디션 방지
 _agent_connect_locks: dict[str, asyncio.Lock] = {}
 if _prev_mod is not None and hasattr(_prev_mod, "_agent_connect_locks"):
@@ -204,7 +206,6 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
     _agent_connections[agent_id] = websocket
     connected_at = datetime.utcnow()
     logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
-    await _record_agent_event(agent_id, "connected")
     disconnect_recorded = False
     disconnect_reason = ""
     disconnect_metadata: dict[str, Any] = {}
@@ -259,9 +260,16 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             return
         device_type = (msg.payload or {}).get("device_type", "pc")
         version = (msg.payload or {}).get("version", "")
+        capabilities = list((msg.payload or {}).get("capabilities") or [])
+        node_role = str((msg.payload or {}).get("node_role") or "interactive")
         await _record_agent_event(
             agent_id, "connected",
-            metadata={"device_type": device_type, "version": version},
+            metadata={
+                "device_type": device_type,
+                "version": version,
+                "node_role": node_role,
+                "capabilities": capabilities,
+            },
         )
         pc_agent_manager.register_agent(agent_id, websocket, msg.payload)
     except (asyncio.TimeoutError, Exception) as exc:
@@ -307,7 +315,11 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             msg = WSMessage.model_validate(raw)
 
             if msg.type == "heartbeat":
-                pc_agent_manager.update_heartbeat(agent_id)
+                pc_agent_manager.update_heartbeat(agent_id, msg.payload)
+                now_monotonic = time.monotonic()
+                if msg.payload and now_monotonic - _LAST_TELEMETRY_EVENT_AT.get(agent_id, 0.0) >= 300:
+                    _LAST_TELEMETRY_EVENT_AT[agent_id] = now_monotonic
+                    await _record_agent_event(agent_id, "heartbeat_status", metadata=msg.payload)
                 await websocket.send_json(
                     {"type": "heartbeat", "id": msg.id, "payload": {}}
                 )
@@ -873,7 +885,7 @@ async def _offline_monitor_loop() -> None:
                     pool = get_pool()
                     async with pool.acquire() as conn:
                         row = await conn.fetchrow(
-                            "SELECT created_at FROM pc_agent_connection_events "
+                            "SELECT created_at, metadata FROM pc_agent_connection_events "
                             "WHERE event = 'disconnected' ORDER BY id DESC LIMIT 1"
                         )
                     if row:
@@ -894,9 +906,15 @@ async def _offline_monitor_loop() -> None:
                                 from app.services.telegram_bot import get_telegram_bot
                                 bot = get_telegram_bot()
                                 if bot:
+                                    disconnected_at = row["created_at"]
+                                    if disconnected_at.tzinfo is None:
+                                        disconnected_at = disconnected_at.replace(tzinfo=timezone.utc)
+                                    disconnected_kst = disconnected_at.astimezone(
+                                        timezone(timedelta(hours=9))
+                                    )
                                     await bot.send_message(
                                         f"⚠️ {device_label} offline {int(elapsed)}초 경과\n"
-                                        f"마지막 끊김: {row['created_at'].strftime('%H:%M KST')}"
+                                        f"마지막 끊김: {disconnected_kst.strftime('%Y-%m-%d %H:%M KST')}"
                                     )
                             except Exception as e:
                                 logger.warning("pc_agent_offline_alert_fail: %s", e)
@@ -915,16 +933,102 @@ async def _offline_monitor_loop() -> None:
         await asyncio.sleep(30)
 
 
-def _ensure_offline_monitor() -> None:
+def start_pc_agent_offline_monitor() -> asyncio.Task[Any] | None:
+    """Start the monitor from FastAPI lifespan; safe to call repeatedly."""
     global _OFFLINE_MONITOR_TASK
     if _OFFLINE_MONITOR_TASK is not None and not _OFFLINE_MONITOR_TASK.done():
-        return
+        return _OFFLINE_MONITOR_TASK
     try:
         loop = asyncio.get_running_loop()
         _OFFLINE_MONITOR_TASK = loop.create_task(_offline_monitor_loop())
         logger.info("pc_agent_offline_monitor_started")
     except RuntimeError:
+        return None
+    return _OFFLINE_MONITOR_TASK
+
+
+def _ensure_offline_monitor() -> None:
+    start_pc_agent_offline_monitor()
+
+
+async def stop_pc_agent_offline_monitor() -> None:
+    global _OFFLINE_MONITOR_TASK
+    task = _OFFLINE_MONITOR_TASK
+    _OFFLINE_MONITOR_TASK = None
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
         pass
+    logger.info("pc_agent_offline_monitor_stopped")
+
+
+@router.post("/pc-agent/launcher-status")
+async def ingest_launcher_status(payload: dict[str, Any]):
+    """Receive sanitized launcher/watchdog telemetry from a Windows node."""
+    token = str(payload.get("agent_token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="agent_token required")
+    if not (token == PC_AGENT_SECRET or await _verify_token_db(token)):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    agent_id = str(payload.get("agent_id") or "unknown")[:64]
+    allowed = {
+        "hostname", "version", "node_role", "launcher_pid", "launcher_uptime_seconds",
+        "launcher_start_count", "worker_restart_count", "worker_connected",
+        "worker_disconnected_seconds", "watchdog_task", "startup_registration", "reported_at",
+    }
+    metadata = {key: payload.get(key) for key in allowed if key in payload}
+    metadata["device_type"] = "pc"
+    await _record_agent_event(agent_id, "launcher_status", metadata=metadata)
+    return {"ok": True, "agent_id": agent_id}
+
+
+@router.get("/pc-agent/diagnostics")
+async def pc_agent_diagnostics():
+    """Return online agent details and the latest launcher telemetry per node."""
+    launcher_rows: list[dict[str, Any]] = []
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (agent_id) agent_id, created_at, metadata
+                FROM pc_agent_connection_events
+                WHERE event IN ('launcher_status', 'heartbeat_status')
+                ORDER BY agent_id, created_at DESC
+                """
+            )
+        launcher_rows = [
+            {
+                "agent_id": row["agent_id"],
+                "reported_at": row["created_at"].isoformat(),
+                "status": dict(row["metadata"] or {}),
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        logger.warning("pc_agent_diagnostics_query_failed: %s", exc)
+    return {
+        "online_agents": pc_agent_manager.list_agent_statuses(),
+        "latest_launcher_status": launcher_rows,
+    }
+
+
+@router.get("/pc-agent/e2e-node/status")
+async def pc_agent_e2e_node_status():
+    agents = pc_agent_manager.list_agent_statuses()
+    nodes = [agent for agent in agents if "windows_e2e" in set(agent.get("capabilities") or [])]
+    return {
+        "ready": bool(nodes),
+        "online_count": len(nodes),
+        "required_capability": "windows_e2e",
+        "nodes": nodes,
+    }
 
 
 # ── Client log ingestion (v1.0.46) ─────────────────────────────────────

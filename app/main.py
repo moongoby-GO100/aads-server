@@ -1549,6 +1549,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"kakaobot_scheduler_start_failed: {e}")
 
+    # PC Agent offline monitoring must start with the API, not on first health request.
+    try:
+        from app.api.pc_agent import start_pc_agent_offline_monitor
+
+        start_pc_agent_offline_monitor()
+        logger.info("pc_agent_offline_monitor_started_at_boot")
+    except Exception as e:
+        logger.warning(f"pc_agent_offline_monitor_start_failed: {e}")
+
     # Memory Store 초기화 (T-011)
     try:
         await memory_store.initialize()
@@ -1582,6 +1591,8 @@ async def lifespan(app: FastAPI):
 
     # 종료 정리 — PC Agent WebSocket graceful-shutdown (SIGTERM/Docker 재시작 시 code=1012 전송)
     try:
+        from app.api.pc_agent import stop_pc_agent_offline_monitor
+        await stop_pc_agent_offline_monitor()
         from app.services.pc_agent_manager import pc_agent_manager
         _pc_closed = await pc_agent_manager.close_all_connections(reason="server_shutdown")
         if _pc_closed:

@@ -143,7 +143,13 @@ async def test_ws_pc_agent_records_heartbeat_timeout_and_closes_socket(monkeypat
         for recorded in mock_record.await_args_list
         if recorded.args[:2] == ("ceo-pc", "disconnected")
     ]
+    connected_calls = [
+        recorded
+        for recorded in mock_record.await_args_list
+        if recorded.args[:2] == ("ceo-pc", "connected")
+    ]
 
+    assert len(connected_calls) == 1
     assert disconnected_calls
     assert disconnected_calls[-1].kwargs["reason"] == "heartbeat_timeout"
     assert disconnected_calls[-1].kwargs["metadata"]["close_reason"] == "heartbeat_timeout"

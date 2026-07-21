@@ -175,6 +175,8 @@ class PCAgentManager:
             agent_id=agent_id,
             hostname=info.get("hostname", ""),
             os_info=info.get("os_info", ""),
+            version=str(info.get("version") or ""),
+            node_role=str(info.get("node_role") or "interactive"),
             capabilities=sorted(capabilities),
             command_types=sorted(command_type_set),
         )
@@ -302,11 +304,13 @@ class PCAgentManager:
             event.set()
         logger.info("pc_agent_result_received command_id=%s status=%s", command_id, stored.status)
 
-    def update_heartbeat(self, agent_id: str) -> None:
+    def update_heartbeat(self, agent_id: str, telemetry: Dict[str, Any] | None = None) -> None:
         """에이전트 하트비트 갱신."""
         conn = self._agents.get(agent_id)
         if conn:
             conn.info.last_heartbeat = datetime.utcnow()
+            if isinstance(telemetry, dict) and telemetry:
+                conn.info.telemetry = dict(telemetry)
 
     # ── 스트리밍 ──────────────────────────────────────────────────
 
@@ -631,6 +635,9 @@ class PCAgentManager:
             "agent_id": conn.info.agent_id,
             "hostname": conn.info.hostname,
             "os_info": conn.info.os_info,
+            "version": conn.info.version,
+            "node_role": conn.info.node_role,
+            "telemetry": dict(conn.info.telemetry or {}),
             "status": "online" if online else "offline",
             "heartbeat_age_seconds": round(heartbeat_age_seconds, 1),
             "capabilities": list(conn.info.capabilities),

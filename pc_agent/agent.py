@@ -50,6 +50,7 @@ INSTALL_DIR = Path(os.environ.get(
     ),
 ))
 CONFIG_PATH = INSTALL_DIR / "config.json"
+AGENT_START_COUNT_FILE = INSTALL_DIR / ".agent_start_count"
 
 # PyInstaller --windowed 환경: sys.stderr=None → StreamHandler 사용 불가
 # FileHandler만 사용하여 깜박임 방지
@@ -156,6 +157,34 @@ def _is_truthy(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _read_agent_config() -> dict[str, Any]:
+    try:
+        value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _node_role() -> str:
+    return str(
+        os.getenv("AADS_PC_AGENT_NODE_ROLE", "")
+        or _read_agent_config().get("node_role")
+        or "interactive"
+    ).strip().lower()
+
+
+def _increment_agent_start_count() -> int:
+    try:
+        count = int(AGENT_START_COUNT_FILE.read_text(encoding="utf-8").strip() or "0") + 1
+    except Exception:
+        count = 1
+    try:
+        AGENT_START_COUNT_FILE.write_text(str(count), encoding="utf-8")
+    except Exception:
+        pass
+    return count
+
+
 def _collect_capabilities() -> list[str]:
     caps = {"pc_control"}
     if "browser_launch" in COMMAND_HANDLERS:
@@ -174,6 +203,9 @@ def _collect_capabilities() -> list[str]:
 
     if _is_truthy(os.getenv("AADS_PC_AGENT_ENABLE_VVIC", "")):
         caps.add("vvic")
+
+    if _node_role() == "windows_e2e":
+        caps.add("windows_e2e")
 
     return sorted(caps)
 
@@ -220,6 +252,10 @@ class PCAgent:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
         self._last_server_message_monotonic: float | None = None
+        self._started_at = time.time()
+        self._agent_start_count = _increment_agent_start_count()
+        self._telemetry_cache: dict[str, Any] = {}
+        self._telemetry_cached_at = 0.0
 
     def _get_version(self) -> str:
         """VERSION 파일에서 에이전트 버전 읽기."""
@@ -230,6 +266,56 @@ class PCAgent:
         except Exception:
             pass
         return "unknown"
+
+    def _runtime_telemetry(self) -> dict[str, Any]:
+        """Collect auto-recovery state; cached to keep heartbeat inexpensive."""
+        now = time.time()
+        if self._telemetry_cache and now - self._telemetry_cached_at < 60:
+            return dict(self._telemetry_cache)
+
+        watchdog: dict[str, Any] = {"registered": False, "platform": sys.platform}
+        startup: dict[str, Any] = {"registered": False, "platform": sys.platform}
+        if sys.platform == "win32":
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ["schtasks", "/Query", "/TN", "KakaoBotWatchdog", "/FO", "LIST"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                watchdog = {
+                    "registered": result.returncode == 0,
+                    "return_code": result.returncode,
+                    "summary": (result.stdout or result.stderr or "").strip()[:1000],
+                }
+            except Exception as exc:
+                watchdog = {"registered": False, "error": type(exc).__name__}
+            try:
+                import winreg
+
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Run",
+                )
+                value, _ = winreg.QueryValueEx(key, "KakaoBot")
+                winreg.CloseKey(key)
+                startup = {"registered": bool(value), "command_present": bool(str(value).strip())}
+            except Exception as exc:
+                startup = {"registered": False, "error": type(exc).__name__}
+
+        self._telemetry_cache = {
+            "node_role": _node_role(),
+            "agent_pid": os.getpid(),
+            "launcher_or_parent_pid": os.getppid(),
+            "agent_uptime_seconds": int(max(0, now - self._started_at)),
+            "agent_start_count": self._agent_start_count,
+            "watchdog_task": watchdog,
+            "startup_registration": startup,
+        }
+        self._telemetry_cached_at = now
+        return dict(self._telemetry_cache)
 
     async def run(self) -> None:
         """메인 루프 — 서버 연결 + 재연결 (지수 백오프).
@@ -339,6 +425,7 @@ class PCAgent:
                         "hostname": self.hostname,
                         "os_info": self.os_info,
                         "version": self._get_version(),
+                        "node_role": _node_role(),
                         "capabilities": _collect_capabilities(),
                         "command_types": _collect_command_types(),
                     },
@@ -422,7 +509,7 @@ class PCAgent:
                 await ws.send(json.dumps({
                     "type": "heartbeat",
                     "id": str(uuid.uuid4()),
-                    "payload": {},
+                    "payload": self._runtime_telemetry(),
                 }))
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
             except Exception:

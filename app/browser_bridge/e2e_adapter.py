@@ -30,6 +30,7 @@ def build_e2e_config(session_id: str | None = None) -> dict[str, Any]:
             "session_id": session_id,
             "cdp_url": cdp_url,
             "headless_fallback": True,
+            "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
         }
 
     ws_url = os.environ.get("AADS_BROWSER_BRIDGE_WS_URL", "").strip()
@@ -40,6 +41,7 @@ def build_e2e_config(session_id: str | None = None) -> dict[str, Any]:
             "session_id": session_id,
             "ws_url": ws_url,
             "headless_fallback": True,
+            "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
         }
 
     storage_state = os.environ.get("AADS_BROWSER_BRIDGE_STORAGE_STATE", "").strip()
@@ -49,6 +51,7 @@ def build_e2e_config(session_id: str | None = None) -> dict[str, Any]:
             "session_id": session_id,
             "storage_state_path": storage_state,
             "headless_fallback": True,
+            "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
         }
 
     return get_browser_bridge_service().e2e_config(session_id=session_id)

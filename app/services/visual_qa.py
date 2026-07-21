@@ -62,13 +62,22 @@ async def main(base_url, pages, out_dir, project_id, browser_bridge):
         cdp_url = (browser_bridge or {}).get("cdp_url") or ""
         ws_url = (browser_bridge or {}).get("ws_url") or ""
         storage_state = (browser_bridge or {}).get("storage_state_path") or None
-        if cdp_url:
-            browser = await p.chromium.connect_over_cdp(cdp_url)
-            context = browser.contexts[0] if browser.contexts else await browser.new_context(viewport={"width": 1920, "height": 1080})
-        elif ws_url:
-            browser = await p.chromium.connect(ws_url)
-            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        else:
+        allow_headless = bool((browser_bridge or {}).get("headless_fallback", True))
+        context = None
+        browser = None
+        try:
+            if cdp_url:
+                browser = await p.chromium.connect_over_cdp(cdp_url)
+                context = browser.contexts[0] if browser.contexts else await browser.new_context(viewport={"width": 1920, "height": 1080})
+            elif ws_url:
+                browser = await p.chromium.connect(ws_url)
+                context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+        except Exception:
+            if not allow_headless:
+                raise
+            browser = None
+            context = None
+        if context is None:
             browser = await p.chromium.launch(headless=True)
             launched_browser = True
             context_args = {"viewport": {"width": 1920, "height": 1080}}

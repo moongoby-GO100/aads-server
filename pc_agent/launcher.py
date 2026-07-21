@@ -30,6 +30,7 @@ VERSION_FILE = AGENT_DIR / "VERSION"
 DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/pc-agent/ws"
 HTTP_BASE = "https://aads.newtalk.kr"
 CRASH_COUNT_FILE = INSTALL_DIR / ".crash_count"
+LAUNCH_COUNT_FILE = INSTALL_DIR / ".launcher_start_count"
 MAX_CRASHES_BEFORE_REDOWNLOAD = 3
 MAX_REDOWNLOADS_PER_HOUR = 3
 SELF_UPDATE_EXIT_CODE = 42
@@ -283,6 +284,105 @@ def _force_redownload() -> None:
         pass
 
 
+def _increment_launcher_start_count() -> int:
+    """Persist how often the launcher itself has started on this Windows node."""
+    try:
+        count = int(LAUNCH_COUNT_FILE.read_text(encoding="utf-8").strip() or "0") + 1
+    except Exception:
+        count = 1
+    try:
+        LAUNCH_COUNT_FILE.write_text(str(count), encoding="utf-8")
+    except Exception:
+        pass
+    return count
+
+
+def _startup_registration_status() -> dict:
+    if sys.platform != "win32":
+        return {"registered": False, "platform": sys.platform}
+    try:
+        import winreg
+
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+        )
+        value, _ = winreg.QueryValueEx(key, "KakaoBot")
+        winreg.CloseKey(key)
+        return {"registered": bool(value), "command_present": bool(str(value).strip())}
+    except Exception as exc:
+        return {"registered": False, "error": type(exc).__name__}
+
+
+def _watchdog_task_status() -> dict:
+    if sys.platform != "win32":
+        return {"registered": False, "platform": sys.platform}
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", "KakaoBotWatchdog", "/FO", "LIST"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = (result.stdout or result.stderr or "").strip()
+        return {
+            "registered": result.returncode == 0,
+            "return_code": result.returncode,
+            "summary": output[:1000],
+        }
+    except Exception as exc:
+        return {"registered": False, "error": type(exc).__name__}
+
+
+def _send_launcher_status(
+    cfg: dict,
+    *,
+    launcher_started_at: float,
+    launcher_start_count: int,
+    worker_restart_count: int,
+    proc,
+    disconnected_since: float | None,
+) -> None:
+    """Send a best-effort heartbeat without blocking the launcher watchdog loop."""
+    token = str(cfg.get("agent_token") or "")
+    if not token:
+        return
+    worker_connected = bool(proc and getattr(proc, "is_connected", False))
+    payload = {
+        "agent_token": token,
+        "agent_id": str(cfg.get("agent_id") or "unknown"),
+        "hostname": os.environ.get("COMPUTERNAME", ""),
+        "version": VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "unknown",
+        "node_role": str(cfg.get("node_role") or "interactive"),
+        "launcher_pid": os.getpid(),
+        "launcher_uptime_seconds": int(max(0, time.time() - launcher_started_at)),
+        "launcher_start_count": launcher_start_count,
+        "worker_restart_count": worker_restart_count,
+        "worker_connected": worker_connected,
+        "worker_disconnected_seconds": (
+            int(max(0, time.time() - disconnected_since)) if disconnected_since else 0
+        ),
+        "watchdog_task": _watchdog_task_status(),
+        "startup_registration": _startup_registration_status(),
+        "reported_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+
+    def _post() -> None:
+        try:
+            from urllib import request as _req
+
+            req = _req.Request(
+                f"{HTTP_BASE}/api/v1/pc-agent/launcher-status",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            _req.urlopen(req, timeout=10).read()
+        except Exception as exc:
+            logger.debug("launcher_status_upload_failed: %s", exc)
+
+    threading.Thread(target=_post, daemon=True, name="LauncherStatusUpload").start()
+
+
 def register_startup() -> None:
     """HKCU Run에 런처 등록."""
     if sys.platform != "win32":
@@ -349,6 +449,7 @@ def run_agent(cfg: dict):
     os.environ["AADS_SERVER_URL"] = cfg.get("server_url", DEFAULT_SERVER_URL)
     os.environ["AADS_AGENT_TOKEN"] = cfg.get("agent_token", "")
     os.environ["KAKAOBOT_INSTALL_DIR"] = str(INSTALL_DIR)
+    os.environ["AADS_PC_AGENT_NODE_ROLE"] = str(cfg.get("node_role") or "interactive")
 
     # agent_id 영속화 — 재시작마다 새 UUID 생성하면 서버에 좀비 연결 누적
     import uuid as _uuid
@@ -462,6 +563,8 @@ def main() -> None:
     """런처 메인 진입점."""
     logger.info("=== KakaoBot 런처 시작 ===")
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    launcher_started_at = time.time()
+    launcher_start_count = _increment_launcher_start_count()
 
     # 단일 인스턴스 보장 — Windows named mutex
     if sys.platform == "win32":
@@ -590,12 +693,28 @@ def main() -> None:
     RECONNECT_WATCHDOG_TIMEOUT = 120  # 120초 이상 미연결 시 강제 재시작
     WORKER_ACTIVITY_TIMEOUT = 120  # 트레이만 살아 있고 WebSocket worker가 멈춘 상태 감지
     last_update_check = time.time()
+    last_status_upload = 0.0
     disconnected_since = None
+    worker_restart_count = 0
+    observed_proc = proc
     _set_crash_count(0)  # 정상 시작 시 크래시 카운터 리셋
 
     try:
         while True:
             proc_ref[0] = proc  # tray가 항상 최신 에이전트 인스턴스를 참조
+            if proc is not None and proc is not observed_proc:
+                worker_restart_count += 1
+                observed_proc = proc
+            if time.time() - last_status_upload >= 60:
+                last_status_upload = time.time()
+                _send_launcher_status(
+                    cfg,
+                    launcher_started_at=launcher_started_at,
+                    launcher_start_count=launcher_start_count,
+                    worker_restart_count=worker_restart_count,
+                    proc=proc,
+                    disconnected_since=disconnected_since,
+                )
             if proc is None:
                 logger.error("proc is None — 에이전트 복구 시도")
                 time.sleep(5)

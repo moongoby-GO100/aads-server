@@ -1,1 +1,2 @@
+v1.0.51: PC Agent 자동복구 텔레메트리·Windows E2E 노드 역할·버전/capability 진단 추가
 v1.0.50: 좀비 _auto_update_loop 버그 수정 — WebSocket 끊김 감지 추가

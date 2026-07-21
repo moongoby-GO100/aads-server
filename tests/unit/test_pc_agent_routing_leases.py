@@ -60,6 +60,8 @@ def test_register_agent_status_exposes_shell_alias_command_types() -> None:
         ws,  # type: ignore[arg-type]
         {
             "hostname": "ceo",
+            "version": "1.0.51",
+            "node_role": "windows_e2e",
             "capabilities": ["pc_control"],
             "command_types": ["shell", "system_info", "app_launch"],
         },
@@ -69,9 +71,16 @@ def test_register_agent_status_exposes_shell_alias_command_types() -> None:
 
     assert status is not None
     assert status["status"] == "online"
+    assert status["version"] == "1.0.51"
+    assert status["node_role"] == "windows_e2e"
     assert {"shell", "cmd", "powershell", "system_info", "app_launch"} <= set(status["command_types"])
     assert status["heartbeat_age_seconds"] >= 0
     assert status["last_seen"]
+
+    manager.update_heartbeat("ceo-pc", {"agent_start_count": 3, "watchdog_task": {"registered": True}})
+    status = manager.get_agent_status("ceo-pc")
+    assert status["telemetry"]["agent_start_count"] == 3
+    assert status["telemetry"]["watchdog_task"]["registered"] is True
 
 
 @pytest.mark.asyncio

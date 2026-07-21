@@ -15,6 +15,9 @@ class AgentInfo(BaseModel):
     agent_id: str
     hostname: str = ""
     os_info: str = ""
+    version: str = ""
+    node_role: str = "interactive"
+    telemetry: Dict[str, Any] = Field(default_factory=dict)
     capabilities: list[str] = Field(default_factory=list)
     command_types: list[str] = Field(default_factory=list)
     connected_at: datetime = Field(default_factory=datetime.utcnow)

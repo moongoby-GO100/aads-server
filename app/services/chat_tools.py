@@ -135,15 +135,17 @@ async def health_check(message: str, workspace_id: str) -> Dict[str, Any]:
         return {
             "status": quick.get("status", "UNKNOWN"),
             "checked_at": quick.get("checked_at", datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")),
-            "server_68": {
+            "server_116": {
                 "ok": True,
-                "role": "AADS Backend+Dashboard (현재 서버)",
+                "role": "AADS Backend+Dashboard (현재 운영 서버)",
+                "host": "5.104.86.116",
                 "db_ok": db_res.get("ok", False),
                 "db_latency_ms": db_res.get("latency_ms", "?"),
                 "disk_usage_pct": disk_res.get("usage_pct", "?"),
                 "disk_used": disk_res.get("used", "?"),
                 "disk_total": disk_res.get("total", "?"),
             },
+            "server_68": {"retired": True, "role": "종료됨 — 운영 조회 대상 아님"},
             "server_211": {"note": "Hub/bridge — SSH 체크 제외 (별도 모니터링)"},
             "server_114": {"note": "SF/NTV2/NAS — SSH 체크 제외 (별도 모니터링)"},
             "directives": {

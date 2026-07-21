@@ -612,6 +612,8 @@ class BrowserBridgeService:
             metadata = dict(session.endpoint.metadata or {})
             if metadata.get("stale"):
                 return False
+            # Tool processes may not own the websocket themselves; command
+            # execution still has an active-API routing fallback.
             return bool(metadata.get("agent_id") and metadata.get("port"))
         browser = self._session_browsers.get(session.session_id)
         if browser is not None and hasattr(browser, "is_connected"):
@@ -620,6 +622,46 @@ class BrowserBridgeService:
             except Exception:
                 return False
         return True
+
+    @staticmethod
+    def _local_agent_online(session: BrowserBridgeSession) -> bool:
+        """Return whether the LOCAL_AGENT session still has a healthy websocket."""
+        metadata = dict(session.endpoint.metadata or {})
+        agent_id = str(metadata.get("agent_id") or "").strip()
+        if not agent_id or not metadata.get("port"):
+            return False
+        try:
+            from app.services.pc_agent_manager import pc_agent_manager
+
+            status = pc_agent_manager.get_agent_status(agent_id)
+        except Exception:
+            return False
+        return bool(status and status.get("status") == "online")
+
+    def _retire_offline_local_agent_session(
+        self,
+        session: BrowserBridgeSession,
+        *,
+        reason: str = "PC_AGENT_OFFLINE",
+    ) -> None:
+        metadata = dict(session.endpoint.metadata or {})
+        metadata["stale"] = True
+        metadata["stale_reason"] = reason
+        session.endpoint.metadata = metadata
+        self.sessions.retire_session(
+            session.session_id,
+            stale_reason=reason,
+            clear_work_key=True,
+            clear_lease=True,
+        )
+        self._session_contexts.pop(session.session_id, None)
+        self._session_browsers.pop(session.session_id, None)
+        logger.warning(
+            "browser_bridge_local_agent_retired_for_headless_fallback session_id=%s agent_id=%s reason=%s",
+            session.session_id,
+            metadata.get("agent_id"),
+            reason,
+        )
 
     def _extract_pc_agent_route_error(self, result: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
         detail = dict(result or {})
@@ -984,12 +1026,18 @@ class BrowserBridgeService:
                 "error": f"browser bridge session not found: {session_id}",
             }
         if not session:
-            return {"mode": "headless", "session_id": None, "headless_fallback": True}
+            return {
+                "mode": "headless",
+                "session_id": None,
+                "headless_fallback": True,
+                "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
+            }
 
         config: dict[str, Any] = {
             "mode": session.endpoint.kind.value,
             "session_id": session.session_id,
             "headless_fallback": True,
+            "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
         }
         if session.endpoint.kind == BrowserEndpointKind.CDP:
             config["endpoint_url"] = session.endpoint.url
@@ -999,10 +1047,19 @@ class BrowserBridgeService:
             config["ws_url"] = session.endpoint.url
         elif session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT:
             metadata = dict(session.endpoint.metadata or {})
+            if not self._local_agent_online(session):
+                self._retire_offline_local_agent_session(session)
+                return {
+                    "mode": "headless",
+                    "session_id": None,
+                    "headless_fallback": True,
+                    "fallback_reason": "PC_AGENT_OFFLINE",
+                    "retired_session_id": session.session_id,
+                    "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
+                }
             config["agent_id"] = metadata.get("agent_id")
             config["port"] = metadata.get("port")
             config["cdp_url"] = metadata.get("cdp_url")
-            config["headless_fallback"] = False
         if session.storage_state_ref:
             config["storage_state_path"] = self.storage_states.path_for_playwright(
                 session.storage_state_ref
