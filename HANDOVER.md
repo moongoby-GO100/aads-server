@@ -4334,3 +4334,28 @@
 - 남은 작업:
   - 배민·쿠팡이츠 실수집은 CEO PC Browser Bridge를 켠 상태에서 재실행해야 한다.
   - 요기요는 공유 자격증명 확인 또는 포털 로그인 방식 재등록이 필요하다.
+
+## 2026-07-21 14:23 KST - Chat deep-link message recovery final closeout
+
+- 대상: `https://aads.newtalk.kr/chat/aa433b41-0ad2-421c-ae7c-bac4806035cc` 새로고침 후 메시지 본문이 표시되지 않던 장애.
+- 원인:
+  - 대시보드는 메시지 타임라인을 `fields=render`로 요청했으나 당시 활성 API 슬롯은 `full|minimal`만 허용해 HTTP 422를 반환했다.
+  - `/chat/{session_id}` 직접 복원 경로도 query/hash만 읽는 구형 경로와 redirect 경합이 있었다.
+- 코드 조치:
+  - API `fields` 계약에 `render`를 추가하고, 전체 본문은 유지하면서 무거운 tool detail payload는 지연 조회하도록 render projection을 구현했다.
+  - 대시보드는 pathname의 세션 ID를 직접 복원하고 `/chat/[id]`에서 ChatPage를 직접 렌더한다.
+  - 임시 `public/e2e-auth.html` 도우미를 삭제하고 대용량 메시지 행에 viewport virtualization을 적용했다.
+- 2026-07-21 최종 실측:
+  - 대상 세션 DB: 메시지 3,729건, 아티팩트 2,158건, 제목 `GO100-002[CTO]` 보존.
+  - API blue(8100)/green(8102) 모두 render projection 함수 검증 통과. 무토큰 render 요청은 양 슬롯 모두 HTTP 401로 응답해 422 계약 오류가 재발하지 않음을 확인했다.
+  - 원격 최신 `origin/main` 기반 회귀테스트: `test_list_messages_render_keeps_content_and_omits_heavy_detail_fields` 1건 통과, Python compile 및 `git diff --check` 통과.
+  - 외부 `/api/v1/health` HTTP 200. 세션 URL 비로그인 요청은 원 경로를 보존한 로그인 URL로 HTTP 307.
+  - 대시보드 blue/green 모두 healthy, 임시 E2E helper 파일 부재, 외부 `/static/e2e-auth.html` HTTP 404 확인.
+  - 로그인 관리자 브라우저에서 동일 URL의 메시지 DOM 렌더를 확인했고, 이후 CEO가 실제 브라우저에서 표시됨을 확인했다.
+- 배포/롤백:
+  - API active green(8102), standby blue(8100); dashboard active green(3101), standby blue(3100). 네 컨테이너 모두 healthy이고 nginx config test를 통과했다.
+  - 양 API 슬롯이 동일 render 계약을 제공해 어느 슬롯으로 롤백해도 해당 422 회귀가 발생하지 않는다.
+- Git/문서:
+  - 원격 최신 main에 적용한 API 코드 커밋은 `2fc3f6da`이다.
+  - 대시보드 복구 커밋은 로컬 dashboard 저장소 `dfe515a`, E2E helper 제거/virtualization 커밋은 `535e7a8`이며 해당 저장소에는 remote가 없어 push하지 못했다.
+  - 이 항목은 서버 원격 main의 후속 문서 커밋으로 기록한다.
