@@ -516,12 +516,7 @@
     }
 
     .contract-paper {
-      box-sizing: border-box;
-      width: min(100%, 210mm);
-      min-height: 297mm;
-      margin: 0 auto;
-      padding: 18mm 16mm;
-      background: #fff;
+      padding: 18px;
       color: var(--text);
       line-height: 1.6;
       font-size: 13px;
@@ -754,6 +749,129 @@
       width: min(460px, 100%);
     }
 
+    .contract-preview-modal {
+      width: min(1040px, 100%);
+      overflow: hidden;
+    }
+
+    .file-preview-modal {
+      width: min(1100px, 100%);
+      overflow: hidden;
+    }
+
+    .file-preview-modal .panel-head {
+      border-bottom: 1px solid var(--line);
+      background: white;
+    }
+
+    .file-preview-stage {
+      display: grid;
+      place-items: center;
+      min-height: min(680px, calc(100vh - 130px));
+      max-height: calc(100vh - 112px);
+      overflow: auto;
+      padding: 14px;
+      background: #dfe4e8;
+    }
+
+    .file-preview-frame {
+      width: 100%;
+      height: min(680px, calc(100vh - 150px));
+      border: 0;
+      border-radius: 6px;
+      background: white;
+    }
+
+    .file-preview-image {
+      display: block;
+      max-width: 100%;
+      max-height: calc(100vh - 160px);
+      object-fit: contain;
+      border-radius: 6px;
+      background: white;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .14);
+    }
+
+    .file-preview-message {
+      max-width: 560px;
+      padding: 24px;
+      border-radius: 8px;
+      background: white;
+      text-align: center;
+      color: var(--text-secondary);
+    }
+
+    .contract-preview-modal .panel-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: white;
+    }
+
+    .contract-preview-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .contract-preview-stage {
+      max-height: calc(100vh - 112px);
+      overflow: auto;
+      padding: 18px;
+      background: #dfe4e8;
+    }
+
+    .contract-a4-paper {
+      box-sizing: border-box;
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 18mm 16mm;
+      background: white;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
+    }
+
+    @media (max-width: 860px) {
+      .contract-preview-stage { padding: 10px; }
+      .contract-a4-paper { margin: 0; }
+    }
+
+    @media print {
+      @page { size: A4 portrait; margin: 0; }
+      body.contract-preview-printing > *:not(#contractPreviewModal) { display: none !important; }
+      body.contract-preview-printing #contractPreviewModal {
+        position: static;
+        display: block !important;
+        padding: 0;
+        background: white;
+      }
+      body.contract-preview-printing .contract-preview-modal {
+        width: 210mm;
+        max-height: none;
+        overflow: visible;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      body.contract-preview-printing .contract-preview-modal .panel-head { display: none; }
+      body.contract-preview-printing .contract-preview-stage {
+        max-height: none;
+        overflow: visible;
+        padding: 0;
+        background: white;
+      }
+      body.contract-preview-printing .contract-a4-paper {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0;
+        box-shadow: none;
+      }
+    }
+
     .file-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -858,69 +976,6 @@
       color: var(--muted);
       font-size: 12px;
       line-height: 1.5;
-    }
-
-    @page {
-      size: A4 portrait;
-      margin: 12mm;
-    }
-
-    @media print {
-      html, body {
-        width: 210mm;
-        min-height: 297mm;
-        margin: 0;
-        padding: 0;
-        background: #fff;
-      }
-
-      body * {
-        visibility: hidden !important;
-      }
-
-      #contractPreviewCard,
-      #contractPreviewCard * {
-        visibility: visible !important;
-      }
-
-      #contractPreviewCard {
-        position: absolute;
-        inset: 0 auto auto 0;
-        box-sizing: border-box;
-        width: 186mm;
-        margin: 0;
-        border: 0;
-        border-radius: 0;
-        overflow: visible;
-        box-shadow: none;
-        background: #fff;
-      }
-
-      #contractPreviewCard .contract-preview-head {
-        display: none !important;
-      }
-
-      #contractPreviewBody {
-        width: 186mm;
-        min-height: 273mm;
-        margin: 0;
-        padding: 0;
-        color: #000;
-        font-size: 10pt;
-        line-height: 1.45;
-      }
-
-      #contractPreviewBody h3 {
-        font-size: 18pt;
-      }
-
-      #contractPreviewBody h4,
-      #contractPreviewBody li,
-      #contractPreviewBody .preview-row,
-      #contractPreviewBody .contract-notice {
-        break-inside: avoid;
-        page-break-inside: avoid;
-      }
     }
 
     @media (max-width: 1120px) {
@@ -2163,6 +2218,40 @@
     </section>
   </div>
 
+  <div id="contractPreviewModal" class="modal-backdrop hidden">
+    <section class="modal contract-preview-modal" role="dialog" aria-modal="true" aria-labelledby="contractPreviewModalTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="contractPreviewModalTitle" class="panel-title">계약서 A4 미리보기</h2>
+          <span id="contractPreviewModalBadge" class="muted">입력값 기준</span>
+        </div>
+        <div class="contract-preview-actions">
+          <button type="button" id="printContractPreviewBtn" class="primary">A4 인쇄</button>
+          <button type="button" id="closeContractPreviewBtn" class="icon" title="닫기">x</button>
+        </div>
+      </div>
+      <div class="contract-preview-stage">
+        <article id="contractPreviewModalPaper" class="contract-paper contract-a4-paper"></article>
+      </div>
+    </section>
+  </div>
+
+  <div id="filePreviewModal" class="modal-backdrop hidden">
+    <section class="modal file-preview-modal" role="dialog" aria-modal="true" aria-labelledby="filePreviewTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="filePreviewTitle" class="panel-title">등록 파일 미리보기</h2>
+          <span id="filePreviewMeta" class="muted">파일을 불러오는 중입니다.</span>
+        </div>
+        <div class="contract-preview-actions">
+          <a id="filePreviewDownloadBtn" class="doc-link hidden" href="#" download>다운로드</a>
+          <button type="button" id="closeFilePreviewBtn" class="icon" title="닫기">x</button>
+        </div>
+      </div>
+      <div id="filePreviewContent" class="file-preview-stage" aria-live="polite"></div>
+    </section>
+  </div>
+
   <div id="importModal" class="modal-backdrop hidden">
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="importTitle">
       <div class="panel-head">
@@ -2424,7 +2513,7 @@
       ],
       branches: [
         { id: "branch-junghwa", name: "중화점", businessId: "biz-junghwa", status: "active", phone: "", address: "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)" },
-        { id: "branch-sungshin", name: "성신여대점", businessId: "biz-sungshin", status: "active", phone: "", address: "" },
+        { id: "branch-sungshin", name: "성신여대점", businessId: "biz-sungshin", status: "active", phone: "", address: "서울특별시 성북구 동소문동5가 67-4" },
         { id: "branch-gangbuk-mia", name: "열정국밥_미아점", businessId: "biz-mia", status: "active", phone: "", address: "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)" }
       ],
       accounts: [
@@ -2565,6 +2654,8 @@
     let pendingPhoneInviteToken = "";
     let pendingPhoneInvite = null;
     let pendingContractSignToken = "";
+    let filePreviewObjectUrl = "";
+    let filePreviewAbortController = null;
 
     const els = {};
     document.querySelectorAll("[id]").forEach(el => els[el.id] = el);
@@ -3718,6 +3809,25 @@
       if (els.contractPreviewBadge) els.contractPreviewBadge.textContent = badgeText;
     }
 
+    function openContractPreviewModal(contract = null, badgeText = "입력값 기준") {
+      const source = contract || contractDraftFromForm();
+      updateContractPreview(source, badgeText);
+      if (els.contractPreviewModalPaper) els.contractPreviewModalPaper.innerHTML = contractPreviewHtml(source);
+      if (els.contractPreviewModalBadge) els.contractPreviewModalBadge.textContent = badgeText;
+      els.contractPreviewModal?.classList.remove("hidden");
+    }
+
+    function closeContractPreviewModal() {
+      document.body.classList.remove("contract-preview-printing");
+      els.contractPreviewModal?.classList.add("hidden");
+    }
+
+    function printContractPreview() {
+      document.body.classList.add("contract-preview-printing");
+      window.print();
+      window.setTimeout(() => document.body.classList.remove("contract-preview-printing"), 250);
+    }
+
     function clearContractForm() {
       delete els.contractForm.dataset.editId;
       els.contractForm.reset();
@@ -4380,7 +4490,8 @@
         renderOnboarding();
         return;
       }
-      const payload = await financeApi("/onboarding/documents");
+      const businessId = canManageOnboarding() ? selectedSettingsBusinessId() : "";
+      const payload = await financeApi(`/onboarding/documents${businessId ? `?business_id=${encodeURIComponent(businessId)}` : ""}`);
       let documents = payload.documents || [];
       if (canManageOnboarding()) {
         try {
@@ -4746,12 +4857,90 @@
       showToast(status === "approved" ? "입사서류를 승인했습니다." : "입사서류 보완 요청으로 표시했습니다.");
     }
 
-    function downloadOnboardingDocument(documentId) {
+    function clearFilePreviewResource() {
+      filePreviewAbortController?.abort();
+      filePreviewAbortController = null;
+      if (filePreviewObjectUrl) URL.revokeObjectURL(filePreviewObjectUrl);
+      filePreviewObjectUrl = "";
+    }
+
+    function closeFilePreviewModal() {
+      clearFilePreviewResource();
+      els.filePreviewModal?.classList.add("hidden");
+      els.filePreviewContent?.replaceChildren();
+      els.filePreviewDownloadBtn?.classList.add("hidden");
+      if (els.filePreviewDownloadBtn) els.filePreviewDownloadBtn.removeAttribute("href");
+    }
+
+    function filePreviewMessage(message) {
+      const panel = document.createElement("div");
+      panel.className = "file-preview-message";
+      panel.textContent = message;
+      els.filePreviewContent.replaceChildren(panel);
+    }
+
+    async function downloadOnboardingDocument(documentId) {
       if (!hasServerAuth()) {
         showToast("로그인 후 서류를 열 수 있습니다.");
         return;
       }
-      window.open(`/api/v1/yeoljeong-finance/onboarding/documents/${encodeURIComponent(documentId)}/download`, "_blank", "noopener");
+      clearFilePreviewResource();
+      const record = onboardingDocuments.find(item => item.id === documentId) || {};
+      const filename = record.original_filename || record.document_label || "등록 파일";
+      els.filePreviewTitle.textContent = filename;
+      els.filePreviewMeta.textContent = "인증 후 파일을 불러오는 중입니다.";
+      els.filePreviewDownloadBtn.classList.add("hidden");
+      els.filePreviewModal.classList.remove("hidden");
+      filePreviewMessage("파일을 불러오는 중입니다.");
+
+      filePreviewAbortController = new AbortController();
+      try {
+        const response = await fetch(`/api/v1/yeoljeong-finance/onboarding/documents/${encodeURIComponent(documentId)}/download`, {
+          headers: apiAuthOnlyHeaders(),
+          signal: filePreviewAbortController.signal
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || payload.message || `파일 조회 ${response.status}`);
+        }
+        const blob = await response.blob();
+        const contentType = String(response.headers.get("content-type") || blob.type || "application/octet-stream").split(";")[0];
+        filePreviewObjectUrl = URL.createObjectURL(blob);
+        els.filePreviewMeta.textContent = `${contentType} · ${Math.max(1, Math.round(blob.size / 1024)).toLocaleString("ko-KR")}KB`;
+        els.filePreviewDownloadBtn.href = filePreviewObjectUrl;
+        els.filePreviewDownloadBtn.download = filename;
+        els.filePreviewDownloadBtn.classList.remove("hidden");
+
+        if (contentType.startsWith("image/")) {
+          const image = document.createElement("img");
+          image.className = "file-preview-image";
+          image.src = filePreviewObjectUrl;
+          image.alt = filename;
+          els.filePreviewContent.replaceChildren(image);
+        } else if (contentType === "application/pdf") {
+          const frame = document.createElement("iframe");
+          frame.className = "file-preview-frame";
+          frame.src = filePreviewObjectUrl;
+          frame.title = `${filename} 미리보기`;
+          els.filePreviewContent.replaceChildren(frame);
+        } else if (contentType.startsWith("text/")) {
+          const frame = document.createElement("iframe");
+          frame.className = "file-preview-frame";
+          frame.src = filePreviewObjectUrl;
+          frame.title = `${filename} 미리보기`;
+          frame.setAttribute("sandbox", "");
+          els.filePreviewContent.replaceChildren(frame);
+        } else {
+          filePreviewMessage("이 파일 형식은 브라우저 미리보기를 지원하지 않습니다. 다운로드 버튼으로 확인하십시오.");
+        }
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        els.filePreviewMeta.textContent = "파일 조회 실패";
+        filePreviewMessage(error?.message || "등록 파일을 불러오지 못했습니다.");
+        showToast(`서류 열기 실패: ${error?.message || "알 수 없는 오류"}`);
+      } finally {
+        filePreviewAbortController = null;
+      }
     }
 
     function prefillOnboardingForm() {
@@ -5127,6 +5316,19 @@
         els.signupModal.classList.remove("hidden");
       });
       els.closeSignupBtn.addEventListener("click", () => els.signupModal.classList.add("hidden"));
+      els.closeContractPreviewBtn?.addEventListener("click", closeContractPreviewModal);
+      els.printContractPreviewBtn?.addEventListener("click", printContractPreview);
+      els.contractPreviewModal?.addEventListener("click", event => {
+        if (event.target === els.contractPreviewModal) closeContractPreviewModal();
+      });
+      els.closeFilePreviewBtn?.addEventListener("click", closeFilePreviewModal);
+      els.filePreviewModal?.addEventListener("click", event => {
+        if (event.target === els.filePreviewModal) closeFilePreviewModal();
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && !els.contractPreviewModal?.classList.contains("hidden")) closeContractPreviewModal();
+        if (event.key === "Escape" && !els.filePreviewModal?.classList.contains("hidden")) closeFilePreviewModal();
+      });
       els.logoutBtn.addEventListener("click", () => logoutFromServer());
       els.loginForm.addEventListener("submit", event => {
         event.preventDefault();
@@ -5593,8 +5795,7 @@
       });
       els.clearContractBtn?.addEventListener("click", () => clearContractForm());
       els.previewContractBtn?.addEventListener("click", () => {
-        updateContractPreview(null, "입력값 기준");
-        els.contractPreviewCard?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        openContractPreviewModal(null, "입력값 기준");
       });
       els.clearPayrollBtn?.addEventListener("click", () => clearPayrollForm());
 
@@ -5704,9 +5905,8 @@
         if (previewContractId) {
           const contract = (state.contracts || []).find(item => item.id === previewContractId);
           if (contract) {
-            updateContractPreview(contract, "저장 계약서 기준");
             setView("contracts");
-            els.contractPreviewCard?.scrollIntoView({ behavior: "smooth", block: "center" });
+            openContractPreviewModal(contract, "저장 계약서 기준");
           }
         }
         if (requestContractId) {

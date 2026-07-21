@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-07-22 06:38 KST - 매장비서 PDF 입사서류 Chrome 미리보기 차단 수정
+
+- 원인: 인증 fetch로 만든 PDF Blob URL을 `sandbox=""` iframe에 넣어 Chrome 내장 PDF 뷰어가 차단됐다.
+- 조치: PDF iframe에서는 sandbox를 제거하고, 텍스트 파일 미리보기에는 기존 sandbox를 유지했다.
+- 변경 대상: `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_finance_api.py`.
+- 검증: 관련 API/정적 계약 테스트 5건 통과, 인라인 JavaScript 문법 정상, 운영 PDF 응답 HTTP 200·`application/pdf`·PDF magic 확인.
+
 ## 2026-07-21 KST - 매장비서 계약서 A4 출력 보완
 - `app/static/apps/yeoljeong-finance/index.html`: 화면 미리보기를 A4 비율(210×297mm)로 맞추고, 인쇄 시 계약서 카드만 A4 portrait/12mm 여백으로 출력되도록 `@page` 및 print 전용 스타일을 추가했다.
 - `tests/unit/test_yeoljeong_finance_print_static.py`: A4 크기, 인쇄 대상 카드, 브라우저 인쇄 동작을 정적 회귀 검증한다.
