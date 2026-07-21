@@ -6,6 +6,8 @@
 - 백엔드: 가입 직원 이메일을 가입요청 원장과 연결해 신규 서류에 직원 요청 ID·사업자·정규화 지점을 저장한다. 기존 서류는 지점으로 사업자를 추론하며 관리자 조회에 `business_id` 필터를 적용한다.
 - 프론트: 입사서류 API를 현재 선택 사업자 범위로 조회한다. 계약서 미리보기 버튼과 저장 계약서 목록 버튼은 210mm × 297mm A4 팝업 모달을 열며 인쇄·닫기·ESC·배경 클릭을 지원한다.
 - 검증: 격리 Green 컨테이너 복제본에서 매장비서 서비스/API/수집기 테스트 30건과 파이프라인 회귀 56건 통과. Python `py_compile`, 정적 앱 JavaScript 구문 검사 통과. Green API 및 운영 화면 E2E는 배포 후 재검증한다.
+- 배포: 커밋 `b57f2f61`을 `main`에 push하고 영구 release worktree `/root/aads/aads-server-release-b57f2f61`로 Blue(:8100)를 재생성했다. 운영 데이터 원장은 `/root/aads/aads-server/app/data/yeoljeong_finance`를 별도 영속 마운트했다. 2026-07-21 19:10 KST 기준 Blue active, Green(:8102) rollback 대기 상태다.
+- 운영 E2E: 공개 페이지 HTTP 200, A4 모달 793.7px(210mm) 폭·최소 297mm 높이 렌더링, 하영훈/중화점 실제 서류 2건과 작성필요 2건의 사업자 범위 조회, 기존 업로드 파일 392,144 bytes 존재를 확인했다.
 - 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위 테스트.
 
 ## 2026-07-21 KST - 매장비서 계약서 A4 출력 보완
