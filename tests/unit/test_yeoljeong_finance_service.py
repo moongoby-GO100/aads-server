@@ -481,6 +481,23 @@ def test_platform_account_db_payload_never_contains_secret_fields():
     assert payload == {"id": "acct-1", "service": "baemin"}
 
 
+def test_platform_account_db_read_restores_secret_from_protected_file_only():
+    db_rows = [{"id": "acct-baemin", "service": "baemin", "username": "owner"}]
+    file_rows = [
+        {
+            "id": "acct-baemin",
+            "service": "baemin",
+            "username": "owner",
+            "password_enc": "ciphertext",
+        }
+    ]
+
+    merged = service._attach_local_account_secrets(db_rows, file_rows)
+
+    assert merged[0]["password_enc"] == "ciphertext"
+    assert "password_enc" not in db_rows[0]
+
+
 def test_onboarding_documents_include_missing_required_rows_for_approved_employee(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")

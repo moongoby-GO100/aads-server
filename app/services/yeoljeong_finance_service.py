@@ -437,6 +437,22 @@ def _db_payload_record(name: str, record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def _attach_local_account_secrets(
+    db_rows: list[dict[str, Any]], file_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Restore account secrets from the protected file without copying them to DB."""
+    file_by_id = {str(row.get("id") or ""): row for row in file_rows if row.get("id")}
+    merged_rows: list[dict[str, Any]] = []
+    for db_row in db_rows:
+        merged = {**db_row}
+        local = file_by_id.get(str(db_row.get("id") or ""), {})
+        for field in _ACCOUNT_SECRET_FIELDS:
+            if local.get(field):
+                merged[field] = local[field]
+        merged_rows.append(merged)
+    return merged_rows
+
+
 async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
     import asyncpg
 
@@ -707,6 +723,8 @@ def _read(name: str) -> list[dict[str, Any]]:
         return file_rows
     db_rows = _run_db(_db_fetch_ledger(name))
     if isinstance(db_rows, list):
+        if name == "platform_accounts":
+            db_rows = _attach_local_account_secrets(db_rows, file_rows)
         if db_rows:
             db_ids = {str(row.get("id") or "") for row in db_rows}
             missing_rows = [row for row in file_rows if str(row.get("id") or "") and str(row.get("id") or "") not in db_ids]
@@ -715,6 +733,8 @@ def _read(name: str) -> list[dict[str, Any]]:
                     _run_db(_db_upsert_ledger(name, row))
                 merged = _run_db(_db_fetch_ledger(name))
                 if isinstance(merged, list) and merged:
+                    if name == "platform_accounts":
+                        merged = _attach_local_account_secrets(merged, file_rows)
                     return merged
             return db_rows
         if file_rows:
@@ -722,6 +742,8 @@ def _read(name: str) -> list[dict[str, Any]]:
                 _run_db(_db_upsert_ledger(name, row))
             seeded = _run_db(_db_fetch_ledger(name))
             if isinstance(seeded, list) and seeded:
+                if name == "platform_accounts":
+                    seeded = _attach_local_account_secrets(seeded, file_rows)
                 return seeded
     return file_rows
 
