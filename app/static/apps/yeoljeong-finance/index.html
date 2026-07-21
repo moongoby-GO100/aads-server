@@ -3765,8 +3765,9 @@
       if (contractType === "freelancer") {
         clauses = [
           contractClause("계약 목적", `${employerName || "사용자"}는 ${employeeName || "수급인"}에게 독립적인 용역 업무를 의뢰하고, 수급인은 계약 범위 내 업무 결과를 제공한다.`),
+          contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 ${workplace || "협의된 장소"}에서 계약 범위의 용역을 수행한다.`),
           contractClause("용역 범위 및 산출물", freelancerScope || `${jobDescription || "업무 범위 미입력"} / 검수 기준, 납품 방식, 재작업 기준을 별도 메모로 확정한다.`),
-          contractClause("용역비 및 정산", freelancerSettlementTerms || `${wageLine}. 지급 시 3.3% 원천징수 기준을 적용하고 비용 부담 주체를 정산 전 확인한다.`),
+          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "지급 시 3.3% 원천징수 기준을 적용하고 비용 부담 주체를 정산 전 확인한다."}`),
           contractClause("독립성 확인", "수급인은 근로시간·근무장소에 대한 직접 지휘감독을 받지 않는 독립 용역자로 운영하며, 실제 운영이 근로자성에 해당하면 근로계약으로 전환 검토한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
           contractClause("계약 해지", terminationTerms || "일방의 중대한 계약 위반, 검수 불합격 반복, 보안 위반 시 서면 통지 후 계약을 해지할 수 있다.")

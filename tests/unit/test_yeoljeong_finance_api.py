@@ -72,3 +72,5 @@ def test_contract_editor_uses_safe_classification_and_locks_signed_records():
     assert '<select name="employeeRequestId" required>' in html
     assert 'form.employeeAddress.value = employee.address || ""' in html
     assert "서명본 수정·삭제 잠금" in html
+    assert 'contractClause("용역 기간 및 장소"' in html
+    assert 'contractClause("용역비 및 정산", `${wageLine}.' in html
