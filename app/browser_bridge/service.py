@@ -583,18 +583,42 @@ class BrowserBridgeService:
                 clear_lease=True,
             )
 
-        session = await self.ensure_pc_agent_cdp_session(
-            agent_id=agent_id,
-            label=label or default_work_session_label(normalized_work_key),
-            url=url or "about:blank",
-            preferred_port=preferred_port,
-            isolated_profile=True,
-            isolation_id=normalized_work_key,
-            activate=False,
-            work_key=normalized_work_key,
-            protected=is_protected,
-            force_recreate=force_recreate,
-        )
+        try:
+            session = await self.ensure_pc_agent_cdp_session(
+                agent_id=agent_id,
+                label=label or default_work_session_label(normalized_work_key),
+                url=url or "about:blank",
+                preferred_port=preferred_port,
+                isolated_profile=True,
+                isolation_id=normalized_work_key,
+                activate=False,
+                work_key=normalized_work_key,
+                protected=is_protected,
+                force_recreate=force_recreate,
+            )
+        except BrowserBridgeError as exc:
+            # A PC-backed profile is preferred, but an offline PC must not
+            # prevent public web/API E2E.  Register a dedicated headless work
+            # session so browser_connect and subsequent browser_* calls share
+            # the same explicit fallback instead of failing at the entrypoint.
+            logger.warning(
+                "browser_bridge_work_session_headless_fallback work_key=%s error=%s",
+                normalized_work_key,
+                exc,
+            )
+            session = self.register_trusted_session(
+                label=label or default_work_session_label(normalized_work_key),
+                endpoint_kind=BrowserEndpointKind.HEADLESS.value,
+                metadata={
+                    "fallback_reason": "PC_AGENT_OFFLINE",
+                    "fallback_chain": ["pc_bridge", "headless", "http_api", "container_health"],
+                    "requested_url": url or "about:blank",
+                },
+                activate=False,
+                created_by="headless_fallback",
+                work_key=normalized_work_key,
+                protected=is_protected,
+            )
         session.mark_used()
         self.sessions.touch(session)
         logger.info(

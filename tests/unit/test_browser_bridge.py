@@ -11,7 +11,7 @@ from app.browser_bridge import service as service_module
 from app.browser_bridge.models import BrowserEndpointKind
 from app.browser_bridge.registry import PairingManager, SessionRegistry
 from app.browser_bridge.security import BrowserBridgeSecurityError, validate_bridge_endpoint
-from app.browser_bridge.service import BrowserBridgeService
+from app.browser_bridge.service import BrowserBridgeError, BrowserBridgeService
 from app.browser_bridge.storage_state import StorageStateManager
 
 
@@ -40,6 +40,33 @@ async def test_work_key_uses_headless_fallback_when_pc_agent_is_offline(monkeypa
 
     assert context == "headless-context"
     assert error is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_work_session_registers_headless_fallback_when_pc_agent_is_offline(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    async def offline_pc_session(**kwargs):
+        raise BrowserBridgeError("no online PC agent")
+
+    monkeypatch.setattr(service, "ensure_pc_agent_cdp_session", offline_pc_session)
+
+    session = await service.ensure_work_session(
+        work_key="aads-headless-fallback",
+        url="https://aads.newtalk.kr/",
+    )
+
+    assert session.endpoint.kind == BrowserEndpointKind.HEADLESS
+    assert session.endpoint.metadata["fallback_reason"] == "PC_AGENT_OFFLINE"
+    assert session.work_key == "aads-headless-fallback"
+    assert await service.ensure_work_session(work_key="aads-headless-fallback") is session
 
 
 @pytest.mark.parametrize(
