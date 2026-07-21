@@ -74,3 +74,30 @@ def test_contract_editor_uses_safe_classification_and_locks_signed_records():
     assert "서명본 수정·삭제 잠금" in html
     assert 'contractClause("용역 기간 및 장소"' in html
     assert 'contractClause("용역비 및 정산", `${wageLine}.' in html
+
+
+def test_onboarding_open_uses_authenticated_file_preview_modal():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    assert 'id="filePreviewModal"' in html
+    assert 'id="filePreviewContent"' in html
+    assert "async function downloadOnboardingDocument(documentId)" in html
+    assert "headers: apiAuthOnlyHeaders()" in html
+    assert "URL.createObjectURL(blob)" in html
+    assert "window.open(`/api/v1/yeoljeong-finance/onboarding/documents/" not in html
+
+
+def test_pdf_preview_does_not_sandbox_chrome_pdf_viewer():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    pdf_branch = html.split('contentType === "application/pdf"', 1)[1].split(
+        'contentType.startsWith("text/")', 1
+    )[0]
+    text_branch = html.split('contentType.startsWith("text/")', 1)[1].split(
+        "} else {", 1
+    )[0]
+
+    assert 'frame.setAttribute("sandbox", "")' not in pdf_branch
+    assert 'frame.setAttribute("sandbox", "")' in text_branch
