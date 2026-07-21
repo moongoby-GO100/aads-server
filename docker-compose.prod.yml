@@ -113,6 +113,7 @@ services:
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
       - /root/aads/aads-server/.active_container:/app/.active_container:ro
       - /root/aads/aads-server/.active_port:/app/.active_port:ro
       - /root/aads/aads-server/docs:/app/docs:rw
@@ -189,6 +190,7 @@ services:
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
       - /root/aads/aads-server/.active_container:/app/.active_container:ro
       - /root/aads/aads-server/.active_port:/app/.active_port:ro
       - /root/aads/aads-server/docs:/app/docs:rw

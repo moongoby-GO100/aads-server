@@ -4302,3 +4302,30 @@
   - 코드/테스트/문서 기록 완료.
   - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
   - commit/push/deploy/restart는 수행하지 않았다.
+
+## 2026-07-21 11:39 KST - Yeoljeong Green recovery and live Ddangyo reconciliation
+
+- 배경: Green 격리 슬롯이 시작 시 새 Vault 키를 생성해 기존 배달 플랫폼 암호문 4건을 복호화하지 못했고, 입사서류 업로드 API의 비동기 호출 오류와 포털 DOM 변경이 실수집을 막았다.
+- 운영 복구:
+  - `docker-compose.prod.yml`의 Blue/Green 양쪽에 호스트 영구 키 `/root/aads/aads-server/app/.vault.key`를 read-only로 마운트했다.
+  - 비활성 Green만 재생성한 뒤 Blue와 동일한 키 해시, canonical `acct-*` 4건 복호화 가능, 컨테이너 health를 확인했다.
+  - API upstream을 8100 Blue에서 8102 Green으로 전환했고 Nginx config test/reload와 외부 `/api/v1/health` HTTP 200을 확인했다. Blue는 즉시 롤백용으로 유지했다.
+- 코드 보완:
+  - 입사서류 업로드 라우트가 async 저장 함수를 직접 await하는지 회귀 테스트를 추가했다.
+  - 포털 클릭 시 숨은 중복 요소·비대화형 컨테이너를 건너뛰고 실제 link/button을 선택하도록 보강했다.
+  - 땡겨요의 선택 동의/홍보 팝업은 동의하지 않고 닫기만 수행하며, WebSquare list table과 리뷰 카드를 원장 행으로 정규화한다.
+  - 땡겨요 `입금(예정)일`, `입금(예정)금액`, `입금상태` 헤더를 정산 원장 필드로 매핑했다.
+  - 요기요 로그아웃 랜딩을 인증 성공으로 오판하지 않고 `PORTAL_LOGIN_NOT_COMPLETED`로 반환한다.
+- 실수집/DB 검증:
+  - 최종 run id `d1137eb8-19d8-4496-abb2-0039cfac7666`은 `succeeded`, 진단은 sales/settlements=`list_table`, reviews=`review_cards`다.
+  - 땡겨요 매출 10건(2026-07-13~20, 합계 283,700원), 정산 10건(2026-07-03~16, 합계 547,035원), 리뷰 8건을 DB에서 확인했다.
+  - 이전 오탐 HTML table에서 생성된 날짜/본문 공백 리뷰 1행은 dry-run과 정확한 row id 검증 후 soft-delete했다(`UPDATE 1`).
+  - 배민은 보안 위배 접근 제한, 쿠팡이츠는 CDN Access Denied로 서버 headless 수집이 차단됐다. 요기요는 로그인 완료 실패이며 2차 인증 화면에는 도달하지 않았다.
+- 검증:
+  - 격리 릴리스 read-only 테스트: 관련 29건 통과.
+  - `git diff --check`: 통과.
+  - 외부 매장비서 정적 앱 HTTP 200, 보호 API 미인증 요청 HTTP 401 확인.
+  - PC Agent가 오프라인이어서 브라우저 E2E는 실행하지 못했고, credential test의 HTTP 200 로그인 페이지 폴백과 API/컨테이너 검증으로 대체했다.
+- 남은 작업:
+  - 배민·쿠팡이츠 실수집은 CEO PC Browser Bridge를 켠 상태에서 재실행해야 한다.
+  - 요기요는 공유 자격증명 확인 또는 포털 로그인 방식 재등록이 필요하다.
