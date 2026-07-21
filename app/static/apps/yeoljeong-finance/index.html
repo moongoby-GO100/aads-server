@@ -4073,7 +4073,8 @@
       });
       if (selectedBranch) {
         [els.contractForm?.branch, els.payrollForm?.branch, els.integrationForm?.branch, els.staffMasterForm?.branch].forEach(input => {
-          if (input && !input.value && Array.from(input.options || []).some(option => option.value === selectedBranch || option.textContent === selectedBranch)) {
+          const belongsToSelectedBusiness = businessIdForBranchName(input?.value || "") === selectedBusiness;
+          if (input && (!input.value || !belongsToSelectedBusiness) && Array.from(input.options || []).some(option => option.value === selectedBranch || option.textContent === selectedBranch)) {
             input.value = selectedBranch;
           }
         });
@@ -5546,6 +5547,7 @@
       els.settingsBusinessSelect?.addEventListener("change", event => {
         setSelectedSettingsBusinessId(event.target.value);
         initSelects();
+        setDefaults();
         renderAll();
         loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
         showToast("선택 사업자 기준으로 설정 현황을 다시 정리했습니다.");
