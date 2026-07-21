@@ -1,5 +1,10 @@
 # AADS HANDOVER
 
+## 2026-07-21 KST - 매장비서 계약서 A4 출력 보완
+- `app/static/apps/yeoljeong-finance/index.html`: 화면 미리보기를 A4 비율(210×297mm)로 맞추고, 인쇄 시 계약서 카드만 A4 portrait/12mm 여백으로 출력되도록 `@page` 및 print 전용 스타일을 추가했다.
+- `tests/unit/test_yeoljeong_finance_print_static.py`: A4 크기, 인쇄 대상 카드, 브라우저 인쇄 동작을 정적 회귀 검증한다.
+- 범위: 계약서 출력 CSS/검증만 변경했으며 HR·배달 원장과 인증 로직은 변경하지 않았다.
+
 ## 2026-07-21 11:03 KST - 매장비서 릴리스 후속 검증·수집기 보정
 - 운영 DB 전체/대상 백업을 `pg_restore --list`와 SHA-256으로 검증했다. 2026-07-20 테스트 수집이력 6건, fixture 매출 1건, 테스트 `legacy` 계정 1건을 soft-delete했고 활성 플랫폼 계정은 최신 `acct-*` 4건만 남겼다. DB account payload의 `password`/`password_enc` 보유 행은 0건이다.
 - Green 격리 슬롯의 Vault 키 불일치로 기존 암호문 복호화가 실패한 것을 발견해 API 트래픽을 동일 릴리스의 Blue 슬롯으로 롤백했다. Blue는 최신 계정 4건을 모두 복호화하며, Green 재기동 시 운영 Vault 키를 명시적으로 마운트해야 한다.

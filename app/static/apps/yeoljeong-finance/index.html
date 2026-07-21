@@ -516,7 +516,12 @@
     }
 
     .contract-paper {
-      padding: 18px;
+      box-sizing: border-box;
+      width: min(100%, 210mm);
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 18mm 16mm;
+      background: #fff;
       color: var(--text);
       line-height: 1.6;
       font-size: 13px;
@@ -853,6 +858,69 @@
       color: var(--muted);
       font-size: 12px;
       line-height: 1.5;
+    }
+
+    @page {
+      size: A4 portrait;
+      margin: 12mm;
+    }
+
+    @media print {
+      html, body {
+        width: 210mm;
+        min-height: 297mm;
+        margin: 0;
+        padding: 0;
+        background: #fff;
+      }
+
+      body * {
+        visibility: hidden !important;
+      }
+
+      #contractPreviewCard,
+      #contractPreviewCard * {
+        visibility: visible !important;
+      }
+
+      #contractPreviewCard {
+        position: absolute;
+        inset: 0 auto auto 0;
+        box-sizing: border-box;
+        width: 186mm;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        overflow: visible;
+        box-shadow: none;
+        background: #fff;
+      }
+
+      #contractPreviewCard .contract-preview-head {
+        display: none !important;
+      }
+
+      #contractPreviewBody {
+        width: 186mm;
+        min-height: 273mm;
+        margin: 0;
+        padding: 0;
+        color: #000;
+        font-size: 10pt;
+        line-height: 1.45;
+      }
+
+      #contractPreviewBody h3 {
+        font-size: 18pt;
+      }
+
+      #contractPreviewBody h4,
+      #contractPreviewBody li,
+      #contractPreviewBody .preview-row,
+      #contractPreviewBody .contract-notice {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
     }
 
     @media (max-width: 1120px) {
