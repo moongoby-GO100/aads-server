@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-22 08:33 KST - 매장비서 계약서·입사파일 최종 원장 대조 및 운영 보완
+
+- 원장 대조: 서버 원격 `main`의 계약서 개선 커밋과 운영 Green 파일은 일치했지만, Dashboard 공개 복사본에는 프리랜서 `용역 기간 및 장소` 조항 누락, 사용자 정산문구 입력 시 용역비 금액 누락, 인증 PDF 파일 모달 재누락이 확인됐다.
+- 조치: 최신 계약서 UI를 기준으로 인증 `fetch`+Blob 파일 모달을 복원하고 PDF iframe만 sandbox를 제거했다. 프리랜서 계약서에는 기간·장소와 용역비 금액을 항상 표시하도록 고쳤다.
+- 검증: 원격 최신 소스 기준 매장비서 테스트 46건 통과, Python compile, 인라인 JavaScript parse, `git diff --check` 통과. API 8100/8102, Dashboard 3100/3101, 외부 health/login 모두 HTTP 200이며 네 컨테이너는 healthy다.
+- 브라우저 E2E: Vault E2E 관리자 세션으로 승인 직원 선택 시 사업자·지점·직원 정보 자동채움을 확인하고, 직원명·근무장소 수정값이 A4 팝업 모달 본문과 서명란에 즉시 반영됨을 확인했다. 저장 버튼은 누르지 않아 운영 계약 데이터는 변경하지 않았다.
+- 배포: API Blue/Green과 Dashboard Blue/Green의 대상 HTML SHA-256을 `1ed76211818d0dcc9d346629ec467e004a05736cd2e66622800a7551311b300b`로 통일했다. API active Green 8102, Dashboard active Blue 3100이며 반대 슬롯은 동일 파일의 롤백 대기다.
+- 롤백: 배포 전 양 API/Dashboard 슬롯 파일은 `/tmp/aads-yeoljeong-closeout-backup-wAPIal`에 보존했다.
+
 ## 2026-07-22 KST - 매장비서 계약서 P0/P1 안전성·자동화 개선
 
 - 계약서 서버 저장·서명요청·서명 단계에서 계약유형, 세무구분, 임금방식, 승인 직원, 사업자, 법정 필수 근로조건을 재검증한다.
