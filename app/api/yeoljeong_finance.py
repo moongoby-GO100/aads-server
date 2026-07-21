@@ -147,8 +147,11 @@ async def list_approved_employees(
 
 
 @router.get("/onboarding/documents")
-async def list_onboarding_documents(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"documents": await run_in_threadpool(svc.list_onboarding_documents, current_user)}
+async def list_onboarding_documents(
+    business_id: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"documents": await run_in_threadpool(svc.list_onboarding_documents, current_user, business_id)}
 
 
 @router.post("/onboarding/documents")

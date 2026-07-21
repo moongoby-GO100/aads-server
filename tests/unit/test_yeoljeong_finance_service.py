@@ -1,8 +1,10 @@
 import os
 import importlib.util
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from fastapi import UploadFile
 
 
 _SERVICE_PATH = Path(__file__).resolve().parents[2] / "app" / "services" / "yeoljeong_finance_service.py"
@@ -550,3 +552,54 @@ def test_onboarding_documents_do_not_include_pending_rows_for_admin(tmp_path, mo
     rows = service.list_onboarding_documents({"email": "owner@example.com", "is_admin": True})
 
     assert all(row["employee_email"] != "pending@example.com" for row in rows)
+
+
+def test_onboarding_documents_filter_legacy_rows_by_inferred_business():
+    service._write(
+        "onboarding_documents",
+        [
+            {"id": "doc-j", "employee_email": "j@example.com", "branch": "중화점", "document_type": "bankbook", "status": "uploaded"},
+            {"id": "doc-m", "employee_email": "m@example.com", "branch": "강북미아점", "document_type": "bankbook", "status": "uploaded"},
+        ],
+    )
+
+    rows = service.list_onboarding_documents(
+        {"email": "owner@example.com", "is_admin": True},
+        "biz-junghwa",
+    )
+
+    assert [row["id"] for row in rows] == ["doc-j"]
+    assert rows[0]["business_id"] == "biz-junghwa"
+
+
+@pytest.mark.asyncio
+async def test_registered_employee_upload_keeps_join_request_business_scope():
+    service._write(
+        "employee_join_requests",
+        [
+            {
+                "id": "join-j",
+                "name": "가입 직원",
+                "email": "employee@example.com",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "status": "approved",
+            }
+        ],
+    )
+    upload = UploadFile(filename="bankbook.pdf", file=BytesIO(b"pdf"))
+
+    saved = await service.save_onboarding_document(
+        employee_name="가입 직원",
+        employee_email="employee@example.com",
+        branch="중화점",
+        document_type="bankbook",
+        issue_date="2026-07-21",
+        memo="",
+        upload=upload,
+        user={"email": "employee@example.com", "is_admin": False},
+    )
+
+    assert saved["employee_request_id"] == "join-j"
+    assert saved["business_id"] == "biz-junghwa"
+    assert saved["branch"] == "중화점"
