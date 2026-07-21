@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-21 KST - 매장비서 입사서류 사업자 연결 및 계약서 A4 팝업 미리보기
+
+- 원인: 기존 입사서류 업로드는 가입요청의 `employee_request_id`와 `business_id`를 저장하지 않아 사업자 기준 조회에서 실제 등록 서류가 연결되지 않았다. 계약서 미리보기는 편집 화면 내부 카드만 제공해 A4 출력 크기와 팝업 확인이 불가능했다.
+- 백엔드: 가입 직원 이메일을 가입요청 원장과 연결해 신규 서류에 직원 요청 ID·사업자·정규화 지점을 저장한다. 기존 서류는 지점으로 사업자를 추론하며 관리자 조회에 `business_id` 필터를 적용한다.
+- 프론트: 입사서류 API를 현재 선택 사업자 범위로 조회한다. 계약서 미리보기 버튼과 저장 계약서 목록 버튼은 210mm × 297mm A4 팝업 모달을 열며 인쇄·닫기·ESC·배경 클릭을 지원한다.
+- 검증: 격리 Green 컨테이너 복제본에서 매장비서 서비스/API/수집기 테스트 30건과 파이프라인 회귀 56건 통과. Python `py_compile`, 정적 앱 JavaScript 구문 검사 통과. Green API 및 운영 화면 E2E는 배포 후 재검증한다.
+- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위 테스트.
+
 ## 2026-07-21 KST - 매장비서 계약서 A4 출력 보완
 - `app/static/apps/yeoljeong-finance/index.html`: 화면 미리보기를 A4 비율(210×297mm)로 맞추고, 인쇄 시 계약서 카드만 A4 portrait/12mm 여백으로 출력되도록 `@page` 및 print 전용 스타일을 추가했다.
 - `tests/unit/test_yeoljeong_finance_print_static.py`: A4 크기, 인쇄 대상 카드, 브라우저 인쇄 동작을 정적 회귀 검증한다.

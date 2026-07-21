@@ -1271,6 +1271,18 @@ async def save_onboarding_document(
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
     if not _is_admin(user) and email != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 업로드할 수 있습니다")
+    employee = next(
+        (
+            row
+            for row in _read("employee_join_requests")
+            if str(row.get("email") or "").strip().lower() == email
+            and str(row.get("status") or "pending").strip().lower() != "rejected"
+        ),
+        None,
+    )
+    employee_branch = str((employee or {}).get("branch") or "").strip()
+    normalized_branch = BRANCH_ALIASES.get(employee_branch or branch.strip(), employee_branch or branch.strip())
+    business_id = _record_business_id(employee or {"branch": normalized_branch})
     meta = _document_meta(document_type)
     original = _safe_filename(upload.filename or "document.bin")
     suffix = Path(original).suffix.lower()
@@ -1292,10 +1304,12 @@ async def save_onboarding_document(
     now = _now()
     record = {
         "id": doc_id,
-        "employee_name": employee_name.strip(),
+        "employee_request_id": str((employee or {}).get("id") or ""),
+        "employee_name": employee_name.strip() or str((employee or {}).get("name") or ""),
         "employee_email": email,
         "employee_email_masked": _mask_email(email),
-        "branch": branch.strip(),
+        "business_id": business_id,
+        "branch": normalized_branch,
         "document_type": document_type,
         "document_label": meta["label"],
         "requirement": meta["requirement"],
@@ -1320,6 +1334,7 @@ def _onboarding_missing_document_rows(
     *,
     existing_rows: list[dict[str, Any]],
     user: dict[str, Any],
+    business_id: str | None = None,
 ) -> list[dict[str, Any]]:
     email_filter = "" if _is_admin(user) else _email(user)
     existing_keys = {
@@ -1342,6 +1357,9 @@ def _onboarding_missing_document_rows(
             continue
         if email_filter and employee_email != email_filter:
             continue
+        employee_business_id = _record_business_id(employee)
+        if business_id and employee_business_id != business_id:
+            continue
         employee_id = str(employee.get("id") or employee_email)
         for meta in _required_document_types():
             document_type = meta["type"]
@@ -1354,7 +1372,8 @@ def _onboarding_missing_document_rows(
                     "employee_name": employee.get("name") or "",
                     "employee_email": employee_email,
                     "employee_email_masked": employee.get("email_masked") or _mask_email(employee_email),
-                    "branch": employee.get("branch") or "",
+                    "business_id": employee_business_id,
+                    "branch": BRANCH_ALIASES.get(str(employee.get("branch") or ""), str(employee.get("branch") or "")),
                     "document_type": document_type,
                     "document_label": meta["label"],
                     "requirement": meta["requirement"],
@@ -1372,10 +1391,22 @@ def _onboarding_missing_document_rows(
     return rows
 
 
-def list_onboarding_documents(user: dict[str, Any]) -> list[dict[str, Any]]:
+def list_onboarding_documents(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     stored_rows = _read("onboarding_documents")
     visible_rows = _filter_user(stored_rows, user, "employee_email", "uploaded_by")
-    rows = visible_rows + _onboarding_missing_document_rows(existing_rows=stored_rows, user=user)
+    normalized_rows = []
+    for item in visible_rows:
+        row = dict(item)
+        row["business_id"] = _record_business_id(row)
+        row["branch"] = BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or ""))
+        if business_id and _is_admin(user) and row["business_id"] != business_id:
+            continue
+        normalized_rows.append(row)
+    rows = normalized_rows + _onboarding_missing_document_rows(
+        existing_rows=stored_rows,
+        user=user,
+        business_id=business_id if _is_admin(user) else None,
+    )
     return sorted(rows, key=lambda row: row.get("uploaded_at") or row.get("updated_at") or "", reverse=True)
 
 
