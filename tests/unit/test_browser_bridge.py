@@ -6,6 +6,7 @@ import urllib.error
 
 import pytest
 
+from app.browser_bridge import aads_adapter
 from app.browser_bridge import service as service_module
 from app.browser_bridge.models import BrowserEndpointKind
 from app.browser_bridge.registry import PairingManager, SessionRegistry
@@ -18,6 +19,27 @@ def test_validate_bridge_endpoint_allows_loopback_cdp() -> None:
     validate_bridge_endpoint(BrowserEndpointKind.CDP, "http://127.0.0.1:9222")
     validate_bridge_endpoint(BrowserEndpointKind.CDP, "ws://localhost:9222/devtools/browser/abc")
     validate_bridge_endpoint(BrowserEndpointKind.CDP, "http://[::1]:9222")
+
+
+@pytest.mark.asyncio
+async def test_work_key_uses_headless_fallback_when_pc_agent_is_offline(monkeypatch) -> None:
+    class FakeService:
+        async def ensure_work_session(self, **kwargs):
+            raise RuntimeError("no online PC agent")
+
+        async def acquire_playwright_context(self, session_id=None):
+            assert session_id is None
+            return "headless-context", None
+
+    monkeypatch.setattr(aads_adapter, "get_browser_bridge_service", lambda: FakeService())
+
+    context, error = await aads_adapter.acquire_browser_context(
+        browser_work_key="pc-agent-fallback-e2e",
+        url="https://aads.newtalk.kr/login",
+    )
+
+    assert context == "headless-context"
+    assert error is None
 
 
 @pytest.mark.parametrize(
