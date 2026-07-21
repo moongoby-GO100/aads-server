@@ -5733,15 +5733,15 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 
 
 def _message_select_fields(fields: str) -> str:
+    _tool_events = (
+        "(CASE WHEN tools_called IS NOT NULL AND jsonb_typeof(tools_called) = 'array' "
+        "THEN tools_called ELSE '[]'::jsonb END)"
+    )
     if fields == "minimal":
         # INVARIANT: fields=minimal is display-only. It never changes DB rows,
         # embeddings, full content, thinking, quality_details, or LLM raw history.
         # tools_called is summarized here but the full JSON is lazy-loaded only
         # for messages that need the tool box.
-        _tool_events = (
-            "(CASE WHEN tools_called IS NOT NULL AND jsonb_typeof(tools_called) = 'array' "
-            "THEN tools_called ELSE '[]'::jsonb END)"
-        )
         return (
             "id, session_id, role, LEFT(content, 200) AS content, "
             "LENGTH(content) AS content_length, "
@@ -5749,6 +5749,32 @@ def _message_select_fields(fields: str) -> str:
             "intent, model_used, quality_score, quality_details, created_at, edited_at, "
             "bookmarked, "
             "(attachments IS NOT NULL AND attachments::text != '[]' AND attachments::text != 'null') AS has_attachments, "
+            f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
+            f"(SELECT COUNT(*)::int FROM jsonb_array_elements({_tool_events}) AS tool_event(value) "
+            " WHERE (jsonb_typeof(tool_event.value) = 'object' AND tool_event.value->>'type' = 'tool_use') "
+            "    OR jsonb_typeof(tool_event.value) = 'string') AS tool_count, "
+            f"COALESCE((SELECT array_agg(name) FROM ("
+            f" SELECT DISTINCT NULLIF(CASE "
+            "  WHEN jsonb_typeof(tool_event.value) = 'object' THEN tool_event.value->>'tool_name' "
+            "  WHEN jsonb_typeof(tool_event.value) = 'string' THEN tool_event.value #>> '{}' "
+            "  ELSE '' END, '') AS name "
+            f" FROM jsonb_array_elements({_tool_events}) AS tool_event(value)"
+            ") tool_name_rows WHERE name IS NOT NULL), ARRAY[]::text[]) AS tool_names, "
+            "CASE "
+            "WHEN intent = 'streaming_placeholder' OR intent LIKE 'streaming%' THEN 'streaming' "
+            "WHEN intent = 'rate_limited' THEN 'rate_limited' "
+            "ELSE 'completed' "
+            "END AS status"
+        )
+    if fields == "render":
+        # Chat timeline projection: preserve the complete visible message while
+        # omitting payloads that are only needed after an explicit detail action.
+        # Full tool events remain available from GET /chat/messages/{id}.
+        return (
+            "id, session_id, execution_id, role, content, model_used, intent, "
+            "cost, tokens_in, tokens_out, bookmarked, attachments, sources, artifact_id, "
+            "created_at, edited_at, quality_score, reply_to_id, branch_id, "
+            "'[]'::jsonb AS tools_called, "
             f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
             f"(SELECT COUNT(*)::int FROM jsonb_array_elements({_tool_events}) AS tool_event(value) "
             " WHERE (jsonb_typeof(tool_event.value) = 'object' AND tool_event.value->>'type' = 'tool_use') "
@@ -6053,7 +6079,8 @@ async def list_messages(
         results = [_row_to_dict(r) for r in rows]
         if fields == "minimal":
             return results
-        results = [_apply_tool_summary(result) for result in results]
+        if fields != "render":
+            results = [_apply_tool_summary(result) for result in results]
         results = await _repair_completed_execution_message_flags(
             conn, results, "list_messages",
         )
@@ -6120,7 +6147,8 @@ async def list_messages_cursor(
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
         if fields != "minimal":
-            messages = [_apply_tool_summary(message) for message in messages]
+            if fields != "render":
+                messages = [_apply_tool_summary(message) for message in messages]
             messages = await _repair_completed_execution_message_flags(
                 conn, messages, "list_messages_cursor",
             )
@@ -6161,7 +6189,7 @@ async def get_message(message_id: str, fields: str = "full", tenant_id: Optional
         if not row:
             return None
         result = _row_to_dict(row)
-        if fields != "minimal":
+        if fields not in ("minimal", "render"):
             result = _apply_tool_summary(result)
         return result
 
