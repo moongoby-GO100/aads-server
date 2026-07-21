@@ -210,6 +210,18 @@ def _click_first(page: Any, labels: tuple[str, ...], timeout: int = 2500) -> boo
 
 
 def _fill_login(page: Any, username: str, password: str) -> bool:
+    # Several merchant portals render their login controls after
+    # ``domcontentloaded``.  Wait for the dynamic form instead of treating the
+    # first empty DOM snapshot as a missing/changed login page.
+    try:
+        page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:
+        pass
+    try:
+        page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
+    except Exception:
+        pass
+
     username_selectors = (
         "input[autocomplete='username']",
         "input[name*='id' i]",
@@ -218,15 +230,45 @@ def _fill_login(page: Any, username: str, password: str) -> bool:
         "input[type='text']",
     )
     password_selectors = ("input[autocomplete='current-password']", "input[type='password']")
-    user_input = next((page.locator(selector).first for selector in username_selectors if page.locator(selector).count()), None)
-    password_input = next((page.locator(selector).first for selector in password_selectors if page.locator(selector).count()), None)
+    def first_visible(selectors: tuple[str, ...]) -> Any | None:
+        for selector in selectors:
+            locator = page.locator(selector).first
+            try:
+                if locator.count() and locator.is_visible(timeout=500):
+                    return locator
+            except Exception:
+                continue
+        return None
+
+    user_input = first_visible(username_selectors)
+    password_input = first_visible(password_selectors)
     if user_input is None or password_input is None:
         return False
     user_input.fill(username)
     password_input.fill(password)
     if not _click_first(page, ("로그인", "login"), timeout=4000):
-        password_input.press("Enter")
-    page.wait_for_timeout(2500)
+        clicked = False
+        for selector in (
+            "button[type='submit']",
+            "input[type='submit']",
+            "input[type='button'][value*='로그인']",
+            "#mf_btn_webLogin",
+        ):
+            control = page.locator(selector).first
+            try:
+                if control.count() and control.is_visible(timeout=500):
+                    control.click(timeout=4000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            password_input.press("Enter")
+    page.wait_for_timeout(5000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
     return True
 
 
@@ -236,8 +278,13 @@ def _page_state(page: Any) -> tuple[str, str]:
         return "portal_action_required", "PORTAL_AUTH_CHALLENGE"
     if any(term in body for term in LOGIN_FAILURE_TERMS):
         return "failed", "PORTAL_CREDENTIAL_REJECTED"
-    if page.locator("input[type='password']").count() and "login" in page.url.lower():
-        return "failed", "PORTAL_LOGIN_NOT_COMPLETED"
+    password_inputs = page.locator("input[type='password']")
+    for index in range(password_inputs.count()):
+        try:
+            if password_inputs.nth(index).is_visible(timeout=500):
+                return "failed", "PORTAL_LOGIN_NOT_COMPLETED"
+        except Exception:
+            continue
     return "authenticated", ""
 
 

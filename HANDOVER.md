@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-21 11:03 KST - 매장비서 릴리스 후속 검증·수집기 보정
+- 운영 DB 전체/대상 백업을 `pg_restore --list`와 SHA-256으로 검증했다. 2026-07-20 테스트 수집이력 6건, fixture 매출 1건, 테스트 `legacy` 계정 1건을 soft-delete했고 활성 플랫폼 계정은 최신 `acct-*` 4건만 남겼다. DB account payload의 `password`/`password_enc` 보유 행은 0건이다.
+- Green 격리 슬롯의 Vault 키 불일치로 기존 암호문 복호화가 실패한 것을 발견해 API 트래픽을 동일 릴리스의 Blue 슬롯으로 롤백했다. Blue는 최신 계정 4건을 모두 복호화하며, Green 재기동 시 운영 Vault 키를 명시적으로 마운트해야 한다.
+- `app/api/yeoljeong_finance.py`에서 async 입사서류 저장 함수를 threadpool로 감싸 coroutine을 응답하던 500 원인을 제거하고 직접 await하도록 수정했다.
+- `app/services/yeoljeong_delivery_collectors.py`는 동적 렌더링 로그인 폼을 최대 8초 기다리고, 보이는 입력만 선택하며, submit/input 로그인 컨트롤을 지원하도록 보강했다. 로그인 후 보이는 비밀번호 입력이 남으면 성공으로 오판하지 않는다.
+- 검증: 격리 이미지에서 매장비서/수집기/API/파이프라인 회귀 `84 passed`, Ruff·Python compile 성공. 운영 계약 API E2E는 미아점 승인 직원 5명 범위화, 자동채움, 수정값 보존, 교차 사업자 400 차단, 테스트 계약 정리까지 통과했다.
+- 실수집 상태: 배민은 보안 위배 페이지, 쿠팡이츠는 Access Denied로 서버 headless 접근이 차단됐다. 요기요는 로그인 미완료, 땡겨요는 로그인 후 데이터 메뉴를 찾지 못해 실데이터 대사는 미완료다. PC Browser Bridge 연결 또는 포털별 로그인 흐름 추가 보정이 필요하다.
+
 ## 2026-07-21 09:59 KST - 매장비서 사업자별 직원 계약서 자동채움 격리 릴리스
 - 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_finance_service.py`.
 - 계약서 작성 시 선택 사업자 소속의 승인된 가입 직원만 조회·선택하도록 API와 화면을 범위화했다.

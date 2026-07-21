@@ -162,18 +162,15 @@ async def upload_onboarding_document(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
-    document = await run_in_threadpool(
-        partial(
-            svc.save_onboarding_document,
-            employee_name=employee_name,
-            employee_email=employee_email,
-            branch=branch,
-            document_type=document_type,
-            issue_date=issue_date,
-            memo=memo,
-            upload=file,
-            user=current_user,
-        )
+    document = await svc.save_onboarding_document(
+        employee_name=employee_name,
+        employee_email=employee_email,
+        branch=branch,
+        document_type=document_type,
+        issue_date=issue_date,
+        memo=memo,
+        upload=file,
+        user=current_user,
     )
     return {"document": document}
 

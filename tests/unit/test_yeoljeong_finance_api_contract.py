@@ -1,6 +1,10 @@
+from io import BytesIO
+
 import pytest
+from fastapi import UploadFile
 from pydantic import ValidationError
 
+from app.api import yeoljeong_finance
 from app.api.yeoljeong_finance import AccountUpsertPayload
 
 
@@ -19,3 +23,28 @@ def test_account_payload_rejects_secret_field_injection():
             username="owner",
             password_enc="attacker-controlled-ciphertext",
         )
+
+
+@pytest.mark.asyncio
+async def test_onboarding_upload_awaits_async_service(monkeypatch):
+    async def fake_save_onboarding_document(**kwargs):
+        assert isinstance(kwargs["upload"], UploadFile)
+        return {"id": "doc-e2e", "status": "pending"}
+
+    monkeypatch.setattr(
+        yeoljeong_finance.svc,
+        "save_onboarding_document",
+        fake_save_onboarding_document,
+    )
+    result = await yeoljeong_finance.upload_onboarding_document(
+        employee_name="테스트 직원",
+        employee_email="employee@example.com",
+        branch="열정국밥_미아점",
+        document_type="resident_registration",
+        issue_date="2026-07-21",
+        memo="E2E",
+        file=UploadFile(filename="test.txt", file=BytesIO(b"test")),
+        current_user={"email": "admin@example.com", "is_admin": True},
+    )
+
+    assert result == {"document": {"id": "doc-e2e", "status": "pending"}}
