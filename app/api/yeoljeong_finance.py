@@ -139,8 +139,11 @@ async def review_employee_join_request(request_id: str, payload: ReviewPayload, 
 
 
 @router.get("/employees/approved")
-async def list_approved_employees(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"employees": await run_in_threadpool(svc.list_approved_employees, current_user)}
+async def list_approved_employees(
+    business_id: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"employees": await run_in_threadpool(svc.list_approved_employees, current_user, business_id)}
 
 
 @router.get("/onboarding/documents")

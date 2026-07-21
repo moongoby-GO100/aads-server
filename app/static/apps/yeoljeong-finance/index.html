@@ -3373,15 +3373,22 @@
       }).join("") : `<tr><td colspan="6"><div class="empty">${employeeMode ? "본인 급여내역서가 아직 없습니다." : "승인된 직원을 선택해 급여내역서를 작성하십시오."}</div></td></tr>`;
     }
 
-    function approvedEmployeeOptions() {
-      return [`<option value="">직접 입력</option>`, ...approvedEmployees.map(item => {
+    function approvedEmployeesForForm(form) {
+      const branchName = form?.branch?.value || "";
+      const businessId = businessIdForBranchName(branchName) || selectedSettingsBusinessId();
+      if (!businessId) return approvedEmployees;
+      return approvedEmployees.filter(item => recordBusinessId(item) === businessId);
+    }
+
+    function approvedEmployeeOptions(form) {
+      return [`<option value="">직접 입력</option>`, ...approvedEmployeesForForm(form).map(item => {
         const label = `${item.name || "직원"} · ${item.branch || "지점 미지정"} · ${item.email_masked || item.email || ""}`;
         return `<option value="${escapeHtml(item.id)}">${escapeHtml(label)}</option>`;
       })].join("");
     }
 
-    function selectedApprovedEmployee(requestId) {
-      return approvedEmployees.find(item => item.id === requestId) || null;
+    function selectedApprovedEmployee(requestId, form) {
+      return approvedEmployeesForForm(form).find(item => item.id === requestId) || null;
     }
 
     function applyEmployeeToForm(form, employee) {
@@ -3394,8 +3401,9 @@
     function refreshApprovedEmployeeSelects() {
       document.querySelectorAll('select[name="employeeRequestId"]').forEach(select => {
         const current = select.value;
-        select.innerHTML = approvedEmployeeOptions();
-        if (approvedEmployees.some(item => item.id === current)) select.value = current;
+        const scopedEmployees = approvedEmployeesForForm(select.form);
+        select.innerHTML = approvedEmployeeOptions(select.form);
+        select.value = scopedEmployees.some(item => item.id === current) ? current : "";
       });
     }
 
@@ -4307,7 +4315,8 @@
       let documents = payload.documents || [];
       if (canManageOnboarding()) {
         try {
-          const employeesPayload = await financeApi("/employees/approved");
+          const businessId = selectedSettingsBusinessId();
+          const employeesPayload = await financeApi(`/employees/approved${businessId ? `?business_id=${encodeURIComponent(businessId)}` : ""}`);
           approvedEmployees = employeesPayload.employees || [];
           refreshApprovedEmployeeSelects();
         } catch (error) {
@@ -4366,7 +4375,8 @@
         refreshApprovedEmployeeSelects();
         return;
       }
-      const payload = await financeApi("/employees/approved");
+      const businessId = selectedSettingsBusinessId();
+      const payload = await financeApi(`/employees/approved${businessId ? `?business_id=${encodeURIComponent(businessId)}` : ""}`);
       approvedEmployees = payload.employees || [];
       refreshApprovedEmployeeSelects();
     }
@@ -5312,11 +5322,12 @@
       });
 
       els.contractForm?.employeeRequestId?.addEventListener("change", event => {
-        applyEmployeeToForm(els.contractForm, selectedApprovedEmployee(event.target.value));
+        applyEmployeeToForm(els.contractForm, selectedApprovedEmployee(event.target.value, els.contractForm));
         applyBusinessToContractForm(false);
         updateContractPreview(null, "입력값 기준");
       });
       els.contractForm?.branch?.addEventListener("change", () => {
+        refreshApprovedEmployeeSelects();
         applyBusinessToContractForm(true);
         updateContractPreview(null, "사업자 정보 반영");
       });
@@ -5330,7 +5341,7 @@
       els.contractForm?.addEventListener("input", () => updateContractPreview(null, "입력값 기준"));
       els.contractForm?.addEventListener("change", () => updateContractPreview(null, "입력값 기준"));
       els.payrollForm?.employeeRequestId?.addEventListener("change", event => {
-        applyEmployeeToForm(els.payrollForm, selectedApprovedEmployee(event.target.value));
+        applyEmployeeToForm(els.payrollForm, selectedApprovedEmployee(event.target.value, els.payrollForm));
       });
       ["grossPay", "employmentTaxType"].forEach(name => {
         els.payrollForm?.[name]?.addEventListener("change", () => maybeAutoFreelancerTax(els.payrollForm));
@@ -5536,6 +5547,7 @@
         setSelectedSettingsBusinessId(event.target.value);
         initSelects();
         renderAll();
+        loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
         showToast("선택 사업자 기준으로 설정 현황을 다시 정리했습니다.");
       });
       els.refreshServerAccountsBtn.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));

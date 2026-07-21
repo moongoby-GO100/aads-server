@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-21 09:59 KST - 매장비서 사업자별 직원 계약서 자동채움 격리 릴리스
+- 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_finance_service.py`.
+- 계약서 작성 시 선택 사업자 소속의 승인된 가입 직원만 조회·선택하도록 API와 화면을 범위화했다.
+- 저장 시 `employee_request_id`의 승인 상태와 사업자 소유권을 다시 검증하며, 직원명·이메일·주소·지점과 사용자 상호·사업자등록번호·대표자·주소·근무장소의 빈 값만 자동채운다. 사용자가 수정한 값은 덮어쓰지 않는다.
+- 플랫폼 계정 DB JSONB payload에는 `password`/`password_enc`가 기록되지 않도록 저장 경계를 보강했다. 암호문은 로컬 보호 원장에만 유지한다.
+- 검증: 격리 컨테이너에서 관련 단위/API 계약 및 파이프라인 회귀 테스트 `79 passed`, Ruff 검사·Python 컴파일·인라인 JavaScript 구문 검사 성공.
+- 운영 DB 정리 전 전체 백업 및 대상 테이블 백업을 생성했다. fixture 매출 1건과 수집이력 6건은 soft-delete 상태, 플랫폼 계정 payload 비밀 필드는 0건으로 확인했다.
+
 ## 2026-07-21 08:28 KST - 매장비서 3개 사업자 설정 최종 동기화·운영 검증
 - CEO 확정 기준 사업자는 `열정국밥 중화점`, `열정국밥 성신여대점`, `열정국밥_미아점` 3건이다.
 - PostgreSQL 실측:

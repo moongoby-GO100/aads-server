@@ -431,6 +431,12 @@ async def _db_fetch_ledger(name: str) -> list[dict[str, Any]] | None:
         await conn.close()
 
 
+def _db_payload_record(name: str, record: dict[str, Any]) -> dict[str, Any]:
+    if name == "platform_accounts":
+        return {key: value for key, value in record.items() if key not in _ACCOUNT_SECRET_FIELDS}
+    return record
+
+
 async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
     import asyncpg
 
@@ -442,7 +448,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
         ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
         if not ready:
             return False
-        payload = json.dumps(record, ensure_ascii=False)
+        payload = json.dumps(_db_payload_record(name, record), ensure_ascii=False)
         record_id = str(record.get("id") or uuid4())
         now = _now()
         if name in GENERIC_DB_LEDGER_NAMES:
@@ -1146,6 +1152,13 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     existing = next((row for row in rows if str(row.get("email") or "").strip().lower() == email), None)
     now = _now()
     record = existing or {"id": str(uuid4()), "requested_at": now}
+    branch = BRANCH_ALIASES.get(
+        str(payload.get("branch") or record.get("branch") or "").strip(),
+        str(payload.get("branch") or record.get("branch") or "").strip(),
+    )
+    business_id = str(payload.get("business_id") or record.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip()
+    if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
+        raise HTTPException(status_code=400, detail="직원의 사업자와 지점 연결이 일치하지 않습니다")
     record.update(
         {
             "name": str(payload.get("name") or record.get("name") or "").strip(),
@@ -1153,7 +1166,8 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             "email_masked": _mask_email(email),
             "phone": str(payload.get("phone") or record.get("phone") or "").strip(),
             "phone_masked": _mask_phone(str(payload.get("phone") or record.get("phone") or "")),
-            "branch": str(payload.get("branch") or record.get("branch") or "").strip(),
+            "business_id": business_id,
+            "branch": branch,
             "memo": str(payload.get("memo") or record.get("memo") or ""),
             "invite_id": payload.get("invite_id") or record.get("invite_id") or "",
             "status": record.get("status") if existing else "pending",
@@ -1184,7 +1198,13 @@ def review_join_request(request_id: str, action: str, memo: str, user: dict[str,
     return record
 
 
-def list_approved_employees(user: dict[str, Any]) -> list[dict[str, Any]]:
+def _record_business_id(record: dict[str, Any]) -> str:
+    branch = BRANCH_ALIASES.get(str(record.get("branch") or "").strip(), str(record.get("branch") or "").strip())
+    explicit = str(record.get("business_id") or record.get("businessId") or "").strip()
+    return explicit if explicit in CANONICAL_BUSINESS_IDS else str(BUSINESS_BY_BRANCH.get(branch) or "")
+
+
+def list_approved_employees(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
     docs = _read("onboarding_documents")
@@ -1195,8 +1215,13 @@ def list_approved_employees(user: dict[str, Any]) -> list[dict[str, Any]]:
     for row in _read("employee_join_requests"):
         if row.get("status") != "approved":
             continue
+        employee_business_id = _record_business_id(row)
+        if business_id and employee_business_id != business_id:
+            continue
         email = str(row.get("email") or "").strip().lower()
         employee = dict(row)
+        employee["business_id"] = employee_business_id
+        employee["branch"] = BRANCH_ALIASES.get(str(employee.get("branch") or ""), str(employee.get("branch") or ""))
         employee["email_masked"] = employee.get("email_masked") or _mask_email(email)
         employee["onboarding_document_count"] = sum(1 for item in docs if str(item.get("employee_email") or "").strip().lower() == email)
         employee["contract_count"] = sum(1 for item in contracts if str(item.get("employee_email") or "").strip().lower() == email)
@@ -1372,6 +1397,63 @@ def delete_onboarding_document(document_id: str, user: dict[str, Any]) -> None:
     _delete("onboarding_documents", document_id)
 
 
+def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None) -> tuple[str, str]:
+    employee = employee or {}
+    employee_branch = BRANCH_ALIASES.get(str(employee.get("branch") or "").strip(), str(employee.get("branch") or "").strip())
+    employee_business_id = _record_business_id(employee)
+    branch = BRANCH_ALIASES.get(
+        str(payload.get("branch") or employee_branch or "").strip(),
+        str(payload.get("branch") or employee_branch or "").strip(),
+    )
+    business_id = str(payload.get("business_id") or payload.get("businessId") or BUSINESS_BY_BRANCH.get(branch) or employee_business_id).strip()
+    if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
+        raise HTTPException(status_code=400, detail="계약서의 사업자와 지점 연결이 일치하지 않습니다")
+    if employee and employee_business_id != business_id:
+        raise HTTPException(status_code=400, detail="선택 직원은 해당 사업자 소속이 아닙니다")
+    return business_id, branch
+
+
+def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    request_id = str(result.get("employee_request_id") or result.get("employeeRequestId") or "").strip()
+    employee = None
+    if request_id:
+        employee = _find(_read("employee_join_requests"), request_id)
+        if not employee or str(employee.get("status") or "").lower() != "approved":
+            raise HTTPException(status_code=400, detail="승인된 가입 직원만 계약서에 선택할 수 있습니다")
+
+    business_id, branch = _contract_business(result, employee)
+    result["business_id"] = business_id
+    result["branch"] = branch
+    if employee:
+        employee_defaults = {
+            "employee_request_id": request_id,
+            "employee_name": employee.get("name") or "",
+            "employee_email": employee.get("email") or "",
+            "employee_address": employee.get("address") or "",
+        }
+        for key, value in employee_defaults.items():
+            if not str(result.get(key) or "").strip() and value:
+                result[key] = value
+
+    settings = get_settings(user).get("settings") or {}
+    businesses = settings.get("businesses") if isinstance(settings.get("businesses"), list) else []
+    business = next((item for item in businesses if item.get("id") == business_id), None)
+    if not business:
+        business = next((item for item in CANONICAL_BUSINESSES if item.get("id") == business_id), {})
+    business_defaults = {
+        "employer_name": business.get("name") or "",
+        "employer_registration_no": business.get("registrationNo") or "",
+        "employer_representative": business.get("representative") or "",
+        "employer_address": business.get("address") or "",
+        "workplace": branch,
+    }
+    for key, value in business_defaults.items():
+        if not str(result.get(key) or "").strip() and value:
+            result[key] = value
+    return result
+
+
 def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     now = _now()
     contract_id = str(payload.get("id") or uuid4())
@@ -1403,7 +1485,7 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 작성 권한이 없습니다")
     rows = _read("contracts")
-    contract = _contract_defaults(payload)
+    contract = _contract_defaults(_fill_contract_reference_data(payload, user))
     existing = _find(rows, contract["id"])
     if existing:
         existing.update(contract)

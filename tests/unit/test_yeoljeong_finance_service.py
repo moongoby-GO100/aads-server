@@ -376,6 +376,111 @@ def test_save_freelancer_contract_adds_a4_service_template_meta(tmp_path, monkey
     assert saved["print_title"] == "3.3% 프리랜서 용역계약서"
 
 
+def test_approved_employees_are_filtered_by_business_and_infer_legacy_scope():
+    service._write(
+        "employee_join_requests",
+        [
+            {"id": "join-mia", "name": "미아 직원", "email": "mia@example.com", "branch": "미아점", "status": "approved"},
+            {"id": "join-junghwa", "name": "중화 직원", "email": "junghwa@example.com", "branch": "중화점", "status": "approved"},
+        ],
+    )
+
+    rows = service.list_approved_employees({"email": "owner@example.com", "is_admin": True}, "biz-mia")
+
+    assert [row["id"] for row in rows] == ["join-mia"]
+    assert rows[0]["business_id"] == "biz-mia"
+    assert rows[0]["branch"] == "열정국밥_미아점"
+
+
+def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
+    service._write(
+        "employee_join_requests",
+        [
+            {
+                "id": "join-mia",
+                "name": "가입 직원",
+                "email": "member@example.com",
+                "address": "서울시 직원 주소",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "status": "approved",
+            }
+        ],
+    )
+    user = {"email": "owner@example.com", "is_admin": True}
+
+    saved = service.save_contract(
+        {
+            "employee_request_id": "join-mia",
+            "business_id": "biz-mia",
+            "branch": "미아점",
+            "contract_type": "regular",
+        },
+        user,
+    )
+
+    assert saved["employee_name"] == "가입 직원"
+    assert saved["employee_email"] == "member@example.com"
+    assert saved["employee_address"] == "서울시 직원 주소"
+    assert saved["employer_name"] == "열정국밥_미아점"
+    assert saved["employer_registration_no"] == "874-21-02160"
+    assert saved["employer_representative"] == "최미미"
+    assert saved["workplace"] == "열정국밥_미아점"
+
+    edited = service.save_contract(
+        {
+            **saved,
+            "employee_name": "직원 수정명",
+            "employer_name": "사용자 수정 상호",
+            "workplace": "수정 근무장소",
+        },
+        user,
+    )
+
+    assert edited["employee_name"] == "직원 수정명"
+    assert edited["employer_name"] == "사용자 수정 상호"
+    assert edited["workplace"] == "수정 근무장소"
+
+
+def test_contract_rejects_employee_from_another_business():
+    service._write(
+        "employee_join_requests",
+        [
+            {
+                "id": "join-junghwa",
+                "name": "중화 직원",
+                "email": "junghwa@example.com",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "status": "approved",
+            }
+        ],
+    )
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(
+            {
+                "employee_request_id": "join-junghwa",
+                "business_id": "biz-mia",
+                "branch": "미아점",
+                "contract_type": "regular",
+            },
+            {"email": "owner@example.com", "is_admin": True},
+        )
+
+    assert exc.value.status_code == 400
+    assert "해당 사업자 소속" in exc.value.detail
+
+
+def test_platform_account_db_payload_never_contains_secret_fields():
+    payload = service._db_payload_record(
+        "platform_accounts",
+        {"id": "acct-1", "service": "baemin", "password": "plain", "password_enc": "cipher"},
+    )
+
+    assert payload == {"id": "acct-1", "service": "baemin"}
+
+
 def test_onboarding_documents_include_missing_required_rows_for_approved_employee(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
