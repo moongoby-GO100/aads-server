@@ -119,6 +119,16 @@ CONTRACT_TEMPLATE_META = {
     },
 }
 
+EMPLOYMENT_CONTRACT_TYPES = {"part_time", "regular", "manager"}
+VALID_CONTRACT_TYPES = EMPLOYMENT_CONTRACT_TYPES | {"freelancer", "confidentiality"}
+CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
+    "sign_token",
+    "sign_token_hash",
+    "signed_snapshot",
+    "signed_snapshot_sha256",
+    "updated_at",
+}
+
 CANONICAL_BUSINESSES: list[dict[str, Any]] = [
     {
         "id": "biz-junghwa",
@@ -1507,6 +1517,94 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
     return result
 
 
+def _contract_payload_value(payload: dict[str, Any], snake_key: str, camel_key: str = "") -> Any:
+    value = payload.get(snake_key)
+    if value is None and camel_key:
+        value = payload.get(camel_key)
+    return value
+
+
+def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate legal/operational invariants before a contract is persisted."""
+    result = dict(payload)
+    contract_type = str(_contract_payload_value(result, "contract_type", "contractType") or "").strip()
+    if contract_type not in VALID_CONTRACT_TYPES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 계약 유형입니다")
+
+    employee_name = str(_contract_payload_value(result, "employee_name", "employeeName") or "").strip()
+    employee_email = str(_contract_payload_value(result, "employee_email", "employeeEmail") or "").strip().lower()
+    employee_request_id = str(_contract_payload_value(result, "employee_request_id", "employeeRequestId") or "").strip()
+    business_id = str(_contract_payload_value(result, "business_id", "businessId") or "").strip()
+    branch = str(result.get("branch") or "").strip()
+    contract_date = str(_contract_payload_value(result, "contract_date", "contractDate") or "").strip()
+    missing: list[str] = []
+    for label, value in (
+        ("승인 직원", employee_request_id), ("직원명", employee_name), ("직원 이메일", employee_email),
+        ("사업자", business_id), ("근무 지점", branch), ("계약 작성일", contract_date),
+        ("사용자 상호", _contract_payload_value(result, "employer_name", "employerName")),
+        ("사업자등록번호", _contract_payload_value(result, "employer_registration_no", "employerRegistrationNo")),
+        ("대표자", _contract_payload_value(result, "employer_representative", "employerRepresentative")),
+    ):
+        if not str(value or "").strip():
+            missing.append(label)
+    if employee_email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", employee_email):
+        raise HTTPException(status_code=400, detail="직원 이메일 형식이 올바르지 않습니다")
+    start_date = str(_contract_payload_value(result, "start_date", "startDate") or "").strip()
+    end_date = str(_contract_payload_value(result, "end_date", "endDate") or "").strip()
+    if start_date and end_date and end_date < start_date:
+        raise HTTPException(status_code=400, detail="계약 종료일은 입사일보다 빠를 수 없습니다")
+    employment_tax_type = str(_contract_payload_value(result, "employment_tax_type", "employmentTaxType") or "").strip()
+    wage_type = str(_contract_payload_value(result, "wage_type", "wageType") or "").strip()
+    try:
+        wage = float(result.get("wage") or 0)
+    except (TypeError, ValueError):
+        wage = 0
+    if contract_type in EMPLOYMENT_CONTRACT_TYPES:
+        if employment_tax_type != "four_insurance":
+            raise HTTPException(status_code=400, detail="근로계약서는 4대보험 가입 근로자 구분으로 작성해야 합니다")
+        for label, key, camel in (
+            ("입사일", "start_date", "startDate"), ("근무장소", "workplace", "workplace"),
+            ("업무내용", "job_description", "jobDescription"), ("근무시간", "work_time", "workTime"),
+            ("휴게시간", "rest_time", "restTime"), ("주 소정근로시간", "weekly_hours", "weeklyHours"),
+            ("근무일/요일", "work_days", "workDays"), ("휴일/주휴", "holidays", "holidays"),
+            ("급여지급일", "pay_date", "payDate"), ("지급방법", "pay_method", "payMethod"),
+            ("임금 구성/공제", "wage_composition", "wageComposition"),
+            ("연장·야간·휴일근로", "overtime_terms", "overtimeTerms"),
+            ("연차/휴가/결근", "leave_terms", "leaveTerms"),
+            ("4대보험/세무 처리", "insurance_terms", "insuranceTerms"),
+        ):
+            if not str(_contract_payload_value(result, key, camel) or "").strip():
+                missing.append(label)
+        if wage_type not in {"hourly", "monthly", "daily"}:
+            raise HTTPException(status_code=400, detail="근로계약서의 임금 산정 방식을 확인하십시오")
+        if wage <= 0:
+            missing.append("확정 임금")
+    elif contract_type == "freelancer":
+        if employment_tax_type != "freelancer_33":
+            raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 3.3% 원천징수 구분으로 작성해야 합니다")
+        if wage_type != "case_fee":
+            raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 건별/용역비 방식으로 작성해야 합니다")
+        for label, key, camel in (
+            ("용역 시작일", "start_date", "startDate"),
+            ("용역 업무범위/산출물", "freelancer_scope", "freelancerScope"),
+            ("용역비 정산/해지", "freelancer_settlement_terms", "freelancerSettlementTerms"),
+        ):
+            if not str(_contract_payload_value(result, key, camel) or "").strip():
+                missing.append(label)
+        if wage <= 0:
+            missing.append("확정 용역비")
+    if missing:
+        unique_missing = list(dict.fromkeys(missing))
+        raise HTTPException(status_code=400, detail=f"계약서 필수 입력값을 확인하십시오: {', '.join(unique_missing)}")
+    return result
+
+
+def _signed_contract_snapshot(contract: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    snapshot = {key: value for key, value in contract.items() if key not in CONTRACT_SNAPSHOT_EXCLUDED_FIELDS}
+    encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return snapshot, hashlib.sha256(encoded).hexdigest()
+
+
 def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     now = _now()
     contract_id = str(payload.get("id") or uuid4())
@@ -1538,12 +1636,24 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 작성 권한이 없습니다")
     rows = _read("contracts")
-    contract = _contract_defaults(_fill_contract_reference_data(payload, user))
+    requested_id = str(payload.get("id") or "").strip()
+    existing = _find(rows, requested_id) if requested_id else None
+    if existing and str(existing.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="서명 완료 계약서는 수정할 수 없습니다. 정정 계약서를 새로 작성하십시오")
+    contract = _contract_defaults(_validate_contract_payload(_fill_contract_reference_data(payload, user)))
     existing = _find(rows, contract["id"])
     if existing:
+        if str(existing.get("status") or "") == "requested":
+            contract["status"] = "draft"
+            contract.pop("sign_token", None)
+            contract.pop("requested_at", None)
         existing.update(contract)
+        if existing.get("status") == "draft":
+            existing.pop("sign_token", None)
+            existing.pop("requested_at", None)
         saved = existing
     else:
+        contract["status"] = "draft"
         rows.insert(0, contract)
         saved = contract
     _write("contracts", rows)
@@ -1557,6 +1667,9 @@ def request_contract_signature(contract_id: str, user: dict[str, Any]) -> dict[s
     contract = _find(rows, contract_id)
     if not contract:
         raise HTTPException(status_code=404, detail="계약서를 찾을 수 없습니다")
+    if str(contract.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="서명 완료 계약서는 다시 서명 요청할 수 없습니다")
+    _validate_contract_payload(contract)
     contract["status"] = "requested"
     contract["sign_token"] = contract.get("sign_token") or secrets.token_urlsafe(24)
     contract["requested_at"] = _now()
@@ -1581,11 +1694,19 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
     signer_email = str(payload.get("signer_email") or (user and _email(user)) or "").strip().lower()
     if signer_email and str(contract.get("employee_email") or "").strip().lower() not in {"", signer_email} and not (user and _is_admin(user)):
         raise HTTPException(status_code=403, detail="서명 대상자가 아닙니다")
+    if str(contract.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
+    if str(contract.get("status") or "") != "requested":
+        raise HTTPException(status_code=409, detail="서명 요청된 계약서만 서명할 수 있습니다")
+    _validate_contract_payload(contract)
     contract["status"] = "signed"
     contract["signed_at"] = _now()
     contract["signer_name"] = str(payload.get("signer_name") or contract.get("employee_name") or "")
     contract["signer_email"] = signer_email
     contract["updated_at"] = contract["signed_at"]
+    snapshot, snapshot_sha256 = _signed_contract_snapshot(contract)
+    contract["signed_snapshot"] = snapshot
+    contract["signed_snapshot_sha256"] = snapshot_sha256
     _write("contracts", rows)
     return contract
 
@@ -1593,6 +1714,11 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
 def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 삭제 권한이 없습니다")
+    contract = _find(_read("contracts"), contract_id)
+    if not contract:
+        raise HTTPException(status_code=404, detail="계약서를 찾을 수 없습니다")
+    if str(contract.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="서명 완료 계약서는 삭제할 수 없습니다")
     _delete("contracts", contract_id)
 
 

@@ -28,6 +28,29 @@ def isolate_yeoljeong_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_run_db", disable_db)
 
 
+def seed_approved_employee(name="가입 직원", email="member@example.com"):
+    service._write("employee_join_requests", [{
+        "id": "join-mia", "name": name, "email": email, "address": "서울시 직원 주소",
+        "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
+    }])
+
+
+def valid_employment_contract(**overrides):
+    payload = {
+        "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",
+        "contract_type": "regular", "employment_tax_type": "four_insurance",
+        "start_date": "2026-07-16", "contract_date": "2026-07-15", "wage_type": "monthly",
+        "wage": 2800000, "workplace": "열정국밥 미아점", "job_description": "매장 운영",
+        "work_time": "09:00-18:00", "rest_time": "12:00-13:00", "weekly_hours": "주 40시간",
+        "work_days": "주 5일", "holidays": "매주 일요일", "pay_date": "매월 10일",
+        "pay_method": "계좌이체", "wage_composition": "기본급 및 법정수당",
+        "overtime_terms": "사전 승인 및 법정 가산수당 지급", "leave_terms": "근로기준법에 따른 연차유급휴가",
+        "insurance_terms": "4대보험 법정 기준 적용",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_import_card_csv_maps_and_classifies(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     csv_text = (
@@ -338,17 +361,10 @@ def test_import_settlement_csv_is_scoped_and_idempotent():
 
 def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    seed_approved_employee(name="E2E 테스트직원", email="e2e.employee@example.com")
 
     saved = service.save_contract(
-        {
-            "employee_name": "E2E 테스트직원",
-            "employee_email": "e2e.employee@example.com",
-            "branch": "열정국밥_미아점",
-            "contract_type": "regular",
-            "employment_tax_type": "four_insurance",
-            "start_date": "2026-07-16",
-            "wage": 2800000,
-        },
+        valid_employment_contract(),
         {"email": "owner@example.com", "is_admin": True},
     )
 
@@ -359,15 +375,20 @@ def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monke
 
 def test_save_freelancer_contract_adds_a4_service_template_meta(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    seed_approved_employee(name="E2E 프리랜서", email="e2e.freelancer@example.com")
 
     saved = service.save_contract(
         {
-            "employee_name": "E2E 프리랜서",
-            "employee_email": "e2e.freelancer@example.com",
+            "employee_request_id": "join-mia",
+            "business_id": "biz-mia",
             "branch": "열정국밥_미아점",
             "contract_type": "freelancer",
             "employment_tax_type": "freelancer_33",
+            "contract_date": "2026-07-15",
+            "start_date": "2026-07-16",
+            "wage_type": "case_fee",
             "freelancer_scope": "홍보 콘텐츠 제작 및 배달앱 리뷰 응대 지원",
+            "freelancer_settlement_terms": "검수 후 매월 10일 3.3% 공제 지급",
             "wage": 500000,
         },
         {"email": "owner@example.com", "is_admin": True},
@@ -412,12 +433,7 @@ def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
     user = {"email": "owner@example.com", "is_admin": True}
 
     saved = service.save_contract(
-        {
-            "employee_request_id": "join-mia",
-            "business_id": "biz-mia",
-            "branch": "미아점",
-            "contract_type": "regular",
-        },
+        valid_employment_contract(branch="미아점", workplace=""),
         user,
     )
 
@@ -442,6 +458,59 @@ def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
     assert edited["employee_name"] == "직원 수정명"
     assert edited["employer_name"] == "사용자 수정 상호"
     assert edited["workplace"] == "수정 근무장소"
+
+
+def test_contract_rejects_employment_and_freelancer_tax_mismatch():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(valid_employment_contract(employment_tax_type="freelancer_33"), {"email": "owner@example.com", "is_admin": True})
+    assert exc.value.status_code == 400
+    assert "4대보험" in exc.value.detail
+
+
+def test_contract_rejects_unconfirmed_wage_and_required_terms():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(valid_employment_contract(wage=0, holidays="", leave_terms=""), {"email": "owner@example.com", "is_admin": True})
+    assert exc.value.status_code == 400
+    assert "확정 임금" in exc.value.detail
+    assert "휴일/주휴" in exc.value.detail
+
+
+def test_edit_after_signature_request_returns_contract_to_draft():
+    seed_approved_employee()
+    user = {"email": "owner@example.com", "is_admin": True}
+    saved = service.save_contract(valid_employment_contract(), user)
+    requested = service.request_contract_signature(saved["id"], user)
+    edited = service.save_contract({**requested, "job_description": "수정된 매장 운영"}, user)
+    assert edited["status"] == "draft"
+    assert "sign_token" not in edited
+    assert "requested_at" not in edited
+
+
+def test_incomplete_legacy_contract_cannot_be_requested_for_signature():
+    service._write("contracts", [{"id": "legacy-incomplete", "status": "draft", "employee_name": "기존 직원"}])
+    with pytest.raises(service.HTTPException) as exc:
+        service.request_contract_signature("legacy-incomplete", {"email": "owner@example.com", "is_admin": True})
+    assert exc.value.status_code == 400
+
+
+def test_signed_contract_is_hashed_and_cannot_be_changed_or_deleted():
+    seed_approved_employee()
+    admin = {"email": "owner@example.com", "is_admin": True}
+    employee = {"email": "member@example.com", "is_admin": False}
+    saved = service.save_contract(valid_employment_contract(), admin)
+    requested = service.request_contract_signature(saved["id"], admin)
+    signed = service.sign_contract({"token": requested["sign_token"], "signer_name": "가입 직원", "signer_email": "member@example.com"}, employee)
+    assert signed["status"] == "signed"
+    assert signed["signed_snapshot"]["employee_email"] == "member@example.com"
+    assert len(signed["signed_snapshot_sha256"]) == 64
+    with pytest.raises(service.HTTPException) as edit_exc:
+        service.save_contract({**signed, "wage": 1}, admin)
+    assert edit_exc.value.status_code == 409
+    with pytest.raises(service.HTTPException) as delete_exc:
+        service.delete_contract(signed["id"], admin)
+    assert delete_exc.value.status_code == 409
 
 
 def test_contract_rejects_employee_from_another_business():

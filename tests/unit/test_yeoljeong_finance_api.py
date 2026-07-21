@@ -59,3 +59,16 @@ def test_contract_preview_is_a4_modal():
     assert "width: 210mm" in html
     assert "min-height: 297mm" in html
     assert "openContractPreviewModal(contract, \"저장 계약서 기준\")" in html
+
+
+def test_contract_editor_uses_safe_classification_and_locks_signed_records():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    assert 'wage: "12000"' not in html
+    assert "function syncContractClassification()" in html
+    assert 'els.contractForm.employmentTaxType.value = "freelancer_33"' in html
+    assert 'els.contractForm.wageType.value = "case_fee"' in html
+    assert "function validateContractDraft(draft)" in html
+    assert '<select name="employeeRequestId" required>' in html
+    assert 'form.employeeAddress.value = employee.address || ""' in html
+    assert "서명본 수정·삭제 잠금" in html

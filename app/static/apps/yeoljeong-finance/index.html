@@ -1599,8 +1599,8 @@
             <div class="panel-body">
               <form id="contractForm" class="form-grid">
                 <label class="span-2">승인 직원 선택
-                  <select name="employeeRequestId">
-                    <option value="">직접 입력</option>
+                  <select name="employeeRequestId" required>
+                    <option value="">승인된 직원을 선택하십시오</option>
                   </select>
                 </label>
                 <label>직원명
@@ -2360,7 +2360,6 @@
       common: {
         workplace: "해당 지점 영업장 및 사용자가 지정한 관련 업무 장소",
         jobDescription: "홀 응대, 주방보조, 포장/배달 주문 확인, 매장 청소, 위생관리, 마감정산 보조 등 매장 운영에 필요한 업무",
-        wage: "12000",
         workTime: "10:00-22:00 중 매장 운영표에 따른 12시간 맞교대 또는 협의된 근무시간",
         restTime: "근로시간 4시간 이상 30분, 8시간 이상 60분 이상 부여",
         weeklyHours: "주 소정근로시간은 실제 근무표 기준으로 확정",
@@ -3459,11 +3458,12 @@
         const link = contractSignUrl(item);
         const actions = managerMode ? `
               <button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>
-              <button data-edit-contract="${escapeHtml(item.id)}">수정</button>
-              <button data-request-contract="${escapeHtml(item.id)}">서명요청</button>
-              <button data-copy-contract="${escapeHtml(link)}">링크복사</button>
-              <button data-sign-contract="${escapeHtml(item.id)}">서명완료</button>
-              <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">-</button>
+              ${item.status === "signed" ? `<span class="muted">서명본 수정·삭제 잠금</span>` : `
+                <button data-edit-contract="${escapeHtml(item.id)}">수정</button>
+                <button data-request-contract="${escapeHtml(item.id)}">서명요청</button>
+                ${item.status === "requested" ? `<button data-copy-contract="${escapeHtml(link)}">링크복사</button><button data-sign-contract="${escapeHtml(item.id)}">서명완료</button>` : ""}
+                <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">-</button>
+              `}
             ` : (employeeMode && item.status === "requested" ? `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button><button data-sign-contract="${escapeHtml(item.id)}">서명완료</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>`);
         return `
           <tr>
@@ -3514,7 +3514,7 @@
     }
 
     function approvedEmployeeOptions(form) {
-      return [`<option value="">직접 입력</option>`, ...approvedEmployeesForForm(form).map(item => {
+      return [`<option value="">승인된 직원을 선택하십시오</option>`, ...approvedEmployeesForForm(form).map(item => {
         const label = `${item.name || "직원"} · ${item.branch || "지점 미지정"} · ${item.email_masked || item.email || ""}`;
         return `<option value="${escapeHtml(item.id)}">${escapeHtml(label)}</option>`;
       })].join("");
@@ -3528,6 +3528,7 @@
       if (!form || !employee) return;
       if (form.employeeName) form.employeeName.value = employee.name || "";
       if (form.employeeEmail) form.employeeEmail.value = employee.email || "";
+      if (form.employeeAddress) form.employeeAddress.value = employee.address || "";
       if (form.branch && employee.branch) form.branch.value = employee.branch;
     }
 
@@ -3611,6 +3612,18 @@
       };
     }
 
+    function syncContractClassification() {
+      if (!els.contractForm) return;
+      const contractType = els.contractForm.contractType?.value || "part_time";
+      if (contractType === "freelancer") {
+        els.contractForm.employmentTaxType.value = "freelancer_33";
+        els.contractForm.wageType.value = "case_fee";
+      } else if (["part_time", "regular", "manager"].includes(contractType)) {
+        els.contractForm.employmentTaxType.value = "four_insurance";
+        els.contractForm.wageType.value = contractType === "part_time" ? "hourly" : "monthly";
+      }
+    }
+
     function applyContractDefaults(overwrite = false) {
       if (!els.contractForm) return;
       const defaults = buildContractDefaults();
@@ -3672,6 +3685,37 @@
         terms: String(data.terms || "").trim(),
         memo: String(data.memo || "").trim()
       };
+    }
+
+    function validateContractDraft(draft) {
+      const missing = [];
+      const requireValue = (label, value) => { if (!String(value ?? "").trim()) missing.push(label); };
+      requireValue("승인 직원", draft.employeeRequestId);
+      requireValue("직원명", draft.employeeName);
+      requireValue("직원 이메일", draft.employeeEmail);
+      requireValue("사업자/지점", draft.businessId && draft.branch);
+      requireValue("계약 작성일", draft.contractDate);
+      requireValue("사용자 상호", draft.employerName);
+      requireValue("사업자등록번호", draft.employerRegistrationNo);
+      requireValue("대표자", draft.employerRepresentative);
+      if (draft.startDate && draft.endDate && draft.endDate < draft.startDate) throw new Error("계약 종료일은 입사일보다 빠를 수 없습니다.");
+      if (["part_time", "regular", "manager"].includes(draft.contractType)) {
+        if (draft.employmentTaxType !== "four_insurance") throw new Error("근로계약서는 4대보험 가입 근로자 구분으로 작성해야 합니다.");
+        [["입사일", draft.startDate], ["근무장소", draft.workplace], ["업무내용", draft.jobDescription],
+          ["근무시간", draft.workTime], ["휴게시간", draft.restTime], ["주 소정근로시간", draft.weeklyHours],
+          ["근무일/요일", draft.workDays], ["휴일/주휴", draft.holidays], ["급여지급일", draft.payDate],
+          ["지급방법", draft.payMethod], ["임금 구성/공제", draft.wageComposition],
+          ["연장·야간·휴일근로", draft.overtimeTerms], ["연차/휴가/결근", draft.leaveTerms],
+          ["4대보험/세무 처리", draft.insuranceTerms]].forEach(([label, value]) => requireValue(label, value));
+        if (!draft.wage || draft.wage <= 0) missing.push("확정 임금");
+      } else if (draft.contractType === "freelancer") {
+        if (draft.employmentTaxType !== "freelancer_33" || draft.wageType !== "case_fee") throw new Error("프리랜서 용역계약서는 3.3% 원천징수·건별/용역비 방식으로 작성해야 합니다.");
+        requireValue("용역 시작일", draft.startDate);
+        requireValue("용역 업무범위/산출물", draft.freelancerScope);
+        requireValue("용역비 정산/해지", draft.freelancerSettlementTerms);
+        if (!draft.wage || draft.wage <= 0) missing.push("확정 용역비");
+      }
+      if (missing.length) throw new Error(`필수 입력값을 확인하십시오: ${[...new Set(missing)].join(", ")}`);
     }
 
     function contractClause(title, body) {
@@ -3808,6 +3852,7 @@
       }
       setDefaults();
       refreshApprovedEmployeeSelects();
+      syncContractClassification();
       applyContractDefaults(true);
       updateContractPreview(null, "입력값 기준");
     }
@@ -5372,6 +5417,12 @@
         event.preventDefault();
         applyContractDefaults(false);
         const draft = contractDraftFromForm();
+        try {
+          validateContractDraft(draft);
+        } catch (error) {
+          showToast(error?.message || "계약서 필수 입력값을 확인하십시오.");
+          return;
+        }
         const editId = els.contractForm.dataset.editId || "";
         const target = editId ? (state.contracts || []).find(item => item.id === editId) : null;
         const now = new Date().toISOString();
@@ -5490,9 +5541,11 @@
         applyBusinessToContractForm(true);
         updateContractPreview(null, "사업자 정보 반영");
       });
-      ["contractType", "employmentTaxType"].forEach(name => {
-        els.contractForm?.[name]?.addEventListener("change", () => applyContractDefaults(false));
+      els.contractForm?.contractType?.addEventListener("change", () => {
+        syncContractClassification();
+        applyContractDefaults(false);
       });
+      els.contractForm?.employmentTaxType?.addEventListener("change", () => applyContractDefaults(false));
       els.fillContractDefaultsBtn?.addEventListener("click", () => {
         applyContractDefaults(true);
         showToast("표준 계약서 기본값과 사업자 정보를 다시 채웠습니다.");
