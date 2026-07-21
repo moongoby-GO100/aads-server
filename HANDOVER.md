@@ -9,6 +9,8 @@
 - 기존 미완성 계약서는 필수조건 보완 전 서명요청할 수 없다. 기존 DB 행을 자동 변경하거나 삭제하지 않는다.
 - 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위/API 테스트.
 - 검증: 격리 릴리스 컨테이너에서 매장비서 서비스/API/수집기 및 파이프라인 회귀 `95 passed`, Ruff·Python compile·인라인 JavaScript 구문·Git diff 검사를 통과했다.
+- 배포: 코드 커밋 `8cd77689`을 `origin/main`에 push하고 릴리스 워크트리 `/root/aads/contract-release-20260722-W5YnMr`를 Green `8102`에 격리 마운트했다. 운영 데이터와 Vault는 기존 경로를 유지했으며 Blue `8100`은 롤백 대기로 보존했다.
+- 운영 E2E: Green 헬스와 외부 헬스 200, 실제 Chromium에서 프리랜서 선택 시 `3.3%/건별 용역비` 자동 연동, A4 모달 폭 `793.7px(210mm)`, 계약 작성→서명요청→서명→SHA-256 스냅샷→수정 409 차단을 확인했다.
 
 ## 2026-07-21 KST - 매장비서 입사서류 사업자 연결 및 계약서 A4 팝업 미리보기
 
