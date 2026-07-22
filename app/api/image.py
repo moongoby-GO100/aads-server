@@ -17,7 +17,7 @@ from app.services.media_generation_service import _app_static_dir, media_generat
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_internal_admin)])
+router = APIRouter()
 
 
 class ImageRequest(BaseModel):
@@ -70,7 +70,7 @@ class GalleryDeleteRequest(BaseModel):
     deleted_by: str = "ceo_gallery"
 
 
-@router.post("/generate")
+@router.post("/generate", dependencies=[Depends(require_internal_admin)])
 async def generate_image(req: ImageRequest):
     """채팅창에서 이미지 생성"""
     logger.info("image_generate_request reference_images=%s model_id=%s aspect_ratio=%s image_size=%s", req.reference_images, req.model_id, req.aspect_ratio, req.image_size)
@@ -95,7 +95,7 @@ async def generate_image(req: ImageRequest):
         raise HTTPException(status_code=500, detail=f"이미지 생성 실패: {e}")
 
 
-@router.post("/edit")
+@router.post("/edit", dependencies=[Depends(require_internal_admin)])
 async def edit_image(req: EditImageRequest):
     """이미지 편집 job 생성/실행."""
     if not req.prompt.strip():
@@ -126,7 +126,7 @@ async def edit_image(req: EditImageRequest):
         raise HTTPException(status_code=500, detail=f"이미지 편집 실패: {e}")
 
 
-@router.post("/video/generate")
+@router.post("/video/generate", dependencies=[Depends(require_internal_admin)])
 async def generate_video(req: VideoRequest):
     """비동기 동영상 생성 job 생성."""
     if not req.prompt.strip():
@@ -146,13 +146,13 @@ async def generate_video(req: VideoRequest):
         raise HTTPException(status_code=500, detail=f"동영상 생성 실패: {e}")
 
 
-@router.get("/video/{job_id}/status")
+@router.get("/video/{job_id}/status", dependencies=[Depends(require_internal_admin)])
 async def video_status(job_id: str):
     """동영상 생성 job 상태 조회."""
     return await media_generation_service.video_status(job_id)
 
 
-@router.post("/video/{job_id}/download")
+@router.post("/video/{job_id}/download", dependencies=[Depends(require_internal_admin)])
 async def video_download(job_id: str, req: VideoDownloadRequest | None = None):
     """동영상 생성 결과를 안전 경로에 저장하고 메타데이터 반환."""
     return await media_generation_service.video_download(
@@ -255,7 +255,7 @@ async def image_gallery(
     }
 
 
-@router.post("/gallery/approve")
+@router.post("/gallery/approve", dependencies=[Depends(require_internal_admin)])
 async def approve_gallery_references(req: GalleryApprovalRequest):
     """CEO 갤러리에서 AI 모델 reference 이미지를 승인/취소 처리."""
     from app.core.db_pool import get_pool
@@ -322,7 +322,7 @@ async def approve_gallery_references(req: GalleryApprovalRequest):
     }
 
 
-@router.post("/gallery/delete")
+@router.post("/gallery/delete", dependencies=[Depends(require_internal_admin)])
 async def delete_gallery_items(req: GalleryDeleteRequest):
     """CEO 갤러리에서 선택한 이미지 job과 연결 reference를 삭제."""
     from app.core.db_pool import get_pool
