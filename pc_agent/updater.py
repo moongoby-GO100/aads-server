@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -24,6 +25,30 @@ INSTALL_DIR = Path(os.environ.get(
 AGENT_DIR = INSTALL_DIR / "agent"
 VERSION_FILE = AGENT_DIR / "VERSION"
 HTTP_BASE = "https://aads.newtalk.kr"
+
+
+def _version_key(version: str) -> tuple[int, ...] | None:
+    """Return a comparable numeric version, rejecting malformed responses."""
+    match = re.fullmatch(r"v?(\d+(?:\.\d+){1,3})", str(version).strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _is_remote_newer(remote_version: str, local_version: str) -> bool:
+    remote_key = _version_key(remote_version)
+    local_key = _version_key(local_version)
+    if remote_key is None or local_key is None:
+        logger.warning(
+            "버전 형식 오류 — 자동 업데이트 차단: local=%r remote=%r",
+            local_version,
+            remote_version,
+        )
+        return False
+    width = max(len(remote_key), len(local_key))
+    remote_key += (0,) * (width - len(remote_key))
+    local_key += (0,) * (width - len(local_key))
+    return remote_key > local_key
 
 
 def _get_local_version() -> str:
@@ -57,7 +82,9 @@ def check_update(cfg: dict) -> tuple[bool, str]:
     remote_ver = info.get("version", "0.0.0")
     local_ver = _get_local_version()
     logger.info("버전 비교: 로컬=%s, 서버=%s", local_ver, remote_ver)
-    return (local_ver != remote_ver, remote_ver)
+    # A rollback slot may expose an older server version temporarily. Never
+    # downgrade a healthy client just because the strings differ.
+    return (_is_remote_newer(remote_ver, local_ver), remote_ver)
 
 
 def download_update(cfg: dict, version: str) -> None:

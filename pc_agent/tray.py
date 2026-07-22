@@ -51,35 +51,24 @@ def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
     return img
 
 
-def _confirm_full_exit() -> bool:
-    """완전 종료 여부를 확인한다.
+def confirm_full_exit() -> bool:
+    """Ask for explicit confirmation without failing open.
 
-    Windows 트레이 콜백은 별도 스레드에서 실행되므로 tkinter 메시지 루프를
-    함께 띄우면 버튼이 응답하지 않을 수 있다. Windows에서는 OS 네이티브
-    MessageBoxW를 사용하고, 확인창 생성 실패 시에는 안전하게 종료를 취소한다.
+    pystray invokes menu callbacks on a worker thread. Tk dialogs can become
+    unresponsive on that thread on Windows, so use the native Win32 dialog
+    there and retain Tk only as a non-Windows fallback.
     """
     if sys.platform == "win32":
         try:
             import ctypes
 
-            mb_yesno = 0x00000004
-            mb_iconwarning = 0x00000030
-            mb_defbutton2 = 0x00000100
-            mb_setforeground = 0x00010000
-            mb_systemmodal = 0x00001000
+            flags = 0x00000004 | 0x00000030 | 0x00000100 | 0x00010000 | 0x00040000
             result = ctypes.windll.user32.MessageBoxW(
-                None,
-                _EXIT_MESSAGE,
-                _EXIT_TITLE,
-                mb_yesno
-                | mb_iconwarning
-                | mb_defbutton2
-                | mb_setforeground
-                | mb_systemmodal,
+                None, _EXIT_MESSAGE, _EXIT_TITLE, flags
             )
             return result == 6  # IDYES
-        except Exception as exc:
-            logger.error("완전 종료 확인창 표시 실패: %s", exc)
+        except Exception:
+            logger.exception("Win32 완전 종료 확인창 표시 실패")
             return False
 
     root = None
@@ -89,9 +78,10 @@ def _confirm_full_exit() -> bool:
 
         root = tk.Tk()
         root.withdraw()
+        root.attributes("-topmost", True)
         return bool(messagebox.askyesno(_EXIT_TITLE, _EXIT_MESSAGE, parent=root))
-    except Exception as exc:
-        logger.error("완전 종료 확인창 표시 실패: %s", exc)
+    except Exception:
+        logger.exception("완전 종료 확인창 표시 실패")
         return False
     finally:
         if root is not None:
@@ -175,8 +165,8 @@ def create_tray(cfg: dict, agent_proc_or_ref, on_quit: Callable) -> None:
         icon.visible = False
 
     def on_exit(icon, item):
-        if not _confirm_full_exit():
-            logger.info("트레이 완전 종료 취소")
+        if not confirm_full_exit():
+            logger.info("완전 종료 취소")
             return
         logger.info("트레이에서 완전 종료 요청")
         on_quit()

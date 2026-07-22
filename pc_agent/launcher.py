@@ -247,14 +247,41 @@ def _record_redownload() -> None:
         pass
 
 
-def _force_redownload() -> None:
-    """VERSION을 0.0.0으로 리셋하여 다음 업데이트 체크 시 강제 재다운로드."""
-    vf = AGENT_DIR / "VERSION"
+def _redownload_agent(cfg: dict) -> bool:
+    """Repair agent files without mutating VERSION or allowing a downgrade."""
+    allowed, used = _can_redownload()
+    if not allowed:
+        logger.error(
+            "강제 재다운로드 횟수 초과 (%d/%d) — 기존 코드로 재시도",
+            used,
+            MAX_REDOWNLOADS_PER_HOUR,
+        )
+        return False
     try:
-        vf.write_text("0.0.0", encoding="utf-8")
-        logger.info("강제 재다운로드 예약 (VERSION → 0.0.0)")
-    except Exception:
-        pass
+        from updater import (
+            _get_local_version,
+            _is_remote_newer,
+            check_update,
+            download_update,
+        )
+
+        _need, remote_version = check_update(cfg)
+        local_version = _get_local_version()
+        if remote_version != local_version and not _is_remote_newer(
+            remote_version, local_version
+        ):
+            logger.error(
+                "복구 다운로드 역다운그레이드 차단: local=%s remote=%s",
+                local_version,
+                remote_version,
+            )
+            return False
+        _record_redownload()
+        download_update(cfg, remote_version)
+        return True
+    except Exception as exc:
+        logger.error("복구 다운로드 실패: %s", exc)
+        return False
 
 
 def _increment_launcher_start_count() -> int:
@@ -478,6 +505,26 @@ def register_watchdog_task() -> None:
         logger.warning("Task Scheduler watchdog 등록 실패: %s", e)
 
 
+def disable_watchdog_for_user_exit() -> None:
+    """Stop automatic revival only after an explicit full-exit confirmation."""
+    if sys.platform != "win32":
+        return
+    for args in (
+        ["schtasks", "/End", "/TN", "KakaoBotWatchdog"],
+        ["schtasks", "/Delete", "/TN", "KakaoBotWatchdog", "/F"],
+    ):
+        try:
+            subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                **_hidden_subprocess_kwargs(),
+            )
+        except Exception as exc:
+            logger.warning("완전 종료 watchdog 해제 실패 (%s): %s", args[1], exc)
+
+
 
 # ---------------------------------------------------------------------------
 # 에이전트 실행
@@ -533,8 +580,8 @@ def run_agent(cfg: dict):
         try:
             spec.loader.exec_module(mod)
         except ImportError as imp_err:
-            logger.error("에이전트 임포트 실패 (코드 손상): %s — 강제 재다운로드 예약", imp_err)
-            _force_redownload()
+            logger.error("에이전트 임포트 실패 (코드 손상): %s — 복구 다운로드", imp_err)
+            _redownload_agent(cfg)
             return None
 
         agent_instance = mod.PCAgent()
@@ -678,13 +725,8 @@ def main() -> None:
     if proc is None:
         # ImportError 등으로 코드 손상 → 강제 재다운로드 후 1회 재시도
         logger.warning("에이전트 실행 실패 — 강제 재다운로드 후 재시도")
-        try:
-            need, remote_ver = check_update(cfg)
-            if need:
-                download_update(cfg, remote_ver)
-                proc = run_agent(cfg)
-        except Exception as _dl_err:
-            logger.error("강제 재다운로드 실패: %s", _dl_err)
+        if _redownload_agent(cfg):
+            proc = run_agent(cfg)
         if proc is None:
             try:
                 import tkinter as _tk
@@ -718,6 +760,7 @@ def main() -> None:
 
         def on_quit():
             """트레이 종료 콜백."""
+            disable_watchdog_for_user_exit()
             stop_requested.set()
             p = proc_ref[0]
             if p and p.poll() is None:
@@ -843,35 +886,9 @@ def main() -> None:
                 logger.warning("에이전트 종료 (코드 %s) — 크래시 %d회", ret, crash_n)
 
                 if crash_n >= MAX_CRASHES_BEFORE_REDOWNLOAD:
-                    # --- redownload circuit breaker ---
-                    _rdl_file = INSTALL_DIR / ".redownload_log"
-                    _now = time.time()
-                    try:
-                        _rdl_entries = [float(x) for x in _rdl_file.read_text(encoding="utf-8").split() if x]
-                    except Exception:
-                        _rdl_entries = []
-                    # keep only entries within the last hour
-                    _rdl_entries = [t for t in _rdl_entries if _now - t < 3600]
-                    if len(_rdl_entries) >= MAX_REDOWNLOADS_PER_HOUR:
-                        logger.error(
-                            "강제 재다운로드 횟수 초과 (%d회/시간) — 재다운로드 건너뜀, 5초 후 재시도",
-                            MAX_REDOWNLOADS_PER_HOUR,
-                        )
-                    else:
-                        logger.warning("크래시 %d회 → 에이전트 코드 강제 재다운로드", crash_n)
-                        _rdl_entries.append(_now)
-                        try:
-                            _rdl_file.write_text(" ".join(str(t) for t in _rdl_entries), encoding="utf-8")
-                        except Exception:
-                            pass
-                        _force_redownload()
+                    logger.warning("크래시 %d회 → 에이전트 코드 복구 다운로드", crash_n)
+                    if _redownload_agent(cfg):
                         _set_crash_count(0)
-                        try:
-                            need, remote_ver = check_update(cfg)
-                            if need:
-                                download_update(cfg, remote_ver)
-                        except Exception as e:
-                            logger.error("강제 재다운로드 실패: %s", e)
 
                 time.sleep(5)
                 try:
@@ -914,7 +931,7 @@ def main() -> None:
                             proc = _new_proc
                         else:
                             logger.error("업데이트 후 에이전트 재시작 실패 — 폴백 재다운로드")
-                            _force_redownload()
+                            _redownload_agent(cfg)
                 except Exception as e:
                     logger.warning("주기적 업데이트 실패: %s", e)
 
