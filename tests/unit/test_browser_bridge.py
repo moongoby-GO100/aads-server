@@ -440,6 +440,52 @@ async def test_local_agent_commands_fallback_to_active_api(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_local_agent_page_tracks_redirect_and_invokes_function_expressions(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="CEO PC Chrome",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        activate=True,
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    expressions: list[str] = []
+
+    async def fake_execute_routed_command(**kwargs):
+        if kwargs["command_type"] == "browser_navigate":
+            return {"status": "success", "result": {"result": {"ok": True}}}
+        expression = kwargs["params"]["expression"]
+        expressions.append(expression)
+        value = "https://aads.newtalk.kr/login" if expression == "window.location.href" else "called"
+        return {"status": "success", "result": {"result": {"value": value}}}
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    context, error = await service.acquire_playwright_context(session_id=session.session_id)
+
+    assert error is None
+    page = context.pages[0]
+    await page.goto("https://aads.newtalk.kr/chat/session-1")
+    assert page.url == "https://aads.newtalk.kr/login"
+    assert session.endpoint.metadata["last_url"] == "https://aads.newtalk.kr/login"
+
+    result = await page.evaluate("() => 'called'")
+    assert result == "called"
+    assert expressions[-1] == "(() => 'called')()"
+
+
+@pytest.mark.asyncio
 async def test_local_agent_browser_input_file_and_download_commands(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),

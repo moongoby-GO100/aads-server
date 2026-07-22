@@ -218,9 +218,24 @@ class _LocalAgentPage:
             {"url": url},
             command_timeout_seconds=LOCAL_AGENT_NAVIGATION_TIMEOUT_SECONDS,
         )
-        self.url = url
+        # Try to capture the actual URL after potential server-side redirects
+        # (e.g., AADS URL → /login). Without this, page.url always returns the
+        # requested URL, so redirect detection in callers never fires.
+        actual_url = url
+        try:
+            href_data = await self._run_browser_command(
+                "browser_eval",
+                {"expression": "window.location.href"},
+                command_timeout_seconds=10.0,
+            )
+            href = str(href_data.get("value") or "").strip()
+            if href.startswith("http"):
+                actual_url = href
+        except Exception:
+            pass
+        self.url = actual_url
         metadata = dict(self._session.endpoint.metadata or {})
-        metadata["last_url"] = url
+        metadata["last_url"] = actual_url
         self._session.endpoint.metadata = metadata
 
     async def title(self) -> str:
@@ -234,10 +249,30 @@ class _LocalAgentPage:
     def locator(self, selector: str) -> _LocalAgentLocator:
         return _LocalAgentLocator(self, selector)
 
+    # Matches arrow/function expressions that must be called.
+    # Distinguishes true arrow-function params ( `() =>`, `(a) =>`, `x =>` )
+    # from IIFEs like `(function(){})()` or `(()=>{})()`  which start with `((`.
+    _FUNC_EXPR_RE = re.compile(
+        r"^(?:async\s+)?"
+        r"(?:"
+        r"\(\s*\)\s*=>"                        # no-arg: () =>
+        r"|\(\s*[a-zA-Z_$][^)]*\)\s*=>"       # with-arg: (a, b) =>
+        r"|[a-zA-Z_$][a-zA-Z0-9_$]*\s*=>"     # single-arg no-paren: x =>
+        r"|function[\s(]"                       # function expression
+        r")"
+    )
+
     async def evaluate(self, expression: str) -> Any:
+        expr = expression.strip()
+        # Wrap arrow/function expressions as IIFE to match Playwright page.evaluate()
+        # semantics. CDP Runtime.evaluate does not call functions — it just returns
+        # the function object. Callers (token injection, login detection) all pass
+        # arrow functions that must be invoked.
+        if self._FUNC_EXPR_RE.match(expr):
+            expr = f"({expr})()"
         data = await self._run_browser_command(
             "browser_eval",
-            {"expression": expression},
+            {"expression": expr},
             command_timeout_seconds=LOCAL_AGENT_SNAPSHOT_TIMEOUT_SECONDS,
         )
         value = data.get("value")

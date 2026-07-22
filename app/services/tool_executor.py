@@ -3698,9 +3698,27 @@ class ToolExecutor:
     async def _device_list(self, inp: Dict[str, Any]) -> Any:
         """연결된 디바이스(PC/Android/iOS) 목록 조회."""
         from app.services.device_manager import device_manager
+        from app.services.pc_agent_manager import pc_agent_manager
 
         device_type = inp.get("device_type")
-        devices = device_manager.get_devices(device_type)
+        devices: list[dict] = list(device_manager.get_devices(device_type))
+
+        # Include PC agents from pc_agent_manager when not filtering or filtering by "pc".
+        # pc_agent_manager is separate from device_manager (Android/iOS SDK path).
+        if not device_type or str(device_type).lower() == "pc":
+            for status in pc_agent_manager.list_agent_statuses():
+                devices.append({
+                    "agent_id": status["agent_id"],
+                    "device_type": "pc",
+                    "hostname": status.get("hostname", ""),
+                    "os_info": status.get("os_info", ""),
+                    "capabilities": status.get("capabilities", []),
+                    "status": status.get("status", "unknown"),
+                    "connected_at": status.get("connected_at"),
+                    "last_seen": status.get("last_seen"),
+                    "heartbeat_age_seconds": status.get("heartbeat_age_seconds"),
+                })
+
         if not devices:
             return {"devices": [], "message": "연결된 디바이스가 없습니다."}
         return {"devices": devices, "count": len(devices)}

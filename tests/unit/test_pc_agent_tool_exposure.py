@@ -65,3 +65,31 @@ async def test_device_execute_routes_pc_command_to_pc_agent(monkeypatch: pytest.
 
     assert result["status"] == "success"
     assert result["backend"] == "pc_agent"
+
+
+@pytest.mark.asyncio
+async def test_device_list_includes_pc_agent_manager_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    executor = ToolExecutor()
+    monkeypatch.setattr("app.services.device_manager.device_manager.get_devices", lambda _device_type: [])
+    monkeypatch.setattr(
+        "app.services.pc_agent_manager.pc_agent_manager.list_agent_statuses",
+        lambda: [
+            {
+                "agent_id": "ceo-pc",
+                "hostname": "ceo-desktop",
+                "os_info": "Windows 11",
+                "capabilities": ["interactive_browser"],
+                "status": "online",
+                "connected_at": "2026-07-23T00:00:00Z",
+                "last_seen": "2026-07-23T00:00:05Z",
+                "heartbeat_age_seconds": 1.2,
+            }
+        ],
+    )
+
+    result = await executor._device_list({"device_type": "pc"})
+
+    assert result["count"] == 1
+    assert result["devices"][0]["agent_id"] == "ceo-pc"
+    assert result["devices"][0]["device_type"] == "pc"
+    assert result["devices"][0]["status"] == "online"
