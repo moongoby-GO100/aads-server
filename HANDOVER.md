@@ -4547,3 +4547,20 @@
 - 운영 동일 이미지 회귀 `34 passed`; active Blue에서 3중 장애를 강제해 DeepSeek `FALLBACK_OK`와 `done` 이벤트를 확인했다.
 - Blue `8100`을 active로 전환하고 Green `8102`를 rollback backup으로 유지했다. 양 슬롯 및 외부 health는 모두 HTTP 200이다.
 - 보존 headless 브라우저는 셸 렌더 후 workspace API 인증이 만료됐고 PC Agent도 offline이라 로그인 E2E는 API 검증으로 대체했다.
+
+## 2026-07-23 08:37 KST - PC Agent Browser Bridge redirect/device-list recovery
+
+- 원인:
+  - local-agent `goto()`가 서버 리다이렉트 이후 실제 URL을 읽지 않고 요청 URL을 그대로 저장해 `/login` 전환을 감지하지 못했다.
+  - local-agent `evaluate()`가 Playwright와 달리 arrow/function expression을 실행하지 않고 함수 객체로 반환해 인증 토큰 주입·로그인 판별이 동작하지 않았다.
+  - `device_list`는 Android/iOS `device_manager`만 조회해, 별도 `pc_agent_manager`에 연결된 PC가 있어도 0대로 표시됐다.
+- 조치:
+  - 이동 직후 `window.location.href`를 조회해 실제 URL과 세션 `last_url`을 동기화한다.
+  - function expression을 IIFE로 감싸 CDP `Runtime.evaluate`에서도 Playwright와 동일하게 호출한다.
+  - `device_list`가 PC Agent status와 모바일 디바이스를 함께 반환하도록 통합한다.
+- 검증:
+  - read-only 격리 컨테이너에서 redirect/function-expression 및 PC device-list 회귀 테스트 `2 passed`.
+  - `git diff --check` 통과.
+- Runner 운영 이슈:
+  - `runner-307da46a`의 코드 수정은 완료됐으나 승인 배포 preflight가 기본 작업폴더의 병행 변경(`dirty=77`)과 로컬 `main` 분기(`behind=62`, `ahead=56`)를 감지해 차단했다.
+  - 사용자 병행 변경을 삭제하거나 reset하지 않고 Runner 격리 worktree의 수정본을 보존해 수동 안전 배포 경로로 전환했다.
