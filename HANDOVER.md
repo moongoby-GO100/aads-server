@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-22 21:19 KST - 채팅 생성 이미지 최종 원장 대조
+
+- 원격 `main` `bb583ed2`에서 `b31e84e3`(채팅 인라인 렌더), `f5df463b`(공개 이미지 읽기), `97ffb027`(Blue/Green 공유 볼륨), `ef5b980d`(기존 완료 기록)의 포함을 재확인했다.
+- 운영 active는 Green `8102`이며 Blue `8100`과 함께 healthy다. 두 슬롯은 동일 `aads-server_aads_generated_media` 볼륨의 `/app/generated-media-static/media/generated/image/media-inlineqa-20260722.png` 68바이트 파일을 읽는다.
+- Blue·Green·외부 공개 URL은 모두 HTTP 200 `image/png`이고 SHA-256 `431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460`으로 일치했다. 관련 회귀 테스트는 active Green에서 `19 passed`였다.
+- 운영 DB assistant 메시지 `4b40addf-fa82-4532-b170-80f5ce964598`에 공개 갤러리 Markdown 이미지가 저장돼 있으며 Dashboard `MarkdownRenderer`의 `img` 경로는 `MarkdownImagePreview`로 연결된다.
+- 브라우저 공개 이미지 렌더는 Headless 세션에서 확인했다. PC Agent는 offline이고 인증 Headless 채팅 세션은 워크스페이스 네트워크 오류가 발생해 로그인 채팅 DOM E2E는 API·DB·공개 이미지 브라우저 검증으로 대체했다.
+
 ## 2026-07-22 KST - 매장비서 정규직 표준계약·사업자 도장 반영
 
 - `app/static/apps/yeoljeong-finance/index.html`
