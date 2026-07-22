@@ -18,8 +18,13 @@
   `app/static/apps/yeoljeong-finance/index.html`, 관련 단위·정적 테스트.
 - 검증: 실제 HTTP 라우트 서명 왕복을 포함한 관련 pytest 49건, Ruff, Python compile,
   인라인 JavaScript 문법, `git diff --check` 통과.
-- 배포/롤백: `fix/yeoljeong-employee-signature-20260722` 격리 브랜치에서 검증 후 Green 슬롯에 배포한다.
-  E2E 실패 시 Nginx API upstream을 기존 Blue 슬롯로 유지 또는 복귀한다.
+- 배포/롤백(2026-07-22 16:12 KST): 격리 커밋 `5a8663e0`을 릴리스 워크트리
+  `/root/aads/releases/aads-server-5a8663e0`로 고정해 Blue `8100`에 배포하고 Nginx active upstream을
+  Green `8102`에서 Blue `8100`으로 무중단 전환했다. 기존 Green은 `ef5b980d` 롤백 슬롯으로 보존했다.
+- 운영 검증: Blue·Green·외부 `/api/v1/health`가 모두 HTTP 200이며 Blue 컨테이너의 정적 앱 SHA-256은
+  릴리스 소스와 일치한다. 운영 OpenAPI에서 `token`, `signer_name`, `consent`, `signature_data_uri`가
+  서명 필수 필드로 확인됐고, 실제 HTTP 라우트 왕복을 포함한 관련 테스트 `49 passed`를 active Blue에서
+  재실행했다. 실제 직원 계정 브라우저 서명은 자격증명을 사용하지 않고 API 라우트 E2E로 대체했다.
 
 ## 2026-07-22 13:20 KST - 채팅 생성 이미지 인라인 표시 안정화
 
