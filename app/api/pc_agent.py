@@ -927,6 +927,60 @@ def _ensure_offline_monitor() -> None:
         pass
 
 
+@router.post("/pc-agent/launcher-status")
+async def ingest_launcher_status(payload: dict[str, Any]):
+    """Receive sanitized launcher/watchdog telemetry from a Windows node."""
+    token = str(payload.get("agent_token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="agent_token required")
+    if not (token == PC_AGENT_SECRET or await _verify_token_db(token)):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    agent_id = str(payload.get("agent_id") or "unknown")[:64]
+    allowed = {
+        "hostname", "version", "node_role", "launcher_pid", "launcher_uptime_seconds",
+        "launcher_start_count", "worker_restart_count", "worker_connected",
+        "worker_disconnected_seconds", "watchdog_task", "startup_registration", "reported_at",
+    }
+    metadata = {key: payload.get(key) for key in allowed if key in payload}
+    metadata["device_type"] = "pc"
+    await _record_agent_event(agent_id, "launcher_status", metadata=metadata)
+    return {"ok": True, "agent_id": agent_id}
+
+
+@router.get("/pc-agent/diagnostics")
+async def pc_agent_diagnostics():
+    """Return online agent details and the latest launcher telemetry per node."""
+    launcher_rows: list[dict[str, Any]] = []
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (agent_id) agent_id, created_at, metadata
+                FROM pc_agent_connection_events
+                WHERE event IN ('launcher_status', 'heartbeat_status')
+                ORDER BY agent_id, created_at DESC
+                """
+            )
+        launcher_rows = [
+            {
+                "agent_id": row["agent_id"],
+                "reported_at": row["created_at"].isoformat(),
+                "status": dict(row["metadata"] or {}),
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        logger.warning("pc_agent_diagnostics_query_failed: %s", exc)
+    return {
+        "online_agents": pc_agent_manager.list_agent_statuses(),
+        "latest_launcher_status": launcher_rows,
+    }
+
+
 # ── Client log ingestion (v1.0.46) ─────────────────────────────────────
 @router.post("/pc-agent/client-log")
 async def ingest_client_log(payload: dict[str, Any]):

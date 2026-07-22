@@ -247,39 +247,6 @@ def _record_redownload() -> None:
         pass
 
 
-def _can_redownload() -> tuple[bool, int]:
-    """시간당 MAX_REDOWNLOADS_PER_HOUR 이내인지 확인.
-
-    반환: (허용 여부, 최근 1시간 시도 횟수)
-    .redownload_log 에 timestamp(float) 공백 구분 저장. 1시간 초과 항목 제거.
-    crash 분기 + exit=0 분기 + 주기 업데이트 분기가 공유하여 무한 다운로드 루프 차단.
-    """
-    rdl_file = INSTALL_DIR / ".redownload_log"
-    now = time.time()
-    try:
-        entries = [float(x) for x in rdl_file.read_text(encoding="utf-8").split() if x]
-    except Exception:
-        entries = []
-    entries = [t for t in entries if now - t < 3600]
-    return (len(entries) < MAX_REDOWNLOADS_PER_HOUR, len(entries))
-
-
-def _record_redownload() -> None:
-    """다운로드 시도 기록 — circuit breaker 카운팅."""
-    rdl_file = INSTALL_DIR / ".redownload_log"
-    now = time.time()
-    try:
-        entries = [float(x) for x in rdl_file.read_text(encoding="utf-8").split() if x]
-    except Exception:
-        entries = []
-    entries = [t for t in entries if now - t < 3600]
-    entries.append(now)
-    try:
-        rdl_file.write_text(" ".join(str(t) for t in entries), encoding="utf-8")
-    except Exception:
-        pass
-
-
 def _force_redownload() -> None:
     """VERSION을 0.0.0으로 리셋하여 다음 업데이트 체크 시 강제 재다운로드."""
     vf = AGENT_DIR / "VERSION"
@@ -530,6 +497,7 @@ def run_agent(cfg: dict):
     os.environ["AADS_SERVER_URL"] = cfg.get("server_url", DEFAULT_SERVER_URL)
     os.environ["AADS_AGENT_TOKEN"] = cfg.get("agent_token", "")
     os.environ["KAKAOBOT_INSTALL_DIR"] = str(INSTALL_DIR)
+    os.environ["AADS_PC_AGENT_NODE_ROLE"] = str(cfg.get("node_role") or "interactive")
 
     # agent_id 영속화 — 재시작마다 새 UUID 생성하면 서버에 좀비 연결 누적
     import uuid as _uuid

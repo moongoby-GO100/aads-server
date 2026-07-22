@@ -51,6 +51,7 @@ INSTALL_DIR = Path(os.environ.get(
     ),
 ))
 CONFIG_PATH = INSTALL_DIR / "config.json"
+AGENT_START_COUNT_FILE = INSTALL_DIR / ".agent_start_count"
 
 # PyInstaller --windowed 환경: sys.stderr=None → StreamHandler 사용 불가
 # FileHandler만 사용하여 깜박임 방지
@@ -164,6 +165,34 @@ def _is_truthy(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _read_agent_config() -> dict[str, Any]:
+    try:
+        value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _node_role() -> str:
+    return str(
+        os.getenv("AADS_PC_AGENT_NODE_ROLE", "")
+        or _read_agent_config().get("node_role")
+        or "interactive"
+    ).strip().lower()
+
+
+def _increment_agent_start_count() -> int:
+    try:
+        count = int(AGENT_START_COUNT_FILE.read_text(encoding="utf-8").strip() or "0") + 1
+    except Exception:
+        count = 1
+    try:
+        AGENT_START_COUNT_FILE.write_text(str(count), encoding="utf-8")
+    except Exception:
+        pass
+    return count
+
+
 def _collect_capabilities() -> list[str]:
     caps = {"pc_control"}
     if "browser_launch" in COMMAND_HANDLERS:
@@ -182,6 +211,9 @@ def _collect_capabilities() -> list[str]:
 
     if _is_truthy(os.getenv("AADS_PC_AGENT_ENABLE_VVIC", "")):
         caps.add("vvic")
+
+    if _node_role() == "windows_e2e":
+        caps.add("windows_e2e")
 
     return sorted(caps)
 
@@ -228,6 +260,10 @@ class PCAgent:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
         self._last_server_message_monotonic: float | None = None
+        self._started_at = time.time()
+        self._agent_start_count = _increment_agent_start_count()
+        self._telemetry_cache: dict[str, Any] = {}
+        self._telemetry_cached_at = 0.0
 
     def _get_version(self) -> str:
         """VERSION 파일에서 에이전트 버전 읽기."""

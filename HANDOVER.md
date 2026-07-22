@@ -1,30 +1,134 @@
 # AADS HANDOVER
 
-## 2026-07-22 22:44 KST - PC Agent 종료·설치·재연결 P0 보강
-- 실기기 `2e9379a1-fed`는 `1.0.52`로 연결되어 있다가 2026-07-22 13:07:31 KST에 클라이언트 정상종료 코드 1000으로 끊겼고, 이후 서버 연결은 0대다.
+## 2026-07-22 22:47 KST - PC Agent 종료·설치·재연결 P0 보강
+
+- 실기기 `2e9379a1-fed`는 PC Agent `1.0.52`로 연결되어 있다가 2026-07-22 13:07:31 KST에 클라이언트 정상종료 코드 1000으로 끊겼다. 서버 이벤트·공개 상태 API 모두 이후 연결 0대를 확인했다.
 - 트레이 콜백 스레드에서 `tkinter` 확인창을 실행하던 구조를 Windows 네이티브 `MessageBoxW`로 교체했다. `아니오` 또는 확인창 오류 시에는 절대 종료하지 않는 fail-safe를 적용했다.
-- 운영 `/agent/download-exe`가 컨테이너에 미추적 `dist/*.exe`가 없어 404를 반환하던 결함을 확인했다. 로컬 EXE가 없으면 동일 버전의 공개 GitHub Release 자산으로 307 연결하도록 수정했다.
-- PC Agent 버전을 `1.0.55`로 올렸고, `/agent/version`이 실제 설치 EXE 경로와 `github_release` 배포 방식을 반환하도록 정합화했다.
-- 검증: 운영과 동일한 API 이미지에서 종료 확인·watchdog·self-update·다운로드 회귀 테스트 9건 통과, `py_compile`, `git diff --check` 통과.
-- 남은 운영 완료 조건: `main` 푸시 후 Windows Actions 빌드/Release 생성, blue/green 배포, 공개 EXE PE·해시 검증, CEO PC 재실행 후 `online`/`1.0.55` 확인.
+- 운영 `/api/v1/kakao-bot/agent/download-exe`가 컨테이너에 미추적 `dist/*.exe`가 없어 HTTP 404를 반환하던 결함을 확인했다. 로컬 EXE가 없으면 동일 버전의 공개 GitHub Release 자산으로 HTTP 307 연결하도록 수정했다.
+- 중복 자동실행을 제거하고 숨김 `ONLOGON` watchdog 하나로 정리했으며, self-update 결과 전송 후 launcher가 코드 42를 확실히 수신하도록 종료 흐름을 보강했다.
+- PC Agent 버전을 `1.0.55`로 올리고 `/agent/version`이 설치 EXE 경로와 `github_release` 배포 방식을 반환하도록 정합화했다. launcher/agent 진단 telemetry endpoint도 복구했다.
+- 검증: 운영과 동일한 API 이미지에서 PC Agent 관련 회귀 테스트 30건 통과, Python compile, `git diff --check` 통과.
+- 남은 운영 완료 조건: `main` 푸시 후 Windows Actions EXE/Release 생성, blue/green 배포, 공개 EXE PE·SHA-256 검증, CEO PC 재실행 후 `online`·`1.0.55` 확인.
 
-## 2026-07-22 13:18 KST - PC Agent 터미널 깜빡임 운영 정합성 재점검
-- 원격 브랜치 `fix/pc-agent-hidden-watchdog-20260722`와 운영 API blue/green의 PC Agent `1.0.54` 배포 상태를 재검증했다.
-- 운영 ZIP SHA-256은 `3074b37c7ebd905c15608967bcfc103006c18b62822c677665d3575cb2bdb72a`이며, `CREATE_NO_WINDOW`, `wscript.exe`, `ONLOGON` 설정과 구형 MINUTE 작업 제거를 확인했다.
-- blue/green의 `agent.py`, `commands/updater.py`, `VERSION`은 원격 커밋과 동일했다. `launcher.py`의 유일한 차이는 운영본에서 불필요한 지역 `import subprocess`가 제거된 것이어서 원격 정본에도 동일하게 반영했다.
-- 실기기 `2e9379a1-fed`의 마지막 연결 버전은 `1.0.52`였으며 2026-07-22 13:07:31 KST에 close code 1000으로 종료한 뒤 현재 오프라인이다.
-- 따라서 서버 코드·ZIP·API 배포는 완료됐지만 실기기 `1.0.54` 재기동, 숨김 ONLOGON 작업 전환, 60초 무깜빡임 검증은 PC Agent 재실행 전까지 미완료다.
-- 기본 EXE 파일은 2026-05-11 빌드의 bootstrap 바이너리이며 API가 `1.0.54` 파일명으로 제공한다. 실제 최신 소스는 `format=zip` 경로가 정본이다.
+## 2026-07-22 21:19 KST - 채팅 생성 이미지 최종 원장 대조
 
-## 2026-07-22 13:01 KST - PC Agent 터미널 깜빡임 완전 차단 보강
-- 실기기(`abc`, PC Agent `2e9379a1-fed`)에서 구형 HKCU Run 등록과 Startup CMD가 제거됐고, `KakaoBotWatchdog`는 `wscript.exe` 기반 ONLOGON/LIMITED 숨김 작업 1개로 정리된 것을 확인했다.
-- 잔여 원인은 agent/launcher가 60초 상태 보고 때 `schtasks`를 `CREATE_NO_WINDOW` 없이 실행하던 경로였다.
-- `pc_agent/agent.py`, `pc_agent/launcher.py`의 모든 watchdog 조회·등록 보조 프로세스에 Windows 콘솔 비노출 플래그를 적용했다.
-- agent 텔레메트리가 구형 레지스트리/Startup CMD 부재를 오류가 아닌 `scheduled_task_hidden` 정상 상태로 보고하도록 수정했다.
-- 최초 `1.0.53` self-update에서 worker 종료 후 런처 재기동이 누락되는 결함을 재현해, 비동기 task의 `SystemExit` 대신 결과 전송 후 agent 메인 루프가 코드 42로 명시 종료하도록 보강했다.
-- PC Agent 배포 버전을 `1.0.54`로 올리고 changelog와 회귀 테스트를 갱신했다.
-- 검증: `python3 -m unittest -v tests.unit.test_pc_agent_launcher_startup` 5건 통과, `py_compile` 및 `git diff --check` 통과.
-- 운영 반영 절차: 서버 API가 제공하는 agent ZIP을 `1.0.54`로 배포한 뒤 연결 PC를 한 번 기동하고, 재연결 telemetry와 60초 이상 무재시작/무구형등록을 재검증한다.
+- 원격 `main`에서 `e869fbb7`(채팅 인라인 렌더), `f5df463b`(공개 이미지 읽기), `97ffb027`(Blue/Green 공유 볼륨), `ef5b980d`(기존 완료 기록)의 포함을 재확인했다. 별도 기능 브랜치 커밋 `b31e84e3`은 `main` 조상이 아니므로 완료 근거에서 제외했다.
+- 운영 Green `8102`는 릴리스 SHA `bb583ed2`를 마운트한다. `bb583ed2` 이후 원격 `main`과의 차이는 `HANDOVER.md`뿐이라 실행 코드는 동일하며, 해당 릴리스에는 `e869fbb7`, `f5df463b`, `97ffb027`이 모두 포함된다.
+- 운영 active는 Green `8102`이며 Blue `8100`과 함께 healthy다. 두 슬롯은 동일 `aads-server_aads_generated_media` 볼륨의 `/app/generated-media-static/media/generated/image/media-inlineqa-20260722.png` 68바이트 파일을 읽는다.
+- Blue·Green·외부 공개 URL은 모두 HTTP 200 `image/png`이고 SHA-256 `431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460`으로 일치했다. Green 운영 이미지와 운영 릴리스 소스를 사용한 read-only 격리 컨테이너에서 관련 회귀 테스트 `19 passed`를 확인했다.
+- 운영 DB에는 공개 갤러리 Markdown 이미지를 포함한 채팅 메시지 2건이 저장돼 있으며 Dashboard `MarkdownRenderer`의 `img` 경로는 `MarkdownImagePreview`로 연결된다.
+- 브라우저 공개 이미지 렌더는 Headless 세션에서 확인했다. PC Agent는 offline이고 인증 Headless 채팅 세션은 워크스페이스 네트워크 오류가 발생해 로그인 채팅 DOM E2E는 API·DB·공개 이미지 브라우저 검증으로 대체했다.
+- 운영 릴리스 Worktree에는 별도 런타임/후속 작업 변경 4건이 남아 있어 clean으로 판정하지 않았고, 이번 원장 보정에서는 해당 변경을 수정·정리하지 않았다.
+
+## 2026-07-22 KST - 매장비서 정규직 표준계약·사업자 도장 반영
+
+- `app/static/apps/yeoljeong-finance/index.html`
+  - 상시 5인 미만 정규직 표준 기본값(주 5일, 21:00~09:00, 휴게 1.5시간, 월 3,000,000원)을 추가했다.
+  - 식사 제공 여부에 따라 `과세 기본급 3,000,000원` 또는 `과세 기본급 2,800,000원 + 조건부 비과세 식대 200,000원`을 자동 계산하되 모든 금액은 수정 가능하게 했다.
+  - 급여 구성 합계, 식대 한도/식사 제공 조건, 2026년 최저임금 환산을 저장 전에 검증한다.
+  - 급여내역서 작성 시 선택 직원의 최신 계약에서 총지급액·과세급여·비과세 식대·신고구분을 자동 채우고 수정 가능하게 했다.
+  - 사업자 ID별 투명 PNG 확인도장을 사용자 서명란과 A4 미리보기에 표시한다.
+- `app/services/yeoljeong_finance_service.py`
+  - 클라이언트 우회를 막기 위해 급여 구성·비과세 식대·2026년 최저임금 검증을 서버에도 추가했다.
+  - 급여내역서에도 과세급여와 조건부 비과세 식대 합계/요건 검증을 적용했다.
+- `tests/unit/test_yeoljeong_finance_service.py`
+  - 적법한 식대 분류와 합계/한도/식사 제공/최저임금 거부 회귀를 추가했다.
+- 검증: 계약·급여 서비스 40 passed, 계약 API 8 passed, 인라인 JavaScript 문법 통과, 도장 PNG 3개 RGBA/투명 모서리 확인.
+- 운영 주의: 성신여대점은 대표자·사업자번호가 미등록이므로 `상호 확인` 임시 도장을 사용한다. 실제 인감/법인인감이 아니라 전자문서용 확인 이미지다.
+- 법령 근거: 고용노동부 2025년 개정 표준근로계약서, 근로기준법 시행령 별표 1, 국세청 비과세 근로소득 안내, 고용노동부 2026년 최저임금 안내를 확인했다.
+
+## 2026-07-22 16:02 KST - 매장비서 직원 본인 전자서명 완성
+
+- 원인: 기존 계약 화면은 관리자에게도 `서명완료` 버튼을 노출했고, 직원은 이름 확인·동의·자필서명 없이
+  버튼 한 번으로 완료할 수 있었다. 서명 토큰 조회도 로그인 이메일과 계약 대상 이메일을 대조하지 않았다.
+- 서버 보강:
+  - 로그인한 비관리자 직원 이메일과 계약 대상 이메일이 완전히 일치해야 계약 조회·서명이 가능하다.
+  - 관리자 대리서명을 HTTP 403으로 차단한다.
+  - 직원 이름 재입력, 계약 내용 확인 동의 v1, 256KB 이하 PNG 자필서명을 필수화한다.
+  - 자필서명 SHA-256, 동의 버전·시각, 접속 IP·User-Agent, 인증 이메일을 감사기록에 저장한다.
+  - 서명 완료 시 원 토큰을 제거하고 토큰 해시만 남기며, 계약 스냅샷 해시와 수정·삭제 잠금을 유지한다.
+- 화면 보강:
+  - 관리자 목록에서는 `서명완료`를 제거하고 `서명요청`·`링크복사`만 제공한다.
+  - 직원은 A4 계약서 전체, 이름 확인, 자필서명 캔버스, 명시적 동의를 한 화면에서 확인·제출한다.
+  - 서명 완료본 A4 미리보기에 자필서명 이미지와 서명시각을 표시한다.
+- 변경 파일: `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`,
+  `app/static/apps/yeoljeong-finance/index.html`, 관련 단위·정적 테스트.
+- 검증: 실제 HTTP 라우트 서명 왕복을 포함한 관련 pytest 49건, Ruff, Python compile,
+  인라인 JavaScript 문법, `git diff --check` 통과.
+- 배포/롤백(2026-07-22 16:12 KST): 격리 커밋 `5a8663e0`을 릴리스 워크트리
+  `/root/aads/releases/aads-server-5a8663e0`로 고정해 Blue `8100`에 배포하고 Nginx active upstream을
+  Green `8102`에서 Blue `8100`으로 무중단 전환했다. 기존 Green은 `ef5b980d` 롤백 슬롯으로 보존했다.
+- 운영 검증: Blue·Green·외부 `/api/v1/health`가 모두 HTTP 200이며 Blue 컨테이너의 정적 앱 SHA-256은
+  릴리스 소스와 일치한다. 운영 OpenAPI에서 `token`, `signer_name`, `consent`, `signature_data_uri`가
+  서명 필수 필드로 확인됐고, 실제 HTTP 라우트 왕복을 포함한 관련 테스트 `49 passed`를 active Blue에서
+  재실행했다. 실제 직원 계정 브라우저 서명은 자격증명을 사용하지 않고 API 라우트 E2E로 대체했다.
+
+## 2026-07-22 13:20 KST - 채팅 생성 이미지 인라인 표시 안정화
+
+- 원인: 이미지 생성 서비스가 `/static/media/generated/...`를 반환했지만 공개 Nginx에서 `/static`은 Dashboard로 라우팅되어 HTTP 404가 발생했다. 생성 도구 결과 URL도 최종 assistant 메시지에 자동 결합되지 않아 생성 성공 후 채팅 버블에는 이미지가 표시되지 않았다.
+- 조치: base64 생성 결과를 영속 파일로 외부화한 뒤 `/api/v1/image/gallery/{job_id}/image`를 공개 URL로 반환한다. 갤러리 API는 허용된 generated 디렉터리의 `result_path`를 직접 스트리밍하며, 과거 data URI와 외부 URL도 계속 지원한다.
+- 영속화: `app/static` 아래 생성 파일이 배포/작업트리 정리 과정에서 삭제되는 재현을 확인했다. Blue/Green API가 공유하는 `aads_generated_media` Docker volume을 `/app/generated-media-static`에 마운트하고 `AADS_MEDIA_STATIC_DIR`로 지정해 생성물을 배포 형상과 분리했다.
+- 채팅 반영: `generate_image`/`edit_image` 성공 도구 결과를 최종 응답에 Markdown 이미지로 자동 첨부한다. Relay가 도구 결과 본문을 누락해도 현재 execution 시작 이후의 `media_generation_jobs`를 조회해 복구하며, 동일 URL은 중복 삽입하지 않는다.
+- 검증(2026-07-22 14:10 KST 재대조): Blue/Green API 컨테이너에서 관련 회귀 테스트가 각각 `18 passed`였고 Python compile·Dashboard TypeScript 검사·Compose config 검사가 통과했다. `media-inlineqa-20260722` PNG는 8100·8102·외부 도메인에서 모두 HTTP 200, `image/png`, 68바이트, SHA-256 `431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460`으로 일치했다. 운영 DB에는 공개 갤러리 이미지 URL을 포함한 assistant 메시지 8건이 존재한다.
+- 배포·원장: `e869fbb7`(채팅 자동 첨부), `f5df463b`(공개 이미지 읽기), `97ffb027`(Blue/Green 공유 볼륨)이 원격 `main`에 push되어 있다. 양 API 슬롯은 `AADS_MEDIA_STATIC_DIR=/app/generated-media-static`과 동일 Docker volume을 사용하며 healthy이고 외부 health는 HTTP 200이다.
+- 외부 공급자 상태: 신규 Gemini 생성 요청은 공급자 응답 `429 RESOURCE_EXHAUSTED`(선불 크레딧 소진)로 실패한다. 이는 채팅 인라인 표시·공개 전달 결함과 분리된 외부 과금 상태다. OpenAI 자격증명은 설정돼 있으나 자동 전환은 신규 과금을 유발하므로 CEO 승인 전에는 활성화하지 않는다.
+
+## 2026-07-22 08:33 KST - 매장비서 계약서·입사파일 최종 원장 대조 및 운영 보완
+
+- 원장 대조: 서버 원격 `main`의 계약서 개선 커밋과 운영 Green 파일은 일치했지만, Dashboard 공개 복사본에는 프리랜서 `용역 기간 및 장소` 조항 누락, 사용자 정산문구 입력 시 용역비 금액 누락, 인증 PDF 파일 모달 재누락이 확인됐다.
+- 조치: 최신 계약서 UI를 기준으로 인증 `fetch`+Blob 파일 모달을 복원하고 PDF iframe만 sandbox를 제거했다. 프리랜서 계약서에는 기간·장소와 용역비 금액을 항상 표시하도록 고쳤다.
+- 검증: 원격 최신 소스 기준 매장비서 테스트 46건 통과, Python compile, 인라인 JavaScript parse, `git diff --check` 통과. API 8100/8102, Dashboard 3100/3101, 외부 health/login 모두 HTTP 200이며 네 컨테이너는 healthy다.
+- 브라우저 E2E: Vault E2E 관리자 세션으로 승인 직원 선택 시 사업자·지점·직원 정보 자동채움을 확인하고, 직원명·근무장소 수정값이 A4 팝업 모달 본문과 서명란에 즉시 반영됨을 확인했다. 저장 버튼은 누르지 않아 운영 계약 데이터는 변경하지 않았다.
+- 배포: API Blue/Green과 Dashboard Blue/Green의 대상 HTML SHA-256을 `1ed76211818d0dcc9d346629ec467e004a05736cd2e66622800a7551311b300b`로 통일했다. API active Green 8102, Dashboard active Blue 3100이며 반대 슬롯은 동일 파일의 롤백 대기다.
+- 롤백: 배포 전 양 API/Dashboard 슬롯 파일은 `/tmp/aads-yeoljeong-closeout-backup-wAPIal`에 보존했다.
+
+## 2026-07-22 KST - 매장비서 계약서 P0/P1 안전성·자동화 개선
+
+- 계약서 서버 저장·서명요청·서명 단계에서 계약유형, 세무구분, 임금방식, 승인 직원, 사업자, 법정 필수 근로조건을 재검증한다.
+- 임의 시급 `12,000원` 기본값을 제거했다. 근로계약은 4대보험 구분, 프리랜서는 3.3%·건별 용역비로 자동 연동하며 확정 임금/용역비를 직접 입력해야 저장된다.
+- 사업자별 승인 직원을 필수 선택하고 이름·이메일·주소·지점·사업자 정보를 자동채운다. 자동 입력 후 사용자가 수정한 값은 보존한다.
+- 서명요청 후 계약 내용을 수정하면 기존 서명 토큰을 폐기하고 작성중으로 되돌린다. 서명 완료 시 계약 스냅샷과 SHA-256을 저장하고 이후 수정·삭제·재서명을 차단한다.
+- 기존 미완성 계약서는 필수조건 보완 전 서명요청할 수 없다. 기존 DB 행을 자동 변경하거나 삭제하지 않는다.
+- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위/API 테스트.
+- 검증: 격리 릴리스 컨테이너에서 매장비서 서비스/API/수집기 및 파이프라인 회귀 `95 passed`, Ruff·Python compile·인라인 JavaScript 구문·Git diff 검사를 통과했다.
+- 배포: 코드 커밋 `8cd77689`을 `origin/main`에 push하고 릴리스 워크트리 `/root/aads/contract-release-20260722-W5YnMr`를 Green `8102`에 격리 마운트했다. 운영 데이터와 Vault는 기존 경로를 유지했으며 Blue `8100`은 롤백 대기로 보존했다.
+- 운영 E2E: Green 헬스와 외부 헬스 200, 실제 Chromium에서 프리랜서 선택 시 `3.3%/건별 용역비` 자동 연동, A4 모달 폭 `793.7px(210mm)`, 계약 작성→서명요청→서명→SHA-256 스냅샷→수정 409 차단을 확인했다.
+- 최종 E2E 보완: 프리랜서 정산 기본문구가 있으면 입력 용역비가 A4 본문에서 누락되는 문제를 발견해, 용역 기간·장소와 `건별/용역비 금액·지급일·지급방법·3.3% 정산조건`이 항상 표시되도록 보정했다. 운영 브라우저에서 승인 직원 선택→직원명 수정→용역비 `654,320원` 입력→저장→저장본 A4 재열기를 검증했고, 테스트 초안은 서비스 삭제 경로로 soft-delete했다.
+- 대시보드 공개 복사본은 커밋 `e4ddc7b`으로 별도 push하고 Green `3101`에 격리 빌드·전환했다. 외부 정적 앱에서 승인 직원 필수 선택, 계약유형 자동 연동, 서명본 잠금 코드를 확인했으며 Blue `3100`은 롤백 대기로 보존했다.
+- A4 정적 테스트의 구형 `186x273mm` 기대값을 현재 팝업 규격 `210x297mm`와 실제 모달/카드 DOM ID 기준으로 갱신했다.
+
+## 2026-07-21 KST - 매장비서 입사서류 사업자 연결 및 계약서 A4 팝업 미리보기
+
+- 원인: 기존 입사서류 업로드는 가입요청의 `employee_request_id`와 `business_id`를 저장하지 않아 사업자 기준 조회에서 실제 등록 서류가 연결되지 않았다. 계약서 미리보기는 편집 화면 내부 카드만 제공해 A4 출력 크기와 팝업 확인이 불가능했다.
+- 백엔드: 가입 직원 이메일을 가입요청 원장과 연결해 신규 서류에 직원 요청 ID·사업자·정규화 지점을 저장한다. 기존 서류는 지점으로 사업자를 추론하며 관리자 조회에 `business_id` 필터를 적용한다.
+- 프론트: 입사서류 API를 현재 선택 사업자 범위로 조회한다. 계약서 미리보기 버튼과 저장 계약서 목록 버튼은 210mm × 297mm A4 팝업 모달을 열며 인쇄·닫기·ESC·배경 클릭을 지원한다.
+- 검증: 격리 Green 컨테이너 복제본에서 매장비서 서비스/API/수집기 테스트 30건과 파이프라인 회귀 56건 통과. Python `py_compile`, 정적 앱 JavaScript 구문 검사 통과. Green API 및 운영 화면 E2E는 배포 후 재검증한다.
+- 배포: 커밋 `b57f2f61`을 `main`에 push하고 영구 release worktree `/root/aads/aads-server-release-b57f2f61`로 Blue(:8100)를 재생성했다. 운영 데이터 원장은 `/root/aads/aads-server/app/data/yeoljeong_finance`를 별도 영속 마운트했다. 2026-07-21 19:10 KST 기준 Blue active, Green(:8102) rollback 대기 상태다.
+- 운영 E2E: 공개 페이지 HTTP 200, A4 모달 793.7px(210mm) 폭·최소 297mm 높이 렌더링, 하영훈/중화점 실제 서류 2건과 작성필요 2건의 사업자 범위 조회, 기존 업로드 파일 392,144 bytes 존재를 확인했다.
+- 변경 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, 관련 단위 테스트.
+
+## 2026-07-21 KST - 매장비서 계약서 A4 출력 보완
+- `app/static/apps/yeoljeong-finance/index.html`: 화면 미리보기를 A4 비율(210×297mm)로 맞추고, 인쇄 시 계약서 카드만 A4 portrait/12mm 여백으로 출력되도록 `@page` 및 print 전용 스타일을 추가했다.
+- `tests/unit/test_yeoljeong_finance_print_static.py`: A4 크기, 인쇄 대상 카드, 브라우저 인쇄 동작을 정적 회귀 검증한다.
+- 범위: 계약서 출력 CSS/검증만 변경했으며 HR·배달 원장과 인증 로직은 변경하지 않았다.
+
+## 2026-07-21 11:03 KST - 매장비서 릴리스 후속 검증·수집기 보정
+- 운영 DB 전체/대상 백업을 `pg_restore --list`와 SHA-256으로 검증했다. 2026-07-20 테스트 수집이력 6건, fixture 매출 1건, 테스트 `legacy` 계정 1건을 soft-delete했고 활성 플랫폼 계정은 최신 `acct-*` 4건만 남겼다. DB account payload의 `password`/`password_enc` 보유 행은 0건이다.
+- Green 격리 슬롯의 Vault 키 불일치로 기존 암호문 복호화가 실패한 것을 발견해 API 트래픽을 동일 릴리스의 Blue 슬롯으로 롤백했다. Blue는 최신 계정 4건을 모두 복호화하며, Green 재기동 시 운영 Vault 키를 명시적으로 마운트해야 한다.
+- `app/api/yeoljeong_finance.py`에서 async 입사서류 저장 함수를 threadpool로 감싸 coroutine을 응답하던 500 원인을 제거하고 직접 await하도록 수정했다.
+- `app/services/yeoljeong_delivery_collectors.py`는 동적 렌더링 로그인 폼을 최대 8초 기다리고, 보이는 입력만 선택하며, submit/input 로그인 컨트롤을 지원하도록 보강했다. 로그인 후 보이는 비밀번호 입력이 남으면 성공으로 오판하지 않는다.
+- 검증: 격리 이미지에서 매장비서/수집기/API/파이프라인 회귀 `84 passed`, Ruff·Python compile 성공. 운영 계약 API E2E는 미아점 승인 직원 5명 범위화, 자동채움, 수정값 보존, 교차 사업자 400 차단, 테스트 계약 정리까지 통과했다.
+- 실수집 상태: 배민은 보안 위배 페이지, 쿠팡이츠는 Access Denied로 서버 headless 접근이 차단됐다. 요기요는 로그인 미완료, 땡겨요는 로그인 후 데이터 메뉴를 찾지 못해 실데이터 대사는 미완료다. PC Browser Bridge 연결 또는 포털별 로그인 흐름 추가 보정이 필요하다.
+
+## 2026-07-21 09:59 KST - 매장비서 사업자별 직원 계약서 자동채움 격리 릴리스
+- 대상: `app/services/yeoljeong_finance_service.py`, `app/api/yeoljeong_finance.py`, `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_finance_service.py`.
+- 계약서 작성 시 선택 사업자 소속의 승인된 가입 직원만 조회·선택하도록 API와 화면을 범위화했다.
+- 저장 시 `employee_request_id`의 승인 상태와 사업자 소유권을 다시 검증하며, 직원명·이메일·주소·지점과 사용자 상호·사업자등록번호·대표자·주소·근무장소의 빈 값만 자동채운다. 사용자가 수정한 값은 덮어쓰지 않는다.
+- 플랫폼 계정 DB JSONB payload에는 `password`/`password_enc`가 기록되지 않도록 저장 경계를 보강했다. 암호문은 로컬 보호 원장에만 유지한다.
+- 검증: 격리 컨테이너에서 관련 단위/API 계약 및 파이프라인 회귀 테스트 `79 passed`, Ruff 검사·Python 컴파일·인라인 JavaScript 구문 검사 성공.
+- Green 브라우저 E2E에서 선택 사업자를 바꿔도 계약서 지점이 이전 사업자에 남는 문제를 발견해, 사업자 변경 시 해당 사업자의 첫 지점으로 기본값을 재정렬하도록 수정했다. 재검증에서 미아점 승인 직원 5명 범위화, 직원·사업자 정보 자동채움, 사용자 수정값 보존, 계약서 미리보기 1,648자 렌더링이 모두 통과했다.
+- 실수집 검증에서 DB-first 계정 조회가 비밀 필드를 제거한 DB payload만 반환해 로컬 보호 원장의 암호문을 사용하지 못하는 문제를 발견했다. 계정 ID가 같은 로컬 암호문만 런타임에 병합하고 DB에는 계속 비밀 필드를 저장하지 않도록 보정했다.
+- 운영 DB 정리 전 전체 백업 및 대상 테이블 백업을 생성했다. fixture 매출 1건과 수집이력 6건은 soft-delete 상태, 플랫폼 계정 payload 비밀 필드는 0건으로 확인했다.
 
 ## 2026-07-21 08:28 KST - 매장비서 3개 사업자 설정 최종 동기화·운영 검증
 - CEO 확정 기준 사업자는 `열정국밥 중화점`, `열정국밥 성신여대점`, `열정국밥_미아점` 3건이다.
@@ -4309,20 +4413,76 @@
 - 상태:
   - 코드/테스트/문서 기록 완료.
   - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
-  - 코드 commit 591388ab 완료. push/deploy/restart는 수행하지 않았다.
+  - commit/push/deploy/restart는 수행하지 않았다.
 
-## 2026-07-22 12:53 KST - PC Agent terminal flicker elimination
+## 2026-07-21 11:39 KST - Yeoljeong Green recovery and live Ddangyo reconciliation
 
-- 증상: Windows PC에서 터미널 창이 주기적으로 열렸다 닫혔다. 실측 결과 `KakaoBotWatchdog`가 대화형 작업으로 5분마다 `AADS-PC-Agent-Setup-1.0.51.exe`를 직접 실행했고, 시작프로그램 CMD와 HKCU Run의 구버전 `1.0.14.exe`가 함께 등록돼 있었다.
-- 운영 조치:
-  - 기존 예약 작업 XML, 시작 CMD, Run 키 값을 `C:\Users\rkvs3\AppData\Local\KakaoBot\backup-20260722-1239\`에 백업했다.
-  - 예약 작업을 로그온 후 30초에 `wscript.exe ...\aads_pc_agent_watchdog.vbs`를 실행하는 단일 숨김 watchdog으로 교체했다.
-  - 구형 시작프로그램 CMD와 HKCU `KakaoBot` Run 값을 제거했다.
-  - 숨김 watchdog이 에이전트 프로세스 단일성을 30초마다 확인하고, 구형 런처가 자동실행을 다시 만들 경우 숨김 작업으로 재정합화하도록 했다.
-- 코드: `pc_agent/launcher.py`의 향후 설치/실행 경로도 동일한 단일 숨김 watchdog 계약으로 변경하고, `tests/unit/test_pc_agent_launcher_startup.py` 회귀 테스트를 추가했다.
+- 배경: Green 격리 슬롯이 시작 시 새 Vault 키를 생성해 기존 배달 플랫폼 암호문 4건을 복호화하지 못했고, 입사서류 업로드 API의 비동기 호출 오류와 포털 DOM 변경이 실수집을 막았다.
+- 운영 복구:
+  - `docker-compose.prod.yml`의 Blue/Green 양쪽에 호스트 영구 키 `/root/aads/aads-server/app/.vault.key`를 read-only로 마운트했다.
+  - 비활성 Green만 재생성한 뒤 Blue와 동일한 키 해시, canonical `acct-*` 4건 복호화 가능, 컨테이너 health를 확인했다.
+  - API upstream을 8100 Blue에서 8102 Green으로 전환했고 Nginx config test/reload와 외부 `/api/v1/health` HTTP 200을 확인했다. Blue는 즉시 롤백용으로 유지했다.
+- 코드 보완:
+  - 입사서류 업로드 라우트가 async 저장 함수를 직접 await하는지 회귀 테스트를 추가했다.
+  - 포털 클릭 시 숨은 중복 요소·비대화형 컨테이너를 건너뛰고 실제 link/button을 선택하도록 보강했다.
+  - 땡겨요의 선택 동의/홍보 팝업은 동의하지 않고 닫기만 수행하며, WebSquare list table과 리뷰 카드를 원장 행으로 정규화한다.
+  - 땡겨요 `입금(예정)일`, `입금(예정)금액`, `입금상태` 헤더를 정산 원장 필드로 매핑했다.
+  - 요기요 로그아웃 랜딩을 인증 성공으로 오판하지 않고 `PORTAL_LOGIN_NOT_COMPLETED`로 반환한다.
+- 실수집/DB 검증:
+  - 최종 run id `d1137eb8-19d8-4496-abb2-0039cfac7666`은 `succeeded`, 진단은 sales/settlements=`list_table`, reviews=`review_cards`다.
+  - 땡겨요 매출 10건(2026-07-13~20, 합계 283,700원), 정산 10건(2026-07-03~16, 합계 547,035원), 리뷰 8건을 DB에서 확인했다.
+  - 이전 오탐 HTML table에서 생성된 날짜/본문 공백 리뷰 1행은 dry-run과 정확한 row id 검증 후 soft-delete했다(`UPDATE 1`).
+  - 배민은 보안 위배 접근 제한, 쿠팡이츠는 CDN Access Denied로 서버 headless 수집이 차단됐다. 요기요는 로그인 완료 실패이며 2차 인증 화면에는 도달하지 않았다.
 - 검증:
-  - 표준 라이브러리 단위 테스트 2건, `py_compile`, `git diff --check` 통과.
-  - 10분간 11회 관찰에서 PC Agent PID `23148`, start count `2`, wscript 1개, agent process tree 2개가 모두 불변이고 heartbeat가 계속 정상인 것을 확인했다.
-  - 최종 Windows 창 목록에서 CMD/PowerShell/터미널 창 0개, 예약 작업 next run N/A·running, legacy Run key/Startup CMD 부재를 확인했다.
-- 배포: Windows PC 운영 설정은 즉시 반영 완료. 서버/API/대시보드 재배포는 필요하지 않다. 향후 PC Agent 설치 코드 변경은 격리 브랜치 커밋으로 관리한다.
-- 롤백: 위 백업 폴더의 XML/CMD/Run 키 기록으로 이전 상태를 복원할 수 있다.
+  - 격리 릴리스 read-only 테스트: 관련 29건 통과.
+  - `git diff --check`: 통과.
+  - 외부 매장비서 정적 앱 HTTP 200, 보호 API 미인증 요청 HTTP 401 확인.
+  - PC Agent가 오프라인이어서 브라우저 E2E는 실행하지 못했고, credential test의 HTTP 200 로그인 페이지 폴백과 API/컨테이너 검증으로 대체했다.
+- 남은 작업:
+  - 배민·쿠팡이츠 실수집은 CEO PC Browser Bridge를 켠 상태에서 재실행해야 한다.
+  - 요기요는 공유 자격증명 확인 또는 포털 로그인 방식 재등록이 필요하다.
+
+## 2026-07-21 14:23 KST - Chat deep-link message recovery final closeout
+
+- 대상: `https://aads.newtalk.kr/chat/aa433b41-0ad2-421c-ae7c-bac4806035cc` 새로고침 후 메시지 본문이 표시되지 않던 장애.
+- 원인:
+  - 대시보드는 메시지 타임라인을 `fields=render`로 요청했으나 당시 활성 API 슬롯은 `full|minimal`만 허용해 HTTP 422를 반환했다.
+  - `/chat/{session_id}` 직접 복원 경로도 query/hash만 읽는 구형 경로와 redirect 경합이 있었다.
+- 코드 조치:
+  - API `fields` 계약에 `render`를 추가하고, 전체 본문은 유지하면서 무거운 tool detail payload는 지연 조회하도록 render projection을 구현했다.
+  - 대시보드는 pathname의 세션 ID를 직접 복원하고 `/chat/[id]`에서 ChatPage를 직접 렌더한다.
+  - 임시 `public/e2e-auth.html` 도우미를 삭제하고 대용량 메시지 행에 viewport virtualization을 적용했다.
+- 2026-07-21 최종 실측:
+  - 대상 세션 DB: 메시지 3,729건, 아티팩트 2,158건, 제목 `GO100-002[CTO]` 보존.
+  - API blue(8100)/green(8102) 모두 render projection 함수 검증 통과. 무토큰 render 요청은 양 슬롯 모두 HTTP 401로 응답해 422 계약 오류가 재발하지 않음을 확인했다.
+  - 원격 최신 `origin/main` 기반 회귀테스트: `test_list_messages_render_keeps_content_and_omits_heavy_detail_fields` 1건 통과, Python compile 및 `git diff --check` 통과.
+  - 외부 `/api/v1/health` HTTP 200. 세션 URL 비로그인 요청은 원 경로를 보존한 로그인 URL로 HTTP 307.
+  - 대시보드 blue/green 모두 healthy, 임시 E2E helper 파일 부재, 외부 `/static/e2e-auth.html` HTTP 404 확인.
+  - 로그인 관리자 브라우저에서 동일 URL의 메시지 DOM 렌더를 확인했고, 이후 CEO가 실제 브라우저에서 표시됨을 확인했다.
+- 배포/롤백:
+  - API active green(8102), standby blue(8100); dashboard active green(3101), standby blue(3100). 네 컨테이너 모두 healthy이고 nginx config test를 통과했다.
+  - 양 API 슬롯이 동일 render 계약을 제공해 어느 슬롯으로 롤백해도 해당 422 회귀가 발생하지 않는다.
+- Git/문서:
+  - 원격 최신 main에 적용한 API 코드 커밋은 `2fc3f6da`이다.
+  - 대시보드 복구 커밋은 로컬 dashboard 저장소 `dfe515a`, E2E helper 제거/virtualization 커밋은 `535e7a8`이며 해당 저장소에는 remote가 없어 push하지 못했다.
+  - 이 항목은 서버 원격 main의 후속 문서 커밋으로 기록한다.
+
+## 2026-07-22 20:51 KST - 매장비서 실제 체결용 계약서 v2
+
+- 고용노동부 2025 개정 표준근로계약서와 근로기준법 제17조, 기간제·단시간근로자법 제17조를 기준으로 계약 입력·본문·서명 전 검증을 재정비했다.
+- 근로자 주소·연락처·생년월일·국적을 회원가입/가입요청에서 받아 승인 직원 선택 시 계약서에 자동 반영한다. 사용자 주소와 미등록 사업자 정보도 서명 전 필수 검증한다.
+- 과거 초안을 수정할 때도 연결된 가입정보와 사업자 설정의 최신 전화·주소·대표자 정보를 빈 필드에만 보완하고, 이미 사용자가 입력한 값은 덮어쓰지 않는다.
+- 18세 미만은 친권자/후견인 정보와 서면동의 확인, 외국인은 국적·체류자격·마스킹 등록번호, 단시간근로자는 근로일별 근로시간을 필수화했다.
+- A4 계약서 본문에서 작성 안내와 자동점검 배너를 제거하고, 계약당사자 인적사항·근로조건·특약·서명만 출력한다. 기존 자필서명·감사기록·서명본 잠금은 유지한다.
+- 검증: Python compile, 인라인 JavaScript parse, `git diff --check`, 관련 API/service 테스트 `56 passed`.
+- 기존 계약 수정 시 승인 직원·사업자 기초정보로 비어 있는 연락처/생년월일/주소를 보완하되 저장된 계약값은 덮어쓰지 않도록 자동채움 회귀를 보강했다.
+- 운영 배포: Green `8102`를 active로 전환하고 Blue `8100`을 즉시 롤백용 backup으로 유지했다. 양 슬롯 health 및 Nginx config test를 통과했다.
+
+## 2026-07-22 21:35 KST - 생성 계약서 최신 미리보기 운영 반영
+
+- 원인: 운영 HTML은 실제 체결용 계약서 v2였지만 `fb.newtalk.kr`의 정적 HTML 응답이 `Cache-Control: max-age=3600`이어서 기존 브라우저가 구형 미리보기를 최대 1시간 재사용할 수 있었다. 운영 계약 29건 중 과거 초안 다수도 근로자 연락처·주소·생년월일 필드가 비어 있어 최신 미리보기의 당사자 정보가 빈칸으로 표시됐다.
+- 조치: 매장비서 메인 HTML만 `no-store`로 전환하고 루트 진입 URL에 릴리스 버전을 부여했다. 생성된 `draft` 계약서 미리보기는 저장값을 우선하면서 빈 근로자/사업자 필드만 현재 승인 직원·사업자 설정으로 읽기 전용 보완한다.
+- 불변성: `requested`와 `signed` 계약서는 체결 당시 저장값을 그대로 표시하며 자동 보완하지 않는다. 모달 배지에서 최신양식/체결 당시 저장본을 구분한다.
+- 검증: 인라인 JavaScript parse, `git diff --check`, 계약서 API·서비스·Nginx 회귀 `57 passed`.
+- 운영 적용: 활성 Green `8102`의 정적 HTML만 무중단 동기화하고 매장비서 HTML 캐시를 `no-store`로 변경했다. 비활성 Blue `8100`은 활성 스트림 1건이 확인돼 재빌드하지 않고 롤백 슬롯으로 보존했다. 외부 health/HTML/cache header와 mocked headless Chromium의 계약 목록 `미리보기`→A4 모달→가입정보 보완까지 통과했다.
+- 롤백: `/tmp/yf-index.before-contract-preview-c9958a38.html`, `/tmp/fb.conf.before-contract-preview-c9958a38`을 복원하면 된다.
