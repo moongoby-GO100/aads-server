@@ -4509,3 +4509,31 @@
 - Regression coverage added to `tests/unit/test_model_selector_dynamic_routing.py` and `tests/unit/test_pipeline_runner_reliability.py`; combined targeted suite passed `31` tests, Python compile and `git diff --check` passed.
 - Browser capture was unavailable because the PC Agent was offline. Fallback checks: public chat route returned the expected unauthenticated `307` to login, public API health returned `200`, and both API slots were healthy.
 - Deployment was not performed in this audit turn. The running containers can see the bind-mounted source for tests, but loaded Python processes require an approved blue-green reload before the safeguards become active.
+
+## 2026-07-22 23:14 KST - PC Agent 1.0.56 Windows lifecycle and release-integrity recovery
+
+- 확인된 사용자 장애:
+  - 서버가 v1.0.50을 제공할 때 Windows PC는 v1.0.52였으나 updater가 단순 불일치로 판단해 역다운그레이드를 시도했다.
+  - 구형 self-update가 worker만 종료하고 launcher 재기동을 누락해 트레이는 남지만 WebSocket은 끊긴 상태가 됐다.
+  - pystray callback thread에서 실행한 Tk 종료 확인창이 Windows에서 예/아니오 입력을 처리하지 못했다.
+  - 운영 설치 EXE가 2026-05-11 빌드로 남아 최신 launcher/tray 수정이 포함되지 않았다.
+- v1.0.55 수정:
+  - 숫자 버전 비교로 상위 버전만 업데이트하고 역다운그레이드를 차단했다.
+  - self-update 결과 전송 후 worker를 종료 코드 42로 닫아 launcher가 재기동하도록 했다.
+  - 완전 종료 확인창을 topmost Win32 MessageBox로 바꾸고, 예 선택 시 watchdog 작업까지 해제하며 아니오/오류는 종료하지 않는다.
+- 추가 P0 릴리스 정합성 수정:
+  - feature와 main 빌드가 같은 v1.0.55 Release 자산을 덮어썼지만 태그는 최초 구버전 커밋에 남는 provenance 불일치를 확인했다.
+  - v1.0.56부터 GitHub Release 게시를 main 브랜치에만 허용하며 feature/fix는 artifact만 만든다.
+  - 커밋 `fd076988`, Actions run `29927232065` 성공, `pc-agent-v1.0.56` 태그가 정확히 `fd076988`을 가리킨다.
+- 검증:
+  - 일회성 운영 이미지에서 `tests/unit/test_pc_agent*.py`: 33 passed.
+  - Python compile, `git diff --check`, Windows GitHub Actions PyInstaller 빌드 통과.
+  - GitHub asset, Blue, Green, 외부 다운로드가 모두 21,488,359 bytes, SHA-256 `e6538ba27c3a75de427e8d1434eb057479d19846890e1a223dc12c9a04472a0e`로 일치한다.
+  - Blue/Green/public version API 모두 v1.0.56이며 두 컨테이너는 healthy다.
+- 배포/롤백:
+  - 컨테이너 재시작 없이 현재 Blue `/root/aads/releases/aads-server-pc-agent-1.0.55-b09bfddd/pc_agent`와 Green `/root/aads/releases/aads-server-chat-noresponse-20260722/pc_agent`에 동일 소스/EXE를 동기화했다.
+  - 작업 중 다른 무중단 배포가 Green mount를 교체해 새 경로를 재탐지한 뒤 다시 동기화했다. 해당 배포의 앱 변경은 수정하지 않았다.
+  - 롤백 백업: `/root/aads/backups/pc-agent-1.0.55-before-1.0.56-20260722-2310/`.
+- 남은 실기기 검증:
+  - 23:14 KST 기준 agent `2e9379a1-fed`는 offline이며 `device_list`, `pc_execute`, 기존 local-agent 브라우저 세션이 모두 `PC_AGENT_OFFLINE`을 반환했다.
+  - 서버에서 종료된 Windows worker를 실행할 제어 채널이 없으므로 CEO PC에서 v1.0.56 EXE를 1회 실행해야 한다. 이후 heartbeat, `system_info`, 완전 종료 예/아니오 E2E를 수행한다.
