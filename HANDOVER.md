@@ -5,9 +5,10 @@
 - 잔여 원인은 agent/launcher가 60초 상태 보고 때 `schtasks`를 `CREATE_NO_WINDOW` 없이 실행하던 경로였다.
 - `pc_agent/agent.py`, `pc_agent/launcher.py`의 모든 watchdog 조회·등록 보조 프로세스에 Windows 콘솔 비노출 플래그를 적용했다.
 - agent 텔레메트리가 구형 레지스트리/Startup CMD 부재를 오류가 아닌 `scheduled_task_hidden` 정상 상태로 보고하도록 수정했다.
-- PC Agent 배포 버전을 `1.0.53`으로 올리고 changelog와 회귀 테스트를 갱신했다.
-- 검증: `python3 -m unittest -v tests.unit.test_pc_agent_launcher_startup` 4건 통과, `py_compile` 및 `git diff --check` 통과.
-- 운영 반영 절차: 서버 API가 제공하는 agent ZIP을 `1.0.53`으로 배포한 뒤 연결 PC에 `self_update`를 실행하고, 재연결 telemetry와 60초 이상 무재시작/무구형등록을 재검증한다.
+- 최초 `1.0.53` self-update에서 worker 종료 후 런처 재기동이 누락되는 결함을 재현해, 비동기 task의 `SystemExit` 대신 결과 전송 후 agent 메인 루프가 코드 42로 명시 종료하도록 보강했다.
+- PC Agent 배포 버전을 `1.0.54`로 올리고 changelog와 회귀 테스트를 갱신했다.
+- 검증: `python3 -m unittest -v tests.unit.test_pc_agent_launcher_startup` 5건 통과, `py_compile` 및 `git diff --check` 통과.
+- 운영 반영 절차: 서버 API가 제공하는 agent ZIP을 `1.0.54`로 배포한 뒤 연결 PC를 한 번 기동하고, 재연결 telemetry와 60초 이상 무재시작/무구형등록을 재검증한다.
 
 ## 2026-07-21 08:28 KST - 매장비서 3개 사업자 설정 최종 동기화·운영 검증
 - CEO 확정 기준 사업자는 `열정국밥 중화점`, `열정국밥 성신여대점`, `열정국밥_미아점` 3건이다.

@@ -53,7 +53,7 @@ def _restart_agent() -> None:
 
 
 async def execute(params: dict) -> dict:
-    """self_update 명령 핸들러 — HTTP 버전 확인 + 재시작."""
+    """self_update 명령 핸들러 — 결과 전송 후 agent 루프가 재시작한다."""
     force = params.get("force", False)
 
     has_update = await check_for_updates()
@@ -66,21 +66,15 @@ async def execute(params: dict) -> dict:
 
     # launcher가 exit=42 감지 후 check_update()로 직접 버전 비교하므로 VERSION 리셋 불필요
     # VERSION 리셋 시 다운로드 실패 → "0.0.0" 고착 → 무한 재시작 루프 위험 제거
-    logger.info("업데이트 감지, 재시작 예정")
-
-    async def _delayed_restart():
-        await asyncio.sleep(2.0)
-        _restart_agent()
-
-    try:
-        asyncio.ensure_future(_delayed_restart())
-    except Exception:
-        loop = asyncio.get_event_loop()
-        loop.call_later(2.0, _restart_agent)
+    logger.info("업데이트 감지 — 명령 결과 전송 후 agent 루프 종료 예정")
 
     return {
         "status": "ok",
-        "data": {"updated": True, "message": "업데이트 감지, 2초 후 재시작"},
+        "data": {
+            "updated": True,
+            "restart_requested": True,
+            "message": "업데이트 감지, 결과 전송 후 재시작",
+        },
     }
 
 

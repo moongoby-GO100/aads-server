@@ -639,6 +639,16 @@ class PCAgent:
         except Exception as e:
             logger.error("결과 전송 실패 command_id=%s: %s", command_id, e)
 
+        if (
+            command_type == "self_update"
+            and result.get("status") == "ok"
+            and bool((result.get("data") or {}).get("restart_requested"))
+        ):
+            logger.info("self_update 결과 전송 완료 — launcher 재기동 코드 42 요청")
+            self._exit_for_update = True
+            self._running = False
+            await ws.close(code=1000, reason="self_update")
+
     async def _execute_command(self, command_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """명령 타입에 따른 실행 디스패치."""
         handler = COMMAND_HANDLERS.get(command_type)
