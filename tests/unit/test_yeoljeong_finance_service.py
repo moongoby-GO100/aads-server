@@ -493,6 +493,79 @@ def test_contract_rejects_unconfirmed_wage_and_required_terms():
     assert "휴일/주휴" in exc.value.detail
 
 
+def test_regular_contract_accepts_qualified_200k_meal_allowance_breakdown():
+    seed_approved_employee()
+    saved = service.save_contract(
+        valid_employment_contract(wage=3000000, meal_provision="cash_no_meal", base_salary=2800000, non_tax_meal_allowance=200000, taxable_allowance=0),
+        {"email": "owner@example.com", "is_admin": True},
+    )
+    assert saved["base_salary"] == 2800000
+    assert saved["non_tax_meal_allowance"] == 200000
+
+
+@pytest.mark.parametrize(
+    ("overrides", "detail"),
+    [
+        ({"wage": 3000000, "base_salary": 2700000, "non_tax_meal_allowance": 200000}, "합계"),
+        ({"wage": 3000000, "base_salary": 2750000, "non_tax_meal_allowance": 250000, "meal_provision": "cash_no_meal"}, "200,000원"),
+        ({"wage": 3000000, "base_salary": 2800000, "non_tax_meal_allowance": 200000, "meal_provision": "employer_meal"}, "식사를 제공"),
+    ],
+)
+def test_regular_contract_rejects_invalid_meal_allowance_breakdown(overrides, detail):
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(valid_employment_contract(**overrides), {"email": "owner@example.com", "is_admin": True})
+    assert exc.value.status_code == 400
+    assert detail in exc.value.detail
+
+
+def test_regular_under_five_contract_rejects_2026_minimum_wage_shortfall():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(
+            valid_employment_contract(
+                contract_date="2026-07-22", wage=2500000, workplace_size_category="under_5", weekly_hours="주 52시간 30분",
+                meal_provision="cash_no_meal", base_salary=2300000, non_tax_meal_allowance=200000, taxable_allowance=0,
+            ),
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    assert exc.value.status_code == 400
+    assert "최저임금" in exc.value.detail
+
+
+def test_payroll_keeps_taxable_and_qualified_non_tax_meal_components():
+    saved = service.save_payroll(
+        {
+            "employee_name": "급여 테스트",
+            "employee_email": "payroll@example.com",
+            "gross_pay": 3000000,
+            "taxable_pay": 2800000,
+            "non_tax_meal_allowance": 200000,
+            "meal_provision": "cash_no_meal",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+    assert saved["taxable_pay"] == 2800000
+    assert saved["non_tax_meal_allowance"] == 200000
+
+
+def test_payroll_rejects_non_tax_meal_when_employer_provides_meal():
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_payroll(
+            {
+                "employee_name": "급여 테스트",
+                "employee_email": "payroll@example.com",
+                "gross_pay": 3000000,
+                "taxable_pay": 2800000,
+                "non_tax_meal_allowance": 200000,
+                "meal_provision": "employer_meal",
+            },
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    assert exc.value.status_code == 400
+    assert "식사를 제공" in exc.value.detail
+
+
 def test_edit_after_signature_request_returns_contract_to_draft():
     seed_approved_employee()
     user = {"email": "owner@example.com", "is_admin": True}

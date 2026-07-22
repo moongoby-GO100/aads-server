@@ -1585,6 +1585,36 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="근로계약서의 임금 산정 방식을 확인하십시오")
         if wage <= 0:
             missing.append("확정 임금")
+        component_values = []
+        for snake, camel in (
+            ("base_salary", "baseSalary"),
+            ("non_tax_meal_allowance", "nonTaxMealAllowance"),
+            ("taxable_allowance", "taxableAllowance"),
+        ):
+            raw_value = _contract_payload_value(result, snake, camel)
+            try:
+                component_values.append(float(raw_value or 0))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="급여 구성 금액을 숫자로 입력하십시오")
+        base_salary, non_tax_meal, taxable_allowance = component_values
+        component_total = base_salary + non_tax_meal + taxable_allowance
+        if component_total and abs(component_total - wage) >= 1:
+            raise HTTPException(status_code=400, detail="기본급·비과세 식대·기타 과세수당 합계가 월 총액과 일치해야 합니다")
+        if non_tax_meal < 0 or non_tax_meal > 200000:
+            raise HTTPException(status_code=400, detail="비과세 식대는 월 200,000원 이내로 입력하십시오")
+        meal_provision = str(_contract_payload_value(result, "meal_provision", "mealProvision") or "").strip()
+        if non_tax_meal > 0 and meal_provision != "cash_no_meal":
+            raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
+        workplace_size = str(_contract_payload_value(result, "workplace_size_category", "workplaceSizeCategory") or "").strip()
+        weekly_hours_text = str(_contract_payload_value(result, "weekly_hours", "weeklyHours") or "")
+        weekly_match = re.search(r"주\s*(\d+)시간(?:\s*(\d+)분)?", weekly_hours_text)
+        contract_date_year = contract_date[:4]
+        if contract_type == "regular" and workplace_size == "under_5" and weekly_match and base_salary > 0 and contract_date_year == "2026":
+            weekly_hours = float(weekly_match.group(1)) + float(weekly_match.group(2) or 0) / 60
+            monthly_paid_hours = (weekly_hours + min(8, weekly_hours / 5)) * 365 / 7 / 12
+            conservative_hourly = base_salary / monthly_paid_hours
+            if conservative_hourly < 10320:
+                raise HTTPException(status_code=400, detail=f"과세 기본급 기준 환산시급 {int(conservative_hourly):,}원은 2026년 최저임금 10,320원보다 낮습니다")
     elif contract_type == "freelancer":
         if employment_tax_type != "freelancer_33":
             raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 3.3% 원천징수 구분으로 작성해야 합니다")
@@ -1789,6 +1819,15 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
     rows = _read("payroll_statements")
     gross = int(float(payload.get("gross_pay") or 0))
+    taxable_pay = int(float(payload.get("taxable_pay") or 0))
+    non_tax_meal = int(float(payload.get("non_tax_meal_allowance") or 0))
+    if taxable_pay or non_tax_meal:
+        if taxable_pay + non_tax_meal != gross:
+            raise HTTPException(status_code=400, detail="과세급여와 비과세 식대 합계가 총지급액과 일치해야 합니다")
+        if non_tax_meal < 0 or non_tax_meal > 200000:
+            raise HTTPException(status_code=400, detail="비과세 식대는 월 200,000원 이내로 입력하십시오")
+        if non_tax_meal > 0 and str(payload.get("meal_provision") or "") != "cash_no_meal":
+            raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
     deductions = int(float(payload.get("tax_withholding") or 0)) + int(float(payload.get("insurance_deduction") or 0)) + int(float(payload.get("other_deduction") or 0))
     now = _now()
     statement_id = str(payload.get("id") or uuid4())
@@ -1799,6 +1838,8 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
         "employee_email": email,
         "employee_email_masked": _mask_email(email),
         "gross_pay": gross,
+        "taxable_pay": taxable_pay,
+        "non_tax_meal_allowance": non_tax_meal,
         "tax_withholding": int(float(payload.get("tax_withholding") or 0)),
         "insurance_deduction": int(float(payload.get("insurance_deduction") or 0)),
         "other_deduction": int(float(payload.get("other_deduction") or 0)),
