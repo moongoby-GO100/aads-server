@@ -3,7 +3,7 @@
 ## 2026-07-22 21:19 KST - 채팅 생성 이미지 최종 원장 대조
 
 - 원격 `main`에서 `e869fbb7`(채팅 인라인 렌더), `f5df463b`(공개 이미지 읽기), `97ffb027`(Blue/Green 공유 볼륨), `ef5b980d`(기존 완료 기록)의 포함을 재확인했다. 별도 기능 브랜치 커밋 `b31e84e3`은 `main` 조상이 아니므로 완료 근거에서 제외했다.
-- 운영 Green `8102`는 릴리스 SHA `bb583ed2`를 마운트하며 현재 원격 `main`보다 이 HANDOVER 문서 커밋만 뒤에 있다. 해당 릴리스에는 `e869fbb7`, `f5df463b`, `97ffb027`이 모두 포함된다.
+- 운영 Green `8102`는 릴리스 SHA `bb583ed2`를 마운트한다. `bb583ed2` 이후 원격 `main`과의 차이는 `HANDOVER.md`뿐이라 실행 코드는 동일하며, 해당 릴리스에는 `e869fbb7`, `f5df463b`, `97ffb027`이 모두 포함된다.
 - 운영 active는 Green `8102`이며 Blue `8100`과 함께 healthy다. 두 슬롯은 동일 `aads-server_aads_generated_media` 볼륨의 `/app/generated-media-static/media/generated/image/media-inlineqa-20260722.png` 68바이트 파일을 읽는다.
 - Blue·Green·외부 공개 URL은 모두 HTTP 200 `image/png`이고 SHA-256 `431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460`으로 일치했다. Green 운영 이미지와 운영 릴리스 소스를 사용한 read-only 격리 컨테이너에서 관련 회귀 테스트 `19 passed`를 확인했다.
 - 운영 DB에는 공개 갤러리 Markdown 이미지를 포함한 채팅 메시지 2건이 저장돼 있으며 Dashboard `MarkdownRenderer`의 `img` 경로는 `MarkdownImagePreview`로 연결된다.
