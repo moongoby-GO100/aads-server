@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +48,25 @@ def test_full_exit_confirmation_fails_closed(monkeypatch) -> None:
     import ctypes
 
     monkeypatch.setattr(ctypes, "windll", BrokenWindll(), raising=False)
+    assert tray.confirm_full_exit() is False
+
+
+def test_full_exit_confirmation_handles_yes_and_no(monkeypatch) -> None:
+    tray = _load("tray_yes_no_test", ROOT / "pc_agent" / "tray.py")
+    monkeypatch.setattr(tray.sys, "platform", "win32")
+
+    import ctypes
+
+    yes_box = SimpleNamespace(MessageBoxW=lambda *_args: 6)
+    monkeypatch.setattr(
+        ctypes, "windll", SimpleNamespace(user32=yes_box), raising=False
+    )
+    assert tray.confirm_full_exit() is True
+
+    no_box = SimpleNamespace(MessageBoxW=lambda *_args: 7)
+    monkeypatch.setattr(
+        ctypes, "windll", SimpleNamespace(user32=no_box), raising=False
+    )
     assert tray.confirm_full_exit() is False
 
 

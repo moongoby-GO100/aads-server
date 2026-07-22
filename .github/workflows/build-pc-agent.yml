@@ -2,7 +2,7 @@ name: Build PC Agent EXE
 
 on:
   push:
-    branches: [main, 'feat/**', 'fix/**']
+    branches: [main]
     paths:
       - 'pc_agent/**'
   workflow_dispatch:

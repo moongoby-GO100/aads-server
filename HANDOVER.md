@@ -7,7 +7,7 @@
 - 운영 `/api/v1/kakao-bot/agent/download-exe`가 컨테이너에 미추적 `dist/*.exe`가 없어 HTTP 404를 반환하던 결함을 확인했다. 로컬 EXE가 없으면 동일 버전의 공개 GitHub Release 자산으로 HTTP 307 연결하도록 수정했다.
 - 중복 자동실행을 제거하고 숨김 `ONLOGON` watchdog 하나로 정리했으며, self-update 결과 전송 후 launcher가 코드 42를 확실히 수신하도록 종료 흐름을 보강했다.
 - PC Agent 버전을 `1.0.55`로 올리고 `/agent/version`이 설치 EXE 경로와 `github_release` 배포 방식을 반환하도록 정합화했다. launcher/agent 진단 telemetry endpoint도 복구했다.
-- 검증: 운영과 동일한 API 이미지에서 PC Agent 관련 회귀 테스트 30건 통과, Python compile, `git diff --check` 통과.
+- 검증: 운영과 동일한 API 이미지에서 완전 종료 예/아니오, watchdog 해제, 역다운그레이드 차단을 포함한 PC Agent 회귀 테스트 32건 통과, Python compile, `git diff --check` 통과.
 - 남은 운영 완료 조건: `main` 푸시 후 Windows Actions EXE/Release 생성, blue/green 배포, 공개 EXE PE·SHA-256 검증, CEO PC 재실행 후 `online`·`1.0.55` 확인.
 
 ## 2026-07-22 21:19 KST - 채팅 생성 이미지 최종 원장 대조
