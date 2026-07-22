@@ -4548,6 +4548,16 @@
 - Blue `8100`을 active로 전환하고 Green `8102`를 rollback backup으로 유지했다. 양 슬롯 및 외부 health는 모두 HTTP 200이다.
 - 보존 headless 브라우저는 셸 렌더 후 workspace API 인증이 만료됐고 PC Agent도 offline이라 로그인 E2E는 API 검증으로 대체했다.
 
+## 2026-07-23 08:47 KST - runner-307da46a deploy preflight recovery
+
+- 실패 원인: 정식 AADS 경로 `/root/aads/aads-server`가 `feat/unni-naengmyeon-inquiries-20260722` 작업공간으로 사용되어 dirty 77건, `origin/main` 대비 behind 62/ahead 56으로 Pipeline Runner 배포 전 점검이 차단됐다. 로컬 `main`도 별도로 원격과 49/64 커밋 분기 상태였다.
+- Git 복구: 기존 로컬 main은 `main-local-diverged-20260723`으로 보존했다. feature dirty 상태는 `/root/aads/aads-server-unni-inquiries-20260723` worktree에 복원하고 `stash@{0}` 백업도 유지했다. 정식 경로는 새 `main`을 `origin/main`에서 생성해 dirty 0, behind 0, ahead 0으로 복구했다.
+- P0 코드: local-agent navigation 후 실제 redirect URL을 기록하고 Playwright식 함수 표현식을 CDP에서 실행하도록 보정했다. `device_list`는 별도 `pc_agent_manager`의 PC 연결 상태를 함께 반환한다. 회귀 30건과 pre-commit 56건, 도구 정합성 검사가 통과했다.
+- Git: 코드/테스트 커밋 `7d32b774`를 `origin/main`에 비강제 fast-forward push했다.
+- 운영 반영 준비: 현재 Blue/Green release mount의 대상 Python 파일을 동기화했고 양 컨테이너에서 `py_compile`을 통과했다. 원본 백업은 `/root/aads/backups/runner-307da46a-predeploy-20260723-0840/`에 있다.
+- 배포 상태: 첫 blue-green 시도는 비활성 Green의 활성 스트림 2건 때문에 안전 게이트가 중단했다. 강제 옵션은 사용하지 않았다. 두 슬롯 모두 스트림 0, 정식 main clean/latest 조건일 때만 재시도하는 transient unit `aads-deploy-runner-307da46a.service`를 등록했으며 로그는 `/tmp/aads-deploy-runner-307da46a.log`이다.
+- 롤백: 배포 전에는 release mount 백업 파일을 복원하면 되고, 배포 후에는 기존 Blue 슬롯으로 nginx upstream을 되돌릴 수 있다.
+
 ## 2026-07-23 08:37 KST - PC Agent Browser Bridge redirect/device-list recovery
 
 - 원인:
