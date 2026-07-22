@@ -389,6 +389,14 @@ class SessionRegistry:
             self._save_locked()
             return session
 
+    def remove_session(self, session_id: str) -> Optional[BrowserBridgeSession]:
+        """Remove completed ephemeral browser state from the persisted registry."""
+        with self._lock:
+            session = self._sessions.pop(session_id, None)
+            if session is not None:
+                self._save_locked()
+            return session
+
     def acquire_lease(
         self,
         *,

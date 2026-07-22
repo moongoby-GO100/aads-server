@@ -445,6 +445,10 @@ class BrowserBridgeService:
             "dynamic_port": True,
             "isolated_profile": isolated_profile,
             "new_window": True,
+            # 업무 키 기반 격리 창만 유휴 자동 정리 대상으로 지정한다.
+            # 일반/보호 세션은 사용자의 로그인 창을 보존한다.
+            "auto_close": bool(normalized_work_key and not is_protected),
+            "idle_timeout_seconds": 600,
         }
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
@@ -628,6 +632,126 @@ class BrowserBridgeService:
             is_protected,
         )
         return session
+
+    async def close_work_session(
+        self,
+        *,
+        work_key: str,
+        force: bool = False,
+        reason: str = "e2e_complete",
+    ) -> dict[str, Any]:
+        """Close one isolated E2E browser and remove its bridge registry entry.
+
+        Protected business sessions are intentionally kept unless an explicit
+        force request is made.  A LOCAL_AGENT close is acknowledged by the PC
+        before the server forgets the session, so an offline PC cannot turn a
+        visible orphan window into invisible state.
+        """
+        normalized_work_key = normalize_work_key(work_key)
+        session = self.sessions.find_by_work_key(normalized_work_key)
+        if session is None:
+            return {
+                "status": "closed",
+                "closed": False,
+                "already_closed": True,
+                "work_key": normalized_work_key,
+            }
+        if session.protected and not force:
+            raise BrowserBridgeError(
+                f"protected browser work session requires force: {normalized_work_key}",
+                error_code="PROTECTED_BROWSER_SESSION",
+            )
+
+        close_result: dict[str, Any] = {
+            "status": "success",
+            "data": {"closed": True, "mode": session.endpoint.kind.value},
+        }
+        if session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT:
+            from app.services.pc_agent_manager import pc_agent_manager
+
+            metadata = dict(session.endpoint.metadata or {})
+            agent_id = str(metadata.get("agent_id") or "")
+            port = int(metadata.get("port") or 0)
+            params = {
+                "work_key": normalized_work_key,
+                "port": port,
+                "force": True,
+                "reason": reason or "e2e_complete",
+            }
+            close_result = await pc_agent_manager.execute_routed_command(
+                command_type="browser_close_session",
+                params=params,
+                agent_id=agent_id,
+                job_type=f"browser_bridge_close_{session.session_id}",
+                required_capabilities=["interactive_browser"],
+                queue_if_busy=True,
+                wait_for_turn=True,
+                queue_wait_timeout_seconds=30,
+                lease_ttl_seconds=45,
+                command_timeout_seconds=30,
+            )
+            if close_result.get("status") != "success" and str(close_result.get("error_code") or "") == "PC_AGENT_OFFLINE":
+                active_result = await self._execute_pc_agent_route_via_active_api(
+                    command_type="browser_close_session",
+                    params=params,
+                    agent_id=agent_id,
+                    job_type=f"browser_bridge_close_{session.session_id}",
+                    required_capabilities=["interactive_browser"],
+                    queue_wait_timeout_seconds=30,
+                    lease_ttl_seconds=45,
+                    command_timeout_seconds=30,
+                )
+                if active_result is not None:
+                    close_result = active_result
+            if close_result.get("status") != "success":
+                metadata["close_pending"] = True
+                metadata["close_reason"] = reason or "e2e_complete"
+                metadata["close_error"] = str(
+                    close_result.get("message") or close_result.get("error_code") or close_result
+                )[:500]
+                session.endpoint.metadata = metadata
+                self.sessions.touch(session)
+                raise BrowserBridgeError(
+                    metadata["close_error"],
+                    error_code=str(close_result.get("error_code") or "BROWSER_CLOSE_FAILED"),
+                    detail=close_result,
+                )
+
+            command_result = close_result.get("result") if isinstance(close_result, dict) else None
+            command_data = command_result.get("result") if isinstance(command_result, dict) else None
+            if isinstance(command_data, dict) and command_data.get("error"):
+                raise BrowserBridgeError(
+                    str(command_data.get("error")),
+                    error_code=str(command_data.get("error_code") or "BROWSER_CLOSE_FAILED"),
+                    detail=command_data,
+                )
+        else:
+            context = self._session_contexts.get(session.session_id)
+            browser = self._session_browsers.get(session.session_id)
+            if context is not None and context is not self._headless_context and hasattr(context, "close"):
+                await context.close()
+            if browser is not None and hasattr(browser, "close"):
+                await browser.close()
+
+        self._session_contexts.pop(session.session_id, None)
+        self._session_browsers.pop(session.session_id, None)
+        self.sessions.remove_session(session.session_id)
+        logger.info(
+            "browser_bridge_work_session_closed work_key=%s session_id=%s kind=%s reason=%s",
+            normalized_work_key,
+            session.session_id,
+            session.endpoint.kind.value,
+            reason,
+        )
+        return {
+            "status": "closed",
+            "closed": True,
+            "work_key": normalized_work_key,
+            "session_id": session.session_id,
+            "kind": session.endpoint.kind.value,
+            "reason": reason or "e2e_complete",
+            "pc_agent_result": close_result,
+        }
 
     def _session_reusable(self, session: BrowserBridgeSession) -> bool:
         if session.is_expired:

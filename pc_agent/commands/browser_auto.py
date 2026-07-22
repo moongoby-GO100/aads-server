@@ -52,6 +52,8 @@ class CDPSession:
     last_target_id: str = ""
     last_target_url: str = ""
     last_error_code: str = ""
+    auto_close: bool = False
+    idle_timeout_seconds: float = 600.0
 
 
 @dataclass
@@ -106,10 +108,26 @@ class CDPSessionManager:
         return _find_free_port()
 
     @classmethod
-    def register(cls, work_key: str, port: int, profile_dir: str, pid: int = 0) -> CDPSession:
+    def register(
+        cls,
+        work_key: str,
+        port: int,
+        profile_dir: str,
+        pid: int = 0,
+        *,
+        auto_close: bool = False,
+        idle_timeout_seconds: float = 600.0,
+    ) -> CDPSession:
         normalized_work_key = cls.normalize_work_key(work_key)
         with cls._lock:
-            session = CDPSession(work_key=normalized_work_key, port=port, profile_dir=profile_dir, pid=pid)
+            session = CDPSession(
+                work_key=normalized_work_key,
+                port=port,
+                profile_dir=profile_dir,
+                pid=pid,
+                auto_close=bool(auto_close),
+                idle_timeout_seconds=max(60.0, float(idle_timeout_seconds or 600.0)),
+            )
             cls._sessions[normalized_work_key] = session
             return session
 
@@ -1752,6 +1770,152 @@ async def browser_close_tab(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
+async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
+    """AADS가 생성한 격리 CDP Chrome 인스턴스 전체를 종료한다.
+
+    일반 사용자 Chrome(`general`)은 명시적 force 없이는 절대 종료하지 않는다.
+    업무 세션은 work_key별 격리 프로필/포트를 사용하므로 Browser.close가 해당
+    E2E 창만 닫고 다른 Chrome 창에는 영향을 주지 않는다.
+    """
+    work_key = _work_key_from_params(params)
+    force = _as_bool(params.get("force", False), default=False)
+    if work_key == "general" and not force:
+        return {
+            "status": "error",
+            "data": {
+                "error": "공용 general Chrome은 자동 종료할 수 없습니다",
+                "error_code": "SHARED_BROWSER_PROTECTED",
+                "work_key": work_key,
+            },
+        }
+
+    session = CDPSessionManager.get_session(work_key)
+    explicit_port = _coerce_port(params.get("port"), 0)
+    if session is None and not explicit_port:
+        return {
+            "status": "success",
+            "data": {
+                "closed": False,
+                "already_closed": True,
+                "work_key": work_key,
+                "message": "이미 종료됐거나 등록되지 않은 브라우저 세션입니다",
+            },
+        }
+
+    # PC Agent가 재시작돼 메모리 registry가 비어도 서버가 보존한 격리 포트로
+    # orphan E2E 창을 닫을 수 있다. general은 위 보호 분기에서 차단된다.
+    port = session.port if session is not None else explicit_port
+    guard_key = CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port)
+    targets_before = 0
+    try:
+        try:
+            targets_before = len([
+                target for target in await _list_cdp_targets(port)
+                if str(target.get("type") or "").lower() == "page"
+            ])
+        except Exception:
+            targets_before = 0
+
+        browser_ws_url = await _get_browser_ws_url(port)
+        try:
+            await _send_cdp(
+                browser_ws_url,
+                "Browser.close",
+                timeout_seconds=5,
+            )
+        except Exception:
+            # Browser.close는 성공 시 WebSocket을 먼저 끊어 응답 수신이 실패할 수 있다.
+            pass
+
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while asyncio.get_running_loop().time() < deadline:
+            if await _probe_cdp_version(port) is None:
+                break
+            await asyncio.sleep(0.2)
+
+        still_open = await _probe_cdp_version(port) is not None
+        if still_open:
+            if session is not None:
+                CDPSessionManager.mark_error(work_key, error_code="BROWSER_CLOSE_TIMEOUT")
+            return {
+                "status": "error",
+                "data": {
+                    "error": f"격리 Chrome 종료 확인 실패 (port {port})",
+                    "error_code": "BROWSER_CLOSE_TIMEOUT",
+                    "work_key": work_key,
+                    "port": port,
+                    "targets_before": targets_before,
+                },
+            }
+
+        CDPSessionManager.release(work_key)
+        CDPCommandGuardManager.force_release(guard_key)
+        logger.info(
+            "격리 E2E Chrome 종료 완료: work_key=%s port=%d targets=%d",
+            work_key,
+            port,
+            targets_before,
+        )
+        return {
+            "status": "success",
+            "data": {
+                "closed": True,
+                "work_key": work_key,
+                "port": port,
+                "targets_before": targets_before,
+                "remaining": 0,
+            },
+        }
+    except CDPCommandError as exc:
+        if await _probe_cdp_version(port) is None:
+            CDPSessionManager.release(work_key)
+            CDPCommandGuardManager.force_release(guard_key)
+            return {
+                "status": "success",
+                "data": {
+                    "closed": True,
+                    "work_key": work_key,
+                    "port": port,
+                    "targets_before": targets_before,
+                    "remaining": 0,
+                },
+            }
+        return _command_error_response(port, params, exc)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "data": {
+                "error": str(exc),
+                "error_code": _ERROR_CDP_NOT_READY,
+                "work_key": work_key,
+                "port": port,
+            },
+        }
+
+
+async def cleanup_idle_browser_sessions() -> list[dict[str, Any]]:
+    """유휴 상태인 auto-close 격리 세션을 정리하는 PC Agent 안전망."""
+    now = _time()
+    cleanup_results: list[dict[str, Any]] = []
+    for work_key, session in list(CDPSessionManager.get_all().items()):
+        if not session.auto_close or work_key == "general":
+            continue
+        idle_seconds = max(0.0, now - session.last_heartbeat_at)
+        if idle_seconds < session.idle_timeout_seconds:
+            continue
+        result = await browser_close_session({
+            "work_key": work_key,
+            "force": True,
+            "reason": "idle_timeout",
+        })
+        cleanup_results.append({
+            "work_key": work_key,
+            "idle_seconds": int(idle_seconds),
+            "result": result,
+        })
+    return cleanup_results
+
+
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     """Chrome CDP 전용 세션 시작 (전용 프로필 + 동적 포트 충돌 회피)."""
     url = params.get("url", "about:blank")
@@ -1783,6 +1947,8 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     preferred = _coerce_port(params.get("preferred_port", params.get("port", CDP_PORT)), CDP_PORT)
     new_window = _as_bool(params.get("new_window", True), default=True)
     ready_timeout = float(params.get("ready_timeout_seconds", 15.0) or 15.0)
+    auto_close = _as_bool(params.get("auto_close", False), default=False)
+    idle_timeout_seconds = max(60.0, float(params.get("idle_timeout_seconds", 600.0) or 600.0))
 
     try:
         os.makedirs(profile_dir, exist_ok=True)
@@ -1791,6 +1957,9 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         if existing_session:
             existing = await _probe_cdp_version(existing_session.port)
             if existing is not None:
+                existing_session.auto_close = auto_close
+                existing_session.idle_timeout_seconds = idle_timeout_seconds
+                existing_session.last_heartbeat_at = _time()
                 return {
                     "status": "success",
                     "data": {
@@ -1811,7 +1980,14 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             if existing is not None:
                 owner = CDPSessionManager.get_by_port(port)
                 if owner and owner.work_key == work_key:
-                    CDPSessionManager.register(work_key, port, profile_dir, pid=owner.pid)
+                    CDPSessionManager.register(
+                        work_key,
+                        port,
+                        profile_dir,
+                        pid=owner.pid,
+                        auto_close=auto_close,
+                        idle_timeout_seconds=idle_timeout_seconds,
+                    )
                     return {
                         "status": "success",
                         "data": {
@@ -1823,7 +1999,13 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                         },
                     }
                 if work_key == "general" and owner is None:
-                    CDPSessionManager.register(work_key, port, profile_dir)
+                    CDPSessionManager.register(
+                        work_key,
+                        port,
+                        profile_dir,
+                        auto_close=auto_close,
+                        idle_timeout_seconds=idle_timeout_seconds,
+                    )
                     return {
                         "status": "success",
                         "data": {
@@ -1857,7 +2039,14 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             if ready is None:
                 continue
 
-            CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
+            CDPSessionManager.register(
+                work_key,
+                port,
+                profile_dir,
+                pid=int(proc.pid or 0),
+                auto_close=auto_close,
+                idle_timeout_seconds=idle_timeout_seconds,
+            )
             logger.info("Chrome CDP 시작 완료 (port=%d profile=%s work_key=%s)", port, profile_dir, work_key)
             return {
                 "status": "success",
@@ -1886,7 +2075,14 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ready = await _wait_cdp_ready(port, ready_timeout)
             if ready is not None:
-                CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
+                CDPSessionManager.register(
+                    work_key,
+                    port,
+                    profile_dir,
+                    pid=int(proc.pid or 0),
+                    auto_close=auto_close,
+                    idle_timeout_seconds=idle_timeout_seconds,
+                )
                 return {
                     "status": "success",
                     "data": {

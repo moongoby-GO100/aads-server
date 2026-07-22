@@ -79,6 +79,12 @@ class WorkSessionRouteExecuteRequest(BaseModel):
     preferred_port: int | None = Field(default=None, ge=1024, le=65535)
 
 
+class CloseWorkSessionRequest(BaseModel):
+    work_key: str = Field(min_length=2, max_length=120)
+    force: bool = False
+    reason: str = Field(default="e2e_complete", max_length=160)
+
+
 class SessionLeaseRequest(BaseModel):
     owner: str = Field(min_length=1, max_length=160)
     preferred_session_id: str = Field(default="", max_length=80)
@@ -204,6 +210,24 @@ async def ensure_work_session(
     except Exception as exc:
         raise HTTPException(status_code=424, detail=str(exc)) from exc
     return {"status": "ready", "session": session.public_dict()}
+
+
+@router.post("/work-sessions/close")
+async def close_work_session(
+    req: CloseWorkSessionRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    service = get_browser_bridge_service()
+    try:
+        return await service.close_work_session(
+            work_key=req.work_key,
+            force=req.force,
+            reason=req.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
 
 
 @router.post("/work-sessions/route-execute")

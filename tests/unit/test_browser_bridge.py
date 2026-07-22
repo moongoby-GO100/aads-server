@@ -439,7 +439,90 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
     assert session.endpoint.metadata["cdp_url"] == "pc-agent://ceo-pc/cdp/9333"
     assert captured_kwargs["params"]["work_key"] == "ntv2-china-sourcing-admin"
     assert captured_kwargs["params"]["isolation_id"] == "ntv2-china-sourcing-admin"
+    assert captured_kwargs["params"]["auto_close"] is True
+    assert captured_kwargs["params"]["idle_timeout_seconds"] == 600
     assert session.work_key == "ntv2-china-sourcing-admin"
+
+
+@pytest.mark.asyncio
+async def test_close_local_work_session_waits_for_pc_ack_then_removes_registry(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="AADS chat E2E",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9333", "endpoint_kind": "local_agent"},
+        work_key="aads-chat-e2e",
+        activate=False,
+    )
+    calls: list[dict] = []
+
+    async def fake_execute(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "success",
+            "result": {"status": "success", "result": {"closed": True, "remaining": 0}},
+        }
+
+    from app.services import pc_agent_manager as manager_module
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute)
+
+    result = await service.close_work_session(work_key="aads-chat-e2e")
+
+    assert result["closed"] is True
+    assert calls[0]["command_type"] == "browser_close_session"
+    assert calls[0]["params"]["port"] == 9333
+    assert service.sessions.get(session.session_id) is None
+    assert service.sessions.find_by_work_key("aads-chat-e2e") is None
+
+
+@pytest.mark.asyncio
+async def test_close_work_session_does_not_force_protected_browser(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    protected = service.register_trusted_session(
+        label="NTV2 Sinsang registration",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9222", "endpoint_kind": "local_agent"},
+        work_key="ntv2-sinsang-registration",
+        protected=True,
+        activate=False,
+    )
+
+    with pytest.raises(BrowserBridgeError, match="requires force"):
+        await service.close_work_session(work_key="ntv2-sinsang-registration")
+
+    assert service.sessions.get(protected.session_id) is protected
+
+
+@pytest.mark.asyncio
+async def test_close_headless_work_session_is_idempotent(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="Headless E2E",
+        endpoint_kind="headless",
+        work_key="headless-e2e",
+        activate=False,
+    )
+
+    first = await service.close_work_session(work_key="headless-e2e")
+    second = await service.close_work_session(work_key="headless-e2e")
+
+    assert first["closed"] is True
+    assert service.sessions.get(session.session_id) is None
+    assert second["closed"] is False
+    assert second["already_closed"] is True
 
 
 @pytest.mark.asyncio

@@ -506,6 +506,14 @@ class PCAgent:
                     await ws.close(code=1000, reason="sleep_wake_reconnect")
                     break
                 last_beat = now
+                try:
+                    from commands.browser_auto import cleanup_idle_browser_sessions
+
+                    cleanup_results = await cleanup_idle_browser_sessions()
+                    if cleanup_results:
+                        logger.info("유휴 E2E 브라우저 자동 정리: %s", cleanup_results)
+                except Exception as cleanup_exc:
+                    logger.warning("유휴 E2E 브라우저 정리 실패 (연결 유지): %s", cleanup_exc)
                 await ws.send(json.dumps({
                     "type": "heartbeat",
                     "id": str(uuid.uuid4()),

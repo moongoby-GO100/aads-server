@@ -176,3 +176,114 @@ def test_runtime_timeout_cleanup_keeps_work_key_session() -> None:
     assert result["status"] == "error"
     assert result["data"]["session_released"] is False
     assert browser_auto.CDPSessionManager.get_session("ntv2-vvic-scrape") is not None
+
+
+@pytest.mark.asyncio
+async def test_close_session_closes_only_registered_work_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    browser_auto.CDPSessionManager.register(
+        "aads-chat-e2e",
+        9333,
+        "/tmp/aads-chat-e2e",
+        pid=1234,
+        auto_close=True,
+    )
+    probe_calls = 0
+
+    async def fake_probe(_port: int):
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            return {"webSocketDebuggerUrl": "ws://127.0.0.1:9333/devtools/browser/test"}
+        return None
+
+    async def fake_targets(_port: int):
+        return [{"type": "page", "id": "page-1", "url": "https://aads.newtalk.kr/"}]
+
+    async def fake_send(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(browser_auto, "_probe_cdp_version", fake_probe)
+    monkeypatch.setattr(browser_auto, "_list_cdp_targets", fake_targets)
+    monkeypatch.setattr(browser_auto, "_send_cdp", fake_send)
+
+    result = await browser_auto.browser_close_session({"work_key": "aads-chat-e2e"})
+
+    assert result["status"] == "success"
+    assert result["data"]["closed"] is True
+    assert result["data"]["targets_before"] == 1
+    assert browser_auto.CDPSessionManager.get_session("aads-chat-e2e") is None
+
+
+@pytest.mark.asyncio
+async def test_close_session_protects_general_browser() -> None:
+    browser_auto.CDPSessionManager.register("general", 9222, "/tmp/general", pid=99)
+
+    result = await browser_auto.browser_close_session({"work_key": "general"})
+
+    assert result["status"] == "error"
+    assert result["data"]["error_code"] == "SHARED_BROWSER_PROTECTED"
+    assert browser_auto.CDPSessionManager.get_session("general") is not None
+
+
+@pytest.mark.asyncio
+async def test_close_session_uses_server_port_after_agent_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe_calls = 0
+
+    async def fake_probe(_port: int):
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            return {"webSocketDebuggerUrl": "ws://127.0.0.1:9555/devtools/browser/orphan"}
+        return None
+
+    async def fake_targets(_port: int):
+        return [{"type": "page", "id": "orphan-page", "url": "https://aads.newtalk.kr/"}]
+
+    async def fake_send(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(browser_auto, "_probe_cdp_version", fake_probe)
+    monkeypatch.setattr(browser_auto, "_list_cdp_targets", fake_targets)
+    monkeypatch.setattr(browser_auto, "_send_cdp", fake_send)
+
+    result = await browser_auto.browser_close_session({
+        "work_key": "orphan-e2e",
+        "port": 9555,
+    })
+
+    assert result["status"] == "success"
+    assert result["data"]["closed"] is True
+    assert result["data"]["port"] == 9555
+
+
+@pytest.mark.asyncio
+async def test_idle_cleanup_targets_only_auto_close_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    ephemeral = browser_auto.CDPSessionManager.register(
+        "e2e-expired",
+        9333,
+        "/tmp/e2e-expired",
+        auto_close=True,
+        idle_timeout_seconds=60,
+    )
+    persistent = browser_auto.CDPSessionManager.register(
+        "persistent",
+        9444,
+        "/tmp/persistent",
+        auto_close=False,
+        idle_timeout_seconds=60,
+    )
+    ephemeral.last_heartbeat_at = 0
+    persistent.last_heartbeat_at = 0
+    closed: list[str] = []
+
+    async def fake_close(params):
+        closed.append(params["work_key"])
+        return {"status": "success", "data": {"closed": True}}
+
+    monkeypatch.setattr(browser_auto, "browser_close_session", fake_close)
+    monkeypatch.setattr(browser_auto, "_time", lambda: 1_000.0)
+
+    results = await browser_auto.cleanup_idle_browser_sessions()
+
+    assert closed == ["e2e-expired"]
+    assert results[0]["idle_seconds"] == 1000

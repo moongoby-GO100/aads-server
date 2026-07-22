@@ -238,6 +238,28 @@ wait_port_health() {
     return 1
 }
 
+nginx_config_test() {
+    if command -v nginx >/dev/null 2>&1; then
+        nginx -t
+    elif docker inspect aads-nginx --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        docker exec aads-nginx nginx -t
+    else
+        echo "[deploy.sh] ❌ 실행 중인 nginx를 찾을 수 없습니다."
+        return 1
+    fi
+}
+
+nginx_reload() {
+    if command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+        systemctl reload nginx
+    elif docker inspect aads-nginx --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        docker exec aads-nginx nginx -s reload
+    else
+        echo "[deploy.sh] ❌ reload 가능한 nginx를 찾을 수 없습니다."
+        return 1
+    fi
+}
+
 switch_api_upstream() {
     local new_port="$1"
     local old_port="$2"
@@ -249,7 +271,7 @@ switch_api_upstream() {
         -e "s/server 127\.0\.0\.1:${new_port} [^;]*;/server 127.0.0.1:${new_port} max_fails=0;/g" \
         -e "s/server 127\.0\.0\.1:${old_port} [^;]*;/server 127.0.0.1:${old_port} max_fails=3 fail_timeout=30s backup;/g" \
         "$UPSTREAM_CONF"
-    if ! nginx -t >/dev/null 2>&1; then
+    if ! nginx_config_test >/dev/null 2>&1; then
         cp "${UPSTREAM_CONF}.pre_code_switch" "$UPSTREAM_CONF"
         echo "[deploy.sh] ❌ nginx 설정 오류 — upstream 전환 취소"
         return 1
@@ -259,7 +281,7 @@ switch_api_upstream() {
     echo "$new_container" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-    systemctl reload nginx
+    nginx_reload
 }
 
 restart_old_slot_after_drain() {
@@ -658,7 +680,7 @@ case "$MODE" in
             -e "s/server 127\.0\.0\.1:${NEW_PORT} [^;]*;/server 127.0.0.1:${NEW_PORT} max_fails=0;/g" \
             -e "s/server 127\.0\.0\.1:${CURRENT_PORT} [^;]*;/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s backup;/g" \
             "$UPSTREAM_CONF"
-        if ! nginx -t 2>/dev/null; then
+        if ! nginx_config_test; then
             echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
@@ -667,7 +689,7 @@ case "$MODE" in
         fi
 
         echo "[deploy.sh] [5/6] nginx reload — existing streams remain on the old worker/slot"
-        systemctl reload nginx
+        nginx_reload
         echo "[deploy.sh]   nginx upstream 전환 완료"
 
         # ④ 전환 후 검증
@@ -677,7 +699,7 @@ case "$MODE" in
         else
             echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
-            systemctl reload nginx
+            nginx_reload
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
             exit 1
