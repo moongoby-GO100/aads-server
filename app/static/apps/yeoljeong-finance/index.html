@@ -549,15 +549,6 @@
       margin: 7px 0;
     }
 
-    .contract-paper .contract-notice {
-      margin: 12px 0;
-      padding: 10px;
-      border: 1px solid #d9e7f7;
-      border-radius: 8px;
-      background: #f5f9ff;
-      color: #23405f;
-    }
-
     .contract-paper .preview-row {
       display: grid;
       grid-template-columns: 118px 1fr;
@@ -1204,6 +1195,15 @@
             <label>연락처
               <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
             </label>
+            <label>생년월일
+              <input name="birthDate" type="date" autocomplete="bday">
+            </label>
+            <label>주소
+              <input name="address" autocomplete="street-address" placeholder="근로계약서에 표시할 주소">
+            </label>
+            <label>국적
+              <input name="nationality" value="대한민국" autocomplete="country-name">
+            </label>
             <input name="organizationName" type="hidden" value="열정국밥 운영관리">
             <label>비밀번호
               <input name="password" type="password" autocomplete="new-password" minlength="8" required>
@@ -1530,6 +1530,15 @@
                 <label>연락처
                   <input name="phone" placeholder="010-0000-0000">
                 </label>
+                <label>생년월일
+                  <input name="birthDate" type="date">
+                </label>
+                <label class="span-2">주소
+                  <input name="address" placeholder="근로계약서에 자동 반영할 주소">
+                </label>
+                <label>국적
+                  <input name="nationality" value="대한민국" placeholder="예: 대한민국">
+                </label>
                 <label class="span-2">요청 메모
                   <textarea name="memo" placeholder="예: 중화점 야간조 입사 예정, 보건증 발급 중"></textarea>
                 </label>
@@ -1698,6 +1707,18 @@
                 <label>직원 이메일
                   <input name="employeeEmail" type="email" placeholder="회원가입 이메일">
                 </label>
+                <label>근로자 연락처
+                  <input name="employeePhone" inputmode="tel" placeholder="010-0000-0000" required>
+                </label>
+                <label>근로자 생년월일
+                  <input name="employeeBirthDate" type="date" required>
+                </label>
+                <label class="span-2">근로자 주소
+                  <input name="employeeAddress" placeholder="주민등록상 주소 또는 실제 거주지" required>
+                </label>
+                <label>국적
+                  <input name="employeeNationality" value="대한민국" placeholder="예: 대한민국">
+                </label>
                 <label>근무 지점
                   <select name="branch" required></select>
                 </label>
@@ -1730,6 +1751,18 @@
                 </label>
                 <label>외국인등록번호
                   <input name="foreignRegistrationNoMasked" placeholder="예: 900101-1******">
+                </label>
+                <label>친권자/후견인 성명
+                  <input name="minorGuardianName" placeholder="18세 미만인 경우 필수">
+                </label>
+                <label>친권자/후견인 연락처
+                  <input name="minorGuardianPhone" inputmode="tel" placeholder="18세 미만인 경우 필수">
+                </label>
+                <label>친권자/후견인 동의서
+                  <select name="minorGuardianConsent">
+                    <option value="not_applicable">해당 없음</option>
+                    <option value="confirmed">서면 동의서 확인 완료</option>
+                  </select>
                 </label>
                 <label>입사일
                   <input name="startDate" type="date" required>
@@ -1787,6 +1820,9 @@
                 <label>근무일/요일
                   <input name="workDays" placeholder="예: 주 5일, 월/화/목/금/토">
                 </label>
+                <label class="span-2">근로일별 근로시간
+                  <textarea name="dailyWorkSchedule" placeholder="단시간근로자 필수. 예: 월 18:00~22:00(휴게 없음), 수 18:00~22:00(휴게 없음)"></textarea>
+                </label>
                 <label>휴일/주휴
                   <input name="holidays" placeholder="예: 매주 수요일, 주휴수당 법정 기준 적용">
                 </label>
@@ -1835,8 +1871,8 @@
                 <label>대표자
                   <input name="employerRepresentative" placeholder="예: 대표자명">
                 </label>
-                <label>직원 주소
-                  <input name="employeeAddress" placeholder="서명본에 표시할 주소">
+                <label>사용자 연락처
+                  <input name="employerPhone" inputmode="tel" placeholder="사업장 대표 연락처">
                 </label>
                 <label class="span-2">사용자 주소
                   <input name="employerAddress" placeholder="사업장 또는 본점 주소">
@@ -2317,6 +2353,15 @@
           <label>연락처
             <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
           </label>
+          <label>생년월일
+            <input name="birthDate" type="date" autocomplete="bday">
+          </label>
+          <label>주소
+            <input name="address" autocomplete="street-address" placeholder="근로계약서에 표시할 주소">
+          </label>
+          <label>국적
+            <input name="nationality" value="대한민국" autocomplete="country-name">
+          </label>
           <input name="organizationName" type="hidden" value="열정국밥 운영관리">
           <label>비밀번호
             <input name="password" type="password" autocomplete="new-password" minlength="6" required>
@@ -2548,12 +2593,13 @@
         mealUniformTerms: "식사 제공 여부, 유니폼 지급·반납, 보건증 제출·갱신, 위생교육 이수 기준을 준수",
         terminationTerms: "퇴직 시 최소 30일 전 통보를 원칙으로 하며, 무단결근, 위생·보안 중대 위반, 업무방해 시 계약 해지 검토 가능",
         confidentialityTerms: "고객정보, 직원정보, 매출·정산자료, 레시피, 배달앱·포스 계정정보, 위생수칙을 준수하고 무단 열람·반출·공유를 금지",
-        terms: "본 계약서의 표준 조건을 기본으로 적용하며, 지점별 근무표, 급여 산정 특이사항, 외국인 체류자격, 4대보험 또는 3.3% 신고 구분 등 특수사항만 추가 입력한다."
+        terms: ""
       },
       part_time: {
         weeklyHours: "주 소정근로시간과 근로일별 근로시간은 확정 근무표에 명시",
         workDays: "월/화/수/목/금/토/일 중 협의된 요일",
-        terms: "단시간 근로자는 근로일, 근로일별 근로시간, 주휴·연차·4대보험 적용 여부를 주 소정근로시간 기준으로 확인한다."
+        dailyWorkSchedule: "근로일별 시작·종료·휴게시간을 확정하여 입력",
+        terms: ""
       },
       regular: {
         workplaceSizeCategory: "under_5",
@@ -2574,13 +2620,13 @@
         leaveTerms: "상시 5인 미만 상태에서는 근로기준법 제60조 연차유급휴가가 원칙적으로 적용되지 않는다. 다만 경조·질병 등 사유의 휴가는 매장 운영에 지장이 없는 범위에서 내부 승인으로 부여할 수 있고, 상시 5인 이상 전환 시 법정 연차 기준을 즉시 적용한다.",
         insuranceTerms: "정규직 근로소득으로 신고하고 국민연금·건강보험·고용보험·산재보험의 취득·보수 신고 및 근로소득 원천징수를 각 법정 기준에 따라 처리한다. 3.3% 사업소득으로 신고하지 않는다.",
         terminationTerms: "근로자는 원활한 인수인계를 위해 퇴직 희망일 30일 전 서면 통보하도록 노력한다. 사용자는 근로기준법 제26조의 해고예고 또는 해고예고수당 기준을 준수한다. 무단결근, 위생·보안 중대 위반은 사실 확인과 소명 기회를 거쳐 조치하며 위약금·손해배상액을 미리 정하지 않는다.",
-        terms: "기간의 정함이 없는 정규직 계약이다. 본 사업장은 계약일 현재 상시 5인 미만 기준을 적용하되, 상시근로자 수 변동 시 적용 법령을 재판정한다. 근무표 변경은 업무상 필요와 근로자의 생활상 불이익을 함께 고려하여 사전 통지한다. 휴게시간에는 업무 지시를 하지 않으며 근로자가 자유롭게 이용한다."
+        terms: "기간의 정함이 없는 근로계약으로 한다. 휴게시간에는 업무 지시를 하지 않으며 근로자가 자유롭게 이용한다. 근무표 변경은 사전에 통지하고, 상시근로자 수 변동으로 강행법규의 적용 범위가 달라지면 변경된 법정 기준을 적용한다."
       },
       manager: {
         jobDescription: "매장 운영관리, 포스 마감, 현금·정산 점검, 위생·근태 관리, 직원 교육, 배달앱 운영계정 관리, 고객 클레임 대응",
         wageType: "monthly",
         weeklyHours: "주 40시간 기준. 매장 운영상 필요한 마감·정산 업무는 관리자 승인 기준으로 처리",
-        terms: "매니저는 매출·정산·계정·개인정보 접근 권한을 갖는 만큼 보안, 인수인계, 위생관리 책임 조항을 강화 적용한다."
+        terms: ""
       },
       freelancer: {
         wageType: "case_fee",
@@ -2592,7 +2638,7 @@
         holidays: "해당 없음",
         freelancerScope: "매장 운영 지원, 콘텐츠·홍보, 단기 행사, 교육 등 독립 용역 범위와 산출물을 계약서에 구체적으로 기재",
         freelancerSettlementTerms: "용역비는 검수 완료 후 합의된 지급일에 지급하며, 지급 시 3.3% 사업소득 원천징수 후 정산",
-        terms: "3.3% 프리랜서는 근로시간·근무장소 지휘감독을 전제로 하지 않으며, 실제 운영이 근로자성에 해당하면 근로계약으로 전환 검토한다."
+        terms: ""
       },
       confidentiality: {
         jobDescription: "영업비밀, 개인정보, 매출·정산자료, 계정정보 보호 서약",
@@ -3723,6 +3769,9 @@
       if (form.employeeName) form.employeeName.value = employee.name || "";
       if (form.employeeEmail) form.employeeEmail.value = employee.email || "";
       if (form.employeeAddress) form.employeeAddress.value = employee.address || "";
+      if (form.employeePhone) form.employeePhone.value = employee.phone || "";
+      if (form.employeeBirthDate) form.employeeBirthDate.value = employee.birth_date || employee.birthDate || "";
+      if (form.employeeNationality) form.employeeNationality.value = employee.nationality || "대한민국";
       if (form.branch && employee.branch) form.branch.value = employee.branch;
     }
 
@@ -3887,6 +3936,9 @@
         employeeEmail: String(data.employeeEmail || "").trim(),
         employeeRequestId: String(data.employeeRequestId || "").trim(),
         employeeAddress: String(data.employeeAddress || "").trim(),
+        employeePhone: String(data.employeePhone || "").trim(),
+        employeeBirthDate: String(data.employeeBirthDate || "").trim(),
+        employeeNationality: String(data.employeeNationality || "").trim(),
         branch: data.branch,
         workplace: String(data.workplace || "").trim() || data.branch,
         contractType: data.contractType,
@@ -3894,6 +3946,9 @@
         foreignWorker: data.foreignWorker === "true",
         visaStatus: String(data.visaStatus || "").trim(),
         foreignRegistrationNoMasked: String(data.foreignRegistrationNoMasked || "").trim(),
+        minorGuardianName: String(data.minorGuardianName || "").trim(),
+        minorGuardianPhone: String(data.minorGuardianPhone || "").trim(),
+        minorGuardianConsent: data.minorGuardianConsent || "not_applicable",
         startDate: data.startDate || "",
         endDate: data.endDate || "",
         contractDate: data.contractDate || "",
@@ -3909,6 +3964,7 @@
         restTime: String(data.restTime || "").trim(),
         weeklyHours: String(data.weeklyHours || "").trim(),
         workDays: String(data.workDays || "").trim(),
+        dailyWorkSchedule: String(data.dailyWorkSchedule || "").trim(),
         holidays: String(data.holidays || "").trim(),
         payDate: String(data.payDate || "").trim(),
         payMethod: String(data.payMethod || "").trim(),
@@ -3926,6 +3982,7 @@
         employerRegistrationNo: String(data.employerRegistrationNo || "").trim() || business.registrationNo || "",
         employerRepresentative: String(data.employerRepresentative || "").trim() || business.representative || "",
         employerAddress: String(data.employerAddress || "").trim() || business.address || "",
+        employerPhone: String(data.employerPhone || "").trim() || business.phone || "",
         terms: String(data.terms || "").trim(),
         memo: String(data.memo || "").trim()
       };
@@ -3939,11 +3996,29 @@
       requireValue("승인 직원", draft.employeeRequestId);
       requireValue("직원명", draft.employeeName);
       requireValue("직원 이메일", draft.employeeEmail);
+      requireValue("근로자 연락처", draft.employeePhone);
+      requireValue("근로자 생년월일", draft.employeeBirthDate);
+      requireValue("근로자 주소", draft.employeeAddress);
       requireValue("사업자/지점", draft.businessId && draft.branch);
       requireValue("계약 작성일", draft.contractDate);
       requireValue("사용자 상호", draft.employerName);
       requireValue("사업자등록번호", draft.employerRegistrationNo);
       requireValue("대표자", draft.employerRepresentative);
+      requireValue("사용자 주소", draft.employerAddress);
+      if (draft.employeeBirthDate) {
+        const birthDate = new Date(`${draft.employeeBirthDate}T00:00:00`);
+        const referenceDate = new Date(`${draft.startDate || draft.contractDate || today()}T00:00:00`);
+        if (Number.isNaN(birthDate.getTime()) || birthDate > referenceDate) throw new Error("근로자 생년월일을 확인하십시오.");
+        let age = referenceDate.getFullYear() - birthDate.getFullYear();
+        const beforeBirthday = referenceDate.getMonth() < birthDate.getMonth()
+          || (referenceDate.getMonth() === birthDate.getMonth() && referenceDate.getDate() < birthDate.getDate());
+        if (beforeBirthday) age -= 1;
+        if (age < 18) {
+          requireValue("친권자/후견인 성명", draft.minorGuardianName);
+          requireValue("친권자/후견인 연락처", draft.minorGuardianPhone);
+          if (draft.minorGuardianConsent !== "confirmed") missing.push("친권자/후견인 동의서 확인");
+        }
+      }
       if (draft.startDate && draft.endDate && draft.endDate < draft.startDate) {
         throw new Error("계약 종료일은 입사일보다 빠를 수 없습니다.");
       }
@@ -3957,6 +4032,12 @@
           ["연장·야간·휴일근로", draft.overtimeTerms], ["연차/휴가/결근", draft.leaveTerms],
           ["4대보험/세무 처리", draft.insuranceTerms]
         ].forEach(([label, value]) => requireValue(label, value));
+        if (draft.contractType === "part_time") requireValue("근로일별 근로시간", draft.dailyWorkSchedule);
+        if (draft.foreignWorker) {
+          requireValue("국적", draft.employeeNationality);
+          requireValue("체류자격", draft.visaStatus);
+          requireValue("외국인등록번호(마스킹)", draft.foreignRegistrationNoMasked);
+        }
         if (!draft.wage || draft.wage <= 0) missing.push("확정 임금");
         const components = draft.baseSalary + draft.nonTaxMealAllowance + draft.taxableAllowance;
         if (components && components !== draft.wage) throw new Error("기본급·비과세 식대·기타 과세수당 합계가 월 총액과 일치해야 합니다.");
@@ -4004,6 +4085,7 @@
       const workTime = contractValue(contract, "workTime", "work_time");
       const restTime = contractValue(contract, "restTime", "rest_time");
       const workDays = contractValue(contract, "workDays", "work_days");
+      const dailyWorkSchedule = contractValue(contract, "dailyWorkSchedule", "daily_work_schedule");
       const holidays = contractValue(contract, "holidays", "holidays");
       const payDate = contractValue(contract, "payDate", "pay_date");
       const payMethod = contractValue(contract, "payMethod", "pay_method") || "직원 명의 계좌이체";
@@ -4024,12 +4106,16 @@
       const signatureDataUri = contractValue(contract, "signatureDataUri", "signature_data_uri");
       const signedAt = contractValue(contract, "signedAt", "signed_at");
       const signerName = contractValue(contract, "signerName", "signer_name") || employeeName;
+      const employeeBirthDate = contractValue(contract, "employeeBirthDate", "employee_birth_date");
+      const employeePhone = contractValue(contract, "employeePhone", "employee_phone");
+      const employeeNationality = contractValue(contract, "employeeNationality", "employee_nationality") || "대한민국";
       const commonMeta = `
-        <div class="preview-row"><b>사용자</b><span>${previewText(employerName, "열정국밥")} / 대표 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))}</span></div>
-        <div class="preview-row"><b>사업자번호</b><span>${previewText(contractValue(contract, "employerRegistrationNo", "employer_registration_no"))}</span></div>
-        <div class="preview-row"><b>사용자 주소</b><span>${previewText(contractValue(contract, "employerAddress", "employer_address"))}</span></div>
-        <div class="preview-row"><b>근로자/수급인</b><span>${previewText(employeeName)} / ${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</span></div>
-        <div class="preview-row"><b>주소</b><span>${previewText(contractValue(contract, "employeeAddress", "employee_address"))}</span></div>
+        <div class="preview-row"><b>사용자</b><span>${previewText(employerName, "열정국밥")} / 대표자 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))}</span></div>
+        <div class="preview-row"><b>사업자등록번호</b><span>${previewText(contractValue(contract, "employerRegistrationNo", "employer_registration_no"))}</span></div>
+        <div class="preview-row"><b>사용자 주소·연락처</b><span>${previewText(contractValue(contract, "employerAddress", "employer_address"))} / ${previewText(contractValue(contract, "employerPhone", "employer_phone"))}</span></div>
+        <div class="preview-row"><b>근로자/수급인</b><span>${previewText(employeeName)} / 생년월일 ${previewText(employeeBirthDate)} / 국적 ${previewText(employeeNationality)}</span></div>
+        <div class="preview-row"><b>근로자 주소</b><span>${previewText(contractValue(contract, "employeeAddress", "employee_address"))}</span></div>
+        <div class="preview-row"><b>근로자 연락처·이메일</b><span>${previewText(employeePhone)} / ${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</span></div>
       `;
       const wageLine = `${wageTypeLabels[wageType] || wageType} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
       let clauses = [];
@@ -4053,7 +4139,7 @@
         ];
       } else {
         const partTimeNote = contractType === "part_time"
-          ? "단시간 근로자는 근로일 및 근로일별 근로시간을 별도 명시하고, 주휴·연차·사회보험 적용 여부를 주 소정근로시간 기준으로 확인한다."
+          ? ` 근로일별 근로시간: ${dailyWorkSchedule || "미입력"}.`
           : "";
         const managerNote = contractType === "manager"
           ? "매니저는 포스 마감, 현금·정산, 위생·근태 점검, 직원 교육, 배달앱 운영계정 관리 책임을 포함한다."
@@ -4062,7 +4148,7 @@
           contractClause("근로계약 기간", `${startDate || "입사일 미입력"}부터 ${endDate || "기간의 정함 없음"}까지로 한다. ${contractType === "regular" ? "정규직은 기간의 정함이 없는 계약으로 관리한다." : ""}`),
           contractClause("근무장소 및 업무", `${workplace || "근무장소 미입력"}에서 ${jobDescription || "업무내용 미입력"} 업무를 수행한다. ${managerNote}`),
           contractClause("소정근로시간 및 휴게", `${workTime || "근무시간 미입력"} / 휴게 ${restTime || "미입력"} / 주 소정근로시간 ${weeklyHours || "미입력"}. ${partTimeNote}`),
-          contractClause("근무일, 휴일, 주휴", `근무일은 ${workDays || "미입력"}, 휴일은 ${holidays || "미입력"}로 하며 주휴수당·공휴일·대체휴무는 법정 기준과 내부 운영표에 따른다.`),
+          contractClause("근무일, 휴일, 주휴", `근무일은 ${workDays || "미입력"}, 휴일은 ${holidays || "미입력"}로 한다.${partTimeNote}`),
           contractClause("임금 및 지급", `${wageLine}. 임금 구성: ${wageComposition || "기본급, 법정수당, 공제항목 미입력"}`),
           contractClause("연장·야간·휴일근로", overtimeTerms || "연장·야간·휴일근로는 사전 승인 기준으로 운영하고 법정 가산수당을 급여마감 시 반영한다."),
           contractClause("휴가, 결근, 근태", leaveTerms || "연차유급휴가, 지각, 조퇴, 결근, 병가 처리는 근태기록과 법정 기준에 따라 급여내역서에 반영한다."),
@@ -4072,12 +4158,13 @@
           contractClause("퇴직 및 계약 해지", terminationTerms || "퇴직 시 사전 통보, 인수인계, 무단결근·중대한 위반 시 계약 해지 기준을 적용한다."),
           contractClause("개인정보, 보안, 위생", confidentialityTerms || "고객정보, 매출자료, 레시피, 배달앱·포스 계정정보, 위생수칙을 준수하고 무단 반출·공유를 금지한다.")
         ];
-        if (workplaceSizeCategory === "under_5") {
-          clauses.push(contractClause("상시 5인 미만 적용 확인", "계약일 현재 상시 5인 미만 사업장 기준으로 근로기준법 시행령 별표 1의 적용 범위를 따른다. 서면 근로조건, 임금, 휴게, 주휴, 해고예고 등 적용 규정은 준수한다. 제50조·제56조·제60조는 원칙적으로 적용 대상에서 제외되나, 상시근로자 수가 5인 이상으로 전환되거나 별도 계약으로 유리한 조건을 정한 경우에는 해당 기준을 적용한다."));
-        }
       }
       if (foreignWorker) {
         clauses.push(contractClause("외국인 채용 확인", `체류자격 ${contractValue(contract, "visaStatus", "visa_status") || "미입력"}, 외국인등록번호 ${contractValue(contract, "foreignRegistrationNoMasked", "foreign_registration_no_masked") || "마스킹본 미입력"}. 채용 전 취업활동 가능 범위, 체류기간, 고용허가/신고 필요 여부를 확인하고 입사서류 검수에 기록한다.`));
+      }
+      const minorGuardianName = contractValue(contract, "minorGuardianName", "minor_guardian_name");
+      if (minorGuardianName) {
+        clauses.push(contractClause("연소근로자 보호", `친권자/후견인 ${minorGuardianName}, 연락처 ${contractValue(contract, "minorGuardianPhone", "minor_guardian_phone") || "미입력"}. 연령증명서와 친권자/후견인 동의서를 사업장에 비치한다.`));
       }
       clauses.push(contractClause("계약서 교부 및 전자서명", "본 계약서는 전자서명 요청 링크로 직원에게 교부하며, 서명 완료본과 급여/입사서류 기록을 직원관리 화면에 보관한다."));
       const contractBusinessId = contractValue(contract, "businessId", "business_id") || businessForBranchName(contractValue(contract, "branch")).id || "";
@@ -4086,22 +4173,11 @@
       const salaryBreakdown = contractType === "regular" && (baseSalary || nonTaxMealAllowance || taxableAllowance)
         ? `<div class="salary-breakdown"><span>과세 기본급<br><b>${formatMoney(baseSalary)}</b></span><span>비과세 식대<br><b>${formatMoney(nonTaxMealAllowance)}</b><br><small>${mealProvision === "cash_no_meal" ? "식사 미제공 조건" : "미적용"}</small></span><span>기타 과세수당<br><b>${formatMoney(taxableAllowance)}</b></span></div>`
         : "";
-      const weeklyMatch = String(weeklyHours || "").match(/주\s*(\d+)시간(?:\s*(\d+)분)?/);
-      let minimumWageCheck = "";
-      if (contractType === "regular" && workplaceSizeCategory === "under_5" && weeklyMatch && baseSalary > 0) {
-        const parsedWeeklyHours = Number(weeklyMatch[1]) + Number(weeklyMatch[2] || 0) / 60;
-        const monthlyPaidHours = (parsedWeeklyHours + Math.min(8, parsedWeeklyHours / 5)) * 365 / 7 / 12;
-        const conservativeHourly = Math.floor(baseSalary / monthlyPaidHours);
-        const passed = conservativeHourly >= MINIMUM_HOURLY_WAGE_2026;
-        minimumWageCheck = `<div class="contract-notice">2026 최저임금 자동점검: 과세 기본급만 보수적으로 반영한 환산시급 약 ${formatMoney(conservativeHourly)} / 법정 최저시급 ${formatMoney(MINIMUM_HOURLY_WAGE_2026)} · ${passed ? "기준 충족" : "기준 미달 — 저장 전 급여 또는 시간을 조정하십시오"}</div>`;
-      }
       return `
         <h3>${previewText(title, "계약서")}</h3>
-        <p class="preview-meta">작성일 ${previewText(contractDate, "미입력")} · 지점 ${previewText(contractValue(contract, "branch"))} · ${previewText(taxLabel)}</p>
-        <div class="contract-notice">고용노동부 표준근로계약서의 필수 기재 축을 기준으로 매장 운영용 상세 조항을 자동 구성합니다. 최종 서명 전 노무 검토가 필요한 항목은 관리 메모에 남기십시오.</div>
+        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))}</p>
         ${commonMeta}
         ${salaryBreakdown}
-        ${minimumWageCheck}
         <h4>계약 상세 조항</h4>
         <ol>${clauses.join("")}</ol>
         ${contractValue(contract, "terms", "terms") ? `<h4>추가 특약</h4><p>${previewText(contractValue(contract, "terms", "terms"))}</p>` : ""}
@@ -4253,6 +4329,9 @@
       els.contractForm.employeeName.value = contract.employeeName || contract.employee_name || "";
       els.contractForm.employeeEmail.value = contract.employeeEmail || contract.employee_email || "";
       els.contractForm.employeeAddress.value = contract.employeeAddress || contract.employee_address || "";
+      els.contractForm.employeePhone.value = contract.employeePhone || contract.employee_phone || "";
+      els.contractForm.employeeBirthDate.value = contract.employeeBirthDate || contract.employee_birth_date || "";
+      els.contractForm.employeeNationality.value = contract.employeeNationality || contract.employee_nationality || "대한민국";
       els.contractForm.branch.value = contract.branch || "";
       els.contractForm.workplace.value = contract.workplace || "";
       els.contractForm.contractType.value = contract.contractType || contract.contract_type || "part_time";
@@ -4260,6 +4339,9 @@
       els.contractForm.foreignWorker.value = String(Boolean(contract.foreignWorker ?? contract.foreign_worker));
       els.contractForm.visaStatus.value = contract.visaStatus || contract.visa_status || "";
       els.contractForm.foreignRegistrationNoMasked.value = contract.foreignRegistrationNoMasked || contract.foreign_registration_no_masked || "";
+      els.contractForm.minorGuardianName.value = contract.minorGuardianName || contract.minor_guardian_name || "";
+      els.contractForm.minorGuardianPhone.value = contract.minorGuardianPhone || contract.minor_guardian_phone || "";
+      els.contractForm.minorGuardianConsent.value = contract.minorGuardianConsent || contract.minor_guardian_consent || "not_applicable";
       els.contractForm.startDate.value = contract.startDate || contract.start_date || "";
       els.contractForm.endDate.value = contract.endDate || contract.end_date || "";
       els.contractForm.contractDate.value = contract.contractDate || contract.contract_date || "";
@@ -4275,6 +4357,7 @@
       els.contractForm.restTime.value = contract.restTime || contract.rest_time || "";
       els.contractForm.weeklyHours.value = contract.weeklyHours || contract.weekly_hours || "";
       els.contractForm.workDays.value = contract.workDays || contract.work_days || "";
+      els.contractForm.dailyWorkSchedule.value = contract.dailyWorkSchedule || contract.daily_work_schedule || "";
       els.contractForm.holidays.value = contract.holidays || "";
       els.contractForm.payDate.value = contract.payDate || contract.pay_date || "";
       els.contractForm.payMethod.value = contract.payMethod || contract.pay_method || "";
@@ -4291,6 +4374,7 @@
       els.contractForm.employerName.value = contract.employerName || contract.employer_name || "";
       els.contractForm.employerRegistrationNo.value = contract.employerRegistrationNo || contract.employer_registration_no || "";
       els.contractForm.employerRepresentative.value = contract.employerRepresentative || contract.employer_representative || "";
+      els.contractForm.employerPhone.value = contract.employerPhone || contract.employer_phone || "";
       els.contractForm.employerAddress.value = contract.employerAddress || contract.employer_address || "";
       els.contractForm.terms.value = contract.terms || "";
       els.contractForm.memo.value = contract.memo || "";
@@ -5180,6 +5264,9 @@
         email: form.email.value.trim() || user.email || "",
         branch: form.branch.value,
         phone: form.phone.value.trim(),
+        address: form.address.value.trim(),
+        birth_date: form.birthDate.value,
+        nationality: form.nationality.value.trim() || "대한민국",
         memo: form.memo.value.trim()
       };
       const payload = await financeApi("/employees/join-requests", {
@@ -5187,6 +5274,7 @@
         body: JSON.stringify(body)
       });
       form.reset();
+      if (form.nationality) form.nationality.value = "대한민국";
       prefillEmployeeJoinForm();
       employeeJoinRequests = [payload.request, ...employeeJoinRequests.filter(item => item.id !== payload.request.id)];
       await refreshFinanceSession();
@@ -5434,6 +5522,9 @@
       const accountType = String(formData.accountType || "employee").trim();
       const branch = String(formData.branch || "").trim();
       const phone = String(formData.phone || "").trim();
+      const address = String(formData.address || "").trim();
+      const birthDate = String(formData.birthDate || "").trim();
+      const nationality = String(formData.nationality || "대한민국").trim();
       if (password !== passwordConfirm) {
         throw new Error("비밀번호 확인이 일치하지 않습니다.");
       }
@@ -5450,16 +5541,16 @@
 	      document.cookie = `aads_token=${payload.token}; path=/; max-age=604800; SameSite=Lax`;
 	      saveAuthSession(sessionFromAuthPayload(payload));
 	      if (accountType === "employee") {
-	        markEmployeeSelfSignup(email, { name, branch, phone });
+	        markEmployeeSelfSignup(email, { name, branch, phone, address, birthDate, nationality });
 	        let joinRequest = null;
 	        if (pendingPhoneInviteToken) {
 	          const accepted = await acceptPendingPhoneInvite(name);
 	          joinRequest = accepted?.request || null;
 	        } else {
-	          joinRequest = await submitEmployeeSignupJoinRequest({ name, email, branch, phone });
+	          joinRequest = await submitEmployeeSignupJoinRequest({ name, email, branch, phone, address, birthDate, nationality });
 	        }
 	        await refreshFinanceSession();
-	        forceEmployeePendingSession(email, joinRequest || { status: "pending", name, branch, phone });
+	        forceEmployeePendingSession(email, joinRequest || { status: "pending", name, branch, phone, address, birth_date: birthDate, nationality });
 	        renderAuthState();
 	        setView("onboarding");
 	        prefillOnboardingForm();
@@ -5474,8 +5565,10 @@
 	      els.signupModal.classList.add("hidden");
 	      els.signupForm.reset();
 	      els.signupForm.organizationName.value = "열정국밥 운영관리";
+	      els.signupForm.nationality.value = "대한민국";
 	      els.gateSignupForm.reset();
 	      els.gateSignupForm.organizationName.value = "열정국밥 운영관리";
+	      els.gateSignupForm.nationality.value = "대한민국";
 	      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
 	      if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       loadOnboardingDocumentTypes().catch(() => {});
@@ -5486,7 +5579,7 @@
       loadPayrollStatements().catch(() => {});
     }
 
-    async function submitEmployeeSignupJoinRequest({ name, email, branch, phone }) {
+    async function submitEmployeeSignupJoinRequest({ name, email, branch, phone, address, birthDate, nationality }) {
       if (!hasServerAuth()) return null;
       const payload = await financeApi("/employees/join-requests", {
         method: "POST",
@@ -5495,6 +5588,9 @@
           email,
           branch,
           phone,
+          address,
+          birth_date: birthDate,
+          nationality: nationality || "대한민국",
           memo: "회원가입 화면에서 직원으로 직접 가입"
         })
       });
@@ -5971,8 +6067,11 @@
               id: editId || null,
               employee_request_id: next.employeeRequestId,
               employee_name: next.employeeName,
-        employee_email: next.employeeEmail,
-        employee_address: next.employeeAddress,
+              employee_email: next.employeeEmail,
+              employee_address: next.employeeAddress,
+              employee_phone: next.employeePhone,
+              employee_birth_date: next.employeeBirthDate,
+              employee_nationality: next.employeeNationality,
         business_id: next.businessId,
         branch: next.branch,
               workplace: next.workplace,
@@ -5981,6 +6080,9 @@
               foreign_worker: next.foreignWorker,
               visa_status: next.visaStatus,
               foreign_registration_no_masked: next.foreignRegistrationNoMasked,
+              minor_guardian_name: next.minorGuardianName,
+              minor_guardian_phone: next.minorGuardianPhone,
+              minor_guardian_consent: next.minorGuardianConsent,
               start_date: next.startDate,
               end_date: next.endDate,
               contract_date: next.contractDate,
@@ -5996,6 +6098,7 @@
               rest_time: next.restTime,
               weekly_hours: next.weeklyHours,
               work_days: next.workDays,
+              daily_work_schedule: next.dailyWorkSchedule,
               holidays: next.holidays,
               pay_date: next.payDate,
               pay_method: next.payMethod,
@@ -6013,6 +6116,7 @@
               employer_registration_no: next.employerRegistrationNo,
               employer_representative: next.employerRepresentative,
               employer_address: next.employerAddress,
+              employer_phone: next.employerPhone,
               terms: next.terms,
               memo: next.memo
             })

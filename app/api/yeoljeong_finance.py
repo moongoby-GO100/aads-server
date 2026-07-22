@@ -41,6 +41,9 @@ class JoinRequestCreate(BaseModel):
     email: str = ""
     branch: str = ""
     phone: str = ""
+    address: str = ""
+    birth_date: str = ""
+    nationality: str = "대한민국"
     memo: str = ""
 
 

@@ -9,6 +9,16 @@ from fastapi.testclient import TestClient
 from app.api import yeoljeong_finance as api
 
 
+def test_join_request_accepts_contract_autofill_profile():
+    payload = api.JoinRequestCreate(
+        name="가입 직원", email="employee@example.com", branch="중화점",
+        phone="010-1234-5678", address="서울특별시 중랑구",
+        birth_date="1990-01-01", nationality="대한민국",
+    )
+    assert payload.address == "서울특별시 중랑구"
+    assert payload.birth_date == "1990-01-01"
+
+
 def _disable_finance_db(coroutine):
     close = getattr(coroutine, "close", None)
     if close:
@@ -67,6 +77,7 @@ def test_employee_signature_http_flow_records_authenticated_audit(tmp_path, monk
     admin = {"email": "owner@example.com", "is_admin": True}
     api.svc._write("employee_join_requests", [{
         "id": "join-mia", "name": "가입 직원", "email": employee["email"],
+        "address": "서울시 직원 주소", "phone": "010-1234-5678", "birth_date": "1990-01-01",
         "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
     }])
     saved = api.svc.save_contract({
@@ -135,6 +146,32 @@ def test_contract_editor_uses_safe_classification_and_locks_signed_records():
     assert "서명본 수정·삭제 잠금" in html
     assert 'contractClause("용역 기간 및 장소"' in html
     assert 'contractClause("용역비 및 정산", `${wageLine}.' in html
+
+
+def test_execution_contract_has_complete_worker_identity_and_no_editor_notice():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    for field in (
+        'name="employeeAddress"', 'name="employeePhone"', 'name="employeeBirthDate"',
+        'name="employeeNationality"', 'name="minorGuardianName"',
+        'name="minorGuardianConsent"', 'name="dailyWorkSchedule"',
+    ):
+        assert field in html
+    preview = html.split("function contractPreviewHtml(contract)", 1)[1].split("function updateContractPreview", 1)[0]
+    assert "근로자 주소" in preview
+    assert "근로자 연락처·이메일" in preview
+    assert "고용노동부 표준근로계약서의 필수 기재 축" not in preview
+    assert "2026 최저임금 자동점검" not in preview
+
+
+def test_employee_signup_collects_contract_autofill_profile():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    assert html.count('name="birthDate"') >= 3
+    assert html.count('name="address"') >= 3
+    assert html.count('name="nationality"') >= 3
+    assert "birth_date: birthDate" in html
+    assert "employee_birth_date: next.employeeBirthDate" in html
 
 
 def test_contract_signing_requires_employee_consent_and_drawn_signature():

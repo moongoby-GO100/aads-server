@@ -32,6 +32,7 @@ def isolate_yeoljeong_storage(tmp_path, monkeypatch):
 def seed_approved_employee(name="가입 직원", email="member@example.com"):
     service._write("employee_join_requests", [{
         "id": "join-mia", "name": name, "email": email, "address": "서울시 직원 주소",
+        "phone": "010-1234-5678", "birth_date": "1990-01-01", "nationality": "대한민국",
         "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
     }])
 
@@ -385,7 +386,7 @@ def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monke
     )
 
     assert saved["document_kind"] == "standard_employment_contract"
-    assert saved["template_version"] == "majangbiseo-employment-2026-07-a4"
+    assert saved["template_version"] == "majangbiseo-employment-2026-07-execution-v2"
     assert saved["print_title"] == "표준근로계약서"
 
 
@@ -411,7 +412,7 @@ def test_save_freelancer_contract_adds_a4_service_template_meta(tmp_path, monkey
     )
 
     assert saved["document_kind"] == "freelancer_service_contract"
-    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-a4"
+    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-execution-v2"
     assert saved["print_title"] == "3.3% 프리랜서 용역계약서"
 
 
@@ -440,6 +441,9 @@ def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
                 "name": "가입 직원",
                 "email": "member@example.com",
                 "address": "서울시 직원 주소",
+                "phone": "010-9876-5432",
+                "birth_date": "1991-02-03",
+                "nationality": "대한민국",
                 "business_id": "biz-mia",
                 "branch": "열정국밥_미아점",
                 "status": "approved",
@@ -456,6 +460,8 @@ def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
     assert saved["employee_name"] == "가입 직원"
     assert saved["employee_email"] == "member@example.com"
     assert saved["employee_address"] == "서울시 직원 주소"
+    assert saved["employee_phone"] == "010-9876-5432"
+    assert saved["employee_birth_date"] == "1991-02-03"
     assert saved["employer_name"] == "열정국밥_미아점"
     assert saved["employer_registration_no"] == "874-21-02160"
     assert saved["employer_representative"] == "최미미"
@@ -482,6 +488,69 @@ def test_contract_rejects_employment_and_freelancer_tax_mismatch():
         service.save_contract(valid_employment_contract(employment_tax_type="freelancer_33"), {"email": "owner@example.com", "is_admin": True})
     assert exc.value.status_code == 400
     assert "4대보험" in exc.value.detail
+
+
+def test_contract_requires_complete_worker_identity_for_real_use():
+    service._write("employee_join_requests", [{
+        "id": "join-mia", "name": "정보 미완료 직원", "email": "member@example.com",
+        "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
+    }])
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(
+            valid_employment_contract(employee_address="", employee_phone="", employee_birth_date=""),
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    assert "근로자 주소" in exc.value.detail
+    assert "근로자 연락처" in exc.value.detail
+    assert "근로자 생년월일" in exc.value.detail
+
+
+def test_contract_rejects_unregistered_employer_placeholders():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(
+            valid_employment_contract(employer_registration_no="기초등록 필요", employer_representative="미등록"),
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    assert "사업자등록번호" in exc.value.detail
+    assert "대표자" in exc.value.detail
+
+
+def test_minor_contract_requires_guardian_identity_and_written_consent():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(valid_employment_contract(employee_birth_date="2010-01-01"), {"email": "owner@example.com", "is_admin": True})
+    assert "친권자/후견인" in exc.value.detail
+
+    saved = service.save_contract(
+        valid_employment_contract(
+            employee_birth_date="2010-01-01", minor_guardian_name="보호자",
+            minor_guardian_phone="010-1111-2222", minor_guardian_consent="confirmed",
+        ),
+        {"email": "owner@example.com", "is_admin": True},
+    )
+    assert saved["minor_guardian_consent"] == "confirmed"
+
+
+def test_part_time_contract_requires_workday_specific_schedule():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(
+            valid_employment_contract(contract_type="part_time", wage_type="hourly", daily_work_schedule=""),
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    assert "근로일별 근로시간" in exc.value.detail
+
+
+def test_foreign_worker_contract_requires_residence_fields():
+    seed_approved_employee()
+    with pytest.raises(service.HTTPException) as exc:
+        service.save_contract(
+            valid_employment_contract(foreign_worker=True, visa_status=""),
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    assert "체류자격" in exc.value.detail
+    assert "외국인등록번호" in exc.value.detail
 
 
 def test_contract_rejects_unconfirmed_wage_and_required_terms():

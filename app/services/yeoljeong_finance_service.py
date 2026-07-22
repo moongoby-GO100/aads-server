@@ -108,17 +108,17 @@ GENERIC_DB_LEDGER_NAMES = {
 CONTRACT_TEMPLATE_META = {
     "freelancer": {
         "document_kind": "freelancer_service_contract",
-        "template_version": "majangbiseo-freelancer-2026-07-a4",
+        "template_version": "majangbiseo-freelancer-2026-07-execution-v2",
         "print_title": "3.3% 프리랜서 용역계약서",
     },
     "confidentiality": {
         "document_kind": "confidentiality_agreement",
-        "template_version": "majangbiseo-confidentiality-2026-07-a4",
+        "template_version": "majangbiseo-confidentiality-2026-07-execution-v2",
         "print_title": "보안 및 개인정보 보호 서약서",
     },
     "default": {
         "document_kind": "standard_employment_contract",
-        "template_version": "majangbiseo-employment-2026-07-a4",
+        "template_version": "majangbiseo-employment-2026-07-execution-v2",
         "print_title": "표준근로계약서",
     },
 }
@@ -1204,6 +1204,9 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             "email_masked": _mask_email(email),
             "phone": str(payload.get("phone") or record.get("phone") or "").strip(),
             "phone_masked": _mask_phone(str(payload.get("phone") or record.get("phone") or "")),
+            "address": str(payload.get("address") or record.get("address") or "").strip(),
+            "birth_date": str(payload.get("birth_date") or record.get("birth_date") or "").strip(),
+            "nationality": str(payload.get("nationality") or record.get("nationality") or "대한민국").strip(),
             "business_id": business_id,
             "branch": branch,
             "memo": str(payload.get("memo") or record.get("memo") or ""),
@@ -1500,6 +1503,9 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
             "employee_name": employee.get("name") or "",
             "employee_email": employee.get("email") or "",
             "employee_address": employee.get("address") or "",
+            "employee_phone": employee.get("phone") or "",
+            "employee_birth_date": employee.get("birth_date") or "",
+            "employee_nationality": employee.get("nationality") or "대한민국",
         }
         for key, value in employee_defaults.items():
             if not str(result.get(key) or "").strip() and value:
@@ -1515,6 +1521,7 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
         "employer_registration_no": business.get("registrationNo") or "",
         "employer_representative": business.get("representative") or "",
         "employer_address": business.get("address") or "",
+        "employer_phone": business.get("phone") or "",
         "workplace": branch,
     }
     for key, value in business_defaults.items():
@@ -1530,6 +1537,10 @@ def _contract_payload_value(payload: dict[str, Any], snake_key: str, camel_key: 
     return value
 
 
+def _missing_contract_value(value: Any) -> bool:
+    return str(value or "").strip() in {"", "-", "미등록", "기초등록 필요"}
+
+
 def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate legal/operational invariants before a contract is persisted."""
     result = dict(payload)
@@ -1543,44 +1554,109 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
     business_id = str(_contract_payload_value(result, "business_id", "businessId") or "").strip()
     branch = str(result.get("branch") or "").strip()
     contract_date = str(_contract_payload_value(result, "contract_date", "contractDate") or "").strip()
+    employee_address = str(_contract_payload_value(result, "employee_address", "employeeAddress") or "").strip()
+    employee_phone = str(_contract_payload_value(result, "employee_phone", "employeePhone") or "").strip()
+    employee_birth_date = str(_contract_payload_value(result, "employee_birth_date", "employeeBirthDate") or "").strip()
+
     missing: list[str] = []
     for label, value in (
-        ("승인 직원", employee_request_id), ("직원명", employee_name), ("직원 이메일", employee_email),
-        ("사업자", business_id), ("근무 지점", branch), ("계약 작성일", contract_date),
+        ("승인 직원", employee_request_id),
+        ("직원명", employee_name),
+        ("직원 이메일", employee_email),
+        ("근로자 주소", employee_address),
+        ("근로자 연락처", employee_phone),
+        ("근로자 생년월일", employee_birth_date),
+        ("사업자", business_id),
+        ("근무 지점", branch),
+        ("계약 작성일", contract_date),
         ("사용자 상호", _contract_payload_value(result, "employer_name", "employerName")),
         ("사업자등록번호", _contract_payload_value(result, "employer_registration_no", "employerRegistrationNo")),
         ("대표자", _contract_payload_value(result, "employer_representative", "employerRepresentative")),
+        ("사용자 주소", _contract_payload_value(result, "employer_address", "employerAddress")),
     ):
-        if not str(value or "").strip():
+        if _missing_contract_value(value):
             missing.append(label)
+
     if employee_email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", employee_email):
         raise HTTPException(status_code=400, detail="직원 이메일 형식이 올바르지 않습니다")
+    if employee_phone and len(re.sub(r"\D", "", employee_phone)) < 9:
+        raise HTTPException(status_code=400, detail="근로자 연락처 형식이 올바르지 않습니다")
+    employer_registration_no = str(
+        _contract_payload_value(result, "employer_registration_no", "employerRegistrationNo") or ""
+    ).strip()
+    if not _missing_contract_value(employer_registration_no) and not re.fullmatch(
+        r"\d{3}-?\d{2}-?\d{5}", employer_registration_no
+    ):
+        raise HTTPException(status_code=400, detail="사업자등록번호 형식이 올바르지 않습니다")
+
     start_date = str(_contract_payload_value(result, "start_date", "startDate") or "").strip()
     end_date = str(_contract_payload_value(result, "end_date", "endDate") or "").strip()
     if start_date and end_date and end_date < start_date:
         raise HTTPException(status_code=400, detail="계약 종료일은 입사일보다 빠를 수 없습니다")
-    employment_tax_type = str(_contract_payload_value(result, "employment_tax_type", "employmentTaxType") or "").strip()
+
+    birth_date_value: date | None = None
+    if employee_birth_date:
+        try:
+            birth_date_value = date.fromisoformat(employee_birth_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="근로자 생년월일 형식이 올바르지 않습니다") from exc
+        reference_text = start_date or contract_date
+        try:
+            reference_date = date.fromisoformat(reference_text)
+        except ValueError:
+            reference_date = datetime.now(KST).date()
+        if birth_date_value > reference_date:
+            raise HTTPException(status_code=400, detail="근로자 생년월일은 계약일보다 늦을 수 없습니다")
+        age = reference_date.year - birth_date_value.year - (
+            (reference_date.month, reference_date.day) < (birth_date_value.month, birth_date_value.day)
+        )
+        if age < 18:
+            for label, key, camel in (
+                ("친권자/후견인 성명", "minor_guardian_name", "minorGuardianName"),
+                ("친권자/후견인 연락처", "minor_guardian_phone", "minorGuardianPhone"),
+            ):
+                if _missing_contract_value(_contract_payload_value(result, key, camel)):
+                    missing.append(label)
+            consent = str(
+                _contract_payload_value(result, "minor_guardian_consent", "minorGuardianConsent") or ""
+            ).strip()
+            if consent != "confirmed":
+                missing.append("친권자/후견인 동의서 확인")
+
+    employment_tax_type = str(
+        _contract_payload_value(result, "employment_tax_type", "employmentTaxType") or ""
+    ).strip()
     wage_type = str(_contract_payload_value(result, "wage_type", "wageType") or "").strip()
     try:
         wage = float(result.get("wage") or 0)
     except (TypeError, ValueError):
         wage = 0
+
     if contract_type in EMPLOYMENT_CONTRACT_TYPES:
         if employment_tax_type != "four_insurance":
             raise HTTPException(status_code=400, detail="근로계약서는 4대보험 가입 근로자 구분으로 작성해야 합니다")
         for label, key, camel in (
-            ("입사일", "start_date", "startDate"), ("근무장소", "workplace", "workplace"),
-            ("업무내용", "job_description", "jobDescription"), ("근무시간", "work_time", "workTime"),
-            ("휴게시간", "rest_time", "restTime"), ("주 소정근로시간", "weekly_hours", "weeklyHours"),
-            ("근무일/요일", "work_days", "workDays"), ("휴일/주휴", "holidays", "holidays"),
-            ("급여지급일", "pay_date", "payDate"), ("지급방법", "pay_method", "payMethod"),
+            ("입사일", "start_date", "startDate"),
+            ("근무장소", "workplace", "workplace"),
+            ("업무내용", "job_description", "jobDescription"),
+            ("근무시간", "work_time", "workTime"),
+            ("휴게시간", "rest_time", "restTime"),
+            ("주 소정근로시간", "weekly_hours", "weeklyHours"),
+            ("근무일/요일", "work_days", "workDays"),
+            ("휴일/주휴", "holidays", "holidays"),
+            ("급여지급일", "pay_date", "payDate"),
+            ("지급방법", "pay_method", "payMethod"),
             ("임금 구성/공제", "wage_composition", "wageComposition"),
             ("연장·야간·휴일근로", "overtime_terms", "overtimeTerms"),
             ("연차/휴가/결근", "leave_terms", "leaveTerms"),
             ("4대보험/세무 처리", "insurance_terms", "insuranceTerms"),
         ):
-            if not str(_contract_payload_value(result, key, camel) or "").strip():
+            if _missing_contract_value(_contract_payload_value(result, key, camel)):
                 missing.append(label)
+        if contract_type == "part_time" and _missing_contract_value(
+            _contract_payload_value(result, "daily_work_schedule", "dailyWorkSchedule")
+        ):
+            missing.append("근로일별 근로시간")
         if wage_type not in {"hourly", "monthly", "daily"}:
             raise HTTPException(status_code=400, detail="근로계약서의 임금 산정 방식을 확인하십시오")
         if wage <= 0:
@@ -1605,16 +1681,38 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
         meal_provision = str(_contract_payload_value(result, "meal_provision", "mealProvision") or "").strip()
         if non_tax_meal > 0 and meal_provision != "cash_no_meal":
             raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
-        workplace_size = str(_contract_payload_value(result, "workplace_size_category", "workplaceSizeCategory") or "").strip()
+        workplace_size = str(
+            _contract_payload_value(result, "workplace_size_category", "workplaceSizeCategory") or ""
+        ).strip()
         weekly_hours_text = str(_contract_payload_value(result, "weekly_hours", "weeklyHours") or "")
         weekly_match = re.search(r"주\s*(\d+)시간(?:\s*(\d+)분)?", weekly_hours_text)
         contract_date_year = contract_date[:4]
-        if contract_type == "regular" and workplace_size == "under_5" and weekly_match and base_salary > 0 and contract_date_year == "2026":
+        if (
+            contract_type == "regular"
+            and workplace_size == "under_5"
+            and weekly_match
+            and base_salary > 0
+            and contract_date_year == "2026"
+        ):
             weekly_hours = float(weekly_match.group(1)) + float(weekly_match.group(2) or 0) / 60
             monthly_paid_hours = (weekly_hours + min(8, weekly_hours / 5)) * 365 / 7 / 12
             conservative_hourly = base_salary / monthly_paid_hours
             if conservative_hourly < 10320:
-                raise HTTPException(status_code=400, detail=f"과세 기본급 기준 환산시급 {int(conservative_hourly):,}원은 2026년 최저임금 10,320원보다 낮습니다")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"과세 기본급 기준 환산시급 {int(conservative_hourly):,}원은 2026년 최저임금 10,320원보다 낮습니다",
+                )
+        foreign_worker = str(
+            _contract_payload_value(result, "foreign_worker", "foreignWorker") or ""
+        ).strip().lower() in {"true", "1", "yes"}
+        if foreign_worker:
+            for label, key, camel in (
+                ("국적", "employee_nationality", "employeeNationality"),
+                ("체류자격", "visa_status", "visaStatus"),
+                ("외국인등록번호(마스킹)", "foreign_registration_no_masked", "foreignRegistrationNoMasked"),
+            ):
+                if _missing_contract_value(_contract_payload_value(result, key, camel)):
+                    missing.append(label)
     elif contract_type == "freelancer":
         if employment_tax_type != "freelancer_33":
             raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 3.3% 원천징수 구분으로 작성해야 합니다")
@@ -1625,10 +1723,11 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
             ("용역 업무범위/산출물", "freelancer_scope", "freelancerScope"),
             ("용역비 정산/해지", "freelancer_settlement_terms", "freelancerSettlementTerms"),
         ):
-            if not str(_contract_payload_value(result, key, camel) or "").strip():
+            if _missing_contract_value(_contract_payload_value(result, key, camel)):
                 missing.append(label)
         if wage <= 0:
             missing.append("확정 용역비")
+
     if missing:
         unique_missing = list(dict.fromkeys(missing))
         raise HTTPException(status_code=400, detail=f"계약서 필수 입력값을 확인하십시오: {', '.join(unique_missing)}")
