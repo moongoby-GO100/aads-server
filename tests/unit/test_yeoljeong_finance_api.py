@@ -142,7 +142,10 @@ def test_contract_editor_uses_safe_classification_and_locks_signed_records():
     assert 'els.contractForm.wageType.value = "case_fee"' in html
     assert "function validateContractDraft(draft)" in html
     assert '<select name="employeeRequestId" required>' in html
-    assert 'form.employeeAddress.value = employee.address || ""' in html
+    assert "function applyEmployeeToForm(form, employee, overwrite = true)" in html
+    assert 'employeeAddress: employee.address || ""' in html
+    assert 'employeePhone: employee.phone || ""' in html
+    assert "employeeBirthDate: employee.birth_date || employee.birthDate || \"\"" in html
     assert "서명본 수정·삭제 잠금" in html
     assert 'contractClause("용역 기간 및 장소"' in html
     assert 'contractClause("용역비 및 정산", `${wageLine}.' in html
@@ -172,6 +175,8 @@ def test_employee_signup_collects_contract_autofill_profile():
     assert html.count('name="nationality"') >= 3
     assert "birth_date: birthDate" in html
     assert "employee_birth_date: next.employeeBirthDate" in html
+    assert "applyEmployeeToForm(els.contractForm, selectedApprovedEmployee(employeeRequestId, els.contractForm), false)" in html
+    assert 'employerPhone: business.phone || ""' in html
 
 
 def test_contract_signing_requires_employee_consent_and_drawn_signature():

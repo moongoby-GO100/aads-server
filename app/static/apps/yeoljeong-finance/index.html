@@ -3764,15 +3764,22 @@
       return approvedEmployeesForForm(form).find(item => item.id === requestId) || null;
     }
 
-    function applyEmployeeToForm(form, employee) {
+    function applyEmployeeToForm(form, employee, overwrite = true) {
       if (!form || !employee) return;
-      if (form.employeeName) form.employeeName.value = employee.name || "";
-      if (form.employeeEmail) form.employeeEmail.value = employee.email || "";
-      if (form.employeeAddress) form.employeeAddress.value = employee.address || "";
-      if (form.employeePhone) form.employeePhone.value = employee.phone || "";
-      if (form.employeeBirthDate) form.employeeBirthDate.value = employee.birth_date || employee.birthDate || "";
-      if (form.employeeNationality) form.employeeNationality.value = employee.nationality || "대한민국";
-      if (form.branch && employee.branch) form.branch.value = employee.branch;
+      const fields = {
+        employeeName: employee.name || "",
+        employeeEmail: employee.email || "",
+        employeeAddress: employee.address || "",
+        employeePhone: employee.phone || "",
+        employeeBirthDate: employee.birth_date || employee.birthDate || "",
+        employeeNationality: employee.nationality || "대한민국",
+        branch: employee.branch || ""
+      };
+      Object.entries(fields).forEach(([name, value]) => {
+        const input = form[name];
+        if (!input || !value) return;
+        if (overwrite || isBlankOrPlaceholder(input.value)) input.value = value;
+      });
     }
 
     function latestEmployeeContract(employee) {
@@ -3856,6 +3863,7 @@
         employerName: business.name || "열정국밥",
         employerRegistrationNo: business.registrationNo || "",
         employerRepresentative: business.representative || "",
+        employerPhone: business.phone || "",
         employerAddress: business.address || ""
       };
       Object.entries(fields).forEach(([name, value]) => {
@@ -4325,7 +4333,8 @@
 
     function fillContractForm(contract) {
       els.contractForm.dataset.editId = contract.id;
-      els.contractForm.employeeRequestId.value = contract.employeeRequestId || contract.employee_request_id || "";
+      const employeeRequestId = contract.employeeRequestId || contract.employee_request_id || "";
+      els.contractForm.employeeRequestId.value = employeeRequestId;
       els.contractForm.employeeName.value = contract.employeeName || contract.employee_name || "";
       els.contractForm.employeeEmail.value = contract.employeeEmail || contract.employee_email || "";
       els.contractForm.employeeAddress.value = contract.employeeAddress || contract.employee_address || "";
@@ -4378,6 +4387,10 @@
       els.contractForm.employerAddress.value = contract.employerAddress || contract.employer_address || "";
       els.contractForm.terms.value = contract.terms || "";
       els.contractForm.memo.value = contract.memo || "";
+      refreshApprovedEmployeeSelects();
+      els.contractForm.employeeRequestId.value = employeeRequestId;
+      applyEmployeeToForm(els.contractForm, selectedApprovedEmployee(employeeRequestId, els.contractForm), false);
+      applyBusinessToContractForm(false);
       if (els.contractEditBadge) {
         els.contractEditBadge.textContent = "수정 중";
         els.contractEditBadge.className = "badge warn";
