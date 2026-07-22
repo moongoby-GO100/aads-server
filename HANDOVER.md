@@ -4579,3 +4579,16 @@
   - Blue·Green 실제 릴리스 소스에 신규 회귀 테스트를 주입한 read-only 격리 테스트가 각각 `2 passed`였고, 8100·8102·외부 health 모두 HTTP 200이었다.
   - PC Agent는 여전히 오프라인이라 실제 Chrome 로그인 리다이렉트·파일 업로드 E2E는 실행하지 못했다. `device_list`는 정상 응답하되 연결 디바이스 0대로 확인됐다.
   - 사후 로그 정정: 08:43 KST hot-reload에서 `app.services.tool_executor`는 성공했지만 `app.browser_bridge.service`는 정책상 `hot_reload_blocked`로 skip됐다. 따라서 Browser Bridge 수정은 아직 프로세스에 완전 반영되지 않았으며, 스트림 0 이후 조건부 blue-green unit이 전체 반영을 대기 중이다.
+
+## 2026-07-23 08:48 KST - Previous-answer execution isolation (P0)
+
+- 대상 세션: `8ad08cc2-620c-4a70-8305-74a8d9b43c4e`.
+- DB 실측: 2026-07-23 08:25:15 KST user 메시지 `83b41920-...`와 execution `e7a70808-...`, assistant 메시지 `00ce58b8-...`는 정상 연결되어 있었다. 저장 순서가 아니라 새 요청 직후 상태 조회 경합이 원인이었다.
+- 원인: 완료된 메모리 상태를 60초, DB 완료 실행을 5분간 복구용으로 노출하는 동안 다음 질문의 execution 생성 전 status 요청이 이전 `just_completed/execution_id`를 반환할 수 있었다. 프론트는 이 값을 새 optimistic placeholder의 실행으로 채택할 수 있었다.
+- 백엔드 P0:
+  - 새 턴 시작 시 이전 completed/content/execution 상태를 같은 dict 객체에서 원자적으로 초기화한다.
+  - 새 execution 생성 후 현재 턴 상태에 execution ID를 명시적으로 재결합한다.
+  - 새 user 메시지가 더 최신이면 DB와 다른 API 슬롯의 이전 completed snapshot을 status 응답에서 제외한다.
+- 프론트 P0는 dashboard 커밋 `e3f2149`에 기록: 새 foreground request generation이 `stream_start`를 받기 전 과거 completion/execution을 무시한다.
+- 검증: `py_compile` 성공, `git diff --check` 성공, 운영 이미지 격리 컨테이너에서 `test_chat_service.py` + `test_tools_and_pipeline.py` 112 passed.
+- 배포 원장과 최종 운영 HTTP/DB 검증은 본 항목의 후속 줄에 완료 시각·커밋·슬롯을 추가한다.

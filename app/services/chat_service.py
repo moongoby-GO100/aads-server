@@ -3438,6 +3438,55 @@ async def _delete_streaming_placeholder(
         logger.warning(f"delete_placeholder_failed session={session_id[:8]}: {e}")
 
 
+def _begin_streaming_turn_state(session_id: str) -> Dict[str, Any]:
+    """Replace a previous turn snapshot without breaking wrapper references.
+
+    ``with_background_completion`` keeps a local reference to this dictionary.
+    Mutating it in place is therefore required: assigning a new dict here would
+    let the wrapper continue publishing the previous turn.  Clearing the
+    completed snapshot before the first ``stream_start`` also prevents status
+    polling from presenting the previous answer as the new turn.
+    """
+    started_at = _bg_time.monotonic()
+    fresh_state: Dict[str, Any] = {
+        "content": "",
+        "tool_count": 0,
+        "last_tool": "",
+        "last_save": started_at,
+        "started_at": started_at,
+        "tool_events": [],
+        "execution_id": None,
+        "last_event_id": None,
+        "saw_done_event": False,
+        "last_event_at": started_at,
+        "first_response_at": None,
+        "last_idle_save": 0.0,
+        "_last_content_len": None,
+        "client_gone": False,
+        "client_gone_since": None,
+        "completed": False,
+    }
+    state = _streaming_state.get(session_id)
+    if isinstance(state, dict):
+        state.clear()
+        state.update(fresh_state)
+    else:
+        state = fresh_state
+        _streaming_state[session_id] = state
+    return state
+
+
+def _bind_streaming_turn_execution(session_id: str, execution_id: str) -> Dict[str, Any]:
+    """Bind only the current turn state to its newly-created execution."""
+    state = _streaming_state.get(session_id)
+    if not isinstance(state, dict) or state.get("completed"):
+        state = _begin_streaming_turn_state(session_id)
+    state["execution_id"] = execution_id
+    state["completed"] = False
+    state.pop("_completed_delivered_at", None)
+    return state
+
+
 async def with_background_completion(
     gen: AsyncGenerator[str, None],
     session_id: str,
@@ -3457,25 +3506,7 @@ async def with_background_completion(
     _hb_stop = _heartbeat_asyncio.Event()
 
     # 스트리밍 상태 초기화 — monotonic 한 번만 호출하여 started_at/last_save 일관성 보장
-    _state_start = _bg_time.monotonic()
-    state: Dict[str, Any] = {
-        "content": "",
-        "tool_count": 0,
-        "last_tool": "",
-        "last_save": _state_start,
-        "started_at": _state_start,
-        "tool_events": [],
-        "execution_id": None,
-        "last_event_id": None,
-        "saw_done_event": False,
-        "last_event_at": _state_start,
-        "first_response_at": None,
-        "last_idle_save": 0.0,
-        "_last_content_len": None,
-        "client_gone": False,
-        "client_gone_since": None,
-    }
-    _streaming_state[session_id] = state
+    state = _begin_streaming_turn_state(session_id)
 
     _client_gone_since: float = 0  # 클라이언트 이탈 시각 (monotonic)
 
@@ -7530,6 +7561,11 @@ async def send_message_stream(
 
         from app.core.interrupt_queue import set_streaming, has_pending_interrupts, pop_pending_interrupts
         set_streaming(session_id, True)
+        # A completed snapshot is intentionally retained for reconnects, but it
+        # belongs to the previous turn.  Clear it synchronously before the first
+        # heartbeat so status polling cannot finalize the new optimistic bubble
+        # with the previous answer.
+        _begin_streaming_turn_state(session_id)
         sid = uuid.UUID(session_id)
         sid_short = session_id[:8]  # 로깅용 축약 (str 보장 — sid[:8] 직접 사용 금지)
         logger.info(
@@ -8035,37 +8071,7 @@ async def send_message_stream(
 
         yield f"data: {json.dumps({'type': 'stream_start', 'stream_id': _stream_id, 'execution_id': _execution_id_str, 'html_context_used': _html_context_state.get('html_context_used', False)})}\n\n"
         # 첫 토큰 전 지연 구간에도 DB placeholder를 즉시 남겨 복구/세션복귀 시 버블이 보이도록 한다.
-        _prefill_started_at = _bg_time.monotonic()
-        _prefill_state = _streaming_state.get(session_id)
-        if not isinstance(_prefill_state, dict):
-            _prefill_state = {
-                "content": "",
-                "tool_count": 0,
-                "last_tool": "",
-                "last_save": _prefill_started_at,
-                "started_at": _prefill_started_at,
-                "tool_events": [],
-                "execution_id": _execution_id_str,
-                "last_event_id": None,
-                "saw_done_event": False,
-                "last_event_at": _prefill_started_at,
-                "first_response_at": None,
-                "last_idle_save": 0.0,
-            }
-            _streaming_state[session_id] = _prefill_state
-        else:
-            _prefill_state.setdefault("execution_id", _execution_id_str)
-            _prefill_state.setdefault("started_at", _prefill_started_at)
-            _prefill_state.setdefault("last_event_at", _prefill_started_at)
-            _prefill_state.setdefault("last_save", _prefill_started_at)
-            _prefill_state.setdefault("content", "")
-            _prefill_state.setdefault("tool_count", 0)
-            _prefill_state.setdefault("last_tool", "")
-            _prefill_state.setdefault("tool_events", [])
-            _prefill_state.setdefault("last_event_id", None)
-            _prefill_state.setdefault("saw_done_event", False)
-            _prefill_state.setdefault("first_response_at", None)
-            _prefill_state.setdefault("last_idle_save", 0.0)
+        _prefill_state = _bind_streaming_turn_execution(session_id, _execution_id_str)
         await _interim_save_streaming(session_id, _prefill_state)
 
         # ★ Phase A 종료 — DB 커넥션 async with 블록 종료로 자동 반환 (LLM 스트리밍 중 점유 방지)

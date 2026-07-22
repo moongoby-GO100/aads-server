@@ -538,6 +538,39 @@ def test_terminal_interrupt_marker_completes_memory_stream_once():
         chat_service._active_bg_tasks.pop(session_id, None)
 
 
+def test_begin_streaming_turn_state_clears_previous_completion_in_place():
+    session_id = str(uuid.uuid4())
+    previous_execution_id = str(uuid.uuid4())
+    stale_state = {
+        "content": "이전 답변",
+        "completed": True,
+        "execution_id": previous_execution_id,
+        "_completed_delivered_at": chat_service._bg_time.monotonic(),
+    }
+    chat_service._streaming_state[session_id] = stale_state
+
+    try:
+        fresh_state = chat_service._begin_streaming_turn_state(session_id)
+
+        assert fresh_state is stale_state
+        assert fresh_state["content"] == ""
+        assert fresh_state["completed"] is False
+        assert fresh_state["execution_id"] is None
+        assert "_completed_delivered_at" not in fresh_state
+        assert chat_service.get_streaming_status(session_id)["just_completed"] is False
+
+        new_execution_id = str(uuid.uuid4())
+        bound_state = chat_service._bind_streaming_turn_execution(
+            session_id,
+            new_execution_id,
+        )
+        assert bound_state is stale_state
+        assert bound_state["execution_id"] == new_execution_id
+        assert bound_state["completed"] is False
+    finally:
+        chat_service._streaming_state.pop(session_id, None)
+
+
 @pytest.mark.asyncio
 async def test_stop_session_streaming_clears_stale_interrupt_stream_flag():
     session_id = str(uuid.uuid4())

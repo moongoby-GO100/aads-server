@@ -1440,6 +1440,14 @@ async def get_streaming_status(
                                     te_latest.status = 'completed'
                                     AND te_latest.completed_at IS NOT NULL
                                     AND te_latest.updated_at > NOW() - interval '5 minutes'
+                                    AND NOT EXISTS (
+                                        SELECT 1
+                                        FROM chat_messages newer_user
+                                        WHERE newer_user.session_id = te_latest.session_id
+                                          AND newer_user.role = 'user'
+                                          AND newer_user.id IS DISTINCT FROM te_latest.user_message_id
+                                          AND newer_user.created_at > te_latest.completed_at
+                                    )
                                 )
                             )
                           ORDER BY
@@ -1650,6 +1658,41 @@ async def get_streaming_status(
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
                     }, conn)
+
+            # A different API slot can still retain the prior turn's completed
+            # in-memory snapshot while the new user message has already landed
+            # in PostgreSQL.  Do not surface that stale snapshot during the
+            # short user-message -> execution-row creation gap.
+            if memory_terminal_status and memory_terminal_status.get("execution_id"):
+                _memory_execution_id = UUID(str(memory_terminal_status["execution_id"]))
+                _newer_user_exists = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM chat_messages newer_user
+                        JOIN chat_turn_executions old_execution
+                          ON old_execution.id = $2
+                        WHERE newer_user.session_id = $1
+                          AND newer_user.role = 'user'
+                          AND newer_user.id IS DISTINCT FROM old_execution.user_message_id
+                          AND newer_user.created_at > COALESCE(
+                              old_execution.completed_at,
+                              old_execution.updated_at,
+                              old_execution.started_at
+                          )
+                    )
+                    """,
+                    session_id,
+                    _memory_execution_id,
+                )
+                if _newer_user_exists:
+                    logger.info(
+                        "streaming_status_ignored_previous_completion session=%s execution=%s",
+                        str(session_id)[:8],
+                        str(_memory_execution_id)[:8],
+                    )
+                    memory_terminal_status = None
+                    status = None
 
             row = await conn.fetchrow(
                 """
