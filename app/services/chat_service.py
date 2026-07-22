@@ -565,6 +565,105 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+_GENERATED_IMAGE_TOOLS = {"generate_image", "edit_image"}
+_GENERATED_IMAGE_URL_RE = re.compile(
+    r"(?:https?://[^\s\"'<>]+|/(?:api/v1/image/gallery/[^\s\"'<>]+/image|static/media/generated/[^\s\"'<>]+))",
+    re.IGNORECASE,
+)
+
+
+def _normalize_generated_image_url(value: Any, job_id: str = "") -> str:
+    """Return a browser-safe URL for a generated image result."""
+    url = str(value or "").strip().strip("<>\"'").rstrip(".,;)")
+    if not url or url.startswith("data:"):
+        return ""
+    static_match = re.search(
+        r"/static/media/generated/(?:image|edit_image)/(media-[A-Za-z0-9_.-]+)\.[A-Za-z0-9]+$",
+        url.split("?", 1)[0],
+        re.IGNORECASE,
+    )
+    if static_match:
+        return f"/api/v1/image/gallery/{static_match.group(1)}/image"
+    if job_id and url.startswith("/static/media/generated/"):
+        return f"/api/v1/image/gallery/{job_id}/image"
+    if url.startswith("/api/v1/image/gallery/") or url.startswith("http://") or url.startswith("https://"):
+        return url
+    return ""
+
+
+def _generated_image_urls_from_tool_events(tools_called: Any) -> List[str]:
+    """Extract successful generated-image URLs from persisted tool results."""
+    urls: List[str] = []
+    for event in normalize_tool_events(tools_called):
+        if event.get("type") != "tool_result" or event.get("tool_name") not in _GENERATED_IMAGE_TOOLS:
+            continue
+        if event.get("is_error"):
+            continue
+        raw = str(event.get("content") or "").strip()
+        job_id = ""
+        candidates: List[Any] = []
+        parsed: Any = raw
+        for _ in range(2):
+            if not isinstance(parsed, str):
+                break
+            try:
+                parsed = json.loads(parsed)
+            except (TypeError, json.JSONDecodeError):
+                break
+        if isinstance(parsed, dict):
+            job_id = str(parsed.get("job_id") or "")
+            if str(parsed.get("status") or "").lower() in {"failed", "cancelled"} or parsed.get("error"):
+                continue
+            candidates.extend(parsed.get(key) for key in ("url", "image_url", "result_uri", "output_url"))
+        candidates.extend(_GENERATED_IMAGE_URL_RE.findall(raw))
+        for candidate in candidates:
+            normalized = _normalize_generated_image_url(candidate, job_id=job_id)
+            if normalized and normalized not in urls:
+                urls.append(normalized)
+    return urls
+
+
+def _append_generated_image_markdown(content: str, urls: List[str]) -> str:
+    """Attach generated images to the final chat bubble exactly once."""
+    clean_content = str(content or "").rstrip()
+    additions = [url for url in urls if url and url not in clean_content]
+    if not additions:
+        return clean_content
+    image_blocks = [f"![생성 이미지 {index}]({url})" for index, url in enumerate(additions, start=1)]
+    return "\n\n".join(part for part in (clean_content, *image_blocks) if part)
+
+
+async def _generated_image_urls_for_execution(
+    conn: asyncpg.Connection,
+    session_id: uuid.UUID,
+    execution_id: Optional[uuid.UUID],
+) -> List[str]:
+    """Recover generated media even when a relay omitted the tool result body."""
+    if execution_id is None:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT j.job_id, j.result_uri
+        FROM media_generation_jobs j
+        JOIN chat_turn_executions e ON e.id = $2
+        WHERE j.session_id = $1
+          AND j.kind IN ('image', 'edit_image')
+          AND j.status = 'succeeded'
+          AND j.created_at >= e.started_at
+        ORDER BY j.created_at ASC
+        LIMIT 8
+        """,
+        str(session_id),
+        execution_id,
+    )
+    urls: List[str] = []
+    for row in rows:
+        normalized = _normalize_generated_image_url(row["result_uri"], job_id=str(row["job_id"] or ""))
+        if normalized and normalized not in urls:
+            urls.append(normalized)
+    return urls
+
+
 async def _prepare_turn_todo_context(
     *,
     session_id: str,
@@ -6704,6 +6803,22 @@ async def _save_and_update_session(
     )
     async with get_pool().acquire() as conn:
         async with conn.transaction():
+            generated_image_urls = _generated_image_urls_from_tool_events(normalized_tools_called)
+            if not generated_image_urls:
+                try:
+                    generated_image_urls = await _generated_image_urls_for_execution(
+                        conn,
+                        sid,
+                        _execution_uuid,
+                    )
+                except Exception as media_lookup_error:
+                    logger.warning(
+                        "generated_media_lookup_failed session=%s execution=%s error=%s",
+                        str(sid)[:8],
+                        str(_execution_uuid or "")[:8],
+                        media_lookup_error,
+                    )
+            content = _append_generated_image_markdown(content, generated_image_urls)
             content, _todo_gate = await _apply_todo_completion_gate(
                 session_id=sid,
                 content=content,

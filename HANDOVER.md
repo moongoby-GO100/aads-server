@@ -4284,3 +4284,12 @@
   - 코드/테스트/문서 기록 완료.
   - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
   - 코드 commit 591388ab 완료. push/deploy/restart는 수행하지 않았다.
+
+## 2026-07-22 14:22 KST - Generated images render inline in chat
+
+- 생성 성공 결과를 공개 `/api/v1/image/gallery/{job_id}/image` URL로 정규화하고 최종 AI 메시지에 Markdown 이미지로 자동 첨부한다.
+- 이미지 파일은 blue/green API가 공유하는 `aads_generated_media` 볼륨에 저장하며, 갤러리 API가 안전한 로컬 경로만 `FileResponse`로 전달한다.
+- 검증: 관련 pytest 18건 통과. 검증 작업 `media-inlineqa-20260722`는 blue(8100), green(8102), 공개 도메인에서 모두 HTTP 200 `image/png`, 68바이트, 동일 SHA-256을 반환했다.
+- 대시보드 Markdown renderer의 이미지 렌더 경로를 확인했고 별도 프론트 변경은 필요하지 않았다.
+- 운영: blue/green 컨테이너 healthy, 공유 볼륨 마운트 및 외부 health HTTP 200 확인.
+- 롤백: 생성 미디어 환경변수/볼륨을 제거하고 이전 API 이미지로 blue-green 재배포한다.
