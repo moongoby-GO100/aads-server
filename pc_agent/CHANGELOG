@@ -1,3 +1,4 @@
+v1.0.55: 완전 종료 확인창을 Windows 네이티브 다이얼로그로 교체하고 EXE 다운로드 404 경로 수정
 v1.0.54: self_update 결과 전송 후 agent 루프를 명시 종료해 launcher 재기동 누락 방지
 v1.0.53: watchdog/telemetry 상태 점검 콘솔 완전 숨김 및 구형 자동실행 상태 진단 보강
 v1.0.52: 격리 E2E Chrome 업무 세션 종료 명령 및 10분 유휴 자동 정리 추가

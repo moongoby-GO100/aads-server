@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import asyncpg
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
@@ -25,6 +25,9 @@ router = APIRouter(prefix="/kakao-bot", tags=["kakao-bot"])
 PC_AGENT_DIR = Path(__file__).resolve().parent.parent.parent / "pc_agent"
 PC_AGENT_VERSION_FILE = PC_AGENT_DIR / "VERSION"
 PC_AGENT_EXE_FILE = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
+PC_AGENT_RELEASE_BASE = (
+    "https://github.com/moongoby-GO100/aads-server/releases/download"
+)
 # zip 제외 패턴
 _ZIP_EXCLUDE_DIRS = {"__pycache__", ".git", "build_tmp", "dist", ".mypy_cache", ".pytest_cache"}
 _ZIP_EXCLUDE_EXTS = {".pyc", ".pyo", ".exe", ".spec"}
@@ -156,21 +159,24 @@ async def agent_version():
     if changelog_file.exists():
         changelog = changelog_file.read_text(encoding="utf-8").strip()
 
-    # EXE 빌드 유무 확인
-    exe_available = PC_AGENT_EXE_FILE.exists()
-    exe_size = ""
-    if exe_available:
+    # 운영 배포본은 GitHub Actions가 버전별 Windows EXE Release를 생성한다.
+    # 컨테이너에 로컬 EXE가 없어도 download-exe가 동일 버전 Release로 연결된다.
+    local_exe_available = PC_AGENT_EXE_FILE.exists()
+    exe_available = version != "0.0.0"
+    exe_size = "Windows EXE"
+    if local_exe_available:
         size_mb = PC_AGENT_EXE_FILE.stat().st_size / (1024 * 1024)
         exe_size = f"{size_mb:.1f} MB"
 
     return {
         "version": version,
-        "download_url": "/api/v1/kakao-bot/agent/download",
+        "download_url": "/api/v1/kakao-bot/agent/download-exe",
         "force_update": force_update,
         "min_version": min_version,
         "changelog": changelog,
         "exe_available": exe_available,
         "file_size": exe_size if exe_available else "ZIP",
+        "distribution": "local" if local_exe_available else "github_release",
         "release_date": time.strftime("%Y-%m-%d"),
     }
 
@@ -250,13 +256,22 @@ async def agent_download_exe():
 
     PyInstaller로 빌드된 kakaobot-setup.exe를 스트리밍 응답.
     """
-    exe_path = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
-    if not exe_path.exists():
-        raise HTTPException(status_code=404, detail="EXE 파일이 아직 빌드되지 않았습니다")
-
     version = "unknown"
     if PC_AGENT_VERSION_FILE.exists():
         version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
+
+    exe_path = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
+    if not exe_path.exists():
+        if version == "unknown":
+            raise HTTPException(status_code=503, detail="PC Agent 버전을 확인할 수 없습니다")
+        release_url = (
+            f"{PC_AGENT_RELEASE_BASE}/pc-agent-v{version}/kakaobot-setup.exe"
+        )
+        return RedirectResponse(
+            url=release_url,
+            status_code=307,
+            headers={"Cache-Control": "no-store"},
+        )
 
     file_size = exe_path.stat().st_size
 

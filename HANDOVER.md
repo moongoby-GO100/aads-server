@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-07-22 22:44 KST - PC Agent 종료·설치·재연결 P0 보강
+- 실기기 `2e9379a1-fed`는 `1.0.52`로 연결되어 있다가 2026-07-22 13:07:31 KST에 클라이언트 정상종료 코드 1000으로 끊겼고, 이후 서버 연결은 0대다.
+- 트레이 콜백 스레드에서 `tkinter` 확인창을 실행하던 구조를 Windows 네이티브 `MessageBoxW`로 교체했다. `아니오` 또는 확인창 오류 시에는 절대 종료하지 않는 fail-safe를 적용했다.
+- 운영 `/agent/download-exe`가 컨테이너에 미추적 `dist/*.exe`가 없어 404를 반환하던 결함을 확인했다. 로컬 EXE가 없으면 동일 버전의 공개 GitHub Release 자산으로 307 연결하도록 수정했다.
+- PC Agent 버전을 `1.0.55`로 올렸고, `/agent/version`이 실제 설치 EXE 경로와 `github_release` 배포 방식을 반환하도록 정합화했다.
+- 검증: 운영과 동일한 API 이미지에서 종료 확인·watchdog·self-update·다운로드 회귀 테스트 9건 통과, `py_compile`, `git diff --check` 통과.
+- 남은 운영 완료 조건: `main` 푸시 후 Windows Actions 빌드/Release 생성, blue/green 배포, 공개 EXE PE·해시 검증, CEO PC 재실행 후 `online`/`1.0.55` 확인.
+
+## 2026-07-22 13:18 KST - PC Agent 터미널 깜빡임 운영 정합성 재점검
+- 원격 브랜치 `fix/pc-agent-hidden-watchdog-20260722`와 운영 API blue/green의 PC Agent `1.0.54` 배포 상태를 재검증했다.
+- 운영 ZIP SHA-256은 `3074b37c7ebd905c15608967bcfc103006c18b62822c677665d3575cb2bdb72a`이며, `CREATE_NO_WINDOW`, `wscript.exe`, `ONLOGON` 설정과 구형 MINUTE 작업 제거를 확인했다.
+- blue/green의 `agent.py`, `commands/updater.py`, `VERSION`은 원격 커밋과 동일했다. `launcher.py`의 유일한 차이는 운영본에서 불필요한 지역 `import subprocess`가 제거된 것이어서 원격 정본에도 동일하게 반영했다.
+- 실기기 `2e9379a1-fed`의 마지막 연결 버전은 `1.0.52`였으며 2026-07-22 13:07:31 KST에 close code 1000으로 종료한 뒤 현재 오프라인이다.
+- 따라서 서버 코드·ZIP·API 배포는 완료됐지만 실기기 `1.0.54` 재기동, 숨김 ONLOGON 작업 전환, 60초 무깜빡임 검증은 PC Agent 재실행 전까지 미완료다.
+- 기본 EXE 파일은 2026-05-11 빌드의 bootstrap 바이너리이며 API가 `1.0.54` 파일명으로 제공한다. 실제 최신 소스는 `format=zip` 경로가 정본이다.
+
 ## 2026-07-22 13:01 KST - PC Agent 터미널 깜빡임 완전 차단 보강
 - 실기기(`abc`, PC Agent `2e9379a1-fed`)에서 구형 HKCU Run 등록과 Startup CMD가 제거됐고, `KakaoBotWatchdog`는 `wscript.exe` 기반 ONLOGON/LIMITED 숨김 작업 1개로 정리된 것을 확인했다.
 - 잔여 원인은 agent/launcher가 60초 상태 보고 때 `schtasks`를 `CREATE_NO_WINDOW` 없이 실행하던 경로였다.
