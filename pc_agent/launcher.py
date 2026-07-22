@@ -484,8 +484,6 @@ def register_watchdog_task() -> None:
     if sys.platform != "win32":
         return
     try:
-        import subprocess
-
         if not getattr(sys, "frozen", False):
             logger.info("개발 실행에서는 Windows watchdog 작업 등록을 생략")
             return

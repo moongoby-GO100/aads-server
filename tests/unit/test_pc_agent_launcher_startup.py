@@ -7,9 +7,32 @@ from unittest import IsolatedAsyncioTestCase, TestCase, mock
 
 from pc_agent import agent as pc_agent_module
 from pc_agent import launcher
+from pc_agent import tray
 
 
 class PcAgentLauncherStartupTest(TestCase):
+    def test_windows_exit_confirmation_uses_native_message_box(self) -> None:
+        user32 = SimpleNamespace(MessageBoxW=mock.Mock(return_value=6))
+        windll = SimpleNamespace(user32=user32)
+
+        with mock.patch.object(tray.sys, "platform", "win32"), \
+             mock.patch("ctypes.windll", windll, create=True):
+            self.assertTrue(tray._confirm_full_exit())
+
+        user32.MessageBoxW.assert_called_once()
+
+    def test_windows_exit_confirmation_no_and_failure_are_safe(self) -> None:
+        no_user32 = SimpleNamespace(MessageBoxW=mock.Mock(return_value=7))
+        broken_user32 = SimpleNamespace(MessageBoxW=mock.Mock(side_effect=OSError("boom")))
+
+        with mock.patch.object(tray.sys, "platform", "win32"), \
+             mock.patch("ctypes.windll", SimpleNamespace(user32=no_user32), create=True):
+            self.assertFalse(tray._confirm_full_exit())
+
+        with mock.patch.object(tray.sys, "platform", "win32"), \
+             mock.patch("ctypes.windll", SimpleNamespace(user32=broken_user32), create=True):
+            self.assertFalse(tray._confirm_full_exit())
+
     def test_agent_telemetry_query_is_console_free(self) -> None:
         fake_agent = object.__new__(pc_agent_module.PCAgent)
         fake_agent._telemetry_cache = {}
