@@ -754,6 +754,55 @@
       overflow: hidden;
     }
 
+    .contract-sign-modal {
+      width: min(1180px, 100%);
+      overflow: hidden;
+    }
+
+    .contract-sign-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+      max-height: calc(100vh - 112px);
+      background: #dfe4e8;
+    }
+
+    .contract-sign-stage {
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .contract-sign-panel {
+      overflow: auto;
+      padding: 18px;
+      background: white;
+      border-left: 1px solid var(--line);
+    }
+
+    .signature-canvas {
+      display: block;
+      width: 100%;
+      height: 150px;
+      margin-top: 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    .signed-signature-image {
+      display: block;
+      max-width: 220px;
+      max-height: 74px;
+      margin: 6px auto 0;
+      object-fit: contain;
+    }
+
+    @media (max-width: 900px) {
+      .contract-sign-layout { grid-template-columns: 1fr; }
+      .contract-sign-panel { border-left: 0; border-top: 1px solid var(--line); }
+    }
+
     .file-preview-modal {
       width: min(1100px, 100%);
       overflow: hidden;
@@ -2236,6 +2285,40 @@
     </section>
   </div>
 
+  <div id="contractSignModal" class="modal-backdrop hidden">
+    <section class="modal contract-sign-modal" role="dialog" aria-modal="true" aria-labelledby="contractSignTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="contractSignTitle" class="panel-title">직원 계약서 전자서명</h2>
+          <span id="contractSignMeta" class="muted">로그인한 본인만 서명할 수 있습니다.</span>
+        </div>
+        <button type="button" id="closeContractSignBtn" class="icon" title="닫기">x</button>
+      </div>
+      <div class="contract-sign-layout">
+        <div class="contract-sign-stage">
+          <article id="contractSignPaper" class="contract-paper contract-a4-paper"></article>
+        </div>
+        <form id="contractSignForm" class="contract-sign-panel grid">
+          <div class="settings-note">
+            계약서 전체 내용을 확인한 뒤 계약 대상 직원 이름을 직접 입력하고 자필 서명하십시오. 관리자 대리서명은 차단됩니다.
+          </div>
+          <label>서명자 이름 확인
+            <input name="signerName" autocomplete="name" maxlength="100" placeholder="계약서의 직원 이름을 입력" required>
+          </label>
+          <label>자필서명
+            <canvas id="contractSignatureCanvas" class="signature-canvas" width="600" height="220" aria-label="자필서명 입력 영역"></canvas>
+          </label>
+          <button type="button" id="clearContractSignatureBtn">서명 지우기</button>
+          <label class="check-row">
+            <input name="consent" type="checkbox" required>
+            <span>계약서 전체 내용을 확인했으며, 위 자필서명을 본인의 전자서명으로 사용하는 데 동의합니다.</span>
+          </label>
+          <button id="submitContractSignatureBtn" class="primary" type="submit">본인 전자서명 제출</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
   <div id="filePreviewModal" class="modal-backdrop hidden">
     <section class="modal file-preview-modal" role="dialog" aria-modal="true" aria-labelledby="filePreviewTitle">
       <div class="panel-head">
@@ -2653,6 +2736,9 @@
     let pendingPhoneInviteToken = "";
     let pendingPhoneInvite = null;
     let pendingContractSignToken = "";
+    let pendingContractToSign = null;
+    let contractSignatureHasInk = false;
+    let contractSignatureDrawing = false;
     let filePreviewObjectUrl = "";
     let filePreviewAbortController = null;
 
@@ -3487,10 +3573,10 @@
               ${item.status === "signed" ? `<span class="muted">서명본 수정·삭제 잠금</span>` : `
                 <button data-edit-contract="${escapeHtml(item.id)}">수정</button>
                 <button data-request-contract="${escapeHtml(item.id)}">서명요청</button>
-                ${item.status === "requested" ? `<button data-copy-contract="${escapeHtml(link)}">링크복사</button><button data-sign-contract="${escapeHtml(item.id)}">서명완료</button>` : ""}
+                ${item.status === "requested" ? `<button data-copy-contract="${escapeHtml(link)}">링크복사</button>` : ""}
                 <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">-</button>
               `}
-            ` : (employeeMode && item.status === "requested" ? `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button><button data-sign-contract="${escapeHtml(item.id)}">서명완료</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>`);
+            ` : (employeeMode && item.status === "requested" ? `<button data-sign-contract="${escapeHtml(item.id)}" class="primary">내용 확인·서명</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>`);
         return `
           <tr>
             <td>${escapeHtml(String(createdAt).slice(0, 10) || "-")}</td>
@@ -3787,6 +3873,9 @@
       const freelancerSettlementTerms = contractValue(contract, "freelancerSettlementTerms", "freelancer_settlement_terms");
       const terminationTerms = contractValue(contract, "terminationTerms", "termination_terms");
       const confidentialityTerms = contractValue(contract, "confidentialityTerms", "confidentiality_terms");
+      const signatureDataUri = contractValue(contract, "signatureDataUri", "signature_data_uri");
+      const signedAt = contractValue(contract, "signedAt", "signed_at");
+      const signerName = contractValue(contract, "signerName", "signer_name") || employeeName;
       const commonMeta = `
         <div class="preview-row"><b>사용자</b><span>${previewText(employerName, "열정국밥")} / 대표 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))}</span></div>
         <div class="preview-row"><b>사업자번호</b><span>${previewText(contractValue(contract, "employerRegistrationNo", "employer_registration_no"))}</span></div>
@@ -3850,7 +3939,7 @@
         ${contractValue(contract, "terms", "terms") ? `<h4>추가 특약</h4><p>${previewText(contractValue(contract, "terms", "terms"))}</p>` : ""}
         <div class="signature-grid">
           <div class="signature-box"><b>사용자 서명</b><br>${previewText(employerName, "열정국밥")}<br>서명: __________</div>
-          <div class="signature-box"><b>근로자 서명</b><br>${previewText(employeeName)}<br>서명: __________</div>
+          <div class="signature-box"><b>근로자 서명</b><br>${previewText(signerName)}<br>${signatureDataUri ? `<img class="signed-signature-image" src="${escapeHtml(signatureDataUri)}" alt="근로자 자필서명">서명일시: ${previewText(String(signedAt).replace("T", " ").slice(0, 19))}` : "서명: __________"}</div>
         </div>
       `;
     }
@@ -3879,6 +3968,101 @@
       document.body.classList.add("contract-preview-printing");
       window.print();
       window.setTimeout(() => document.body.classList.remove("contract-preview-printing"), 250);
+    }
+
+    function signatureCanvasPoint(event) {
+      const canvas = els.contractSignatureCanvas;
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (canvas.width / rect.width),
+        y: (event.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    function clearContractSignature() {
+      const canvas = els.contractSignatureCanvas;
+      const context = canvas?.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = "#13232a";
+      context.lineWidth = 3;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      contractSignatureHasInk = false;
+      contractSignatureDrawing = false;
+    }
+
+    function openContractSignModal(contract) {
+      if (!contract || contract.status !== "requested") {
+        showToast("서명 요청 상태인 계약서만 서명할 수 있습니다.");
+        return;
+      }
+      if (canManageOnboarding()) {
+        showToast("관리자는 직원 대신 서명할 수 없습니다. 직원 본인에게 서명 링크를 전달하십시오.");
+        return;
+      }
+      const token = contract.sign_token || pendingContractSignToken;
+      if (!token) {
+        showToast("서명 토큰이 없습니다. 관리자에게 서명 링크를 다시 요청하십시오.");
+        return;
+      }
+      pendingContractSignToken = token;
+      pendingContractToSign = contract;
+      els.contractSignPaper.innerHTML = contractPreviewHtml(contract);
+      els.contractSignMeta.textContent = `${contractValue(contract, "employeeName", "employee_name") || "직원"} · ${contractValue(contract, "branch") || "지점 미입력"}`;
+      els.contractSignForm.reset();
+      els.contractSignModal.classList.remove("hidden");
+      window.requestAnimationFrame(clearContractSignature);
+    }
+
+    function closeContractSignModal() {
+      els.contractSignModal?.classList.add("hidden");
+      pendingContractToSign = null;
+      contractSignatureDrawing = false;
+    }
+
+    async function submitContractSignature(event) {
+      event.preventDefault();
+      if (!pendingContractToSign || !pendingContractSignToken) {
+        showToast("서명 요청 계약서를 다시 여십시오.");
+        return;
+      }
+      const data = Object.fromEntries(new FormData(els.contractSignForm).entries());
+      if (!data.consent) {
+        showToast("계약 내용 확인 및 전자서명 동의가 필요합니다.");
+        return;
+      }
+      if (!contractSignatureHasInk) {
+        showToast("자필서명을 입력하십시오.");
+        return;
+      }
+      els.submitContractSignatureBtn.disabled = true;
+      try {
+        const payload = await financeApi("/contracts/signing", {
+          method: "POST",
+          body: JSON.stringify({
+            token: pendingContractSignToken,
+            signer_name: String(data.signerName || "").trim(),
+            consent: true,
+            consent_version: "yeoljeong-contract-sign-v1",
+            signature_data_uri: els.contractSignatureCanvas.toDataURL("image/png")
+          })
+        });
+        const signed = payload.contract;
+        state.contracts = [signed, ...(state.contracts || []).filter(item => item.id !== signed.id)];
+        pendingContractSignToken = "";
+        saveState();
+        closeContractSignModal();
+        renderContracts();
+        openContractPreviewModal(signed, "전자서명 완료본");
+        showToast("본인 전자서명이 완료됐습니다. 계약서는 수정·삭제할 수 없습니다.");
+      } catch (error) {
+        showToast(`계약서 서명 실패: ${error.message}`);
+      } finally {
+        els.submitContractSignatureBtn.disabled = false;
+      }
     }
 
     function clearContractForm() {
@@ -3997,8 +4181,9 @@
         const contract = payload.contract;
         state.contracts = [contract, ...(state.contracts || []).filter(item => item.id !== contract.id)];
         saveState();
-        fillContractForm(contract);
-        showToast("서명 요청 계약서를 열었습니다. 내용 확인 후 서명완료 처리하십시오.");
+        setView("contracts");
+        openContractSignModal(contract);
+        showToast("계약서 내용을 확인하고 본인 자필서명을 제출하십시오.");
         return;
       }
       const contractId = params.get("yf_contract_id") || "";
@@ -4008,8 +4193,9 @@
         showToast("이 브라우저에 해당 계약서 데이터가 없습니다. 관리자에게 다시 요청하십시오.");
         return;
       }
-      fillContractForm(contract);
-      showToast("서명 요청 계약서를 열었습니다. 내용 확인 후 서명완료 처리하십시오.");
+      setView("contracts");
+      if (contract.status === "requested") openContractSignModal(contract);
+      else openContractPreviewModal(contract, "저장 계약서 기준");
     }
 
     function renderClosing() {
@@ -5058,6 +5244,9 @@
       loadEmployeeContracts().catch(() => {});
       loadApprovedEmployees().catch(() => {});
       loadPayrollStatements().catch(() => {});
+      if (new URLSearchParams(window.location.search).has("yf_contract_token")) {
+        handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
+      }
     }
 
     async function signupToServer(formData) {
@@ -5392,9 +5581,39 @@
       els.filePreviewModal?.addEventListener("click", event => {
         if (event.target === els.filePreviewModal) closeFilePreviewModal();
       });
+      els.closeContractSignBtn?.addEventListener("click", closeContractSignModal);
+      els.contractSignModal?.addEventListener("click", event => {
+        if (event.target === els.contractSignModal) closeContractSignModal();
+      });
+      els.clearContractSignatureBtn?.addEventListener("click", clearContractSignature);
+      els.contractSignForm?.addEventListener("submit", submitContractSignature);
+      els.contractSignatureCanvas?.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        contractSignatureDrawing = true;
+        const point = signatureCanvasPoint(event);
+        const context = els.contractSignatureCanvas.getContext("2d");
+        context.beginPath();
+        context.moveTo(point.x, point.y);
+        els.contractSignatureCanvas.setPointerCapture?.(event.pointerId);
+      });
+      els.contractSignatureCanvas?.addEventListener("pointermove", event => {
+        if (!contractSignatureDrawing) return;
+        event.preventDefault();
+        const point = signatureCanvasPoint(event);
+        const context = els.contractSignatureCanvas.getContext("2d");
+        context.lineTo(point.x, point.y);
+        context.stroke();
+        contractSignatureHasInk = true;
+      });
+      ["pointerup", "pointercancel", "pointerleave"].forEach(type => {
+        els.contractSignatureCanvas?.addEventListener(type, () => {
+          contractSignatureDrawing = false;
+        });
+      });
       document.addEventListener("keydown", event => {
         if (event.key === "Escape" && !els.contractPreviewModal?.classList.contains("hidden")) closeContractPreviewModal();
         if (event.key === "Escape" && !els.filePreviewModal?.classList.contains("hidden")) closeFilePreviewModal();
+        if (event.key === "Escape" && !els.contractSignModal?.classList.contains("hidden")) closeContractSignModal();
       });
       els.logoutBtn.addEventListener("click", () => logoutFromServer());
       els.loginForm.addEventListener("submit", event => {
@@ -6013,33 +6232,7 @@
         }
         if (signContractId) {
           const contract = (state.contracts || []).find(item => item.id === signContractId);
-          if (contract) {
-            if (pendingContractSignToken) {
-              financeApi("/contracts/signing", {
-                method: "POST",
-                body: JSON.stringify({
-                  token: pendingContractSignToken,
-                  signer_name: contract.employeeName || contract.employee_name || "",
-                  signer_email: contract.employeeEmail || contract.employee_email || ""
-                })
-              })
-                .then(payload => {
-                  const signed = payload.contract;
-                  state.contracts = [signed, ...(state.contracts || []).filter(item => item.id !== signed.id)];
-                  saveState();
-                  renderContracts();
-                  showToast("계약서를 서명완료로 처리했습니다.");
-                })
-                .catch(err => showToast(`계약서 서명 실패: ${err.message}`));
-              return;
-            }
-            contract.status = "signed";
-            contract.signedAt = new Date().toISOString();
-            contract.updatedAt = contract.signedAt;
-            saveState();
-            renderContracts();
-            showToast("계약서를 서명완료로 처리했습니다.");
-          }
+          if (contract) openContractSignModal(contract);
         }
         if (deleteContractId) {
           if (!confirm("선택한 계약서를 삭제하시겠습니까?")) return;

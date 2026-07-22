@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -55,9 +55,12 @@ class DocumentReviewPayload(BaseModel):
 
 
 class ContractSignPayload(BaseModel):
+    model_config = {"extra": "forbid"}
     token: str
-    signer_name: str = ""
-    signer_email: str = ""
+    signer_name: str = Field(min_length=1, max_length=100)
+    consent: bool
+    consent_version: str = Field(default="yeoljeong-contract-sign-v1", max_length=80)
+    signature_data_uri: str = Field(min_length=100, max_length=350_000)
 
 
 class AccountUpsertPayload(BaseModel):
@@ -212,12 +215,23 @@ async def request_contract_signature(contract_id: str, current_user: dict = Depe
 
 @router.get("/contracts/signing/{token}")
 async def get_contract_signing(token: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"contract": await run_in_threadpool(svc.get_contract_by_token, token)}
+    return {"contract": await run_in_threadpool(svc.get_contract_by_token, token, current_user)}
 
 
 @router.post("/contracts/signing")
-async def sign_contract(payload: ContractSignPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"contract": await run_in_threadpool(svc.sign_contract, payload.model_dump(), current_user)}
+async def sign_contract(
+    payload: ContractSignPayload,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    forwarded_for = str(request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    client_ip = forwarded_for or (request.client.host if request.client else "")
+    sign_payload = {
+        **payload.model_dump(),
+        "audit_ip": client_ip[:64],
+        "audit_user_agent": str(request.headers.get("user-agent") or "")[:512],
+    }
+    return {"contract": await run_in_threadpool(svc.sign_contract, sign_payload, current_user)}
 
 
 @router.delete("/contracts/{contract_id}")

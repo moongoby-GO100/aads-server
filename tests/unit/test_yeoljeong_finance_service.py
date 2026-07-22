@@ -1,3 +1,4 @@
+import base64
 import os
 import importlib.util
 from io import BytesIO
@@ -46,6 +47,21 @@ def valid_employment_contract(**overrides):
         "pay_method": "계좌이체", "wage_composition": "기본급 및 법정수당",
         "overtime_terms": "사전 승인 및 법정 가산수당 지급", "leave_terms": "근로기준법에 따른 연차유급휴가",
         "insurance_terms": "4대보험 법정 기준 적용",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def valid_signature_payload(token, **overrides):
+    png = b"\x89PNG\r\n\x1a\n" + (b"signature-test" * 16)
+    payload = {
+        "token": token,
+        "signer_name": "가입 직원",
+        "consent": True,
+        "consent_version": "yeoljeong-contract-sign-v1",
+        "signature_data_uri": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+        "audit_ip": "203.0.113.10",
+        "audit_user_agent": "pytest-browser",
     }
     payload.update(overrides)
     return payload
@@ -501,16 +517,62 @@ def test_signed_contract_is_hashed_and_cannot_be_changed_or_deleted():
     employee = {"email": "member@example.com", "is_admin": False}
     saved = service.save_contract(valid_employment_contract(), admin)
     requested = service.request_contract_signature(saved["id"], admin)
-    signed = service.sign_contract({"token": requested["sign_token"], "signer_name": "가입 직원", "signer_email": "member@example.com"}, employee)
+    token = requested["sign_token"]
+    signed = service.sign_contract(valid_signature_payload(token), employee)
     assert signed["status"] == "signed"
     assert signed["signed_snapshot"]["employee_email"] == "member@example.com"
     assert len(signed["signed_snapshot_sha256"]) == 64
+    assert len(signed["signature_sha256"]) == 64
+    assert signed["signature_consent"]["accepted"] is True
+    assert signed["signature_audit"]["client_ip"] == "203.0.113.10"
+    assert signed["signature_audit"]["user_agent"] == "pytest-browser"
+    assert len(signed["sign_token_hash"]) == 64
+    assert "sign_token" not in signed
     with pytest.raises(service.HTTPException) as edit_exc:
         service.save_contract({**signed, "wage": 1}, admin)
     assert edit_exc.value.status_code == 409
     with pytest.raises(service.HTTPException) as delete_exc:
         service.delete_contract(signed["id"], admin)
     assert delete_exc.value.status_code == 409
+
+
+def test_contract_signing_requires_target_employee_and_blocks_admin():
+    seed_approved_employee()
+    admin = {"email": "owner@example.com", "is_admin": True}
+    employee = {"email": "member@example.com", "is_admin": False}
+    other_employee = {"email": "other@example.com", "is_admin": False}
+    saved = service.save_contract(valid_employment_contract(), admin)
+    requested = service.request_contract_signature(saved["id"], admin)
+    token = requested["sign_token"]
+
+    assert service.get_contract_by_token(token, employee)["id"] == saved["id"]
+    with pytest.raises(service.HTTPException) as wrong_view:
+        service.get_contract_by_token(token, other_employee)
+    assert wrong_view.value.status_code == 403
+    with pytest.raises(service.HTTPException) as admin_sign:
+        service.sign_contract(valid_signature_payload(token), admin)
+    assert admin_sign.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"consent": False}, "동의"),
+        ({"signer_name": "다른 이름"}, "이름"),
+        ({"signature_data_uri": "data:text/plain;base64,dGVzdA=="}, "PNG"),
+    ],
+)
+def test_contract_signing_rejects_missing_proof(overrides, message):
+    seed_approved_employee()
+    admin = {"email": "owner@example.com", "is_admin": True}
+    employee = {"email": "member@example.com", "is_admin": False}
+    saved = service.save_contract(valid_employment_contract(), admin)
+    requested = service.request_contract_signature(saved["id"], admin)
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.sign_contract(valid_signature_payload(requested["sign_token"], **overrides), employee)
+    assert exc.value.status_code == 400
+    assert message in exc.value.detail
 
 
 def test_contract_rejects_employee_from_another_business():

@@ -7,6 +7,8 @@ payroll statements, and delivery account status.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import csv
 import hashlib
 import json
@@ -26,6 +28,8 @@ KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("YEOLJEONG_FINANCE_DATA_DIR", "app/data/yeoljeong_finance"))
 UPLOAD_DIR = DATA_DIR / "uploads" / "onboarding"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_SIGNATURE_BYTES = 256 * 1024
+CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
 
 DOCUMENT_TYPES: list[dict[str, str]] = [
     {
@@ -126,6 +130,7 @@ CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "sign_token_hash",
     "signed_snapshot",
     "signed_snapshot_sha256",
+    "signature_data_uri",
     "updated_at",
 }
 
@@ -603,6 +608,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
             return True
         if name == "contracts":
             token = str(record.get("sign_token") or "")
+            token_hash = str(record.get("sign_token_hash") or "")
             await conn.execute(
                 """
                 INSERT INTO yeoljeong_contracts
@@ -644,7 +650,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 str(record.get("template_version") or ""),
                 str(record.get("print_title") or ""),
                 str(record.get("status") or "draft"),
-                hashlib.sha256(token.encode("utf-8")).hexdigest() if token else "",
+                hashlib.sha256(token.encode("utf-8")).hexdigest() if token else token_hash,
                 _pg_ts(record.get("requested_at")),
                 _pg_ts(record.get("signed_at")),
                 str(record.get("created_by") or ""),
@@ -1678,10 +1684,39 @@ def request_contract_signature(contract_id: str, user: dict[str, Any]) -> dict[s
     return contract
 
 
-def get_contract_by_token(token: str) -> dict[str, Any]:
+def _contract_signer_email(contract: dict[str, Any], user: dict[str, Any] | None) -> str:
+    if not user or not _email(user):
+        raise HTTPException(status_code=401, detail="직원 계정 로그인이 필요합니다")
+    if _is_admin(user):
+        raise HTTPException(status_code=403, detail="관리자는 직원 대신 계약서에 서명할 수 없습니다")
+    signer_email = _email(user)
+    employee_email = str(contract.get("employee_email") or "").strip().lower()
+    if not employee_email or signer_email != employee_email:
+        raise HTTPException(status_code=403, detail="서명 대상 직원 계정이 아닙니다")
+    return signer_email
+
+
+def _validated_signature_image(data_uri: Any) -> tuple[str, str]:
+    value = str(data_uri or "").strip()
+    prefix = "data:image/png;base64,"
+    if not value.startswith(prefix):
+        raise HTTPException(status_code=400, detail="자필서명은 PNG 이미지 형식이어야 합니다")
+    try:
+        raw = base64.b64decode(value[len(prefix) :], validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="자필서명 이미지가 올바르지 않습니다") from None
+    if len(raw) < 100 or len(raw) > MAX_SIGNATURE_BYTES or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=400, detail="자필서명 이미지 크기 또는 형식을 확인하십시오")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
     contract = next((row for row in _read("contracts") if row.get("sign_token") == token), None)
     if not contract:
         raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
+    _contract_signer_email(contract, user)
+    if str(contract.get("status") or "") != "requested":
+        raise HTTPException(status_code=409, detail="서명 요청된 계약서가 아닙니다")
     return contract
 
 
@@ -1691,18 +1726,41 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
     contract = next((row for row in rows if row.get("sign_token") == token), None)
     if not contract:
         raise HTTPException(status_code=404, detail="서명 요청 계약서를 찾을 수 없습니다")
-    signer_email = str(payload.get("signer_email") or (user and _email(user)) or "").strip().lower()
-    if signer_email and str(contract.get("employee_email") or "").strip().lower() not in {"", signer_email} and not (user and _is_admin(user)):
-        raise HTTPException(status_code=403, detail="서명 대상자가 아닙니다")
+    signer_email = _contract_signer_email(contract, user)
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
     if str(contract.get("status") or "") != "requested":
         raise HTTPException(status_code=409, detail="서명 요청된 계약서만 서명할 수 있습니다")
+    if payload.get("consent") is not True:
+        raise HTTPException(status_code=400, detail="계약 내용 확인 및 전자서명 동의가 필요합니다")
+    consent_version = str(payload.get("consent_version") or "").strip()
+    if consent_version != CONTRACT_SIGNATURE_CONSENT_VERSION:
+        raise HTTPException(status_code=400, detail="전자서명 동의 문구를 새로 확인하십시오")
+    signer_name = str(payload.get("signer_name") or "").strip()
+    employee_name = str(contract.get("employee_name") or "").strip()
+    if not signer_name or re.sub(r"\s+", "", signer_name) != re.sub(r"\s+", "", employee_name):
+        raise HTTPException(status_code=400, detail="계약 대상 직원 이름을 정확히 입력하십시오")
+    signature_data_uri, signature_sha256 = _validated_signature_image(payload.get("signature_data_uri"))
     _validate_contract_payload(contract)
     contract["status"] = "signed"
     contract["signed_at"] = _now()
-    contract["signer_name"] = str(payload.get("signer_name") or contract.get("employee_name") or "")
+    contract["signer_name"] = signer_name
     contract["signer_email"] = signer_email
+    contract["signature_data_uri"] = signature_data_uri
+    contract["signature_sha256"] = signature_sha256
+    contract["signature_consent"] = {
+        "accepted": True,
+        "version": consent_version,
+        "accepted_at": contract["signed_at"],
+    }
+    contract["signature_audit"] = {
+        "authenticated_email": signer_email,
+        "client_ip": str(payload.get("audit_ip") or "")[:64],
+        "user_agent": str(payload.get("audit_user_agent") or "")[:512],
+        "signed_at": contract["signed_at"],
+    }
+    contract["sign_token_hash"] = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    contract.pop("sign_token", None)
     contract["updated_at"] = contract["signed_at"]
     snapshot, snapshot_sha256 = _signed_contract_snapshot(contract)
     contract["signed_snapshot"] = snapshot
