@@ -1,9 +1,15 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import unni_naengmyeon as api
+
+
+def test_public_inquiry_route_is_exempt_from_global_jwt_middleware():
+    main_source = (Path(__file__).parents[2] / "app" / "main.py").read_text(encoding="utf-8")
+    assert '"/api/v1/unni-naengmyeon/inquiries"' in main_source
 
 
 class _FakeConnection:
