@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102a43">
+  <title>언니냉면 로고 시안 3종</title>
+  <style>
+    :root {
+      --navy: #102a43;
+      --green: #173d36;
+      --ice: #bfeaf2;
+      --coral: #ef6a5b;
+      --cream: #faf7f0;
+      --ink: #17202a;
+      --muted: #68727d;
+      --line: rgba(16, 42, 67, .13);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 5%, rgba(191, 234, 242, .48), transparent 24rem),
+        linear-gradient(180deg, #fff 0%, var(--cream) 100%);
+      font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", Arial, sans-serif;
+    }
+    .wrap { width: min(1460px, calc(100% - 40px)); margin: 0 auto; }
+    header { padding: 64px 0 38px; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 10px; margin-bottom: 16px;
+      color: var(--coral); font-size: 13px; font-weight: 900; letter-spacing: .13em;
+    }
+    .eyebrow::before { content: ""; width: 30px; height: 3px; background: var(--coral); border-radius: 9px; }
+    h1 { margin: 0; color: var(--navy); font-size: clamp(40px, 6vw, 80px); line-height: 1; letter-spacing: -.065em; }
+    .lead { max-width: 740px; margin: 22px 0 0; color: var(--muted); font-size: 18px; line-height: 1.75; }
+    .brand-rule { display: flex; gap: 8px; margin-top: 26px; }
+    .brand-rule span { width: 44px; height: 8px; border-radius: 999px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; padding-bottom: 56px; }
+    .card {
+      overflow: hidden; border: 1px solid var(--line); border-radius: 28px; background: rgba(255,255,255,.82);
+      box-shadow: 0 22px 70px rgba(16, 42, 67, .09); backdrop-filter: blur(12px);
+      transition: transform .25s ease, box-shadow .25s ease;
+    }
+    .card:hover { transform: translateY(-6px); box-shadow: 0 30px 80px rgba(16, 42, 67, .15); }
+    .visual { position: relative; aspect-ratio: 1; overflow: hidden; background: #f7f2e8; cursor: zoom-in; }
+    .visual img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .35s ease; }
+    .card:hover .visual img { transform: scale(1.018); }
+    .badge {
+      position: absolute; top: 16px; left: 16px; z-index: 2; padding: 8px 11px; border-radius: 999px;
+      color: #fff; background: rgba(16,42,67,.92); font-size: 12px; font-weight: 900; letter-spacing: .08em;
+      box-shadow: 0 8px 24px rgba(16,42,67,.18);
+    }
+    .body { padding: 25px 25px 27px; }
+    .title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    h2 { margin: 0; color: var(--navy); font-size: 25px; letter-spacing: -.045em; }
+    .number { color: var(--ice); font-size: 34px; font-weight: 950; line-height: .9; }
+    .desc { min-height: 68px; margin: 13px 0 17px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .tags { display: flex; flex-wrap: wrap; gap: 7px; min-height: 58px; }
+    .tag { padding: 7px 10px; border-radius: 999px; color: var(--navy); background: #edf7f9; font-size: 12px; font-weight: 750; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 20px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 14px;
+      border: 1px solid var(--line); border-radius: 13px; color: var(--navy); background: #fff;
+      font-size: 13px; font-weight: 850; text-decoration: none; cursor: pointer;
+    }
+    .btn.primary { color: #fff; border-color: var(--navy); background: var(--navy); }
+    .summary {
+      display: grid; grid-template-columns: 1.1fr 1.9fr; gap: 34px; align-items: center;
+      margin: 0 0 64px; padding: 34px; border-radius: 28px; color: #fff; background: var(--navy);
+    }
+    .summary h3 { margin: 0; font-size: 30px; letter-spacing: -.045em; }
+    .summary p { margin: 10px 0 0; color: rgba(255,255,255,.72); line-height: 1.7; }
+    .summary table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .summary th, .summary td { padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,.15); text-align: left; }
+    .summary th { color: var(--ice); font-weight: 900; }
+    footer { padding: 0 0 40px; color: var(--muted); font-size: 12px; text-align: center; }
+    dialog {
+      width: min(92vw, 1040px); padding: 0; border: 0; border-radius: 24px; background: #fff;
+      box-shadow: 0 40px 120px rgba(0,0,0,.35);
+    }
+    dialog::backdrop { background: rgba(4,16,28,.82); backdrop-filter: blur(7px); }
+    dialog img { display: block; width: 100%; height: auto; border-radius: 24px; }
+    .close {
+      position: fixed; top: 18px; right: 20px; width: 48px; height: 48px; border: 0; border-radius: 999px;
+      color: #fff; background: var(--coral); font-size: 26px; cursor: pointer; box-shadow: 0 8px 26px rgba(0,0,0,.26);
+    }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      .summary { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .wrap { width: min(100% - 24px, 1460px); }
+      header { padding: 42px 0 28px; }
+      .lead { font-size: 16px; }
+      .grid { grid-template-columns: 1fr; gap: 18px; }
+      .desc, .tags { min-height: 0; }
+      .summary { padding: 24px 20px; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="wrap">
+    <div class="eyebrow">BRAND IDENTITY EXPLORATION</div>
+    <h1>언니냉면<br>로고 시안 3종</h1>
+    <p class="lead">시원한 냉면의 인상과 친근한 ‘언니’의 정서를 서로 다른 세 방향으로 풀었습니다. 이미지를 누르면 원본 크기로 확대할 수 있습니다.</p>
+    <div class="brand-rule" aria-hidden="true"><span style="background:#102a43"></span><span style="background:#bfeaf2"></span><span style="background:#ef6a5b"></span><span style="background:#173d36"></span></div>
+  </header>
+
+  <main class="wrap">
+    <section class="grid" aria-label="언니냉면 로고 시안 비교">
+      <article class="card">
+        <div class="visual" data-full="../brands/unni-naengmyeon/logo-concepts-20260722/concept-a-wave-bowl.png">
+          <span class="badge">CONCEPT A</span>
+          <img src="../brands/unni-naengmyeon/logo-concepts-20260722/concept-a-wave-bowl.png" alt="언니냉면 물결과 면 그릇 로고 시안" loading="eager">
+        </div>
+        <div class="body">
+          <div class="title-row"><h2>물결 면그릇형</h2><span class="number">01</span></div>
+          <p class="desc">면발과 차가운 육수의 물결을 하나의 그릇 심볼로 결합한 방향입니다. 빠르고 시원한 인상이 강합니다.</p>
+          <div class="tags"><span class="tag">간판 가독성</span><span class="tag">배달앱 아이콘</span><span class="tag">시원함 강조</span></div>
+          <div class="actions"><button class="btn primary" type="button" data-open="../brands/unni-naengmyeon/logo-concepts-20260722/concept-a-wave-bowl.png">크게 보기</button><a class="btn" href="../brands/unni-naengmyeon/logo-concepts-20260722/concept-a-wave-bowl.png" download>PNG 저장</a></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="visual" data-full="../brands/unni-naengmyeon/logo-concepts-20260722/concept-b-sister-seal.png">
+          <span class="badge">CONCEPT B</span>
+          <img src="../brands/unni-naengmyeon/logo-concepts-20260722/concept-b-sister-seal.png" alt="언니냉면 친근한 언니 인장형 로고 시안" loading="eager">
+        </div>
+        <div class="body">
+          <div class="title-row"><h2>친근한 언니 인장형</h2><span class="number">02</span></div>
+          <p class="desc">‘언니’라는 브랜드 이름을 캐릭터 자산으로 확장한 방향입니다. 기억성과 이야기 전달력이 가장 좋습니다.</p>
+          <div class="tags"><span class="tag">브랜드 기억성</span><span class="tag">패키지 활용</span><span class="tag">친근한 인상</span></div>
+          <div class="actions"><button class="btn primary" type="button" data-open="../brands/unni-naengmyeon/logo-concepts-20260722/concept-b-sister-seal.png">크게 보기</button><a class="btn" href="../brands/unni-naengmyeon/logo-concepts-20260722/concept-b-sister-seal.png" download>PNG 저장</a></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="visual" data-full="../brands/unni-naengmyeon/logo-concepts-20260722/concept-c-hangul-monogram.png">
+          <span class="badge">CONCEPT C</span>
+          <img src="../brands/unni-naengmyeon/logo-concepts-20260722/concept-c-hangul-monogram.png" alt="언니냉면 한글 자소 모노그램 로고 시안" loading="eager">
+        </div>
+        <div class="body">
+          <div class="title-row"><h2>한글 모노그램형</h2><span class="number">03</span></div>
+          <p class="desc">한글 자소와 그릇·얼음·면발을 기하학적으로 정리한 방향입니다. 현대적이고 확장성이 좋습니다.</p>
+          <div class="tags"><span class="tag">모던 한식</span><span class="tag">굿즈 확장</span><span class="tag">작은 화면 대응</span></div>
+          <div class="actions"><button class="btn primary" type="button" data-open="../brands/unni-naengmyeon/logo-concepts-20260722/concept-c-hangul-monogram.png">크게 보기</button><a class="btn" href="../brands/unni-naengmyeon/logo-concepts-20260722/concept-c-hangul-monogram.png" download>PNG 저장</a></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="summary">
+      <div><h3>선택 가이드</h3><p>브랜드가 무엇으로 기억되길 원하는지에 따라 한 안을 고르면, 다음 단계에서 실제 간판·메뉴판·배달앱용 규격으로 정교화할 수 있습니다.</p></div>
+      <table>
+        <thead><tr><th>시안</th><th>핵심 강점</th><th>가장 적합한 용도</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>냉면 업종을 즉시 인지</td><td>간판·배달앱·매장 전면</td></tr>
+          <tr><td>B</td><td>브랜드 인물성과 기억성</td><td>패키지·SNS·가맹 브랜딩</td></tr>
+          <tr><td>C</td><td>현대적이고 확장 가능한 심볼</td><td>앱 아이콘·굿즈·서브브랜드</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>UNNI NAENGMYEON · LOGO CONCEPTS · 2026.07.22</footer>
+
+  <dialog id="viewer" aria-label="로고 원본 확대 보기">
+    <button class="close" type="button" aria-label="닫기">×</button>
+    <img id="viewer-image" src="" alt="선택한 언니냉면 로고 원본">
+  </dialog>
+  <script>
+    const viewer = document.querySelector('#viewer');
+    const viewerImage = document.querySelector('#viewer-image');
+    const openImage = (src) => { viewerImage.src = src; viewer.showModal(); };
+    document.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => openImage(button.dataset.open)));
+    document.querySelectorAll('[data-full]').forEach((visual) => visual.addEventListener('click', () => openImage(visual.dataset.full)));
+    document.querySelector('.close').addEventListener('click', () => viewer.close());
+    viewer.addEventListener('click', (event) => { if (event.target === viewer) viewer.close(); });
+  </script>
+</body>
+</html>

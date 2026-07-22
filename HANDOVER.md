@@ -4285,6 +4285,23 @@
   - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
   - 코드 commit 591388ab 완료. push/deploy/restart는 수행하지 않았다.
 
+## 2026-07-22 14:27 KST - 언니냉면 로고 시안 3종 및 HTML 비교 보드 최종 검증
+
+- 이미지 생성:
+  - A안 물결·면그릇형, B안 친근한 언니 인장형, C안 한글 모노그램형 PNG 3종을 생성했다.
+  - 원본은 `app/static/brands/unni-naengmyeon/logo-concepts-20260722/`에 저장했으며 각 파일은 `1254x1254` RGB PNG다.
+- 비교 보드:
+  - `app/static/reports/unni-naengmyeon-logo-concepts-20260722.html`에 반응형 3열/1열 비교, 원본 확대 dialog, 개별 PNG 저장 링크, 시안별 선택 가이드를 구현했다.
+  - 공개 URL `https://fb.newtalk.kr/static/reports/unni-naengmyeon-logo-concepts-20260722.html`은 HTTP 200 `text/html`로 확인했다.
+  - 포함 PNG 3개는 공개 `https://fb.newtalk.kr/static/brands/unni-naengmyeon/logo-concepts-20260722/` 경로에서 각각 HTTP 200 `image/png`이며 파일 크기와 SHA-256이 로컬 원본과 일치한다.
+- 채팅 표시:
+  - 생성 원본 3장을 이미지 생성 결과와 로컬 파일 재로딩 방식으로 현재 채팅에 직접 표시했다.
+- 브라우저 E2E:
+  - CEO PC Agent 오프라인으로 `capture_screenshot`은 실패했으나, 전용 Headless 업무 세션 `unni-logo-final-e2e-20260722`에서 공개 URL 탐색과 브라우저 스크린샷을 완료했다.
+  - ARIA 스냅샷에서 A/B/C 이미지 3개, 확대 버튼 3개, PNG 저장 링크 3개, 선택 가이드 표 렌더를 확인했다.
+- 배포 방식:
+  - 산출물은 API 컨테이너가 바인드하는 기존 `app/static` 경로에 추가되어 별도 재시작 없이 공개 반영됐다. Nginx·Docker 설정 변경 및 서비스 재시작은 수행하지 않았다.
+
 ## 2026-07-22 14:22 KST - Generated images render inline in chat
 
 - 생성 성공 결과를 공개 `/api/v1/image/gallery/{job_id}/image` URL로 정규화하고 최종 AI 메시지에 Markdown 이미지로 자동 첨부한다.
