@@ -1617,7 +1617,11 @@ async def call_stream(
             if not _codex_had_error:
                 return
             _CODEX_FB = {
-                "gpt-5.6-sol": ["claude-opus", "gemini-3.1-pro-preview"],
+                "gpt-5.6-sol": [
+                    "claude-opus",
+                    "gemini-3.1-pro-preview",
+                    "deepseek-v4-flash",
+                ],
                 "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
                 "gpt-5.4": ["claude-sonnet", "gemini-2.5-flash"],
                 "gpt-5.4-mini": ["claude-haiku", "gemini-3.1-flash-lite-preview"],

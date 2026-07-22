@@ -740,6 +740,85 @@ async def test_call_stream_falls_back_immediately_when_gpt_56_relay_is_busy(monk
 
 
 @pytest.mark.asyncio
+async def test_call_stream_uses_deepseek_when_gpt_56_claude_and_gemini_fail(monkeypatch):
+    calls = []
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {
+            "gpt-5.6-sol",
+            "claude-opus",
+            "gemini-3.1-pro-preview",
+            "deepseek-v4-flash",
+        }
+
+    async def _fake_registered_models(active_only=False):
+        return [
+            {
+                "provider": "codex",
+                "model_id": "gpt-5.6-sol",
+                "execution_model_id": "gpt-5.6-sol",
+                "is_active": True,
+                "metadata": {
+                    "execution_backend": "codex_cli",
+                    "execution_model_id": "gpt-5.6-sol",
+                },
+            }
+        ]
+
+    async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
+        calls.append(("codex", model))
+        yield {"type": "error", "content": "codex_relay_busy: relay_semaphore_timeout"}
+
+    async def _fake_cli_stream(model, system_prompt, messages, tools=None, session_id=None, oauth_slot=None):
+        calls.append(("claude", model))
+        yield {"type": "error", "content": "no OAuth token available"}
+
+    async def _fake_litellm_stream(model, system_prompt, messages, tools=None, session_id=None):
+        calls.append(("litellm", model))
+        if model == "gemini-3.1-pro-preview":
+            yield {"type": "error", "content": "RESOURCE_EXHAUSTED"}
+            return
+        yield {"type": "delta", "content": "fallback ok"}
+        yield {
+            "type": "done",
+            "model": model,
+            "cost": "0",
+            "input_tokens": 1,
+            "output_tokens": 1,
+        }
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
+    monkeypatch.setattr(model_selector, "_stream_litellm", _fake_litellm_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="code_modify", model="gpt-5.6-sol", use_tools=True, tool_group="all"),
+            "system prompt",
+            [{"role": "user", "content": "all-provider fallback"}],
+            model_override="gpt-5.6-sol",
+            session_id="session-codex-all-fallbacks",
+        )
+    ]
+
+    assert calls == [
+        ("codex", "gpt-5.6-sol"),
+        ("claude", "claude-opus"),
+        ("litellm", "gemini-3.1-pro-preview"),
+        ("litellm", "deepseek-v4-flash"),
+    ]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
 async def test_call_stream_routes_registry_claude_backend_without_static_allowlist(monkeypatch):
     captured = {}
 

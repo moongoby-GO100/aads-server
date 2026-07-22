@@ -4537,3 +4537,10 @@
 - 남은 실기기 검증:
   - 23:14 KST 기준 agent `2e9379a1-fed`는 offline이며 `device_list`, `pc_execute`, 기존 local-agent 브라우저 세션이 모두 `PC_AGENT_OFFLINE`을 반환했다.
   - 서버에서 종료된 Windows worker를 실행할 제어 채널이 없으므로 CEO PC에서 v1.0.56 EXE를 1회 실행해야 한다. 이후 heartbeat, `system_info`, 완전 종료 예/아니오 E2E를 수행한다.
+
+## 2026-07-22 23:17 KST - Multi-session no-response P0 third-provider fallback
+
+- 운영 Green에 1차 P0(`1d7b2d5d`) 반영 후, Relay는 healthy였으나 Claude 가용 토큰 0건, Gemini 선불 크레딧 소진(HTTP 429)이 동시에 확인됐다.
+- DeepSeek V4 Flash를 운영 컨테이너에서 직접 호출해 `OK` delta와 `done` 이벤트를 실측했다.
+- `gpt-5.6-sol` Relay 포화 시 폴백을 `Claude Opus -> Gemini 3.1 Pro -> DeepSeek V4 Flash` 순으로 확장했다.
+- Codex/Claude/Gemini를 각각 실패시키고 DeepSeek 완료를 검증하는 회귀 테스트를 추가했다.
