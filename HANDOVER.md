@@ -4403,76 +4403,20 @@
 - 상태:
   - 코드/테스트/문서 기록 완료.
   - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
-  - commit/push/deploy/restart는 수행하지 않았다.
+  - 코드 commit 591388ab 완료. push/deploy/restart는 수행하지 않았다.
 
-## 2026-07-21 11:39 KST - Yeoljeong Green recovery and live Ddangyo reconciliation
+## 2026-07-22 12:53 KST - PC Agent terminal flicker elimination
 
-- 배경: Green 격리 슬롯이 시작 시 새 Vault 키를 생성해 기존 배달 플랫폼 암호문 4건을 복호화하지 못했고, 입사서류 업로드 API의 비동기 호출 오류와 포털 DOM 변경이 실수집을 막았다.
-- 운영 복구:
-  - `docker-compose.prod.yml`의 Blue/Green 양쪽에 호스트 영구 키 `/root/aads/aads-server/app/.vault.key`를 read-only로 마운트했다.
-  - 비활성 Green만 재생성한 뒤 Blue와 동일한 키 해시, canonical `acct-*` 4건 복호화 가능, 컨테이너 health를 확인했다.
-  - API upstream을 8100 Blue에서 8102 Green으로 전환했고 Nginx config test/reload와 외부 `/api/v1/health` HTTP 200을 확인했다. Blue는 즉시 롤백용으로 유지했다.
-- 코드 보완:
-  - 입사서류 업로드 라우트가 async 저장 함수를 직접 await하는지 회귀 테스트를 추가했다.
-  - 포털 클릭 시 숨은 중복 요소·비대화형 컨테이너를 건너뛰고 실제 link/button을 선택하도록 보강했다.
-  - 땡겨요의 선택 동의/홍보 팝업은 동의하지 않고 닫기만 수행하며, WebSquare list table과 리뷰 카드를 원장 행으로 정규화한다.
-  - 땡겨요 `입금(예정)일`, `입금(예정)금액`, `입금상태` 헤더를 정산 원장 필드로 매핑했다.
-  - 요기요 로그아웃 랜딩을 인증 성공으로 오판하지 않고 `PORTAL_LOGIN_NOT_COMPLETED`로 반환한다.
-- 실수집/DB 검증:
-  - 최종 run id `d1137eb8-19d8-4496-abb2-0039cfac7666`은 `succeeded`, 진단은 sales/settlements=`list_table`, reviews=`review_cards`다.
-  - 땡겨요 매출 10건(2026-07-13~20, 합계 283,700원), 정산 10건(2026-07-03~16, 합계 547,035원), 리뷰 8건을 DB에서 확인했다.
-  - 이전 오탐 HTML table에서 생성된 날짜/본문 공백 리뷰 1행은 dry-run과 정확한 row id 검증 후 soft-delete했다(`UPDATE 1`).
-  - 배민은 보안 위배 접근 제한, 쿠팡이츠는 CDN Access Denied로 서버 headless 수집이 차단됐다. 요기요는 로그인 완료 실패이며 2차 인증 화면에는 도달하지 않았다.
+- 증상: Windows PC에서 터미널 창이 주기적으로 열렸다 닫혔다. 실측 결과 `KakaoBotWatchdog`가 대화형 작업으로 5분마다 `AADS-PC-Agent-Setup-1.0.51.exe`를 직접 실행했고, 시작프로그램 CMD와 HKCU Run의 구버전 `1.0.14.exe`가 함께 등록돼 있었다.
+- 운영 조치:
+  - 기존 예약 작업 XML, 시작 CMD, Run 키 값을 `C:\Users\rkvs3\AppData\Local\KakaoBot\backup-20260722-1239\`에 백업했다.
+  - 예약 작업을 로그온 후 30초에 `wscript.exe ...\aads_pc_agent_watchdog.vbs`를 실행하는 단일 숨김 watchdog으로 교체했다.
+  - 구형 시작프로그램 CMD와 HKCU `KakaoBot` Run 값을 제거했다.
+  - 숨김 watchdog이 에이전트 프로세스 단일성을 30초마다 확인하고, 구형 런처가 자동실행을 다시 만들 경우 숨김 작업으로 재정합화하도록 했다.
+- 코드: `pc_agent/launcher.py`의 향후 설치/실행 경로도 동일한 단일 숨김 watchdog 계약으로 변경하고, `tests/unit/test_pc_agent_launcher_startup.py` 회귀 테스트를 추가했다.
 - 검증:
-  - 격리 릴리스 read-only 테스트: 관련 29건 통과.
-  - `git diff --check`: 통과.
-  - 외부 매장비서 정적 앱 HTTP 200, 보호 API 미인증 요청 HTTP 401 확인.
-  - PC Agent가 오프라인이어서 브라우저 E2E는 실행하지 못했고, credential test의 HTTP 200 로그인 페이지 폴백과 API/컨테이너 검증으로 대체했다.
-- 남은 작업:
-  - 배민·쿠팡이츠 실수집은 CEO PC Browser Bridge를 켠 상태에서 재실행해야 한다.
-  - 요기요는 공유 자격증명 확인 또는 포털 로그인 방식 재등록이 필요하다.
-
-## 2026-07-21 14:23 KST - Chat deep-link message recovery final closeout
-
-- 대상: `https://aads.newtalk.kr/chat/aa433b41-0ad2-421c-ae7c-bac4806035cc` 새로고침 후 메시지 본문이 표시되지 않던 장애.
-- 원인:
-  - 대시보드는 메시지 타임라인을 `fields=render`로 요청했으나 당시 활성 API 슬롯은 `full|minimal`만 허용해 HTTP 422를 반환했다.
-  - `/chat/{session_id}` 직접 복원 경로도 query/hash만 읽는 구형 경로와 redirect 경합이 있었다.
-- 코드 조치:
-  - API `fields` 계약에 `render`를 추가하고, 전체 본문은 유지하면서 무거운 tool detail payload는 지연 조회하도록 render projection을 구현했다.
-  - 대시보드는 pathname의 세션 ID를 직접 복원하고 `/chat/[id]`에서 ChatPage를 직접 렌더한다.
-  - 임시 `public/e2e-auth.html` 도우미를 삭제하고 대용량 메시지 행에 viewport virtualization을 적용했다.
-- 2026-07-21 최종 실측:
-  - 대상 세션 DB: 메시지 3,729건, 아티팩트 2,158건, 제목 `GO100-002[CTO]` 보존.
-  - API blue(8100)/green(8102) 모두 render projection 함수 검증 통과. 무토큰 render 요청은 양 슬롯 모두 HTTP 401로 응답해 422 계약 오류가 재발하지 않음을 확인했다.
-  - 원격 최신 `origin/main` 기반 회귀테스트: `test_list_messages_render_keeps_content_and_omits_heavy_detail_fields` 1건 통과, Python compile 및 `git diff --check` 통과.
-  - 외부 `/api/v1/health` HTTP 200. 세션 URL 비로그인 요청은 원 경로를 보존한 로그인 URL로 HTTP 307.
-  - 대시보드 blue/green 모두 healthy, 임시 E2E helper 파일 부재, 외부 `/static/e2e-auth.html` HTTP 404 확인.
-  - 로그인 관리자 브라우저에서 동일 URL의 메시지 DOM 렌더를 확인했고, 이후 CEO가 실제 브라우저에서 표시됨을 확인했다.
-- 배포/롤백:
-  - API active green(8102), standby blue(8100); dashboard active green(3101), standby blue(3100). 네 컨테이너 모두 healthy이고 nginx config test를 통과했다.
-  - 양 API 슬롯이 동일 render 계약을 제공해 어느 슬롯으로 롤백해도 해당 422 회귀가 발생하지 않는다.
-- Git/문서:
-  - 원격 최신 main에 적용한 API 코드 커밋은 `2fc3f6da`이다.
-  - 대시보드 복구 커밋은 로컬 dashboard 저장소 `dfe515a`, E2E helper 제거/virtualization 커밋은 `535e7a8`이며 해당 저장소에는 remote가 없어 push하지 못했다.
-  - 이 항목은 서버 원격 main의 후속 문서 커밋으로 기록한다.
-
-## 2026-07-22 20:51 KST - 매장비서 실제 체결용 계약서 v2
-
-- 고용노동부 2025 개정 표준근로계약서와 근로기준법 제17조, 기간제·단시간근로자법 제17조를 기준으로 계약 입력·본문·서명 전 검증을 재정비했다.
-- 근로자 주소·연락처·생년월일·국적을 회원가입/가입요청에서 받아 승인 직원 선택 시 계약서에 자동 반영한다. 사용자 주소와 미등록 사업자 정보도 서명 전 필수 검증한다.
-- 과거 초안을 수정할 때도 연결된 가입정보와 사업자 설정의 최신 전화·주소·대표자 정보를 빈 필드에만 보완하고, 이미 사용자가 입력한 값은 덮어쓰지 않는다.
-- 18세 미만은 친권자/후견인 정보와 서면동의 확인, 외국인은 국적·체류자격·마스킹 등록번호, 단시간근로자는 근로일별 근로시간을 필수화했다.
-- A4 계약서 본문에서 작성 안내와 자동점검 배너를 제거하고, 계약당사자 인적사항·근로조건·특약·서명만 출력한다. 기존 자필서명·감사기록·서명본 잠금은 유지한다.
-- 검증: Python compile, 인라인 JavaScript parse, `git diff --check`, 관련 API/service 테스트 `56 passed`.
-- 기존 계약 수정 시 승인 직원·사업자 기초정보로 비어 있는 연락처/생년월일/주소를 보완하되 저장된 계약값은 덮어쓰지 않도록 자동채움 회귀를 보강했다.
-- 운영 배포: Green `8102`를 active로 전환하고 Blue `8100`을 즉시 롤백용 backup으로 유지했다. 양 슬롯 health 및 Nginx config test를 통과했다.
-
-## 2026-07-22 21:35 KST - 생성 계약서 최신 미리보기 운영 반영
-
-- 원인: 운영 HTML은 실제 체결용 계약서 v2였지만 `fb.newtalk.kr`의 정적 HTML 응답이 `Cache-Control: max-age=3600`이어서 기존 브라우저가 구형 미리보기를 최대 1시간 재사용할 수 있었다. 운영 계약 29건 중 과거 초안 다수도 근로자 연락처·주소·생년월일 필드가 비어 있어 최신 미리보기의 당사자 정보가 빈칸으로 표시됐다.
-- 조치: 매장비서 메인 HTML만 `no-store`로 전환하고 루트 진입 URL에 릴리스 버전을 부여했다. 생성된 `draft` 계약서 미리보기는 저장값을 우선하면서 빈 근로자/사업자 필드만 현재 승인 직원·사업자 설정으로 읽기 전용 보완한다.
-- 불변성: `requested`와 `signed` 계약서는 체결 당시 저장값을 그대로 표시하며 자동 보완하지 않는다. 모달 배지에서 최신양식/체결 당시 저장본을 구분한다.
-- 검증: 인라인 JavaScript parse, `git diff --check`, 계약서 API·서비스·Nginx 회귀 `57 passed`.
-- 운영 적용: 활성 Green `8102`의 정적 HTML만 무중단 동기화하고 매장비서 HTML 캐시를 `no-store`로 변경했다. 비활성 Blue `8100`은 활성 스트림 1건이 확인돼 재빌드하지 않고 롤백 슬롯으로 보존했다. 외부 health/HTML/cache header와 mocked headless Chromium의 계약 목록 `미리보기`→A4 모달→가입정보 보완까지 통과했다.
-- 롤백: `/tmp/yf-index.before-contract-preview-c9958a38.html`, `/tmp/fb.conf.before-contract-preview-c9958a38`을 복원하면 된다.
+  - 표준 라이브러리 단위 테스트 2건, `py_compile`, `git diff --check` 통과.
+  - 10분간 11회 관찰에서 PC Agent PID `23148`, start count `2`, wscript 1개, agent process tree 2개가 모두 불변이고 heartbeat가 계속 정상인 것을 확인했다.
+  - 최종 Windows 창 목록에서 CMD/PowerShell/터미널 창 0개, 예약 작업 next run N/A·running, legacy Run key/Startup CMD 부재를 확인했다.
+- 배포: Windows PC 운영 설정은 즉시 반영 완료. 서버/API/대시보드 재배포는 필요하지 않다. 향후 PC Agent 설치 코드 변경은 격리 브랜치 커밋으로 관리한다.
+- 롤백: 위 백업 폴더의 XML/CMD/Run 키 기록으로 이전 상태를 복원할 수 있다.
