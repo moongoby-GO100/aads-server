@@ -4578,3 +4578,4 @@
   - 코드 커밋 `7d32b774`를 `origin/main`에 반영하고 2026-07-23 08:43 KST 활성 Blue 슬롯, 08:47 KST standby Green 슬롯에 API hot-reload를 수행했다. 각각 74개·56개 모듈 재로드를 확인했다.
   - Blue·Green 실제 릴리스 소스에 신규 회귀 테스트를 주입한 read-only 격리 테스트가 각각 `2 passed`였고, 8100·8102·외부 health 모두 HTTP 200이었다.
   - PC Agent는 여전히 오프라인이라 실제 Chrome 로그인 리다이렉트·파일 업로드 E2E는 실행하지 못했다. `device_list`는 정상 응답하되 연결 디바이스 0대로 확인됐다.
+  - 사후 로그 정정: 08:43 KST hot-reload에서 `app.services.tool_executor`는 성공했지만 `app.browser_bridge.service`는 정책상 `hot_reload_blocked`로 skip됐다. 따라서 Browser Bridge 수정은 아직 프로세스에 완전 반영되지 않았으며, 스트림 0 이후 조건부 blue-green unit이 전체 반영을 대기 중이다.
