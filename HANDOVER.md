@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-07-22 23:14 KST - Multi-session no-response P0 production closeout
+
+- Seven-day execution-ledger audit: `167 completed`, `79 interrupted`, `1 running`. Manual user turns were `175`, with `9` executions lacking an assistant message (`5.1%`). The 22:00 KST incident cluster contained seven `llm_first_response_timeout_after_180~182s` failures.
+- Root cause 1: a saturated Codex relay returned `codex_relay_busy` / `relay_semaphore_timeout`, but the model layer retried the same route up to 30 times while the chat layer cancelled at its 180-second first-response timeout. Commit `1d7b2d5d` makes these capacity errors non-retryable and adds `gpt-5.6-sol -> claude-opus -> gemini-3.1-pro-preview` fallback.
+- Root cause 2: blue/green watchdogs could collect the same detached Runner result repeatedly. The same commit adds an atomic `[watchdog_result_collected]` claim before posting a completion message or triggering another AI turn.
+- Validation: isolated release tests and active Green tests both passed `33` cases. Active runtime check returned `relay_busy_retryable=False`; Python compile/diff checks passed during the release audit.
+- Production: clean release commit `1d7b2d5d30303c63bc5675aae938bef1f8e07c56` was pushed to `main` and deployed to Green `8102`. Nginx API/WS upstream, `.active_port`, `.active_container`, and execution-resume ownership were synchronized to Green. External, Blue, and Green health checks returned HTTP 200; Nginx configuration validation passed.
+- Rollback: Blue `8100` remains healthy as the previous release while the reporting SSE drains. Repoint Nginx API/WS upstream and active markers to Blue if rollback is required. Standby rebuild is intentionally deferred until old-slot streams reach zero.
+- E2E limitation: Browser Bridge capture could not run because the PC Agent was offline. Public `/chat` returned the expected authenticated redirect (`307`), so browser E2E was replaced with API, container, Nginx, DB-ledger, and active-slot regression checks.
+
 ## 2026-07-22 22:47 KST - PC Agent 종료·설치·재연결 P0 보강
 
 - 실기기 `2e9379a1-fed`는 PC Agent `1.0.52`로 연결되어 있다가 2026-07-22 13:07:31 KST에 클라이언트 정상종료 코드 1000으로 끊겼다. 서버 이벤트·공개 상태 API 모두 이후 연결 0대를 확인했다.
