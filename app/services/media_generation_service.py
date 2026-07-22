@@ -748,10 +748,15 @@ class MediaGenerationService:
         if not saved:
             return result, metadata, None
         updated_result = dict(result)
-        updated_result["url"] = saved["url"]
+        # /static is owned by the Next.js dashboard at the public ingress, so
+        # returning the filesystem-style URL makes successfully generated
+        # images render as 404 in chat.  The gallery endpoint streams the
+        # stored file through the API ingress and is the stable public URL.
+        updated_result["url"] = f"/api/v1/image/gallery/{job_id}/image"
         updated_metadata = {
             **metadata,
             "storage": "static_file",
+            "storage_url": saved["url"],
             "bytes": saved["bytes"],
             "content_type": saved["content_type"],
             "base64_externalized": True,

@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-07-22 13:20 KST - 채팅 생성 이미지 인라인 표시 안정화
+
+- 원인: 이미지 생성 서비스가 `/static/media/generated/...`를 반환했지만 공개 Nginx에서 `/static`은 Dashboard로 라우팅되어 HTTP 404가 발생했다. 생성 도구 결과 URL도 최종 assistant 메시지에 자동 결합되지 않아 생성 성공 후 채팅 버블에는 이미지가 표시되지 않았다.
+- 조치: base64 생성 결과를 영속 파일로 외부화한 뒤 `/api/v1/image/gallery/{job_id}/image`를 공개 URL로 반환한다. 갤러리 API는 허용된 generated 디렉터리의 `result_path`를 직접 스트리밍하며, 과거 data URI와 외부 URL도 계속 지원한다.
+- 채팅 반영: `generate_image`/`edit_image` 성공 도구 결과를 최종 응답에 Markdown 이미지로 자동 첨부한다. Relay가 도구 결과 본문을 누락해도 현재 execution 시작 이후의 `media_generation_jobs`를 조회해 복구하며, 동일 URL은 중복 삽입하지 않는다.
+- 검증: 변경 파일 `py_compile`, `git diff --check`, 이미지 생성·도구 계약·채팅 첨부·API 파일 스트리밍 단위 테스트 24건을 통과했다. 운영 배포와 외부 API/E2E 결과는 배포 후 본 항목에 추가 기록한다.
+
 ## 2026-07-22 08:33 KST - 매장비서 계약서·입사파일 최종 원장 대조 및 운영 보완
 
 - 원장 대조: 서버 원격 `main`의 계약서 개선 커밋과 운영 Green 파일은 일치했지만, Dashboard 공개 복사본에는 프리랜서 `용역 기간 및 장소` 조항 누락, 사용자 정산문구 입력 시 용역비 금액 누락, 인증 PDF 파일 모달 재누락이 확인됐다.

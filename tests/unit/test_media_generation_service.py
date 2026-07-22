@@ -339,9 +339,9 @@ async def test_default_image_route_externalizes_base64_result(monkeypatch, tmp_p
 
     assert result["status"] == "succeeded"
     assert result["provider"] == "gpt-image-1"
-    assert result["url"].startswith("/static/media/generated/image/")
+    assert result["url"] == f"/api/v1/image/gallery/{result['job_id']}/image"
     assert conn.rows[result["job_id"]]["provider"] == "openai"
-    assert conn.rows[result["job_id"]]["result_uri"].startswith("/static/media/generated/image/")
+    assert conn.rows[result["job_id"]]["result_uri"] == result["url"]
     assert not conn.rows[result["job_id"]]["result_uri"].startswith("data:")
     assert Path(conn.rows[result["job_id"]]["result_path"]).read_bytes() == b"image-bytes"
     assert conn.rows[result["job_id"]]["result_metadata"]["base64_externalized"] is True

@@ -4,14 +4,16 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import mimetypes
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response, RedirectResponse
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.auth import require_internal_admin
-from app.services.media_generation_service import media_generation_service
+from app.services.media_generation_service import _app_static_dir, media_generation_service
 
 logger = logging.getLogger(__name__)
 
@@ -380,12 +382,35 @@ async def get_gallery_image(job_id: str):
         raise HTTPException(503, "DB 미연결")
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT result_uri FROM media_generation_jobs WHERE job_id = $1",
+            "SELECT result_uri, result_path FROM media_generation_jobs WHERE job_id = $1",
             job_id,
         )
     if not row or not row["result_uri"]:
         raise HTTPException(404, "이미지 없음 또는 생성 중")
     uri: str = row["result_uri"]
+    generated_root = (_app_static_dir() / "media" / "generated").resolve()
+
+    def _safe_generated_file(candidate: str | Path | None) -> Path | None:
+        if not candidate:
+            return None
+        try:
+            path = Path(candidate).expanduser().resolve()
+            path.relative_to(generated_root)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return path if path.is_file() else None
+
+    local_path = _safe_generated_file(row["result_path"])
+    if local_path is None and uri.startswith("/static/media/generated/"):
+        relative_uri = uri.removeprefix("/static/")
+        local_path = _safe_generated_file(_app_static_dir() / relative_uri)
+    if local_path is not None:
+        media_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
+        return FileResponse(
+            local_path,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
     if uri.startswith("data:"):
         header, b64data = uri.split(",", 1)
         media_type = header.split(";")[0].replace("data:", "")
@@ -394,4 +419,6 @@ async def get_gallery_image(job_id: str):
             media_type=media_type,
             headers={"Cache-Control": "public, max-age=86400"},
         )
+    if uri.startswith(f"/api/v1/image/gallery/{job_id}/image"):
+        raise HTTPException(404, "생성 이미지 파일을 찾을 수 없습니다")
     return RedirectResponse(uri)
