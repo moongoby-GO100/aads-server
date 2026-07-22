@@ -6,7 +6,9 @@
 - 조치: base64 생성 결과를 영속 파일로 외부화한 뒤 `/api/v1/image/gallery/{job_id}/image`를 공개 URL로 반환한다. 갤러리 API는 허용된 generated 디렉터리의 `result_path`를 직접 스트리밍하며, 과거 data URI와 외부 URL도 계속 지원한다.
 - 영속화: `app/static` 아래 생성 파일이 배포/작업트리 정리 과정에서 삭제되는 재현을 확인했다. Blue/Green API가 공유하는 `aads_generated_media` Docker volume을 `/app/generated-media-static`에 마운트하고 `AADS_MEDIA_STATIC_DIR`로 지정해 생성물을 배포 형상과 분리했다.
 - 채팅 반영: `generate_image`/`edit_image` 성공 도구 결과를 최종 응답에 Markdown 이미지로 자동 첨부한다. Relay가 도구 결과 본문을 누락해도 현재 execution 시작 이후의 `media_generation_jobs`를 조회해 복구하며, 동일 URL은 중복 삽입하지 않는다.
-- 검증: 변경 파일 `py_compile`, `git diff --check`, 이미지 생성·도구 계약·채팅 첨부·API 파일 스트리밍 단위 테스트를 통과했다. Compose 설정 검증과 영속 volume 재생성 후 origin/API/브라우저 E2E를 수행한다.
+- 검증(2026-07-22 14:10 KST 재대조): Blue/Green API 컨테이너에서 관련 회귀 테스트가 각각 `18 passed`였고 Python compile·Dashboard TypeScript 검사·Compose config 검사가 통과했다. `media-inlineqa-20260722` PNG는 8100·8102·외부 도메인에서 모두 HTTP 200, `image/png`, 68바이트, SHA-256 `431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460`으로 일치했다. 운영 DB에는 공개 갤러리 이미지 URL을 포함한 assistant 메시지 8건이 존재한다.
+- 배포·원장: `e869fbb7`(채팅 자동 첨부), `f5df463b`(공개 이미지 읽기), `97ffb027`(Blue/Green 공유 볼륨)이 원격 `main`에 push되어 있다. 양 API 슬롯은 `AADS_MEDIA_STATIC_DIR=/app/generated-media-static`과 동일 Docker volume을 사용하며 healthy이고 외부 health는 HTTP 200이다.
+- 외부 공급자 상태: 신규 Gemini 생성 요청은 공급자 응답 `429 RESOURCE_EXHAUSTED`(선불 크레딧 소진)로 실패한다. 이는 채팅 인라인 표시·공개 전달 결함과 분리된 외부 과금 상태다. OpenAI 자격증명은 설정돼 있으나 자동 전환은 신규 과금을 유발하므로 CEO 승인 전에는 활성화하지 않는다.
 
 ## 2026-07-22 08:33 KST - 매장비서 계약서·입사파일 최종 원장 대조 및 운영 보완
 
