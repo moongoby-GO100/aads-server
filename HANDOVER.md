@@ -4424,3 +4424,11 @@
   - 원격 최신 main에 적용한 API 코드 커밋은 `2fc3f6da`이다.
   - 대시보드 복구 커밋은 로컬 dashboard 저장소 `dfe515a`, E2E helper 제거/virtualization 커밋은 `535e7a8`이며 해당 저장소에는 remote가 없어 push하지 못했다.
   - 이 항목은 서버 원격 main의 후속 문서 커밋으로 기록한다.
+
+## 2026-07-22 16:10 KST - 언니냉면 공개 문의 API 운영 복구
+
+- 원인: 대시보드의 언니냉면 문의 폼은 `/api/v1/unni-naengmyeon/inquiries`를 호출하지만, 후속 API 릴리스가 기존 문의 API 커밋을 포함하지 않아 운영 요청이 HTTP 401로 회귀했다.
+- 조치: 직전 운영 릴리스 `5a8663e0` 위에 공개 문의 라우터, JWT 예외 경로, 마이그레이션, 단위 테스트를 재적용했다.
+- 데이터: `unni_naengmyeon_inquiries` 테이블은 이미 존재하며 기존 문의 3건을 보존했다. DROP/TRUNCATE/DELETE는 수행하지 않았다.
+- 검증: 격리 컨테이너에서 `tests/unit/test_unni_naengmyeon_api.py` 4건 통과, `py_compile` 및 `git diff --check` 통과.
+- 배포/운영 검증: 본 문서 커밋 후 clean release worktree에서 API blue-green 배포하고, 양 슬롯 health와 공개 문의 API의 비저장 honeypot 요청 HTTP 201을 확인한다.
