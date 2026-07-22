@@ -110,9 +110,11 @@ services:
       - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
+      - AADS_MEDIA_STATIC_DIR=/app/generated-media-static
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
+      - aads_generated_media:/app/generated-media-static:rw
       - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
       - /root/aads/aads-server/.active_container:/app/.active_container:ro
       - /root/aads/aads-server/.active_port:/app/.active_port:ro
@@ -188,8 +190,10 @@ services:
       - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
+      - AADS_MEDIA_STATIC_DIR=/app/generated-media-static
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
+      - aads_generated_media:/app/generated-media-static:rw
       - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
       - /root/aads/aads-server/.active_container:/app/.active_container:ro
       - /root/aads/aads-server/.active_port:/app/.active_port:ro
@@ -360,6 +364,7 @@ services:
 volumes:
   aads_postgres_data:
   aads_redis_data:
+  aads_generated_media:
 
 networks:
   aads_network:

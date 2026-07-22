@@ -4,8 +4,9 @@
 
 - 원인: 이미지 생성 서비스가 `/static/media/generated/...`를 반환했지만 공개 Nginx에서 `/static`은 Dashboard로 라우팅되어 HTTP 404가 발생했다. 생성 도구 결과 URL도 최종 assistant 메시지에 자동 결합되지 않아 생성 성공 후 채팅 버블에는 이미지가 표시되지 않았다.
 - 조치: base64 생성 결과를 영속 파일로 외부화한 뒤 `/api/v1/image/gallery/{job_id}/image`를 공개 URL로 반환한다. 갤러리 API는 허용된 generated 디렉터리의 `result_path`를 직접 스트리밍하며, 과거 data URI와 외부 URL도 계속 지원한다.
+- 영속화: `app/static` 아래 생성 파일이 배포/작업트리 정리 과정에서 삭제되는 재현을 확인했다. Blue/Green API가 공유하는 `aads_generated_media` Docker volume을 `/app/generated-media-static`에 마운트하고 `AADS_MEDIA_STATIC_DIR`로 지정해 생성물을 배포 형상과 분리했다.
 - 채팅 반영: `generate_image`/`edit_image` 성공 도구 결과를 최종 응답에 Markdown 이미지로 자동 첨부한다. Relay가 도구 결과 본문을 누락해도 현재 execution 시작 이후의 `media_generation_jobs`를 조회해 복구하며, 동일 URL은 중복 삽입하지 않는다.
-- 검증: 변경 파일 `py_compile`, `git diff --check`, 이미지 생성·도구 계약·채팅 첨부·API 파일 스트리밍 단위 테스트 24건을 통과했다. 운영 배포와 외부 API/E2E 결과는 배포 후 본 항목에 추가 기록한다.
+- 검증: 변경 파일 `py_compile`, `git diff --check`, 이미지 생성·도구 계약·채팅 첨부·API 파일 스트리밍 단위 테스트를 통과했다. Compose 설정 검증과 영속 volume 재생성 후 origin/API/브라우저 E2E를 수행한다.
 
 ## 2026-07-22 08:33 KST - 매장비서 계약서·입사파일 최종 원장 대조 및 운영 보완
 
