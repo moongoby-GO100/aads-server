@@ -300,6 +300,7 @@ def _increment_launcher_start_count() -> int:
 def _startup_registration_status() -> dict:
     if sys.platform != "win32":
         return {"registered": False, "platform": sys.platform}
+    legacy_registry_present = False
     try:
         import winreg
 
@@ -307,11 +308,27 @@ def _startup_registration_status() -> dict:
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
         )
-        value, _ = winreg.QueryValueEx(key, "KakaoBot")
-        winreg.CloseKey(key)
-        return {"registered": bool(value), "command_present": bool(str(value).strip())}
+        try:
+            value, _ = winreg.QueryValueEx(key, "KakaoBot")
+            legacy_registry_present = bool(str(value).strip())
+        finally:
+            winreg.CloseKey(key)
+    except FileNotFoundError:
+        pass
     except Exception as exc:
         return {"registered": False, "error": type(exc).__name__}
+
+    startup_cmd = (
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+    )
+    legacy_startup_cmd_present = startup_cmd.exists()
+    return {
+        "registered": not legacy_registry_present and not legacy_startup_cmd_present,
+        "mode": "scheduled_task_hidden",
+        "legacy_registry_present": legacy_registry_present,
+        "legacy_startup_cmd_present": legacy_startup_cmd_present,
+    }
 
 
 def _watchdog_task_status() -> dict:
@@ -384,7 +401,7 @@ def _send_launcher_status(
 
 
 def register_startup() -> None:
-    """HKCU Run에 런처 등록."""
+    """중복 실행과 콘솔 깜빡임을 만드는 구형 자동실행 등록을 제거한다."""
     if sys.platform != "win32":
         return
     try:
@@ -394,36 +411,94 @@ def register_startup() -> None:
             r"Software\Microsoft\Windows\CurrentVersion\Run",
             0, winreg.KEY_SET_VALUE,
         )
-        # PyInstaller EXE면 sys.executable, 아니면 스크립트 경로
-        exe_path = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" "{__file__}"'
-        winreg.SetValueEx(key, "KakaoBot", 0, winreg.REG_SZ, exe_path)
-        winreg.CloseKey(key)
-        logger.info("시작프로그램 등록 완료")
+        try:
+            winreg.DeleteValue(key, "KakaoBot")
+            logger.info("구형 HKCU Run 자동실행 제거 완료")
+        except FileNotFoundError:
+            pass
+        finally:
+            winreg.CloseKey(key)
+
+        startup_cmd = (
+            Path(os.environ.get("APPDATA", ""))
+            / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+        )
+        if startup_cmd.exists():
+            startup_cmd.unlink()
+            logger.info("구형 시작프로그램 CMD 제거 완료")
     except Exception as e:
-        logger.warning("시작프로그램 등록 실패: %s", e)
+        logger.warning("구형 자동실행 정리 실패: %s", e)
+
+
+def _build_hidden_watchdog_vbs(exe_path: str) -> str:
+    """Create a console-free watchdog that starts one launcher instance only."""
+    escaped_path = exe_path.replace('"', '""')
+    process_name = Path(exe_path).name.replace("'", "''")
+    watchdog_path = str(INSTALL_DIR / "aads_pc_agent_watchdog.vbs").replace('"', '""')
+    return (
+        "Option Explicit\n"
+        "Dim shell, service, processes, agentExe, watchdogPath, startupCmd, taskCommand, fso\n"
+        f'agentExe = "{escaped_path}"\n'
+        f'watchdogPath = "{watchdog_path}"\n'
+        'Set shell = CreateObject("WScript.Shell")\n'
+        'Set service = GetObject("winmgmts:\\\\.\\root\\cimv2")\n\n'
+        'Set fso = CreateObject("Scripting.FileSystemObject")\n'
+        'startupCmd = shell.ExpandEnvironmentStrings("%APPDATA%") & "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\AADS-PC-Agent-Watchdog.cmd"\n'
+        'taskCommand = "schtasks.exe /Create /TN KakaoBotWatchdog /TR " & Chr(34) & "wscript.exe " & watchdogPath & Chr(34) & " /SC ONLOGON /DELAY 0000:30 /RL LIMITED /F"\n\n'
+        "Sub EnforceSingleStartup\n"
+        "  On Error Resume Next\n"
+        '  shell.RegDelete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\KakaoBot"\n'
+        "  If fso.FileExists(startupCmd) Then fso.DeleteFile startupCmd, True\n"
+        "  shell.Run taskCommand, 0, True\n"
+        "  Err.Clear\n"
+        "  On Error GoTo 0\n"
+        "End Sub\n\n"
+        "EnforceSingleStartup\n\n"
+        "Do\n"
+        "  On Error Resume Next\n"
+        f'  Set processes = service.ExecQuery("SELECT * FROM Win32_Process WHERE Name=\'{process_name}\'")\n'
+        "  If Err.Number = 0 Then\n"
+        "    If processes.Count = 0 Then\n"
+        "      shell.Run Chr(34) & agentExe & Chr(34), 0, False\n"
+        "      WScript.Sleep 5000\n"
+        "      EnforceSingleStartup\n"
+        "    End If\n"
+        "  End If\n"
+        "  Err.Clear\n"
+        "  On Error GoTo 0\n"
+        "  WScript.Sleep 30000\n"
+        "Loop\n"
+    )
 
 
 def register_watchdog_task() -> None:
-    """Windows Task Scheduler에 5분 간격 watchdog 등록 — 런처가 죽어도 자동 복구."""
+    """로그온 시 콘솔 없는 단일 watchdog을 실행한다."""
     if sys.platform != "win32":
         return
     try:
         import subprocess
-        if getattr(sys, "frozen", False):
-            exe_path = f'"{sys.executable}"'
-        else:
-            exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+
+        if not getattr(sys, "frozen", False):
+            logger.info("개발 실행에서는 Windows watchdog 작업 등록을 생략")
+            return
+
+        watchdog_path = INSTALL_DIR / "aads_pc_agent_watchdog.vbs"
+        watchdog_path.write_text(
+            _build_hidden_watchdog_vbs(sys.executable),
+            encoding="utf-8-sig",
+        )
+        task_command = f'wscript.exe "{watchdog_path}"'
         result = subprocess.run(
             ["schtasks", "/Create",
              "/TN", "KakaoBotWatchdog",
-             "/TR", exe_path,
-             "/SC", "MINUTE", "/MO", "5",
-             "/RL", "HIGHEST",
+             "/TR", task_command,
+             "/SC", "ONLOGON", "/DELAY", "0000:30",
+             "/RL", "LIMITED",
              "/F"],
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0:
-            logger.info("Task Scheduler watchdog 등록 완료 (5분 간격)")
+            logger.info("Task Scheduler 숨김 watchdog 등록 완료 (로그온 후 30초)")
         else:
             logger.warning("Task Scheduler watchdog 등록 실패: %s", result.stderr.strip())
     except Exception as e:

@@ -4284,3 +4284,19 @@
   - 코드/테스트/문서 기록 완료.
   - 실제 4사 포털 로그인·7월 실수집·입금 대사·운영 배포는 미완료.
   - 코드 commit 591388ab 완료. push/deploy/restart는 수행하지 않았다.
+
+## 2026-07-22 12:53 KST - PC Agent terminal flicker elimination
+
+- 증상: Windows PC에서 터미널 창이 주기적으로 열렸다 닫혔다. 실측 결과 `KakaoBotWatchdog`가 대화형 작업으로 5분마다 `AADS-PC-Agent-Setup-1.0.51.exe`를 직접 실행했고, 시작프로그램 CMD와 HKCU Run의 구버전 `1.0.14.exe`가 함께 등록돼 있었다.
+- 운영 조치:
+  - 기존 예약 작업 XML, 시작 CMD, Run 키 값을 `C:\Users\rkvs3\AppData\Local\KakaoBot\backup-20260722-1239\`에 백업했다.
+  - 예약 작업을 로그온 후 30초에 `wscript.exe ...\aads_pc_agent_watchdog.vbs`를 실행하는 단일 숨김 watchdog으로 교체했다.
+  - 구형 시작프로그램 CMD와 HKCU `KakaoBot` Run 값을 제거했다.
+  - 숨김 watchdog이 에이전트 프로세스 단일성을 30초마다 확인하고, 구형 런처가 자동실행을 다시 만들 경우 숨김 작업으로 재정합화하도록 했다.
+- 코드: `pc_agent/launcher.py`의 향후 설치/실행 경로도 동일한 단일 숨김 watchdog 계약으로 변경하고, `tests/unit/test_pc_agent_launcher_startup.py` 회귀 테스트를 추가했다.
+- 검증:
+  - 표준 라이브러리 단위 테스트 2건, `py_compile`, `git diff --check` 통과.
+  - 10분간 11회 관찰에서 PC Agent PID `23148`, start count `2`, wscript 1개, agent process tree 2개가 모두 불변이고 heartbeat가 계속 정상인 것을 확인했다.
+  - 최종 Windows 창 목록에서 CMD/PowerShell/터미널 창 0개, 예약 작업 next run N/A·running, legacy Run key/Startup CMD 부재를 확인했다.
+- 배포: Windows PC 운영 설정은 즉시 반영 완료. 서버/API/대시보드 재배포는 필요하지 않다. 향후 PC Agent 설치 코드 변경은 격리 브랜치 커밋으로 관리한다.
+- 롤백: 위 백업 폴더의 XML/CMD/Run 키 기록으로 이전 상태를 복원할 수 있다.
