@@ -2542,6 +2542,38 @@ async def _check_stalled_jobs():
                     logger.error(f"pipeline_c_watchdog_kill_err job={job.job_id}: {_ke}")
 
 
+_ORPHAN_RESULT_COLLECTED_MARKER = "[watchdog_result_collected]"
+
+
+async def _claim_orphan_result_collection(
+    conn,
+    *,
+    job_id: str,
+    status: str,
+    result: str,
+    exit_code: str,
+):
+    """Atomically claim a detached result so blue/green watchdogs report it once."""
+    return await conn.fetchrow(
+        """
+        UPDATE pipeline_jobs
+        SET status = $2,
+            phase = $2,
+            result_output = $3,
+            review_feedback = COALESCE(review_feedback, '') || $4,
+            updated_at = NOW()
+        WHERE job_id = $1
+          AND COALESCE(review_feedback, '') NOT LIKE '%' || $5 || '%'
+        RETURNING chat_session_id
+        """,
+        job_id,
+        status,
+        result[:5000],
+        f" | {_ORPHAN_RESULT_COLLECTED_MARKER}: exit={exit_code}",
+        _ORPHAN_RESULT_COLLECTED_MARKER,
+    )
+
+
 async def _collect_orphan_results():
     """
     2분마다 실행: DB에서 error 상태인 최근 작업 중 원격 .done 파일이 존재하는 것을 수거.
@@ -2558,6 +2590,7 @@ async def _collect_orphan_results():
                 FROM pipeline_jobs
                 WHERE status = 'error'
                   AND review_feedback LIKE '%서버 재시작으로 중단%'
+                  AND review_feedback NOT LIKE '%[watchdog_result_collected]%'
                   AND updated_at > NOW() - INTERVAL '2 hours'
                 ORDER BY updated_at DESC LIMIT 5
                 """
@@ -2600,13 +2633,18 @@ async def _collect_orphan_results():
                     _ok = _exit_str.strip() == "0"
                     _st = "done" if _ok else "error"
 
-                    await conn.execute(
-                        "UPDATE pipeline_jobs SET status=$2, phase=$2, result_output=$3, review_feedback=COALESCE(review_feedback,'')||$4, updated_at=now() WHERE job_id=$1",
-                        _jid, _st, _result[:5000],
-                        f" | watchdog 결과수거: exit={_exit_str}",
+                    _claimed_row = await _claim_orphan_result_collection(
+                        conn,
+                        job_id=_jid,
+                        status=_st,
+                        result=_result,
+                        exit_code=_exit_str,
                     )
+                    if not _claimed_row:
+                        logger.info("watchdog_orphan_duplicate_skipped: job=%s", _jid)
+                        continue
 
-                    _sid = row.get("chat_session_id")
+                    _sid = _claimed_row.get("chat_session_id") or row.get("chat_session_id")
                     if _sid:
                         _emoji = "✅" if _ok else "⚠️"
                         await conn.execute(

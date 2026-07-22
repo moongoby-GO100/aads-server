@@ -679,6 +679,67 @@ async def test_call_stream_routes_registry_codex_backend_without_static_allowlis
 
 
 @pytest.mark.asyncio
+async def test_call_stream_falls_back_immediately_when_gpt_56_relay_is_busy(monkeypatch):
+    calls = []
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"gpt-5.6-sol", "claude-opus"}
+
+    async def _fake_registered_models(active_only=False):
+        return [
+            {
+                "provider": "codex",
+                "model_id": "gpt-5.6-sol",
+                "execution_model_id": "gpt-5.6-sol",
+                "is_active": True,
+                "metadata": {
+                    "execution_backend": "codex_cli",
+                    "execution_model_id": "gpt-5.6-sol",
+                },
+            }
+        ]
+
+    async def _fake_codex_stream(model, system_prompt, messages, tools=None, session_id=None):
+        calls.append(("codex", model))
+        yield {"type": "error", "content": "codex_relay_busy: relay_semaphore_timeout"}
+
+    async def _fake_cli_stream(model, system_prompt, messages, tools=None, session_id=None, oauth_slot=None):
+        calls.append(("claude", model))
+        yield {
+            "type": "done",
+            "model": model,
+            "cost": "0",
+            "input_tokens": 1,
+            "output_tokens": 1,
+        }
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
+    monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="code_modify", model="gpt-5.6-sol", use_tools=True, tool_group="all"),
+            "system prompt",
+            [{"role": "user", "content": "relay busy fallback"}],
+            model_override="gpt-5.6-sol",
+            session_id="session-codex-busy",
+        )
+    ]
+
+    assert calls == [("codex", "gpt-5.6-sol"), ("claude", "claude-opus")]
+    assert any("claude-opus" in event.get("content", "") for event in events)
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "claude-opus"
+
+
+@pytest.mark.asyncio
 async def test_call_stream_routes_registry_claude_backend_without_static_allowlist(monkeypatch):
     captured = {}
 
@@ -740,6 +801,7 @@ def test_is_codex_retryable_error_distinguishes_transient_and_auth_errors():
     assert not model_selector._is_codex_retryable_error("Codex Relay 401: unauthorized")
     assert not model_selector._is_codex_retryable_error("relay_mcp_preflight_failed: preflight_failed")
     assert not model_selector._is_codex_retryable_error("missing_binary: codex command not found")
+    assert not model_selector._is_codex_retryable_error("codex_relay_busy: relay_semaphore_timeout")
     assert not model_selector._is_codex_retryable_error("You've hit your limit · resets 3am")
     assert not model_selector._is_codex_retryable_error("You exceeded your current quota, please check your plan and billing details.")
 

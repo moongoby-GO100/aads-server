@@ -4310,3 +4310,13 @@
 - 대시보드 Markdown renderer의 이미지 렌더 경로를 확인했고 별도 프론트 변경은 필요하지 않았다.
 - 운영: blue/green 컨테이너 healthy, 공유 볼륨 마운트 및 외부 health HTTP 200 확인.
 - 롤백: 생성 미디어 환경변수/볼륨을 제거하고 이전 API 이미지로 blue-green 재배포한다.
+
+## 2026-07-22 22:51 KST - Multi-session no-response P0 audit and safeguards
+
+- DB execution ledger audit for the preceding 7 days found `165 completed`, `77 interrupted`, `2 running`, and `1 retrying` executions. The dominant user-visible empty-response failure was `llm_first_response_timeout_after_180~182s` on `gpt-5.6-sol`.
+- Runtime evidence showed the Codex relay at capacity (`max_concurrent=5`, `semaphore_available=0`) and repeating `codex_relay_busy` / `relay_semaphore_timeout` errors. The model layer retried the same route while the chat layer cancelled it at the 180-second first-response deadline, before cross-provider fallback.
+- `app/services/model_selector.py`: treat relay-capacity errors as fast-fail, and add the missing `gpt-5.6-sol -> claude-opus -> gemini-3.1-pro-preview` fallback chain.
+- `app/services/pipeline_runner_service.py`: atomically claim orphan result collection using `[watchdog_result_collected]`, preventing blue/green watchdogs from repeatedly inserting the same Runner completion message and triggering duplicate AI turns.
+- Regression coverage added to `tests/unit/test_model_selector_dynamic_routing.py` and `tests/unit/test_pipeline_runner_reliability.py`; combined targeted suite passed `31` tests, Python compile and `git diff --check` passed.
+- Browser capture was unavailable because the PC Agent was offline. Fallback checks: public chat route returned the expected unauthenticated `307` to login, public API health returned `200`, and both API slots were healthy.
+- Deployment was not performed in this audit turn. The running containers can see the bind-mounted source for tests, but loaded Python processes require an approved blue-green reload before the safeguards become active.
