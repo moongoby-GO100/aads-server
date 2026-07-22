@@ -4474,3 +4474,5 @@
 - 조치: 매장비서 메인 HTML만 `no-store`로 전환하고 루트 진입 URL에 릴리스 버전을 부여했다. 생성된 `draft` 계약서 미리보기는 저장값을 우선하면서 빈 근로자/사업자 필드만 현재 승인 직원·사업자 설정으로 읽기 전용 보완한다.
 - 불변성: `requested`와 `signed` 계약서는 체결 당시 저장값을 그대로 표시하며 자동 보완하지 않는다. 모달 배지에서 최신양식/체결 당시 저장본을 구분한다.
 - 검증: 인라인 JavaScript parse, `git diff --check`, 계약서 API·서비스·Nginx 회귀 `57 passed`.
+- 운영 적용: 활성 Green `8102`의 정적 HTML만 무중단 동기화하고 매장비서 HTML 캐시를 `no-store`로 변경했다. 비활성 Blue `8100`은 활성 스트림 1건이 확인돼 재빌드하지 않고 롤백 슬롯으로 보존했다. 외부 health/HTML/cache header와 mocked headless Chromium의 계약 목록 `미리보기`→A4 모달→가입정보 보완까지 통과했다.
+- 롤백: `/tmp/yf-index.before-contract-preview-c9958a38.html`, `/tmp/fb.conf.before-contract-preview-c9958a38`을 복원하면 된다.
