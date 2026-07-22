@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-22 13:01 KST - PC Agent 터미널 깜빡임 완전 차단 보강
+- 실기기(`abc`, PC Agent `2e9379a1-fed`)에서 구형 HKCU Run 등록과 Startup CMD가 제거됐고, `KakaoBotWatchdog`는 `wscript.exe` 기반 ONLOGON/LIMITED 숨김 작업 1개로 정리된 것을 확인했다.
+- 잔여 원인은 agent/launcher가 60초 상태 보고 때 `schtasks`를 `CREATE_NO_WINDOW` 없이 실행하던 경로였다.
+- `pc_agent/agent.py`, `pc_agent/launcher.py`의 모든 watchdog 조회·등록 보조 프로세스에 Windows 콘솔 비노출 플래그를 적용했다.
+- agent 텔레메트리가 구형 레지스트리/Startup CMD 부재를 오류가 아닌 `scheduled_task_hidden` 정상 상태로 보고하도록 수정했다.
+- PC Agent 배포 버전을 `1.0.53`으로 올리고 changelog와 회귀 테스트를 갱신했다.
+- 검증: `python3 -m unittest -v tests.unit.test_pc_agent_launcher_startup` 4건 통과, `py_compile` 및 `git diff --check` 통과.
+- 운영 반영 절차: 서버 API가 제공하는 agent ZIP을 `1.0.53`으로 배포한 뒤 연결 PC에 `self_update`를 실행하고, 재연결 telemetry와 60초 이상 무재시작/무구형등록을 재검증한다.
+
 ## 2026-07-21 08:28 KST - 매장비서 3개 사업자 설정 최종 동기화·운영 검증
 - CEO 확정 기준 사업자는 `열정국밥 중화점`, `열정국밥 성신여대점`, `열정국밥_미아점` 3건이다.
 - PostgreSQL 실측:

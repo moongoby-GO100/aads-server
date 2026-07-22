@@ -49,6 +49,13 @@ logging.basicConfig(
 logger = logging.getLogger("launcher")
 
 
+def _hidden_subprocess_kwargs() -> dict[str, int]:
+    """Windows 보조 명령과 worker를 콘솔 창 없이 실행한다."""
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # 원격 로그 업로드 핸들러 (v1.0.46) — ERROR/WARNING을 서버로 전송
 # ---------------------------------------------------------------------------
@@ -340,6 +347,7 @@ def _watchdog_task_status() -> dict:
             capture_output=True,
             text=True,
             timeout=10,
+            **_hidden_subprocess_kwargs(),
         )
         output = (result.stdout or result.stderr or "").strip()
         return {
@@ -496,6 +504,7 @@ def register_watchdog_task() -> None:
              "/RL", "LIMITED",
              "/F"],
             capture_output=True, text=True, timeout=10,
+            **_hidden_subprocess_kwargs(),
         )
         if result.returncode == 0:
             logger.info("Task Scheduler 숨김 watchdog 등록 완료 (로그온 후 30초)")
@@ -616,9 +625,7 @@ def run_agent(cfg: dict):
         return _FakeProc(t, agent_instance)
     else:
         # 개발 환경: 시스템 Python으로 subprocess 실행
-        kwargs = {}
-        if hasattr(subprocess, "CREATE_NO_WINDOW"):
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        kwargs = _hidden_subprocess_kwargs()
         proc = subprocess.Popen(
             [sys.executable, str(agent_main)],
             cwd=str(AGENT_DIR),

@@ -1,3 +1,4 @@
+v1.0.53: watchdog/telemetry 상태 점검 콘솔 완전 숨김 및 구형 자동실행 상태 진단 보강
 v1.0.52: 격리 E2E Chrome 업무 세션 종료 명령 및 10분 유휴 자동 정리 추가
 v1.0.51: PC Agent 자동복구 텔레메트리·Windows E2E 노드 역할·버전/capability 진단 추가
 v1.0.50: 좀비 _auto_update_loop 버그 수정 — WebSocket 끊김 감지 추가
