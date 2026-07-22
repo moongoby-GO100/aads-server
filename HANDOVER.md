@@ -8,7 +8,10 @@
 - 중복 자동실행을 제거하고 숨김 `ONLOGON` watchdog 하나로 정리했으며, self-update 결과 전송 후 launcher가 코드 42를 확실히 수신하도록 종료 흐름을 보강했다.
 - PC Agent 버전을 `1.0.55`로 올리고 `/agent/version`이 설치 EXE 경로와 `github_release` 배포 방식을 반환하도록 정합화했다. launcher/agent 진단 telemetry endpoint도 복구했다.
 - 검증: 운영과 동일한 API 이미지에서 완전 종료 예/아니오, watchdog 해제, 역다운그레이드 차단을 포함한 PC Agent 회귀 테스트 32건 통과, Python compile, `git diff --check` 통과.
-- 남은 운영 완료 조건: `main` 푸시 후 Windows Actions EXE/Release 생성, blue/green 배포, 공개 EXE PE·SHA-256 검증, CEO PC 재실행 후 `online`·`1.0.55` 확인.
+- GitHub Actions run `29925990247`이 `main` SHA `b09bfddd` 기준 Windows EXE 빌드·Release 갱신을 성공했다. 공개 EXE는 PE32+ GUI x86-64, 21,488,672바이트, SHA-256 `19ad1903d441d48ac86199e01edfbc5f68e0002e59e17017779c8459e5571265`로 Release 메타데이터와 실제 다운로드가 일치한다.
+- 배포: clean 릴리스 `/root/aads/releases/aads-server-pc-agent-1.0.55-b09bfddd`를 비활성 Blue `8100`에 재빌드하고 health 통과 후 Nginx API/WebSocket upstream을 Green `8102`에서 Blue `8100`으로 무중단 전환했다. Blue·Green·외부 health는 모두 HTTP 200이며 Green은 즉시 롤백 슬롯으로 보존했다.
+- 공개 `/agent/version`은 `1.0.55`·`github_release`, `/agent/download-exe`는 동일 버전 GitHub Release로 307 후 정상 PE 파일을 반환한다.
+- 미완료: CEO PC는 연결 통로가 없는 `PC_AGENT_OFFLINE` 상태라 서버에서 설치/재실행 명령을 전달할 수 없다. CEO PC에서 새 EXE를 1회 실행한 뒤 `online`·`1.0.55`·완전 종료 예/아니오 실기기 검증이 필요하다.
 
 ## 2026-07-22 21:19 KST - 채팅 생성 이미지 최종 원장 대조
 
