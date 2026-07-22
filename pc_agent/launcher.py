@@ -49,6 +49,13 @@ logging.basicConfig(
 logger = logging.getLogger("launcher")
 
 
+def _hidden_subprocess_kwargs() -> dict[str, int]:
+    """Windows 보조 명령과 worker를 콘솔 창 없이 실행한다."""
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # 원격 로그 업로드 핸들러 (v1.0.46) — ERROR/WARNING을 서버로 전송
 # ---------------------------------------------------------------------------
@@ -241,47 +248,41 @@ def _record_redownload() -> None:
         pass
 
 
-def _can_redownload() -> tuple[bool, int]:
-    """시간당 MAX_REDOWNLOADS_PER_HOUR 이내인지 확인.
-
-    반환: (허용 여부, 최근 1시간 시도 횟수)
-    .redownload_log 에 timestamp(float) 공백 구분 저장. 1시간 초과 항목 제거.
-    crash 분기 + exit=0 분기 + 주기 업데이트 분기가 공유하여 무한 다운로드 루프 차단.
-    """
-    rdl_file = INSTALL_DIR / ".redownload_log"
-    now = time.time()
+def _redownload_agent(cfg: dict) -> bool:
+    """Repair agent files without mutating VERSION or allowing a downgrade."""
+    allowed, used = _can_redownload()
+    if not allowed:
+        logger.error(
+            "강제 재다운로드 횟수 초과 (%d/%d) — 기존 코드로 재시도",
+            used,
+            MAX_REDOWNLOADS_PER_HOUR,
+        )
+        return False
     try:
-        entries = [float(x) for x in rdl_file.read_text(encoding="utf-8").split() if x]
-    except Exception:
-        entries = []
-    entries = [t for t in entries if now - t < 3600]
-    return (len(entries) < MAX_REDOWNLOADS_PER_HOUR, len(entries))
+        from updater import (
+            _get_local_version,
+            _is_remote_newer,
+            check_update,
+            download_update,
+        )
 
-
-def _record_redownload() -> None:
-    """다운로드 시도 기록 — circuit breaker 카운팅."""
-    rdl_file = INSTALL_DIR / ".redownload_log"
-    now = time.time()
-    try:
-        entries = [float(x) for x in rdl_file.read_text(encoding="utf-8").split() if x]
-    except Exception:
-        entries = []
-    entries = [t for t in entries if now - t < 3600]
-    entries.append(now)
-    try:
-        rdl_file.write_text(" ".join(str(t) for t in entries), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _force_redownload() -> None:
-    """VERSION을 0.0.0으로 리셋하여 다음 업데이트 체크 시 강제 재다운로드."""
-    vf = AGENT_DIR / "VERSION"
-    try:
-        vf.write_text("0.0.0", encoding="utf-8")
-        logger.info("강제 재다운로드 예약 (VERSION → 0.0.0)")
-    except Exception:
-        pass
+        _need, remote_version = check_update(cfg)
+        local_version = _get_local_version()
+        if remote_version != local_version and not _is_remote_newer(
+            remote_version, local_version
+        ):
+            logger.error(
+                "복구 다운로드 역다운그레이드 차단: local=%s remote=%s",
+                local_version,
+                remote_version,
+            )
+            return False
+        _record_redownload()
+        download_update(cfg, remote_version)
+        return True
+    except Exception as exc:
+        logger.error("복구 다운로드 실패: %s", exc)
+        return False
 
 
 def _increment_launcher_start_count() -> int:
@@ -300,6 +301,7 @@ def _increment_launcher_start_count() -> int:
 def _startup_registration_status() -> dict:
     if sys.platform != "win32":
         return {"registered": False, "platform": sys.platform}
+    legacy_registry_present = False
     try:
         import winreg
 
@@ -307,11 +309,27 @@ def _startup_registration_status() -> dict:
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
         )
-        value, _ = winreg.QueryValueEx(key, "KakaoBot")
-        winreg.CloseKey(key)
-        return {"registered": bool(value), "command_present": bool(str(value).strip())}
+        try:
+            value, _ = winreg.QueryValueEx(key, "KakaoBot")
+            legacy_registry_present = bool(str(value).strip())
+        finally:
+            winreg.CloseKey(key)
+    except FileNotFoundError:
+        pass
     except Exception as exc:
         return {"registered": False, "error": type(exc).__name__}
+
+    startup_cmd = (
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+    )
+    legacy_startup_cmd_present = startup_cmd.exists()
+    return {
+        "registered": not legacy_registry_present and not legacy_startup_cmd_present,
+        "mode": "scheduled_task_hidden",
+        "legacy_registry_present": legacy_registry_present,
+        "legacy_startup_cmd_present": legacy_startup_cmd_present,
+    }
 
 
 def _watchdog_task_status() -> dict:
@@ -323,6 +341,7 @@ def _watchdog_task_status() -> dict:
             capture_output=True,
             text=True,
             timeout=10,
+            **_hidden_subprocess_kwargs(),
         )
         output = (result.stdout or result.stderr or "").strip()
         return {
@@ -384,7 +403,7 @@ def _send_launcher_status(
 
 
 def register_startup() -> None:
-    """HKCU Run에 런처 등록."""
+    """중복 실행과 콘솔 깜빡임을 만드는 구형 자동실행 등록을 제거한다."""
     if sys.platform != "win32":
         return
     try:
@@ -394,40 +413,117 @@ def register_startup() -> None:
             r"Software\Microsoft\Windows\CurrentVersion\Run",
             0, winreg.KEY_SET_VALUE,
         )
-        # PyInstaller EXE면 sys.executable, 아니면 스크립트 경로
-        exe_path = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" "{__file__}"'
-        winreg.SetValueEx(key, "KakaoBot", 0, winreg.REG_SZ, exe_path)
-        winreg.CloseKey(key)
-        logger.info("시작프로그램 등록 완료")
+        try:
+            winreg.DeleteValue(key, "KakaoBot")
+            logger.info("구형 HKCU Run 자동실행 제거 완료")
+        except FileNotFoundError:
+            pass
+        finally:
+            winreg.CloseKey(key)
+
+        startup_cmd = (
+            Path(os.environ.get("APPDATA", ""))
+            / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+        )
+        if startup_cmd.exists():
+            startup_cmd.unlink()
+            logger.info("구형 시작프로그램 CMD 제거 완료")
     except Exception as e:
-        logger.warning("시작프로그램 등록 실패: %s", e)
+        logger.warning("구형 자동실행 정리 실패: %s", e)
+
+
+def _build_hidden_watchdog_vbs(exe_path: str) -> str:
+    """Create a console-free watchdog that starts one launcher instance only."""
+    escaped_path = exe_path.replace('"', '""')
+    process_name = Path(exe_path).name.replace("'", "''")
+    watchdog_path = str(INSTALL_DIR / "aads_pc_agent_watchdog.vbs").replace('"', '""')
+    return (
+        "Option Explicit\n"
+        "Dim shell, service, processes, agentExe, watchdogPath, startupCmd, taskCommand, fso\n"
+        f'agentExe = "{escaped_path}"\n'
+        f'watchdogPath = "{watchdog_path}"\n'
+        'Set shell = CreateObject("WScript.Shell")\n'
+        'Set service = GetObject("winmgmts:\\\\.\\root\\cimv2")\n\n'
+        'Set fso = CreateObject("Scripting.FileSystemObject")\n'
+        'startupCmd = shell.ExpandEnvironmentStrings("%APPDATA%") & "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\AADS-PC-Agent-Watchdog.cmd"\n'
+        'taskCommand = "schtasks.exe /Create /TN KakaoBotWatchdog /TR " & Chr(34) & "wscript.exe " & watchdogPath & Chr(34) & " /SC ONLOGON /DELAY 0000:30 /RL LIMITED /F"\n\n'
+        "Sub EnforceSingleStartup\n"
+        "  On Error Resume Next\n"
+        '  shell.RegDelete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\KakaoBot"\n'
+        "  If fso.FileExists(startupCmd) Then fso.DeleteFile startupCmd, True\n"
+        "  shell.Run taskCommand, 0, True\n"
+        "  Err.Clear\n"
+        "  On Error GoTo 0\n"
+        "End Sub\n\n"
+        "EnforceSingleStartup\n\n"
+        "Do\n"
+        "  On Error Resume Next\n"
+        f'  Set processes = service.ExecQuery("SELECT * FROM Win32_Process WHERE Name=\'{process_name}\'")\n'
+        "  If Err.Number = 0 Then\n"
+        "    If processes.Count = 0 Then\n"
+        "      shell.Run Chr(34) & agentExe & Chr(34), 0, False\n"
+        "      WScript.Sleep 5000\n"
+        "      EnforceSingleStartup\n"
+        "    End If\n"
+        "  End If\n"
+        "  Err.Clear\n"
+        "  On Error GoTo 0\n"
+        "  WScript.Sleep 30000\n"
+        "Loop\n"
+    )
 
 
 def register_watchdog_task() -> None:
-    """Windows Task Scheduler에 5분 간격 watchdog 등록 — 런처가 죽어도 자동 복구."""
+    """로그온 시 콘솔 없는 단일 watchdog을 실행한다."""
     if sys.platform != "win32":
         return
     try:
-        import subprocess
-        if getattr(sys, "frozen", False):
-            exe_path = f'"{sys.executable}"'
-        else:
-            exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+        if not getattr(sys, "frozen", False):
+            logger.info("개발 실행에서는 Windows watchdog 작업 등록을 생략")
+            return
+
+        watchdog_path = INSTALL_DIR / "aads_pc_agent_watchdog.vbs"
+        watchdog_path.write_text(
+            _build_hidden_watchdog_vbs(sys.executable),
+            encoding="utf-8-sig",
+        )
+        task_command = f'wscript.exe "{watchdog_path}"'
         result = subprocess.run(
             ["schtasks", "/Create",
              "/TN", "KakaoBotWatchdog",
-             "/TR", exe_path,
-             "/SC", "MINUTE", "/MO", "5",
-             "/RL", "HIGHEST",
+             "/TR", task_command,
+             "/SC", "ONLOGON", "/DELAY", "0000:30",
+             "/RL", "LIMITED",
              "/F"],
             capture_output=True, text=True, timeout=10,
+            **_hidden_subprocess_kwargs(),
         )
         if result.returncode == 0:
-            logger.info("Task Scheduler watchdog 등록 완료 (5분 간격)")
+            logger.info("Task Scheduler 숨김 watchdog 등록 완료 (로그온 후 30초)")
         else:
             logger.warning("Task Scheduler watchdog 등록 실패: %s", result.stderr.strip())
     except Exception as e:
         logger.warning("Task Scheduler watchdog 등록 실패: %s", e)
+
+
+def disable_watchdog_for_user_exit() -> None:
+    """Stop automatic revival only after an explicit full-exit confirmation."""
+    if sys.platform != "win32":
+        return
+    for args in (
+        ["schtasks", "/End", "/TN", "KakaoBotWatchdog"],
+        ["schtasks", "/Delete", "/TN", "KakaoBotWatchdog", "/F"],
+    ):
+        try:
+            subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                **_hidden_subprocess_kwargs(),
+            )
+        except Exception as exc:
+            logger.warning("완전 종료 watchdog 해제 실패 (%s): %s", args[1], exc)
 
 
 
@@ -485,8 +581,8 @@ def run_agent(cfg: dict):
         try:
             spec.loader.exec_module(mod)
         except ImportError as imp_err:
-            logger.error("에이전트 임포트 실패 (코드 손상): %s — 강제 재다운로드 예약", imp_err)
-            _force_redownload()
+            logger.error("에이전트 임포트 실패 (코드 손상): %s — 복구 다운로드", imp_err)
+            _redownload_agent(cfg)
             return None
 
         agent_instance = mod.PCAgent()
@@ -541,9 +637,7 @@ def run_agent(cfg: dict):
         return _FakeProc(t, agent_instance)
     else:
         # 개발 환경: 시스템 Python으로 subprocess 실행
-        kwargs = {}
-        if hasattr(subprocess, "CREATE_NO_WINDOW"):
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        kwargs = _hidden_subprocess_kwargs()
         proc = subprocess.Popen(
             [sys.executable, str(agent_main)],
             cwd=str(AGENT_DIR),
@@ -634,13 +728,8 @@ def main() -> None:
     if proc is None:
         # ImportError 등으로 코드 손상 → 강제 재다운로드 후 1회 재시도
         logger.warning("에이전트 실행 실패 — 강제 재다운로드 후 재시도")
-        try:
-            need, remote_ver = check_update(cfg)
-            if need:
-                download_update(cfg, remote_ver)
-                proc = run_agent(cfg)
-        except Exception as _dl_err:
-            logger.error("강제 재다운로드 실패: %s", _dl_err)
+        if _redownload_agent(cfg):
+            proc = run_agent(cfg)
         if proc is None:
             try:
                 import tkinter as _tk
@@ -674,6 +763,7 @@ def main() -> None:
 
         def on_quit():
             """트레이 종료 콜백."""
+            disable_watchdog_for_user_exit()
             stop_requested.set()
             p = proc_ref[0]
             if p and p.poll() is None:
@@ -815,35 +905,9 @@ def main() -> None:
                 logger.warning("에이전트 종료 (코드 %s) — 크래시 %d회", ret, crash_n)
 
                 if crash_n >= MAX_CRASHES_BEFORE_REDOWNLOAD:
-                    # --- redownload circuit breaker ---
-                    _rdl_file = INSTALL_DIR / ".redownload_log"
-                    _now = time.time()
-                    try:
-                        _rdl_entries = [float(x) for x in _rdl_file.read_text(encoding="utf-8").split() if x]
-                    except Exception:
-                        _rdl_entries = []
-                    # keep only entries within the last hour
-                    _rdl_entries = [t for t in _rdl_entries if _now - t < 3600]
-                    if len(_rdl_entries) >= MAX_REDOWNLOADS_PER_HOUR:
-                        logger.error(
-                            "강제 재다운로드 횟수 초과 (%d회/시간) — 재다운로드 건너뜀, 5초 후 재시도",
-                            MAX_REDOWNLOADS_PER_HOUR,
-                        )
-                    else:
-                        logger.warning("크래시 %d회 → 에이전트 코드 강제 재다운로드", crash_n)
-                        _rdl_entries.append(_now)
-                        try:
-                            _rdl_file.write_text(" ".join(str(t) for t in _rdl_entries), encoding="utf-8")
-                        except Exception:
-                            pass
-                        _force_redownload()
+                    logger.warning("크래시 %d회 → 에이전트 코드 복구 다운로드", crash_n)
+                    if _redownload_agent(cfg):
                         _set_crash_count(0)
-                        try:
-                            need, remote_ver = check_update(cfg)
-                            if need:
-                                download_update(cfg, remote_ver)
-                        except Exception as e:
-                            logger.error("강제 재다운로드 실패: %s", e)
 
                 time.sleep(5)
                 try:
@@ -886,7 +950,7 @@ def main() -> None:
                             proc = _new_proc
                         else:
                             logger.error("업데이트 후 에이전트 재시작 실패 — 폴백 재다운로드")
-                            _force_redownload()
+                            _redownload_agent(cfg)
                 except Exception as e:
                     logger.warning("주기적 업데이트 실패: %s", e)
 

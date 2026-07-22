@@ -14,6 +14,13 @@ from typing import Callable
 
 logger = logging.getLogger("tray")
 
+_EXIT_TITLE = "KakaoBot 종료"
+_EXIT_MESSAGE = (
+    "에이전트를 완전히 종료합니다.\n"
+    "PC Agent 연결이 끊어집니다.\n\n"
+    "정말 종료하시겠습니까?"
+)
+
 _COLORS = {
     "connected": (0, 200, 80),
     "reconnecting": (240, 200, 0),
@@ -42,6 +49,46 @@ def _make_icon(color: tuple[int, int, int] = (0, 200, 80)):
     draw.ellipse([4, 4, 60, 60], fill=(*color, 255))
     draw.text((22, 16), "K", fill=(255, 255, 255, 255))
     return img
+
+
+def confirm_full_exit() -> bool:
+    """Ask for explicit confirmation without failing open.
+
+    pystray invokes menu callbacks on a worker thread. Tk dialogs can become
+    unresponsive on that thread on Windows, so use the native Win32 dialog
+    there and retain Tk only as a non-Windows fallback.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            flags = 0x00000004 | 0x00000030 | 0x00000100 | 0x00010000 | 0x00040000
+            result = ctypes.windll.user32.MessageBoxW(
+                None, _EXIT_MESSAGE, _EXIT_TITLE, flags
+            )
+            return result == 6  # IDYES
+        except Exception:
+            logger.exception("Win32 완전 종료 확인창 표시 실패")
+            return False
+
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        return bool(messagebox.askyesno(_EXIT_TITLE, _EXIT_MESSAGE, parent=root))
+    except Exception:
+        logger.exception("완전 종료 확인창 표시 실패")
+        return False
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 def create_tray(cfg: dict, agent_proc_or_ref, on_quit: Callable) -> None:
@@ -118,20 +165,9 @@ def create_tray(cfg: dict, agent_proc_or_ref, on_quit: Callable) -> None:
         icon.visible = False
 
     def on_exit(icon, item):
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            result = messagebox.askyesno(
-                "KakaoBot 종료",
-                "에이전트를 완전히 종료합니다.\nPC Agent 연결이 끊어집니다.\n\n정말 종료하시겠습니까?",
-            )
-            root.destroy()
-            if not result:
-                return
-        except Exception:
-            pass
+        if not confirm_full_exit():
+            logger.info("완전 종료 취소")
+            return
         logger.info("트레이에서 완전 종료 요청")
         on_quit()
         icon.stop()

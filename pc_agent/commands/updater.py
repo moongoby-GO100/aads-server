@@ -11,6 +11,7 @@ import asyncio
 import json as _json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from urllib import request as _req
@@ -25,6 +26,29 @@ INSTALL_DIR = Path(os.environ.get(
 AGENT_DIR = INSTALL_DIR / "agent"
 VERSION_FILE = AGENT_DIR / "VERSION"
 HTTP_BASE = "https://aads.newtalk.kr"
+
+
+def _version_key(version: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"v?(\d+(?:\.\d+){1,3})", str(version).strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _is_remote_newer(remote_version: str, local_version: str) -> bool:
+    remote_key = _version_key(remote_version)
+    local_key = _version_key(local_version)
+    if remote_key is None or local_key is None:
+        logger.warning(
+            "버전 형식 오류 — 자동 업데이트 차단: local=%r remote=%r",
+            local_version,
+            remote_version,
+        )
+        return False
+    width = max(len(remote_key), len(local_key))
+    remote_key += (0,) * (width - len(remote_key))
+    local_key += (0,) * (width - len(local_key))
+    return remote_key > local_key
 
 
 def _get_local_version() -> str:
@@ -53,7 +77,7 @@ def _restart_agent() -> None:
 
 
 async def execute(params: dict) -> dict:
-    """self_update 명령 핸들러 — HTTP 버전 확인 + 재시작."""
+    """self_update 명령 핸들러 — 결과 전송 후 agent 루프가 재시작한다."""
     force = params.get("force", False)
 
     has_update = await check_for_updates()
@@ -66,21 +90,15 @@ async def execute(params: dict) -> dict:
 
     # launcher가 exit=42 감지 후 check_update()로 직접 버전 비교하므로 VERSION 리셋 불필요
     # VERSION 리셋 시 다운로드 실패 → "0.0.0" 고착 → 무한 재시작 루프 위험 제거
-    logger.info("업데이트 감지, 재시작 예정")
-
-    async def _delayed_restart():
-        await asyncio.sleep(2.0)
-        _restart_agent()
-
-    try:
-        asyncio.ensure_future(_delayed_restart())
-    except Exception:
-        loop = asyncio.get_event_loop()
-        loop.call_later(2.0, _restart_agent)
+    logger.info("업데이트 감지 — 명령 결과 전송 후 agent 루프 종료 예정")
 
     return {
         "status": "ok",
-        "data": {"updated": True, "message": "업데이트 감지, 2초 후 재시작"},
+        "data": {
+            "updated": True,
+            "restart_requested": True,
+            "message": "업데이트 감지, 결과 전송 후 재시작",
+        },
     }
 
 
@@ -103,9 +121,15 @@ async def check_for_updates() -> bool:
             "버전 체크: local=%r (path=%s, exists=%s) remote=%r",
             local_ver, VERSION_FILE, VERSION_FILE.exists(), remote_ver,
         )
-        if remote_ver != local_ver:
+        if _is_remote_newer(remote_ver, local_ver):
             logger.info("업데이트 감지: 로컬=%s 서버=%s", local_ver, remote_ver)
             return True
+        if _version_key(remote_ver) and _version_key(local_ver) and remote_ver != local_ver:
+            logger.warning(
+                "서버 버전이 로컬보다 낮거나 같아 역다운그레이드를 차단: local=%s remote=%s",
+                local_ver,
+                remote_ver,
+            )
         return False
     except Exception as e:
         logger.debug("업데이트 확인 실패: %s", e)
