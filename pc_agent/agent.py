@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import platform
+import subprocess
 import sys
 import time
 import uuid
@@ -71,6 +72,13 @@ RECONNECT_DELAY = 5  # 초
 MAX_RECONNECT_DELAY = 30  # 초 — 지수 백오프 상한 (60→30으로 단축)
 MAX_RECONNECT_DURATION = 300  # 초 — 5분 연속 재연결 실패 시 프로세스 종료 → launcher가 재시작
 AUTO_UPDATE_INTERVAL = 600  # 초 — 10분마다 서버 버전 확인 (v1.0.38: 300→600 빈도 절감)
+
+
+def _hidden_subprocess_kwargs() -> dict[str, int]:
+    """Windows 상태 점검 명령이 콘솔 창을 만들지 않게 한다."""
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
 
 # ── 단일 인스턴스 (Windows 뮤텍스) ────────────────────────────────────────
 
@@ -230,6 +238,72 @@ class PCAgent:
         except Exception:
             pass
         return "unknown"
+
+    def _runtime_telemetry(self) -> dict[str, Any]:
+        """Collect auto-recovery state; cached to keep heartbeat inexpensive."""
+        now = time.time()
+        if self._telemetry_cache and now - self._telemetry_cached_at < 60:
+            return dict(self._telemetry_cache)
+
+        watchdog: dict[str, Any] = {"registered": False, "platform": sys.platform}
+        startup: dict[str, Any] = {"registered": False, "platform": sys.platform}
+        if sys.platform == "win32":
+            try:
+                result = subprocess.run(
+                    ["schtasks", "/Query", "/TN", "KakaoBotWatchdog", "/FO", "LIST"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    **_hidden_subprocess_kwargs(),
+                )
+                watchdog = {
+                    "registered": result.returncode == 0,
+                    "return_code": result.returncode,
+                    "summary": (result.stdout or result.stderr or "").strip()[:1000],
+                }
+            except Exception as exc:
+                watchdog = {"registered": False, "error": type(exc).__name__}
+            legacy_registry_present = False
+            try:
+                import winreg
+
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Run",
+                )
+                try:
+                    value, _ = winreg.QueryValueEx(key, "KakaoBot")
+                    legacy_registry_present = bool(str(value).strip())
+                finally:
+                    winreg.CloseKey(key)
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                startup = {"registered": False, "error": type(exc).__name__}
+            if "error" not in startup:
+                startup_cmd = (
+                    Path(os.environ.get("APPDATA", ""))
+                    / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+                )
+                legacy_startup_cmd_present = startup_cmd.exists()
+                startup = {
+                    "registered": not legacy_registry_present and not legacy_startup_cmd_present,
+                    "mode": "scheduled_task_hidden",
+                    "legacy_registry_present": legacy_registry_present,
+                    "legacy_startup_cmd_present": legacy_startup_cmd_present,
+                }
+
+        self._telemetry_cache = {
+            "node_role": _node_role(),
+            "agent_pid": os.getpid(),
+            "launcher_or_parent_pid": os.getppid(),
+            "agent_uptime_seconds": int(max(0, now - self._started_at)),
+            "agent_start_count": self._agent_start_count,
+            "watchdog_task": watchdog,
+            "startup_registration": startup,
+        }
+        self._telemetry_cached_at = now
+        return dict(self._telemetry_cache)
 
     async def run(self) -> None:
         """메인 루프 — 서버 연결 + 재연결 (지수 백오프).
