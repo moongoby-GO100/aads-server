@@ -38,3 +38,12 @@ async def test_gallery_image_streams_externalized_local_file(monkeypatch, tmp_pa
     assert Path(response.path) == image_path
     assert response.media_type == "image/png"
     assert response.headers["cache-control"] == "public, max-age=86400, immutable"
+
+
+def test_gallery_image_get_is_public_but_generation_remains_admin_only():
+    routes = {(route.path, ",".join(sorted(route.methods or []))): route for route in image_api.router.routes}
+    image_route = routes[("/gallery/{job_id}/image", "GET")]
+    generate_route = routes[("/generate", "POST")]
+
+    assert image_route.dependencies == []
+    assert len(generate_route.dependencies) == 1
