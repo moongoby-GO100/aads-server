@@ -1,4 +1,4 @@
-"""PC Agent v1.0.55 release guard regressions."""
+"""PC Agent v1.0.56 release guard regressions."""
 
 from __future__ import annotations
 
@@ -75,3 +75,13 @@ def test_launcher_has_single_redownload_guard_definition() -> None:
     assert source.count("def _can_redownload()") == 1
     assert source.count("def _record_redownload()") == 1
     assert "disable_watchdog_for_user_exit()" in source
+
+
+def test_release_publish_is_main_only() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "build-pc-agent.yml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "- name: Create/Update Release\n"
+        "        if: github.ref == 'refs/heads/main'\n"
+    ) in workflow
