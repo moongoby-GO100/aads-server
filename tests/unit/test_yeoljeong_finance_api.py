@@ -131,6 +131,12 @@ def test_contract_preview_is_a4_modal():
     assert "width: 210mm" in html
     assert "min-height: 297mm" in html
     assert "openContractPreviewModal(contract, \"저장 계약서 기준\")" in html
+    assert "function contractPreviewWithCurrentReferences(contract)" in html
+    assert 'String(source.status || "draft") !== "draft"' in html
+    assert 'fillBlank("employeePhone", "employee_phone", employee.phone || "")' in html
+    assert 'fillBlank("employerRegistrationNo", "employer_registration_no", business.registrationNo || "")' in html
+    assert "최신양식 v2026.07.22" in html
+    assert "체결 당시 저장본" in html
 
 
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():

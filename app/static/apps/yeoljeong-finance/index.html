@@ -4196,6 +4196,52 @@
       `;
     }
 
+    function contractPreviewWithCurrentReferences(contract) {
+      const source = { ...(contract || {}) };
+      if (String(source.status || "draft") !== "draft") return source;
+
+      const requestId = String(contractValue(source, "employeeRequestId", "employee_request_id") || "");
+      const employeeEmail = String(contractValue(source, "employeeEmail", "employee_email") || "").toLowerCase();
+      const employee = approvedEmployees.find(item =>
+        (requestId && String(item.id || "") === requestId)
+        || (employeeEmail && String(item.email || "").toLowerCase() === employeeEmail)
+      ) || null;
+      const branchName = contractValue(source, "branch") || employee?.branch || "";
+      const businessId = contractValue(source, "businessId", "business_id")
+        || recordBusinessId(employee || {})
+        || businessIdForBranchName(branchName);
+      const business = settings().businesses.find(item => item.id === businessId) || null;
+      let hydrated = false;
+      const fillBlank = (camelKey, snakeKey, value) => {
+        if (!value || !isBlankOrPlaceholder(contractValue(source, camelKey, snakeKey))) return;
+        source[camelKey] = value;
+        if (snakeKey) source[snakeKey] = value;
+        hydrated = true;
+      };
+
+      if (employee) {
+        fillBlank("employeeRequestId", "employee_request_id", employee.id || "");
+        fillBlank("employeeName", "employee_name", employee.name || "");
+        fillBlank("employeeEmail", "employee_email", employee.email || "");
+        fillBlank("employeeAddress", "employee_address", employee.address || "");
+        fillBlank("employeePhone", "employee_phone", employee.phone || "");
+        fillBlank("employeeBirthDate", "employee_birth_date", employee.birth_date || employee.birthDate || "");
+        fillBlank("employeeNationality", "employee_nationality", employee.nationality || "대한민국");
+        fillBlank("branch", "branch", employee.branch || "");
+      }
+      if (business) {
+        fillBlank("businessId", "business_id", business.id || "");
+        fillBlank("employerName", "employer_name", business.name || "");
+        fillBlank("employerRegistrationNo", "employer_registration_no", business.registrationNo || "");
+        fillBlank("employerRepresentative", "employer_representative", business.representative || "");
+        fillBlank("employerAddress", "employer_address", business.address || "");
+        fillBlank("employerPhone", "employer_phone", business.phone || "");
+      }
+      fillBlank("workplace", "workplace", branchName);
+      source.previewReferenceHydrated = hydrated;
+      return source;
+    }
+
     function updateContractPreview(contract = null, badgeText = "입력값 기준") {
       if (!els.contractPreviewBody) return;
       const source = contract || contractDraftFromForm();
@@ -4204,10 +4250,16 @@
     }
 
     function openContractPreviewModal(contract = null, badgeText = "입력값 기준") {
-      const source = contract || contractDraftFromForm();
-      updateContractPreview(source, badgeText);
+      const source = contract ? contractPreviewWithCurrentReferences(contract) : contractDraftFromForm();
+      const status = String(source.status || "draft");
+      const resolvedBadge = contract
+        ? (status === "draft"
+          ? `${badgeText} · 최신양식 v2026.07.22${source.previewReferenceHydrated ? " · 가입/사업자정보 보완" : ""}`
+          : `${badgeText} · 체결 당시 저장본`)
+        : badgeText;
+      updateContractPreview(source, resolvedBadge);
       if (els.contractPreviewModalPaper) els.contractPreviewModalPaper.innerHTML = contractPreviewHtml(source);
-      if (els.contractPreviewModalBadge) els.contractPreviewModalBadge.textContent = badgeText;
+      if (els.contractPreviewModalBadge) els.contractPreviewModalBadge.textContent = resolvedBadge;
       els.contractPreviewModal?.classList.remove("hidden");
     }
 
