@@ -208,3 +208,29 @@ async def test_cleanup_dead_local_runner_processes_marks_dead_aads_pid():
     assert "error_detail = 'process_died'" in query
     assert args[0] == "runner-dead"
     assert "PID=999999" in args[1]
+
+
+@pytest.mark.asyncio
+async def test_claim_orphan_result_collection_is_atomic_and_marks_job():
+    from app.services.pipeline_runner_service import (
+        _ORPHAN_RESULT_COLLECTED_MARKER,
+        _claim_orphan_result_collection,
+    )
+
+    conn = _FakeConn(fetchrow_result={"chat_session_id": "11111111-1111-1111-1111-111111111111"})
+
+    claimed = await _claim_orphan_result_collection(
+        conn,
+        job_id="runner-once",
+        status="error",
+        result="exit 137",
+        exit_code="137",
+    )
+
+    assert claimed["chat_session_id"]
+    query, args = conn.fetchrow_calls[0]
+    assert "RETURNING chat_session_id" in query
+    assert "NOT LIKE '%' || $5 || '%'" in query
+    assert args[0] == "runner-once"
+    assert _ORPHAN_RESULT_COLLECTED_MARKER in args[3]
+    assert args[4] == _ORPHAN_RESULT_COLLECTED_MARKER

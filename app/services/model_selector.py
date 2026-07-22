@@ -1617,6 +1617,7 @@ async def call_stream(
             if not _codex_had_error:
                 return
             _CODEX_FB = {
+                "gpt-5.6-sol": ["claude-opus", "gemini-3.1-pro-preview"],
                 "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
                 "gpt-5.4": ["claude-sonnet", "gemini-2.5-flash"],
                 "gpt-5.4-mini": ["claude-haiku", "gemini-3.1-flash-lite-preview"],
@@ -2773,6 +2774,13 @@ _RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     "403",
     "404",
     "cli relay unreachable",  # 헬스체크 연결 실패 → 즉시 포기, 재시도 불필요
+    "preflight_failed",
+    "missing_binary",
+    # Capacity exhaustion is already a bounded relay wait. Retrying Codex
+    # here can outlive chat_service's first-response timeout, so return the
+    # error immediately and let call_stream use a cross-provider fallback.
+    "codex_relay_busy",
+    "relay_semaphore_timeout",
     "you've hit your limit",
     "you have hit your limit",
     "resets ",

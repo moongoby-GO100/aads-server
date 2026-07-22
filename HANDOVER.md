@@ -4489,3 +4489,13 @@
 - 검증: 인라인 JavaScript parse, `git diff --check`, 계약서 API·서비스·Nginx 회귀 `57 passed`.
 - 운영 적용: 활성 Green `8102`의 정적 HTML만 무중단 동기화하고 매장비서 HTML 캐시를 `no-store`로 변경했다. 비활성 Blue `8100`은 활성 스트림 1건이 확인돼 재빌드하지 않고 롤백 슬롯으로 보존했다. 외부 health/HTML/cache header와 mocked headless Chromium의 계약 목록 `미리보기`→A4 모달→가입정보 보완까지 통과했다.
 - 롤백: `/tmp/yf-index.before-contract-preview-c9958a38.html`, `/tmp/fb.conf.before-contract-preview-c9958a38`을 복원하면 된다.
+
+## 2026-07-22 22:51 KST - Multi-session no-response P0 audit and safeguards
+
+- DB execution ledger audit for the preceding 7 days found `165 completed`, `77 interrupted`, `2 running`, and `1 retrying` executions. The dominant user-visible empty-response failure was `llm_first_response_timeout_after_180~182s` on `gpt-5.6-sol`.
+- Runtime evidence showed the Codex relay at capacity (`max_concurrent=5`, `semaphore_available=0`) and repeating `codex_relay_busy` / `relay_semaphore_timeout` errors. The model layer retried the same route while the chat layer cancelled it at the 180-second first-response deadline, before cross-provider fallback.
+- `app/services/model_selector.py`: treat relay-capacity errors as fast-fail, and add the missing `gpt-5.6-sol -> claude-opus -> gemini-3.1-pro-preview` fallback chain.
+- `app/services/pipeline_runner_service.py`: atomically claim orphan result collection using `[watchdog_result_collected]`, preventing blue/green watchdogs from repeatedly inserting the same Runner completion message and triggering duplicate AI turns.
+- Regression coverage added to `tests/unit/test_model_selector_dynamic_routing.py` and `tests/unit/test_pipeline_runner_reliability.py`; combined targeted suite passed `31` tests, Python compile and `git diff --check` passed.
+- Browser capture was unavailable because the PC Agent was offline. Fallback checks: public chat route returned the expected unauthenticated `307` to login, public API health returned `200`, and both API slots were healthy.
+- Deployment was not performed in this audit turn. The running containers can see the bind-mounted source for tests, but loaded Python processes require an approved blue-green reload before the safeguards become active.
