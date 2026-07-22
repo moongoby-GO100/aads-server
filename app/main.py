@@ -1702,6 +1702,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
     "/api/v1/external/chat",  # 외부 서비스 임베드 채팅: 자체 service-token/HMAC 인증
+    "/api/v1/unni-naengmyeon/inquiries",  # 언니냉면 고객 문의 접수 (rate-limit/honeypot 적용)
     "/static",  # 정적 파일 (기술문서/보고서/갤러리)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
