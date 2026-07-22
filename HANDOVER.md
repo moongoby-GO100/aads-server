@@ -4544,3 +4544,6 @@
 - DeepSeek V4 Flash를 운영 컨테이너에서 직접 호출해 `OK` delta와 `done` 이벤트를 실측했다.
 - `gpt-5.6-sol` Relay 포화 시 폴백을 `Claude Opus -> Gemini 3.1 Pro -> DeepSeek V4 Flash` 순으로 확장했다.
 - Codex/Claude/Gemini를 각각 실패시키고 DeepSeek 완료를 검증하는 회귀 테스트를 추가했다.
+- 운영 동일 이미지 회귀 `34 passed`; active Blue에서 3중 장애를 강제해 DeepSeek `FALLBACK_OK`와 `done` 이벤트를 확인했다.
+- Blue `8100`을 active로 전환하고 Green `8102`를 rollback backup으로 유지했다. 양 슬롯 및 외부 health는 모두 HTTP 200이다.
+- 보존 headless 브라우저는 셸 렌더 후 workspace API 인증이 만료됐고 PC Agent도 offline이라 로그인 E2E는 API 검증으로 대체했다.
