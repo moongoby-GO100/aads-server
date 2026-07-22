@@ -4575,6 +4575,6 @@
   - `runner-307da46a`의 코드 수정은 완료됐으나 승인 배포 preflight가 기본 작업폴더의 병행 변경(`dirty=77`)과 로컬 `main` 분기(`behind=62`, `ahead=56`)를 감지해 차단했다.
   - 사용자 병행 변경을 삭제하거나 reset하지 않고 Runner 격리 worktree의 수정본을 보존해 수동 안전 배포 경로로 전환했다.
 - 운영 반영:
-  - 코드 커밋 `7d32b774`를 `origin/main`에 반영하고 2026-07-23 08:43 KST 활성 Blue 슬롯에 API hot-reload를 수행했다. 74개 모듈 재로드와 전후 pipeline health 통과를 확인했다.
-  - 실제 활성 릴리스 소스에 신규 회귀 테스트를 주입한 read-only 격리 테스트도 `2 passed`였다.
+  - 코드 커밋 `7d32b774`를 `origin/main`에 반영하고 2026-07-23 08:43 KST 활성 Blue 슬롯, 08:47 KST standby Green 슬롯에 API hot-reload를 수행했다. 각각 74개·56개 모듈 재로드를 확인했다.
+  - Blue·Green 실제 릴리스 소스에 신규 회귀 테스트를 주입한 read-only 격리 테스트가 각각 `2 passed`였고, 8100·8102·외부 health 모두 HTTP 200이었다.
   - PC Agent는 여전히 오프라인이라 실제 Chrome 로그인 리다이렉트·파일 업로드 E2E는 실행하지 못했다. `device_list`는 정상 응답하되 연결 디바이스 0대로 확인됐다.
