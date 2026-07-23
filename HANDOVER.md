@@ -4646,5 +4646,8 @@
 - 대표 URL `https://unni.newtalk.kr/`은 로그인 리다이렉트 없이 HTTP 200이며 Next.js middleware가 `/unni-naengmyeon`으로 내부 rewrite한다.
 - 대시보드 `main` 및 전용 브랜치의 코드·문서 커밋은 두 Git 원격에 push된 상태를 `ls-remote`로 확인했다.
 - 운영 `/etc/nginx/conf.d/aads.conf`에 중복 등록된 언니냉면 server block 한 벌을 제거하고, 저장소의 `nginx-aads.conf`에는 단일 전용 host 설정을 기록해 운영 설정과 형상 원장을 일치시킨다.
+- 저장소의 기존 AADS HTTPS 인증서 경로도 서버에 실제 존재하는 wildcard 인증서 `/etc/letsencrypt/live/newtalk.kr/`로 맞춰 원본 설정의 독립 `nginx -t`가 가능하도록 정합화한다.
 - 검증 기준: `nginx -t`, 무중단 nginx reload, 외부 HTTP 200/redirect 0회, canonical·제목·주소·메뉴 이미지 응답, dashboard Blue/Green health 확인.
 - 롤백: `/etc/nginx/conf.d/aads.conf.bak.unni-ledger-20260723-1047` 복원 후 nginx reload 또는 직전 dashboard 슬롯으로 upstream 전환.
+- 사후 검증: 운영 `nginx -t`와 무중단 reload 성공. dashboard 3100/3101 양 슬롯은 `Host: unni.newtalk.kr` 루트 HTTP 200, 외부 루트는 HTTP 200/redirect 0회, 물냉면 원본은 HTTP 200·1,755,446 bytes이며 양 dashboard 컨테이너는 healthy다. 전용 대시보드 production build도 `/unni-naengmyeon` 포함 60개 라우트로 성공했다.
+- 브라우저 캡처 도구는 `Argument list too long`으로 실패해 성공으로 간주하지 않았으며, 외부 HTML의 제목·canonical·주소·메뉴 본문 확인과 양 슬롯·정적 자산 HTTP 검증으로 대체했다.
