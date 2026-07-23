@@ -647,7 +647,9 @@ class BrowserBridgeService:
             metadata = dict(session.endpoint.metadata or {})
             if metadata.get("stale"):
                 return False
-            return bool(metadata.get("agent_id") and metadata.get("port"))
+            if not (metadata.get("agent_id") and metadata.get("port")):
+                return False
+            return self._local_agent_online(session)
         browser = self._session_browsers.get(session.session_id)
         if browser is not None and hasattr(browser, "is_connected"):
             try:
@@ -655,6 +657,20 @@ class BrowserBridgeService:
             except Exception:
                 return False
         return True
+
+    @staticmethod
+    def _local_agent_online(session: BrowserBridgeSession) -> bool:
+        """Do not reuse a historical CDP record after its PC Agent disconnects."""
+        try:
+            from app.services.pc_agent_manager import pc_agent_manager
+
+            metadata = dict(session.endpoint.metadata or {})
+            agent_id = str(metadata.get("agent_id") or "").strip()
+            return bool(agent_id and pc_agent_manager.get_agent(agent_id) is not None)
+        except Exception:
+            # Preserve availability if manager introspection itself is broken;
+            # command routing will still perform the authoritative check.
+            return True
 
     def _extract_pc_agent_route_error(self, result: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
         detail = dict(result or {})

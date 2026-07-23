@@ -948,10 +948,24 @@ async def ingest_launcher_status(payload: dict[str, Any]):
     return {"ok": True, "agent_id": agent_id}
 
 
+def _event_metadata_dict(value: Any) -> dict[str, Any]:
+    """Normalize JSONB metadata across asyncpg codec configurations."""
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {"raw": value[:1000]}
+        return dict(decoded) if isinstance(decoded, dict) else {"value": decoded}
+    return {}
+
+
 @router.get("/pc-agent/diagnostics")
 async def pc_agent_diagnostics():
     """Return online agent details and the latest launcher telemetry per node."""
     launcher_rows: list[dict[str, Any]] = []
+    connection_rows: list[dict[str, Any]] = []
     try:
         from app.core.db_pool import get_pool
 
@@ -965,19 +979,38 @@ async def pc_agent_diagnostics():
                 ORDER BY agent_id, created_at DESC
                 """
             )
+            latest_events = await conn.fetch(
+                """
+                SELECT DISTINCT ON (agent_id)
+                       agent_id, event, reason, created_at, metadata
+                FROM pc_agent_connection_events
+                ORDER BY agent_id, created_at DESC
+                """
+            )
         launcher_rows = [
             {
                 "agent_id": row["agent_id"],
                 "reported_at": row["created_at"].isoformat(),
-                "status": dict(row["metadata"] or {}),
+                "status": _event_metadata_dict(row["metadata"]),
             }
             for row in rows
+        ]
+        connection_rows = [
+            {
+                "agent_id": row["agent_id"],
+                "event": row["event"],
+                "reason": row["reason"] or "",
+                "reported_at": row["created_at"].isoformat(),
+                "metadata": _event_metadata_dict(row["metadata"]),
+            }
+            for row in latest_events
         ]
     except Exception as exc:
         logger.warning("pc_agent_diagnostics_query_failed: %s", exc)
     return {
         "online_agents": pc_agent_manager.list_agent_statuses(),
         "latest_launcher_status": launcher_rows,
+        "latest_connection_events": connection_rows,
     }
 
 

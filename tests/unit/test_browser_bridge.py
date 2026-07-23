@@ -600,6 +600,10 @@ async def test_acquire_specific_session_reports_missing_session(tmp_path) -> Non
 
 @pytest.mark.asyncio
 async def test_work_key_session_does_not_reuse_protected_sinsang_session(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "app.services.pc_agent_manager.pc_agent_manager.get_agent",
+        lambda _agent_id: object(),
+    )
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
         sessions=SessionRegistry(tmp_path / "sessions"),

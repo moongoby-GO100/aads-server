@@ -1,9 +1,12 @@
 """AADS-facing adapter around the reusable Browser Bridge service."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from .service import get_browser_bridge_service
+
+logger = logging.getLogger(__name__)
 
 
 async def acquire_browser_context(
@@ -19,7 +22,22 @@ async def acquire_browser_context(
                 url=url or "about:blank",
             )
         except Exception as exc:
-            return None, f"[브라우저 업무 세션 확보 실패] {exc}"
+            logger.warning(
+                "browser_work_session_unavailable_headless_fallback "
+                "work_key=%s error=%s",
+                browser_work_key,
+                exc,
+            )
+            # An unavailable LOCAL_AGENT must not make browser-only work fail
+            # outright. Use a fresh server-side headless context explicitly;
+            # session_id=None could otherwise select a stale active session.
+            try:
+                return await service._headless_fallback_context(), None
+            except Exception as fallback_exc:
+                return None, (
+                    f"[브라우저 업무 세션 확보 실패] {exc}; "
+                    f"headless fallback 실패: {fallback_exc}"
+                )
         browser_session_id = session.session_id
     return await service.acquire_playwright_context(session_id=browser_session_id or None)
 
