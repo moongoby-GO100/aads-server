@@ -1,5 +1,6 @@
 import json
 import inspect
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -64,6 +65,32 @@ def test_aads_e2e_login_uses_public_dashboard_asset():
     assert _E2E_PROJECT_CONFIG["AADS"]["e2e_url"].startswith(
         "https://aads.newtalk.kr/e2e-auth.html?"
     )
+
+
+@pytest.mark.asyncio
+async def test_internal_aads_e2e_uses_server_admin_identity(monkeypatch):
+    monkeypatch.setattr(
+        "app.auth.get_internal_tenant_id",
+        AsyncMock(return_value="internal-tenant"),
+    )
+    monkeypatch.setattr("app.auth.ADMIN_EMAIL", "admin@example.test")
+    monkeypatch.setattr("app.auth.ADMIN_PASSWORD", "test-password")
+
+    identity = await credential_vault._get_internal_aads_e2e_identity("internal-tenant")
+
+    assert identity == ("admin@example.test", "test-password")
+
+
+@pytest.mark.asyncio
+async def test_customer_aads_e2e_does_not_use_server_admin_identity(monkeypatch):
+    monkeypatch.setattr(
+        "app.auth.get_internal_tenant_id",
+        AsyncMock(return_value="internal-tenant"),
+    )
+
+    identity = await credential_vault._get_internal_aads_e2e_identity("customer-tenant")
+
+    assert identity is None
 
 
 def test_credential_crud_requires_and_filters_tenant_scope():

@@ -3345,6 +3345,8 @@ async def tool_browser_connect(
                     _redirect = _parsed.path
                     if _parsed.query:
                         _redirect += "?" + _parsed.query
+                    if _parsed.fragment:
+                        _redirect += "#" + _parsed.fragment
                     _e2e_text = await tool_get_e2e_login_url(
                         project="AADS",
                         redirect=_redirect,

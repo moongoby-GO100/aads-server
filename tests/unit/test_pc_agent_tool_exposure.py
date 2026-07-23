@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 
 import pytest
 
@@ -180,3 +181,9 @@ async def test_browser_connect_forwards_tenant_id(monkeypatch: pytest.MonkeyPatc
 
     assert result == "ok"
     assert received["tenant_id"] == "tenant-1"
+
+
+def test_browser_connect_preserves_chat_fragment_in_source() -> None:
+    source = inspect.getsource(ceo_chat_tools.tool_browser_connect)
+
+    assert '_redirect += "#" + _parsed.fragment' in source

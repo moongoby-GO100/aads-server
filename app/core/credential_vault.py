@@ -810,6 +810,18 @@ _E2E_TOKEN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _E2E_TOKEN_CACHE_TTL_SECONDS = 180
 
 
+async def _get_internal_aads_e2e_identity(tenant_id: str) -> tuple[str, str] | None:
+    """Use the built-in admin identity only for the canonical internal tenant."""
+    from app import auth as auth_module
+
+    internal_tenant_id = await auth_module.get_internal_tenant_id()
+    if not internal_tenant_id or str(tenant_id) != str(internal_tenant_id):
+        return None
+    if not auth_module.ADMIN_PASSWORD:
+        raise RuntimeError("AADS internal E2E admin password is not configured")
+    return auth_module.ADMIN_EMAIL, auth_module.ADMIN_PASSWORD
+
+
 async def get_e2e_login_url(project: str, redirect: str | None = None, role: str | None = None, tenant_id: str | None = None) -> dict[str, Any]:
     """프로젝트별 E2E 브라우저 자동 로그인 URL 생성."""
     import aiohttp
@@ -841,12 +853,21 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
             "instructions": f"browser_navigate({config['login_url']}) → browser_fill(각 필드) → browser_click(submit)",
         }
 
-    cred = await get_login_credential(config["service"], project, config["label"], tenant_id=tenant_id)
-    if not cred:
-        return {"success": False, "error": f"No credential found for {project}"}
+    internal_identity = None
+    if project == "AADS":
+        try:
+            internal_identity = await _get_internal_aads_e2e_identity(str(tenant_id))
+        except RuntimeError as exc:
+            return {"success": False, "error": str(exc)}
 
-    username = cred.get("username", "")
-    password = cred.get("password", "")
+    if internal_identity:
+        username, password = internal_identity
+    else:
+        cred = await get_login_credential(config["service"], project, config["label"], tenant_id=tenant_id)
+        if not cred:
+            return {"success": False, "error": f"No credential found for {project}"}
+        username = cred.get("username", "")
+        password = cred.get("password", "")
     headers = dict(config.get("extra_headers", {}))
     headers["Content-Type"] = "application/json"
 
