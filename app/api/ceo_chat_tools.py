@@ -3179,6 +3179,31 @@ async def _do_aads_login(page: Any) -> None:
     await page.wait_for_timeout(3000)
 
 
+async def _apply_aads_e2e_url(page: Any, e2e_url: str) -> str:
+    """Apply an AADS E2E token without exposing it in browser history."""
+    from urllib.parse import parse_qs, urljoin, urlparse
+
+    parsed = urlparse(e2e_url)
+    params = parse_qs(parsed.query)
+    token = str((params.get("token") or [""])[0]).strip()
+    redirect = str((params.get("redirect") or ["/"])[0]).strip() or "/"
+    if not token:
+        raise ValueError("AADS E2E token missing")
+
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    await page.goto(f"{origin}/e2e-auth.html", wait_until="domcontentloaded")
+    await page.evaluate(
+        """(token) => {
+            localStorage.setItem('aads_token', token);
+            document.cookie = 'aads_token=' + token + '; path=/; max-age=604800; SameSite=Lax';
+        }""",
+        token,
+    )
+    target_url = urljoin(f"{origin}/", redirect)
+    await page.goto(target_url, wait_until="domcontentloaded")
+    return target_url
+
+
 async def _pre_inject_vault_token(page: Any, url: str) -> bool:
     """대상 URL의 도메인에 매칭되는 vault 자격증명으로 사전 토큰 주입.
 
@@ -3364,8 +3389,11 @@ async def tool_browser_connect(
                         )
                         if _ctx and not _ctx_err:
                             _page = await _ctx.new_page()
-                            await _page.goto(_e2e_url)
-                            auth_note = "\naads_auth: 인증 세션 복구 완료 (E2E 로그인 적용)"
+                            _target_url = await _apply_aads_e2e_url(_page, _e2e_url)
+                            auth_note = (
+                                "\naads_auth: 인증 세션 복구 완료 "
+                                f"(직접 토큰 주입, target={_target_url})"
+                            )
                         else:
                             auth_note = f"\naads_auth: 컨텍스트 오류 — {_ctx_err}"
                     else:

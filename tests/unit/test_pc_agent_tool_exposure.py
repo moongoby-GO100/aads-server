@@ -187,3 +187,32 @@ def test_browser_connect_preserves_chat_fragment_in_source() -> None:
     source = inspect.getsource(ceo_chat_tools.tool_browser_connect)
 
     assert '_redirect += "#" + _parsed.fragment' in source
+
+
+class _FakeAadsAuthPage:
+    def __init__(self) -> None:
+        self.goto_calls: list[tuple[str, str]] = []
+        self.evaluate_token = ""
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+
+    async def evaluate(self, _script: str, token: str) -> None:
+        self.evaluate_token = token
+
+
+@pytest.mark.asyncio
+async def test_apply_aads_e2e_url_injects_token_and_preserves_fragment() -> None:
+    page = _FakeAadsAuthPage()
+
+    target = await ceo_chat_tools._apply_aads_e2e_url(
+        page,
+        "https://aads.newtalk.kr/e2e-auth.html?token=secret-token&redirect=/chat%23session-1",
+    )
+
+    assert page.evaluate_token == "secret-token"
+    assert page.goto_calls == [
+        ("https://aads.newtalk.kr/e2e-auth.html", "domcontentloaded"),
+        ("https://aads.newtalk.kr/chat#session-1", "domcontentloaded"),
+    ]
+    assert target == "https://aads.newtalk.kr/chat#session-1"
