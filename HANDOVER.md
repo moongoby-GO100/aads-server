@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-23 10:50 KST - PC Agent internal AADS session auth final recovery
+
+- Correction to the 09:56 entry: the first authenticated Browser Bridge DOM was an `E2E Auto Test Workspace` session, not the requested internal session. The URL title alone was insufficient evidence; the internal target remained inaccessible because the tenant-scoped vault credential belonged to `e2e_auto@aads.dev`.
+- Root causes: internal AADS E2E generation reused the customer E2E credential; the chat fragment was lost/unencoded in the callback URL; the callback page could render the login app instead of executing its inline token script; and the Local-Agent Playwright facade did not accept `page.evaluate(expression, arg)`.
+- Fixes: internal-tenant AADS E2E now uses the configured server admin identity while customer tenants remain vault-scoped; redirect fragments are preserved and encoded; Browser Bridge injects the token directly on the AADS origin without leaving it in browser history; `_LocalAgentPage.evaluate()` supports one Playwright-style argument and keeps the argument beyond the PC Agent log preview.
+- Validation: focused credential/PC-Agent suites passed `20` tests, the guarded tool commit hook passed `56` tests twice, Python compile and `git diff --check` passed. A fresh-process token returned HTTP 200 from `/api/v1/auth/me` as `moongoby@gmail.com`, internal tenant `2d701a8c-9596-4757-8588-faa4f7837112`. The clean PC-Agent CDP session `bb-4eb7d7f9bff5` rendered `[AADS] 프로젝트 매니저`, `AADS-011[도구/스킬관리자]`, session `8ad08cc2...`, and `1,455개 메시지` in the ARIA DOM.
+- Release: commits `6521be9c`, `da87faf5`, `46dd8df5`, and `44e64cda` were pushed to `origin/main`. Active Blue received zero-downtime module hot reloads, ending with `63` modules reloaded at 10:47:21 KST; API/SSE and the PC Agent WebSocket were preserved. Full Green image rebuild/slot synchronization remains deferred because the deployment guard detected three active streams on the standby slot; no force deployment was used.
+- Rollback: revert the four commits and run the same module reload. The pre-change Blue/Green containers remain healthy, but the standby image does not yet contain these commits until the next stream-safe rebuild.
+
 ## 2026-07-23 09:56 KST - PC Agent MCP registry/auth follow-up
 
 - Runtime verification: PC Agent `2e9379a1-fed` reconnected at 09:31:01 KST and remained online with a healthy heartbeat. Direct Blue/Green `/api/v1/pc-agent/status` calls reported one online Windows Agent, while the MCP `device_list` tool incorrectly returned zero.
@@ -4631,3 +4640,11 @@
 - Git: 서버 `8665eefd`, 대시보드 `0f4a6e6`을 각 main 브랜치에 push했다.
 - 운영: 서버는 dirty 작업트리의 다른 변경을 포함하지 않도록 Blue/Green에서 `app.core.credential_vault`만 무중단 hot-reload했다(각 success=1, failed=0, tasks_lost=0). 대시보드는 release `0f4a6e68ba57`로 blue-green 배포하고 Blue 활성/Green standby를 동기화했다.
 - 사후 검증: 새/구 E2E 콜백과 외부 API health 모두 HTTP 200, PC Agent CDP에서 E2E 토큰 적용 후 로그인 폼이 아닌 `CEO Chat / AI 채팅 허브` 화면을 확인했다. 자동 QA는 `UNKNOWN`으로 끝났으나 HTTP·브라우저 실검증으로 대체했다.
+
+## 2026-07-23 10:47 KST - 언니냉면 전용 도메인 운영 원장 정합화
+
+- 대표 URL `https://unni.newtalk.kr/`은 로그인 리다이렉트 없이 HTTP 200이며 Next.js middleware가 `/unni-naengmyeon`으로 내부 rewrite한다.
+- 대시보드 `main` 및 전용 브랜치의 코드·문서 커밋은 두 Git 원격에 push된 상태를 `ls-remote`로 확인했다.
+- 운영 `/etc/nginx/conf.d/aads.conf`에 중복 등록된 언니냉면 server block 한 벌을 제거하고, 저장소의 `nginx-aads.conf`에는 단일 전용 host 설정을 기록해 운영 설정과 형상 원장을 일치시킨다.
+- 검증 기준: `nginx -t`, 무중단 nginx reload, 외부 HTTP 200/redirect 0회, canonical·제목·주소·메뉴 이미지 응답, dashboard Blue/Green health 확인.
+- 롤백: `/etc/nginx/conf.d/aads.conf.bak.unni-ledger-20260723-1047` 복원 후 nginx reload 또는 직전 dashboard 슬롯으로 upstream 전환.
