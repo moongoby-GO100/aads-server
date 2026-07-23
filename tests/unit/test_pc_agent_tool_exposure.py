@@ -68,6 +68,31 @@ async def test_device_execute_routes_pc_command_to_pc_agent(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("command_type", ["file_upload", "file_download"])
+async def test_device_execute_routes_file_transfer_to_pc_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    command_type: str,
+) -> None:
+    executor = ToolExecutor()
+
+    async def fake_execute_routed_command(**kwargs):  # noqa: ANN003
+        assert kwargs["command_type"] == command_type
+        return {"status": "success", "backend": "pc_agent"}
+
+    async def fail_send_command(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("file transfer must be routed to PC Agent")
+
+    monkeypatch.setattr("app.services.pc_agent_manager.pc_agent_manager.execute_routed_command", fake_execute_routed_command)
+    monkeypatch.setattr("app.services.pc_agent_manager.pc_agent_manager.online_agents_count", lambda: 1)
+    monkeypatch.setattr("app.services.device_manager.device_manager.get_device", lambda _agent_id: None)
+    monkeypatch.setattr("app.services.device_manager.device_manager.send_command", fail_send_command)
+
+    result = await executor._device_execute({"command_type": command_type, "params": {}})
+
+    assert result == {"status": "success", "backend": "pc_agent"}
+
+
+@pytest.mark.asyncio
 async def test_device_list_includes_pc_agent_manager_connections(monkeypatch: pytest.MonkeyPatch) -> None:
     executor = ToolExecutor()
     monkeypatch.setattr("app.services.device_manager.device_manager.get_devices", lambda _device_type: [])
