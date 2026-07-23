@@ -1,5 +1,10 @@
 # AADS HANDOVER
-최종 업데이트: 2026-06-18
+최종 업데이트: 2026-07-23
+
+## 2026-07-23
+- AADS-FOOD-MENU-MOCKUP: `app/static/apps/yeoljeong-finance/mockup-v2.html` mockup-v2를 단일 HTML SPA 시안으로 확장했다. 통합 홈 회귀를 유지하면서 할 일·알림, 경영 리포트, 매출·정산, 입금·계좌, 직원·급여, 세무·회계, 사업자·지점, 연동 관리 총 9개 `data-view` 화면이 실제 메인 콘텐츠를 교체한다.
+- UX 반영: 사이드바와 모바일 하단 메뉴 active 동기화, `#sales` 등 해시 직접 진입/새로고침, 제목/브라우저 타이틀 동기화, 주요 CTA/toast 상호작용, 1440px 및 390px 가로 overflow 방지 스타일을 적용했다. 모든 숫자는 시안 데이터 표기를 유지한다.
+- 정적·브라우저 검증 후 변경 파일만 선별 커밋·푸시하고 기존 `deploy.sh`로 배포한다. 운영 API·DB 변경은 없다.
 
 ## 신규 러너 시작점
 - 1차: `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md`
