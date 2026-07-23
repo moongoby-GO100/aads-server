@@ -4669,4 +4669,4 @@
 - 운영 첨부 대조: 하영훈 주민등록등본·통장사본 2건을 승인하고 계약용 정보로 반영했다. 홍석빈의 `resident_register` 첨부는 실제 보건증이어서 `health_certificate`로 정정하고 생년월일·국적·발급일·유효기한을 반영했다. 홍석빈 주소와 급여계좌는 제출 근거가 없어 미등록 상태를 유지한다.
 - 데이터 백업: `/root/aads/backups/yeoljeong-contract-identity-20260723-134520/yeoljeong-contract-identity-20260723-134520.dump`, CUSTOM archive TOC 21건, SHA-256 `f6cc955d311fb7d9997ff69b2810b5251479fa9b4c685125c0229c26d07acf9f`.
 - 검증: Python compile, 인라인 JavaScript parse, scoped `git diff --check`, 계약/API/서비스/인쇄/Nginx 회귀 `63 passed`.
-- 배포/운영 E2E/커밋·푸시 상태는 후속 완료 줄에 기록한다.
+- 릴리스 완료(2026-07-23 14:02 KST): 기능 커밋 `d3f3d95d`와 HR 원본 이미지 제외 보안 커밋 `1d6dfe7f`를 `origin/main`에 push했다. Blue-Green 배포로 Green `8102`를 active로 전환했고 Blue `8100`은 rollback 슬롯으로 보존했다. Green·공개 `/api/v1/health` HTTP 200, Nginx 검증, DB/채팅/LLM 배포 점검, 운영 컨테이너 회귀 `63 passed`, 외부 정적 HTML의 `identity-table`·`최신양식 v2026.07.23`·`입사서류 확인` 표식과 `Cache-Control: no-store`를 확인했다. 인증 브라우저 클릭 E2E는 실행하지 못해 운영 API·외부 HTML·컨테이너 테스트로 대체했다.
