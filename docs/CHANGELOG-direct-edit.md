@@ -3697,3 +3697,8 @@ from __
 
 ## [2026-07-23 13:47:28 KST] [aads-server] app/data/yeoljeong_finance/onboarding_documents.json
 - Chat-Direct 수정: run_remote_command: docker exec aads-nginx cat /etc/nginx/conf.d/aads-upstream.conf
+
+## [2026-07-23 19:38:30 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-07-23
+- AADS-FOOD-OPS-DETAIL-MOC→## 2026-07-23
+- AADS-FOOD-OPS-DETAIL-MOC
