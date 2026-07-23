@@ -262,13 +262,15 @@ class _LocalAgentPage:
         r")"
     )
 
-    async def evaluate(self, expression: str) -> Any:
+    async def evaluate(self, expression: str, arg: Any = None) -> Any:
         expr = expression.strip()
-        # Wrap arrow/function expressions as IIFE to match Playwright page.evaluate()
-        # semantics. CDP Runtime.evaluate does not call functions — it just returns
-        # the function object. Callers (token injection, login detection) all pass
-        # arrow functions that must be invoked.
-        if self._FUNC_EXPR_RE.match(expr):
+        if arg is not None:
+            # Keep sensitive arguments beyond the PC Agent's 200-character log preview.
+            redacted_prefix = "/* browser-bridge argument redacted */" + (" " * 220)
+            expr = f"{redacted_prefix}({expr})({json.dumps(arg)})"
+        # Wrap no-argument arrow/function expressions as an IIFE to match
+        # Playwright page.evaluate() semantics.
+        elif self._FUNC_EXPR_RE.match(expr):
             expr = f"({expr})()"
         data = await self._run_browser_command(
             "browser_eval",

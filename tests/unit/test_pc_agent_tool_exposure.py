@@ -6,6 +6,7 @@ import inspect
 import pytest
 
 from app.api import ceo_chat_tools
+from app.browser_bridge.service import _LocalAgentPage
 from app.services import tool_registry
 from app.services.tool_executor import ToolExecutor
 
@@ -216,3 +217,24 @@ async def test_apply_aads_e2e_url_injects_token_and_preserves_fragment() -> None
         ("https://aads.newtalk.kr/chat#session-1", "domcontentloaded"),
     ]
     assert target == "https://aads.newtalk.kr/chat#session-1"
+
+
+@pytest.mark.asyncio
+async def test_local_agent_evaluate_accepts_playwright_argument(monkeypatch) -> None:
+    page = object.__new__(_LocalAgentPage)
+    captured: dict[str, str] = {}
+
+    async def fake_run(command_type, params, **_kwargs):
+        captured["command_type"] = command_type
+        captured["expression"] = params["expression"]
+        return {"value": "ok"}
+
+    monkeypatch.setattr(page, "_run_browser_command", fake_run)
+
+    result = await page.evaluate("(token) => token", "secret-token")
+
+    assert result == "ok"
+    assert captured["command_type"] == "browser_eval"
+    assert "secret-token" not in captured["expression"][:200]
+    assert captured["expression"].endswith('(secret-token)') is False
+    assert captured["expression"].endswith('(\"secret-token\")')
