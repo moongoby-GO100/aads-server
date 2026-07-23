@@ -561,6 +561,42 @@
       color: var(--muted);
     }
 
+    .contract-paper .identity-table {
+      width: 100%;
+      margin: 0 0 12px;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+
+    .contract-paper .identity-table th,
+    .contract-paper .identity-table td {
+      padding: 6px 7px;
+      border: 1px solid #cfd7dc;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    .contract-paper .identity-table th {
+      width: 15%;
+      background: #f4f7f8;
+      color: #45545b;
+      font-weight: 800;
+      text-align: left;
+    }
+
+    .contract-paper .identity-table .section-head {
+      width: 9%;
+      background: #e9eff2;
+      color: #1f343d;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .contract-paper .identity-table .wide-label {
+      width: 18%;
+    }
+
     .contract-paper .signature-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1718,6 +1754,21 @@
                 </label>
                 <label>국적
                   <input name="employeeNationality" value="대한민국" placeholder="예: 대한민국">
+                </label>
+                <label>급여 은행
+                  <input name="bankName" placeholder="입사서류 통장사본에서 자동 반영">
+                </label>
+                <label>예금주
+                  <input name="bankAccountHolder" placeholder="직원 본인 명의">
+                </label>
+                <label>급여 계좌번호(마스킹)
+                  <input name="bankAccountMasked" placeholder="예: 우리은행 1002-***-**3886">
+                </label>
+                <label>보건증 유효기한
+                  <input name="healthCertificateValidUntil" type="date">
+                </label>
+                <label class="span-2">입사서류 확인내역
+                  <textarea name="onboardingDocumentSummary" rows="2" placeholder="첨부 서류 종류·발급일·검수상태가 자동 반영되며 수정할 수 있습니다."></textarea>
                 </label>
                 <label>근무 지점
                   <select name="branch" required></select>
@@ -3773,6 +3824,11 @@
         employeePhone: employee.phone || "",
         employeeBirthDate: employee.birth_date || employee.birthDate || "",
         employeeNationality: employee.nationality || "대한민국",
+        bankName: employee.bank_name || employee.bankName || "",
+        bankAccountHolder: employee.bank_account_holder || employee.bankAccountHolder || employee.name || "",
+        bankAccountMasked: employee.bank_account_masked || employee.bankAccountMasked || "",
+        healthCertificateValidUntil: employee.health_certificate_valid_until || employee.healthCertificateValidUntil || "",
+        onboardingDocumentSummary: employee.onboarding_document_summary || employee.onboardingDocumentSummary || "",
         branch: employee.branch || ""
       };
       Object.entries(fields).forEach(([name, value]) => {
@@ -3947,6 +4003,11 @@
         employeePhone: String(data.employeePhone || "").trim(),
         employeeBirthDate: String(data.employeeBirthDate || "").trim(),
         employeeNationality: String(data.employeeNationality || "").trim(),
+        bankName: String(data.bankName || "").trim(),
+        bankAccountHolder: String(data.bankAccountHolder || "").trim(),
+        bankAccountMasked: String(data.bankAccountMasked || "").trim(),
+        healthCertificateValidUntil: String(data.healthCertificateValidUntil || "").trim(),
+        onboardingDocumentSummary: String(data.onboardingDocumentSummary || "").trim(),
         branch: data.branch,
         workplace: String(data.workplace || "").trim() || data.branch,
         contractType: data.contractType,
@@ -4117,13 +4178,50 @@
       const employeeBirthDate = contractValue(contract, "employeeBirthDate", "employee_birth_date");
       const employeePhone = contractValue(contract, "employeePhone", "employee_phone");
       const employeeNationality = contractValue(contract, "employeeNationality", "employee_nationality") || "대한민국";
+      const bankName = contractValue(contract, "bankName", "bank_name");
+      const bankAccountHolder = contractValue(contract, "bankAccountHolder", "bank_account_holder");
+      const bankAccountMasked = contractValue(contract, "bankAccountMasked", "bank_account_masked");
+      const healthCertificateValidUntil = contractValue(contract, "healthCertificateValidUntil", "health_certificate_valid_until");
+      const onboardingDocumentSummary = contractValue(contract, "onboardingDocumentSummary", "onboarding_document_summary");
       const commonMeta = `
-        <div class="preview-row"><b>사용자</b><span>${previewText(employerName, "열정국밥")} / 대표자 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))}</span></div>
-        <div class="preview-row"><b>사업자등록번호</b><span>${previewText(contractValue(contract, "employerRegistrationNo", "employer_registration_no"))}</span></div>
-        <div class="preview-row"><b>사용자 주소·연락처</b><span>${previewText(contractValue(contract, "employerAddress", "employer_address"))} / ${previewText(contractValue(contract, "employerPhone", "employer_phone"))}</span></div>
-        <div class="preview-row"><b>근로자/수급인</b><span>${previewText(employeeName)} / 생년월일 ${previewText(employeeBirthDate)} / 국적 ${previewText(employeeNationality)}</span></div>
-        <div class="preview-row"><b>근로자 주소</b><span>${previewText(contractValue(contract, "employeeAddress", "employee_address"))}</span></div>
-        <div class="preview-row"><b>근로자 연락처·이메일</b><span>${previewText(employeePhone)} / ${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</span></div>
+        <table class="identity-table" aria-label="계약 당사자 인적사항">
+          <tbody>
+            <tr>
+              <th class="section-head" rowspan="3">사용자</th>
+              <th>상호</th><td>${previewText(employerName, "열정국밥")}</td>
+              <th>대표자</th><td>${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))}</td>
+            </tr>
+            <tr>
+              <th>사업자등록번호</th><td>${previewText(contractValue(contract, "employerRegistrationNo", "employer_registration_no"))}</td>
+              <th>연락처</th><td>${previewText(contractValue(contract, "employerPhone", "employer_phone"))}</td>
+            </tr>
+            <tr>
+              <th>주소</th><td colspan="3">${previewText(contractValue(contract, "employerAddress", "employer_address"))}</td>
+            </tr>
+            <tr>
+              <th class="section-head" rowspan="4">근로자</th>
+              <th>성명</th><td>${previewText(employeeName)}</td>
+              <th>생년월일·국적</th><td>${previewText(employeeBirthDate)} / ${previewText(employeeNationality)}</td>
+            </tr>
+            <tr>
+              <th>주소</th><td colspan="3">${previewText(contractValue(contract, "employeeAddress", "employee_address"))}</td>
+            </tr>
+            <tr>
+              <th>연락처</th><td>${previewText(employeePhone)}</td>
+              <th>이메일</th><td>${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</td>
+            </tr>
+            <tr>
+              <th>급여계좌</th><td colspan="3">${previewText([bankName, bankAccountMasked, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
+            </tr>
+            <tr>
+              <th class="section-head" rowspan="2">서류</th>
+              <th class="wide-label">입사서류 확인</th><td colspan="3">${previewText(onboardingDocumentSummary, "등록된 입사서류 없음")}</td>
+            </tr>
+            <tr>
+              <th class="wide-label">보건증 유효기한</th><td colspan="3">${previewText(healthCertificateValidUntil, "미등록")}</td>
+            </tr>
+          </tbody>
+        </table>
       `;
       const wageLine = `${wageTypeLabels[wageType] || wageType} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
       let clauses = [];
@@ -4227,6 +4325,11 @@
         fillBlank("employeePhone", "employee_phone", employee.phone || "");
         fillBlank("employeeBirthDate", "employee_birth_date", employee.birth_date || employee.birthDate || "");
         fillBlank("employeeNationality", "employee_nationality", employee.nationality || "대한민국");
+        fillBlank("bankName", "bank_name", employee.bank_name || employee.bankName || "");
+        fillBlank("bankAccountHolder", "bank_account_holder", employee.bank_account_holder || employee.bankAccountHolder || employee.name || "");
+        fillBlank("bankAccountMasked", "bank_account_masked", employee.bank_account_masked || employee.bankAccountMasked || "");
+        fillBlank("healthCertificateValidUntil", "health_certificate_valid_until", employee.health_certificate_valid_until || employee.healthCertificateValidUntil || "");
+        fillBlank("onboardingDocumentSummary", "onboarding_document_summary", employee.onboarding_document_summary || employee.onboardingDocumentSummary || "");
         fillBlank("branch", "branch", employee.branch || "");
       }
       if (business) {
@@ -4254,7 +4357,7 @@
       const status = String(source.status || "draft");
       const resolvedBadge = contract
         ? (status === "draft"
-          ? `${badgeText} · 최신양식 v2026.07.22${source.previewReferenceHydrated ? " · 가입/사업자정보 보완" : ""}`
+          ? `${badgeText} · 최신양식 v2026.07.23${source.previewReferenceHydrated ? " · 가입/입사서류/사업자정보 보완" : ""}`
           : `${badgeText} · 체결 당시 저장본`)
         : badgeText;
       updateContractPreview(source, resolvedBadge);
@@ -4393,6 +4496,11 @@
       els.contractForm.employeePhone.value = contract.employeePhone || contract.employee_phone || "";
       els.contractForm.employeeBirthDate.value = contract.employeeBirthDate || contract.employee_birth_date || "";
       els.contractForm.employeeNationality.value = contract.employeeNationality || contract.employee_nationality || "대한민국";
+      els.contractForm.bankName.value = contract.bankName || contract.bank_name || "";
+      els.contractForm.bankAccountHolder.value = contract.bankAccountHolder || contract.bank_account_holder || "";
+      els.contractForm.bankAccountMasked.value = contract.bankAccountMasked || contract.bank_account_masked || "";
+      els.contractForm.healthCertificateValidUntil.value = contract.healthCertificateValidUntil || contract.health_certificate_valid_until || "";
+      els.contractForm.onboardingDocumentSummary.value = contract.onboardingDocumentSummary || contract.onboarding_document_summary || "";
       els.contractForm.branch.value = contract.branch || "";
       els.contractForm.workplace.value = contract.workplace || "";
       els.contractForm.contractType.value = contract.contractType || contract.contract_type || "part_time";
@@ -6137,6 +6245,11 @@
               employee_phone: next.employeePhone,
               employee_birth_date: next.employeeBirthDate,
               employee_nationality: next.employeeNationality,
+              bank_name: next.bankName,
+              bank_account_holder: next.bankAccountHolder,
+              bank_account_masked: next.bankAccountMasked,
+              health_certificate_valid_until: next.healthCertificateValidUntil,
+              onboarding_document_summary: next.onboardingDocumentSummary,
         business_id: next.businessId,
         branch: next.branch,
               workplace: next.workplace,

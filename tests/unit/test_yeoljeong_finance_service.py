@@ -386,7 +386,7 @@ def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monke
     )
 
     assert saved["document_kind"] == "standard_employment_contract"
-    assert saved["template_version"] == "majangbiseo-employment-2026-07-execution-v2"
+    assert saved["template_version"] == "majangbiseo-employment-2026-07-identity-table-v3"
     assert saved["print_title"] == "표준근로계약서"
 
 
@@ -412,7 +412,7 @@ def test_save_freelancer_contract_adds_a4_service_template_meta(tmp_path, monkey
     )
 
     assert saved["document_kind"] == "freelancer_service_contract"
-    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-execution-v2"
+    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-identity-table-v3"
     assert saved["print_title"] == "3.3% 프리랜서 용역계약서"
 
 
@@ -480,6 +480,84 @@ def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
     assert edited["employee_name"] == "직원 수정명"
     assert edited["employer_name"] == "사용자 수정 상호"
     assert edited["workplace"] == "수정 근무장소"
+
+
+def test_contract_autofills_privacy_minimised_onboarding_document_profile():
+    service._write(
+        "employee_join_requests",
+        [{
+            "id": "join-mia",
+            "name": "가입 직원",
+            "email": "member@example.com",
+            "phone": "010-1234-5678",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "status": "approved",
+        }],
+    )
+    service._write(
+        "onboarding_documents",
+        [
+            {
+                "id": "doc-resident",
+                "employee_request_id": "join-mia",
+                "employee_email": "member@example.com",
+                "employee_name": "가입 직원",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "document_type": "resident_register",
+                "document_label": "주민등록등본",
+                "status": "approved",
+                "issue_date": "2026-07-03",
+                "extracted_fields": {
+                    "address": "첨부 확인 주소",
+                    "birth_date": "1997-07-15",
+                    "nationality": "대한민국",
+                },
+            },
+            {
+                "id": "doc-bankbook",
+                "employee_request_id": "join-mia",
+                "employee_email": "member@example.com",
+                "employee_name": "가입 직원",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "document_type": "bankbook",
+                "document_label": "통장사본",
+                "status": "approved",
+                "issue_date": "2026-07-05",
+                "extracted_fields": {
+                    "bank_name": "우리은행",
+                    "bank_account_holder": "가입 직원",
+                    "bank_account_masked": "1002-***-**3886",
+                },
+            },
+        ],
+    )
+    employee_rows = service.list_approved_employees(
+        {"email": "owner@example.com", "is_admin": True},
+        "biz-mia",
+    )
+    assert employee_rows[0]["bank_name"] == "우리은행"
+    assert employee_rows[0]["bank_account_masked"] == "1002-***-**3886"
+    assert "주민등록등본(2026-07-03, approved)" in employee_rows[0]["onboarding_document_summary"]
+    assert "통장사본(2026-07-05, approved)" in employee_rows[0]["onboarding_document_summary"]
+
+    saved = service.save_contract(
+        valid_employment_contract(
+            employee_address="",
+            employee_birth_date="",
+            employee_nationality="",
+        ),
+        {"email": "owner@example.com", "is_admin": True},
+    )
+    assert saved["employee_address"] == "첨부 확인 주소"
+    assert saved["employee_birth_date"] == "1997-07-15"
+    assert saved["employee_nationality"] == "대한민국"
+    assert saved["bank_name"] == "우리은행"
+    assert saved["bank_account_holder"] == "가입 직원"
+    assert saved["bank_account_masked"] == "1002-***-**3886"
+    assert "통장사본" in saved["onboarding_document_summary"]
 
 
 def test_contract_rejects_employment_and_freelancer_tax_mismatch():

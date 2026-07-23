@@ -108,17 +108,17 @@ GENERIC_DB_LEDGER_NAMES = {
 CONTRACT_TEMPLATE_META = {
     "freelancer": {
         "document_kind": "freelancer_service_contract",
-        "template_version": "majangbiseo-freelancer-2026-07-execution-v2",
+        "template_version": "majangbiseo-freelancer-2026-07-identity-table-v3",
         "print_title": "3.3% 프리랜서 용역계약서",
     },
     "confidentiality": {
         "document_kind": "confidentiality_agreement",
-        "template_version": "majangbiseo-confidentiality-2026-07-execution-v2",
+        "template_version": "majangbiseo-confidentiality-2026-07-identity-table-v3",
         "print_title": "보안 및 개인정보 보호 서약서",
     },
     "default": {
         "document_kind": "standard_employment_contract",
-        "template_version": "majangbiseo-employment-2026-07-execution-v2",
+        "template_version": "majangbiseo-employment-2026-07-identity-table-v3",
         "print_title": "표준근로계약서",
     },
 }
@@ -1245,6 +1245,72 @@ def _record_business_id(record: dict[str, Any]) -> str:
     return explicit if explicit in CANONICAL_BUSINESS_IDS else str(BUSINESS_BY_BRANCH.get(branch) or "")
 
 
+ONBOARDING_PROFILE_FIELDS = (
+    "address",
+    "birth_date",
+    "nationality",
+    "bank_name",
+    "bank_account_holder",
+    "bank_account_masked",
+    "health_certificate_issue_date",
+    "health_certificate_valid_until",
+)
+
+
+def _employee_onboarding_profile(
+    documents: list[dict[str, Any]],
+    *,
+    employee_email: str,
+    employee_request_id: str,
+) -> dict[str, Any]:
+    """Return privacy-minimised fields verified from an employee's uploaded documents."""
+    email = str(employee_email or "").strip().lower()
+    request_id = str(employee_request_id or "").strip()
+    matched = [
+        row
+        for row in documents
+        if str(row.get("status") or "").strip().lower() != "missing"
+        and (
+            (request_id and str(row.get("employee_request_id") or "").strip() == request_id)
+            or (email and str(row.get("employee_email") or "").strip().lower() == email)
+        )
+    ]
+    profile: dict[str, Any] = {}
+    summaries: list[dict[str, str]] = []
+    for row in matched:
+        extracted = row.get("extracted_fields")
+        if not isinstance(extracted, dict):
+            extracted = {}
+        for field in ONBOARDING_PROFILE_FIELDS:
+            value = extracted.get(field)
+            if value and not profile.get(field):
+                profile[field] = value
+        summaries.append(
+            {
+                "document_type": str(row.get("document_type") or ""),
+                "document_label": str(row.get("document_label") or ""),
+                "status": str(row.get("status") or "uploaded"),
+                "issue_date": str(row.get("issue_date") or ""),
+                "valid_until": str(
+                    extracted.get("health_certificate_valid_until")
+                    or row.get("valid_until")
+                    or ""
+                ),
+            }
+        )
+    summaries.sort(key=lambda item: (item["document_label"], item["issue_date"]))
+    profile["onboarding_documents"] = summaries
+    summary_items: list[str] = []
+    for item in summaries:
+        valid_until = f"~{item['valid_until']}" if item["valid_until"] else ""
+        summary_items.append(
+            f"{item['document_label'] or item['document_type']}"
+            f"({item['issue_date'] or '발급일 미입력'}{valid_until}, {item['status']})"
+        )
+    profile["onboarding_document_summary"] = ", ".join(summary_items)
+    return profile
+
+
 def list_approved_employees(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
@@ -1264,6 +1330,16 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         employee["business_id"] = employee_business_id
         employee["branch"] = BRANCH_ALIASES.get(str(employee.get("branch") or ""), str(employee.get("branch") or ""))
         employee["email_masked"] = employee.get("email_masked") or _mask_email(email)
+        document_profile = _employee_onboarding_profile(
+            docs,
+            employee_email=email,
+            employee_request_id=str(employee.get("id") or ""),
+        )
+        for field in ONBOARDING_PROFILE_FIELDS:
+            if not employee.get(field) and document_profile.get(field):
+                employee[field] = document_profile[field]
+        employee["onboarding_documents"] = document_profile["onboarding_documents"]
+        employee["onboarding_document_summary"] = document_profile["onboarding_document_summary"]
         employee["onboarding_document_count"] = sum(1 for item in docs if str(item.get("employee_email") or "").strip().lower() == email)
         employee["contract_count"] = sum(1 for item in contracts if str(item.get("employee_email") or "").strip().lower() == email)
         employee["payroll_statement_count"] = sum(1 for item in payroll if str(item.get("employee_email") or "").strip().lower() == email)
@@ -1498,14 +1574,25 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
     result["business_id"] = business_id
     result["branch"] = branch
     if employee:
+        document_profile = _employee_onboarding_profile(
+            _read("onboarding_documents"),
+            employee_email=str(employee.get("email") or ""),
+            employee_request_id=request_id,
+        )
         employee_defaults = {
             "employee_request_id": request_id,
             "employee_name": employee.get("name") or "",
             "employee_email": employee.get("email") or "",
-            "employee_address": employee.get("address") or "",
+            "employee_address": employee.get("address") or document_profile.get("address") or "",
             "employee_phone": employee.get("phone") or "",
-            "employee_birth_date": employee.get("birth_date") or "",
-            "employee_nationality": employee.get("nationality") or "대한민국",
+            "employee_birth_date": employee.get("birth_date") or document_profile.get("birth_date") or "",
+            "employee_nationality": employee.get("nationality") or document_profile.get("nationality") or "대한민국",
+            "bank_name": document_profile.get("bank_name") or "",
+            "bank_account_holder": document_profile.get("bank_account_holder") or "",
+            "bank_account_masked": document_profile.get("bank_account_masked") or "",
+            "health_certificate_issue_date": document_profile.get("health_certificate_issue_date") or "",
+            "health_certificate_valid_until": document_profile.get("health_certificate_valid_until") or "",
+            "onboarding_document_summary": document_profile.get("onboarding_document_summary") or "",
         }
         for key, value in employee_defaults.items():
             if not str(result.get(key) or "").strip() and value:

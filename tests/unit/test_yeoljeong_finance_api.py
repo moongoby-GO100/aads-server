@@ -135,7 +135,7 @@ def test_contract_preview_is_a4_modal():
     assert 'String(source.status || "draft") !== "draft"' in html
     assert 'fillBlank("employeePhone", "employee_phone", employee.phone || "")' in html
     assert 'fillBlank("employerRegistrationNo", "employer_registration_no", business.registrationNo || "")' in html
-    assert "최신양식 v2026.07.22" in html
+    assert "최신양식 v2026.07.23" in html
     assert "체결 당시 저장본" in html
 
 
@@ -163,12 +163,18 @@ def test_execution_contract_has_complete_worker_identity_and_no_editor_notice():
     for field in (
         'name="employeeAddress"', 'name="employeePhone"', 'name="employeeBirthDate"',
         'name="employeeNationality"', 'name="minorGuardianName"',
-        'name="minorGuardianConsent"', 'name="dailyWorkSchedule"',
+        'name="minorGuardianConsent"', 'name="dailyWorkSchedule"', 'name="bankName"',
+        'name="bankAccountHolder"', 'name="bankAccountMasked"',
+        'name="healthCertificateValidUntil"', 'name="onboardingDocumentSummary"',
     ):
         assert field in html
     preview = html.split("function contractPreviewHtml(contract)", 1)[1].split("function updateContractPreview", 1)[0]
-    assert "근로자 주소" in preview
-    assert "근로자 연락처·이메일" in preview
+    assert 'class="identity-table"' in preview
+    assert 'aria-label="계약 당사자 인적사항"' in preview
+    assert "생년월일·국적" in preview
+    assert "급여계좌" in preview
+    assert "입사서류 확인" in preview
+    assert "보건증 유효기한" in preview
     assert "고용노동부 표준근로계약서의 필수 기재 축" not in preview
     assert "2026 최저임금 자동점검" not in preview
 
