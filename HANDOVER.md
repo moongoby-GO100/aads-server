@@ -4651,3 +4651,11 @@
 - 롤백: `/etc/nginx/conf.d/aads.conf.bak.unni-ledger-20260723-1047` 복원 후 nginx reload 또는 직전 dashboard 슬롯으로 upstream 전환.
 - 사후 검증: 운영 `nginx -t`와 무중단 reload 성공. dashboard 3100/3101 양 슬롯은 `Host: unni.newtalk.kr` 루트 HTTP 200, 외부 루트는 HTTP 200/redirect 0회, 물냉면 원본은 HTTP 200·1,755,446 bytes이며 양 dashboard 컨테이너는 healthy다. 전용 대시보드 production build도 `/unni-naengmyeon` 포함 60개 라우트로 성공했다.
 - 브라우저 캡처 도구는 `Argument list too long`으로 실패해 성공으로 간주하지 않았으며, 외부 HTML의 제목·canonical·주소·메뉴 본문 확인과 양 슬롯·정적 자산 HTTP 검증으로 대체했다.
+
+## 2026-07-23 13:22 KST - 언니냉면 B-1 300DPI 다운로드 경로 복구
+
+- 증상: `https://unni.newtalk.kr/exports/outdoor-b1-*-300dpi.png` 요청이 HTTP 307로 홈페이지 루트에 전환되어 배너 페이지의 다운로드 버튼이 실제 파일을 내려받지 못했다.
+- 원인: 인쇄용 PNG 두 파일은 `/var/www/certbot/exports/`에 존재했지만 `unni.newtalk.kr` 전용 Nginx HTTPS server block에는 `/exports/` alias가 없었다.
+- 조치: 전용 server block에 `/exports/` alias, `nosniff`, 캐시 헤더를 추가하고 운영 설정을 무중단 reload했다.
+- 검증: `nginx -t` 성공. 외부 Range 요청에서 앞면 HTTP 206·`image/png`·77,157,245 bytes, 뒷면 HTTP 206·`image/png`·38,277,235 bytes를 확인했다. 배너 페이지는 HTTP 200이다.
+- 롤백: `nginx-aads.conf`의 전용 `/exports/` location을 제거하고 운영 설정에 동일하게 반영한 뒤 `nginx -t && nginx -s reload`한다.
