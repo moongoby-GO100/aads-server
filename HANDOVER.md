@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-23 14:07 KST - 매장비서 통합 경영 대시보드 UX 시안
+
+- 기존 운영 앱과 분리된 브라우저 검토용 `app/static/apps/yeoljeong-finance/mockup-v2.html`을 추가했다. 기존 `index.html`, 운영 데이터, API는 변경하지 않았다.
+- 다사업자·다지점 전환을 전역 컨텍스트로 두고, 첫 화면을 통합 매출·정산 예정액·가용 현금·예상 세금, 8일 현금흐름, 오늘 처리할 일 중심의 경영 콕핏으로 재설계했다.
+- 배달 플랫폼 자동매출 집계, 은행 입금 매칭, 계약·근태·급여 예외, 세무 일정·증빙 수집률·경영 보고서를 한 화면에 배치했다.
+- 데스크톱 사이드바와 모바일 하단 탐색을 각각 제공하며, 메뉴·기간·업무 버튼에 시안용 상호작용과 안내 토스트를 구현했다. 표시 금액과 인물은 모두 샘플 데이터다.
+- 검증: Python HTML parser 통과, 로컬 정적 HTTP 응답 `200`/`33,195 bytes`, `git diff --check` 통과. 공개 URL 배포 및 캡처 검증은 이 기록 다음 단계에서 수행한다.
+- 롤백: 신규 시안 파일과 이 HANDOVER 항목만 되돌리면 되며 기존 운영 앱에는 영향이 없다.
+
 ## 2026-07-23 10:50 KST - PC Agent internal AADS session auth final recovery
 
 - Correction to the 09:56 entry: the first authenticated Browser Bridge DOM was an `E2E Auto Test Workspace` session, not the requested internal session. The URL title alone was insufficient evidence; the internal target remained inaccessible because the tenant-scoped vault credential belonged to `e2e_auto@aads.dev`.

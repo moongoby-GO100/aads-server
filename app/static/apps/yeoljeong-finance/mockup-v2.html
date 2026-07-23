@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>매장비서 · 통합 경영 대시보드 시안</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --nav: #111827;
+      --nav-soft: #1f2937;
+      --page: #f4f5f7;
+      --card: #fff;
+      --ink: #171a21;
+      --muted: #68707f;
+      --line: #e5e7eb;
+      --orange: #f26a2e;
+      --orange-soft: #fff2ea;
+      --green: #15936b;
+      --green-soft: #eaf8f2;
+      --red: #dc4c4c;
+      --red-soft: #fff0f0;
+      --blue: #3778d4;
+      --blue-soft: #edf4ff;
+      --amber: #b7791f;
+      --amber-soft: #fff8e5;
+      --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+      font-family: Pretendard, "Noto Sans KR", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--page); color: var(--ink); }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 228px minmax(0, 1fr); }
+    .sidebar {
+      position: sticky; top: 0; height: 100vh; z-index: 20;
+      display: flex; flex-direction: column; background: var(--nav); color: #fff;
+      border-right: 1px solid rgba(255,255,255,.05);
+    }
+    .brand { height: 72px; display: flex; align-items: center; gap: 11px; padding: 0 22px; font-weight: 850; font-size: 18px; letter-spacing: -.6px; }
+    .brand-mark { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 9px; background: var(--orange); font-size: 16px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+    .workspace { margin: 0 13px 15px; padding: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); border-radius: 10px; }
+    .workspace-label { margin-bottom: 7px; font-size: 10px; color: #9ca3af; font-weight: 750; letter-spacing: .7px; }
+    .workspace button { width: 100%; padding: 0; border: 0; color: #fff; background: transparent; display: flex; align-items: center; gap: 9px; text-align: left; }
+    .workspace-logo { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: #fff; color: var(--nav); font-size: 12px; font-weight: 900; }
+    .workspace-name { min-width: 0; flex: 1; }
+    .workspace-name b, .workspace-name span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .workspace-name b { font-size: 13px; }
+    .workspace-name span { color: #9ca3af; font-size: 11px; margin-top: 2px; }
+    .nav { display: grid; gap: 4px; padding: 0 10px; }
+    .nav-label { padding: 13px 12px 5px; color: #747d8d; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+    .nav button { position: relative; width: 100%; height: 43px; border: 0; border-radius: 8px; background: transparent; color: #aeb5c1; display: flex; align-items: center; gap: 12px; padding: 0 12px; font-size: 13px; font-weight: 700; text-align: left; }
+    .nav button:hover { background: rgba(255,255,255,.05); color: #fff; }
+    .nav button.active { color: #fff; background: var(--nav-soft); }
+    .nav button.active::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 3px; border-radius: 3px; background: var(--orange); }
+    .nav svg { width: 18px; height: 18px; stroke-width: 1.8; }
+    .count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; background: #3b2524; color: #ffb08a; font-size: 10px; }
+    .sidebar-bottom { margin-top: auto; padding: 16px 18px; border-top: 1px solid rgba(255,255,255,.07); color: #858d9a; font-size: 11px; line-height: 1.5; }
+    .main { min-width: 0; }
+    .topbar { position: sticky; top: 0; z-index: 15; height: 72px; padding: 0 28px; background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .top-left, .top-right, .profile { display: flex; align-items: center; }
+    .top-left { gap: 13px; min-width: 0; }
+    .top-left h1 { margin: 0; font-size: 19px; letter-spacing: -.5px; white-space: nowrap; }
+    .prototype { padding: 5px 8px; border: 1px solid #f3cdbb; border-radius: 5px; background: var(--orange-soft); color: #a8461b; font-size: 10px; font-weight: 800; white-space: nowrap; }
+    .top-right { gap: 9px; }
+    .topbar button { width: 38px; height: 38px; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: #555e6e; }
+    .topbar svg { width: 18px; height: 18px; }
+    .profile { gap: 9px; margin-left: 5px; padding-left: 14px; border-left: 1px solid var(--line); }
+    .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: #ede7e1; color: #694b37; font-size: 11px; font-weight: 900; }
+    .profile b, .profile span { display: block; }
+    .profile b { font-size: 12px; }
+    .profile span { color: var(--muted); font-size: 10px; margin-top: 2px; }
+    .mobile-menu { display: none !important; }
+    .content { max-width: 1520px; margin: 0 auto; padding: 26px 28px 52px; }
+    .hero { display: flex; justify-content: space-between; gap: 20px; align-items: flex-end; margin-bottom: 20px; }
+    .hero h2 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.9px; }
+    .hero p { margin: 0; color: var(--muted); font-size: 13px; }
+    .hero-actions { display: flex; align-items: center; gap: 8px; }
+    .select, .outline, .primary { min-height: 38px; padding: 0 13px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 750; }
+    .primary { border-color: var(--nav); background: var(--nav); color: #fff; }
+    .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-bottom: 14px; }
+    .card { min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+    .kpi { position: relative; min-height: 137px; padding: 18px; overflow: hidden; }
+    .kpi-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .kpi-label { color: var(--muted); font-size: 12px; font-weight: 750; }
+    .kpi-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; }
+    .kpi-icon svg { width: 17px; height: 17px; }
+    .kpi-icon.orange { background: var(--orange-soft); color: var(--orange); }
+    .kpi-icon.green { background: var(--green-soft); color: var(--green); }
+    .kpi-icon.blue { background: var(--blue-soft); color: var(--blue); }
+    .kpi-icon.amber { background: var(--amber-soft); color: var(--amber); }
+    .kpi-value { margin-top: 13px; font-size: 25px; font-weight: 880; letter-spacing: -1.2px; }
+    .kpi-foot { display: flex; align-items: center; gap: 7px; margin-top: 7px; color: var(--muted); font-size: 11px; }
+    .up { color: var(--green); font-weight: 800; }
+    .down { color: var(--red); font-weight: 800; }
+    .grid-main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(310px, .72fr); gap: 14px; margin-bottom: 14px; }
+    .grid-bottom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .panel { padding: 19px; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
+    .panel-title { min-width: 0; }
+    .panel-title h3 { margin: 0; font-size: 15px; letter-spacing: -.35px; }
+    .panel-title p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .link { border: 0; background: none; color: #565f6f; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .cash-summary { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 19px; }
+    .cash-summary small { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; }
+    .cash-summary strong { font-size: 22px; letter-spacing: -.8px; }
+    .legend { display: flex; gap: 13px; color: var(--muted); font-size: 10px; }
+    .legend span::before { content: ""; width: 7px; height: 7px; display: inline-block; margin-right: 5px; border-radius: 2px; background: var(--green); }
+    .legend span:last-child::before { background: #d8dee7; }
+    .chart { position: relative; height: 174px; display: flex; align-items: end; justify-content: space-between; gap: 11px; padding: 12px 8px 26px; border-bottom: 1px solid var(--line); background-image: linear-gradient(to bottom, transparent 24%, #f0f2f5 25%, transparent 26%, transparent 49%, #f0f2f5 50%, transparent 51%, transparent 74%, #f0f2f5 75%, transparent 76%); }
+    .bar-set { height: 100%; flex: 1; display: flex; align-items: end; justify-content: center; gap: 4px; position: relative; }
+    .bar { width: min(17px, 40%); border-radius: 4px 4px 0 0; background: #d9dee6; transition: height .3s ease; }
+    .bar.in { background: var(--green); }
+    .bar-set label { position: absolute; bottom: -20px; color: #858c98; font-size: 9px; white-space: nowrap; }
+    .forecast { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; border-radius: 8px; background: #f6f8fa; font-size: 11px; color: var(--muted); }
+    .forecast b { color: var(--ink); font-size: 12px; }
+    .tasks { display: grid; gap: 1px; }
+    .task { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto; gap: 11px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f0f1f3; }
+    .task:last-child { border-bottom: 0; }
+    .task-icon { width: 35px; height: 35px; display: grid; place-items: center; border-radius: 9px; }
+    .task-icon svg { width: 16px; height: 16px; }
+    .task-icon.red { color: var(--red); background: var(--red-soft); }
+    .task-icon.amber { color: var(--amber); background: var(--amber-soft); }
+    .task-icon.blue { color: var(--blue); background: var(--blue-soft); }
+    .task b, .task span { display: block; }
+    .task b { font-size: 12px; }
+    .task span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .task button { min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 10px; font-weight: 800; }
+    .task button:hover, .outline:hover { border-color: var(--orange); color: var(--orange); }
+    .section-tabs { display: flex; gap: 5px; margin-bottom: 15px; padding: 4px; border-radius: 8px; background: #f3f4f6; }
+    .section-tabs button { flex: 1; min-height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 800; }
+    .section-tabs button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .channel-list { display: grid; gap: 12px; }
+    .channel { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; gap: 10px; align-items: center; }
+    .channel-logo { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: #fff; font-size: 10px; font-weight: 900; }
+    .channel-logo.baemin { background: #25b9b1; }
+    .channel-logo.coupang { background: #e84852; }
+    .channel-logo.cardpay { background: #4968a9; }
+    .channel b, .channel span { display: block; }
+    .channel b { font-size: 11px; }
+    .channel span { margin-top: 2px; color: var(--muted); font-size: 9px; }
+    .amount { text-align: right; font-size: 11px; font-weight: 850; }
+    .amount small { display: block; margin-top: 2px; color: var(--green); font-size: 9px; }
+    .employee-list { display: grid; gap: 12px; }
+    .employee { display: grid; grid-template-columns: 31px minmax(0,1fr) auto; gap: 10px; align-items: center; }
+    .employee-photo { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 50%; background: #f0ebe6; color: #7d5b43; font-size: 10px; font-weight: 900; }
+    .employee b, .employee span { display: block; }
+    .employee b { font-size: 11px; }
+    .employee span { color: var(--muted); font-size: 9px; margin-top: 2px; }
+    .status { padding: 4px 7px; border-radius: 10px; font-size: 9px; font-weight: 800; }
+    .status.ok { color: var(--green); background: var(--green-soft); }
+    .status.warn { color: var(--amber); background: var(--amber-soft); }
+    .tax-card { display: grid; gap: 12px; }
+    .tax-deadline { padding: 13px; border: 1px solid #f2e3c1; background: var(--amber-soft); border-radius: 9px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .tax-deadline b { display: block; font-size: 11px; }
+    .tax-deadline span { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+    .d-day { color: var(--amber); font-size: 14px; font-weight: 900; white-space: nowrap; }
+    .report-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 10px 0; border-bottom: 1px solid #f0f1f3; }
+    .report-row:last-child { border-bottom: 0; }
+    .report-row b { display: block; font-size: 11px; }
+    .report-row span { display: block; color: var(--muted); font-size: 9px; margin-top: 2px; }
+    .report-row button { width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); }
+    .bottom-nav, .mobile-switch { display: none; }
+    .toast { position: fixed; right: 24px; bottom: 24px; z-index: 50; max-width: calc(100vw - 48px); padding: 12px 15px; border-radius: 9px; background: #171a21; color: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.24); font-size: 12px; font-weight: 700; transform: translateY(90px); opacity: 0; transition: .25s ease; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    @media (max-width: 1180px) {
+      .app { grid-template-columns: 204px minmax(0,1fr); }
+      .grid-main { grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); }
+      .grid-bottom { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .grid-bottom .card:last-child { grid-column: 1 / -1; }
+    }
+    @media (max-width: 900px) {
+      .app { display: block; padding-bottom: 68px; }
+      .sidebar { display: none; }
+      .topbar { height: 64px; padding: 0 18px; }
+      .mobile-menu { display: grid !important; }
+      .profile > div:last-child { display: none; }
+      .content { padding: 19px 18px 35px; }
+      .hero { align-items: flex-start; }
+      .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .grid-main { grid-template-columns: 1fr; }
+      .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; height: 66px; display: grid; grid-template-columns: repeat(5, 1fr); background: rgba(255,255,255,.96); border-top: 1px solid var(--line); backdrop-filter: blur(12px); }
+      .bottom-nav button { border: 0; background: transparent; color: #808897; display: grid; place-items: center; align-content: center; gap: 4px; font-size: 9px; font-weight: 750; }
+      .bottom-nav button.active { color: var(--orange); }
+      .bottom-nav svg { width: 18px; height: 18px; }
+    }
+    @media (max-width: 620px) {
+      .topbar { padding: 0 13px; }
+      .top-left h1 { font-size: 16px; }
+      .prototype { display: none; }
+      .top-right > button { display: none; }
+      .content { padding: 16px 13px 30px; }
+      .hero { display: block; margin-bottom: 15px; }
+      .hero h2 { font-size: 21px; }
+      .hero-actions { margin-top: 14px; }
+      .hero-actions .outline { display: none; }
+      .hero-actions .select { flex: 1; }
+      .mobile-switch { display: block; margin-bottom: 12px; padding: 11px 13px; background: var(--nav); border-radius: 10px; color: #fff; }
+      .mobile-switch small { display: block; color: #9ca3af; font-size: 9px; margin-bottom: 3px; }
+      .mobile-switch b { font-size: 12px; }
+      .kpis { gap: 9px; }
+      .kpi { min-height: 123px; padding: 15px; }
+      .kpi-value { font-size: 20px; }
+      .grid-bottom { grid-template-columns: 1fr; }
+      .grid-bottom .card:last-child { grid-column: auto; }
+      .panel { padding: 16px; }
+      .cash-summary { display: block; }
+      .legend { margin-top: 10px; }
+      .chart { gap: 5px; padding-left: 0; padding-right: 0; }
+      .task { grid-template-columns: 35px minmax(0,1fr); }
+      .task button { grid-column: 2; justify-self: start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">M</span>매장비서</div>
+      <div class="workspace">
+        <div class="workspace-label">현재 사업자</div>
+        <button data-action="business">
+          <span class="workspace-logo">열</span>
+          <span class="workspace-name"><b id="businessName">열정국밥 주식회사</b><span id="storeCount">3개 지점 통합</span></span>
+          <span>⌄</span>
+        </button>
+      </div>
+      <nav class="nav">
+        <div class="nav-label">경영</div>
+        <button class="active" data-view="통합 홈"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-7H9v7H4a1 1 0 01-1-1z"/></svg>통합 홈</button>
+        <button data-view="할 일·알림"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>할 일·알림<span class="count">5</span></button>
+        <button data-view="경영 리포트"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>경영 리포트</button>
+        <div class="nav-label">운영</div>
+        <button data-view="매출·정산"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 15l3-3 2 2 4-5"/></svg>매출·정산</button>
+        <button data-view="입금·계좌"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 10h18M5 10v8m4-8v8m6-8v8m4-8v8M2 21h20M12 3l9 5H3z"/></svg>입금·계좌</button>
+        <button data-view="직원·급여"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>직원·급여</button>
+        <button data-view="세무·회계"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h8"/></svg>세무·회계</button>
+        <div class="nav-label">설정</div>
+        <button data-view="사업자·지점"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 10h2m2 0h2m-6 4h2m2 0h2"/></svg>사업자·지점</button>
+        <button data-view="연동 관리"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>연동 관리</button>
+      </nav>
+      <div class="sidebar-bottom">Concept v2.0 · 2026<br>의사결정용 인터랙티브 시안</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="top-left">
+          <button class="mobile-menu" data-action="menu" aria-label="메뉴"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+          <h1 id="pageTitle">통합 홈</h1><span class="prototype">UX 시안 · 샘플 데이터</span>
+        </div>
+        <div class="top-right">
+          <button data-action="search" aria-label="검색"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
+          <button data-action="notification" aria-label="알림"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></button>
+          <div class="profile"><span class="avatar">MOON</span><div><b>문고비 대표님</b><span>최고 관리자</span></div></div>
+        </div>
+      </header>
+
+      <div class="content">
+        <div class="mobile-switch"><small>현재 사업자 · 3개 지점 통합</small><b>열정국밥 주식회사⌄</b></div>
+        <section class="hero">
+          <div><h2>대표님, 오늘 경영 현황입니다</h2><p>전체 사업자와 지점의 돈·직원·세무 이슈를 한눈에 확인하세요.</p></div>
+          <div class="hero-actions">
+            <select class="select" id="periodSelect" aria-label="조회 기간"><option>2026년 7월</option><option>2026년 6월</option><option>2026년 5월</option></select>
+            <button class="outline" data-action="report">월간 보고서</button>
+            <button class="primary" data-action="connect">+ 연동 추가</button>
+          </div>
+        </section>
+
+        <section class="kpis">
+          <article class="card kpi">
+            <div class="kpi-top"><span class="kpi-label">이번 달 통합 매출</span><span class="kpi-icon orange"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7"/></svg></span></div>
+            <div class="kpi-value">₩128,460,000</div><div class="kpi-foot"><span class="up">↑ 8.4%</span><span>지난달 같은 기간 대비</span></div>
+          </article>
+          <article class="card kpi">
+            <div class="kpi-top"><span class="kpi-label">정산 예정액</span><span class="kpi-icon green"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18v12H3zM3 10h18M7 15h4"/></svg></span></div>
+            <div class="kpi-value">₩34,821,500</div><div class="kpi-foot"><span class="up">정상</span><span>7월 24일 외 6건</span></div>
+          </article>
+          <article class="card kpi">
+            <div class="kpi-top"><span class="kpi-label">가용 현금</span><span class="kpi-icon blue"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16v13H4zM4 9h16M16 14h1"/></svg></span></div>
+            <div class="kpi-value">₩52,190,200</div><div class="kpi-foot"><span class="down">↓ 3.1%</span><span>급여·임대료 지급 반영</span></div>
+          </article>
+          <article class="card kpi">
+            <div class="kpi-top"><span class="kpi-label">예상 세금</span><span class="kpi-icon amber"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 3h10v18l-5-3-5 3zM10 8h4m-4 4h4"/></svg></span></div>
+            <div class="kpi-value">₩11,740,000</div><div class="kpi-foot"><span>부가세 신고까지</span><span class="down">D-2</span></div>
+          </article>
+        </section>
+
+        <section class="grid-main">
+          <article class="card panel">
+            <div class="panel-head"><div class="panel-title"><h3>통합 현금흐름</h3><p>입금 예정과 지출을 반영한 8일 전망</p></div><button class="link" data-action="cash">상세 보기 →</button></div>
+            <div class="cash-summary">
+              <div><small>7월 말 예상 잔액</small><strong>₩68,320,000</strong></div>
+              <div class="legend"><span>유입</span><span>유출</span></div>
+            </div>
+            <div class="chart" aria-label="현금흐름 막대 차트">
+              <div class="bar-set"><i class="bar in" style="height:42%"></i><i class="bar" style="height:18%"></i><label>7/23</label></div>
+              <div class="bar-set"><i class="bar in" style="height:58%"></i><i class="bar" style="height:28%"></i><label>7/24</label></div>
+              <div class="bar-set"><i class="bar in" style="height:32%"></i><i class="bar" style="height:22%"></i><label>7/25</label></div>
+              <div class="bar-set"><i class="bar in" style="height:68%"></i><i class="bar" style="height:35%"></i><label>7/26</label></div>
+              <div class="bar-set"><i class="bar in" style="height:51%"></i><i class="bar" style="height:31%"></i><label>7/27</label></div>
+              <div class="bar-set"><i class="bar in" style="height:74%"></i><i class="bar" style="height:48%"></i><label>7/28</label></div>
+              <div class="bar-set"><i class="bar in" style="height:45%"></i><i class="bar" style="height:82%"></i><label>7/29</label></div>
+              <div class="bar-set"><i class="bar in" style="height:88%"></i><i class="bar" style="height:39%"></i><label>7/30</label></div>
+            </div>
+            <div class="forecast"><span>7월 29일 급여 지급으로 잔액이 일시 감소합니다.</span><b>최저 잔액 ₩39,810,000</b></div>
+          </article>
+
+          <article class="card panel">
+            <div class="panel-head"><div class="panel-title"><h3>오늘 처리할 일</h3><p>중요도와 마감일 기준 자동 정렬</p></div><button class="link" data-action="tasks">전체 5건 →</button></div>
+            <div class="tasks">
+              <div class="task"><span class="task-icon red"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10 3L2 20h20L14 3a2 2 0 00-4 0z"/></svg></span><div><b>부가세 신고 자료 확인</b><span>전체 사업자 · 7월 25일 마감</span></div><button data-action="task">확인</button></div>
+              <div class="task"><span class="task-icon amber"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><div><b>7월 급여 최종 승인</b><span>직원 18명 · 지급액 38,420,000원</span></div><button data-action="task">승인</button></div>
+              <div class="task"><span class="task-icon blue"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 12l3 3 5-6"/></svg></span><div><b>미확인 입금 3건 매칭</b><span>신한은행 · 합계 1,840,000원</span></div><button data-action="task">매칭</button></div>
+              <div class="task"><span class="task-icon amber"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 20h16M6 20V8h12v12M9 4h6v4H9z"/></svg></span><div><b>근로계약 갱신</b><span>미아점 김서윤 · 7월 31일 만료</span></div><button data-action="task">작성</button></div>
+            </div>
+          </article>
+        </section>
+
+        <section class="grid-bottom">
+          <article class="card panel">
+            <div class="panel-head"><div class="panel-title"><h3>매출·정산</h3><p>플랫폼별 자동 집계 현황</p></div><button class="link" data-action="sales">상세 →</button></div>
+            <div class="section-tabs"><button class="active">오늘</button><button>이번 주</button><button>이번 달</button></div>
+            <div class="channel-list">
+              <div class="channel"><span class="channel-logo baemin">배민</span><div><b>배달의민족</b><span>3개 지점 · 12:42 동기화</span></div><div class="amount">₩3,284,000<small>정상 집계</small></div></div>
+              <div class="channel"><span class="channel-logo coupang">쿠팡</span><div><b>쿠팡이츠</b><span>3개 지점 · 12:40 동기화</span></div><div class="amount">₩1,928,000<small>정상 집계</small></div></div>
+              <div class="channel"><span class="channel-logo cardpay">카드</span><div><b>카드·현장 매출</b><span>3개 지점 · 실시간</span></div><div class="amount">₩2,611,000<small>정상 집계</small></div></div>
+            </div>
+          </article>
+
+          <article class="card panel">
+            <div class="panel-head"><div class="panel-title"><h3>직원·급여</h3><p>계약·근태·급여 예외 중심</p></div><button class="link" data-action="employees">직원 18명 →</button></div>
+            <div class="employee-list">
+              <div class="employee"><span class="employee-photo">김서</span><div><b>김서윤 · 미아점</b><span>계약 만료 8일 전</span></div><span class="status warn">갱신 필요</span></div>
+              <div class="employee"><span class="employee-photo">박준</span><div><b>박준호 · 성신점</b><span>이번 주 46시간 근무</span></div><span class="status warn">초과 확인</span></div>
+              <div class="employee"><span class="employee-photo">이하</span><div><b>이하늘 · 정화점</b><span>급여명세서 발급 완료</span></div><span class="status ok">정상</span></div>
+              <div class="employee"><span class="employee-photo">최민</span><div><b>최민석 · 성신점</b><span>4대보험 취득 신고 완료</span></div><span class="status ok">정상</span></div>
+            </div>
+          </article>
+
+          <article class="card panel">
+            <div class="panel-head"><div class="panel-title"><h3>세무·경영 보고</h3><p>신고 일정과 자동 생성 자료</p></div><button class="link" data-action="tax">전체 →</button></div>
+            <div class="tax-card">
+              <div class="tax-deadline"><div><b>2026년 1기 부가가치세</b><span>증빙 수집 94% · 누락 7건</span></div><div class="d-day">D-2</div></div>
+              <div class="report-row"><div><b>6월 손익 보고서</b><span>전체 사업자 통합 · PDF 12쪽</span></div><button data-action="download">↓</button></div>
+              <div class="report-row"><div><b>지점별 원가율 분석</b><span>식재료·인건비·배달 수수료</span></div><button data-action="download">↓</button></div>
+              <div class="report-row"><div><b>세무대리인 공유 자료</b><span>7월 22일 자동 전송 완료</span></div><span class="status ok">완료</span></div>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <nav class="bottom-nav">
+    <button class="active" data-view="통합 홈"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9H3z"/></svg>홈</button>
+    <button data-view="매출·정산"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>매출</button>
+    <button data-view="입금·계좌"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 10h18M5 10v9m14-9v9M2 21h20M12 3l9 5H3z"/></svg>입금</button>
+    <button data-view="직원·급여"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21v-2a6 6 0 0112 0v2M17 11a4 4 0 014 4v6"/></svg>직원</button>
+    <button data-view="더보기"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>더보기</button>
+  </nav>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    const toast = document.getElementById("toast");
+    const showToast = (message) => {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => toast.classList.remove("show"), 2200);
+    };
+    document.querySelectorAll("[data-view]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const view = button.dataset.view;
+        document.getElementById("pageTitle").textContent = view;
+        document.querySelectorAll("[data-view]").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
+        showToast(`${view} 화면 구조를 확인하는 시안입니다.`);
+      });
+    });
+    const actionMessages = {
+      business: "사업자 전환: 열정국밥㈜ · 문라이트F&B · 개인사업자",
+      menu: "모바일에서는 하단 5개 핵심 메뉴로 이동합니다.",
+      search: "사업자·직원·거래를 통합 검색합니다.",
+      notification: "미처리 알림 5건이 있습니다.",
+      report: "월간 CEO 보고서를 PDF·엑셀로 생성합니다.",
+      connect: "배달 플랫폼·은행·카드·세무 연동 센터로 이동합니다.",
+      cash: "계좌별 입출금과 30일 현금 전망을 확인합니다.",
+      tasks: "사업자 전체의 미처리 업무 5건입니다.",
+      task: "실제 구현 시 상세 승인 패널이 열립니다.",
+      sales: "채널·지점·상품별 매출과 정산 차이를 확인합니다.",
+      employees: "계약·근태·급여·인사 기록을 통합 관리합니다.",
+      tax: "부가세·원천세·소득세·법인세 일정을 관리합니다.",
+      download: "보고서 다운로드 동작 예시입니다."
+    };
+    document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => showToast(actionMessages[button.dataset.action] || "시안 동작입니다.")));
+    document.querySelectorAll(".section-tabs button").forEach((button) => {
+      button.addEventListener("click", () => {
+        button.parentElement.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        showToast(`${button.textContent} 기준으로 집계했습니다.`);
+      });
+    });
+    document.getElementById("periodSelect").addEventListener("change", (event) => showToast(`${event.target.value} 샘플 데이터를 표시합니다.`));
+  </script>
+</body>
+</html>
