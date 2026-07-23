@@ -753,6 +753,7 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
         "token_path": "token",
         "e2e_url": "https://aads.newtalk.kr/e2e-auth.html?token={token}&redirect={redirect}",
         "default_redirect": "/",
+        "url_encode_redirect": True,
     },
     "GO100": {
         "service": "go100.newtalk.kr",
@@ -921,6 +922,9 @@ async def get_e2e_login_url(project: str, redirect: str | None = None, role: str
             "retail": "/retail/feed",
             "outsource": "/outsource/dashboard",
         }.get(selected_role, config["default_redirect"])
+
+    if config.get("url_encode_redirect"):
+        redir = quote(str(redir), safe="/")
 
     url = config["e2e_url"].format(
         token=token, refresh_token=refresh_token, redirect=redir, role=selected_role,

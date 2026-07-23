@@ -65,6 +65,7 @@ def test_aads_e2e_login_uses_public_dashboard_asset():
     assert _E2E_PROJECT_CONFIG["AADS"]["e2e_url"].startswith(
         "https://aads.newtalk.kr/e2e-auth.html?"
     )
+    assert _E2E_PROJECT_CONFIG["AADS"]["url_encode_redirect"] is True
 
 
 @pytest.mark.asyncio
