@@ -113,6 +113,44 @@ _BROWSER_TOOLS = frozenset({
     "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
 })
+
+
+async def _fetch_pc_agent_statuses_from_api() -> list[dict[str, Any]]:
+    """Read the live PC-Agent registry from the API process.
+
+    MCP bridge workers run outside the Uvicorn process that owns the in-memory
+    WebSocket registry.  Reading ``pc_agent_manager`` directly from a bridge
+    therefore reports zero agents even while the API has a healthy connection.
+    The REST endpoint already implements blue/green peer fallback, so use it as
+    the cross-process source of truth when the local registry is empty.
+    """
+    configured = str(os.getenv("AADS_API_URL", "") or "").rstrip("/")
+    candidates: list[str] = []
+    for base in (
+        configured,
+        f"{_AADS_API_BASE.rstrip('/')}/api/v1",
+        "http://127.0.0.1:8100/api/v1",
+        "http://127.0.0.1:8102/api/v1",
+    ):
+        if not base:
+            continue
+        normalized = base if base.endswith("/api/v1") else f"{base}/api/v1"
+        url = f"{normalized}/pc-agent/agents"
+        if url not in candidates:
+            candidates.append(url)
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for url in candidates:
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError, TypeError):
+                continue
+            agents = payload.get("agents") if isinstance(payload, dict) else None
+            if isinstance(agents, list) and agents:
+                return [item for item in agents if isinstance(item, dict)]
+    return []
 _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
@@ -3708,7 +3746,17 @@ class ToolExecutor:
         # Include PC agents from pc_agent_manager when not filtering or filtering by "pc".
         # pc_agent_manager is separate from device_manager (Android/iOS SDK path).
         if not device_type or str(device_type).lower() == "pc":
-            for status in pc_agent_manager.list_agent_statuses():
+            pc_statuses = pc_agent_manager.list_agent_statuses()
+            if not pc_statuses:
+                pc_statuses = await _fetch_pc_agent_statuses_from_api()
+            known_agent_ids = {
+                str(device.get("agent_id") or "")
+                for device in devices
+                if isinstance(device, dict)
+            }
+            for status in pc_statuses:
+                if str(status.get("agent_id") or "") in known_agent_ids:
+                    continue
                 devices.append({
                     "agent_id": status["agent_id"],
                     "device_type": "pc",
@@ -4455,6 +4503,7 @@ class ToolExecutor:
             preferred_port=inp.get("preferred_port"),
             activate=bool(inp.get("activate", False)),
             work_key=inp.get("work_key", ""),
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:

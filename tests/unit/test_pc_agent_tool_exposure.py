@@ -122,3 +122,61 @@ async def test_device_list_includes_pc_agent_manager_connections(monkeypatch: py
     assert result["devices"][0]["agent_id"] == "ceo-pc"
     assert result["devices"][0]["device_type"] == "pc"
     assert result["devices"][0]["status"] == "online"
+
+
+@pytest.mark.asyncio
+async def test_device_list_uses_api_fallback_outside_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
+    executor = ToolExecutor()
+    monkeypatch.setattr("app.services.device_manager.device_manager.get_devices", lambda _device_type: [])
+    monkeypatch.setattr(
+        "app.services.pc_agent_manager.pc_agent_manager.list_agent_statuses",
+        lambda: [],
+    )
+
+    async def fake_fetch_statuses() -> list[dict[str, object]]:
+        return [
+            {
+                "agent_id": "ceo-pc",
+                "hostname": "ceo-desktop",
+                "os_info": "Windows 11",
+                "capabilities": ["interactive_browser"],
+                "status": "online",
+                "connected_at": "2026-07-23T00:00:00Z",
+                "last_seen": "2026-07-23T00:00:05Z",
+                "heartbeat_age_seconds": 1.2,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.services.tool_executor._fetch_pc_agent_statuses_from_api",
+        fake_fetch_statuses,
+    )
+
+    result = await executor._device_list({"device_type": "pc"})
+
+    assert result["count"] == 1
+    assert result["devices"][0]["agent_id"] == "ceo-pc"
+    assert result["devices"][0]["status"] == "online"
+
+
+@pytest.mark.asyncio
+async def test_browser_connect_forwards_tenant_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    received: dict[str, object] = {}
+
+    async def fake_browser_connect(**kwargs):  # noqa: ANN003
+        received.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(ceo_chat_tools, "tool_browser_connect", fake_browser_connect)
+
+    result = await ToolExecutor()._browser_connect(
+        {
+            "action": "ensure_pc_cdp",
+            "agent_id": "ceo-pc",
+            "url": "https://aads.newtalk.kr/chat/session-id",
+            "tenant_id": "tenant-1",
+        }
+    )
+
+    assert result == "ok"
+    assert received["tenant_id"] == "tenant-1"
