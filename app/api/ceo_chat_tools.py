@@ -3307,6 +3307,7 @@ async def tool_browser_connect(
     preferred_port: int | None = None,
     activate: bool = False,
     work_key: str = "",
+    tenant_id: str = "",  # [AADS-PC-FIX-2] AADS 인증 세션 자동 복구용
 ) -> str:
     """Browser Bridge pairing/status/session selection."""
     from app.browser_bridge.aads_adapter import create_pairing_instructions
@@ -3334,6 +3335,42 @@ async def tool_browser_connect(
             )
             endpoint = session.endpoint.public_dict()
             metadata = endpoint.get("metadata", {})
+
+            # [AADS-PC-FIX-2] AADS URL이면 E2E 로그인으로 인증 세션 자동 복구
+            auth_note = ""
+            if tenant_id and url and "aads.newtalk.kr" in url:
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    _parsed = _urlparse(url)
+                    _redirect = _parsed.path
+                    if _parsed.query:
+                        _redirect += "?" + _parsed.query
+                    _e2e_text = await tool_get_e2e_login_url(
+                        project="AADS",
+                        redirect=_redirect,
+                        tenant_id=tenant_id,
+                    )
+                    _e2e_url = ""
+                    for _line in _e2e_text.split("\n"):
+                        _line = _line.strip()
+                        if _line.startswith("https://") and "e2e-auth" in _line:
+                            _e2e_url = _line
+                            break
+                    if _e2e_url:
+                        _ctx, _ctx_err = await service.acquire_playwright_context(
+                            session_id=session.session_id
+                        )
+                        if _ctx and not _ctx_err:
+                            _page = await _ctx.new_page()
+                            await _page.goto(_e2e_url)
+                            auth_note = "\naads_auth: 인증 세션 복구 완료 (E2E 로그인 적용)"
+                        else:
+                            auth_note = f"\naads_auth: 컨텍스트 오류 — {_ctx_err}"
+                    else:
+                        auth_note = f"\naads_auth: E2E URL 추출 실패 — {_e2e_text[:120]}"
+                except Exception as _auth_exc:
+                    auth_note = f"\naads_auth: 인증 주입 실패 — {_auth_exc}"
+
             return (
                 "[Browser Bridge PC Agent CDP 준비 완료]\n"
                 f"session_id: {session.session_id}\n"
@@ -3342,6 +3379,7 @@ async def tool_browser_connect(
                 f"port: {metadata.get('port')}\n"
                 f"kind: {endpoint.get('kind')}\n"
                 "사용: browser_* 도구에 browser_session_id를 지정하세요."
+                + auth_note
             )
         if action == "ensure_work_session":
             if not work_key:
@@ -4693,6 +4731,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             preferred_port=params.get("preferred_port"),
             activate=bool(params.get("activate", False)),
             work_key=params.get("work_key", ""),
+            tenant_id=str(params.get("tenant_id") or ""),  # [AADS-PC-FIX-2]
         )
     elif name == "browser_navigate":
         return await tool_browser_navigate(
