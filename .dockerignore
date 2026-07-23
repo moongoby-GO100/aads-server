@@ -17,6 +17,8 @@ static/media/generated
 app/static/media/generated
 static/media/uploads
 app/static/media/uploads
+app/data/yeoljeong_finance/*.json
+app/data/yeoljeong_finance/uploads
 *.bak
 *.bak_*
 *.tmp
