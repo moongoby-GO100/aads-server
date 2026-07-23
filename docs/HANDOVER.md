@@ -2,6 +2,7 @@
 최종 업데이트: 2026-07-23
 
 ## 2026-07-23
+- AADS-FOOD-OPS-DETAIL-MOCKUP-LEDGER-RECONCILIATION-20260723: 2026-07-23 20:17 KST 최종 대조에서 Pipeline Runner `runner-f7556238`의 배포 단계는 기존 dirty 11건 때문에 `deploy_preflight_git_state` 오류로 종료된 상태임을 재확인했다. 다만 시안 구현 커밋 `cc9fd12f`와 감사 커밋 `805c220b`는 `origin/main`에 포함되어 있고, nginx 원본 `mockup-v2.html`은 저장소 파일과 130,520 bytes 및 SHA-256 `dccdd2695f74ac690c9c062f1b5de49a5ac3e3c2420e91c4294acde3c468fa35`가 일치하며 공개 URL도 HTTP 200이다. 따라서 정확한 완료 상태는 “Runner 배포 단계 실패, 별도 정적 시안 공개 반영 및 검증 완료”다. Browser Bridge에서 직원 계약서 작성, 사업자 OCR 원본대조, 메뉴 매출 행 상세, 권장 발주 산출근거, 대표자 회원가입 화면을 다시 클릭 검증했다. 기존 운영 `index.html`, API, DB, nginx 및 사용자 dirty 파일은 변경하지 않았다.
 - AADS-FOOD-OPS-DETAIL-MOCKUP-FINAL-AUDIT-20260723: 2026-07-23 19:30 KST 기준 `cc9fd12f`가 로컬 `HEAD`와 `origin/main`에 일치하고, 공개 `mockup-v2.html`은 HTTP 200으로 응답함을 재확인했다. Cloudflare 보안 스크립트 삽입분을 제외하면 배포 HTML은 저장소 원본과 동일하다. Browser Bridge에서 직원·급여(입사서류 OCR/계약조건), 사업자·지점(사업자등록증 OCR), 매출·정산(일자·사업자·지점·마켓·메뉴 필터/메뉴별 통계), 재고·발주(지점별 권장발주), 대표자 회원가입 화면과 드로어 동작을 재검증했다. 이번 감사 기록은 `docs/HANDOVER.md`만 변경하며 기존 운영 `index.html`과 API·DB는 변경하지 않는다.
 - AADS-FOOD-OPS-DETAIL-MOCKUP-20260723: `app/static/apps/yeoljeong-finance/mockup-v2.html`을 직원 계약관리, 사업자등록증 OCR, 메뉴별 매출통계, 재고·발주예측, 통합 승인함, 알림센터, 원가·마진, 권한·감사로그, 문서보관함 상세 시안으로 확장했다. 기존 `index.html`은 수정하지 않았다.
 - 직원 계약관리: 직원 회원가입/초대 수락, 입사서류 드롭존, 파일별 업로드/OCR/검토 상태, 민감정보 마스킹 안내, OCR 출처 배지, 관리자 수정 가능 필드, 계약조건 입력, 계약서 미리보기/전자서명/문서보관 드로어 흐름을 추가했다.
