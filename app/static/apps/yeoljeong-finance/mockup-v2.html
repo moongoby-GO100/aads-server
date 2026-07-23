@@ -145,6 +145,21 @@
     .amount { text-align: right; font-weight: 850; }
     .cards-list { display: grid; gap: 12px; }
     .business-card, .integration-card { display: grid; gap: 11px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .flow-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+    .flow-step { min-height: 74px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .flow-step strong { display: block; font-size: 11px; }
+    .flow-step span { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .dropzone { min-height: 130px; display: grid; place-items: center; gap: 8px; padding: 18px; border: 1px dashed #b8c1ce; border-radius: 10px; background: #fbfcfe; text-align: center; color: var(--muted); font-size: 11px; }
+    .dropzone b { color: var(--ink); font-size: 13px; }
+    .source-badge { display: inline-flex; margin-left: 4px; padding: 2px 6px; border-radius: 99px; background: var(--blue-soft); color: var(--blue); font-size: 9px; font-weight: 850; }
+    .mini-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .heatmap { display: grid; grid-template-columns: 54px repeat(7, minmax(30px, 1fr)); gap: 5px; align-items: center; font-size: 10px; color: var(--muted); }
+    .heatmap b, .heatmap span { min-height: 28px; display: grid; place-items: center; border-radius: 6px; background: #f4f6f8; }
+    .heatmap .h1 { background: #eaf8f2; color: var(--green); }
+    .heatmap .h2 { background: #fff2ea; color: var(--orange); }
+    .heatmap .h3 { background: #fff0f0; color: var(--red); }
+    .toggle-off { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 800; }
+    .toggle-off::before { content: ""; width: 32px; height: 18px; border-radius: 99px; background: #d1d5db; box-shadow: inset 3px 0 0 #fff; }
     .card-row { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
     .card-row b { display: block; font-size: 13px; }
     .card-row span { display: block; color: var(--muted); font-size: 10px; margin-top: 3px; }
@@ -158,12 +173,61 @@
     .step b { font-size: 12px; }
     .step span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
     .bottom-nav { display: none; }
+    .filter-panel { margin-bottom: 14px; padding: 15px; }
+    .filter-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .filter-head h3 { margin: 0; font-size: 13px; }
+    .filter-head span { color: var(--muted); font-size: 10px; }
+    .filter-grid { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; align-items: end; }
+    .field { display: grid; gap: 5px; min-width: 0; }
+    .field label { color: #525b69; font-size: 10px; font-weight: 800; }
+    .field input, .field select, .auth-card input, .auth-card select {
+      width: 100%; min-width: 0; min-height: 38px; padding: 0 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: #fff; color: var(--ink); font: inherit; font-size: 11px;
+    }
+    .filter-actions { display: flex; gap: 7px; align-items: center; }
+    .quick-ranges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+    .quick-ranges button { min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); font-size: 10px; font-weight: 800; }
+    button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]:focus-visible { outline: 3px solid rgba(55,120,212,.28); outline-offset: 2px; }
+    .overlay { position: fixed; inset: 0; z-index: 80; display: none; justify-content: flex-end; background: rgba(17,24,39,.48); }
+    .overlay.open { display: flex; }
+    .drawer { width: min(560px, 100%); height: 100%; overflow-y: auto; padding: 24px; background: #fff; box-shadow: -20px 0 55px rgba(17,24,39,.18); }
+    .drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .drawer-head h2 { margin: 0; font-size: 20px; }
+    .drawer-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .icon-close { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 20px; }
+    .drawer-body { display: grid; gap: 14px; padding-top: 16px; }
+    .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+    .detail-block { padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: #f8f9fb; }
+    .detail-block small { display: block; color: var(--muted); font-size: 9px; }
+    .detail-block strong { display: block; margin-top: 5px; font-size: 12px; overflow-wrap: anywhere; }
+    .drawer-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-top: 4px; }
+    .profile { cursor: pointer; border-radius: 8px; }
+    .profile:hover { background: #f7f8fa; }
+    .profile-menu { display: grid; gap: 8px; }
+    .profile-menu button { min-height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; font-weight: 750; }
+    .auth-shell { min-height: calc(100vh - 150px); display: grid; place-items: center; padding: 24px 0; }
+    .auth-card { width: min(560px, 100%); padding: 28px; }
+    .auth-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 22px; font-weight: 900; }
+    .auth-card h2 { margin: 0; font-size: 23px; }
+    .auth-card > p { margin: 7px 0 20px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .auth-form { display: grid; gap: 12px; }
+    .auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+    .auth-card .primary { width: 100%; min-height: 44px; margin-top: 4px; }
+    .auth-links { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+    .auth-links button { border: 0; background: none; color: var(--blue); font-size: 11px; font-weight: 800; }
+    .agreement { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .agreement input { width: 15px; min-height: 15px; margin: 1px 0 0; }
+    .stepper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 18px; }
+    .stepper span { padding: 8px; border-radius: 7px; background: #f1f3f6; color: var(--muted); text-align: center; font-size: 9px; font-weight: 800; }
+    .stepper span.active { background: var(--orange-soft); color: var(--orange); }
+    .sample-badge { display: inline-flex; margin-left: 6px; padding: 3px 6px; border-radius: 99px; background: #eef1f5; color: var(--muted); font-size: 9px; font-weight: 800; vertical-align: middle; }
     .toast { position: fixed; right: 24px; bottom: 24px; z-index: 50; max-width: calc(100vw - 48px); padding: 12px 15px; border-radius: 9px; background: #171a21; color: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.24); font-size: 12px; font-weight: 700; transform: translateY(90px); opacity: 0; transition: .25s ease; }
     .toast.show { transform: translateY(0); opacity: 1; }
     @media (max-width: 1180px) {
       .app { grid-template-columns: 204px minmax(0,1fr); }
       .grid-main { grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); }
       .grid-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .flow-grid, .mini-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-3 .card:last-child { grid-column: 1 / -1; }
     }
     @media (max-width: 900px) {
@@ -173,6 +237,7 @@
       .mobile-menu { display: grid !important; }
       .profile > div:last-child { display: none; }
       .content { padding: 19px 18px 35px; }
+      .filter-grid { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
       .hero { align-items: flex-start; }
       .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
       .grid-main, .grid-2 { grid-template-columns: 1fr; }
@@ -197,6 +262,7 @@
       .kpi { min-height: 118px; padding: 15px; }
       .kpi-value { font-size: 20px; }
       .grid-3 { grid-template-columns: 1fr; }
+      .flow-grid, .mini-form { grid-template-columns: 1fr; }
       .grid-3 .card:last-child { grid-column: auto; }
       .panel { padding: 16px; }
       .chart { gap: 5px; padding-left: 0; padding-right: 0; }
@@ -206,6 +272,14 @@
       .forecast, .notice { display: block; }
       .forecast b, .notice b { display: block; margin-top: 6px; }
       .toast { right: 13px; bottom: 82px; max-width: calc(100vw - 26px); }
+      .filter-panel { padding: 13px; }
+      .filter-grid, .auth-grid { grid-template-columns: 1fr; }
+      .filter-actions { grid-column: 1 / -1; }
+      .filter-actions button { flex: 1; }
+      .drawer { padding: 18px; }
+      .detail-grid { grid-template-columns: 1fr; }
+      .auth-shell { min-height: auto; padding: 4px 0 20px; }
+      .auth-card { padding: 20px; }
     }
   </style>
 </head>
@@ -226,14 +300,20 @@
         <button data-view="home"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-7H9v7H4a1 1 0 01-1-1z"/></svg>통합 홈</button>
         <button data-view="tasks"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>할 일·알림<span class="count">5</span></button>
         <button data-view="reports"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>경영 리포트</button>
+        <button data-view="documents"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h8"/></svg>경영자료·보관</button>
         <div class="nav-label">운영</div>
         <button data-view="sales"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 15l3-3 2 2 4-5"/></svg>매출·정산</button>
         <button data-view="accounts"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 10h18M5 10v8m4-8v8m6-8v8m4-8v8M2 21h20M12 3l9 5H3z"/></svg>입금·계좌</button>
         <button data-view="employees"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>직원·급여</button>
+        <button data-view="inventory"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 7l8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10"/></svg>재고·발주<span class="count">4</span></button>
         <button data-view="tax"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h8"/></svg>세무·회계</button>
+        <button data-view="approvals"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-5M4 4h16v16H4z"/></svg>통합 승인함<span class="count">8</span></button>
+        <button data-view="alerts"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>알림센터</button>
         <div class="nav-label">설정</div>
         <button data-view="business"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 10h2m2 0h2m-6 4h2m2 0h2"/></svg>사업자·지점</button>
         <button data-view="integrations"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>연동 관리</button>
+        <button data-view="margins"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19V5m0 14h16M8 16l3-5 3 2 4-7"/></svg>원가·마진</button>
+        <button data-view="audit"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 5-3 8-7 9-4-1-7-4-7-9V7zM9 12l2 2 4-5"/></svg>권한·감사로그</button>
       </nav>
       <div class="sidebar-bottom">Concept v2.0 · 2026<br>의사결정용 인터랙티브 시안</div>
     </aside>
@@ -247,7 +327,7 @@
         <div class="top-right">
           <button data-action="search" aria-label="검색"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
           <button data-action="notification" aria-label="알림"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></button>
-          <div class="profile"><span class="avatar">MOON</span><div><b>문고비 대표님</b><span>최고 관리자</span></div></div>
+          <div class="profile" data-action="profile" role="button" tabindex="0" aria-label="프로필 및 인증 메뉴"><span class="avatar">MOON</span><div><b>문고비 대표님</b><span>최고 관리자</span></div></div>
         </div>
       </header>
 
@@ -262,19 +342,35 @@
     <button data-view="home"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9H3z"/></svg>홈</button>
     <button data-view="tasks"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/></svg>할일</button>
     <button data-view="reports"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg>리포트</button>
+    <button data-view="documents"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6zM14 2v6h6"/></svg>보관</button>
     <button data-view="sales"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 15l3-3 2 2 4-5"/></svg>매출</button>
     <button data-view="accounts"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 10h18M5 10v9m14-9v9M2 21h20M12 3l9 5H3z"/></svg>입금</button>
     <button data-view="employees"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21v-2a6 6 0 0112 0v2M17 11a4 4 0 014 4v6"/></svg>직원</button>
+    <button data-view="inventory"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 7l8-4 8 4v10l-8 4-8-4z"/></svg>재고</button>
     <button data-view="tax"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6zM14 2v6h6"/></svg>세무</button>
+    <button data-view="approvals"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-5M4 4h16v16H4z"/></svg>승인</button>
+    <button data-view="alerts"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18"/></svg>알림</button>
     <button data-view="business"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14"/></svg>지점</button>
     <button data-view="integrations"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07"/></svg>연동</button>
+    <button data-view="margins"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 19h16M8 16l3-5 3 2 4-7"/></svg>마진</button>
+    <button data-view="audit"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 5-3 8-7 9-4-1-7-4-7-9V7z"/></svg>권한</button>
   </nav>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="overlay" id="detailOverlay" aria-hidden="true">
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+      <div class="drawer-head"><div><h2 id="drawerTitle">상세현황</h2><p id="drawerSubtitle">시안 데이터 상세 화면</p></div><button type="button" class="icon-close" data-close-overlay aria-label="상세 화면 닫기">×</button></div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </section>
+  </div>
 
   <script>
     const viewRoot = document.getElementById("viewRoot");
     const pageTitle = document.getElementById("pageTitle");
     const toast = document.getElementById("toast");
+    const detailOverlay = document.getElementById("detailOverlay");
+    const drawerTitle = document.getElementById("drawerTitle");
+    const drawerSubtitle = document.getElementById("drawerSubtitle");
+    const drawerBody = document.getElementById("drawerBody");
     const moneyIcon = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7"/></svg>';
     const cardIcon = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18v12H3zM3 10h18M7 15h4"/></svg>';
     const bankIcon = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 10h18M5 10v8m4-8v8m6-8v8m4-8v8M2 21h20M12 3l9 5H3z"/></svg>';
@@ -311,6 +407,7 @@
               <button class="primary" data-action="connect">+ 연동 추가</button>
             </div>
           </section>
+          ${filterBar("통합 홈")}
           <section class="kpis">
             ${kpi("이번 달 통합 매출", "₩128,460,000", '<span class="up">↑ 8.4%</span><span>지난달 같은 기간 대비</span>', "orange", moneyIcon)}
             ${kpi("정산 예정액", "₩34,821,500", '<span class="up">정상</span><span>7월 24일 외 6건</span>', "green", cardIcon)}
@@ -489,12 +586,54 @@
       <section class="hero">
         <div><h2>${headline}</h2><p>${description}</p></div>
         <div class="hero-actions"><button class="outline" data-action="help">검토 메모</button><button class="primary" data-action="primary">주요 작업</button></div>
-      </section>${body}`;
+      </section>${filterBar(headline)}${body}`;
+    function filterBar(headline) {
+      const idKey = headline.replace(/[^a-zA-Z0-9가-힣]/g, "-");
+      const dateField = `<div class="field"><label for="start-${idKey}">시작일</label><input id="start-${idKey}" name="start" type="date" value="2026-07-01"></div><div class="field"><label for="end-${idKey}">종료일</label><input id="end-${idKey}" name="end" type="date" value="2026-07-23"></div>`;
+      const periodField = `<div class="field"><label for="period-${idKey}">기준 기간</label><select id="period-${idKey}" name="period"><option>2026년 7월</option><option>2026년 2분기</option><option>2026년 상반기</option></select></div>`;
+      const businessField = `<div class="field"><label for="business-${idKey}">사업자</label><select id="business-${idKey}" name="business"><option>전체 사업자</option><option>열정국밥 주식회사</option><option>문라이트F&amp;B</option></select></div>`;
+      const branchField = `<div class="field"><label for="branch-${idKey}">지점</label><select id="branch-${idKey}" name="branch"><option>전체 지점</option><option>성신점</option><option>미아점</option><option>정화점</option></select></div>`;
+      const keywordField = `<div class="field"><label for="keyword-${idKey}">검색어</label><input id="keyword-${idKey}" name="keyword" type="search" placeholder="이름·거래·문서 검색"></div>`;
+      const statusField = `<div class="field"><label for="status-${idKey}">상태</label><select id="status-${idKey}" name="status"><option>전체 상태</option><option>정상</option><option>확인 필요</option><option>처리 완료</option></select></div>`;
+      const marketField = `<div class="field"><label for="market-${idKey}">마켓·채널</label><select id="market-${idKey}" name="market"><option>전체 채널</option><option>배달의민족</option><option>쿠팡이츠</option><option>요기요</option><option>POS·카드</option></select></div>`;
+      const bankField = `<div class="field"><label for="bank-${idKey}">은행·계좌</label><select id="bank-${idKey}" name="bank"><option>전체 계좌</option><option>신한 운영계좌</option><option>국민 정산계좌</option><option>우리 급여계좌</option></select></div>`;
+      const ownerField = `<div class="field"><label for="owner-${idKey}">담당자</label><select id="owner-${idKey}" name="owner"><option>전체 담당자</option><option>대표</option><option>재무팀</option><option>점장</option></select></div>`;
+      const typeField = `<div class="field"><label for="type-${idKey}">업무 구분</label><select id="type-${idKey}" name="type"><option>전체 구분</option><option>부가세</option><option>급여·근태</option><option>정산·입금</option><option>보고서</option></select></div>`;
+      const menuField = `<div class="field"><label for="menu-${idKey}">메뉴</label><select id="menu-${idKey}" name="menu"><option>전체 메뉴</option><option>얼큰국밥</option><option>수육정식</option><option>해장라면</option></select></div>`;
+      const categoryField = `<div class="field"><label for="category-${idKey}">카테고리</label><select id="category-${idKey}" name="category"><option>전체 카테고리</option><option>식재료</option><option>음료</option><option>소모품</option><option>국밥</option></select></div>`;
+      const warehouseField = `<div class="field"><label for="warehouse-${idKey}">창고</label><select id="warehouse-${idKey}" name="warehouse"><option>전체 창고</option><option>성신 냉장</option><option>미아 냉동</option><option>정화 상온</option></select></div>`;
+      const supplierField = `<div class="field"><label for="supplier-${idKey}">공급사</label><select id="supplier-${idKey}" name="supplier"><option>전체 공급사</option><option>동북식자재</option><option>서울축산</option><option>그린푸드</option></select></div>`;
+      const fields = {
+        "통합 홈": periodField + businessField + branchField + statusField,
+        "할 일·알림": dateField + ownerField + statusField + keywordField,
+        "경영 리포트": dateField + businessField + branchField + typeField,
+        "경영자료": dateField + businessField + typeField + statusField + keywordField,
+        "매출·정산": dateField + businessField + branchField + marketField + categoryField + menuField,
+        "입금·계좌": dateField + businessField + bankField + statusField + keywordField,
+        "직원·급여": periodField + businessField + branchField + statusField + keywordField,
+        "재고·발주": dateField + businessField + branchField + warehouseField + categoryField + supplierField,
+        "세무·회계": periodField + businessField + typeField + statusField + keywordField,
+        "통합 승인함": dateField + businessField + ownerField + typeField + statusField,
+        "알림센터": dateField + businessField + branchField + typeField + statusField,
+        "사업자·지점": businessField + branchField + statusField + keywordField,
+        "연동 관리": businessField + typeField + statusField + keywordField,
+        "원가·마진": dateField + businessField + branchField + categoryField + menuField,
+        "권한·감사로그": dateField + businessField + ownerField + typeField + statusField
+      };
+      return `<section class="card filter-panel" aria-label="${headline} 검색 조건">
+        <div class="filter-head"><h3>검색 조건</h3><span>조건별 시안 데이터를 조회합니다.</span></div>
+        <form class="filter-grid" data-filter-form>
+          ${fields[headline] || dateField + businessField + statusField}
+          <div class="filter-actions"><button type="reset" class="outline">초기화</button><button type="submit" class="primary">검색</button></div>
+        </form>
+        ${headline === "사업자·지점" || headline === "연동 관리" ? "" : '<div class="quick-ranges" aria-label="빠른 기간"><button type="button" data-range="today">오늘</button><button type="button" data-range="7days">최근 7일</button><button type="button" data-range="month">이번 달</button><button type="button" data-range="last-month">지난 달</button></div>'}
+      </section>`;
+    }
     function simpleChannels() {
       return `<div class="list">
-        ${row("green", "배", "배달의민족", "3개 지점 · 12:42 동기화 · ₩3,284,000", "", '<span class="status ok">정상</span>')}
-        ${row("green", "쿠", "쿠팡이츠", "3개 지점 · 12:40 동기화 · ₩1,928,000", "", '<span class="status ok">정상</span>')}
-        ${row("blue", "카", "카드·현장 매출", "실시간 · ₩2,611,000", "", '<span class="status info">검증중</span>')}
+        ${row("green", "배", "배달의민족", "3개 지점 · 12:42 동기화 · ₩3,284,000", "sales-detail")}
+        ${row("green", "쿠", "쿠팡이츠", "3개 지점 · 12:40 동기화 · ₩1,928,000", "sales-detail")}
+        ${row("blue", "카", "카드·현장 매출", "실시간 · ₩2,611,000", "sales-detail")}
       </div>`;
     }
     function employeeRows() {
@@ -512,10 +651,10 @@
       </div>`;
     }
     function branchTable() {
-      return `<div class="table-wrap"><table><thead><tr><th>지점</th><th>매출</th><th>이익률</th><th>원가율</th><th>상태</th></tr></thead><tbody>
-        <tr><td><strong>성신점</strong></td><td>₩48,200,000</td><td>15.4%</td><td>35.8%</td><td><span class="status ok">정상</span></td></tr>
-        <tr><td><strong>미아점</strong></td><td>₩41,960,000</td><td>12.1%</td><td>39.2%</td><td><span class="status warn">원가 확인</span></td></tr>
-        <tr><td><strong>정화점</strong></td><td>₩38,300,000</td><td>16.2%</td><td>34.9%</td><td><span class="status ok">정상</span></td></tr>
+      return `<div class="table-wrap"><table><thead><tr><th>지점</th><th>매출</th><th>이익률</th><th>원가율</th><th>상태</th><th>상세</th></tr></thead><tbody>
+        <tr><td><strong>성신점</strong></td><td>₩48,200,000</td><td>15.4%</td><td>35.8%</td><td><span class="status ok">정상</span></td><td><button type="button" class="chip-btn" data-action="business-detail">보기</button></td></tr>
+        <tr><td><strong>미아점</strong></td><td>₩41,960,000</td><td>12.1%</td><td>39.2%</td><td><span class="status warn">원가 확인</span></td><td><button type="button" class="chip-btn" data-action="business-detail">보기</button></td></tr>
+        <tr><td><strong>정화점</strong></td><td>₩38,300,000</td><td>16.2%</td><td>34.9%</td><td><span class="status ok">정상</span></td><td><button type="button" class="chip-btn" data-action="business-detail">보기</button></td></tr>
       </tbody></table></div>`;
     }
     function settlementTable() {
@@ -526,27 +665,272 @@
       </tbody></table></div>`;
     }
     function accountTable() {
-      return `<div class="table-wrap"><table><thead><tr><th>은행</th><th>계좌 용도</th><th>잔액</th><th>최근 동기화</th><th>상태</th></tr></thead><tbody>
-        <tr><td>신한은행</td><td>운영 계좌</td><td>₩22,480,200</td><td>12:45</td><td><span class="status ok">정상</span></td></tr>
-        <tr><td>국민은행</td><td>정산 계좌</td><td>₩18,920,000</td><td>09:18</td><td><span class="status warn">지연</span></td></tr>
-        <tr><td>우리은행</td><td>급여 계좌</td><td>₩10,790,000</td><td>12:12</td><td><span class="status ok">정상</span></td></tr>
+      return `<div class="table-wrap"><table><thead><tr><th>은행</th><th>계좌 용도</th><th>잔액</th><th>최근 동기화</th><th>상태</th><th>상세</th></tr></thead><tbody>
+        <tr><td>신한은행</td><td>운영 계좌</td><td>₩22,480,200</td><td>12:45</td><td><span class="status ok">정상</span></td><td><button type="button" class="chip-btn" data-action="account-detail">거래</button></td></tr>
+        <tr><td>국민은행</td><td>정산 계좌</td><td>₩18,920,000</td><td>09:18</td><td><span class="status warn">지연</span></td><td><button type="button" class="chip-btn" data-action="account-detail">거래</button></td></tr>
+        <tr><td>우리은행</td><td>급여 계좌</td><td>₩10,790,000</td><td>12:12</td><td><span class="status ok">정상</span></td><td><button type="button" class="chip-btn" data-action="account-detail">거래</button></td></tr>
       </tbody></table></div>`;
     }
     function employeeTable() {
-      return `<div class="table-wrap"><table><thead><tr><th>직원</th><th>지점</th><th>근태</th><th>계약</th><th>급여</th><th>상태</th></tr></thead><tbody>
-        <tr><td><strong>김서윤</strong></td><td>미아점</td><td>정상</td><td>7월 31일 만료</td><td>₩2,430,000</td><td><span class="status warn">갱신</span></td></tr>
-        <tr><td><strong>박준호</strong></td><td>성신점</td><td>46시간</td><td>정상</td><td>₩2,780,000</td><td><span class="status warn">초과</span></td></tr>
-        <tr><td><strong>이하늘</strong></td><td>정화점</td><td>정상</td><td>정상</td><td>₩2,510,000</td><td><span class="status ok">정상</span></td></tr>
+      return `<div class="table-wrap"><table><thead><tr><th>직원</th><th>지점</th><th>근태</th><th>계약</th><th>급여</th><th>상태</th><th>상세</th></tr></thead><tbody>
+        <tr><td><strong>김서윤</strong></td><td>미아점</td><td>정상</td><td>7월 31일 만료</td><td>₩2,430,000</td><td><span class="status warn">갱신</span></td><td><button type="button" class="chip-btn" data-action="employee-detail">보기</button></td></tr>
+        <tr><td><strong>박준호</strong></td><td>성신점</td><td>46시간</td><td>정상</td><td>₩2,780,000</td><td><span class="status warn">초과</span></td><td><button type="button" class="chip-btn" data-action="employee-detail">보기</button></td></tr>
+        <tr><td><strong>이하늘</strong></td><td>정화점</td><td>정상</td><td>정상</td><td>₩2,510,000</td><td><span class="status ok">정상</span></td><td><button type="button" class="chip-btn" data-action="employee-detail">보기</button></td></tr>
       </tbody></table></div>`;
     }
     function step(mark, title, meta, state) {
       return `<div class="step"><span class="step-dot">${mark}</span><div><b>${title}</b><span>${meta}</span></div><span class="status ${state === "완료" ? "ok" : state === "대기" ? "warn" : "info"}">${state}</span></div>`;
     }
     function businessCard(name, meta, stores, accounts, people, tone) {
-      return `<article class="business-card card"><div class="card-row"><div><b>${name}</b><span>${meta}</span></div><span class="status ${tone}">${tone === "ok" ? "운영중" : tone === "warn" ? "확인" : "대기"}</span></div><div class="summary-grid"><div><small>지점</small><strong>${stores}</strong></div><div><small>계좌</small><strong>${accounts}</strong></div><div><small>직원</small><strong>${people}</strong></div></div><button class="outline" data-action="business-switch">이 사업자로 전환</button></article>`;
+      return `<article class="business-card card"><div class="card-row"><div><b>${name}</b><span>${meta}</span></div><span class="status ${tone}">${tone === "ok" ? "운영중" : tone === "warn" ? "확인" : "대기"}</span></div><div class="summary-grid"><div><small>지점</small><strong>${stores}</strong></div><div><small>계좌</small><strong>${accounts}</strong></div><div><small>직원</small><strong>${people}</strong></div></div><div class="drawer-actions"><button type="button" class="outline" data-action="business-detail">상세·권한</button><button type="button" class="primary" data-action="business-switch">전환</button></div></article>`;
     }
     function integrationCard(name, meta, state, synced, tone) {
       return `<article class="integration-card card"><div class="card-row"><div><b>${name}</b><span>${meta}</span></div><span class="status ${tone}">${state}</span></div><div class="summary-grid"><div><small>최근 동기화</small><strong>${synced}</strong></div><div><small>오류</small><strong>${tone === "ok" ? "0건" : "1건"}</strong></div><div><small>조치</small><strong>${tone === "ok" ? "없음" : "필요"}</strong></div></div><button class="outline" data-action="${tone === "ok" ? "sync" : "reconnect"}">${tone === "ok" ? "동기화" : "재연결"}</button></article>`;
+    }
+
+    const authShell = (title, description, form, links, step = "", ctaLabel = "다음 단계", nextView = "") => `
+      <section class="auth-shell"><article class="card auth-card">
+        <div class="auth-brand"><span class="brand-mark">M</span>매장비서 <span class="sample-badge">UX 시안</span></div>
+        ${step}
+        <h2>${title}</h2><p>${description}</p>
+        <form class="auth-form" data-auth-form${nextView ? ` data-next-view="${nextView}"` : ""}>${form}<button type="submit" class="primary">${ctaLabel}</button></form>
+        <div class="auth-links">${links}</div>
+      </article></section>`;
+    const authLink = (slug, label) => `<button type="button" data-auth="${slug}">${label}</button>`;
+    const authField = (id, label, type, placeholder, value = "") => `<div class="field"><label for="${id}">${label}</label><input id="${id}" name="${id}" type="${type}" placeholder="${placeholder}" value="${value}" required></div>`;
+    const authSelect = (id, label, options) => `<div class="field"><label for="${id}">${label}</label><select id="${id}" name="${id}">${options.map((item) => `<option>${item}</option>`).join("")}</select></div>`;
+    const stepper = (active) => `<div class="stepper"><span class="${active === 1 ? "active" : ""}">1. 계정</span><span class="${active === 2 ? "active" : ""}">2. 인증</span><span class="${active === 3 ? "active" : ""}">3. 사업자</span></div>`;
+
+    Object.assign(views, {
+      documents: {
+        title: "경영자료",
+        desc: "보고서 생성, 미리보기, 공유 및 다운로드 이력을 관리합니다.",
+        html: () => page("경영자료", "사업자·기간별 경영자료 생성 상태와 미리보기, 다운로드 이력입니다. 시안 데이터입니다.", `
+          <section class="kpis">
+            ${kpi("생성 완료", "18건", '<span class="up">이번 달 +5건</span>', "green", cardIcon)}
+            ${kpi("생성 중", "2건", '<span>평균 1분 20초</span>', "blue", bankIcon)}
+            ${kpi("공유 대기", "3건", '<span>대표 승인 필요</span>', "amber", taxIcon)}
+            ${kpi("다운로드", "41회", '<span>최근 30일</span>', "orange", moneyIcon)}
+          </section>
+          <section class="grid-main">
+            <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>보고서 목록</h3><p>PDF·Excel 생성 및 공유 상태</p></div><button type="button" class="primary" data-action="report">+ 새 보고서</button></div>
+              <div class="table-wrap"><table><thead><tr><th>보고서</th><th>기간</th><th>사업자</th><th>형식</th><th>상태</th><th>상세</th></tr></thead><tbody>
+                <tr><td><strong>7월 CEO 경영보고</strong></td><td>7/1–7/23</td><td>전체</td><td>PDF 14쪽</td><td><span class="status ok">완료</span></td><td><button type="button" class="chip-btn" data-action="download">미리보기</button></td></tr>
+                <tr><td><strong>플랫폼 정산 대사</strong></td><td>7/17–7/23</td><td>열정국밥</td><td>Excel</td><td><span class="status info">생성 중</span></td><td><button type="button" class="chip-btn" data-action="download">진행현황</button></td></tr>
+                <tr><td><strong>부가세 증빙 묶음</strong></td><td>상반기</td><td>전체</td><td>ZIP·PDF</td><td><span class="status warn">승인 대기</span></td><td><button type="button" class="chip-btn" data-action="review">검토</button></td></tr>
+              </tbody></table></div>
+            </article>
+            <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>최근 다운로드</h3><p>생성·공유 감사 이력</p></div></div><div class="timeline">${step("✓","CEO 보고서","문고비 대표 · PDF","완료")}${step("✓","급여대장","재무 담당 · Excel","완료")}${step("3","정산 대사","자동 생성 중","진행")}</div></article>
+          </section>`)
+      },
+      "auth-login": {
+        title: "로그인",
+        html: () => authShell("매장비서 로그인", "대표자·직원 계정으로 안전하게 로그인하는 화면입니다.", `${authField("login-email","이메일","email","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}<label class="agreement"><input type="checkbox">로그인 상태 유지</label>`, `${authLink("auth-signup","회원가입")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-invite","직원 초대 수락")}`, "", "로그인", "home")
+      },
+      "auth-signup": {
+        title: "회원가입",
+        html: () => authShell("대표자 회원가입", "대표자 정보와 첫 사업자 기본정보를 입력합니다.", `<div class="auth-grid">${authField("signup-name","대표자명","text","홍길동")}${authField("signup-phone","휴대폰","tel","010-0000-0000")}${authField("signup-email","이메일","email","name@company.com")}${authField("signup-password","비밀번호","password","8자 이상")}${authField("signup-business","상호명","text","열정국밥")}${authField("signup-number","사업자등록번호","text","000-00-00000")}</div><label class="agreement"><input type="checkbox" required>서비스 이용약관 및 개인정보 처리방침에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-verify","본인인증 화면")}`, stepper(1), "회원가입 계속", "auth-verify")
+      },
+      "auth-verify": {
+        title: "이메일·휴대폰 인증",
+        html: () => authShell("본인인증", "이메일 또는 휴대폰으로 받은 6자리 인증번호를 확인합니다.", `${authSelect("verify-method","인증 방식",["휴대폰 문자","이메일"])}${authField("verify-target","인증 대상","text","010-1234-5678")}${authField("verify-code","인증번호","text","6자리 숫자")}`, `${authLink("auth-signup","이전 단계")}${authLink("auth-onboarding","사업자 등록으로")}`, stepper(2), "인증 확인", "auth-onboarding")
+      },
+      "auth-forgot": {
+        title: "비밀번호 찾기",
+        html: () => authShell("비밀번호 찾기", "가입한 이메일 또는 휴대폰으로 재설정 링크를 발송합니다.", `${authSelect("forgot-method","찾기 방식",["이메일","휴대폰"])}${authField("forgot-account","가입 정보","text","name@company.com")}`, `${authLink("auth-login","로그인으로")}${authLink("auth-reset","재설정 화면 보기")}`, "", "재설정 링크 발송", "auth-reset")
+      },
+      "auth-reset": {
+        title: "비밀번호 재설정",
+        html: () => authShell("새 비밀번호 설정", "보안을 위해 기존과 다른 비밀번호를 입력합니다.", `${authField("reset-password","새 비밀번호","password","영문·숫자·특수문자 포함")}${authField("reset-confirm","비밀번호 확인","password","한 번 더 입력")}`, `${authLink("auth-login","로그인으로")}`, "", "비밀번호 변경", "auth-login")
+      },
+      "auth-invite": {
+        title: "직원 초대 수락",
+        html: () => authShell("성신점 직원 초대", "초대된 지점과 권한을 확인하고 직원 계정을 생성합니다.", `<div class="detail-grid"><div class="detail-block"><small>초대한 사람</small><strong>문고비 대표</strong></div><div class="detail-block"><small>부여 권한</small><strong>근태 입력·매출 조회</strong></div></div>${authField("invite-name","이름","text","직원 이름")}${authField("invite-password","비밀번호","password","8자 이상")}<label class="agreement"><input type="checkbox" required>성신점 직원 초대와 권한 범위를 확인했습니다.</label>`, `${authLink("auth-login","로그인으로")}`, "", "초대 수락", "home")
+      },
+      "auth-onboarding": {
+        title: "초기 사업자 등록",
+        html: () => authShell("첫 사업자 등록", "사업자·지점·정산계좌를 등록하는 초기 온보딩 화면입니다.", `<div class="auth-grid">${authField("onboard-name","상호명","text","열정국밥")}${authSelect("onboard-type","사업자 유형",["법인사업자","개인사업자"])}${authField("onboard-number","사업자등록번호","text","000-00-00000")}${authField("onboard-branch","첫 지점명","text","성신점")}${authSelect("onboard-bank","정산 은행",["신한은행","국민은행","우리은행"])}${authField("onboard-account","계좌번호","text","숫자만 입력")}</div><label class="agreement"><input type="checkbox" required>사업자 정보 확인 및 계좌 조회 권한에 동의합니다.</label>`, `${authLink("auth-verify","이전 단계")}${authLink("home","나중에 등록")}`, stepper(3), "사업자 등록 완료", "home")
+      }
+    });
+
+    function flow(items) {
+      return `<div class="flow-grid">${items.map((item, index) => `<div class="flow-step"><strong>${index + 1}. ${item[0]}</strong><span>${item[1]}</span></div>`).join("")}</div>`;
+    }
+    function uploadRows() {
+      return `<div class="table-wrap"><table><thead><tr><th>서류</th><th>파일</th><th>업로드</th><th>OCR</th><th>검토</th><th>상세</th></tr></thead><tbody>
+        <tr><td>신분증 사본</td><td>kim_id_masked.pdf</td><td><span class="status ok">완료</span></td><td><span class="status ok">추출</span></td><td><span class="status warn">대표 확인</span></td><td><button type="button" class="chip-btn" data-action="employee-docs">원본대조</button></td></tr>
+        <tr><td>통장 사본</td><td>bankbook.jpg</td><td><span class="status ok">완료</span></td><td><span class="status info">진행</span></td><td><span class="status info">대기</span></td><td><button type="button" class="chip-btn" data-action="employee-docs">상태</button></td></tr>
+        <tr><td>주민등록등본</td><td>resident_masked.pdf</td><td><span class="status ok">완료</span></td><td><span class="status ok">추출</span></td><td><span class="status ok">확인</span></td><td><button type="button" class="chip-btn" data-action="employee-docs">보기</button></td></tr>
+        <tr><td>보건증</td><td>health_card.png</td><td><span class="status ok">완료</span></td><td><span class="status ok">추출</span></td><td><span class="status warn">만료일 확인</span></td><td><button type="button" class="chip-btn" data-action="employee-docs">보기</button></td></tr>
+        <tr><td>자격증 선택</td><td>-</td><td><span class="status info">선택</span></td><td><span class="status info">대기</span></td><td><span class="status info">대기</span></td><td><button type="button" class="chip-btn" data-action="employee-docs">업로드</button></td></tr>
+      </tbody></table></div>`;
+    }
+    function employeeContractTable() {
+      return `<div class="table-wrap"><table><thead><tr><th>직원</th><th>지점</th><th>계약상태</th><th>서류상태</th><th>서명상태</th><th>CTA</th><th>상세</th></tr></thead><tbody>
+        <tr><td><strong>김서윤</strong></td><td>미아점</td><td><span class="status warn">조건 입력</span></td><td><span class="status ok">OCR 완료</span></td><td><span class="status info">요청 전</span></td><td><button type="button" class="chip-btn" data-action="contract-builder">계약서 작성</button></td><td><button type="button" class="chip-btn" data-action="employee-detail">드로어</button></td></tr>
+        <tr><td><strong>박준호</strong></td><td>성신점</td><td><span class="status info">미리보기</span></td><td><span class="status warn">보건증 검토</span></td><td><span class="status warn">서명 대기</span></td><td><button type="button" class="chip-btn" data-action="signature-progress">서명 확인</button></td><td><button type="button" class="chip-btn" data-action="employee-detail">드로어</button></td></tr>
+        <tr><td><strong>이하늘</strong></td><td>정화점</td><td><span class="status ok">완료</span></td><td><span class="status ok">보관</span></td><td><span class="status ok">완료</span></td><td><button type="button" class="chip-btn" data-action="document-vault">문서보관</button></td><td><button type="button" class="chip-btn" data-action="employee-detail">드로어</button></td></tr>
+      </tbody></table></div>`;
+    }
+    function menuStatsTable() {
+      return `<div class="table-wrap"><table><thead><tr><th>메뉴</th><th>판매수량</th><th>매출</th><th>할인</th><th>수수료</th><th>원가</th><th>공헌이익</th><th>이익률</th><th>전기 대비</th><th>상세</th></tr></thead><tbody>
+        <tr><td><strong>얼큰국밥</strong></td><td>1,284</td><td>₩12,840,000</td><td>₩314,000</td><td>₩926,000</td><td>₩4,366,000</td><td>₩7,234,000</td><td>56.3%</td><td><span class="up">+8.2%</span></td><td><button type="button" class="chip-btn" data-action="menu-detail">분해</button></td></tr>
+        <tr><td><strong>수육정식</strong></td><td>642</td><td>₩10,914,000</td><td>₩188,000</td><td>₩701,000</td><td>₩4,912,000</td><td>₩5,113,000</td><td>46.8%</td><td><span class="down">-2.1%</span></td><td><button type="button" class="chip-btn" data-action="menu-detail">분해</button></td></tr>
+        <tr><td><strong>해장라면</strong></td><td>331</td><td>₩2,648,000</td><td>₩54,000</td><td>₩139,000</td><td>₩1,126,000</td><td>₩1,329,000</td><td>50.2%</td><td><span class="up">+4.5%</span></td><td><button type="button" class="chip-btn" data-action="menu-detail">분해</button></td></tr>
+      </tbody></table></div>`;
+    }
+    function inventoryTable() {
+      return `<div class="table-wrap"><table><thead><tr><th>품목</th><th>지점</th><th>현 재고</th><th>안전재고</th><th>사용속도</th><th>예상 소진일</th><th>발주점</th><th>권장 발주</th><th>공급사</th><th>리드타임</th><th>입고예정</th><th>재고금액</th><th>상세</th></tr></thead><tbody>
+        <tr><td><strong>돼지사골</strong></td><td>성신점</td><td>38kg</td><td>45kg</td><td>12kg/일</td><td><span class="status bad">3일</span></td><td>54kg</td><td>96kg</td><td>서울축산</td><td>2일</td><td>20kg</td><td>₩456,000</td><td><button type="button" class="chip-btn" data-action="order-detail">근거</button></td></tr>
+        <tr><td><strong>쌀 20kg</strong></td><td>미아점</td><td>9포</td><td>8포</td><td>2.4포/일</td><td><span class="status warn">4일</span></td><td>10포</td><td>12포</td><td>동북식자재</td><td>1일</td><td>0포</td><td>₩378,000</td><td><button type="button" class="chip-btn" data-action="order-detail">근거</button></td></tr>
+        <tr><td><strong>깍두기</strong></td><td>정화점</td><td>62kg</td><td>35kg</td><td>8kg/일</td><td><span class="status ok">7일</span></td><td>40kg</td><td>0kg</td><td>그린푸드</td><td>1일</td><td>30kg</td><td>₩248,000</td><td><button type="button" class="chip-btn" data-action="order-detail">근거</button></td></tr>
+      </tbody></table></div>`;
+    }
+    function heatmap() {
+      return `<div class="heatmap" aria-label="시간대 요일별 주문 열지도">
+        <b>시간</b><b>월</b><b>화</b><b>수</b><b>목</b><b>금</b><b>토</b><b>일</b>
+        <b>11시</b><span class="h1">42</span><span class="h1">45</span><span class="h2">61</span><span class="h2">66</span><span class="h3">88</span><span class="h3">92</span><span class="h2">73</span>
+        <b>18시</b><span class="h2">70</span><span class="h2">74</span><span class="h3">96</span><span class="h3">101</span><span class="h3">128</span><span class="h3">134</span><span class="h3">119</span>
+        <b>22시</b><span>21</span><span class="h1">34</span><span class="h1">38</span><span class="h2">52</span><span class="h2">64</span><span class="h2">58</span><span class="h1">33</span>
+      </div>`;
+    }
+
+    Object.assign(views, {
+      sales: {
+        title: "매출·정산",
+        desc: "상품·식당메뉴별 매출, 수수료, 원가와 공헌이익을 검토합니다.",
+        html: () => page("매출·정산", "일자·사업자·지점·마켓·카테고리·메뉴·채널 기준의 상세 통계입니다. 모든 숫자는 시안 데이터/시뮬레이션입니다.", `
+          <section class="hero-actions" style="margin-bottom:14px"><button type="button" class="outline" data-action="export-csv">CSV</button><button type="button" class="outline" data-action="export-excel">Excel</button><button type="button" class="primary" data-action="comparison-toggle">비교기간 켜기</button></section>
+          <section class="kpis">
+            ${kpi("총매출", "₩128,460,000", '<span class="up">↑ 8.4%</span><span>전기 대비</span>', "orange", moneyIcon)}
+            ${kpi("주문수·객단가", "8,214건", '<span>객단가 ₩15,640</span>', "blue", cardIcon)}
+            ${kpi("할인·수수료·광고", "₩12,408,000", '<span>플랫폼 비용 포함</span>', "amber", taxIcon)}
+            ${kpi("원가·공헌이익", "₩54,220,000", '<span class="up">이익률 42.2%</span>', "green", bankIcon)}
+          </section>
+          <section class="grid-main">
+            <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>통계 탭 · 일별 추이</h3><p>채널/마켓 구성과 수수료 차감 후 흐름</p></div><div class="section-tabs"><button class="active" data-action="sales-tab">통계</button><button data-action="sales-tab">상세</button></div></div>${chart(["7/17","7/18","7/19","7/20","7/21","7/22","7/23"], [[[45,"in"],[37,""],[12,"warn"]],[[58,"in"],[48,""],[18,"warn"]],[[74,"in"],[62,""],[22,"warn"]],[[69,"in"],[57,""],[19,"warn"]],[[51,"in"],[44,""],[14,"warn"]],[[63,"in"],[52,""],[17,"warn"]],[[56,"in"],[46,""],[15,"warn"]]])}</article>
+            <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>TOP/BOTTOM 메뉴</h3><p>매출 기여와 마진 저하 항목</p></div><button class="link" data-action="menu-detail">상세</button></div><div class="list">${row("green","1","얼큰국밥","매출 ₩12.8M · 공헌이익률 56.3%","menu-detail")}${row("green","2","수육정식","매출 ₩10.9M · 세트 전환 31%","menu-detail")}${row("red","B","해장라면","할인율 8.4% · 마진 점검","menu-detail")}</div></article>
+          </section>
+          <section class="grid-2"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>시간대·요일 히트맵</h3><p>주문 피크 시각 대체 시각화</p></div></div>${heatmap()}</article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>채널/마켓 구성</h3><p>배달·홀·포장 비중</p></div></div>${simpleChannels()}</article></section>
+          <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>메뉴별 상세 표</h3><p>행 상세에서 채널별 분해, 옵션/세트, 환불/취소, 원가 추이를 확인합니다.</p></div><button type="button" class="primary" data-action="menu-detail">행 상세 열기</button></div>${menuStatsTable()}</section>`)
+      },
+      employees: {
+        title: "직원·급여",
+        desc: "직원 가입부터 계약 완료와 문서보관까지 단계형으로 관리합니다.",
+        html: () => page("직원·급여", "직원 계약관리 상세 흐름입니다. OCR 결과와 자동 등록값은 시안 데이터이며 민감정보는 마스킹 전제로 표시합니다.", `
+          ${flow([["회원가입·초대 수락","직원 계정 생성 후 입사서류 제출 링크 발송"],["입사서류 제출","신분증·통장·등본·보건증·자격증 선택 업로드"],["OCR 검토","자동 추출값과 원본 대조, 출처 배지 확인"],["기본정보 등록","검토 완료값으로 직원 기본정보 초안 생성"],["계약조건 입력","계약유형·급여·근로시간·수당 입력"],["미리보기·수정","계약서 조항과 입력값 확인"],["전자서명 요청","직원 서명 링크 발송 및 상태 추적"],["완료·보관","계약서와 입사서류를 문서보관함에 분류"]])}
+          <section class="grid-main">
+            <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>입사서류 업로드</h3><p>신분증, 통장, 주민등록등본, 보건증, 자격증 선택 · 주민번호/계좌 일부 마스킹</p></div><button type="button" class="primary" data-action="employee-docs">OCR 검토</button></div><div class="dropzone" role="button" tabindex="0" data-action="employee-docs"><b>서류를 끌어오거나 선택</b><span>이 영역은 시안입니다. 실제 파일 저장·외부 OCR 연동은 수행하지 않습니다.</span></div>${uploadRows()}</article>
+            <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>자동 등록 필드</h3><p>출처 배지와 관리자 수정 가능 표시</p></div></div><div class="detail-grid">${detailCard("이름","김서윤 <span class='source-badge'>신분증 OCR</span>")}${detailCard("생년월일","1998-**-** <span class='source-badge'>마스킹</span>")}${detailCard("주소","서울 성북구 *** <span class='source-badge'>등본 OCR</span>")}${detailCard("계좌","신한 110-***-123456 <span class='source-badge'>통장 OCR</span>")}${detailCard("보건증 만료","2027-03-31 <span class='source-badge'>보건증 OCR</span>")}${detailCard("수정 가능","관리자 검토 후 직접 수정")}</div></article>
+          </section>
+          <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>직원 목록 · 계약/서류/서명 필터</h3><p>상단 검색 조건에서 상태별 조회 후 상세 드로어와 계약서 작성 CTA로 이동합니다.</p></div><button type="button" class="primary" data-action="contract-builder">계약서 작성</button></div>${employeeContractTable()}</section>
+          <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>계약조건 입력</h3><p>관리자가 수정 가능한 계약서 생성 필드</p></div></div><form class="mini-form" data-filter-form>${authSelect("contract-type","계약유형",["기간제","정규직","단시간"])}${authField("join-date","입사일","date","2026-08-01","2026-08-01")}${authSelect("workplace","근무지",["미아점","성신점","정화점"])}${authField("role","직무","text","주방 보조","주방 보조")}${authField("pay","시급/월급","text","12,500원","12,500원")}${authField("probation","수습기간","text","3개월","3개월")}${authField("work-hours","근로시간","text","주 40시간","주 40시간")}${authField("break-time","휴게시간","text","일 60분","일 60분")}${authField("payday","급여일","text","매월 10일","매월 10일")}${authField("allowance","연차/수당","text","법정 기준","법정 기준")}${authField("contract-period","계약기간","text","2026.08.01-2027.07.31","2026.08.01-2027.07.31")}<div class="filter-actions"><button type="submit" class="primary">미리보기 생성</button></div></form></section>`)
+      },
+      business: {
+        title: "사업자·지점",
+        desc: "사업자등록증 OCR과 다사업자 운영정보를 검토합니다.",
+        html: () => page("사업자·지점", "사업자등록증 업로드부터 OCR 매핑 검토, 저장, 지점·계좌·배달플랫폼 연결까지의 온보딩 시안입니다.", `
+          ${flow([["사업자등록증 업로드","원본 파일 선택 또는 드롭존 업로드"],["OCR 추출","등록번호·상호·대표자·주소 자동 추출"],["필드 매핑 검토","원본 대조와 신뢰도 확인 후 수정"],["저장·수정","사업자 기본정보 저장 및 이력 기록"],["지점 연결","지점, 계좌, 배달 플랫폼 연결"]])}
+          <section class="grid-main"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>사업자등록증 업로드</h3><p>실제 연동 없는 OCR 시뮬레이션</p></div><button type="button" class="primary" data-action="business-ocr">OCR 추출</button></div><div class="dropzone" role="button" tabindex="0" data-action="business-ocr"><b>사업자등록증 파일 선택</b><span>PDF/JPG/PNG 시안 · 사업자번호 등 민감정보는 일부 마스킹</span></div><div class="notice"><span>OCR 신뢰도와 원본 대조 UI는 시안 데이터입니다.</span><b>실제 홈택스 검증 아님</b></div></article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>OCR 필드 매핑</h3><p>필드별 신뢰도와 원본 대조</p></div></div><div class="detail-grid">${detailCard("사업자번호","123-45-67890 <span class='source-badge'>98%</span>")}${detailCard("상호","열정국밥 주식회사 <span class='source-badge'>96%</span>")}${detailCard("대표자","문고비 <span class='source-badge'>99%</span>")}${detailCard("개업일","2025-03-01 <span class='source-badge'>92%</span>")}${detailCard("사업장주소","서울 성북구 *** <span class='source-badge'>94%</span>")}${detailCard("업태/종목","음식점업 / 한식 <span class='source-badge'>91%</span>")}${detailCard("과세유형","일반과세자 <span class='source-badge'>89%</span>")}${detailCard("법인번호","110111-******* <span class='source-badge'>마스킹</span>")}${detailCard("관할세무서","성북세무서 <span class='source-badge'>88%</span>")}</div></article></section>
+          <section class="grid-3">${businessCard("열정국밥 주식회사", "법인 · 주사업자 · 검증 완료", "3개 지점", "계좌 5개", "플랫폼 6개", "ok")}${businessCard("문라이트F&B", "법인 · 수정이력 2건", "1개 지점", "계좌 2개", "플랫폼 2개", "warn")}${businessCard("문고비 개인사업자", "개인 · 서류 재업로드 필요", "1개 지점", "계좌 1개", "플랫폼 1개", "info")}</section>
+          <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>다사업자 관리</h3><p>주사업자 지정, 권한, 재업로드, 검증상태, 수정이력</p></div><button type="button" class="primary" data-action="business-ocr">서류 재업로드</button></div><div class="timeline">${step("✓","주사업자 지정","열정국밥 주식회사","완료")}${step("2","권한 검토","대표/회계/점장 접근 범위","검토")}${step("3","수정이력","주소 정정 1건 · 계좌 연결 1건","검토")}${step("4","플랫폼 연결","배민·쿠팡·요기요 계정 매핑","대기")}</div></section>`)
+      },
+      inventory: {
+        title: "재고·발주",
+        desc: "지점별 실시간 재고와 권장 발주수량을 예측합니다.",
+        html: () => page("재고·발주", "최근 판매, 레시피 소요량, 현재 재고, 입고예정, 안전재고를 근거로 발주 제안을 보여주는 시안입니다.", `
+          ${flow([["발주 제안","품목별 예상 부족과 권장 수량 산출"],["수량 수정","지점별 발주 수량 조정"],["승인","대표 또는 점장 승인"],["발주서 미리보기","공급사별 발주서 확인"],["발주 완료","발주번호와 납기 상태 생성"],["입고·검수","입고예정 대비 실입고 검수"]])}
+          <section class="kpis">${kpi("부족 예상 품목", "4개", '<span class="down">3일 이내 소진</span>', "amber", taxIcon)}${kpi("권장 발주금액", "₩2,184,000", '<span>3개 공급사</span>', "orange", moneyIcon)}${kpi("입고예정", "7건", '<span>오늘 2건</span>', "blue", cardIcon)}${kpi("재고금액", "₩18,920,000", '<span>전주 -4.1%</span>', "green", bankIcon)}</section>
+          <section class="grid-main"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>지점별 예상 발주 요약</h3><p>자동발주는 비활성 시안 표시</p></div><span class="toggle-off">자동발주 비활성</span></div><div class="summary-grid"><div><small>성신점</small><strong>₩982,000 · 5품목</strong></div><div><small>미아점</small><strong>₩736,000 · 4품목</strong></div><div><small>정화점</small><strong>₩466,000 · 2품목</strong></div></div><div class="notice"><span>권장 발주수량 = 최근 판매 × 레시피 소요량 - 현재 재고 - 입고예정 + 안전재고</span><b>시뮬레이션</b></div></article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>발주 진행</h3><p>제안부터 입고 검수까지</p></div><button type="button" class="primary" data-action="order-detail">발주서 미리보기</button></div><div class="timeline">${step("1","제안 생성","돼지사골 96kg 외","대기")}${step("2","수량 수정","점장 확인 필요","검토")}${step("3","대표 승인","₩2,184,000","대기")}${step("4","입고·검수","7월 25일 예정","예정")}</div></article></section>
+          <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>품목별 재고·발주 상세</h3><p>현 재고, 안전재고, 사용속도, 소진일, 발주점, 공급사, 리드타임, 입고예정, 재고금액</p></div><button type="button" class="primary" data-action="order-detail">발주 제안 검토</button></div>${inventoryTable()}</section>`)
+      },
+      approvals: {
+        title: "통합 승인함",
+        desc: "계약, 발주, 정산, 세무 승인 대기를 한 곳에서 처리합니다.",
+        html: () => page("통합 승인함", "업무별 승인 대기 항목과 근거 자료를 드로어로 확인합니다. 시안 데이터입니다.", `<section class="kpis">${kpi("승인 대기", "8건", '<span>계약 2 · 발주 3</span>', "amber", taxIcon)}${kpi("오늘 마감", "3건", '<span class="down">세무 포함</span>', "orange", moneyIcon)}${kpi("내 승인", "5건", '<span>대표 권한</span>', "blue", bankIcon)}${kpi("반려 초안", "1건", '<span>계약조건 수정</span>', "green", cardIcon)}</section><section class="card panel"><div class="panel-head"><div class="panel-title"><h3>승인 대기 큐</h3><p>계약/발주/정산/세무 통합</p></div><button type="button" class="primary" data-action="approval-detail">선택 승인</button></div><div class="list">${row("amber","계","김서윤 근로계약서","시급 12,500원 · 전자서명 요청 전","contract-builder")}${row("red","발","성신점 사골 긴급발주","권장 96kg · ₩982,000","order-detail")}${row("blue","정","카드 정산 차이 소명","성신점 · ₩42,000","review")}${row("amber","세","부가세 신고자료 공유","누락 증빙 7건","task")}</div></section>`)
+      },
+      alerts: {
+        title: "알림센터",
+        desc: "계약·보건증·사업자서류 만료, 세금 신고, 재고 부족을 확인합니다.",
+        html: () => page("알림센터", "만료와 부족, 신고 일정을 기준으로 알림을 분류합니다. 시안 데이터입니다.", `<section class="grid-2"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>만료·갱신</h3><p>계약, 보건증, 사업자 서류</p></div></div><div class="list">${row("red","계","김서윤 계약 만료 D-8","미아점 · 전자서명 요청 필요","contract-builder")}${row("amber","보","박준호 보건증 만료 D-14","성신점 · 재업로드 요청","employee-docs")}${row("blue","사","문라이트F&B 사업자 서류 재검증","대표자 주소 수정 이력","business-ocr")}</div></article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>신고·재고</h3><p>세금 신고와 품목 부족</p></div></div><div class="list">${row("red","세","부가세 신고 D-2","누락 증빙 7건","task")}${row("red","재","돼지사골 3일 내 소진","성신점 · 권장 96kg","order-detail")}${row("amber","마","수육정식 원가율 상승","전기 대비 +2.1%p","margin-detail")}</div></article></section>`)
+      },
+      margins: {
+        title: "원가·마진",
+        desc: "레시피 원가와 메뉴 가격 시뮬레이션을 비교합니다.",
+        html: () => page("원가·마진", "레시피 소요량, 식재료 단가, 플랫폼 비용을 반영한 메뉴 가격 시뮬레이션입니다.", `<section class="kpis">${kpi("평균 원가율", "36.8%", '<span class="down">+1.2%p</span>', "amber", taxIcon)}${kpi("목표 마진 미달", "3개", '<span>수육정식 포함</span>', "orange", moneyIcon)}${kpi("가격 조정 효과", "+₩2.4M", '<span>시뮬레이션</span>', "green", bankIcon)}${kpi("레시피 단가", "₩4,366", '<span>얼큰국밥 1인분</span>', "blue", cardIcon)}</section><section class="grid-main"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>레시피 원가</h3><p>식재료별 단가와 소요량</p></div><button type="button" class="primary" data-action="margin-detail">가격 시뮬레이션</button></div><div class="table-wrap"><table><thead><tr><th>메뉴</th><th>재료비</th><th>포장비</th><th>수수료</th><th>판매가</th><th>공헌이익</th><th>상세</th></tr></thead><tbody><tr><td><strong>얼큰국밥</strong></td><td>₩4,366</td><td>₩420</td><td>₩740</td><td>₩10,000</td><td>₩4,474</td><td><button class="chip-btn" data-action="margin-detail">보기</button></td></tr><tr><td><strong>수육정식</strong></td><td>₩7,650</td><td>₩520</td><td>₩1,080</td><td>₩17,000</td><td>₩7,750</td><td><button class="chip-btn" data-action="margin-detail">보기</button></td></tr></tbody></table></div></article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>가격 시뮬레이션</h3><p>판매가 변경 전후 비교</p></div></div><div class="detail-grid">${detailCard("수육정식 현재가","₩17,000")}${detailCard("권장가","₩18,000")}${detailCard("주문 감소 가정","-3.0%")}${detailCard("월 공헌이익 증가","+₩640,000")}</div></article></section>`)
+      },
+      audit: {
+        title: "권한·감사로그",
+        desc: "대표, 매니저, 회계, 노무 역할과 주요 변경 이력을 관리합니다.",
+        html: () => page("권한·감사로그", "역할별 접근 범위와 계약·발주·사업자 정보 변경 이력을 검토합니다. 시안 데이터입니다.", `<section class="grid-2"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>역할 권한</h3><p>대표/매니저/회계/노무</p></div><button type="button" class="primary" data-action="audit-detail">권한 수정</button></div><div class="summary-grid"><div><small>대표</small><strong>전체 승인</strong></div><div><small>매니저</small><strong>지점 근태·재고</strong></div><div><small>회계</small><strong>정산·세무</strong></div></div><div class="summary-grid"><div><small>노무</small><strong>계약·급여 검토</strong></div><div><small>외부 세무</small><strong>증빙 열람</strong></div><div><small>직원</small><strong>본인 서류</strong></div></div></article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>감사로그</h3><p>주요 변경 이력</p></div></div><div class="timeline">${step("✓","계약조건 수정","문고비 대표 · 김서윤 시급 변경","완료")}${step("✓","사업자 서류 재업로드","회계 담당 · 문라이트F&B","완료")}${step("3","발주 승인","성신점 점장 · 돼지사골 96kg","검토")}${step("4","권한 변경","노무 역할 계약서 열람 허용","대기")}</div></article></section>`)
+      },
+      documents: {
+        title: "문서보관함",
+        desc: "입사, 계약, 사업자, 세무 증빙을 분류하고 만료를 추적합니다.",
+        html: () => page("문서보관함", "보고서 생성 이력과 함께 입사·계약·사업자·세무 증빙 분류/만료를 관리합니다. 시안 데이터입니다.", `<section class="kpis">${kpi("보관 문서", "184건", '<span>입사 42 · 계약 36</span>', "blue", bankIcon)}${kpi("만료 임박", "5건", '<span class="down">보건증 2</span>', "amber", taxIcon)}${kpi("승인 대기", "3건", '<span>세무 증빙 공유</span>', "orange", moneyIcon)}${kpi("다운로드", "41회", '<span>최근 30일</span>', "green", cardIcon)}</section><section class="grid-main"><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>문서 분류</h3><p>입사·계약·사업자·세무 증빙</p></div><button type="button" class="primary" data-action="document-vault">문서 상세</button></div><div class="table-wrap"><table><thead><tr><th>문서</th><th>분류</th><th>소유</th><th>만료</th><th>권한</th><th>상태</th><th>상세</th></tr></thead><tbody><tr><td><strong>김서윤 근로계약서</strong></td><td>계약</td><td>미아점</td><td>2027-07-31</td><td>대표·노무</td><td><span class="status warn">서명 대기</span></td><td><button class="chip-btn" data-action="document-vault">보기</button></td></tr><tr><td><strong>사업자등록증</strong></td><td>사업자</td><td>열정국밥</td><td>-</td><td>대표·회계</td><td><span class="status ok">검증</span></td><td><button class="chip-btn" data-action="business-ocr">보기</button></td></tr><tr><td><strong>부가세 증빙 묶음</strong></td><td>세무</td><td>전체</td><td>2026-07-25</td><td>대표·회계·세무</td><td><span class="status warn">공유 대기</span></td><td><button class="chip-btn" data-action="review">검토</button></td></tr></tbody></table></div></article><article class="card panel"><div class="panel-head"><div class="panel-title"><h3>최근 이력</h3><p>생성·미리보기·PDF/Excel 내보내기</p></div></div><div class="timeline">${step("✓","CEO 보고서","문고비 대표 · PDF","완료")}${step("✓","급여대장","재무 담당 · Excel","완료")}${step("3","정산 대사","자동 생성 중","진행")}</div></article></section>`)
+      }
+    });
+
+    const detailCard = (label, value) => `<div class="detail-block"><small>${label}</small><strong>${value}</strong></div>`;
+    function detailContent(action) {
+      const slug = normalizeHash();
+      const reviewByView = {
+        sales: ["정산 차이 상세", "7월 23일 · 성신점 · 카드 매출", [["주문·승인 매출","₩2,611,000"],["총 수수료","₩78,330"],["광고비·쿠폰 차감","₩26,500"],["입금 예정액","₩2,506,170"],["원장 차이","₩42,000"],["처리 상태","소명자료 검토 중"]]],
+        accounts: ["입금 매칭 상세", "BAEMIN_PAY 입금 후보 비교", [["입금액","₩400,000"],["예상 정산액","₩426,500"],["차이","₩26,500"],["후보 주문","배민 성신점 128건"],["매칭 신뢰도","92% · 시안"],["처리 상태","대표 확인 필요"]]],
+        employees: ["직원·근태 상세", "박준호 · 성신점", [["계약","2026.01.01–12.31"],["이번 주 근무","46시간"],["연장근무","6시간"],["예상 급여","₩2,780,000"],["급여명세","초안 생성"],["상태","점장 확인 필요"]]],
+        tax: ["신고 상세", "2026년 1기 부가가치세", [["대상 사업자","3개"],["매출세액","₩28,420,000"],["매입세액","₩16,680,000"],["예상 납부세액","₩11,740,000"],["증빙 수집","94% · 7건 누락"],["신고 마감","2026-07-25"]]],
+        business: ["사업자·지점 상세", "열정국밥 주식회사 · 성신점", [["사업자 상태","운영 중"],["지점 권한","대표·점장·재무"],["연결 계좌","신한 운영·국민 정산"],["연동 마켓","배민·쿠팡·요기요"],["직원","8명"],["최근 동기화","12:45"]]],
+        documents: ["보고서 검토", "부가세 증빙 묶음", [["대상 기간","2026년 상반기"],["형식","ZIP·PDF"],["자료 수","126건"],["누락","7건"],["공유 대상","세무대리인"],["상태","대표 승인 대기"]]]
+      };
+      const specs = {
+        profile: ["프로필·계정", "문고비 대표 · 최고 관리자", `<div class="profile-menu"><button type="button" data-auth="auth-login">로그인 화면</button><button type="button" data-auth="auth-signup">대표자 회원가입</button><button type="button" data-auth="auth-invite">직원 초대 수락</button><button type="button" data-auth="auth-onboarding">사업자 온보딩</button><button type="button" data-action="logout">로그아웃</button></div>`],
+        search: ["통합 검색", "사업자·직원·거래·문서를 한 번에 찾습니다.", `<form class="auth-form" data-search-form>${authField("global-search","검색어","search","사업자, 직원명, 거래번호")}<div class="drawer-actions"><button type="submit" class="primary">검색</button></div></form>`],
+        notification: ["알림센터", "미처리 알림 5건", `<div class="list">${row("red","세","부가세 신고 D-2","누락 증빙 7건","task")}${row("amber","급","급여 승인 대기","직원 18명","approve")}${row("blue","입","미매칭 입금","3건 · 1,840,000원","match")}</div>`],
+        task: ["업무 상세", "부가세 신고 자료 확인", `<div class="detail-grid">${detailCard("담당자","문고비 대표")}${detailCard("마감","2026-07-25")}${detailCard("사업자","전체 사업자")}${detailCard("진행률","94%")}</div><div class="timeline">${step("✓","매출 자료","수집 완료","완료")}${step("2","누락 증빙","7건 확인","검토")}${step("3","대표 승인","검토 후 승인","대기")}</div>`],
+        approve: ["승인 상세", "7월 급여 최종 승인", `<div class="detail-grid">${detailCard("직원","18명")}${detailCard("지급 예정","₩38,420,000")}${detailCard("지급일","2026-07-29 10:00")}${detailCard("예외","야간수당 4건")}</div><div class="drawer-actions"><button type="button" class="outline" data-close-overlay>보류</button><button type="button" class="primary" data-action="confirm-state">승인 처리</button></div>`],
+        match: ["미매칭 입금 처리", "입금 원장과 주문·정산 후보 비교", `<div class="detail-grid">${detailCard("입금자","KCP_열정국밥")}${detailCard("입금액","₩1,120,000")}${detailCard("추천 후보","카드 정산 7/22")}${detailCard("신뢰도","96% · 시안")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">수동 지정</button><button type="button" class="primary" data-action="confirm-state">추천 매칭</button></div>`],
+        contract: ["근로계약 상세", "김서윤 · 미아점", `<div class="detail-grid">${detailCard("계약 만료","2026-07-31")}${detailCard("현재 급여","₩2,430,000")}${detailCard("근무 형태","주 40시간")}${detailCard("갱신 상태","작성 필요")}</div><div class="drawer-actions"><button type="button" class="primary" data-action="confirm-state">갱신안 작성</button></div>`],
+        "sales-detail": ["플랫폼 거래 상세", "배달의민족 · 성신점", `<div class="detail-grid">${detailCard("주문 매출","₩3,284,000")}${detailCard("중개 수수료","₩196,820")}${detailCard("배달비·광고비","₩184,300")}${detailCard("쿠폰 차감","₩42,000")}${detailCard("입금 예정","₩2,860,880")}${detailCard("예정일","2026-07-24")}</div><button type="button" class="outline" data-action="download">정산 명세 미리보기</button>`],
+        "account-detail": ["계좌 거래 상세", "신한은행 운영계좌", `<div class="detail-grid">${detailCard("현재 잔액","₩22,480,200")}${detailCard("오늘 입금","₩4,820,000")}${detailCard("오늘 출금","₩1,240,000")}${detailCard("미매칭","1건")}</div><div class="list">${row("green","입","KCP 정산 입금","₩1,120,000 · 매칭 완료","","<span class='status ok'>완료</span>")}${row("amber","입","김민수","₩320,000 · 후보 확인","match")}</div>`],
+        "employee-detail": ["직원 프로필", "김서윤 · 미아점", `<div class="detail-grid">${detailCard("입사일","2025-08-01")}${detailCard("계약","2026-07-31 만료")}${detailCard("이번 달 근태","152시간")}${detailCard("급여 예정","₩2,430,000")}${detailCard("급여명세","발급 대기")}${detailCard("권한","근태 입력")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="contract">계약 수정</button><button type="button" class="primary" data-action="approve">급여명세 보기</button></div>`],
+        "business-detail": ["사업자·지점 상세", "열정국밥 주식회사", `<div class="detail-grid">${detailCard("사업자등록번호","123-45-67890 · 시안")}${detailCard("운영 지점","3개")}${detailCard("연결 계좌","5개")}${detailCard("직원","18명")}${detailCard("권한 그룹","대표·점장·재무")}${detailCard("연동 서비스","11개")}</div><div class="timeline">${step("✓","사업자 정보","확인 완료","완료")}${step("✓","계좌·마켓 연동","정상","완료")}${step("3","직원 권한 검토","1건 승인 대기","검토")}</div>`],
+        "employee-docs": ["입사서류 OCR 검토", "김서윤 · 민감정보 마스킹 적용", `<div class="detail-grid">${detailCard("신분증","이름/생년월일 추출 · 주민번호 뒤 7자리 마스킹")}${detailCard("통장","은행/계좌 일부 추출 · 계좌 중간자리 마스킹")}${detailCard("등본","주소 추출 · 상세주소 일부 마스킹")}${detailCard("보건증","만료일 2027-03-31 · 94% 신뢰도")}${detailCard("관리자 수정","모든 자동 등록 필드 수정 가능")}${detailCard("실제 연동","없음 · 시안 데이터")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">수정 저장</button><button type="button" class="primary" data-action="contract-builder">계약조건 입력</button></div>`],
+        "contract-builder": ["근로계약서 작성", "자동 등록값과 관리자 계약조건을 조합합니다.", `<div class="detail-grid">${detailCard("계약유형","기간제")}${detailCard("입사일","2026-08-01")}${detailCard("근무지/직무","미아점 · 주방 보조")}${detailCard("급여","시급 12,500원 · 매월 10일")}${detailCard("근로/휴게","주 40시간 · 일 60분 휴게")}${detailCard("수습/기간","3개월 · 2027-07-31까지")}${detailCard("연차/수당","법정 기준 · 야간/연장 자동 계산")}${detailCard("문서 상태","미리보기 생성 가능")}</div><div class="timeline">${step("✓","입사서류 검토","OCR 원본 대조 완료","완료")}${step("2","계약조건 입력","관리자 수정 중","검토")}${step("3","계약서 미리보기","조항 확인 필요","대기")}${step("4","전자서명 요청","직원 링크 발송 예정","대기")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">미리보기 수정</button><button type="button" class="primary" data-action="signature-progress">전자서명 요청</button></div>`],
+        "signature-progress": ["전자서명 진행상태", "박준호 · 성신점", `<div class="timeline">${step("✓","계약서 생성","2026-07-23 14:10","완료")}${step("✓","직원에게 요청","문자·이메일 링크 발송","완료")}${step("3","직원 본인확인","휴대폰 인증 대기","대기")}${step("4","서명 완료·보관","문서보관함 자동 분류 예정","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">요청 재발송</button><button type="button" class="primary" data-action="document-vault">문서보관함</button></div>`],
+        "business-ocr": ["사업자등록 OCR 원본대조", "사업자등록증 업로드 · 필드 매핑 검토", `<div class="detail-grid">${detailCard("사업자번호","123-45-67890 · 신뢰도 98%")}${detailCard("상호","열정국밥 주식회사 · 96%")}${detailCard("대표자","문고비 · 99%")}${detailCard("개업일","2025-03-01 · 92%")}${detailCard("주소","서울 성북구 *** · 94%")}${detailCard("업태/종목","음식점업/한식 · 91%")}${detailCard("과세유형","일반과세자 · 89%")}${detailCard("관할세무서","성북세무서 · 88%")}</div><div class="timeline">${step("✓","업로드","파일 수신 시안","완료")}${step("2","OCR 추출","신뢰도 낮은 필드 확인","검토")}${step("3","저장·수정","관리자 승인 필요","대기")}${step("4","지점·계좌·플랫폼 연결","저장 후 진행","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">필드 수정</button><button type="button" class="primary" data-action="confirm-state">저장</button></div>`],
+        "menu-detail": ["메뉴 매출 행 상세", "얼큰국밥 · 채널/옵션/환불/원가 추이", `<div class="detail-grid">${detailCard("배달의민족","742건 · ₩7,420,000")}${detailCard("쿠팡이츠","312건 · ₩3,120,000")}${detailCard("홀/POS","230건 · ₩2,300,000")}${detailCard("옵션/세트","곱빼기 184건 · 세트 96건")}${detailCard("환불/취소","18건 · ₩180,000")}${detailCard("원가 추이","사골 단가 +3.2% · 쌀 -1.1%")}${detailCard("공헌이익","₩7,234,000")}${detailCard("전기 대비","+8.2%")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="export-csv">CSV</button><button type="button" class="primary" data-action="margin-detail">원가 시뮬레이션</button></div>`],
+        "order-detail": ["권장 발주수량 산출 근거", "성신점 돼지사골 · 발주 제안", `<div class="detail-grid">${detailCard("최근 판매","7일 684그릇")}${detailCard("레시피 소요량","0.18kg/그릇")}${detailCard("예상 사용량","123kg")}${detailCard("현 재고","38kg")}${detailCard("입고예정","20kg")}${detailCard("안전재고","45kg")}${detailCard("권장 발주","96kg")}${detailCard("공급사/리드타임","서울축산 · 2일")}</div><div class="timeline">${step("1","발주 제안","권장 96kg","대기")}${step("2","수량 수정","점장 90kg 조정 가능","검토")}${step("3","승인","대표 승인 후 발주서 생성","대기")}${step("4","입고·검수","7월 25일 예정","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">수량 수정</button><button type="button" class="primary" data-action="confirm-state">발주 승인</button></div>`],
+        "approval-detail": ["통합 승인 상세", "계약·발주·정산·세무 대기 항목", `<div class="detail-grid">${detailCard("승인 유형","발주")}${detailCard("요청자","성신점 점장")}${detailCard("금액","₩982,000")}${detailCard("근거","3일 내 소진 예상")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">반려</button><button type="button" class="primary" data-action="confirm-state">승인</button></div>`],
+        "margin-detail": ["원가·마진 시뮬레이션", "수육정식 가격 조정", `<div class="detail-grid">${detailCard("현재 판매가","₩17,000")}${detailCard("권장 판매가","₩18,000")}${detailCard("원가","₩7,650")}${detailCard("플랫폼 비용","₩1,080")}${detailCard("주문 감소 가정","-3.0%")}${detailCard("월 공헌이익 변화","+₩640,000")}</div><button type="button" class="primary" data-action="confirm-state">시뮬레이션 저장</button>`],
+        "audit-detail": ["권한·감사 상세", "역할 변경과 주요 변경 이력", `<div class="detail-grid">${detailCard("대표","모든 사업자 승인/설정")}${detailCard("매니저","담당 지점 근태·재고")}${detailCard("회계","계좌·정산·세무 증빙")}${detailCard("노무","계약·급여 검토")}</div><div class="timeline">${step("✓","계약조건 수정","문고비 대표 · 14:22","완료")}${step("✓","사업자 OCR 저장","회계 담당 · 13:48","완료")}${step("3","권한 변경 요청","노무 역할 열람 범위","검토")}</div>`],
+        "document-vault": ["문서보관함 상세", "입사·계약·사업자·세무 증빙 분류", `<div class="detail-grid">${detailCard("분류","계약")}${detailCard("문서","김서윤 근로계약서")}${detailCard("보관 위치","직원/미아점/2026")}${detailCard("만료","2027-07-31")}${detailCard("열람 권한","대표·노무")}${detailCard("감사 이력","생성 1 · 열람 2")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">권한 변경</button><button type="button" class="primary" data-action="download">미리보기</button></div>`],
+        download: ["보고서 미리보기", "생성·다운로드 상태", `<div class="detail-grid">${detailCard("보고서","7월 CEO 경영보고")}${detailCard("형식","PDF 14쪽")}${detailCard("생성 상태","완료")}${detailCard("생성 시각","2026-07-23 18:40")}</div><div class="timeline">${step("✓","데이터 집계","완료","완료")}${step("✓","PDF 생성","완료","완료")}${step("3","다운로드·공유","사용자 선택","대기")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">Excel</button><button type="button" class="primary" data-action="confirm-state">PDF 다운로드</button></div>`],
+        report: ["새 보고서 생성", "기간·사업자·형식을 선택합니다.", `<form class="auth-form" data-report-form>${authSelect("report-type","보고서 유형",["CEO 경영보고","정산 대사","급여대장","세무 증빙"])}${authSelect("report-format","파일 형식",["PDF","Excel","PDF + Excel"])}<div class="drawer-actions"><button type="submit" class="primary">생성 시작</button></div></form>`],
+        "business-switch": ["사업자 전환", "조회 범위와 권한을 확인합니다.", `<div class="profile-menu"><button type="button" data-action="confirm-state">열정국밥 주식회사 · 3개 지점</button><button type="button" data-action="confirm-state">문라이트F&amp;B · 1개 지점</button><button type="button" data-action="confirm-state">문고비 개인사업자 · 1개 지점</button></div>`],
+        connect: ["외부 서비스 연동", "마켓·은행·카드·세무 연결 추가", `<div class="profile-menu"><button type="button" data-action="confirm-state">배달 플랫폼</button><button type="button" data-action="confirm-state">은행 빠른계좌조회</button><button type="button" data-action="confirm-state">POS·카드</button><button type="button" data-action="confirm-state">홈택스·세무</button><button type="button" data-action="business-ocr">사업자·계좌 연결</button></div>`],
+        calendar: ["세무 캘린더", "신고·납부 일정 상세", `<div class="timeline">${step("!","부가가치세","2026-07-25 · D-2","대기")}${step("2","원천세","2026-08-10","검토")}${step("3","법인세 중간예납","2026-08-31","예정")}</div>`],
+        primary: ["주요 작업", `${views[slug] ? views[slug].title : "현재 화면"} 업무`, `<div class="profile-menu"><button type="button" data-action="review">상세현황 검토</button><button type="button" data-action="download">자료 미리보기·내보내기</button><button type="button" data-action="help">검토 메모 남기기</button></div>`]
+      };
+      if (action === "review" && reviewByView[slug]) {
+        const item = reviewByView[slug];
+        return [item[0], item[1], `<div class="detail-grid">${item[2].map((pair) => detailCard(pair[0], pair[1])).join("")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="download">근거자료</button><button type="button" class="primary" data-action="confirm-state">검토 완료</button></div>`];
+      }
+      return specs[action] || ["상세현황", "선택한 업무의 상세 화면입니다.", `<div class="notice"><span>해당 기능의 업무 흐름을 확인하는 UX 시안입니다.</span><b>시안 데이터</b></div>`];
+    }
+    function openDetail(action) {
+      const [title, subtitle, body] = detailContent(action);
+      drawerTitle.textContent = title;
+      drawerSubtitle.textContent = subtitle;
+      drawerBody.innerHTML = body;
+      detailOverlay.classList.add("open");
+      detailOverlay.setAttribute("aria-hidden", "false");
+      document.body.style.overflow = "hidden";
+      detailOverlay.querySelector("[data-close-overlay]").focus();
+    }
+    function closeDetail() {
+      detailOverlay.classList.remove("open");
+      detailOverlay.setAttribute("aria-hidden", "true");
+      document.body.style.overflow = "";
     }
 
     const actionMessages = {
@@ -570,7 +954,11 @@
       primary: "현재 화면의 주요 작업 CTA 시안 동작입니다.",
       help: "CEO 검토 메모를 남기는 시안 동작입니다.",
       calendar: "세무 일정 캘린더를 여는 시안 동작입니다.",
-      period: "선택한 기간의 시안 데이터를 표시합니다."
+      period: "선택한 기간의 시안 데이터를 표시합니다.",
+      "export-csv": "현재 표의 CSV 내보내기 요청 상태로 변경했습니다.",
+      "export-excel": "현재 표의 Excel 내보내기 요청 상태로 변경했습니다.",
+      "comparison-toggle": "비교기간 표시를 켠 시안 상태입니다.",
+      "sales-tab": "매출 통계/상세 탭을 전환했습니다."
     };
 
     const normalizeHash = () => {
@@ -579,9 +967,11 @@
     };
     const render = (slug, updateHash = true) => {
       const view = views[slug] || views.home;
+      closeDetail();
       pageTitle.textContent = view.title;
       document.title = `매장비서 · ${view.title} 시안`;
       viewRoot.innerHTML = view.html();
+      window.scrollTo(0, 0);
       document.querySelectorAll("[data-view]").forEach((item) => item.classList.toggle("active", item.dataset.view === slug));
       if (updateHash && window.location.hash !== `#${slug}`) {
         history.pushState(null, "", `#${slug}`);
@@ -589,6 +979,11 @@
     };
 
     document.addEventListener("click", (event) => {
+      const authButton = event.target.closest("[data-auth]");
+      if (authButton) {
+        render(authButton.dataset.auth);
+        return;
+      }
       const viewButton = event.target.closest("[data-view]");
       if (viewButton) {
         const slug = viewButton.dataset.view;
@@ -599,7 +994,53 @@
       const actionButton = event.target.closest("[data-action]");
       if (actionButton) {
         const action = actionButton.dataset.action;
+        if (action === "new-business") {
+          render("auth-onboarding");
+          return;
+        }
+        if (action === "logout") {
+          render("auth-login");
+          showToast("로그아웃 후 로그인 화면으로 이동한 시안입니다.");
+          return;
+        }
+        if (action === "confirm-state") {
+          closeDetail();
+          showToast("선택한 상태 변경을 시안에 반영했습니다.");
+          return;
+        }
+        const detailActions = new Set(["profile","search","notification","report","task","approve","match","contract","review","download","business-switch","connect","calendar","primary","sales-detail","account-detail","employee-detail","business-detail","employee-docs","contract-builder","signature-progress","business-ocr","menu-detail","order-detail","approval-detail","margin-detail","audit-detail","document-vault"]);
+        if (detailActions.has(action)) {
+          openDetail(action);
+          return;
+        }
         showToast(actionMessages[action] || "시안 동작입니다.");
+      }
+    });
+    document.addEventListener("submit", (event) => {
+      if (event.target.matches("[data-filter-form]")) {
+        event.preventDefault();
+        const values = [...new FormData(event.target).values()].filter(Boolean);
+        showToast(`${values.length}개 검색 조건을 적용했습니다.`);
+      }
+      if (event.target.matches("[data-auth-form]")) {
+        event.preventDefault();
+        const nextView = event.target.dataset.nextView;
+        if (nextView) {
+          render(nextView);
+          showToast("입력 내용을 확인하고 다음 화면으로 이동했습니다.");
+        } else {
+          showToast("입력 내용을 확인했습니다.");
+        }
+      }
+      if (event.target.matches("[data-search-form], [data-report-form]")) {
+        event.preventDefault();
+        closeDetail();
+        showToast("요청을 접수한 시안 상태로 변경했습니다.");
+      }
+    });
+    document.addEventListener("reset", (event) => {
+      if (event.target.matches("[data-filter-form]")) {
+        window.setTimeout(() => showToast("검색 조건을 초기화했습니다."), 0);
       }
     });
     document.addEventListener("change", (event) => {
@@ -613,6 +1054,24 @@
       tab.parentElement.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
       tab.classList.add("active");
       showToast(`${tab.textContent} 필터를 적용했습니다.`);
+    });
+    document.addEventListener("click", (event) => {
+      const rangeButton = event.target.closest("[data-range]");
+      if (!rangeButton) return;
+      rangeButton.parentElement.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
+      rangeButton.classList.add("active");
+      showToast(`${rangeButton.textContent} 기간을 적용했습니다.`);
+    });
+    document.addEventListener("click", (event) => {
+      if (event.target.closest("[data-close-overlay]")) closeDetail();
+      if (event.target === detailOverlay) closeDetail();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && detailOverlay.classList.contains("open")) closeDetail();
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".profile[role='button']")) {
+        event.preventDefault();
+        openDetail("profile");
+      }
     });
     window.addEventListener("hashchange", () => render(normalizeHash(), false));
     render(normalizeHash(), false);
