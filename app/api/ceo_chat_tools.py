@@ -211,6 +211,10 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "description": "생성/준비한 세션을 active로 지정할지 여부",
                     "default": False,
                 },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "ensure_pc_cdp + AADS URL 조합 시 E2E 로그인 자동 주입에 사용할 tenant_id",
+                },
             },
             "required": [],
         },
@@ -861,7 +865,8 @@ TOOL_DEFINITIONS: List[Dict] = [
         "name": "pc_execute",
         "description": (
             "연결된 PC Agent에 명령을 전송하고 결과를 수신합니다. "
-            "주요 명령: shell, cmd, powershell, system_info, process_list, file_list, file_read, file_write, app_launch."
+            "주요 명령: shell, cmd, powershell, system_info, process_list, file_list, file_read, "
+            "file_write, file_upload, file_download, app_launch."
         ),
         "input_schema": {
             "type": "object",
@@ -872,7 +877,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "command_type": {
                     "type": "string",
-                    "description": "실행할 명령 유형 (shell, cmd, powershell, system_info, process_list, file_list, file_read, file_write, app_launch 등)",
+                    "description": "실행할 명령 유형 (shell, cmd, powershell, system_info, process_list, file_list, file_read, file_write, file_upload, file_download, app_launch 등)",
                 },
                 "params": {
                     "type": "object",
@@ -887,7 +892,8 @@ TOOL_DEFINITIONS: List[Dict] = [
         "name": "device_execute",
         "description": (
             "연결된 디바이스(PC/Android/iOS)에 명령을 실행합니다. "
-            "PC 명령은 shell/cmd/powershell/system_info/process_list/file_list/file_read/file_write/app_launch를 포함합니다."
+            "PC 명령은 shell/cmd/powershell/system_info/process_list/file_list/file_read/file_write/"
+            "file_upload/file_download/app_launch를 포함합니다."
         ),
         "input_schema": {
             "type": "object",

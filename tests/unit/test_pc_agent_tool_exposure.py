@@ -16,8 +16,12 @@ def test_tool_registry_descriptions_expose_windows_command_aliases() -> None:
     assert "cmd" in pc_tool["description"]
     assert "powershell" in pc_tool["description"]
     assert "app_launch" in pc_tool["description"]
+    assert "file_upload" in pc_tool["description"]
+    assert "file_download" in pc_tool["description"]
     assert "cmd" in device_tool["description"]
     assert "powershell" in device_tool["description"]
+    assert "file_upload" in device_tool["description"]
+    assert "file_download" in device_tool["description"]
 
 
 def test_ceo_chat_tools_exposes_pc_and_device_execute() -> None:

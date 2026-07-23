@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-23 09:10 KST - runner-90009369 deploy preflight recovery
+
+- Failure: approved job `runner-90009369` was blocked because the AADS server main worktree was not clean/latest. The reported historical state was `dirty=77`, `behind=62`, `ahead=56`; recovery-time measurement was `dirty=5`, `behind=3`, `ahead=1` after another recovery had already reduced the divergence.
+- Preservation: the five remaining main-worktree changes were saved as `preserve-main-before-runner-90009369-recovery-20260723`; backup branches retain both pre-recovery local commits. No force push, hard reset, or deletion of user changes was used.
+- Reconciliation: main was synchronized to the current `origin/main`, including concurrent P0 PC Agent recovery `38ae425f`. The runner patch was narrowed to the missing `file_upload`/`file_download` PC routing and hash preservation across expired-login redirects. Its duplicate `/chat/[sessionId]` route was removed because the dashboard already has `/chat/[id]` and Next.js rejected both as ambiguous.
+- Validation: production-image isolated tests passed `14` PC Agent recovery/exposure cases. The dashboard `origin/main` isolated worktree completed a Next.js 16 production build with `/chat/[id]`; lint on the added route passed before the duplicate route was removed. Full-file `src/lib/api.ts` lint remains blocked by 141 pre-existing `no-explicit-any` findings unrelated to the one-line redirect change.
+- Deployment: commit/push and backend/dashboard blue-green deployment are pending below; rollback points are the pre-recovery backup branches, named stash, and the active blue/green slot markers.
+
 ## 2026-07-23 09:03 KST - PC Agent command isolation and auth fallback P0
 
 - Incident: PC Agent `2e9379a1-fed` received a long-running `shell` command at 08:11:35 KST. The server command timed out 30 seconds later and the WebSocket disconnected with code `1005` at 08:12:06 KST. No reconnect followed; both API slots and the public status endpoint reported zero online agents.
