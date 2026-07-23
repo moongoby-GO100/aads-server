@@ -3128,7 +3128,7 @@ async def _ensure_aads_auth(page: Any) -> None:
                     logger.info("_ensure_aads_auth: vault token inject success")
                     return
     except Exception as e:
-        logger.debug("_ensure_aads_auth vault path failed: %s", e)
+        logger.warning("_ensure_aads_auth vault path failed: %s", e)
 
     # 2순위: 서버 내부 토큰 생성 (browser-agent)
     try:
@@ -3140,7 +3140,7 @@ async def _ensure_aads_auth(page: Any) -> None:
         }}""")
         logger.info("_ensure_aads_auth: server token inject success")
     except Exception as e:
-        logger.debug("_ensure_aads_auth server token failed: %s", e)
+        logger.warning("_ensure_aads_auth server token failed: %s", e)
 
 
 async def _do_aads_login(page: Any) -> None:

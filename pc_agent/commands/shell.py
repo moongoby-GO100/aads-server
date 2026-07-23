@@ -1,7 +1,10 @@
 """AADS-195: 셸 명령 실행."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import signal
 import subprocess
 from typing import Any, Dict
 
@@ -12,6 +15,65 @@ _BLOCKED_COMMANDS = [
     "format", "del /s", "rd /s", "rmdir /s",
     "shutdown", "rm -rf", "mkfs",
 ]
+
+
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Best-effort termination including descendants spawned by shell=True."""
+    if os.name == "nt":
+        taskkill_kwargs = {}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            taskkill_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=5,
+                **taskkill_kwargs,
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def _run_shell_command(command: str, kwargs: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    """Run one command with a hard deadline and descendant cleanup."""
+    popen_kwargs: dict[str, Any] = dict(kwargs)
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        popen_kwargs["creationflags"] = (
+            int(popen_kwargs.get("creationflags", 0))
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    elif os.name != "nt":
+        popen_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **popen_kwargs,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        _terminate_process_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        raise
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
 
 
 async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -32,16 +94,13 @@ async def execute(params: Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(subprocess, "CREATE_NO_WINDOW"):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            encoding="utf-8",
-            errors="replace",
-            **kwargs,
-        )
+        # subprocess.run() is blocking. Running it directly in this async
+        # handler stalls the PC Agent WebSocket loop, including heartbeats and
+        # reconnect handling. A long command previously caused the server
+        # command timeout and WebSocket code=1005 disconnect in the same
+        # 30-second window. Keep the subprocess deadline, but isolate the wait
+        # from the networking event loop.
+        result = await asyncio.to_thread(_run_shell_command, command, kwargs)
         return {
             "status": "success",
             "data": {

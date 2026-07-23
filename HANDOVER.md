@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-07-23 09:03 KST - PC Agent command isolation and auth fallback P0
+
+- Incident: PC Agent `2e9379a1-fed` received a long-running `shell` command at 08:11:35 KST. The server command timed out 30 seconds later and the WebSocket disconnected with code `1005` at 08:12:06 KST. No reconnect followed; both API slots and the public status endpoint reported zero online agents.
+- Root cause: `pc_agent/commands/shell.py` called blocking `subprocess.run()` inside the Agent asyncio loop. A shell child retaining captured pipes after timeout could block heartbeat and reconnect indefinitely. The handler now waits in `asyncio.to_thread()`, creates a process group, and terminates the full descendant tree on timeout.
+- Browser/auth recovery: historical `local_agent` work sessions are no longer reused after their PC Agent disappears. A failed work-session acquisition explicitly falls back to a fresh server-side headless context, while AADS vault/server-token injection failures are promoted to warning logs. Redirect final-URL detection from `7d32b774` remains included on `main`.
+- Diagnostics: `/api/v1/pc-agent/diagnostics` previously returned an empty telemetry list because this deployment's asyncpg JSONB codec yielded strings and `dict(metadata)` raised. Metadata now accepts dict or JSON text, and the response also exposes the latest connection event/reason per agent.
+- Release: PC Agent version advanced to `1.0.57`; the main-branch Windows build workflow will publish the matching EXE and the backend ZIP endpoint will serve the isolated shell handler.
+- Validation before deployment: focused Browser Bridge, launcher, release-guard, and new recovery suites passed `42` tests in the production image; Ruff on the modified P0 modules/tests, Python compile, and `git diff --check` passed. `app/api/ceo_chat_tools.py` retains pre-existing unrelated Ruff findings; the two modified warning lines compile successfully.
+- Deployment status: pending commit/push/blue-green deployment and post-deploy API/health verification in this work item.
+
 ## 2026-07-22 23:14 KST - Multi-session no-response P0 production closeout
 
 - Seven-day execution-ledger audit: `167 completed`, `79 interrupted`, `1 running`. Manual user turns were `175`, with `9` executions lacking an assistant message (`5.1%`). The 22:00 KST incident cluster contained seven `llm_first_response_timeout_after_180~182s` failures.
