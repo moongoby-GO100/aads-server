@@ -3600,7 +3600,7 @@ class ToolExecutor:
         command_type = str(inp.get("command_type", "") or "").strip()
         params = inp.get("params", {})
         if not command_type:
-            return {"error": "command_type 필수 (shell, cmd, powershell, screenshot, file_list, process_list, file_read, file_write, kakao_send, kakao_read, system_info, app_launch)"}
+            return {"error": "command_type 필수 (shell, cmd, powershell, screenshot, file_list, process_list, file_read, file_write, file_upload, file_download, kakao_send, kakao_read, system_info, app_launch)"}
 
         if params is None:
             params = {}
@@ -3661,6 +3661,8 @@ class ToolExecutor:
             "file_list",
             "file_read",
             "file_write",
+            "file_upload",
+            "file_download",
             "app_launch",
         }
 
@@ -3696,7 +3698,7 @@ class ToolExecutor:
             return {"error": str(e)}
 
     async def _device_list(self, inp: Dict[str, Any]) -> Any:
-        """연결된 디바이스(PC/Android/iOS) 목록 조회."""
+        """연결된 디바이스(PC Agent + Android/iOS) 목록 조회."""
         from app.services.device_manager import device_manager
         from app.services.pc_agent_manager import pc_agent_manager
 
