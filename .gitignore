@@ -60,6 +60,13 @@ playwright/.auth/
 .active_container
 .active_port
 
+# Server-local task/runtime artifacts
+.tmp-*/
+app/data/yeoljeong_finance/contracts.json
+app/data/yeoljeong_finance/employee_join_requests.json
+app/data/yeoljeong_finance/onboarding_documents.json
+app/data/yeoljeong_finance/uploads/
+
 # Backup files
 *.bak_*
 *.bak.*
