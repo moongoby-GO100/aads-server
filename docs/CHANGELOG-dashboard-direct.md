@@ -766,3 +766,9 @@ ol
 
 ## [2026-06-05 07:54:05 KST] [aads-dashboard] src/app/login/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i 's@: {};@: { color: "#111827", backgroundColor: "#fff" };@' /root/aads/aa
+
+## [2026-07-23 10:20:54 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-nginx cat /etc/nginx/conf.d/aads-upstream.conf
+
+## [2026-07-23 10:20:54 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server ruff check /app/app/core/credential_vault.py /app/app/ap

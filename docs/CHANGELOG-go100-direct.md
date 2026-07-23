@@ -17903,3 +17903,205 @@ async def get_da
 - Chat-Direct 수정: 배포 중복 실행 없이 진행 중이던 blue/green 배포 PID 1993267 완료 추적.
 - 결과: Nginx upstream green(3001) -> blue(3000), BUILD_ID 3vHmEncGtP-8oRUEWmc99, 외부 /auth/login HTTP 200, /go100/command-center HTTP 307, backend data-status HTTP 200.
 - finalize: completed
+
+## [2026-07-23 09:49:39 KST] [GO100] backend/scripts/go100_audit_card119_exit.py
+- Chat-Direct 수정: write: backend/scripts/go100_audit_card119_exit.py
+- finalize: pending
+
+## [2026-07-23 10:17:49 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                     SELECT order_id, kis→                    SELECT order_id, kis
+- finalize: pending
+
+## [2026-07-23 10:21:21 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: write: backend/app/services/go100/live_trading/live_engine.py
+- finalize: pending
+
+## [2026-07-23 11:11:44 KST] [GO100] backend/app/services/go100/decision_logger.py
+- Chat-Direct 수정: patch:     # Resolve is_paper: explicit payload→    # Resolve paper/live provenance with
+- finalize: pending
+
+## [2026-07-23 11:12:38 KST] [GO100] backend/app/services/go100/decision_logger.py
+- Chat-Direct 수정: patch:                 COALESCE(
+              →                COALESCE(
+              
+- finalize: pending
+
+## [2026-07-23 11:13:28 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:                    COALESCE(
+           →                   COALESCE(card_version
+- finalize: pending
+
+## [2026-07-23 11:14:32 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:             "go100_card_id = :card_id AN→            "go100_card_id = :card_id AN
+- finalize: pending
+
+## [2026-07-23 11:15:39 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:             "go100_card_id = :card_id AN→            "go100_card_id = :card_id AN
+- finalize: pending
+
+## [2026-07-23 11:16:42 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         if is_paper is not None:
+       →        if is_paper is not None:
+       
+- finalize: pending
+
+## [2026-07-23 11:17:55 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         if is_paper is not None:
+       →        if is_paper is not None:
+       
+- finalize: pending
+
+## [2026-07-23 11:19:06 KST] [GO100] backend/migrations/124_go100_event_audit_constraints.sql
+- Chat-Direct 수정: write: backend/migrations/124_go100_event_audit_constraints.sql
+- finalize: pending
+
+## [2026-07-23 11:20:30 KST] [GO100] backend/app/services/go100/screener_v2_service.py
+- Chat-Direct 수정: patch:         # ── Card #119 dedicated screene→        # ── Card #119 dedicated discove
+- finalize: pending
+
+## [2026-07-23 11:21:14 KST] [GO100] backend/app/services/go100/screener_v2_service.py
+- Chat-Direct 수정: patch:     if request.strategy_id is not None:
+→    if request.strategy_id is not None:
+
+- finalize: pending
+
+## [2026-07-23 11:22:04 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:   const strategyResultStage = entryRuleM→  const strategyResultStage = entryRuleU
+- finalize: pending
+
+## [2026-07-23 11:23:06 KST] [GO100] frontend/src/go100/pages/ScreenerPage.tsx
+- Chat-Direct 수정: patch:     if (entryRuleMappedCount > 0) return→    if (entryRuleMappedCount > 0) return
+- finalize: pending
+
+## [2026-07-23 11:24:17 KST] [GO100] tests/unit/test_go100_screener_v2_service.py
+- Chat-Direct 수정: patch: CARD_119_ENTRY_RULES = [
+    {"type": "m→CARD_119_ENTRY_RULES = [
+    {"name": "m
+- finalize: pending
+
+## [2026-07-23 11:25:22 KST] [GO100] tests/unit/test_go100_screener_v2_service.py
+- Chat-Direct 수정: patch:     assert len(leaves) == len(CARD_119_E→    assert len(leaves) == 5, (
+        f
+- finalize: pending
+
+## [2026-07-23 11:25:45 KST] [GO100] backend/migrations/124_go100_event_audit_constraints.sql
+- Chat-Direct 수정: run_remote_command: pytest tests/test_workbench_api.py -q
+- finalize: pending
+
+## [2026-07-23 11:26:24 KST] [GO100] tests/unit/test_go100_screener_v2_service.py
+- Chat-Direct 수정: patch: 
+
+def test_card_119_rule_deduplication()→
+
+def test_card_119_thresholds_come_from
+- finalize: pending
+
+## [2026-07-23 11:28:47 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:             "go100_card_id = :card_id AN→            "go100_card_id = :card_id AN
+- finalize: pending
+
+## [2026-07-23 11:28:50 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: systemctl status user@0.service
+- finalize: pending
+
+## [2026-07-23 11:29:58 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         if is_paper is not None:
+       →        if is_paper is not None:
+       
+- finalize: pending
+
+## [2026-07-23 11:31:09 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:             "go100_card_id = :card_id AN→            "go100_card_id = :card_id AN
+- finalize: pending
+
+## [2026-07-23 11:31:11 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: date +%Y-%m-%dT%H:%M:%S%z
+- finalize: pending
+
+## [2026-07-23 11:32:10 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         if is_paper is not None:
+       →        if is_paper is not None:
+       
+- finalize: pending
+
+## [2026-07-23 11:33:08 KST] [GO100] backend/app/services/go100/decision_logger.py
+- Chat-Direct 수정: run_remote_command: ss -ltnp
+- finalize: pending
+
+## [2026-07-23 12:02:52 KST] [GO100] e2e/.auth/user.json
+- Chat-Direct 수정: run_remote_command: env GO100_E2E_BASE_URL=https://go100.newtalk.kr INTERNAL_API_ORIGIN=http://127.0
+- finalize: pending
+
+## [2026-07-23 12:03:37 KST] [GO100] scripts/go100/backfill_card119_event_audit.py
+- Chat-Direct 수정: patch: from __future__ import annotations
+
+from→from __future__ import annotations
+
+impo
+- finalize: pending
+
+## [2026-07-23 12:04:50 KST] [GO100] scripts/go100/backfill_card119_event_audit.py
+- Chat-Direct 수정: patch: CARD_ID = 119
+
+
+def main() -> None:
+    →CARD_ID = 119
+
+
+def _snapshot(conn) -> d
+- finalize: pending
+
+## [2026-07-23 12:06:04 KST] [GO100] scripts/go100/backfill_card119_event_audit.py
+- Chat-Direct 수정: patch: if __name__ == "__main__":
+    main()→if __name__ == "__main__":
+    parser = 
+- finalize: pending
+
+## [2026-07-23 12:08:14 KST] [GO100] scripts/go100/backfill_card119_event_audit.py
+- Chat-Direct 수정: patch:             MAX(created_at) AS latest_cr→            MAX(created_at) AS latest_cr
+- finalize: pending
+
+## [2026-07-23 12:09:41 KST] [GO100] scripts/go100/backfill_card119_event_audit.py
+- Chat-Direct 수정: patch: import argparse
+import json→import argparse
+import json
+import shuti
+- finalize: pending
+
+## [2026-07-23 12:10:44 KST] [GO100] scripts/go100/backfill_card119_event_audit.py
+- Chat-Direct 수정: patch:         if check_only:
+            print→        if check_only:
+            print
+- finalize: pending
+
+## [2026-07-23 12:11:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - migration 124는 장중 INSERT 차단을 피하기 위해 신규→- migration 124는 장중 INSERT 차단을 피하기 위해 신규
+- finalize: pending
+
+## [2026-07-23 12:22:33 KST] [GO100] tests/go100/test_card119_strategy_metadata_contract.py
+- Chat-Direct 수정: run_remote_command: curl -sS -o /dev/null -w '%{http_code} %{time_total}\n' https://go100.newtalk.kr
+- finalize: pending
+
+## [2026-07-23 13:49:46 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: date '+%Y-%m-%d %H:%M:%S %Z'
+- finalize: pending
+
+## [2026-07-23 13:49:46 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: date '+%Y-%m-%d %H:%M:%S %Z'
+- finalize: pending
+
+## [2026-07-23 13:58:32 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                         "exit_evaluation→                        "exit_evaluation
+- finalize: pending
+
+## [2026-07-23 13:59:40 KST] [GO100] tests/go100/test_live_safety_p0_119.py
+- Chat-Direct 수정: patch:     assert "stale_or_missing_exit_price"→    assert "stale_or_missing_exit_price"
+- finalize: pending
+
+## [2026-07-23 14:01:27 KST] [GO100] tests/go100/test_live_safety_p0_119.py
+- Chat-Direct 수정: patch:     assert "fresh timestamped minute/sna→    assert "fresh timestamped minute/sna
+- finalize: pending
+
+## [2026-07-23 14:03:55 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-07-23 13:48 KST — GO100-119 EXIT →# 2026-07-23 14:03 KST — GO100-119 EXIT 
+- finalize: pending

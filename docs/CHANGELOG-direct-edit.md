@@ -3685,3 +3685,15 @@ from __
 
 ## [2026-07-18 09:52:01 KST] [aads-server] PostgreSQL yeoljeong_* ledgers
 - Chat-Direct 조치: 수동 회귀 테스트 중 DB fallback으로 생성된 테스트 row 3건을 `deleted_at=NOW()` soft-delete로 정리. 정리 후 active count는 가입요청 10건, 입사서류 23건, 계약 4건, 급여 2건, 플랫폼 계정 4건으로 확인.
+
+## [2026-07-23 10:28:32 KST] [aads-server] aads-dashboard/src/middleware.ts
+- Chat-Direct 수정: patch: export async function middleware(request→export async function middleware(request
+
+## [2026-07-23 10:28:48 KST] [aads-server] aads-dashboard/src/middleware.ts
+- Chat-Direct 수정: write: aads-dashboard/src/middleware.ts
+
+## [2026-07-23 13:47:02 KST] [aads-server] .tmp-yf-contract-profile-backfill-20260723.py
+- Chat-Direct 수정: run_remote_command: docker inspect -f '{{.Name}} {{range .Config.Env}}{{println .}}{{end}}' aads-das
+
+## [2026-07-23 13:47:28 KST] [aads-server] app/data/yeoljeong_finance/onboarding_documents.json
+- Chat-Direct 수정: run_remote_command: docker exec aads-nginx cat /etc/nginx/conf.d/aads-upstream.conf
