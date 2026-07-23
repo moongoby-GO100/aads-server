@@ -6,7 +6,8 @@
 - 다사업자·다지점 전환을 전역 컨텍스트로 두고, 첫 화면을 통합 매출·정산 예정액·가용 현금·예상 세금, 8일 현금흐름, 오늘 처리할 일 중심의 경영 콕핏으로 재설계했다.
 - 배달 플랫폼 자동매출 집계, 은행 입금 매칭, 계약·근태·급여 예외, 세무 일정·증빙 수집률·경영 보고서를 한 화면에 배치했다.
 - 데스크톱 사이드바와 모바일 하단 탐색을 각각 제공하며, 메뉴·기간·업무 버튼에 시안용 상호작용과 안내 토스트를 구현했다. 표시 금액과 인물은 모두 샘플 데이터다.
-- 검증: Python HTML parser 통과, 로컬 정적 HTTP 응답 `200`/`33,195 bytes`, `git diff --check` 통과. 공개 URL 배포 및 캡처 검증은 이 기록 다음 단계에서 수행한다.
+- 검증: Python HTML parser·인라인 JavaScript 문법·필수 DOM ID·`git diff --check` 통과. 로컬 정적 응답은 HTTP `200`/`33,195 bytes`, 공개 URL과 공개 health는 모두 HTTP `200`이었다. Browser Bridge ARIA 스냅샷에서 전체 KPI·현금흐름·오늘 할 일·매출/정산·직원/급여·세무/보고 영역을 확인했고, 메뉴 클릭 후 제목과 안내 토스트 변경도 확인했다.
+- 배포: 커밋 `23010f2d`를 `origin/main`에 push하고 2026-07-23 14:12 KST에 0ms hot reload를 완료했다. 공개 시안 URL은 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html`이다.
 - 롤백: 신규 시안 파일과 이 HANDOVER 항목만 되돌리면 되며 기존 운영 앱에는 영향이 없다.
 
 ## 2026-07-23 10:50 KST - PC Agent internal AADS session auth final recovery
