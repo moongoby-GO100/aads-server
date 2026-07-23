@@ -4628,3 +4628,6 @@
 - 인증 복구 실패 원인은 AADS E2E URL이 존재하지 않는 `/static/e2e-auth.html`을 가리키고, 미들웨어가 실제 `/e2e-auth.html`도 공개 경로로 허용하지 않아 `/login`으로 307 전환한 것이었다.
 - 서버의 E2E URL을 `/e2e-auth.html`로 수정하고, 대시보드 미들웨어에 해당 공개 경로와 구 URL 호환 rewrite를 추가했다.
 - 검증: credential vault 단위 테스트 10 passed, 대시보드 ESLint 통과, Next.js production build 성공. Browser Bridge 전체 테스트 30건 중 29건 통과, 기존 보호 work-session 재사용 테스트 1건은 현재 컨테이너 상태 의존 실패로 이번 변경과 무관하다.
+- Git: 서버 `8665eefd`, 대시보드 `0f4a6e6`을 각 main 브랜치에 push했다.
+- 운영: 서버는 dirty 작업트리의 다른 변경을 포함하지 않도록 Blue/Green에서 `app.core.credential_vault`만 무중단 hot-reload했다(각 success=1, failed=0, tasks_lost=0). 대시보드는 release `0f4a6e68ba57`로 blue-green 배포하고 Blue 활성/Green standby를 동기화했다.
+- 사후 검증: 새/구 E2E 콜백과 외부 API health 모두 HTTP 200, PC Agent CDP에서 E2E 토큰 적용 후 로그인 폼이 아닌 `CEO Chat / AI 채팅 허브` 화면을 확인했다. 자동 QA는 `UNKNOWN`으로 끝났으나 HTTP·브라우저 실검증으로 대체했다.
