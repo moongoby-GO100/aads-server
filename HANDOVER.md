@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-07-23 09:56 KST - PC Agent MCP registry/auth follow-up
+
+- Runtime verification: PC Agent `2e9379a1-fed` reconnected at 09:31:01 KST and remained online with a healthy heartbeat. Direct Blue/Green `/api/v1/pc-agent/status` calls reported one online Windows Agent, while the MCP `device_list` tool incorrectly returned zero.
+- Root cause 1: MCP bridge workers run outside the Uvicorn process that owns the in-memory PC Agent WebSocket registry. `ToolExecutor._device_list()` read its process-local empty manager instead of the API registry. It now falls back to `/api/v1/pc-agent/agents`, which already resolves the active Blue/Green peer, and deduplicates any unified device entries.
+- Root cause 2: the P0 AADS E2E token injection was added to `tool_browser_connect(tenant_id=...)`, but the MCP bridge's primary `ToolExecutor._browser_connect()` wrapper dropped `tenant_id`. The wrapper now forwards it so `ensure_pc_cdp` can execute the E2E login URL in the same local-Agent Chrome context.
+- Validation before deployment: focused PC Agent, connection-guard, and CDP suites passed `25` tests in the production image; Python compile and `git diff --check` passed. Live CDP launch and navigation commands completed against the reconnected Agent. Commit/push, blue-green deployment, and authenticated chat DOM verification follow this entry.
+
 ## 2026-07-23 09:10 KST - runner-90009369 deploy preflight recovery
 
 - Failure: approved job `runner-90009369` was blocked because the AADS server main worktree was not clean/latest. The reported historical state was `dirty=77`, `behind=62`, `ahead=56`; recovery-time measurement was `dirty=5`, `behind=3`, `ahead=1` after another recovery had already reduced the divergence.
@@ -4612,3 +4619,12 @@
 - 프론트 P0는 dashboard 커밋 `e3f2149`에 기록: 새 foreground request generation이 `stream_start`를 받기 전 과거 completion/execution을 무시한다.
 - 검증: `py_compile` 성공, `git diff --check` 성공, 운영 이미지 격리 컨테이너에서 `test_chat_service.py` + `test_tools_and_pipeline.py` 112 passed.
 - 배포 원장과 최종 운영 HTTP/DB 검증은 본 항목의 후속 줄에 완료 시각·커밋·슬롯을 추가한다.
+
+## 2026-07-23 09:50 KST - PC Agent CDP 및 AADS 인증 콜백 복구
+
+- PC Agent `2e9379a1-fed` v1.0.57 재연결 후 Blue/Green status API에서 `online_count=1`, heartbeat 10~21초를 확인했다.
+- 양쪽 `/api/v1/pc-agent/route-execute`에서 `system_info` 명령이 성공했고, Windows 10 호스트 응답을 실제 수신했다.
+- Browser Bridge가 PC Agent Chrome 포트 9333에 local-agent CDP 세션을 생성했으며 탭 조회와 ARIA snapshot이 성공했다.
+- 인증 복구 실패 원인은 AADS E2E URL이 존재하지 않는 `/static/e2e-auth.html`을 가리키고, 미들웨어가 실제 `/e2e-auth.html`도 공개 경로로 허용하지 않아 `/login`으로 307 전환한 것이었다.
+- 서버의 E2E URL을 `/e2e-auth.html`로 수정하고, 대시보드 미들웨어에 해당 공개 경로와 구 URL 호환 rewrite를 추가했다.
+- 검증: credential vault 단위 테스트 10 passed, 대시보드 ESLint 통과, Next.js production build 성공. Browser Bridge 전체 테스트 30건 중 29건 통과, 기존 보호 work-session 재사용 테스트 1건은 현재 컨테이너 상태 의존 실패로 이번 변경과 무관하다.

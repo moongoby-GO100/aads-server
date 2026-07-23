@@ -751,7 +751,7 @@ _E2E_PROJECT_CONFIG: dict[str, dict[str, Any]] = {
         "label": "E2E 자동 검증용",
         "api_url": "https://aads.newtalk.kr/api/v1/auth/login",
         "token_path": "token",
-        "e2e_url": "https://aads.newtalk.kr/static/e2e-auth.html?token={token}&redirect={redirect}",
+        "e2e_url": "https://aads.newtalk.kr/e2e-auth.html?token={token}&redirect={redirect}",
         "default_redirect": "/",
     },
     "GO100": {
