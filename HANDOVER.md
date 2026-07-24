@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-24 23:00 KST - AADS chat/session recovery final audit and ops version alias
+
+- 배경: CEO가 이전 완료보고의 커밋/푸시/배포/문서 ledger 충돌을 지적해 서버·대시보드 Git, 운영 슬롯, 인증 경로, 문서 기록을 재실측했다.
+- 확인: 서버 저장소는 `main == origin/main` at `b70a8403`였고, 대시보드는 `main == origin/main == dashboard-write/main` at `26a086e`였다. 대시보드의 `public/manager/env_unknown.json`, `public/manager/env_5.json`은 운영 진단 산출물로 이번 기능 커밋 대상에서 제외했다.
+- 검증: 외부 `https://aads.newtalk.kr/api/v1/health` HTTP 200, 무인증 `/api/v1/chat/workspaces` HTTP 401, 쿠키 전용 인증으로 `/api/v1/auth/me`, `/api/v1/chat/workspaces`, 지정 세션 `/api/v1/chat/messages`, `/api/v1/chat/sessions/{session_id}/streaming-status` 모두 HTTP 200을 확인했다.
+- 보정: 대시보드 `useVersionCheck`가 호출하는 `/api/v1/ops/version`이 404였고, 백엔드는 `/api/v1/version`만 제공하고 있었다. 기존 계약을 유지하면서 `app/api/ops.py`에 `/ops/version` alias를 추가했다.
+- 검증 명령: `python3 -m py_compile app/api/ops.py app/auth.py app/main.py` 통과. Dashboard `npm run build` 통과. Dashboard 파일 한정 ESLint는 기존 `src/lib/api.ts`의 `no-explicit-any` 부채로 실패했다.
+
 ## 2026-07-24 22:31 KST - AADS chat auth/session 401 recovery
 
 - Incident: CEO reported `aads.newtalk.kr` loads, but after login the admin AI chat could not connect to workspaces/sessions on other devices.

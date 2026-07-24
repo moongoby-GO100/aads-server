@@ -262,6 +262,7 @@ async def get_streaming_metrics():
 
 
 @router.get("/version")
+@router.get("/ops/version")
 async def get_version():
     """배포 버전 해시 반환 — 프론트엔드 자동 새로고침용"""
     import subprocess as _sp_ver
