@@ -3729,3 +3729,11 @@ with open(p) as f:
 ## [2026-07-24 18:35:06 KST] [aads-server] app/main.py
 - Chat-Direct 수정: patch:     # 인증 실패
     return JSONResponse(stat→    # 인증 실패 — CORS 헤더를 포함해야 브라우저가 401 응답
+
+## [2026-07-25 08:18:02 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch:         infra = {}
+        # 컨테이너 상태 (Do→        infra = {}
+        # 컨테이너 상태 (Do
+
+## [2026-07-25 08:18:57 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch:         all_containers_ok = all(v == "ru→        # OHVIS Blue/Green: aads-server 

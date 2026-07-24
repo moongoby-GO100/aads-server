@@ -882,8 +882,14 @@ async def health_check():
 
         infra = {}
         # 컨테이너 상태 (Docker API via socket proxy)
+        # OHVIS Blue/Green: 각 서비스는 -blue/-green 슬롯 중 하나만 활성이면 healthy 처리
         _docker_host = os.environ.get("DOCKER_HOST", "")
-        for cname in ["aads-server", "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm", "aads-dashboard"]:
+        _container_names = [
+            "aads-server", "aads-server-blue", "aads-server-green",
+            "aads-dashboard", "aads-dashboard-blue", "aads-dashboard-green",
+            "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm",
+        ]
+        for cname in _container_names:
             try:
                 if _docker_host.startswith("tcp://"):
                     _base = _docker_host.replace("tcp://", "http://")
@@ -972,8 +978,20 @@ async def health_check():
         except Exception:
             infra["completion_rate_24h"] = None
 
-        all_containers_ok = all(v == "running" for k, v in infra.items()
-                                if k in ("aads-server", "aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm", "aads-dashboard"))
+        # OHVIS Blue/Green: aads-server / aads-dashboard 는 슬롯 페어 중 하나만 running 이면 OK
+        _pair_ok_server = any(
+            infra.get(_n) == "running"
+            for _n in ("aads-server", "aads-server-blue", "aads-server-green")
+        )
+        _pair_ok_dashboard = any(
+            infra.get(_n) == "running"
+            for _n in ("aads-dashboard", "aads-dashboard-blue", "aads-dashboard-green")
+        )
+        _singleton_ok = all(
+            infra.get(_n) == "running"
+            for _n in ("aads-postgres", "aads-redis", "aads-socket-proxy", "aads-litellm")
+        )
+        all_containers_ok = _pair_ok_server and _pair_ok_dashboard and _singleton_ok
 
         return {
             "pipeline_healthy": pipeline_healthy and all_containers_ok,
