@@ -4698,3 +4698,13 @@
 - 마블/JARVIS의 로고·음성·대사·시각 요소를 직접 모방하지 않고 독자 브랜드로 구축한다.
 - 결정 원문: `docs/agenda/AADS-OHVIS-BRAND-DECISION.md`
 - 이번 단계는 의사결정 기록만 수행했으며 UI·로고·도메인·코드 식별자 변경과 배포는 별도 작업으로 남긴다.
+
+
+## 2026-07-24 13:40 KST - OHVIS 3-Tier vs 현재 채팅 시스템 비교 보고서
+
+- CEO 요청으로 현재 채팅 시스템과 제안 3-Tier Response Architecture의 상세 비교 보고서를 작성했다.
+- 보고서: docs/reports/20260724_OHVIS_3tier_vs_current_chat_comparison.md (162줄)
+- 실측 근거: DB 조회(chat_messages 45301건, chat_artifacts 23484건, ohvis_tasks 0건), chat_service.py 10884줄, 대시보드 38개 컴포넌트
+- 핵심 결론: 기반 인프라 약 65% 구현 완료, 핵심 연결 고리 3가지(즉시 응답 분리, 카드 격리, 오비스 자동 판단) 미구현
+- 전체 3-Tier 완성도: 약 40%. P0 예상 2-3일, P0+P1 전체 5-7일
+- 이번 단계는 기획 비교 보고만 수행했으며 코드/DB/배포 변경은 없다.
