@@ -1,0 +1,61 @@
+[
+  {
+    "file": "indoor-b1-glass-pickup-clean-300dpi.png",
+    "url": "/static/apps/yeoljeong-finance/assets/prints/indoor-b1-glass-pickup-clean-300dpi.png",
+    "pixels": [
+      4299,
+      6083
+    ],
+    "dpi": 300,
+    "physical_mm": [
+      364,
+      515
+    ],
+    "role": "glass pickup poster",
+    "notes": [
+      "300DPI PNG",
+      "35mm safe area",
+      "18mm perforation caution guide",
+      "B-1 상단 소형 보조이미지 제거 기준 반영"
+    ]
+  },
+  {
+    "file": "indoor-b2-cold-noodle-visual-300dpi.png",
+    "url": "/static/apps/yeoljeong-finance/assets/prints/indoor-b2-cold-noodle-visual-300dpi.png",
+    "pixels": [
+      4299,
+      6083
+    ],
+    "dpi": 300,
+    "physical_mm": [
+      364,
+      515
+    ],
+    "role": "cold noodle food visual poster",
+    "notes": [
+      "300DPI PNG",
+      "냉면 사진 교체 요청을 반영한 대형 메뉴 비주얼형",
+      "가까운 검수용 텍스트 최소화"
+    ]
+  },
+  {
+    "file": "indoor-p4-glass-pickup-perforation-safe-300dpi.png",
+    "url": "/static/apps/yeoljeong-finance/assets/prints/indoor-p4-glass-pickup-perforation-safe-300dpi.png",
+    "pixels": [
+      3508,
+      4961
+    ],
+    "dpi": 300,
+    "physical_mm": [
+      297,
+      420
+    ],
+    "role": "glass pickup poster",
+    "notes": [
+      "300DPI PNG",
+      "35mm safe area",
+      "18mm perforation caution guide",
+      "유리 부착 타공 안전영역 표시"
+    ]
+  }
+]

@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-24 13:30 KST - 열정국밥 실내용 배너 300DPI 산출물 추가
+
+- 배경: 중단된 FOOD 배너 작업을 이어 받아 B-1 상단 소형 이미지 제거, B-2 냉면 비주얼 교체, INDOOR P4 유리 부착 타공 안전영역 검수 산출물을 운영 정적 경로에 추가했다.
+- 조치: `scripts/generate_yeoljeong_indoor_banners.py`를 추가해 300DPI PNG 3종과 `manifest.json`, 검수/다운로드 페이지 `app/static/apps/yeoljeong-finance/banners.html`을 재현 가능하게 생성한다.
+- 산출물: `indoor-b1-glass-pickup-clean-300dpi.png`(364×515mm, 4299×6083px), `indoor-b2-cold-noodle-visual-300dpi.png`(364×515mm, 4299×6083px), `indoor-p4-glass-pickup-perforation-safe-300dpi.png`(297×420mm, 3508×4961px).
+- 주의: 채팅 첨부 원본 `indoor-p4-glass-pickup-300dpi`는 업로드 저장소에서 조회되지 않았다. B-2도 기존 냉면 사진 원본이 명시 파일명으로 발견되지 않아 이번 산출물은 검수용 대체 비주얼이며, 고해상도 촬영 원본 수급 시 같은 스크립트에서 이미지 레이어만 교체하면 된다.
+- 검증: 생성 스크립트 compile, HTML parser, `git diff --check`, PNG DPI 메타데이터/manifest/검수 페이지 링크 직접 검증을 통과했다. 로컬 active API 정적 응답은 `banners.html` HTTP 200, P4 PNG Range HTTP 206이며, 공개 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/banners.html`도 HTTP 200, 공개 P4 PNG Range도 HTTP 206을 반환했다.
+- 롤백: 신규 `banners.html`, `assets/prints/*`, 생성 스크립트, 테스트, 이 HANDOVER 항목만 되돌리면 기존 운영 `index.html`과 API에는 영향이 없다.
+
 ## 2026-07-23 14:07 KST - 매장비서 통합 경영 대시보드 UX 시안
 
 - 기존 운영 앱과 분리된 브라우저 검토용 `app/static/apps/yeoljeong-finance/mockup-v2.html`을 추가했다. 기존 `index.html`, 운영 데이터, API는 변경하지 않았다.
@@ -4680,3 +4689,12 @@
 - 데이터 백업: `/root/aads/backups/yeoljeong-contract-identity-20260723-134520/yeoljeong-contract-identity-20260723-134520.dump`, CUSTOM archive TOC 21건, SHA-256 `f6cc955d311fb7d9997ff69b2810b5251479fa9b4c685125c0229c26d07acf9f`.
 - 검증: Python compile, 인라인 JavaScript parse, scoped `git diff --check`, 계약/API/서비스/인쇄/Nginx 회귀 `63 passed`.
 - 릴리스 완료(2026-07-23 14:02 KST): 기능 커밋 `d3f3d95d`와 HR 원본 이미지 제외 보안 커밋 `1d6dfe7f`를 `origin/main`에 push했다. Blue-Green 배포로 Green `8102`를 active로 전환했고 Blue `8100`은 rollback 슬롯으로 보존했다. Green·공개 `/api/v1/health` HTTP 200, Nginx 검증, DB/채팅/LLM 배포 점검, 운영 컨테이너 회귀 `63 passed`, 외부 정적 HTML의 `identity-table`·`최신양식 v2026.07.23`·`입사서류 확인` 표식과 `Cache-Control: no-store`를 확인했다. 인증 브라우저 클릭 E2E는 실행하지 못해 운영 API·외부 HTML·컨테이너 테스트로 대체했다.
+
+## 2026-07-24 10:44 KST - OHVIS(오비스) 사용자 브랜드 확정
+
+- CEO 결정으로 AADS의 사용자-facing AI 파트너 브랜드명을 `오비스(OHVIS)`로 확정했다.
+- `AADS`는 내부 기술 플랫폼명으로 유지하고, 대외 연결 표기는 `OHVIS powered by AADS`를 기준으로 한다.
+- 한국어 호출명은 `오비스`, 영문 표기는 `OHVIS`로 통일한다.
+- 마블/JARVIS의 로고·음성·대사·시각 요소를 직접 모방하지 않고 독자 브랜드로 구축한다.
+- 결정 원문: `docs/agenda/AADS-OHVIS-BRAND-DECISION.md`
+- 이번 단계는 의사결정 기록만 수행했으며 UI·로고·도메인·코드 식별자 변경과 배포는 별도 작업으로 남긴다.
