@@ -3737,3 +3737,9 @@ with open(p) as f:
 
 ## [2026-07-25 08:18:57 KST] [aads-server] app/api/ops.py
 - Chat-Direct 수정: patch:         all_containers_ok = all(v == "ru→        # OHVIS Blue/Green: aads-server 
+
+## [2026-07-25 08:31:50 KST] [aads-server] scripts/_run_bg_release.sh
+- Chat-Direct 수정: write: scripts/_run_bg_release.sh
+
+## [2026-07-25 08:44:14 KST] [aads-server] migrations/20260725_add_task_card_type.sql
+- Chat-Direct 수정: write: migrations/20260725_add_task_card_type.sql
