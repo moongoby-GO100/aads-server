@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-24 15:55 KST - OHVIS 3-Tier Response Architecture P0-P2 구현 및 대시보드 배포
+
+- 배경: CEO 지시로 채팅 응답 속도 개선과 멀티태스킹을 위한 3-Tier 아키텍처를 P0-P2 전체 구현했다.
+- 백엔드: ohvis_tasks.py(CRUD 7라우트), ohvis_task_manager.py(생명주기/Tier1/Redis/멀티슬롯), chat_service.py 연동. DB ohvis_tasks 16컬럼.
+- 대시보드: TaskCard.tsx(작업카드UI), ChatArtifactPanel 렌더링, SSE 이벤트 리스너.
+- 커밋: 서버 4820f0b6, 대시보드 2364c21. 양쪽 origin/main 푸시 완료.
+- 배포: API Blue+Green 모듈 로드 확인. 대시보드 blue-green Green(3101) 활성, Blue(3100) 동기화. TaskCard 번들 포함 확인.
+- 롤백: nginx upstream Blue 활성 전환. ohvis_tasks 0건으로 기존 기능 부작용 없음.
+
 ## 2026-07-24 13:30 KST - 열정국밥 실내용 배너 300DPI 산출물 추가
 
 - 배경: 중단된 FOOD 배너 작업을 이어 받아 B-1 상단 소형 이미지 제거, B-2 냉면 비주얼 교체, INDOOR P4 유리 부착 타공 안전영역 검수 산출물을 운영 정적 경로에 추가했다.
