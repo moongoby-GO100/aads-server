@@ -1732,7 +1732,7 @@ async def jwt_auth_middleware(request: Request, call_next):
     # 4) JWT Bearer 토큰 검증
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
-        cookie_token = request.cookies.get("aads_token")
+        cookie_token = _auth_mod.extract_aads_cookie_token(request)
         if cookie_token:
             auth_header = f"Bearer {cookie_token}"
     if auth_header.startswith("Bearer "):
@@ -1746,8 +1746,16 @@ async def jwt_auth_middleware(request: Request, call_next):
     if request.headers.get("x-monitor-key"):
         return await call_next(request)
 
-    # 인증 실패
-    return JSONResponse(status_code=401, content={"detail": "인증이 필요합니다. Bearer 토큰을 제공하세요."})
+    # 인증 실패 — CORS 헤더를 포함해야 브라우저가 401 응답을 읽을 수 있음
+    _origin = request.headers.get("origin", "")
+    _cors_h: dict = {}
+    if _origin and any(_origin == o for o in (
+        "https://aads.newtalk.kr", "https://kakaobot.newtalk.kr",
+        "https://newtalk.kr", "https://www.newtalk.kr", "https://v2.newtalk.kr",
+        "http://localhost:3000", "http://localhost:3001",
+    )):
+        _cors_h = {"access-control-allow-origin": _origin, "access-control-allow-credentials": "true", "vary": "Origin"}
+    return JSONResponse(status_code=401, content={"detail": "인증이 필요합니다. Bearer 토큰을 제공하세요."}, headers=_cors_h)
 
 # 글로벌 예외 핸들러
 @app.exception_handler(Exception)

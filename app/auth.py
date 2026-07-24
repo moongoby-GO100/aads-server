@@ -5,6 +5,7 @@ import logging
 import hashlib
 import re
 import secrets
+from http.cookies import SimpleCookie
 from enum import Enum
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -36,6 +37,22 @@ TOKEN_EXPIRE_HOURS = 24 * 7  # 7일
 ADMIN_EMAIL = os.getenv('AADS_ADMIN_EMAIL', 'admin@aads.dev')
 ADMIN_PASSWORD = os.getenv('AADS_ADMIN_PASSWORD', '')
 INTERNAL_TENANT_ALLOWED_ROLES = {'ceo', 'admin', 'system'}
+
+
+def extract_aads_cookie_token(request: Request) -> Optional[str]:
+    token = request.cookies.get('aads_token')
+    if token:
+        return token
+    raw_cookie = request.headers.get('cookie') or request.headers.get('Cookie') or ''
+    if not raw_cookie:
+        return None
+    parsed = SimpleCookie()
+    try:
+        parsed.load(raw_cookie)
+    except Exception:
+        return None
+    morsel = parsed.get('aads_token')
+    return morsel.value if morsel else None
 
 
 class TenantRole(str, Enum):
@@ -1261,7 +1278,7 @@ async def get_current_user(
             'is_internal_admin': True,
         }
     if not authorization or not authorization.startswith('Bearer '):
-        cookie_token = request.cookies.get('aads_token')
+        cookie_token = extract_aads_cookie_token(request)
         if cookie_token:
             authorization = f'Bearer {cookie_token}'
         else:
