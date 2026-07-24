@@ -3705,3 +3705,27 @@ from __
 
 ## [2026-07-24 16:02:17 KST] [aads-server] nginx-aads-upstream.conf
 - Chat-Direct 수정: run_remote_command: tail -30 /root/aads/aads-dashboard/deploy-logs/dashboard-deploy-20260724-085928.
+
+## [2026-07-24 17:53:29 KST] [aads-server] app/auth.py
+- Chat-Direct 수정: patch:     if not authorization or not authoriz→    if not authorization or not authoriz
+
+## [2026-07-24 17:54:38 KST] [aads-server] app/auth.py
+- Chat-Direct 수정: patch:     if not authorization or not authoriz→    if not authorization or not authoriz
+
+## [2026-07-24 18:08:18 KST] [aads-server] app/main.py
+- Chat-Direct 수정: run_remote_command: python3 -c "
+p = '/root/aads/aads-server/app/main.py'
+with open(p) as f:
+    lin
+
+## [2026-07-24 18:09:48 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     # 4) JWT Bearer 토큰 검증
+    auth_heade→    # 4) JWT Bearer 토큰 검증 (헤더 → 쿠키 폴백)
+
+
+## [2026-07-24 18:30:56 KST] [aads-server] scripts/test_auth_flow.py
+- Chat-Direct 수정: write: scripts/test_auth_flow.py
+
+## [2026-07-24 18:35:06 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     # 인증 실패
+    return JSONResponse(stat→    # 인증 실패 — CORS 헤더를 포함해야 브라우저가 401 응답

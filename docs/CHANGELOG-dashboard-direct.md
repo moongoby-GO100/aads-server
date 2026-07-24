@@ -772,3 +772,23 @@ ol
 
 ## [2026-07-23 10:20:54 KST] [aads-dashboard] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server ruff check /app/app/core/credential_vault.py /app/app/ap
+
+## [2026-07-24 17:54:24 KST] [aads-dashboard] /root/aads/aads-dashboard/src/lib/auth.ts
+- Chat-Direct 수정: patch: function setTokenCookie(token: string) {→function setTokenCookie(token: string) {
+
+## [2026-07-24 17:54:24 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/api.ts
+- Chat-Direct 수정: patch:   const token = localStorage.getItem("aa→  const token = localStorage.getItem("aa
+
+## [2026-07-24 17:55:36 KST] [aads-dashboard] src/lib/auth.ts
+- Chat-Direct 수정: run_remote_command: sed -i "s|document.cookie = \`\${TOKEN_KEY}=\${token}; path=/; max-age=\${COOKIE
+
+## [2026-07-24 17:55:40 KST] [aads-dashboard] src/app/chat/api.ts
+- Chat-Direct 수정: run_remote_command: sed -i 's|document.cookie = `aads_token=${token}; path=/; max-age=${24 \* 7 \* 3
+
+## [2026-07-24 17:58:55 KST] [aads-dashboard] src/services/chatApi.ts
+- Chat-Direct 수정: run_remote_command: python3 -c "
+p = '/root/aads/aads-dashboard/src/services/chatApi.ts'
+with open(p
+
+## [2026-07-24 18:02:45 KST] [aads-dashboard] public/manager/env_unknown.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git add app/auth.py && ALLOW_AUTH_COMMIT=1 git comm

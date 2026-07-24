@@ -18329,3 +18329,28 @@ class Test
 ## [2026-07-23 19:42:59 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: # 2026-07-23 15:36 KST — GO100-119 익절·손절→# 2026-07-23 19:40 KST — GO100-119 이중 청산
 - finalize: pending
+
+## [2026-07-24 17:34:40 KST] [GO100] scripts/go100_archive_monitor_20260724.py
+- Chat-Direct 수정: write: scripts/go100_archive_monitor_20260724.py
+- finalize: pending
+
+## [2026-07-24 17:36:21 KST] [GO100] scripts/go100_archive_monitor_daemon_20260724.py
+- Chat-Direct 수정: write: scripts/go100_archive_monitor_daemon_20260724.py
+- finalize: pending
+
+## [2026-07-24 17:39:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-07-24 14:57 KST — GO100 저장공간 P1/P→# 2026-07-24 17:40 KST — GO100 원시데이터 백필
+- finalize: pending
+
+## [2026-07-24 17:41:07 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-07-24 15:24 KST — GO100 저장공간 P1/P→# 2026-07-24 17:40 KST — GO100 원시데이터 백필
+- finalize: pending
+
+## [2026-07-24 17:50:40 KST] [GO100] scripts/run_raw_archive_backfill_20260724.sh
+- Chat-Direct 수정: patch: current="$START_DATE"
+while [[ "$current→if [[ "${ARCHIVE_SKIP_ORDERBOOK:-false}"
+- finalize: pending
+
+## [2026-07-24 17:52:47 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-07-24 17:40 KST — GO100 원시데이터 백필 →# 2026-07-24 17:52 KST — GO100 틱 백필 재개 보
+- finalize: pending

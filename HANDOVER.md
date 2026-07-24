@@ -4735,3 +4735,21 @@
 - 핵심 결론: 기반 인프라 약 65% 구현 완료, 핵심 연결 고리 3가지(즉시 응답 분리, 카드 격리, 오비스 자동 판단) 미구현
 - 전체 3-Tier 완성도: 약 40%. P0 예상 2-3일, P0+P1 전체 5-7일
 - 이번 단계는 기획 비교 보고만 수행했으며 코드/DB/배포 변경은 없다.
+
+## 2026-07-24 22:51 KST - AADS 외부 기기 AI챗 세션 연결 401 복구 완료
+
+- 증상: `aads.newtalk.kr` 접속과 로그인은 가능하지만, 핸드폰/타 PC에서 어드민 AI챗 진입 시 세션 목록 연결이 실패했다.
+- 원인: 외부 브라우저에서 `/api/v1/chat/workspaces` 요청의 `Authorization` 헤더가 누락되는 경우가 있었고, 서버의 인증 의존성/미들웨어는 커밋상 쿠키 폴백 코드가 있었으나 운영 프로세스는 구버전 인증 모듈을 물고 있어 쿠키 단독 요청을 401로 반환했다.
+- 조치:
+  - 서버 인증 커밋 `5e0360a7`, `6c601c4f`, `c6c114ef`가 `origin/main`에 이미 존재함을 재확인했다.
+  - 대시보드 인증 쿠키/401 처리 커밋 `3c1984f`, `26a086e`가 GitHub `main`에 존재함을 `ls-remote`/`fetch`로 재확인했다.
+  - API `bash deploy.sh bluegreen`을 실행해 인증 미들웨어 프로세스를 새 Green 슬롯으로 무중단 전환했다.
+  - 회귀 스크립트 `scripts/test_auth_flow.py`를 토큰 비노출 형태로 기록했다.
+- 운영 결과:
+  - 활성 API 슬롯은 Green `8102`, Blue `8100`은 backup/rollback 슬롯이다.
+  - `docker exec aads-server-green python /app/scripts/test_auth_flow.py` 결과 Bearer 사용자 200, 쿠키 사용자 200, admin 200을 확인했다.
+  - `https://aads.newtalk.kr/chat`은 비인증 상태에서 `/login?redirect=%2Fchat`로 307 전환되어 공개 접근 경로가 정상이다.
+  - `http://127.0.0.1:8102/api/v1/health`는 HTTP 200, 관련 컨테이너는 healthy다.
+- 미해결/리스크:
+  - 인증된 실제 핸드폰/타 PC 브라우저 클릭 E2E는 이 세션에서 직접 실행하지 못했다. API 기반 인증 회귀와 운영 헬스로 대체했다.
+  - 대시보드 전역 `npm run lint`는 기존 부채 261 errors/67 warnings로 실패한다. 이번 인증 변경과 직접 관련 없는 기존 lint debt로 별도 P1 정리가 필요하다.
