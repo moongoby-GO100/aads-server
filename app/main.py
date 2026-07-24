@@ -57,6 +57,7 @@ from app.api.llm_models import router as llm_models_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.api.external_chat import router as external_chat_router
+from app.api.ohvis_tasks import router as ohvis_tasks_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -1824,6 +1825,7 @@ app.include_router(terminal.router, prefix="/api/v1", tags=["terminal"])
 app.include_router(browser_bridge.router, prefix="/api/v1", tags=["browser-bridge"])
 app.include_router(external_chat_router, prefix="/api/v1", tags=["external-chat"])
 app.include_router(local_media_router)
+app.include_router(ohvis_tasks_router, prefix="/api/v1", tags=["ohvis-tasks"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
 from fastapi.responses import JSONResponse as _JSONResponse

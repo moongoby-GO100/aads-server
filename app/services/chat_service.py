@@ -7182,6 +7182,7 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
 async def trigger_ai_reaction(
     session_id: str,
     system_message: str,
+    ohvis_task_id: str = None,
 ) -> None:
     """
     채팅방에 시스템 사용자 메시지를 삽입한 후 AI가 자동 반응하도록 트리거.
@@ -7275,6 +7276,14 @@ async def trigger_ai_reaction(
             logger.warning(f"trigger_ai_reaction error session={session_id}: {e}")
         finally:
             _ai_reaction_active.pop(session_id, None)
+            # OHVIS 3-Tier: trigger 완료 후 ohvis_tasks 갱신 + 아티팩트 카드
+            if ohvis_task_id:
+                try:
+                    from app.services.ohvis_task_manager import complete_task as _otm_done
+                    await _otm_done(ohvis_task_id, status="done",
+                                    ohvis_judgement="오비스 자동 확인 완료")
+                except Exception as _otm_e:
+                    logger.debug("ohvis_task_complete_failed: %s", _otm_e)
             # 큐에 대기 중인 트리거가 있으면 다음 것 처리
             if session_id in _ai_reaction_queue and _ai_reaction_queue[session_id]:
                 next_msg = _ai_reaction_queue[session_id].pop(0)
@@ -8190,6 +8199,14 @@ async def send_message_stream(
             logger.info(f"contradiction_warning_injected session={session_id[:8]}")
 
         intent = intent_override if intent_override else intent_result.intent
+
+        # OHVIS Tier 1: 복잡한 인텐트에 대해 즉시 계획 응답 선행
+        if not intent_override and not _semantic_cache_hit:
+            from app.services.ohvis_task_manager import is_complex_intent, generate_instant_plan
+            if is_complex_intent(intent):
+                _plan_text = generate_instant_plan(intent, content)
+                yield f'data: {json.dumps({"type": "task_plan", "intent": intent, "content": _plan_text})}\n\n'
+                logger.info("ohvis_tier1_instant_plan session=%s intent=%s", sid_short, intent)
 
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (

@@ -241,6 +241,7 @@ class PipelineCJob:
         self.review_feedback = ""
         self.created_at = datetime.now()
         self.error_msg = ""
+        self.ohvis_task_id = None
 
         conf = PROJECT_MAP.get(self.project)
         if not conf:
@@ -327,9 +328,20 @@ class PipelineCJob:
         if not self.chat_session_id:
             logger.warning(f"pipeline_c_trigger_skipped: job={self.job_id} no session_id")
             return
+        # OHVIS 3-Tier: 트리거 전 ohvis_tasks 상태 갱신
+        if self.ohvis_task_id:
+            try:
+                from app.services.ohvis_task_manager import update_task as _otm_update
+                _step_status = "error" if "실패" in message or "오류" in message else "running"
+                await _otm_update(self.ohvis_task_id, status=_step_status)
+            except Exception:
+                pass
         try:
             from app.services.chat_service import trigger_ai_reaction
-            await trigger_ai_reaction(self.chat_session_id, message)
+            await trigger_ai_reaction(
+                self.chat_session_id, message,
+                ohvis_task_id=self.ohvis_task_id,
+            )
             logger.info(f"pipeline_c_ai_trigger job={self.job_id} session={self.chat_session_id[:8]}...")
         except Exception as e:
             logger.warning(f"pipeline_c_ai_trigger_error job={self.job_id}: {e}")
@@ -376,6 +388,25 @@ class PipelineCJob:
                 await emit_task_started(self.job_id, self.project, self.instruction[:100], "pipeline_c", self.chat_session_id)
             except Exception:
                 pass
+
+            # OHVIS 3-Tier: ohvis_tasks 자동 생성
+            if self.chat_session_id:
+                try:
+                    from app.services.ohvis_task_manager import create_task as _otm_create
+                    self.ohvis_task_id = await _otm_create(
+                        session_id=self.chat_session_id,
+                        title=f"[{self.project}] {self.instruction[:120]}",
+                        task_type="runner",
+                        runner_job_id=self.job_id,
+                        steps=[
+                            {"label": "코드 실행", "status": "running"},
+                            {"label": "AI 검수", "status": "pending"},
+                            {"label": "CEO 승인", "status": "pending"},
+                            {"label": "배포", "status": "pending"},
+                        ],
+                    )
+                except Exception as _otm_err:
+                    logger.debug("ohvis_task_create_skip job=%s: %s", self.job_id, _otm_err)
 
             # Phase 1: Claude Code로 작업 수행
             self._log("claude_code_work", f"Claude Code에 작업 지시 중: {self.instruction[:100]}")
