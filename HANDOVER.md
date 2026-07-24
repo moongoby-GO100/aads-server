@@ -4748,8 +4748,9 @@
 - 운영 결과:
   - 활성 API 슬롯은 Green `8102`, Blue `8100`은 backup/rollback 슬롯이다.
   - `docker exec aads-server-green python /app/scripts/test_auth_flow.py` 결과 Bearer 사용자 200, 쿠키 사용자 200, admin 200을 확인했다.
+  - Playwright 인증 브라우저 E2E 결과 `https://aads.newtalk.kr/chat` HTTP 200, 최종 URL `https://aads.newtalk.kr/chat#e13b7b8b-1f32-4d0f-994c-b29beddbd1e9`, 본문 `CEO Chat / AI 채팅 허브` 표시를 확인했다.
   - `https://aads.newtalk.kr/chat`은 비인증 상태에서 `/login?redirect=%2Fchat`로 307 전환되어 공개 접근 경로가 정상이다.
   - `http://127.0.0.1:8102/api/v1/health`는 HTTP 200, 관련 컨테이너는 healthy다.
 - 미해결/리스크:
-  - 인증된 실제 핸드폰/타 PC 브라우저 클릭 E2E는 이 세션에서 직접 실행하지 못했다. API 기반 인증 회귀와 운영 헬스로 대체했다.
+  - 핸드폰/타 PC 실기기 클릭은 CEO 기기에서 최종 체감 확인이 필요하다. 서버 측 인증 브라우저 E2E와 API 회귀는 통과했다.
   - 대시보드 전역 `npm run lint`는 기존 부채 261 errors/67 warnings로 실패한다. 이번 인증 변경과 직접 관련 없는 기존 lint debt로 별도 P1 정리가 필요하다.
