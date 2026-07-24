@@ -1731,6 +1731,10 @@ async def jwt_auth_middleware(request: Request, call_next):
 
     # 4) JWT Bearer 토큰 검증
     auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        cookie_token = request.cookies.get("aads_token")
+        if cookie_token:
+            auth_header = f"Bearer {cookie_token}"
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         payload = _auth_mod.verify_token(token)
