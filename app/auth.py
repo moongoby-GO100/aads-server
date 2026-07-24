@@ -1261,7 +1261,11 @@ async def get_current_user(
             'is_internal_admin': True,
         }
     if not authorization or not authorization.startswith('Bearer '):
-        raise HTTPException(status_code=401, detail='Authorization header missing')
+        cookie_token = request.cookies.get('aads_token')
+        if cookie_token:
+            authorization = f'Bearer {cookie_token}'
+        else:
+            raise HTTPException(status_code=401, detail='인증이 필요합니다. Bearer 토큰을 제공하세요.')
     token = authorization[7:]
     payload = verify_token(token)
     if not payload:
