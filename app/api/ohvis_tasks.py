@@ -1,5 +1,5 @@
 """
-OHVIS 3-Tier Response Architecture — Task CRUD API.
+OHVIS 3-Tier Response Architecture — Task CRUD API + SSE Events.
 
 POST   /api/v1/ohvis/tasks           — 작업 생성
 GET    /api/v1/ohvis/tasks           — 세션별 작업 목록
@@ -7,7 +7,10 @@ GET    /api/v1/ohvis/tasks/{task_id} — 단건 조회
 PATCH  /api/v1/ohvis/tasks/{task_id} — 상태/단계/결과 업데이트
 GET    /api/v1/ohvis/tasks/unreported — 보고 미완료 작업 조회
 POST   /api/v1/ohvis/tasks/{task_id}/report — 보고 완료 처리
+GET    /api/v1/ohvis/tasks/events/{session_id} — SSE 작업 이벤트 구독
+GET    /api/v1/ohvis/tasks/queue     — 멀티태스크 큐 상태
 """
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -16,7 +19,8 @@ from uuid import UUID
 
 import asyncpg
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -140,6 +144,50 @@ async def list_unreported_tasks(
         return [_row_to_response(r) for r in rows]
     finally:
         await conn.close()
+
+
+@router.get("/ohvis/tasks/events/{session_id}", tags=["ohvis-tasks"])
+async def task_events_sse(session_id: UUID, request: Request):
+    """P2: Redis pub/sub 기반 작업 이벤트 SSE 스트림."""
+    async def event_generator():
+        pubsub = None
+        try:
+            from app.services.redis_stream import _get_redis
+            redis = await _get_redis()
+            if not redis:
+                yield "event: error\ndata: {\"error\": \"redis_unavailable\"}\n\n"
+                return
+            pubsub = redis.pubsub()
+            channel = f"ohvis:task:{session_id}"
+            await pubsub.subscribe(channel)
+            while True:
+                if await request.is_disconnected():
+                    break
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if msg and msg["type"] == "message":
+                    data = msg["data"]
+                    yield f"data: {data}\n\n"
+                else:
+                    yield ": heartbeat\n\n"
+                    await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug("task_sse_stream_error: %s", e)
+            yield f"event: error\ndata: {{\"error\": \"{e}\"}}\n\n"
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe()
+                    await pubsub.close()
+                except Exception:
+                    pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/ohvis/tasks/queue", tags=["ohvis-tasks"])
