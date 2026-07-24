@@ -3702,3 +3702,6 @@ from __
 - Chat-Direct 수정: patch: ## 2026-07-23
 - AADS-FOOD-OPS-DETAIL-MOC→## 2026-07-23
 - AADS-FOOD-OPS-DETAIL-MOC
+
+## [2026-07-24 16:02:17 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: tail -30 /root/aads/aads-dashboard/deploy-logs/dashboard-deploy-20260724-085928.
