@@ -6,7 +6,7 @@
 - Root cause: dashboard auth helpers restored login state from `localStorage` only, while route access can be allowed by the `aads_token` cookie. This allowed `/chat` to render with cookie auth but sent empty/missing Authorization headers on chat/session API calls. Backend cookie-only auth also failed in a direct container test.
 - Fix: dashboard chat/global API helpers now recover `aads_token` from the readable cookie into `localStorage` and send `credentials: include` on chat/session/SSE/resume/regenerate calls. Backend `get_current_user` and JWT middleware now parse the raw `Cookie` header as a fallback when `request.cookies` misses `aads_token`.
 - Validation: `python3 -m py_compile app/auth.py app/main.py` passed. Dashboard `npx tsc --noEmit --pretty false` passed. In active API container, CEO token returned HTTP 200 for `/api/v1/auth/me` and `/api/v1/chat/workspaces` via both Bearer header and Cookie-only requests. Public health returned HTTP 200; unauthenticated `/api/v1/chat/workspaces` remains HTTP 401.
-- Deployment: API hot-reload completed with 60 modules reloaded at 22:28 KST. Dashboard blue-green deploy is required for the frontend bundle to pick up the cookie recovery changes.
+- Deployment: API hot-reload completed with 60 modules reloaded at 22:28 KST. Dashboard blue-green deploy completed at 22:37 KST with active Green `3101`; Blue `3100` was rebuilt as warm standby. Both dashboard slots run `AADS_RELEASE_SHA=26a086ecbce9`.
 - Rollback: revert the auth helper/dashboard commit and run API hot-reload plus dashboard blue-green deploy back to the previous slot.
 
 ## 2026-07-24 17:25 KST - OHVIS 3-Tier P0-P2 deployment closeout
