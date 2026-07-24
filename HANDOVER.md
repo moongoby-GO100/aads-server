@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-24 17:25 KST - OHVIS 3-Tier P0-P2 deployment closeout
+
+- 배경: OHVIS 3-Tier P0-P2 구현 후 중단된 배포 마감 절차를 재개해 Git, 컨테이너, Nginx, HTTP, DB 상태를 최종 재실측했다.
+- 조치: 배포 슬롯 상태 파일과 `docs/CHANGELOG-direct-edit.md`를 커밋 `e75019b8`로 `origin/main`에 반영했다. 서버 저장소는 `main == origin/main` 상태다.
+- 운영 상태: API Blue(8100)와 Green(8102)은 모두 healthy이며, Nginx active API 헬스 `http://127.0.0.1:8102/health`는 HTTP 200이다. 대시보드 Blue(3100)와 Green(3101)도 모두 healthy이고 양 슬롯 `AADS_RELEASE_SHA`는 `2364c2120eae`다.
+- DB 검증: `ohvis_tasks` 테이블 존재를 확인했으며 현재 row 수는 0건이다. 배포 직후 신규 작업 누적이 없는 상태라 기존 채팅 데이터에는 부작용이 없다.
+- 검증: `docker exec aads-nginx nginx -t` 성공, 공개 `https://aads.newtalk.kr/chat`은 로그인 리다이렉트 HTTP 307, `https://aads.newtalk.kr/api/v1/ohvis/tasks`는 인증 없는 요청에 HTTP 401로 응답해 라우터 등록을 확인했다.
+- 남은 리스크: 인증 브라우저 E2E는 수행하지 못했으며 API/컨테이너/번들 검증으로 대체했다. 대시보드 전체 lint는 기존 전역 부채로 실패하므로 별도 정리 작업이 필요하다.
+
 ## 2026-07-24 15:55 KST - OHVIS 3-Tier Response Architecture P0-P2 구현 및 대시보드 배포
 
 - 배경: CEO 지시로 채팅 응답 속도 개선과 멀티태스킹을 위한 3-Tier 아키텍처를 P0-P2 전체 구현했다.
