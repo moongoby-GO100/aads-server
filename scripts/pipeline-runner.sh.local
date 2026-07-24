@@ -242,7 +242,7 @@ normalize_claude_cli_model() {
 
 is_read_only_instruction() {
     local instruction="${1:-}"
-    printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
+    printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|읽기[[:space:]]*전용|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
 }
 
 # P1: DB 연결 실패 감지 및 텔레그램 알림

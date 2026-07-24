@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-07-23
+최종 업데이트: 2026-07-25
+
+## 2026-07-25
+- AADS-PIPELINE-RUNNER-KO-READONLY-GUARD-20260725: `runner-92eb71d8`가 "읽기 전용 확인만 수행" 지시를 수행하고도 Runner Guard의 영어 중심 read-only 판별에 걸리지 않아 `status='cancelled', phase='no_changes'`로 저장된 false cancellation을 확인했다. `scripts/pipeline-runner.sh`와 `scripts/pipeline-runner.sh.local`의 `is_read_only_instruction()`에 `읽기[[:space:]]*전용` 패턴을 추가해 한국어 읽기 전용 검증 작업이 diff 0건을 정상 완료(`done`)로 저장하도록 보강했다. 관련 단위 테스트는 `tests/unit/test_pipeline_runner_script_guards.py`에 추가했다.
 
 ## 2026-07-23
 - AADS-FOOD-OPS-DETAIL-MOCKUP-FINAL-LEDGER-20260723: 2026-07-23 20:56 KST 최종 완료 원장을 재대조했다. 저장소와 GitHub `main`은 `9d8d3d7c` 기준 clean/ahead 0/behind 0이며, 운영 `aads-server`·`aads-server-green`의 `mockup-v2.html`은 저장소와 동일한 130,520 bytes 및 SHA-256 `dccdd2695f74ac690c9c062f1b5de49a5ac3e3c2420e91c4294acde3c468fa35`다. active 슬롯은 `aads-server-green:8102`, `/api/v1/health`와 공개 시안 URL은 HTTP 200이다. 공개 URL을 Chromium/Playwright로 1440x900·390x844에서 재검증해 메인 화면 15개, 업무별 검색 제출, 입사서류 OCR 검토, 근로계약서 작성, 사업자등록 OCR 원본대조, 메뉴 매출 행 상세, 권장 발주수량 산출 근거, 대표자 회원가입이 정상 동작했고 console/page error 0, horizontal overflow 0을 확인했다. Browser Bridge `capture_screenshot`은 SSH argument list too long 오류로 실패했으나 동일 공개 URL의 실제 Chromium 렌더와 HTTP/API 검증으로 대체했으며, 저장된 데스크톱·모바일 화면도 육안 검수했다. 변경 범위는 별도 정적 시안과 완료 기록이며 기존 운영 `index.html`, API, DB는 변경하지 않았다.

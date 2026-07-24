@@ -80,4 +80,5 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "NO_CHANGES_READ_ONLY job=$job_id" in script
     assert "status='done', phase='done'" in script
     assert "completed_at=NOW()" not in script
+    assert "읽기[[:space:]]*전용" in script
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script
