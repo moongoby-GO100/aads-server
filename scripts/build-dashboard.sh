@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
-echo "[$(date)] Dashboard blue-green deploy started" > /tmp/dashboard-build.log
-/root/aads/aads-dashboard/deploy.sh >> /tmp/dashboard-build.log 2>&1
-echo "[$(date)] Dashboard blue-green deploy done" >> /tmp/dashboard-build.log
+cd /root/aads/aads-dashboard
+docker compose build aads-dashboard >> /tmp/dash-opus5-build.log 2>&1
+docker compose up -d aads-dashboard >> /tmp/dash-opus5-build.log 2>&1
+echo "DONE $(date)" >> /tmp/dash-opus5-build.log

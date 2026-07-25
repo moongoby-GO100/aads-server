@@ -3774,3 +3774,62 @@ with open(p) as f:
 
 ## [2026-07-25 13:59:44 KST] [aads-server] _patch_p12.py
 - Chat-Direct 수정: write: _patch_p12.py
+
+## [2026-07-25 18:01:56 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch:     "claude-opus": "claude-opus-4-8",→    "claude-opus": "claude-opus-5",
+
+## [2026-07-25 18:02:51 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch:     "claude-opus": (
+        "claude-opu→    "claude-opus": (
+        "claude-opu
+
+## [2026-07-25 18:03:46 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     "claude-opus-4-7": "claude-opus",
+  →    "claude-opus-5": "claude-opus",
+    
+
+## [2026-07-25 18:04:41 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     model_used = "claude→                    model_used = "claude
+
+## [2026-07-25 18:05:36 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                             model=_selec→                            model=_selec
+
+## [2026-07-25 18:06:36 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch:     "claude-opus": "claude-opus-4-8",→    "claude-opus": "claude-opus-5",
+
+## [2026-07-25 18:08:00 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                             execution_mo→                            execution_mo
+
+## [2026-07-25 18:11:33 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch:     "claude-opus": "claude-opus-4-8",→    "claude-opus": "claude-opus-5",
+
+## [2026-07-25 18:11:34 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch:     "claude-opus": (
+        "claude-opu→    "claude-opus": (
+        "claude-opu
+
+## [2026-07-25 18:11:34 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     "claude-opus-4-7": "claude-opus",
+  →    "claude-opus-5": "claude-opus",
+    
+
+## [2026-07-25 18:12:29 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     model_used = "claude→                    model_used = "claude
+
+## [2026-07-25 18:12:31 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                             model=_selec→                            model=_selec
+
+## [2026-07-25 18:12:31 KST] [aads-server] app/services/model_registry.py
+- Chat-Direct 수정: patch:     "claude-opus": "claude-opus-4-8",→    "claude-opus": "claude-opus-5",
+
+## [2026-07-25 18:12:36 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                             execution_mo→                            execution_mo
+
+## [2026-07-25 18:41:08 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     "claude-opus":   "claude-opus-4-7",→    "claude-opus":   "claude-opus-5",
+
+## [2026-07-25 18:42:03 KST] [aads-server] app/api/pipeline_runner.py
+- Chat-Direct 수정: patch: "XL": "claude-opus-4-6"→"XL": "claude-opus-5"
+
+## [2026-07-25 18:49:56 KST] [aads-server] scripts/build-dashboard.sh
+- Chat-Direct 수정: write: scripts/build-dashboard.sh

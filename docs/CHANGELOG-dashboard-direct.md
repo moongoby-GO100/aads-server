@@ -795,3 +795,12 @@ with open(p
 
 ## [2026-07-25 14:02:03 KST] [aads-dashboard] src/components/chat/ChatBubble.tsx
 - Chat-Direct 수정: run_remote_command: sed -i '/const \[editText, setEditText\] = useState("")/a\  const [autoExpanded,
+
+## [2026-07-25 18:43:02 KST] [aads-dashboard] src/components/chat/ModelSelector.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '/id: "claude-opus-4-7",           name: "Claude Opus 4.7"/i\  { id: "cla
+
+## [2026-07-25 18:43:09 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/"claude-opus": "claude-opus-4-7"/"claude-opus": "claude-opus-5"/' /roo
+
+## [2026-07-25 18:49:47 KST] [aads-dashboard] ../aads-dashboard/build-opus5.sh
+- Chat-Direct 수정: write: ../aads-dashboard/build-opus5.sh
