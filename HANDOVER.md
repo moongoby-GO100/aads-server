@@ -1,5 +1,11 @@
 # AADS HANDOVER
 
+## 2026-07-25 KST - OHVIS 3-Tier final ledger verification
+
+- 목적: OHVIS 3-Tier final ledger verification용 XS runner 실사용 검증. 이전 read-only 검증 작업의 pipeline_jobs cancelled 상태 문제를 해결하기 위해 실제 diff가 있는 안전한 문서 변경으로 Pipeline Runner → ohvis_tasks 자동 생성/완료 → task_card 기록 흐름을 최종 검증한다.
+- 변경 범위: 문서 기록만, 코드 변경 없음. HANDOVER.md 단일 파일 수정.
+- 검증: py_compile 대상 없음. git diff --check 통과.
+
 ## 2026-07-24 23:00 KST - AADS chat/session recovery final audit and ops version alias
 
 - 배경: CEO가 이전 완료보고의 커밋/푸시/배포/문서 ledger 충돌을 지적해 서버·대시보드 Git, 운영 슬롯, 인증 경로, 문서 기록을 재실측했다.
