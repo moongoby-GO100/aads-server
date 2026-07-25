@@ -7252,6 +7252,7 @@ async def trigger_ai_reaction(
     current_chat_session_id.set(session_id)
 
     async def _consume_stream():
+        _reaction_summary = ""
         try:
             async for _ in send_message_stream(
                 session_id=session_id,
@@ -7259,7 +7260,7 @@ async def trigger_ai_reaction(
                 intent_override="auto_reaction",
             ):
                 pass  # 스트림 전체 소비 → DB에 AI 응답 자동 저장
-            # message_count 보정 (trigger_ai_reaction으로 생성된 시스템+AI 메시지 반영)
+            # message_count 보정 + P1-2 AI 반응 텍스트 조회 (task_card용)
             try:
                 from app.core.db_pool import get_pool
                 pool = get_pool()
@@ -7270,20 +7271,30 @@ async def trigger_ai_reaction(
                         "updated_at = NOW() WHERE id = $1",
                         uuid.UUID(session_id),
                     )
+                    _last_ai = await _conn.fetchval(
+                        "SELECT content FROM chat_messages "
+                        "WHERE session_id = $1 AND role = 'assistant' "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        uuid.UUID(session_id),
+                    )
+                    if _last_ai:
+                        _reaction_summary = str(_last_ai)[:2000]
             except Exception as _mc_err:
-                logger.warning(f"trigger_ai_reaction: message_count update failed session={session_id[:8]}: {_mc_err}")
+                logger.warning(f"trigger_ai_reaction: post_stream_update failed session={session_id[:8]}: {_mc_err}")
         except Exception as e:
             logger.warning(f"trigger_ai_reaction error session={session_id}: {e}")
         finally:
             _ai_reaction_active.pop(session_id, None)
-            # OHVIS 3-Tier: trigger 완료 후 ohvis_tasks 갱신 + 아티팩트 카드
+            # OHVIS 3-Tier: trigger 완료 후 ohvis_tasks 갱신 + 아티팩트 카드 (AI 반응 내용 포함)
             if ohvis_task_id:
                 try:
                     from app.services.ohvis_task_manager import complete_task as _otm_done
+                    _judgement = _reaction_summary[:500] if _reaction_summary else "오비스 자동 확인 완료"
                     await _otm_done(ohvis_task_id, status="done",
-                                    ohvis_judgement="오비스 자동 확인 완료")
+                                    result={"ai_reaction": _reaction_summary} if _reaction_summary else None,
+                                    ohvis_judgement=_judgement)
                 except Exception as _otm_e:
-                    logger.debug("ohvis_task_complete_failed: %s", _otm_e)
+                    logger.warning("ohvis_task_complete_failed: %s", _otm_e)
             # 큐에 대기 중인 트리거가 있으면 다음 것 처리
             if session_id in _ai_reaction_queue and _ai_reaction_queue[session_id]:
                 next_msg = _ai_reaction_queue[session_id].pop(0)
@@ -7596,6 +7607,19 @@ async def send_message_stream(
 
         # ★ EARLY SSE: DB/첨부파일 처리 전 즉시 HTTP 응답 시작 — 버블 지연 150~500ms 해소
         yield f'data: {json.dumps({"type": "heartbeat"})}\n\n'
+
+        # OHVIS Tier 1 즉시 수신: intent 분류 전 키워드 기반 빠른 피드백
+        _early_plan_emitted = False
+        _INSTANT_ACK_KEYWORDS = (
+            "수정", "배포", "구현", "분석", "보고", "점검", "조치", "개선",
+            "실행", "커밋", "푸시", "이어서", "진행해", "해줘", "만들어",
+            "확인하고", "시켜", "작업", "리팩", "마이그", "테스트",
+        )
+        if not intent_override and len(content) > 20 and any(kw in content for kw in _INSTANT_ACK_KEYWORDS):
+            _ack_msg = "✅ 요청을 수신했습니다. 분석 및 도구 준비 중..."
+            yield f'data: {json.dumps({"type": "task_plan", "content": _ack_msg})}\n\n'
+            _early_plan_emitted = True
+            logger.info("ohvis_tier1_early_ack session=%s content_len=%d", session_id[:8], len(content))
 
         # AADS-FIX: 이전 턴에서 미소비된 인터럽트를 현재 user 메시지 앞에 주입
         if has_pending_interrupts(session_id):
@@ -8200,8 +8224,8 @@ async def send_message_stream(
 
         intent = intent_override if intent_override else intent_result.intent
 
-        # OHVIS Tier 1: 복잡한 인텐트에 대해 즉시 계획 응답 선행
-        if not intent_override and not _semantic_cache_hit:
+        # OHVIS Tier 1: 복잡한 인텐트에 대해 즉시 계획 응답 선행 (조기 응답 미발동 시만)
+        if not intent_override and not _semantic_cache_hit and not _early_plan_emitted:
             from app.services.ohvis_task_manager import is_complex_intent, generate_instant_plan
             if is_complex_intent(intent):
                 _plan_text = generate_instant_plan(intent, content)

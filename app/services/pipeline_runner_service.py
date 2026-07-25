@@ -406,7 +406,8 @@ class PipelineCJob:
                         ],
                     )
                 except Exception as _otm_err:
-                    logger.debug("ohvis_task_create_skip job=%s: %s", self.job_id, _otm_err)
+                    logger.warning("ohvis_task_create_failed job=%s session=%s: %s",
+                                   self.job_id, self.chat_session_id[:8] if self.chat_session_id else "-", _otm_err)
 
             # Phase 1: Claude Code로 작업 수행
             self._log("claude_code_work", f"Claude Code에 작업 지시 중: {self.instruction[:100]}")
