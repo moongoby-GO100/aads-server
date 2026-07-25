@@ -792,3 +792,6 @@ with open(p
 
 ## [2026-07-24 18:02:45 KST] [aads-dashboard] public/manager/env_unknown.json
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git add app/auth.py && ALLOW_AUTH_COMMIT=1 git comm
+
+## [2026-07-25 14:02:03 KST] [aads-dashboard] src/components/chat/ChatBubble.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '/const \[editText, setEditText\] = useState("")/a\  const [autoExpanded,

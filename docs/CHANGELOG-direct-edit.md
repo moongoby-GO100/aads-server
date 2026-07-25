@@ -3749,3 +3749,28 @@ with open(p) as f:
 
 ## [2026-07-25 09:04:14 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
 - Chat-Direct 수정: run_remote_command: sleep 45
+
+## [2026-07-25 13:42:07 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         # ★ EARLY SSE: DB/첨부파일 처리 전 즉시 H→        # ★ EARLY SSE: DB/첨부파일 처리 전 즉시 H
+
+## [2026-07-25 13:43:02 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:                 except Exception as _otm→                except Exception as _otm
+
+## [2026-07-25 13:44:23 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         # OHVIS Tier 1: 복잡한 인텐트에 대해 즉시 계→        # OHVIS Tier 1: 복잡한 인텐트에 대해 즉시 계
+
+## [2026-07-25 13:45:18 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     async def _consume_stream():
+       →    async def _consume_stream():
+       
+
+## [2026-07-25 13:52:16 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         if not intent_override and len(c→        if not intent_override and len(c
+
+## [2026-07-25 13:53:11 KST] [aads-server] app/api/pipeline_runner.py
+- Chat-Direct 수정: patch:     try:
+        from app.services.chat_→    try:
+        from app.services.chat_
+
+## [2026-07-25 13:59:44 KST] [aads-server] _patch_p12.py
+- Chat-Direct 수정: write: _patch_p12.py
