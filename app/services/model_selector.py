@@ -319,6 +319,7 @@ _INTENT_POLICY_MODEL_ALIASES = {
     "claude-sonnet-4-5": "claude-sonnet",
     "claude-haiku-4-5": "claude-haiku",
     "claude-haiku-4-5-20251001": "claude-haiku",
+    "claude-opus-5": "claude-opus",
     "claude-opus-4-7": "claude-opus",
     "claude-opus-4-6": "claude-opus",
     "claude-opus-4-5": "claude-opus",

@@ -387,7 +387,7 @@ _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
 }
 _ANTHROPIC_RUNTIME_MODEL_IDS = {
     "claude-sonnet": "claude-sonnet-4-6",
-    "claude-opus": "claude-opus-4-8",
+    "claude-opus": "claude-opus-5",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku": "claude-haiku-4-5-20251001",
 }
@@ -400,6 +400,7 @@ _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
         "claude-2.1",
     ),
     "claude-opus": (
+        "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-8",
         "claude-opus-4-5",

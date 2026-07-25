@@ -8693,7 +8693,7 @@ async def send_message_stream(
                 try:
                     full_response = ""
                     _captured_sdk_sid: Optional[str] = None
-                    model_used = "claude-opus-4-6"
+                    model_used = "claude-opus-5"
                     cost_usd = Decimal("0")
                     tools_called: list = []
                     _sdk_system_prompt = system_prompt
@@ -8708,11 +8708,11 @@ async def send_message_stream(
                         _compiled_sdk_prompt = await PromptCompiler().compile(
                             workspace_name=_normalized_project or workspace_name,
                             intent=intent,
-                            model=_selected_model_id or "claude-opus-4-6",
+                            model=_selected_model_id or "claude-opus-5",
                             session_id=str(session_id),
                             role=_session_role_key or "",
                             selected_model_id=_selected_model_id or (model_override or ""),
-                            execution_model_id="claude-opus-4-6",
+                            execution_model_id="claude-opus-5",
                             base_system_prompt=system_prompt,
                         )
                         _sdk_system_prompt = _compiled_sdk_prompt.system_prompt
