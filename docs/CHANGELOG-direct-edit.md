@@ -3743,3 +3743,9 @@ with open(p) as f:
 
 ## [2026-07-25 08:44:14 KST] [aads-server] migrations/20260725_add_task_card_type.sql
 - Chat-Direct 수정: write: migrations/20260725_add_task_card_type.sql
+
+## [2026-07-25 09:04:14 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: sleep 45
+
+## [2026-07-25 09:04:14 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: sleep 45
