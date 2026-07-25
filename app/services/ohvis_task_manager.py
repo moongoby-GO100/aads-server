@@ -21,6 +21,28 @@ _COMPLEX_INTENTS = frozenset({
 _MAX_CONCURRENT_TASKS = 3
 
 
+def _finalize_steps(steps: Any, final_status: str) -> List[Dict]:
+    """Keep task row steps consistent when the parent task is terminal."""
+    if isinstance(steps, str):
+        try:
+            steps = json.loads(steps)
+        except Exception:
+            steps = []
+    if not isinstance(steps, list):
+        return []
+    target = "done" if final_status == "done" else "error"
+    finalized = []
+    for step in steps:
+        if not isinstance(step, dict):
+            finalized.append(step)
+            continue
+        item = dict(step)
+        if item.get("status") in (None, "", "pending", "running"):
+            item["status"] = target
+        finalized.append(item)
+    return finalized
+
+
 async def create_task(
     session_id: str,
     title: str,
@@ -126,6 +148,15 @@ async def update_task(
             _steps = row["steps"]
             if isinstance(_steps, str):
                 _steps = json.loads(_steps)
+            if row["status"] in ("done", "error"):
+                _final_steps = _finalize_steps(_steps, row["status"])
+                if _final_steps != (_steps or []):
+                    await conn.execute(
+                        "UPDATE ohvis_tasks SET steps=$1::jsonb, updated_at=NOW() WHERE id=$2",
+                        json.dumps(_final_steps, ensure_ascii=False, default=str),
+                        _uuid.UUID(task_id),
+                    )
+                    _steps = _final_steps
             _result = row["result"]
             if isinstance(_result, str):
                 _result = json.loads(_result)

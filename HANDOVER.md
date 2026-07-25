@@ -1,5 +1,11 @@
 # AADS HANDOVER
 
+## 2026-07-25 09:31 KST - OHVIS 3-Tier task step consistency fix
+
+- 배경: 최종 ledger 재검증 중 `ohvis_tasks.status='done'` 및 task_card 아티팩트는 완료인데 `ohvis_tasks.steps` 내부 단계가 `running/pending`으로 남는 불일치를 발견했다.
+- 조치: `app/services/ohvis_task_manager.py`와 `app/api/ohvis_tasks.py`에 terminal status(`done`/`error`) 전환 시 단계 상태를 자동 정규화하는 로직을 추가했다. 기존 E2E 검증 row `c82eff31-bfc0-406b-9a75-016b32a862fe`의 steps도 `done/done/done`으로 보정했다.
+- 검증: `python3 -m py_compile app/api/ohvis_tasks.py app/services/ohvis_task_manager.py` 통과. 인증 API E2E에서 `/api/v1/ohvis/tasks`, `/api/v1/ohvis/tasks/queue`, `/api/v1/ohvis/tasks/unreported`, `/api/v1/ops/health-check` HTTP 200 확인.
+
 ## 2026-07-25 KST - OHVIS 3-Tier final ledger verification
 
 - 목적: OHVIS 3-Tier final ledger verification용 XS runner 실사용 검증. 이전 read-only 검증 작업의 pipeline_jobs cancelled 상태 문제를 해결하기 위해 실제 diff가 있는 안전한 문서 변경으로 Pipeline Runner → ohvis_tasks 자동 생성/완료 → task_card 기록 흐름을 최종 검증한다.

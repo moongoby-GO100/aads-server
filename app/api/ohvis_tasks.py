@@ -82,6 +82,28 @@ def _row_to_response(row: asyncpg.Record) -> dict:
     return d
 
 
+def _finalize_steps(steps: object, final_status: str) -> list:
+    """Keep API responses and stored rows coherent for terminal tasks."""
+    if isinstance(steps, str):
+        try:
+            steps = json.loads(steps)
+        except Exception:
+            steps = []
+    if not isinstance(steps, list):
+        return []
+    target = "done" if final_status == "done" else "error"
+    finalized = []
+    for step in steps:
+        if not isinstance(step, dict):
+            finalized.append(step)
+            continue
+        item = dict(step)
+        if item.get("status") in (None, "", "pending", "running"):
+            item["status"] = target
+        finalized.append(item)
+    return finalized
+
+
 # ─── 엔드포인트 ───────────────────────────────────────────────────────────────
 
 @router.post("/ohvis/tasks", status_code=201, tags=["ohvis-tasks"])
@@ -259,6 +281,17 @@ async def update_task(task_id: UUID, req: UpdateTaskRequest):
         row = await conn.fetchrow(query, *params)
         if not row:
             raise HTTPException(404, "Task not found")
+        if row["status"] in ("done", "error"):
+            current_steps = row["steps"]
+            if isinstance(current_steps, str):
+                current_steps = json.loads(current_steps)
+            final_steps = _finalize_steps(current_steps, row["status"])
+            if final_steps != (current_steps or []):
+                row = await conn.fetchrow(
+                    "UPDATE ohvis_tasks SET steps=$1::jsonb, updated_at=NOW() WHERE id=$2 RETURNING *",
+                    json.dumps(final_steps, ensure_ascii=False),
+                    task_id,
+                )
         return _row_to_response(row)
     finally:
         await conn.close()
