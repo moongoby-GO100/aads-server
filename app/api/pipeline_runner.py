@@ -1185,9 +1185,24 @@ async def notify_completion(job_id: str):
 
     try:
         from app.services.chat_service import trigger_ai_reaction
+        from app.services.ohvis_task_manager import create_task as _ohvis_create
         import asyncio
         logger.info("pipeline_runner.trigger_sent", job_id=job_id, session_id=session_id, status=status)
-        asyncio.create_task(trigger_ai_reaction(session_id, msg))
+
+        async def _trigger_with_ohvis():
+            _otid = None
+            try:
+                _otid = await _ohvis_create(
+                    session_id=session_id,
+                    title=f"Runner {status}: {job_id}",
+                    task_type="runner",
+                    runner_job_id=job_id,
+                )
+            except Exception as _oe:
+                logger.warning("ohvis_create_before_trigger: %s", _oe)
+            await trigger_ai_reaction(session_id, msg, ohvis_task_id=_otid)
+
+        asyncio.create_task(_trigger_with_ohvis())
         return {"status": "triggered", "session_id": session_id, "promoted_job_id": promoted_job_id}
     except Exception as e:
         logger.warning(f"notify_trigger_failed: {e}")

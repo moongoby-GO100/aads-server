@@ -7615,7 +7615,7 @@ async def send_message_stream(
             "실행", "커밋", "푸시", "이어서", "진행해", "해줘", "만들어",
             "확인하고", "시켜", "작업", "리팩", "마이그", "테스트",
         )
-        if not intent_override and len(content) > 20 and any(kw in content for kw in _INSTANT_ACK_KEYWORDS):
+        if not intent_override and len(content) > 2 and any(kw in content for kw in _INSTANT_ACK_KEYWORDS):
             _ack_msg = "✅ 요청을 수신했습니다. 분석 및 도구 준비 중..."
             yield f'data: {json.dumps({"type": "task_plan", "content": _ack_msg})}\n\n'
             _early_plan_emitted = True
