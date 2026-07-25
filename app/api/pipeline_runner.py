@@ -448,7 +448,7 @@ async def _get_model_for_size(conn, size: str) -> str:
     # DB 조회 실패 시 안전망
     return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
             "M": "claude-sonnet-4-6", "L": "claude-sonnet-4-6",
-            "XL": "claude-opus-4-6"}.get(_size, "claude-sonnet-4-6")
+            "XL": "claude-opus-5"}.get(_size, "claude-sonnet-4-6")
 
 
 

@@ -749,7 +749,7 @@ _COST_MAP = {
 # LiteLLM alias → Anthropic model ID
 _ANTHROPIC_MODEL_ID = {
     "claude-sonnet": "claude-sonnet-4-6",
-    "claude-opus":   "claude-opus-4-7",
+    "claude-opus":   "claude-opus-5",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku":  "claude-haiku-4-5-20251001",
 }
