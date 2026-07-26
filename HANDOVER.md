@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-07-27 08:45 KST - AADS loop API deploy preflight fix
+
+- 배경: FOOD FB 직원 회원가입 우선 흐름의 정식 `deploy.sh bluegreen` 원장 정합성을 맞추는 과정에서 clean `origin/main` 배포가 새 `aads-server:8100` health 실패로 롤백됐다.
+- 원인: 현재 작업트리에는 OHVIS Loop API 연결(`app/main.py`의 `loops_router`)과 신규 파일 `app/api/loops.py`, `app/services/loop_executor.py`가 함께 존재하지만, 신규 파일 2건이 미커밋 상태라 clean build 컨텍스트에서 `ModuleNotFoundError: No module named 'app.api.loops'`가 발생했다.
+- 조치: `app/main.py`, `app/api/loops.py`, `app/services/loop_executor.py`를 하나의 최소 기능 세트로 선별 커밋해 loop API import 정합성을 복구한다. 기존 FOOD 데이터, dashboard/nginx 배포 스크립트, CHANGELOG 잔여 dirty 변경은 이번 커밋에서 제외한다.
+- 검증 예정: `python3 -m py_compile app/api/loops.py app/services/loop_executor.py app/services/loop_controller.py`, `git diff --check` 대상 파일 통과 후 `deploy.sh bluegreen` 재실행. 배포 성공/실패와 active 슬롯은 최종 보고에서 별도 확정한다.
+
 ## 2026-07-27 08:45 KST - FOOD FB recipe redirect completion
 
 - 요청: 언니냉면 직원용 레시피 페이지가 FB 로그인 후 열리지 않고 FB 대시보드로 빠지는 문제를 즉시 조치.

@@ -58,6 +58,7 @@ from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.api.external_chat import router as external_chat_router
 from app.api.ohvis_tasks import router as ohvis_tasks_router
+from app.api.loops import router as loops_router
 from app.routers.chat import router as chat_v2_router
 from app.config import settings
 from app.graph.builder import compile_graph
@@ -1838,6 +1839,7 @@ app.include_router(browser_bridge.router, prefix="/api/v1", tags=["browser-bridg
 app.include_router(external_chat_router, prefix="/api/v1", tags=["external-chat"])
 app.include_router(local_media_router)
 app.include_router(ohvis_tasks_router, prefix="/api/v1", tags=["ohvis-tasks"])
+app.include_router(loops_router, prefix="/api/v1", tags=["loops"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)
 from fastapi.responses import JSONResponse as _JSONResponse
@@ -1855,6 +1857,27 @@ async def root_health_check():
         "version": "0.2.1",
         "sandbox": sandbox_health,
     })# 정적 파일 서빙
+
+
+@app.get("/health/live", tags=["health"], include_in_schema=False)
+async def live_health_check():
+    """Container liveness probe. Keep this independent from deep service checks."""
+    return _JSONResponse({
+        "status": "ok",
+        "version": "0.2.1",
+    })
+
+
+@app.get("/api/v1/health/live", tags=["health"], include_in_schema=False)
+async def api_live_health_check():
+    """API-prefixed liveness probe for Docker/Nginx health checks."""
+    return _JSONResponse({
+        "status": "ok",
+        "version": "0.2.1",
+    })
+
+
+# 정적 파일 서빙
 import pathlib as _pathlib
 _static_dir = _pathlib.Path(__file__).resolve().parent / "static"
 if _static_dir.is_dir():
