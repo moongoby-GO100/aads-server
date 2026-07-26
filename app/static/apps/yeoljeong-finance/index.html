@@ -57,6 +57,7 @@
     button.danger { color: var(--red); }
     button.share { color: #3b1e1e; border-color: #f5d84f; background: #fee500; }
     button.icon { width: 38px; padding: 0; }
+    a.tab,
     .doc-link {
       min-height: 38px;
       border: 1px solid var(--line);
@@ -73,6 +74,14 @@
       text-decoration: none;
       white-space: nowrap;
     }
+    a.tab {
+      min-width: 92px;
+      background: transparent;
+      border-color: transparent;
+      color: var(--muted);
+      font-weight: 800;
+    }
+    a.tab:hover,
     .doc-link:hover { border-color: #9fb0b8; }
     button:disabled {
       cursor: not-allowed;
@@ -198,31 +207,78 @@
       text-align: right;
     }
 
+    body.signed-out .topbar {
+      background: rgba(247,250,248,.94);
+    }
+
+    body.signed-out .topbar-inner {
+      max-width: 1180px;
+    }
+
     .auth-gate {
       min-height: calc(100vh - 67px);
       display: grid;
       align-items: center;
       background:
-        linear-gradient(180deg, #f7faf9 0%, #edf6f3 100%);
+        linear-gradient(180deg, #f7faf8 0%, #eef3ef 48%, #f6f0e6 100%);
       border-top: 1px solid var(--line);
     }
 
     .auth-gate-inner {
-      max-width: 1120px;
+      max-width: 1180px;
       width: 100%;
       margin: 0 auto;
-      padding: 52px 18px;
+      padding: 46px 18px 38px;
       display: grid;
-      grid-template-columns: minmax(360px, 1.1fr) minmax(340px, 420px);
-      gap: 34px;
+      grid-template-columns: minmax(390px, 1.08fr) minmax(350px, 430px);
+      gap: 42px;
       align-items: center;
     }
 
     .auth-intro {
       display: grid;
       align-content: center;
-      gap: 20px;
+      gap: 18px;
       padding: 4px 16px 4px 0;
+    }
+
+    .auth-brand-lockup {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .auth-mark-large {
+      width: 58px;
+      height: 58px;
+      border-radius: 8px;
+      background: #112426;
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      font-weight: 900;
+      flex: 0 0 auto;
+      box-shadow: 0 14px 28px rgba(16, 36, 38, .16);
+    }
+
+    .auth-brand-text {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .auth-brand-text strong {
+      font-size: 19px;
+      line-height: 1.15;
+      color: #102a2b;
+    }
+
+    .auth-brand-text span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
     }
 
     .auth-kicker {
@@ -240,7 +296,7 @@
 
     .auth-intro h2 {
       margin: 0;
-      font-size: 42px;
+      font-size: 40px;
       line-height: 1.08;
       letter-spacing: 0;
       color: #102a2b;
@@ -284,6 +340,52 @@
       line-height: 1.45;
     }
 
+    .auth-checklist {
+      display: grid;
+      gap: 8px;
+      max-width: 640px;
+    }
+
+    .auth-checklist span {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #34454c;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .auth-checklist span::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #0f766e;
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, .12);
+      flex: 0 0 auto;
+    }
+
+    .auth-flow-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .auth-flow-steps span {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      color: #2e4146;
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1.35;
+    }
+
     .auth-card {
       background: rgba(255,255,255,.96);
       border: 1px solid var(--line);
@@ -291,6 +393,13 @@
       box-shadow: 0 20px 48px rgba(20, 35, 45, .13);
       min-width: 0;
       overflow: hidden;
+    }
+
+    .auth-card::before {
+      content: "";
+      display: block;
+      height: 5px;
+      background: linear-gradient(90deg, #102a2d 0%, #0f766e 55%, #d59b2f 100%);
     }
 
     .auth-mode-tabs {
@@ -323,6 +432,24 @@
       gap: 12px;
     }
 
+    .auth-card input,
+    .auth-card select {
+      min-height: 44px;
+      background: #fbfcfd;
+    }
+
+    .auth-card input:focus,
+    .auth-card select:focus {
+      outline: 3px solid rgba(15, 118, 110, .14);
+      border-color: var(--accent);
+      background: #fff;
+    }
+
+    .auth-card button {
+      min-height: 42px;
+      font-weight: 900;
+    }
+
     .auth-help {
       margin: 0;
       color: var(--muted);
@@ -331,7 +458,63 @@
     }
 
     .auth-card .panel-head {
-      padding-bottom: 0;
+      padding: 18px 18px 0;
+    }
+
+    .auth-card .panel-title {
+      font-size: 18px;
+    }
+
+    .auth-security-strip {
+      display: grid;
+      gap: 7px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--line);
+      background: #f8faf7;
+    }
+
+    .auth-security-strip span {
+      color: #516168;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .auth-security-strip strong {
+      color: #233238;
+      font-size: 12px;
+    }
+
+    .employee-flow-card {
+      border: 1px solid #c7ded6;
+      background: #f7fbf8;
+    }
+
+    .employee-flow-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .employee-flow-step {
+      display: grid;
+      gap: 7px;
+      min-height: 96px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .employee-flow-step strong {
+      color: #102a2d;
+      font-size: 13px;
+      line-height: 1.3;
+    }
+
+    .employee-flow-step span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
     }
 
     .filters {
@@ -470,6 +653,8 @@
       align-items: start;
       margin-top: 14px;
     }
+
+    .content-grid > .span-2 { grid-column: 1 / -1; }
 
     .panel-head {
       padding: 14px 14px 0;
@@ -1092,6 +1277,7 @@
       .business-workspace { grid-template-columns: 1fr; }
       .business-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .auth-intro { padding-right: 0; }
+      .auth-card { max-width: 560px; }
     }
 
     @media (max-width: 760px) {
@@ -1124,9 +1310,17 @@
       .form-grid { grid-template-columns: 1fr; }
       .form-grid .span-2 { grid-column: span 1; }
       .auth-gate { align-items: start; }
-      .auth-gate-inner { padding: 24px 14px; gap: 18px; }
-      .auth-intro h2 { font-size: 26px; }
+      .auth-gate-inner { padding: 22px 14px; gap: 18px; }
+      .auth-brand-lockup { align-items: flex-start; }
+      .auth-mark-large { width: 48px; height: 48px; font-size: 18px; }
+      .auth-intro h2 { font-size: 28px; }
       .auth-summary { grid-template-columns: 1fr; }
+      .auth-flow-steps,
+      .employee-flow-grid { grid-template-columns: 1fr; }
+      .auth-summary div { min-height: 0; }
+      .auth-checklist span { align-items: flex-start; }
+      .auth-card { max-width: none; }
+      .auth-mode-tabs { margin: 12px 12px 0; }
       .segmented { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       main { padding: 12px; }
       .subtitle { white-space: normal; }
@@ -1139,16 +1333,18 @@
       <div class="topbar-inner">
         <div class="brand">
           <div class="mark">매</div>
-          <div>
-            <h1>매장비서</h1>
-            <div class="subtitle">매출, 정산, 근태, 입사서류를 한 화면에서 관리</div>
-          </div>
+            <div>
+              <h1>매장비서</h1>
+            <div class="subtitle">직원 회원가입, 입사서류, 계약, 정산을 한 화면에서 관리</div>
+            </div>
         </div>
         <div class="top-actions">
           <a class="doc-link app-only hidden" data-doc-key="index" href="/static/reports/20260716_yeoljeong_store_assistant_docs_index.html" target="_blank" rel="noopener noreferrer">문서</a>
           <a class="doc-link app-only hidden" data-doc-key="technical" href="/static/reports/20260716_yeoljeong_store_assistant_technical.html" target="_blank" rel="noopener noreferrer">기술</a>
           <a class="doc-link app-only hidden" data-doc-key="architecture" href="/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html" target="_blank" rel="noopener noreferrer">기획</a>
           <a class="doc-link app-only hidden" data-doc-key="dbTransition" href="/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html" target="_blank" rel="noopener noreferrer">DB전환</a>
+          <a class="doc-link app-only hidden" data-external-link="unniHome" href="https://unni.newtalk.kr/" target="_blank" rel="noopener noreferrer">언니냉면 홈</a>
+          <a class="doc-link app-only hidden" data-external-link="unniRecipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
           <button id="sampleBtn" class="app-only hidden" title="샘플 데이터 다시 불러오기">샘플</button>
           <button id="importBtn" class="app-only hidden" title="CSV 또는 JSON 파일 가져오기">가져오기</button>
           <button id="exportBtn" class="app-only hidden" title="현재 데이터를 JSON으로 저장">내보내기</button>
@@ -1171,37 +1367,55 @@
     <section id="authGate" class="auth-gate">
       <div class="auth-gate-inner">
         <div class="auth-intro">
+          <div class="auth-brand-lockup" aria-label="매장비서 브랜드">
+            <div class="auth-mark-large">매</div>
+            <div class="auth-brand-text">
+              <strong>열정국밥 매장비서</strong>
+              <span>중화점, 성신여대점, 미아점 통합 운영관리</span>
+            </div>
+          </div>
           <span class="auth-kicker">열정국밥 운영관리 웹앱</span>
-          <h2>매장 운영을 매일 정리하는 사장님 전용 비서</h2>
-          <p>배달앱 매출, 포스 포장매출, 은행 입금, 마켓봄 매입, 직원 근태와 입사서류를 사업자와 지점 기준으로 정리합니다.</p>
+          <h2>직원은 먼저 회원가입하고, 관리자는 승인부터 계약까지 이어서 처리합니다</h2>
+          <p>직원 가입요청, 입사서류, 근로계약, 판매사이트 정산, 은행 입금, 매입처 증빙을 사업자와 지점 기준으로 분리해 월마감에 바로 쓸 수 있게 정리합니다.</p>
           <div class="auth-summary" aria-label="운영 범위 요약">
             <div>
-              <strong>매출/정산</strong>
-              <span>배민, 쿠팡이츠, 요기요, 땡겨요와 포스 매출을 월마감 기준으로 확인</span>
+              <strong>판매사이트</strong>
+              <span>배민, 쿠팡이츠, 요기요, 땡겨요 계정과 정산 자료를 분리 보관</span>
             </div>
             <div>
-              <strong>입금/매입</strong>
-              <span>은행 입금내역과 마켓봄 매입 자료를 업로드해 자동 대사</span>
+              <strong>입금 대사</strong>
+              <span>은행 입금내역과 배달앱 정산 금액을 월별로 비교</span>
             </div>
             <div>
-              <strong>직원관리</strong>
-              <span>직원 초대, 회원가입 요청, 입사서류 업로드와 검수 처리</span>
+              <strong>직원 회원가입</strong>
+              <span>초대 대기 없이 직접 가입요청 후 입사서류 업로드</span>
             </div>
             <div>
-              <strong>사업자/지점</strong>
-              <span>열정국밥 중화점, 성신여대점, 미아점 3개 사업자를 분리 설정</span>
+              <strong>권한 분리</strong>
+              <span>총괄 운영관리자, 운영관리자, 직원 화면을 역할별로 구분</span>
             </div>
+          </div>
+          <div class="auth-flow-steps" aria-label="직원 가입 흐름">
+            <span>1. 직원 회원가입</span>
+            <span>2. 가입요청 자동 생성</span>
+            <span>3. 입사서류 업로드</span>
+            <span>4. 관리자 승인 후 계약</span>
+          </div>
+          <div class="auth-checklist" aria-label="로그인 후 관리 범위">
+            <span>서버 저장, 자동 수집, 직원 서류 검수는 로그인 세션에서만 실행</span>
+            <span>사업자/지점/계정 정보를 분리해 월마감 기준 데이터 오염 방지</span>
+            <span>초대 링크는 보조 수단이며 기본 입사 흐름은 직원 직접 회원가입</span>
           </div>
         </div>
         <section class="auth-card">
           <div class="panel-head">
-            <h2 id="authGateTitle" class="panel-title">로그인</h2>
+            <h2 id="authGateTitle" class="panel-title">직원 회원가입</h2>
           </div>
           <div class="auth-mode-tabs" role="tablist" aria-label="인증 방식">
-            <button id="authModeLogin" class="active" type="button" role="tab" aria-selected="true">로그인</button>
-            <button id="authModeSignup" type="button" role="tab" aria-selected="false">회원가입</button>
+            <button id="authModeSignup" class="active" type="button" role="tab" aria-selected="true">회원가입</button>
+            <button id="authModeLogin" type="button" role="tab" aria-selected="false">로그인</button>
           </div>
-          <form id="gateLoginForm" class="panel-body">
+          <form id="gateLoginForm" class="panel-body hidden">
             <label>이메일
               <input name="email" type="email" autocomplete="username" required>
             </label>
@@ -1209,10 +1423,10 @@
               <input name="password" type="password" autocomplete="current-password" required>
             </label>
             <button class="primary" type="submit">로그인</button>
-            <button id="openSignupFromGateBtn" type="button">회원가입</button>
-            <p class="auth-help">관리자는 로그인 후 자동화, 설정, 직원 서류 검수를 사용할 수 있습니다.</p>
+            <button id="openSignupFromGateBtn" type="button">직원 회원가입 먼저 하기</button>
+            <p class="auth-help">관리자는 로그인 후 자동화, 설정, 직원 서류 검수와 계약 작성을 사용할 수 있습니다.</p>
           </form>
-          <form id="gateSignupForm" class="panel-body hidden">
+          <form id="gateSignupForm" class="panel-body">
             <label>이름
               <input name="name" type="text" autocomplete="name" required>
             </label>
@@ -1247,9 +1461,9 @@
             <label>비밀번호 확인
               <input name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required>
             </label>
-            <button class="primary" type="submit">회원가입 후 시작</button>
+            <button class="primary" type="submit">회원가입 후 입사서류 등록</button>
             <button id="openLoginFromGateBtn" type="button">로그인으로 전환</button>
-            <p class="auth-help">직원은 가입 후 입사서류 화면으로 이동합니다. 관리 권한은 총괄 운영관리자가 승인합니다.</p>
+            <p class="auth-help">직원은 가입과 동시에 가입요청이 생성되고 입사서류 화면으로 이동합니다. 관리 권한은 총괄 운영관리자가 승인합니다.</p>
           </form>
           <form id="gateInviteAcceptForm" class="panel-body hidden">
             <label>초대 토큰
@@ -1265,6 +1479,10 @@
             <button id="openLoginFromInviteBtn" type="button">로그인으로 전환</button>
             <p class="auth-help">관리자가 전달한 초대 링크로 가입하면 지정된 권한으로 열정국밥 조직에 연결됩니다.</p>
           </form>
+          <div class="auth-security-strip">
+            <strong>접근 범위</strong>
+            <span>판매사이트 비밀번호는 화면에 표시하지 않고, 지점별 운영 데이터는 로그인 권한 기준으로만 저장합니다.</span>
+          </div>
         </section>
       </div>
     </section>
@@ -1285,6 +1503,7 @@
           <button class="tab" data-view="onboarding">입사서류</button>
           <button class="tab" data-view="contracts">계약서</button>
           <button class="tab" data-view="payroll">급여내역서</button>
+          <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
           <button class="tab" data-view="closing">월마감</button>
           <button class="tab" data-view="settings">설정</button>
         </nav>
@@ -1491,65 +1710,43 @@
 
       <section id="employeesView" class="hidden">
         <div class="settings-note" style="margin-bottom:14px">
-          총괄 운영관리자는 이 화면에서 <strong>직원 초대</strong>, <strong>회원가입 요청 승인</strong>, <strong>입사서류 검수</strong>를 처리합니다.
-          직원은 첫 화면에서 회원가입한 뒤 아래 가입요청을 보내고, <strong>입사서류</strong> 탭에서 본인 서류를 업로드합니다.
+          기본 입사 흐름은 <strong>직원 직접 회원가입</strong>입니다. 직원은 회원가입 후 가입요청과 입사서류를 등록하고,
+          관리자는 가입요청 승인, 서류 검수, 계약서 작성과 전자서명을 순서대로 처리합니다. 초대 링크는 전화번호만 알고 있을 때 쓰는 보조 수단입니다.
         </div>
         <div class="grid content-grid">
-          <section class="panel">
+          <section class="panel employee-flow-card span-2">
             <div class="panel-head">
-              <h2 class="panel-title">직원 초대</h2>
-              <span id="employeeInviteBadge" class="badge warn">관리자 권한 필요</span>
+              <h2 class="panel-title">직원 가입 처리 흐름</h2>
+              <span class="badge good">회원가입 우선</span>
             </div>
             <div class="panel-body grid">
-              <form id="employeeInviteForm" class="form-grid">
-                <label>직원 전화번호
-                  <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000" required>
-                </label>
-                <label>직원 이름
-                  <input name="name" placeholder="입사자 이름">
-                </label>
-                <label>근무 지점
-                  <select name="branch"></select>
-                </label>
-                <label>권한
-                  <select name="role">
-                    <option value="member">운영 입력자</option>
-                    <option value="viewer">조회 전용</option>
-                    <option value="admin">운영관리자</option>
-                  </select>
-                </label>
-                <label>초대 유효시간
-                  <input name="expiresInHours" type="number" min="1" max="168" value="72">
-                </label>
-                <div style="align-self:end">
-                  <button id="createEmployeeInviteBtn" class="primary" type="submit">초대 링크 생성</button>
+              <div class="employee-flow-grid">
+                <div class="employee-flow-step">
+                  <strong>1. 직원 회원가입</strong>
+                  <span>이메일, 연락처, 희망 지점, 주소를 직원이 직접 입력합니다.</span>
                 </div>
-              </form>
-              <div id="employeeInviteResult" class="settings-note">
-                직원 전화번호를 입력하면 초대 링크가 생성됩니다. 링크는 카톡, 문자, SNS로 복사해 전달할 수 있습니다.
-              </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>전화번호</th>
-                      <th>직원</th>
-                      <th>권한</th>
-                      <th>만료</th>
-                      <th>상태</th>
-                    </tr>
-                  </thead>
-                  <tbody id="employeeInviteRows"></tbody>
-                </table>
+                <div class="employee-flow-step">
+                  <strong>2. 가입요청 승인</strong>
+                  <span>관리자가 지점과 권한을 확인하고 승인 또는 반려합니다.</span>
+                </div>
+                <div class="employee-flow-step">
+                  <strong>3. 입사서류 제출</strong>
+                  <span>통장사본, 보건증, 조건부 서류를 직원 본인이 업로드합니다.</span>
+                </div>
+                <div class="employee-flow-step">
+                  <strong>4. 계약서 작성</strong>
+                  <span>승인 직원 기본값을 계약서에 자동 반영하고 전자서명을 요청합니다.</span>
+                </div>
               </div>
               <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
-                <button id="refreshEmployeeInvitesBtn" type="button">대기 초대 새로고침</button>
+                <button type="button" id="openEmployeeSignupPrimaryBtn" class="primary">직원 회원가입 화면 열기</button>
+                <button type="button" id="goOnboardingFromEmployeesBtn">입사서류 등록으로 이동</button>
               </div>
             </div>
           </section>
           <section class="panel">
             <div class="panel-head">
-              <h2 class="panel-title">회원가입 요청</h2>
+              <h2 class="panel-title">직원 회원가입/가입요청</h2>
               <span id="employeeJoinBadge" class="badge warn">로그인 필요</span>
             </div>
             <div class="panel-body grid">
@@ -1584,7 +1781,7 @@
                 </div>
               </form>
               <div class="settings-note">
-                초대 없이 직접 회원가입한 직원은 이 요청을 보내면 됩니다. 관리자는 아래 목록에서 승인/반려하고, 승인 후 서류 제출 상태를 검수합니다.
+                직원이 로그인 화면에서 회원가입하면 이 가입요청이 자동으로 생성됩니다. 관리자는 아래 목록에서 승인/반려하고, 승인 후 서류 제출 상태와 계약 작성 상태를 검수합니다.
               </div>
               <div class="table-wrap">
                 <table>
@@ -1623,7 +1820,6 @@
               </div>
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-top:12px">
                 <button type="button" id="goSignupFromEmployeesBtn">회원가입 화면 열기</button>
-                <button type="button" id="goOnboardingFromEmployeesBtn" class="primary">입사서류 등록으로 이동</button>
               </div>
             </div>
           </section>
@@ -1647,6 +1843,58 @@
                   <button id="acceptEmployeeInviteBtn" type="submit">초대 수락</button>
                 </div>
               </form>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">초대 링크(보조)</h2>
+              <span id="employeeInviteBadge" class="badge warn">관리자 권한 필요</span>
+            </div>
+            <div class="panel-body grid">
+              <form id="employeeInviteForm" class="form-grid">
+                <label>직원 전화번호
+                  <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000" required>
+                </label>
+                <label>직원 이름
+                  <input name="name" placeholder="입사자 이름">
+                </label>
+                <label>근무 지점
+                  <select name="branch"></select>
+                </label>
+                <label>권한
+                  <select name="role">
+                    <option value="member">운영 입력자</option>
+                    <option value="viewer">조회 전용</option>
+                    <option value="admin">운영관리자</option>
+                  </select>
+                </label>
+                <label>초대 유효시간
+                  <input name="expiresInHours" type="number" min="1" max="168" value="72">
+                </label>
+                <div style="align-self:end">
+                  <button id="createEmployeeInviteBtn" type="submit">초대 링크 생성</button>
+                </div>
+              </form>
+              <div id="employeeInviteResult" class="settings-note">
+                초대 링크는 직원이 직접 회원가입하기 어려운 경우의 보조 수단입니다. 링크를 받은 직원도 회원가입 후 입사서류 등록 화면으로 이어집니다.
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>전화번호</th>
+                      <th>직원</th>
+                      <th>권한</th>
+                      <th>만료</th>
+                      <th>상태</th>
+                    </tr>
+                  </thead>
+                  <tbody id="employeeInviteRows"></tbody>
+                </table>
+              </div>
+              <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
+                <button id="refreshEmployeeInvitesBtn" type="button">대기 초대 새로고침</button>
+              </div>
             </div>
           </section>
         </div>
@@ -2400,9 +2648,9 @@
           </label>
           <button class="primary" type="submit">로그인</button>
         </form>
-        <button id="openSignupFromLoginBtn" type="button">회원가입</button>
+        <button id="openSignupFromLoginBtn" type="button">직원 회원가입 먼저 하기</button>
         <div class="settings-note">
-          로그인 후 매출 자동정리, 직원관리, 입사서류 검수 기능을 사용할 수 있습니다.
+          기존 관리자는 로그인하고, 신규 직원은 회원가입 후 가입요청과 입사서류 등록을 진행합니다.
         </div>
       </div>
     </section>
@@ -2411,7 +2659,7 @@
   <div id="signupModal" class="modal-backdrop hidden">
     <section class="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="signupTitle">
       <div class="panel-head">
-        <h2 id="signupTitle" class="panel-title">매장비서 회원가입</h2>
+        <h2 id="signupTitle" class="panel-title">직원 회원가입</h2>
         <button class="icon" id="closeSignupBtn" title="닫기">x</button>
       </div>
       <div class="panel-body grid">
@@ -2445,15 +2693,15 @@
           </label>
           <input name="organizationName" type="hidden" value="열정국밥 운영관리">
           <label>비밀번호
-            <input name="password" type="password" autocomplete="new-password" minlength="6" required>
+            <input name="password" type="password" autocomplete="new-password" minlength="8" required>
           </label>
           <label>비밀번호 확인
-            <input name="passwordConfirm" type="password" autocomplete="new-password" minlength="6" required>
+            <input name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required>
           </label>
-          <button class="primary" type="submit">가입하고 바로 로그인</button>
+          <button class="primary" type="submit">회원가입 후 입사서류 등록</button>
         </form>
         <div class="settings-note">
-          직원은 가입 후 입사서류 등록으로 이동합니다. 운영관리자는 총괄 운영관리자 승인 후 설정과 자동화 기능을 사용할 수 있습니다.
+          직원은 가입 즉시 가입요청이 생성되고 입사서류 등록으로 이동합니다. 운영관리자는 총괄 운영관리자 승인 후 설정과 자동화 기능을 사용할 수 있습니다.
         </div>
       </div>
     </section>
@@ -3601,9 +3849,17 @@
       document.body.classList.toggle("employee-view", isAuthed && employeeMode);
       const permitted = allowedViews();
       document.querySelectorAll(".tab").forEach(button => {
+        if (button.dataset.externalTab) {
+          button.classList.toggle("hidden", !isAuthed);
+          if ("disabled" in button) button.disabled = false;
+          return;
+        }
         const allowed = permitted.includes(button.dataset.view);
         button.classList.toggle("hidden", isAuthed && !allowed);
         button.disabled = isAuthed && !allowed;
+      });
+      document.querySelectorAll("[data-external-link]").forEach(link => {
+        link.classList.toggle("hidden", !isAuthed);
       });
       [els.sampleBtn, els.importBtn, els.exportBtn, els.resetBtn, els.csvBtn, els.downloadCsvBtn, els.downloadShiftCsvBtn].forEach(button => {
         if (button) button.classList.toggle("hidden", !isAuthed || employeeMode);
@@ -3648,7 +3904,7 @@
       els.authModeLogin?.setAttribute("aria-selected", String(isLogin));
       els.authModeSignup?.setAttribute("aria-selected", String(isSignup));
       els.authModeInvite?.setAttribute("aria-selected", String(isInvite));
-      if (els.authGateTitle) els.authGateTitle.textContent = isSignup ? "회원가입" : (isInvite ? "초대 수락" : "로그인");
+      if (els.authGateTitle) els.authGateTitle.textContent = isSignup ? "직원 회원가입" : (isInvite ? "초대 수락 보조" : "운영관리 로그인");
       if (els.authGateBadge) {
         els.authGateBadge.textContent = isSignup ? "직접 입력" : (isInvite ? "초대 필요" : "계정 필요");
         els.authGateBadge.className = `badge ${isSignup || isInvite ? "info" : "warn"}`;
@@ -5497,7 +5753,7 @@
       const redirectPath = readPostLoginRedirectFromUrl();
       if (!redirectPath) return "";
       localStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectPath);
-      setAuthMode("login");
+      setAuthMode("signup");
       return redirectPath;
     }
 
@@ -6542,7 +6798,13 @@
     function bindEvents() {
       els.monthFilter.addEventListener("change", renderAll);
       els.branchFilter.addEventListener("change", renderAll);
-      document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
+      document.querySelectorAll(".tab[data-view]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
+      document.querySelector('[data-external-tab="recipes"]')?.addEventListener("click", event => {
+        if (!hasServerAuth()) {
+          event.preventDefault();
+          showToast("레시피는 로그인 후 열 수 있습니다.");
+        }
+      });
       document.querySelectorAll("#entryType button").forEach(btn => btn.addEventListener("click", () => {
         currentType = btn.dataset.type;
         document.querySelectorAll("#entryType button").forEach(item => item.classList.toggle("active", item === btn));
@@ -6683,6 +6945,15 @@
           els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
         } else {
           showToast("이미 로그인되어 있습니다.");
+        }
+      });
+      els.openEmployeeSignupPrimaryBtn?.addEventListener("click", () => {
+        setAuthMode("signup");
+        if (!hasServerAuth()) {
+          els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
+          els.gateSignupForm?.querySelector("input[name='name']")?.focus();
+        } else {
+          showToast("이미 로그인되어 있습니다. 직원 가입요청 목록을 확인하십시오.");
         }
       });
       els.goOnboardingFromEmployeesBtn?.addEventListener("click", () => setView("onboarding"));
