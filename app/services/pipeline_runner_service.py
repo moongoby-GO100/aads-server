@@ -71,7 +71,7 @@ _LITELLM_FALLBACK_MODELS = {
 }
 
 # Codex CLI 가용 모델 (Codex catalog, 2026-04-28)
-_CODEX_AVAILABLE_MODELS = {"default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_AVAILABLE_MODELS = {"default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 _TERMINAL_JOB_STATUSES = {
     "done",
     "error",
