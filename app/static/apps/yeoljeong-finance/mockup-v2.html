@@ -31,7 +31,7 @@
     * { box-sizing: border-box; }
     html { overflow-x: hidden; }
     body { margin: 0; min-width: 320px; overflow-x: hidden; background: var(--page); color: var(--ink); }
-    button, select { font: inherit; }
+    button, select, input, textarea { font: inherit; }
     button { cursor: pointer; }
     .app { min-height: 100vh; display: grid; grid-template-columns: 228px minmax(0, 1fr); }
     .sidebar {
@@ -145,6 +145,41 @@
     .amount { text-align: right; font-weight: 850; }
     .cards-list { display: grid; gap: 12px; }
     .business-card, .integration-card { display: grid; gap: 11px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .integration-suite { display: grid; gap: 14px; }
+    .integration-service-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .integration-service-card { min-height: 178px; display: grid; align-content: space-between; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .integration-service-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .connector-logo { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: var(--nav); font-size: 12px; font-weight: 900; }
+    .connector-logo.green { background: var(--green); }
+    .connector-logo.orange { background: var(--orange); }
+    .connector-logo.blue { background: var(--blue); }
+    .connector-logo.amber { background: var(--amber); }
+    .connector-copy b { display: block; font-size: 13px; }
+    .connector-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .connector-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+    .connector-tags span { padding: 4px 7px; border-radius: 99px; background: #f1f3f6; color: #4b5563; font-size: 9px; font-weight: 800; }
+    .integration-action-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+    .integration-action { min-height: 78px; display: grid; align-content: center; gap: 5px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: #f8f9fb; text-align: left; }
+    .integration-action strong { font-size: 12px; }
+    .integration-action span { color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .integration-progress { display: grid; gap: 9px; }
+    .progress-row { display: grid; grid-template-columns: minmax(90px, .55fr) minmax(0, 1fr) auto; gap: 10px; align-items: center; color: var(--muted); font-size: 10px; }
+    .progress-track { height: 8px; border-radius: 99px; background: #eef1f5; overflow: hidden; }
+    .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--green); }
+    .progress-track.warn span { background: var(--amber); }
+    .progress-track.bad span { background: var(--red); }
+    .requirement-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .requirement-card { min-height: 94px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .requirement-card strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
+    .requirement-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .credential-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .credential-grid .wide { grid-column: 1 / -1; }
+    .fallback-lane { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 12px; align-items: start; }
+    .manual-pipeline { display: grid; gap: 8px; }
+    .manual-pipeline .step { padding: 9px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .upload-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .52fr); gap: 12px; align-items: stretch; }
+    .manual-receipt-list { display: grid; gap: 8px; }
+    .manual-receipt-list button { min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; font-size: 11px; font-weight: 800; }
     .flow-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
     .flow-step { min-height: 74px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
     .flow-step strong { display: block; font-size: 11px; }
@@ -227,7 +262,8 @@
       .app { grid-template-columns: 204px minmax(0,1fr); }
       .grid-main { grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); }
       .grid-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
-      .flow-grid, .mini-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .requirement-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .fallback-lane { grid-template-columns: 1fr; }
       .grid-3 .card:last-child { grid-column: 1 / -1; }
     }
     @media (max-width: 900px) {
@@ -262,7 +298,9 @@
       .kpi { min-height: 118px; padding: 15px; }
       .kpi-value { font-size: 20px; }
       .grid-3 { grid-template-columns: 1fr; }
-      .flow-grid, .mini-form { grid-template-columns: 1fr; }
+      .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .upload-split, .requirement-grid, .credential-grid { grid-template-columns: 1fr; }
+      .credential-grid .wide { grid-column: auto; }
+      .progress-row { grid-template-columns: 1fr; }
       .grid-3 .card:last-child { grid-column: auto; }
       .panel { padding: 16px; }
       .chart { gap: 5px; padding-left: 0; padding-right: 0; }
@@ -567,18 +605,44 @@
       },
       integrations: {
         title: "연동 관리",
-        desc: "배달 플랫폼, POS, 카드, 은행, 세무 연동 상태와 오류를 관리합니다.",
-        html: () => page("연동 관리", "외부 서비스 연결 상태, 최근 동기화, 오류와 재연결 CTA입니다. 시안 데이터입니다.", `
-          <section class="hero-actions" style="margin-bottom:14px"><button class="primary" data-action="connect">+ 연동 추가</button><button class="outline" data-action="sync">전체 동기화</button></section>
-          <section class="grid-3">
-            ${integrationCard("배달 플랫폼", "배민·쿠팡이츠·요기요", "정상", "12:42", "ok")}
-            ${integrationCard("POS", "OKPOS · 3개 지점", "정상", "실시간", "ok")}
-            ${integrationCard("카드", "KCP·나이스페이", "차이 2건", "12:31", "warn")}
-            ${integrationCard("은행", "신한·국민·우리", "지연", "09:18", "bad")}
-            ${integrationCard("세무", "홈택스·세무대리인", "정상", "06:00", "ok")}
-            ${integrationCard("급여", "급여 이체 파일", "승인 대기", "어제", "info")}
+        desc: "판매채널, 은행, 매입처, 홈택스, 수기 증빙 연동을 사업자·지점별로 설정합니다.",
+        html: () => page("연동 관리", "실제 연결에 필요한 인증 방식, 매핑값, 수기 업로드 대체 흐름과 오류 조치까지 포함한 설정 상세 시안입니다.", `
+          <section class="hero-actions" style="margin-bottom:14px"><button class="primary" data-action="connect">+ 연동 추가</button><button class="outline" data-action="sync">전체 동기화</button><button class="outline" data-action="integration-audit">연동 권한 점검</button></section>
+          <section class="kpis">
+            ${kpi("연동 서비스", "24개", '<span>판매 8 · 은행 4 · 매입 9</span>', "blue", bankIcon)}
+            ${kpi("자동 수집률", "91.8%", '<span class="up">전주 +4.6%p</span>', "green", cardIcon)}
+            ${kpi("인증 갱신", "5건", '<span class="down">비밀번호·OTP 포함</span>', "amber", taxIcon)}
+            ${kpi("수기 증빙", "17건", '<span>OCR 대기 6건</span>', "orange", moneyIcon)}
           </section>
-          <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>오류·재연결 큐</h3><p>실패한 동기화 항목과 조치</p></div><button class="primary" data-action="reconnect">선택 재연결</button></div><div class="list">${row("red", "은", "국민은행 빠른계좌조회 지연", "인증 갱신 필요 · 최근 성공 7월 22일 22:10", "reconnect")}${row("amber", "카", "카드 정산 파일 차이", "성신점 · 42,000원 차이", "review")}${row("blue", "세", "홈택스 증빙 수집 예약", "오늘 18:00 재시도 예정", "sync")}</div></section>`)
+          <section class="integration-suite">
+            <section class="card panel">
+              <div class="panel-head"><div class="panel-title"><h3>연동 설정 바로가기</h3><p>사업자·지점 매핑과 인증방식을 서비스별로 관리합니다.</p></div><button type="button" class="link" data-action="integration-guide">설정 가이드</button></div>
+              <div class="integration-service-grid">
+                ${connectorCard("판매사이트", "배민 · 쿠팡이츠 · 요기요 · 땡겨요", "주문/매출/정산/리뷰 자동 수집", "정상 3 · 대기 1", "ok", "orange", "판매", ["ID/PW Vault", "2차인증", "메뉴 매핑"], "sales-channel-connect")}
+                ${connectorCard("은행 빠른계좌조회", "신한은행 기업 · 기업은행 기업", "입금내역, 잔액, 정산금 자동 매칭", "인증 갱신 1", "warn", "blue", "은행", ["기업뱅킹 ID/PW", "OTP/인증서", "읽기전용"], "bank-connect")}
+                ${connectorCard("매입처·발주", "쿠팡 · 마켓봄 · 뉴통 · 발주고", "주문 프로그램 연동과 영수증 OCR 병행", "신규 4", "info", "green", "매입", ["계정/API", "거래명세서", "수기등록"], "supplier-connect")}
+                ${connectorCard("홈택스·계산서", "전자세금계산서 · 현금영수증 · 카드매입", "부가세/소득세/법인세 자료 자동 수집", "정상", "ok", "amber", "세무", ["공동인증서", "인증서 PW", "세무대리인"], "tax-connect")}
+              </div>
+            </section>
+            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>연동 조건별 필수 입력값</h3><p>ID만으로 연결할 수 없는 항목을 먼저 확인합니다.</p></div><button type="button" class="outline" data-action="credential-vault">보안 보관 정책</button></div>${integrationRequirementGrid()}</section>
+            <section class="grid-main">
+              <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>카테고리별 자동화 현황</h3><p>자동 수집, 파일 업로드, 수기 확인 비율</p></div><button type="button" class="primary" data-action="integration-audit">상세 점검</button></div>${integrationProgress()}</article>
+              <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>빠른 설정</h3><p>대표자가 자주 쓰는 추가/수정 동선</p></div></div>
+                <div class="integration-action-grid">
+                  ${integrationAction("판매채널 추가", "ID·비밀번호·2차인증·매장코드 등록", "sales-channel-connect")}
+                  ${integrationAction("은행 계좌 연결", "기업뱅킹 계정·인증서·OTP 검증", "bank-connect")}
+                  ${integrationAction("매입처 등록", "계정/API 또는 수기 증빙 등록", "supplier-connect")}
+                  ${integrationAction("계산서 수집", "홈택스 계정·공동인증서·위임 설정", "tax-connect")}
+                </div>
+              </article>
+            </section>
+            <section class="grid-2">
+              <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>수기 증빙 등록</h3><p>주문 프로그램이 없는 매입처를 위한 영수증/거래명세서 OCR 흐름</p></div><button type="button" class="primary" data-action="receipt-upload">사진 등록</button></div>${manualReceiptPanel()}</article>
+              <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>추가 권장 연동</h3><p>누락되기 쉬운 운영 데이터를 확장합니다.</p></div><button type="button" class="outline" data-action="recommended-connectors">후보 보기</button></div><div class="list">${row("blue","P","POS·키오스크","OKPOS/포스뱅크/키오스크 매출을 배달 매출과 합산","pos-connect")}${row("green","리","리뷰·CS","배달앱 리뷰, 고객 불만, 보상쿠폰 이력 수집","review-connect")}${row("amber","노","노무·4대보험","급여, 입퇴사, 4대보험 신고 일정 연계","hr-connect")}${row("blue","카","카드·PG","KCP·나이스·토스페이먼츠 매입/정산 대사","pg-connect")}</div></article>
+            </section>
+            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>연동 목록 상세</h3><p>연결 상태, 사업자/지점 매핑, 최근 동기화, 조치 버튼</p></div><button type="button" class="primary" data-action="bulk">선택 일괄 동기화</button></div>${integrationSettingsTable()}</section>
+            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>오류·재연결 큐</h3><p>실패한 동기화 항목과 다음 조치</p></div><button class="primary" data-action="reconnect">선택 재연결</button></div><div class="list">${row("red", "은", "기업은행 기업뱅킹 인증 만료", "문라이트F&B · OTP 재인증 필요", "bank-connect")}${row("amber", "판", "요기요 비밀번호 변경 감지", "성신점 · 저장된 비밀번호 갱신 후 2차 인증 필요", "sales-channel-connect")}${row("amber", "매", "마켓봄 거래명세서 누락", "성신점 · 7월 22일 발주건 사진 등록 권장", "receipt-upload")}${row("blue", "세", "홈택스 계산서 수집 예약", "오늘 18:00 전자세금계산서 재조회 예정", "tax-connect")}</div></section>
+          </section>`)
       }
     };
 
@@ -599,6 +663,7 @@
       const bankField = `<div class="field"><label for="bank-${idKey}">은행·계좌</label><select id="bank-${idKey}" name="bank"><option>전체 계좌</option><option>신한 운영계좌</option><option>국민 정산계좌</option><option>우리 급여계좌</option></select></div>`;
       const ownerField = `<div class="field"><label for="owner-${idKey}">담당자</label><select id="owner-${idKey}" name="owner"><option>전체 담당자</option><option>대표</option><option>재무팀</option><option>점장</option></select></div>`;
       const typeField = `<div class="field"><label for="type-${idKey}">업무 구분</label><select id="type-${idKey}" name="type"><option>전체 구분</option><option>부가세</option><option>급여·근태</option><option>정산·입금</option><option>보고서</option></select></div>`;
+      const integrationTypeField = `<div class="field"><label for="type-${idKey}">연동 구분</label><select id="type-${idKey}" name="type"><option>전체 연동</option><option>판매사이트</option><option>은행</option><option>매입처</option><option>홈택스·계산서</option><option>POS·카드</option><option>수기 증빙</option></select></div>`;
       const menuField = `<div class="field"><label for="menu-${idKey}">메뉴</label><select id="menu-${idKey}" name="menu"><option>전체 메뉴</option><option>얼큰국밥</option><option>수육정식</option><option>해장라면</option></select></div>`;
       const categoryField = `<div class="field"><label for="category-${idKey}">카테고리</label><select id="category-${idKey}" name="category"><option>전체 카테고리</option><option>식재료</option><option>음료</option><option>소모품</option><option>국밥</option></select></div>`;
       const warehouseField = `<div class="field"><label for="warehouse-${idKey}">창고</label><select id="warehouse-${idKey}" name="warehouse"><option>전체 창고</option><option>성신 냉장</option><option>미아 냉동</option><option>정화 상온</option></select></div>`;
@@ -616,7 +681,7 @@
         "통합 승인함": dateField + businessField + ownerField + typeField + statusField,
         "알림센터": dateField + businessField + branchField + typeField + statusField,
         "사업자·지점": businessField + branchField + statusField + keywordField,
-        "연동 관리": businessField + typeField + statusField + keywordField,
+        "연동 관리": businessField + branchField + integrationTypeField + statusField + keywordField,
         "원가·마진": dateField + businessField + branchField + categoryField + menuField,
         "권한·감사로그": dateField + businessField + ownerField + typeField + statusField
       };
@@ -686,6 +751,57 @@
     }
     function integrationCard(name, meta, state, synced, tone) {
       return `<article class="integration-card card"><div class="card-row"><div><b>${name}</b><span>${meta}</span></div><span class="status ${tone}">${state}</span></div><div class="summary-grid"><div><small>최근 동기화</small><strong>${synced}</strong></div><div><small>오류</small><strong>${tone === "ok" ? "0건" : "1건"}</strong></div><div><small>조치</small><strong>${tone === "ok" ? "없음" : "필요"}</strong></div></div><button class="outline" data-action="${tone === "ok" ? "sync" : "reconnect"}">${tone === "ok" ? "동기화" : "재연결"}</button></article>`;
+    }
+    function connectorCard(title, services, description, state, tone, logoTone, logo, tags, action) {
+      return `<article class="integration-service-card">
+        <div class="integration-service-head"><span class="connector-logo ${logoTone}">${logo}</span><span class="status ${tone}">${state}</span></div>
+        <div class="connector-copy"><b>${title}</b><span>${services}</span><span>${description}</span></div>
+        <div class="connector-tags">${tags.map((tag) => `<span>${tag}</span>`).join("")}</div>
+        <button type="button" class="primary" data-action="${action}">설정</button>
+      </article>`;
+    }
+    function integrationAction(title, desc, action) {
+      return `<button type="button" class="integration-action" data-action="${action}"><strong>${title}</strong><span>${desc}</span></button>`;
+    }
+    function integrationProgress() {
+      const rows = [
+        ["판매사이트", "배민/쿠팡이츠/요기요 연결 · 땡겨요 대기", "93%", "93", ""],
+        ["은행", "신한은행 기업 정상 · 기업은행 인증 갱신", "68%", "68", "warn"],
+        ["매입처", "프로그램 연동 4개 · 수기 OCR 6건", "74%", "74", "warn"],
+        ["홈택스", "계산서/현금영수증/카드매입 수집", "96%", "96", ""],
+        ["기타", "POS/PG/리뷰/노무 후보", "42%", "42", "bad"]
+      ];
+      return `<div class="integration-progress">${rows.map(([name, meta, value, width, tone]) => `<div class="progress-row"><strong>${name}</strong><div><div class="progress-track ${tone}"><span style="width:${width}%"></span></div><span>${meta}</span></div><b>${value}</b></div>`).join("")}</div>`;
+    }
+    function requirementCard(title, desc) {
+      return `<div class="requirement-card"><strong>${title}</strong><span>${desc}</span></div>`;
+    }
+    function integrationRequirementGrid() {
+      return `<div class="requirement-grid">
+        ${requirementCard("판매사이트", "계정 ID, 비밀번호, 2차 인증 수단, 플랫폼 매장코드, 정산 CSV/API 권한, 메뉴 매핑값")}
+        ${requirementCard("은행", "기업뱅킹 ID, 비밀번호, 계좌번호, 공동인증서/금융인증서, 인증서 비밀번호, OTP/보안매체")}
+        ${requirementCard("매입처", "주문 프로그램 ID/PW 또는 API Key, 공급사 코드, 품목 매핑, 미연동 시 거래명세서·영수증 사진")}
+        ${requirementCard("홈택스", "사업자별 홈택스 ID/PW, 공동인증서, 인증서 비밀번호, 세무대리인 위임, 수집 범위")}
+      </div><div class="notice"><span>비밀번호·인증서 비밀번호·토큰은 화면에 평문으로 재표시하지 않고 저장 전 Vault 암호화와 만료 알림을 거치는 디자인입니다.</span><b>보안 필수</b></div>`;
+    }
+    function credentialNotice() {
+      return `<div class="notice"><span>ID만 저장하면 연결 테스트가 실패합니다. 비밀번호, 2차 인증, 인증서, API 토큰은 서비스별 요구 조건에 따라 별도 입력하고 저장 후에는 마스킹·만료일·감사로그로 관리합니다.</span><b>조회 전용 권한 우선</b></div>`;
+    }
+    function manualReceiptPanel() {
+      return `<div class="upload-split"><div class="dropzone" role="button" tabindex="0" data-action="receipt-upload"><b>거래명세서·영수증 사진 등록</b><span>카메라 촬영, PDF, 카카오톡 이미지 저장본을 올리면 매입처/품목/금액/부가세를 추출하는 시안입니다.</span></div><div class="manual-receipt-list"><button type="button" data-action="receipt-upload">주문 프로그램 없음 · 사진만 등록</button><button type="button" data-action="receipt-upload">거래명세서 여러 장 일괄 업로드</button><button type="button" data-action="receipt-upload">반복 매입처 템플릿으로 저장</button><button type="button" data-action="receipt-upload">품목명 레시피 재료와 매핑</button><button type="button" data-action="receipt-upload">대표 승인 후 매입자료 반영</button></div></div>`;
+    }
+    function integrationSettingsTable() {
+      return `<div class="table-wrap"><table><thead><tr><th>구분</th><th>서비스</th><th>사업자·지점</th><th>수집 데이터</th><th>필수 인증값</th><th>최근 동기화</th><th>상태</th><th>설정</th></tr></thead><tbody>
+        <tr><td>판매</td><td><strong>배달의민족</strong></td><td>열정국밥 · 3개 지점</td><td>주문·매출·정산·리뷰</td><td>ID/PW · 2차인증 · 매장코드</td><td>12:42</td><td><span class="status ok">정상</span></td><td><button class="chip-btn" data-action="sales-channel-connect">수정</button></td></tr>
+        <tr><td>판매</td><td><strong>쿠팡이츠</strong></td><td>열정국밥 · 3개 지점</td><td>주문·정산·취소</td><td>ID/PW · API 토큰 · 지점코드</td><td>12:40</td><td><span class="status ok">정상</span></td><td><button class="chip-btn" data-action="sales-channel-connect">수정</button></td></tr>
+        <tr><td>판매</td><td><strong>요기요</strong></td><td>열정국밥 · 2개 지점</td><td>주문·쿠폰·정산</td><td>ID/PW 갱신 · CSV 보조</td><td>12:31</td><td><span class="status warn">차이</span></td><td><button class="chip-btn" data-action="sales-channel-connect">검토</button></td></tr>
+        <tr><td>판매</td><td><strong>땡겨요</strong></td><td>문라이트F&B · 미연결</td><td>주문·정산 예정</td><td>기업 계정 · 승인번호</td><td>-</td><td><span class="status info">대기</span></td><td><button class="chip-btn" data-action="sales-channel-connect">연결</button></td></tr>
+        <tr><td>은행</td><td><strong>신한은행 기업</strong></td><td>열정국밥 · 운영계좌</td><td>잔액·입출금·입금자명</td><td>기업뱅킹 ID/PW · 인증서 PW · OTP</td><td>12:45</td><td><span class="status ok">정상</span></td><td><button class="chip-btn" data-action="bank-connect">수정</button></td></tr>
+        <tr><td>은행</td><td><strong>기업은행 기업</strong></td><td>문라이트F&B · 정산계좌</td><td>입금 매칭</td><td>기업뱅킹 PW · OTP 재인증</td><td>09:18</td><td><span class="status bad">갱신</span></td><td><button class="chip-btn" data-action="bank-connect">재인증</button></td></tr>
+        <tr><td>매입</td><td><strong>마켓봄</strong></td><td>성신점 · 주방</td><td>발주·거래명세서</td><td>거래처 ID/PW · 품목코드</td><td>11:20</td><td><span class="status warn">누락</span></td><td><button class="chip-btn" data-action="supplier-connect">설정</button></td></tr>
+        <tr><td>매입</td><td><strong>동네 정육점</strong></td><td>미아점 · 주방</td><td>거래명세서·영수증</td><td>수기등록 · 사진/OCR · 승인</td><td>-</td><td><span class="status info">수기</span></td><td><button class="chip-btn" data-action="receipt-upload">등록</button></td></tr>
+        <tr><td>세무</td><td><strong>홈택스</strong></td><td>전체 사업자</td><td>전자세금계산서·현금영수증</td><td>홈택스 ID/PW · 공동인증서 PW</td><td>06:00</td><td><span class="status ok">정상</span></td><td><button class="chip-btn" data-action="tax-connect">수정</button></td></tr>
+      </tbody></table></div>`;
     }
 
     const authShell = (title, description, form, links, step = "", ctaLabel = "다음 단계", nextView = "") => `
@@ -907,7 +1023,20 @@
         download: ["보고서 미리보기", "생성·다운로드 상태", `<div class="detail-grid">${detailCard("보고서","7월 CEO 경영보고")}${detailCard("형식","PDF 14쪽")}${detailCard("생성 상태","완료")}${detailCard("생성 시각","2026-07-23 18:40")}</div><div class="timeline">${step("✓","데이터 집계","완료","완료")}${step("✓","PDF 생성","완료","완료")}${step("3","다운로드·공유","사용자 선택","대기")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">Excel</button><button type="button" class="primary" data-action="confirm-state">PDF 다운로드</button></div>`],
         report: ["새 보고서 생성", "기간·사업자·형식을 선택합니다.", `<form class="auth-form" data-report-form>${authSelect("report-type","보고서 유형",["CEO 경영보고","정산 대사","급여대장","세무 증빙"])}${authSelect("report-format","파일 형식",["PDF","Excel","PDF + Excel"])}<div class="drawer-actions"><button type="submit" class="primary">생성 시작</button></div></form>`],
         "business-switch": ["사업자 전환", "조회 범위와 권한을 확인합니다.", `<div class="profile-menu"><button type="button" data-action="confirm-state">열정국밥 주식회사 · 3개 지점</button><button type="button" data-action="confirm-state">문라이트F&amp;B · 1개 지점</button><button type="button" data-action="confirm-state">문고비 개인사업자 · 1개 지점</button></div>`],
-        connect: ["외부 서비스 연동", "마켓·은행·카드·세무 연결 추가", `<div class="profile-menu"><button type="button" data-action="confirm-state">배달 플랫폼</button><button type="button" data-action="confirm-state">은행 빠른계좌조회</button><button type="button" data-action="confirm-state">POS·카드</button><button type="button" data-action="confirm-state">홈택스·세무</button><button type="button" data-action="business-ocr">사업자·계좌 연결</button></div>`],
+        "sales-channel-connect": ["판매사이트 연동 설정", "배민, 쿠팡이츠, 요기요, 땡겨요는 ID만으로 부족하므로 비밀번호와 2차 인증까지 관리합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("sales-service","판매사이트",["배달의민족","쿠팡이츠","요기요","땡겨요"])}${authSelect("sales-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("sales-branch","지점 매핑",["성신점","미아점","정화점","신규 지점 추가"])}${authField("sales-store-code","플랫폼 매장코드","text","store-12345")}${authField("sales-account","계정 ID","text","owner@store.com")}${authField("sales-password","비밀번호","password","Vault에 암호화 저장")}${authSelect("sales-mfa","2차 인증 수단",["문자 OTP","이메일 OTP","앱 푸시 승인","관리자 수동 승인"])}${authField("sales-otp","일회용 인증번호","text","연결 테스트 때만 입력")}${authSelect("sales-auth","보조 연결 방식",["OAuth 승인","정산 CSV 업로드","API 토큰","관리자 대리 등록"])}${authField("sales-api-key","API 토큰·승인키","password","제공되는 경우 입력")}${authSelect("sales-sync","수집 범위",["주문+매출+정산+리뷰","주문+정산","정산만","리뷰 제외"])}${authSelect("sales-permission","권한 범위",["조회 전용","정산 조회","리뷰 답변 포함","관리자 전체"])}<div class="wide">${authSelect("sales-fallback","연동 실패 시 대체",["정산 CSV 자동 요청","파일 업로드 대기열로 전환","대표에게 인증 갱신 알림","해당 지점 수기 입력"])}</div></div><div class="timeline">${step("1","ID/PW 저장","Vault 암호화·평문 재표시 금지","대기")}${step("2","2차 인증","OTP/푸시 승인 후 세션 발급","검토")}${step("3","지점·메뉴 매핑","플랫폼 매장명과 내부 지점/메뉴 연결","검토")}${step("4","샘플 정산 대사","수수료, 광고비, 쿠폰 차감값 확인","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">임시 저장</button><button type="submit" class="primary">연결 테스트</button></div></form>`],
+        "bank-connect": ["은행 빠른계좌조회 설정", "신한은행 기업과 기업은행 기업은 기업뱅킹 ID/PW, 인증서, OTP를 분리해 등록합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("bank-service","은행",["신한은행 기업","기업은행 기업"])}${authSelect("bank-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authField("bank-login-id","기업뱅킹 ID","text","company-admin")}${authField("bank-login-password","기업뱅킹 비밀번호","password","Vault에 암호화 저장")}${authField("bank-account","조회 계좌번호","text","숫자만 입력")}${authSelect("bank-purpose","계좌 용도",["운영계좌","정산계좌","급여계좌","세금 납부계좌"])}${authField("bank-cert","공동/금융인증서 파일","file","인증서 선택")}${authField("bank-cert-password","인증서 비밀번호","password","인증서 암호")}${authField("bank-otp","OTP/보안카드 식별값","text","기기명 또는 일련번호")}${authSelect("bank-auth","인증 방식",["기업뱅킹 인증서","OTP/2차 인증","API 제휴 토큰","읽기 전용 파일 업로드"])}${authSelect("bank-rule","입금 매칭 규칙",["입금자명+금액+예정일","플랫폼별 가상계좌","수동 확인 후 저장","미매칭만 알림"])}${authSelect("bank-permission","권한 범위",["조회 전용","거래내역 조회","잔액+입출금 조회","이체 권한 제외"])}</div><div class="notice"><span>이체 권한은 UX에서 제외하고 잔액·입출금 조회 권한만 연결하는 설계입니다. 인증 만료 14/7/1일 전 대표와 회계 담당에게 알림을 보냅니다.</span><b>이체 금지</b></div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">계좌 검증</button><button type="submit" class="primary">빠른조회 연결</button></div></form>`],
+        "supplier-connect": ["매입처·발주 프로그램 설정", "쿠팡, 마켓봄, 뉴통, 발주고는 계정/API 연동을 우선하고, 미연동 거래처는 수기 증빙으로 관리합니다.", `<form class="auth-form" data-search-form><div class="credential-grid">${authSelect("supplier-service","매입처",["쿠팡","마켓봄","뉴통","발주고","직접 추가"])}${authSelect("supplier-method","연동 방식",["주문 프로그램 계정","API Key","발주서 파일 업로드","거래명세서 OCR","영수증 사진 등록"])}${authSelect("supplier-has-program","주문 프로그램 여부",["있음 · 계정 연동","있음 · 파일만 제공","없음 · 수기등록","확인 필요"])}${authSelect("supplier-branch","사용 지점",["전체 지점","성신점","미아점","정화점"])}${authField("supplier-name","매입처명","text","서울축산")}${authField("supplier-login-id","주문 프로그램 ID","text","없으면 비워둠")}${authField("supplier-password","주문 프로그램 비밀번호","password","Vault에 암호화 저장")}${authField("supplier-api-key","API Key·거래처 코드","password","제공되는 경우 입력")}${authSelect("supplier-category","품목 분류",["식재료","소모품","포장재","기타"])}${authField("supplier-phone","담당 연락처","tel","010-0000-0000")}</div><div class="fallback-lane"><div>${manualReceiptPanel()}</div><div class="manual-pipeline">${step("1","수기 매입처 생성","사업자·지점·거래처명만으로 임시 거래처 등록","대기")}${step("2","사진/OCR 등록","영수증·거래명세서에서 품목, 금액, 부가세 추출","검토")}${step("3","반복 템플릿 저장","자주 사는 품목과 단가를 다음 등록 기본값으로 사용","예정")}${step("4","승인 후 반영","대표 승인 시 매입자료, 재고, 세무 증빙에 동시 반영","예정")}</div></div><div class="drawer-actions"><button type="button" class="outline" data-action="receipt-upload">증빙 먼저 등록</button><button type="submit" class="primary">매입처 저장</button></div></form>`],
+        "tax-connect": ["홈택스·계산서 연동 설정", "전자세금계산서, 현금영수증, 카드매입, 신고자료를 사업자별 인증값으로 수집합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("tax-business","사업자",["전체 사업자","열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("tax-auth","인증 방식",["공동인증서","세무대리인 위임","홈택스 ID/PW","자료 파일 업로드"])}${authField("tax-login-id","홈택스 ID","text","사업자 계정")}${authField("tax-login-password","홈택스 비밀번호","password","Vault에 암호화 저장")}${authField("tax-cert","공동인증서 파일","file","인증서 선택")}${authField("tax-cert-password","인증서 비밀번호","password","인증서 암호")}${authField("tax-agent","세무대리인","text","담당 세무사")}${authSelect("tax-delegation","위임 상태",["위임 완료","위임 요청 필요","대표 직접 인증","파일 업로드만 사용"])}${authSelect("tax-scope","수집 범위",["전자세금계산서+현금영수증+카드매입","전자세금계산서만","매입 증빙만","신고서 파일"])}${authSelect("tax-cycle","수집 주기",["매일 06:00","매주 월요일","신고기간 집중","수동 실행"])}${authField("tax-alert","신고 알림일","text","마감 14일/7일/2일 전")}${authSelect("tax-permission","열람 권한",["대표+회계","대표+세무대리인","사업자별 담당자","대표 전용"])}</div><div class="detail-grid">${detailCard("부가세 신고","매출/매입 증빙 자동 묶음")}${detailCard("소득세/법인세","월 손익 보고서와 감가/인건비 연계")}${detailCard("계산서 누락","거래처별 미수취 알림")}${detailCard("인증 만료","인증서/위임 만료 전 알림")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="calendar">신고 일정 보기</button><button type="submit" class="primary">연동 테스트</button></div></form>`],
+        "receipt-upload": ["수기 증빙 사진 등록", "주문 프로그램이 없는 매입처의 거래명세서, 영수증, 세금계산서 이미지를 등록합니다.", `<form class="auth-form" data-search-form>${manualReceiptPanel()}<div class="credential-grid">${authSelect("receipt-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("receipt-branch","지점",["성신점","미아점","정화점"])}${authField("receipt-date","거래일자","date","거래일")}${authSelect("receipt-type","증빙 종류",["거래명세서","영수증","간이영수증","세금계산서","카카오톡 주문 캡처"])}${authSelect("receipt-reason","수기 사유",["주문 프로그램 없음","계정 연동 실패","거래처가 파일만 제공","현장 구매"])}${authSelect("receipt-tax","부가세 처리",["자동 판정","과세","면세","불공제","회계 검토"])}${authField("receipt-supplier","매입처","text","직접 입력 또는 자동 추출")}${authField("receipt-total","금액","text","자동 추출 후 수정")}${authSelect("receipt-payment","결제 방식",["사업자카드","계좌이체","현금","대표 개인카드 정산"])}${authSelect("receipt-template","반복 템플릿",["이번만 등록","매입처 기본값 저장","품목·단가까지 저장","다음 발주 예측에 반영"])}</div><div class="timeline">${step("1","파일 수신","사진/PDF/카카오톡 캡처 업로드","완료")}${step("2","OCR 추출","품목, 공급가, 부가세, 합계 자동 추출","검토")}${step("3","사용자 수정","매입처·품목·세금 분류 보정","대기")}${step("4","승인 반영","매입자료, 재고, 세무 증빙에 동시 반영","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">OCR 결과 수정</button><button type="submit" class="primary">매입자료 반영</button></div></form>`],
+        "credential-vault": ["인증정보 보관 정책", "연동 계정의 비밀번호, 인증서, 토큰, OTP 관리를 분리합니다.", `<div class="detail-grid">${detailCard("저장 방식","Vault 암호화 · 평문 재표시 금지")}${detailCard("권한","대표/회계 관리자만 입력·갱신")}${detailCard("감사로그","입력, 갱신, 테스트, 실패 이력 기록")}${detailCard("만료 알림","14일/7일/1일 전 알림")}${detailCard("권장 범위","조회 전용 · 이체/결제 권한 제외")}${detailCard("연동 실패","수기 업로드 대체 큐 자동 생성")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="audit-detail">감사로그 보기</button><button type="button" class="primary" data-action="confirm-state">정책 확인</button></div>`],
+        "integration-audit": ["연동 권한·보안 점검", "사업자별 인증 주체, 접근 권한, 만료일, 감사로그를 확인합니다.", `<div class="detail-grid">${detailCard("만료 예정","기업은행 OTP 1건 · 홈택스 인증서 1건")}${detailCard("권한 과다","점장 계정 2건이 정산 상세 열람 가능")}${detailCard("암호화 보관","인증 토큰/파일은 Vault 보관 필요")}${detailCard("감사로그","연동 설정 변경 9건 · 최근 30일")}${detailCard("권장 조치","읽기 전용 권한 우선, 쓰기/이체 권한 분리")}${detailCard("알림","만료 14/7/1일 전 대표·회계 알림")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="audit-detail">감사로그 보기</button><button type="button" class="primary" data-action="confirm-state">점검 완료</button></div>`],
+        "integration-guide": ["연동 설정 가이드", "대표자가 실수 없이 연결하도록 단계별로 안내합니다.", `<div class="timeline">${step("1","사업자 선택","연동 데이터가 귀속될 사업자와 지점 선택","대기")}${step("2","읽기 전용 인증","판매/은행/세무 계정은 조회 권한부터 연결","대기")}${step("3","데이터 매핑","메뉴, 계좌, 매입처, 세금 분류를 내부 기준과 연결","검토")}${step("4","검증 후 자동화","3일 샘플 대사 후 자동 수집 주기 적용","예정")}</div>`],
+        "recommended-connectors": ["추가 권장 연동 후보", "CEO 요구 외에 운영 효율을 높이는 연결 후보입니다.", `<div class="list">${row("blue","P","POS·키오스크","홀 매출과 배달 매출을 통합해 메뉴별 손익 정확도 개선","pos-connect")}${row("green","리","리뷰·CS","평점 하락, 환불, 보상쿠폰을 매출/원가 영향으로 연결","review-connect")}${row("amber","노","노무·4대보험","입퇴사, 급여, 4대보험 신고 일정 자동 알림","hr-connect")}${row("blue","카","카드·PG","카드 매입, PG 정산, 수수료 차이를 입금과 대사","pg-connect")}${row("green","메","메신저 알림","카카오 알림톡/문자로 증빙 요청과 인증 만료 알림 발송","notification")}</div>`],
+        "pos-connect": ["POS·키오스크 연동", "홀 매출, 현금, 카드, 키오스크 주문을 판매채널과 통합합니다.", `<div class="detail-grid">${detailCard("대상","OKPOS, 포스뱅크, 키오스크")}${detailCard("수집 데이터","주문, 결제수단, 메뉴, 취소")}${detailCard("활용","메뉴별 매출/재고 소진/입금 대사")}${detailCard("설정","지점별 단말기와 내부 메뉴 매핑")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
+        "review-connect": ["리뷰·CS 연동", "배달앱 리뷰와 환불/보상 이력을 운영 리스크로 관리합니다.", `<div class="detail-grid">${detailCard("수집","평점, 키워드, 리뷰 답변 상태")}${detailCard("알림","평점 3점 이하 즉시")}${detailCard("매출 영향","쿠폰/환불/재주문 여부 연결")}${detailCard("담당","점장 답변, 대표 예외 승인")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
+        "hr-connect": ["노무·4대보험 연동", "직원 계약, 급여, 입퇴사 신고 일정을 연동합니다.", `<div class="detail-grid">${detailCard("대상","급여대장, 4대보험, 입퇴사")}${detailCard("권한","대표·노무 담당 분리")}${detailCard("알림","계약/보건증/보험 신고 마감")}${detailCard("자료","계약서, 급여명세서, 원천세")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
+        "pg-connect": ["카드·PG 연동", "KCP, 나이스, 토스페이먼츠 정산과 은행 입금을 대사합니다.", `<div class="detail-grid">${detailCard("수집","승인, 취소, 수수료, 정산 예정")}${detailCard("대사","은행 입금 자동 매칭")}${detailCard("예외","차이 금액, 보류, 취소 누락")}${detailCard("보고","정산 차이 리포트")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
+        connect: ["외부 서비스 연동", "판매사이트, 은행, 매입처, 홈택스, POS/PG를 추가합니다.", `<div class="profile-menu"><button type="button" data-action="sales-channel-connect">판매사이트: 배민·쿠팡이츠·요기요·땡겨요</button><button type="button" data-action="bank-connect">은행: 신한은행 기업·기업은행 기업</button><button type="button" data-action="supplier-connect">매입처: 쿠팡·마켓봄·뉴통·발주고·직접 추가</button><button type="button" data-action="tax-connect">홈택스·전자세금계산서</button><button type="button" data-action="receipt-upload">주문 프로그램 없는 매입처 증빙 등록</button><button type="button" data-action="recommended-connectors">추가 권장 연동 후보</button></div>`],
         calendar: ["세무 캘린더", "신고·납부 일정 상세", `<div class="timeline">${step("!","부가가치세","2026-07-25 · D-2","대기")}${step("2","원천세","2026-08-10","검토")}${step("3","법인세 중간예납","2026-08-31","예정")}</div>`],
         primary: ["주요 작업", `${views[slug] ? views[slug].title : "현재 화면"} 업무`, `<div class="profile-menu"><button type="button" data-action="review">상세현황 검토</button><button type="button" data-action="download">자료 미리보기·내보내기</button><button type="button" data-action="help">검토 메모 남기기</button></div>`]
       };
@@ -958,7 +1087,20 @@
       "export-csv": "현재 표의 CSV 내보내기 요청 상태로 변경했습니다.",
       "export-excel": "현재 표의 Excel 내보내기 요청 상태로 변경했습니다.",
       "comparison-toggle": "비교기간 표시를 켠 시안 상태입니다.",
-      "sales-tab": "매출 통계/상세 탭을 전환했습니다."
+      "sales-tab": "매출 통계/상세 탭을 전환했습니다.",
+      "sales-channel-connect": "판매사이트 연동 설정을 여는 시안 동작입니다.",
+      "bank-connect": "은행 빠른계좌조회 설정을 여는 시안 동작입니다.",
+      "supplier-connect": "매입처·발주 프로그램 설정을 여는 시안 동작입니다.",
+      "tax-connect": "홈택스·계산서 연동 설정을 여는 시안 동작입니다.",
+      "receipt-upload": "수기 증빙 사진 등록 화면을 여는 시안 동작입니다.",
+      "integration-audit": "연동 권한과 보안 점검 패널을 여는 시안 동작입니다.",
+      "integration-guide": "연동 설정 가이드를 여는 시안 동작입니다.",
+      "recommended-connectors": "추가 권장 연동 후보를 여는 시안 동작입니다.",
+      "credential-vault": "연동 인증정보 보관 정책을 여는 시안 동작입니다.",
+      "pos-connect": "POS·키오스크 연동 후보 상세를 여는 시안 동작입니다.",
+      "review-connect": "리뷰·CS 연동 후보 상세를 여는 시안 동작입니다.",
+      "hr-connect": "노무·4대보험 연동 후보 상세를 여는 시안 동작입니다.",
+      "pg-connect": "카드·PG 연동 후보 상세를 여는 시안 동작입니다."
     };
 
     const normalizeHash = () => {
@@ -1008,7 +1150,7 @@
           showToast("선택한 상태 변경을 시안에 반영했습니다.");
           return;
         }
-        const detailActions = new Set(["profile","search","notification","report","task","approve","match","contract","review","download","business-switch","connect","calendar","primary","sales-detail","account-detail","employee-detail","business-detail","employee-docs","contract-builder","signature-progress","business-ocr","menu-detail","order-detail","approval-detail","margin-detail","audit-detail","document-vault"]);
+        const detailActions = new Set(["profile","search","notification","report","task","approve","match","contract","review","download","business-switch","connect","calendar","primary","sales-detail","account-detail","employee-detail","business-detail","employee-docs","contract-builder","signature-progress","business-ocr","menu-detail","order-detail","approval-detail","margin-detail","audit-detail","document-vault","sales-channel-connect","bank-connect","supplier-connect","tax-connect","receipt-upload","integration-audit","integration-guide","recommended-connectors","credential-vault","pos-connect","review-connect","hr-connect","pg-connect"]);
         if (detailActions.has(action)) {
           openDetail(action);
           return;

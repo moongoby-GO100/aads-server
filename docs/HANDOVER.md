@@ -1,5 +1,10 @@
 # AADS HANDOVER
-최종 업데이트: 2026-07-25
+최종 업데이트: 2026-07-26
+
+## 2026-07-26
+- AADS-FOOD-INTEGRATION-MOCKUP-CREDENTIALS-20260726: 20:49:19 KST 기준 매장비서 `mockup-v2.html#integrations` 연동관리 시안을 CEO 지적사항에 맞춰 보강했다. 판매사이트(배민, 쿠팡이츠, 요기요, 땡겨요)는 계정 ID만으로 부족하므로 비밀번호, 2차 인증/OTP, 플랫폼 매장코드, API 토큰/정산 CSV fallback, 수집 범위, 권한 범위를 상세 입력값으로 추가했다. 은행(신한은행 기업, 기업은행 기업)은 기업뱅킹 ID/PW, 조회 계좌번호, 공동/금융인증서 파일, 인증서 비밀번호, OTP/보안매체, 조회 전용 권한을 분리했다. 홈택스/계산서는 홈택스 ID/PW, 공동인증서 파일/PW, 세무대리인 위임, 수집 범위, 인증 만료 알림을 추가했다. 매입처는 쿠팡/마켓봄/뉴통/발주고 계정/API 연동과 주문 프로그램이 없는 거래처의 수기 매입처 생성, 거래명세서/영수증 사진 OCR, 반복 템플릿, 대표 승인 후 매입자료·재고·세무 반영 흐름을 반영했다. 추가로 인증정보 Vault 보관 정책 상세 드로어를 추가했다. 검증은 인라인 JS `vm.Script` 구문 검사, `git diff --check`, 공개 URL HTTP 200 및 응답 HTML 문구 확인, Browser Bridge 렌더/드로어 클릭/캡처 성공으로 수행했다. 기존 운영 `index.html`, API, DB는 변경하지 않았다.
+- AADS-FOOD-INTEGRATION-SETTINGS-R2-20260726: 20:04:49 KST 기준 매장비서 설정/연동관리 화면을 추가 보강했다. 판매사이트 4사(배민, 쿠팡이츠, 요기요, 땡겨요), POS, 신한은행 기업/기업은행 기업, 쿠팡/마켓봄/뉴통/발주고/기타 매입처, 거래내역서·영수증 사진/OCR, 홈택스, 계산서/증빙 업로드에 더해 카드사/PG 매출, 공과금 고지서, 세무대리인/회계프로그램 전달 채널을 추가했다. 프론트는 서비스 카탈로그 기반으로 공식/관리 URL, 권장 수집방식, 수집대상, 필수 확인값, 메모를 자동 프리셋하고 연동 현황 카드에 표시한다. `/api/v1/yeoljeong-finance/accounts`는 `category`, `data_scope`, `required_proof`, 기존 프론트가 보내던 `auto_sync` payload를 허용하도록 API 계약을 보강했다. 검증은 `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`, 인라인 JS `node --check`, `git diff --check` 통과. 로컬 `.venv/bin/python`은 깨진 symlink라 FastAPI import/pytest는 미실행했다. 커밋, 푸시, 배포는 아직 수행하지 않았다.
+- AADS-FOOD-INTEGRATION-SETTINGS-20260726: 19:51:07 KST 기준 매장비서 운영 앱 `app/static/apps/yeoljeong-finance/index.html`의 설정/연동관리 화면을 판매사이트(배민, 쿠팡이츠, 요기요, 땡겨요, POS), 은행(신한은행 기업, 기업은행 기업), 매입처(쿠팡, 마켓봄, 뉴통, 발주고, 기타 주문프로그램), 주문프로그램 없는 매입처의 거래내역서/영수증 파일·사진 등록, 홈택스 및 계산서/증빙 업로드까지 등록 가능하도록 확장했다. 기본 연동 목록과 서비스 라벨, 수집 방식, 요약 카운트, 파일/사진 등록 CTA를 추가했고, 비배달 서비스의 `수집 실행`은 오류 호출 대신 설정 저장/파일 등록 흐름으로 분기한다. 백엔드 `app/services/yeoljeong_finance_service.py`는 `/api/v1/yeoljeong-finance/accounts` 저장 허용 범위를 배달 4사에서 전체 연동 서비스로 넓히고, 홈택스처럼 지점 공통인 연동도 사업자 기준으로 저장될 수 있게 범위 검증을 분리했다. 검증은 `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`와 Node `vm.Script` 인라인 스크립트 파싱 1건 통과로 수행했다. 커밋, 푸시, 무중단 배포는 아직 수행하지 않았다.
 
 ## 2026-07-25
 - AADS-PIPELINE-RUNNER-KO-READONLY-GUARD-20260725: `runner-92eb71d8`가 "읽기 전용 확인만 수행" 지시를 수행하고도 Runner Guard의 영어 중심 read-only 판별에 걸리지 않아 `status='cancelled', phase='no_changes'`로 저장된 false cancellation을 확인했다. `scripts/pipeline-runner.sh`와 `scripts/pipeline-runner.sh.local`의 `is_read_only_instruction()`에 `읽기[[:space:]]*전용` 패턴을 추가해 한국어 읽기 전용 검증 작업이 diff 0건을 정상 완료(`done`)로 저장하도록 보강했다. 관련 단위 테스트는 `tests/unit/test_pipeline_runner_script_guards.py`에 추가했다.
@@ -176,3 +181,6 @@
 
 ## 2026-04-24
 - Phase 1-C: claude_md_merger ready, /api/v1/ops/claude-md endpoint live
+
+## 2026-07-26 API liveness follow-up
+- AADS chat replay/stale-runtime 배포 후 Docker health가 `/api/v1/health`의 종합 점검 지연으로 10초 timeout에 걸리는 문제를 확인했다. 컨테이너 liveness 전용 `/health/live`, `/api/v1/health/live`를 추가하고 API blue/green healthcheck를 `/health/live`로 전환했다. 기능 health는 기존 `/api/v1/health` 유지, 컨테이너 생존 판정은 경량 경로로 분리한다.
