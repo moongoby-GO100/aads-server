@@ -172,6 +172,14 @@
     .requirement-card { min-height: 94px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
     .requirement-card strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
     .requirement-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .decision-matrix { display: grid; gap: 8px; }
+    .decision-row { display: grid; grid-template-columns: minmax(92px, .45fr) minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; font-size: 10px; }
+    .decision-row b { font-size: 11px; }
+    .decision-row span { color: var(--muted); line-height: 1.45; }
+    .manual-board { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 12px; align-items: stretch; }
+    .manual-card { display: grid; gap: 9px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .manual-card b { font-size: 12px; }
+    .manual-card span { color: var(--muted); font-size: 10px; line-height: 1.45; }
     .credential-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .credential-grid .wide { grid-column: 1 / -1; }
     .fallback-lane { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 12px; align-items: start; }
@@ -240,8 +248,18 @@
     .profile:hover { background: #f7f8fa; }
     .profile-menu { display: grid; gap: 8px; }
     .profile-menu button { min-height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; text-align: left; font-weight: 750; }
-    .auth-shell { min-height: calc(100vh - 150px); display: grid; place-items: center; padding: 24px 0; }
-    .auth-card { width: min(560px, 100%); padding: 28px; }
+    .auth-shell { min-height: calc(100vh - 150px); display: grid; align-items: center; padding: 24px 0; }
+    .auth-layout { width: min(1040px, 100%); margin: 0 auto; display: grid; grid-template-columns: minmax(280px, .82fr) minmax(360px, 1fr); gap: 16px; align-items: stretch; }
+    .auth-side { padding: 28px; border: 1px solid var(--line); border-radius: 12px; background: var(--nav); color: #fff; box-shadow: var(--shadow); }
+    .auth-side h2 { margin: 0; font-size: 24px; }
+    .auth-side p { margin: 8px 0 18px; color: #c5cad3; font-size: 12px; line-height: 1.6; }
+    .auth-side-list { display: grid; gap: 10px; }
+    .auth-side-list div { padding: 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 9px; background: rgba(255,255,255,.06); }
+    .auth-side-list strong { display: block; font-size: 12px; }
+    .auth-side-list span { display: block; margin-top: 4px; color: #aeb5c1; font-size: 10px; line-height: 1.45; }
+    .auth-security-strip { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin: 14px 0 6px; }
+    .auth-security-strip span { min-height: 42px; display: grid; align-content: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9fb; color: var(--muted); font-size: 10px; font-weight: 800; text-align: center; }
+    .auth-card { width: 100%; padding: 28px; }
     .auth-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 22px; font-weight: 900; }
     .auth-card h2 { margin: 0; font-size: 23px; }
     .auth-card > p { margin: 7px 0 20px; color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -263,6 +281,9 @@
       .grid-main { grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); }
       .grid-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
       .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .requirement-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .auth-layout { grid-template-columns: 1fr; }
+      .decision-row { grid-template-columns: 1fr; }
+      .manual-board { grid-template-columns: 1fr; }
       .fallback-lane { grid-template-columns: 1fr; }
       .grid-3 .card:last-child { grid-column: 1 / -1; }
     }
@@ -317,6 +338,8 @@
       .drawer { padding: 18px; }
       .detail-grid { grid-template-columns: 1fr; }
       .auth-shell { min-height: auto; padding: 4px 0 20px; }
+      .auth-side { padding: 20px; }
+      .auth-security-strip { grid-template-columns: 1fr; }
       .auth-card { padding: 20px; }
     }
   </style>
@@ -624,7 +647,8 @@
                 ${connectorCard("홈택스·계산서", "전자세금계산서 · 현금영수증 · 카드매입", "부가세/소득세/법인세 자료 자동 수집", "정상", "ok", "amber", "세무", ["공동인증서", "인증서 PW", "세무대리인"], "tax-connect")}
               </div>
             </section>
-            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>연동 조건별 필수 입력값</h3><p>ID만으로 연결할 수 없는 항목을 먼저 확인합니다.</p></div><button type="button" class="outline" data-action="credential-vault">보안 보관 정책</button></div>${integrationRequirementGrid()}</section>
+            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>연동 조건별 필수 입력값</h3><p>ID만으로 연결할 수 없는 항목을 먼저 확인합니다. 판매사이트도 계정 ID와 비밀번호, 2차 인증 정보가 함께 필요합니다.</p></div><button type="button" class="outline" data-action="credential-vault">보안 보관 정책</button></div>${integrationRequirementGrid()}</section>
+            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>서비스별 설정 판단표</h3><p>어떤 인증값을 받아야 하고, 실패하면 어떤 대체 화면으로 보낼지 정의합니다.</p></div><button type="button" class="primary" data-action="integration-guide">설정 순서</button></div>${integrationDecisionMatrix()}</section>
             <section class="grid-main">
               <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>카테고리별 자동화 현황</h3><p>자동 수집, 파일 업로드, 수기 확인 비율</p></div><button type="button" class="primary" data-action="integration-audit">상세 점검</button></div>${integrationProgress()}</article>
               <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>빠른 설정</h3><p>대표자가 자주 쓰는 추가/수정 동선</p></div></div>
@@ -640,6 +664,7 @@
               <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>수기 증빙 등록</h3><p>주문 프로그램이 없는 매입처를 위한 영수증/거래명세서 OCR 흐름</p></div><button type="button" class="primary" data-action="receipt-upload">사진 등록</button></div>${manualReceiptPanel()}</article>
               <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>추가 권장 연동</h3><p>누락되기 쉬운 운영 데이터를 확장합니다.</p></div><button type="button" class="outline" data-action="recommended-connectors">후보 보기</button></div><div class="list">${row("blue","P","POS·키오스크","OKPOS/포스뱅크/키오스크 매출을 배달 매출과 합산","pos-connect")}${row("green","리","리뷰·CS","배달앱 리뷰, 고객 불만, 보상쿠폰 이력 수집","review-connect")}${row("amber","노","노무·4대보험","급여, 입퇴사, 4대보험 신고 일정 연계","hr-connect")}${row("blue","카","카드·PG","KCP·나이스·토스페이먼츠 매입/정산 대사","pg-connect")}</div></article>
             </section>
+            <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>미연동 매입처 수기 운영</h3><p>주문 프로그램이 없거나 계정 연동이 막힌 거래처도 같은 매입·재고·세무 흐름에 태웁니다.</p></div><button type="button" class="primary" data-action="receipt-upload">수기 등록 시작</button></div>${manualSupplierBoard()}</section>
             <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>연동 목록 상세</h3><p>연결 상태, 사업자/지점 매핑, 최근 동기화, 조치 버튼</p></div><button type="button" class="primary" data-action="bulk">선택 일괄 동기화</button></div>${integrationSettingsTable()}</section>
             <section class="card panel"><div class="panel-head"><div class="panel-title"><h3>오류·재연결 큐</h3><p>실패한 동기화 항목과 다음 조치</p></div><button class="primary" data-action="reconnect">선택 재연결</button></div><div class="list">${row("red", "은", "기업은행 기업뱅킹 인증 만료", "문라이트F&B · OTP 재인증 필요", "bank-connect")}${row("amber", "판", "요기요 비밀번호 변경 감지", "성신점 · 저장된 비밀번호 갱신 후 2차 인증 필요", "sales-channel-connect")}${row("amber", "매", "마켓봄 거래명세서 누락", "성신점 · 7월 22일 발주건 사진 등록 권장", "receipt-upload")}${row("blue", "세", "홈택스 계산서 수집 예약", "오늘 18:00 전자세금계산서 재조회 예정", "tax-connect")}</div></section>
           </section>`)
@@ -778,17 +803,37 @@
     }
     function integrationRequirementGrid() {
       return `<div class="requirement-grid">
-        ${requirementCard("판매사이트", "계정 ID, 비밀번호, 2차 인증 수단, 플랫폼 매장코드, 정산 CSV/API 권한, 메뉴 매핑값")}
-        ${requirementCard("은행", "기업뱅킹 ID, 비밀번호, 계좌번호, 공동인증서/금융인증서, 인증서 비밀번호, OTP/보안매체")}
-        ${requirementCard("매입처", "주문 프로그램 ID/PW 또는 API Key, 공급사 코드, 품목 매핑, 미연동 시 거래명세서·영수증 사진")}
-        ${requirementCard("홈택스", "사업자별 홈택스 ID/PW, 공동인증서, 인증서 비밀번호, 세무대리인 위임, 수집 범위")}
+        ${requirementCard("판매사이트", "배민·쿠팡이츠·요기요·땡겨요: 계정 ID, 비밀번호, 2차 인증 수단, 플랫폼 매장코드, 정산 CSV/API 권한, 메뉴 매핑")}
+        ${requirementCard("은행", "신한은행 기업·기업은행 기업: 기업뱅킹 ID, 비밀번호, 계좌번호, 인증서 파일, 인증서 비밀번호, OTP/보안매체")}
+        ${requirementCard("매입처", "쿠팡·마켓봄·뉴통·발주고: 주문 프로그램 ID/PW 또는 API Key, 공급사 코드, 품목 매핑, 발주/명세서 수집 범위")}
+        ${requirementCard("미연동 매입처", "주문 프로그램이 없으면 매입처명, 거래일, 금액, 품목, 부가세, 결제수단을 거래명세서·영수증 사진 OCR로 등록")}
+        ${requirementCard("홈택스", "사업자별 홈택스 ID/PW, 공동인증서, 인증서 비밀번호, 세무대리인 위임, 전자세금계산서·현금영수증 수집 범위")}
+        ${requirementCard("POS·키오스크", "지점 단말기, 관리자 ID/PW, 매장코드, 메뉴코드, 결제수단, 취소/환불 권한")}
+        ${requirementCard("카드·PG", "가맹점번호, 정산 계좌, 승인/취소 API 또는 파일, 수수료 코드, 입금 매칭 규칙")}
+        ${requirementCard("알림 채널", "대표·회계·점장 수신자, 인증 만료 알림, 증빙 요청 알림, 실패 재시도 정책")}
       </div><div class="notice"><span>비밀번호·인증서 비밀번호·토큰은 화면에 평문으로 재표시하지 않고 저장 전 Vault 암호화와 만료 알림을 거치는 디자인입니다.</span><b>보안 필수</b></div>`;
+    }
+    function integrationDecisionMatrix() {
+      const rows = [
+        ["판매사이트", "ID/PW + OTP/푸시 + 매장코드", "주문, 매출, 정산, 리뷰, 광고비", "비밀번호 변경/2차 인증 실패 시 CSV 업로드 대기열", "sales-channel-connect"],
+        ["은행", "기업뱅킹 ID/PW + 인증서 PW + OTP", "잔액, 입출금, 입금자명, 정산금 매칭", "빠른조회 실패 시 거래내역 파일 업로드", "bank-connect"],
+        ["매입처 프로그램", "ID/PW 또는 API Key + 공급사/품목코드", "발주, 거래명세서, 입고, 단가", "프로그램 없음 선택 시 수기 매입처 카드 생성", "supplier-connect"],
+        ["홈택스", "홈택스 ID/PW 또는 공동인증서 + 위임 상태", "전자세금계산서, 현금영수증, 신고자료", "인증 만료 시 파일 업로드와 세무대리인 공유", "tax-connect"],
+        ["수기 증빙", "사진/PDF + 거래일 + 매입처 + 금액", "품목, 부가세, 결제수단, 재고 반영", "OCR 신뢰도 낮으면 사용자 수정 후 승인", "receipt-upload"]
+      ];
+      return `<div class="decision-matrix">${rows.map(([type, auth, data, fallback, action]) => `<div class="decision-row"><b>${type}</b><span>${auth}</span><span>${data}</span><span>${fallback}</span><button type="button" class="chip-btn" data-action="${action}">설정</button></div>`).join("")}</div>`;
     }
     function credentialNotice() {
       return `<div class="notice"><span>ID만 저장하면 연결 테스트가 실패합니다. 비밀번호, 2차 인증, 인증서, API 토큰은 서비스별 요구 조건에 따라 별도 입력하고 저장 후에는 마스킹·만료일·감사로그로 관리합니다.</span><b>조회 전용 권한 우선</b></div>`;
     }
     function manualReceiptPanel() {
       return `<div class="upload-split"><div class="dropzone" role="button" tabindex="0" data-action="receipt-upload"><b>거래명세서·영수증 사진 등록</b><span>카메라 촬영, PDF, 카카오톡 이미지 저장본을 올리면 매입처/품목/금액/부가세를 추출하는 시안입니다.</span></div><div class="manual-receipt-list"><button type="button" data-action="receipt-upload">주문 프로그램 없음 · 사진만 등록</button><button type="button" data-action="receipt-upload">거래명세서 여러 장 일괄 업로드</button><button type="button" data-action="receipt-upload">반복 매입처 템플릿으로 저장</button><button type="button" data-action="receipt-upload">품목명 레시피 재료와 매핑</button><button type="button" data-action="receipt-upload">대표 승인 후 매입자료 반영</button></div></div>`;
+    }
+    function manualSupplierBoard() {
+      return `<div class="manual-board">
+        <div class="manual-card"><b>미연동 매입처 등록 조건</b><span>매입처명, 담당 연락처, 사용 지점, 기본 품목, 결제 방식만으로 임시 거래처를 만들고 주문 프로그램 여부를 계속 관리합니다.</span><button type="button" class="primary" data-action="supplier-connect">수기 매입처 만들기</button></div>
+        <div class="manual-card"><b>사진 등록 후 반영 경로</b><span>사진/PDF 업로드 → OCR 추출 → 품목·부가세 수정 → 반복 템플릿 저장 → 대표 승인 → 매입자료·재고·세무증빙 동시 반영.</span><button type="button" class="outline" data-action="receipt-upload">증빙 등록 화면</button></div>
+      </div>`;
     }
     function integrationSettingsTable() {
       return `<div class="table-wrap"><table><thead><tr><th>구분</th><th>서비스</th><th>사업자·지점</th><th>수집 데이터</th><th>필수 인증값</th><th>최근 동기화</th><th>상태</th><th>설정</th></tr></thead><tbody>
@@ -804,16 +849,28 @@
       </tbody></table></div>`;
     }
 
+    const authProofPanel = () => `<aside class="auth-side">
+      <div class="auth-brand"><span class="brand-mark">M</span>매장비서 <span class="sample-badge">FB 시안</span></div>
+      <h2>돈, 직원, 세무 권한을 한 계정에서 분리합니다</h2>
+      <p>대표자는 전체 사업자를 보고, 점장은 자기 지점만 보고, 직원은 본인 서류와 계약만 처리하는 로그인 구조입니다.</p>
+      <div class="auth-side-list">
+        <div><strong>대표자</strong><span>다사업자 전환, 연동 인증정보, 정산·세무·급여 승인</span></div>
+        <div><strong>점장</strong><span>지점 매출, 근태, 재고, 발주 요청과 수기 증빙 등록</span></div>
+        <div><strong>직원</strong><span>회원가입 후 입사서류 업로드, 계약서 확인, 전자서명</span></div>
+        <div><strong>외부 담당자</strong><span>세무·노무 자료 열람은 초대 권한과 감사로그 기준으로 제한</span></div>
+      </div>
+    </aside>`;
+    const authSecurityStrip = () => `<div class="auth-security-strip"><span>2단계 인증</span><span>사업자별 권한</span><span>접속 감사로그</span></div>`;
     const authShell = (title, description, form, links, step = "", ctaLabel = "다음 단계", nextView = "") => `
-      <section class="auth-shell"><article class="card auth-card">
+      <section class="auth-shell"><div class="auth-layout">${authProofPanel()}<article class="card auth-card">
         <div class="auth-brand"><span class="brand-mark">M</span>매장비서 <span class="sample-badge">UX 시안</span></div>
         ${step}
         <h2>${title}</h2><p>${description}</p>
         <form class="auth-form" data-auth-form${nextView ? ` data-next-view="${nextView}"` : ""}>${form}<button type="submit" class="primary">${ctaLabel}</button></form>
         <div class="auth-links">${links}</div>
-      </article></section>`;
+      </article></div></section>`;
     const authLink = (slug, label) => `<button type="button" data-auth="${slug}">${label}</button>`;
-    const authField = (id, label, type, placeholder, value = "") => `<div class="field"><label for="${id}">${label}</label><input id="${id}" name="${id}" type="${type}" placeholder="${placeholder}" value="${value}" required></div>`;
+    const authField = (id, label, type, placeholder, value = "", required = true) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" name="${id}" type="${type}" placeholder="${placeholder}" value="${value}"${required ? " required" : ""}></div>`;
     const authSelect = (id, label, options) => `<div class="field"><label for="${id}">${label}</label><select id="${id}" name="${id}">${options.map((item) => `<option>${item}</option>`).join("")}</select></div>`;
     const stepper = (active) => `<div class="stepper"><span class="${active === 1 ? "active" : ""}">1. 계정</span><span class="${active === 2 ? "active" : ""}">2. 인증</span><span class="${active === 3 ? "active" : ""}">3. 사업자</span></div>`;
 
@@ -841,11 +898,11 @@
       },
       "auth-login": {
         title: "로그인",
-        html: () => authShell("매장비서 로그인", "대표자·직원 계정으로 안전하게 로그인하는 화면입니다.", `${authField("login-email","이메일","email","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}<label class="agreement"><input type="checkbox">로그인 상태 유지</label>`, `${authLink("auth-signup","회원가입")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-invite","직원 초대 수락")}`, "", "로그인", "home")
+        html: () => authShell("매장비서 로그인", "대표자·점장·직원·외부 담당자별 권한을 분리해 접속하는 FB 공개 로그인 시안입니다.", `<div class="auth-grid">${authField("login-email","이메일 또는 휴대폰","text","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}${authSelect("login-role","접속 역할",["대표자/관리자","점장","직원","세무·노무 외부 담당자"])}${authField("login-tenant","조직 코드","text","초대 링크는 자동 입력","",false)}</div>${authSecurityStrip()}<label class="agreement"><input type="checkbox">로그인 상태 유지 · 공용 PC에서는 선택하지 않음</label>`, `${authLink("auth-signup","대표자 회원가입")}${authLink("auth-invite","직원 초대 수락")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-onboarding","사업자 등록")}`, "", "로그인", "home")
       },
       "auth-signup": {
         title: "회원가입",
-        html: () => authShell("대표자 회원가입", "대표자 정보와 첫 사업자 기본정보를 입력합니다.", `<div class="auth-grid">${authField("signup-name","대표자명","text","홍길동")}${authField("signup-phone","휴대폰","tel","010-0000-0000")}${authField("signup-email","이메일","email","name@company.com")}${authField("signup-password","비밀번호","password","8자 이상")}${authField("signup-business","상호명","text","열정국밥")}${authField("signup-number","사업자등록번호","text","000-00-00000")}</div><label class="agreement"><input type="checkbox" required>서비스 이용약관 및 개인정보 처리방침에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-verify","본인인증 화면")}`, stepper(1), "회원가입 계속", "auth-verify")
+        html: () => authShell("대표자 회원가입", "대표자 정보와 첫 사업자 기본정보를 입력하고, 사업자등록증 업로드 온보딩으로 이어집니다.", `<div class="auth-grid">${authField("signup-name","대표자명","text","홍길동")}${authField("signup-phone","휴대폰","tel","010-0000-0000")}${authField("signup-email","이메일","email","name@company.com")}${authField("signup-password","비밀번호","password","8자 이상")}${authField("signup-business","상호명","text","열정국밥")}${authField("signup-number","사업자등록번호","text","000-00-00000")}${authSelect("signup-role","가입 목적",["대표자 직접 관리","회계 담당자 초대","점장 조직 생성"])}${authSelect("signup-doc","사업자 서류",["회원가입 후 업로드","지금 업로드 예정","세무대리인에게 요청"])}</div><label class="agreement"><input type="checkbox" required>서비스 이용약관, 개인정보 처리방침, 사업자 권한 확인에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-verify","본인인증 화면")}${authLink("auth-onboarding","사업자등록 OCR")}`, stepper(1), "회원가입 계속", "auth-verify")
       },
       "auth-verify": {
         title: "이메일·휴대폰 인증",
@@ -861,11 +918,11 @@
       },
       "auth-invite": {
         title: "직원 초대 수락",
-        html: () => authShell("성신점 직원 초대", "초대된 지점과 권한을 확인하고 직원 계정을 생성합니다.", `<div class="detail-grid"><div class="detail-block"><small>초대한 사람</small><strong>문고비 대표</strong></div><div class="detail-block"><small>부여 권한</small><strong>근태 입력·매출 조회</strong></div></div>${authField("invite-name","이름","text","직원 이름")}${authField("invite-password","비밀번호","password","8자 이상")}<label class="agreement"><input type="checkbox" required>성신점 직원 초대와 권한 범위를 확인했습니다.</label>`, `${authLink("auth-login","로그인으로")}`, "", "초대 수락", "home")
+        html: () => authShell("성신점 직원 초대", "초대된 지점과 권한을 확인하고 직원 계정을 만든 뒤 입사서류 제출 화면으로 이동합니다.", `<div class="detail-grid"><div class="detail-block"><small>초대한 사람</small><strong>문고비 대표</strong></div><div class="detail-block"><small>부여 권한</small><strong>본인 근태·본인 문서</strong></div></div>${authField("invite-name","이름","text","직원 이름")}${authField("invite-phone","휴대폰","tel","010-0000-0000")}${authField("invite-password","비밀번호","password","8자 이상")}<label class="agreement"><input type="checkbox" required>성신점 직원 초대와 본인 서류 제출 범위를 확인했습니다.</label>`, `${authLink("auth-login","로그인으로")}${authLink("employees","입사서류 화면 보기")}`, "", "초대 수락 후 서류 제출", "employees")
       },
       "auth-onboarding": {
         title: "초기 사업자 등록",
-        html: () => authShell("첫 사업자 등록", "사업자·지점·정산계좌를 등록하는 초기 온보딩 화면입니다.", `<div class="auth-grid">${authField("onboard-name","상호명","text","열정국밥")}${authSelect("onboard-type","사업자 유형",["법인사업자","개인사업자"])}${authField("onboard-number","사업자등록번호","text","000-00-00000")}${authField("onboard-branch","첫 지점명","text","성신점")}${authSelect("onboard-bank","정산 은행",["신한은행","국민은행","우리은행"])}${authField("onboard-account","계좌번호","text","숫자만 입력")}</div><label class="agreement"><input type="checkbox" required>사업자 정보 확인 및 계좌 조회 권한에 동의합니다.</label>`, `${authLink("auth-verify","이전 단계")}${authLink("home","나중에 등록")}`, stepper(3), "사업자 등록 완료", "home")
+        html: () => authShell("첫 사업자 등록", "사업자등록증을 업로드하면 OCR 기본값을 만들고, 대표자가 수정 후 저장하는 온보딩입니다.", `<div class="dropzone" role="button" tabindex="0" data-action="business-ocr"><b>사업자등록증 업로드</b><span>상호, 사업자번호, 대표자, 주소, 업태/종목을 추출하고 직접 수정할 수 있습니다.</span></div><div class="auth-grid">${authField("onboard-name","상호명","text","열정국밥")}${authSelect("onboard-type","사업자 유형",["법인사업자","개인사업자"])}${authField("onboard-number","사업자등록번호","text","000-00-00000")}${authField("onboard-branch","첫 지점명","text","성신점")}${authSelect("onboard-bank","정산 은행",["신한은행 기업","기업은행 기업","기타 은행"])}${authField("onboard-account","계좌번호","text","숫자만 입력")}</div><label class="agreement"><input type="checkbox" required>사업자 정보 확인 및 계좌 조회 권한에 동의합니다.</label>`, `${authLink("auth-verify","이전 단계")}${authLink("business","사업자 설정 화면")}${authLink("home","나중에 등록")}`, stepper(3), "사업자 등록 완료", "home")
       }
     });
 
@@ -1023,9 +1080,9 @@
         download: ["보고서 미리보기", "생성·다운로드 상태", `<div class="detail-grid">${detailCard("보고서","7월 CEO 경영보고")}${detailCard("형식","PDF 14쪽")}${detailCard("생성 상태","완료")}${detailCard("생성 시각","2026-07-23 18:40")}</div><div class="timeline">${step("✓","데이터 집계","완료","완료")}${step("✓","PDF 생성","완료","완료")}${step("3","다운로드·공유","사용자 선택","대기")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">Excel</button><button type="button" class="primary" data-action="confirm-state">PDF 다운로드</button></div>`],
         report: ["새 보고서 생성", "기간·사업자·형식을 선택합니다.", `<form class="auth-form" data-report-form>${authSelect("report-type","보고서 유형",["CEO 경영보고","정산 대사","급여대장","세무 증빙"])}${authSelect("report-format","파일 형식",["PDF","Excel","PDF + Excel"])}<div class="drawer-actions"><button type="submit" class="primary">생성 시작</button></div></form>`],
         "business-switch": ["사업자 전환", "조회 범위와 권한을 확인합니다.", `<div class="profile-menu"><button type="button" data-action="confirm-state">열정국밥 주식회사 · 3개 지점</button><button type="button" data-action="confirm-state">문라이트F&amp;B · 1개 지점</button><button type="button" data-action="confirm-state">문고비 개인사업자 · 1개 지점</button></div>`],
-        "sales-channel-connect": ["판매사이트 연동 설정", "배민, 쿠팡이츠, 요기요, 땡겨요는 ID만으로 부족하므로 비밀번호와 2차 인증까지 관리합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("sales-service","판매사이트",["배달의민족","쿠팡이츠","요기요","땡겨요"])}${authSelect("sales-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("sales-branch","지점 매핑",["성신점","미아점","정화점","신규 지점 추가"])}${authField("sales-store-code","플랫폼 매장코드","text","store-12345")}${authField("sales-account","계정 ID","text","owner@store.com")}${authField("sales-password","비밀번호","password","Vault에 암호화 저장")}${authSelect("sales-mfa","2차 인증 수단",["문자 OTP","이메일 OTP","앱 푸시 승인","관리자 수동 승인"])}${authField("sales-otp","일회용 인증번호","text","연결 테스트 때만 입력")}${authSelect("sales-auth","보조 연결 방식",["OAuth 승인","정산 CSV 업로드","API 토큰","관리자 대리 등록"])}${authField("sales-api-key","API 토큰·승인키","password","제공되는 경우 입력")}${authSelect("sales-sync","수집 범위",["주문+매출+정산+리뷰","주문+정산","정산만","리뷰 제외"])}${authSelect("sales-permission","권한 범위",["조회 전용","정산 조회","리뷰 답변 포함","관리자 전체"])}<div class="wide">${authSelect("sales-fallback","연동 실패 시 대체",["정산 CSV 자동 요청","파일 업로드 대기열로 전환","대표에게 인증 갱신 알림","해당 지점 수기 입력"])}</div></div><div class="timeline">${step("1","ID/PW 저장","Vault 암호화·평문 재표시 금지","대기")}${step("2","2차 인증","OTP/푸시 승인 후 세션 발급","검토")}${step("3","지점·메뉴 매핑","플랫폼 매장명과 내부 지점/메뉴 연결","검토")}${step("4","샘플 정산 대사","수수료, 광고비, 쿠폰 차감값 확인","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">임시 저장</button><button type="submit" class="primary">연결 테스트</button></div></form>`],
+        "sales-channel-connect": ["판매사이트 연동 설정", "배민, 쿠팡이츠, 요기요, 땡겨요는 ID만으로 부족하므로 비밀번호와 2차 인증까지 관리합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="detail-grid">${detailCard("필수","계정 ID + 비밀번호 + 2차 인증")}${detailCard("권장","조회 전용 계정 · 이체/결제 권한 제외")}${detailCard("저장","Vault 암호화 · 평문 재표시 금지")}${detailCard("실패 대체","CSV 업로드·수기 입력 대기열")}</div><div class="credential-grid">${authSelect("sales-service","판매사이트",["배달의민족","쿠팡이츠","요기요","땡겨요"])}${authSelect("sales-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("sales-branch","지점 매핑",["성신점","미아점","정화점","신규 지점 추가"])}${authField("sales-store-code","플랫폼 매장코드","text","store-12345")}${authField("sales-account","계정 ID","text","owner@store.com")}${authField("sales-password","비밀번호","password","Vault에 암호화 저장")}${authField("sales-password-confirm","비밀번호 확인","password","한 번 더 입력")}${authField("sales-owner","인증 담당자","text","대표 또는 지점 관리자")}${authSelect("sales-mfa","2차 인증 수단",["문자 OTP","이메일 OTP","앱 푸시 승인","관리자 수동 승인"])}${authField("sales-otp","일회용 인증번호","text","연결 테스트 때만 입력","",false)}${authField("sales-expire","인증 만료일","date","만료일","",false)}${authSelect("sales-auth","보조 연결 방식",["OAuth 승인","정산 CSV 업로드","API 토큰","관리자 대리 등록"])}${authField("sales-api-key","API 토큰·승인키","password","제공되는 경우 입력","",false)}${authSelect("sales-sync","수집 범위",["주문+매출+정산+리뷰","주문+정산","정산만","리뷰 제외"])}${authSelect("sales-permission","권한 범위",["조회 전용","정산 조회","리뷰 답변 포함","관리자 전체"])}<div class="wide">${authSelect("sales-fallback","연동 실패 시 대체",["정산 CSV 자동 요청","파일 업로드 대기열로 전환","대표에게 인증 갱신 알림","해당 지점 수기 입력"])}</div></div><div class="timeline">${step("1","ID/PW 저장","Vault 암호화·평문 재표시 금지","대기")}${step("2","2차 인증","OTP/푸시 승인 후 세션 발급","검토")}${step("3","지점·메뉴 매핑","플랫폼 매장명과 내부 지점/메뉴 연결","검토")}${step("4","샘플 정산 대사","수수료, 광고비, 쿠폰 차감값 확인","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">임시 저장</button><button type="submit" class="primary">연결 테스트</button></div></form>`],
         "bank-connect": ["은행 빠른계좌조회 설정", "신한은행 기업과 기업은행 기업은 기업뱅킹 ID/PW, 인증서, OTP를 분리해 등록합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("bank-service","은행",["신한은행 기업","기업은행 기업"])}${authSelect("bank-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authField("bank-login-id","기업뱅킹 ID","text","company-admin")}${authField("bank-login-password","기업뱅킹 비밀번호","password","Vault에 암호화 저장")}${authField("bank-account","조회 계좌번호","text","숫자만 입력")}${authSelect("bank-purpose","계좌 용도",["운영계좌","정산계좌","급여계좌","세금 납부계좌"])}${authField("bank-cert","공동/금융인증서 파일","file","인증서 선택")}${authField("bank-cert-password","인증서 비밀번호","password","인증서 암호")}${authField("bank-otp","OTP/보안카드 식별값","text","기기명 또는 일련번호")}${authSelect("bank-auth","인증 방식",["기업뱅킹 인증서","OTP/2차 인증","API 제휴 토큰","읽기 전용 파일 업로드"])}${authSelect("bank-rule","입금 매칭 규칙",["입금자명+금액+예정일","플랫폼별 가상계좌","수동 확인 후 저장","미매칭만 알림"])}${authSelect("bank-permission","권한 범위",["조회 전용","거래내역 조회","잔액+입출금 조회","이체 권한 제외"])}</div><div class="notice"><span>이체 권한은 UX에서 제외하고 잔액·입출금 조회 권한만 연결하는 설계입니다. 인증 만료 14/7/1일 전 대표와 회계 담당에게 알림을 보냅니다.</span><b>이체 금지</b></div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">계좌 검증</button><button type="submit" class="primary">빠른조회 연결</button></div></form>`],
-        "supplier-connect": ["매입처·발주 프로그램 설정", "쿠팡, 마켓봄, 뉴통, 발주고는 계정/API 연동을 우선하고, 미연동 거래처는 수기 증빙으로 관리합니다.", `<form class="auth-form" data-search-form><div class="credential-grid">${authSelect("supplier-service","매입처",["쿠팡","마켓봄","뉴통","발주고","직접 추가"])}${authSelect("supplier-method","연동 방식",["주문 프로그램 계정","API Key","발주서 파일 업로드","거래명세서 OCR","영수증 사진 등록"])}${authSelect("supplier-has-program","주문 프로그램 여부",["있음 · 계정 연동","있음 · 파일만 제공","없음 · 수기등록","확인 필요"])}${authSelect("supplier-branch","사용 지점",["전체 지점","성신점","미아점","정화점"])}${authField("supplier-name","매입처명","text","서울축산")}${authField("supplier-login-id","주문 프로그램 ID","text","없으면 비워둠")}${authField("supplier-password","주문 프로그램 비밀번호","password","Vault에 암호화 저장")}${authField("supplier-api-key","API Key·거래처 코드","password","제공되는 경우 입력")}${authSelect("supplier-category","품목 분류",["식재료","소모품","포장재","기타"])}${authField("supplier-phone","담당 연락처","tel","010-0000-0000")}</div><div class="fallback-lane"><div>${manualReceiptPanel()}</div><div class="manual-pipeline">${step("1","수기 매입처 생성","사업자·지점·거래처명만으로 임시 거래처 등록","대기")}${step("2","사진/OCR 등록","영수증·거래명세서에서 품목, 금액, 부가세 추출","검토")}${step("3","반복 템플릿 저장","자주 사는 품목과 단가를 다음 등록 기본값으로 사용","예정")}${step("4","승인 후 반영","대표 승인 시 매입자료, 재고, 세무 증빙에 동시 반영","예정")}</div></div><div class="drawer-actions"><button type="button" class="outline" data-action="receipt-upload">증빙 먼저 등록</button><button type="submit" class="primary">매입처 저장</button></div></form>`],
+        "supplier-connect": ["매입처·발주 프로그램 설정", "쿠팡, 마켓봄, 뉴통, 발주고는 계정/API 연동을 우선하고, 미연동 거래처는 수기 증빙으로 관리합니다.", `<form class="auth-form" data-search-form><div class="notice"><span>주문 프로그램이 없는 매입처는 계정 ID/PW를 요구하지 않고, 거래명세서·영수증 사진 등록 화면으로 바로 전환합니다.</span><b>수기등록 지원</b></div><div class="credential-grid">${authSelect("supplier-service","매입처",["쿠팡","마켓봄","뉴통","발주고","직접 추가"])}${authSelect("supplier-method","연동 방식",["주문 프로그램 계정","API Key","발주서 파일 업로드","거래명세서 OCR","영수증 사진 등록"])}${authSelect("supplier-has-program","주문 프로그램 여부",["있음 · 계정 연동","있음 · 파일만 제공","없음 · 수기등록","확인 필요"])}${authSelect("supplier-branch","사용 지점",["전체 지점","성신점","미아점","정화점"])}${authField("supplier-name","매입처명","text","서울축산")}${authField("supplier-login-id","주문 프로그램 ID","text","없으면 비워둠","",false)}${authField("supplier-password","주문 프로그램 비밀번호","password","Vault에 암호화 저장","",false)}${authField("supplier-api-key","API Key·거래처 코드","password","제공되는 경우 입력","",false)}${authSelect("supplier-upload-rule","주문 프로그램 없음 처리",["거래명세서 사진/OCR 기본","영수증 사진 기본","카카오톡 주문 캡처 허용","월말 파일 일괄 등록"])}${authSelect("supplier-category","품목 분류",["식재료","소모품","포장재","기타"])}${authField("supplier-phone","담당 연락처","tel","010-0000-0000","",false)}${authSelect("supplier-approval","반영 승인",["대표 승인 후 매입/재고 반영","점장 확인 후 대표 승인","금액 기준 자동 승인","회계 검토 필요"])}</div><div class="fallback-lane"><div>${manualReceiptPanel()}</div><div class="manual-pipeline">${step("1","수기 매입처 생성","사업자·지점·거래처명만으로 임시 거래처 등록","대기")}${step("2","사진/OCR 등록","영수증·거래명세서에서 품목, 금액, 부가세 추출","검토")}${step("3","반복 템플릿 저장","자주 사는 품목과 단가를 다음 등록 기본값으로 사용","예정")}${step("4","승인 후 반영","대표 승인 시 매입자료, 재고, 세무 증빙에 동시 반영","예정")}</div></div><div class="drawer-actions"><button type="button" class="outline" data-action="receipt-upload">증빙 먼저 등록</button><button type="submit" class="primary">매입처 저장</button></div></form>`],
         "tax-connect": ["홈택스·계산서 연동 설정", "전자세금계산서, 현금영수증, 카드매입, 신고자료를 사업자별 인증값으로 수집합니다.", `<form class="auth-form" data-search-form>${credentialNotice()}<div class="credential-grid">${authSelect("tax-business","사업자",["전체 사업자","열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("tax-auth","인증 방식",["공동인증서","세무대리인 위임","홈택스 ID/PW","자료 파일 업로드"])}${authField("tax-login-id","홈택스 ID","text","사업자 계정")}${authField("tax-login-password","홈택스 비밀번호","password","Vault에 암호화 저장")}${authField("tax-cert","공동인증서 파일","file","인증서 선택")}${authField("tax-cert-password","인증서 비밀번호","password","인증서 암호")}${authField("tax-agent","세무대리인","text","담당 세무사")}${authSelect("tax-delegation","위임 상태",["위임 완료","위임 요청 필요","대표 직접 인증","파일 업로드만 사용"])}${authSelect("tax-scope","수집 범위",["전자세금계산서+현금영수증+카드매입","전자세금계산서만","매입 증빙만","신고서 파일"])}${authSelect("tax-cycle","수집 주기",["매일 06:00","매주 월요일","신고기간 집중","수동 실행"])}${authField("tax-alert","신고 알림일","text","마감 14일/7일/2일 전")}${authSelect("tax-permission","열람 권한",["대표+회계","대표+세무대리인","사업자별 담당자","대표 전용"])}</div><div class="detail-grid">${detailCard("부가세 신고","매출/매입 증빙 자동 묶음")}${detailCard("소득세/법인세","월 손익 보고서와 감가/인건비 연계")}${detailCard("계산서 누락","거래처별 미수취 알림")}${detailCard("인증 만료","인증서/위임 만료 전 알림")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="calendar">신고 일정 보기</button><button type="submit" class="primary">연동 테스트</button></div></form>`],
         "receipt-upload": ["수기 증빙 사진 등록", "주문 프로그램이 없는 매입처의 거래명세서, 영수증, 세금계산서 이미지를 등록합니다.", `<form class="auth-form" data-search-form>${manualReceiptPanel()}<div class="credential-grid">${authSelect("receipt-business","사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}${authSelect("receipt-branch","지점",["성신점","미아점","정화점"])}${authField("receipt-date","거래일자","date","거래일")}${authSelect("receipt-type","증빙 종류",["거래명세서","영수증","간이영수증","세금계산서","카카오톡 주문 캡처"])}${authSelect("receipt-reason","수기 사유",["주문 프로그램 없음","계정 연동 실패","거래처가 파일만 제공","현장 구매"])}${authSelect("receipt-tax","부가세 처리",["자동 판정","과세","면세","불공제","회계 검토"])}${authField("receipt-supplier","매입처","text","직접 입력 또는 자동 추출")}${authField("receipt-total","금액","text","자동 추출 후 수정")}${authSelect("receipt-payment","결제 방식",["사업자카드","계좌이체","현금","대표 개인카드 정산"])}${authSelect("receipt-template","반복 템플릿",["이번만 등록","매입처 기본값 저장","품목·단가까지 저장","다음 발주 예측에 반영"])}</div><div class="timeline">${step("1","파일 수신","사진/PDF/카카오톡 캡처 업로드","완료")}${step("2","OCR 추출","품목, 공급가, 부가세, 합계 자동 추출","검토")}${step("3","사용자 수정","매입처·품목·세금 분류 보정","대기")}${step("4","승인 반영","매입자료, 재고, 세무 증빙에 동시 반영","예정")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="confirm-state">OCR 결과 수정</button><button type="submit" class="primary">매입자료 반영</button></div></form>`],
         "credential-vault": ["인증정보 보관 정책", "연동 계정의 비밀번호, 인증서, 토큰, OTP 관리를 분리합니다.", `<div class="detail-grid">${detailCard("저장 방식","Vault 암호화 · 평문 재표시 금지")}${detailCard("권한","대표/회계 관리자만 입력·갱신")}${detailCard("감사로그","입력, 갱신, 테스트, 실패 이력 기록")}${detailCard("만료 알림","14일/7일/1일 전 알림")}${detailCard("권장 범위","조회 전용 · 이체/결제 권한 제외")}${detailCard("연동 실패","수기 업로드 대체 큐 자동 생성")}</div><div class="drawer-actions"><button type="button" class="outline" data-action="audit-detail">감사로그 보기</button><button type="button" class="primary" data-action="confirm-state">정책 확인</button></div>`],
