@@ -2621,6 +2621,7 @@
     const STORE_KEY = "yeoljeong-finance-v1";
     const AUTH_USER_KEY = "yeoljeong-finance-auth-user";
     const EMPLOYEE_SELF_SIGNUP_KEY = "yeoljeong-finance-employee-self-signup";
+    const POST_LOGIN_REDIRECT_KEY = "yeoljeong-finance-post-login-redirect";
     const SETTINGS_BUSINESS_KEY = "yeoljeong-finance-settings-business";
     const typeLabels = {
       sales: "매출",
@@ -5466,6 +5467,39 @@
       return Boolean(localStorage.getItem("aads_token"));
     }
 
+    function safeRecipeRedirectPath(value) {
+      const redirectPath = String(value || "").trim();
+      return redirectPath.startsWith("/unni-naengmyeon/recipes") ? redirectPath : "";
+    }
+
+    function readPostLoginRedirectFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      return safeRecipeRedirectPath(params.get("redirect") || params.get("next") || "");
+    }
+
+    function rememberPostLoginRedirectFromUrl() {
+      const redirectPath = readPostLoginRedirectFromUrl();
+      if (!redirectPath) return "";
+      localStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectPath);
+      setAuthMode("login");
+      return redirectPath;
+    }
+
+    function consumePostLoginRedirect() {
+      const redirectPath = safeRecipeRedirectPath(
+        readPostLoginRedirectFromUrl() || localStorage.getItem(POST_LOGIN_REDIRECT_KEY)
+      );
+      localStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+      return redirectPath;
+    }
+
+    function followPostLoginRedirect() {
+      const redirectPath = consumePostLoginRedirect();
+      if (!redirectPath) return false;
+      window.location.href = redirectPath;
+      return true;
+    }
+
     function permissionsFromAuthPayload(payload = {}) {
       const isAdmin = Boolean(payload.is_admin);
       return {
@@ -6075,6 +6109,7 @@
       els.loginModal.classList.add("hidden");
       els.loginForm.reset();
       els.gateLoginForm.reset();
+      if (followPostLoginRedirect()) return;
       setView(defaultView());
       renderAuthState();
       refreshFinanceSessionInBackground();
@@ -6142,6 +6177,7 @@
 	        if (pendingPhoneInviteToken) {
 	          await acceptPendingPhoneInvite(name);
 	        }
+	        if (followPostLoginRedirect()) return;
 	        showToast("회원가입이 완료되어 로그인되었습니다.");
 	      }
 	      els.signupModal.classList.add("hidden");
@@ -7429,6 +7465,7 @@
       bindEvents();
       updateContractPreview(null, "입력값 기준");
       renderAll();
+      rememberPostLoginRedirectFromUrl();
       readInviteTokenFromUrl();
       handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
       renderAuthState();
