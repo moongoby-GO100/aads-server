@@ -674,6 +674,45 @@
       padding: 14px;
     }
 
+    .unni-shortcuts {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .unni-shortcut {
+      display: grid;
+      gap: 7px;
+      min-height: 118px;
+      padding: 16px;
+      border: 1px solid #d9c6a0;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #fffaf0 0%, #fdf2e5 100%);
+      color: #1f2f2b;
+      text-decoration: none;
+      box-shadow: 0 8px 22px rgba(121, 83, 36, .08);
+    }
+
+    .unni-shortcut strong {
+      font-size: 17px;
+      line-height: 1.2;
+    }
+
+    .unni-shortcut span {
+      color: #6f5b3f;
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 750;
+    }
+
+    .unni-shortcut b {
+      width: fit-content;
+      color: #0f766e;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
     .form-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1273,7 +1312,7 @@
 
     @media (max-width: 1120px) {
       .kpis { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
-      .content-grid, .split, .settings-grid, .auth-gate-inner { grid-template-columns: 1fr; }
+      .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts { grid-template-columns: 1fr; }
       .business-workspace { grid-template-columns: 1fr; }
       .business-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .auth-intro { padding-right: 0; }
@@ -1515,6 +1554,18 @@
       <section id="dashboardView">
         <div class="grid kpis" id="kpiGrid"></div>
         <div class="grid content-grid">
+          <div class="unni-shortcuts" aria-label="언니냉면 바로가기">
+            <a class="unni-shortcut" href="https://unni.newtalk.kr/" target="_blank" rel="noopener noreferrer">
+              <b>UNNI HOME</b>
+              <strong>언니냉면 홈페이지</strong>
+              <span>배민 주문 링크, 메뉴, 매장 위치, 문의 게시판을 확인합니다.</span>
+            </a>
+            <a class="unni-shortcut" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">
+              <b>STAFF RECIPE</b>
+              <strong>직원용 레시피 페이지</strong>
+              <span>FB 로그인 권한으로 조리법과 A4 출력용 레시피를 엽니다.</span>
+            </a>
+          </div>
           <section class="panel">
             <div class="panel-head">
               <h2 class="panel-title">월마감 상태</h2>
@@ -5753,7 +5804,7 @@
       const redirectPath = readPostLoginRedirectFromUrl();
       if (!redirectPath) return "";
       localStorage.setItem(POST_LOGIN_REDIRECT_KEY, redirectPath);
-      setAuthMode("signup");
+      setAuthMode("login");
       return redirectPath;
     }
 
@@ -6799,11 +6850,14 @@
       els.monthFilter.addEventListener("change", renderAll);
       els.branchFilter.addEventListener("change", renderAll);
       document.querySelectorAll(".tab[data-view]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
-      document.querySelector('[data-external-tab="recipes"]')?.addEventListener("click", event => {
-        if (!hasServerAuth()) {
-          event.preventDefault();
-          showToast("레시피는 로그인 후 열 수 있습니다.");
-        }
+      document.querySelectorAll('[data-external-tab="recipes"]').forEach(link => {
+        link.addEventListener("click", event => {
+          if (!hasServerAuth()) {
+            event.preventDefault();
+            localStorage.setItem(POST_LOGIN_REDIRECT_KEY, "/unni-naengmyeon/recipes");
+            window.location.href = "/static/apps/yeoljeong-finance/index.html?redirect=/unni-naengmyeon/recipes";
+          }
+        });
       });
       document.querySelectorAll("#entryType button").forEach(btn => btn.addEventListener("click", () => {
         currentType = btn.dataset.type;
