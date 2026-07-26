@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-27 08:45 KST - FOOD FB recipe redirect completion
+
+- 요청: 언니냉면 직원용 레시피 페이지가 FB 로그인 후 열리지 않고 FB 대시보드로 빠지는 문제를 즉시 조치.
+- 원인: FB 매장비서 앱이 `redirect=/unni-naengmyeon/recipes`를 기억하지만, 이미 로그인된 직원 세션에서는 앱 초기화 시 해당 redirect를 소비하지 않았다. 또한 기존 세션이 localStorage에만 있고 `fb_access_token` 쿠키가 없으면 Next 레시피 서버가 인증을 읽지 못해 다시 FB 앱으로 돌아가는 루프가 발생할 수 있었다.
+- 반영: `app/static/apps/yeoljeong-finance/index.html`에 `syncServerAuthCookieFromStorage()`를 추가해 기존 FB 로그인 토큰을 `fb_access_token` 쿠키로 복원하고, 앱 초기화 시 레시피 redirect가 있고 로그인 상태이면 즉시 `/unni-naengmyeon/recipes`로 이동하도록 수정했다. HTTPS에서는 `Secure` 쿠키 속성도 붙인다.
+- 테스트: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py -q` 결과 11 passed, 1 warning. `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과. `git diff --check` 통과.
+- 배포/검증: 커밋·푸시 후 AADS blue/green 배포와 공개 HTTP 검증을 수행한다. 완료 결과는 최종 보고에 남긴다.
+- 범위 제외: 기존 미커밋 `app/main.py`, `docs/CHANGELOG-direct-edit.md`, 대시보드 `public/manager/env_*`는 이번 레시피 조치와 무관해 보존한다.
+
 ## 2026-07-27 08:18 KST - FOOD FB employee signup flow final audit
 
 - 요청: 직원초대보다 직원 직접 회원가입을 우선하는 흐름이 FB 화면에 실제 반영됐는지 확인하고, 미완료였던 커밋/푸시/문서/배포 상태를 최종 정정.

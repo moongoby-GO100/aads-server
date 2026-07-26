@@ -5779,8 +5779,16 @@
     function persistServerAuthToken(token) {
       localStorage.setItem(SERVER_AUTH_TOKEN_KEY, token);
       localStorage.setItem(FB_ACCESS_TOKEN_KEY, token);
-      document.cookie = `${SERVER_AUTH_TOKEN_KEY}=${token}; path=/; max-age=604800; SameSite=Lax`;
-      document.cookie = `${FB_ACCESS_TOKEN_KEY}=${token}; path=/; max-age=604800; SameSite=Lax`;
+      const secure = window.location.protocol === "https:" ? "; Secure" : "";
+      document.cookie = `${SERVER_AUTH_TOKEN_KEY}=${token}; path=/; max-age=604800; SameSite=Lax${secure}`;
+      document.cookie = `${FB_ACCESS_TOKEN_KEY}=${token}; path=/; max-age=604800; SameSite=Lax${secure}`;
+    }
+
+    function syncServerAuthCookieFromStorage() {
+      const token = localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY);
+      if (!token) return false;
+      persistServerAuthToken(token);
+      return true;
     }
 
     function clearServerAuthToken() {
@@ -7802,10 +7810,12 @@
       bindEvents();
       updateContractPreview(null, "입력값 기준");
       renderAll();
-      rememberPostLoginRedirectFromUrl();
+      const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();
+      syncServerAuthCookieFromStorage();
       readInviteTokenFromUrl();
       handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
       renderAuthState();
+      if (rememberedRecipeRedirect && hasServerAuth() && followPostLoginRedirect()) return;
       refreshFinanceSessionInBackground();
       if (hasServerAuth()) loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
       if (canManageAutomation()) refreshServerAccounts().catch(() => {});

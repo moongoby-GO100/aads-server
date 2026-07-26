@@ -191,6 +191,18 @@ def test_employee_signup_collects_contract_autofill_profile():
     assert 'employerPhone: business.phone || ""' in html
 
 
+def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "function syncServerAuthCookieFromStorage()" in html
+    assert 'localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY)' in html
+    assert "SameSite=Lax${secure}" in html
+    assert "const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();" in html
+    assert "syncServerAuthCookieFromStorage();" in html
+    assert "if (rememberedRecipeRedirect && hasServerAuth() && followPostLoginRedirect()) return;" in html
+
+
 def test_contract_signing_requires_employee_consent_and_drawn_signature():
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
     html = html_path.read_text(encoding="utf-8")
