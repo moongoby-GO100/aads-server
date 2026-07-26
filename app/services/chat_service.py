@@ -5313,7 +5313,13 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
             _max_age = 1800 if s.get("tool_count", 0) > 0 else 600
             _last_evt = s.get("last_event_at", _started)
             _idle = (_bg_time.monotonic() - _last_evt) if _last_evt else (_bg_time.monotonic() - _started) if _started else 0
-            if _started and (_bg_time.monotonic() - _started) > _max_age and _idle > 120:
+            _task = _active_bg_tasks.get(session_id)
+            _task_alive = _task is not None and not _task.done()
+            if not _task_alive and _idle > 60:
+                logger.warning(f"streaming_state_orphaned session={session_id[:8]} idle={_idle:.0f}s")
+                is_completed = True
+                s["completed"] = True
+            elif _started and (_bg_time.monotonic() - _started) > _max_age and _idle > 120:
                 logger.warning(f"streaming_state_expired session={session_id[:8]} age={_bg_time.monotonic() - _started:.0f}s")
                 is_completed = True
                 s["completed"] = True

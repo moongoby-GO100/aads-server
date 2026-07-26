@@ -317,15 +317,12 @@ def _extract_tool_progress(tools_called: Any) -> tuple[int, str]:
 def _has_live_streaming_runtime(session_id: UUID | str, cached_status: Optional[dict] = None) -> bool:
     """Check whether a session still has an in-process producer on this server."""
     sid = str(session_id)
-    if cached_status and cached_status.get("is_streaming"):
-        return True
-    if is_streaming(sid):
-        return True
-    _state = getattr(svc, "_streaming_state", {}).get(sid)
-    if _state and not _state.get("completed", False):
-        return True
     _task = getattr(svc, "_active_bg_tasks", {}).get(sid)
-    return bool(_task is not None and not _task.done())
+    if _task is not None and not _task.done():
+        return True
+    # Stale in-memory status/interrupt flags can outlive the producer task.
+    # Only a live task proves runtime liveness; DB freshness keeps grace periods.
+    return False
 
 
 async def _schedule_recovery_auto_resume(

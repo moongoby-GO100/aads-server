@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-26 19:41 KST - Chat stale streaming runtime P0
+
+- 배경: 세션 `7a1b186e-e71f-41c5-bd7b-e5926f41b4d9`에서 브라우저 멈춤, 스크롤 점프, 이전/중복 응답 표시가 반복됐다.
+- 실측: DB 기준 메시지 2,081건, 총 2,926,736자, 최대 68,782자, `streaming_placeholder` 1건, `running` execution `08bccdc2-2756-4ae2-abf9-5691595e5961` 1건이 남아 있었다.
+- 원인: `_has_live_streaming_runtime()`이 실제 producer task 생존이 아니라 stale memory/cached streaming status를 live로 오판해 stale 정리가 막힐 수 있었다.
+- 반영: `app/routers/chat.py`는 live task만 runtime 증거로 인정한다. `app/services/chat_service.py`는 `_streaming_state`는 남았지만 `_active_bg_tasks`가 없거나 끝난 orphan 상태가 60초 idle이면 completed로 전환한다.
+- 검증: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` 통과. 컨테이너 pytest 4건 통과: streaming-status DB placeholder, last-response stale settle, terminal interrupt marker, begin-streaming state reset.
+- 범위 제외: 기존 deploy/changelog/script 미커밋 변경은 수정·커밋 대상에서 제외한다.
 
 ## 2026-07-26 19:30 KST - 세션 94a1dc9e "언니냉면" 응답 지연 진단
 
