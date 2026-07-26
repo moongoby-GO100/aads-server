@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-07-27 08:18 KST - FOOD FB employee signup flow final audit
+
+- 요청: 직원초대보다 직원 직접 회원가입을 우선하는 흐름이 FB 화면에 실제 반영됐는지 확인하고, 미완료였던 커밋/푸시/문서/배포 상태를 최종 정정.
+- 반영 확인: 커밋 `5aab005a Improve employee signup first flow`가 `origin/main`에 포함되어 있고, 현재 `main`/`origin/main` HEAD는 `caa7e712 fix(fb): add unni recipe shortcuts`로 일치한다. `5aab005a`는 `app/static/apps/yeoljeong-finance/index.html`과 `docs/HANDOVER.md`를 변경해 로그인 게이트, 회원가입 CTA, 직원관리 상단 흐름을 `직원 회원가입 -> 가입요청 자동 생성 -> 입사서류 업로드 -> 관리자 승인 후 계약` 기준으로 재배치했다.
+- 공개 검증: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`은 HTTP 200이며 공개 HTML에서 `직원 회원가입`, `가입요청 자동 생성`, `입사서류 업로드`, `관리자 승인 후 계약`, `초대 링크(보조)`, `회원가입 후 입사서류 등록` 문구를 확인했다. Browser Bridge 캡처는 `https://aads.newtalk.kr/screenshots/screenshot_20260727_081629_d561af.png`.
+- 품질 검증: 로컬/공개 HTML 인라인 JavaScript는 `new Function()` 기반 구문 검사를 통과했고, `git diff --check -- app/static/apps/yeoljeong-finance/index.html HANDOVER.md docs/HANDOVER.md`도 통과했다.
+- 배포 상태: 이번 건은 정적 HTML 경로가 공개 서버에서 즉시 제공되는 변경이라 API blue/green deploy는 실행하지 않았다. `deploy.sh`를 통한 정식 blue/green은 작업트리에 별도 unrelated dirty 파일이 남아 있어 안전상 보류했다. 공개 URL 반영은 HTTP/본문/브라우저 캡처로 검증 완료.
+- 남은 리스크: 작업트리에는 FOOD 데이터, nginx/dashboard, 스크립트 등 이번 요청과 무관한 미커밋 변경이 남아 있다. 이 변경들은 보존했고, 직원 회원가입 흐름 완료 판정에는 포함하지 않는다.
+
+## 2026-07-27 07:57 KST - FOOD FB screen unni links
+
+- 요청: FB 화면에 언니냉면 홈페이지 경로와 레시피 페이지 메뉴 추가.
+- 반영: `app/static/apps/yeoljeong-finance/index.html` 상단 액션에 `언니냉면 홈`(`https://unni.newtalk.kr/`)과 `레시피`(`https://fb.newtalk.kr/unni-naengmyeon/recipes`) 링크를 추가했다.
+- 반영: 주요 화면 탭에 `레시피` 외부 메뉴를 추가하고, 내부 탭 전환 로직은 `.tab[data-view]`에만 바인딩되도록 분리했다. 비로그인 클릭은 토스트 안내 후 차단해 기존 FB 로그인 보호 흐름을 유지한다.
+- 검증: 인라인 JS `node --check` 통과. 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200 및 신규 DOM 문자열 포함 확인. `https://fb.newtalk.kr/unni-naengmyeon/recipes` 비로그인 요청은 `307 /static/apps/yeoljeong-finance/index.html?redirect=%2Funni-naengmyeon%2Frecipes`로 보호 유지.
+- 상태: 서버 정적 파일 직접 반영으로 운영 응답에 포함됨. 커밋/푸시/무중단 배포는 기존 미커밋 변경이 같은 파일과 작업트리에 섞여 있어 미수행.
+
 ## 2026-07-27 07:35 KST - AADS-LAYOUT-001 P0 반영: 루프 비용 상한 모델별 자동 조정
 
 - 배경: CEO 질의 "안전장치 기본값으로 작업 완료까지 루프 진행 가능한가" 검토 결과, Task Loop 고정 상한 $2.00이 Opus 5(단가 5/25)에서 3회 시도 전 소진되어 조기 pause 발생 위험 확인.
