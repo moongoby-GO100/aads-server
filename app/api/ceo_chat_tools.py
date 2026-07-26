@@ -3563,8 +3563,8 @@ async def tool_capture_screenshot(
         filename = f"screenshot_{ts}_{uuid.uuid4().hex[:6]}.png"
         # Store the binary PNG over stdin; base64 in the SSH command can exceed argv limits.
         save_cmd = (
-            f"mkdir -p /var/www/aads_exports/screenshots && "
-            f"cat > /var/www/aads_exports/screenshots/{filename}"
+            f"mkdir -p /var/www/certbot/screenshots && "
+            f"cat > /var/www/certbot/screenshots/{filename}"
         )
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
