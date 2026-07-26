@@ -80,7 +80,11 @@ class AccountUpsertPayload(BaseModel):
     business_id: str = "biz-mia"
     branch: str = "열정국밥_미아점"
     collection_mode: str = "browser-automation"
+    category: str = ""
+    data_scope: str = ""
+    required_proof: str = ""
     memo: str = ""
+    auto_sync: bool = False
 
 
 class SyncPayload(BaseModel):
@@ -288,6 +292,45 @@ async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Dep
 @router.get("/settlements")
 async def list_settlements(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"settlements": await run_in_threadpool(svc.list_settlements, current_user, business_id)}
+
+
+@router.get("/integration-evidence")
+async def list_integration_evidence(
+    business_id: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"evidence": await run_in_threadpool(svc.list_integration_evidence, current_user, business_id)}
+
+
+@router.post("/integration-evidence")
+async def upload_integration_evidence(
+    service: str = Form(...),
+    business_id: str = Form("biz-mia"),
+    branch: str = Form(""),
+    document_kind: str = Form("other"),
+    vendor: str = Form(""),
+    amount: int = Form(0),
+    memo: str = Form(""),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await svc.save_integration_evidence(
+        service=service,
+        business_id=business_id,
+        branch=branch,
+        document_kind=document_kind,
+        vendor=vendor,
+        amount=amount,
+        memo=memo,
+        upload=file,
+        user=current_user,
+    )
+
+
+@router.get("/integration-evidence/{evidence_id}/download")
+async def download_integration_evidence(evidence_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
+    document, path = await run_in_threadpool(svc.get_integration_evidence, evidence_id, current_user)
+    return FileResponse(path, media_type=document.get("content_type") or "application/octet-stream", filename=document.get("original_filename") or path.name)
 
 
 @router.get("/sales")

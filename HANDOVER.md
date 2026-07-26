@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-26 20:04 KST - FOOD 연동관리 설정 R2
+
+- 반영: `app/static/apps/yeoljeong-finance/index.html`, `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`.
+- 내용: 설정/연동관리 화면에 판매사이트 4사, POS, 신한은행 기업/기업은행 기업, 쿠팡/마켓봄/뉴통/발주고/기타 매입처, 거래내역서·영수증 사진/OCR, 홈택스, 계산서/증빙 업로드, 카드사/PG, 공과금, 세무대리인/회계프로그램 채널을 등록 가능하게 보강했다. 서비스 선택 시 URL, 수집방식, 수집대상, 필수 확인값, 메모가 자동 프리셋되고 현황 카드에 표시된다.
+- API: `/api/v1/yeoljeong-finance/accounts`가 `category`, `data_scope`, `required_proof`, `auto_sync` payload를 허용하도록 보강했다.
+- 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py`, 인라인 JS `node --check`, `git diff --check` 통과. `.venv/bin/python` symlink 깨짐으로 FastAPI import/pytest는 미실행.
+- 상태: 커밋, 푸시, 배포는 아직 수행하지 않았다.
+
 ## 2026-07-26 19:41 KST - Chat stale streaming runtime P0
 
 - 배경: 세션 `7a1b186e-e71f-41c5-bd7b-e5926f41b4d9`에서 브라우저 멈춤, 스크롤 점프, 이전/중복 응답 표시가 반복됐다.
@@ -4812,3 +4820,13 @@
 - 추가 조치: 저장된 PNG는 존재했지만 `https://aads.newtalk.kr/screenshots/{filename}`가 Nginx를 통해 `/api/v1/chat/screenshots/{filename}`로 프록시되어 404가 발생했다. 운영 Nginx와 저장소 원장의 `/screenshots/` location을 Nginx 컨테이너가 볼 수 있는 `/var/www/certbot/screenshots/` alias 직접 서빙으로 변경했다.
 - 검증: `python3 -m py_compile app/api/ceo_chat_tools.py`, `docker exec aads-server python -m py_compile /app/app/api/ceo_chat_tools.py`, 컨테이너 함수 레벨 모의 실행에서 1.4MB PNG payload가 stdin으로 전달되고 SSH command length 123, base64 문자열 미포함을 확인했다.
 - 운영 확인: 배포 후 `capture_screenshot` 실제 호출로 이미지 URL 생성 여부를 재검증한다.
+
+## 2026-07-26 20:05 KST - 열정국밥 연동관리 설정 페이지 실제 연결 보강
+
+- 요청: 연동관리 페이지에 판매사이트(배민/쿠팡이츠/요기요/땡겨요), 은행(신한 기업/기업은행 기업), 매입처(쿠팡/마켓봄/뉴통/발주고/추가 주문프로그램), 주문프로그램 없는 매입처의 거래내역서·영수증 사진 등록, 홈택스 계산서 연동, 추가 운영 항목을 반영.
+- 조치: `app/static/apps/yeoljeong-finance/index.html`의 연동관리 폼을 판매사이트/은행/매입처/세무·계산서/기타 운영 optgroup으로 확장하고, 서비스별 기본 URL·수집방식·수집대상·필요확인값·메모 프리셋을 적용했다.
+- 조치: 판매 4사는 기존 `/sync` 자동 수집 버튼으로 연결하고, 은행 엑셀·매입처 거래내역서·영수증 사진·홈택스/계산서 PDF·카드/PG·공과금·회계프로그램 파일은 `증빙 서버 등록` 흐름으로 연결했다.
+- 조치: `app/api/yeoljeong_finance.py`에 `/integration-evidence` 목록/업로드/다운로드 API를 추가하고, `app/services/yeoljeong_finance_service.py`에 `integration_evidence` JSON 원장과 파일 저장소, 확인필요 거래 자동 생성 로직을 추가했다.
+- 보안/권한: 외부 계정 비밀번호는 기존 Vault 암호화 저장 경로를 유지하고, 연동 증빙 업로드·조회·다운로드는 관리자 권한에서만 허용한다. 업로드 파일은 15MB 제한과 안전 파일명 처리를 적용한다.
+- 검증: `docker exec aads-server-green python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 성공, `docker exec aads-server-green python -m pytest -q /app/tests/unit/test_yeoljeong_finance_service.py /app/tests/unit/test_yeoljeong_finance_api_contract.py` 결과 49 passed, Node inline script syntax check 성공.
+- 미완료/리스크: 실제 포털 자동 로그인은 배달 4사부터 지원하며, 은행/홈택스/매입처별 전용 수집기는 계정 저장 및 파일 업로드 기반 운영 데이터가 쌓인 뒤 추가 구현한다. 브라우저 로그인 E2E는 아직 미실행이다.

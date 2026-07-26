@@ -2104,10 +2104,10 @@
 
       <section id="settingsView" class="hidden">
         <div class="settings-note" style="margin-bottom:14px">
-          기초등록은 모든 거래/근태 입력의 기준값입니다. 사업자등록번호, 상호, 대표자, 과세유형, 지점 소속, 정산계좌, 직원 기본시급, 외부 플랫폼 계정을 먼저 등록하면 입력 화면과 월마감 점검에 즉시 반영됩니다.
+          기초등록은 모든 거래/근태 입력의 기준값입니다. 사업자등록번호, 상호, 대표자, 과세유형, 지점 소속, 정산계좌, 직원 기본시급, 판매사이트, 은행, 매입처, 홈택스와 증빙 업로드 채널을 먼저 등록하면 입력 화면과 월마감 점검에 즉시 반영됩니다.
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
             <button id="refreshServerAccountsBtn">서버 계정 불러오기</button>
-            <button id="syncDeliveryBtn" class="primary">배달 4사 자동 수집 실행</button>
+            <button id="syncDeliveryBtn" class="primary">배달 4사 매출/정산 수집 실행</button>
           </div>
         </div>
         <div class="business-workspace">
@@ -2253,28 +2253,49 @@
             </section>
 
             <section class="panel">
-              <div class="panel-head"><h2 class="panel-title">외부계정/자동화 연결</h2></div>
+              <div class="panel-head"><h2 class="panel-title">연동관리/자동화 연결</h2></div>
               <div class="panel-body grid">
                 <form id="integrationForm" class="form-grid">
                   <label>구분
                     <select name="service" required>
-                      <option value="baemin">배민 셀프서비스</option>
-                      <option value="coupangeats">쿠팡이츠 사장님</option>
-                      <option value="yogiyo">요기요 사장님</option>
-                      <option value="ddangyo">땡겨요</option>
-                      <option value="matepos">메이트포스</option>
-                      <option value="marketbom">마켓봄</option>
-                      <option value="bank">은행 거래내역</option>
+                      <optgroup label="판매사이트">
+                        <option value="baemin">배민 셀프서비스</option>
+                        <option value="coupangeats">쿠팡이츠 사장님</option>
+                        <option value="yogiyo">요기요 사장님</option>
+                        <option value="ddangyo">땡겨요</option>
+                        <option value="matepos">메이트포스/POS</option>
+                      </optgroup>
+                      <optgroup label="은행">
+                        <option value="shinhan_business">신한은행 기업</option>
+                        <option value="ibk_business">기업은행 기업</option>
+                      </optgroup>
+                      <optgroup label="매입처">
+                        <option value="coupang_supplier">쿠팡 매입처</option>
+                        <option value="marketbom">마켓봄</option>
+                        <option value="newtong">뉴통</option>
+                        <option value="baljugo">발주고</option>
+                        <option value="supplier_custom_portal">기타 매입처 주문프로그램</option>
+                        <option value="supplier_statement_upload">거래내역서/영수증 업로드</option>
+                      </optgroup>
+                      <optgroup label="세무·계산서">
+                        <option value="hometax">홈택스</option>
+                        <option value="tax_invoice_upload">계산서/증빙 업로드</option>
+                      </optgroup>
+                      <optgroup label="기타 운영">
+                        <option value="card_pg">카드사/PG 매출</option>
+                        <option value="utility_bills">공과금 고지서</option>
+                        <option value="accountant_tax_agent">세무대리인/회계프로그램</option>
+                      </optgroup>
                     </select>
                   </label>
                   <label>표시명
                     <input name="label" placeholder="예: 중화점 배민" required>
                   </label>
                   <label class="span-2">로그인/관리 URL
-                    <input name="loginUrl" type="url" placeholder="https://..." required>
+                    <input name="loginUrl" type="url" placeholder="https://... 또는 파일/사진 업로드 채널은 비워둠">
                   </label>
-                  <label>아이디
-                    <input name="username" placeholder="로그인 ID 또는 휴대폰번호" required>
+                  <label>아이디/업로드 기준명
+                    <input name="username" placeholder="로그인 ID, 휴대폰번호 또는 매입처명">
                   </label>
                   <label>소속 사업자
                     <select name="businessId" required></select>
@@ -2290,6 +2311,15 @@
                       <option value="portal-csv">포털 정산서/CSV 다운로드</option>
                       <option value="pos-export">POS/메이트포스 내보내기</option>
                       <option value="bank-excel">은행 엑셀 업로드</option>
+                      <option value="bank-openbanking">은행 기업뱅킹 조회</option>
+                      <option value="purchase-portal">매입처 주문프로그램 수집</option>
+                      <option value="statement-upload">거래내역서 파일 업로드</option>
+                      <option value="receipt-photo">영수증 사진/OCR 등록</option>
+                      <option value="hometax-certificate">홈택스 인증서/간편인증 수집</option>
+                      <option value="tax-invoice-upload">계산서 파일 업로드</option>
+                      <option value="card-pg-report">카드사/PG 매출 리포트</option>
+                      <option value="utility-bill-upload">공과금 고지서 업로드</option>
+                      <option value="accounting-export">회계프로그램 내보내기</option>
                       <option value="browser-automation">브라우저 자동화</option>
                       <option value="api">공식 API</option>
                     </select>
@@ -2311,7 +2341,7 @@
                   </div>
                 </form>
                 <div class="settings-note">
-                  비밀번호는 공개 HTML 기본값에 넣지 않습니다. 서버 Vault에는 암호화 등록하고, 화면에는 마스킹된 연동 상태만 표시합니다.
+                  비밀번호는 공개 HTML 기본값에 넣지 않습니다. 서버 Vault에는 암호화 등록하고, 화면에는 마스킹된 연동 상태만 표시합니다. 주문프로그램이 없는 매입처는 거래내역서 파일 또는 영수증 사진/OCR 채널로 등록합니다.
                 </div>
               </div>
             </section>
@@ -2341,7 +2371,7 @@
                   <div id="staffList" class="master-list"></div>
                 </div>
                 <div>
-                  <h3 class="panel-title" style="margin-bottom:8px">외부계정/자동화</h3>
+                  <h3 class="panel-title" style="margin-bottom:8px">연동관리/자동화</h3>
                   <div id="integrationList" class="master-list"></div>
                 </div>
               </div>
@@ -2506,7 +2536,7 @@
       <div class="panel-body grid">
         <div class="file-row">
           <label>파일
-            <input id="fileInput" type="file" accept=".csv,.json,application/json,text/csv">
+            <input id="fileInput" type="file" accept=".csv,.json,.jpg,.jpeg,.png,.pdf,application/json,text/csv,image/*,application/pdf">
           </label>
           <button id="loadFileBtn" class="primary">불러오기</button>
         </div>
@@ -2520,6 +2550,56 @@
             </select>
           </label>
           <button id="serverImportSettlementBtn">서버 자동정리</button>
+        </div>
+        <div class="file-row">
+          <label>증빙 연동 구분
+            <select id="evidenceService">
+              <optgroup label="은행">
+                <option value="shinhan_business">신한은행 기업</option>
+                <option value="ibk_business">기업은행 기업</option>
+              </optgroup>
+              <optgroup label="매입처">
+                <option value="coupang_supplier">쿠팡 매입처</option>
+                <option value="marketbom">마켓봄</option>
+                <option value="newtong">뉴통</option>
+                <option value="baljugo">발주고</option>
+                <option value="supplier_custom_portal">기타 매입처 주문프로그램</option>
+                <option value="supplier_statement_upload">거래내역서/영수증 업로드</option>
+              </optgroup>
+              <optgroup label="세무·기타">
+                <option value="hometax">홈택스</option>
+                <option value="tax_invoice_upload">계산서/증빙 업로드</option>
+                <option value="card_pg">카드사/PG 매출</option>
+                <option value="utility_bills">공과금 고지서</option>
+                <option value="accountant_tax_agent">세무대리인/회계프로그램</option>
+              </optgroup>
+            </select>
+          </label>
+          <label>증빙 종류
+            <select id="evidenceKind">
+              <option value="supplier_statement">매입처 거래내역서</option>
+              <option value="receipt_photo">영수증 사진</option>
+              <option value="tax_invoice">세금계산서</option>
+              <option value="bank_statement">은행 거래내역</option>
+              <option value="utility_bill">공과금 고지서</option>
+              <option value="card_pg_report">카드/PG 리포트</option>
+              <option value="other">기타 증빙</option>
+            </select>
+          </label>
+        </div>
+        <div class="file-row">
+          <label>매입처/거래처명
+            <input id="evidenceVendor" placeholder="예: 마켓봄, 뉴통, 도시가스">
+          </label>
+          <label>금액
+            <input id="evidenceAmount" type="number" min="0" step="1" placeholder="금액 확인 전이면 0">
+          </label>
+        </div>
+        <label>증빙 메모
+          <textarea id="evidenceMemo" placeholder="예: 7월 식자재 거래명세서, 홈택스 매입 전자세금계산서"></textarea>
+        </label>
+        <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
+          <button id="uploadEvidenceBtn" class="primary">증빙 서버 등록</button>
         </div>
         <label>CSV 붙여넣기
           <textarea id="csvText" placeholder="date,branch,type,vendor,channel,amount,status,memo"></textarea>
@@ -2567,10 +2647,185 @@
       coupangeats: "쿠팡이츠 사장님",
       yogiyo: "요기요 사장님",
       ddangyo: "땡겨요",
-      matepos: "메이트포스",
+      matepos: "메이트포스/POS",
+      shinhan_business: "신한은행 기업",
+      ibk_business: "기업은행 기업",
+      coupang_supplier: "쿠팡 매입처",
       marketbom: "마켓봄",
-      bank: "은행 거래내역"
+      newtong: "뉴통",
+      baljugo: "발주고",
+      supplier_custom_portal: "기타 매입처 주문프로그램",
+      supplier_statement_upload: "거래내역서/영수증 업로드",
+      hometax: "홈택스",
+      tax_invoice_upload: "계산서/증빙 업로드",
+      card_pg: "카드사/PG 매출",
+      utility_bills: "공과금 고지서",
+      accountant_tax_agent: "세무대리인/회계프로그램"
     };
+    const integrationCatalog = {
+      baemin: {
+        category: "판매사이트",
+        loginUrl: "https://self.baemin.com/",
+        collectionMode: "portal-csv",
+        dataScope: "주문, 매출, 배달팁, 쿠폰, 정산서",
+        requiredProof: "사업자번호, 매장 권한, 2차 인증",
+        memo: "배민셀프서비스에서 매출/정산 자료를 내려받아 월마감에 반영"
+      },
+      coupangeats: {
+        category: "판매사이트",
+        loginUrl: "https://store.coupangeats.com/",
+        collectionMode: "portal-csv",
+        dataScope: "주문, 매출, 정산, 프로모션",
+        requiredProof: "스토어 계정, 매장 권한, 2차 인증",
+        memo: "쿠팡이츠 사장님 포털 정산 자료 수집"
+      },
+      yogiyo: {
+        category: "판매사이트",
+        loginUrl: "https://ceo.yogiyo.co.kr/",
+        collectionMode: "portal-csv",
+        dataScope: "주문, 매출, 정산, 리뷰",
+        requiredProof: "사장님사이트 계정, 매장 권한",
+        memo: "요기요 사장님사이트 매출/정산 자료 수집"
+      },
+      ddangyo: {
+        category: "판매사이트",
+        loginUrl: "https://boss.ddangyo.com/",
+        collectionMode: "portal-csv",
+        dataScope: "주문, 매출, 즉시정산, 정산서",
+        requiredProof: "땡겨요 사장님라운지 계정, 사업자 인증",
+        memo: "땡겨요 사장님라운지 매출/정산 자료 수집"
+      },
+      matepos: {
+        category: "POS",
+        loginUrl: "",
+        collectionMode: "pos-export",
+        dataScope: "포장/홀 매출, 결제수단, 영업일 마감",
+        requiredProof: "POS 관리자 권한 또는 내보내기 파일",
+        memo: "POS 내보내기 파일을 거래 원장에 반영"
+      },
+      shinhan_business: {
+        category: "은행",
+        loginUrl: "https://bizbank.shinhan.com/",
+        collectionMode: "bank-excel",
+        dataScope: "입출금 거래내역, 배달앱 정산 입금, 카드/현금 입금",
+        requiredProof: "기업뱅킹 권한, 공동/금융인증서, OTP",
+        memo: "신한은행 기업 거래내역 엑셀 또는 인증 조회"
+      },
+      ibk_business: {
+        category: "은행",
+        loginUrl: "https://kiup.ibk.co.kr/uib/jsp/index.jsp",
+        collectionMode: "bank-excel",
+        dataScope: "입출금 거래내역, 배달앱 정산 입금, 카드/현금 입금",
+        requiredProof: "기업뱅킹 권한, 공동/금융인증서, OTP",
+        memo: "기업은행 기업 거래내역 엑셀 또는 인증 조회"
+      },
+      coupang_supplier: {
+        category: "매입처",
+        loginUrl: "https://marketplace.coupang.com/",
+        collectionMode: "purchase-portal",
+        dataScope: "식자재/소모품 주문, 매입, 배송, 세금계산서",
+        requiredProof: "판매자/구매 계정 또는 주문내역 파일",
+        memo: "쿠팡 매입/주문 내역을 비용 원장에 반영"
+      },
+      marketbom: {
+        category: "매입처",
+        loginUrl: "https://marketbom.com/",
+        collectionMode: "purchase-portal",
+        dataScope: "식자재 발주, 매입처별 거래명세, 납품",
+        requiredProof: "마켓봄 거래처 계정",
+        memo: "마켓봄 발주/매입 자료를 식재료율 계산에 반영"
+      },
+      newtong: {
+        category: "매입처",
+        loginUrl: "",
+        collectionMode: "purchase-portal",
+        dataScope: "뉴통 발주, 거래명세, 납품",
+        requiredProof: "매입처 주문프로그램 계정",
+        memo: "뉴통 주문프로그램 자료 수집 대기"
+      },
+      baljugo: {
+        category: "매입처",
+        loginUrl: "",
+        collectionMode: "purchase-portal",
+        dataScope: "발주고 발주, 거래명세, 납품",
+        requiredProof: "매입처 주문프로그램 계정",
+        memo: "발주고 주문프로그램 자료 수집 대기"
+      },
+      supplier_custom_portal: {
+        category: "매입처",
+        loginUrl: "",
+        collectionMode: "purchase-portal",
+        dataScope: "추가 매입처 주문/납품/거래명세",
+        requiredProof: "매입처명, 로그인 URL, 계정 또는 파일 양식",
+        memo: "새 매입처는 이 항목으로 먼저 등록 후 전용 수집기로 확장"
+      },
+      supplier_statement_upload: {
+        category: "매입처",
+        loginUrl: "",
+        collectionMode: "receipt-photo",
+        dataScope: "거래내역서, 영수증 사진, PDF, 이미지",
+        requiredProof: "사진/PDF/CSV 원본",
+        memo: "주문프로그램이 없는 매입처는 파일/사진/OCR로 등록"
+      },
+      hometax: {
+        category: "세무·계산서",
+        loginUrl: "https://www.hometax.go.kr/",
+        collectionMode: "hometax-certificate",
+        dataScope: "전자세금계산서 매입/매출, 현금영수증, 사업자 세무증빙",
+        requiredProof: "공동/금융인증서, 간편인증, 사업자 권한",
+        memo: "홈택스 전자세금계산서 목록 조회/증빙 수집"
+      },
+      tax_invoice_upload: {
+        category: "세무·계산서",
+        loginUrl: "",
+        collectionMode: "tax-invoice-upload",
+        dataScope: "계산서 PDF, 거래명세서, 카드전표, 현금영수증",
+        requiredProof: "파일/PDF/이미지 원본",
+        memo: "홈택스 자동조회 전까지 증빙 파일로 수동 등록"
+      },
+      card_pg: {
+        category: "기타 운영",
+        loginUrl: "",
+        collectionMode: "card-pg-report",
+        dataScope: "카드 매출, 입금 예정액, 수수료, 승인/취소",
+        requiredProof: "카드사/PG 관리자 권한 또는 월별 리포트",
+        memo: "배달앱 외 카드/PG 매출과 입금 대사를 반영"
+      },
+      utility_bills: {
+        category: "기타 운영",
+        loginUrl: "",
+        collectionMode: "utility-bill-upload",
+        dataScope: "전기, 가스, 수도, 통신, 렌탈 고지서",
+        requiredProof: "고지서 PDF/사진/납부내역",
+        memo: "공과금 고지서 업로드로 월 비용 원장에 반영"
+      },
+      accountant_tax_agent: {
+        category: "기타 운영",
+        loginUrl: "",
+        collectionMode: "accounting-export",
+        dataScope: "세무대리인 전달자료, 회계프로그램 내보내기, 신고 보완자료",
+        requiredProof: "세무대리인 연락처, 회계프로그램 파일 또는 공유 폴더",
+        memo: "세무대리인/회계프로그램 전달 채널을 월마감 체크리스트에 연결"
+      }
+    };
+    const deliveryAutomationServices = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+    const serverVaultServices = new Set([
+      "baemin",
+      "coupangeats",
+      "yogiyo",
+      "ddangyo",
+      "matepos",
+      "shinhan_business",
+      "ibk_business",
+      "coupang_supplier",
+      "marketbom",
+      "newtong",
+	      "baljugo",
+	      "supplier_custom_portal",
+	      "hometax",
+	      "card_pg",
+	      "accountant_tax_agent"
+	    ]);
     const integrationStatusLabels = {
       "vault-ready": ["Vault 등록완료", "good"],
       ready: ["연동준비", "info"],
@@ -2861,6 +3116,48 @@
           memo: "매장 포장/POS 매출 통합관리 기준 데이터"
         },
         {
+          id: "int-shinhan-business",
+          service: "shinhan_business",
+          label: "신한은행 기업",
+          loginUrl: "https://bizbank.shinhan.com/",
+          username: "",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
+          passwordMasked: "Vault/입력 필요",
+          collectionMode: "bank-openbanking",
+          status: "ready",
+          vaultService: "yeoljeong-shinhan-business",
+          memo: "운영/정산 계좌 거래내역 수집 및 입금 대사 대상"
+        },
+        {
+          id: "int-ibk-business",
+          service: "ibk_business",
+          label: "기업은행 기업",
+          loginUrl: "https://kiup.ibk.co.kr/",
+          username: "",
+          businessId: "biz-sungshin",
+          branch: "성신여대점",
+          passwordMasked: "Vault/입력 필요",
+          collectionMode: "bank-openbanking",
+          status: "ready",
+          vaultService: "yeoljeong-ibk-business",
+          memo: "성신여대점 운영계좌 거래내역 수집 및 입금 대사 대상"
+        },
+        {
+          id: "int-coupang-supplier",
+          service: "coupang_supplier",
+          label: "쿠팡 매입처",
+          loginUrl: "https://supplier.coupang.com/",
+          username: "",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
+          passwordMasked: "Vault/입력 필요",
+          collectionMode: "purchase-portal",
+          status: "ready",
+          vaultService: "yeoljeong-coupang-supplier",
+          memo: "매입 주문/거래명세서 수집 대상"
+        },
+        {
           id: "int-marketbom",
           service: "marketbom",
           label: "마켓봄",
@@ -2873,6 +3170,76 @@
           status: "vault-ready",
           vaultService: "yeoljeong-marketbom",
           memo: "본사 매입 발주/정산 자료 수집 대상"
+        },
+        {
+          id: "int-newtong",
+          service: "newtong",
+          label: "뉴통",
+          loginUrl: "",
+          username: "",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
+          passwordMasked: "Vault/입력 필요",
+          collectionMode: "purchase-portal",
+          status: "ready",
+          vaultService: "yeoljeong-newtong",
+          memo: "매입처 주문 프로그램이 있을 경우 로그인 정보 등록, 없으면 파일/사진 업로드로 대체"
+        },
+        {
+          id: "int-baljugo",
+          service: "baljugo",
+          label: "발주고",
+          loginUrl: "",
+          username: "",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
+          passwordMasked: "Vault/입력 필요",
+          collectionMode: "purchase-portal",
+          status: "ready",
+          vaultService: "yeoljeong-baljugo",
+          memo: "발주/입고/거래명세서 수집 대상"
+        },
+        {
+          id: "int-supplier-upload",
+          service: "supplier_statement_upload",
+          label: "거래내역서/영수증 업로드",
+          loginUrl: "",
+          username: "",
+          businessId: "biz-mia",
+          branch: "열정국밥_미아점",
+          passwordMasked: "",
+          collectionMode: "receipt-photo",
+          status: "manual",
+          vaultService: "file-upload",
+          memo: "주문프로그램이 없는 매입처의 거래내역서, 영수증 사진 등록 채널"
+        },
+        {
+          id: "int-hometax",
+          service: "hometax",
+          label: "홈택스",
+          loginUrl: "https://www.hometax.go.kr/",
+          username: "",
+          businessId: "biz-mia",
+          branch: "",
+          passwordMasked: "Vault/입력 필요",
+          collectionMode: "hometax-certificate",
+          status: "ready",
+          vaultService: "yeoljeong-hometax",
+          memo: "전자세금계산서, 현금영수증, 신고 증빙 수집 대상"
+        },
+        {
+          id: "int-tax-invoice-upload",
+          service: "tax_invoice_upload",
+          label: "계산서/증빙 업로드",
+          loginUrl: "",
+          username: "",
+          businessId: "biz-mia",
+          branch: "",
+          passwordMasked: "",
+          collectionMode: "tax-invoice-upload",
+          status: "manual",
+          vaultService: "file-upload",
+          memo: "홈택스 자동수집 실패 또는 외부 세무자료 파일 업로드 대체 채널"
         }
       ]
     };
@@ -4687,7 +5054,7 @@
       const filteredPayroll = (payrollStatements || []).filter(isSelectedBusinessRecord);
       const filteredSettlements = (deliverySettlements || []).filter(isSelectedBusinessRecord);
       const settlementAmount = filteredSettlements.reduce((sum, item) => sum + Number(item.settlement_amount || item.settlementAmount || item.amount || 0), 0);
-      els.settingsSummary.textContent = `전체 사업자 ${cfg.businesses.length} / 선택 지점 ${filteredBranches.length} / 계좌 ${filteredAccounts.length} / 직원 ${filteredStaff.length} / 외부계정 ${filteredIntegrations.length} / 정산 ${filteredSettlements.length}건`;
+      els.settingsSummary.textContent = `전체 사업자 ${cfg.businesses.length} / 선택 지점 ${filteredBranches.length} / 계좌 ${filteredAccounts.length} / 직원 ${filteredStaff.length} / 연동 ${filteredIntegrations.length} / 정산 ${filteredSettlements.length}건`;
       if (els.settingsBusinessSelect) {
         const current = els.settingsBusinessSelect.value || selectedBusinessId;
         els.settingsBusinessSelect.innerHTML = cfg.businesses.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("");
@@ -4707,7 +5074,7 @@
       if (els.businessWorkspaceSummary) {
         const cards = [
           ["운영지점", filteredBranches.length],
-          ["배달/POS/은행", filteredIntegrations.length],
+          ["판매/은행/매입/세무", filteredIntegrations.length],
           ["등록직원", filteredStaff.length],
           ["계약서", filteredContracts.length],
           ["급여내역서", filteredPayroll.length],
@@ -4800,6 +5167,15 @@
       els.integrationList.innerHTML = filteredIntegrations.length ? filteredIntegrations.map(item => {
         const status = integrationStatusLabels[item.status] || [item.status || "미지정", "warn"];
         const syncStatus = integrationStatusLabels[item.portalStatus || item.lastSyncStatus] || [item.lastSyncStatus || "대기", "warn"];
+        const catalog = integrationCatalog[item.service] || {};
+        const canRunPortalSync = deliveryAutomationServices.has(item.service);
+        const uploadMode = ["shinhan_business", "ibk_business", "supplier_statement_upload", "tax_invoice_upload", "utility_bills", "card_pg", "accountant_tax_agent"].includes(item.service)
+          || ["bank-excel", "statement-upload", "receipt-photo", "tax-invoice-upload", "utility-bill-upload", "card-pg-report", "accounting-export"].includes(item.collectionMode);
+        const actionButton = canRunPortalSync
+          ? `<button data-sync-integration="${escapeHtml(item.service)}">수집 실행</button>`
+          : uploadMode
+            ? `<button data-open-import="${escapeHtml(item.service)}">파일/사진 등록</button>`
+            : `<button type="button" disabled title="설정 저장 후 전용 수집기가 연결됩니다.">계정/Vault 등록</button>`;
         return `
         <article class="master-card">
           <header>
@@ -4810,21 +5186,23 @@
             <button class="icon danger" data-delete-integration="${escapeHtml(item.id)}" title="외부계정 삭제">-</button>
           </header>
           <div class="meta-grid">
-            <span>구분: ${escapeHtml(integrationLabels[item.service] || item.service)}</span>
+            <span>구분: ${escapeHtml(catalog.category || "기타")} · ${escapeHtml(integrationLabels[item.service] || item.service)}</span>
             <span>사업자: ${escapeHtml(businessName(item.businessId || item.business_id || ""))}</span>
             <span>지점: ${escapeHtml(item.branch || "공통/미지정")}</span>
             <span>ID: ${escapeHtml(item.username || "미등록")}</span>
             <span>PW: ${escapeHtml(item.passwordMasked || (item.password ? "브라우저 저장됨" : "Vault/입력 필요"))}</span>
             <span>수집: ${escapeHtml(collectionModeLabel(item.collectionMode))}</span>
             <span>최근수집: ${escapeHtml(item.lastSyncAt || "미실행")} / <b class="badge ${syncStatus[1]}">${escapeHtml(syncStatus[0])}</b></span>
+            <span style="grid-column:1/-1">수집대상: ${escapeHtml(item.dataScope || catalog.dataScope || "미지정")}</span>
+            <span style="grid-column:1/-1">확인값: ${escapeHtml(item.requiredProof || catalog.requiredProof || "계정/파일 확인 필요")}</span>
             <span style="grid-column:1/-1">URL: <a href="${escapeHtml(item.loginUrl || "#")}" target="_blank" rel="noopener">${escapeHtml(item.loginUrl || "미등록")}</a></span>
             <span style="grid-column:1/-1">Vault: ${escapeHtml(item.vaultService || "미연결")} / ${escapeHtml(item.portalMessage || item.memo || "-")}</span>
           </div>
           <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:10px">
-            <button data-sync-integration="${escapeHtml(item.service)}">수집 실행</button>
+            ${actionButton}
           </div>
         </article>`;
-      }).join("") : `<div class="empty">선택한 사업자의 배달앱, POS, 마켓봄, 은행 계정을 등록하십시오.</div>`;
+      }).join("") : `<div class="empty">선택한 사업자의 판매사이트, 은행, 매입처, 홈택스 또는 증빙 업로드 채널을 등록하십시오.</div>`;
       els.staffOptions.innerHTML = cfg.staff.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.branch)} · ${formatMoney(item.hourly)}</option>`).join("");
     }
 
@@ -4833,9 +5211,39 @@
         "portal-csv": "포털 정산서/CSV",
         "pos-export": "POS/메이트포스 내보내기",
         "bank-excel": "은행 엑셀 업로드",
+        "bank-openbanking": "은행 기업뱅킹 조회",
+        "purchase-portal": "매입처 주문프로그램 수집",
+        "statement-upload": "거래내역서 파일 업로드",
+        "receipt-photo": "영수증 사진/OCR 등록",
+        "hometax-certificate": "홈택스 인증서/간편인증",
+        "tax-invoice-upload": "계산서 파일 업로드",
+        "card-pg-report": "카드사/PG 매출 리포트",
+        "utility-bill-upload": "공과금 고지서 업로드",
+        "accounting-export": "회계프로그램 내보내기",
         "browser-automation": "브라우저 자동화",
         api: "공식 API"
       }[value] || value || "미지정";
+    }
+
+    function applyIntegrationPreset(service, overwrite = false) {
+      if (!els.integrationForm) return;
+      const catalog = integrationCatalog[service] || {};
+      const form = els.integrationForm;
+      if (!catalog) return;
+      if (catalog.loginUrl && (overwrite || !form.loginUrl.value.trim())) form.loginUrl.value = catalog.loginUrl;
+      if (catalog.collectionMode && (overwrite || !form.collectionMode.value)) form.collectionMode.value = catalog.collectionMode;
+      if (overwrite || !form.label.value.trim()) {
+        const branch = form.branch.value || selectedBusinessBranches()[0]?.name || "";
+        const label = integrationLabels[service] || service;
+        form.label.value = branch ? `${branch} ${label}` : label;
+      }
+      if (catalog.memo && (overwrite || !form.memo.value.trim())) form.memo.value = catalog.memo;
+      if (["supplier_statement_upload", "tax_invoice_upload"].includes(service)) {
+        form.status.value = "manual";
+        if (!form.username.value.trim()) form.username.value = integrationLabels[service] || service;
+      } else if (serverVaultServices.has(service)) {
+        form.status.value = "ready";
+      }
     }
 
     function renderAll() {
@@ -4931,6 +5339,7 @@
         });
       }
       applyContractDefaults(false);
+      applyIntegrationPreset(els.integrationForm?.service?.value || "baemin", false);
     }
 
     function showToast(message) {
@@ -5872,21 +6281,25 @@
       accounts.forEach(account => {
         const service = account.service;
         const existing = list.find(item => item.serverAccountId === account.id || item.service === service);
+        const catalog = integrationCatalog[service] || {};
         const next = {
           id: existing?.id || `srv-${account.id}`,
           serverAccountId: account.id,
           service,
           label: account.label || integrationLabels[service] || service,
-          loginUrl: account.login_url || account.loginUrl || "",
+          category: account.category || existing?.category || catalog.category || "기타",
+          loginUrl: account.login_url || account.loginUrl || existing?.loginUrl || catalog.loginUrl || "",
           username: account.username || "",
           passwordMasked: account.password_masked || "********",
           businessId: account.business_id || account.businessId || existing?.businessId || "",
           business_id: account.business_id || account.businessId || existing?.business_id || "",
           branch: account.branch || existing?.branch || "",
-          collectionMode: account.collection_mode || "browser-automation",
+          collectionMode: account.collection_mode || existing?.collectionMode || catalog.collectionMode || "browser-automation",
+          dataScope: account.data_scope || existing?.dataScope || catalog.dataScope || "",
+          requiredProof: account.required_proof || existing?.requiredProof || catalog.requiredProof || "",
           status: account.status === "credential_registered" ? "vault-ready" : (account.status || "ready"),
           vaultService: `server:${account.id}`,
-          memo: account.memo || "서버 암호화 계정",
+          memo: account.memo || existing?.memo || catalog.memo || "서버 암호화 계정",
           lastSyncAt: account.last_sync_at || existing?.lastSyncAt || "",
           lastSyncStatus: account.last_sync_status || existing?.lastSyncStatus || "not_started",
           portalStatus: account.portal_status || account.portalStatus || existing?.portalStatus || "",
@@ -5954,12 +6367,17 @@
         showToast("총괄 운영관리자 로그인 후 서버 자동 수집을 실행할 수 있습니다.");
         return;
       }
+      const runnableServices = services.filter(service => deliveryAutomationServices.has(service));
+      if (!runnableServices.length) {
+        showToast("자동 포털 수집은 배달 4사부터 실행됩니다. 은행·매입처·홈택스는 계정/Vault 또는 파일 업로드 설정을 저장하십시오.");
+        return;
+      }
       const scope = selectedAutomationScope();
       const month = selectedMonth();
       const payload = await financeApi("/sync", {
         method: "POST",
         body: JSON.stringify({
-          services,
+          services: runnableServices,
           ...scope,
           date_from: `${month}-01`,
           date_to: new Date().toISOString().slice(0, 10)
@@ -5996,6 +6414,83 @@
       showToast(`서버 자동정리 ${records.length}건 / 정산 ${(payload.settlements || []).length}건 반영`);
     }
 
+    function evidenceKindForService(service) {
+      if (["shinhan_business", "ibk_business"].includes(service)) return "bank_statement";
+      if (["hometax", "tax_invoice_upload", "accountant_tax_agent"].includes(service)) return "tax_invoice";
+      if (service === "utility_bills") return "utility_bill";
+      if (service === "card_pg") return "card_pg_report";
+      if (service === "supplier_statement_upload") return "receipt_photo";
+      return "supplier_statement";
+    }
+
+    function openEvidenceImport(service = "") {
+      const selectedService = service || els.evidenceService?.value || "supplier_statement_upload";
+      if (els.evidenceService) els.evidenceService.value = selectedService;
+      if (els.evidenceKind) els.evidenceKind.value = evidenceKindForService(selectedService);
+      if (els.settlementService && deliveryAutomationServices.has(selectedService)) els.settlementService.value = selectedService;
+      if (els.evidenceVendor && !els.evidenceVendor.value.trim()) {
+        els.evidenceVendor.value = integrationLabels[selectedService] || "";
+      }
+      els.importModal.classList.remove("hidden");
+    }
+
+    function mergeEvidenceTransaction(result, file) {
+      const evidence = result?.evidence || {};
+      const transaction = result?.transaction || {};
+      const scope = selectedAutomationScope();
+      state.entries.push({
+        id: transaction.id || uid(),
+        date: transaction.transaction_date || new Date().toISOString().slice(0, 10),
+        branch: evidence.branch || scope.branch,
+        type: transaction.direction === "income" ? "sales" : "expense",
+        vendor: evidence.vendor || els.evidenceVendor.value.trim() || integrationLabels[evidence.service] || file.name,
+        channel: `${integrationLabels[evidence.service] || evidence.service || "증빙"} · ${evidence.document_label || "업로드"}`,
+        amount: Number(evidence.amount || transaction.amount || 0),
+        status: "pending",
+        memo: evidence.memo || transaction.memo || "서버 업로드 증빙 확인 필요",
+        attachmentName: evidence.original_filename || file.name,
+        attachmentType: evidence.content_type || file.type || "",
+        attachmentSize: evidence.size_bytes || file.size,
+        serverEvidenceId: evidence.id || ""
+      });
+      saveState();
+      renderAll();
+    }
+
+    async function uploadIntegrationEvidenceToServer() {
+      if (!canManageAutomation()) {
+        showToast("총괄 운영관리자 로그인 후 증빙을 서버에 등록할 수 있습니다.");
+        return;
+      }
+      const file = els.fileInput.files[0];
+      if (!file) {
+        showToast("등록할 파일 또는 사진을 선택하십시오.");
+        return;
+      }
+      const scope = selectedAutomationScope();
+      const formData = new FormData();
+      formData.append("service", els.evidenceService.value);
+      formData.append("business_id", scope.business_id);
+      formData.append("branch", scope.branch);
+      formData.append("document_kind", els.evidenceKind.value);
+      formData.append("vendor", els.evidenceVendor.value.trim() || integrationLabels[els.evidenceService.value] || "");
+      formData.append("amount", String(Number(els.evidenceAmount.value || 0)));
+      formData.append("memo", els.evidenceMemo.value.trim());
+      formData.append("file", file);
+      const response = await fetch("/api/v1/yeoljeong-finance/integration-evidence", {
+        method: "POST",
+        headers: apiAuthOnlyHeaders(),
+        body: formData
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.detail || payload.message || `증빙 등록 ${response.status}`);
+      }
+      mergeEvidenceTransaction(payload, file);
+      setView("entries");
+      showToast("증빙을 서버에 등록하고 확인 필요 거래로 반영했습니다.");
+    }
+
     function bindEvents() {
       els.monthFilter.addEventListener("change", renderAll);
       els.branchFilter.addEventListener("change", renderAll);
@@ -6009,6 +6504,10 @@
       els.csvBtn.addEventListener("click", () => els.importModal.classList.remove("hidden"));
       els.importBtn.addEventListener("click", () => els.importModal.classList.remove("hidden"));
       els.closeImportBtn.addEventListener("click", () => els.importModal.classList.add("hidden"));
+      els.evidenceService?.addEventListener("change", event => {
+        if (els.evidenceKind) els.evidenceKind.value = evidenceKindForService(event.target.value);
+        if (els.evidenceVendor && !els.evidenceVendor.value.trim()) els.evidenceVendor.value = integrationLabels[event.target.value] || "";
+      });
       els.loginBtn.addEventListener("click", () => els.loginModal.classList.remove("hidden"));
       els.closeLoginBtn.addEventListener("click", () => els.loginModal.classList.add("hidden"));
       els.signupBtn.addEventListener("click", () => els.signupModal.classList.remove("hidden"));
@@ -6521,54 +7020,71 @@
       els.integrationForm.addEventListener("submit", async event => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(els.integrationForm).entries());
+        const catalog = integrationCatalog[data.service] || {};
+        const loginUrl = data.loginUrl.trim() || catalog.loginUrl || "";
+        const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
+        const memo = data.memo.trim() || catalog.memo || "";
         let serverAccount = null;
-        if (["baemin", "coupangeats", "yogiyo", "ddangyo"].includes(data.service) && !canManageAutomation()) {
-          showToast("배달 4사 계정 서버 등록은 총괄 운영관리자 로그인 후 가능합니다.");
+        const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(data.username?.trim());
+        if (shouldUseServerVault && !canManageAutomation()) {
+          showToast("외부 서비스 계정 서버 등록은 총괄 운영관리자 로그인 후 가능합니다.");
           return;
         }
-        if (canManageAutomation() && ["baemin", "coupangeats", "yogiyo", "ddangyo"].includes(data.service)) {
-          try {
-            const result = await financeApi("/accounts", {
-              method: "POST",
-              body: JSON.stringify({
-                service: data.service,
-                label: data.label.trim(),
-                login_url: data.loginUrl.trim(),
-                username: data.username.trim(),
-                password: data.password || "",
-                business_id: data.businessId,
-                branch: data.branch || "",
-                collection_mode: data.collectionMode,
-                memo: data.memo.trim(),
-                auto_sync: true
-              })
-            });
+	        if (canManageAutomation() && shouldUseServerVault) {
+	          try {
+	            const result = await financeApi("/accounts", {
+	              method: "POST",
+	              body: JSON.stringify({
+	                service: data.service,
+	                label: data.label.trim(),
+	                login_url: loginUrl,
+	                username: data.username.trim(),
+	                password: data.password || "",
+	                business_id: data.businessId,
+	                branch: data.branch || "",
+	                collection_mode: collectionMode,
+	                category: catalog.category || "",
+	                data_scope: catalog.dataScope || "",
+	                required_proof: catalog.requiredProof || "",
+	                memo,
+	                auto_sync: true
+	              })
+	            });
             serverAccount = result.account;
             if (result.sync) applySyncPayload(result.sync);
           } catch (err) {
             showToast(`서버 저장 실패: ${err.message}`);
           }
         }
-        settings().integrations.push({
-          id: uid(),
-          serverAccountId: serverAccount?.id || "",
-          service: data.service,
-          label: data.label.trim(),
-          loginUrl: data.loginUrl.trim(),
-          username: data.username.trim(),
-          businessId: data.businessId,
-          branch: data.branch || "",
-          passwordMasked: serverAccount?.password_masked || (data.password ? "브라우저 저장됨" : "Vault/입력 필요"),
-          collectionMode: data.collectionMode,
-          status: serverAccount ? "vault-ready" : data.status,
-          vaultService: serverAccount ? `server:${serverAccount.id}` : `yeoljeong-${data.service}`,
-          memo: data.memo.trim()
-        });
-        saveState();
-        syncSettingsToServer();
-        els.integrationForm.reset();
-        renderAll();
-        showToast("외부계정 연결 정보를 저장했습니다.");
+	        settings().integrations.push({
+	          id: uid(),
+	          serverAccountId: serverAccount?.id || "",
+	          service: data.service,
+	          label: data.label.trim(),
+	          category: catalog.category || "기타",
+	          loginUrl,
+	          username: data.username.trim(),
+	          business_id: data.businessId,
+	          businessId: data.businessId,
+	          branch: data.branch || "",
+	          passwordMasked: serverAccount?.password_masked || (data.password ? "브라우저 저장됨" : "Vault/입력 필요"),
+	          collectionMode,
+	          dataScope: catalog.dataScope || "",
+	          requiredProof: catalog.requiredProof || "",
+	          status: serverAccount ? "vault-ready" : data.status,
+	          vaultService: serverAccount ? `server:${serverAccount.id}` : `yeoljeong-${data.service}`,
+	          memo
+	        });
+	        saveState();
+	        syncSettingsToServer();
+	        els.integrationForm.reset();
+	        if (els.integrationForm.businessId) els.integrationForm.businessId.value = selectedSettingsBusinessId();
+	        applyIntegrationPreset(els.integrationForm.service.value, true);
+	        renderAll();
+	        showToast("외부계정 연결 정보를 저장했습니다.");
+	      });
+      els.integrationForm.service?.addEventListener("change", event => {
+        applyIntegrationPreset(event.target.value, true);
       });
 
       els.clearEntryBtn.addEventListener("click", () => {
@@ -6599,6 +7115,7 @@
       els.clearIntegrationBtn.addEventListener("click", () => {
         els.integrationForm.reset();
         if (els.integrationForm.businessId) els.integrationForm.businessId.value = selectedSettingsBusinessId();
+        applyIntegrationPreset(els.integrationForm.service.value, true);
       });
       els.settingsBusinessSelect?.addEventListener("change", event => {
         setSelectedSettingsBusinessId(event.target.value);
@@ -6611,6 +7128,7 @@
       els.refreshServerAccountsBtn.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));
       els.syncDeliveryBtn.addEventListener("click", () => syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]).catch(err => showToast(err.message)));
       els.serverImportSettlementBtn.addEventListener("click", () => importSettlementCsvToServer().catch(err => showToast(err.message)));
+      els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
       document.body.addEventListener("click", event => {
         const entryId = event.target.dataset.deleteEntry;
@@ -6623,6 +7141,7 @@
         const staffId = event.target.dataset.deleteStaff;
         const integrationId = event.target.dataset.deleteIntegration;
         const syncService = event.target.dataset.syncIntegration;
+        const openImportService = event.target.dataset.openImport;
         const onboardingDownloadId = event.target.dataset.downloadOnboarding;
         const onboardingDeleteId = event.target.dataset.deleteOnboarding;
         const joinReviewId = event.target.dataset.reviewJoin;
@@ -6821,6 +7340,10 @@
         if (syncService) {
           syncDeliveryServices([syncService]).catch(err => showToast(err.message));
         }
+        if (openImportService) {
+          openEvidenceImport(openImportService);
+          showToast("파일/사진을 선택한 뒤 증빙 서버 등록을 실행하십시오.");
+        }
         if (onboardingDownloadId) {
           downloadOnboardingDocument(onboardingDownloadId);
         }
@@ -6857,8 +7380,33 @@
           showToast("파일을 선택하십시오.");
           return;
         }
+        const lowerName = file.name.toLowerCase();
+        const isJson = lowerName.endsWith(".json") || file.type === "application/json";
+        const isCsv = lowerName.endsWith(".csv") || file.type === "text/csv";
+        if (!isJson && !isCsv) {
+          const branch = Array.from(selectedBusinessBranchNames())[0] || settings().branches[0]?.name || "";
+          state.entries.push({
+            id: uid(),
+            date: new Date().toISOString().slice(0, 10),
+            branch,
+            type: "expense",
+            vendor: file.name,
+            channel: "거래내역서/영수증 파일",
+            amount: 0,
+            status: "pending",
+            memo: `${file.type || "파일"} · ${Math.ceil(file.size / 1024).toLocaleString("ko-KR")}KB · 금액/OCR 확인 필요`,
+            attachmentName: file.name,
+            attachmentType: file.type || "",
+            attachmentSize: file.size
+          });
+          saveState();
+          renderAll();
+          setView("entries");
+          showToast("거래내역서/영수증 파일을 확인 필요 거래로 등록했습니다.");
+          return;
+        }
         const text = await file.text();
-        if (file.name.toLowerCase().endsWith(".json")) {
+        if (isJson) {
           const parsed = JSON.parse(text);
           state.entries.push(...(parsed.entries || []));
           state.shifts.push(...(parsed.shifts || []));

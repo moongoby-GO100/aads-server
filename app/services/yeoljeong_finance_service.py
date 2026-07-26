@@ -27,6 +27,7 @@ from fastapi import HTTPException, UploadFile
 KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("YEOLJEONG_FINANCE_DATA_DIR", "app/data/yeoljeong_finance"))
 UPLOAD_DIR = DATA_DIR / "uploads" / "onboarding"
+EVIDENCE_UPLOAD_DIR = DATA_DIR / "uploads" / "evidence"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 256 * 1024
 CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
@@ -49,11 +50,29 @@ DOCUMENT_TYPES: list[dict[str, str]] = [
     {"type": "other", "label": "기타 서류", "requirement": "선택", "notice": "수집 사유를 메모에 남깁니다."},
 ]
 
-PLATFORM_LABELS = {
+CONNECTOR_LABELS = {
     "baemin": "배민셀프서비스",
     "coupangeats": "쿠팡이츠",
     "yogiyo": "요기요",
     "ddangyo": "땡겨요",
+    "matepos": "메이트포스",
+    "shinhan_business": "신한은행 기업",
+    "ibk_business": "기업은행 기업",
+    "coupang_supplier": "쿠팡 매입처",
+    "marketbom": "마켓봄",
+    "newtong": "뉴통",
+    "baljugo": "발주고",
+    "supplier_custom_portal": "기타 매입처 주문프로그램",
+    "supplier_statement_upload": "거래내역서/영수증 업로드",
+    "hometax": "홈택스",
+    "tax_invoice_upload": "계산서/증빙 업로드",
+    "card_pg": "카드사/PG 매출",
+    "utility_bills": "공과금 고지서",
+    "accountant_tax_agent": "세무대리인/회계프로그램",
+}
+PLATFORM_LABELS = {
+    key: CONNECTOR_LABELS[key]
+    for key in ("baemin", "coupangeats", "yogiyo", "ddangyo")
 }
 
 DEFAULT_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -195,6 +214,11 @@ def _now() -> str:
 def _ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _evidence_upload_dir().mkdir(parents=True, exist_ok=True)
+
+
+def _evidence_upload_dir() -> Path:
+    return DATA_DIR / "uploads" / "evidence"
 
 
 def _path(name: str) -> Path:
@@ -814,6 +838,21 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
         branch = str(next_item.get("branch") or "").strip()
         if branch and branch not in CANONICAL_BRANCH_NAMES:
             next_item["branch"] = MIA_BRANCH_NAME
+        service = str(next_item.get("service") or "").strip()
+        if service in CONNECTOR_LABELS:
+            next_item["service"] = service
+            next_item["label"] = str(next_item.get("label") or CONNECTOR_LABELS[service]).strip()
+            next_item["category"] = str(next_item.get("category") or "").strip()
+            next_item["collectionMode"] = str(
+                next_item.get("collectionMode") or next_item.get("collection_mode") or "browser-automation"
+            ).strip()
+            next_item["dataScope"] = str(next_item.get("dataScope") or next_item.get("data_scope") or "").strip()
+            next_item["requiredProof"] = str(
+                next_item.get("requiredProof") or next_item.get("required_proof") or ""
+            ).strip()
+            next_item["loginUrl"] = str(next_item.get("loginUrl") or next_item.get("login_url") or "").strip()
+            next_item["username"] = str(next_item.get("username") or "").strip()
+            next_item["status"] = str(next_item.get("status") or "ready").strip()
         return next_item
 
     return {
@@ -886,6 +925,20 @@ def _normalize_delivery_scope(business_id: Any, branch: Any) -> tuple[str, str]:
         raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
     if not expected_business or expected_business != normalized_business:
         raise HTTPException(status_code=400, detail="사업자와 지점 연결이 일치하지 않습니다")
+    return normalized_business, normalized_branch
+
+
+def _normalize_connector_scope(service: str, business_id: Any, branch: Any) -> tuple[str, str]:
+    if service in PLATFORM_LABELS:
+        return _normalize_delivery_scope(business_id, branch)
+    normalized_business = str(business_id or "").strip()
+    normalized_branch = BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip())
+    if normalized_business not in CANONICAL_BUSINESS_IDS:
+        raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+    if normalized_branch:
+        expected_business = BUSINESS_BY_BRANCH.get(normalized_branch)
+        if not expected_business or expected_business != normalized_business:
+            raise HTTPException(status_code=400, detail="사업자와 지점 연결이 일치하지 않습니다")
     return normalized_business, normalized_branch
 
 
@@ -1423,6 +1476,124 @@ async def save_onboarding_document(
     rows.insert(0, record)
     _write("onboarding_documents", rows)
     return record
+
+
+def _evidence_kind_label(kind: str) -> str:
+    return {
+        "bank_statement": "은행 거래내역",
+        "supplier_statement": "매입처 거래내역서",
+        "receipt_photo": "영수증 사진",
+        "tax_invoice": "세금계산서",
+        "utility_bill": "공과금 고지서",
+        "card_pg_report": "카드/PG 리포트",
+        "other": "기타 증빙",
+    }.get(kind, kind or "기타 증빙")
+
+
+def list_integration_evidence(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="연동 증빙 조회 권한이 없습니다")
+    rows = _read("integration_evidence")
+    if business_id:
+        rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
+    return sorted(rows, key=lambda row: str(row.get("uploaded_at") or row.get("created_at") or ""), reverse=True)
+
+
+async def save_integration_evidence(
+    *,
+    service: str,
+    business_id: str,
+    branch: str,
+    document_kind: str,
+    vendor: str,
+    amount: int,
+    memo: str,
+    upload: UploadFile,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="연동 증빙 업로드 권한이 없습니다")
+    normalized_service = str(service or "").strip()
+    if normalized_service not in CONNECTOR_LABELS:
+        raise HTTPException(status_code=400, detail="지원하지 않는 연동 서비스입니다")
+    normalized_business, normalized_branch = _normalize_connector_scope(normalized_service, business_id, branch)
+    original = _safe_filename(upload.filename or "evidence.bin")
+    suffix = Path(original).suffix.lower()
+    evidence_id = str(uuid4())
+    stored_name = f"{evidence_id}{suffix or '.bin'}"
+    destination = _evidence_upload_dir() / stored_name
+    _ensure_dirs()
+    size = 0
+    with destination.open("wb") as out:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                destination.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="파일은 최대 15MB까지 업로드할 수 있습니다")
+            out.write(chunk)
+    now = _now()
+    content_type = upload.content_type or mimetypes.guess_type(original)[0] or "application/octet-stream"
+    record = {
+        "id": evidence_id,
+        "service": normalized_service,
+        "service_label": CONNECTOR_LABELS.get(normalized_service, normalized_service),
+        "business_id": normalized_business,
+        "branch": normalized_branch,
+        "document_kind": document_kind or "other",
+        "document_label": _evidence_kind_label(document_kind or "other"),
+        "vendor": vendor.strip() or CONNECTOR_LABELS.get(normalized_service, normalized_service),
+        "amount": int(amount or 0),
+        "memo": memo,
+        "original_filename": original,
+        "stored_filename": stored_name,
+        "content_type": content_type,
+        "size_bytes": size,
+        "status": "pending_review",
+        "uploaded_by": _email(user),
+        "uploaded_at": now,
+        "created_at": now,
+        "updated_at": now,
+    }
+    evidence_rows = _read("integration_evidence")
+    evidence_rows.insert(0, record)
+    _write("integration_evidence", evidence_rows)
+
+    transaction = create_transaction(
+        {
+            "transaction_date": now[:10],
+            "source_type": "integration_evidence",
+            "source_file": original,
+            "description": f"{record['service_label']} {record['document_label']} 업로드",
+            "amount": record["amount"],
+            "direction": "expense" if normalized_service not in PLATFORM_LABELS else "income",
+            "category": _transaction_category(" ".join([record["service_label"], record["document_label"], record["vendor"], memo])),
+            "approval_number": "",
+            "order_number": "",
+            "account_name": record["vendor"],
+            "business_id": normalized_business,
+            "branch": normalized_branch,
+            "evidence_id": evidence_id,
+            "status": "pending",
+            "memo": memo or "업로드 증빙 확인 필요",
+        }
+    )
+    return {"evidence": record, "transaction": transaction}
+
+
+def get_integration_evidence(evidence_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="연동 증빙 다운로드 권한이 없습니다")
+    document = _find(_read("integration_evidence"), evidence_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="연동 증빙을 찾을 수 없습니다")
+    stored = _safe_filename(str(document.get("stored_filename") or ""))
+    path = _evidence_upload_dir() / stored
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="연동 증빙 파일이 없습니다")
+    return document, path
 
 
 def _onboarding_missing_document_rows(
@@ -2408,10 +2579,10 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     service = str(payload.get("service") or "").strip()
     username = str(payload.get("username") or "").strip()
     if not service or not username:
-        raise HTTPException(status_code=400, detail="플랫폼과 아이디가 필요합니다")
-    if service not in PLATFORM_LABELS:
-        raise HTTPException(status_code=400, detail="지원하지 않는 배달 플랫폼입니다")
-    business_id, branch = _normalize_delivery_scope(payload.get("business_id"), payload.get("branch"))
+        raise HTTPException(status_code=400, detail="연동 서비스와 아이디가 필요합니다")
+    if service not in CONNECTOR_LABELS:
+        raise HTTPException(status_code=400, detail="지원하지 않는 연동 서비스입니다")
+    business_id, branch = _normalize_connector_scope(service, payload.get("business_id"), payload.get("branch"))
     existing = next(
         (
             row
@@ -2434,12 +2605,15 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     record.update(
         {
             "service": service,
-            "label": payload.get("label") or PLATFORM_LABELS.get(service, service),
+            "label": payload.get("label") or CONNECTOR_LABELS.get(service, service),
             "login_url": payload.get("login_url") or "",
             "username": username,
             "business_id": business_id,
             "branch": branch,
             "collection_mode": payload.get("collection_mode") or "browser-automation",
+            "category": str(payload.get("category") or "").strip(),
+            "data_scope": str(payload.get("data_scope") or "").strip(),
+            "required_proof": str(payload.get("required_proof") or "").strip(),
             "status": "credential_registered",
             "last_sync_status": record.get("last_sync_status") or "not_started",
             "memo": payload.get("memo") or "",

@@ -220,6 +220,33 @@ def test_upsert_account_stores_encrypted_password_only(tmp_path, monkeypatch):
     assert "password" not in raw[0]
 
 
+@pytest.mark.asyncio
+async def test_save_integration_evidence_uploads_file_and_creates_pending_transaction(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    result = await service.save_integration_evidence(
+        service="marketbom",
+        business_id="biz-mia",
+        branch="열정국밥_미아점",
+        document_kind="supplier_statement",
+        vendor="마켓봄",
+        amount=123400,
+        memo="7월 거래명세서",
+        upload=UploadFile(filename="statement.pdf", file=BytesIO(b"pdf-data")),
+        user={"email": "owner@example.com", "is_admin": True},
+    )
+
+    evidence = result["evidence"]
+    transaction = result["transaction"]
+
+    assert evidence["service"] == "marketbom"
+    assert evidence["amount"] == 123400
+    assert (service._evidence_upload_dir() / evidence["stored_filename"]).exists()
+    assert transaction["evidence_id"] == evidence["id"]
+    assert transaction["status"] == "pending"
+    assert transaction["direction"] == "expense"
+
+
 def test_list_accounts_migrates_legacy_plain_password(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
