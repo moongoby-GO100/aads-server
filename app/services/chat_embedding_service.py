@@ -26,7 +26,7 @@ _EMBED_CACHE_MAX = int(os.getenv("EMBED_CACHE_MAX", "500"))
 # ── AADS P0(2026-07-26): Gemini 임베딩 429 차단기 ──
 # 크레딧 고갈(RESOURCE_EXHAUSTED) 감지 시 일정 시간 호출을 끊어
 # 2분간 32회식 재시도 폭주와 로그 오염을 방지한다. 충전 후 자동 복구.
-_EMBED_GEMINI_ENABLED = os.getenv("EMBED_GEMINI_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+_EMBED_GEMINI_ENABLED = os.getenv("EMBED_GEMINI_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 _GEMINI_BLOCK_SECONDS = int(os.getenv("EMBED_GEMINI_BLOCK_SECONDS", "3600"))
 _gemini_blocked_until: float = 0.0
 
