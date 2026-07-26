@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-27 07:19 KST - AADS-LAYOUT-001 OHVIS 루프 시스템 기획서 커밋/푸시
+
+- 산출물: docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md (752줄, 27,455 bytes) - 루프 시스템 상세 구현 기획서 15개 섹션.
+- 조치: 해당 파일 1건만 스테이징 후 커밋 80856619, origin/main 푸시 완료 (pre-push hook HOOK_VERIFIED 통과).
+- 검증: git log origin/main -1 = 80856619, git status -sb = main...origin/main (ahead/behind 0).
+- 정정: 앞서 푸시된 86e2b3df는 별도 파일 docs/layout/AADS-LAYOUT-001_OHVIS_Loop_Engineering.md (343줄)로, 본 기획서와 다른 산출물이다.
+- 범위 제외: 이전 세션 잔여 미커밋 10건(app/main.py, docker-compose.prod.yml, nginx/deploy 스크립트, CHANGELOG 3종)은 손대지 않았다.
+- 미완료: 루프 시스템 구현(P0 loop_controller, DB 스키마, API)은 CEO 승인 대기. 코드 변경 0건, 배포 없음.
+
 ## 2026-07-26 21:10 KST - P0 Gemini 429 circuit breaker applied
 
 - Background: Gemini prepaid credits depleted, 231 x 429 errors in 24h. Embedding, image, LLM fallback retry delays.
