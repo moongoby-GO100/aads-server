@@ -4863,3 +4863,17 @@
 - 배포 주의:
   - 이 파일은 FastAPI 정적앱으로 서빙되므로 서버 blue/green 배포 또는 정적 파일 반영 확인이 필요하다.
   - 대시보드 레시피 보호 변경은 별도 aads-dashboard 커밋/배포와 함께 적용한다.
+
+## 2026-07-27 07:31 KST - FB 매장비서 정적앱 운영 반영 확인
+
+- 커밋/푸시:
+  - `fix(fb): issue recipe access token` 커밋 `60d0b080`을 생성했고, 이후 문서 커밋들과 함께 `origin/main`에 포함됐다.
+- 운영 반영:
+  - `docker-compose.prod.yml` 기준 `aads-server`와 `aads-server-green`은 `/root/aads/aads-server/app:/app/app:rw` bind mount를 사용한다.
+  - 양 컨테이너에서 `/app/app/static/apps/yeoljeong-finance/index.html` 안의 `FB_ACCESS_TOKEN_KEY`, `persistServerAuthToken`, `fb_access_token` 코드가 확인됐다.
+  - 외부 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?redirect=/unni-naengmyeon/recipes` HTML에서도 `FB_ACCESS_TOKEN_KEY`, `fb_access_token`, `persistServerAuthToken`, `followPostLoginRedirect`가 확인됐다.
+- 검증:
+  - 대시보드 레시피 비로그인 경로는 FB 매장비서 앱으로 이동한다.
+  - `aads_token` 단독 쿠키 요청도 FB 로그인 앱으로 이동하여 AADS 공용 로그인만으로는 레시피 접근이 열리지 않는다.
+- 미검증:
+  - 실제 직원 계정 입력 후 레시피 본문 진입 E2E는 계정 자격증명 없이 수행하지 않았다.
