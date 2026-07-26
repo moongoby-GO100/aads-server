@@ -2623,6 +2623,8 @@
     const EMPLOYEE_SELF_SIGNUP_KEY = "yeoljeong-finance-employee-self-signup";
     const POST_LOGIN_REDIRECT_KEY = "yeoljeong-finance-post-login-redirect";
     const SETTINGS_BUSINESS_KEY = "yeoljeong-finance-settings-business";
+    const SERVER_AUTH_TOKEN_KEY = "aads_token";
+    const FB_ACCESS_TOKEN_KEY = "fb_access_token";
     const typeLabels = {
       sales: "매출",
       bank: "입금",
@@ -5456,7 +5458,7 @@
     }
 
     function apiHeaders() {
-      const token = localStorage.getItem("aads_token");
+      const token = localStorage.getItem(SERVER_AUTH_TOKEN_KEY);
       return {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {})
@@ -5464,7 +5466,21 @@
     }
 
     function hasServerAuth() {
-      return Boolean(localStorage.getItem("aads_token"));
+      return Boolean(localStorage.getItem(SERVER_AUTH_TOKEN_KEY));
+    }
+
+    function persistServerAuthToken(token) {
+      localStorage.setItem(SERVER_AUTH_TOKEN_KEY, token);
+      localStorage.setItem(FB_ACCESS_TOKEN_KEY, token);
+      document.cookie = `${SERVER_AUTH_TOKEN_KEY}=${token}; path=/; max-age=604800; SameSite=Lax`;
+      document.cookie = `${FB_ACCESS_TOKEN_KEY}=${token}; path=/; max-age=604800; SameSite=Lax`;
+    }
+
+    function clearServerAuthToken() {
+      localStorage.removeItem(SERVER_AUTH_TOKEN_KEY);
+      localStorage.removeItem(FB_ACCESS_TOKEN_KEY);
+      document.cookie = `${SERVER_AUTH_TOKEN_KEY}=; path=/; max-age=0; SameSite=Lax`;
+      document.cookie = `${FB_ACCESS_TOKEN_KEY}=; path=/; max-age=0; SameSite=Lax`;
     }
 
     function safeRecipeRedirectPath(value) {
@@ -5861,8 +5877,7 @@
           name: form.name.value.trim() || undefined
         })
       });
-      localStorage.setItem("aads_token", payload.token);
-      document.cookie = `aads_token=${payload.token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
+      persistServerAuthToken(payload.token);
       await refreshFinanceSession();
       form.reset();
       setView("onboarding");
@@ -6103,8 +6118,7 @@
         method: "POST",
         body: JSON.stringify({ email, password })
       });
-      localStorage.setItem("aads_token", payload.token);
-      document.cookie = `aads_token=${payload.token}; path=/; max-age=604800; SameSite=Lax`;
+      persistServerAuthToken(payload.token);
       saveAuthSession(sessionFromAuthPayload(payload));
       els.loginModal.classList.add("hidden");
       els.loginForm.reset();
@@ -6154,8 +6168,7 @@
 	          organization_name: organizationName || "열정국밥 운영관리"
 	        })
 	      });
-	      localStorage.setItem("aads_token", payload.token);
-	      document.cookie = `aads_token=${payload.token}; path=/; max-age=604800; SameSite=Lax`;
+	      persistServerAuthToken(payload.token);
 	      saveAuthSession(sessionFromAuthPayload(payload));
 	      if (accountType === "employee") {
 	        markEmployeeSelfSignup(email, { name, branch, phone, address, birthDate, nationality });
@@ -6223,8 +6236,7 @@
       } catch (err) {
         // Local token removal is still the source of truth for this static app.
       }
-      localStorage.removeItem("aads_token");
-      document.cookie = "aads_token=; path=/; max-age=0; SameSite=Lax";
+      clearServerAuthToken();
       saveAuthSession(null);
       onboardingDocuments = [];
       employeeJoinRequests = [];

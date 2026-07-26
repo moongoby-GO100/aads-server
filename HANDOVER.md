@@ -4840,3 +4840,17 @@
 - 보안/권한: 외부 계정 비밀번호는 기존 Vault 암호화 저장 경로를 유지하고, 연동 증빙 업로드·조회·다운로드는 관리자 권한에서만 허용한다. 업로드 파일은 15MB 제한과 안전 파일명 처리를 적용한다.
 - 검증: `docker exec aads-server-green python -m py_compile /app/app/api/yeoljeong_finance.py /app/app/services/yeoljeong_finance_service.py` 성공, `docker exec aads-server-green python -m pytest -q /app/tests/unit/test_yeoljeong_finance_service.py /app/tests/unit/test_yeoljeong_finance_api_contract.py` 결과 49 passed, Node inline script syntax check 성공.
 - 미완료/리스크: 실제 포털 자동 로그인은 배달 4사부터 지원하며, 은행/홈택스/매입처별 전용 수집기는 계정 저장 및 파일 업로드 기반 운영 데이터가 쌓인 뒤 추가 구현한다. 브라우저 로그인 E2E는 아직 미실행이다.
+
+## 2026-07-27 07:18 KST - FB 매장비서 레시피 접근 전용 토큰 발급
+
+- 요청: 언니냉면 직원용 레시피 페이지를 AADS 로그인 권한이 아니라 FB 로그인 권한으로 접근하게 하고, FB 로그인 후 레시피 페이지로 복귀하도록 보완.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에 `fb_access_token` 전용 쿠키/스토리지 키를 추가했다.
+  - 로그인, 회원가입, 직원 초대수락 성공 시 기존 서버 API용 `aads_token`과 함께 레시피 보호 전용 `fb_access_token`을 발급한다.
+  - 로그아웃 시 두 토큰을 함께 삭제한다.
+- 검증:
+  - 인라인 JavaScript 문법 파싱 `node -e ... new Function(script)` 통과. inline scripts parsed: 1.
+  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html` 통과.
+- 배포 주의:
+  - 이 파일은 FastAPI 정적앱으로 서빙되므로 서버 blue/green 배포 또는 정적 파일 반영 확인이 필요하다.
+  - 대시보드 레시피 보호 변경은 별도 aads-dashboard 커밋/배포와 함께 적용한다.
