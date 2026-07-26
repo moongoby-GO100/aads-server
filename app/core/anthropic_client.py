@@ -27,6 +27,10 @@ from app.core.auth_provider import (
 logger = logging.getLogger(__name__)
 
 _GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+# AADS P0(2026-07-26): Gemini prepaid 크레딧 고갈로 429 RESOURCE_EXHAUSTED 반복 발생.
+# 폴백 체인에서 기본 제외하고 qwen3-235b를 다음 순위로 사용한다.
+# 크레딧 충전 후 되살리려면 .env 에 LLM_GEMINI_FALLBACK_ENABLED=1 설정.
+_GEMINI_FALLBACK_ENABLED = os.getenv("LLM_GEMINI_FALLBACK_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
 _CLAUDE_RETRY_BASE_SEC = 2.0
@@ -158,11 +162,12 @@ async def call_llm_with_fallback(
             return await _call_litellm(prompt, model, max_tokens, system)
         except Exception as e:
             logger.warning("litellm_bg_error: model=%s error=%s", model, str(e)[:80])
-            # 실패 시 Gemini 폴백
-            try:
-                return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
-            except Exception as e2:
-                logger.warning("litellm_bg_gemini_fallback_error: %s", str(e2)[:80])
+            # 실패 시 Gemini 폴백 — 기본 비활성(크레딧 고갈 429 반복 차단)
+            if _GEMINI_FALLBACK_ENABLED:
+                try:
+                    return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
+                except Exception as e2:
+                    logger.warning("litellm_bg_gemini_fallback_error: %s", str(e2)[:80])
             return None
 
     from app.services.oauth_usage_tracker import log_usage
@@ -288,7 +293,7 @@ async def call_llm_with_fallback(
 
     # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
     _lc = get_litellm_config()
-    if _lc["key"]:
+    if _GEMINI_FALLBACK_ENABLED and _lc["key"]:
         try:
             return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
         except Exception as e:
