@@ -3559,21 +3559,20 @@ async def tool_capture_screenshot(
             data = await page.screenshot(full_page=full_page, timeout=_BROWSER_TIMEOUT_MS)
         finally:
             await page.close()
-        import base64 as b64mod
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"screenshot_{ts}_{uuid.uuid4().hex[:6]}.png"
-        # 호스트에 SSH로 저장 (컨테이너→호스트, 볼륨 마운트 없어도 동작)
-        b64_data = b64mod.b64encode(data).decode("ascii")
+        # Store the binary PNG over stdin; base64 in the SSH command can exceed argv limits.
         save_cmd = (
             f"mkdir -p /var/www/aads_exports/screenshots && "
-            f"echo '{b64_data}' | base64 -d > /var/www/aads_exports/screenshots/{filename}"
+            f"cat > /var/www/aads_exports/screenshots/{filename}"
         )
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
             "root@host.docker.internal", save_cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.wait_for(proc.communicate(), timeout=30)
+        await asyncio.wait_for(proc.communicate(data), timeout=30)
         if proc.returncode != 0:
             return f"[ERROR] 호스트에 스크린샷 저장 실패 (exit={proc.returncode})"
         image_url = f"https://aads.newtalk.kr/screenshots/{filename}"

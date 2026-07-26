@@ -4803,3 +4803,11 @@
 - 미해결/리스크:
   - 핸드폰/타 PC 실기기 클릭은 CEO 기기에서 최종 체감 확인이 필요하다. 서버 측 인증 브라우저 E2E와 API 회귀는 통과했다.
   - 대시보드 전역 `npm run lint`는 기존 부채 261 errors/67 warnings로 실패한다. 이번 인증 변경과 직접 관련 없는 기존 lint debt로 별도 P1 정리가 필요하다.
+
+## 2026-07-26 19:40 KST - capture_screenshot SSH 인자 길이 오류 복구
+
+- 증상: `capture_screenshot(url='https://unni.newtalk.kr/')`가 `[Errno 7] Argument list too long: 'ssh'`로 실패해 CEO 표시용 이미지 URL 생성이 막혔다.
+- 원인: `tool_capture_screenshot`이 PNG를 base64 문자열로 변환한 뒤 SSH 명령 인자에 직접 포함했다. 화면 PNG가 커지면 OS argv 제한을 초과한다.
+- 조치: `app/api/ceo_chat_tools.py`의 저장 방식을 base64 echo에서 SSH stdin 바이너리 전송으로 변경했다. 원격 명령은 짧은 `cat > /var/www/aads_exports/screenshots/{filename}`만 유지한다.
+- 검증: `python3 -m py_compile app/api/ceo_chat_tools.py`, `docker exec aads-server python -m py_compile /app/app/api/ceo_chat_tools.py`, 컨테이너 함수 레벨 모의 실행에서 1.4MB PNG payload가 stdin으로 전달되고 SSH command length 123, base64 문자열 미포함을 확인했다.
+- 운영 확인: 배포 후 `capture_screenshot` 실제 호출로 이미지 URL 생성 여부를 재검증한다.
