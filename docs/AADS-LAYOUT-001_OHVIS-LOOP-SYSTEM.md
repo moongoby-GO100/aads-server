@@ -373,22 +373,31 @@ if loop_total_cost >= max_cost_usd:
 
 기준: Sonnet = 1.00. 배율 = `(input_cost + output_cost) / 18.0` [출처: DB `llm_models` 조회, 2026-07-27 07:30 KST]
 
-| 모델 | input $/1M | output $/1M | 배율 |
-|------|-----------|------------|------|
-| claude-haiku (4.5) | 1.00 | 5.00 | 0.33 |
-| gpt-5.6-luna | 1.00 | 6.00 | 0.39 |
-| gpt-5.6-terra | 2.50 | 15.00 | 0.97 |
-| claude-sonnet (4.6/5) | 3.00 | 15.00 | 1.00 |
-| **claude-opus-5** | 5.00 | 25.00 | **1.67** |
-| **gpt-5.6-sol** | 5.00 | 30.00 | **1.94** |
+| 모델 | Provider | input $/1M | output $/1M | 배율 | 비고 |
+|------|----------|-----------|------------|------|------|
+| gpt-5.4-mini | Codex CLI | 0.75 | 4.50 | 0.29 | XS/S 기본 |
+| claude-haiku (4.5) | Anthropic | 1.00 | 5.00 | 0.33 | XS/S 기본 |
+| gpt-5.6-luna | Codex CLI | 1.00 | 6.00 | 0.39 | M 기본 |
+| gpt-5.3-codex | Codex CLI | 1.75 | 14.00 | 0.88 | AI_REVIEW |
+| gpt-5.5 | Codex CLI | 2.00 | 12.00 | 0.78 | M/L 폴백 |
+| gpt-5.4 | Codex CLI | 2.50 | 15.00 | 0.97 | M 대안 |
+| gpt-5.6-terra | Codex CLI | 2.50 | 15.00 | 0.97 | L/AI_REVIEW 1순위 |
+| claude-sonnet (4.6/5) | Anthropic | 3.00 | 15.00 | 1.00 | **기준 모델** |
+| **claude-opus-5** | Anthropic | 5.00 | 25.00 | **1.67** | XL 2순위 |
+| **gpt-5.6-sol** | Codex CLI | 5.00 | 30.00 | **1.94** | XL 1순위 |
+| **claude-fable-5** | Anthropic | 10.00 | 50.00 | **3.33** | 최고사양 (CEO 명시 시만) |
+
+> **GPT 모델 전체 포함 (2026-07-27 반영)**: `runner_model_config`의 6개 사이즈(XS~XL+AI_REVIEW)에 등록된 GPT 모델 7종이 모두 `resolve_max_cost()` 배율표에 반영됨. DB `llm_models.input_cost`/`output_cost`가 NULL인 모델(antigravity 등)은 배율 1.0(Sonnet 동급) 적용.
 
 #### 6.3.2 자동 산출 결과 (기준 예산 × 배율, 하한 적용)
 
-| 루프 유형 | 기준 예산 | Haiku | Luna | Terra | Sonnet | **Opus 5** | **Sol** |
-|-----------|----------|-------|------|-------|--------|-----------|---------|
-| Monitor | $0.50 | $0.50* | $0.50* | $0.50* | $0.50 | $0.84 | $0.97 |
-| Task | $3.00 | $1.00 | $1.17 | $2.92 | $3.00 | **$5.00** | $5.83 |
-| Sequential | $6.00 | $2.00 | $2.34 | $5.83 | $6.00 | **$10.00** | $11.67 |
+| 루프 유형 | 기준 예산 | Mini | Haiku | Luna | GPT-5.5 | Terra | Sonnet | **Opus 5** | **Sol** | **Fable 5** |
+|-----------|----------|------|-------|------|---------|-------|--------|-----------|---------|------------|
+| Monitor | $0.50 | $0.50* | $0.50* | $0.50* | $0.50* | $0.50* | $0.50 | $0.84 | $0.97 | $1.67 |
+| Task | $3.00 | $0.88 | $1.00 | $1.17 | $2.33 | $2.92 | $3.00 | **$5.00** | $5.83 | $10.00 |
+| Sequential | $6.00 | $1.75 | $2.00 | $2.34 | $4.67 | $5.83 | $6.00 | **$10.00** | $11.67 | $20.00 |
+
+> `*` 하한 $0.50 적용. Fable 5는 CEO 명시 선택 시에만 사용되며 자동 라우팅 대상 아님.
 
 `*` 하한 $0.50 적용 (저단가 모델도 최소 예산 보장)
 
@@ -799,12 +808,109 @@ Week 3: Phase 4 (UI + 고급)
 
 ---
 
+## 16. 멀티프로젝트 지원 (2026-07-27 추가)
+
+### 16.1 대상 프로젝트
+
+| 프로젝트 | Task ID | 서버 | 러너 지원 | 루프 활용 시나리오 |
+|----------|---------|------|----------|------------------|
+| **AADS** | AADS-xxx | 서버68 | ✅ | 서버 감시, 배포 재시도, 다중 작업 순차 처리 |
+| **GO100** (백억이) | GO100-xxx | contabo14 | ✅ | 시장 데이터 주기 수집, 매매 신호 감시, 백테스트 반복 |
+| **NTV2** (뉴톡) | NT-xxx | 서버114 | ✅ | API 헬스 감시, 콘텐츠 파이프라인 순차 처리 |
+| **SF** (ShortFlow) | SF-xxx | 서버114:7916 | ✅ | 영상 생성 상태 폴링, 배치 업로드 순차 처리 |
+| **KIS** (자동매매) | KIS-xxx | 서버211 | ✅ | 주문 체결 감시, 포지션 모니터링, 긴급 청산 루프 |
+| 대형 외부 프로젝트 (FB 등) | — | 별도 | ⚠️ 확장 필요 | 광고 성과 감시, 대량 작업 배치 처리 |
+
+### 16.2 프로젝트별 차이 처리
+
+```python
+# ohvis_loops.project 컬럼으로 자동 분기
+async def execute_iteration(loop):
+    project = loop.project  # 'AADS' | 'GO100' | 'NTV2' | 'SF' | 'KIS'
+
+    if loop.requires_code_execution:
+        # Pipeline Runner가 project별 서버 자동 매핑
+        task_id = await pipeline_runner.submit(
+            project=project,          # 러너가 서버 자동 선택
+            instruction=loop.current_task,
+            parent_loop_id=loop.id,
+            budget_remaining=loop.max_cost_usd - loop.total_cost_usd
+        )
+        return await wait_for_task(task_id)
+    else:
+        # 단순 조회: run_remote_command(project=project, ...)
+        return await run_remote_command(
+            project=project,
+            command=loop.check_command
+        )
+```
+
+### 16.3 프로젝트별 기본 프리셋 확장
+
+```json
+[
+  {
+    "name": "go100-market-monitor",
+    "project": "GO100",
+    "description": "시장 데이터 주기 수집 및 매매 신호 감시",
+    "default_interval_seconds": 300,
+    "default_max_iterations": 288,
+    "task_template": {
+      "action": "run_command",
+      "command": "python3 scripts/check_market_signals.py",
+      "alert_on": ["signal_count > 0", "price_change_pct > 3"]
+    }
+  },
+  {
+    "name": "ntv2-api-health",
+    "project": "NTV2",
+    "description": "NewTalk V2 API 헬스 감시",
+    "default_interval_seconds": 600,
+    "default_max_iterations": 144,
+    "task_template": {
+      "action": "health_check",
+      "targets": ["ntv2-server"],
+      "alert_on": ["status != 200", "response_time > 5000ms"]
+    }
+  },
+  {
+    "name": "kis-position-monitor",
+    "project": "KIS",
+    "description": "자동매매 포지션 실시간 감시",
+    "default_interval_seconds": 60,
+    "default_max_iterations": 480,
+    "task_template": {
+      "action": "run_command",
+      "command": "python3 scripts/check_positions.py",
+      "alert_on": ["unrealized_loss_pct > 5", "margin_ratio < 150"]
+    }
+  }
+]
+```
+
+### 16.4 대형 외부 프로젝트 확장 방안
+
+대형 프로젝트(FB 광고 관리, 대규모 이커머스 등)를 루프로 관리하려면:
+
+| 확장 항목 | 현재 | 필요 변경 | 난이도 |
+|----------|------|----------|-------|
+| `ohvis_loops.project` | AADS/GO100/NTV2/SF/KIS | 동적 프로젝트 등록 (DB 기반) | S |
+| 러너 서버 매핑 | 5개 서버 하드코딩 | `project_servers` 테이블 추가 | S |
+| 프로젝트별 비용 상한 | 전역 공유 | `project_budget_config` 테이블 | M |
+| 외부 API 연동 | SSH 기반 서버 명령만 | Webhook/REST 콜백 지원 | M |
+| 프로젝트별 알림 채널 | 텔레그램 공유 | 프로젝트별 Slack/카카오톡 분기 | S |
+
+**구현 우선순위**: Phase 0~2에서 기존 5개 프로젝트 지원 → Phase 4에서 외부 프로젝트 확장
+
+---
+
 ## 교훈
 
 - Loop은 "반복"이 아니라 "자율 위임"의 핵심 인프라
 - 안전 제한 없는 자율 실행은 비용 폭주의 직접 원인
 - Silent Success 패턴이 CEO 인지 부하를 최소화하는 핵심
 - 기존 3-Tier와의 통합이 신규 시스템보다 중요 (중복 방지)
+- 멀티프로젝트 지원은 DB 컬럼 + 러너 매핑만으로 80% 해결 (신규 인프라 불필요)
 
 ---
 
