@@ -1,6 +1,17 @@
 # AADS HANDOVER
 
 
+## 2026-07-26 19:30 KST - 세션 94a1dc9e "언니냉면" 응답 지연 진단
+
+- 배경: CEO가 세션 94a1dc9e (언니냉면, gpt-5.6-sol, 49 msgs, $169.25)의 응답 지연 원인과 OHVIS 3-Tier 적용 여부를 질의했다.
+- 진단 결과:
+  1. **OHVIS 3-Tier 적용 확인**: 3-Tier 아키텍처는 활성 상태이나, 해당 세션의 마지막 인텐트 `status_check`는 Tier 1-B complex intent도, Tier 2 runner delegation 대상도 아님. Tier 1-A instant ACK만 콘텐츠 키워드 매칭 시 동작. 주 응답은 직접 LLM 경로(Codex CLI relay)로 생성.
+  2. **Gemini 429 활성**: 5분간 35회 발생, "prepayment credits depleted" — 임베딩 전용 영향, dummy 벡터로 폴백하지만 HTTP 재시도 지연 발생. 두 키(GEMINI_API_KEY, GEMINI_API_KEY_2)가 동일값이라 실질 폴백 없음.
+  3. **518,351 입력 토큰**: 49개 메시지 누적 컨텍스트 — GPT-5.6 Sol 단일 응답에 $1.60 소비.
+  4. **Codex CLI 릴레이 오버헤드**: GPT 모델은 `_stream_codex_relay()` 서브프로세스 경유.
+- 코드 변경: 없음 (진단 전용). 커밋/푸시/배포: 해당 없음.
+- 권장: ①Gemini 크레딧 충전 또는 별도 프로젝트 키 발급(GEMINI_API_KEY_2), ②세션 컴팩션(CEO 승인 필요), ③임베딩 429 시 재시도 없이 즉시 dummy 폴백하도록 최적화.
+
 ## 2026-07-26 18:18 KST - Claude Opus 5 full-stack integration
 
 - Background: Claude Opus 5 (model_id: claude-opus-5) released 2026-07-24. Applied across OHVIS chat, runner, intent policies.
