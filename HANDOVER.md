@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-07-27 07:35 KST - AADS-LAYOUT-001 P0 반영: 루프 비용 상한 모델별 자동 조정
+
+- 배경: CEO 질의 "안전장치 기본값으로 작업 완료까지 루프 진행 가능한가" 검토 결과, Task Loop 고정 상한 $2.00이 Opus 5(단가 5/25)에서 3회 시도 전 소진되어 조기 pause 발생 위험 확인.
+- 근거: DB llm_models 실측(2026-07-27 07:30 KST) - haiku 1/5, luna 1/6, terra 2.5/15, sonnet 3/15, opus-5 5/25, gpt-5.6-sol 5/30.
+- 조치 1: docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md 6.1 비용 상한 행을 Sonnet 기준/Opus 5 기준 2행으로 분리. Task $2.00 -> Sonnet $3.00 / Opus 5 $5.00, Sequential $5.00 -> Sonnet $6.00 / Opus 5 $10.00, CEO 오버라이드 최대 $20 -> $30.
+- 조치 2: 6.3 "모델별 자동 비용 조정" 신설(단가/배율표, 유형x모델 산출표, resolve_max_cost() 의사코드, 폴백 시 재산출 규칙, 단위 테스트 완료기준). 기존 6.3 CEO 오버라이드는 6.4로 번호 이동.
+- 조치 3: 3장 DB 스키마에 execution_model_id, cost_override_by_ceo 컬럼 추가. 7장 Phase 0에 resolve_max_cost 구현 항목 추가. 10장 deploy-until-success 프리셋 default_max_cost_usd 3.00 -> null(자동 산출). 12.1 비용표에 Opus 5 열/자동 상한/여유율(Task 1.99배, Sequential 3.0배) 추가.
+- 조치 4: docs/layout/AADS-LAYOUT-001_OHVIS_Loop_Engineering.md 예산 행을 모델별 자동 산출로 갱신 + 6.3 교차참조.
+- 함정 기록: HANDOVER.md는 docker-compose.prod.yml 볼륨 목록(app/docs/scripts/migrations/mcp_servers/pc_agent만 마운트)에 없어 MCP patch_remote_file이 컨테이너 사본(/app/HANDOVER.md)만 수정한다. 호스트 반영은 scripts/ 경유 스크립트로 처리할 것.
+- 범위: 문서 2건만 변경. 코드/DB/배포 변경 0건 (루프 시스템 구현 자체는 CEO 승인 대기).
+- 범위 제외: 이전 세션 잔여 미커밋 10 modified + 9 untracked는 손대지 않았다.
+
+## 2026-07-27 07:37 KST - FOOD FB login page design refresh
+
+- 대상: `app/static/apps/yeoljeong-finance/index.html` (`https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` 로그인 게이트).
+- 반영: 로그인 첫 화면에 `열정국밥 매장비서` 브랜드 락업, 운영관리 로그인 제목, 판매사이트/입금대사/직원서류/권한분리 요약, 접근 범위 보안 안내, 입력 focus/버튼/모바일 반응형 스타일을 추가했다.
+- 범위: 정적 HTML/CSS 디자인 보강만 수행했다. 인증 API, 계정 저장, 판매사이트 연동 데이터, 기존 미커밋 운영 데이터는 수정하지 않았다.
+- 검증: `python3` HTMLParser 파싱 통과, `git diff --check -- app/static/apps/yeoljeong-finance/index.html` 통과, 로컬 정적 HTTP `http://127.0.0.1:18087/index.html` 200 OK 및 핵심 DOM 텍스트 포함 확인.
+- 미검증: Playwright Chromium 바이너리와 시스템 브라우저가 없어 픽셀 스크린샷 검증은 미실행. 커밋, 푸시, 배포는 아직 수행하지 않았다.
+
 ## 2026-07-27 07:19 KST - AADS-LAYOUT-001 OHVIS 루프 시스템 기획서 커밋/푸시
 
 - 산출물: docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md (752줄, 27,455 bytes) - 루프 시스템 상세 구현 기획서 15개 섹션.

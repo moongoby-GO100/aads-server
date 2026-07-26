@@ -240,7 +240,7 @@ def should_continue(loop, result) -> Verdict:
 | 장치 | 값(기본) | 근거 |
 |---|---|---|
 | 최대 회차 | 5회 | 폭주 차단 |
-| 루프당 예산 | $5.00 | 초과 시 CEO 승인 (기존 러너 규칙과 동일) |
+| 루프당 예산 | 모델별 자동 산출 (Sonnet $3.00 / Opus 5 $5.00 / Sol $5.83) | 상세 배율표는 `docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md` §6.3. 초과 시 CEO 승인, 최대 $30 |
 | 기한 | 지시 시각 +24h | 좀비 루프 방지 |
 | 무진전 감지 | 동일 verdict+evidence 2회 연속 → 강제 종료 | 헛돌기 차단 |
 | 승인 게이트 | deploy/delete/ssh/docker/git push/과금 → BLOCKED | 기존 보안 규칙 |

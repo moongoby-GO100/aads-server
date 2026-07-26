@@ -113,7 +113,9 @@ CREATE TABLE ohvis_loops (
     -- 실행 설정
     interval_seconds INT,              -- monitor: 반복 주기 (초)
     max_iterations  INT DEFAULT 50,    -- 최대 반복 횟수
-    max_cost_usd    DECIMAL(8,4) DEFAULT 0.50,  -- 비용 상한
+    max_cost_usd    DECIMAL(8,4) DEFAULT 0.50,  -- 비용 상한 (생성 시 resolve_max_cost()가 모델별 자동 산출, §6.3)
+    execution_model_id VARCHAR(80),    -- 상한 산출 기준 모델 (폴백 시 갱신 + 상한 재계산)
+    cost_override_by_ceo BOOLEAN DEFAULT FALSE,  -- CEO 수동 지정 여부 (TRUE면 자동 조정 skip)
     max_failures    INT DEFAULT 3,     -- 연속 실패 허용 횟수
     timeout_minutes INT DEFAULT 1440,  -- 전체 타임아웃 (기본 24시간)
     
@@ -339,7 +341,8 @@ async def classify_loop_intent(message: str) -> dict:
 | 제한 항목 | Monitor | Task | Sequential | 비고 |
 |-----------|---------|------|------------|------|
 | 최대 반복 | 100회 | 10회 | 작업수×3 | CEO 오버라이드 가능 |
-| 비용 상한 | $0.50 | $2.00 | $5.00 | CEO 지정 시 최대 $20 |
+| 비용 상한 (Sonnet 기준) | $0.50 | $3.00 | $6.00 | 모델별 자동 조정 (6.3 참조) |
+| 비용 상한 (Opus 5 기준) | $0.50 | **$5.00** | **$10.00** | CEO 지정 시 최대 $30 |
 | 시간 제한 | 48시간 | 4시간 | 8시간 | 초과 시 자동 pause |
 | 연속 실패 | 5회 | 3회 | 3회 | 초과 시 CEO 알림 |
 | LLM/iteration | 3회 | 15회 | 15회 | AADS CEO 규칙 준수 |
@@ -348,6 +351,7 @@ async def classify_loop_intent(message: str) -> dict:
 ### 6.2 비용 추적 공식
 
 ```python
+max_cost_usd = await resolve_max_cost(loop_type, execution_model_id, ceo_override)  # §6.3
 iteration_cost = sum(llm_call_costs)  # 모델별 단가 적용
 loop_total_cost = sum(all_iteration_costs)
 
@@ -360,7 +364,58 @@ if loop_total_cost >= max_cost_usd:
     notify_ceo("루프 일시정지 — 계속하려면 '계속해' / 중단하려면 '중단해'")
 ```
 
-### 6.3 CEO 오버라이드 명령어
+### 6.3 모델별 자동 비용 조정 (P0 — 2026-07-27 추가)
+
+**배경**: 고정 상한($2.00)은 Haiku/Sonnet 기준으로는 충분하나, Opus 5·GPT-5.6 Sol 같은 고단가 모델에서는 3회 시도 전에 상한에 도달해 루프가 조기 일시정지된다.
+**해결**: 루프 생성 시점에 실행 모델의 DB 단가를 조회해 상한을 자동 배율 적용한다.
+
+#### 6.3.1 모델 단가·배율표
+
+기준: Sonnet = 1.00. 배율 = `(input_cost + output_cost) / 18.0` [출처: DB `llm_models` 조회, 2026-07-27 07:30 KST]
+
+| 모델 | input $/1M | output $/1M | 배율 |
+|------|-----------|------------|------|
+| claude-haiku (4.5) | 1.00 | 5.00 | 0.33 |
+| gpt-5.6-luna | 1.00 | 6.00 | 0.39 |
+| gpt-5.6-terra | 2.50 | 15.00 | 0.97 |
+| claude-sonnet (4.6/5) | 3.00 | 15.00 | 1.00 |
+| **claude-opus-5** | 5.00 | 25.00 | **1.67** |
+| **gpt-5.6-sol** | 5.00 | 30.00 | **1.94** |
+
+#### 6.3.2 자동 산출 결과 (기준 예산 × 배율, 하한 적용)
+
+| 루프 유형 | 기준 예산 | Haiku | Luna | Terra | Sonnet | **Opus 5** | **Sol** |
+|-----------|----------|-------|------|-------|--------|-----------|---------|
+| Monitor | $0.50 | $0.50* | $0.50* | $0.50* | $0.50 | $0.84 | $0.97 |
+| Task | $3.00 | $1.00 | $1.17 | $2.92 | $3.00 | **$5.00** | $5.83 |
+| Sequential | $6.00 | $2.00 | $2.34 | $5.83 | $6.00 | **$10.00** | $11.67 |
+
+`*` 하한 $0.50 적용 (저단가 모델도 최소 예산 보장)
+
+#### 6.3.3 구현 로직
+
+```python
+# app/services/loop_controller.py
+_BASE_BUDGET = {"monitor": 0.50, "task": 3.00, "sequential": 6.00}
+_MIN_BUDGET = 0.50
+_MAX_BUDGET_CEO_OVERRIDE = 30.00
+_SONNET_BLENDED = 18.0  # input 3 + output 15
+
+async def resolve_max_cost(loop_type: str, model_id: str, ceo_override: float | None) -> float:
+    if ceo_override is not None:
+        return min(ceo_override, _MAX_BUDGET_CEO_OVERRIDE)
+    row = await db.fetchrow(
+        "SELECT input_cost, output_cost FROM llm_models WHERE model_id=$1 AND is_active", model_id
+    )
+    multiplier = ((row["input_cost"] + row["output_cost"]) / _SONNET_BLENDED) if row else 1.0
+    return max(round(_BASE_BUDGET[loop_type] * multiplier, 2), _MIN_BUDGET)
+```
+
+**모델 변경 시 재산출**: 루프 실행 중 폴백으로 모델이 바뀌면(예: Opus 5 → Sonnet) 다음 iteration 시작 시 `resolve_max_cost`를 재호출해 상한을 재계산한다. 이미 집행된 `total_cost_usd`는 유지한다.
+
+**완료기준**: `resolve_max_cost("task", "claude-opus-5", None) == 5.00`, `resolve_max_cost("task", "claude-haiku", None) == 1.00` 단위 테스트 통과.
+
+### 6.4 CEO 오버라이드 명령어
 
 | 명령어 | 동작 |
 |--------|------|
@@ -381,6 +436,7 @@ if loop_total_cost >= max_cost_usd:
 |------|------|------|
 | DB 스키마 생성 | 3개 테이블 + 인덱스 | `migrations/` |
 | Loop Controller 모듈 | 핵심 제어 로직 | `app/services/loop_controller.py` |
+| **모델별 비용 자동 조정** | `resolve_max_cost()` 구현 + 단위 테스트 (§6.3) | `app/services/loop_controller.py` |
 | 인텐트 확장 | loop 감지 추가 | `app/services/intent_classifier.py` |
 | 설정 테이블 시드 | 기본 루프 정의 3종 | `scripts/init_loop_definitions.sql` |
 
@@ -620,7 +676,8 @@ async def send_completion_report(loop):
     "name": "deploy-until-success",
     "description": "배포 성공할 때까지 재시도",
     "default_max_iterations": 5,
-    "default_max_cost_usd": 3.00,
+    "default_max_cost_usd": null,
+    "_comment": "null = resolve_max_cost()가 실행 모델 단가로 자동 산출 (§6.3). Opus 5 기준 $5.00",
     "task_template": {
       "action": "pipeline_runner",
       "retry_strategy": "analyze_and_fix",
@@ -670,11 +727,13 @@ WS /ws/loops/status   # 실시간 루프 상태 업데이트 스트림
 
 ### 12.1 루프 유형별 예상 비용
 
-| 루프 유형 | 일반 시나리오 | LLM 호출 | 예상 비용 |
-|-----------|--------------|----------|-----------|
-| Monitor (24시간, 30분 간격) | 48회 × 2 calls | 96회 | $0.15~0.25 |
-| Task (버그 수정, 3회 시도) | 3회 × 10 calls | 30회 | $0.50~1.50 |
-| Sequential (5개 todo) | 5회 × 8 calls | 40회 | $0.60~2.00 |
+| 루프 유형 | 일반 시나리오 | LLM 호출 | Sonnet 예상 | Opus 5 예상 | 자동 상한(Opus 5) |
+|-----------|--------------|----------|------------|------------|-----------------|
+| Monitor (24시간, 30분 간격) | 48회 × 2 calls | 96회 | $0.15~0.25 | $0.25~0.42 | $0.84 |
+| Task (버그 수정, 3회 시도) | 3회 × 10 calls | 30회 | $0.50~1.50 | $0.84~2.51 | $5.00 |
+| Sequential (5개 todo) | 5회 × 8 calls | 40회 | $0.60~2.00 | $1.00~3.34 | $10.00 |
+
+**여유율**: Opus 5 최악 시나리오 대비 Task 1.99배, Sequential 3.0배 여유 → 조기 일시정지 리스크 해소. [산출: §6.3.2 배율표 × 시나리오 상단값]
 
 ### 12.2 월간 비용 예측 (일반 사용 패턴)
 
