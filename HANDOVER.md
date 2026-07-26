@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+
+## 2026-07-26 18:18 KST - Claude Opus 5 full-stack integration
+
+- Background: Claude Opus 5 (model_id: claude-opus-5) released 2026-07-24. Applied across OHVIS chat, runner, intent policies.
+- Code: app/services/pipeline_runner_service.py line 62 XL default claude-opus-4-8 to claude-opus-5.
+- DB: intent_policies 3 rows (dashboard/report/code_modify) added claude-opus-5. runner_model_config XL/L rows added claude-opus-5.
+- Commits: 122bcffb, c57a2bbf, ec882c24 on origin/main.
+- Deploy: Hot-Reload 61 modules (18:18 KST), 0ms downtime. Runtime verified.
+- Validation: py_compile pass. health-check pipeline_healthy=True.
+- Remaining: 3-Tier task_plan chat stream renderer (page.tsx), Tier 1 early ACK (chat_service.py).
 ## 2026-07-25 09:31 KST - OHVIS 3-Tier task step consistency fix
 
 - 배경: 최종 ledger 재검증 중 `ohvis_tasks.status='done'` 및 task_card 아티팩트는 완료인데 `ohvis_tasks.steps` 내부 단계가 `running/pending`으로 남는 불일치를 발견했다.
