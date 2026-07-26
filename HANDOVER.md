@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-07-26 21:10 KST - P0 Gemini 429 circuit breaker applied
+
+- Background: Gemini prepaid credits depleted, 231 x 429 errors in 24h. Embedding, image, LLM fallback retry delays.
+- Fix 1: chat_embedding_service.py + code_indexer_service.py 1h circuit breaker (commit 52ce0470).
+- Fix 2: anthropic_client.py GEMINI_FALLBACK_ENABLED=False by default (commit 7d2397ed).
+- Fix 3: Gemini embedding disabled by default (commit a04b7cfa).
+- Verified: Both blue/green containers GEMINI_FALLBACK_ENABLED=False. 0 Gemini fallback calls post-deploy. Health HEALTHY.
+- Restore: Set LLM_GEMINI_FALLBACK_ENABLED=1 in .env and restart.
+- Remaining: Disk 80%, Anthropic 401 sk-ant-oat01 sleep-time failure needs separate fix.
+
 ## 2026-07-26 20:04 KST - FOOD 연동관리 설정 R2
 
 - 반영: `app/static/apps/yeoljeong-finance/index.html`, `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`.
