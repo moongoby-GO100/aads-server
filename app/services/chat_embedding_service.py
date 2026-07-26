@@ -23,6 +23,13 @@ _EMBED_DIM = 768
 _EMBED_CACHE_TTL = int(os.getenv("EMBED_CACHE_TTL", "300"))
 _EMBED_CACHE_MAX = int(os.getenv("EMBED_CACHE_MAX", "500"))
 
+# ── AADS P0(2026-07-26): Gemini 임베딩 429 차단기 ──
+# 크레딧 고갈(RESOURCE_EXHAUSTED) 감지 시 일정 시간 호출을 끊어
+# 2분간 32회식 재시도 폭주와 로그 오염을 방지한다. 충전 후 자동 복구.
+_EMBED_GEMINI_ENABLED = os.getenv("EMBED_GEMINI_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+_GEMINI_BLOCK_SECONDS = int(os.getenv("EMBED_GEMINI_BLOCK_SECONDS", "3600"))
+_gemini_blocked_until: float = 0.0
+
 class _EmbedCache:
     """TTL + LRU 인메모리 임베딩 캐시."""
     def __init__(self, ttl: int, maxsize: int):
@@ -69,9 +76,17 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
 
     uncached_texts = [texts[i] for i in uncached_indices]
 
+    global _gemini_blocked_until
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("[ChatEmbed] GEMINI_API_KEY 없음 — 시맨틱 검색 비활성화 (dummy 임베딩)")
+    now = time.monotonic()
+    if not api_key or not _EMBED_GEMINI_ENABLED or now < _gemini_blocked_until:
+        if not api_key:
+            logger.debug("[ChatEmbed] GEMINI_API_KEY 없음 — dummy 임베딩")
+        elif not _EMBED_GEMINI_ENABLED:
+            logger.debug("[ChatEmbed] EMBED_GEMINI_ENABLED=0 — dummy 임베딩")
+        else:
+            logger.debug("[ChatEmbed] Gemini 서킷 브레이커 활성 (%.0f초 남음) — dummy 임베딩",
+                         _gemini_blocked_until - now)
         fetched: List[List[float]] = [_dummy_embedding(t) for t in uncached_texts]
     else:
         try:
@@ -94,7 +109,12 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
                 for emb in result.embeddings:
                     fetched.append(list(emb.values))
         except Exception as e:
-            logger.warning(f"[ChatEmbed] Gemini 임베딩 실패: {e} — dummy 사용")
+            err_str = str(e)
+            if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
+                _gemini_blocked_until = now + _GEMINI_BLOCK_SECONDS
+                logger.warning("[ChatEmbed] Gemini 429/크레딧 고갈 → %d초 서킷 브레이커 발동", _GEMINI_BLOCK_SECONDS)
+            else:
+                logger.warning(f"[ChatEmbed] Gemini 임베딩 실패: {e}")
             fetched = [_dummy_embedding(t) for t in uncached_texts]
 
     # 캐시에 저장 + 결과 병합

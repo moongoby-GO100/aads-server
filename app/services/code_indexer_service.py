@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -114,14 +115,20 @@ class CodeIndexerService:
 
     # ── 임베딩 ──────────────────────────────────────────────────────────────
 
+    _gemini_blocked_until: float = 0.0
+
     async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
         """
         Google Gemini gemini-embedding-001 (3072차원) 으로 텍스트 임베딩.
-        GEMINI_API_KEY 없으면 hash 기반 dummy 임베딩 반환.
+        GEMINI_API_KEY 없으면 또는 크레딧 고갈 서킷 브레이커 발동 시 dummy 반환.
         """
         api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.debug("[CodeIndexer] GEMINI_API_KEY 없음 — dummy 임베딩 사용")
+        now = time.monotonic()
+        if not api_key or now < self._gemini_blocked_until:
+            if not api_key:
+                logger.debug("[CodeIndexer] GEMINI_API_KEY 없음 — dummy 임베딩 사용")
+            else:
+                logger.debug("[CodeIndexer] Gemini 서킷 브레이커 활성 — dummy 임베딩")
             return [self._dummy_embedding(t) for t in texts]
 
         try:
@@ -145,7 +152,12 @@ class CodeIndexerService:
 
             return all_embeddings
         except Exception as e:
-            logger.warning(f"[CodeIndexer] Gemini 임베딩 실패: {e} — dummy 사용")
+            err_str = str(e)
+            if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
+                self._gemini_blocked_until = now + 3600
+                logger.warning("[CodeIndexer] Gemini 429/크레딧 고갈 → 1시간 서킷 브레이커 발동")
+            else:
+                logger.warning(f"[CodeIndexer] Gemini 임베딩 실패: {e}")
             return [self._dummy_embedding(t) for t in texts]
 
     def _dummy_embedding(self, text: str, dim: int = 3072) -> List[float]:
