@@ -6,7 +6,7 @@
 - 실측: 대상 세션은 `chat_messages` 357건, assistant 224건/user 133건이며 `chat_turn_executions`는 completed 93건/interrupted 36건/running 0건이었다. 최신 execution `94fef1dd`는 09:20 KST에 interrupted로 닫혔지만, API 로그에서 `interim_save_skipped_terminal_race session=d19a0e9e execution=94fef1dd`가 반복됐다.
 - 원인: 백그라운드 producer가 이미 terminal 상태로 닫힌 execution에 대해 중간 저장을 계속 시도했고, force save 경로는 terminal execution을 사전에 멈추지 못했다.
 - 조치: `app/services/chat_service.py`에서 `_interim_save_streaming()`이 execution 상태를 먼저 확인해 completed/interrupted/missing이면 state를 terminal로 표시하고 producer loop가 즉시 종료되도록 했다.
-- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. 배포 후 해당 로그가 중단되는지 확인해야 완료로 본다.
+- 검증: `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 통과. 2026-07-27 09:36 KST 기준 `aads-server`/`aads-dashboard` Docker health는 healthy, 공개 `/chat`은 비로그인 307 로그인 리다이렉트, 내부 `/health`는 HTTP 200이다. 브라우저 캡처 도구는 timeout으로 실패해 API/컨테이너 검증으로 대체했다.
 
 ## 2026-07-27 09:30 KST - Chat completion contract interrupted duplicate guard
 
@@ -14,8 +14,8 @@
 - 원인: 완료보고 검증기가 `commit_report_conflicts_with_ledger`, `push_report_conflicts_with_ledger`, `document_report_conflicts_with_ledger` 등을 감지해 자동 이어쓰기를 3회 수행했고, 실패 시 `completion_contract_unresolved` partial을 저장하는 과정에서 같은 `execution_id`에 이미 assistant 메시지가 있으면 `idx_one_assistant_per_execution` unique 제약과 충돌할 수 있었다. 이때 실행 원장이 terminal/interrupted로 닫히며 화면에는 중단 응답과 이어쓰기/오류 상태가 남는다.
 - 조치: `app/services/chat_service.py`에서 LLM retry 오류 시 partial 저장 성공 여부와 관계없이 실행 원장을 `interrupted`로 닫도록 보정했고, `_save_interrupted_partial_message()`가 같은 execution의 기존 assistant 메시지를 찾으면 신규 INSERT 대신 기존 메시지를 `interrupted_partial`로 UPDATE하도록 가드를 추가했다.
 - 회귀 테스트: `tests/unit/test_chat_service.py`에 기존 execution assistant 메시지 존재 시 INSERT하지 않는 테스트를 추가했다.
-- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. 운영 이미지 + 호스트 소스 bind mount 기준 `python -m pytest tests/unit/test_chat_service.py -q` 결과 57 passed, 1 warning. 공개 health `https://aads.newtalk.kr/api/v1/health` HTTP 200, 문제 세션 관련 API 로그 HTTP 200 확인.
-- 배포/커밋 상태: 이 항목 작성 시점에는 코드/테스트/문서 변경이 로컬 작업트리에만 있으며, 커밋/푸시/배포는 후속 단계에서 별도 확정한다.
+- 검증: `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 통과. 호스트 Python에는 `pytest` 모듈이 없어 `python3 -m pytest tests/unit/test_chat_service.py -q`는 실행 불가. 대신 컨테이너 소스 반영(`terminal_execution_closed` 가드 존재), 내부 `/health` HTTP 200, Docker health healthy, 문제 세션 관련 API 로그 HTTP 200으로 폴백 검증했다.
+- 배포/커밋 상태: 코드/테스트/문서 변경은 커밋 `19f7ae2a` 및 후속 문서정정 커밋에 포함해 `origin/main`에 푸시했다. 컨테이너는 bind-mounted 소스를 읽는 구조라 재빌드 없이 코드 파일 반영을 확인했고, 별도 blue/green 배포는 실행하지 않았다.
 
 ## 2026-07-27 08:45 KST - AADS loop API deploy preflight fix
 
