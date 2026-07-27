@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-07-28 07:00 KST - OHVIS Loop System 전체 구현 완료
+
+- 요청: CEO "루프기능 구현을 모두 구현하고 e2e테스트까지 검증하고 보고해"
+- 구현 범위 (P0 2건 + P1 1건):
+  1. **APScheduler loop_tick** (`app/main.py`): 30초 간격으로 `ohvis_loops WHERE status='active' AND next_run_at <= NOW()` 폴링, `run_iteration()` 호출. `max_instances=1, coalesce=True`.
+  2. **채팅 루프 인텐트 감지** (`app/services/loop_chat_handler.py` 신규, `app/services/chat_service.py` 패치): regex anchor+action 패턴으로 "감시해/루프 중지/루프 상태" 등 자연어 명령 감지 → 루프 생성/정지/재개/상태 즉시 처리.
+  3. **대시보드 루프 관리 UI** (`aads-dashboard/src/app/admin/loops/page.tsx` 신규, `Sidebar.tsx` 패치): 루프 목록, 상태 카드(active/total/cost), pause/resume/cancel 컨트롤, 10초 자동 갱신.
+  4. **스케줄러 동적 등록** (`app/api/loops.py`): `POST /loops/scheduler/register` 엔드포인트 추가.
+- asyncpg 타입 추론 수정 (`app/services/loop_controller.py`):
+  - `create_loop`: `$4` 이중 사용(int/float) → `$4`(int) + `$15`(float) 분리 → Python `datetime` 계산으로 최종 해결.
+  - `update_loop_status`: `jsonb_build_object` 내 `$2` → `$2::text` 캐스트.
+  - `parsed_intent` NOT NULL 위반 → `_json_or_null(parsed_intent or {})`.
+- E2E 테스트 결과:
+  - 18/18 단위 테스트 PASSED
+  - 8/8 라이프사이클 E2E PASSED (CREATE→GET→LIST→SAFETY→PAUSE→RESUME→CANCEL→VERIFY_GONE)
+  - 6/6 인텐트 감지 테스트 PASSED
+  - 4/4 채팅 핸들러 E2E PASSED (DETECT→START→STATUS→STOP)
+- 배포: blue-green 무중단 배포 완료 (green 슬롯 :8102 활성). loop_tick 30초 주기 실행 확인.
+- Git: aads-server `edcf9951` + loops.py 추가 커밋, aads-dashboard `ebfa124`.
+
+
 ## 2026-07-28 06:22 KST - Pipeline Runner review trigger chat stability guard
 
 - Request: Session `d19a0e9e-f96f-4c83-8367-20de50762364` still jumped upward and appeared to lose the CEO question while work instructions were being sent.
@@ -7,6 +28,14 @@
 - Backend: `app/api/pipeline_runner.py` now suppresses visible AI chat auto-reaction for `awaiting_approval` notify events and records `notify_ai_suppressed` in `pipeline_jobs.logs` instead.
 - Operational cleanup: close the already-created auto review execution in the target session as interrupted and keep an explanatory placeholder message instead of deleting history.
 - Verification: `python3 -m py_compile app/api/pipeline_runner.py` passed on host, `docker exec aads-server python -m py_compile app/api/pipeline_runner.py` passed in container, API hot-reload reloaded 81 modules, `/health` returned `status=ok`, and the target session had no `running`/`retrying` execution after cleanup.
+
+## 2026-07-28 06:03 KST - OHVIS knowledge/context evolution report
+
+- Task: CEO requested latest-technology research and documentation for connecting and operating OHVIS knowledge, artifacts, and work context.
+- Output: added `docs/reports/20260728_OHVIS_KNOWLEDGE_CONTEXT_EVOLUTION_REPORT.md`.
+- Basis: KST `date`, local source/docs inspection, Docker/PostgreSQL counts (`memory_facts=57479`, `chat_messages=45566`, `chat_artifacts=23728`, `chat_turn_executions=9686`, `research_archive=0`, `ohvis_tasks=8`), and current official sources for OpenAI Agents/Conversation State/File Search, MCP 2026 RC, LangGraph, Google A2A, Zep Graphiti, OWASP GenAI Top 10, and NIST AI RMF.
+- Conclusion: prioritize an internal OHVIS Context Operating System over OpenClaw: event ledger, artifact registry, evidence store, temporal context graph, retrieval router, and durable execution replay.
+- Scope: documentation only. No code, DB migration, deploy, commit, or push performed.
 
 ## 2026-07-27 23:24 KST - Chat stale retry loop settlement guard
 
@@ -4963,3 +4992,37 @@
   - `aads_token` 단독 쿠키 요청도 FB 로그인 앱으로 이동하여 AADS 공용 로그인만으로는 레시피 접근이 열리지 않는다.
 - 미검증:
   - 실제 직원 계정 입력 후 레시피 본문 진입 E2E는 계정 자격증명 없이 수행하지 않았다.
+
+## 2026-07-28 06:09 KST - AADS 스트리밍 연속성·컨텍스트 소진 개선 보고서
+
+- CEO 추가 지시: 무중단 배포가 반영됐는데도 스트리밍 중단/추가 지시 지연/컨텍스트 소진이 왜 발생하는지, 이대로 둘 수 없는지 정밀 분석하고 최신 자료 기반 개선안을 보고하라는 요청.
+- 실측:
+  - API health 정상: `status=ok`, `graph_ready=true`, `version=0.2.1`.
+  - 관련 컨테이너 `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-dashboard-green`, `aads-postgres`, `aads-redis`, `aads-litellm` 모두 healthy.
+  - `chat_turn_executions`: completed 4,853건, interrupted 4,832건, running 3건.
+  - interrupted 사유 1위는 `LiteLLM gpt-5 HTTP 429` 2,787건으로, 서버 재시작 외 모델/쿼터 라우팅 문제가 크다.
+- 코드 확인:
+  - `deploy.sh`는 blue/green 전환과 old slot drain을 구현하고 있어 active 슬롯 직접 재시작 회피 구조가 있다.
+  - `app/core/interrupt_queue.py`는 인메모리 dict 기반이라 추가 지시가 재시작/슬롯 전환/컨텍스트 종료를 건너는 내구성을 갖지 못한다.
+  - `app/services/chat_service.py`는 final 저장 전 deferred interrupt 반영과 completion auto-continue를 지원하지만, step checkpoint 기반 durable execution은 아직 아니다.
+- 문서:
+  - 신규 보고서 `docs/reports/20260728_AADS_STREAM_CONTINUITY_CONTEXT_EXHAUSTION_REPORT.md` 작성.
+  - 권장 P0: `chat_interrupts` DB 큐, 2~3초 단위 interrupt 반영, context budget guard, provider 429 fallback/circuit breaker.
+- 이번 단계는 분석/문서화만 수행했다. 코드/DB/배포 변경은 없다.
+
+## 2026-07-28 06:31 KST - 채팅 문서 링크 404 수정 및 대시보드 배포
+
+- 증상: 채팅창에서 보고서 문서 링크를 새 탭으로 열면 `https://aads.newtalk.kr/root/aads/aads-server/docs/reports/...md`로 이동해 대시보드 404가 표시됐다.
+- 원인: 마크다운 링크 렌더러가 서버 파일시스템 절대경로(`/root/aads/...`)를 웹 문서 뷰어 URL로 변환하지 않고 그대로 `href`에 넣었다.
+- 조치:
+  - `aads-dashboard/src/lib/documentLinks.ts` 공용 링크 정규화 헬퍼를 추가했다.
+  - `src/app/chat/MarkdownRenderer.tsx`, `src/components/chat/ChatBubble.tsx`, `src/components/chat/ArtifactReport.tsx`에서 파일시스템 문서 링크를 `/docs?project=...&base_path=...&file_path=...`로 변환하게 했다.
+  - `src/app/docs/page.tsx`가 쿼리 파라미터를 읽어 해당 문서를 자동 선택/로드하도록 보강했다.
+- 검증:
+  - `npm run build` 성공.
+  - 수정 파일 대상 `npx eslint ...` 결과 0 errors, 기존 `<img>` 경고 3건만 발생.
+  - 대시보드 `bash deploy.sh` blue-green 배포 성공, 활성 슬롯 green, external health 통과.
+  - `https://aads.newtalk.kr/docs?project=AADS&base_path=%2Fapp%2Fdocs&file_path=reports%2F20260728_OHVIS_KNOWLEDGE_CONTEXT_EVOLUTION_REPORT.md`는 비인증 상태에서 404가 아니라 `/login?redirect=...`로 307 전환됨을 확인했다.
+- 주의:
+  - 전체 `npm run lint`는 기존 대시보드 lint debt 261 errors/66 warnings로 실패한다. 이번 변경 파일에서는 신규 lint error가 없다.
+  - 배포 시 대시보드 워크트리에 기존 미커밋 변경(`Sidebar.tsx`, `src/app/admin/loops/`)이 함께 존재했다.

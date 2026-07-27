@@ -137,3 +137,49 @@ def _serialize(row: dict) -> dict:
 
 def _serialize_list(rows: list[dict]) -> list[dict]:
     return [_serialize(r) for r in rows]
+
+
+@router.post("/loops/scheduler/register")
+async def register_loop_tick():
+    """loop_tick 스케줄러 작업을 동적으로 등록."""
+    try:
+        from app.api.ceo_chat_tools_scheduler import _scheduler
+        if not _scheduler:
+            from fastapi import Request
+            raise HTTPException(status_code=503, detail="scheduler_not_available")
+
+        existing = [j.id for j in _scheduler.get_jobs()]
+        if "loop_tick" in existing:
+            return {"status": "already_registered", "jobs": len(existing)}
+
+        async def _run_loop_tick():
+            try:
+                from app.core.db_pool import get_pool as _get_pool
+                pool = _get_pool()
+                rows = await pool.fetch(
+                    "SELECT id FROM ohvis_loops "
+                    "WHERE status = 'active' AND next_run_at IS NOT NULL "
+                    "AND next_run_at <= NOW() "
+                    "ORDER BY next_run_at ASC LIMIT 3"
+                )
+                if not rows:
+                    return
+                from app.services.loop_executor import run_iteration
+                for row in rows:
+                    try:
+                        await run_iteration(row["id"])
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        _scheduler.add_job(
+            _run_loop_tick, "interval", seconds=30,
+            id="loop_tick", replace_existing=True,
+            max_instances=1, coalesce=True,
+        )
+        return {"status": "registered", "jobs": len(_scheduler.get_jobs())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
