@@ -270,6 +270,13 @@
     .auth-links button { border: 0; background: none; color: var(--blue); font-size: 11px; font-weight: 800; }
     .agreement { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); font-size: 10px; line-height: 1.5; }
     .agreement input { width: 15px; min-height: 15px; margin: 1px 0 0; }
+    .employee-auth { align-items: flex-start; padding-top: 10px; }
+    .employee-auth .auth-layout { grid-template-columns: minmax(390px, 1.08fr) minmax(260px, .72fr); align-items: start; }
+    .employee-auth .auth-card { order: 1; }
+    .employee-auth .auth-side { order: 2; padding: 22px; }
+    .employee-auth .auth-side h2 { font-size: 20px; }
+    .employee-auth .auth-side-list { gap: 8px; }
+    .employee-auth .auth-side-list div { padding: 10px; }
     .stepper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 18px; }
     .stepper span { padding: 8px; border-radius: 7px; background: #f1f3f6; color: var(--muted); text-align: center; font-size: 9px; font-weight: 800; }
     .stepper span.active { background: var(--orange-soft); color: var(--orange); }
@@ -339,6 +346,8 @@
       .detail-grid { grid-template-columns: 1fr; }
       .auth-shell { min-height: auto; padding: 4px 0 20px; }
       .auth-side { padding: 20px; }
+      .employee-auth .auth-card { order: 1; }
+      .employee-auth .auth-side { order: 2; }
       .auth-security-strip { grid-template-columns: 1fr; }
       .auth-card { padding: 20px; }
     }
@@ -861,8 +870,8 @@
       </div>
     </aside>`;
     const authSecurityStrip = () => `<div class="auth-security-strip"><span>2단계 인증</span><span>사업자별 권한</span><span>접속 감사로그</span></div>`;
-    const authShell = (title, description, form, links, step = "", ctaLabel = "다음 단계", nextView = "") => `
-      <section class="auth-shell"><div class="auth-layout">${authProofPanel()}<article class="card auth-card">
+    const authShell = (title, description, form, links, step = "", ctaLabel = "다음 단계", nextView = "", shellClass = "") => `
+      <section class="auth-shell${shellClass ? ` ${shellClass}` : ""}"><div class="auth-layout">${authProofPanel()}<article class="card auth-card">
         <div class="auth-brand"><span class="brand-mark">M</span>매장비서 <span class="sample-badge">UX 시안</span></div>
         ${step}
         <h2>${title}</h2><p>${description}</p>
@@ -919,22 +928,22 @@
       "auth-invite": {
         title: "직원 회원가입",
         html: () => authShell("직원 회원가입", "직원이 이메일 인증과 비밀번호 설정만으로 먼저 가입하고, 로그인 후 기본정보와 입사서류를 이어서 등록하는 기본 흐름입니다. 초대 링크는 보조 확인값으로만 사용합니다.", `
-          ${flow([["사업장 코드 입력","대표·점장이 전달한 사업장 코드로 지점과 권한 후보를 찾습니다."],["이메일 가입","이메일 인증번호를 확인하고 비밀번호/확인을 등록합니다."],["로그인 후 기본정보","주소, 긴급연락처, 근무지, 직무, 입사유형, 급여계좌를 선택·입력합니다."],["입사서류 제출","신분증, 통장, 주민등록등본, 보건증, 자격증 선택 파일을 업로드합니다."],["관리자 검토","OCR 자동 등록값을 대표 또는 점장이 확인하고 계약조건을 입력합니다."],["계약서 확인·전자서명","직원은 본인 계약서만 열람하고 전자서명 후 문서보관함에 저장합니다."]])}
           <div class="auth-grid">
             ${authField("employee-code","사업장 코드","text","예: YJ-SUNGSIN-2026")}
-            ${authSelect("employee-branch","근무 지점",["코드로 자동 선택 · 성신점","미아점","정화점","입사 예정 지점 모름"])}
-            ${authField("employee-name","직원 이름","text","홍길동")}
-            ${authField("employee-phone","휴대폰","tel","010-0000-0000")}
             ${authField("employee-email","아이디 · 이메일","email","employee@example.com")}
             ${authField("employee-email-code","이메일 인증번호","text","메일로 받은 6자리")}
             ${authField("employee-password","비밀번호","password","8자 이상")}
             ${authField("employee-password-confirm","비밀번호 확인","password","한 번 더 입력")}
+            ${authSelect("employee-branch","근무 지점",["코드로 자동 선택 · 성신점","미아점","정화점","입사 예정 지점 모름"])}
+            ${authField("employee-name","직원 이름","text","홍길동")}
+            ${authField("employee-phone","휴대폰","tel","010-0000-0000")}
             ${authSelect("employee-role","입사 유형",["정직원","단시간 근로자","수습 예정","일용직"])}
             ${authSelect("employee-job","희망/배정 직무",["홀","주방","배달/포장","매니저","협의 필요"])}
             ${authField("employee-start-date","입사 예정일","date","입사일","",false)}
             ${authField("employee-invite-token","초대 코드 또는 링크 토큰","text","초대받은 경우만 입력","",false)}
             ${authSelect("employee-verify","보조 본인인증",["이메일 인증 완료","휴대폰 문자 추가 인증","카카오 인증 추가"])}
           </div>
+          ${flow([["사업장 코드 입력","대표·점장이 전달한 사업장 코드로 지점과 권한 후보를 찾습니다."],["이메일 가입","이메일 인증번호를 확인하고 비밀번호/확인을 등록합니다."],["로그인 후 기본정보","주소, 긴급연락처, 근무지, 직무, 입사유형, 급여계좌를 선택·입력합니다."],["입사서류 제출","신분증, 통장, 주민등록등본, 보건증, 자격증 선택 파일을 업로드합니다."],["관리자 검토","OCR 자동 등록값을 대표 또는 점장이 확인하고 계약조건을 입력합니다."],["계약서 확인·전자서명","직원은 본인 계약서만 열람하고 전자서명 후 문서보관함에 저장합니다."]])}
           <div class="detail-grid">
             ${detailCard("가입 방식","이메일 인증 + 비밀번호 설정")}
             ${detailCard("가입 후 생성","직원 가입요청 · 관리자 승인 대기")}
@@ -952,7 +961,7 @@
               <button type="button" data-action="contract-builder">관리자 계약서 작성 흐름</button>
             </div>
           </div>
-          <label class="agreement"><input type="checkbox" required>이메일 인증 회원가입, 직원 가입요청 생성, 기본정보·입사서류 제출, 본인 계약서 열람 범위에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-employee-profile","로그인 후 기본정보")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("auth-forgot","비밀번호 찾기")}`, stepper(1), "이메일 인증 후 기본정보 입력", "auth-employee-profile")
+          <label class="agreement"><input type="checkbox" required>이메일 인증 회원가입, 직원 가입요청 생성, 기본정보·입사서류 제출, 본인 계약서 열람 범위에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-employee-profile","로그인 후 기본정보")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("auth-forgot","비밀번호 찾기")}`, stepper(1), "이메일 인증 후 기본정보 입력", "auth-employee-profile", "employee-auth")
       },
       "auth-employee-profile": {
         title: "직원 기본정보 입력",
@@ -978,7 +987,7 @@
             ${detailCard("관리자 수정","계약 전 대표·점장이 필드별 수정 가능")}
             ${detailCard("민감정보","주민번호·계좌는 마스킹 저장 전제")}
           </div>
-          <label class="agreement"><input type="checkbox" required>입력한 기본정보를 입사서류 검토와 근로계약서 작성에 사용하는 것에 동의합니다.</label>`, `${authLink("auth-invite","회원가입으로 돌아가기")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("employees","관리자 계약관리 보기")}`, stepper(2), "기본정보 저장 후 서류등록", "auth-employee-documents")
+          <label class="agreement"><input type="checkbox" required>입력한 기본정보를 입사서류 검토와 근로계약서 작성에 사용하는 것에 동의합니다.</label>`, `${authLink("auth-invite","회원가입으로 돌아가기")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("employees","관리자 계약관리 보기")}`, stepper(2), "기본정보 저장 후 서류등록", "auth-employee-documents", "employee-auth")
       },
       "auth-employee-documents": {
         title: "직원 입사서류 등록",
@@ -1001,7 +1010,7 @@
             ${detailCard("보완 요청","관리자가 반려하면 직원 홈에 재제출 카드 표시")}
             ${detailCard("계약 연결","서류 승인 후 관리자 계약서 작성 화면으로 이동")}
           </div>
-          <label class="agreement"><input type="checkbox" required>제출 서류의 민감정보 마스킹과 관리자 검토 절차에 동의합니다.</label>`, `${authLink("auth-employee-profile","기본정보 수정")}${authLink("employees","관리자 계약관리 보기")}${authLink("auth-login","로그인 화면")}`, stepper(3), "입사서류 제출 완료", "employees")
+          <label class="agreement"><input type="checkbox" required>제출 서류의 민감정보 마스킹과 관리자 검토 절차에 동의합니다.</label>`, `${authLink("auth-employee-profile","기본정보 수정")}${authLink("employees","관리자 계약관리 보기")}${authLink("auth-login","로그인 화면")}`, stepper(3), "입사서류 제출 완료", "employees", "employee-auth")
       },
       "auth-onboarding": {
         title: "초기 사업자 등록",
