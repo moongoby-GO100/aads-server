@@ -84,6 +84,18 @@ TRANSACTION_SOURCE_BY_SERVICE = {
     "ibk_business": "bank",
     "card_pg": "card",
 }
+BANK_QUICK_SERVICE_CONFIG = {
+    "shinhan_business": {
+        "label": "신한은행 간편서비스",
+        "login_url": "https://bank.shinhan.com/rib/easy/index.jsp",
+        "enrollment": "기업뱅킹에서 간편조회 허용 계좌 등록 후 간편서비스 계좌조회로 거래내역을 확인합니다.",
+    },
+    "ibk_business": {
+        "label": "IBK기업은행 빠른서비스",
+        "login_url": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+        "enrollment": "기업뱅킹의 빠른조회서비스 신청/해제에서 대상 계좌를 등록한 뒤 빠른조회로 거래내역을 확인합니다.",
+    },
+}
 
 DEFAULT_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("식자재", ("쌀", "백미", "고춧가루", "소스", "김치", "대파", "양파", "고기", "식자재")),
@@ -862,6 +874,11 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
             ).strip()
             next_item["loginUrl"] = str(next_item.get("loginUrl") or next_item.get("login_url") or "").strip()
             next_item["username"] = str(next_item.get("username") or "").strip()
+            next_item["businessRegistrationNoMasked"] = str(
+                next_item.get("businessRegistrationNoMasked")
+                or next_item.get("business_registration_no_masked")
+                or ""
+            ).strip()
             next_item["status"] = str(next_item.get("status") or "ready").strip()
         return next_item
 
@@ -911,6 +928,9 @@ _ACCOUNT_SECRET_FIELD_MAP: dict[str, str] = {
     "api_key": "api_key_enc",
     "client_secret": "client_secret_enc",
     "certificate_password": "certificate_password_enc",
+    "account_no": "account_no_enc",
+    "account_password": "account_password_enc",
+    "business_registration_no": "business_registration_no_enc",
 }
 
 
@@ -930,6 +950,20 @@ def _migrate_platform_account_secrets(rows: list[dict[str, Any]]) -> bool:
 
 def _has_account_secret(row: dict[str, Any]) -> bool:
     return any(bool(row.get(field)) for field in _ACCOUNT_SECRET_FIELDS)
+
+
+def _masked_digits(value: Any, *, visible_tail: int = 4) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    if not digits:
+        return ""
+    if len(digits) <= visible_tail:
+        return "*" * len(digits)
+    return f"{'*' * max(3, len(digits) - visible_tail)}{digits[-visible_tail:]}"
+
+
+def _has_secret_value(row: dict[str, Any], plaintext_field: str) -> bool:
+    encrypted_field = _ACCOUNT_SECRET_FIELD_MAP.get(plaintext_field, "")
+    return bool(encrypted_field and row.get(encrypted_field))
 
 
 # Fields that must never appear in API responses or logs.
@@ -2251,6 +2285,23 @@ def _decode_csv(content: bytes) -> str:
     raise HTTPException(status_code=400, detail="CSV 문자 인코딩을 확인할 수 없습니다")
 
 
+def _csv_delimiter(text: str) -> str:
+    first_line = next((line for line in text.splitlines() if line.strip()), "")
+    if first_line.count("\t") > first_line.count(","):
+        return "\t"
+    if first_line.count(";") > first_line.count(","):
+        return ";"
+    return ","
+
+
+def _first_present(row: dict[str, str], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
 def _amount(value: Any) -> int:
     cleaned = re.sub(r"[^0-9.-]", "", str(value or ""))
     if cleaned in {"", "-", ".", "-."}:
@@ -2326,7 +2377,8 @@ def import_file(
     normalized_business = str(business_id or "").strip()
     normalized_branch = BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip())
     normalized_service = str(service or "").strip()
-    reader = csv.DictReader(_decode_csv(content).splitlines())
+    decoded = _decode_csv(content)
+    reader = csv.DictReader(decoded.splitlines(), delimiter=_csv_delimiter(decoded))
     existing = _read("transactions")
     existing_ids = {str(row.get("id") or "") for row in existing}
     imported: list[dict[str, Any]] = []
@@ -2351,8 +2403,8 @@ def import_file(
         if record_id in existing_ids:
             duplicate_rows += 1
             continue
-        incoming = _amount(raw.get("입금액"))
-        outgoing = _amount(raw.get("출금액"))
+        incoming = _amount(_first_present(raw, "입금액", "입금", "입금금액", "맡기신금액", "받으신금액"))
+        outgoing = _amount(_first_present(raw, "출금액", "출금", "출금금액", "찾으신금액", "지급금액"))
         amount = incoming or outgoing or _amount(
             raw.get("합계금액") or raw.get("결제금액") or raw.get("거래금액") or raw.get("금액")
         )
@@ -2362,8 +2414,21 @@ def import_file(
             or raw.get("적요")
             or raw.get("거래내용")
             or raw.get("내용")
+            or raw.get("기재내용")
+            or raw.get("보낸분/받는분")
+            or raw.get("보낸분")
+            or raw.get("받는분")
+            or raw.get("거래처")
             or raw.get("판매자상호")
             or ""
+        )
+        transaction_datetime = (
+            raw.get("거래일시")
+            or " ".join(
+                item
+                for item in (raw.get("거래일자") or raw.get("거래일") or raw.get("일자") or "", raw.get("거래시간") or "")
+                if item
+            )
         )
         searchable = " ".join([description, *raw.values()])
         record = {
@@ -2374,16 +2439,14 @@ def import_file(
             "branch": normalized_branch,
             "source_account_id": str(source_account_id or ""),
             "source_file": Path(filename or "upload.csv").name,
-            "transaction_date": _transaction_date(
-                raw.get("거래일시") or raw.get("거래일자") or raw.get("거래일") or raw.get("일자")
-            ),
+            "transaction_date": _transaction_date(transaction_datetime),
             "description": description,
             "amount": amount,
             "direction": direction,
             "category": _transaction_category(searchable),
             "approval_number": raw.get("승인번호") or "",
             "order_number": raw.get("주문번호") or "",
-            "account_name": raw.get("계좌명") or "",
+            "account_name": raw.get("계좌명") or raw.get("계좌번호") or raw.get("계좌") or "",
             "created_at": now,
             "updated_at": now,
         }
@@ -2649,6 +2712,9 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     )
     now = _now()
     record = existing or {"id": str(uuid4()), "created_at": now}
+    collection_mode = str(payload.get("collection_mode") or "browser-automation").strip()
+    if service in BANK_QUICK_SERVICE_CONFIG and collection_mode in {"bank-openbanking", "browser-automation"}:
+        collection_mode = "bank-quick-service"
     secret_payload = False
     for plaintext_field, encrypted_field in _ACCOUNT_SECRET_FIELD_MAP.items():
         incoming_secret = str(payload.get(plaintext_field) or "")
@@ -2658,26 +2724,51 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
             secret_payload = True
     if not secret_payload:
         _migrate_platform_account_secrets([record])
+    if service in BANK_QUICK_SERVICE_CONFIG and collection_mode == "bank-quick-service":
+        missing = [
+            label
+            for label, key in (
+                ("로그인 비밀번호", "password"),
+                ("조회용 계좌번호", "account_no"),
+                ("계좌비밀번호", "account_password"),
+                ("사업자번호", "business_registration_no"),
+            )
+            if not _has_secret_value(record, key)
+        ]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"은행 간편/빠른조회 필수값을 확인하십시오: {', '.join(missing)}")
+    bank_quick_config = BANK_QUICK_SERVICE_CONFIG.get(service) or {}
+    account_no_masked = (
+        str(payload.get("account_no_masked") or "").strip()
+        or _masked_digits(payload.get("account_no"))
+        or str(record.get("account_no_masked") or "").strip()
+    )
+    business_no_masked = (
+        str(payload.get("business_registration_no_masked") or "").strip()
+        or _masked_digits(payload.get("business_registration_no"))
+        or str(record.get("business_registration_no_masked") or "").strip()
+    )
     record.update(
         {
             "service": service,
             "label": payload.get("label") or CONNECTOR_LABELS.get(service, service),
-            "login_url": payload.get("login_url") or "",
+            "login_url": payload.get("login_url") or bank_quick_config.get("login_url") or "",
             "username": username,
             "business_id": business_id,
             "branch": branch,
             "institution_code": str(payload.get("institution_code") or "").strip(),
-            "account_no_masked": str(payload.get("account_no_masked") or "").strip(),
+            "account_no_masked": account_no_masked,
+            "business_registration_no_masked": business_no_masked,
             "merchant_no": str(payload.get("merchant_no") or "").strip(),
             "settlement_cycle": str(payload.get("settlement_cycle") or "").strip(),
-            "collection_mode": payload.get("collection_mode") or "browser-automation",
+            "collection_mode": collection_mode,
             "category": str(payload.get("category") or "").strip(),
             "data_scope": str(payload.get("data_scope") or "").strip(),
             "required_proof": str(payload.get("required_proof") or "").strip(),
             "status": "credential_registered",
             "last_sync_status": record.get("last_sync_status") or "not_started",
             "auto_sync": bool(payload.get("auto_sync")),
-            "memo": payload.get("memo") or "",
+            "memo": payload.get("memo") or bank_quick_config.get("enrollment") or "",
             "updated_at": now,
         }
     )
@@ -2854,19 +2945,43 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
                 }
             )
             continue
-        if collection_mode in {"api", "bank-openbanking", "browser-automation"}:
-            if not _has_account_secret(account):
+        if collection_mode in {"api", "bank-openbanking", "browser-automation", "bank-quick-service"}:
+            quick_missing = []
+            if collection_mode == "bank-quick-service":
+                quick_missing = [
+                    label
+                    for label, key in (
+                        ("로그인 비밀번호", "password"),
+                        ("조회용 계좌번호", "account_no"),
+                        ("계좌비밀번호", "account_password"),
+                        ("사업자번호", "business_registration_no"),
+                    )
+                    if not _has_secret_value(account, key)
+                ]
+            if not _has_account_secret(account) or quick_missing:
                 status = "credential_required"
-                message = "API 키, 인증서 비밀번호 또는 로그인 비밀번호를 설정에서 등록해야 합니다."
+                message = (
+                    f"은행 간편/빠른조회 필수값 누락: {', '.join(quick_missing)}"
+                    if quick_missing
+                    else "API 키, 인증서 비밀번호 또는 로그인 비밀번호를 설정에서 등록해야 합니다."
+                )
             else:
                 status = "connector_not_configured"
-                message = "자격증명은 저장됐지만 해당 기관 실조회 커넥터가 아직 연결되지 않았습니다. 파일 업로드로 대체 수집할 수 있습니다."
+                bank_config = BANK_QUICK_SERVICE_CONFIG.get(service)
+                if collection_mode == "bank-quick-service" and bank_config:
+                    message = (
+                        f"{bank_config['label']} 자격증명은 Vault에 준비됐지만 실시간 조회 Playwright 커넥터가 아직 연결되지 않았습니다. "
+                        "은행 엑셀/CSV 다운로드 파일 또는 엑셀 복사표로 대체 반영할 수 있습니다."
+                    )
+                else:
+                    message = "자격증명은 저장됐지만 해당 기관 실조회 커넥터가 아직 연결되지 않았습니다. 파일 업로드로 대체 수집할 수 있습니다."
             summary.append(
                 {
                     "service": service,
                     "status": status,
                     "message": message,
                     "account_id": account.get("id") or "",
+                    "collection_mode": collection_mode,
                     "imported_rows": 0,
                 }
             )

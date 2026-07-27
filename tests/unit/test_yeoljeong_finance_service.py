@@ -101,6 +101,21 @@ def test_import_bank_csv_uses_income_expense_columns(tmp_path, monkeypatch):
     assert rows[1]["category"] == "공과금"
 
 
+def test_import_bank_excel_copied_table_uses_tab_delimiter(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    copied = "거래일자\t거래시간\t기재내용\t맡기신금액\t찾으신금액\t계좌번호\n2026.07.03\t11:20:33\t요기요 정산\t88000\t\t110123456789\n"
+
+    result = service.import_file("shinhan.xls.txt", copied.encode("utf-8-sig"), "bank")
+
+    row = result["rows"][0]
+    assert result["import"]["imported_rows"] == 1
+    assert row["transaction_date"] == "2026-07-03 11:20:33"
+    assert row["description"] == "요기요 정산"
+    assert row["amount"] == 88000
+    assert row["direction"] == "income"
+    assert row["account_name"] == "110123456789"
+
+
 def test_import_transaction_csv_applies_business_scope(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     csv_text = "거래일자,적요,입금액,출금액,계좌명\n2026-07-01,배달의민족 정산,55000,,신한 중화점\n"
@@ -273,6 +288,64 @@ def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
     assert raw["api_key_enc"] == "encrypted:client-id"
     assert raw["client_secret_enc"] == "encrypted:client-secret"
     assert "api_key" not in raw
+
+
+def test_upsert_bank_quick_service_encrypts_required_lookup_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+
+    saved = service.upsert_account(
+        {
+            "service": "ibk_business",
+            "label": "중화점 IBK 빠른조회",
+            "username": "quick-user",
+            "password": "login-secret",
+            "account_no": "12345678901234",
+            "account_password": "4321",
+            "business_registration_no": "7108604499",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "collection_mode": "bank-quick-service",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    raw = service._read("platform_accounts")[0]
+    assert saved["collection_mode"] == "bank-quick-service"
+    assert saved["account_no_masked"].endswith("1234")
+    assert saved["business_registration_no_masked"].endswith("4499")
+    assert raw["password_enc"] == "encrypted:login-secret"
+    assert raw["account_no_enc"] == "encrypted:12345678901234"
+    assert raw["account_password_enc"] == "encrypted:4321"
+    assert raw["business_registration_no_enc"] == "encrypted:7108604499"
+    assert "account_no" not in saved
+    assert "account_password" not in saved
+    assert "business_registration_no" not in saved
+
+
+def test_upsert_bank_quick_service_requires_account_password_and_business_no(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+
+    try:
+        service.upsert_account(
+            {
+                "service": "shinhan_business",
+                "username": "quick-user",
+                "password": "login-secret",
+                "account_no": "110123456789",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+            },
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400
+        assert "계좌비밀번호" in str(getattr(exc, "detail", ""))
+        assert "사업자번호" in str(getattr(exc, "detail", ""))
+    else:
+        raise AssertionError("quick service credentials should require account password and business no")
 
 
 def test_sync_financial_transactions_reports_connector_gap(tmp_path, monkeypatch):

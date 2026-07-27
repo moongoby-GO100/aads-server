@@ -139,6 +139,50 @@ def test_contract_preview_is_a4_modal():
     assert "체결 당시 저장본" in html
 
 
+@pytest.mark.asyncio
+async def test_account_upsert_runs_financial_sync_when_auto_sync_enabled(monkeypatch):
+    saved_account = {
+        "id": "acct-shinhan",
+        "service": "shinhan_business",
+        "business_id": "biz-junghwa",
+        "branch": "중화점",
+    }
+    sync_result = {"summary": [{"service": "shinhan_business", "status": "connector_not_configured"}]}
+
+    def fake_upsert_account(payload, current_user):
+        assert payload["auto_sync"] is True
+        assert payload["service"] == "shinhan_business"
+        return saved_account
+
+    def fake_sync_financial_transactions(payload, current_user):
+        assert payload == {
+            "services": ["shinhan_business"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+        }
+        return sync_result
+
+    monkeypatch.setattr(api.svc, "upsert_account", fake_upsert_account)
+    monkeypatch.setattr(api.svc, "sync_financial_transactions", fake_sync_financial_transactions)
+
+    payload = api.AccountUpsertPayload(
+        service="shinhan_business",
+        username="quick-user",
+        password="login-secret",
+        account_no="110123456789",
+        account_password="4321",
+        business_registration_no="7108604499",
+        business_id="biz-junghwa",
+        branch="중화점",
+        collection_mode="bank-quick-service",
+        auto_sync=True,
+    )
+
+    result = await api.upsert_account(payload, {"email": "owner@example.com", "is_admin": True})
+
+    assert result == {"account": saved_account, "sync": sync_result}
+
+
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
     html = html_path.read_text(encoding="utf-8")
@@ -191,6 +235,28 @@ def test_employee_signup_collects_contract_autofill_profile():
     assert 'employerPhone: business.phone || ""' in html
 
 
+def test_employee_auth_gate_prioritizes_self_signup_over_invites():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    gate = html.split('<section id="authGate"', 1)[1].split('<section id="appFilters"', 1)[0]
+
+    assert '<h2 id="authGateTitle" class="panel-title">직원 회원가입</h2>' in gate
+    assert '<button id="authModeSignup" class="active"' in gate
+    assert '<form id="gateSignupForm" class="panel-body">' in gate
+    assert '<form id="gateInviteAcceptForm" class="panel-body hidden">' in gate
+    assert "초대 링크는 보조 수단이며 기본 입사 흐름은 직원 직접 회원가입" in gate
+    assert "회원가입 후 입사서류 등록" in gate
+
+    signup_function = html.split("async function signupToServer(formData)", 1)[1].split(
+        "async function submitEmployeeSignupJoinRequest", 1
+    )[0]
+    assert 'const accountType = String(formData.accountType || "employee").trim();' in signup_function
+    assert 'if (accountType === "employee")' in signup_function
+    assert "joinRequest = await submitEmployeeSignupJoinRequest" in signup_function
+    assert 'setView("onboarding")' in signup_function
+    assert "직원 회원가입과 가입요청이 완료됐습니다. 입사서류를 등록하십시오." in signup_function
+
+
 def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
     html = html_path.read_text(encoding="utf-8")
@@ -228,6 +294,22 @@ def test_onboarding_open_uses_authenticated_file_preview_modal():
     assert "headers: apiAuthOnlyHeaders()" in html
     assert "URL.createObjectURL(blob)" in html
     assert "window.open(`/api/v1/yeoljeong-finance/onboarding/documents/" not in html
+
+
+def test_bank_quick_service_ui_collects_required_vault_fields():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    assert '<option value="bank-quick-service">은행 간편/빠른조회</option>' in html
+    assert 'name="accountNo"' in html
+    assert 'name="accountPassword" type="password"' in html
+    assert 'name="businessRegistrationNo"' in html
+    assert 'account_no: data.accountNo || ""' in html
+    assert 'account_password: data.accountPassword || ""' in html
+    assert 'business_registration_no: data.businessRegistrationNo || ""' in html
+    assert "신한은행 간편서비스 계좌조회 기준" in html
+    assert "IBK기업은행 빠른서비스 계좌조회 기준" in html
+    assert "function csvDelimiter(text)" in html
 
 
 def test_pdf_preview_does_not_sandbox_chrome_pdf_viewer():

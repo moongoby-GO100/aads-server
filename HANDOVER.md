@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-07-28 07:42 KST - Yeoljeong employee self-signup auth gate continuity check
+
+- 요청: 중단된 `#auth-invite` 화면 작업을 이어서 진행. 목표는 직원 초대 중심이 아니라 직원 직접 회원가입/가입요청/입사서류 제출 흐름을 기본 화면으로 고정하는 것.
+- 확인: `app/static/apps/yeoljeong-finance/index.html`의 비로그인 auth gate는 `직원 회원가입`을 기본 제목과 active tab으로 표시하고, `회원가입 후 입사서류 등록` CTA를 제공한다. 초대 수락 폼은 `hidden` 상태의 보조 흐름으로 남아 있다.
+- 흐름: 직원 가입 시 `signupToServer()`가 `accountType === "employee"`이면 서버 회원가입 후 `submitEmployeeSignupJoinRequest()` 또는 전화번호 초대 수락을 실행하고, `forceEmployeePendingSession()` 후 `setView("onboarding")`으로 입사서류 화면에 진입한다.
+- 테스트 보강: `tests/unit/test_yeoljeong_finance_api.py`에 `test_employee_auth_gate_prioritizes_self_signup_over_invites`를 추가해 auth gate 기본값, 초대 보조 상태, 직원 가입 후 onboarding 이동 문자열을 회귀 방지한다.
+- 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py` 통과. `docker run --rm -e JWT_SECRET_KEY=test-secret -e AADS_DB_URL=sqlite:///tmp/aads-test.db -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py -q` 결과 70 passed, 1 warning. 신규 직원 회원가입/은행 빠른조회 회귀 테스트 3건도 별도 실행해 3 passed. `git diff --check`는 대상 파일 기준 통과. `node` 인라인 스크립트 파싱 `inline_script_parse_ok:2` 통과. 로컬 정적 HTTP `http://127.0.0.1:8799/index.html`은 200 응답이며 핵심 DOM 문자열을 확인했다.
+- 미실행/한계: 호스트 `pytest` 모듈이 없고 `.venv/bin/python`은 `/usr/local/bin/python3.11` 깨진 링크라 pytest는 bind mount 임시 컨테이너로 대체했다. Browser Bridge 캡처는 이번 이어진 턴에서 재실행하지 못했고, 로컬 시스템 브라우저 바이너리는 미설치라 HTTP/DOM/JS 파싱 검증으로 대체했다.
+- 배포/커밋: CEO의 명시 커밋·푸시·배포 지시 전이라 로컬 변경만 수행했다. 기존 작업트리의 은행 간편조회/기타 dirty 변경은 보존했다.
+
+## 2026-07-28 07:37 KST - Yeoljeong finance bank quick-service integration prep
+
+- 요청: 신한은행 간편서비스와 IBK기업은행 빠른서비스가 아이디/비밀번호/계좌번호/계좌비밀번호/사업자번호 기반으로 계좌 거래현황 조회와 엑셀 다운로드가 가능한지 확인하고, 매장비서 연동에 반영.
+- 공식 확인: 신한 간편서비스 URL(`https://bank.shinhan.com/rib/easy/index.jsp`)과 IBK 빠른조회 URL(`https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp`)을 확인했다. IBK 기업뱅킹 메뉴에는 `빠른조회서비스신청/해제`, `거래내역조회`, `거래내역서` 항목이 존재한다.
+- Backend: `app/api/yeoljeong_finance.py`의 `AccountUpsertPayload`에 `account_no`, `account_password`, `business_registration_no` write-only 필드를 추가했다. `app/services/yeoljeong_finance_service.py`는 신한/IBK `bank-quick-service` 모드에서 로그인 비밀번호, 조회용 계좌번호, 계좌비밀번호, 사업자번호가 모두 Vault 암호화 필드로 저장될 때만 등록되도록 검증한다. 공개 응답에는 마스킹값만 반환한다.
+- Import: 은행 거래 CSV 외에 엑셀에서 복사한 탭 구분 표도 서버 파서와 정적 앱 파서가 처리하도록 보강했다. `거래일자/거래시간/기재내용/맡기신금액/찾으신금액/계좌번호`류 헤더를 거래 원장 필드로 매핑한다.
+- UI: `app/static/apps/yeoljeong-finance/index.html`의 연동관리 폼에 조회용 계좌번호, 계좌비밀번호, 사업자번호 입력을 추가하고 신한/IBK 기본 수집 방식을 `은행 간편/빠른조회`로 변경했다. 연결 카드에는 사업자번호 마스킹값과 간편/빠른조회 수집 방식이 표시된다.
+- 한계: 실제 은행 사이트 접속/조회 Playwright 커넥터는 아직 연결하지 않았다. `/transactions/sync`는 자격증명 준비 여부를 판정하되, 실조회 커넥터 미연결 시 `connector_not_configured`로 보고하고 은행 엑셀/CSV 또는 엑셀 복사표 반영을 대체 경로로 안내한다.
+- 검증: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 통과. `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py -q` 결과 65 passed, 1 warning. `git diff --check` 통과.
+- 배포/커밋: CEO의 명시 커밋·푸시·배포 승인 전이라 로컬 변경만 수행했다. 기존 dirty worktree의 무관 변경은 보존했다.
+
 ## 2026-07-28 07:34 KST - Chat interrupted auto-resume reclaim hardening
 
 - Request: CEO reported that an assistant response was interrupted and did not automatically continue, after repeated chat scroll/reply stability fixes.
@@ -5053,3 +5074,48 @@
 - 한계:
   - 신한/IBK 오픈뱅킹, 카드사/VAN/PG 실조회는 기관 API 계약·인증서·키가 필요하다. 해당 자격증명과 커넥터 구현 전에는 장부 오염 방지를 위해 가상 거래를 생성하지 않고 `계정필요`, `파일필요`, `커넥터필요` 상태만 반환한다.
   - API 라우트 추가는 서버 프로세스 재시작 또는 blue/green 배포 후 외부 사이트에서 활성화된다.
+
+## 2026-07-28 07:43 KST - 매장비서 직원 회원가입 해시 딥링크 보강
+
+- 요청: 중단된 `#auth-invite` 화면 재설계 작업을 이어서 진행.
+- 확인:
+  - `app/static/apps/yeoljeong-finance/index.html`의 인증 게이트는 이미 직원 직접 회원가입 중심으로 바뀌어 있었다.
+  - 가입 성공 시 `signupToServer()`가 직원 가입요청을 만들고 `onboarding` 탭으로 이동해 입사서류 등록을 유도한다.
+  - 다만 기획서에 명시된 `#auth-invite`, `#auth-employee-profile`, `#auth-employee-documents` 해시 진입은 실제 JS 라우팅에 연결되어 있지 않았다.
+- 조치:
+  - `#auth-invite` 접근 시 비로그인 사용자는 직원 회원가입 게이트로 이동하고 이름 입력칸에 포커스하도록 했다. 로그인 사용자는 직원관리 탭으로 보낸다.
+  - `#auth-employee-profile` 접근 시 로그인 사용자는 직원관리 탭, 비로그인 사용자는 직원 회원가입 게이트로 보낸다.
+  - `#auth-employee-documents` 접근 시 로그인 사용자는 입사서류 탭, 비로그인 사용자는 직원 회원가입 게이트로 보낸다.
+  - 직원관리 화면의 “직원 회원가입 화면 열기”, “입사서류 등록으로 이동” 버튼도 같은 해시를 갱신하도록 맞췄다.
+  - `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`에 해시별 연결 기준을 반영했다.
+- 검증:
+  - `node` VM 인라인 스크립트 파싱 `inline_script_parse_ok:2` 통과.
+  - 로컬 정적 서버 `python3 -m http.server 8799` 기준 `curl http://127.0.0.1:8799/index.html` HTTP 200 확인.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -e AADS_DB_URL=sqlite:///tmp/aads-test.db -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py -q` 결과 70 passed, 1 warning.
+  - 대상 파일 `git diff --check` 통과.
+  - AADS 브라우저 도구는 이번 이어진 턴에서 재실행하지 못했고, 로컬 시스템 브라우저 바이너리는 미설치라 HTTP/DOM/JS 문법 검증으로 대체했다.
+- 미완료:
+  - 커밋, 푸시, 배포는 아직 수행하지 않았다.
+  - 운영 외부 URL의 실제 브라우저 E2E는 배포 후 수행해야 한다.
+
+## 2026-07-28 07:56 KST - 신한 간편서비스/IBK 빠른서비스 설정 등록 및 즉시 동기화 반영
+
+- 요청: 신한은행 간편서비스와 IBK기업은행 빠른서비스처럼 아이디, 비밀번호, 계좌번호, 계좌비밀번호, 사업자번호를 관리자가 등록하면 은행 거래내역/카드 거래내역 연동이 바로 실행되도록 조치.
+- 공식 확인:
+  - 신한 간편서비스 URL: `https://bank.shinhan.com/rib/easy/index.jsp`.
+  - IBK 빠른서비스 URL: `https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp`.
+  - IBK 기업 빠른서비스 화면은 계좌번호, 계좌비밀번호, 주민/사업자등록번호 입력 기반 조회를 노출한다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html` 연동관리 화면에 `은행 간편/빠른조회` 수집 방식과 조회용 계좌번호, 계좌비밀번호, 사업자번호 등록 필드를 반영했다.
+  - `app/services/yeoljeong_finance_service.py`에서 신한/IBK 은행 계정은 `bank-quick-service`로 정규화하고, 로그인 비밀번호·계좌번호·계좌비밀번호·사업자번호 누락 시 저장을 차단한다.
+  - 해당 비밀값은 `password_enc`, `account_no_enc`, `account_password_enc`, `business_registration_no_enc`로 암호화 저장하며 API/DB payload 응답에는 원문을 제외한다.
+  - `app/api/yeoljeong_finance.py`에서 은행/카드 계정 저장 시 `auto_sync=true`이면 `/transactions/sync`를 즉시 실행해 화면의 최근수집/상태 메시지가 바로 갱신되도록 했다.
+- 검증:
+  - `docker exec aads-server python -m pytest /app/tests/unit/test_yeoljeong_finance_api.py -q` 결과 12 passed, 1 warning.
+  - `docker exec aads-server-green python -m pytest /app/tests/unit/test_yeoljeong_finance_api.py -q` 결과 13 passed, 1 warning.
+  - `docker exec aads-server python -m pytest /app/tests/unit/test_yeoljeong_finance_service.py -q` 결과 50 passed.
+  - `deploy_safe(mode=reload)` 성공, Hot-Reload 60개, post health 정상.
+  - 외부 헬스 `https://fb.newtalk.kr/api/v1/health` HTTP 200.
+- 운영 현황:
+  - DB 원장에는 현재 신한/IBK 은행 계정이 아직 등록되어 있지 않다. 관리자가 실제 은행 필수값을 입력해야 실계정 수집 상태가 생성된다.
+  - 은행 사이트 실시간 로그인/엑셀 다운로드 커넥터는 실제 자격증명, 2차 인증, 은행 화면 변경 대응이 필요하다. 커넥터 미연결 상태에서는 가상 거래를 만들지 않고 `커넥터필요`로 표시한다.

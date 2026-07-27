@@ -2609,6 +2609,15 @@
                   <label>계좌/가맹점번호
                     <input name="accountNoMasked" placeholder="뒷자리만 표시해 등록">
                   </label>
+                  <label>조회용 계좌번호
+                    <input name="accountNo" autocomplete="off" placeholder="간편/빠른조회 등록 계좌번호">
+                  </label>
+                  <label>계좌비밀번호
+                    <input name="accountPassword" type="password" autocomplete="new-password" placeholder="은행 조회용. 서버 Vault 암호화 저장">
+                  </label>
+                  <label>사업자번호
+                    <input name="businessRegistrationNo" autocomplete="off" placeholder="000-00-00000">
+                  </label>
                   <label>정산주기
                     <input name="settlementCycle" placeholder="예: D+2, 매월 10일">
                   </label>
@@ -2625,6 +2634,7 @@
                     <select name="collectionMode">
                       <option value="portal-csv">포털 정산서/CSV 다운로드</option>
                       <option value="pos-export">POS/메이트포스 내보내기</option>
+                      <option value="bank-quick-service">은행 간편/빠른조회</option>
                       <option value="bank-excel">은행 엑셀 업로드</option>
                       <option value="bank-openbanking">은행 기업뱅킹 조회</option>
                       <option value="purchase-portal">매입처 주문프로그램 수집</option>
@@ -2916,15 +2926,16 @@
         <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
           <button id="uploadEvidenceBtn" class="primary">증빙 서버 등록</button>
         </div>
-        <label>CSV 붙여넣기
-          <textarea id="csvText" placeholder="date,branch,type,vendor,channel,amount,status,memo"></textarea>
+        <label>CSV/엑셀 표 붙여넣기
+          <textarea id="csvText" placeholder="거래일자,적요,입금액,출금액,계좌명 또는 엑셀에서 복사한 표"></textarea>
         </label>
         <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
-          <button id="serverImportTransactionBtn">은행/카드 CSV 서버반영</button>
+          <button id="serverImportTransactionBtn">은행/카드 거래 서버반영</button>
           <button id="pasteEntryCsvBtn">거래 CSV 반영</button>
           <button id="pasteShiftCsvBtn">근태 CSV 반영</button>
         </div>
         <div class="muted">
+          은행 거래 헤더: 거래일자, 거래시간, 적요, 입금액, 출금액, 계좌명 또는 은행 엑셀 표 복사<br>
           거래 CSV 헤더: date, branch, type, vendor, channel, amount, status, memo<br>
           근태 CSV 헤더: date, branch, staff, start, end, breakMin, hourly, status, memo
         </div>
@@ -3024,19 +3035,19 @@
       },
       shinhan_business: {
         category: "은행",
-        loginUrl: "https://bizbank.shinhan.com/",
-        collectionMode: "bank-excel",
+        loginUrl: "https://bank.shinhan.com/rib/easy/index.jsp",
+        collectionMode: "bank-quick-service",
         dataScope: "입출금 거래내역, 배달앱 정산 입금, 카드/현금 입금",
-        requiredProof: "기업뱅킹 권한, 공동/금융인증서, OTP",
-        memo: "신한은행 기업 거래내역 엑셀 또는 인증 조회"
+        requiredProof: "간편조회 허용계좌, 아이디, 비밀번호, 계좌번호, 계좌비밀번호, 사업자번호",
+        memo: "신한은행 간편서비스 계좌조회 기준. 실조회 커넥터 연결 전에는 엑셀/CSV 반영으로 대체"
       },
       ibk_business: {
         category: "은행",
-        loginUrl: "https://kiup.ibk.co.kr/uib/jsp/index.jsp",
-        collectionMode: "bank-excel",
+        loginUrl: "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+        collectionMode: "bank-quick-service",
         dataScope: "입출금 거래내역, 배달앱 정산 입금, 카드/현금 입금",
-        requiredProof: "기업뱅킹 권한, 공동/금융인증서, OTP",
-        memo: "기업은행 기업 거래내역 엑셀 또는 인증 조회"
+        requiredProof: "빠른조회서비스 신청계좌, 아이디, 비밀번호, 계좌번호, 계좌비밀번호, 사업자번호",
+        memo: "IBK기업은행 빠른서비스 계좌조회 기준. 실조회 커넥터 연결 전에는 엑셀/CSV 반영으로 대체"
       },
       coupang_supplier: {
         category: "매입처",
@@ -3156,6 +3167,7 @@
       upload_required: ["파일필요", "warn"],
       credential_required: ["계정필요", "warn"],
       connector_not_configured: ["커넥터필요", "warn"],
+      "bank-quick-ready": ["간편조회준비", "good"],
       downloaded: ["파일다운로드", "good"],
       portal_action_required: ["추가인증필요", "warn"],
       download_not_found: ["다운로드확인필요", "warn"],
@@ -5528,6 +5540,7 @@
             <span>PW: ${escapeHtml(item.passwordMasked || (item.password ? "브라우저 저장됨" : "Vault/입력 필요"))}</span>
             <span>기관: ${escapeHtml(item.institutionCode || "미등록")}</span>
             <span>계좌/가맹점: ${escapeHtml(item.accountNoMasked || item.merchantNo || "미등록")}</span>
+            <span>사업자번호: ${escapeHtml(item.businessRegistrationNoMasked || "Vault/입력 필요")}</span>
             <span>정산주기: ${escapeHtml(item.settlementCycle || "미등록")}</span>
             <span>수집: ${escapeHtml(collectionModeLabel(item.collectionMode))}</span>
             <span>최근수집: ${escapeHtml(item.lastSyncAt || "미실행")} / <b class="badge ${syncStatus[1]}">${escapeHtml(syncStatus[0])}</b></span>
@@ -5548,6 +5561,7 @@
       return {
         "portal-csv": "포털 정산서/CSV",
         "pos-export": "POS/메이트포스 내보내기",
+        "bank-quick-service": "은행 간편/빠른조회",
         "bank-excel": "은행 엑셀 업로드",
         "bank-openbanking": "은행 기업뱅킹 조회",
         "purchase-portal": "매입처 주문프로그램 수집",
@@ -5705,11 +5719,19 @@
       return `${head}${"*".repeat(Math.max(1, local.length - head.length))}@${domain}`;
     }
 
+    function maskDigits(value, tail = 4) {
+      const digits = String(value || "").replace(/\D/g, "");
+      if (!digits) return "";
+      if (digits.length <= tail) return "*".repeat(digits.length);
+      return `${"*".repeat(Math.max(3, digits.length - tail))}${digits.slice(-tail)}`;
+    }
+
     function parseCsv(text) {
       const rows = [];
       let row = [];
       let cell = "";
       let quoted = false;
+      const delimiter = csvDelimiter(text);
       for (let i = 0; i < text.length; i += 1) {
         const char = text[i];
         const next = text[i + 1];
@@ -5718,7 +5740,7 @@
           i += 1;
         } else if (char === '"') {
           quoted = !quoted;
-        } else if (char === "," && !quoted) {
+        } else if (char === delimiter && !quoted) {
           row.push(cell.trim());
           cell = "";
         } else if ((char === "\n" || char === "\r") && !quoted) {
@@ -5738,6 +5760,13 @@
       return rows.slice(1).map(values => Object.fromEntries(headers.map((h, i) => [h, values[i] || ""])));
     }
 
+    function csvDelimiter(text) {
+      const first = String(text || "").split(/\r?\n/).find(line => line.trim()) || "";
+      if ((first.match(/\t/g) || []).length > (first.match(/,/g) || []).length) return "\t";
+      if ((first.match(/;/g) || []).length > (first.match(/,/g) || []).length) return ";";
+      return ",";
+    }
+
     function fallbackBranch(branch) {
       const defaultBranch = activeBranches()[0]?.name || "중화점";
       return branch || (selectedBranch() !== "전체" ? selectedBranch() : defaultBranch);
@@ -5750,14 +5779,17 @@
         || (sourceType === "bank" && direction === "income" ? "bank" : "")
         || (sourceType === "card" || sourceType === "card_pg" ? "sales" : "")
         || (direction === "expense" ? "expense" : "");
+      const incoming = record["입금액"] || record["입금"] || record["입금금액"] || record["맡기신금액"] || "";
+      const outgoing = record["출금액"] || record["출금"] || record["출금금액"] || record["찾으신금액"] || "";
+      const description = record.vendor || record.description || record.name || record["적요"] || record["거래내용"] || record["내용"] || record["기재내용"] || record["보낸분/받는분"] || "미분류";
       return {
         id: record.id || uid(),
-        date: String(record.date || record.transaction_date || today()).slice(0, 10),
+        date: String(record.date || record.transaction_date || record["거래일시"] || record["거래일자"] || record["거래일"] || today()).slice(0, 10).replaceAll("/", "-").replaceAll(".", "-"),
         branch: fallbackBranch(record.branch),
-        type: inferredType || currentType,
-        vendor: record.vendor || record.description || record.name || "미분류",
-        channel: record.channel || record.account_name || record.service || record.source_type || "기타",
-        amount: Number(record.amount || 0),
+        type: inferredType || (incoming ? "bank" : outgoing ? "expense" : currentType),
+        vendor: description,
+        channel: record.channel || record.account_name || record["계좌명"] || record["계좌번호"] || record.service || record.source_type || "기타",
+        amount: Number(String(record.amount || incoming || outgoing || record["금액"] || 0).replace(/[^0-9.-]/g, "")),
         status: record.status || "pending",
         memo: record.memo || record.category || ""
       };
@@ -6294,6 +6326,46 @@
       }
     }
 
+    function focusEmployeeSignupGate() {
+      setAuthMode("signup");
+      if (!hasServerAuth()) {
+        els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
+        window.setTimeout(() => {
+          els.gateSignupForm?.querySelector("input[name='name']")?.focus();
+        }, 80);
+      }
+    }
+
+    function applyAuthHashDeepLink() {
+      const hash = String(window.location.hash || "").replace(/^#/, "");
+      if (!hash) return false;
+      if (hash === "auth-invite") {
+        if (hasServerAuth()) {
+          setView("employees");
+        } else {
+          focusEmployeeSignupGate();
+        }
+        return true;
+      }
+      if (hash === "auth-employee-profile") {
+        if (hasServerAuth()) {
+          setView("employees");
+        } else {
+          focusEmployeeSignupGate();
+        }
+        return true;
+      }
+      if (hash === "auth-employee-documents") {
+        if (hasServerAuth()) {
+          setView("onboarding");
+        } else {
+          focusEmployeeSignupGate();
+        }
+        return true;
+      }
+      return false;
+    }
+
     async function uploadOnboardingDocument(form) {
       if (!hasServerAuth()) {
         showToast("회원가입 또는 로그인 후 입사서류를 업로드할 수 있습니다.");
@@ -6693,6 +6765,7 @@
           branch: account.branch || existing?.branch || "",
           institutionCode: account.institution_code || account.institutionCode || existing?.institutionCode || "",
           accountNoMasked: account.account_no_masked || account.accountNoMasked || existing?.accountNoMasked || "",
+          businessRegistrationNoMasked: account.business_registration_no_masked || account.businessRegistrationNoMasked || existing?.businessRegistrationNoMasked || "",
           merchantNo: account.merchant_no || account.merchantNo || existing?.merchantNo || "",
           settlementCycle: account.settlement_cycle || account.settlementCycle || existing?.settlementCycle || "",
           collectionMode: account.collection_mode || existing?.collectionMode || catalog.collectionMode || "browser-automation",
@@ -7089,8 +7162,8 @@
         els.gateInviteAcceptForm?.querySelector("input[name='token']")?.focus();
       });
       els.openSignupFromGateBtn.addEventListener("click", () => {
-        setAuthMode("signup");
-        els.gateSignupForm?.querySelector("input[name='name']")?.focus();
+        window.location.hash = "auth-invite";
+        focusEmployeeSignupGate();
       });
       els.openLoginFromGateBtn?.addEventListener("click", () => {
         setAuthMode("login");
@@ -7124,7 +7197,8 @@
         acceptEmployeeInvite(els.employeeInviteAcceptForm).catch(err => showToast(`초대 수락 실패: ${err.message}`));
       });
       els.goSignupFromEmployeesBtn?.addEventListener("click", () => {
-        setAuthMode("signup");
+        window.location.hash = "auth-invite";
+        focusEmployeeSignupGate();
         if (!hasServerAuth()) {
           els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
         } else {
@@ -7132,7 +7206,8 @@
         }
       });
       els.openEmployeeSignupPrimaryBtn?.addEventListener("click", () => {
-        setAuthMode("signup");
+        window.location.hash = "auth-invite";
+        focusEmployeeSignupGate();
         if (!hasServerAuth()) {
           els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
           els.gateSignupForm?.querySelector("input[name='name']")?.focus();
@@ -7140,7 +7215,13 @@
           showToast("이미 로그인되어 있습니다. 직원 가입요청 목록을 확인하십시오.");
         }
       });
-      els.goOnboardingFromEmployeesBtn?.addEventListener("click", () => setView("onboarding"));
+      els.goOnboardingFromEmployeesBtn?.addEventListener("click", () => {
+        window.location.hash = "auth-employee-documents";
+        setView("onboarding");
+      });
+      window.addEventListener("hashchange", () => {
+        applyAuthHashDeepLink();
+      });
       els.printBtn.addEventListener("click", () => window.print());
 
       els.sampleBtn.addEventListener("click", () => {
@@ -7527,6 +7608,8 @@
         const loginUrl = data.loginUrl.trim() || catalog.loginUrl || "";
         const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
         const memo = data.memo.trim() || catalog.memo || "";
+        const accountNoMasked = data.accountNoMasked.trim() || maskDigits(data.accountNo);
+        const businessRegistrationNoMasked = maskDigits(data.businessRegistrationNo);
         let serverAccount = null;
         const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(data.username?.trim());
         if (shouldUseServerVault && !canManageAutomation()) {
@@ -7546,11 +7629,15 @@
 	                api_key: data.apiKey || "",
 	                client_secret: data.clientSecret || "",
 	                certificate_password: data.clientSecret || "",
+	                account_no: data.accountNo || "",
+	                account_password: data.accountPassword || "",
+	                business_registration_no: data.businessRegistrationNo || "",
 	                business_id: data.businessId,
 	                branch: data.branch || "",
 	                institution_code: data.institutionCode || "",
-	                account_no_masked: data.accountNoMasked || "",
-	                merchant_no: data.accountNoMasked || "",
+	                account_no_masked: accountNoMasked,
+	                business_registration_no_masked: businessRegistrationNoMasked,
+	                merchant_no: accountNoMasked,
 	                settlement_cycle: data.settlementCycle || "",
 	                collection_mode: collectionMode,
 	                category: catalog.category || "",
@@ -7578,10 +7665,11 @@
 	          businessId: data.businessId,
 	          branch: data.branch || "",
 	          institutionCode: data.institutionCode.trim(),
-	          accountNoMasked: data.accountNoMasked.trim(),
-	          merchantNo: data.accountNoMasked.trim(),
+	          accountNoMasked,
+	          businessRegistrationNoMasked,
+	          merchantNo: accountNoMasked,
 	          settlementCycle: data.settlementCycle.trim(),
-	          passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret) ? "브라우저 저장됨" : "Vault/입력 필요"),
+	          passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret || data.accountPassword) ? "브라우저 저장됨" : "Vault/입력 필요"),
 	          collectionMode,
 	          dataScope: catalog.dataScope || "",
 	          requiredProof: catalog.requiredProof || "",
@@ -7957,6 +8045,7 @@
       const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();
       syncServerAuthCookieFromStorage();
       readInviteTokenFromUrl();
+      applyAuthHashDeepLink();
       handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
       renderAuthState();
       if (rememberedRecipeRedirect && hasServerAuth() && followPostLoginRedirect()) return;

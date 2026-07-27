@@ -78,12 +78,16 @@ class AccountUpsertPayload(BaseModel):
     api_key: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     client_secret: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     certificate_password: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    account_no: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    account_password: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    business_registration_no: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     label: str = ""
     login_url: str = ""
     business_id: str = "biz-mia"
     branch: str = "열정국밥_미아점"
     institution_code: str = ""
     account_no_masked: str = ""
+    business_registration_no_masked: str = ""
     merchant_no: str = ""
     settlement_cycle: str = ""
     collection_mode: str = "browser-automation"
@@ -301,8 +305,20 @@ async def get_storage_status(current_user: dict = Depends(get_current_user)) -> 
 
 @router.post("/accounts")
 async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    account = await run_in_threadpool(svc.upsert_account, payload.model_dump(), current_user)
-    return {"account": account}
+    data = payload.model_dump()
+    account = await run_in_threadpool(svc.upsert_account, data, current_user)
+    response: dict[str, Any] = {"account": account}
+    if data.get("auto_sync") and str(data.get("service") or "") in svc.FINANCIAL_TRANSACTION_SERVICES:
+        response["sync"] = await run_in_threadpool(
+            svc.sync_financial_transactions,
+            {
+                "services": [data["service"]],
+                "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
+                "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
+            },
+            current_user,
+        )
+    return response
 
 
 @router.get("/settlements")
