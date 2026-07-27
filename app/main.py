@@ -918,6 +918,35 @@ async def lifespan(app: FastAPI):
                 logger.warning("mcp_health_check_error", error=str(e))
         scheduler.add_job(_mcp_health_check_job, "interval", minutes=1, id="mcp_health_check", max_instances=1, coalesce=True)
 
+        # OHVIS Loop System: 활성 루프 폴링 (30초 주기)
+        async def _run_loop_tick():
+            try:
+                pool = app_state.get("db_pool")
+                if not pool:
+                    return
+                rows = await pool.fetch(
+                    "SELECT id FROM ohvis_loops "
+                    "WHERE status = 'active' AND next_run_at IS NOT NULL "
+                    "AND next_run_at <= NOW() "
+                    "ORDER BY next_run_at ASC LIMIT 3"
+                )
+                if not rows:
+                    return
+                from app.services.loop_executor import run_iteration
+                for row in rows:
+                    try:
+                        result = await run_iteration(row["id"])
+                        logger.info("loop_tick loop=%d ok=%s", row["id"], result.get("ok"))
+                    except Exception as _iter_err:
+                        logger.warning("loop_tick_fail loop=%d: %s", row["id"], _iter_err)
+            except Exception as e:
+                logger.debug("loop_tick_skip: %s", e)
+        scheduler.add_job(
+            _run_loop_tick, "interval", seconds=30,
+            id="loop_tick", replace_existing=True,
+            max_instances=1, coalesce=True,
+        )
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()

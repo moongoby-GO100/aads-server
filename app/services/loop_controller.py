@@ -94,7 +94,7 @@ async def create_loop(
     original_command: str,
     project: str = "AADS",
     *,
-    parsed_intent: dict | None = None,
+    parsed_intent: dict | None = None,  # DB NOT NULL — {} 기본
     interval_seconds: int | None = None,
     max_iterations: int | None = None,
     max_cost_override: float | None = None,
@@ -133,6 +133,10 @@ async def create_loop(
         loop_type, execution_model_id, max_cost_override
     )
 
+    next_run_at = None
+    if interval_seconds is not None:
+        next_run_at = datetime.now() + timedelta(seconds=interval_seconds)
+
     pool = get_db_pool()
     row = await pool.fetchrow(
         """
@@ -149,15 +153,14 @@ async def create_loop(
             $7, $8,
             $9, $10,
             $11::jsonb, $12::jsonb,
-            $13, $14, NOW(),
-            CASE WHEN $4 IS NOT NULL THEN NOW() + make_interval(secs := $4) ELSE NULL END
+            $13, $14, NOW(), $15
         )
         RETURNING id, loop_type, status, max_cost_usd, max_iterations,
                   interval_seconds, execution_model_id, project
         """,
         loop_type,
         original_command,
-        _json_or_null(parsed_intent),
+        _json_or_null(parsed_intent or {}),
         interval_seconds,
         max_iterations,
         max_cost_usd,
@@ -169,6 +172,7 @@ async def create_loop(
         _json_or_null(alert_condition),
         project,
         session_id,
+        next_run_at,
     )
 
     result = dict(row)
@@ -210,7 +214,7 @@ async def update_loop_status(loop_id: int, new_status: str, reason: str = "") ->
         f"""
         UPDATE ohvis_loops
         SET status = $1,
-            last_result = COALESCE(last_result, '{{}}'::jsonb) || jsonb_build_object('status_reason', $2),
+            last_result = COALESCE(last_result, '{{}}'::jsonb) || jsonb_build_object('status_reason', $2::text),
             completed_at = {completed_at}
         WHERE id = $3
         RETURNING id, status, total_cost_usd, current_iteration

@@ -8301,6 +8301,50 @@ async def send_message_stream(
                 yield f'data: {json.dumps({"type": "task_plan", "intent": intent, "content": _plan_text})}\n\n'
                 logger.info("ohvis_tier1_instant_plan session=%s intent=%s", sid_short, intent)
 
+        # OHVIS Loop: 채팅 루프 명령 감지 → 즉시 처리 후 return
+        if not intent_override:
+            from app.services.loop_chat_handler import detect_loop_intent
+            _loop_intent = detect_loop_intent(content)
+            if _loop_intent:
+                try:
+                    _loop_resp = ""
+                    if _loop_intent == "loop_start":
+                        from app.services.loop_chat_handler import handle_loop_start
+                        _lr = await handle_loop_start(content, session_id, intent_result.model if intent_result else None)
+                        _loop_resp = _lr["message"]
+                    elif _loop_intent == "loop_stop":
+                        from app.services.loop_chat_handler import handle_loop_stop
+                        _lr = await handle_loop_stop(content, session_id)
+                        _loop_resp = _lr["message"]
+                    elif _loop_intent == "loop_resume":
+                        from app.services.loop_chat_handler import handle_loop_resume
+                        _lr = await handle_loop_resume(content, session_id)
+                        _loop_resp = _lr["message"]
+                    elif _loop_intent == "loop_status":
+                        from app.services.loop_chat_handler import handle_loop_status
+                        _lr = await handle_loop_status(session_id)
+                        _loop_resp = _lr["message"]
+                    if _loop_resp:
+                        yield f'data: {json.dumps({"type": "delta", "content": _loop_resp})}\n\n'
+                        yield f'data: {json.dumps({"type": "message_stop"})}\n\n'
+                        try:
+                            await _save_and_update_session(
+                                sid, _loop_resp,
+                                session_id_str=session_id,
+                                raw_messages=raw_messages,
+                                model_used="loop_handler",
+                                intent="loop_command",
+                                cost=0.0, tokens_in=0, tokens_out=0,
+                                tools_called=[], thinking_summary=None,
+                                **_artifact_chain_kwargs,
+                            )
+                        except Exception:
+                            pass
+                        logger.info("loop_command_handled session=%s type=%s", sid_short, _loop_intent)
+                        return
+                except Exception as _loop_err:
+                    logger.warning("loop_command_error session=%s: %s", sid_short, _loop_err)
+
         # 4.5. AADS-188E: 시맨틱 코드 검색 컨텍스트 주입 (code_search 관련 키워드 감지)
         _CODE_SEARCH_KEYWORDS = (
             "코드", "함수", "클래스", "어디", "어디야", "파일", "소스", "구현",
