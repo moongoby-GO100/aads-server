@@ -1152,16 +1152,35 @@ async def notify_completion(job_id: str):
                 "session_id": session_id,
                 "promoted_job_id": promoted_job_id,
             }
-        msg = (f"[시스템] Pipeline Runner 작업 AI 검수 요청\n\n"
-               f"**Job**: {job_id}\n**프로젝트**: {project}\n"
-               f"**작업**: {instruction}\n**결과 미리보기**:\n{output[:300]}\n\n"
-               f"**검수 지시 (반드시 도구 호출로 완료):**\n"
-               f"1. read_remote_file로 수정된 파일을 직접 확인하세요.\n"
-               f"2. 검수 완료 후 반드시 아래 중 하나를 실행하세요:\n"
-               f"   - 이상 없음: pipeline_runner_approve(job_id='{job_id}', action='approve') 호출\n"
-               f"   - 문제 있음: pipeline_runner_approve(job_id='{job_id}', action='reject', feedback='구체적 사유') 호출\n"
-               f"   - 수정 재지시: reject 후 pipeline_runner_submit으로 수정 지시 제출\n"
-               f"도구 호출 없이 보고 금지. 반드시 승인 또는 거부 도구를 실행하세요.")
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                    jsonb_build_object(
+                        'ts', NOW()::text,
+                        'event', 'notify_ai_suppressed',
+                        'status', 'awaiting_approval',
+                        'reason', 'chat_stability_no_visible_autoreaction'
+                    )
+                )
+                WHERE job_id = $1
+                """,
+                job_id,
+            )
+        logger.info(
+            "pipeline_runner.notify_ai_suppressed",
+            job_id=job_id,
+            session_id=session_id,
+            status=status,
+            reason="chat_stability_no_visible_autoreaction",
+        )
+        return {
+            "status": "skipped",
+            "reason": "awaiting_approval AI chat trigger suppressed for chat stability",
+            "session_id": session_id,
+            "promoted_job_id": promoted_job_id,
+        }
     elif status == "done":
         msg = (f"[시스템] Pipeline Runner 작업 배포 완료\n\n"
                f"**Job**: {job_id}\n**프로젝트**: {project}\n"

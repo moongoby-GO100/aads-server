@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-28 06:22 KST - Pipeline Runner review trigger chat stability guard
+
+- Request: Session `d19a0e9e-f96f-4c83-8367-20de50762364` still jumped upward and appeared to lose the CEO question while work instructions were being sent.
+- Root cause confirmed from DB: a Pipeline Runner `awaiting_approval` notification inserted `[시스템] Pipeline Runner 작업 AI 검수 요청` as a visible user turn in the same chat session, then created a streaming assistant placeholder. This made the chat look like the CEO question disappeared and kept the session in a running stream state.
+- Backend: `app/api/pipeline_runner.py` now suppresses visible AI chat auto-reaction for `awaiting_approval` notify events and records `notify_ai_suppressed` in `pipeline_jobs.logs` instead.
+- Operational cleanup: close the already-created auto review execution in the target session as interrupted and keep an explanatory placeholder message instead of deleting history.
+- Verification: `python3 -m py_compile app/api/pipeline_runner.py` passed on host, `docker exec aads-server python -m py_compile app/api/pipeline_runner.py` passed in container, API hot-reload reloaded 81 modules, `/health` returned `status=ok`, and the target session had no `running`/`retrying` execution after cleanup.
+
 ## 2026-07-27 23:24 KST - Chat stale retry loop settlement guard
 
 - Task: d19a0e9e chat scroll/repeated-response recurrence follow-up.
