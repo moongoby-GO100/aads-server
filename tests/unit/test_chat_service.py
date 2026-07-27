@@ -1037,6 +1037,42 @@ async def test_save_interrupted_partial_blocks_orphan_insert_without_execution()
 
 
 @pytest.mark.asyncio
+async def test_save_interrupted_partial_updates_existing_execution_message():
+    session_id = str(uuid.uuid4())
+    execution_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=[
+        None,  # no same-content interrupted message
+        {"id": message_id, "created_at_text": created_at.isoformat()},
+        {"id": message_id, "created_at_text": created_at.isoformat()},
+    ])
+    conn.execute = AsyncMock()
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch(
+            "app.services.chat_service._resolve_stream_execution_binding",
+            new=AsyncMock(return_value=(execution_id, None)),
+        ),
+    ):
+        result = await chat_service._save_interrupted_partial_message(
+            session_id,
+            "부분 응답입니다.",
+            reason="completion_contract_unresolved",
+            execution_id=str(execution_id),
+        )
+
+    assert result is not None
+    assert result["id"] == str(message_id)
+    fetch_sql = [" ".join(call.args[0].split()) for call in conn.fetchrow.await_args_list]
+    assert any("UPDATE chat_messages" in sql and "intent = 'interrupted_partial'" in sql for sql in fetch_sql)
+    assert not any("INSERT INTO chat_messages" in sql for sql in fetch_sql)
+    conn.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cleanup_deleted_duplicate_messages_dry_run_does_not_delete():
     session_id = uuid.uuid4()
     conn = AsyncMock()

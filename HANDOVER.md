@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-07-27 09:30 KST - Chat terminal execution interim-save loop guard
+
+- 배경: CEO가 세션 `d19a0e9e-f96f-4c83-8367-20de50762364`에서 스크롤 이상과 반복 응답 체감을 보고했다.
+- 실측: 대상 세션은 `chat_messages` 357건, assistant 224건/user 133건이며 `chat_turn_executions`는 completed 93건/interrupted 36건/running 0건이었다. 최신 execution `94fef1dd`는 09:20 KST에 interrupted로 닫혔지만, API 로그에서 `interim_save_skipped_terminal_race session=d19a0e9e execution=94fef1dd`가 반복됐다.
+- 원인: 백그라운드 producer가 이미 terminal 상태로 닫힌 execution에 대해 중간 저장을 계속 시도했고, force save 경로는 terminal execution을 사전에 멈추지 못했다.
+- 조치: `app/services/chat_service.py`에서 `_interim_save_streaming()`이 execution 상태를 먼저 확인해 completed/interrupted/missing이면 state를 terminal로 표시하고 producer loop가 즉시 종료되도록 했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. 배포 후 해당 로그가 중단되는지 확인해야 완료로 본다.
+
+## 2026-07-27 09:30 KST - Chat completion contract interrupted duplicate guard
+
+- 요청: 세션 `d19a0e9e-f96f-4c83-8367-20de50762364`에서 최종 완료보고 조건 위반 후 응답이 중단/장애처럼 보인 원인을 확인하고 조치.
+- 원인: 완료보고 검증기가 `commit_report_conflicts_with_ledger`, `push_report_conflicts_with_ledger`, `document_report_conflicts_with_ledger` 등을 감지해 자동 이어쓰기를 3회 수행했고, 실패 시 `completion_contract_unresolved` partial을 저장하는 과정에서 같은 `execution_id`에 이미 assistant 메시지가 있으면 `idx_one_assistant_per_execution` unique 제약과 충돌할 수 있었다. 이때 실행 원장이 terminal/interrupted로 닫히며 화면에는 중단 응답과 이어쓰기/오류 상태가 남는다.
+- 조치: `app/services/chat_service.py`에서 LLM retry 오류 시 partial 저장 성공 여부와 관계없이 실행 원장을 `interrupted`로 닫도록 보정했고, `_save_interrupted_partial_message()`가 같은 execution의 기존 assistant 메시지를 찾으면 신규 INSERT 대신 기존 메시지를 `interrupted_partial`로 UPDATE하도록 가드를 추가했다.
+- 회귀 테스트: `tests/unit/test_chat_service.py`에 기존 execution assistant 메시지 존재 시 INSERT하지 않는 테스트를 추가했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py` 통과. 운영 이미지 + 호스트 소스 bind mount 기준 `python -m pytest tests/unit/test_chat_service.py -q` 결과 57 passed, 1 warning. 공개 health `https://aads.newtalk.kr/api/v1/health` HTTP 200, 문제 세션 관련 API 로그 HTTP 200 확인.
+- 배포/커밋 상태: 이 항목 작성 시점에는 코드/테스트/문서 변경이 로컬 작업트리에만 있으며, 커밋/푸시/배포는 후속 단계에서 별도 확정한다.
+
 ## 2026-07-27 08:45 KST - AADS loop API deploy preflight fix
 
 - 배경: FOOD FB 직원 회원가입 우선 흐름의 정식 `deploy.sh bluegreen` 원장 정합성을 맞추는 과정에서 clean `origin/main` 배포가 새 `aads-server:8100` health 실패로 롤백됐다.

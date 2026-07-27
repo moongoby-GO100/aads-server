@@ -2977,29 +2977,61 @@ async def _save_interrupted_partial_message(
                     len(final_content),
                 )
                 return None
-            saved = await conn.fetchrow(
+            existing_execution_message = await conn.fetchrow(
                 """
-                INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tokens_in, tokens_out)
-                VALUES ($1, $3, 'assistant', $2, 'interrupted', 'interrupted_partial', $4, $5)
-                RETURNING id, created_at::text AS created_at_text
+                SELECT id, created_at::text AS created_at_text
+                FROM chat_messages
+                WHERE execution_id = $1
+                  AND role = 'assistant'
+                ORDER BY created_at DESC
+                LIMIT 1
                 """,
-                sid,
-                final_content,
                 eid,
-                _ti,
-                _to,
             )
-            saved_id = saved["id"]
-            created_at_text = saved["created_at_text"]
-            await conn.execute(
-                """
-                UPDATE chat_sessions
-                SET message_count = message_count + 1,
-                    updated_at = NOW()
-                WHERE id = $1
-                """,
-                sid,
-            )
+            if existing_execution_message:
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE chat_messages
+                    SET content = $1,
+                        model_used = 'interrupted',
+                        intent = 'interrupted_partial',
+                        tokens_in = CASE WHEN $3 > 0 THEN $3 ELSE tokens_in END,
+                        tokens_out = CASE WHEN $4 > 0 THEN $4 ELSE tokens_out END,
+                        edited_at = NOW()
+                    WHERE id = $2
+                    RETURNING id, created_at::text AS created_at_text
+                    """,
+                    final_content,
+                    existing_execution_message["id"],
+                    _ti,
+                    _to,
+                )
+                saved_id = updated["id"]
+                created_at_text = updated["created_at_text"]
+            else:
+                saved = await conn.fetchrow(
+                    """
+                    INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tokens_in, tokens_out)
+                    VALUES ($1, $3, 'assistant', $2, 'interrupted', 'interrupted_partial', $4, $5)
+                    RETURNING id, created_at::text AS created_at_text
+                    """,
+                    sid,
+                    final_content,
+                    eid,
+                    _ti,
+                    _to,
+                )
+                saved_id = saved["id"]
+                created_at_text = saved["created_at_text"]
+                await conn.execute(
+                    """
+                    UPDATE chat_sessions
+                    SET message_count = message_count + 1,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    sid,
+                )
     logger.info(
         "interrupted_partial_preserved session=%s reason=%s len=%s",
         str(session_id)[:8],
@@ -3080,6 +3112,29 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
             _tool_events_json = state.get("_cached_te_json", "[]")
         async with pool.acquire() as conn:
             if _eid:
+                _exec_state = await conn.fetchrow(
+                    """
+                    SELECT status, completed_at
+                    FROM chat_turn_executions
+                    WHERE id = $1
+                    """,
+                    _eid,
+                )
+                if (
+                    not _exec_state
+                    or _exec_state["completed_at"] is not None
+                    or _exec_state["status"] not in ("running", "retrying")
+                ):
+                    state["completed"] = True
+                    state["_terminal_execution_closed"] = True
+                    state.setdefault("_producer_incomplete_exit", "terminal_execution_closed")
+                    logger.info(
+                        "interim_save_stopped_terminal_execution session=%s execution=%s status=%s",
+                        session_id[:8],
+                        str(_eid)[:8],
+                        _exec_state["status"] if _exec_state else "missing",
+                    )
+                    return
                 # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
                 if force:
                     _row = await conn.fetchrow(
@@ -3513,11 +3568,13 @@ async def with_background_completion(
     _token_idx = 0  # Redis Stream 토큰 인덱스
 
     async def _maybe_interim_save_after_disconnect() -> bool:
+        if state.get("completed") or state.get("_terminal_execution_closed"):
+            return False
         content_len = len(state.get("content", "") or "")
         if state.get("_last_content_len") == content_len:
             return False
         await _interim_save_streaming(session_id, state)
-        return True
+        return not bool(state.get("_terminal_execution_closed"))
 
     async def _queue_stream_item(item: Any, *, timeout: float = 5.0) -> bool:
         """Send an SSE item without letting a detached browser block the LLM producer."""
@@ -3880,6 +3937,8 @@ async def with_background_completion(
                 if _event_type == "stream_start" and state.get("execution_id"):
                     state["last_idle_save"] = _bg_time.monotonic()
                     await _interim_save_streaming(session_id, state)
+                    if state.get("_terminal_execution_closed"):
+                        return
                 _queued = await _queue_stream_item((chunk, _entry_id))
                 if not _queued and not _client_gone:
                     return
@@ -3890,6 +3949,8 @@ async def with_background_completion(
                     if _now_rt - state["last_save"] > 5:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
+                        if state.get("_terminal_execution_closed"):
+                            return
 
                 # 클라이언트 disconnect 후 처리
                 if _client_gone:
@@ -3898,6 +3959,8 @@ async def with_background_completion(
                     if now - state["last_save"] > 5:
                         state["last_save"] = now
                         await _maybe_interim_save_after_disconnect()
+                        if state.get("_terminal_execution_closed"):
+                            return
                     # 클라이언트 이탈 후: LLM 활동이 없더라도 watchdog 정책 전에는 자동 종료하지 않는다.
                     # 활동 중인 장시간 작업은 최대 120분까지 보호한다.
                     _idle_since_last_event = now - state.get("last_event_at", _client_gone_since)
@@ -9161,7 +9224,7 @@ async def send_message_stream(
                                 logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
                             except Exception as _eps:
                                 logger.warning(f"error_partial_save_failed session={session_id[:8]}: {_eps}")
-                        elif _execution_id_str:
+                        if _execution_id_str:
                             try:
                                 async with get_pool().acquire() as _conn:
                                     await _mark_execution_interrupted(
