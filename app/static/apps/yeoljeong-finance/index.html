@@ -7648,7 +7648,14 @@
 	              })
 	            });
             serverAccount = result.account;
-            if (result.sync) applySyncPayload(result.sync);
+            if (result.sync) {
+              const syncResult = applyFinancialSyncPayload(result.sync);
+              if (syncResult.recordsCount) {
+                showToast(`계정 저장 후 은행/카드 거래 ${syncResult.recordsCount}건을 반영했습니다.`);
+              } else if (syncResult.blocked) {
+                showToast(`계정은 저장됐고 연동 상태를 확인했습니다. 확인필요 ${syncResult.blocked}건${syncResult.messages.length ? " · " + syncResult.messages.join(" / ") : ""}`);
+              }
+            }
           } catch (err) {
             showToast(`서버 저장 실패: ${err.message}`);
           }

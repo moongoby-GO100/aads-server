@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-28 08:07 KST - Yeoljeong bank quick sync save-flow correction
+
+- 요청: 신한은행 간편서비스/IBK 빠른서비스 자격값을 설정에서 등록하면 은행거래·카드거래 연동이 즉시 실행될 수 있게 최종 확인·조치.
+- 확인: 공식 경로 기준 신한 간편조회와 IBK 빠른조회 입력 흐름을 재확인했다. AADS에는 `shinhan_business`, `ibk_business`, `card_pg` 금융 거래 동기화 서비스와 `/api/v1/yeoljeong-finance/transactions/sync`가 존재한다.
+- 원인: `/accounts` 저장 API가 `auto_sync=true`일 때 금융 동기화 결과를 반환하지만, UI가 그 결과를 배달앱 수집 처리 함수 `applySyncPayload()`로 넘겨 저장 직후 금융 연동 상태가 정확히 반영되지 않았다.
+- 조치: `app/static/apps/yeoljeong-finance/index.html`에서 저장 직후 `result.sync`를 `applyFinancialSyncPayload()`로 처리하고, 반영 건수 또는 `connector_not_configured`/확인필요 상태를 즉시 토스트로 보여주도록 수정했다. 회귀 테스트에 잘못된 함수 재사용 차단 검증을 추가했다.
+- 검증: `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py` → 68 passed. 운영 외부 HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `applyFinancialSyncPayload(result.sync)` 응답 확인. 직접 서비스 호출에서 필수값 암호화 저장 및 `connector_not_configured` 상태 확인.
+- 한계: 은행 사이트 실시간 조회 Playwright 커넥터는 아직 미구현이다. 따라서 관리자 값 등록 즉시 AADS 계정 Vault 저장·동기화 판정까지는 동작하고, 실제 은행 사이트 로그인/엑셀 자동 다운로드는 별도 커넥터 구현과 실계정 검증이 필요하다.
+
 ## 2026-07-28 07:42 KST - Yeoljeong employee self-signup auth gate continuity check
 
 - 요청: 중단된 `#auth-invite` 화면 작업을 이어서 진행. 목표는 직원 초대 중심이 아니라 직원 직접 회원가입/가입요청/입사서류 제출 흐름을 기본 화면으로 고정하는 것.

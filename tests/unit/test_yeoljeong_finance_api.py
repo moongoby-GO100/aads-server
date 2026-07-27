@@ -307,6 +307,8 @@ def test_bank_quick_service_ui_collects_required_vault_fields():
     assert 'account_no: data.accountNo || ""' in html
     assert 'account_password: data.accountPassword || ""' in html
     assert 'business_registration_no: data.businessRegistrationNo || ""' in html
+    assert "const syncResult = applyFinancialSyncPayload(result.sync)" in html
+    assert "if (result.sync) applySyncPayload(result.sync)" not in html
     assert "신한은행 간편서비스 계좌조회 기준" in html
     assert "IBK기업은행 빠른서비스 계좌조회 기준" in html
     assert "function csvDelimiter(text)" in html
