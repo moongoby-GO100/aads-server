@@ -308,6 +308,8 @@ async def lifespan(app: FastAPI):
                 from app.services.chat_service import (
                     _resume_single_stream as _watchdog_resume_single_stream,
                     get_active_bg_tasks as _get_active_bg_tasks,
+                    _has_meaningful_partial_content as _has_meaningful_partial_content_watchdog,
+                    _strip_streaming_progress_markers as _strip_streaming_progress_markers_watchdog,
                 )
                 import asyncio as _watchdog_asyncio
 
@@ -323,6 +325,7 @@ async def lifespan(app: FastAPI):
                                te.session_id,
                                te.requested_model,
                                te.retry_count,
+                               te.error_message,
                                COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                                COALESCE(ph.content, am.content, '') AS partial_content,
                                COALESCE(um.content, '') AS last_user_msg,
@@ -363,9 +366,23 @@ async def lifespan(app: FastAPI):
                         r for r in candidates
                         if str(r["session_id"]) not in _active_sids
                     ]
+                    def _should_settle_without_retry(row) -> bool:
+                        """Do not replay abandoned turns that already preserved useful output."""
+                        _err = str(row["error_message"] or "")
+                        _clean = _strip_streaming_progress_markers_watchdog(row["partial_content"] or "")
+                        return (
+                            "missing_done_event" in _err
+                            and "client_gone=True" in _err
+                            and _has_meaningful_partial_content_watchdog(_clean)
+                        )
+
                     _retry_rows = [
                         r for r in _claimable
-                        if (r["retry_count"] or 0) < 2 and (r["last_user_msg"] or "").strip()
+                        if (
+                            (r["retry_count"] or 0) < 2
+                            and (r["last_user_msg"] or "").strip()
+                            and not _should_settle_without_retry(r)
+                        )
                     ]
                     _retry_ids = [r["id"] for r in _retry_rows]
                     _retry_claimed = []

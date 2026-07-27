@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-07-27 23:24 KST - Chat stale retry loop settlement guard
+
+- Task: d19a0e9e chat scroll/repeated-response recurrence follow-up.
+- Root cause: `stale_execution_watchdog` could auto-retry abandoned `missing_done_event` turns even when `client_gone=True` and meaningful partial content was already preserved, causing large sessions to keep surfacing a live streaming state and re-trigger frontend polling/scroll merges.
+- Backend: `app/main.py` now sends `missing_done_event + client_gone=True + meaningful partial_content` candidates to the settle path instead of scheduling another retry.
+- Verification: pending at patch time.
+
 ## 2026-07-27 09:30 KST - Chat terminal execution interim-save loop guard
 
 - 배경: CEO가 세션 `d19a0e9e-f96f-4c83-8367-20de50762364`에서 스크롤 이상과 반복 응답 체감을 보고했다.
