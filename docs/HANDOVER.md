@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-07-27
+최종 업데이트: 2026-07-28
+
+## 2026-07-28
+- AADS-FOOD-DESIGN-PLAN-SYNC-20260728: 06:53 KST 기준 매장비서 화면 시안과 디자인 기획서의 불일치를 확인했다. `app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html`은 2026-07-16 기준 직원/계약/급여 중심 문서라 최신 CEO 지시인 FB 로그인/직원 직접 회원가입 우선, 판매사이트 ID/PW/2차인증, 은행 기업뱅킹 인증서/OTP, 홈택스/계산서 연동, 미연동 매입처 수기등록/OCR/승인 반영 흐름이 누락돼 있었다. 기획서에 최신 지시 반영 설계 섹션을 추가하고 화면 설계·디자인 기준·로드맵을 최신 시안과 맞췄다. 검증은 `git diff --check`, 핵심 문구 grep, 공개 정적 URL HTTP 200 및 공개 HTML 본문 확인으로 수행했다. 기존 운영 API/DB는 변경하지 않았다.
 
 ## 2026-07-27
 - AADS-FOOD-EMPLOYEE-SIGNUP-FLOW-20260727: 08:03 KST 기준 매장비서 FB 운영 앱 `app/static/apps/yeoljeong-finance/index.html`의 직원관리/로그인 UX를 직원 직접 회원가입 우선 흐름으로 조정했다. 로그인 게이트 기본 탭을 직원 회원가입으로 바꾸고, 첫 화면에 `직원 회원가입 → 가입요청 자동 생성 → 입사서류 업로드 → 관리자 승인 후 계약` 4단계 흐름을 표시했다. 직원관리 메뉴는 `직원 가입 처리 흐름`과 `직원 회원가입/가입요청`을 상단으로 올리고, 기존 `직원 초대`는 `초대 링크(보조)` 카드로 낮춰 전화번호 기반 예외 흐름만 처리하도록 정리했다. FB 로그인/회원가입 모달 문구와 CTA도 `회원가입 후 입사서류 등록` 기준으로 맞췄다. 검증은 `git diff --check -- app/static/apps/yeoljeong-finance/index.html`, Node `vm.Script` 인라인 JS 컴파일, 공개 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=employee-signup-flow` HTTP 200 및 신규 문구 grep, Browser Bridge 캡처 `https://aads.newtalk.kr/screenshots/screenshot_20260727_080402_49a6d1.png`로 수행했다. 기존 API/DB는 변경하지 않았다.
