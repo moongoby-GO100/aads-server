@@ -766,6 +766,12 @@ def test_producer_interruption_reason_preserves_client_gone_subreason():
     )
 
 
+def test_active_stream_hard_timeout_is_auto_resumable():
+    assert chat_service._should_auto_resume_interrupted_reason(
+        "active_stream_hard_timeout_after_2700s age=2826s idle=68s content_len=4092"
+    )
+
+
 def test_final_report_tail_is_completion_candidate():
     assert not chat_service._looks_like_incomplete_progress_tail(
         "수행 내역: 완료판정 가드를 적용했습니다.\n"

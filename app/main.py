@@ -1229,6 +1229,7 @@ async def lifespan(app: FastAPI):
                            te.session_id::text AS session_id,
                            te.requested_model,
                            te.retry_count,
+                           COALESCE(te.error_message, '') AS error_message,
                            COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                            EXTRACT(EPOCH FROM (
                                NOW() - GREATEST(
@@ -1265,6 +1266,14 @@ async def lifespan(app: FastAPI):
                               COALESCE(ph.edited_at, ph.created_at, te.updated_at)
                           ) < NOW() - ($2::int * INTERVAL '1 second')
                           OR (
+                              te.status = 'retrying'
+                              AND COALESCE(te.error_message, '') LIKE ANY ($4::text[])
+                              AND GREATEST(
+                                  te.updated_at,
+                                  COALESCE(ph.edited_at, ph.created_at, te.updated_at)
+                              ) < NOW() - INTERVAL '10 seconds'
+                          )
+                          OR (
                               $3::timestamptz IS NOT NULL
                               AND GREATEST(
                                   te.updated_at,
@@ -1278,6 +1287,10 @@ async def lifespan(app: FastAPI):
                     max_rows,
                     min_stale_seconds,
                     reclaim_before,
+                    [
+                        "interrupted_auto_retry_scheduled:%",
+                        "interrupted_auto_resume_cancelled:%",
+                    ],
                 )
 
                 for row in rows:
@@ -1366,6 +1379,11 @@ async def lifespan(app: FastAPI):
                           AND status IN ('running', 'retrying')
                           AND (
                               updated_at < NOW() - ($3::int * INTERVAL '1 second')
+                              OR (
+                                  status = 'retrying'
+                                  AND COALESCE(error_message, '') LIKE ANY ($5::text[])
+                                  AND updated_at < NOW() - INTERVAL '10 seconds'
+                              )
                               OR ($4::timestamptz IS NOT NULL AND updated_at < $4::timestamptz)
                           )
                         RETURNING id::text
@@ -1374,6 +1392,10 @@ async def lifespan(app: FastAPI):
                         "resume_claimed_by:" + os.getenv("HOSTNAME", "unknown")[:80],
                         min_stale_seconds,
                         reclaim_before,
+                        [
+                            "interrupted_auto_retry_scheduled:%",
+                            "interrupted_auto_resume_cancelled:%",
+                        ],
                     )
                     if not _claim_id:
                         continue

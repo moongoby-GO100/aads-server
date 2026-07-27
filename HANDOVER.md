@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-28 07:34 KST - Chat interrupted auto-resume reclaim hardening
+
+- Request: CEO reported that an assistant response was interrupted and did not automatically continue, after repeated chat scroll/reply stability fixes.
+- Root cause confirmed from DB/logs: `interrupted_auto_resume_scheduled` was followed by `interrupted_auto_resume_cancelled` within the same stream shutdown path, leaving the execution in `retrying` until the slower stale scanner reclaimed it. Long-running executions ending with `active_stream_hard_timeout_after_2700s` were also not explicitly whitelisted as process-interruption auto-resume candidates.
+- Backend: `app/services/chat_service.py` now treats active stream hard timeouts as auto-resumable process interruptions and, when an auto-resume task is cancelled, marks the `retrying` execution as immediately reclaimable by backdating `updated_at` and storing `interrupted_auto_resume_cancelled:*`.
+- Backend startup scanner: `app/main.py` now reclaims `retrying` executions with `interrupted_auto_retry_scheduled:*` or `interrupted_auto_resume_cancelled:*` after 10 seconds instead of waiting for the generic stale threshold.
+- Verification: `python3 -m py_compile app/services/chat_service.py app/main.py` passed. PostgreSQL SELECT using the new expedited-reclaim predicate returned the currently eligible retry execution without syntax errors. Local pytest was unavailable (`pytest` missing, `.venv/bin/python` broken symlink), and container pytest could not see the host-side new test before deployment.
+
 ## 2026-07-28 07:00 KST - OHVIS Loop System 전체 구현 완료
 
 - 요청: CEO "루프기능 구현을 모두 구현하고 e2e테스트까지 검증하고 보고해"

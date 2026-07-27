@@ -72,6 +72,7 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
 )
 
 _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES = (
+    "active_stream_hard_timeout",
     "api_shutdown_before_process_stop",
     "api_shutdown",
     "server_shutdown",
@@ -2503,6 +2504,45 @@ async def _schedule_interrupted_auto_resume(
     def _on_auto_resume_done(_task, _sid=session_id, _eid=execution_id):
         if _task.cancelled():
             logger.warning("interrupted_auto_resume_cancelled session=%s execution=%s", _sid[:8], _eid[:8])
+            async def _mark_cancelled_retry_for_reclaim() -> None:
+                try:
+                    async with get_pool().acquire() as _conn:
+                        await _conn.execute(
+                            """
+                            UPDATE chat_turn_executions
+                            SET error_message = $3,
+                                updated_at = NOW() - INTERVAL '90 seconds'
+                            WHERE id = $1
+                              AND session_id = $2
+                              AND status = 'retrying'
+                              AND completed_at IS NULL
+                            """,
+                            uuid.UUID(str(_eid)),
+                            uuid.UUID(str(_sid)),
+                            f"interrupted_auto_resume_cancelled:{reason}"[:1000],
+                        )
+                        await _conn.execute(
+                            """
+                            UPDATE chat_sessions
+                            SET updated_at = NOW()
+                            WHERE id = $1
+                              AND current_execution_id = $2
+                            """,
+                            uuid.UUID(str(_sid)),
+                            uuid.UUID(str(_eid)),
+                        )
+                except Exception as _cancel_sync_err:
+                    logger.warning(
+                        "interrupted_auto_resume_cancelled_reclaim_mark_failed session=%s execution=%s error=%s",
+                        _sid[:8],
+                        _eid[:8],
+                        str(_cancel_sync_err)[:160],
+                    )
+
+            try:
+                _heartbeat_asyncio.create_task(_mark_cancelled_retry_for_reclaim())
+            except Exception:
+                pass
             return
         exc = _task.exception()
         if exc:
