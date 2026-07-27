@@ -10,10 +10,23 @@ from app.api.yeoljeong_finance import AccountUpsertPayload
 
 def test_account_password_is_write_only_and_hidden_from_repr():
     schema = AccountUpsertPayload.model_json_schema()
-    payload = AccountUpsertPayload(service="baemin", username="owner", password="secret")
+    payload = AccountUpsertPayload(
+        service="baemin",
+        username="owner",
+        password="secret",
+        account_no="110123456789",
+        account_password="1234",
+        business_registration_no="1234567890",
+    )
 
     assert schema["properties"]["password"]["writeOnly"] is True
+    assert schema["properties"]["account_no"]["writeOnly"] is True
+    assert schema["properties"]["account_password"]["writeOnly"] is True
+    assert schema["properties"]["business_registration_no"]["writeOnly"] is True
     assert "password=" not in repr(payload)
+    assert "account_no=" not in repr(payload)
+    assert "account_password=" not in repr(payload)
+    assert "business_registration_no=" not in repr(payload)
 
 
 def test_account_payload_rejects_secret_field_injection():
