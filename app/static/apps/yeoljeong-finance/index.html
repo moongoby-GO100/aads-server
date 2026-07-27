@@ -2407,6 +2407,7 @@
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
             <button id="refreshServerAccountsBtn">서버 계정 불러오기</button>
             <button id="syncDeliveryBtn" class="primary">배달 4사 매출/정산 수집 실행</button>
+            <button id="syncFinancialBtn">은행/카드 거래 연동 실행</button>
           </div>
         </div>
         <div class="business-workspace">
@@ -2596,11 +2597,26 @@
                   <label>아이디/업로드 기준명
                     <input name="username" placeholder="로그인 ID, 휴대폰번호 또는 매입처명">
                   </label>
+                  <label>기관/은행 코드
+                    <input name="institutionCode" placeholder="예: 신한, IBK, VAN/PG사명">
+                  </label>
                   <label>소속 사업자
                     <select name="businessId" required></select>
                   </label>
                   <label>대상 지점
                     <select name="branch"></select>
+                  </label>
+                  <label>계좌/가맹점번호
+                    <input name="accountNoMasked" placeholder="뒷자리만 표시해 등록">
+                  </label>
+                  <label>정산주기
+                    <input name="settlementCycle" placeholder="예: D+2, 매월 10일">
+                  </label>
+                  <label>API Key / Client ID
+                    <input name="apiKey" autocomplete="off" placeholder="공식 API 사용 시 등록">
+                  </label>
+                  <label>API Secret / 인증서 비밀번호
+                    <input name="clientSecret" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
                   </label>
                   <label>비밀번호
                     <input name="password" type="password" placeholder="화면 저장용. Vault 등록 후에는 마스킹 관리">
@@ -2904,6 +2920,7 @@
           <textarea id="csvText" placeholder="date,branch,type,vendor,channel,amount,status,memo"></textarea>
         </label>
         <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
+          <button id="serverImportTransactionBtn">은행/카드 CSV 서버반영</button>
           <button id="pasteEntryCsvBtn">거래 CSV 반영</button>
           <button id="pasteShiftCsvBtn">근태 CSV 반영</button>
         </div>
@@ -3111,6 +3128,7 @@
       }
     };
     const deliveryAutomationServices = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+    const financialTransactionServices = new Set(["shinhan_business", "ibk_business", "card_pg"]);
     const serverVaultServices = new Set([
       "baemin",
       "coupangeats",
@@ -3134,6 +3152,10 @@
       manual: ["수동업로드", "warn"],
       blocked: ["확인필요", "bad"],
       completed: ["수집완료", "good"],
+      no_records: ["신규없음", "info"],
+      upload_required: ["파일필요", "warn"],
+      credential_required: ["계정필요", "warn"],
+      connector_not_configured: ["커넥터필요", "warn"],
       downloaded: ["파일다운로드", "good"],
       portal_action_required: ["추가인증필요", "warn"],
       download_not_found: ["다운로드확인필요", "warn"],
@@ -5479,10 +5501,13 @@
         const syncStatus = integrationStatusLabels[item.portalStatus || item.lastSyncStatus] || [item.lastSyncStatus || "대기", "warn"];
         const catalog = integrationCatalog[item.service] || {};
         const canRunPortalSync = deliveryAutomationServices.has(item.service);
+        const canRunFinancialSync = financialTransactionServices.has(item.service);
         const uploadMode = ["shinhan_business", "ibk_business", "supplier_statement_upload", "tax_invoice_upload", "utility_bills", "card_pg", "accountant_tax_agent"].includes(item.service)
           || ["bank-excel", "statement-upload", "receipt-photo", "tax-invoice-upload", "utility-bill-upload", "card-pg-report", "accounting-export"].includes(item.collectionMode);
         const actionButton = canRunPortalSync
           ? `<button data-sync-integration="${escapeHtml(item.service)}">수집 실행</button>`
+          : canRunFinancialSync
+            ? `<button data-sync-financial-integration="${escapeHtml(item.service)}">거래 연동 실행</button>`
           : uploadMode
             ? `<button data-open-import="${escapeHtml(item.service)}">파일/사진 등록</button>`
             : `<button type="button" disabled title="설정 저장 후 전용 수집기가 연결됩니다.">계정/Vault 등록</button>`;
@@ -5501,6 +5526,9 @@
             <span>지점: ${escapeHtml(item.branch || "공통/미지정")}</span>
             <span>ID: ${escapeHtml(item.username || "미등록")}</span>
             <span>PW: ${escapeHtml(item.passwordMasked || (item.password ? "브라우저 저장됨" : "Vault/입력 필요"))}</span>
+            <span>기관: ${escapeHtml(item.institutionCode || "미등록")}</span>
+            <span>계좌/가맹점: ${escapeHtml(item.accountNoMasked || item.merchantNo || "미등록")}</span>
+            <span>정산주기: ${escapeHtml(item.settlementCycle || "미등록")}</span>
             <span>수집: ${escapeHtml(collectionModeLabel(item.collectionMode))}</span>
             <span>최근수집: ${escapeHtml(item.lastSyncAt || "미실행")} / <b class="badge ${syncStatus[1]}">${escapeHtml(syncStatus[0])}</b></span>
             <span style="grid-column:1/-1">수집대상: ${escapeHtml(item.dataScope || catalog.dataScope || "미지정")}</span>
@@ -5716,16 +5744,22 @@
     }
 
     function entryFromRecord(record) {
+      const sourceType = String(record.source_type || "");
+      const direction = String(record.direction || "");
+      const inferredType = record.type
+        || (sourceType === "bank" && direction === "income" ? "bank" : "")
+        || (sourceType === "card" || sourceType === "card_pg" ? "sales" : "")
+        || (direction === "expense" ? "expense" : "");
       return {
-        id: uid(),
-        date: record.date || today(),
+        id: record.id || uid(),
+        date: String(record.date || record.transaction_date || today()).slice(0, 10),
         branch: fallbackBranch(record.branch),
-        type: record.type || currentType,
-        vendor: record.vendor || record.name || "미분류",
-        channel: record.channel || "기타",
+        type: inferredType || currentType,
+        vendor: record.vendor || record.description || record.name || "미분류",
+        channel: record.channel || record.account_name || record.service || record.source_type || "기타",
         amount: Number(record.amount || 0),
         status: record.status || "pending",
-        memo: record.memo || ""
+        memo: record.memo || record.category || ""
       };
     }
 
@@ -6622,7 +6656,7 @@
       document.querySelectorAll(".app-only").forEach(el => el.classList.toggle("hidden", !isAuthed));
       applyAccessPolicy();
       const canAutomate = canManageAutomation();
-      [els.refreshServerAccountsBtn, els.syncDeliveryBtn, els.serverImportSettlementBtn].forEach(button => {
+      [els.refreshServerAccountsBtn, els.syncDeliveryBtn, els.syncFinancialBtn, els.serverImportSettlementBtn].forEach(button => {
         if (button) {
           button.disabled = !canAutomate;
           button.title = canAutomate ? "" : "총괄 운영관리자 또는 운영관리자 로그인 필요";
@@ -6657,6 +6691,10 @@
           businessId: account.business_id || account.businessId || existing?.businessId || "",
           business_id: account.business_id || account.businessId || existing?.business_id || "",
           branch: account.branch || existing?.branch || "",
+          institutionCode: account.institution_code || account.institutionCode || existing?.institutionCode || "",
+          accountNoMasked: account.account_no_masked || account.accountNoMasked || existing?.accountNoMasked || "",
+          merchantNo: account.merchant_no || account.merchantNo || existing?.merchantNo || "",
+          settlementCycle: account.settlement_cycle || account.settlementCycle || existing?.settlementCycle || "",
           collectionMode: account.collection_mode || existing?.collectionMode || catalog.collectionMode || "browser-automation",
           dataScope: account.data_scope || existing?.dataScope || catalog.dataScope || "",
           requiredProof: account.required_proof || existing?.requiredProof || catalog.requiredProof || "",
@@ -6748,6 +6786,90 @@
       });
       const result = applySyncPayload(payload);
       showToast(result.recordsCount ? `자동 수집 ${result.recordsCount}건 / 정산 ${result.settlementsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
+    }
+
+    function applyFinancialSyncPayload(payload) {
+      const records = (payload.transactions || []).map(entryFromRecord);
+      if (records.length) {
+        state.entries.push(...records);
+      }
+      (payload.summary || []).forEach(summary => {
+        settings().integrations
+          .filter(item => item.service === summary.service)
+          .forEach(item => {
+            item.lastSyncAt = payload.synced_at || new Date().toISOString();
+            item.lastSyncStatus = summary.status;
+            item.portalStatus = summary.status;
+            item.portalMessage = summary.message || "";
+            if (summary.account_id) item.serverAccountId = item.serverAccountId || summary.account_id;
+          });
+      });
+      saveState();
+      renderAll();
+      const blocked = (payload.summary || []).filter(item => !["completed", "no_records"].includes(item.status)).length;
+      const messages = (payload.summary || [])
+        .filter(item => !["completed", "no_records"].includes(item.status))
+        .map(item => `${integrationLabels[item.service] || item.service}: ${item.message || item.status}`)
+        .slice(0, 2);
+      return { recordsCount: records.length, blocked, messages };
+    }
+
+    async function syncFinancialServices(services) {
+      if (!canManageAutomation()) {
+        showToast("총괄 운영관리자 로그인 후 은행/카드 거래 연동을 실행할 수 있습니다.");
+        return;
+      }
+      const runnableServices = services.filter(service => financialTransactionServices.has(service));
+      if (!runnableServices.length) {
+        showToast("은행 또는 카드/PG 연동 항목을 선택하십시오.");
+        return;
+      }
+      const scope = selectedAutomationScope();
+      const month = selectedMonth();
+      const payload = await financeApi("/transactions/sync", {
+        method: "POST",
+        body: JSON.stringify({
+          services: runnableServices,
+          ...scope,
+          date_from: `${month}-01`,
+          date_to: new Date().toISOString().slice(0, 10)
+        })
+      });
+      const result = applyFinancialSyncPayload(payload);
+      if (result.recordsCount) {
+        showToast(`은행/카드 거래 ${result.recordsCount}건을 반영했습니다.`);
+      } else {
+        showToast(`은행/카드 연동 확인 완료. 확인필요 ${result.blocked}건${result.messages.length ? " · " + result.messages.join(" / ") : ""}`);
+      }
+    }
+
+    async function importTransactionCsvToServer(service) {
+      if (!canManageAutomation()) {
+        showToast("총괄 운영관리자 로그인 후 거래내역을 서버에 반영할 수 있습니다.");
+        return;
+      }
+      const csvText = els.csvText.value.trim();
+      if (!csvText) {
+        showToast("은행/카드 거래 CSV 내용을 붙여넣거나 파일을 불러오십시오.");
+        return;
+      }
+      const scope = selectedAutomationScope();
+      const payload = await financeApi("/transactions/import", {
+        method: "POST",
+        body: JSON.stringify({
+          service,
+          csv_text: csvText,
+          filename: els.fileInput.files[0]?.name || "transactions.csv",
+          ...scope
+        })
+      });
+      const records = (payload.transactions || payload.rows || []).map(entryFromRecord);
+      if (records.length) {
+        state.entries.push(...records);
+        saveState();
+      }
+      renderAll();
+      showToast(`은행/카드 거래 ${records.length}건 반영 / 중복 ${payload.import?.duplicate_rows || 0}건 제외`);
     }
 
     async function importSettlementCsvToServer() {
@@ -7421,8 +7543,15 @@
 	                login_url: loginUrl,
 	                username: data.username.trim(),
 	                password: data.password || "",
+	                api_key: data.apiKey || "",
+	                client_secret: data.clientSecret || "",
+	                certificate_password: data.clientSecret || "",
 	                business_id: data.businessId,
 	                branch: data.branch || "",
+	                institution_code: data.institutionCode || "",
+	                account_no_masked: data.accountNoMasked || "",
+	                merchant_no: data.accountNoMasked || "",
+	                settlement_cycle: data.settlementCycle || "",
 	                collection_mode: collectionMode,
 	                category: catalog.category || "",
 	                data_scope: catalog.dataScope || "",
@@ -7448,7 +7577,11 @@
 	          business_id: data.businessId,
 	          businessId: data.businessId,
 	          branch: data.branch || "",
-	          passwordMasked: serverAccount?.password_masked || (data.password ? "브라우저 저장됨" : "Vault/입력 필요"),
+	          institutionCode: data.institutionCode.trim(),
+	          accountNoMasked: data.accountNoMasked.trim(),
+	          merchantNo: data.accountNoMasked.trim(),
+	          settlementCycle: data.settlementCycle.trim(),
+	          passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret) ? "브라우저 저장됨" : "Vault/입력 필요"),
 	          collectionMode,
 	          dataScope: catalog.dataScope || "",
 	          requiredProof: catalog.requiredProof || "",
@@ -7508,6 +7641,7 @@
       });
       els.refreshServerAccountsBtn.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));
       els.syncDeliveryBtn.addEventListener("click", () => syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]).catch(err => showToast(err.message)));
+      els.syncFinancialBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
       els.serverImportSettlementBtn.addEventListener("click", () => importSettlementCsvToServer().catch(err => showToast(err.message)));
       els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
@@ -7522,6 +7656,7 @@
         const staffId = event.target.dataset.deleteStaff;
         const integrationId = event.target.dataset.deleteIntegration;
         const syncService = event.target.dataset.syncIntegration;
+        const syncFinancialService = event.target.dataset.syncFinancialIntegration;
         const openImportService = event.target.dataset.openImport;
         const onboardingDownloadId = event.target.dataset.downloadOnboarding;
         const onboardingDeleteId = event.target.dataset.deleteOnboarding;
@@ -7721,9 +7856,12 @@
         if (syncService) {
           syncDeliveryServices([syncService]).catch(err => showToast(err.message));
         }
+        if (syncFinancialService) {
+          syncFinancialServices([syncFinancialService]).catch(err => showToast(err.message));
+        }
         if (openImportService) {
           openEvidenceImport(openImportService);
-          showToast("파일/사진을 선택한 뒤 증빙 서버 등록을 실행하십시오.");
+          showToast(financialTransactionServices.has(openImportService) ? "CSV 내용을 붙여넣은 뒤 거래 CSV 반영 또는 증빙 서버 등록을 실행하십시오." : "파일/사진을 선택한 뒤 증빙 서버 등록을 실행하십시오.");
         }
         if (onboardingDownloadId) {
           downloadOnboardingDocument(onboardingDownloadId);
@@ -7745,6 +7883,12 @@
         saveState();
         renderAll();
         showToast(`거래 ${parsed.length}건을 반영했습니다.`);
+      });
+      els.serverImportTransactionBtn?.addEventListener("click", () => {
+        const selectedService = financialTransactionServices.has(els.evidenceService.value)
+          ? els.evidenceService.value
+          : "shinhan_business";
+        importTransactionCsvToServer(selectedService).catch(err => showToast(err.message));
       });
 
       els.pasteShiftCsvBtn.addEventListener("click", () => {

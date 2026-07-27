@@ -74,6 +74,16 @@ PLATFORM_LABELS = {
     key: CONNECTOR_LABELS[key]
     for key in ("baemin", "coupangeats", "yogiyo", "ddangyo")
 }
+FINANCIAL_TRANSACTION_SERVICES = {
+    "shinhan_business",
+    "ibk_business",
+    "card_pg",
+}
+TRANSACTION_SOURCE_BY_SERVICE = {
+    "shinhan_business": "bank",
+    "ibk_business": "bank",
+    "card_pg": "card",
+}
 
 DEFAULT_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("식자재", ("쌀", "백미", "고춧가루", "소스", "김치", "대파", "양파", "고기", "식자재")),
@@ -896,25 +906,36 @@ def _decrypt_secret(value: str) -> str:
         return ""
 
 
+_ACCOUNT_SECRET_FIELD_MAP: dict[str, str] = {
+    "password": "password_enc",
+    "api_key": "api_key_enc",
+    "client_secret": "client_secret_enc",
+    "certificate_password": "certificate_password_enc",
+}
+
+
 def _migrate_platform_account_secrets(rows: list[dict[str, Any]]) -> bool:
     changed = False
     for row in rows:
-        plaintext = str(row.get("password") or "")
-        if not plaintext:
-            continue
-        if not row.get("password_enc"):
-            row["password_enc"] = _encrypt_secret(plaintext)
-        row.pop("password", None)
-        changed = True
+        for plaintext_field, encrypted_field in _ACCOUNT_SECRET_FIELD_MAP.items():
+            plaintext = str(row.get(plaintext_field) or "")
+            if not plaintext:
+                continue
+            if not row.get(encrypted_field):
+                row[encrypted_field] = _encrypt_secret(plaintext)
+            row.pop(plaintext_field, None)
+            changed = True
     return changed
 
 
 def _has_account_secret(row: dict[str, Any]) -> bool:
-    return bool(row.get("password_enc") or row.get("password"))
+    return any(bool(row.get(field)) for field in _ACCOUNT_SECRET_FIELDS)
 
 
 # Fields that must never appear in API responses or logs.
-_ACCOUNT_SECRET_FIELDS: frozenset[str] = frozenset({"password", "password_enc"})
+_ACCOUNT_SECRET_FIELDS: frozenset[str] = frozenset(
+    set(_ACCOUNT_SECRET_FIELD_MAP) | set(_ACCOUNT_SECRET_FIELD_MAP.values())
+)
 
 
 def _normalize_delivery_scope(business_id: Any, branch: Any) -> tuple[str, str]:
@@ -2267,6 +2288,12 @@ def list_transactions() -> list[dict[str, Any]]:
     return sorted(_read("transactions"), key=lambda row: str(row.get("transaction_date") or ""), reverse=True)
 
 
+def list_transactions_for_user(user: dict[str, Any]) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="거래 원장 조회 권한이 없습니다")
+    return list_transactions()
+
+
 def create_transaction(payload: dict[str, Any]) -> dict[str, Any]:
     rows = _read("transactions")
     now = _now()
@@ -2283,10 +2310,22 @@ def create_transaction(payload: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def import_file(filename: str, content: bytes, source_type: str) -> dict[str, Any]:
+def import_file(
+    filename: str,
+    content: bytes,
+    source_type: str,
+    *,
+    business_id: str = "",
+    branch: str = "",
+    service: str = "",
+    source_account_id: str = "",
+) -> dict[str, Any]:
     normalized_source = str(source_type or "other").strip().lower()
     if normalized_source not in {"bank", "card", "other"}:
         raise HTTPException(status_code=400, detail="source_type은 bank, card, other 중 하나여야 합니다")
+    normalized_business = str(business_id or "").strip()
+    normalized_branch = BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip())
+    normalized_service = str(service or "").strip()
     reader = csv.DictReader(_decode_csv(content).splitlines())
     existing = _read("transactions")
     existing_ids = {str(row.get("id") or "") for row in existing}
@@ -2297,7 +2336,17 @@ def import_file(filename: str, content: bytes, source_type: str) -> dict[str, An
         raw = {str(key or "").strip(): str(value or "").strip() for key, value in source_row.items()}
         if not any(raw.values()):
             continue
-        fingerprint = json.dumps({"source_type": normalized_source, "row": raw}, ensure_ascii=False, sort_keys=True)
+        fingerprint = json.dumps(
+            {
+                "source_type": normalized_source,
+                "service": normalized_service,
+                "business_id": normalized_business,
+                "branch": normalized_branch,
+                "row": raw,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         record_id = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
         if record_id in existing_ids:
             duplicate_rows += 1
@@ -2320,6 +2369,10 @@ def import_file(filename: str, content: bytes, source_type: str) -> dict[str, An
         record = {
             "id": record_id,
             "source_type": normalized_source,
+            "service": normalized_service,
+            "business_id": normalized_business,
+            "branch": normalized_branch,
+            "source_account_id": str(source_account_id or ""),
             "source_file": Path(filename or "upload.csv").name,
             "transaction_date": _transaction_date(
                 raw.get("거래일시") or raw.get("거래일자") or raw.get("거래일") or raw.get("일자")
@@ -2596,11 +2649,14 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     )
     now = _now()
     record = existing or {"id": str(uuid4()), "created_at": now}
-    incoming_password = str(payload.get("password") or "")
-    if incoming_password:
-        record["password_enc"] = _encrypt_secret(incoming_password)
-        record.pop("password", None)
-    elif record.get("password"):
+    secret_payload = False
+    for plaintext_field, encrypted_field in _ACCOUNT_SECRET_FIELD_MAP.items():
+        incoming_secret = str(payload.get(plaintext_field) or "")
+        if incoming_secret:
+            record[encrypted_field] = _encrypt_secret(incoming_secret)
+            record.pop(plaintext_field, None)
+            secret_payload = True
+    if not secret_payload:
         _migrate_platform_account_secrets([record])
     record.update(
         {
@@ -2610,12 +2666,17 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
             "username": username,
             "business_id": business_id,
             "branch": branch,
+            "institution_code": str(payload.get("institution_code") or "").strip(),
+            "account_no_masked": str(payload.get("account_no_masked") or "").strip(),
+            "merchant_no": str(payload.get("merchant_no") or "").strip(),
+            "settlement_cycle": str(payload.get("settlement_cycle") or "").strip(),
             "collection_mode": payload.get("collection_mode") or "browser-automation",
             "category": str(payload.get("category") or "").strip(),
             "data_scope": str(payload.get("data_scope") or "").strip(),
             "required_proof": str(payload.get("required_proof") or "").strip(),
             "status": "credential_registered",
             "last_sync_status": record.get("last_sync_status") or "not_started",
+            "auto_sync": bool(payload.get("auto_sync")),
             "memo": payload.get("memo") or "",
             "updated_at": now,
         }
@@ -2671,6 +2732,182 @@ def automation_status(user: dict[str, Any]) -> dict[str, Any]:
         "status": "available",
         "message": "계정 기반 포털 수집과 CSV 정산서 가져오기를 사용할 수 있습니다. CAPTCHA·2차 인증은 사용자 조치가 필요합니다.",
         "checked_at": _now(),
+    }
+
+
+def _matching_accounts(
+    *,
+    services: list[str],
+    business_id: str,
+    branch: str,
+) -> dict[str, dict[str, Any]]:
+    rows = _read("platform_accounts")
+    if _migrate_platform_account_secrets(rows):
+        _write("platform_accounts", rows)
+    candidates = [
+        row
+        for row in rows
+        if str(row.get("service") or "") in services
+        and str(row.get("business_id") or "") == business_id
+        and (
+            not branch
+            or not str(row.get("branch") or "").strip()
+            or BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
+        )
+    ]
+    candidates.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+    accounts_by_service: dict[str, dict[str, Any]] = {}
+    for service in services:
+        service_rows = [row for row in candidates if str(row.get("service") or "") == service]
+        if service_rows:
+            accounts_by_service[service] = next((row for row in service_rows if _has_account_secret(row)), service_rows[0])
+    return accounts_by_service
+
+
+def import_transaction_csv(
+    payload: dict[str, Any],
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="거래내역 가져오기 권한이 없습니다")
+    service = str(payload.get("service") or "").strip()
+    if service not in FINANCIAL_TRANSACTION_SERVICES:
+        raise HTTPException(status_code=400, detail="은행/카드 거래 연동 서비스만 가져올 수 있습니다")
+    business_id, branch = _normalize_connector_scope(service, payload.get("business_id"), payload.get("branch"))
+    csv_text = str(payload.get("csv_text") or "")
+    if not csv_text.strip():
+        raise HTTPException(status_code=400, detail="거래내역 CSV 내용이 필요합니다")
+    result = import_file(
+        str(payload.get("filename") or "transactions.csv"),
+        csv_text.encode("utf-8-sig"),
+        TRANSACTION_SOURCE_BY_SERVICE[service],
+        business_id=business_id,
+        branch=branch,
+        service=service,
+        source_account_id=str(payload.get("source_account_id") or ""),
+    )
+    return {
+        **result,
+        "business_id": business_id,
+        "branch": branch,
+        "service": service,
+        "transactions": result["rows"],
+    }
+
+
+def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행/카드 자동연동 실행 권한이 없습니다")
+    services = [str(item) for item in (payload.get("services") or []) if str(item).strip()]
+    requested_services = services or sorted(FINANCIAL_TRANSACTION_SERVICES)
+    unsupported = sorted(set(requested_services) - FINANCIAL_TRANSACTION_SERVICES)
+    if unsupported:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 은행/카드 연동: {', '.join(unsupported)}")
+    today = datetime.now(KST).date()
+    default_from = today.replace(day=1).isoformat()
+    date_from_text = str(payload.get("date_from") or default_from)
+    date_to_text = str(payload.get("date_to") or today.isoformat())
+    try:
+        date_from = date.fromisoformat(date_from_text)
+        date_to = date.fromisoformat(date_to_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="연동 기간은 YYYY-MM-DD 형식이어야 합니다") from exc
+    if date_from > date_to or (date_to - date_from).days > 92:
+        raise HTTPException(status_code=400, detail="은행/카드 연동 기간은 시작일 이후 최대 93일입니다")
+    business_id, branch = _normalize_connector_scope(
+        "shinhan_business",
+        payload.get("business_id") or MIA_BUSINESS_ID,
+        payload.get("branch") or MIA_BRANCH_NAME,
+    )
+    accounts_by_service = _matching_accounts(
+        services=requested_services,
+        business_id=business_id,
+        branch=branch,
+    )
+    synced_at = _now()
+    transactions = _read("transactions")
+    by_id = {str(row.get("id") or ""): row for row in transactions if row.get("id")}
+    summary: list[dict[str, Any]] = []
+    imported_rows: list[dict[str, Any]] = []
+
+    for service in requested_services:
+        account = accounts_by_service.get(service)
+        if not account:
+            summary.append(
+                {
+                    "service": service,
+                    "status": "credential_required",
+                    "message": "설정에서 계정/가맹점 정보를 먼저 등록해야 합니다.",
+                    "imported_rows": 0,
+                }
+            )
+            continue
+        collection_mode = str(account.get("collection_mode") or "").strip()
+        if collection_mode in {"bank-excel", "card-pg-report", "statement-upload"}:
+            summary.append(
+                {
+                    "service": service,
+                    "status": "upload_required",
+                    "message": "현재 연동 방식은 파일 업로드입니다. 거래내역 CSV/리포트를 업로드하면 거래원장에 반영됩니다.",
+                    "account_id": account.get("id") or "",
+                    "imported_rows": 0,
+                }
+            )
+            continue
+        if collection_mode in {"api", "bank-openbanking", "browser-automation"}:
+            if not _has_account_secret(account):
+                status = "credential_required"
+                message = "API 키, 인증서 비밀번호 또는 로그인 비밀번호를 설정에서 등록해야 합니다."
+            else:
+                status = "connector_not_configured"
+                message = "자격증명은 저장됐지만 해당 기관 실조회 커넥터가 아직 연결되지 않았습니다. 파일 업로드로 대체 수집할 수 있습니다."
+            summary.append(
+                {
+                    "service": service,
+                    "status": status,
+                    "message": message,
+                    "account_id": account.get("id") or "",
+                    "imported_rows": 0,
+                }
+            )
+            continue
+        sample_rows = account.get("last_download_rows") if isinstance(account.get("last_download_rows"), list) else []
+        count = 0
+        for row in sample_rows:
+            record = {
+                **row,
+                "service": service,
+                "source_type": TRANSACTION_SOURCE_BY_SERVICE[service],
+                "business_id": business_id,
+                "branch": branch,
+                "source_account_id": account.get("id") or "",
+                "updated_at": synced_at,
+            }
+            record["id"] = str(record.get("id") or hashlib.sha256(json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest())
+            by_id[record["id"]] = record
+            imported_rows.append(record)
+            count += 1
+        summary.append(
+            {
+                "service": service,
+                "status": "completed" if count else "no_records",
+                "message": "저장된 다운로드 거래를 반영했습니다." if count else "반영할 신규 거래가 없습니다.",
+                "account_id": account.get("id") or "",
+                "imported_rows": count,
+            }
+        )
+
+    if imported_rows:
+        _write("transactions", list(by_id.values()))
+    return {
+        "synced_at": synced_at,
+        "business_id": business_id,
+        "branch": branch,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "summary": summary,
+        "transactions": imported_rows,
+        "totals": {"transactions": len(imported_rows)},
     }
 
 

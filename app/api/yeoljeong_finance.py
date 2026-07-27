@@ -75,10 +75,17 @@ class AccountUpsertPayload(BaseModel):
         repr=False,
         json_schema_extra={"writeOnly": True},
     )
+    api_key: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    client_secret: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    certificate_password: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     label: str = ""
     login_url: str = ""
     business_id: str = "biz-mia"
     branch: str = "열정국밥_미아점"
+    institution_code: str = ""
+    account_no_masked: str = ""
+    merchant_no: str = ""
+    settlement_cycle: str = ""
     collection_mode: str = "browser-automation"
     category: str = ""
     data_scope: str = ""
@@ -101,6 +108,15 @@ class CsvImportPayload(BaseModel):
     filename: str = "settlement.csv"
     business_id: str = "biz-mia"
     branch: str = "열정국밥_미아점"
+
+
+class TransactionCsvImportPayload(BaseModel):
+    service: str
+    csv_text: str = ""
+    filename: str = "transactions.csv"
+    business_id: str = "biz-mia"
+    branch: str = "열정국밥_미아점"
+    source_account_id: str = ""
 
 
 @router.get("/session")
@@ -356,6 +372,21 @@ async def get_automation_status(current_user: dict = Depends(get_current_user)) 
 @router.post("/sync")
 async def sync_delivery(payload: SyncPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.sync_delivery, payload.model_dump(), current_user)
+
+
+@router.get("/transactions")
+async def list_transactions(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"transactions": await run_in_threadpool(svc.list_transactions_for_user, current_user)}
+
+
+@router.post("/transactions/import")
+async def import_transactions(payload: TransactionCsvImportPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.import_transaction_csv, payload.model_dump(), current_user)
+
+
+@router.post("/transactions/sync")
+async def sync_financial_transactions(payload: SyncPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.sync_financial_transactions, payload.model_dump(), current_user)
 
 
 @router.post("/settlements/import")

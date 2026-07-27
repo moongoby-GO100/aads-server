@@ -5026,3 +5026,22 @@
 - 주의:
   - 전체 `npm run lint`는 기존 대시보드 lint debt 261 errors/66 warnings로 실패한다. 이번 변경 파일에서는 신규 lint error가 없다.
   - 배포 시 대시보드 워크트리에 기존 미커밋 변경(`Sidebar.tsx`, `src/app/admin/loops/`)이 함께 존재했다.
+
+## 2026-07-28 07:04 KST - 매장비서 은행/카드 거래 자동연동 골격 보강
+
+- 요청: 자동연동 기능에서 은행 거래내역과 카드사용/카드PG 거래내역을 연동하고, 필요한 정보는 설정에서 등록·수정할 수 있게 조치.
+- 조치:
+  - `app/api/yeoljeong_finance.py`에 `/transactions`, `/transactions/import`, `/transactions/sync` API를 추가했다.
+  - `app/services/yeoljeong_finance_service.py`에 은행/카드 거래 서비스(`shinhan_business`, `ibk_business`, `card_pg`) 범위 검증, 사업자/지점 스코프, CSV 거래 원장 반영, 자동연동 실행 상태 보고를 추가했다.
+  - 외부 계정 비밀필드를 `password` 외 `api_key`, `client_secret`, `certificate_password`까지 확장하고, 응답/DB payload에는 원문이 노출되지 않도록 암호화 필드만 유지했다.
+  - `app/static/apps/yeoljeong-finance/index.html` 설정 화면에 기관/은행 코드, 계좌/가맹점번호, 정산주기, API Key/Client Secret 입력란과 `은행/카드 거래 연동 실행`, `은행/카드 CSV 서버반영` 버튼을 추가했다.
+  - 은행 입금은 월마감 `bank`, 은행 출금은 `expense`, 카드/PG 거래는 `sales` 유형으로 화면 거래원장에 반영한다.
+- 검증:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
+  - HTML inline script parse 성공: `inline scripts parsed: 1`.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_service.py` 성공.
+  - 운영 컨테이너 기준 `docker exec aads-server python -m pytest -q /app/tests/unit/test_yeoljeong_finance_service.py /app/tests/unit/test_yeoljeong_finance_api_contract.py /app/tests/unit/test_yeoljeong_finance_api.py` 결과 62 passed, 1 warning.
+  - 외부 헬스 `https://fb.newtalk.kr/api/v1/health` HTTP 200.
+- 한계:
+  - 신한/IBK 오픈뱅킹, 카드사/VAN/PG 실조회는 기관 API 계약·인증서·키가 필요하다. 해당 자격증명과 커넥터 구현 전에는 장부 오염 방지를 위해 가상 거래를 생성하지 않고 `계정필요`, `파일필요`, `커넥터필요` 상태만 반환한다.
+  - API 라우트 추가는 서버 프로세스 재시작 또는 blue/green 배포 후 외부 사이트에서 활성화된다.

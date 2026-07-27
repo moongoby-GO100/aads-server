@@ -101,6 +101,29 @@ def test_import_bank_csv_uses_income_expense_columns(tmp_path, monkeypatch):
     assert rows[1]["category"] == "공과금"
 
 
+def test_import_transaction_csv_applies_business_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    csv_text = "거래일자,적요,입금액,출금액,계좌명\n2026-07-01,배달의민족 정산,55000,,신한 중화점\n"
+
+    result = service.import_transaction_csv(
+        {
+            "service": "shinhan_business",
+            "csv_text": csv_text,
+            "filename": "bank.csv",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    row = result["transactions"][0]
+    assert result["import"]["imported_rows"] == 1
+    assert row["source_type"] == "bank"
+    assert row["service"] == "shinhan_business"
+    assert row["business_id"] == "biz-junghwa"
+    assert row["branch"] == "중화점"
+
+
 def test_duplicate_import_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     csv_text = "거래일자,적요,출금액\n2026-07-02,가스요금,12000\n"
@@ -218,6 +241,68 @@ def test_upsert_account_stores_encrypted_password_only(tmp_path, monkeypatch):
     assert "password_enc" not in saved
     assert raw[0]["password_enc"] == "encrypted:plain-secret"
     assert "password" not in raw[0]
+
+
+def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+
+    saved = service.upsert_account(
+        {
+            "service": "shinhan_business",
+            "label": "중화점 신한",
+            "login_url": "https://bizbank.shinhan.com/",
+            "username": "bank-user",
+            "api_key": "client-id",
+            "client_secret": "client-secret",
+            "institution_code": "shinhan",
+            "account_no_masked": "110-***-123456",
+            "settlement_cycle": "D+1",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "collection_mode": "api",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    raw = service._read("platform_accounts")[0]
+    assert saved["password_masked"] == "********"
+    assert saved["account_no_masked"] == "110-***-123456"
+    assert "api_key" not in saved
+    assert "client_secret" not in saved
+    assert raw["api_key_enc"] == "encrypted:client-id"
+    assert raw["client_secret_enc"] == "encrypted:client-secret"
+    assert "api_key" not in raw
+
+
+def test_sync_financial_transactions_reports_connector_gap(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+    service.upsert_account(
+        {
+            "service": "shinhan_business",
+            "username": "bank-user",
+            "api_key": "client-id",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "collection_mode": "api",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    result = service.sync_financial_transactions(
+        {
+            "services": ["shinhan_business"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-07-01",
+            "date_to": "2026-07-31",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["totals"]["transactions"] == 0
+    assert result["summary"][0]["status"] == "connector_not_configured"
 
 
 @pytest.mark.asyncio
