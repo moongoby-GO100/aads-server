@@ -14,7 +14,7 @@
 - 원인: 완료보고 검증기가 `commit_report_conflicts_with_ledger`, `push_report_conflicts_with_ledger`, `document_report_conflicts_with_ledger` 등을 감지해 자동 이어쓰기를 3회 수행했고, 실패 시 `completion_contract_unresolved` partial을 저장하는 과정에서 같은 `execution_id`에 이미 assistant 메시지가 있으면 `idx_one_assistant_per_execution` unique 제약과 충돌할 수 있었다. 이때 실행 원장이 terminal/interrupted로 닫히며 화면에는 중단 응답과 이어쓰기/오류 상태가 남는다.
 - 조치: `app/services/chat_service.py`에서 LLM retry 오류 시 partial 저장 성공 여부와 관계없이 실행 원장을 `interrupted`로 닫도록 보정했고, `_save_interrupted_partial_message()`가 같은 execution의 기존 assistant 메시지를 찾으면 신규 INSERT 대신 기존 메시지를 `interrupted_partial`로 UPDATE하도록 가드를 추가했다.
 - 회귀 테스트: `tests/unit/test_chat_service.py`에 기존 execution assistant 메시지 존재 시 INSERT하지 않는 테스트를 추가했다.
-- 검증: `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 통과. 호스트 Python에는 `pytest` 모듈이 없어 `python3 -m pytest tests/unit/test_chat_service.py -q`는 실행 불가. 대신 컨테이너 소스 반영(`terminal_execution_closed` 가드 존재), 내부 `/health` HTTP 200, Docker health healthy, 문제 세션 관련 API 로그 HTTP 200으로 폴백 검증했다.
+- 검증: `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 통과. 호스트 Python에는 `pytest` 모듈이 없어 `python3 -m pytest tests/unit/test_chat_service.py -q`는 실행 불가. 대신 컨테이너에서 `docker exec aads-server python -m pytest tests/unit/test_chat_service.py -q`를 실행해 56 passed, 1 warning을 확인했다. 컨테이너 소스 반영(`terminal_execution_closed` 가드 존재), 내부 `/health` HTTP 200, Docker health healthy, 문제 세션 관련 API 로그 HTTP 200도 확인했다.
 - 배포/커밋 상태: 코드/테스트/문서 변경은 커밋 `19f7ae2a` 및 후속 문서정정 커밋에 포함해 `origin/main`에 푸시했다. 컨테이너는 bind-mounted 소스를 읽는 구조라 재빌드 없이 코드 파일 반영을 확인했고, 별도 blue/green 배포는 실행하지 않았다.
 
 ## 2026-07-27 08:45 KST - AADS loop API deploy preflight fix
