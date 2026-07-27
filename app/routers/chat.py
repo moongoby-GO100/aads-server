@@ -1414,6 +1414,9 @@ async def get_streaming_status(
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
                        am.model_used AS assistant_model_used,
+                       COALESCE(um.content, '') AS user_content,
+                       pj.job_id AS pipeline_job_id,
+                       pj.status AS pipeline_job_status,
                        pm.id::text AS placeholder_id,
                        CASE
                            WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.content, am.content)
@@ -1458,6 +1461,15 @@ async def get_streaming_status(
                   )
                 LEFT JOIN chat_messages am
                   ON am.id = te.assistant_message_id
+                LEFT JOIN chat_messages um
+                  ON um.id = te.user_message_id
+                LEFT JOIN LATERAL (
+                    SELECT job_id, status
+                    FROM pipeline_jobs
+                    WHERE COALESCE(um.content, '') LIKE '%' || job_id || '%'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                ) pj ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT id, content, tools_called
                     FROM chat_messages
@@ -1485,6 +1497,71 @@ async def get_streaming_status(
                     return 0, ""
 
             if execution_row and execution_row["execution_id"]:
+                _is_terminal_pipeline_review = (
+                    execution_row["status"] in ("running", "retrying")
+                    and str(execution_row["user_content"] or "").startswith("[시스템] Pipeline Runner 작업 AI 검수 요청")
+                    and bool(execution_row["pipeline_job_status"])
+                    and str(execution_row["pipeline_job_status"]) not in {
+                        "queued",
+                        "claimed",
+                        "running",
+                        "awaiting_approval",
+                        "approved",
+                        "deploying",
+                        "restarting",
+                    }
+                )
+                if _is_terminal_pipeline_review:
+                    _execution_uuid = UUID(execution_row["execution_id"])
+                    _job_id = str(execution_row["pipeline_job_id"] or "")
+                    _job_status = str(execution_row["pipeline_job_status"] or "done")
+                    _notice = f"Pipeline Runner 검수 작업은 이미 종료되었습니다. job={_job_id} status={_job_status}"
+                    await conn.execute(
+                        """
+                        UPDATE chat_turn_executions
+                        SET status = 'interrupted',
+                            completed_at = COALESCE(completed_at, NOW()),
+                            updated_at = NOW(),
+                            error_message = COALESCE(error_message, 'terminal pipeline review settled by streaming-status')
+                        WHERE id = $1
+                          AND status IN ('running', 'retrying')
+                        """,
+                        _execution_uuid,
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET content = $2,
+                            intent = 'interrupted_partial',
+                            model_used = 'interrupted',
+                            edited_at = NOW()
+                        WHERE execution_id = $1
+                          AND intent = 'streaming_placeholder'
+                        """,
+                        _execution_uuid,
+                        _notice,
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE chat_sessions
+                        SET current_execution_id = NULL,
+                            updated_at = NOW()
+                        WHERE id = $1
+                          AND current_execution_id = $2
+                        """,
+                        session_id,
+                        _execution_uuid,
+                    )
+                    return await _finalize_streaming_status(session_id, {
+                        "is_streaming": False,
+                        "just_completed": False,
+                        "content_length": len(_notice),
+                        "token_count": 0,
+                        "tool_count": 0,
+                        "last_tool": "",
+                        "execution_id": execution_row["execution_id"],
+                        "last_event_id": execution_row["last_event_id"],
+                    }, conn)
                 if (
                     execution_row["status"] in ("running", "retrying")
                     and execution_row["assistant_model_used"] in ("interrupted", "stopped")

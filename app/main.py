@@ -329,6 +329,8 @@ async def lifespan(app: FastAPI):
                                COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                                COALESCE(ph.content, am.content, '') AS partial_content,
                                COALESCE(um.content, '') AS last_user_msg,
+                               pj.job_id AS pipeline_job_id,
+                               pj.status AS pipeline_job_status,
                                w.name AS workspace_name
                         FROM chat_turn_executions te
                         JOIN chat_sessions s
@@ -339,6 +341,13 @@ async def lifespan(app: FastAPI):
                           ON am.id = te.assistant_message_id
                         LEFT JOIN chat_messages um
                           ON um.id = te.user_message_id
+                        LEFT JOIN LATERAL (
+                            SELECT job_id, status
+                            FROM pipeline_jobs
+                            WHERE COALESCE(um.content, '') LIKE '%' || job_id || '%'
+                            ORDER BY updated_at DESC
+                            LIMIT 1
+                        ) pj ON TRUE
                         LEFT JOIN LATERAL (
                             SELECT id, content
                             FROM chat_messages
@@ -369,11 +378,29 @@ async def lifespan(app: FastAPI):
                     def _should_settle_without_retry(row) -> bool:
                         """Do not replay abandoned turns that already preserved useful output."""
                         _err = str(row["error_message"] or "")
+                        _user_msg = str(row["last_user_msg"] or "")
+                        _pipeline_status = str(row["pipeline_job_status"] or "")
                         _clean = _strip_streaming_progress_markers_watchdog(row["partial_content"] or "")
+                        _terminal_pipeline_review = (
+                            _user_msg.startswith("[시스템] Pipeline Runner 작업 AI 검수 요청")
+                            and _pipeline_status
+                            and _pipeline_status not in {
+                                "queued",
+                                "claimed",
+                                "running",
+                                "awaiting_approval",
+                                "approved",
+                                "deploying",
+                                "restarting",
+                            }
+                        )
                         return (
-                            "missing_done_event" in _err
-                            and "client_gone=True" in _err
-                            and _has_meaningful_partial_content_watchdog(_clean)
+                            (
+                                "missing_done_event" in _err
+                                and "client_gone=True" in _err
+                                and _has_meaningful_partial_content_watchdog(_clean)
+                            )
+                            or _terminal_pipeline_review
                         )
 
                     _retry_rows = [

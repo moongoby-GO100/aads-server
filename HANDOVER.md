@@ -5,7 +5,8 @@
 - Task: d19a0e9e chat scroll/repeated-response recurrence follow-up.
 - Root cause: `stale_execution_watchdog` could auto-retry abandoned `missing_done_event` turns even when `client_gone=True` and meaningful partial content was already preserved, causing large sessions to keep surfacing a live streaming state and re-trigger frontend polling/scroll merges.
 - Backend: `app/main.py` now sends `missing_done_event + client_gone=True + meaningful partial_content` candidates to the settle path instead of scheduling another retry.
-- Verification: `python3 -m py_compile app/main.py`, container `python -m py_compile app/main.py`, container pytest `tests/unit/test_tools_and_pipeline.py` 56 passed, container pytest `tests/unit/test_response_completion_contract.py` 10 passed, active/standby API health 200, active/standby hot-reload succeeded.
+- Follow-up: completed Pipeline Runner review messages can also leave chat executions in `retrying` after their `pipeline_jobs.status` is already terminal. `app/main.py` and `app/routers/chat.py` now detect `[시스템] Pipeline Runner 작업 AI 검수 요청` tied to terminal pipeline jobs and settle them instead of replaying stale assistant content.
+- Verification: `python3 -m py_compile app/main.py app/routers/chat.py`, container `python -m py_compile app/main.py app/routers/chat.py`, container pytest `tests/unit/test_tools_and_pipeline.py` 56 passed, container pytest `tests/unit/test_response_completion_contract.py` 10 passed, active/standby API health 200, active/standby hot-reload succeeded.
 
 ## 2026-07-27 09:30 KST - Chat terminal execution interim-save loop guard
 
