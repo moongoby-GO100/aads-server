@@ -898,7 +898,7 @@
       },
       "auth-login": {
         title: "로그인",
-        html: () => authShell("매장비서 로그인", "대표자·점장·직원·외부 담당자별 권한을 분리해 접속하는 FB 공개 로그인 시안입니다.", `<div class="auth-grid">${authField("login-email","이메일 또는 휴대폰","text","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}${authSelect("login-role","접속 역할",["대표자/관리자","점장","직원","세무·노무 외부 담당자"])}${authField("login-tenant","조직 코드","text","초대 링크는 자동 입력","",false)}</div>${authSecurityStrip()}<label class="agreement"><input type="checkbox">로그인 상태 유지 · 공용 PC에서는 선택하지 않음</label>`, `${authLink("auth-signup","대표자 회원가입")}${authLink("auth-invite","직원 초대 수락")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-onboarding","사업자 등록")}`, "", "로그인", "home")
+        html: () => authShell("매장비서 로그인", "대표자·점장·직원·외부 담당자별 권한을 분리해 접속하는 FB 공개 로그인 시안입니다.", `<div class="auth-grid">${authField("login-email","이메일 또는 휴대폰","text","name@company.com")}${authField("login-password","비밀번호","password","8자 이상")}${authSelect("login-role","접속 역할",["대표자/관리자","점장","직원","세무·노무 외부 담당자"])}${authField("login-tenant","조직 코드","text","직원은 사업장 코드 입력","",false)}</div>${authSecurityStrip()}<label class="agreement"><input type="checkbox">로그인 상태 유지 · 공용 PC에서는 선택하지 않음</label>`, `${authLink("auth-signup","대표자 회원가입")}${authLink("auth-invite","직원 회원가입")}${authLink("auth-forgot","비밀번호 찾기")}${authLink("auth-onboarding","사업자 등록")}`, "", "로그인", "home")
       },
       "auth-signup": {
         title: "회원가입",
@@ -917,8 +917,39 @@
         html: () => authShell("새 비밀번호 설정", "보안을 위해 기존과 다른 비밀번호를 입력합니다.", `${authField("reset-password","새 비밀번호","password","영문·숫자·특수문자 포함")}${authField("reset-confirm","비밀번호 확인","password","한 번 더 입력")}`, `${authLink("auth-login","로그인으로")}`, "", "비밀번호 변경", "auth-login")
       },
       "auth-invite": {
-        title: "직원 초대 수락",
-        html: () => authShell("성신점 직원 초대", "초대된 지점과 권한을 확인하고 직원 계정을 만든 뒤 입사서류 제출 화면으로 이동합니다.", `<div class="detail-grid"><div class="detail-block"><small>초대한 사람</small><strong>문고비 대표</strong></div><div class="detail-block"><small>부여 권한</small><strong>본인 근태·본인 문서</strong></div></div>${authField("invite-name","이름","text","직원 이름")}${authField("invite-phone","휴대폰","tel","010-0000-0000")}${authField("invite-password","비밀번호","password","8자 이상")}<label class="agreement"><input type="checkbox" required>성신점 직원 초대와 본인 서류 제출 범위를 확인했습니다.</label>`, `${authLink("auth-login","로그인으로")}${authLink("employees","입사서류 화면 보기")}`, "", "초대 수락 후 서류 제출", "employees")
+        title: "직원 회원가입",
+        html: () => authShell("직원 회원가입", "직원이 직접 가입하고 사업장 코드를 입력한 뒤 입사서류 제출로 이동하는 기본 흐름입니다. 초대 링크는 보조 확인값으로만 사용합니다.", `
+          ${flow([["사업장 코드 입력","대표·점장이 전달한 사업장 코드로 지점과 권한 후보를 찾습니다."],["직원 본인 가입","이름, 휴대폰, 이메일, 비밀번호와 본인인증 수단을 등록합니다."],["입사서류 제출","신분증, 통장, 주민등록등본, 보건증, 자격증 선택 파일을 업로드합니다."],["관리자 검토","OCR 자동 등록값을 대표 또는 점장이 확인하고 계약조건을 입력합니다."],["계약서 확인·전자서명","직원은 본인 계약서만 열람하고 전자서명 후 문서보관함에 저장합니다."]])}
+          <div class="auth-grid">
+            ${authField("employee-code","사업장 코드","text","예: YJ-SUNGSIN-2026")}
+            ${authSelect("employee-branch","근무 지점",["코드로 자동 선택 · 성신점","미아점","정화점","입사 예정 지점 모름"])}
+            ${authField("employee-name","직원 이름","text","홍길동")}
+            ${authField("employee-phone","휴대폰","tel","010-0000-0000")}
+            ${authField("employee-email","이메일","email","employee@example.com","",false)}
+            ${authField("employee-password","비밀번호","password","8자 이상")}
+            ${authField("employee-password-confirm","비밀번호 확인","password","한 번 더 입력")}
+            ${authSelect("employee-role","입사 유형",["정직원","단시간 근로자","수습 예정","일용직"])}
+            ${authSelect("employee-job","희망/배정 직무",["홀","주방","배달/포장","매니저","협의 필요"])}
+            ${authField("employee-start-date","입사 예정일","date","입사일","",false)}
+            ${authField("employee-invite-token","초대 코드 또는 링크 토큰","text","초대받은 경우만 입력","",false)}
+            ${authSelect("employee-verify","본인인증 방식",["휴대폰 문자 인증","카카오 인증","이메일 인증"])}
+          </div>
+          <div class="detail-grid">
+            ${detailCard("가입 후 생성","직원 가입요청 · 관리자 승인 대기")}
+            ${detailCard("자동 연결","사업장 코드 기준 지점/직무/권한 후보")}
+            ${detailCard("서류 업로드","가입 직후 입사서류 제출 화면으로 이동")}
+            ${detailCard("보안 범위","직원은 본인 서류·계약·근태만 열람")}
+          </div>
+          <div class="upload-split">
+            <div class="dropzone" role="button" tabindex="0" data-action="employee-docs"><b>가입 후 제출할 입사서류 미리보기</b><span>신분증, 통장 사본, 주민등록등본, 보건증, 자격증 선택 파일을 모바일 촬영 또는 PDF로 제출합니다.</span></div>
+            <div class="manual-receipt-list">
+              <button type="button" data-action="employee-docs">신분증 · 주민번호 마스킹</button>
+              <button type="button" data-action="employee-docs">통장 사본 · 급여계좌 자동 추출</button>
+              <button type="button" data-action="employee-docs">보건증 · 만료일 알림 등록</button>
+              <button type="button" data-action="contract-builder">관리자 계약서 작성 흐름</button>
+            </div>
+          </div>
+          <label class="agreement"><input type="checkbox" required>직원 가입요청 생성, 입사서류 제출, 본인 계약서 열람 범위에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("employees","입사서류·계약관리 보기")}${authLink("auth-forgot","비밀번호 찾기")}`, stepper(1), "회원가입 후 입사서류 제출", "employees")
       },
       "auth-onboarding": {
         title: "초기 사업자 등록",
@@ -991,7 +1022,7 @@
         title: "직원·급여",
         desc: "직원 가입부터 계약 완료와 문서보관까지 단계형으로 관리합니다.",
         html: () => page("직원·급여", "직원 계약관리 상세 흐름입니다. OCR 결과와 자동 등록값은 시안 데이터이며 민감정보는 마스킹 전제로 표시합니다.", `
-          ${flow([["회원가입·초대 수락","직원 계정 생성 후 입사서류 제출 링크 발송"],["입사서류 제출","신분증·통장·등본·보건증·자격증 선택 업로드"],["OCR 검토","자동 추출값과 원본 대조, 출처 배지 확인"],["기본정보 등록","검토 완료값으로 직원 기본정보 초안 생성"],["계약조건 입력","계약유형·급여·근로시간·수당 입력"],["미리보기·수정","계약서 조항과 입력값 확인"],["전자서명 요청","직원 서명 링크 발송 및 상태 추적"],["완료·보관","계약서와 입사서류를 문서보관함에 분류"]])}
+          ${flow([["직원 직접 회원가입","사업장 코드 입력 후 직원 가입요청과 입사서류 제출 화면 생성"],["입사서류 제출","신분증·통장·등본·보건증·자격증 선택 업로드"],["OCR 검토","자동 추출값과 원본 대조, 출처 배지 확인"],["기본정보 등록","검토 완료값으로 직원 기본정보 초안 생성"],["계약조건 입력","계약유형·급여·근로시간·수당 입력"],["미리보기·수정","계약서 조항과 입력값 확인"],["전자서명 요청","직원 서명 링크 발송 및 상태 추적"],["완료·보관","계약서와 입사서류를 문서보관함에 분류"]])}
           <section class="grid-main">
             <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>입사서류 업로드</h3><p>신분증, 통장, 주민등록등본, 보건증, 자격증 선택 · 주민번호/계좌 일부 마스킹</p></div><button type="button" class="primary" data-action="employee-docs">OCR 검토</button></div><div class="dropzone" role="button" tabindex="0" data-action="employee-docs"><b>서류를 끌어오거나 선택</b><span>이 영역은 시안입니다. 실제 파일 저장·외부 OCR 연동은 수행하지 않습니다.</span></div>${uploadRows()}</article>
             <article class="card panel"><div class="panel-head"><div class="panel-title"><h3>자동 등록 필드</h3><p>출처 배지와 관리자 수정 가능 표시</p></div></div><div class="detail-grid">${detailCard("이름","김서윤 <span class='source-badge'>신분증 OCR</span>")}${detailCard("생년월일","1998-**-** <span class='source-badge'>마스킹</span>")}${detailCard("주소","서울 성북구 *** <span class='source-badge'>등본 OCR</span>")}${detailCard("계좌","신한 110-***-123456 <span class='source-badge'>통장 OCR</span>")}${detailCard("보건증 만료","2027-03-31 <span class='source-badge'>보건증 OCR</span>")}${detailCard("수정 가능","관리자 검토 후 직접 수정")}</div></article>
@@ -1056,7 +1087,7 @@
         documents: ["보고서 검토", "부가세 증빙 묶음", [["대상 기간","2026년 상반기"],["형식","ZIP·PDF"],["자료 수","126건"],["누락","7건"],["공유 대상","세무대리인"],["상태","대표 승인 대기"]]]
       };
       const specs = {
-        profile: ["프로필·계정", "문고비 대표 · 최고 관리자", `<div class="profile-menu"><button type="button" data-auth="auth-login">로그인 화면</button><button type="button" data-auth="auth-signup">대표자 회원가입</button><button type="button" data-auth="auth-invite">직원 초대 수락</button><button type="button" data-auth="auth-onboarding">사업자 온보딩</button><button type="button" data-action="logout">로그아웃</button></div>`],
+        profile: ["프로필·계정", "문고비 대표 · 최고 관리자", `<div class="profile-menu"><button type="button" data-auth="auth-login">로그인 화면</button><button type="button" data-auth="auth-signup">대표자 회원가입</button><button type="button" data-auth="auth-invite">직원 회원가입</button><button type="button" data-auth="auth-onboarding">사업자 온보딩</button><button type="button" data-action="logout">로그아웃</button></div>`],
         search: ["통합 검색", "사업자·직원·거래·문서를 한 번에 찾습니다.", `<form class="auth-form" data-search-form>${authField("global-search","검색어","search","사업자, 직원명, 거래번호")}<div class="drawer-actions"><button type="submit" class="primary">검색</button></div></form>`],
         notification: ["알림센터", "미처리 알림 5건", `<div class="list">${row("red","세","부가세 신고 D-2","누락 증빙 7건","task")}${row("amber","급","급여 승인 대기","직원 18명","approve")}${row("blue","입","미매칭 입금","3건 · 1,840,000원","match")}</div>`],
         task: ["업무 상세", "부가세 신고 자료 확인", `<div class="detail-grid">${detailCard("담당자","문고비 대표")}${detailCard("마감","2026-07-25")}${detailCard("사업자","전체 사업자")}${detailCard("진행률","94%")}</div><div class="timeline">${step("✓","매출 자료","수집 완료","완료")}${step("2","누락 증빙","7건 확인","검토")}${step("3","대표 승인","검토 후 승인","대기")}</div>`],
