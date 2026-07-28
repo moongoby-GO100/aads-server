@@ -7,19 +7,21 @@
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f7f8;
+      --bg: #f4f5f7;
       --panel: #ffffff;
-      --panel-strong: #eef3f5;
-      --ink: #182024;
-      --muted: #64727a;
-      --line: #d8e0e4;
-      --accent: #0f766e;
-      --accent-strong: #0b5d58;
-      --blue: #2563eb;
-      --red: #dc2626;
-      --amber: #b45309;
-      --green: #15803d;
-      --shadow: 0 8px 24px rgba(20, 35, 45, .08);
+      --panel-strong: #f7f8fa;
+      --ink: #171a21;
+      --muted: #68707f;
+      --line: #e5e7eb;
+      --accent: #f26a2e;
+      --accent-strong: #d95016;
+      --nav: #111827;
+      --nav-soft: #1f2937;
+      --blue: #3778d4;
+      --red: #dc4c4c;
+      --amber: #b7791f;
+      --green: #15936b;
+      --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
@@ -121,6 +123,137 @@
       min-height: 100vh;
       display: grid;
       grid-template-rows: auto auto 1fr;
+    }
+
+    .app-shell {
+      min-height: calc(100vh - 67px);
+      display: grid;
+      grid-template-columns: 228px minmax(0, 1fr);
+      background: var(--bg);
+    }
+
+    .app-sidebar {
+      position: sticky;
+      top: 67px;
+      align-self: start;
+      height: calc(100vh - 67px);
+      display: flex;
+      flex-direction: column;
+      background: var(--nav);
+      color: #fff;
+      border-right: 1px solid rgba(255,255,255,.07);
+      z-index: 9;
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 18px 18px 14px;
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .sidebar-mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .workspace-card {
+      margin: 0 12px 14px;
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 10px;
+      background: rgba(255,255,255,.06);
+    }
+
+    .workspace-card small,
+    .app-sidebar-foot {
+      color: #9ca3af;
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .workspace-card b {
+      display: block;
+      margin-top: 5px;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .side-nav {
+      display: grid;
+      gap: 4px;
+      padding: 0 10px 16px;
+      overflow-y: auto;
+    }
+
+    .side-label {
+      padding: 12px 10px 5px;
+      color: #747d8d;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: .9px;
+    }
+
+    .side-nav .tab {
+      position: relative;
+      width: 100%;
+      min-width: 0;
+      height: 42px;
+      justify-content: flex-start;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #aeb5c1;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: none;
+    }
+
+    .side-nav .tab:hover {
+      background: rgba(255,255,255,.05);
+      color: #fff;
+    }
+
+    .side-nav .tab.active {
+      color: #fff;
+      background: var(--nav-soft);
+      border-color: transparent;
+      box-shadow: none;
+    }
+
+    .side-nav .tab.active::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 11px;
+      bottom: 11px;
+      width: 3px;
+      border-radius: 3px;
+      background: var(--accent);
+    }
+
+    .app-sidebar-foot {
+      margin-top: auto;
+      padding: 14px 18px 18px;
+      border-top: 1px solid rgba(255,255,255,.07);
+    }
+
+    .app-workspace {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
     }
 
     .topbar {
@@ -518,16 +651,20 @@
     }
 
     .filters {
-      background: var(--panel-strong);
+      position: sticky;
+      top: 67px;
+      z-index: 8;
+      background: rgba(255,255,255,.94);
       border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
     }
 
     .filters-inner {
-      max-width: 1480px;
-      margin: 0 auto;
-      padding: 12px 18px;
+      max-width: 1520px;
+      margin: 0;
+      padding: 12px 28px;
       display: grid;
-      grid-template-columns: 160px 170px 1fr auto;
+      grid-template-columns: 160px 170px minmax(0, 1fr) auto;
       gap: 10px;
       align-items: end;
     }
@@ -598,10 +735,10 @@
     }
 
     main {
-      max-width: 1480px;
+      max-width: 1520px;
       width: 100%;
-      margin: 0 auto;
-      padding: 18px;
+      margin: 0;
+      padding: 24px 28px 52px;
     }
 
     .grid {
@@ -652,6 +789,93 @@
       grid-template-columns: minmax(360px, 1fr) minmax(620px, 1.55fr);
       align-items: start;
       margin-top: 14px;
+    }
+
+    .dashboard-hero {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-end;
+      margin-bottom: 18px;
+    }
+
+    .dashboard-hero h2 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    .dashboard-hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .hero-actions,
+    .ops-status-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .ops-status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 14px;
+    }
+
+    .ops-card {
+      min-height: 104px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .ops-card small,
+    .ops-card span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .ops-card strong {
+      display: block;
+      margin: 8px 0 4px;
+      font-size: 17px;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+
+    .approval-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .approval-card {
+      min-height: 98px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      display: grid;
+      gap: 6px;
+    }
+
+    .approval-card b {
+      font-size: 13px;
+    }
+
+    .approval-card span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
     }
 
     .content-grid > .span-2 { grid-column: 1 / -1; }
@@ -1320,6 +1544,35 @@
     }
 
     @media (max-width: 760px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .app-sidebar {
+        position: static;
+        height: auto;
+      }
+
+      .side-nav {
+        display: flex;
+        overflow-x: auto;
+        padding-bottom: 12px;
+      }
+
+      .side-label,
+      .app-sidebar-foot {
+        display: none;
+      }
+
+      .side-nav .tab {
+        flex: 0 0 auto;
+        width: auto;
+      }
+
+      .filters {
+        top: 0;
+      }
+
       .topbar-inner, .filters-inner {
         grid-template-columns: 1fr;
       }
@@ -1346,6 +1599,9 @@
       }
 
       .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .ops-status-grid, .approval-grid { grid-template-columns: 1fr; }
+      .dashboard-hero { display: grid; align-items: start; }
+      .hero-actions { justify-content: stretch; }
       .form-grid { grid-template-columns: 1fr; }
       .form-grid .span-2 { grid-column: span 1; }
       .auth-gate { align-items: start; }
@@ -1526,32 +1782,76 @@
       </div>
     </section>
 
-    <section id="appFilters" class="filters app-only hidden">
-      <div class="filters-inner">
-        <label>월 선택
-          <input id="monthFilter" type="month">
-        </label>
-        <label>지점
-          <select id="branchFilter"></select>
-        </label>
-        <nav class="tabs" aria-label="주요 화면">
-          <button class="tab active" data-view="dashboard">대시보드</button>
-          <button class="tab" data-view="entries">거래입력</button>
-          <button class="tab" data-view="attendance">근태</button>
-          <button class="tab" data-view="employees">직원관리</button>
+    <div id="appShell" class="app-shell app-only hidden">
+      <aside class="app-sidebar" aria-label="매장비서 주요 메뉴">
+        <div class="sidebar-brand"><span class="sidebar-mark">FB</span><span>매장비서</span></div>
+        <div class="workspace-card">
+          <small>현재 사업장</small>
+          <b>열정국밥 통합 운영</b>
+          <small>중화점 · 성신여대점 · 미아점</small>
+        </div>
+        <nav class="side-nav" aria-label="좌측 주요 화면">
+          <div class="side-label">경영</div>
+          <button class="tab active" data-view="dashboard">통합 홈</button>
+          <button class="tab" data-view="entries">매출·정산</button>
+          <button class="tab" data-view="closing">경영 리포트</button>
+          <div class="side-label">운영</div>
+          <button class="tab" data-view="employees">직원·승인함</button>
           <button class="tab" data-view="onboarding">입사서류</button>
           <button class="tab" data-view="contracts">계약서</button>
+          <button class="tab" data-view="attendance">근태</button>
           <button class="tab" data-view="payroll">급여내역서</button>
+          <div class="side-label">설정</div>
+          <button class="tab" data-view="settings">사업자·연동 관리</button>
           <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
-          <button class="tab" data-view="closing">월마감</button>
-          <button class="tab" data-view="settings">설정</button>
         </nav>
-        <button id="csvBtn" class="primary">CSV 추가</button>
-      </div>
-    </section>
+        <div class="app-sidebar-foot">권한, 자동수집, 문서 보관은 로그인 세션 기준으로 제한됩니다.</div>
+      </aside>
+
+      <div class="app-workspace">
+        <section id="appFilters" class="filters app-only hidden">
+          <div class="filters-inner">
+            <label>월 선택
+              <input id="monthFilter" type="month">
+            </label>
+            <label>지점
+              <select id="branchFilter"></select>
+            </label>
+            <nav class="tabs" aria-label="상단 빠른 화면">
+              <button class="tab active" data-view="dashboard">통합 홈</button>
+              <button class="tab" data-view="employees">승인함</button>
+              <button class="tab" data-view="contracts">계약서</button>
+              <button class="tab" data-view="onboarding">입사서류</button>
+              <button class="tab" data-view="settings">연동관리</button>
+            </nav>
+            <button id="csvBtn" class="primary">CSV 추가</button>
+          </div>
+        </section>
 
     <main id="appMain" class="app-only hidden">
       <section id="dashboardView">
+        <div class="dashboard-hero">
+          <div>
+            <h2>통합 경영 대시보드</h2>
+            <p>매출, 입금, 직원, 계약, 입사서류, 연동 상태를 사업자와 지점 기준으로 봅니다.</p>
+          </div>
+          <div class="hero-actions">
+            <button type="button" class="primary" data-view="settings">연동 설정</button>
+            <button type="button" data-view="employees">승인함</button>
+            <button type="button" data-view="closing">월마감</button>
+          </div>
+        </div>
+        <div class="ops-status-grid" aria-label="운영 요약">
+          <div class="ops-card"><small>입사·계약</small><strong>직원 승인 → 서류 → 계약</strong><span>가입 직원의 누락 항목과 서명 대기 계약을 한 흐름으로 확인합니다.</span></div>
+          <div class="ops-card"><small>은행·카드</small><strong>신한·IBK·카드 연동</strong><span>설정에 등록된 계정 기준으로 수집 상태와 파일 업로드 폴백을 같이 봅니다.</span></div>
+          <div class="ops-card"><small>매출·정산</small><strong>배달 4사 대사</strong><span>배민, 쿠팡이츠, 요기요, 땡겨요 정산과 입금 차이를 월별로 점검합니다.</span></div>
+          <div class="ops-card"><small>문서</small><strong>계약·입사서류 보관</strong><span>PDF 미리보기, A4 계약서, 전자서명 상태를 직원별로 추적합니다.</span></div>
+        </div>
+        <div class="approval-grid" aria-label="통합 승인함 요약">
+          <button type="button" class="approval-card" data-view="employees"><b>가입요청·직원 승인</b><span>직원 회원가입 후 관리자가 승인해야 하는 항목</span></button>
+          <button type="button" class="approval-card" data-view="onboarding"><b>입사서류 검수</b><span>직원이 등록한 파일 확인, 반려, 승인 처리</span></button>
+          <button type="button" class="approval-card" data-view="contracts"><b>계약서 작성·서명요청</b><span>승인 직원 자동채움과 A4 미리보기 확인</span></button>
+        </div>
         <div class="grid kpis" id="kpiGrid"></div>
         <div class="grid content-grid">
           <div class="unni-shortcuts" aria-label="언니냉면 바로가기">
@@ -2705,6 +3005,8 @@
         </div>
       </section>
     </main>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -7741,6 +8043,12 @@
       els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
       document.body.addEventListener("click", event => {
+        const viewShortcut = event.target.closest("[data-view]:not(.tab)");
+        if (viewShortcut && viewShortcut.dataset.view) {
+          event.preventDefault();
+          setView(viewShortcut.dataset.view);
+          return;
+        }
         const entryId = event.target.dataset.deleteEntry;
         const shiftId = event.target.dataset.deleteShift;
         const businessId = event.target.dataset.deleteBusiness;

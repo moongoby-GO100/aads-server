@@ -5128,3 +5128,16 @@
 - 운영 현황:
   - DB 원장에는 현재 신한/IBK 은행 계정이 아직 등록되어 있지 않다. 관리자가 실제 은행 필수값을 입력해야 실계정 수집 상태가 생성된다.
   - 은행 사이트 실시간 로그인/엑셀 다운로드 커넥터는 실제 자격증명, 2차 인증, 은행 화면 변경 대응이 필요하다. 커넥터 미연결 상태에서는 가상 거래를 만들지 않고 `커넥터필요`로 표시한다.
+
+## 2026-07-29 07:58 KST - FB 매장비서 mockup-v2 디자인 운영 반영
+
+- 요청: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html` 기준 디자인을 운영 FB 매장비서 화면에 즉시 반영.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 로그인 후 앱 레이아웃을 좌측 사이드바 + 상단 빠른 필터 + 통합 홈 구조로 개편했다.
+  - 시안의 IA를 실제 기능에 매핑했다: 통합 홈, 매출·정산, 경영 리포트, 직원·승인함, 입사서류, 계약서, 근태, 급여내역서, 사업자·연동 관리.
+  - 기존 계약서, 입사서류, 은행/카드 연동, 배달 정산, 직원 승인 기능의 DOM id와 API 호출 경로는 유지했다.
+  - 통합 홈에 운영 요약 카드와 승인함 바로가기 카드를 추가하고, 카드 클릭 시 실제 탭으로 전환되도록 `[data-view]` 단축 이벤트를 보강했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `node -e ... new Function(inline script)` 결과 `inline scripts syntax ok: 1`.
+  - 배포 후 외부 URL과 스크린샷으로 운영 반영 여부를 확인해야 한다.
