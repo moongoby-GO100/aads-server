@@ -882,6 +882,7 @@
     const authField = (id, label, type, placeholder, value = "", required = true) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" name="${id}" type="${type}" placeholder="${placeholder}" value="${value}"${required ? " required" : ""}></div>`;
     const authSelect = (id, label, options) => `<div class="field"><label for="${id}">${label}</label><select id="${id}" name="${id}">${options.map((item) => `<option>${item}</option>`).join("")}</select></div>`;
     const stepper = (active) => `<div class="stepper"><span class="${active === 1 ? "active" : ""}">1. 계정</span><span class="${active === 2 ? "active" : ""}">2. 인증</span><span class="${active === 3 ? "active" : ""}">3. 사업자</span></div>`;
+    const employeeStepper = (active) => `<div class="stepper"><span class="${active === 1 ? "active" : ""}">1. 간편가입</span><span class="${active === 2 ? "active" : ""}">2. 직원홈</span><span class="${active === 3 ? "active" : ""}">3. 서류제출</span></div>`;
 
     Object.assign(views, {
       documents: {
@@ -927,54 +928,54 @@
       },
       "auth-invite": {
         title: "직원 회원가입",
-        html: () => authShell("직원 회원가입", "직원이 이메일 인증과 비밀번호 설정만으로 먼저 가입하고, 로그인 후 기본정보와 입사서류를 이어서 등록하는 기본 흐름입니다. 초대 링크는 보조 확인값으로만 사용합니다.", `
+        html: () => authShell("직원 간편 회원가입", "첫 가입에서는 이메일 아이디, 비밀번호, 소속, 휴대폰번호만 받습니다. 이름·주소·계좌·근무조건·입사서류는 로그인 후 직원화면에서 분리 입력합니다.", `
           <div class="auth-grid">
-            ${authField("employee-code","사업장 코드","text","예: YJ-SUNGSIN-2026")}
             ${authField("employee-email","아이디 · 이메일","email","employee@example.com")}
-            ${authField("employee-email-code","이메일 인증번호","text","메일로 받은 6자리")}
             ${authField("employee-password","비밀번호","password","8자 이상")}
-            ${authField("employee-password-confirm","비밀번호 확인","password","한 번 더 입력")}
-            ${authSelect("employee-branch","근무 지점",["코드로 자동 선택 · 성신점","미아점","정화점","입사 예정 지점 모름"])}
-            ${authField("employee-name","직원 이름","text","홍길동")}
+            ${authField("employee-company","소속","text","열정국밥 성신점 또는 사업장 코드")}
             ${authField("employee-phone","휴대폰","tel","010-0000-0000")}
-            ${authSelect("employee-role","입사 유형",["정직원","단시간 근로자","수습 예정","일용직"])}
-            ${authSelect("employee-job","희망/배정 직무",["홀","주방","배달/포장","매니저","협의 필요"])}
-            ${authField("employee-start-date","입사 예정일","date","입사일","",false)}
-            ${authField("employee-invite-token","초대 코드 또는 링크 토큰","text","초대받은 경우만 입력","",false)}
-            ${authSelect("employee-verify","보조 본인인증",["이메일 인증 완료","휴대폰 문자 추가 인증","카카오 인증 추가"])}
           </div>
-          ${flow([["사업장 코드 입력","대표·점장이 전달한 사업장 코드로 지점과 권한 후보를 찾습니다."],["이메일 가입","이메일 인증번호를 확인하고 비밀번호/확인을 등록합니다."],["로그인 후 기본정보","주소, 긴급연락처, 근무지, 직무, 입사유형, 급여계좌를 선택·입력합니다."],["입사서류 제출","신분증, 통장, 주민등록등본, 보건증, 자격증 선택 파일을 업로드합니다."],["관리자 검토","OCR 자동 등록값을 대표 또는 점장이 확인하고 계약조건을 입력합니다."],["계약서 확인·전자서명","직원은 본인 계약서만 열람하고 전자서명 후 문서보관함에 저장합니다."]])}
+          ${flow([["간편 가입","이메일 아이디, 비밀번호, 소속, 휴대폰번호만 입력"],["이메일 인증","가입 버튼 후 인증 메일을 발송하고 인증 완료 시 계정 활성화"],["직원 로그인","직원 전용 홈에서 할 일 2개를 바로 표시"],["기본정보 입력","이름, 주소, 긴급연락처, 계좌, 근무조건을 별도 화면에서 입력"],["입사서류 등록","기본정보 저장 후 서류등록 화면으로 이동"],["관리자 검토","관리자는 자동 등록값을 확인하고 계약조건만 보완"]])}
           <div class="detail-grid">
-            ${detailCard("가입 방식","이메일 인증 + 비밀번호 설정")}
-            ${detailCard("가입 후 생성","직원 가입요청 · 관리자 승인 대기")}
-            ${detailCard("자동 연결","사업장 코드 기준 지점/직무/권한 후보")}
-            ${detailCard("다음 화면","로그인 후 기본정보 입력·선택")}
-            ${detailCard("서류 업로드","기본정보 저장 후 입사서류 제출 화면으로 이동")}
-            ${detailCard("보안 범위","직원은 본인 서류·계약·근태만 열람")}
+            ${detailCard("필수 입력값","이메일 · 비밀번호 · 소속 · 휴대폰")}
+            ${detailCard("이메일 인증","가입 CTA 후 인증 메일 발송 · 인증 완료 표시")}
+            ${detailCard("가입 후 화면","직원 홈에서 기본정보와 서류등록을 분리 안내")}
+            ${detailCard("초대 링크","기본값 아님 · 관리자가 보낸 경우에만 보조 확인")}
           </div>
-          <div class="upload-split">
-            <div class="dropzone" role="button" tabindex="0" data-action="employee-docs"><b>가입 후 제출할 입사서류 미리보기</b><span>신분증, 통장 사본, 주민등록등본, 보건증, 자격증 선택 파일을 모바일 촬영 또는 PDF로 제출합니다.</span></div>
-            <div class="manual-receipt-list">
-              <button type="button" data-action="employee-docs">신분증 · 주민번호 마스킹</button>
-              <button type="button" data-action="employee-docs">통장 사본 · 급여계좌 자동 추출</button>
-              <button type="button" data-action="employee-docs">보건증 · 만료일 알림 등록</button>
-              <button type="button" data-action="contract-builder">관리자 계약서 작성 흐름</button>
-            </div>
+          <div class="notice"><span>이름, 주민번호, 주소, 계좌, 근무조건은 이 화면에서 받지 않습니다. 직원이 로그인한 뒤 단계별로 입력해야 이탈률이 낮습니다.</span><b>가입 폼 4개 입력값</b></div>
+          <label class="agreement"><input type="checkbox" required>이메일 인증 회원가입, 소속 확인, 휴대폰 연락, 직원 전용 화면 사용 범위에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-employee-home","직원화면 미리보기")}${authLink("auth-forgot","비밀번호 찾기")}`, employeeStepper(1), "이메일 인증 후 직원화면 보기", "auth-employee-home", "employee-auth")
+      },
+      "auth-employee-home": {
+        title: "직원 홈",
+        html: () => authShell("직원 로그인 후 홈", "회원가입 후 직원이 처음 보는 화면입니다. 해야 할 일을 기본정보 입력과 입사서류 등록으로 분리해 바로 진행하게 합니다.", `
+          ${flow([["가입 완료","이메일 인증과 소속 확인 완료"],["직원 홈 진입","본인 진행률과 관리자 요청사항만 표시"],["기본정보 입력","계약서 초안에 필요한 개인정보와 근무조건 입력"],["입사서류 등록","신분증·통장·보건증 등 파일 제출"],["계약 확인","관리자가 계약서를 작성하면 직원이 확인·전자서명"]])}
+          <div class="detail-grid">
+            ${detailCard("계정","employee@example.com · 열정국밥 성신점")}
+            ${detailCard("진행률","가입 완료 · 기본정보 대기 · 서류 대기")}
+            ${detailCard("관리자 요청","입사 전 기본정보와 필수 서류 제출 필요")}
+            ${detailCard("권한","본인 정보, 본인 서류, 본인 계약서만 접근")}
           </div>
-          <label class="agreement"><input type="checkbox" required>이메일 인증 회원가입, 직원 가입요청 생성, 기본정보·입사서류 제출, 본인 계약서 열람 범위에 동의합니다.</label>`, `${authLink("auth-login","이미 계정이 있습니다")}${authLink("auth-employee-profile","로그인 후 기본정보")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("auth-forgot","비밀번호 찾기")}`, stepper(1), "이메일 인증 후 기본정보 입력", "auth-employee-profile", "employee-auth")
+          <div class="integration-action-grid">
+            <button type="button" class="integration-action" data-auth="auth-employee-profile"><strong>기본정보 입력</strong><span>이름, 주소, 긴급연락처, 근무조건, 급여계좌</span></button>
+            <button type="button" class="integration-action" data-auth="auth-employee-documents"><strong>입사서류 등록</strong><span>신분증, 통장, 보건증, 등본, 자격증 선택</span></button>
+            <button type="button" class="integration-action" data-action="contract-builder"><strong>계약서 상태</strong><span>관리자 작성 후 확인·전자서명</span></button>
+            <button type="button" class="integration-action" data-auth="auth-login"><strong>로그아웃</strong><span>공용 기기에서는 로그인 유지 해제</span></button>
+          </div>
+          <div class="notice"><span>직원 홈은 관리자 메뉴가 아니라 직원 본인 온보딩 전용 화면입니다.</span><b>기본정보/서류 분리</b></div>`, `${authLink("auth-employee-profile","기본정보 입력")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("auth-login","로그인 화면")}`, employeeStepper(2), "기본정보 입력 시작", "auth-employee-profile", "employee-auth")
       },
       "auth-employee-profile": {
         title: "직원 기본정보 입력",
-        html: () => authShell("직원 기본정보 입력·선택", "회원가입 후 첫 로그인에서 직원 본인이 입력할 기본정보와 근무조건 선택 화면입니다. 저장값은 관리자 계약서 초안에 자동 반영됩니다.", `
-          ${flow([["이메일 로그인","회원가입한 이메일과 비밀번호로 접속"],["기본정보 입력","주소, 생년월일, 긴급연락처, 급여계좌를 직접 입력"],["근무조건 선택","지점, 직무, 입사유형, 근무 가능 요일/시간을 선택"],["관리자 검토 대기","관리자는 자동 등록값을 확인하고 계약조건을 보완"],["입사서류 등록","필수 서류를 모바일 촬영 또는 PDF로 제출"]])}
+        html: () => authShell("직원 기본정보 입력·선택", "로그인 후 직원 본인이 입력하는 첫 번째 업무 화면입니다. 가입 때 받은 이메일·소속·휴대폰은 자동 표시하고, 계약서에 필요한 정보만 여기서 받습니다.", `
+          ${flow([["직원 홈","가입 계정으로 로그인"],["기본정보 입력","이름, 생년월일, 주소, 긴급연락처를 직접 입력"],["근무조건 선택","지점, 직무, 입사유형, 가능 요일/시간 선택"],["급여계좌 등록","급여 지급용 은행과 계좌 입력"],["서류등록 이동","저장 후 입사서류 화면으로 이어짐"]])}
           <div class="auth-grid">
-            ${authField("profile-email","로그인 이메일","email","employee@example.com")}
+            ${authField("profile-email","가입 이메일","email","employee@example.com")}
+            ${authField("profile-company","소속","text","열정국밥 성신점")}
+            ${authField("profile-phone","휴대폰","tel","010-0000-0000")}
             ${authField("profile-name","이름","text","홍길동")}
             ${authField("profile-birth","생년월일","date","YYYY-MM-DD","",false)}
-            ${authField("profile-phone","휴대폰","tel","010-0000-0000")}
             ${authField("profile-address","주소","text","도로명 주소")}
             ${authField("profile-emergency","긴급 연락처","tel","가족 또는 보호자 연락처")}
-            ${authSelect("profile-branch","희망/배정 지점",["사업장 코드로 자동 선택 · 성신점","미아점","정화점","복수 지점 가능"])}
+            ${authSelect("profile-branch","근무 지점 선택",["소속으로 자동 추천 · 성신점","미아점","정화점","복수 지점 가능"])}
             ${authSelect("profile-duty","희망/배정 직무",["홀","주방","배달/포장","매니저","협의 필요"])}
             ${authSelect("profile-employment-type","입사 유형",["정직원","단시간 근로자","수습 예정","일용직","3.3% 프리랜서"])}
             ${authSelect("profile-work-days","근무 가능 요일",["평일 전체","주말 포함","월/수/금","협의 필요"])}
@@ -987,12 +988,12 @@
             ${detailCard("관리자 수정","계약 전 대표·점장이 필드별 수정 가능")}
             ${detailCard("민감정보","주민번호·계좌는 마스킹 저장 전제")}
           </div>
-          <label class="agreement"><input type="checkbox" required>입력한 기본정보를 입사서류 검토와 근로계약서 작성에 사용하는 것에 동의합니다.</label>`, `${authLink("auth-invite","회원가입으로 돌아가기")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("employees","관리자 계약관리 보기")}`, stepper(2), "기본정보 저장 후 서류등록", "auth-employee-documents", "employee-auth")
+          <label class="agreement"><input type="checkbox" required>입력한 기본정보를 입사서류 검토와 근로계약서 작성에 사용하는 것에 동의합니다.</label>`, `${authLink("auth-employee-home","직원 홈")}${authLink("auth-employee-documents","입사서류 등록")}${authLink("employees","관리자 계약관리 보기")}`, employeeStepper(2), "기본정보 저장 후 서류등록", "auth-employee-documents", "employee-auth")
       },
       "auth-employee-documents": {
         title: "직원 입사서류 등록",
-        html: () => authShell("입사서류 등록", "직원이 로그인 후 본인 서류를 직접 올리고, OCR 자동 추출값과 제출 상태를 확인하는 화면입니다.", `
-          ${flow([["필수 서류 확인","입사유형과 직무에 따라 필요한 서류만 표시"],["파일 등록","모바일 촬영, PDF, 이미지 파일 업로드"],["OCR 자동 추출","이름, 계좌, 보건증 만료일 등 기본값 자동 등록"],["직원 검토","잘못 추출된 값은 직원이 먼저 수정 요청"],["관리자 승인","대표·점장이 원본 대조 후 계약서 작성으로 이동"]])}
+        html: () => authShell("직원 입사서류 등록", "기본정보 저장 후 별도로 진행하는 두 번째 업무 화면입니다. 직원은 필요한 서류만 촬영 또는 PDF로 등록하고 제출 상태를 확인합니다.", `
+          ${flow([["기본정보 저장","이름, 주소, 계좌, 근무조건 저장 완료"],["필수 서류 확인","입사유형과 직무에 따라 필요한 서류만 표시"],["파일 등록","모바일 촬영, PDF, 이미지 파일 업로드"],["OCR 자동 추출","계좌, 주소, 보건증 만료일 등 기본값 자동 등록"],["직원 검토","잘못 추출된 값은 직원이 먼저 수정 요청"],["관리자 승인","대표·점장이 원본 대조 후 계약서 작성으로 이동"]])}
           <div class="upload-split">
             <div class="dropzone" role="button" tabindex="0" data-action="employee-docs"><b>입사서류 파일 등록</b><span>신분증, 통장 사본, 주민등록등본, 보건증, 자격증을 촬영하거나 PDF로 올립니다.</span></div>
             <div class="manual-receipt-list">
@@ -1010,7 +1011,7 @@
             ${detailCard("보완 요청","관리자가 반려하면 직원 홈에 재제출 카드 표시")}
             ${detailCard("계약 연결","서류 승인 후 관리자 계약서 작성 화면으로 이동")}
           </div>
-          <label class="agreement"><input type="checkbox" required>제출 서류의 민감정보 마스킹과 관리자 검토 절차에 동의합니다.</label>`, `${authLink("auth-employee-profile","기본정보 수정")}${authLink("employees","관리자 계약관리 보기")}${authLink("auth-login","로그인 화면")}`, stepper(3), "입사서류 제출 완료", "employees", "employee-auth")
+          <label class="agreement"><input type="checkbox" required>제출 서류의 민감정보 마스킹과 관리자 검토 절차에 동의합니다.</label>`, `${authLink("auth-employee-home","직원 홈")}${authLink("auth-employee-profile","기본정보 수정")}${authLink("employees","관리자 계약관리 보기")}${authLink("auth-login","로그인 화면")}`, employeeStepper(3), "입사서류 제출 완료", "auth-employee-home", "employee-auth")
       },
       "auth-onboarding": {
         title: "초기 사업자 등록",
