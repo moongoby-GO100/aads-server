@@ -5158,6 +5158,12 @@
   - `node -e ... new vm.Script(...)` 결과 `inline scripts syntax ok: 1`.
   - `node -e ... appViewNames/View id 대조` 결과 `views: 22`, `missing: []`.
   - 대상 파일 `rg`로 누락 메뉴 표식 확인 완료.
+- 배포/운영 확인:
+  - 커밋 `d666788198f3bf55a4bb30440607cf02c7ecc3fb`를 `origin/main`에 푸시했다.
+  - `deploy_safe(mode=reload)` 성공, hot reload 78개, post health 정상.
+  - 외부 `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200 및 신규 메뉴 문자열 확인 완료.
+  - `https://fb.newtalk.kr/api/v1/health` 응답 `status=ok`.
+  - `capture_screenshot`은 timeout으로 실패하여 브라우저 캡처 검증은 미실행, HTTP/헬스/HTML 표식 검증으로 대체했다.
 - 주의:
   - 재고·발주, 원가·마진, 감사로그는 이번 단계에서 기존 운영 원장 기반 페이지로 구현했다. 별도 재고 DB, 발주 승인 DB, 서버 감사로그 테이블은 후속 마이그레이션 대상이다.
   - 작업트리에는 이번 변경과 무관한 기존 미커밋 파일이 남아 있어 커밋에는 대상 파일만 선별해야 한다.
