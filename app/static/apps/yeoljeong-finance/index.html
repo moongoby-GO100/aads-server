@@ -1793,16 +1793,26 @@
         <nav class="side-nav" aria-label="좌측 주요 화면">
           <div class="side-label">경영</div>
           <button class="tab active" data-view="dashboard">통합 홈</button>
-          <button class="tab" data-view="entries">매출·정산</button>
-          <button class="tab" data-view="closing">경영 리포트</button>
+          <button class="tab" data-view="tasks">할 일·알림</button>
+          <button class="tab" data-view="reports">경영 리포트</button>
+          <button class="tab" data-view="documents">경영자료·보관</button>
+          <button class="tab" data-view="sales">매출·정산</button>
+          <button class="tab" data-view="accounts">입금·계좌</button>
           <div class="side-label">운영</div>
-          <button class="tab" data-view="employees">직원·승인함</button>
+          <button class="tab" data-view="employees">직원·급여</button>
+          <button class="tab" data-view="inventory">재고·발주</button>
+          <button class="tab" data-view="tax">세무·회계</button>
+          <button class="tab" data-view="approvals">통합 승인함</button>
+          <button class="tab" data-view="alerts">알림센터</button>
           <button class="tab" data-view="onboarding">입사서류</button>
           <button class="tab" data-view="contracts">계약서</button>
           <button class="tab" data-view="attendance">근태</button>
           <button class="tab" data-view="payroll">급여내역서</button>
           <div class="side-label">설정</div>
-          <button class="tab" data-view="settings">사업자·연동 관리</button>
+          <button class="tab" data-view="business">사업자·지점</button>
+          <button class="tab" data-view="integrations">연동 관리</button>
+          <button class="tab" data-view="margins">원가·마진</button>
+          <button class="tab" data-view="audit">권한·감사로그</button>
           <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
         </nav>
         <div class="app-sidebar-foot">권한, 자동수집, 문서 보관은 로그인 세션 기준으로 제한됩니다.</div>
@@ -1819,10 +1829,12 @@
             </label>
             <nav class="tabs" aria-label="상단 빠른 화면">
               <button class="tab active" data-view="dashboard">통합 홈</button>
-              <button class="tab" data-view="employees">승인함</button>
+              <button class="tab" data-view="tasks">할일</button>
+              <button class="tab" data-view="sales">매출</button>
+              <button class="tab" data-view="approvals">승인함</button>
               <button class="tab" data-view="contracts">계약서</button>
               <button class="tab" data-view="onboarding">입사서류</button>
-              <button class="tab" data-view="settings">연동관리</button>
+              <button class="tab" data-view="integrations">연동관리</button>
             </nav>
             <button id="csvBtn" class="primary">CSV 추가</button>
           </div>
@@ -1836,9 +1848,9 @@
             <p>매출, 입금, 직원, 계약, 입사서류, 연동 상태를 사업자와 지점 기준으로 봅니다.</p>
           </div>
           <div class="hero-actions">
-            <button type="button" class="primary" data-view="settings">연동 설정</button>
-            <button type="button" data-view="employees">승인함</button>
-            <button type="button" data-view="closing">월마감</button>
+            <button type="button" class="primary" data-view="integrations">연동 설정</button>
+            <button type="button" data-view="approvals">승인함</button>
+            <button type="button" data-view="reports">월마감</button>
           </div>
         </div>
         <div class="ops-status-grid" aria-label="운영 요약">
@@ -1848,7 +1860,7 @@
           <div class="ops-card"><small>문서</small><strong>계약·입사서류 보관</strong><span>PDF 미리보기, A4 계약서, 전자서명 상태를 직원별로 추적합니다.</span></div>
         </div>
         <div class="approval-grid" aria-label="통합 승인함 요약">
-          <button type="button" class="approval-card" data-view="employees"><b>가입요청·직원 승인</b><span>직원 회원가입 후 관리자가 승인해야 하는 항목</span></button>
+          <button type="button" class="approval-card" data-view="approvals"><b>가입요청·직원 승인</b><span>직원 회원가입 후 관리자가 승인해야 하는 항목</span></button>
           <button type="button" class="approval-card" data-view="onboarding"><b>입사서류 검수</b><span>직원이 등록한 파일 확인, 반려, 승인 처리</span></button>
           <button type="button" class="approval-card" data-view="contracts"><b>계약서 작성·서명요청</b><span>승인 직원 자동채움과 A4 미리보기 확인</span></button>
         </div>
@@ -1906,6 +1918,160 @@
           <section class="panel">
             <div class="panel-head"><h2 class="panel-title">운영 체크</h2></div>
             <div class="panel-body"><div id="alerts" class="progress-list"></div></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="tasksView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head">
+              <h2 class="panel-title">할 일·알림</h2>
+              <span id="taskSummaryBadge" class="badge info">0건</span>
+            </div>
+            <div class="panel-body">
+              <div id="taskQueueRows" class="progress-list"></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">빠른 처리</h2></div>
+            <div class="panel-body">
+              <div class="approval-grid">
+                <button type="button" class="approval-card" data-view="approvals"><b>승인함</b><span>가입·서류·계약 승인 대기</span></button>
+                <button type="button" class="approval-card" data-view="integrations"><b>연동 점검</b><span>은행·카드·배달앱 계정 상태</span></button>
+                <button type="button" class="approval-card" data-view="reports"><b>월마감</b><span>매출·입금·매입·근태 마감</span></button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="reportsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">경영 리포트 요약</h2></div>
+            <div class="panel-body"><div id="reportMetricRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">월마감 리포트</h2>
+              <button type="button" data-view="closing">상세 리포트 열기</button>
+            </div>
+            <div class="panel-body">
+              <textarea id="reportPreview" readonly style="min-height:360px"></textarea>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="documentsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head">
+              <h2 class="panel-title">경영자료·보관</h2>
+              <span id="documentVaultBadge" class="badge info">문서 0건</span>
+            </div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>구분</th><th>대상</th><th>상태</th><th>보관 위치</th></tr></thead>
+                  <tbody id="documentVaultRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="salesView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">매출·정산 요약</h2><button type="button" data-view="entries">거래 입력 열기</button></div>
+            <div class="panel-body"><div id="salesSummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">최근 매출·정산</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>일자</th><th>채널</th><th>항목</th><th class="num">금액</th><th>상태</th></tr></thead><tbody id="salesRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="accountsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">입금·계좌 대사</h2><button type="button" data-view="settings">계좌 설정</button></div>
+            <div class="panel-body"><div id="accountSummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">등록 계좌·은행 연동</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>구분</th><th>사업자/지점</th><th>계좌·기관</th><th>상태</th></tr></thead><tbody id="accountRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="inventoryView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">재고·발주</h2><button type="button" data-view="integrations">매입처 연동</button></div>
+            <div class="panel-body"><div id="inventorySummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">매입·발주 근거</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>일자</th><th>매입처</th><th>채널</th><th class="num">금액</th><th>상태</th></tr></thead><tbody id="inventoryRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="taxView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">세무·회계 체크</h2><button type="button" data-view="documents">증빙 보관</button></div>
+            <div class="panel-body"><div id="taxSummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">세무 연동·증빙</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>서비스</th><th>수집방식</th><th>상태</th><th>확인값</th></tr></thead><tbody id="taxRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="approvalsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head">
+              <h2 class="panel-title">통합 승인함</h2>
+              <span id="approvalSummaryBadge" class="badge warn">0건</span>
+            </div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>업무</th><th>대상</th><th>상태</th><th>처리 화면</th></tr></thead><tbody id="approvalRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="alertsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head"><h2 class="panel-title">알림센터</h2><span id="alertCenterBadge" class="badge info">0건</span></div>
+            <div class="panel-body"><div id="alertCenterRows" class="progress-list"></div></div>
           </section>
         </div>
       </section>
@@ -3004,6 +3170,74 @@
           </section>
         </div>
       </section>
+
+      <section id="businessView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">사업자·지점</h2><button type="button" data-view="settings">기초등록 열기</button></div>
+            <div class="panel-body"><div id="businessSummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">사업자/지점 목록</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>구분</th><th>명칭</th><th>사업자</th><th>상태</th></tr></thead><tbody id="businessRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="integrationsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">연동 관리</h2>
+              <button type="button" data-view="settings">계정 등록</button>
+            </div>
+            <div class="panel-body"><div id="integrationSummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">자동수집 채널</h2>
+              <button id="syncFinancialShortcutBtn" type="button">은행/카드 거래 연동 실행</button>
+            </div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>서비스</th><th>사업자/지점</th><th>수집방식</th><th>상태</th></tr></thead><tbody id="integrationOpsRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="marginsView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head"><h2 class="panel-title">원가·마진</h2><span id="marginSummaryBadge" class="badge info">실시간 계산</span></div>
+            <div class="panel-body">
+              <div id="marginRows" class="progress-list"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="auditView" class="hidden">
+        <div class="grid content-grid">
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">권한·감사로그</h2></div>
+            <div class="panel-body"><div id="auditSummaryRows" class="progress-list"></div></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">최근 운영 흔적</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>시각</th><th>구분</th><th>대상</th><th>상태</th></tr></thead><tbody id="auditRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
     </main>
       </div>
     </div>
@@ -3614,7 +3848,30 @@
       { type: "foreign_employment_report", label: "외국인 고용 신고/변동 확인", requirement: "외국인 조건부", notice: "신고 대상 여부와 처리일 기록" },
       { type: "other", label: "기타 서류", requirement: "선택", notice: "수집 사유 메모 필수" }
     ];
-    const appViewNames = ["dashboard", "entries", "attendance", "employees", "onboarding", "contracts", "payroll", "closing", "settings"];
+    const appViewNames = [
+      "dashboard",
+      "tasks",
+      "reports",
+      "documents",
+      "sales",
+      "accounts",
+      "employees",
+      "inventory",
+      "tax",
+      "approvals",
+      "alerts",
+      "onboarding",
+      "contracts",
+      "attendance",
+      "payroll",
+      "business",
+      "integrations",
+      "margins",
+      "audit",
+      "entries",
+      "closing",
+      "settings"
+    ];
     const employeeViewNames = ["attendance", "onboarding", "contracts", "payroll"];
 
     const fallbackPermissions = {
@@ -4561,6 +4818,261 @@
       if ((settings().integrations || []).some(item => item.status === "blocked")) alerts.push(["외부계정 자동화 연결 확인이 필요합니다.", "warn"]);
       if (!alerts.length) alerts.push(["현재 월마감 위험 신호가 없습니다.", "good"]);
       els.alerts.innerHTML = alerts.map(([text, klass]) => `<span class="badge ${klass}">${escapeHtml(text)}</span>`).join("");
+    }
+
+    function badgeHtml(label, klass = "info") {
+      return `<span class="badge ${klass}">${escapeHtml(label)}</span>`;
+    }
+
+    function tableEmpty(colspan, message) {
+      return `<tr><td colspan="${colspan}"><div class="empty">${escapeHtml(message)}</div></td></tr>`;
+    }
+
+    function progressRow(label, value, klass = "info", width = 100) {
+      return `
+        <div class="progress-row">
+          <strong>${escapeHtml(label)}</strong>
+          <div class="bar"><i style="--w:${Math.max(5, Math.min(100, Number(width) || 0))}%"></i></div>
+          <span class="badge ${klass}">${escapeHtml(value)}</span>
+        </div>`;
+    }
+
+    function pendingTaskItems() {
+      const pendingEntries = scopedEntries().filter(item => item.status === "pending");
+      const pendingShifts = scopedShifts().filter(item => item.status === "pending");
+      const pendingJoin = employeeJoinRequests.filter(item => String(item.status || "").toLowerCase() === "pending");
+      const visibleDocs = visibleOnboardingDocuments();
+      const pendingDocs = visibleDocs.filter(item => ["pending", "missing", "needs_fix"].includes(String(item.status || "").toLowerCase()) || item.missing_document);
+      const pendingContracts = visibleContracts().filter(item => ["draft", "requested"].includes(String(item.status || "").toLowerCase()));
+      const blockedIntegrations = (settings().integrations || []).filter(item => ["blocked", "credential_required", "connector_not_configured", "credentials_missing"].includes(String(item.status || item.lastSyncStatus || "").toLowerCase()));
+      return [
+        { type: "가입승인", count: pendingJoin.length, view: "approvals", detail: "직원 가입요청 승인 대기" },
+        { type: "입사서류", count: pendingDocs.length, view: "onboarding", detail: "서류 미제출·보완·검수 대기" },
+        { type: "계약서", count: pendingContracts.length, view: "contracts", detail: "초안 또는 직원 서명 요청 상태" },
+        { type: "거래확인", count: pendingEntries.length, view: "sales", detail: "매출·입금·비용 확인필요" },
+        { type: "근태확인", count: pendingShifts.length, view: "attendance", detail: "근무시간 확인필요" },
+        { type: "연동확인", count: blockedIntegrations.length, view: "integrations", detail: "계정·커넥터·수집상태 확인필요" }
+      ];
+    }
+
+    function renderOperationalPages() {
+      const m = metrics();
+      const sales = m.sales || 0;
+      const laborRate = sales ? (m.labor / sales) * 100 : 0;
+      const foodRate = sales ? (m.marketbom / sales) * 100 : 0;
+      const profitRate = sales ? (m.gross / sales) * 100 : 0;
+      const taskItems = pendingTaskItems();
+      const taskCount = taskItems.reduce((sum, item) => sum + item.count, 0);
+
+      if (els.taskSummaryBadge) {
+        els.taskSummaryBadge.textContent = `${taskCount}건`;
+        els.taskSummaryBadge.className = `badge ${taskCount ? "warn" : "good"}`;
+      }
+      if (els.taskQueueRows) {
+        els.taskQueueRows.innerHTML = taskItems.map(item =>
+          progressRow(`${item.type} · ${item.detail}`, `${item.count}건`, item.count ? "warn" : "good", item.count ? 65 : 100)
+        ).join("");
+      }
+
+      if (els.reportMetricRows) {
+        els.reportMetricRows.innerHTML = [
+          progressRow("총매출", formatMoney(m.sales), m.sales ? "good" : "warn", 100),
+          progressRow("입금 차이", formatMoney(m.depositGap), Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? "warn" : "good", 70),
+          progressRow("식재료율", `${foodRate.toFixed(1)}%`, foodRate > 38 ? "bad" : "info", foodRate),
+          progressRow("인건비율", `${laborRate.toFixed(1)}%`, laborRate > 28 ? "bad" : "info", laborRate),
+          progressRow("추정 손익률", `${profitRate.toFixed(1)}%`, profitRate >= 0 ? "good" : "bad", Math.abs(profitRate))
+        ].join("");
+      }
+      if (els.reportPreview) {
+        els.reportPreview.value = [
+          `[${selectedMonth()} / ${selectedBranch()}] 경영 리포트`,
+          `총매출: ${formatMoney(m.sales)}`,
+          `입금합계: ${formatMoney(m.bank)} / 차이: ${formatMoney(m.depositGap)}`,
+          `매입: ${formatMoney(m.marketbom)} / 식재료율: ${foodRate.toFixed(1)}%`,
+          `인건비: ${formatMoney(m.labor)} / 인건비율: ${laborRate.toFixed(1)}%`,
+          `운영비: ${formatMoney(m.expense)}`,
+          `추정 손익: ${formatMoney(m.gross)} / 손익률: ${profitRate.toFixed(1)}%`
+        ].join("\n");
+      }
+
+      const visibleDocs = visibleOnboardingDocuments();
+      const documentRows = [
+        ...visibleDocs.map(item => ({
+          kind: item.document_label || onboardingDocTypeLabels[item.document_type] || "입사서류",
+          target: item.employee_name || item.employeeName || "-",
+          status: item.status_label || item.status || "확인필요",
+          location: item.original_filename || (item.missing_document ? "미제출" : "서버 보관")
+        })),
+        ...visibleContracts().map(item => ({
+          kind: "계약서",
+          target: item.employee_name || item.employeeName || "-",
+          status: contractStatusLabels[item.status]?.[0] || item.status || "작성중",
+          location: item.signedAt || item.signed_at ? "서명완료 보관" : "계약서 탭"
+        })),
+        ...visiblePayrollStatements().map(item => ({
+          kind: "급여내역서",
+          target: item.employee_name || item.employeeName || "-",
+          status: payrollStatusLabels[item.status]?.[0] || item.status || "작성중",
+          location: item.period || "급여내역서 탭"
+        }))
+      ];
+      if (els.documentVaultBadge) els.documentVaultBadge.textContent = `문서 ${documentRows.length}건`;
+      if (els.documentVaultRows) {
+        els.documentVaultRows.innerHTML = documentRows.length ? documentRows.map(item => `
+          <tr><td>${escapeHtml(item.kind)}</td><td>${escapeHtml(item.target)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.location)}</td></tr>
+        `).join("") : tableEmpty(4, "보관 문서가 없습니다.");
+      }
+
+      const salesRows = scopedEntries().filter(item => ["sales", "bank"].includes(item.type)).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      if (els.salesSummaryRows) {
+        els.salesSummaryRows.innerHTML = [
+          progressRow("매출", formatMoney(m.sales), m.sales ? "good" : "warn", 100),
+          progressRow("입금", formatMoney(m.bank), m.bank ? "good" : "warn", 100),
+          progressRow("대사 차이", formatMoney(m.depositGap), Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? "warn" : "good", 60)
+        ].join("");
+      }
+      if (els.salesRows) {
+        els.salesRows.innerHTML = salesRows.length ? salesRows.map(row => {
+          const [label, klass] = statusLabels[row.status] || statusLabels.pending;
+          return `<tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.channel)}</td><td>${escapeHtml(row.vendor)}</td><td class="num">${formatMoney(row.amount)}</td><td>${badgeHtml(label, klass)}</td></tr>`;
+        }).join("") : tableEmpty(5, "매출·입금 거래가 없습니다.");
+      }
+
+      const bankIntegrations = (settings().integrations || []).filter(item => financialTransactionServices.has(item.service));
+      if (els.accountSummaryRows) {
+        els.accountSummaryRows.innerHTML = [
+          progressRow("등록 계좌", `${settings().accounts.length}개`, settings().accounts.length ? "good" : "warn", 100),
+          progressRow("은행·카드 연동", `${bankIntegrations.length}개`, bankIntegrations.length ? "good" : "warn", 100),
+          progressRow("입금 대사", formatMoney(m.depositGap), Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? "warn" : "good", 60)
+        ].join("");
+      }
+      if (els.accountRows) {
+        const accountRows = [
+          ...settings().accounts.map(item => ({ type: "계좌", scope: businessName(item.businessId), account: `${item.bank} ${item.accountNo}`, status: "기초등록" })),
+          ...bankIntegrations.map(item => ({ type: integrationLabels[item.service] || item.service, scope: `${businessName(item.businessId || item.business_id || "")} / ${item.branch || "공통"}`, account: item.accountNoMasked || item.merchantNo || item.institutionCode || "미등록", status: integrationStatusLabels[item.status]?.[0] || item.status || "미지정" }))
+        ];
+        els.accountRows.innerHTML = accountRows.length ? accountRows.map(item => `
+          <tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.scope)}</td><td>${escapeHtml(item.account)}</td><td>${escapeHtml(item.status)}</td></tr>
+        `).join("") : tableEmpty(4, "등록된 계좌 또는 은행 연동이 없습니다.");
+      }
+
+      const purchaseRows = scopedEntries().filter(item => ["marketbom", "expense"].includes(item.type) || /마켓봄|매입|식자재|발주|거래명세|영수증/.test(`${item.vendor} ${item.channel} ${item.memo}`));
+      const supplierIntegrations = (settings().integrations || []).filter(item => ["매입처"].includes(integrationCatalog[item.service]?.category));
+      if (els.inventorySummaryRows) {
+        els.inventorySummaryRows.innerHTML = [
+          progressRow("매입 합계", formatMoney(m.marketbom), m.marketbom ? "good" : "warn", 100),
+          progressRow("매입처 연동", `${supplierIntegrations.length}개`, supplierIntegrations.length ? "good" : "warn", 80),
+          progressRow("식재료율", `${foodRate.toFixed(1)}%`, foodRate > 38 ? "bad" : "info", foodRate)
+        ].join("");
+      }
+      if (els.inventoryRows) {
+        els.inventoryRows.innerHTML = purchaseRows.length ? purchaseRows.slice(0, 20).map(row => {
+          const [label, klass] = statusLabels[row.status] || statusLabels.pending;
+          return `<tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.vendor)}</td><td>${escapeHtml(row.channel)}</td><td class="num">${formatMoney(row.amount)}</td><td>${badgeHtml(label, klass)}</td></tr>`;
+        }).join("") : tableEmpty(5, "매입·발주 근거 거래가 없습니다.");
+      }
+
+      const taxIntegrations = (settings().integrations || []).filter(item => ["세무·계산서", "기타 운영"].includes(integrationCatalog[item.service]?.category));
+      if (els.taxSummaryRows) {
+        els.taxSummaryRows.innerHTML = [
+          progressRow("세무 연동", `${taxIntegrations.length}개`, taxIntegrations.length ? "good" : "warn", 80),
+          progressRow("증빙 문서", `${documentRows.length}건`, documentRows.length ? "good" : "warn", 80),
+          progressRow("급여/원천세 자료", `${visiblePayrollStatements().length}건`, visiblePayrollStatements().length ? "good" : "warn", 60)
+        ].join("");
+      }
+      if (els.taxRows) {
+        els.taxRows.innerHTML = taxIntegrations.length ? taxIntegrations.map(item => `
+          <tr><td>${escapeHtml(integrationLabels[item.service] || item.service)}</td><td>${escapeHtml(collectionModeLabel(item.collectionMode))}</td><td>${escapeHtml(integrationStatusLabels[item.status]?.[0] || item.status || "미지정")}</td><td>${escapeHtml(item.requiredProof || integrationCatalog[item.service]?.requiredProof || "-")}</td></tr>
+        `).join("") : tableEmpty(4, "홈택스·세무 증빙 연동을 등록하십시오.");
+      }
+
+      const approvalRows = [];
+      employeeJoinRequests.filter(item => String(item.status || "").toLowerCase() === "pending").forEach(item => approvalRows.push(["가입요청", item.name || item.employee_name || item.email || "-", "승인대기", "employees"]));
+      visibleDocs.filter(item => ["pending", "missing", "needs_fix"].includes(String(item.status || "").toLowerCase()) || item.missing_document).forEach(item => approvalRows.push(["입사서류", item.employee_name || item.employeeName || "-", item.status_label || item.status || "확인필요", "onboarding"]));
+      visibleContracts().filter(item => ["draft", "requested"].includes(String(item.status || "").toLowerCase())).forEach(item => approvalRows.push(["계약서", item.employee_name || item.employeeName || "-", contractStatusLabels[item.status]?.[0] || item.status || "작성중", "contracts"]));
+      scopedEntries().filter(item => item.status === "pending").forEach(item => approvalRows.push(["거래확인", item.vendor || "-", "확인필요", "sales"]));
+      if (els.approvalSummaryBadge) {
+        els.approvalSummaryBadge.textContent = `${approvalRows.length}건`;
+        els.approvalSummaryBadge.className = `badge ${approvalRows.length ? "warn" : "good"}`;
+      }
+      if (els.approvalRows) {
+        els.approvalRows.innerHTML = approvalRows.length ? approvalRows.map(row => `
+          <tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td><td>${escapeHtml(row[2])}</td><td><button type="button" data-view="${escapeHtml(row[3])}">열기</button></td></tr>
+        `).join("") : tableEmpty(4, "승인 대기 항목이 없습니다.");
+      }
+
+      const alertRows = [
+        ...taskItems.filter(item => item.count > 0).map(item => [`${item.type} ${item.count}건`, item.detail, "warn"]),
+        ...(Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? [["입금 대사 차이", formatMoney(m.depositGap), "warn"]] : []),
+        ...(foodRate > 38 ? [["식재료율 초과", `${foodRate.toFixed(1)}%`, "bad"]] : []),
+        ...(laborRate > 28 ? [["인건비율 초과", `${laborRate.toFixed(1)}%`, "bad"]] : [])
+      ];
+      if (els.alertCenterBadge) {
+        els.alertCenterBadge.textContent = `${alertRows.length}건`;
+        els.alertCenterBadge.className = `badge ${alertRows.length ? "warn" : "good"}`;
+      }
+      if (els.alertCenterRows) {
+        els.alertCenterRows.innerHTML = alertRows.length ? alertRows.map(item => progressRow(item[0], item[1], item[2], 70)).join("") : progressRow("정상", "즉시 처리 알림 없음", "good", 100);
+      }
+
+      const branchRows = settings().branches.map(item => ["지점", item.name, businessName(item.businessId), branchStatusLabels[item.status] || item.status || "운영중"]);
+      const businessRows = settings().businesses.map(item => ["사업자", item.name, item.registrationNo || "미등록", item.representative || "대표자 미등록"]);
+      if (els.businessSummaryRows) {
+        els.businessSummaryRows.innerHTML = [
+          progressRow("사업자", `${settings().businesses.length}개`, "info", 100),
+          progressRow("지점", `${settings().branches.length}개`, "info", 100),
+          progressRow("미완성 사업자", `${settings().businesses.filter(item => !item.registrationNo || !item.representative).length}개`, settings().businesses.some(item => !item.registrationNo || !item.representative) ? "warn" : "good", 60)
+        ].join("");
+      }
+      if (els.businessRows) {
+        els.businessRows.innerHTML = [...businessRows, ...branchRows].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td><td>${escapeHtml(row[2])}</td><td>${escapeHtml(row[3])}</td></tr>`).join("");
+      }
+
+      if (els.integrationSummaryRows) {
+        const integrations = settings().integrations || [];
+        els.integrationSummaryRows.innerHTML = [
+          progressRow("전체 연동", `${integrations.length}개`, integrations.length ? "good" : "warn", 100),
+          progressRow("은행·카드", `${bankIntegrations.length}개`, bankIntegrations.length ? "good" : "warn", 80),
+          progressRow("파일/수동 폴백", `${integrations.filter(item => ["manual", "receipt-photo", "statement-upload", "tax-invoice-upload"].includes(item.status) || /upload|photo/.test(item.collectionMode || "")).length}개`, "info", 60)
+        ].join("");
+      }
+      if (els.integrationOpsRows) {
+        els.integrationOpsRows.innerHTML = (settings().integrations || []).length ? settings().integrations.map(item => `
+          <tr><td>${escapeHtml(integrationLabels[item.service] || item.service)}</td><td>${escapeHtml(`${businessName(item.businessId || item.business_id || "")} / ${item.branch || "공통"}`)}</td><td>${escapeHtml(collectionModeLabel(item.collectionMode))}</td><td>${escapeHtml(integrationStatusLabels[item.status]?.[0] || item.status || "미지정")}</td></tr>
+        `).join("") : tableEmpty(4, "연동 계정을 등록하십시오.");
+      }
+
+      if (els.marginSummaryBadge) {
+        els.marginSummaryBadge.textContent = `${profitRate.toFixed(1)}%`;
+        els.marginSummaryBadge.className = `badge ${profitRate >= 0 ? "good" : "bad"}`;
+      }
+      if (els.marginRows) {
+        els.marginRows.innerHTML = [
+          progressRow("총매출", formatMoney(m.sales), m.sales ? "good" : "warn", 100),
+          progressRow("식재료비", `${formatMoney(m.marketbom)} · ${foodRate.toFixed(1)}%`, foodRate > 38 ? "bad" : "info", foodRate),
+          progressRow("인건비", `${formatMoney(m.labor)} · ${laborRate.toFixed(1)}%`, laborRate > 28 ? "bad" : "info", laborRate),
+          progressRow("운영비", formatMoney(m.expense), "info", sales ? (m.expense / sales) * 100 : 0),
+          progressRow("추정 손익", `${formatMoney(m.gross)} · ${profitRate.toFixed(1)}%`, profitRate >= 0 ? "good" : "bad", Math.abs(profitRate))
+        ].join("");
+      }
+
+      if (els.auditSummaryRows) {
+        const permissions = authPermissions();
+        els.auditSummaryRows.innerHTML = [
+          progressRow("로그인 계정", authSession?.user?.email || "미로그인", hasServerAuth() ? "good" : "warn", 100),
+          progressRow("권한", permissions.role_label || permissions.role || "guest", permissions.can_manage_automation ? "good" : "info", 80),
+          progressRow("자동화 관리", permissions.can_manage_automation ? "허용" : "제한", permissions.can_manage_automation ? "good" : "warn", 70),
+          progressRow("설정 동기화", state.meta?.updatedAt || "로컬 상태", "info", 60)
+        ].join("");
+      }
+      if (els.auditRows) {
+        const rows = [
+          [state.meta?.updatedAt || "-", "로컬 원장", "브라우저 저장 데이터", "loaded"],
+          [authSession?.issued_at || authSession?.created_at || "-", "세션", authSession?.user?.email || "미로그인", hasServerAuth() ? "active" : "signed-out"],
+          ...((settings().integrations || []).slice(0, 8).map(item => [item.lastSyncAt || "-", "연동", integrationLabels[item.service] || item.service, item.lastSyncStatus || item.status || "not_started"]))
+        ];
+        els.auditRows.innerHTML = rows.map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td><td>${escapeHtml(row[2])}</td><td>${escapeHtml(row[3])}</td></tr>`).join("");
+      }
     }
 
     function renderEntryRows() {
@@ -5915,6 +6427,7 @@
       renderContracts();
       renderPayroll();
       renderClosing();
+      renderOperationalPages();
     }
 
     function setView(view) {
@@ -8039,6 +8552,7 @@
       els.refreshServerAccountsBtn.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));
       els.syncDeliveryBtn.addEventListener("click", () => syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]).catch(err => showToast(err.message)));
       els.syncFinancialBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
+      els.syncFinancialShortcutBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
       els.serverImportSettlementBtn.addEventListener("click", () => importSettlementCsvToServer().catch(err => showToast(err.message)));
       els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
