@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-30 00:00 KST - response duration footer closeout correction
+
+- Request: Previous completion report conflicted with commit/push/deploy/document ledger; continue verification and finish remaining action.
+- Finding: Dashboard calculated live response duration but hid the footer while a bubble was visibly streaming because the footer renderer was gated by `!isVisiblyStreaming`. DB telemetry also remained incomplete for older completed assistant rows because ledger-derived durations were only hydrated into API payloads, not persisted.
+- Backend: `app/services/chat_service.py` now persists execution-ledger-derived response duration into `chat_messages.quality_details` for non-running assistant messages that were missing duration keys.
+- Dashboard: `/root/aads/aads-dashboard/src/app/chat/page.tsx` now renders the assistant footer for streaming and completed states, and shows response duration as a visible bottom badge (`진행 N초` / `소요 N초`) instead of burying it in the model metadata string.
+- Validation before deploy: `python3 -m py_compile app/services/chat_service.py` passed; `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
+- Notes: Existing unrelated dirty files were not included. Authenticated browser pixel E2E remains dependent on a logged-in CEO/browser session; API/DB/container validation is the fallback.
+
 ## 2026-07-29 23:46 KST - chat response duration E2E gap fix
 
 - Request: Current session assistant bubble footer did not show response elapsed time; verify E2E gap and patch missing cases.

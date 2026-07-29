@@ -6135,6 +6135,30 @@ async def _hydrate_message_response_durations(
         message["response_duration_ms"] = int(round(duration_sec * 1000))
         message["duration_sec"] = duration_sec
         message["duration_ms"] = int(round(duration_sec * 1000))
+        if status not in ("running", "retrying"):
+            try:
+                await conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb
+                    WHERE id = $1
+                      AND NOT (
+                        quality_details ? 'response_duration_ms'
+                        OR quality_details ? 'duration_ms'
+                        OR quality_details ? 'response_duration_sec'
+                        OR quality_details ? 'duration_sec'
+                      )
+                    """,
+                    message.get("id"),
+                    json.dumps(details, ensure_ascii=False),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "response_duration_backfill_failed message=%s execution=%s error=%s",
+                    message.get("id"),
+                    execution_id,
+                    exc,
+                )
     return messages
 
 
