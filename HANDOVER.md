@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-07-29 17:15 KST - AADS chat response duration display and telemetry
+
+- Request: Show AI response elapsed time under each assistant bubble and store response metrics for later quality improvement.
+- Backend:
+  - `app/services/chat_service.py` now records `response_duration_sec`, `response_duration_ms`, `duration_sec`, and `duration_ms` into `chat_messages.quality_details`.
+  - Normal streaming, semantic cache, loop handler, discussion, search/grounding, deep research, SDK, and autonomous paths now include duration in SSE `done` payloads where applicable.
+  - Render message projection now includes `quality_details` so historical saved durations are visible after reload.
+- Dashboard:
+  - `/root/aads/aads-dashboard/src/app/chat/types.ts` added duration fields to `ChatMessage`.
+  - `/root/aads/aads-dashboard/src/app/chat/page.tsx` displays `소요 N초` in the assistant bubble footer, reading both live SSE fields and persisted `quality_details`.
+- Validation:
+  - `python3 -m py_compile app/services/chat_service.py` passed.
+  - `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
+  - `git diff --check` passed for touched backend and dashboard files.
+  - DB check found existing `chat_messages.quality_details ? 'duration_sec'` rows, confirming the JSONB telemetry path is available.
+- Deployment: not deployed in this entry. Apply backend reload and dashboard deploy after CEO deployment approval if production visibility is required.
+
 ## 2026-07-28 08:07 KST - Yeoljeong bank quick sync save-flow correction
 
 - 요청: 신한은행 간편서비스/IBK 빠른서비스 자격값을 설정에서 등록하면 은행거래·카드거래 연동이 즉시 실행될 수 있게 최종 확인·조치.

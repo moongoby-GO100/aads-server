@@ -6009,7 +6009,7 @@ def _message_select_fields(fields: str) -> str:
         return (
             "id, session_id, execution_id, role, content, model_used, intent, "
             "cost, tokens_in, tokens_out, bookmarked, attachments, sources, artifact_id, "
-            "created_at, edited_at, quality_score, reply_to_id, branch_id, "
+            "created_at, edited_at, quality_score, quality_details, reply_to_id, branch_id, "
             "'[]'::jsonb AS tools_called, "
             f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
             f"(SELECT COUNT(*)::int FROM jsonb_array_elements({_tool_events}) AS tool_event(value) "
@@ -6864,6 +6864,7 @@ async def _save_and_update_session(
     sources: Optional[list] = None,
     tools_called: Optional[list] = None,
     thinking_summary: Optional[str] = None,
+    response_duration_sec: Optional[float] = None,
     auto_save_check: bool = False,
     parent_artifact_id: Optional[uuid.UUID] = None,
     edit_intent: bool = False,
@@ -7063,6 +7064,37 @@ async def _save_and_update_session(
                     thinking_summary=thinking_summary,
                 )
                 _assistant_msg_id = _saved_msg["id"] if _saved_msg else None
+            if _assistant_msg_id and response_duration_sec is not None:
+                try:
+                    _response_duration_sec = max(0.0, round(float(response_duration_sec), 3))
+                    _response_telemetry = {
+                        "response_duration_sec": _response_duration_sec,
+                        "response_duration_ms": int(round(_response_duration_sec * 1000)),
+                        "duration_sec": _response_duration_sec,
+                        "duration_ms": int(round(_response_duration_sec * 1000)),
+                        "response_duration_source": "server_monotonic",
+                        "response_model": model_used or None,
+                        "response_intent": intent or None,
+                        "tool_event_count": len(normalized_tools_called or []),
+                        "tokens_in": int(tokens_in or 0),
+                        "tokens_out": int(tokens_out or 0),
+                    }
+                    await conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb
+                        WHERE id = $1
+                        """,
+                        _assistant_msg_id,
+                        json.dumps(_response_telemetry, ensure_ascii=False),
+                    )
+                except Exception as _duration_save_err:
+                    logger.warning(
+                        "response_duration_save_failed session=%s message=%s error=%s",
+                        str(sid)[:8],
+                        str(_assistant_msg_id)[:8],
+                        _duration_save_err,
+                    )
             if _execution_uuid:
                 if _assistant_msg_id is None:
                     _assistant_msg_id = await conn.fetchval(
@@ -7658,6 +7690,8 @@ async def send_message_stream(
     _lf_span_intent = None
     _lf_span_llm = None
     _trace_start_time = __import__("time").monotonic()
+    def _response_duration_sec() -> float:
+        return round(__import__("time").monotonic() - _trace_start_time, 3)
     _todo_context_token = _current_todo_context.set(None)
     _todo_context_token_mid: Any = None  # AADS: L5246 set() 토큰 추적 (역순 reset용)
 
@@ -8322,6 +8356,7 @@ async def send_message_stream(
                 intent=intent_override or "cache_hit",
                 cost=0.0, tokens_in=0, tokens_out=0,
                 tools_called=[], thinking_summary=None,
+                response_duration_sec=_response_duration_sec(),
                 **_artifact_chain_kwargs,
             )
             return
@@ -8376,6 +8411,7 @@ async def send_message_stream(
                                 intent="loop_command",
                                 cost=0.0, tokens_in=0, tokens_out=0,
                                 tools_called=[], thinking_summary=None,
+                                response_duration_sec=_response_duration_sec(),
                                 **_artifact_chain_kwargs,
                             )
                         except Exception:
@@ -8563,14 +8599,18 @@ async def send_message_stream(
                 cost=Decimal(str(discussion_result['cost_usd'])),
                 tools_called=discussion_result["tools_called"],
                 thinking_summary="다관점 토론 오케스트레이터",
+                response_duration_sec=_response_duration_sec(),
                 **_artifact_chain_kwargs,
             )
+            _duration_sec = _response_duration_sec()
             _discussion_done = {
                 "type": "done",
                 "intent": intent,
                 "model": _DISCUSSION_MODEL_USED,
                 "cost": str(discussion_result["cost_usd"]),
                 "debate_id": discussion_result["debate_id"],
+                "duration_sec": _duration_sec,
+                "duration_ms": int(round(_duration_sec * 1000)),
             }
             yield f"data: {json.dumps(_discussion_done)}\n\n"
             return
@@ -8637,8 +8677,10 @@ async def send_message_stream(
                         await _save_and_update_session(
                             sid, result.text, model_used=_model_label, intent=intent,
                             cost=Decimal("0"), sources=result.citations,
+                            response_duration_sec=_response_duration_sec(),
                             **_artifact_chain_kwargs)
-                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': _model_label, 'cost': '0'})}\n\n"
+                        _duration_sec = _response_duration_sec()
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': _model_label, 'cost': '0', 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
                         _searxng_ok = True
                 except Exception as _sxng_err:
                     logger.warning(f"smart_search_grounding_failed: {_sxng_err}")
@@ -8710,8 +8752,10 @@ async def send_message_stream(
                 await _save_and_update_session(
                     sid, result.text, model_used="gemini-flash", intent=intent,
                     cost=_search_cost, sources=result.citations,
+                    response_duration_sec=_response_duration_sec(),
                     **_artifact_chain_kwargs)
-                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': str(_search_cost)})}\n\n"
+                _duration_sec = _response_duration_sec()
+                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': str(_search_cost), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
                 return
 
             elif intent_result.gemini_mode == "deep_research":
@@ -8777,8 +8821,10 @@ async def send_message_stream(
                         await _save_and_update_session(
                             sid, report_text, model_used="gemini-deep-research", intent=intent,
                             cost=Decimal(str(cost_usd)), sources=final_citations,
+                            response_duration_sec=_response_duration_sec(),
                             **_artifact_chain_kwargs)
-                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(cost_usd)})}\n\n"
+                        _duration_sec = _response_duration_sec()
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(cost_usd), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
                         return
                     except Exception as e:
                         logger.warning(f"gemini_deep_research_failed: {e}")
@@ -8966,8 +9012,10 @@ async def send_message_stream(
                         await _save_and_update_session(
                             sid, full_response, model_used=model_used, intent=intent,
                             cost=cost_usd, tools_called=tools_called,
+                            response_duration_sec=_response_duration_sec(),
                             **_artifact_chain_kwargs)
-                        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'agent_sdk': True})}\n\n"
+                        _duration_sec = _response_duration_sec()
+                        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000)), 'agent_sdk': True})}\n\n"
                         return
 
                 except Exception as _sdk_err:
@@ -9171,8 +9219,10 @@ async def send_message_stream(
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called,
+                response_duration_sec=_response_duration_sec(),
                 **_artifact_chain_kwargs)
-            yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'autonomous': True})}\n\n"
+            _duration_sec = _response_duration_sec()
+            yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': 0, 'output_tokens': 0, 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000)), 'autonomous': True})}\n\n"
             return
 
         # 9. 모델 선택기 → SSE 스트리밍
@@ -9874,6 +9924,7 @@ async def send_message_stream(
         _thinking_truncated = (thinking_summary or "")[:2000] or None
         if thinking_summary and len(thinking_summary) > 2000:
             logger.info(f"thinking_truncated original_len={len(thinking_summary)} session={session_id[:8]}")
+        _final_response_duration_sec = _response_duration_sec()
         await _save_and_update_session(
             sid, full_response,
             session_id_str=session_id,
@@ -9885,12 +9936,13 @@ async def send_message_stream(
             tokens_out=output_tokens,
             tools_called=tools_called,
             thinking_summary=_thinking_truncated,
+            response_duration_sec=_final_response_duration_sec,
             auto_save_check=True,
             **_artifact_chain_kwargs,
         )
 
         try:
-            _duration_sec = round(__import__("time").monotonic() - _trace_start_time, 3)
+            _duration_sec = _final_response_duration_sec
             _mode_details = json.dumps(
                 {
                     "response_mode": response_mode,
@@ -10062,7 +10114,7 @@ async def send_message_stream(
             _confidence_label = "mixed"
         else:
             _confidence_label = None  # 도구 사용했지만 DB 아닌 경우 (웹검색 등) — 레이블 미표시
-        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'duration_sec': _final_response_duration_sec, 'duration_ms': int(round(_final_response_duration_sec * 1000)), 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
         # ContextVar set/reset이 async generator/Task 경계에서 분리되면 ValueError 발생.
