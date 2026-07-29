@@ -6858,7 +6858,7 @@
           body: `<div class="integration-detail-grid">${receiptCards}</div><div class="integration-detail-timeline">${integrationStep("1", "파일 수신", "사진, PDF, CSV, 엑셀 붙여넣기")}${integrationStep("2", "OCR/표준화", "거래일자, 거래처, 금액, 부가세, 계좌를 추출")}${integrationStep("3", "사용자 보정", "품목·세금 분류와 사업자/지점 귀속 보정")}${integrationStep("4", "승인 반영", "거래 원장, 증빙 원장, 월마감에 반영")}</div><div class="integration-detail-actions"><button type="button" data-open-import="supplier_statement_upload">증빙 파일 등록</button><button type="button" data-open-import="shinhan_business">은행 CSV 반영</button><button type="button" class="primary" data-open-import="card_pg">카드/PG 리포트 반영</button></div>`
         },
         "credential-vault": {
-          title: "인증정보 보관 정책",
+          title: "보안 보관 정책",
           subtitle: "비밀번호·계좌비번·인증서·토큰은 원문 재표시 없이 Vault에 저장합니다.",
           body: `<div class="integration-detail-grid">${integrationDetailCard("저장 방식", "서버 Vault 암호화, 공개 응답에서는 마스킹값만 반환")}${integrationDetailCard("입력 권한", "총괄 운영관리자/운영관리자만 계정 등록 가능")}${integrationDetailCard("감사", "입력, 갱신, 테스트, 실패 이력을 연동 상태에 남김")}${integrationDetailCard("만료 알림", "14일/7일/1일 전 대표·회계 담당 알림")}${integrationDetailCard("권장 범위", "조회 전용, 이체/결제 권한 제외")}${integrationDetailCard("실패 대체", "파일 업로드 대기열로 자동 전환")}</div><div class="integration-detail-actions"><button type="button" data-integration-detail="integration-audit">감사 점검</button><button type="button" class="primary" data-integration-detail="connect">연동 추가</button></div>`
         },
