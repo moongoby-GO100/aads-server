@@ -1064,6 +1064,40 @@
       flex-wrap: wrap;
     }
 
+    .integration-setup-form {
+      display: grid;
+      gap: 14px;
+    }
+
+    .integration-setup-band {
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      border-radius: var(--radius-sm);
+      padding: 14px;
+    }
+
+    .integration-setup-band h3 {
+      margin: 0 0 4px;
+      font-size: 15px;
+    }
+
+    .integration-setup-band p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .integration-preset-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .integration-preset-strip button {
+      text-align: left;
+      min-height: 58px;
+    }
+
     .content-grid > .span-2 { grid-column: 1 / -1; }
 
     .panel-head {
@@ -1152,35 +1186,87 @@
     .contract-paper {
       padding: 18px;
       color: var(--text);
-      line-height: 1.6;
-      font-size: 13px;
+      line-height: 1.52;
+      font-size: 12.5px;
     }
 
     .contract-paper h3 {
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       text-align: center;
       font-size: 18px;
+      letter-spacing: 0;
     }
 
     .contract-paper .preview-meta {
-      margin: 0 0 14px;
+      margin: 0 0 12px;
       text-align: center;
       color: var(--muted);
       font-size: 12px;
     }
 
     .contract-paper h4 {
-      margin: 14px 0 6px;
+      margin: 12px 0 5px;
       font-size: 13px;
+      break-after: avoid;
     }
 
     .contract-paper ol {
-      margin: 8px 0 0 18px;
+      margin: 7px 0 0 18px;
       padding: 0;
     }
 
     .contract-paper li {
-      margin: 7px 0;
+      margin: 5px 0;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .contract-paper .legal-basis {
+      margin: 0 0 12px;
+      padding: 9px 10px;
+      border: 1px solid #b7d8cf;
+      border-radius: 6px;
+      background: #f0fdfa;
+      color: #134e4a;
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .contract-paper .legal-checklist {
+      margin: 10px 0 12px;
+      padding: 10px 12px;
+      border: 1px solid #d7e0e4;
+      border-radius: 6px;
+      background: #f8fafb;
+      break-inside: avoid;
+    }
+
+    .contract-paper .legal-checklist b {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .contract-paper .legal-checklist ul {
+      margin: 0 0 0 17px;
+      padding: 0;
+    }
+
+    .contract-paper .legal-checklist li {
+      margin: 4px 0;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .contract-paper .classification-warning {
+      margin: 10px 0 12px;
+      padding: 9px 10px;
+      border: 1px solid #f3c36f;
+      border-radius: 6px;
+      background: #fff8e7;
+      color: #7c4a03;
+      font-size: 11px;
+      line-height: 1.5;
+      break-inside: avoid;
     }
 
     .contract-paper .preview-row {
@@ -1197,15 +1283,17 @@
 
     .contract-paper .identity-table {
       width: 100%;
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       border-collapse: collapse;
       table-layout: fixed;
-      font-size: 12px;
+      font-size: 11.5px;
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
 
     .contract-paper .identity-table th,
     .contract-paper .identity-table td {
-      padding: 6px 7px;
+      padding: 5px 6px;
       border: 1px solid #cfd7dc;
       vertical-align: top;
       overflow-wrap: anywhere;
@@ -1235,12 +1323,14 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 12px;
-      margin-top: 14px;
+      margin-top: 12px;
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
 
     .contract-paper .signature-box {
       position: relative;
-      min-height: 70px;
+      min-height: 66px;
       padding: 10px;
       border: 1px dashed var(--line);
       border-radius: 8px;
@@ -1267,6 +1357,8 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 6px;
       margin: 8px 0;
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
 
     .contract-paper .salary-breakdown span {
@@ -1572,7 +1664,7 @@
       width: 210mm;
       min-height: 297mm;
       margin: 0 auto;
-      padding: 18mm 16mm;
+      padding: 15mm 14mm;
       background: white;
       box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
     }
@@ -1725,6 +1817,7 @@
       .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts,
       .integration-service-grid, .integration-requirement-grid, .integration-detail-grid { grid-template-columns: 1fr; }
       .integration-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .integration-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .business-workspace { grid-template-columns: 1fr; }
       .business-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .auth-intro { padding-right: 0; }
@@ -1792,6 +1885,7 @@
       .hero-actions { justify-content: stretch; }
       .form-grid { grid-template-columns: 1fr; }
       .form-grid .span-2 { grid-column: span 1; }
+      .integration-preset-strip { grid-template-columns: 1fr; }
       .auth-gate { align-items: start; }
       .auth-gate-inner { padding: 22px 14px; gap: 18px; }
       .auth-brand-lockup { align-items: flex-start; }
@@ -2676,7 +2770,8 @@
       <section id="contractsView" class="hidden">
         <div class="settings-note" style="margin-bottom:14px">
           관리자는 근로계약서를 작성·수정하고 직원에게 서명 링크를 보낼 수 있습니다. 직원은 전달받은 링크로 계약 내용을 확인한 뒤 서명 완료 상태로 처리합니다.
-          계약서는 승인된 직원 선택 후 4대보험 가입 근로자 또는 3.3% 프리랜서 구분에 맞춰 작성합니다. 외국인 직원은 체류자격과 취업 가능 확인 내용을 계약 메모와 입사서류 검수에 함께 남깁니다.
+          계약서는 승인된 직원 선택 후 4대보험 가입 근로자 또는 3.3% 프리랜서 구분에 맞춰 작성합니다. 근로계약서는 고용노동부 표준근로계약서 서식 모음의 필수 기재축과 2026년 적용 최저임금 고시 시간급 10,320원 기준을 반영합니다.
+          프리랜서 계약서는 고용노동부 노무제공자 공통 표준계약서 기준으로 업무범위·산출물·검수·정산·해지 기준을 분리하고, 3.3% 원천징수만으로 근로자성이 배제되지 않으므로 지휘·감독, 고정 근무표, 출퇴근 통제, 매장 상시업무 편입 여부를 확인해 근로계약으로 전환해야 합니다. 외국인 직원은 체류자격과 취업 가능 확인 내용을 계약 메모와 입사서류 검수에 함께 남깁니다.
         </div>
         <div class="grid content-grid">
           <section id="contractEditorPanel" class="panel">
@@ -4097,27 +4192,27 @@
       common: {
         workplace: "해당 지점 영업장 및 사용자가 지정한 관련 업무 장소",
         jobDescription: "홀 응대, 주방보조, 포장/배달 주문 확인, 매장 청소, 위생관리, 마감정산 보조 등 매장 운영에 필요한 업무",
-        workTime: "10:00-22:00 중 매장 운영표에 따른 12시간 맞교대 또는 협의된 근무시간",
-        restTime: "근로시간 4시간 이상 30분, 8시간 이상 60분 이상 부여",
-        weeklyHours: "주 소정근로시간은 실제 근무표 기준으로 확정",
+        workTime: "근로계약서 저장 전 실제 시작·종료시각을 확정 입력",
+        restTime: "근로시간 4시간 이상 30분, 8시간 이상 60분 이상을 근로자가 자유롭게 이용",
+        weeklyHours: "주 소정근로시간은 실제 근무표 기준으로 확정하고 법정 한도 내에서 운영",
         workDays: "주 5일 또는 매장 근무표에 따른 협의 근무",
         holidays: "주휴일은 근무표에 따라 지정하고 주휴수당은 법정 요건 충족 시 지급",
         payDate: "매월 10일",
         payMethod: "직원 본인 명의 계좌이체",
         probationPeriod: "수습기간 해당 없음. 필요 시 입사 후 3개월 이내로 별도 명시",
         wageComposition: "기본급, 주휴수당, 연장·야간·휴일근로수당, 식대 또는 기타 수당, 법정 공제항목을 급여내역서에 구분 기재",
-        overtimeTerms: "연장·야간·휴일근로는 관리자 사전 승인 또는 매장 운영상 필요 시 진행하며, 법정 가산수당을 급여마감에 반영",
+        overtimeTerms: "연장·야간·휴일근로는 사전 승인 및 근태기록 기준으로 운영하고, 적용 대상 법정수당을 급여마감에 반영",
         leaveTerms: "연차유급휴가, 지각, 조퇴, 결근, 병가, 무단결근은 근태기록과 법정 기준에 따라 급여내역서에 반영",
         mealUniformTerms: "식사 제공 여부, 유니폼 지급·반납, 보건증 제출·갱신, 위생교육 이수 기준을 준수",
-        terminationTerms: "퇴직 시 최소 30일 전 통보를 원칙으로 하며, 무단결근, 위생·보안 중대 위반, 업무방해 시 계약 해지 검토 가능",
+        terminationTerms: "퇴직 시 원활한 인수인계를 위해 사전 통보하도록 노력한다. 해고·계약해지는 법령상 제한, 해고예고, 소명 기회, 서면 통지 기준을 준수하며 위약금 또는 손해배상 예정액을 미리 정하지 않는다.",
         confidentialityTerms: "고객정보, 직원정보, 매출·정산자료, 레시피, 배달앱·포스 계정정보, 위생수칙을 준수하고 무단 열람·반출·공유를 금지",
-        terms: ""
+        terms: "본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법, 개인정보보호법 등 관계 법령과 사업장 취업규칙 또는 내부 운영기준에 따른다. 임금, 소정근로시간, 휴일, 연차유급휴가, 임금 구성항목·계산방법·지급방법은 서면 또는 전자문서로 명시하고 서명 완료본을 근로자에게 교부한다. PDF와 인쇄본은 A4 세로 문서 기준으로 보관한다."
       },
       part_time: {
         weeklyHours: "주 소정근로시간과 근로일별 근로시간은 확정 근무표에 명시",
         workDays: "월/화/수/목/금/토/일 중 협의된 요일",
         dailyWorkSchedule: "근로일별 시작·종료·휴게시간을 확정하여 입력",
-        terms: ""
+        terms: "단시간근로자는 근로일별 시작·종료·휴게시간을 서면에 확정 기재한다. 본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법 등 관계 법령에 따른다."
       },
       regular: {
         workplaceSizeCategory: "under_5",
@@ -4149,14 +4244,16 @@
       freelancer: {
         wageType: "case_fee",
         jobDescription: "독립 용역 업무",
-        workTime: "용역 수행 일정은 결과물 납품과 검수 기준에 따라 협의",
+        workTime: "근무시간을 정하지 않고 산출물 납품 일정과 검수 기준으로 관리",
         restTime: "근로시간 지휘·감독 대상 아님",
         weeklyHours: "해당 없음",
         workDays: "해당 없음",
         holidays: "해당 없음",
-        freelancerScope: "매장 운영 지원, 콘텐츠·홍보, 단기 행사, 교육 등 독립 용역 범위와 산출물을 계약서에 구체적으로 기재",
-        freelancerSettlementTerms: "용역비는 검수 완료 후 합의된 지급일에 지급하며, 지급 시 3.3% 사업소득 원천징수 후 정산",
-        terms: ""
+        freelancerScope: "고용노동부 노무제공자 공통 표준계약서 기준에 맞춰 계약 목적, 구체적 업무범위, 산출물 형식, 납품일, 검수 기준, 재작업 범위, 수급인의 독립 수행 방식을 개별 계약서에 명확히 기재",
+        freelancerSettlementTerms: "용역비는 산출물 검수 완료 후 합의된 지급일에 지급하며, 사업소득 원천징수 3.3% 적용 여부, 비용 부담 주체, 자료 제공 범위, 지연 지급 기준, 중도해지 시 기성 정산 기준을 명시한다.",
+        terminationTerms: "계약 위반, 산출물 미제출, 보안 위반, 협업 불능 등 객관적 사유가 있는 경우 서면 통지 후 해지한다. 이미 검수 완료된 산출물의 정산 권리와 반환·삭제해야 할 자료 범위는 별도로 보호한다.",
+        confidentialityTerms: "영업비밀, 고객정보, 계정정보, 매출·정산자료, 레시피를 용역 목적 외로 사용하거나 제3자에게 제공하지 않는다.",
+        terms: "수급인은 독립 사업자로서 근로시간·근무장소·업무수행방법에 대한 직접 지휘감독을 받지 않는다. 실제 운영이 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성에 해당하면 근로계약 전환 여부를 즉시 검토한다. 계약서와 검수·정산 기록은 A4 세로 문서 기준으로 보관한다."
       },
       confidentiality: {
         jobDescription: "영업비밀, 개인정보, 매출·정산자료, 계정정보 보호 서약",
@@ -6030,9 +6127,17 @@
         if (draft.employmentTaxType !== "freelancer_33" || draft.wageType !== "case_fee") {
           throw new Error("프리랜서 용역계약서는 3.3% 원천징수·건별/용역비 방식으로 작성해야 합니다.");
         }
+        const fixedWorkSignals = [draft.workTime, draft.weeklyHours, draft.workDays].join(" ");
+        if (/(출퇴근|근무표|주\s*\d+\s*시간|월\/화|화\/수|수\/목|목\/금|금\/토|토\/일|상시|교대)/.test(fixedWorkSignals)) {
+          throw new Error("프리랜서 용역계약서에 고정 근무표·출퇴근·상시 교대 근무 표현이 있습니다. 해당 운영이면 근로계약서로 작성하십시오.");
+        }
         requireValue("용역 시작일", draft.startDate);
+        requireValue("용역 수행장소/방식", draft.workplace);
+        requireValue("용역 업무내용", draft.jobDescription);
         requireValue("용역 업무범위/산출물", draft.freelancerScope);
         requireValue("용역비 정산/해지", draft.freelancerSettlementTerms);
+        requireValue("계약 해지/기성정산 기준", draft.terminationTerms);
+        requireValue("비밀유지/자료보호", draft.confidentialityTerms);
         if (!draft.wage || draft.wage <= 0) missing.push("확정 용역비");
       }
       if (missing.length) throw new Error(`필수 입력값을 확인하십시오: ${[...new Set(missing)].join(", ")}`);
@@ -6047,6 +6152,11 @@
       const employmentTaxType = contractValue(contract, "employmentTaxType", "employment_tax_type");
       const foreignWorker = Boolean(contractValue(contract, "foreignWorker", "foreign_worker"));
       const title = contractTypeLabels[contractType] || contractValue(contract, "contract_label") || "근로계약서";
+      const isFreelancerContract = contractType === "freelancer";
+      const isConfidentialityContract = contractType === "confidentiality";
+      const partyLabel = isFreelancerContract ? "수급인" : isConfidentialityContract ? "서약자" : "근로자";
+      const signatureLabel = isFreelancerContract ? "수급인 서명" : isConfidentialityContract ? "서약자 서명" : "근로자 서명";
+      const contractDetailHeading = isFreelancerContract ? "용역 상세 조항" : isConfidentialityContract ? "서약 상세 조항" : "계약 상세 조항";
       const employeeName = contractValue(contract, "employeeName", "employee_name");
       const employerName = contractValue(contract, "employerName", "employer_name");
       const startDate = contractValue(contract, "startDate", "start_date");
@@ -6106,7 +6216,7 @@
               <th>주소</th><td colspan="3">${previewText(contractValue(contract, "employerAddress", "employer_address"))}</td>
             </tr>
             <tr>
-              <th class="section-head" rowspan="4">근로자</th>
+              <th class="section-head" rowspan="4">${partyLabel}</th>
               <th>성명</th><td>${previewText(employeeName)}</td>
               <th>생년월일·국적</th><td>${previewText(employeeBirthDate)} / ${previewText(employeeNationality)}</td>
             </tr>
@@ -6118,7 +6228,7 @@
               <th>이메일</th><td>${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</td>
             </tr>
             <tr>
-              <th>급여계좌</th><td colspan="3">${previewText([bankName, bankAccountMasked, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
+              <th>${isFreelancerContract ? "정산계좌" : "급여계좌"}</th><td colspan="3">${previewText([bankName, bankAccountMasked, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
             </tr>
             <tr>
               <th class="section-head" rowspan="2">서류</th>
@@ -6134,13 +6244,14 @@
       let clauses = [];
       if (contractType === "freelancer") {
         clauses = [
-          contractClause("계약 목적", `${employerName || "사용자"}는 ${employeeName || "수급인"}에게 독립적인 용역 업무를 의뢰하고, 수급인은 계약 범위 내 업무 결과를 제공한다.`),
-          contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 ${workplace || "협의된 장소"}에서 계약 범위의 용역을 수행한다.`),
-          contractClause("용역 범위 및 산출물", freelancerScope || `${jobDescription || "업무 범위 미입력"} / 검수 기준, 납품 방식, 재작업 기준을 별도 메모로 확정한다.`),
-          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "지급 시 3.3% 원천징수 기준을 적용하고 비용 부담 주체를 정산 전 확인한다."}`),
-          contractClause("독립성 확인", "수급인은 근로시간·근무장소에 대한 직접 지휘감독을 받지 않는 독립 용역자로 운영하며, 실제 운영이 근로자성에 해당하면 근로계약으로 전환 검토한다."),
+          contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 독립 용역을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
+          contractClause("용역 기간 및 수행방식", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
+          contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"} / 산출물, 납품 방식, 검수 기준, 재작업 범위를 확정한다.`),
+          contractClause("용역비, 지급, 원천징수", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의 지급일에 지급하고 3.3% 사업소득 원천징수 및 비용 부담 주체를 확인한다."}`),
+          contractClause("독립성 및 근로자성 점검", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
+          contractClause("안전보건 및 협조", "위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
-          contractClause("계약 해지", terminationTerms || "일방의 중대한 계약 위반, 검수 불합격 반복, 보안 위반 시 서면 통지 후 계약을 해지할 수 있다.")
+          contractClause("계약 해지 및 기성 정산", terminationTerms || "중대한 계약 위반, 검수 불합격 반복, 보안 위반 시 서면 통지 후 해지할 수 있으며 검수 완료 산출물은 별도 정산한다.")
         ];
       } else if (contractType === "confidentiality") {
         clauses = [
@@ -6162,7 +6273,7 @@
           contractClause("근무장소 및 업무", `${workplace || "근무장소 미입력"}에서 ${jobDescription || "업무내용 미입력"} 업무를 수행한다. ${managerNote}`),
           contractClause("소정근로시간 및 휴게", `${workTime || "근무시간 미입력"} / 휴게 ${restTime || "미입력"} / 주 소정근로시간 ${weeklyHours || "미입력"}. ${partTimeNote}`),
           contractClause("근무일, 휴일, 주휴", `근무일은 ${workDays || "미입력"}, 휴일은 ${holidays || "미입력"}로 한다.${partTimeNote}`),
-          contractClause("임금 및 지급", `${wageLine}. 임금 구성: ${wageComposition || "기본급, 법정수당, 공제항목 미입력"}`),
+          contractClause("임금, 계산방법, 지급방법", `${wageLine}. 임금 구성: ${wageComposition || "기본급, 법정수당, 공제항목 미입력"}. 최저임금 및 임금명세서 교부 기준을 준수한다.`),
           contractClause("연장·야간·휴일근로", overtimeTerms || "연장·야간·휴일근로는 사전 승인 기준으로 운영하고 법정 가산수당을 급여마감 시 반영한다."),
           contractClause("휴가, 결근, 근태", leaveTerms || "연차유급휴가, 지각, 조퇴, 결근, 병가 처리는 근태기록과 법정 기준에 따라 급여내역서에 반영한다."),
           contractClause("4대보험 및 세무", insuranceTerms || `${taxLabel} 기준으로 취득 신고, 원천세, 급여명세서 교부를 처리한다.`),
@@ -6179,24 +6290,48 @@
       if (minorGuardianName) {
         clauses.push(contractClause("연소근로자 보호", `친권자/후견인 ${minorGuardianName}, 연락처 ${contractValue(contract, "minorGuardianPhone", "minor_guardian_phone") || "미입력"}. 연령증명서와 친권자/후견인 동의서를 사업장에 비치한다.`));
       }
-      clauses.push(contractClause("계약서 교부 및 전자서명", "본 계약서는 전자서명 요청 링크로 직원에게 교부하며, 서명 완료본과 급여/입사서류 기록을 직원관리 화면에 보관한다."));
+      clauses.push(contractClause(
+        isFreelancerContract ? "계약서 제공 및 전자서명" : isConfidentialityContract ? "서약서 제공 및 전자서명" : "계약서 교부 및 전자서명",
+        isFreelancerContract
+          ? "본 용역계약서는 전자서명 요청 링크로 수급인에게 제공하며, 서명 완료본과 정산·검수 기록을 문서보관함에 보관한다."
+          : isConfidentialityContract
+            ? "본 서약서는 전자서명 요청 링크로 서약자에게 제공하며, 서명 완료본을 문서보관함에 보관한다."
+            : "사업주는 근로계약 체결 시 본 계약서를 근로자에게 교부하며, 전자서명 완료본과 급여/입사서류 기록을 직원관리 화면에 보관한다."
+      ));
       const contractBusinessId = contractValue(contract, "businessId", "business_id") || businessForBranchName(contractValue(contract, "branch")).id || "";
       const stampUrl = ["biz-junghwa", "biz-sungshin", "biz-mia"].includes(contractBusinessId) ? `assets/stamps/${contractBusinessId}.png` : "";
       const stampAlt = `${employerName || "사용자"} 전자문서용 확인도장`;
+      const legalBasisText = isFreelancerContract
+        ? "고용노동부 노무제공자 공통 표준계약서 및 활용가이드(2023-12-26 게시)를 기준으로 업무범위, 산출물, 검수, 용역비, 비용 부담, 비밀유지, 해지 기준을 명확히 하는 내부 양식입니다. 3.3% 원천징수는 세무 처리 기준일 뿐 근로자성 판단을 대체하지 않습니다."
+        : isConfidentialityContract
+          ? "보안/개인정보 서약서는 근로계약 또는 용역계약과 별도로 체결하는 부속 문서입니다. 개인정보보호와 영업비밀 보호 범위, 반환·삭제 의무를 분리해 관리합니다."
+          : "고용노동부 표준근로계약서(서식 모음) 필수 기재축과 2026년 적용 최저임금 고시 시간급 10,320원 기준을 반영한 내부 작성본입니다. 최종 체결 전 실제 근무표, 상시근로자 수, 적용 법령을 확인하십시오.";
+      const legalChecklist = isFreelancerContract
+        ? ["업무범위·산출물·검수 기준", "용역비·정산일·3.3% 원천징수", "비용 부담과 자료 소유·반환", "지휘·감독 및 고정근무 배제", "근로자성 발견 시 근로계약 전환", "A4 계약서와 검수·정산 기록 보관"]
+        : isConfidentialityContract
+          ? ["비밀정보와 개인정보 범위", "접근·복사·반출 금지", "계약 종료 후 반환·삭제", "위반 시 책임 범위"]
+          : ["임금과 임금 구성항목·계산방법·지급방법", "소정근로시간·근무일·휴게시간", "휴일·주휴·연차유급휴가", "근무장소와 업무내용", "계약기간 및 계약서 교부", "A4 서면·전자문서 보관"];
+      const legalChecklistHtml = `<div class="legal-checklist"><b>${isFreelancerContract ? "용역계약 필수 확인" : isConfidentialityContract ? "서약서 필수 확인" : "근로기준법 제17조 필수 확인"}</b><ul>${legalChecklist.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+      const classificationWarningHtml = isFreelancerContract
+        ? `<div class="classification-warning"><b>프리랜서 오분류 방지</b><br>매장 상시업무에 투입되고 출퇴근·근무시간·업무수행 방식에 대한 직접 지휘·감독을 받으면 계약 명칭이나 3.3% 원천징수와 무관하게 근로계약으로 보아야 할 수 있습니다. 이 경우 4대보험, 최저임금, 휴게, 임금명세서, 해고예고 등 근로관계 기준을 재검토하십시오.</div>`
+        : "";
       const salaryBreakdown = contractType === "regular" && (baseSalary || nonTaxMealAllowance || taxableAllowance)
         ? `<div class="salary-breakdown"><span>과세 기본급<br><b>${formatMoney(baseSalary)}</b></span><span>비과세 식대<br><b>${formatMoney(nonTaxMealAllowance)}</b><br><small>${mealProvision === "cash_no_meal" ? "식사 미제공 조건" : "미적용"}</small></span><span>기타 과세수당<br><b>${formatMoney(taxableAllowance)}</b></span></div>`
         : "";
       return `
         <h3>${previewText(title, "계약서")}</h3>
-        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))}</p>
+        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
+        <div class="legal-basis">${escapeHtml(legalBasisText)}</div>
         ${commonMeta}
+        ${legalChecklistHtml}
+        ${classificationWarningHtml}
         ${salaryBreakdown}
-        <h4>계약 상세 조항</h4>
+        <h4>${contractDetailHeading}</h4>
         <ol>${clauses.join("")}</ol>
         ${contractValue(contract, "terms", "terms") ? `<h4>추가 특약</h4><p>${previewText(contractValue(contract, "terms", "terms"))}</p>` : ""}
         <div class="signature-grid">
           <div class="signature-box employer-signature"><b>사용자 서명</b><br>${previewText(employerName, "열정국밥")}<br>대표 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))} (서명 또는 인)${stampUrl ? `<img class="contract-stamp" src="${escapeHtml(stampUrl)}" alt="${escapeHtml(stampAlt)}">` : ""}</div>
-          <div class="signature-box"><b>근로자 서명</b><br>${previewText(signerName)}<br>${signatureDataUri ? `<img class="signed-signature-image" src="${escapeHtml(signatureDataUri)}" alt="근로자 자필서명">서명일시: ${previewText(String(signedAt).replace("T", " ").slice(0, 19))}` : "서명: __________"}</div>
+          <div class="signature-box"><b>${signatureLabel}</b><br>${previewText(signerName)}<br>${signatureDataUri ? `<img class="signed-signature-image" src="${escapeHtml(signatureDataUri)}" alt="${escapeHtml(signatureLabel)} 자필서명">서명일시: ${previewText(String(signedAt).replace("T", " ").slice(0, 19))}` : "서명: __________"}</div>
         </div>
       `;
     }
@@ -6264,7 +6399,7 @@
       const status = String(source.status || "draft");
       const resolvedBadge = contract
         ? (status === "draft"
-          ? `${badgeText} · 최신양식 v2026.07.23${source.previewReferenceHydrated ? " · 가입/입사서류/사업자정보 보완" : ""}`
+          ? `${badgeText} · 고용노동부 표준근로계약서 참고 · A4 출력 기준${source.previewReferenceHydrated ? " · 가입/입사서류/사업자정보 보완" : ""}`
           : `${badgeText} · 체결 당시 저장본`)
         : badgeText;
       updateContractPreview(source, resolvedBadge);
@@ -6786,6 +6921,134 @@
       return `<button type="button" class="integration-choice"${actionAttr}><b>${escapeHtml(label)}</b><span>${escapeHtml(desc)}</span></button>`;
     }
 
+    function selectedOption(value, selected) {
+      return String(value) === String(selected) ? " selected" : "";
+    }
+
+    function integrationServiceOptions(selected = "shinhan_business") {
+      const groups = [
+        ["판매사이트", ["baemin", "coupangeats", "yogiyo", "ddangyo", "matepos"]],
+        ["은행/카드", ["shinhan_business", "ibk_business", "card_pg"]],
+        ["매입처", ["coupang_supplier", "marketbom", "newtong", "baljugo", "supplier_custom_portal", "supplier_statement_upload"]],
+        ["세무·계산서", ["hometax", "tax_invoice_upload"]],
+        ["기타 운영", ["utility_bills", "accountant_tax_agent"]]
+      ];
+      return groups.map(([label, services]) => `<optgroup label="${escapeHtml(label)}">${services.map(service => `<option value="${escapeHtml(service)}"${selectedOption(service, selected)}>${escapeHtml(integrationLabels[service] || service)}</option>`).join("")}</optgroup>`).join("");
+    }
+
+    function integrationBusinessOptions(selected = selectedSettingsBusinessId()) {
+      return settings().businesses.map(item => `<option value="${escapeHtml(item.id)}"${selectedOption(item.id, selected)}>${escapeHtml(item.name)}</option>`).join("");
+    }
+
+    function integrationBranchOptions(selected = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "") {
+      return activeBranches().map(item => `<option value="${escapeHtml(item.name)}"${selectedOption(item.name, selected)}>${escapeHtml(item.name)}</option>`).join("");
+    }
+
+    function integrationCollectionModeOptions(selected = "bank-quick-service") {
+      const modes = [
+        ["portal-csv", "포털 정산서/CSV 다운로드"],
+        ["pos-export", "POS/메이트포스 내보내기"],
+        ["bank-quick-service", "은행 간편/빠른조회"],
+        ["bank-excel", "은행 엑셀 업로드"],
+        ["bank-openbanking", "은행 기업뱅킹 조회"],
+        ["purchase-portal", "매입처 주문프로그램 수집"],
+        ["statement-upload", "거래내역서 파일 업로드"],
+        ["receipt-photo", "영수증 사진/OCR 등록"],
+        ["hometax-certificate", "홈택스 인증서/간편인증 수집"],
+        ["tax-invoice-upload", "계산서 파일 업로드"],
+        ["card-pg-report", "카드사/PG 매출 리포트"],
+        ["utility-bill-upload", "공과금 고지서 업로드"],
+        ["accounting-export", "회계프로그램 내보내기"],
+        ["browser-automation", "브라우저 자동화"],
+        ["api", "공식 API"]
+      ];
+      return modes.map(([value, label]) => `<option value="${escapeHtml(value)}"${selectedOption(value, selected)}>${escapeHtml(label)}</option>`).join("");
+    }
+
+    function integrationConnectFormHtml(defaultService = "shinhan_business") {
+      const service = integrationCatalog[defaultService] ? defaultService : "shinhan_business";
+      const catalog = integrationCatalog[service] || {};
+      const selectedBusiness = selectedSettingsBusinessId();
+      const selectedBranch = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "";
+      return `<form class="integration-setup-form" data-integration-connect-form>
+        <div class="integration-setup-band">
+          <h3>연동 설정 페이지</h3>
+          <p>서비스를 선택하고 필수 인증값을 등록하면 서버 Vault 저장 후 가능한 수집 API를 즉시 호출합니다.</p>
+        </div>
+        <div class="integration-preset-strip">
+          <button type="button" data-integration-connect-service="shinhan_business"><b>신한 간편서비스</b><span>계좌거래/잔액 조회값</span></button>
+          <button type="button" data-integration-connect-service="ibk_business"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
+          <button type="button" data-integration-connect-service="card_pg"><b>카드/PG 리포트</b><span>승인·취소·입금 대사</span></button>
+          <button type="button" data-integration-connect-service="baemin"><b>판매채널</b><span>배달앱 정산 연결</span></button>
+        </div>
+        <div class="form-grid">
+          <label>연동 구분
+            <select name="service" required>${integrationServiceOptions(service)}</select>
+          </label>
+          <label>소속 사업자
+            <select name="businessId" required>${integrationBusinessOptions(selectedBusiness)}</select>
+          </label>
+          <label>대상 지점
+            <select name="branch">${integrationBranchOptions(selectedBranch)}</select>
+          </label>
+          <label>표시명
+            <input name="label" placeholder="예: 중화점 신한은행 간편서비스" required>
+          </label>
+          <label class="span-2">로그인/관리 URL
+            <input name="loginUrl" type="url" placeholder="https://... 또는 파일/사진 업로드 채널은 비워둠">
+          </label>
+          <label>아이디/업로드 기준명
+            <input name="username" autocomplete="username" placeholder="로그인 ID, 휴대폰번호 또는 매입처명">
+          </label>
+          <label>비밀번호
+            <input name="password" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
+          </label>
+          <label>조회용 계좌번호
+            <input name="accountNo" inputmode="numeric" autocomplete="off" placeholder="신한/IBK 빠른조회 등록 계좌번호">
+          </label>
+          <label>계좌비밀번호
+            <input name="accountPassword" type="password" autocomplete="new-password" placeholder="은행 조회 전용. 서버 Vault 암호화 저장">
+          </label>
+          <label>사업자번호
+            <input name="businessRegistrationNo" autocomplete="off" placeholder="000-00-00000">
+          </label>
+          <label>기관/은행 코드
+            <input name="institutionCode" placeholder="예: 신한, IBK, VAN/PG사명">
+          </label>
+          <label>계좌/가맹점번호 표시값
+            <input name="accountNoMasked" placeholder="미입력 시 뒷자리 자동 마스킹">
+          </label>
+          <label>정산주기
+            <input name="settlementCycle" placeholder="예: D+2, 매월 10일">
+          </label>
+          <label>API Key / Client ID
+            <input name="apiKey" autocomplete="off" placeholder="공식 API 사용 시 등록">
+          </label>
+          <label>API Secret / 인증서 비밀번호
+            <input name="clientSecret" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
+          </label>
+          <label>수집 방식
+            <select name="collectionMode">${integrationCollectionModeOptions(catalog.collectionMode || "bank-quick-service")}</select>
+          </label>
+          <label>연동상태
+            <select name="status">
+              <option value="vault-ready">Vault 등록완료</option>
+              <option value="ready" selected>연동준비</option>
+              <option value="manual">수동업로드</option>
+              <option value="blocked">확인필요</option>
+            </select>
+          </label>
+          <label class="span-2">메모
+            <textarea name="memo" placeholder="예: 신한 간편서비스에서 계좌거래현황 엑셀 다운로드 후 거래원장 반영"></textarea>
+          </label>
+          <div class="span-2 integration-detail-actions">
+            <button type="button" data-open-import="${escapeHtml(service)}">CSV/엑셀 대체 등록</button>
+            <button type="submit" class="primary">저장 후 연동 실행</button>
+          </div>
+        </div>
+      </form>`;
+    }
+
     function integrationDetailSpec(action, defaultService = "") {
       const selectedBusiness = businessName(selectedSettingsBusinessId()) || "선택 사업자";
       const bankService = defaultService || "shinhan_business";
@@ -6822,15 +7085,8 @@
       const specs = {
         connect: {
           title: "외부 서비스 연동 추가",
-          subtitle: `${selectedBusiness} 기준으로 연동 유형을 선택합니다.`,
-          body: `<div class="integration-choice-list">
-            ${integrationChoice("판매사이트", "배민·쿠팡이츠·요기요·땡겨요 계정과 정산 CSV", "sales-channel-connect")}
-            ${integrationChoice("은행 빠른계좌조회", "신한 간편서비스·IBK 빠른서비스 계좌 거래내역", "bank-connect")}
-            ${integrationChoice("매입처·발주", "주문 프로그램 또는 수기 증빙/OCR", "supplier-connect")}
-            ${integrationChoice("홈택스·계산서", "전자세금계산서·현금영수증·세무자료", "tax-connect")}
-            ${integrationChoice("수기 증빙", "은행/카드/매입처 파일 업로드와 CSV 붙여넣기", "receipt-upload")}
-            ${integrationChoice("추가 권장 후보", "POS·리뷰·노무·PG 후보를 검토", "recommended-connectors")}
-          </div>`
+          subtitle: `${selectedBusiness} 기준으로 연동 유형과 필수값을 등록합니다.`,
+          body: integrationConnectFormHtml(defaultService || "shinhan_business")
         },
         "sales-channel-connect": {
           title: "판매사이트 연동 설정",
@@ -6907,6 +7163,8 @@
       els.integrationDetailTitle.textContent = spec.title;
       els.integrationDetailSubtitle.textContent = spec.subtitle;
       els.integrationDetailBody.innerHTML = spec.body;
+      const modalForm = els.integrationDetailBody.querySelector("[data-integration-connect-form]");
+      if (modalForm) applyIntegrationPreset(modalForm.service?.value || defaultService || "shinhan_business", true, modalForm);
       els.integrationDetailModal.classList.remove("hidden");
       els.closeIntegrationDetailBtn?.focus();
     }
@@ -6915,38 +7173,130 @@
       els.integrationDetailModal?.classList.add("hidden");
     }
 
-    function applyIntegrationPreset(service, overwrite = false) {
-      if (!els.integrationForm) return;
+    function applyIntegrationPreset(service, overwrite = false, targetForm = els.integrationForm) {
+      if (!targetForm) return;
       const catalog = integrationCatalog[service] || {};
-      const form = els.integrationForm;
+      const form = targetForm;
       if (!catalog) return;
-      if (catalog.loginUrl && (overwrite || !form.loginUrl.value.trim())) form.loginUrl.value = catalog.loginUrl;
-      if (catalog.collectionMode && (overwrite || !form.collectionMode.value)) form.collectionMode.value = catalog.collectionMode;
-      if (overwrite || !form.label.value.trim()) {
-        const branch = form.branch.value || selectedBusinessBranches()[0]?.name || "";
+      if (form.service && form.service.value !== service) form.service.value = service;
+      if (form.loginUrl && catalog.loginUrl && (overwrite || !form.loginUrl.value.trim())) form.loginUrl.value = catalog.loginUrl;
+      if (form.collectionMode && catalog.collectionMode && (overwrite || !form.collectionMode.value)) form.collectionMode.value = catalog.collectionMode;
+      if (form.label && (overwrite || !form.label.value.trim())) {
+        const branch = form.branch?.value || selectedBusinessBranches()[0]?.name || "";
         const label = integrationLabels[service] || service;
         form.label.value = branch ? `${branch} ${label}` : label;
       }
-      if (catalog.memo && (overwrite || !form.memo.value.trim())) form.memo.value = catalog.memo;
+      if (form.memo && catalog.memo && (overwrite || !form.memo.value.trim())) form.memo.value = catalog.memo;
       if (["supplier_statement_upload", "tax_invoice_upload"].includes(service)) {
-        form.status.value = "manual";
-        if (!form.username.value.trim()) form.username.value = integrationLabels[service] || service;
+        if (form.status) form.status.value = "manual";
+        if (form.username && !form.username.value.trim()) form.username.value = integrationLabels[service] || service;
       } else if (serverVaultServices.has(service)) {
-        form.status.value = "ready";
+        if (form.status) form.status.value = "ready";
       }
     }
 
     function openIntegrationPreset(service = "shinhan_business") {
-      setView("settings");
+      openIntegrationDetail("connect", service);
       window.setTimeout(() => {
-        if (!els.integrationForm) return;
-        els.integrationForm.scrollIntoView({ behavior: "smooth", block: "start" });
-        if (els.integrationForm.service) els.integrationForm.service.value = service;
-        if (els.integrationForm.businessId) els.integrationForm.businessId.value = selectedSettingsBusinessId();
-        applyIntegrationPreset(service, true);
-        const firstInput = els.integrationForm.querySelector("input[name='username'], input[name='label']");
+        const form = els.integrationDetailBody?.querySelector("[data-integration-connect-form]");
+        if (!form) return;
+        if (form.businessId) form.businessId.value = selectedSettingsBusinessId();
+        applyIntegrationPreset(service, true, form);
+        const firstInput = form.querySelector("input[name='username'], input[name='label']");
         firstInput?.focus();
       }, 50);
+    }
+
+    async function saveIntegrationConnection(form) {
+      const data = Object.fromEntries(new FormData(form).entries());
+      const catalog = integrationCatalog[data.service] || {};
+      const loginUrl = String(data.loginUrl || "").trim() || catalog.loginUrl || "";
+      const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
+      const memo = String(data.memo || "").trim() || catalog.memo || "";
+      const accountNoMasked = String(data.accountNoMasked || "").trim() || maskDigits(data.accountNo);
+      const businessRegistrationNoMasked = maskDigits(data.businessRegistrationNo);
+      let serverAccount = null;
+      const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(String(data.username || "").trim());
+      if (shouldUseServerVault && !canManageAutomation()) {
+        showToast("외부 서비스 계정 서버 등록은 총괄 운영관리자 로그인 후 가능합니다.");
+        return false;
+      }
+      if (canManageAutomation() && shouldUseServerVault) {
+        try {
+          const result = await financeApi("/accounts", {
+            method: "POST",
+            body: JSON.stringify({
+              service: data.service,
+              label: String(data.label || "").trim(),
+              login_url: loginUrl,
+              username: String(data.username || "").trim(),
+              password: data.password || "",
+              api_key: data.apiKey || "",
+              client_secret: data.clientSecret || "",
+              certificate_password: data.clientSecret || "",
+              account_no: data.accountNo || "",
+              account_password: data.accountPassword || "",
+              business_registration_no: data.businessRegistrationNo || "",
+              business_id: data.businessId,
+              branch: data.branch || "",
+              institution_code: data.institutionCode || "",
+              account_no_masked: accountNoMasked,
+              business_registration_no_masked: businessRegistrationNoMasked,
+              merchant_no: accountNoMasked,
+              settlement_cycle: data.settlementCycle || "",
+              collection_mode: collectionMode,
+              category: catalog.category || "",
+              data_scope: catalog.dataScope || "",
+              required_proof: catalog.requiredProof || "",
+              memo,
+              auto_sync: true
+            })
+          });
+          serverAccount = result.account;
+          if (result.sync) {
+            const syncResult = applyFinancialSyncPayload(result.sync);
+            if (syncResult.recordsCount) {
+              showToast(`계정 저장 후 은행/카드 거래 ${syncResult.recordsCount}건을 반영했습니다.`);
+            } else if (syncResult.blocked) {
+              showToast(`계정은 저장됐고 연동 상태를 확인했습니다. 확인필요 ${syncResult.blocked}건${syncResult.messages.length ? " · " + syncResult.messages.join(" / ") : ""}`);
+            }
+          }
+        } catch (err) {
+          showToast(`서버 저장 실패: ${err.message}`);
+        }
+      }
+      settings().integrations.push({
+        id: uid(),
+        serverAccountId: serverAccount?.id || "",
+        service: data.service,
+        label: String(data.label || "").trim(),
+        category: catalog.category || "기타",
+        loginUrl,
+        username: String(data.username || "").trim(),
+        business_id: data.businessId,
+        businessId: data.businessId,
+        branch: data.branch || "",
+        institutionCode: String(data.institutionCode || "").trim(),
+        accountNoMasked,
+        businessRegistrationNoMasked,
+        merchantNo: accountNoMasked,
+        settlementCycle: String(data.settlementCycle || "").trim(),
+        passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret || data.accountPassword) ? "브라우저 저장됨" : "Vault/입력 필요"),
+        collectionMode,
+        dataScope: catalog.dataScope || "",
+        requiredProof: catalog.requiredProof || "",
+        status: serverAccount ? "vault-ready" : data.status,
+        vaultService: serverAccount ? `server:${serverAccount.id}` : `yeoljeong-${data.service}`,
+        memo
+      });
+      saveState();
+      syncSettingsToServer();
+      form.reset();
+      if (form.businessId) form.businessId.value = selectedSettingsBusinessId();
+      applyIntegrationPreset(form.service?.value || data.service, true, form);
+      renderAll();
+      showToast(serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.");
+      return true;
     }
 
     async function runIntegrationAudit() {
@@ -8969,97 +9319,24 @@
 
       els.integrationForm.addEventListener("submit", async event => {
         event.preventDefault();
-        const data = Object.fromEntries(new FormData(els.integrationForm).entries());
-        const catalog = integrationCatalog[data.service] || {};
-        const loginUrl = data.loginUrl.trim() || catalog.loginUrl || "";
-        const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
-        const memo = data.memo.trim() || catalog.memo || "";
-        const accountNoMasked = data.accountNoMasked.trim() || maskDigits(data.accountNo);
-        const businessRegistrationNoMasked = maskDigits(data.businessRegistrationNo);
-        let serverAccount = null;
-        const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(data.username?.trim());
-        if (shouldUseServerVault && !canManageAutomation()) {
-          showToast("외부 서비스 계정 서버 등록은 총괄 운영관리자 로그인 후 가능합니다.");
-          return;
-        }
-	        if (canManageAutomation() && shouldUseServerVault) {
-	          try {
-	            const result = await financeApi("/accounts", {
-	              method: "POST",
-	              body: JSON.stringify({
-	                service: data.service,
-	                label: data.label.trim(),
-	                login_url: loginUrl,
-	                username: data.username.trim(),
-	                password: data.password || "",
-	                api_key: data.apiKey || "",
-	                client_secret: data.clientSecret || "",
-	                certificate_password: data.clientSecret || "",
-	                account_no: data.accountNo || "",
-	                account_password: data.accountPassword || "",
-	                business_registration_no: data.businessRegistrationNo || "",
-	                business_id: data.businessId,
-	                branch: data.branch || "",
-	                institution_code: data.institutionCode || "",
-	                account_no_masked: accountNoMasked,
-	                business_registration_no_masked: businessRegistrationNoMasked,
-	                merchant_no: accountNoMasked,
-	                settlement_cycle: data.settlementCycle || "",
-	                collection_mode: collectionMode,
-	                category: catalog.category || "",
-	                data_scope: catalog.dataScope || "",
-	                required_proof: catalog.requiredProof || "",
-	                memo,
-	                auto_sync: true
-	              })
-	            });
-            serverAccount = result.account;
-            if (result.sync) {
-              const syncResult = applyFinancialSyncPayload(result.sync);
-              if (syncResult.recordsCount) {
-                showToast(`계정 저장 후 은행/카드 거래 ${syncResult.recordsCount}건을 반영했습니다.`);
-              } else if (syncResult.blocked) {
-                showToast(`계정은 저장됐고 연동 상태를 확인했습니다. 확인필요 ${syncResult.blocked}건${syncResult.messages.length ? " · " + syncResult.messages.join(" / ") : ""}`);
-              }
-            }
-          } catch (err) {
-            showToast(`서버 저장 실패: ${err.message}`);
-          }
-        }
-	        settings().integrations.push({
-	          id: uid(),
-	          serverAccountId: serverAccount?.id || "",
-	          service: data.service,
-	          label: data.label.trim(),
-	          category: catalog.category || "기타",
-	          loginUrl,
-	          username: data.username.trim(),
-	          business_id: data.businessId,
-	          businessId: data.businessId,
-	          branch: data.branch || "",
-	          institutionCode: data.institutionCode.trim(),
-	          accountNoMasked,
-	          businessRegistrationNoMasked,
-	          merchantNo: accountNoMasked,
-	          settlementCycle: data.settlementCycle.trim(),
-	          passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret || data.accountPassword) ? "브라우저 저장됨" : "Vault/입력 필요"),
-	          collectionMode,
-	          dataScope: catalog.dataScope || "",
-	          requiredProof: catalog.requiredProof || "",
-	          status: serverAccount ? "vault-ready" : data.status,
-	          vaultService: serverAccount ? `server:${serverAccount.id}` : `yeoljeong-${data.service}`,
-	          memo
-	        });
-	        saveState();
-	        syncSettingsToServer();
-	        els.integrationForm.reset();
-	        if (els.integrationForm.businessId) els.integrationForm.businessId.value = selectedSettingsBusinessId();
-	        applyIntegrationPreset(els.integrationForm.service.value, true);
-	        renderAll();
-	        showToast("외부계정 연결 정보를 저장했습니다.");
-	      });
+        await saveIntegrationConnection(els.integrationForm);
+      });
       els.integrationForm.service?.addEventListener("change", event => {
         applyIntegrationPreset(event.target.value, true);
+      });
+      document.body.addEventListener("change", event => {
+        const modalForm = event.target.closest("[data-integration-connect-form]");
+        if (modalForm && event.target.name === "service") {
+          applyIntegrationPreset(event.target.value, true, modalForm);
+        }
+      });
+      document.body.addEventListener("submit", event => {
+        const modalForm = event.target.closest("[data-integration-connect-form]");
+        if (!modalForm) return;
+        event.preventDefault();
+        saveIntegrationConnection(modalForm)
+          .then(saved => { if (saved) closeIntegrationDetailModal(); })
+          .catch(err => showToast(err.message));
       });
 
       els.clearEntryBtn.addEventListener("click", () => {
@@ -9134,6 +9411,15 @@
         if (event.target.closest("[data-refresh-server-accounts]")) {
           event.preventDefault();
           refreshServerAccounts().catch(err => showToast(err.message));
+          return;
+        }
+        const integrationConnectService = event.target.closest("[data-integration-connect-service]");
+        if (integrationConnectService) {
+          event.preventDefault();
+          const form = integrationConnectService.closest("[data-integration-connect-form]") || els.integrationDetailBody?.querySelector("[data-integration-connect-form]");
+          const service = integrationConnectService.dataset.integrationConnectService || "shinhan_business";
+          if (form?.service) form.service.value = service;
+          if (form) applyIntegrationPreset(service, true, form);
           return;
         }
         const viewShortcut = event.target.closest("[data-view]:not(.tab)");

@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-07-30 08:27 KST - Yeoljeong contract legal template and A4 print update
+
+- Request: Review Korean standard employment contract and freelancer contract forms, revise the Yeoljeong finance contract editor so previews/prints are A4-sized and legally safer.
+- Sources checked: MOEL 2025 revised standard employment contract notice (`bbs_seq=20250300356`) and 2026 minimum wage 10,320 KRW/hour notice.
+- Scope: `app/static/apps/yeoljeong-finance/index.html`, `app/static/apps/yeoljeong-finance/mockup-v2.html`, and `docs/HANDOVER.md`; unrelated dirty worktree files were preserved.
+- UI/template changes: Added legal basis/checklist blocks to the production A4 contract preview, kept A4 paper CSS at `@page { size: A4 portrait; margin: 0; }` and `.contract-a4-paper { width: 210mm; min-height: 297mm; }`, changed freelancer party/account/signature labels to `수급인`/`정산계좌`/`수급인 서명`, and added freelancer misclassification warning copy.
+- Contract content changes: Employment templates now explicitly surface Labor Standards Act Article 17 checklist items: wage, prescribed working hours, holidays, annual paid leave, wage components/calculation/payment method, workplace/job, contract period, and contract delivery. Freelancer templates now require service scope, deliverables, inspection, fee/payment/3.3% withholding, cost allocation, confidentiality, termination, and worker-status conversion review when direct supervision or fixed attendance exists.
+- Validation: `git diff --check` passed; Node VM parsed 2 inline scripts in production HTML and 1 inline script in mockup HTML; local HTTP returned `200 467861`; DOM assertions passed for A4 CSS, 210mm paper, legal basis, law checklist, freelancer warning, freelancer signature, and print button.
+- Limit: Browser Bridge could not access this process-local `localhost` and returned `ERR_CONNECTION_REFUSED`; browser E2E was replaced by HTTP/DOM/JS validation. No commit, push, deployment, or service restart was performed.
+
 ## 2026-07-30 08:06 KST - FB integrations detailed action design rollout
 
 - Request: Apply every detailed action/button design from `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations` to production `index.html#auth-invite`, including DB/API-connected operation paths.
@@ -5283,3 +5293,20 @@
 - 운영 주의:
   - 실제 은행/카드 사이트 자동 로그인은 자격증명과 2차 인증이 필요하므로 이번 작업에서는 더미 거래를 생성하지 않는다.
   - 작업트리에는 이번 작업과 무관한 기존 미커밋 파일이 남아 있으므로 후속 커밋 시 선별 스테이징이 필요하다.
+
+## 2026-07-30 08:28 KST - FB 매장비서 연동추가 설정 페이지 시안형 모달 반영
+
+- 요청: `mockup-v2.html#integrations` 기준으로 `index.html#auth-invite`의 `연동 추가` 안쪽 연동설정 페이지까지 같은 디자인으로 반영.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 `+ 연동 추가` 클릭 결과를 단순 선택 목록에서 시안형 설정 페이지 모달로 변경했다.
+  - 모달 안에 서비스 프리셋, 사업자/지점, ID/PW, 계좌번호, 계좌비밀번호, 사업자번호, API Key, 인증서 비밀번호, 수집방식, 상태, 메모 입력을 추가했다.
+  - 기존 기초등록 폼과 신규 모달 폼이 같은 `saveIntegrationConnection()` 저장 로직을 사용하도록 공용화했다.
+  - 관리자 권한 상태에서는 `/accounts` Vault 저장 후 은행/카드 계정의 `result.sync`를 반영하고, 기존 `/transactions/sync` 수동 실행 경로도 유지했다.
+  - `설정 폼 열기`와 신한/IBK/카드/판매채널 프리셋 버튼이 구형 설정 화면으로 빠지지 않고 모달 안에서 즉시 값이 자동채움되도록 변경했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `node -e ... new Function(inline script)` 결과 `inline scripts ok 1`.
+  - `rg`로 `data-integration-connect-form`, `연동 설정 페이지`, `저장 후 연동 실행`, `saveIntegrationConnection` 표식 확인 완료.
+- 운영 주의:
+  - 실제 은행 사이트 로그인/엑셀 다운로드 커넥터는 자격증명과 은행별 2차 인증이 필요하며, 커넥터 미설정 시 거래를 임의 생성하지 않는다.
+  - 작업트리에는 이번 범위와 무관한 기존 미커밋 파일이 남아 있으므로 배포 커밋은 `index.html`과 `HANDOVER.md`만 선별해야 한다.
