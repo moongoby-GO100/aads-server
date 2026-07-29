@@ -2630,6 +2630,24 @@ async def _mark_execution_interrupted(
         "interrupted_delete_empty_placeholder": bool(delete_empty_placeholder),
         "interrupted_superseded": bool(is_superseded_cancel),
     }
+    try:
+        _started_at = await conn.fetchval(
+            "SELECT started_at FROM chat_turn_executions WHERE id = $1",
+            eid,
+        )
+        if _started_at:
+            _duration_sec = max(0.0, round((datetime.now(timezone.utc) - _started_at).total_seconds(), 3))
+            interruption_quality_details.update(
+                {
+                    "response_duration_sec": _duration_sec,
+                    "response_duration_ms": int(round(_duration_sec * 1000)),
+                    "duration_sec": _duration_sec,
+                    "duration_ms": int(round(_duration_sec * 1000)),
+                    "response_duration_source": "interrupted_execution_elapsed",
+                }
+            )
+    except Exception as _duration_err:
+        logger.debug("interrupted_duration_measure_failed execution=%s error=%s", str(eid)[:8], _duration_err)
     interruption_quality_details.update(_parse_interrupt_diagnostic_reason(reason))
     final_content = clean_partial
     assistant_message_id = pid
@@ -6031,6 +6049,95 @@ def _message_select_fields(fields: str) -> str:
     return "*"
 
 
+def _message_has_response_duration(message: Dict[str, Any]) -> bool:
+    details = message.get("quality_details") or {}
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except Exception:
+            details = {}
+    for key in (
+        "response_duration_ms",
+        "response_duration_sec",
+        "duration_ms",
+        "duration_sec",
+    ):
+        if message.get(key) is not None or (isinstance(details, dict) and details.get(key) is not None):
+            return True
+    return False
+
+
+async def _hydrate_message_response_durations(
+    conn: asyncpg.Connection,
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Backfill response duration in API payloads from execution ledger.
+
+    Older and interrupted assistant rows may lack quality_details duration even
+    though chat_turn_executions has started/completed timestamps.
+    """
+    execution_ids: List[uuid.UUID] = []
+    for message in messages:
+        if message.get("role") != "assistant" or _message_has_response_duration(message):
+            continue
+        execution_id = message.get("execution_id")
+        if not execution_id:
+            continue
+        try:
+            execution_ids.append(uuid.UUID(str(execution_id)))
+        except Exception:
+            continue
+    if not execution_ids:
+        return messages
+
+    rows = await conn.fetch(
+        """
+        SELECT id, status, started_at, completed_at, updated_at
+        FROM chat_turn_executions
+        WHERE id = ANY($1::uuid[])
+        """,
+        list(dict.fromkeys(execution_ids)),
+    )
+    execution_map = {str(row["id"]): row for row in rows}
+    now = datetime.now(timezone.utc)
+    for message in messages:
+        execution_id = message.get("execution_id")
+        row = execution_map.get(str(execution_id))
+        started_at = row["started_at"] if row else None
+        if not started_at:
+            continue
+        status = str(row["status"] or "")
+        end_at = row["completed_at"] or row["updated_at"]
+        if not end_at and status in ("running", "retrying"):
+            end_at = now
+        if not end_at:
+            continue
+        duration_sec = max(0.0, round((end_at - started_at).total_seconds(), 3))
+        details = message.get("quality_details") or {}
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except Exception:
+                details = {}
+        if not isinstance(details, dict):
+            details = {}
+        details = {
+            **details,
+            "response_duration_sec": duration_sec,
+            "response_duration_ms": int(round(duration_sec * 1000)),
+            "duration_sec": duration_sec,
+            "duration_ms": int(round(duration_sec * 1000)),
+            "response_duration_source": "execution_ledger",
+            "response_duration_status": status or None,
+        }
+        message["quality_details"] = details
+        message["response_duration_sec"] = duration_sec
+        message["response_duration_ms"] = int(round(duration_sec * 1000))
+        message["duration_sec"] = duration_sec
+        message["duration_ms"] = int(round(duration_sec * 1000))
+    return messages
+
+
 def _message_list_filter(is_active: bool, include_streaming: bool) -> str:
     intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
     if is_active and not include_streaming:
@@ -6313,6 +6420,7 @@ async def list_messages(
             tenant_uuid,
         )
         results = [_row_to_dict(r) for r in rows]
+        results = await _hydrate_message_response_durations(conn, results)
         if fields == "minimal":
             return results
         if fields != "render":
@@ -6379,6 +6487,7 @@ async def list_messages_cursor(
                 sid, fetch_limit, tenant_uuid,
             )
         messages = [_row_to_dict(r) for r in rows]
+        messages = await _hydrate_message_response_durations(conn, messages)
         has_more = len(messages) > limit  # has_more는 필터링 전 원본 건수로 판별
         if has_more:
             messages = messages[1:]  # 가장 오래된 1건(초과분) 제거 — dedup 전에 수행
@@ -6425,6 +6534,7 @@ async def get_message(message_id: str, fields: str = "full", tenant_id: Optional
         if not row:
             return None
         result = _row_to_dict(row)
+        result = (await _hydrate_message_response_durations(conn, [result]))[0]
         if fields not in ("minimal", "render"):
             result = _apply_tool_summary(result)
         return result
@@ -9946,7 +10056,10 @@ async def send_message_stream(
             _mode_details = json.dumps(
                 {
                     "response_mode": response_mode,
+                    "response_duration_sec": _duration_sec,
+                    "response_duration_ms": int(round(_duration_sec * 1000)),
                     "duration_sec": _duration_sec,
+                    "duration_ms": int(round(_duration_sec * 1000)),
                     "tool_event_count": len(tools_called or []),
                     "completion_auto_continue_count": _completion_auto_continue_count,
                     "critic_skipped": response_mode == _RESPONSE_MODE_FAST,
@@ -10675,7 +10788,7 @@ async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
 # ─── 내부 헬퍼 ────────────────────────────────────────────────────────────────
 
 # #8: JSONB 필드 목록 (파싱 필요한 컬럼만)
-_JSONB_FIELDS = frozenset({"attachments", "sources", "tools_called", "settings", "files", "metadata"})
+_JSONB_FIELDS = frozenset({"attachments", "sources", "tools_called", "settings", "files", "metadata", "quality_details"})
 
 
 def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:

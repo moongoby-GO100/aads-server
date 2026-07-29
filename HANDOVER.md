@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-29 23:46 KST - chat response duration E2E gap fix
+
+- Request: Current session assistant bubble footer did not show response elapsed time; verify E2E gap and patch missing cases.
+- Finding: Dashboard release contained the `소요` footer renderer, but DB inspection showed only 2/60 assistant messages in the last 24h had response duration metadata. The current session latest bubble was a `streaming_placeholder`, and many previous visible bubbles were `interrupted_partial` rows without duration fields.
+- Backend: `app/services/chat_service.py` now hydrates missing duration fields from `chat_turn_executions.started_at/completed_at/updated_at` for message list/detail API responses, persists duration fields for interrupted partial rows, records `response_duration_*` in the normal response-mode metadata, and parses `quality_details` JSONB consistently.
+- Dashboard: `/root/aads/aads-dashboard/src/app/chat/page.tsx` now shows live `진행 N초` for active streaming assistant bubbles and keeps `소요 N초` for completed/interrupted assistant bubbles.
+- Validation before deploy: `python3 -m py_compile app/services/chat_service.py` passed; `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
+- Notes: Existing unrelated dirty files were not included. Authenticated browser E2E should confirm the footer visually after deployment; API/DB validation is the fallback if browser auth is unavailable.
+
 ## 2026-07-29 17:36 KST - chat last-response placeholder payload guard
 
 - Request: Continue the response-duration closeout and complete remaining verification instead of ending with an inconsistent report.
