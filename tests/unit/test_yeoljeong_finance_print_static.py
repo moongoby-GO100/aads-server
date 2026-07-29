@@ -32,6 +32,7 @@ def test_integrations_detail_buttons_have_operational_drawer_and_api_ctas():
     assert 'data-integration-detail="tax-connect"' in HTML
     assert 'data-integration-detail="receipt-upload"' in HTML
     assert 'data-integration-detail="credential-vault"' in HTML
+    assert 'title: "보안 보관 정책"' in HTML
     assert 'data-integration-detail="recommended-connectors"' in HTML
     assert 'data-integration-detail="pos-connect"' in HTML
     assert 'data-integration-detail="review-connect"' in HTML

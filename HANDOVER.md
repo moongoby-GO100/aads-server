@@ -5263,3 +5263,19 @@
 - 운영 주의:
   - 은행 실시간 외부 로그인/엑셀 다운로드 커넥터가 아직 연결되지 않은 경우 서버는 가상 거래를 만들지 않고 `connector_not_configured` 또는 수기 CSV/엑셀 업로드 대체 상태를 반환한다.
   - 실제 거래 수집 완료 판정은 관리자가 신한/IBK 계정 필수값을 등록한 뒤 `/transactions/sync` 결과로 확인해야 한다.
+
+## 2026-07-30 08:17 KST - FB 매장비서 연동관리 세부 상세버튼 디자인 운영 반영
+
+- 요청: `mockup-v2.html#integrations`의 세부 상세버튼별 디자인을 운영 `index.html`에도 모두 반영.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에 연동관리 전용 상세 모달을 추가했다.
+  - 세부 버튼을 상세 패널로 연결했다: 설정 가이드, 판매채널 추가, 은행 계좌 연결, 매입처 등록, 계산서 수집, 사진 등록, 보안 보관 정책, 상세 점검, 추가 권장 연동, POS·키오스크, 리뷰·CS, 노무·4대보험, 카드·PG.
+  - 상세 패널 내부 CTA는 기존 운영 흐름으로 연결했다: 계정 저장 프리셋, 배달/은행/카드 동기화, 수기 증빙 업로드, 직원/급여 화면 이동.
+  - POS 파일 업로드 분류를 추가해 `POS 파일 등록` 버튼이 실제 가져오기 모달에서 `matepos` 서비스로 열리도록 했다.
+- 검증:
+  - `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` 결과 3 passed.
+  - 공개 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `integrationDetailModal`, `recommended-connectors`, `pos-connect`, `review-connect`, `hr-connect`, `pg-connect` 표식 확인 완료.
+  - Blue/Green `/health` 모두 `status=ok`.
+- 운영 주의:
+  - 실제 은행/카드 사이트 자동 로그인은 자격증명과 2차 인증이 필요하므로 이번 작업에서는 더미 거래를 생성하지 않는다.
+  - 작업트리에는 이번 작업과 무관한 기존 미커밋 파일이 남아 있으므로 후속 커밋 시 선별 스테이징이 필요하다.
