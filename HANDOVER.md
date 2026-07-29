@@ -5310,3 +5310,27 @@
 - 운영 주의:
   - 실제 은행 사이트 로그인/엑셀 다운로드 커넥터는 자격증명과 은행별 2차 인증이 필요하며, 커넥터 미설정 시 거래를 임의 생성하지 않는다.
   - 작업트리에는 이번 범위와 무관한 기존 미커밋 파일이 남아 있으므로 배포 커밋은 `index.html`과 `HANDOVER.md`만 선별해야 한다.
+
+## 2026-07-30 08:44 KST - FB 연동추가 설정 페이지 완료 원장 재검증
+
+- 요청: 이전 완료보고의 커밋/푸시/배포 원장 충돌을 실제 상태로 재확인하고 최종 완료 조건을 보정.
+- 확인:
+  - 기능 커밋 `0dff9c8b`(`feat: add FB integration setup modal`)은 `app/static/apps/yeoljeong-finance/index.html`과 `HANDOVER.md`만 포함하며 `origin/main`에 포함돼 있다.
+  - 현재 `HEAD`와 `origin/main`은 `80769051cd2f68e8c9b2a171421ecc13b5a5429b`로 일치한다.
+  - 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html#auth-invite`는 HTTP 200이며 `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`를 반환한다.
+  - 운영 HTML 본문에서 `연동 설정 페이지`, `data-integration-connect-form`, `저장 후 연동 실행`, `shinhan_business`, `ibk_business`, `connector_not_configured` 표식을 확인했다.
+  - AADS Blue `8100`과 Green `8102` `/health`는 모두 `status=ok`, `aads-server`와 `aads-server-green` 컨테이너는 healthy 상태다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - `node -e ... new Function(inline script)` 결과 `inline_script_parse_ok:1`.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -e AADS_DB_URL=sqlite:///tmp/aads-test.db -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py::test_bank_quick_service_ui_collects_required_vault_fields tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py::test_upsert_bank_quick_service_requires_account_password_and_business_no -q` 결과 5 passed, 1 warning.
+  - 전체 `tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py`는 69 passed, 2 failed, 1 warning. 실패 2건은 계약서 미리보기 고정 문자열(`최신양식 v2026.07.23`, `contractClause("용역 기간 및 장소"`) 관련 기존 테스트로, 이번 연동설정 기능 실패는 아니다.
+- 브라우저 검증:
+  - Browser Bridge 업무 세션은 생성됐고 운영 URL 탐색은 완료됐다.
+  - 인증 전 화면까지만 확인됐으며 관리자 로그인 세션이 없어 `+ 연동 추가` 실제 클릭 E2E는 미수행했다. `capture_screenshot`은 CDP 응답 없음으로 실패했다.
+  - 따라서 이번 최종 판정은 HTTP/DOM/API/컨테이너 검증으로 대체한다.
+- 상태:
+  - 코드 커밋/푸시: 기능 커밋 `0dff9c8b` 반영 완료.
+  - 운영 배포: 운영 URL 200 및 신규 HTML 표식 확인 완료.
+  - 추가 조치: 이 원장 보정은 문서 전용 커밋으로 별도 반영한다.
+  - 미완료: 관리자 인증 세션 기반 클릭 E2E와 은행 사이트 실조회 커넥터는 미완료. 은행 자격증명/2차 인증 등록 후 별도 검증 필요.
