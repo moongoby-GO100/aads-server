@@ -6,6 +6,7 @@
 - Finding: Dashboard calculated live response duration but hid the footer while a bubble was visibly streaming because the footer renderer was gated by `!isVisiblyStreaming`. DB telemetry also remained incomplete for older completed assistant rows because ledger-derived durations were only hydrated into API payloads, not persisted.
 - Backend: `app/services/chat_service.py` now persists execution-ledger-derived response duration into `chat_messages.quality_details` for non-running assistant messages that were missing duration keys.
 - Dashboard: `/root/aads/aads-dashboard/src/app/chat/page.tsx` now renders the assistant footer for streaming and completed states, and shows response duration as a visible bottom badge (`진행 N초` / `소요 N초`) instead of burying it in the model metadata string.
+- DB backfill: Updated 5,147 historical non-running assistant messages with execution-ledger-derived duration telemetry. Post-check showed 0 remaining computable missing rows globally and 0 in current session `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`.
 - Validation before deploy: `python3 -m py_compile app/services/chat_service.py` passed; `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
 - Notes: Existing unrelated dirty files were not included. Authenticated browser pixel E2E remains dependent on a logged-in CEO/browser session; API/DB/container validation is the fallback.
 
