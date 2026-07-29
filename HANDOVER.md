@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-07-29 17:36 KST - chat last-response placeholder payload guard
+
+- Request: Continue the response-duration closeout and complete remaining verification instead of ending with an inconsistent report.
+- Finding: During live verification, `/api/v1/chat/sessions/{session_id}/last-response` raised `KeyError: 'message'` when a completed `streaming_placeholder` was settled by `_settle_or_surface_orphan_placeholder()`.
+- Fix: `app/routers/chat.py` now returns a normalized `message` payload from the completed-placeholder settlement branch, including `id`, `session_id`, `role`, `content`, `model_used`, `created_at`, `intent`, and `execution_id`.
+- Validation: `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` passed before commit.
+- Note: This is a narrow chat recovery guard discovered while validating the response-duration deployment; unrelated dirty files were not included.
+
 ## 2026-07-29 17:15 KST - AADS chat response duration display and telemetry
 
 - Request: Show AI response elapsed time under each assistant bubble and store response metrics for later quality improvement.

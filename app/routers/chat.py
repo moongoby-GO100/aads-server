@@ -681,7 +681,9 @@ async def _settle_or_surface_orphan_placeholder(
                     ),
                     edited_at = NOW()
                 WHERE id = $1
-                RETURNING id::text, content, tools_called, execution_id::text AS execution_id
+                RETURNING id::text, content, tools_called, model_used, intent,
+                          execution_id::text AS execution_id,
+                          created_at::text AS created_at_text
                 """,
                 placeholder_row["id"],
                 completed_exec["final_model"],
@@ -695,6 +697,16 @@ async def _settle_or_surface_orphan_placeholder(
             )
             return {
                 "found": True,
+                "message": {
+                    "id": updated["id"] if updated else str(placeholder_row["id"]),
+                    "session_id": str(session_id),
+                    "role": "assistant",
+                    "content": (updated["content"] if updated else placeholder_row["content"]) or "",
+                    "model_used": (updated["model_used"] if updated else completed_exec["final_model"]) or "assistant",
+                    "created_at": updated["created_at_text"] if updated else None,
+                    "intent": updated["intent"] if updated else None,
+                    "execution_id": completed_exec["execution_id"],
+                },
                 "status": {
                     "is_streaming": False,
                     "just_completed": True,
