@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 2026-07-30 08:06 KST - FB integrations detailed action design rollout
+
+- Request: Apply every detailed action/button design from `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations` to production `index.html#auth-invite`, including DB/API-connected operation paths.
+- Scope: `app/static/apps/yeoljeong-finance/index.html` and `tests/unit/test_yeoljeong_finance_print_static.py`. Existing unrelated dirty worktree files were preserved.
+- UI: Added `integrationDetailModal` and responsive detail layouts for `connect`, `sales-channel-connect`, `bank-connect`, `supplier-connect`, `tax-connect`, `receipt-upload`, `credential-vault`, `integration-audit`, `integration-guide`, `recommended-connectors`, `pos-connect`, `review-connect`, `hr-connect`, and `pg-connect`.
+- API wiring: Detail CTAs route into the existing operational paths: `data-integration-preset` opens the server-backed `/accounts` Vault save form, `data-sync-integration` runs delivery `/sync`, `data-sync-financial-integration` runs `/transactions/sync`, and `data-open-import` opens the import modal for `/transactions/import` or integration-evidence upload.
+- Validation:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed.
+  - `node -e "... new Function(inline script) ..."` passed with 1 inline script.
+  - Local direct assertion run for `tests/unit/test_yeoljeong_finance_print_static.py` passed 3 test functions.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` passed on the running container's mounted test set.
+
 ## 2026-07-30 07:37 KST - FB integrations deployment ledger verification
 
 - Request: Previous closeout report conflicted with commit/push/deploy/document ledger; continue verification for `fb.newtalk.kr` Yeoljeong finance `#auth-invite` integration management page until all remaining checks are complete.

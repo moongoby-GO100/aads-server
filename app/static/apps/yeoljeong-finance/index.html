@@ -988,6 +988,82 @@
       line-height: 1.55;
     }
 
+    .integration-detail-modal {
+      width: min(940px, 100%);
+    }
+
+    .integration-detail-layout {
+      display: grid;
+      gap: 14px;
+      padding: 14px;
+    }
+
+    .integration-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .integration-detail-card,
+    .integration-step,
+    .integration-choice {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+
+    .integration-detail-card b,
+    .integration-step b,
+    .integration-choice b {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+    }
+
+    .integration-detail-card span,
+    .integration-step span,
+    .integration-choice span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .integration-detail-timeline,
+    .integration-choice-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .integration-step {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .integration-step i {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #e8f0ff;
+      color: #1e40af;
+      font-style: normal;
+      font-weight: 900;
+      font-size: 12px;
+    }
+
+    .integration-detail-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
     .content-grid > .span-2 { grid-column: 1 / -1; }
 
     .panel-head {
@@ -1647,7 +1723,7 @@
     @media (max-width: 1120px) {
       .kpis { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
       .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts,
-      .integration-service-grid, .integration-requirement-grid { grid-template-columns: 1fr; }
+      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid { grid-template-columns: 1fr; }
       .integration-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .business-workspace { grid-template-columns: 1fr; }
       .business-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -3329,29 +3405,29 @@
                 <h2 class="panel-title">연동 설정 바로가기</h2>
                 <p class="muted">사업자·지점 매핑과 인증방식을 서비스별로 관리합니다.</p>
               </div>
-              <button type="button" data-view="settings">설정 가이드</button>
+              <button type="button" data-integration-detail="integration-guide">설정 가이드</button>
             </div>
             <div class="panel-body">
               <div class="integration-service-grid">
                 <article class="integration-service-card">
                   <header><span class="connector-kind">판매</span><h3>판매사이트</h3><p>배민 · 쿠팡이츠 · 요기요 · 땡겨요 주문/매출/정산/리뷰 자동 수집</p></header>
                   <div class="connector-tags"><span>ID/PW Vault</span><span>2차인증</span><span>매장코드</span></div>
-                  <button type="button" data-integration-preset="baemin">판매채널 추가</button>
+                  <button type="button" data-integration-detail="sales-channel-connect">판매채널 추가</button>
                 </article>
                 <article class="integration-service-card">
                   <header><span class="connector-kind">은행</span><h3>은행 빠른계좌조회</h3><p>신한은행 간편서비스 · IBK 빠른서비스 계좌 거래내역/잔액/입금 매칭</p></header>
                   <div class="connector-tags"><span>ID/PW</span><span>계좌번호</span><span>계좌비번</span><span>사업자번호</span></div>
-                  <button type="button" class="primary" data-integration-preset="shinhan_business">은행 계좌 연결</button>
+                  <button type="button" class="primary" data-integration-detail="bank-connect">은행 계좌 연결</button>
                 </article>
                 <article class="integration-service-card">
                   <header><span class="connector-kind">매입</span><h3>매입처·발주</h3><p>쿠팡 · 마켓봄 · 뉴통 · 발주고 주문 프로그램과 영수증/OCR 병행</p></header>
                   <div class="connector-tags"><span>계정/API</span><span>거래명세서</span><span>수기등록</span></div>
-                  <button type="button" data-integration-preset="marketbom">매입처 등록</button>
+                  <button type="button" data-integration-detail="supplier-connect">매입처 등록</button>
                 </article>
                 <article class="integration-service-card">
                   <header><span class="connector-kind">세무</span><h3>홈택스·계산서</h3><p>전자세금계산서 · 현금영수증 · 카드매입 자료 수집</p></header>
                   <div class="connector-tags"><span>공동인증서</span><span>인증서 PW</span><span>세무대리인</span></div>
-                  <button type="button" data-integration-preset="hometax">계산서 수집</button>
+                  <button type="button" data-integration-detail="tax-connect">계산서 수집</button>
                 </article>
               </div>
             </div>
@@ -3360,7 +3436,7 @@
           <section class="panel">
             <div class="panel-head">
               <div><h2 class="panel-title">연동 조건별 필수 입력값</h2><p class="muted">ID만으로 연결할 수 없는 항목을 먼저 확인합니다.</p></div>
-              <button type="button" data-view="settings">보안 보관 정책</button>
+              <button type="button" data-integration-detail="credential-vault">보안 보관 정책</button>
             </div>
             <div class="panel-body">
               <div class="integration-requirement-grid">
@@ -3377,7 +3453,7 @@
           <section class="panel">
             <div class="panel-head">
               <div><h2 class="panel-title">서비스별 설정 판단표</h2><p class="muted">등록값이 충분하면 서버 Vault 저장 후 즉시 해당 수집 API를 호출합니다.</p></div>
-              <button type="button" class="primary" data-view="settings">설정 순서</button>
+              <button type="button" class="primary" data-integration-detail="integration-guide">설정 순서</button>
             </div>
             <div class="panel-body">
               <div class="table-wrap">
@@ -3403,12 +3479,12 @@
               <div class="panel-head"><div><h2 class="panel-title">빠른 설정</h2><p class="muted">대표자가 자주 쓰는 추가/수정 동선</p></div></div>
               <div class="panel-body">
                 <div class="integration-action-grid">
-                  <button type="button" data-integration-preset="baemin">판매채널 추가</button>
-                  <button type="button" data-integration-preset="shinhan_business">신한은행 간편서비스</button>
-                  <button type="button" data-integration-preset="ibk_business">기업은행 빠른서비스</button>
-                  <button type="button" data-integration-preset="card_pg">카드/PG 리포트</button>
-                  <button type="button" data-integration-preset="supplier_statement_upload">수기 증빙 등록</button>
-                  <button type="button" data-integration-preset="hometax">홈택스·계산서</button>
+                  <button type="button" data-integration-detail="sales-channel-connect">판매채널 추가</button>
+                  <button type="button" data-integration-detail="bank-connect" data-default-service="shinhan_business">신한은행 간편서비스</button>
+                  <button type="button" data-integration-detail="bank-connect" data-default-service="ibk_business">기업은행 빠른서비스</button>
+                  <button type="button" data-integration-detail="pg-connect">카드/PG 리포트</button>
+                  <button type="button" data-integration-detail="receipt-upload">수기 증빙 등록</button>
+                  <button type="button" data-integration-detail="tax-connect">홈택스·계산서</button>
                 </div>
               </div>
             </article>
@@ -3416,7 +3492,7 @@
 
           <section class="grid content-grid">
             <article class="panel">
-              <div class="panel-head"><div><h2 class="panel-title">수기 증빙 등록</h2><p class="muted">주문 프로그램이 없는 매입처를 위한 영수증/거래명세서 OCR 흐름</p></div><button type="button" data-open-import="supplier_statement_upload">사진 등록</button></div>
+              <div class="panel-head"><div><h2 class="panel-title">수기 증빙 등록</h2><p class="muted">주문 프로그램이 없는 매입처를 위한 영수증/거래명세서 OCR 흐름</p></div><button type="button" data-integration-detail="receipt-upload">사진 등록</button></div>
               <div class="panel-body">
                 <div class="integration-action-grid">
                   <article class="manual-card"><b>은행 엑셀/CSV</b><span>신한·IBK 빠른조회에서 내려받은 거래내역을 붙여넣으면 거래원장에 반영합니다.</span><button type="button" data-open-import="shinhan_business">은행 CSV 반영</button></article>
@@ -3428,6 +3504,21 @@
               <div class="panel-head"><div><h2 class="panel-title">오류·재연결 큐</h2><p class="muted">실패한 동기화 항목과 다음 조치</p></div><button type="button" id="integrationReconnectBtn">선택 재연결</button></div>
               <div class="panel-body"><div id="integrationIssueRows" class="progress-list"></div></div>
             </article>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2 class="panel-title">추가 권장 연동</h2><p class="muted">시안 기준으로 누락되기 쉬운 운영 데이터를 확장합니다.</p></div>
+              <button type="button" data-integration-detail="recommended-connectors">후보 보기</button>
+            </div>
+            <div class="panel-body">
+              <div class="integration-action-grid">
+                <button type="button" data-integration-detail="pos-connect">POS·키오스크</button>
+                <button type="button" data-integration-detail="review-connect">리뷰·CS</button>
+                <button type="button" data-integration-detail="hr-connect">노무·4대보험</button>
+                <button type="button" data-integration-detail="pg-connect">카드·PG</button>
+              </div>
+            </div>
           </section>
 
           <section class="panel">
@@ -3662,6 +3753,7 @@
                 <option value="supplier_statement_upload">거래내역서/영수증 업로드</option>
               </optgroup>
               <optgroup label="세무·기타">
+                <option value="matepos">메이트포스/POS</option>
                 <option value="hometax">홈택스</option>
                 <option value="tax_invoice_upload">계산서/증빙 업로드</option>
                 <option value="card_pg">카드사/PG 매출</option>
@@ -3710,6 +3802,19 @@
           근태 CSV 헤더: date, branch, staff, start, end, breakMin, hourly, status, memo
         </div>
       </div>
+    </section>
+  </div>
+
+  <div id="integrationDetailModal" class="modal-backdrop hidden">
+    <section class="modal integration-detail-modal" role="dialog" aria-modal="true" aria-labelledby="integrationDetailTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="integrationDetailTitle" class="panel-title">연동 상세</h2>
+          <span id="integrationDetailSubtitle" class="muted">연동 설정값과 실행 경로를 확인합니다.</span>
+        </div>
+        <button class="icon" id="closeIntegrationDetailBtn" title="닫기">x</button>
+      </div>
+      <div id="integrationDetailBody" class="integration-detail-layout" aria-live="polite"></div>
     </section>
   </div>
 
@@ -6668,6 +6773,148 @@
       }[value] || value || "미지정";
     }
 
+    function integrationDetailCard(label, value) {
+      return `<article class="integration-detail-card"><b>${escapeHtml(label)}</b><span>${escapeHtml(value)}</span></article>`;
+    }
+
+    function integrationStep(num, title, desc, state = "대기") {
+      return `<div class="integration-step"><i>${escapeHtml(num)}</i><div><b>${escapeHtml(title)}</b><span>${escapeHtml(desc)}</span></div><span class="badge info">${escapeHtml(state)}</span></div>`;
+    }
+
+    function integrationChoice(label, desc, action, service = "") {
+      const actionAttr = service ? ` data-${action}="${escapeHtml(service)}"` : ` data-integration-detail="${escapeHtml(action)}"`;
+      return `<button type="button" class="integration-choice"${actionAttr}><b>${escapeHtml(label)}</b><span>${escapeHtml(desc)}</span></button>`;
+    }
+
+    function integrationDetailSpec(action, defaultService = "") {
+      const selectedBusiness = businessName(selectedSettingsBusinessId()) || "선택 사업자";
+      const bankService = defaultService || "shinhan_business";
+      const salesCards = [
+        integrationDetailCard("필수값", "계정 ID, 비밀번호, 2차 인증, 매장코드, 사업자/지점 매핑"),
+        integrationDetailCard("저장/API", "/accounts 서버 Vault 저장 후 /sync 포털 수집 실행"),
+        integrationDetailCard("권한", "조회 전용 또는 정산 조회 권한 우선, 관리자 전체 권한은 예외"),
+        integrationDetailCard("대체 경로", "포털 정산 CSV 업로드와 수기 검수 대기열")
+      ].join("");
+      const bankCards = [
+        integrationDetailCard("신한 간편서비스", "아이디, 비밀번호, 조회용 계좌번호, 계좌비밀번호, 사업자번호, 간편조회 허용계좌"),
+        integrationDetailCard("IBK 빠른서비스", "아이디, 비밀번호, 계좌번호, 계좌비밀번호, 주민/사업자번호, 빠른조회 신청계좌"),
+        integrationDetailCard("저장/API", "/accounts Vault 저장 후 /transactions/sync 즉시 호출"),
+        integrationDetailCard("대체 경로", "은행 엑셀/CSV 붙여넣기 또는 파일 업로드 후 /transactions/import 반영")
+      ].join("");
+      const supplierCards = [
+        integrationDetailCard("계정형 매입처", "쿠팡, 마켓봄, 뉴통, 발주고 ID/PW 또는 API Key"),
+        integrationDetailCard("미연동 매입처", "거래명세서, 영수증, 카카오톡 주문 캡처를 파일/OCR로 등록"),
+        integrationDetailCard("반영 대상", "매입자료, 재고, 원가, 세무 증빙"),
+        integrationDetailCard("승인", "대표 또는 점장 확인 후 매입/재고 반영")
+      ].join("");
+      const taxCards = [
+        integrationDetailCard("인증", "홈택스 ID/PW, 공동/금융인증서, 인증서 비밀번호, 세무대리인 위임"),
+        integrationDetailCard("수집", "전자세금계산서, 현금영수증, 카드매입, 신고자료"),
+        integrationDetailCard("보관", "인증정보는 Vault 암호화, 원문 재표시 금지"),
+        integrationDetailCard("대체", "계산서/증빙 PDF 업로드")
+      ].join("");
+      const receiptCards = [
+        integrationDetailCard("증빙 종류", "은행 거래내역, 카드/PG 리포트, 거래명세서, 영수증, 세금계산서"),
+        integrationDetailCard("처리", "파일 또는 엑셀 붙여넣기 후 거래 원장/증빙 원장에 반영"),
+        integrationDetailCard("검수", "금액, 거래처, 부가세, 품목 분류 확인"),
+        integrationDetailCard("반영", "월마감, 세무 증빙, 매입/재고 흐름에 연결")
+      ].join("");
+      const specs = {
+        connect: {
+          title: "외부 서비스 연동 추가",
+          subtitle: `${selectedBusiness} 기준으로 연동 유형을 선택합니다.`,
+          body: `<div class="integration-choice-list">
+            ${integrationChoice("판매사이트", "배민·쿠팡이츠·요기요·땡겨요 계정과 정산 CSV", "sales-channel-connect")}
+            ${integrationChoice("은행 빠른계좌조회", "신한 간편서비스·IBK 빠른서비스 계좌 거래내역", "bank-connect")}
+            ${integrationChoice("매입처·발주", "주문 프로그램 또는 수기 증빙/OCR", "supplier-connect")}
+            ${integrationChoice("홈택스·계산서", "전자세금계산서·현금영수증·세무자료", "tax-connect")}
+            ${integrationChoice("수기 증빙", "은행/카드/매입처 파일 업로드와 CSV 붙여넣기", "receipt-upload")}
+            ${integrationChoice("추가 권장 후보", "POS·리뷰·노무·PG 후보를 검토", "recommended-connectors")}
+          </div>`
+        },
+        "sales-channel-connect": {
+          title: "판매사이트 연동 설정",
+          subtitle: "ID만으로 부족한 2차 인증과 매장코드까지 등록합니다.",
+          body: `<div class="integration-detail-grid">${salesCards}</div><div class="integration-detail-timeline">${integrationStep("1", "ID/PW 저장", "서버 Vault 암호화 저장, 평문 재표시 금지")}${integrationStep("2", "2차 인증", "OTP/푸시 승인 후 세션 또는 다운로드 권한 확인")}${integrationStep("3", "지점·메뉴 매핑", "플랫폼 매장명과 내부 지점/메뉴 연결")}${integrationStep("4", "샘플 정산 대사", "수수료, 광고비, 쿠폰 차감값 검증")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="baemin">설정 폼 열기</button><button type="button" class="primary" data-sync-integration="baemin">배달 수집 실행</button></div>`
+        },
+        "bank-connect": {
+          title: "은행 빠른계좌조회 설정",
+          subtitle: "신한 간편서비스와 IBK 빠른서비스 입력값을 등록하면 거래 연동 API를 실행합니다.",
+          body: `<div class="integration-detail-grid">${bankCards}</div><div class="integration-detail-timeline">${integrationStep("1", "조회계좌 등록", "은행 사이트에서 빠른조회/간편조회 허용계좌인지 확인")}${integrationStep("2", "자격값 저장", "ID/PW, 계좌번호, 계좌비번, 사업자번호를 Vault 저장")}${integrationStep("3", "거래 연동 실행", "/transactions/sync 호출 후 미연결 커넥터 상태 또는 반영 건수 표시")}${integrationStep("4", "엑셀 대체", "은행 엑셀/CSV를 가져오기 모달에서 /transactions/import 반영")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="${escapeHtml(bankService)}">${escapeHtml(integrationLabels[bankService] || "은행")} 설정 폼 열기</button><button type="button" data-open-import="${escapeHtml(bankService)}">은행 CSV 반영</button><button type="button" class="primary" data-sync-financial-integration="${escapeHtml(bankService)}">거래 연동 실행</button></div>`
+        },
+        "supplier-connect": {
+          title: "매입처·발주 프로그램 설정",
+          subtitle: "계정/API가 있으면 자동 수집, 없으면 수기 증빙 등록으로 연결합니다.",
+          body: `<div class="integration-detail-grid">${supplierCards}</div><div class="integration-detail-timeline">${integrationStep("1", "매입처 구분", "주문 프로그램 있음/없음, 파일만 제공 여부 확인")}${integrationStep("2", "계정 또는 파일 등록", "계정/API는 Vault, 무계정은 증빙 업로드로 처리")}${integrationStep("3", "품목·세금 분류", "식재료/소모품/포장재와 과세/면세 보정")}${integrationStep("4", "승인 반영", "대표 승인 후 매입자료·재고·세무 증빙에 반영")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="marketbom">마켓봄 설정 폼</button><button type="button" data-open-import="supplier_statement_upload">증빙 파일 등록</button><button type="button" class="primary" data-integration-preset="supplier_statement_upload">수기 매입처 등록</button></div>`
+        },
+        "tax-connect": {
+          title: "홈택스·계산서 연동 설정",
+          subtitle: "사업자별 세무 인증과 세무대리인 위임 상태를 관리합니다.",
+          body: `<div class="integration-detail-grid">${taxCards}</div><div class="integration-detail-timeline">${integrationStep("1", "사업자 선택", "세무 자료 귀속 사업자 확인")}${integrationStep("2", "인증정보 등록", "홈택스 ID/PW 또는 인증서 비밀번호 Vault 저장")}${integrationStep("3", "수집 범위 지정", "전자세금계산서, 현금영수증, 카드매입 자료 선택")}${integrationStep("4", "신고 일정 연결", "마감 14/7/2일 전 알림과 누락 증빙 요청")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="hometax">홈택스 설정 폼</button><button type="button" data-open-import="tax_invoice_upload">계산서 파일 등록</button><button type="button" class="primary" data-integration-detail="integration-guide">설정 순서 보기</button></div>`
+        },
+        "receipt-upload": {
+          title: "수기 증빙 사진·파일 등록",
+          subtitle: "주문 프로그램이 없거나 자동 연동이 막힌 거래를 같은 원장에 태웁니다.",
+          body: `<div class="integration-detail-grid">${receiptCards}</div><div class="integration-detail-timeline">${integrationStep("1", "파일 수신", "사진, PDF, CSV, 엑셀 붙여넣기")}${integrationStep("2", "OCR/표준화", "거래일자, 거래처, 금액, 부가세, 계좌를 추출")}${integrationStep("3", "사용자 보정", "품목·세금 분류와 사업자/지점 귀속 보정")}${integrationStep("4", "승인 반영", "거래 원장, 증빙 원장, 월마감에 반영")}</div><div class="integration-detail-actions"><button type="button" data-open-import="supplier_statement_upload">증빙 파일 등록</button><button type="button" data-open-import="shinhan_business">은행 CSV 반영</button><button type="button" class="primary" data-open-import="card_pg">카드/PG 리포트 반영</button></div>`
+        },
+        "credential-vault": {
+          title: "인증정보 보관 정책",
+          subtitle: "비밀번호·계좌비번·인증서·토큰은 원문 재표시 없이 Vault에 저장합니다.",
+          body: `<div class="integration-detail-grid">${integrationDetailCard("저장 방식", "서버 Vault 암호화, 공개 응답에서는 마스킹값만 반환")}${integrationDetailCard("입력 권한", "총괄 운영관리자/운영관리자만 계정 등록 가능")}${integrationDetailCard("감사", "입력, 갱신, 테스트, 실패 이력을 연동 상태에 남김")}${integrationDetailCard("만료 알림", "14일/7일/1일 전 대표·회계 담당 알림")}${integrationDetailCard("권장 범위", "조회 전용, 이체/결제 권한 제외")}${integrationDetailCard("실패 대체", "파일 업로드 대기열로 자동 전환")}</div><div class="integration-detail-actions"><button type="button" data-integration-detail="integration-audit">감사 점검</button><button type="button" class="primary" data-integration-detail="connect">연동 추가</button></div>`
+        },
+        "integration-audit": {
+          title: "연동 권한·보안 점검",
+          subtitle: "사업자별 인증 주체, 접근 권한, 만료일, 수집 오류를 다시 계산합니다.",
+          body: `<div class="integration-detail-grid">${integrationDetailCard("확인 대상", "판매채널, 은행, 카드/PG, 매입처, 홈택스")}${integrationDetailCard("권한 점검", "조회 전용 여부와 점장/회계 담당 접근 범위")}${integrationDetailCard("Vault 점검", "마스킹 응답, 원문 비노출, 자격값 등록 여부")}${integrationDetailCard("동기화 상태", "connector_not_configured, credentials_missing, upload_required 분류")}${integrationDetailCard("대체 경로", "CSV/엑셀/사진 업로드 가능 여부")}${integrationDetailCard("보고", "확인 필요 항목을 오류·재연결 큐에 표시")}</div><div class="integration-detail-actions"><button type="button" data-refresh-server-accounts="true">서버 계정 불러오기</button><button type="button" class="primary" data-run-integration-audit="true">점검 실행</button></div>`
+        },
+        "integration-guide": {
+          title: "연동 설정 가이드",
+          subtitle: "대표자가 실수 없이 연결하도록 순서를 고정합니다.",
+          body: `<div class="integration-detail-timeline">${integrationStep("1", "사업자 선택", "연동 데이터가 귀속될 사업자와 지점 선택")}${integrationStep("2", "읽기 전용 인증", "판매/은행/세무 계정은 조회 권한부터 연결")}${integrationStep("3", "데이터 매핑", "메뉴, 계좌, 매입처, 세금 분류를 내부 기준과 연결", "검토")}${integrationStep("4", "검증 후 자동화", "3일 샘플 대사 후 자동 수집 주기 적용", "예정")}</div><div class="integration-detail-actions"><button type="button" data-integration-detail="credential-vault">보안 정책</button><button type="button" class="primary" data-integration-detail="connect">연동 추가 시작</button></div>`
+        },
+        "recommended-connectors": {
+          title: "추가 권장 연동 후보",
+          subtitle: "CEO 요구 외에 운영 효율을 높이는 연결 후보입니다.",
+          body: `<div class="integration-choice-list">${integrationChoice("POS·키오스크", "홀 매출과 배달 매출을 통합", "pos-connect")}${integrationChoice("리뷰·CS", "평점 하락, 환불, 보상쿠폰을 운영 리스크로 연결", "review-connect")}${integrationChoice("노무·4대보험", "입퇴사, 급여, 4대보험 신고 일정 자동 알림", "hr-connect")}${integrationChoice("카드·PG", "카드 매입, PG 정산, 수수료 차이를 입금과 대사", "pg-connect")}</div>`
+        },
+        "pos-connect": {
+          title: "POS·키오스크 연동",
+          subtitle: "홀 매출, 현금, 카드, 키오스크 주문을 배달 매출과 합칩니다.",
+          body: `<div class="integration-detail-grid">${integrationDetailCard("대상", "OKPOS, 포스뱅크, 키오스크, 메이트포스")}${integrationDetailCard("수집 데이터", "주문, 결제수단, 메뉴, 취소, 영업일 마감")}${integrationDetailCard("활용", "메뉴별 매출, 재고 소진, 입금 대사")}${integrationDetailCard("설정", "지점별 단말기와 내부 메뉴 매핑")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="matepos">POS 설정 폼</button><button type="button" class="primary" data-open-import="matepos">POS 파일 등록</button></div>`
+        },
+        "review-connect": {
+          title: "리뷰·CS 연동",
+          subtitle: "배달앱 리뷰와 환불/보상 이력을 운영 리스크로 관리합니다.",
+          body: `<div class="integration-detail-grid">${integrationDetailCard("수집", "평점, 키워드, 리뷰 답변 상태")}${integrationDetailCard("알림", "평점 3점 이하 즉시 확인")}${integrationDetailCard("매출 영향", "쿠폰, 환불, 재주문 여부 연결")}${integrationDetailCard("담당", "점장 답변, 대표 예외 승인")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="baemin">배달앱 설정 폼</button><button type="button" class="primary" data-sync-integration="baemin">리뷰 수집 점검</button></div>`
+        },
+        "hr-connect": {
+          title: "노무·4대보험 연동",
+          subtitle: "직원 계약, 급여, 입퇴사 신고 일정을 연동합니다.",
+          body: `<div class="integration-detail-grid">${integrationDetailCard("대상", "급여대장, 4대보험, 입퇴사")}${integrationDetailCard("권한", "대표·노무 담당 분리")}${integrationDetailCard("알림", "계약, 보건증, 보험 신고 마감")}${integrationDetailCard("자료", "계약서, 급여명세서, 원천세")}</div><div class="integration-detail-actions"><button type="button" data-view="employees">직원 관리</button><button type="button" class="primary" data-view="payroll">급여내역서</button></div>`
+        },
+        "pg-connect": {
+          title: "카드·PG 연동",
+          subtitle: "KCP, 나이스, 토스페이먼츠 정산과 은행 입금을 대사합니다.",
+          body: `<div class="integration-detail-grid">${integrationDetailCard("수집", "승인, 취소, 수수료, 정산 예정")}${integrationDetailCard("대사", "은행 입금 자동 매칭")}${integrationDetailCard("예외", "차이 금액, 보류, 취소 누락")}${integrationDetailCard("보고", "정산 차이 리포트")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="card_pg">카드/PG 설정 폼</button><button type="button" data-open-import="card_pg">리포트 등록</button><button type="button" class="primary" data-sync-financial-integration="card_pg">거래 연동 실행</button></div>`
+        }
+      };
+      return specs[action] || specs.connect;
+    }
+
+    function openIntegrationDetail(action = "connect", defaultService = "") {
+      if (!els.integrationDetailModal || !els.integrationDetailTitle || !els.integrationDetailBody) return;
+      const spec = integrationDetailSpec(action, defaultService);
+      els.integrationDetailTitle.textContent = spec.title;
+      els.integrationDetailSubtitle.textContent = spec.subtitle;
+      els.integrationDetailBody.innerHTML = spec.body;
+      els.integrationDetailModal.classList.remove("hidden");
+      els.closeIntegrationDetailBtn?.focus();
+    }
+
+    function closeIntegrationDetailModal() {
+      els.integrationDetailModal?.classList.add("hidden");
+    }
+
     function applyIntegrationPreset(service, overwrite = false) {
       if (!els.integrationForm) return;
       const catalog = integrationCatalog[service] || {};
@@ -8090,7 +8337,7 @@
       if (["shinhan_business", "ibk_business"].includes(service)) return "bank_statement";
       if (["hometax", "tax_invoice_upload", "accountant_tax_agent"].includes(service)) return "tax_invoice";
       if (service === "utility_bills") return "utility_bill";
-      if (service === "card_pg") return "card_pg_report";
+      if (["card_pg", "matepos"].includes(service)) return "card_pg_report";
       if (service === "supplier_statement_upload") return "receipt_photo";
       return "supplier_statement";
     }
@@ -8189,6 +8436,10 @@
         if (els.evidenceKind) els.evidenceKind.value = evidenceKindForService(event.target.value);
         if (els.evidenceVendor && !els.evidenceVendor.value.trim()) els.evidenceVendor.value = integrationLabels[event.target.value] || "";
       });
+      els.closeIntegrationDetailBtn?.addEventListener("click", closeIntegrationDetailModal);
+      els.integrationDetailModal?.addEventListener("click", event => {
+        if (event.target === els.integrationDetailModal) closeIntegrationDetailModal();
+      });
       els.loginBtn.addEventListener("click", () => els.loginModal.classList.remove("hidden"));
       els.closeLoginBtn.addEventListener("click", () => els.loginModal.classList.add("hidden"));
       els.signupBtn.addEventListener("click", () => els.signupModal.classList.remove("hidden"));
@@ -8239,6 +8490,7 @@
         if (event.key === "Escape" && !els.contractPreviewModal?.classList.contains("hidden")) closeContractPreviewModal();
         if (event.key === "Escape" && !els.filePreviewModal?.classList.contains("hidden")) closeFilePreviewModal();
         if (event.key === "Escape" && !els.contractSignModal?.classList.contains("hidden")) closeContractSignModal();
+        if (event.key === "Escape" && !els.integrationDetailModal?.classList.contains("hidden")) closeIntegrationDetailModal();
       });
       els.logoutBtn.addEventListener("click", () => logoutFromServer());
       els.loginForm.addEventListener("submit", event => {
@@ -8852,10 +9104,10 @@
       els.syncDeliveryBtn.addEventListener("click", () => syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]).catch(err => showToast(err.message)));
       els.syncFinancialBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
       els.syncFinancialShortcutBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
-      els.integrationAddBtn?.addEventListener("click", () => openIntegrationPreset("shinhan_business"));
+      els.integrationAddBtn?.addEventListener("click", () => openIntegrationDetail("connect"));
       els.integrationRefreshAccountsBtn?.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));
-      els.integrationAuditBtn?.addEventListener("click", () => runIntegrationAudit().catch(err => showToast(err.message)));
-      els.integrationReconnectBtn?.addEventListener("click", () => runIntegrationAudit().catch(err => showToast(err.message)));
+      els.integrationAuditBtn?.addEventListener("click", () => openIntegrationDetail("integration-audit"));
+      els.integrationReconnectBtn?.addEventListener("click", () => openIntegrationDetail("integration-audit"));
       els.integrationSyncAllBtn?.addEventListener("click", async () => {
         try {
           await syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
@@ -8868,9 +9120,26 @@
       els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
       document.body.addEventListener("click", event => {
+        const integrationDetailButton = event.target.closest("[data-integration-detail]");
+        if (integrationDetailButton) {
+          event.preventDefault();
+          openIntegrationDetail(integrationDetailButton.dataset.integrationDetail, integrationDetailButton.dataset.defaultService || "");
+          return;
+        }
+        if (event.target.closest("[data-run-integration-audit]")) {
+          event.preventDefault();
+          runIntegrationAudit().catch(err => showToast(err.message));
+          return;
+        }
+        if (event.target.closest("[data-refresh-server-accounts]")) {
+          event.preventDefault();
+          refreshServerAccounts().catch(err => showToast(err.message));
+          return;
+        }
         const viewShortcut = event.target.closest("[data-view]:not(.tab)");
         if (viewShortcut && viewShortcut.dataset.view) {
           event.preventDefault();
+          closeIntegrationDetailModal();
           setView(viewShortcut.dataset.view);
           return;
         }
@@ -8910,6 +9179,7 @@
           copyText(shareMessage || copyInvite).then(copied => showToast(copied ? "초대 문구를 복사했습니다." : "초대 링크를 복사하지 못했습니다."));
         }
         if (integrationPreset) {
+          closeIntegrationDetailModal();
           openIntegrationPreset(integrationPreset);
         }
         if (editBusinessId) {
@@ -9086,12 +9356,15 @@
           showToast("외부계정 연결 정보를 삭제했습니다.");
         }
         if (syncService) {
+          closeIntegrationDetailModal();
           syncDeliveryServices([syncService]).catch(err => showToast(err.message));
         }
         if (syncFinancialService) {
+          closeIntegrationDetailModal();
           syncFinancialServices([syncFinancialService]).catch(err => showToast(err.message));
         }
         if (openImportService) {
+          closeIntegrationDetailModal();
           openEvidenceImport(openImportService);
           showToast(financialTransactionServices.has(openImportService) ? "CSV 내용을 붙여넣은 뒤 거래 CSV 반영 또는 증빙 서버 등록을 실행하십시오." : "파일/사진을 선택한 뒤 증빙 서버 등록을 실행하십시오.");
         }
