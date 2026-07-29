@@ -8524,21 +8524,21 @@ async def send_message_stream(
         # OHVIS Loop: 채팅 루프 명령 감지 → 즉시 처리 후 return
         if not intent_override:
             from app.services.loop_chat_handler import detect_loop_intent
-            _loop_intent = detect_loop_intent(content)
+            _loop_intent = detect_loop_intent(persisted_user_content)
             if _loop_intent:
                 try:
                     _loop_resp = ""
                     if _loop_intent == "loop_start":
                         from app.services.loop_chat_handler import handle_loop_start
-                        _lr = await handle_loop_start(content, session_id, intent_result.model if intent_result else None)
+                        _lr = await handle_loop_start(persisted_user_content, session_id, intent_result.model if intent_result else None)
                         _loop_resp = _lr["message"]
                     elif _loop_intent == "loop_stop":
                         from app.services.loop_chat_handler import handle_loop_stop
-                        _lr = await handle_loop_stop(content, session_id)
+                        _lr = await handle_loop_stop(persisted_user_content, session_id)
                         _loop_resp = _lr["message"]
                     elif _loop_intent == "loop_resume":
                         from app.services.loop_chat_handler import handle_loop_resume
-                        _lr = await handle_loop_resume(content, session_id)
+                        _lr = await handle_loop_resume(persisted_user_content, session_id)
                         _loop_resp = _lr["message"]
                     elif _loop_intent == "loop_status":
                         from app.services.loop_chat_handler import handle_loop_status

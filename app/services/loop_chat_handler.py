@@ -28,21 +28,48 @@ _INTERVAL_RE = re.compile(r"매\s*(\d+)\s*(초|분|시간)")
 _LOOP_ID_RE = re.compile(r"(?:루프|loop)\s*#?\s*(\d+)")
 
 
-_LOOP_ANCHOR = re.compile(r"루프|loop|감시|모니터")
-_STOP_ACTION = re.compile(r"중지|정지|취소|멈춰|중단|삭제|stop|cancel")
-_RESUME_ACTION = re.compile(r"재개|재시작|resume")
-_STATUS_ACTION = re.compile(r"상태|목록|list|status")
+# ── 오탐 방지 가드 (AADS-LOOP-FP-001) ──────────────────────────────
+# 기존 구현은 "루프|감시" 앵커와 "중지|상태" 액션이 문서 어디에든 각각
+# 존재하면 루프 명령으로 판정했다. reply_to 인용문(최대 2000자)이나
+# 루프 관련 보고 요청("루프 구현상태 보고해")까지 루프 명령으로 오분류되어
+# "⚠️ 활성 루프가 없습니다."만 응답하고 본 답변이 차단되는 사고가 있었다.
+# → ① 길이 제한 ② 서술/질의형 제외 ③ 앵커-액션 인접 강제 3중 가드.
+_LOOP_CMD_MAX_LEN = 200
+
+# 보고/설명/질의 요청은 루프 제어 명령이 아니다.
+_NON_COMMAND_HINT = re.compile(
+    r"보고해|보고하|보고드|보고 |설명|뭐지|뭔가|무엇|어떻게|어떤|구현|기획|"
+    r"문서|분석|검토|점검|정리해|알려주|가르쳐|차이|의미"
+)
+
+_ANCHOR = r"(?:루프|loop|감시|모니터링|모니터)"
+_SUFFIX = r"\s*(?:#?\s*\d+\s*)?(?:을|를|은|는|이|가)?\s*"
+_STOP_CMD = re.compile(
+    _ANCHOR + _SUFFIX + r"(?:중지|정지|취소|멈춰|멈춰줘|중단|삭제|stop|cancel)"
+)
+_RESUME_CMD = re.compile(_ANCHOR + _SUFFIX + r"(?:재개|재시작|resume)")
+_STATUS_CMD = re.compile(_ANCHOR + _SUFFIX + r"(?:상태|목록|list|status)")
 
 
 def detect_loop_intent(content: str) -> str | None:
-    if any(kw in content for kw in LOOP_START_KW):
+    """채팅 입력에서 루프 제어 명령만 정확히 판정한다.
+
+    호출자는 반드시 reply_to 인용문/재개 스캐폴드가 제거된
+    사용자 원문(persisted_user_content)을 전달해야 한다.
+    """
+    text = str(content or "").strip()
+    if not text or len(text) > _LOOP_CMD_MAX_LEN:
+        return None
+    if _NON_COMMAND_HINT.search(text):
+        return None
+
+    if any(kw in text for kw in LOOP_START_KW):
         return "loop_start"
-    has_anchor = bool(_LOOP_ANCHOR.search(content))
-    if has_anchor and _STOP_ACTION.search(content):
+    if any(kw in text for kw in LOOP_STOP_KW) or _STOP_CMD.search(text):
         return "loop_stop"
-    if has_anchor and _RESUME_ACTION.search(content):
+    if any(kw in text for kw in LOOP_RESUME_KW) or _RESUME_CMD.search(text):
         return "loop_resume"
-    if has_anchor and _STATUS_ACTION.search(content):
+    if any(kw in text for kw in LOOP_STATUS_KW) or _STATUS_CMD.search(text):
         return "loop_status"
     return None
 
