@@ -182,6 +182,15 @@
     .manual-card span { color: var(--muted); font-size: 10px; line-height: 1.45; }
     .credential-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .credential-grid .wide { grid-column: 1 / -1; }
+    .integration-setup-form { display: grid; gap: 14px; }
+    .integration-setup-band { padding: 15px; border: 1px solid #d7e3f5; border-radius: 10px; background: linear-gradient(135deg, #f8fbff, #eef5ff); }
+    .integration-setup-band h3 { margin: 0; font-size: 16px; }
+    .integration-setup-band p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .integration-preset-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .integration-preset-strip button { min-height: 72px; display: grid; align-content: center; gap: 5px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; text-align: left; }
+    .integration-preset-strip button.active { border-color: var(--blue); background: var(--blue-soft); }
+    .integration-preset-strip b { font-size: 11px; }
+    .integration-preset-strip span { color: var(--muted); font-size: 10px; line-height: 1.45; }
     .fallback-lane { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 12px; align-items: start; }
     .manual-pipeline { display: grid; gap: 8px; }
     .manual-pipeline .step { padding: 9px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
@@ -287,7 +296,7 @@
       .app { grid-template-columns: 204px minmax(0,1fr); }
       .grid-main { grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); }
       .grid-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
-      .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .requirement-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .integration-preset-strip, .requirement-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .auth-layout { grid-template-columns: 1fr; }
       .decision-row { grid-template-columns: 1fr; }
       .manual-board { grid-template-columns: 1fr; }
@@ -326,7 +335,7 @@
       .kpi { min-height: 118px; padding: 15px; }
       .kpi-value { font-size: 20px; }
       .grid-3 { grid-template-columns: 1fr; }
-      .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .upload-split, .requirement-grid, .credential-grid { grid-template-columns: 1fr; }
+      .flow-grid, .mini-form, .integration-service-grid, .integration-action-grid, .integration-preset-strip, .upload-split, .requirement-grid, .credential-grid { grid-template-columns: 1fr; }
       .credential-grid .wide { grid-column: auto; }
       .progress-row { grid-template-columns: 1fr; }
       .grid-3 .card:last-child { grid-column: auto; }
@@ -844,6 +853,39 @@
         <div class="manual-card"><b>사진 등록 후 반영 경로</b><span>사진/PDF 업로드 → OCR 추출 → 품목·부가세 수정 → 반복 템플릿 저장 → 대표 승인 → 매입자료·재고·세무증빙 동시 반영.</span><button type="button" class="outline" data-action="receipt-upload">증빙 등록 화면</button></div>
       </div>`;
     }
+    function integrationSetupForm(defaultService = "shinhan") {
+      return `<form class="auth-form integration-setup-form" data-search-form data-integration-setup-form>
+        <div class="integration-setup-band"><h3>연동 설정 페이지</h3><p>사업자와 지점, 서비스 유형, 로그인/Vault 보관값, 계좌·가맹점번호, 수집 범위를 한 화면에서 등록하는 시안입니다.</p></div>
+        <div class="integration-preset-strip">
+          <button type="button" class="active" data-integration-preset="shinhan" data-label="성신점 신한은행 빠른계좌조회" data-url="https://bizbank.shinhan.com"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
+          <button type="button" data-integration-preset="ibk" data-label="성신점 IBK 빠른계좌조회" data-url="https://kiup.ibk.co.kr"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
+          <button type="button" data-integration-preset="baemin" data-label="성신점 배달의민족 정산" data-url="https://self.baemin.com"><b>판매채널</b><span>주문·매출·정산·리뷰</span></button>
+          <button type="button" data-integration-preset="supplier" data-label="성신점 매입처 수기증빙" data-url=""><b>매입·증빙</b><span>발주 프로그램·사진 OCR</span></button>
+        </div>
+        <div class="credential-grid">
+          ${authSelect("integration-service","연동 구분",["신한은행 빠른계좌조회","기업은행 빠른계좌조회","배달의민족 판매채널","쿠팡이츠 판매채널","요기요 판매채널","홈택스·계산서","매입처·발주 프로그램","카드·PG 리포트"])}
+          ${authSelect("integration-business","소속 사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}
+          ${authSelect("integration-branch","대상 지점",["성신점","미아점","정화점","전체 지점"])}
+          ${authField("integration-label","표시명","text","성신점 신한은행 빠른계좌조회","성신점 신한은행 빠른계좌조회")}
+          ${authField("integration-url","로그인/관리 URL","url","https://...","https://bizbank.shinhan.com",false)}
+          ${authField("integration-user","아이디/업로드 기준명","text","로그인 ID, 휴대폰번호 또는 매입처명","")}
+          ${authField("integration-password","비밀번호","password","서버 Vault 암호화 저장","")}
+          ${authField("integration-account","계좌/가맹점번호","text","숫자 또는 플랫폼 매장코드","")}
+          ${authField("integration-account-pw","계좌비밀번호/API Secret","password","은행 조회·API 연동 보안값","")}
+          ${authField("integration-business-no","사업자등록번호","text","000-00-00000","123-45-67890")}
+          ${authSelect("integration-mode","수집 방식",["은행 빠른조회","브라우저 자동화","공식 API","CSV/엑셀 업로드","사진/OCR 수기등록"])}
+          ${authSelect("integration-scope","수집 범위",["거래내역+잔액+입금자명","주문+매출+정산+리뷰","발주+거래명세서+입고","전자세금계산서+현금영수증","승인+취소+입금대사"])}
+          <div class="wide">${authField("integration-memo","검증 메모","text","조회 전용 권한, 인증 만료일, 파일 대체 경로","조회 전용 권한으로 저장 후 샘플 3일 대사")}</div>
+        </div>
+        <div class="detail-grid">
+          ${detailCard("저장", "서버 Vault 암호화 · 평문 재표시 금지")}
+          ${detailCard("권한", "대표/회계 관리자만 등록 · 조회 전용 우선")}
+          ${detailCard("실패 대체", "CSV/엑셀/사진 업로드 대기열")}
+          ${detailCard("검증", "저장 후 샘플 동기화와 감사로그 기록")}
+        </div>
+        <div class="drawer-actions"><button type="button" class="outline" data-action="integration-guide">설정 가이드</button><button type="submit" class="primary">저장 후 연동 테스트</button></div>
+      </form>`;
+    }
     function integrationSettingsTable() {
       return `<div class="table-wrap"><table><thead><tr><th>구분</th><th>서비스</th><th>사업자·지점</th><th>수집 데이터</th><th>필수 인증값</th><th>최근 동기화</th><th>상태</th><th>설정</th></tr></thead><tbody>
         <tr><td>판매</td><td><strong>배달의민족</strong></td><td>열정국밥 · 3개 지점</td><td>주문·매출·정산·리뷰</td><td>ID/PW · 2차인증 · 매장코드</td><td>12:42</td><td><span class="status ok">정상</span></td><td><button class="chip-btn" data-action="sales-channel-connect">수정</button></td></tr>
@@ -1186,7 +1228,7 @@
         "review-connect": ["리뷰·CS 연동", "배달앱 리뷰와 환불/보상 이력을 운영 리스크로 관리합니다.", `<div class="detail-grid">${detailCard("수집","평점, 키워드, 리뷰 답변 상태")}${detailCard("알림","평점 3점 이하 즉시")}${detailCard("매출 영향","쿠폰/환불/재주문 여부 연결")}${detailCard("담당","점장 답변, 대표 예외 승인")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
         "hr-connect": ["노무·4대보험 연동", "직원 계약, 급여, 입퇴사 신고 일정을 연동합니다.", `<div class="detail-grid">${detailCard("대상","급여대장, 4대보험, 입퇴사")}${detailCard("권한","대표·노무 담당 분리")}${detailCard("알림","계약/보건증/보험 신고 마감")}${detailCard("자료","계약서, 급여명세서, 원천세")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
         "pg-connect": ["카드·PG 연동", "KCP, 나이스, 토스페이먼츠 정산과 은행 입금을 대사합니다.", `<div class="detail-grid">${detailCard("수집","승인, 취소, 수수료, 정산 예정")}${detailCard("대사","은행 입금 자동 매칭")}${detailCard("예외","차이 금액, 보류, 취소 누락")}${detailCard("보고","정산 차이 리포트")}</div><button type="button" class="primary" data-action="confirm-state">후보 저장</button>`],
-        connect: ["외부 서비스 연동", "판매사이트, 은행, 매입처, 홈택스, POS/PG를 추가합니다.", `<div class="profile-menu"><button type="button" data-action="sales-channel-connect">판매사이트: 배민·쿠팡이츠·요기요·땡겨요</button><button type="button" data-action="bank-connect">은행: 신한은행 기업·기업은행 기업</button><button type="button" data-action="supplier-connect">매입처: 쿠팡·마켓봄·뉴통·발주고·직접 추가</button><button type="button" data-action="tax-connect">홈택스·전자세금계산서</button><button type="button" data-action="receipt-upload">주문 프로그램 없는 매입처 증빙 등록</button><button type="button" data-action="recommended-connectors">추가 권장 연동 후보</button></div>`],
+        connect: ["외부 서비스 연동 추가", "사업자·지점·서비스·인증값·수집 범위를 한 화면에서 등록합니다.", integrationSetupForm()],
         calendar: ["세무 캘린더", "신고·납부 일정 상세", `<div class="timeline">${step("!","부가가치세","2026-07-25 · D-2","대기")}${step("2","원천세","2026-08-10","검토")}${step("3","법인세 중간예납","2026-08-31","예정")}</div>`],
         primary: ["주요 작업", `${views[slug] ? views[slug].title : "현재 화면"} 업무`, `<div class="profile-menu"><button type="button" data-action="review">상세현황 검토</button><button type="button" data-action="download">자료 미리보기·내보내기</button><button type="button" data-action="help">검토 메모 남기기</button></div>`]
       };
@@ -1271,6 +1313,22 @@
     };
 
     document.addEventListener("click", (event) => {
+      const integrationPreset = event.target.closest("[data-integration-preset]");
+      if (integrationPreset) {
+        const form = integrationPreset.closest("[data-integration-setup-form]");
+        if (form) {
+          form.querySelectorAll("[data-integration-preset]").forEach((item) => item.classList.toggle("active", item === integrationPreset));
+          const serviceMap = { shinhan: "신한은행 빠른계좌조회", ibk: "기업은행 빠른계좌조회", baemin: "배달의민족 판매채널", supplier: "매입처·발주 프로그램" };
+          const modeMap = { shinhan: "은행 빠른조회", ibk: "은행 빠른조회", baemin: "브라우저 자동화", supplier: "사진/OCR 수기등록" };
+          const key = integrationPreset.dataset.integrationPreset;
+          if (form["integration-service"]) form["integration-service"].value = serviceMap[key] || form["integration-service"].value;
+          if (form["integration-label"]) form["integration-label"].value = integrationPreset.dataset.label || "";
+          if (form["integration-url"]) form["integration-url"].value = integrationPreset.dataset.url || "";
+          if (form["integration-mode"]) form["integration-mode"].value = modeMap[key] || form["integration-mode"].value;
+          showToast("선택한 연동 유형의 설정값을 불러왔습니다.");
+        }
+        return;
+      }
       const authButton = event.target.closest("[data-auth]");
       if (authButton) {
         render(authButton.dataset.auth);
