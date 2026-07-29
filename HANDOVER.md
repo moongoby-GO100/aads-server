@@ -15,7 +15,11 @@
   - `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
   - `git diff --check` passed for touched backend and dashboard files.
   - DB check found existing `chat_messages.quality_details ? 'duration_sec'` rows, confirming the JSONB telemetry path is available.
-- Deployment: not deployed in this entry. Apply backend reload and dashboard deploy after CEO deployment approval if production visibility is required.
+- Deployment:
+  - Backend hot-reload completed on both `aads-server-green` and `aads-server` at 2026-07-29 17:19 KST; `/health/live` returned 200 on ports 8102 and 8100.
+  - Dashboard commit `ad609d4d99c6` was deployed by blue/green at 2026-07-29 17:30 KST; active slot is green and standby blue was rebuilt to the same release.
+  - External `https://aads.newtalk.kr/chat` returned 307 to `/login?redirect=%2Fchat`, confirming the public route is reachable behind auth.
+  - Deployment script QA returned `UNKNOWN`, so it was not counted as an E2E pass. Authenticated browser E2E remains pending.
 
 ## 2026-07-28 08:07 KST - Yeoljeong bank quick sync save-flow correction
 
