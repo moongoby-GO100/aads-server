@@ -5224,3 +5224,21 @@
 - 주의:
   - 재고·발주, 원가·마진, 감사로그는 이번 단계에서 기존 운영 원장 기반 페이지로 구현했다. 별도 재고 DB, 발주 승인 DB, 서버 감사로그 테이블은 후속 마이그레이션 대상이다.
   - 작업트리에는 이번 변경과 무관한 기존 미커밋 파일이 남아 있어 커밋에는 대상 파일만 선별해야 한다.
+
+## 2026-07-30 07:19 KST - FB 매장비서 연동관리 페이지 mockup-v2 integrations 디자인/API 연결 반영
+
+- 요청: `index.html#auth-invite` 연동관리 페이지를 `mockup-v2.html#integrations` 디자인과 동일한 구조로 적용하고 DB/API 연동까지 완료.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 `integrationsView`를 mockup-v2 기준으로 재구성했다: KPI, 연동 설정 바로가기, 조건별 필수 입력값, 서비스별 설정 판단표, 카테고리별 자동화 현황, 빠른 설정, 수기 증빙 등록, 오류·재연결 큐, 연동 목록 상세.
+  - 신한은행 간편서비스와 IBK기업은행 빠른서비스 필수값을 화면에 명시했다: 아이디, 비밀번호, 조회용 계좌번호, 계좌비밀번호, 사업자번호, 빠른/간편조회 신청계좌 여부.
+  - 연동 카드와 빠른 설정 버튼을 기존 `integrationForm` 프리셋으로 연결해 관리자가 선택하면 실제 계정 저장 폼으로 이동하고 은행별 기본 URL/수집방식/필수 증빙이 자동 입력되도록 했다.
+  - 연동 목록 상세의 조치 버튼을 기존 API 흐름에 연결했다: 배달앱은 `/sync`, 은행/카드는 `/transactions/sync`, 수기 증빙은 업로드/import 흐름.
+  - `#auth-invite` 해시는 로그인 상태에서 연동관리 화면으로 열리도록 변경했고, 직원 가입 버튼은 `#auth-employee-profile`로 분리해 기존 온보딩 흐름을 보존했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - 인라인 스크립트 추출 후 `node --check /tmp/yf-inline-0.js` 성공.
+  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html` 성공.
+  - 로컬 `pytest`는 PATH에 없고 `.venv/bin/python` 링크도 없어 실행 불가. `python3` 직접 서비스 호출은 `structlog` 의존성 미설치로 실패했다.
+- 운영 주의:
+  - 은행 실시간 외부 로그인/엑셀 다운로드 커넥터가 아직 연결되지 않은 경우 서버는 가상 거래를 만들지 않고 `connector_not_configured` 또는 수기 CSV/엑셀 업로드 대체 상태를 반환한다.
+  - 실제 거래 수집 완료 판정은 관리자가 신한/IBK 계정 필수값을 등록한 뒤 `/transactions/sync` 결과로 확인해야 한다.
