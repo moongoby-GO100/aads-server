@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-30 07:37 KST - FB integrations deployment ledger verification
+
+- Request: Previous closeout report conflicted with commit/push/deploy/document ledger; continue verification for `fb.newtalk.kr` Yeoljeong finance `#auth-invite` integration management page until all remaining checks are complete.
+- Commit/push verification: `HEAD`, upstream `@{u}`, and `origin/main` all resolve to `660b659fdfa76afc68baf22a3409b0af58bd214b` (`feat: align FB integration management page`). That commit contains only `HANDOVER.md` and `app/static/apps/yeoljeong-finance/index.html`.
+- Deployment verification: `aads-server` is healthy and serves `/static/apps/yeoljeong-finance/index.html` with the same SHA-256 as the local committed file (`245db13739abac248d3e8adc342a5d46bd9b2a25b9a90c22375a3e4eb4f9a1a3`). External `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returns HTTP 200 and `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`.
+- Feature verification: the production HTML contains `id="integrationsView"`, `은행 빠른계좌조회`, `신한은행 간편서비스`, `IBK기업은행 빠른서비스`, `/transactions/sync`, `/transactions/import`, and the Shinhan/IBK preset buttons. Static route inspection confirms `#auth-invite` opens `setView("integrations")`.
+- Test verification: `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed; inline JS `node --check` passed; `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py -q` returned 68 passed, 1 warning.
+- Limit: Authenticated browser click E2E was not run because this workspace has no Playwright/Puppeteer/jsdom browser package installed. Public unauthenticated API calls correctly return 401; authenticated API behavior is covered by the unit tests above.
+
 ## 2026-07-30 00:24 KST - response duration footer JSON payload fix
 
 - Request: Previous closeout still failed final completion criteria; continue verification until current-session assistant footer is actually supported by API payload and renderer.
