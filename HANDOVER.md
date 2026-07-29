@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-30 08:44 KST - FB mockup integrations add-flow settings page
+
+- Request: In `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations`, make `+ 연동 추가` open the same detailed integration settings-page design instead of a simple service list.
+- Scope: `app/static/apps/yeoljeong-finance/mockup-v2.html` only for UI behavior, plus this handover entry. The main `/root/aads/aads-server` worktree had unrelated dirty files, so this change was prepared in isolated worktree `/tmp/aads-mockup-integration-20260730`.
+- UI: Added `integrationSetupForm()` with the `연동 설정 페이지` band, Shinhan/IBK/sales/supplier preset cards, business/branch/service fields, ID/password/account/business-number/security fields, collection scope, Vault/security cards, and `저장 후 연동 테스트` CTA.
+- Behavior: The existing `+ 연동 추가` / `data-action="connect"` path now opens that form directly. Preset buttons update service, display label, URL, and collection mode inside the drawer.
+- Validation: `python3 -m html.parser app/static/apps/yeoljeong-finance/mockup-v2.html` passed; inline script parsing with Node `new Function(...)` passed for 1 script; `git diff --check` passed; local HTTP returned `200 190804`; DOM markers found `integrationSetupForm`, `연동 설정 페이지`, preset buttons, `사업자등록번호`, `계좌/가맹점번호`, and `저장 후 연동 테스트`.
+- Deployment note: To avoid deploying unrelated dirty files from the main worktree, production should receive this exact file from the isolated worktree or a clean commit based on `origin/main`. Local Browser Bridge could not reach this process-local `localhost:8899`, so public URL browser verification is required after production file replacement.
+
 ## 2026-07-30 08:27 KST - Yeoljeong contract legal template and A4 print update
 
 - Request: Review Korean standard employment contract and freelancer contract forms, revise the Yeoljeong finance contract editor so previews/prints are A4-sized and legally safer.
