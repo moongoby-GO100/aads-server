@@ -5276,6 +5276,10 @@
   - `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` 결과 3 passed.
   - 공개 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`에서 `integrationDetailModal`, `recommended-connectors`, `pos-connect`, `review-connect`, `hr-connect`, `pg-connect` 표식 확인 완료.
   - Blue/Green `/health` 모두 `status=ok`.
+- 배포:
+  - 커밋 `143e7a78`를 `origin/main`에 반영했다.
+  - `bash /root/aads/aads-server/deploy.sh`는 코드 검증 통과 후 전환 대상 Blue `8100`의 활성 스트림 4건 때문에 안전 중단했다. 강제 배포(`AADS_DEPLOY_ALLOW_BUSY_TARGET=true`)는 사용하지 않았다.
+  - 공개 URL은 `보안 보관 정책`, `POS·키오스크 연동`, `리뷰·CS 연동`, `노무·4대보험 연동`, `카드·PG 연동` 표식을 정상 반환했다.
 - 운영 주의:
   - 실제 은행/카드 사이트 자동 로그인은 자격증명과 2차 인증이 필요하므로 이번 작업에서는 더미 거래를 생성하지 않는다.
   - 작업트리에는 이번 작업과 무관한 기존 미커밋 파일이 남아 있으므로 후속 커밋 시 선별 스테이징이 필요하다.
