@@ -6049,20 +6049,38 @@ def _message_select_fields(fields: str) -> str:
     return "*"
 
 
-def _message_has_response_duration(message: Dict[str, Any]) -> bool:
+def _coerce_quality_details_dict(message: Dict[str, Any]) -> Dict[str, Any]:
     details = message.get("quality_details") or {}
     if isinstance(details, str):
         try:
             details = json.loads(details)
         except Exception:
             details = {}
+        if isinstance(details, dict):
+            message["quality_details"] = details
+    if not isinstance(details, dict):
+        details = {}
+        message["quality_details"] = details
+    return details
+
+
+def _message_has_response_duration(message: Dict[str, Any]) -> bool:
+    details = _coerce_quality_details_dict(message)
     for key in (
         "response_duration_ms",
         "response_duration_sec",
         "duration_ms",
         "duration_sec",
     ):
-        if message.get(key) is not None or (isinstance(details, dict) and details.get(key) is not None):
+        if message.get(key) is not None:
+            return True
+        if details.get(key) is not None:
+            if key.endswith("_ms"):
+                message.setdefault("response_duration_ms", details.get(key))
+                message.setdefault("duration_ms", details.get(key))
+            if key.endswith("_sec"):
+                message.setdefault("response_duration_sec", details.get(key))
+                message.setdefault("duration_sec", details.get(key))
             return True
     return False
 
@@ -6113,14 +6131,7 @@ async def _hydrate_message_response_durations(
         if not end_at:
             continue
         duration_sec = max(0.0, round((end_at - started_at).total_seconds(), 3))
-        details = message.get("quality_details") or {}
-        if isinstance(details, str):
-            try:
-                details = json.loads(details)
-            except Exception:
-                details = {}
-        if not isinstance(details, dict):
-            details = {}
+        details = _coerce_quality_details_dict(message)
         details = {
             **details,
             "response_duration_sec": duration_sec,

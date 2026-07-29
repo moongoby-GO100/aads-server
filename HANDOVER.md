@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-07-30 00:24 KST - response duration footer JSON payload fix
+
+- Request: Previous closeout still failed final completion criteria; continue verification until current-session assistant footer is actually supported by API payload and renderer.
+- Finding: Authenticated message API returned `quality_details` as a JSON string and did not expose top-level `response_duration_ms` for rows that already had duration inside the JSON. The dashboard duration parser only handled object-shaped `quality_details`, so `소요/진행` could be hidden even though DB telemetry existed.
+- Backend: `app/services/chat_service.py` now normalizes string `quality_details` into dicts during duration hydration and mirrors existing detail duration into top-level `response_duration_*` / `duration_*` payload fields.
+- Dashboard: `/root/aads/aads-dashboard/src/app/chat/page.tsx` now parses string `quality_details` defensively for incomplete flags, placeholder status, and response duration display. `/root/aads/aads-dashboard/src/app/chat/types.ts` now allows string payloads from the API.
+- Validation before deploy: `python3 -m py_compile app/services/chat_service.py` passed; `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
+- Notes: Existing unrelated dirty files were not included. Browser screenshot E2E tool timed out; authenticated API payload and deployment health are the fallback validation path.
+
 ## 2026-07-30 00:00 KST - response duration footer closeout correction
 
 - Request: Previous completion report conflicted with commit/push/deploy/document ledger; continue verification and finish remaining action.
