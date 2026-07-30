@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
-from typing import Any
+from typing import Any, Optional
 
 from app.services.loop_controller import (
     get_loop,
@@ -19,6 +20,24 @@ from app.services.loop_controller import (
 )
 
 logger = logging.getLogger("ohvis.loop_executor")
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def _loop_tenant_id(loop: dict) -> Optional[str]:
+    """루프 실행에 적용할 테넌트 UUID.
+
+    루프는 시스템 배경 작업이라 테넌트가 없을 수 있다. 'system' 같은 비-UUID 문자열을
+    그대로 넘기면 asyncpg UUID 캐스팅 오류로 iteration 전체가 실패하므로,
+    유효한 UUID일 때만 사용량 한도 검사를 적용한다. (AADS-LOOP P0, 2026-07-30)
+    """
+    tid = loop.get("tenant_id")
+    if isinstance(tid, str) and tid != _NIL_UUID and _UUID_RE.match(tid):
+        return tid
+    return None
 
 
 async def run_iteration(loop_id: int) -> dict:
@@ -167,7 +186,7 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=1000,
         system=system_prompt,
-        tenant_id="system",
+        tenant_id=_loop_tenant_id(loop),
     )
 
     if not resp:
@@ -234,7 +253,7 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
         system=system_prompt,
-        tenant_id="system",
+        tenant_id=_loop_tenant_id(loop),
     )
 
     if not resp:
@@ -289,7 +308,7 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
         system=system_prompt,
-        tenant_id="system",
+        tenant_id=_loop_tenant_id(loop),
     )
 
     if not resp:

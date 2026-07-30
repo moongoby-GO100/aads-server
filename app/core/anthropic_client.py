@@ -33,6 +33,16 @@ _GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 _GEMINI_FALLBACK_ENABLED = os.getenv("LLM_GEMINI_FALLBACK_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
+# AADS-LOOP P0(2026-07-30): Claude OAuth 토큰 만료(401) + Gemini 크레딧 고갈 +
+# DashScope 404 동시 발생 시 배경 LLM이 전부 None을 반환해 루프/평가가 100% 실패했다.
+# LiteLLM 경유 저비용 체인을 최종 폴백으로 둬 배경 작업 가용성을 유지한다.
+_BG_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
+    ).split(",")
+    if m.strip()
+]
 _CLAUDE_RETRY_BASE_SEC = 2.0
 _CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
 _CLAUDE_RETRY_JITTER_SEC = 1.5
@@ -168,6 +178,18 @@ async def call_llm_with_fallback(
                     return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
                 except Exception as e2:
                     logger.warning("litellm_bg_gemini_fallback_error: %s", str(e2)[:80])
+            for _fb_model in _BG_FALLBACK_MODELS:
+                if _fb_model == model:
+                    continue
+                try:
+                    _text = await _call_litellm(prompt, _fb_model, max_tokens, system)
+                    if _text:
+                        logger.info("bg_llm_last_resort_ok: model=%s", _fb_model)
+                        return _text
+                except Exception as e3:
+                    logger.warning(
+                        "bg_llm_last_resort_error: model=%s error=%s", _fb_model, str(e3)[:80]
+                    )
             return None
 
     from app.services.oauth_usage_tracker import log_usage
@@ -305,7 +327,21 @@ async def call_llm_with_fallback(
             return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system)
         except Exception as e:
             logger.warning("qwen3_235b_fallback_error: %s", str(e)[:80])
-    logger.error("all_bg_llm_failed: claude+gemini+qwen3 exhausted")
+
+    # 5순위(최종): LiteLLM 저비용 체인 — Claude OAuth 만료/Gemini 고갈 시 가용성 유지
+    if _lc.get("key"):
+        for _fb_model in _BG_FALLBACK_MODELS:
+            try:
+                _text = await _call_litellm(prompt, _fb_model, max_tokens, system)
+                if _text:
+                    logger.info("bg_llm_last_resort_ok: model=%s", _fb_model)
+                    return _text
+            except Exception as e:
+                logger.warning(
+                    "bg_llm_last_resort_error: model=%s error=%s", _fb_model, str(e)[:80]
+                )
+
+    logger.error("all_bg_llm_failed: claude+gemini+qwen3+litellm_chain exhausted")
     return None
 
 
