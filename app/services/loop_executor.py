@@ -90,6 +90,55 @@ async def _call_llm_resilient(
     return None, model
 
 
+# 루프 실행용 최종 폴백 모델 체인 (LiteLLM 경유).
+# Claude OAuth 토큰 만료(401) / Gemini 크레딧 고갈 / DashScope 404가 동시에 발생하면
+# call_llm_with_fallback()이 None을 반환해 iteration이 100% 실패한다. (AADS-LOOP P0, 2026-07-30)
+_LOOP_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
+    ).split(",")
+    if m.strip()
+]
+
+
+async def _call_llm_resilient(
+    *, prompt: str, model: str, max_tokens: int, system: str, tenant_id: Optional[str]
+) -> tuple[Optional[str], str]:
+    """배경 LLM 호출 + 최종 폴백. 반환: (응답 텍스트 또는 None, 실제 사용 모델)."""
+    from app.core.anthropic_client import call_llm_with_fallback
+
+    try:
+        text = await call_llm_with_fallback(
+            prompt=prompt,
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            tenant_id=tenant_id,
+        )
+    except Exception as exc:
+        logger.warning("loop_llm_primary_error: model=%s error=%s", model, str(exc)[:120])
+        text = None
+    if text:
+        return text, model
+
+    from app.core.anthropic_client import _call_litellm
+
+    for fb_model in _LOOP_FALLBACK_MODELS:
+        if fb_model == model:
+            continue
+        try:
+            text = await _call_litellm(prompt, fb_model, max_tokens, system)
+            if text:
+                logger.info("loop_llm_fallback_ok: model=%s", fb_model)
+                return text, fb_model
+        except Exception as exc:
+            logger.warning(
+                "loop_llm_fallback_error: model=%s error=%s", fb_model, str(exc)[:120]
+            )
+    return None, model
+
+
 async def run_iteration(loop_id: int) -> dict:
     """단일 iteration 실행. 반환: {ok, loop_id, iteration, status, summary}"""
     from app.core.db_pool import get_pool
