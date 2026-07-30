@@ -43,6 +43,16 @@ _BG_FALLBACK_MODELS = [
     ).split(",")
     if m.strip()
 ]
+# AADS-LOOP P0(2026-07-30): Claude OAuth 토큰 만료(401) + Gemini 크레딧 고갈 +
+# DashScope 404 동시 발생 시 배경 LLM이 전부 None을 반환해 루프/평가가 100% 실패했다.
+# LiteLLM 경유 저비용 체인을 최종 폴백으로 둬 배경 작업 가용성을 유지한다.
+_BG_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
+    ).split(",")
+    if m.strip()
+]
 _CLAUDE_RETRY_BASE_SEC = 2.0
 _CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
 _CLAUDE_RETRY_JITTER_SEC = 1.5
