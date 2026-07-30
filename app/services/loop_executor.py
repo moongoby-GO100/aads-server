@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any, Optional
@@ -38,6 +39,55 @@ def _loop_tenant_id(loop: dict) -> Optional[str]:
     if isinstance(tid, str) and tid != _NIL_UUID and _UUID_RE.match(tid):
         return tid
     return None
+
+
+# 루프 실행용 최종 폴백 모델 체인 (LiteLLM 경유).
+# Claude OAuth 토큰 만료(401) / Gemini 크레딧 고갈 / DashScope 404가 동시에 발생하면
+# call_llm_with_fallback()이 None을 반환해 iteration이 100% 실패한다. (AADS-LOOP P0, 2026-07-30)
+_LOOP_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
+    ).split(",")
+    if m.strip()
+]
+
+
+async def _call_llm_resilient(
+    *, prompt: str, model: str, max_tokens: int, system: str, tenant_id: Optional[str]
+) -> tuple[Optional[str], str]:
+    """배경 LLM 호출 + 최종 폴백. 반환: (응답 텍스트 또는 None, 실제 사용 모델)."""
+    from app.core.anthropic_client import call_llm_with_fallback
+
+    try:
+        text = await call_llm_with_fallback(
+            prompt=prompt,
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            tenant_id=tenant_id,
+        )
+    except Exception as exc:
+        logger.warning("loop_llm_primary_error: model=%s error=%s", model, str(exc)[:120])
+        text = None
+    if text:
+        return text, model
+
+    from app.core.anthropic_client import _call_litellm
+
+    for fb_model in _LOOP_FALLBACK_MODELS:
+        if fb_model == model:
+            continue
+        try:
+            text = await _call_litellm(prompt, fb_model, max_tokens, system)
+            if text:
+                logger.info("loop_llm_fallback_ok: model=%s", fb_model)
+                return text, fb_model
+        except Exception as exc:
+            logger.warning(
+                "loop_llm_fallback_error: model=%s error=%s", fb_model, str(exc)[:120]
+            )
+    return None, model
 
 
 async def run_iteration(loop_id: int) -> dict:
@@ -96,7 +146,7 @@ async def run_iteration(loop_id: int) -> dict:
             llm_calls=llm_calls,
             cost_usd=cost,
             duration_ms=duration_ms,
-            model_used=model_id,
+            model_used=result.get("model_used") or model_id,
             alert_sent=alert_sent,
             alert_channel=result.get("alert_channel"),
         )
@@ -181,7 +231,7 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
         f"알림조건: {alert_cond}"
     )
 
-    resp = await call_llm_with_fallback(
+    resp, used_model = await _call_llm_resilient(
         prompt=user_msg,
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=1000,
@@ -192,9 +242,10 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
     if not resp:
         return {
             "status": "failure",
-            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini)",
+            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini/LiteLLM)",
             "llm_calls": 1,
             "cost_usd": 0.0,
+            "model_used": used_model,
         }
 
     text = resp
@@ -220,7 +271,8 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
         "summary": parsed.get("summary", text[:200]) if parsed else text[:200],
         "data": parsed,
         "llm_calls": 1,
-        "cost_usd": _estimate_cost(model_id, text),
+        "cost_usd": _estimate_cost(used_model, text),
+        "model_used": used_model,
         "alert_sent": alert_sent,
         "alert_channel": "telegram" if alert_sent else None,
         "goal_reached": goal_reached,
@@ -248,7 +300,7 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
         f"이전 결과: {prev_summary}"
     )
 
-    resp = await call_llm_with_fallback(
+    resp, used_model = await _call_llm_resilient(
         prompt=user_msg,
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
@@ -259,9 +311,10 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
     if not resp:
         return {
             "status": "failure",
-            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini)",
+            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini/LiteLLM)",
             "llm_calls": 1,
             "cost_usd": 0.0,
+            "model_used": used_model,
         }
 
     text = resp
@@ -273,7 +326,8 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
         "summary": parsed.get("summary", text[:200]) if parsed else text[:200],
         "data": parsed,
         "llm_calls": 1,
-        "cost_usd": _estimate_cost(model_id, text),
+        "cost_usd": _estimate_cost(used_model, text),
+        "model_used": used_model,
         "goal_reached": goal_reached,
     }
 
@@ -303,7 +357,7 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
         f"반복 #{iteration_num}"
     )
 
-    resp = await call_llm_with_fallback(
+    resp, used_model = await _call_llm_resilient(
         prompt=user_msg,
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
@@ -314,9 +368,10 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
     if not resp:
         return {
             "status": "failure",
-            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini)",
+            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini/LiteLLM)",
             "llm_calls": 1,
             "cost_usd": 0.0,
+            "model_used": used_model,
             "goal_reached": False,
         }
 
@@ -329,7 +384,8 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
         "summary": parsed.get("summary", text[:200]) if parsed else text[:200],
         "data": {**(parsed or {}), "task_index": task_idx, "total_tasks": len(task_list)},
         "llm_calls": 1,
-        "cost_usd": _estimate_cost(model_id, text),
+        "cost_usd": _estimate_cost(used_model, text),
+        "model_used": used_model,
         "goal_reached": all_done,
     }
 
