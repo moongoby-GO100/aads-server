@@ -23,6 +23,17 @@ logger = logging.getLogger("ohvis.loop_executor")
 
 async def run_iteration(loop_id: int) -> dict:
     """단일 iteration 실행. 반환: {ok, loop_id, iteration, status, summary}"""
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    claimed = await pool.fetchval(
+        "UPDATE ohvis_loops SET next_run_at = NULL "
+        "WHERE id = $1 AND status = 'active' AND next_run_at IS NOT NULL "
+        "RETURNING id",
+        loop_id,
+    )
+    if not claimed:
+        return {"ok": False, "error": "loop_already_claimed"}
+
     loop = await get_loop(loop_id)
     if not loop:
         return {"ok": False, "error": "loop_not_found"}
@@ -43,7 +54,7 @@ async def run_iteration(loop_id: int) -> dict:
         return {"ok": False, "error": reason, "action": action}
 
     iteration_num = (loop["current_iteration"] or 0) + 1
-    model_id = loop["execution_model_id"]
+    model_id = loop["execution_model_id"] or "claude-haiku-4-5-20251001"
     loop_type = loop["loop_type"]
     t0 = time.monotonic()
 
@@ -156,12 +167,21 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=1000,
         system=system_prompt,
+        tenant_id="system",
     )
 
-    text = resp or ""
+    if not resp:
+        return {
+            "status": "failure",
+            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini)",
+            "llm_calls": 1,
+            "cost_usd": 0.0,
+        }
+
+    text = resp
     parsed = _try_parse_json(text)
     needs_alert = parsed.get("needs_alert", False) if parsed else False
-    status_str = parsed.get("status", "normal") if parsed else "success"
+    status_str = parsed.get("status", "normal") if parsed else "normal"
 
     alert_sent = False
     if needs_alert and alert_cond.get("telegram", True):
@@ -214,9 +234,18 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
         system=system_prompt,
+        tenant_id="system",
     )
 
-    text = resp or ""
+    if not resp:
+        return {
+            "status": "failure",
+            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini)",
+            "llm_calls": 1,
+            "cost_usd": 0.0,
+        }
+
+    text = resp
     parsed = _try_parse_json(text)
     goal_reached = parsed.get("goal_reached", False) if parsed else False
 
@@ -260,9 +289,19 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
         model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
         system=system_prompt,
+        tenant_id="system",
     )
 
-    text = resp or ""
+    if not resp:
+        return {
+            "status": "failure",
+            "summary": "LLM 호출 실패: 모든 폴백 소진 (Claude/Gemini)",
+            "llm_calls": 1,
+            "cost_usd": 0.0,
+            "goal_reached": False,
+        }
+
+    text = resp
     parsed = _try_parse_json(text)
     all_done = task_idx >= len(task_list) - 1 and parsed and parsed.get("status") == "done"
 

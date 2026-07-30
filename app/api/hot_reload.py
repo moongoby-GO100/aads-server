@@ -140,9 +140,15 @@ async def hot_reload(req: HotReloadRequest = None):
 
         module = sys.modules.get(module_name)
         if module is None:
-            results[module_name] = "skipped: 미로드 모듈"
-            skipped += 1
-            continue
+            try:
+                module = importlib.import_module(module_name)
+                results[module_name] = "ok (fresh import)"
+                logger.info(f"hot_reload_fresh_import: {module_name}")
+                continue
+            except Exception as e:
+                results[module_name] = f"error: import failed — {e}"
+                skipped += 1
+                continue
 
         try:
             importlib.reload(module)
