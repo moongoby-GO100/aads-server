@@ -545,7 +545,6 @@ async def _settle_stale_execution_for_recovery(
     _hard_stale_by_started_at = (
         not has_live_runtime
         and _started_age >= _hard_cutoff_sec
-        and _updated_age >= 120
     )
     if execution_row["updated_recently"] and not (
         _stale_empty_execution or _stale_progressed_execution or _stale_empty_no_runtime
