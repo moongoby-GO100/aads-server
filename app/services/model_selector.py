@@ -1630,7 +1630,12 @@ async def call_stream(
             }
             for _cfb in _CODEX_FB.get(model, []):
                 try:
-                    yield {"type": "delta", "content": f"\n\n⚠️ _{model} 장애 — {_cfb}로 전환합니다._\n\n"}
+                    yield {
+                        "type": "model_fallback",
+                        "content": f"⚠️ {model} 장애 — {_cfb}로 전환합니다.",
+                        "from_model": model,
+                        "to_model": _cfb,
+                    }
                     _cfb_err = False
                     if _cfb in _ANTHROPIC_MODEL_ID:
                         _cfb_stream = _stream_cli_relay(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
