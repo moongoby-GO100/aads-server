@@ -369,8 +369,11 @@ def get_available_tokens():
 
 
 def create_anthropic_client(token: Optional[str] = None) -> AsyncAnthropic:
-    """AsyncAnthropic 클라이언트 생성. token 미지정 시 primary 사용."""
+    """AsyncAnthropic 클라이언트 생성. token 미지정 시 primary 사용.
+    OAuth 토큰(sk-ant-oat*)은 auth_token으로, API 키는 api_key로 전달."""
     key = token or get_primary_token()
+    if key and key.startswith("sk-ant-oat"):
+        return AsyncAnthropic(auth_token=key, base_url=_BASE_URL)
     return AsyncAnthropic(api_key=key, base_url=_BASE_URL)
 
 

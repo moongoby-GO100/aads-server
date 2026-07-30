@@ -152,13 +152,13 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
     )
 
     resp = await call_llm_with_fallback(
-        messages=[{"role": "user", "content": user_msg}],
-        system_prompt=system_prompt,
-        model_id=model_id,
+        prompt=user_msg,
+        model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=1000,
+        system=system_prompt,
     )
 
-    text = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+    text = resp or ""
     parsed = _try_parse_json(text)
     needs_alert = parsed.get("needs_alert", False) if parsed else False
     status_str = parsed.get("status", "normal") if parsed else "success"
@@ -181,7 +181,7 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
         "summary": parsed.get("summary", text[:200]) if parsed else text[:200],
         "data": parsed,
         "llm_calls": 1,
-        "cost_usd": _estimate_cost(resp),
+        "cost_usd": _estimate_cost(model_id, text),
         "alert_sent": alert_sent,
         "alert_channel": "telegram" if alert_sent else None,
         "goal_reached": goal_reached,
@@ -202,7 +202,7 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
         '"details": "수행 내용", "goal_reached": true/false, "next_action": "다음 할 일"}\n'
         "반드시 유효한 JSON만 출력하세요."
     )
-    prev_summary = last_result.get("summary", "첫 번째 시도")
+    prev_summary = last_result.get("summary", "첫 번째 시도") if isinstance(last_result, dict) else "첫 번째 시도"
     user_msg = (
         f"목표: {command}\n"
         f"반복 #{iteration_num}\n"
@@ -210,13 +210,13 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
     )
 
     resp = await call_llm_with_fallback(
-        messages=[{"role": "user", "content": user_msg}],
-        system_prompt=system_prompt,
-        model_id=model_id,
+        prompt=user_msg,
+        model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
+        system=system_prompt,
     )
 
-    text = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+    text = resp or ""
     parsed = _try_parse_json(text)
     goal_reached = parsed.get("goal_reached", False) if parsed else False
 
@@ -225,7 +225,7 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
         "summary": parsed.get("summary", text[:200]) if parsed else text[:200],
         "data": parsed,
         "llm_calls": 1,
-        "cost_usd": _estimate_cost(resp),
+        "cost_usd": _estimate_cost(model_id, text),
         "goal_reached": goal_reached,
     }
 
@@ -256,13 +256,13 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
     )
 
     resp = await call_llm_with_fallback(
-        messages=[{"role": "user", "content": user_msg}],
-        system_prompt=system_prompt,
-        model_id=model_id,
+        prompt=user_msg,
+        model=model_id or "claude-haiku-4-5-20251001",
         max_tokens=2000,
+        system=system_prompt,
     )
 
-    text = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+    text = resp or ""
     parsed = _try_parse_json(text)
     all_done = task_idx >= len(task_list) - 1 and parsed and parsed.get("status") == "done"
 
@@ -271,18 +271,29 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
         "summary": parsed.get("summary", text[:200]) if parsed else text[:200],
         "data": {**(parsed or {}), "task_index": task_idx, "total_tasks": len(task_list)},
         "llm_calls": 1,
-        "cost_usd": _estimate_cost(resp),
+        "cost_usd": _estimate_cost(model_id, text),
         "goal_reached": all_done,
     }
 
 
-def _estimate_cost(resp: Any) -> float:
-    if isinstance(resp, dict):
-        usage = resp.get("usage", {})
-        inp = usage.get("input_tokens", 0)
-        out = usage.get("output_tokens", 0)
-        return round((inp * 3 + out * 15) / 1_000_000, 6)
-    return 0.001
+def _estimate_cost(model_id: str | None, response_text: str) -> float:
+    """call_llm_with_fallback는 str을 반환하므로 모델 단가 기반 추정."""
+    if not response_text:
+        return 0.0
+    out_tokens = max(len(response_text) // 4, 1)
+    in_tokens = out_tokens * 3
+    per_m_in, per_m_out = 3.0, 15.0
+    if model_id:
+        m = model_id.lower()
+        if "opus" in m:
+            per_m_in, per_m_out = 15.0, 75.0
+        elif "haiku" in m:
+            per_m_in, per_m_out = 0.80, 4.0
+        elif "gpt" in m:
+            per_m_in, per_m_out = 2.50, 10.0
+        elif "gemini" in m:
+            per_m_in, per_m_out = 0.15, 0.60
+    return round((in_tokens * per_m_in + out_tokens * per_m_out) / 1_000_000, 6)
 
 
 def _try_parse_json(text: str) -> dict | None:
