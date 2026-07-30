@@ -78,9 +78,11 @@ async def api_create_loop(req: LoopCreateRequest):
 @router.get("/loops", summary="활성 루프 목록")
 async def api_list_loops(
     project: Optional[str] = Query(None, description="프로젝트 필터"),
+    status: str = Query("active", description="active(기본) | all | completed | failed | paused | cancelled"),
+    limit: int = Query(50, ge=1, le=200, description="최대 조회 건수"),
 ):
-    loops = await list_active_loops(project)
-    return {"ok": True, "count": len(loops), "loops": _serialize_list(loops)}
+    loops = await list_active_loops(project, status=status, limit=limit)
+    return {"ok": True, "count": len(loops), "status": status, "loops": _serialize_list(loops)}
 
 
 @router.get("/loops/{loop_id}", summary="루프 상세 조회")

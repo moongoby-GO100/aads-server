@@ -189,18 +189,32 @@ async def get_loop(loop_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-async def list_active_loops(project: str | None = None) -> list[dict]:
+async def list_active_loops(
+    project: str | None = None,
+    status: str | None = "active",
+    limit: int = 50,
+) -> list[dict]:
+    """루프 목록 조회.
+
+    status='active'(기본) | 'all'(전체 이력) | 'completed'/'failed'/'paused'/'cancelled'.
+    대시보드에서 완료·실패 이력까지 확인할 수 있도록 status 필터를 지원한다.
+    (AADS-LOOP P1, 2026-07-30)
+    """
     pool = get_db_pool()
+    limit = max(1, min(int(limit or 50), 200))
+    conds: list[str] = []
+    args: list = []
+    if status and status != "all":
+        args.append(status)
+        conds.append(f"status = ${len(args)}")
     if project:
-        rows = await pool.fetch(
-            "SELECT * FROM ohvis_loops WHERE status = 'active' AND project = $1 "
-            "ORDER BY created_at DESC",
-            project,
-        )
-    else:
-        rows = await pool.fetch(
-            "SELECT * FROM ohvis_loops WHERE status = 'active' ORDER BY created_at DESC"
-        )
+        args.append(project)
+        conds.append(f"project = ${len(args)}")
+    where = f"WHERE {' AND '.join(conds)}" if conds else ""
+    rows = await pool.fetch(
+        f"SELECT * FROM ohvis_loops {where} ORDER BY created_at DESC LIMIT {limit}",
+        *args,
+    )
     return [dict(r) for r in rows]
 
 
