@@ -5,19 +5,16 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
 import time
-from typing import Any, Optional
 
 from app.services.loop_controller import (
-    get_loop,
     check_safety_limits,
+    get_loop,
     record_iteration,
     update_loop_status,
-    recalculate_cost_on_fallback,
 )
 
 logger = logging.getLogger("ohvis.loop_executor")
@@ -28,7 +25,7 @@ _UUID_RE = re.compile(
 _NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
-def _loop_tenant_id(loop: dict) -> Optional[str]:
+def _loop_tenant_id(loop: dict) -> str | None:
     """루프 실행에 적용할 테넌트 UUID.
 
     루프는 시스템 배경 작업이라 테넌트가 없을 수 있다. 'system' 같은 비-UUID 문자열을
@@ -54,57 +51,8 @@ _LOOP_FALLBACK_MODELS = [
 
 
 async def _call_llm_resilient(
-    *, prompt: str, model: str, max_tokens: int, system: str, tenant_id: Optional[str]
-) -> tuple[Optional[str], str]:
-    """배경 LLM 호출 + 최종 폴백. 반환: (응답 텍스트 또는 None, 실제 사용 모델)."""
-    from app.core.anthropic_client import call_llm_with_fallback
-
-    try:
-        text = await call_llm_with_fallback(
-            prompt=prompt,
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            tenant_id=tenant_id,
-        )
-    except Exception as exc:
-        logger.warning("loop_llm_primary_error: model=%s error=%s", model, str(exc)[:120])
-        text = None
-    if text:
-        return text, model
-
-    from app.core.anthropic_client import _call_litellm
-
-    for fb_model in _LOOP_FALLBACK_MODELS:
-        if fb_model == model:
-            continue
-        try:
-            text = await _call_litellm(prompt, fb_model, max_tokens, system)
-            if text:
-                logger.info("loop_llm_fallback_ok: model=%s", fb_model)
-                return text, fb_model
-        except Exception as exc:
-            logger.warning(
-                "loop_llm_fallback_error: model=%s error=%s", fb_model, str(exc)[:120]
-            )
-    return None, model
-
-
-# 루프 실행용 최종 폴백 모델 체인 (LiteLLM 경유).
-# Claude OAuth 토큰 만료(401) / Gemini 크레딧 고갈 / DashScope 404가 동시에 발생하면
-# call_llm_with_fallback()이 None을 반환해 iteration이 100% 실패한다. (AADS-LOOP P0, 2026-07-30)
-_LOOP_FALLBACK_MODELS = [
-    m.strip()
-    for m in os.getenv(
-        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
-    ).split(",")
-    if m.strip()
-]
-
-
-async def _call_llm_resilient(
-    *, prompt: str, model: str, max_tokens: int, system: str, tenant_id: Optional[str]
-) -> tuple[Optional[str], str]:
+    *, prompt: str, model: str, max_tokens: int, system: str, tenant_id: str | None
+) -> tuple[str | None, str]:
     """배경 LLM 호출 + 최종 폴백. 반환: (응답 텍스트 또는 None, 실제 사용 모델)."""
     from app.core.anthropic_client import call_llm_with_fallback
 
@@ -173,7 +121,6 @@ async def run_iteration(loop_id: int) -> dict:
 
     iteration_num = (loop["current_iteration"] or 0) + 1
     model_id = loop["execution_model_id"] or "claude-haiku-4-5-20251001"
-    loop_type = loop["loop_type"]
     t0 = time.monotonic()
 
     try:
@@ -260,8 +207,6 @@ async def _execute_by_type(loop: dict, iteration_num: int) -> dict:
 
 
 async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
-    from app.core.anthropic_client import call_llm_with_fallback
-
     command = loop["original_command"]
     model_id = loop["execution_model_id"]
     success_cond = loop.get("success_condition") or {}
@@ -329,8 +274,6 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
 
 
 async def _execute_task(loop: dict, iteration_num: int) -> dict:
-    from app.core.anthropic_client import call_llm_with_fallback
-
     command = loop["original_command"]
     model_id = loop["execution_model_id"]
     last_result = loop.get("last_result") or {}
@@ -390,8 +333,6 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
 
     task_idx = min(iteration_num - 1, len(task_list) - 1)
     current_task = task_list[task_idx]
-
-    from app.core.anthropic_client import call_llm_with_fallback
 
     model_id = loop["execution_model_id"]
     system_prompt = (
