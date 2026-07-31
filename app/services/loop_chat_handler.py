@@ -25,12 +25,15 @@ LOOP_START_KW = (
     "루프 시작", "루프 돌려",
     "완료시까지", "완료할 때까지", "완료할때까지", "끝날 때까지", "끝날때까지",
     "될 때까지", "될때까지", "계속 진행", "계속 실행",
+    "루프로 진행", "루프를 진행", "루프로 돌려", "루프를 돌려",
+    "루프로 시작", "루프를 시작",
 )
 # "매 N분/초/시간" 패턴만 루프로 인식 (단독 "매 "는 오탐 위험)
 _INTERVAL_START_RE = re.compile(r"매\s*\d+\s*(?:초|분|시간)")
 
 # CEO 확인 프롬프트 승인 키워드 → loop_start (확인 없이 즉시 생성)
-LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프 승인", "루프 생성")
+LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프 승인", "루프 생성",
+                   "루프로 진행", "루프를 진행", "루프로 시작", "루프를 시작")
 
 # P1 보완: 확인 프롬프트에서 제시한 원본 지시를 승인 시점까지 보관한다.
 # 승인 응답("루프 진행")만으로 루프를 만들면 original_command/interval이
@@ -111,8 +114,8 @@ def detect_loop_intent(content: str) -> str | None:
     if not text or len(text) > _LOOP_CMD_MAX_LEN:
         return None
 
-    # CEO 승인 응답 → 즉시 루프 생성 (확인 프롬프트 스킵)
-    if any(kw in text for kw in LOOP_CONFIRM_KW):
+    # CEO 승인 응답 → 즉시 루프 생성 (50자 이하 짧은 승인만)
+    if len(text) <= 50 and any(kw in text for kw in LOOP_CONFIRM_KW):
         return "loop_start"
 
     # START는 _NON_COMMAND_HINT 가드 없이 판정 (CEO 화법 호환)
