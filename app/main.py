@@ -561,6 +561,13 @@ async def lifespan(app: FastAPI):
                               AND started_at < NOW() - INTERVAL '45 minutes'
                               AND updated_at < NOW() - INTERVAL '20 minutes'
                             )
+                            OR (
+                              started_at < NOW() - INTERVAL '30 minutes'
+                              AND COALESCE(actual_model, '') = ''
+                            )
+                            OR (
+                              started_at < NOW() - INTERVAL '90 minutes'
+                            )
                           )
                         RETURNING id, session_id
                         """,
