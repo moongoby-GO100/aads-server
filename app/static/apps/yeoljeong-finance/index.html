@@ -1140,6 +1140,35 @@
       min-height: 58px;
     }
 
+    .integration-preset-strip button.active {
+      border-color: #2563eb;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .integration-preset-strip b {
+      display: block;
+      font-size: 12px;
+    }
+
+    .integration-preset-strip span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .integration-form-support {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .integration-form-support .integration-detail-card {
+      min-height: 88px;
+    }
+
     .content-grid > .span-2 { grid-column: 1 / -1; }
 
     .panel-head {
@@ -1857,7 +1886,7 @@
     @media (max-width: 1120px) {
       .kpis { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
       .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts,
-      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid { grid-template-columns: 1fr; }
+      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid, .integration-form-support { grid-template-columns: 1fr; }
       .integration-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .integration-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .business-workspace { grid-template-columns: 1fr; }
@@ -7017,16 +7046,23 @@
       const catalog = integrationCatalog[service] || {};
       const selectedBusiness = selectedSettingsBusinessId();
       const selectedBranch = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "";
+      const activePreset = presetService => presetService === service ? " class=\"active\"" : "";
       return `<form class="integration-setup-form" data-integration-connect-form>
         <div class="integration-setup-band">
           <h3>연동 설정 페이지</h3>
-          <p>서비스를 선택하고 필수 인증값을 등록하면 서버 Vault 저장 후 가능한 수집 API를 즉시 호출합니다.</p>
+          <p>사업자와 지점, 서비스 유형, 로그인/Vault 보관값, 계좌·가맹점번호, 수집 범위를 한 화면에서 등록합니다.</p>
         </div>
         <div class="integration-preset-strip">
-          <button type="button" data-integration-connect-service="shinhan_business"><b>신한 간편서비스</b><span>계좌거래/잔액 조회값</span></button>
-          <button type="button" data-integration-connect-service="ibk_business"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
-          <button type="button" data-integration-connect-service="card_pg"><b>카드/PG 리포트</b><span>승인·취소·입금 대사</span></button>
-          <button type="button" data-integration-connect-service="baemin"><b>판매채널</b><span>배달앱 정산 연결</span></button>
+          <button type="button"${activePreset("shinhan_business")} data-integration-connect-service="shinhan_business"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
+          <button type="button"${activePreset("ibk_business")} data-integration-connect-service="ibk_business"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
+          <button type="button"${activePreset("baemin")} data-integration-connect-service="baemin"><b>판매채널</b><span>주문·매출·정산·리뷰</span></button>
+          <button type="button"${activePreset("supplier_statement_upload")} data-integration-connect-service="supplier_statement_upload"><b>매입·증빙</b><span>발주 프로그램·사진 OCR</span></button>
+        </div>
+        <div class="integration-form-support">
+          ${integrationDetailCard("필수값", "계정 ID, 비밀번호, 2차 인증, 매장코드, 사업자/지점 매핑")}
+          ${integrationDetailCard("저장/API", "/accounts 서버 Vault 저장 후 /sync 또는 /transactions/sync 실행")}
+          ${integrationDetailCard("권한", "조회 전용 또는 정산 조회 권한 우선, 이체/결제 권한 제외")}
+          ${integrationDetailCard("대체 경로", "CSV/엑셀/사진 업로드 대기열로 전환")}
         </div>
         <div class="form-grid">
           <label>연동 구분
@@ -7049,6 +7085,26 @@
           </label>
           <label>비밀번호
             <input name="password" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
+          </label>
+          <label>비밀번호 확인
+            <input name="passwordConfirm" type="password" autocomplete="new-password" placeholder="한 번 더 입력">
+          </label>
+          <label>인증 담당자
+            <input name="authOwner" placeholder="대표 또는 지점 관리자">
+          </label>
+          <label>2차 인증 수단
+            <select name="mfaMethod">
+              <option value="sms_otp">문자 OTP</option>
+              <option value="email_otp">이메일 OTP</option>
+              <option value="app_push">앱 푸시 승인</option>
+              <option value="manual_approval">관리자 수동 승인</option>
+            </select>
+          </label>
+          <label>일회용 인증번호
+            <input name="oneTimePassword" autocomplete="one-time-code" placeholder="연결 테스트 때만 입력">
+          </label>
+          <label>인증 만료일
+            <input name="credentialExpiresAt" type="date">
           </label>
           <label>조회용 계좌번호
             <input name="accountNo" inputmode="numeric" autocomplete="off" placeholder="신한/IBK 빠른조회 등록 계좌번호">
@@ -7074,8 +7130,33 @@
           <label>API Secret / 인증서 비밀번호
             <input name="clientSecret" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
           </label>
+          <label>보조 연결 방식
+            <select name="fallbackAuth">
+              <option value="oauth">OAuth 승인</option>
+              <option value="settlement_csv">정산 CSV 업로드</option>
+              <option value="api_token">API 토큰</option>
+              <option value="admin_registration">관리자 대리 등록</option>
+            </select>
+          </label>
           <label>수집 방식
             <select name="collectionMode">${integrationCollectionModeOptions(catalog.collectionMode || "bank-quick-service")}</select>
+          </label>
+          <label>수집 범위
+            <select name="syncScope">
+              <option value="sales_settlement_review">주문+매출+정산+리뷰</option>
+              <option value="bank_balance_transactions">거래내역+잔액+입금자명</option>
+              <option value="purchase_statement_inventory">발주+거래명세서+입고</option>
+              <option value="tax_invoice_receipt">전자세금계산서+현금영수증</option>
+              <option value="card_approval_deposit">승인+취소+입금대사</option>
+            </select>
+          </label>
+          <label>권한 범위
+            <select name="permissionScope">
+              <option value="read_only">조회 전용</option>
+              <option value="settlement_read">정산 조회</option>
+              <option value="review_reply">리뷰 답변 포함</option>
+              <option value="admin_full">관리자 전체</option>
+            </select>
           </label>
           <label>연동상태
             <select name="status">
@@ -7085,10 +7166,19 @@
               <option value="blocked">확인필요</option>
             </select>
           </label>
+          <label class="span-2">연동 실패 시 대체
+            <select name="failureFallback">
+              <option value="settlement_csv_queue">정산 CSV 자동 요청</option>
+              <option value="upload_queue">파일 업로드 대기열로 전환</option>
+              <option value="credential_alert">대표에게 인증 갱신 알림</option>
+              <option value="manual_entry">해당 지점 수기 입력</option>
+            </select>
+          </label>
           <label class="span-2">메모
-            <textarea name="memo" placeholder="예: 신한 간편서비스에서 계좌거래현황 엑셀 다운로드 후 거래원장 반영"></textarea>
+            <textarea name="memo" placeholder="조회 전용 권한, 인증 만료일, 파일 대체 경로"></textarea>
           </label>
           <div class="span-2 integration-detail-actions">
+            <button type="button" data-integration-detail="integration-guide">설정 가이드</button>
             <button type="button" data-open-import="${escapeHtml(service)}">CSV/엑셀 대체 등록</button>
             <button type="submit" class="primary">저장 후 연동 실행</button>
           </div>
@@ -7154,22 +7244,22 @@
         "sales-channel-connect": {
           title: "판매사이트 연동 설정",
           subtitle: "ID만으로 부족한 2차 인증과 매장코드까지 등록합니다.",
-          body: `<div class="integration-detail-grid">${salesCards}</div><div class="integration-detail-timeline">${integrationStep("1", "ID/PW 저장", "서버 Vault 암호화 저장, 평문 재표시 금지")}${integrationStep("2", "2차 인증", "OTP/푸시 승인 후 세션 또는 다운로드 권한 확인")}${integrationStep("3", "지점·메뉴 매핑", "플랫폼 매장명과 내부 지점/메뉴 연결")}${integrationStep("4", "샘플 정산 대사", "수수료, 광고비, 쿠폰 차감값 검증")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="baemin">설정 폼 열기</button><button type="button" class="primary" data-sync-integration="baemin">배달 수집 실행</button></div>`
+          body: integrationConnectFormHtml(defaultService || "baemin")
         },
         "bank-connect": {
           title: "은행 빠른계좌조회 설정",
           subtitle: "신한 간편서비스와 IBK 빠른서비스 입력값을 등록하면 거래 연동 API를 실행합니다.",
-          body: `<div class="integration-detail-grid">${bankCards}</div><div class="integration-detail-timeline">${integrationStep("1", "조회계좌 등록", "은행 사이트에서 빠른조회/간편조회 허용계좌인지 확인")}${integrationStep("2", "자격값 저장", "ID/PW, 계좌번호, 계좌비번, 사업자번호를 Vault 저장")}${integrationStep("3", "거래 연동 실행", "/transactions/sync 호출 후 미연결 커넥터 상태 또는 반영 건수 표시")}${integrationStep("4", "엑셀 대체", "은행 엑셀/CSV를 가져오기 모달에서 /transactions/import 반영")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="${escapeHtml(bankService)}">${escapeHtml(integrationLabels[bankService] || "은행")} 설정 폼 열기</button><button type="button" data-open-import="${escapeHtml(bankService)}">은행 CSV 반영</button><button type="button" class="primary" data-sync-financial-integration="${escapeHtml(bankService)}">거래 연동 실행</button></div>`
+          body: integrationConnectFormHtml(bankService)
         },
         "supplier-connect": {
           title: "매입처·발주 프로그램 설정",
           subtitle: "계정/API가 있으면 자동 수집, 없으면 수기 증빙 등록으로 연결합니다.",
-          body: `<div class="integration-detail-grid">${supplierCards}</div><div class="integration-detail-timeline">${integrationStep("1", "매입처 구분", "주문 프로그램 있음/없음, 파일만 제공 여부 확인")}${integrationStep("2", "계정 또는 파일 등록", "계정/API는 Vault, 무계정은 증빙 업로드로 처리")}${integrationStep("3", "품목·세금 분류", "식재료/소모품/포장재와 과세/면세 보정")}${integrationStep("4", "승인 반영", "대표 승인 후 매입자료·재고·세무 증빙에 반영")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="marketbom">마켓봄 설정 폼</button><button type="button" data-open-import="supplier_statement_upload">증빙 파일 등록</button><button type="button" class="primary" data-integration-preset="supplier_statement_upload">수기 매입처 등록</button></div>`
+          body: integrationConnectFormHtml(defaultService || "marketbom")
         },
         "tax-connect": {
           title: "홈택스·계산서 연동 설정",
           subtitle: "사업자별 세무 인증과 세무대리인 위임 상태를 관리합니다.",
-          body: `<div class="integration-detail-grid">${taxCards}</div><div class="integration-detail-timeline">${integrationStep("1", "사업자 선택", "세무 자료 귀속 사업자 확인")}${integrationStep("2", "인증정보 등록", "홈택스 ID/PW 또는 인증서 비밀번호 Vault 저장")}${integrationStep("3", "수집 범위 지정", "전자세금계산서, 현금영수증, 카드매입 자료 선택")}${integrationStep("4", "신고 일정 연결", "마감 14/7/2일 전 알림과 누락 증빙 요청")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="hometax">홈택스 설정 폼</button><button type="button" data-open-import="tax_invoice_upload">계산서 파일 등록</button><button type="button" class="primary" data-integration-detail="integration-guide">설정 순서 보기</button></div>`
+          body: integrationConnectFormHtml(defaultService || "hometax")
         },
         "receipt-upload": {
           title: "수기 증빙 사진·파일 등록",
@@ -7199,12 +7289,12 @@
         "pos-connect": {
           title: "POS·키오스크 연동",
           subtitle: "홀 매출, 현금, 카드, 키오스크 주문을 배달 매출과 합칩니다.",
-          body: `<div class="integration-detail-grid">${integrationDetailCard("대상", "OKPOS, 포스뱅크, 키오스크, 메이트포스")}${integrationDetailCard("수집 데이터", "주문, 결제수단, 메뉴, 취소, 영업일 마감")}${integrationDetailCard("활용", "메뉴별 매출, 재고 소진, 입금 대사")}${integrationDetailCard("설정", "지점별 단말기와 내부 메뉴 매핑")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="matepos">POS 설정 폼</button><button type="button" class="primary" data-open-import="matepos">POS 파일 등록</button></div>`
+          body: integrationConnectFormHtml("matepos")
         },
         "review-connect": {
           title: "리뷰·CS 연동",
           subtitle: "배달앱 리뷰와 환불/보상 이력을 운영 리스크로 관리합니다.",
-          body: `<div class="integration-detail-grid">${integrationDetailCard("수집", "평점, 키워드, 리뷰 답변 상태")}${integrationDetailCard("알림", "평점 3점 이하 즉시 확인")}${integrationDetailCard("매출 영향", "쿠폰, 환불, 재주문 여부 연결")}${integrationDetailCard("담당", "점장 답변, 대표 예외 승인")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="baemin">배달앱 설정 폼</button><button type="button" class="primary" data-sync-integration="baemin">리뷰 수집 점검</button></div>`
+          body: integrationConnectFormHtml("baemin")
         },
         "hr-connect": {
           title: "노무·4대보험 연동",
@@ -7214,7 +7304,7 @@
         "pg-connect": {
           title: "카드·PG 연동",
           subtitle: "KCP, 나이스, 토스페이먼츠 정산과 은행 입금을 대사합니다.",
-          body: `<div class="integration-detail-grid">${integrationDetailCard("수집", "승인, 취소, 수수료, 정산 예정")}${integrationDetailCard("대사", "은행 입금 자동 매칭")}${integrationDetailCard("예외", "차이 금액, 보류, 취소 누락")}${integrationDetailCard("보고", "정산 차이 리포트")}</div><div class="integration-detail-actions"><button type="button" data-integration-preset="card_pg">카드/PG 설정 폼</button><button type="button" data-open-import="card_pg">리포트 등록</button><button type="button" class="primary" data-sync-financial-integration="card_pg">거래 연동 실행</button></div>`
+          body: integrationConnectFormHtml("card_pg")
         }
       };
       return specs[action] || specs.connect;
@@ -7242,8 +7332,18 @@
       const form = targetForm;
       if (!catalog) return;
       if (form.service && form.service.value !== service) form.service.value = service;
+      form.querySelectorAll("[data-integration-connect-service]").forEach(button => {
+        button.classList.toggle("active", button.dataset.integrationConnectService === service);
+      });
       if (form.loginUrl && catalog.loginUrl && (overwrite || !form.loginUrl.value.trim())) form.loginUrl.value = catalog.loginUrl;
       if (form.collectionMode && catalog.collectionMode && (overwrite || !form.collectionMode.value)) form.collectionMode.value = catalog.collectionMode;
+      if (form.syncScope && (overwrite || !form.syncScope.value)) {
+        if (["shinhan_business", "ibk_business"].includes(service)) form.syncScope.value = "bank_balance_transactions";
+        else if (service === "card_pg") form.syncScope.value = "card_approval_deposit";
+        else if (["marketbom", "coupang_supplier", "newtong", "baljugo", "supplier_statement_upload"].includes(service)) form.syncScope.value = "purchase_statement_inventory";
+        else if (["hometax", "tax_invoice_upload"].includes(service)) form.syncScope.value = "tax_invoice_receipt";
+        else form.syncScope.value = "sales_settlement_review";
+      }
       if (form.label && (overwrite || !form.label.value.trim())) {
         const branch = form.branch?.value || selectedBusinessBranches()[0]?.name || "";
         const label = integrationLabels[service] || service;
@@ -7273,6 +7373,10 @@
     async function saveIntegrationConnection(form) {
       const data = Object.fromEntries(new FormData(form).entries());
       const catalog = integrationCatalog[data.service] || {};
+      if (data.passwordConfirm && data.password && data.passwordConfirm !== data.password) {
+        showToast("비밀번호 확인값이 일치하지 않습니다.");
+        return false;
+      }
       const loginUrl = String(data.loginUrl || "").trim() || catalog.loginUrl || "";
       const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
       const memo = String(data.memo || "").trim() || catalog.memo || "";
@@ -7311,6 +7415,13 @@
               category: catalog.category || "",
               data_scope: catalog.dataScope || "",
               required_proof: catalog.requiredProof || "",
+              auth_owner: data.authOwner || "",
+              mfa_method: data.mfaMethod || "",
+              credential_expires_at: data.credentialExpiresAt || "",
+              fallback_auth: data.fallbackAuth || "",
+              sync_scope: data.syncScope || "",
+              permission_scope: data.permissionScope || "",
+              failure_fallback: data.failureFallback || "",
               memo,
               auto_sync: true
             })
@@ -7348,6 +7459,13 @@
         collectionMode,
         dataScope: catalog.dataScope || "",
         requiredProof: catalog.requiredProof || "",
+        authOwner: data.authOwner || "",
+        mfaMethod: data.mfaMethod || "",
+        credentialExpiresAt: data.credentialExpiresAt || "",
+        fallbackAuth: data.fallbackAuth || "",
+        syncScope: data.syncScope || "",
+        permissionScope: data.permissionScope || "",
+        failureFallback: data.failureFallback || "",
         status: serverAccount ? "vault-ready" : data.status,
         vaultService: serverAccount ? `server:${serverAccount.id}` : `yeoljeong-${data.service}`,
         memo
@@ -8545,6 +8663,13 @@
           collectionMode: account.collection_mode || existing?.collectionMode || catalog.collectionMode || "browser-automation",
           dataScope: account.data_scope || existing?.dataScope || catalog.dataScope || "",
           requiredProof: account.required_proof || existing?.requiredProof || catalog.requiredProof || "",
+          authOwner: account.auth_owner || account.authOwner || existing?.authOwner || "",
+          mfaMethod: account.mfa_method || account.mfaMethod || existing?.mfaMethod || "",
+          credentialExpiresAt: account.credential_expires_at || account.credentialExpiresAt || existing?.credentialExpiresAt || "",
+          fallbackAuth: account.fallback_auth || account.fallbackAuth || existing?.fallbackAuth || "",
+          syncScope: account.sync_scope || account.syncScope || existing?.syncScope || "",
+          permissionScope: account.permission_scope || account.permissionScope || existing?.permissionScope || "",
+          failureFallback: account.failure_fallback || account.failureFallback || existing?.failureFallback || "",
           status: account.status === "credential_registered" ? "vault-ready" : (account.status || "ready"),
           vaultService: `server:${account.id}`,
           memo: account.memo || existing?.memo || catalog.memo || "서버 암호화 계정",

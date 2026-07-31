@@ -5345,3 +5345,22 @@
   - 운영 배포: 운영 URL 200 및 신규 HTML 표식 확인 완료.
   - 추가 조치: 이 원장 보정은 문서 전용 커밋으로 별도 반영한다.
   - 미완료: 관리자 인증 세션 기반 클릭 E2E와 은행 사이트 실조회 커넥터는 미완료. 은행 자격증명/2차 인증 등록 후 별도 검증 필요.
+
+## 2026-07-31 12:10 KST - FB 연동설정 입력폼 시안형 상세 페이지 운영 반영
+
+- 요청: `mockup-v2.html#integrations`의 연동설정 입력폼 디자인을 운영 `index.html#auth-invite`에도 동일하게 반영.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 연동설정 드로어 폼을 시안형 구조로 확장했다.
+  - 서비스 프리셋, 안내 카드, 사업자/지점, 계정 ID/PW, 비밀번호 확인, 인증 담당자, 2차 인증 수단, 일회용 인증번호, 인증 만료일, 계좌번호, 계좌비밀번호, 사업자번호, API Key/Secret, 보조 연결 방식, 수집 방식, 수집 범위, 권한 범위, 실패 대체, 메모 입력을 한 화면에 배치했다.
+  - 판매채널 추가, 은행 계좌 연결, 매입처 등록, 홈택스·계산서, POS, 리뷰·CS, 카드·PG 상세 버튼이 설명 화면을 거치지 않고 바로 `data-integration-connect-form` 입력폼을 열도록 변경했다.
+  - `saveIntegrationConnection()`은 기존 `/accounts` Vault 저장 및 `/transactions/sync` 반영 경로를 유지하고, 비밀번호 확인 불일치 검증을 추가했다.
+  - `AccountUpsertPayload`와 `upsert_account()`에 `auth_owner`, `mfa_method`, `credential_expires_at`, `fallback_auth`, `sync_scope`, `permission_scope`, `failure_fallback` 저장 필드를 추가했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - 인라인 스크립트 `new Function()` 문법 검사 결과 `inline scripts ok: 1`.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py` 결과 71 passed, 1 warning.
+  - 컨테이너 API 모델 확인 결과 `sync_scope=bank_balance_transactions`, 비밀 필드 repr 노출 없음.
+- 운영 주의:
+  - 일회용 인증번호는 연결 테스트용 입력값이며 서버 저장 대상에 포함하지 않았다.
+  - 은행 사이트 실제 조회는 등록된 자격증명과 2차 인증이 필요하며, 커넥터 미설정 상태에서는 더미 거래를 생성하지 않는다.

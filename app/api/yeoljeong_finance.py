@@ -94,6 +94,13 @@ class AccountUpsertPayload(BaseModel):
     category: str = ""
     data_scope: str = ""
     required_proof: str = ""
+    auth_owner: str = ""
+    mfa_method: str = ""
+    credential_expires_at: str = ""
+    fallback_auth: str = ""
+    sync_scope: str = ""
+    permission_scope: str = ""
+    failure_fallback: str = ""
     memo: str = ""
     auto_sync: bool = False
 
