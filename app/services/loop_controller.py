@@ -136,6 +136,8 @@ async def create_loop(
     next_run_at = None
     if interval_seconds is not None:
         next_run_at = datetime.now() + timedelta(seconds=interval_seconds)
+    else:
+        next_run_at = datetime.now()
 
     pool = get_db_pool()
     row = await pool.fetchrow(
