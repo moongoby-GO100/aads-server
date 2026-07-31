@@ -988,14 +988,30 @@
       line-height: 1.55;
     }
 
+    #integrationDetailModal {
+      place-items: stretch end;
+      justify-content: flex-end;
+      align-items: stretch;
+      padding: 0;
+      background: rgba(17, 24, 39, .48);
+    }
+
     .integration-detail-modal {
-      width: min(940px, 100%);
+      width: min(560px, 100%);
+      height: 100vh;
+      max-height: 100vh;
+      border-radius: 0;
+      border-top: 0;
+      border-right: 0;
+      border-bottom: 0;
+      overflow: auto;
+      box-shadow: -20px 0 55px rgba(17, 24, 39, .18);
     }
 
     .integration-detail-layout {
       display: grid;
       gap: 14px;
-      padding: 14px;
+      padding: 16px 24px 24px;
     }
 
     .integration-detail-grid {
@@ -1035,6 +1051,32 @@
     .integration-choice-list {
       display: grid;
       gap: 9px;
+    }
+
+    .integration-add-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .integration-add-list button {
+      width: 100%;
+      min-height: 42px;
+      display: grid;
+      gap: 3px;
+      text-align: left;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 900;
+    }
+
+    .integration-add-list button span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.35;
     }
 
     .integration-step {
@@ -6245,9 +6287,9 @@
       if (contractType === "freelancer") {
         clauses = [
           contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 독립 용역을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
-          contractClause("용역 기간 및 수행방식", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
+          contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
           contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"} / 산출물, 납품 방식, 검수 기준, 재작업 범위를 확정한다.`),
-          contractClause("용역비, 지급, 원천징수", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의 지급일에 지급하고 3.3% 사업소득 원천징수 및 비용 부담 주체를 확인한다."}`),
+          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의 지급일에 지급하고 3.3% 사업소득 원천징수 및 비용 부담 주체를 확인한다."}`),
           contractClause("독립성 및 근로자성 점검", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
           contractClause("안전보건 및 협조", "위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
@@ -6305,7 +6347,7 @@
         ? "고용노동부 노무제공자 공통 표준계약서 및 활용가이드(2023-12-26 게시)를 기준으로 업무범위, 산출물, 검수, 용역비, 비용 부담, 비밀유지, 해지 기준을 명확히 하는 내부 양식입니다. 3.3% 원천징수는 세무 처리 기준일 뿐 근로자성 판단을 대체하지 않습니다."
         : isConfidentialityContract
           ? "보안/개인정보 서약서는 근로계약 또는 용역계약과 별도로 체결하는 부속 문서입니다. 개인정보보호와 영업비밀 보호 범위, 반환·삭제 의무를 분리해 관리합니다."
-          : "고용노동부 표준근로계약서(서식 모음) 필수 기재축과 2026년 적용 최저임금 고시 시간급 10,320원 기준을 반영한 내부 작성본입니다. 최종 체결 전 실제 근무표, 상시근로자 수, 적용 법령을 확인하십시오.";
+          : "고용노동부 2025년 개정 표준근로계약서 기준 참고. 고용노동부 표준근로계약서(서식 모음) 필수 기재축과 2026년 적용 최저임금 고시 시간급 10,320원 기준을 반영한 내부 작성본입니다. 최종 체결 전 실제 근무표, 상시근로자 수, 적용 법령을 확인하십시오.";
       const legalChecklist = isFreelancerContract
         ? ["업무범위·산출물·검수 기준", "용역비·정산일·3.3% 원천징수", "비용 부담과 자료 소유·반환", "지휘·감독 및 고정근무 배제", "근로자성 발견 시 근로계약 전환", "A4 계약서와 검수·정산 기록 보관"]
         : isConfidentialityContract
@@ -6320,7 +6362,7 @@
         : "";
       return `
         <h3>${previewText(title, "계약서")}</h3>
-        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
+        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · 최신양식 v2026.07.23 · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
         <div class="legal-basis">${escapeHtml(legalBasisText)}</div>
         ${commonMeta}
         ${legalChecklistHtml}
@@ -6921,6 +6963,11 @@
       return `<button type="button" class="integration-choice"${actionAttr}><b>${escapeHtml(label)}</b><span>${escapeHtml(desc)}</span></button>`;
     }
 
+    function integrationAddChoice(label, desc, action, service = "") {
+      const serviceAttr = service ? ` data-default-service="${escapeHtml(service)}"` : "";
+      return `<button type="button" data-integration-detail="${escapeHtml(action)}"${serviceAttr} title="${escapeHtml(desc)}" aria-label="${escapeHtml(`${label} - ${desc}`)}"><b>${escapeHtml(label)}</b></button>`;
+    }
+
     function selectedOption(value, selected) {
       return String(value) === String(selected) ? " selected" : "";
     }
@@ -7049,6 +7096,17 @@
       </form>`;
     }
 
+    function integrationAddLandingHtml() {
+      return `<div class="integration-add-list">
+        ${integrationAddChoice("판매사이트: 배민 · 쿠팡이츠 · 요기요 · 땡겨요", "주문, 매출, 정산서, 리뷰 수집 계정을 사업자·지점에 연결합니다.", "sales-channel-connect")}
+        ${integrationAddChoice("은행: 신한은행 기업 · 기업은행 기업", "간편서비스/빠른서비스 ID, 비밀번호, 계좌번호, 계좌비밀번호, 사업자번호를 등록합니다.", "bank-connect", "shinhan_business")}
+        ${integrationAddChoice("매입처: 쿠팡 · 마켓봄 · 뉴통 · 발주고 · 직접 추가", "주문 프로그램 계정/API 또는 거래명세서·영수증 파일 수집 경로를 등록합니다.", "supplier-connect")}
+        ${integrationAddChoice("홈택스 · 전자세금계산서", "사업자별 홈택스 계정, 인증서, 세무대리인 위임, 계산서 수집 범위를 관리합니다.", "tax-connect")}
+        ${integrationAddChoice("주문 프로그램 없는 매입처 증빙 등록", "사진/PDF/CSV/OCR 대체 경로로 수기 증빙을 같은 원장에 반영합니다.", "receipt-upload")}
+        ${integrationAddChoice("추가 권장 연동 후보", "POS, 리뷰·CS, 노무·4대보험, 카드·PG 연동 후보를 확인합니다.", "recommended-connectors")}
+      </div>`;
+    }
+
     function integrationDetailSpec(action, defaultService = "") {
       const selectedBusiness = businessName(selectedSettingsBusinessId()) || "선택 사업자";
       const bankService = defaultService || "shinhan_business";
@@ -7085,7 +7143,12 @@
       const specs = {
         connect: {
           title: "외부 서비스 연동 추가",
-          subtitle: `${selectedBusiness} 기준으로 연동 유형과 필수값을 등록합니다.`,
+          subtitle: "판매사이트, 은행, 매입처, 홈택스, POS/PG를 추가합니다.",
+          body: integrationAddLandingHtml()
+        },
+        "connect-form": {
+          title: "연동 설정 페이지",
+          subtitle: `${selectedBusiness} 기준으로 서비스·인증값·수집 범위를 저장합니다.`,
           body: integrationConnectFormHtml(defaultService || "shinhan_business")
         },
         "sales-channel-connect": {
@@ -7196,7 +7259,7 @@
     }
 
     function openIntegrationPreset(service = "shinhan_business") {
-      openIntegrationDetail("connect", service);
+      openIntegrationDetail("connect-form", service);
       window.setTimeout(() => {
         const form = els.integrationDetailBody?.querySelector("[data-integration-connect-form]");
         if (!form) return;
