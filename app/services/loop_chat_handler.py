@@ -5,16 +5,17 @@ loop_controller를 호출하고 응답 메시지를 반환한다.
 """
 from __future__ import annotations
 
-import re
 import logging
+import re
+import time
 from typing import Any
 
 from app.services.loop_controller import (
+    cancel_loop,
     create_loop,
+    list_active_loops,
     pause_loop,
     resume_loop,
-    cancel_loop,
-    list_active_loops,
 )
 
 logger = logging.getLogger("ohvis.loop_chat_handler")
@@ -30,6 +31,41 @@ _INTERVAL_START_RE = re.compile(r"매\s*\d+\s*(?:초|분|시간)")
 
 # CEO 확인 프롬프트 승인 키워드 → loop_start (확인 없이 즉시 생성)
 LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프 승인", "루프 생성")
+
+# P1 보완: 확인 프롬프트에서 제시한 원본 지시를 승인 시점까지 보관한다.
+# 승인 응답("루프 진행")만으로 루프를 만들면 original_command/interval이
+# 소실되어 루프가 무의미한 명령을 반복 실행하는 사고가 발생한다.
+_PENDING_CONFIRM: dict[str, tuple[float, str]] = {}
+_PENDING_TTL_SEC = 900.0
+
+
+def _remember_pending(session_id: str, content: str) -> None:
+    if not session_id:
+        return
+    now = time.time()
+    for k, (ts, _) in list(_PENDING_CONFIRM.items()):
+        if now - ts > _PENDING_TTL_SEC:
+            _PENDING_CONFIRM.pop(k, None)
+    _PENDING_CONFIRM[session_id] = (now, content)
+
+
+def _take_pending(session_id: str, content: str) -> str:
+    """승인 응답이면 보관된 원본 지시로 치환한다. 없으면 원문 유지."""
+    if not session_id:
+        return content
+    entry = _PENDING_CONFIRM.pop(session_id, None)
+    if not entry:
+        return content
+    ts, original = entry
+    if time.time() - ts > _PENDING_TTL_SEC:
+        return content
+    # 승인 키워드만 있는 짧은 응답일 때만 치환 (새 지시는 그대로 사용)
+    stripped = content
+    for kw in LOOP_CONFIRM_KW:
+        stripped = stripped.replace(kw, "")
+    if len(stripped.strip()) <= 10:
+        return original
+    return content
 LOOP_STOP_KW = ("루프 중지", "루프 정지", "루프 취소", "감시 중지", "감시 취소", "루프 멈춰", "루프 중단")
 LOOP_RESUME_KW = ("루프 재개", "루프 재시작", "감시 재개")
 LOOP_STATUS_KW = ("루프 상태", "루프 목록", "감시 목록", "활성 루프")
@@ -99,6 +135,7 @@ async def handle_loop_start_confirm(
     content: str, session_id: str, model_id: str | None = None,
 ) -> dict[str, Any]:
     """P1: 루프 생성 전 확인 프롬프트를 반환한다."""
+    _remember_pending(session_id, content)
     loop_type = "monitor"
     if any(kw in content for kw in ("순차", "단계별")):
         loop_type = "sequential"
@@ -118,7 +155,7 @@ async def handle_loop_start_confirm(
         f"- **유형**: {loop_type}\n"
         f"- **반복 간격**: {interval_desc}\n"
         f"- **명령**: {content[:80]}{'…' if len(content) > 80 else ''}\n\n"
-        f"→ **'진행해'** 또는 **'루프 시작'**으로 승인하시면 루프를 생성합니다.\n"
+        f"→ **'루프 진행'** 또는 **'루프 시작'**으로 승인하시면 루프를 생성합니다.\n"
         f"→ **'아니'** 또는 다른 지시를 하시면 단일 턴으로 처리합니다."
     )
     return {
@@ -133,6 +170,8 @@ async def handle_loop_start_confirm(
 async def handle_loop_start(
     content: str, session_id: str, model_id: str | None = None,
 ) -> dict[str, Any]:
+    # 승인 응답("루프 진행")이면 확인 프롬프트에 제시했던 원본 지시로 복원
+    content = _take_pending(session_id, content)
     loop_type = "monitor"
     if any(kw in content for kw in ("순차", "단계별")):
         loop_type = "sequential"
