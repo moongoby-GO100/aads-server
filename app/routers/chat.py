@@ -1127,6 +1127,29 @@ async def send_message(
                         "name": fname,
                         "media_type": mime,
                     })
+                elif fname.lower().endswith((".xlsx", ".xls")) or mime in (
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/vnd.ms-excel",
+                ):
+                    try:
+                        import io as _io
+                        import csv as _csv
+                        from openpyxl import load_workbook
+                        wb = load_workbook(_io.BytesIO(data), read_only=True, data_only=True)
+                        parts = []
+                        for sheet_name in wb.sheetnames:
+                            ws = wb[sheet_name]
+                            buf = _io.StringIO()
+                            writer = _csv.writer(buf)
+                            for row in ws.iter_rows(values_only=True):
+                                writer.writerow([("" if c is None else str(c)) for c in row])
+                            parts.append(f"## Sheet: {sheet_name}\n{buf.getvalue()}")
+                        wb.close()
+                        csv_text = "\n".join(parts)
+                        attachments.append({"type": "text", "name": fname, "content": csv_text})
+                    except Exception as e:
+                        logger.warning("엑셀 파싱 실패", filename=fname, error=str(e))
+                        attachments.append({"type": "file", "name": fname})
                 else:
                     try:
                         text_content = data.decode("utf-8", errors="replace")
