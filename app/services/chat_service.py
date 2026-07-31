@@ -74,6 +74,12 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
 _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES = (
     "active_stream_hard_timeout",
     "llm_first_response_timeout",
+    # P0: LLM/도구가 첫 응답 이후 장시간 무이벤트로 멈춘 경우도 자동 재개 대상.
+    # 이 접두사가 없으면 heartbeat idle ceiling으로 끊긴 턴이 "응답이 중단됨"에서
+    # 종료되어 사용자가 직접 재질문해야 한다.
+    "heartbeat_idle_ceiling",
+    # startup/watchdog가 프로세스 재시작·고아 실행을 강제 종료한 경우도 재개 대상.
+    "force_interrupted_stale_",
     "api_shutdown_before_process_stop",
     "api_shutdown",
     "server_shutdown",
@@ -4634,6 +4640,22 @@ async def with_background_completion(
                     break
                 try:
                     _now = _bg_time.monotonic()
+                    _hb_last_evt = float(state.get("last_event_at") or state.get("started_at") or _now)
+                    if (
+                        state.get("first_response_at")
+                        and not state.get("saw_done_event")
+                        and _now - _hb_last_evt > 600
+                    ):
+                        logger.warning("heartbeat_idle_ceiling session=%s execution=%s idle=%.0fs", session_id[:8], str(state.get("execution_id", ""))[:8], _now - _hb_last_evt)
+                        state["completed"] = True
+                        state["_producer_incomplete_exit"] = f"heartbeat_idle_ceiling_{int(_now - _hb_last_evt)}s"
+                        try:
+                            _pool_idle = get_pool()
+                            async with _pool_idle.acquire() as _conn_idle:
+                                await _mark_execution_interrupted(_conn_idle, session_id, str(state.get("execution_id", "")), f"heartbeat_idle_ceiling_{int(_now - _hb_last_evt)}s", partial_content=state.get("content", ""), delete_empty_placeholder=False)
+                        except Exception:
+                            pass
+                        break
                     if (
                         state.get("execution_id")
                         and not state.get("saw_done_event")

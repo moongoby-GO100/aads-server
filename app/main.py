@@ -368,6 +368,13 @@ async def lifespan(app: FastAPI):
                               AND te.started_at < NOW() - INTERVAL '45 minutes'
                               AND te.updated_at < NOW() - INTERVAL '20 minutes'
                             )
+                            OR (
+                              te.started_at < NOW() - INTERVAL '30 minutes'
+                              AND COALESCE(te.actual_model, '') = ''
+                            )
+                            OR (
+                              te.started_at < NOW() - INTERVAL '90 minutes'
+                            )
                           )
                         """
                     )
@@ -434,6 +441,13 @@ async def lifespan(app: FastAPI):
                                   COALESCE(last_event_id, '') <> ''
                                   AND started_at < NOW() - INTERVAL '45 minutes'
                                   AND updated_at < NOW() - INTERVAL '20 minutes'
+                                )
+                                OR (
+                                  started_at < NOW() - INTERVAL '30 minutes'
+                                  AND COALESCE(actual_model, '') = ''
+                                )
+                                OR (
+                                  started_at < NOW() - INTERVAL '90 minutes'
                                 )
                               )
                             RETURNING id
