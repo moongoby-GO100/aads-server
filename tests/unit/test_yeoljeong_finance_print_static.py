@@ -10,7 +10,6 @@ HTML = (
     / "index.html"
 ).read_text(encoding="utf-8")
 
-
 def test_contract_preview_has_a4_print_layout():
     assert "@page" in HTML
     assert "size: A4 portrait" in HTML
@@ -38,8 +37,10 @@ def test_integrations_detail_buttons_have_operational_drawer_and_api_ctas():
     assert 'data-integration-detail="review-connect"' in HTML
     assert 'data-integration-detail="hr-connect"' in HTML
     assert 'data-integration-detail="pg-connect"' in HTML
-    assert 'data-integration-preset="${escapeHtml(bankService)}"' in HTML
-    assert 'data-sync-financial-integration="${escapeHtml(bankService)}"' in HTML
-    assert 'data-open-import="${escapeHtml(bankService)}"' in HTML
+    assert 'data-integration-connect-service="shinhan_business"' in HTML
+    assert 'data-integration-connect-service="ibk_business"' in HTML
+    assert 'data-integration-connect-form' in HTML
+    assert 'data-sync-financial-integration' in HTML
+    assert 'data-open-import="${escapeHtml(service)}"' in HTML
     assert "/transactions/sync" in HTML
     assert "/transactions/import" in HTML
