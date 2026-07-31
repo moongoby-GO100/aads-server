@@ -1608,15 +1608,25 @@ async def call_stream(
         elif backend == "codex_cli":
             _codex_had_error = False
             _codex_error_content = ""
+            _codex_is_tool_error = False
             async for event in _stream_codex_relay(
                 model, system_prompt, messages, tools=tools, session_id=session_id,
             ):
                 if event.get("type") == "error":
                     _codex_had_error = True
                     _codex_error_content = event.get("content", "")
+                    _err_lower = _codex_error_content.lower()
+                    _codex_is_tool_error = any(k in _err_lower for k in (
+                        "transport closed", "transport_closed", "mcp",
+                        "tool_error", "tool error", "connection reset",
+                    ))
                     break
                 yield event
             if not _codex_had_error:
+                return
+            if _codex_is_tool_error:
+                logger.warning(f"codex_tool_error_no_model_fallback: {model} — {_codex_error_content[:120]}")
+                yield {"type": "error", "content": _codex_error_content, "error_category": "tool_transport_error"}
                 return
             _CODEX_FB = {
                 "gpt-5.6-sol": [

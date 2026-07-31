@@ -19,7 +19,17 @@ from app.services.loop_controller import (
 
 logger = logging.getLogger("ohvis.loop_chat_handler")
 
-LOOP_START_KW = ("감시해", "감시하고", "모니터링해", "모니터해", "반복해", "반복 실행", "루프 시작", "루프 돌려")
+LOOP_START_KW = (
+    "감시해", "감시하고", "모니터링해", "모니터해", "반복해", "반복 실행",
+    "루프 시작", "루프 돌려",
+    "완료시까지", "완료할 때까지", "완료할때까지", "끝날 때까지", "끝날때까지",
+    "될 때까지", "될때까지", "계속 진행", "계속 실행",
+)
+# "매 N분/초/시간" 패턴만 루프로 인식 (단독 "매 "는 오탐 위험)
+_INTERVAL_START_RE = re.compile(r"매\s*\d+\s*(?:초|분|시간)")
+
+# CEO 확인 프롬프트 승인 키워드 → loop_start (확인 없이 즉시 생성)
+LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프 승인", "루프 생성")
 LOOP_STOP_KW = ("루프 중지", "루프 정지", "루프 취소", "감시 중지", "감시 취소", "루프 멈춰", "루프 중단")
 LOOP_RESUME_KW = ("루프 재개", "루프 재시작", "감시 재개")
 LOOP_STATUS_KW = ("루프 상태", "루프 목록", "감시 목록", "활성 루프")
@@ -56,15 +66,26 @@ def detect_loop_intent(content: str) -> str | None:
 
     호출자는 반드시 reply_to 인용문/재개 스캐폴드가 제거된
     사용자 원문(persisted_user_content)을 전달해야 한다.
+
+    P0: _NON_COMMAND_HINT는 STOP/STATUS/RESUME 오탐 방지에만 적용.
+        START에는 적용하지 않음 (CEO 화법 "…하고 보고해" 차단 방지).
+    P1: START 판정 시 "loop_start_confirm" 반환 → 확인 프롬프트.
     """
     text = str(content or "").strip()
     if not text or len(text) > _LOOP_CMD_MAX_LEN:
         return None
+
+    # CEO 승인 응답 → 즉시 루프 생성 (확인 프롬프트 스킵)
+    if any(kw in text for kw in LOOP_CONFIRM_KW):
+        return "loop_start"
+
+    # START는 _NON_COMMAND_HINT 가드 없이 판정 (CEO 화법 호환)
+    if any(kw in text for kw in LOOP_START_KW) or _INTERVAL_START_RE.search(text):
+        return "loop_start_confirm"
+
+    # STOP/RESUME/STATUS는 오탐 방지 가드 적용
     if _NON_COMMAND_HINT.search(text):
         return None
-
-    if any(kw in text for kw in LOOP_START_KW):
-        return "loop_start"
     if any(kw in text for kw in LOOP_STOP_KW) or _STOP_CMD.search(text):
         return "loop_stop"
     if any(kw in text for kw in LOOP_RESUME_KW) or _RESUME_CMD.search(text):
@@ -72,6 +93,41 @@ def detect_loop_intent(content: str) -> str | None:
     if any(kw in text for kw in LOOP_STATUS_KW) or _STATUS_CMD.search(text):
         return "loop_status"
     return None
+
+
+async def handle_loop_start_confirm(
+    content: str, session_id: str, model_id: str | None = None,
+) -> dict[str, Any]:
+    """P1: 루프 생성 전 확인 프롬프트를 반환한다."""
+    loop_type = "monitor"
+    if any(kw in content for kw in ("순차", "단계별")):
+        loop_type = "sequential"
+    elif not any(kw in content for kw in ("감시", "모니터")):
+        loop_type = "task"
+
+    interval = None
+    m = _INTERVAL_RE.search(content)
+    if m:
+        num = int(m.group(1))
+        unit = m.group(2)
+        interval = num * {"초": 1, "분": 60, "시간": 3600}[unit]
+
+    interval_desc = f"{interval}초" if interval else "기본값"
+    msg = (
+        f"🔄 **루프로 진행할까요?**\n\n"
+        f"- **유형**: {loop_type}\n"
+        f"- **반복 간격**: {interval_desc}\n"
+        f"- **명령**: {content[:80]}{'…' if len(content) > 80 else ''}\n\n"
+        f"→ **'진행해'** 또는 **'루프 시작'**으로 승인하시면 루프를 생성합니다.\n"
+        f"→ **'아니'** 또는 다른 지시를 하시면 단일 턴으로 처리합니다."
+    )
+    return {
+        "ok": True,
+        "pending_confirm": True,
+        "loop_type": loop_type,
+        "interval_seconds": interval,
+        "message": msg,
+    }
 
 
 async def handle_loop_start(

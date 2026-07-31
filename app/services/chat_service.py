@@ -73,6 +73,7 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
 
 _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES = (
     "active_stream_hard_timeout",
+    "llm_first_response_timeout",
     "api_shutdown_before_process_stop",
     "api_shutdown",
     "server_shutdown",
@@ -2054,10 +2055,51 @@ async def cleanup_overlong_running_executions(
                 timeout,
             )
 
+    # P1: stale retrying 정리 — resume task 실패 후 retrying 상태로 300초+ 잔류하는 실행을 자동 정리
+    _retrying_timeout = max(timeout // 2, 300)
+    retrying_rows = await conn.fetch(
+        """
+        SELECT te.id::text AS execution_id,
+               te.session_id::text AS session_id,
+               COALESCE(te.assistant_message_id, (
+                   SELECT id FROM chat_messages
+                   WHERE execution_id = te.id AND intent = 'streaming_placeholder'
+                   ORDER BY COALESCE(edited_at, created_at) DESC LIMIT 1
+               ))::text AS assistant_message_id,
+               '' AS partial_content,
+               EXTRACT(EPOCH FROM (NOW() - COALESCE(te.updated_at, te.started_at)))::int AS age_seconds
+        FROM chat_turn_executions te
+        WHERE te.status = 'retrying'
+          AND te.completed_at IS NULL
+          AND COALESCE(te.updated_at, te.started_at) < NOW() - ($1::int * INTERVAL '1 second')
+        ORDER BY COALESCE(te.updated_at, te.started_at) ASC
+        """,
+        _retrying_timeout,
+    )
+    retrying_closed = 0
+    for row in retrying_rows:
+        session_id = row["session_id"]
+        execution_id = row["execution_id"]
+        await _mark_execution_interrupted(
+            conn,
+            session_id,
+            execution_id,
+            f"stale_retrying_cleanup_after_{row['age_seconds']}s",
+            partial_content="",
+            placeholder_id=row["assistant_message_id"],
+            delete_empty_placeholder=True,
+        )
+        retrying_closed += 1
+        logger.warning(
+            "stale_retrying_execution_cleaned session=%s execution=%s age=%ss",
+            session_id[:8], execution_id[:8], row["age_seconds"],
+        )
+
     return {
         "scanned": len(rows),
         "closed": closed,
         "cancelled_active": cancelled_active,
+        "retrying_cleaned": retrying_closed,
         "timeout_sec": timeout,
     }
 
@@ -8528,7 +8570,11 @@ async def send_message_stream(
             if _loop_intent:
                 try:
                     _loop_resp = ""
-                    if _loop_intent == "loop_start":
+                    if _loop_intent == "loop_start_confirm":
+                        from app.services.loop_chat_handler import handle_loop_start_confirm
+                        _lr = await handle_loop_start_confirm(persisted_user_content, session_id, intent_result.model if intent_result else None)
+                        _loop_resp = _lr["message"]
+                    elif _loop_intent == "loop_start":
                         from app.services.loop_chat_handler import handle_loop_start
                         _lr = await handle_loop_start(persisted_user_content, session_id, intent_result.model if intent_result else None)
                         _loop_resp = _lr["message"]
