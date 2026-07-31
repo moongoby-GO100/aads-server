@@ -1,5 +1,16 @@
 # AADS HANDOVER
 
+## 2026-07-31 12:03 KST - Direct Work Dependency Policy
+
+- Request: CEO asked for a detailed plan and operating policy reflection for resolving dependency risks when multiple chat sessions directly modify code/DB instead of using Pipeline Runner.
+- Policy: Added `docs/knowledge/DIRECT-WORK-DEPENDENCY-POLICY-v1.0.md`. It defines Runner-vs-chat-direct boundaries, mandatory preflight, GREEN/YELLOW/RED/BLOCK decisions, DB direct-change rules, Runner conversion rules, and automation backlog.
+- Docs updated: `docs/knowledge/DEV-FLOW-v1.1.md`, `docs/knowledge/DEV-FLOW-CHECKLIST-v1.0.md`, and `docs/HANDOVER.md`.
+- Prompt policy: Added and applied migration `migrations/117_direct_work_dependency_policy_prompt.sql`, creating L1 prompt asset `global-direct-work-dependency-gate`.
+- DB verification: `prompt_assets` row is enabled with `layer_id=1`, `priority=15`, `content=1238 chars`.
+- Current risk basis rechecked at 2026-07-31 12:13-12:16 KST: AADS has no queued/running runner jobs; AADS `chat_workspace_change_ledger` has `dirty=1457`, `deployed=14`, `pushed=41`, so direct mutation must preflight against both runner jobs and direct-work ledger.
+- Validation: Rechecked at 2026-07-31 12:17-12:18 KST. `git diff --check` passed for the policy/document/migration files; DB SELECT verified prompt asset `slug=global-direct-work-dependency-gate`, `layer_id=1`, `enabled=true`, `priority=15`, `content=1238 chars`; production-container `PromptCompiler.compile(workspace=AADS,intent=code_modify,model=gpt-5.6-sol,role=CTO)` applied the asset with no compile error, `applied_count=17`, `slug_index=2`, and `system_prompt_chars=20745`; public health check returned HTTP 200. `compiled_prompt_provenance` persisted real chat-turn count for this slug remains 0, so persisted provenance confirmation is the only remaining observation item.
+- Commit/push/deploy: not performed. Existing unrelated dirty files remain in the worktree.
+
 ## 2026-07-30 08:44 KST - FB mockup integrations add-flow settings page
 
 - Request: In `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations`, make `+ 연동 추가` open the same detailed integration settings-page design instead of a simple service list.
