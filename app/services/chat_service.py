@@ -7794,6 +7794,23 @@ async def process_files_for_claude(files: list) -> list:
                 content_parts.append({"type": "text", "text": f"[PDF: {filename}]\n{text[:10000]}"})
             except Exception as e:
                 content_parts.append({"type": "text", "text": f"[첨부파일: {filename} - PDF 추출 실패: {e}]"})
+        elif Path(filename).suffix.lower() in (".xlsx", ".xls"):
+            try:
+                import openpyxl
+                import io
+                wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+                sheets_text = []
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    rows = []
+                    for row in ws.iter_rows(values_only=True):
+                        rows.append(",".join(str(cell) if cell is not None else "" for cell in row))
+                    sheets_text.append(f"[시트: {sheet_name}]\n" + "\n".join(rows))
+                wb.close()
+                text = "\n\n".join(sheets_text)
+                content_parts.append({"type": "text", "text": f"[엑셀: {filename}]\n```csv\n{text[:15000]}\n```"})
+            except Exception as e:
+                content_parts.append({"type": "text", "text": f"[첨부파일: {filename} - 엑셀 추출 실패: {e}]"})
         elif mime_type.startswith("text/") or Path(filename).suffix.lower() in (
             ".py", ".js", ".ts", ".md", ".txt", ".json", ".yaml", ".yml", ".csv",
             ".tsx", ".jsx", ".sh", ".sql", ".go", ".rs", ".java", ".c", ".cpp",
@@ -8085,6 +8102,24 @@ async def send_message_stream(
                     except Exception as _pe:
                         _ephemeral_doc_context = (_ephemeral_doc_context + f"\n\n[PDF: {fname} — 추출 실패: {_pe}]").strip()
                     _uf_ref_lines.append(f"- [PDF: {fname}]")
+                elif Path(fname).suffix.lower() in (".xlsx", ".xls"):
+                    try:
+                        import openpyxl
+                        import io as _xio
+                        _wb = openpyxl.load_workbook(_xio.BytesIO(data), read_only=True, data_only=True)
+                        _sheets = []
+                        for _sn in _wb.sheetnames:
+                            _ws = _wb[_sn]
+                            _rows = []
+                            for _row in _ws.iter_rows(values_only=True):
+                                _rows.append(",".join(str(_c) if _c is not None else "" for _c in _row))
+                            _sheets.append(f"[시트: {_sn}]\n" + "\n".join(_rows))
+                        _wb.close()
+                        _excel_text = "\n\n".join(_sheets)
+                        _ephemeral_doc_context = (_ephemeral_doc_context + f"\n\n[엑셀: {fname}]\n```csv\n{_excel_text[:15000]}\n```").strip()
+                    except Exception as _ee:
+                        _ephemeral_doc_context = (_ephemeral_doc_context + f"\n\n[엑셀: {fname} — 추출 실패: {_ee}]").strip()
+                    _uf_ref_lines.append(f"- [엑셀: {fname}] CSV 변환 완료")
                 elif mime.startswith("text/") or Path(fname).suffix.lower() in (
                     ".py", ".js", ".ts", ".tsx", ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".sh", ".sql"
                 ):
