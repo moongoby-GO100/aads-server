@@ -125,44 +125,6 @@ async def _write_loop_result_to_chat(loop: dict, iteration_num: int, result: dic
         logger.warning("loop_chat_write_error: loop=%d iter=%d err=%s", loop["id"], iteration_num, str(exc)[:120])
 
 
-async def _write_loop_result_to_chat(loop: dict, iteration_num: int, result: dict, duration_ms: int, cost: float):
-    """루프 반복 결과를 채팅 세션에 기록 — CEO가 채팅창에서 확인 가능 (P0)."""
-    session_id = loop.get("session_id")
-    if not session_id or not _UUID_RE.match(str(session_id)):
-        return
-
-    import uuid as _uuid
-
-    from app.core.db_pool import get_pool
-
-    status_emoji = {"success": "✅", "failure": "❌", "warning": "⚠️"}.get(
-        result.get("status", ""), "🔄"
-    )
-    max_iter = loop.get("max_iterations") or "∞"
-    summary = result.get("summary", "결과 없음")[:500]
-
-    content = (
-        f"🔄 **루프 #{loop['id']}** 반복 {iteration_num}/{max_iter} {status_emoji}\n"
-        f"**요약**: {summary}\n"
-        f"⏱ {duration_ms / 1000:.1f}초 | 💰 ${cost:.4f}"
-    )
-    if result.get("goal_reached"):
-        content += "\n\n✅ **목표 달성 — 루프 완료**"
-
-    pool = get_pool()
-    try:
-        await pool.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, model_used, intent, cost,"
-            " tokens_in, tokens_out, bookmarked, attachments, sources, tools_called, is_compacted)"
-            " VALUES ($1, $2, 'assistant', $3, $4, 'loop_result', $5,"
-            " 0, 0, false, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, false)",
-            _uuid.uuid4(), _uuid.UUID(str(session_id)), content,
-            result.get("model_used", ""), cost,
-        )
-    except (OSError, ValueError, RuntimeError) as exc:
-        logger.warning("loop_chat_write_error: loop=%d iter=%d err=%s", loop["id"], iteration_num, str(exc)[:120])
-
-
 async def run_iteration(loop_id: int) -> dict:
     """단일 iteration 실행. 반환: {ok, loop_id, iteration, status, summary}"""
     from app.core.db_pool import get_pool
