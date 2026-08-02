@@ -5381,6 +5381,7 @@
 - 요청: 운영 `index.html#auth-invite`의 연동설정 페이지가 `mockup-v2.html#integrations` 디자인기획 페이지와 달라 보이는 문제를 동일 디자인 기준으로 재반영.
 - 조치:
   - `app/static/apps/yeoljeong-finance/index.html`의 연동 상세 드로어 폭을 넓히고, 시안의 안내 밴드, 프리셋 스트립, `credential-grid`, `detail-grid`, `drawer-actions` 구조를 운영 입력폼에 맞췄다.
+  - 후순위 공용 `.modal` 규칙이 연동설정 드로어 폭을 덮어쓰지 않도록 `.modal.integration-detail-modal` 우선순위 규칙을 추가했다.
   - 연동설정 입력폼을 시안 순서대로 `연동 구분 → 사업자 → 지점 → 표시명 → 로그인 URL → ID/PW → 계좌/계좌비밀번호 → 사업자번호 → 수집 방식/범위 → 검증 메모`로 재배치했다.
   - 운영 저장/API에 필요한 고급값은 hidden 기본값으로 유지해 기존 `/accounts` Vault 저장과 `/transactions/sync` 실행 경로가 끊기지 않게 했다.
   - `연동 추가` 선택 리스트에 설명 문구를 화면 표시하도록 복구해 디자인기획안의 설명형 선택 버튼과 맞췄다.
