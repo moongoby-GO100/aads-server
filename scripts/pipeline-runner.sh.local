@@ -134,8 +134,10 @@ EOF
 
 # Redis 잠금 해제 헬퍼 (graceful — 실패해도 진행)
 _release_work_lock() {
-    local project="$1" job_id="$2"
-    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+    local project="$1" job_id="$2" scope="${3:-}"
+    local scope_param=""
+    [[ -n "$scope" ]] && scope_param="&scope=${scope}"
+    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}${scope_param}" 2>/dev/null || true
 }
 _release_deploy_lock() {
     local project="$1" job_id="$2"
@@ -286,6 +288,33 @@ looks_like_git_diff() {
     fi
 
     return 1
+}
+
+json_array_from_lines() {
+    if command -v jq >/dev/null 2>&1; then
+        jq -R -s 'split("\n") | map(select(length > 0))'
+    else
+        python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))'
+    fi
+}
+
+record_actual_changed_files() {
+    local job_id="$1" files_text="${2:-}" worktree_path="${3:-}" parallel_group="${4:-}"
+    local files_json
+    files_json=$(printf '%s\n' "$files_text" | json_array_from_lines 2>/dev/null) || files_json="[]"
+    local files_json_sql
+    files_json_sql=$(sql_escape "$files_json")
+    db_update "UPDATE pipeline_jobs
+               SET actual_changed_files=${files_json_sql}::jsonb,
+                   logs=COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                       'ts', NOW()::text,
+                       'event', 'actual_changed_files_recorded',
+                       'files', ${files_json_sql}::jsonb,
+                       'worktree_path', $(sql_escape "$worktree_path"),
+                       'parallel_group', $(sql_escape "$parallel_group")
+                   )),
+                   updated_at=NOW()
+               WHERE job_id='${job_id}';" 2>/dev/null || true
 }
 
 is_remote_project() {
@@ -749,7 +778,7 @@ claim_queued_job() {
         model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
     else
         engine_predicate="AND NOT (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
-        model_return_expr="COALESCE(NULLIF(worker_model, ''), 'auto')"
+        model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
     fi
     # instruction의 줄바꿈을 \\n으로 치환하여 단일행 RETURNING 보장
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
@@ -769,7 +798,7 @@ claim_queued_job() {
                 ORDER BY COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M');"
+             RETURNING job_id, project, replace(replace(instruction, E'\\n', ' '), '|', ' '), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'');"
 }
 
 claim_approved_job() {
@@ -798,7 +827,7 @@ claim_rejected_job() {
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
-    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}"
+    local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
     local workdir
     workdir=$(resolve_project_workdir "$project" "$instruction")
@@ -822,7 +851,9 @@ run_job() {
 
     # ── Redis 잠금 (1단계: 작업 잠금) ──
     local lock_result
-    lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+    local work_lock_scope_param=""
+    [[ -n "$parallel_group" ]] && work_lock_scope_param="&scope=${parallel_group}"
+    lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}" 2>/dev/null) || true
     if echo "$lock_result" | grep -q '"acquired":false'; then
         local holder
         holder=$(echo "$lock_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('holder','unknown'))" 2>/dev/null) || holder="unknown"
@@ -832,10 +863,10 @@ run_job() {
     fi
 
     # ── 사전 검증 (Pre-validation) ──
-    pre_validate "$job_id" "$project" "$session_id" "$instruction" || { _release_work_lock "$project" "$job_id"; return 1; }
+    pre_validate "$job_id" "$project" "$session_id" "$instruction" || { _release_work_lock "$project" "$job_id" "$parallel_group"; return 1; }
 
     # ── 중복 작업 확인 ──
-    check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id"; return 0; }
+    check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id" "$parallel_group"; return 0; }
 
     local use_worktree=false
     local worktree_dir=""
@@ -848,7 +879,7 @@ run_job() {
         avail_gb=$(df --output=avail -BG /tmp 2>/dev/null | tail -1 | tr -d ' G') || avail_gb=999
         if [[ "$avail_gb" -lt 5 ]]; then
             _fail_job "$job_id" "$session_id" "worktree_disk_low" "clean worktree 생성 공간 부족: ${avail_gb}GB < 5GB"
-            _release_work_lock "$project" "$job_id"
+            _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
             promote_next_queued "$project"
             _current_job_id=""
@@ -857,7 +888,7 @@ run_job() {
             return 1
         fi
         prepare_clean_job_worktree "$job_id" "$project" "$session_id" "$workdir" "$worktree_dir" || {
-            _release_work_lock "$project" "$job_id"
+            _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
             promote_next_queued "$project"
             _current_job_id=""
@@ -869,7 +900,7 @@ run_job() {
         use_worktree=true
     elif ! is_remote_project "$project"; then
         _fail_job "$job_id" "$session_id" "worktree_required" "로컬 프로젝트는 Git clean worktree가 필수입니다: ${workdir:-undefined}"
-        _release_work_lock "$project" "$job_id"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
         promote_next_queued "$project"
         _current_job_id=""
@@ -878,7 +909,7 @@ run_job() {
         return 1
     fi
 
-    log "▶ START job=$job_id project=$project target=${target_repo} workdir=$workdir"
+    log "▶ START job=$job_id project=$project target=${target_repo} parallel_group=${parallel_group:-none} workdir=$workdir"
     # FIX(INVALID_GIT_DIFF): Claude 실행 전 HEAD SHA 캡처
     local pre_exec_sha
     pre_exec_sha=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) || pre_exec_sha=""
@@ -1206,7 +1237,8 @@ $out_tail")
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    updated_at=NOW() WHERE job_id='${job_id}';"
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
-        _release_work_lock "$project" "$job_id"
+        record_actual_changed_files "$job_id" "" "$worktree_dir" "$parallel_group"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
         # worktree 정리
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
@@ -1238,6 +1270,18 @@ ${_uncommitted}"
     else
         git_diff=$(git diff HEAD 2>/dev/null | head -c 50000) || true
     fi
+    local actual_changed_files=""
+    if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
+        actual_changed_files=$(git diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
+        local _uncommitted_files=""
+        _uncommitted_files=$(git diff --name-only HEAD 2>/dev/null) || true
+        [[ -n "$_uncommitted_files" ]] && actual_changed_files="${actual_changed_files}
+${_uncommitted_files}"
+    else
+        actual_changed_files=$(git diff --name-only HEAD 2>/dev/null) || true
+    fi
+    actual_changed_files=$(printf '%s\n' "$actual_changed_files" | sed '/^[[:space:]]*$/d' | sort -u)
+    record_actual_changed_files "$job_id" "$actual_changed_files" "$worktree_dir" "$parallel_group"
 
     if [[ -z "${git_diff//[[:space:]]/}" ]]; then
         if is_read_only_instruction "$instruction" && [[ -n "${output//[[:space:]]/}" ]]; then
@@ -1254,7 +1298,7 @@ ${_uncommitted}"
 \`\`\`
 ${output:0:1500}
 \`\`\`"
-            _release_work_lock "$project" "$job_id"
+            _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
             if [[ -d "$worktree_dir" ]]; then
                 cd "${main_workdir:-/tmp}"
@@ -1282,7 +1326,7 @@ ${output:0:1500}
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
                    updated_at=NOW() WHERE job_id='${job_id}';"
         post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
-        _release_work_lock "$project" "$job_id"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
         if [[ -d "$worktree_dir" ]]; then
             cd "${main_workdir:-/tmp}"
@@ -1390,7 +1434,7 @@ ${diff_summary}
 승인: pipeline_runner_approve(job_id='${job_id}', action='approve')"
 
     log "  AWAITING_APPROVAL job=$job_id"
-    _release_work_lock "$project" "$job_id"
+    _release_work_lock "$project" "$job_id" "$parallel_group"
     _cleanup_artifacts "$job_id"
 
     # 채팅AI 자동 반응 트리거 — AI가 결과 확인 후 CEO에게 보고
@@ -2425,10 +2469,10 @@ main() {
 
         if [[ -n "$pending" ]]; then
             # FIX: ASCII RS(0x1e) 구분자 사용 — instruction에 | 포함 시 파싱 깨짐 방지
-            IFS=$'\x1e' read -r job_id project instruction session_id max_cycles job_model job_size <<< "$pending"
+            IFS=$'\x1e' read -r job_id project instruction session_id max_cycles job_model job_size parallel_group <<< "$pending"
             if [[ -n "$job_id" && -n "$project" ]]; then
                 # 방안A: 백그라운드 병렬 실행 — 다른 프로젝트 작업이 블로킹하지 않음
-                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" &
+                run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &
                 _bg_jobs[$!]="${job_id}|${session_id}"
                 log "  BG_START: job=$job_id pid=$! (parallel)"
             fi

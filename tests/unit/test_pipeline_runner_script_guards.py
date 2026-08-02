@@ -82,3 +82,31 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "completed_at=NOW()" not in script
     assert "읽기[[:space:]]*전용" in script
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script
+
+
+def test_pipeline_runner_passes_parallel_group_to_work_lock_and_run_job():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "RETURNING job_id, project" in script
+    assert "COALESCE(parallel_group,'')" in script
+    assert "read -r job_id project instruction session_id max_cycles job_model job_size parallel_group" in script
+    assert 'run_job "$job_id" "$project" "$instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &' in script
+    assert "work_lock_scope_param=\"&scope=${parallel_group}\"" in script
+    assert '_release_work_lock "$project" "$job_id" "$parallel_group"' in script
+
+
+def test_pipeline_runner_general_claim_uses_admin_model_column():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "model_return_expr=\"COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')\"" in script
+    assert "get_db_model_cycle \"$job_size\"" in script
+
+
+def test_pipeline_runner_records_actual_changed_files_to_db():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "record_actual_changed_files()" in script
+    assert "actual_changed_files=" in script
+    assert "git diff --name-only" in script
+    assert "actual_changed_files_recorded" in script
+    assert "worktree_path" in script
