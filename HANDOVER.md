@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-03 07:14 KST - FB 연동설정 페이지 최종 원장 재검증
+
+- 요청: 이전 완료보고의 커밋/푸시/배포/문서 원장 충돌을 해소하고, `index.html#auth-invite` 연동설정 페이지가 디자인기획안 기준으로 운영 반영됐는지 끝까지 검증.
+- 대상: `app/static/apps/yeoljeong-finance/index.html`의 연동 상세 드로어와 입력폼. 이번 재검증에서 기능 코드는 추가 변경하지 않았고, 원장 문서만 보정한다.
+- 커밋/푸시 확인: `HEAD`와 `origin/main`은 `4fac936a8e6625cb7772a11254b1e7113ebbb219`로 일치한다. 해당 커밋은 `HANDOVER.md`와 `app/static/apps/yeoljeong-finance/index.html`만 포함한다.
+- 운영 확인: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`은 HTTP 200, `Last-Modified: Sun, 02 Aug 2026 22:08:08 GMT`를 반환한다. 외부 HTML에서 `modal integration-detail-modal`, `연동 설정 페이지`, `credential-grid`, `detail-grid`, `drawer-actions`, `신한 간편서비스`, `IBK 빠른서비스`, `data-integration-connect-form`, `/accounts`, `/transactions/sync` 표식을 확인했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node 인라인 스크립트 `new Function()` 문법 검사 성공(`inline scripts ok 1`).
+  - `git diff --check app/static/apps/yeoljeong-finance/index.html HANDOVER.md docs/HANDOVER.md` 성공.
+  - 운영 컨테이너 `docker exec aads-server python3 -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_service.py` 결과 71 passed, 1 warning.
+  - 컨테이너 상태: `aads-server`, `aads-dashboard`, `aads-server-green`, `aads-dashboard-green`, `aads-postgres`, `aads-litellm`, `aads-nginx`, `aads-redis` 정상/healthy 확인.
+  - Browser Bridge는 공개 URL 탐색과 스크린샷 캡처 성공. 단, 인증 전 화면까지만 확인되어 관리자 로그인 후 `+ 연동 추가` 실제 클릭 E2E는 미수행했다.
+- 남은 제한: 은행 실사이트 조회/엑셀 다운로드는 실계정 자격증명과 은행별 2차 인증, 별도 커넥터가 필요하다. 현재 운영은 관리자 입력값을 `/accounts` Vault 저장 경로로 받고 `/transactions/sync` 상태 판정까지 연결하며, 커넥터 미설정 시 더미 거래를 생성하지 않는다.
+- 작업트리 주의: `/root/aads/aads-server`에는 이번 범위와 무관한 기존 미커밋 파일이 남아 있다. 이번 커밋에는 포함하지 않는다.
+
 ## 2026-07-31 12:03 KST - Direct Work Dependency Policy
 
 - Request: CEO asked for a detailed plan and operating policy reflection for resolving dependency risks when multiple chat sessions directly modify code/DB instead of using Pipeline Runner.
