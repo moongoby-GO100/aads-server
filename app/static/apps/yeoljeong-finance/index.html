@@ -997,7 +997,7 @@
     }
 
     .integration-detail-modal {
-      width: min(560px, 100%);
+      width: min(720px, 100%);
       height: 100vh;
       max-height: 100vh;
       border-radius: 0;
@@ -1112,21 +1112,22 @@
     }
 
     .integration-setup-band {
-      border: 1px solid var(--line);
-      background: #f8fafc;
-      border-radius: var(--radius-sm);
-      padding: 14px;
+      padding: 15px;
+      border: 1px solid #d7e3f5;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #f8fbff, #eef5ff);
     }
 
     .integration-setup-band h3 {
-      margin: 0 0 4px;
-      font-size: 15px;
+      margin: 0;
+      font-size: 16px;
     }
 
     .integration-setup-band p {
-      margin: 0;
+      margin: 6px 0 0;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 11px;
+      line-height: 1.55;
     }
 
     .integration-preset-strip {
@@ -1136,37 +1137,65 @@
     }
 
     .integration-preset-strip button {
+      min-height: 72px;
+      display: grid;
+      align-content: center;
+      gap: 5px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
       text-align: left;
-      min-height: 58px;
     }
 
     .integration-preset-strip button.active {
-      border-color: #2563eb;
-      background: #eff6ff;
-      color: #1d4ed8;
+      border-color: var(--blue);
+      background: var(--blue-soft);
     }
 
     .integration-preset-strip b {
       display: block;
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .integration-preset-strip span {
       display: block;
       margin-top: 3px;
       color: var(--muted);
-      font-size: 11px;
-      line-height: 1.35;
+      font-size: 10px;
+      line-height: 1.45;
     }
 
+    .credential-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .credential-grid .wide {
+      grid-column: 1 / -1;
+    }
+
+    .detail-grid,
     .integration-form-support {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
     }
 
+    .detail-grid .integration-detail-card {
+      min-height: 82px;
+    }
+
     .integration-form-support .integration-detail-card {
       min-height: 88px;
+    }
+
+    .drawer-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     .content-grid > .span-2 { grid-column: 1 / -1; }
@@ -1886,7 +1915,7 @@
     @media (max-width: 1120px) {
       .kpis { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
       .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts,
-      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid, .integration-form-support { grid-template-columns: 1fr; }
+      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid, .integration-form-support, .detail-grid { grid-template-columns: 1fr; }
       .integration-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .integration-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .business-workspace { grid-template-columns: 1fr; }
@@ -1956,6 +1985,8 @@
       .hero-actions { justify-content: stretch; }
       .form-grid { grid-template-columns: 1fr; }
       .form-grid .span-2 { grid-column: span 1; }
+      .credential-grid { grid-template-columns: 1fr; }
+      .credential-grid .wide { grid-column: 1; }
       .integration-preset-strip { grid-template-columns: 1fr; }
       .auth-gate { align-items: start; }
       .auth-gate-inner { padding: 22px 14px; gap: 18px; }
@@ -6994,7 +7025,7 @@
 
     function integrationAddChoice(label, desc, action, service = "") {
       const serviceAttr = service ? ` data-default-service="${escapeHtml(service)}"` : "";
-      return `<button type="button" data-integration-detail="${escapeHtml(action)}"${serviceAttr} title="${escapeHtml(desc)}" aria-label="${escapeHtml(`${label} - ${desc}`)}"><b>${escapeHtml(label)}</b></button>`;
+      return `<button type="button" data-integration-detail="${escapeHtml(action)}"${serviceAttr} title="${escapeHtml(desc)}" aria-label="${escapeHtml(`${label} - ${desc}`)}"><b>${escapeHtml(label)}</b><span>${escapeHtml(desc)}</span></button>`;
     }
 
     function selectedOption(value, selected) {
@@ -7047,24 +7078,18 @@
       const selectedBusiness = selectedSettingsBusinessId();
       const selectedBranch = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "";
       const activePreset = presetService => presetService === service ? " class=\"active\"" : "";
-      return `<form class="integration-setup-form" data-integration-connect-form>
+      return `<form class="auth-form integration-setup-form" data-integration-connect-form>
         <div class="integration-setup-band">
           <h3>연동 설정 페이지</h3>
-          <p>사업자와 지점, 서비스 유형, 로그인/Vault 보관값, 계좌·가맹점번호, 수집 범위를 한 화면에서 등록합니다.</p>
+          <p>사업자와 지점, 서비스 유형, 로그인/Vault 보관값, 계좌·가맹점번호, 수집 범위를 한 화면에서 등록하는 시안입니다.</p>
         </div>
         <div class="integration-preset-strip">
-          <button type="button"${activePreset("shinhan_business")} data-integration-connect-service="shinhan_business"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
-          <button type="button"${activePreset("ibk_business")} data-integration-connect-service="ibk_business"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
-          <button type="button"${activePreset("baemin")} data-integration-connect-service="baemin"><b>판매채널</b><span>주문·매출·정산·리뷰</span></button>
-          <button type="button"${activePreset("supplier_statement_upload")} data-integration-connect-service="supplier_statement_upload"><b>매입·증빙</b><span>발주 프로그램·사진 OCR</span></button>
+          <button type="button"${activePreset("shinhan_business")} data-integration-connect-service="shinhan_business" data-label="성신점 신한은행 빠른계좌조회" data-url="https://bizbank.shinhan.com"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
+          <button type="button"${activePreset("ibk_business")} data-integration-connect-service="ibk_business" data-label="성신점 IBK 빠른계좌조회" data-url="https://kiup.ibk.co.kr"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
+          <button type="button"${activePreset("baemin")} data-integration-connect-service="baemin" data-label="성신점 배달의민족 정산" data-url="https://self.baemin.com"><b>판매채널</b><span>주문·매출·정산·리뷰</span></button>
+          <button type="button"${activePreset("supplier_statement_upload")} data-integration-connect-service="supplier_statement_upload" data-label="성신점 매입처 수기증빙" data-url=""><b>매입·증빙</b><span>발주 프로그램·사진 OCR</span></button>
         </div>
-        <div class="integration-form-support">
-          ${integrationDetailCard("필수값", "계정 ID, 비밀번호, 2차 인증, 매장코드, 사업자/지점 매핑")}
-          ${integrationDetailCard("저장/API", "/accounts 서버 Vault 저장 후 /sync 또는 /transactions/sync 실행")}
-          ${integrationDetailCard("권한", "조회 전용 또는 정산 조회 권한 우선, 이체/결제 권한 제외")}
-          ${integrationDetailCard("대체 경로", "CSV/엑셀/사진 업로드 대기열로 전환")}
-        </div>
-        <div class="form-grid">
+        <div class="credential-grid">
           <label>연동 구분
             <select name="service" required>${integrationServiceOptions(service)}</select>
           </label>
@@ -7115,29 +7140,6 @@
           <label>사업자번호
             <input name="businessRegistrationNo" autocomplete="off" placeholder="000-00-00000">
           </label>
-          <label>기관/은행 코드
-            <input name="institutionCode" placeholder="예: 신한, IBK, VAN/PG사명">
-          </label>
-          <label>계좌/가맹점번호 표시값
-            <input name="accountNoMasked" placeholder="미입력 시 뒷자리 자동 마스킹">
-          </label>
-          <label>정산주기
-            <input name="settlementCycle" placeholder="예: D+2, 매월 10일">
-          </label>
-          <label>API Key / Client ID
-            <input name="apiKey" autocomplete="off" placeholder="공식 API 사용 시 등록">
-          </label>
-          <label>API Secret / 인증서 비밀번호
-            <input name="clientSecret" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
-          </label>
-          <label>보조 연결 방식
-            <select name="fallbackAuth">
-              <option value="oauth">OAuth 승인</option>
-              <option value="settlement_csv">정산 CSV 업로드</option>
-              <option value="api_token">API 토큰</option>
-              <option value="admin_registration">관리자 대리 등록</option>
-            </select>
-          </label>
           <label>수집 방식
             <select name="collectionMode">${integrationCollectionModeOptions(catalog.collectionMode || "bank-quick-service")}</select>
           </label>
@@ -7150,39 +7152,30 @@
               <option value="card_approval_deposit">승인+취소+입금대사</option>
             </select>
           </label>
-          <label>권한 범위
-            <select name="permissionScope">
-              <option value="read_only">조회 전용</option>
-              <option value="settlement_read">정산 조회</option>
-              <option value="review_reply">리뷰 답변 포함</option>
-              <option value="admin_full">관리자 전체</option>
-            </select>
-          </label>
-          <label>연동상태
-            <select name="status">
-              <option value="vault-ready">Vault 등록완료</option>
-              <option value="ready" selected>연동준비</option>
-              <option value="manual">수동업로드</option>
-              <option value="blocked">확인필요</option>
-            </select>
-          </label>
-          <label class="span-2">연동 실패 시 대체
-            <select name="failureFallback">
-              <option value="settlement_csv_queue">정산 CSV 자동 요청</option>
-              <option value="upload_queue">파일 업로드 대기열로 전환</option>
-              <option value="credential_alert">대표에게 인증 갱신 알림</option>
-              <option value="manual_entry">해당 지점 수기 입력</option>
-            </select>
-          </label>
-          <label class="span-2">메모
+          <label class="wide">검증 메모
             <textarea name="memo" placeholder="조회 전용 권한, 인증 만료일, 파일 대체 경로"></textarea>
           </label>
-          <div class="span-2 integration-detail-actions">
-            <button type="button" data-integration-detail="integration-guide">설정 가이드</button>
-            <button type="button" data-open-import="${escapeHtml(service)}">CSV/엑셀 대체 등록</button>
-            <button type="submit" class="primary">저장 후 연동 실행</button>
-          </div>
         </div>
+        <input type="hidden" name="status" value="ready">
+        <input type="hidden" name="permissionScope" value="read_only">
+        <input type="hidden" name="failureFallback" value="upload_queue">
+        <input type="hidden" name="fallbackAuth" value="admin_registration">
+        <input type="hidden" name="institutionCode" value="">
+        <input type="hidden" name="accountNoMasked" value="">
+        <input type="hidden" name="settlementCycle" value="">
+        <input type="hidden" name="apiKey" value="">
+        <input type="hidden" name="clientSecret" value="">
+        <input type="hidden" name="authOwner" value="">
+        <input type="hidden" name="mfaMethod" value="">
+        <input type="hidden" name="oneTimePassword" value="">
+        <input type="hidden" name="credentialExpiresAt" value="">
+        <div class="detail-grid">
+          ${integrationDetailCard("저장", "서버 Vault 암호화 · 평문 재표시 금지")}
+          ${integrationDetailCard("권한", "대표/회계 관리자만 등록 · 조회 전용 우선")}
+          ${integrationDetailCard("실패 대체", "CSV/엑셀/사진 업로드 대기열")}
+          ${integrationDetailCard("검증", "저장 후 샘플 동기화와 감사로그 기록")}
+        </div>
+        <div class="drawer-actions"><button type="button" data-integration-detail="integration-guide">설정 가이드</button><button type="button" data-open-import="${escapeHtml(service)}">CSV/엑셀 대체 등록</button><button type="submit" class="primary">저장 후 연동 실행</button></div>
       </form>`;
     }
 

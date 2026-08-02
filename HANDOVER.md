@@ -5375,3 +5375,19 @@
 - 운영 주의:
   - 일회용 인증번호는 연결 테스트용 입력값이며 서버 저장 대상에 포함하지 않았다.
   - 은행 사이트 실제 조회는 등록된 자격증명과 2차 인증이 필요하며, 커넥터 미설정 상태에서는 더미 거래를 생성하지 않는다.
+
+## 2026-08-03 06:53 KST - FB 연동설정 페이지 디자인기획안 재정렬
+
+- 요청: 운영 `index.html#auth-invite`의 연동설정 페이지가 `mockup-v2.html#integrations` 디자인기획 페이지와 달라 보이는 문제를 동일 디자인 기준으로 재반영.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 연동 상세 드로어 폭을 넓히고, 시안의 안내 밴드, 프리셋 스트립, `credential-grid`, `detail-grid`, `drawer-actions` 구조를 운영 입력폼에 맞췄다.
+  - 연동설정 입력폼을 시안 순서대로 `연동 구분 → 사업자 → 지점 → 표시명 → 로그인 URL → ID/PW → 계좌/계좌비밀번호 → 사업자번호 → 수집 방식/범위 → 검증 메모`로 재배치했다.
+  - 운영 저장/API에 필요한 고급값은 hidden 기본값으로 유지해 기존 `/accounts` Vault 저장과 `/transactions/sync` 실행 경로가 끊기지 않게 했다.
+  - `연동 추가` 선택 리스트에 설명 문구를 화면 표시하도록 복구해 디자인기획안의 설명형 선택 버튼과 맞췄다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts parsed: 1`).
+  - 로컬 표식 검증: `credential-grid`, `detail-grid`, `drawer-actions`, `data-integration-connect-form`, `신한 간편서비스`, `IBK 빠른서비스`, `/accounts`, `/transactions/sync` 확인.
+  - 컨테이너 내부 `pytest`는 배포 전 컨테이너 코드 기준으로 실행되어 기존 mockup/정적 문자열 실패가 섞였다. 기능 관련 운영 API 테스트는 배포 후 재확인 필요.
+- 운영 주의:
+  - 이번 조치는 정적 UI 재정렬이며 은행 실사이트 조회는 등록된 자격증명과 커넥터 설정이 있어야 실행된다.
