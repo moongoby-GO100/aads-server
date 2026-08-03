@@ -44,3 +44,22 @@ def test_integrations_detail_buttons_have_operational_drawer_and_api_ctas():
     assert 'data-open-import="${escapeHtml(service)}"' in HTML
     assert "/transactions/sync" in HTML
     assert "/transactions/import" in HTML
+
+
+def test_integration_add_opens_mockup_setup_form_without_extra_fields():
+    connect_spec = HTML.split("connect: {", 1)[1].split('"connect-form": {', 1)[0]
+    form_html = HTML.split("function integrationConnectFormHtml", 1)[1].split("function integrationAddLandingHtml", 1)[0]
+
+    assert "body: integrationConnectFormHtml" in connect_spec
+    assert "integrationAddLandingHtml()" not in connect_spec
+    assert "연동 설정 페이지" in form_html
+    assert "integration-preset-strip" in form_html
+    assert "credential-grid" in form_html
+    assert "계좌/가맹점번호" in form_html
+    assert "계좌비밀번호/API Secret" in form_html
+    assert "사업자등록번호" in form_html
+    assert 'name="passwordConfirm"' not in form_html
+    assert 'name="authOwner"' not in form_html
+    assert 'name="mfaMethod"' not in form_html
+    assert 'name="oneTimePassword"' not in form_html
+    assert 'name="credentialExpiresAt"' not in form_html

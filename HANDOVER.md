@@ -5408,3 +5408,21 @@
   - 컨테이너 내부 `pytest`는 배포 전 컨테이너 코드 기준으로 실행되어 기존 mockup/정적 문자열 실패가 섞였다. 기능 관련 운영 API 테스트는 배포 후 재확인 필요.
 - 운영 주의:
   - 이번 조치는 정적 UI 재정렬이며 은행 실사이트 조회는 등록된 자격증명과 커넥터 설정이 있어야 실행된다.
+
+## 2026-08-03 09:06 KST - FB 연동추가/연동설정 입력폼 시안 1:1 보정
+
+- 요청: `mockup-v2.html#integrations`의 디자인과 입력폼을 운영 `index.html#auth-invite`에 정확히 반영.
+- 조치:
+  - 운영 `+ 연동 추가`가 중간 선택 목록으로 열리지 않고, 기준 시안의 `연동 설정 페이지` 입력폼을 우측 드로어에 바로 표시하도록 변경했다.
+  - 운영 입력폼에서 기준 시안에 없는 `비밀번호 확인`, `인증 담당자`, `2차 인증 수단`, `일회용 인증번호`, `인증 만료일` 노출 필드를 제거했다.
+  - 중복 hidden 필드가 같은 `name`으로 사용자 입력값을 덮어쓸 수 있던 `authOwner`, `mfaMethod`, `oneTimePassword`, `credentialExpiresAt` 항목을 제거했다.
+  - 시안과 동일하게 `연동 구분`, `소속 사업자`, `대상 지점`, `표시명`, `로그인/관리 URL`, `아이디/업로드 기준명`, `비밀번호`, `계좌/가맹점번호`, `계좌비밀번호/API Secret`, `사업자등록번호`, `수집 방식`, `수집 범위`, `검증 메모` 순서로 정리했다.
+  - 기존 `/accounts` Vault 저장과 `/transactions/sync` 거래 연동 API 연결은 유지했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
+  - 직접 정적 assert 성공: 연동 상세 드로어, 신한/IBK 프리셋, `data-integration-connect-form`, `/transactions/sync`, `/transactions/import`, 시안 필수 입력명 확인.
+  - 컨테이너 내부 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py -q` 결과 18 passed, 1 warning.
+  - 컨테이너 내부 `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py -q` 결과 18 passed, 1 warning.
+- 운영 주의:
+  - 실제 은행 실시간 조회는 관리자 등록 자격증명과 은행 2차 인증/커넥터 설정이 있어야 실행된다. 커넥터 미설정 상태에서는 더미 거래를 생성하지 않는다.
