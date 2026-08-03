@@ -37,8 +37,8 @@ def test_integrations_detail_buttons_have_operational_drawer_and_api_ctas():
     assert 'data-integration-detail="review-connect"' in HTML
     assert 'data-integration-detail="hr-connect"' in HTML
     assert 'data-integration-detail="pg-connect"' in HTML
-    assert 'data-integration-connect-service="shinhan_business"' in HTML
-    assert 'data-integration-connect-service="ibk_business"' in HTML
+    assert 'presetButton("shinhan_business"' in HTML
+    assert 'presetButton("ibk_business"' in HTML
     assert 'data-integration-connect-form' in HTML
     assert 'data-sync-financial-integration' in HTML
     assert 'data-open-import="${escapeHtml(service)}"' in HTML
@@ -63,6 +63,11 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "사업자등록번호" in form_html
     assert "거래명세서 OCR" in form_html
     assert "공동/금융인증서 비밀번호" in form_html
+    assert "if (isSales) return [" in form_html
+    assert "if (isBank) return [" in form_html
+    assert "data-edit-integration" in HTML
+    assert "function openIntegrationEdit" in HTML
+    assert "editIntegrationId" in HTML
     assert 'name="passwordConfirm"' not in form_html
     assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
     assert "rerenderIntegrationConnectForm(service, form)" in HTML

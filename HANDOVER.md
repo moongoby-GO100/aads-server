@@ -5452,3 +5452,23 @@
   - 로컬 `python3 -m pytest`는 현재 환경에 pytest 미설치로 실행 불가.
 - 운영 주의:
   - 이번 조치는 UI/API 입력 경로 보정이다. 은행 실사이트 조회는 관리자 자격증명과 은행 2차 인증/커넥터 설정 후 별도 실조회 검증이 필요하다.
+
+## 2026-08-03 10:04 KST - FB 연동관리 저장 리스트 수정 페이지 반영
+
+- 요청: 연동관리 입력저장 리스트에 수정페이지가 없고, 판매채널과 은행 계좌 입력폼이 동일하게 보이는 문제 수정.
+- 원인:
+  - 저장된 `settings().integrations` 렌더링 카드에 삭제/실행 버튼만 있고 수정 버튼이 없었다.
+  - 연동설정 상단 프리셋이 은행, 판매채널, 매입처를 한 줄에 같이 보여 서비스별 폼 분리가 체감되지 않았다.
+  - 저장 로직이 항상 `settings().integrations.push()`로 신규 추가만 수행해 기존 행 수정 흐름이 없었다.
+- 조치:
+  - 저장 리스트 카드에 `수정` 버튼을 추가했다.
+  - `openIntegrationEdit()`를 추가해 기존 연동 행을 우측 드로어 수정 폼으로 불러오도록 했다.
+  - 수정 저장 시 `data-edit-integration-id` 기준으로 기존 행을 교체하고, 신규 저장 시에만 새 행을 추가하도록 했다.
+  - 판매채널/은행/매입처/홈택스/카드·PG별 프리셋 버튼을 서비스군 안에서만 노출하도록 분리했다.
+  - 마스킹된 계좌번호/사업자번호, 기존 Vault 상태, 비밀번호 마스킹 값을 수정 저장 시 보존하도록 했다.
+  - 기존 `/accounts` Vault 저장과 `/transactions/sync`, `/transactions/import` 연결은 유지했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
+  - `python3` 직접 호출로 `tests/unit/test_yeoljeong_finance_print_static.py`의 `test_*` 함수 전체 실행 성공.
+  - 로컬 `python3 -m pytest tests/unit/test_yeoljeong_finance_print_static.py`는 현재 환경에 pytest 미설치로 실행 불가.
