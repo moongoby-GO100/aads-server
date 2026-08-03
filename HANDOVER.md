@@ -5601,3 +5601,13 @@
   - 실제 중화점 배민 수집 실행 결과: `BAEMIN_SECURITY_BLOCKED`, totals `sales=0`, `settlements=0`, `reviews=0`.
 - 운영 주의:
   - 현재 장애는 코드 누락이 아니라 배민 포털의 서버 자동접속 보안 차단이다. PC 인증 세션 전달 또는 배민 정산 CSV/엑셀 업로드로 대체 수집해야 실제 데이터가 반영된다.
+
+## 2026-08-04 08:22 KST - OHVIS AI glasses PoC idea deferred
+
+- 요청: 오비스와 연동 가능한 AI 안경 조사는 아이디어로 저장하고, 구매 후 진행하도록 보류.
+- 조치:
+  - `docs/plans/20260804_OHVIS_AI_GLASSES_POC_IDEA.md`를 추가해 후보 기기, 미래 PoC 범위, 재개 기준을 기록했다.
+  - 아젠다 등록 도구 `add_agenda`는 `maximum recursion depth exceeded` 오류로 실패해 문서 기록으로 우회했다.
+- 상태:
+  - 아이디어 저장 완료.
+  - 구매/PoC 구현은 CEO 구매 검토 승인 후 재개.
