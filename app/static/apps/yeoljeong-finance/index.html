@@ -1079,6 +1079,43 @@
       line-height: 1.35;
     }
 
+    .integration-add-header {
+      display: grid;
+      gap: 6px;
+      padding: 14px 15px;
+      border: 1px solid #d7e3f5;
+      border-radius: 10px;
+      background: #f8fbff;
+    }
+
+    .integration-add-header h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .integration-add-header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .integration-edit-banner {
+      display: none;
+      gap: 5px;
+      padding: 12px 14px;
+      border: 1px solid #fed7aa;
+      border-radius: 9px;
+      background: #fff7ed;
+      color: #7c2d12;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .integration-setup-form.is-editing .integration-edit-banner {
+      display: grid;
+    }
+
     .integration-step {
       display: grid;
       grid-template-columns: 28px minmax(0, 1fr) auto;
@@ -7257,6 +7294,10 @@
           ${textAreaField("memo", "검증 메모", "승인/취소/입금대사 기준과 리포트 대체 경로")}`;
       })();
       return `<form class="auth-form integration-setup-form" data-integration-connect-form>
+        <div class="integration-edit-banner" data-integration-edit-banner>
+          <b>저장된 연동 수정 페이지</b>
+          <span>기존 리스트 항목을 불러와 수정 중입니다. 저장하면 같은 항목을 갱신하고 중복 연동을 만들지 않습니다.</span>
+        </div>
         <div class="integration-setup-band">
           <h3>연동 설정 페이지</h3>
           <p>${isSales ? "판매채널은 매장코드, 계정, 2차 인증, 정산 CSV 대체 경로를 등록합니다." : isBank ? "은행은 간편/빠른조회에 필요한 ID, 계좌번호, 계좌비밀번호, 사업자번호를 분리해 등록합니다." : isSupplier ? "매입처는 주문 프로그램 계정과 수기 증빙/OCR 대체 경로를 함께 등록합니다." : isTax ? "홈택스와 계산서는 인증서, 위임 상태, 수집 범위를 사업자별로 관리합니다." : "카드/PG 등 기타 연동은 가맹점번호와 리포트/API 수집 기준을 등록합니다."}</p>
@@ -7281,12 +7322,17 @@
     }
 
     function integrationAddLandingHtml() {
-      return `<div class="integration-add-list">
-        ${integrationAddChoice("판매사이트: 배민 · 쿠팡이츠 · 요기요 · 땡겨요", "주문, 매출, 정산서, 리뷰 수집 계정을 사업자·지점에 연결합니다.", "sales-channel-connect")}
-        ${integrationAddChoice("은행: 신한은행 기업 · 기업은행 기업", "간편서비스/빠른서비스 ID, 비밀번호, 계좌번호, 계좌비밀번호, 사업자번호를 등록합니다.", "bank-connect", "shinhan_business")}
-        ${integrationAddChoice("매입처: 쿠팡 · 마켓봄 · 뉴통 · 발주고 · 직접 추가", "주문 프로그램 계정/API 또는 거래명세서·영수증 파일 수집 경로를 등록합니다.", "supplier-connect")}
+      return `<div class="integration-add-header">
+        <h3>연동 설정 메뉴</h3>
+        <p>디자인 시안처럼 먼저 연동 유형을 선택한 뒤, 판매채널·은행계좌·매입처·세무·수기증빙별 전용 입력 페이지로 이동합니다.</p>
+      </div>
+      <div class="integration-add-list">
+        ${integrationAddChoice("판매채널 추가", "배민 · 쿠팡이츠 · 요기요 · 땡겨요 주문, 매출, 정산서, 리뷰 수집 계정을 연결합니다.", "sales-channel-connect")}
+        ${integrationAddChoice("은행 계좌 연결", "신한은행 간편서비스 · IBK 빠른서비스 ID, 계좌번호, 계좌비밀번호, 사업자번호를 등록합니다.", "bank-connect", "shinhan_business")}
+        ${integrationAddChoice("카드/PG 리포트", "카드사, PG 가맹점번호와 승인·취소·입금대사 리포트 수집 기준을 등록합니다.", "pg-connect")}
+        ${integrationAddChoice("매입처 등록", "쿠팡 · 마켓봄 · 뉴통 · 발주고 계정/API 또는 기타 매입처 주문프로그램을 등록합니다.", "supplier-connect")}
+        ${integrationAddChoice("기타 매입처 수기 증빙", "주문 프로그램 없는 매입처의 사진/PDF/CSV/OCR 대체 경로를 등록합니다.", "receipt-upload")}
         ${integrationAddChoice("홈택스 · 전자세금계산서", "사업자별 홈택스 계정, 인증서, 세무대리인 위임, 계산서 수집 범위를 관리합니다.", "tax-connect")}
-        ${integrationAddChoice("주문 프로그램 없는 매입처 증빙 등록", "사진/PDF/CSV/OCR 대체 경로로 수기 증빙을 같은 원장에 반영합니다.", "receipt-upload")}
         ${integrationAddChoice("추가 권장 연동 후보", "POS, 리뷰·CS, 노무·4대보험, 카드·PG 연동 후보를 확인합니다.", "recommended-connectors")}
       </div>`;
     }
@@ -7327,12 +7373,17 @@
       const specs = {
         connect: {
           title: "외부 서비스 연동 추가",
-          subtitle: "사업자·지점·서비스·인증값·수집 범위를 한 화면에서 등록합니다.",
-          body: integrationConnectFormHtml(defaultService || "shinhan_business")
+          subtitle: "먼저 연동 유형을 선택하면 각 서비스 특성에 맞는 입력 페이지가 열립니다.",
+          body: integrationAddLandingHtml()
         },
         "connect-form": {
           title: "연동 설정 페이지",
           subtitle: `${selectedBusiness} 기준으로 서비스·인증값·수집 범위를 저장합니다.`,
+          body: integrationConnectFormHtml(defaultService || "shinhan_business")
+        },
+        "edit-form": {
+          title: "연동 설정 수정",
+          subtitle: `${selectedBusiness} 기준으로 저장된 연동값을 불러와 수정합니다.`,
           body: integrationConnectFormHtml(defaultService || "shinhan_business")
         },
         "sales-channel-connect": {
@@ -7493,11 +7544,14 @@
         return;
       }
       const service = item.service || "shinhan_business";
-      openIntegrationDetail("connect-form", service);
+      openIntegrationDetail("edit-form", service);
       window.setTimeout(() => {
         const form = els.integrationDetailBody?.querySelector("[data-integration-connect-form]");
         if (!form) return;
         form.dataset.editIntegrationId = item.id;
+        form.classList.add("is-editing");
+        const banner = form.querySelector("[data-integration-edit-banner] span");
+        if (banner) banner.textContent = `${item.label || integrationLabels[service] || service} 값을 수정 중입니다. 저장하면 입력된 연동 리스트의 같은 항목에 반영됩니다.`;
         setIntegrationFormValue(form, "service", service);
         setIntegrationFormValue(form, "businessId", item.businessId || item.business_id || selectedSettingsBusinessId());
         setIntegrationFormValue(form, "branch", item.branch || "");

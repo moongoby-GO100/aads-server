@@ -5472,3 +5472,24 @@
   - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
   - `python3` 직접 호출로 `tests/unit/test_yeoljeong_finance_print_static.py`의 `test_*` 함수 전체 실행 성공.
   - 로컬 `python3 -m pytest tests/unit/test_yeoljeong_finance_print_static.py`는 현재 환경에 pytest 미설치로 실행 불가.
+
+## 2026-08-03 11:30 KST - FB 연동추가 메뉴 원복 및 수정 페이지 명확화
+
+- 요청: 디자인 시안 파일 훼손 여부 확인, 연동설정의 판매채널/계좌연동/기타매입처 메뉴와 각 특성 입력페이지 원복, 입력된 연동 리스트 수정페이지 반영.
+- 원인:
+  - `mockup-v2.html`에 연동관리와 무관한 직원/급여/문서 미리보기 변경이 섞여 기준 시안이 dirty 상태였다.
+  - 운영 `+ 연동 추가`의 `connect` 기본 경로가 서비스 선택 메뉴가 아니라 `shinhan_business` 기본 입력폼을 바로 열어 판매채널/은행/매입처 선택 메뉴가 사라진 것처럼 보였다.
+  - 저장 리스트 `수정` 버튼은 존재했지만 신규 등록 폼과 같은 제목/상태로 열려 수정 페이지인지 명확하지 않았다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/mockup-v2.html`을 Git HEAD 기준으로 원복해 기준 디자인 시안을 보존했다.
+  - 운영 `app/static/apps/yeoljeong-finance/index.html`의 `connect` 기본 화면을 `integrationAddLandingHtml()`로 되돌렸다.
+  - 연동추가 메뉴에 판매채널, 은행 계좌, 카드/PG, 매입처, 기타 매입처 수기 증빙, 홈택스, 추가 권장 연동 후보를 각각 노출했다.
+  - 각 메뉴는 기존 서비스별 전용 입력폼(`sales-channel-connect`, `bank-connect`, `supplier-connect`, `tax-connect`, `pg-connect`, `receipt-upload`)으로 이동한다.
+  - 입력된 연동 리스트의 `수정` 버튼은 `연동 설정 수정` 드로어와 수정 모드 배너로 열리며, 기존 `editIntegrationId` 기준으로 같은 항목을 갱신한다.
+  - 기존 `/accounts`, `/transactions/sync`, `/transactions/import` API 연결은 유지했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node `new Function()` 인라인 스크립트 문법 검사 성공(`inline scripts ok: 1`).
+  - 직접 정적 assert 성공: `body: integrationAddLandingHtml()`, 판매채널/은행 계좌/카드PG/매입처/기타 매입처 메뉴, `연동 설정 수정`, `is-editing`, `data-edit-integration` 확인.
+  - `git diff --quiet -- app/static/apps/yeoljeong-finance/mockup-v2.html` 성공.
+  - 로컬 `python3 -m pytest tests/unit/test_yeoljeong_finance_print_static.py`는 현재 환경에 pytest 미설치로 실행 불가.
