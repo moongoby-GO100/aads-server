@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-03 14:06 KST - Yeoljeong Baemin integration priority handling
+
+- Request: Prioritize Baemin integration processing and immediately report blocking issues.
+- Finding:
+  - Production DB/API has 2 Baemin accounts. Jung-hwa branch account has protected local `password_enc` and `collection_mode=portal-csv`; Mia branch `acct-baemin` has no protected password secret.
+  - Direct sync before the fix mixed states as browser failures. Recent status rows included `LOGIN_FORM_NOT_FOUND` and `COLLECTOR_TIMEOUTERROR`, with Baemin sales/settlements/reviews counts all 0.
+- Backend change:
+  - `app/services/yeoljeong_finance_service.py` now reports delivery accounts without a password as `credential_required` in `/accounts`.
+  - Delivery sync now short-circuits `portal-csv`/manual upload modes to `upload_required` with `CSV_UPLOAD_REQUIRED` instead of opening the headless browser collector.
+  - Sync summaries and collection-status rows now include a user-facing `message` for required follow-up.
+- Tests:
+  - Added regression coverage in `tests/unit/test_yeoljeong_finance_service.py` for password-missing account status and portal CSV mode not launching browser collection.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py` passed: 59 passed.
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py` passed.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` passed.
+- Runtime verification:
+  - Jung-hwa Baemin sync now returns `status=upload_required`, `error_code=CSV_UPLOAD_REQUIRED`, counts 0, message `배민 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.`
+  - Mia Baemin sync now returns `status=credential_required`, `error_code=CREDENTIAL_REQUIRED`, counts 0, message `배민 계정 비밀번호가 등록되지 않았습니다.`
+- Remaining operational action: To collect real Baemin data, either upload Baemin CSV/Excel settlement files for the Jung-hwa `portal-csv` account or register a valid password/2FA-ready browser automation credential for the target branch. No fake rows were generated.
+
 ## 2026-08-03 07:14 KST - FB 연동설정 페이지 최종 원장 재검증
 
 - 요청: 이전 완료보고의 커밋/푸시/배포/문서 원장 충돌을 해소하고, `index.html#auth-invite` 연동설정 페이지가 디자인기획안 기준으로 운영 반영됐는지 끝까지 검증.

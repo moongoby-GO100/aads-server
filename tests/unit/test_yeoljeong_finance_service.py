@@ -258,6 +258,28 @@ def test_upsert_account_stores_encrypted_password_only(tmp_path, monkeypatch):
     assert "password" not in raw[0]
 
 
+def test_list_accounts_marks_delivery_account_without_password_as_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "status": "credential_registered",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+
+    listed = service.list_accounts({"email": "owner@example.com", "is_admin": True})
+
+    assert listed[0]["status"] == "credential_required"
+    assert listed[0]["password_masked"] == ""
+
+
 def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
@@ -534,6 +556,46 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
     statuses = service.list_collection_status(user, "biz-mia")
     assert len(statuses) == 2
     assert all(row["status"] == "succeeded" for row in statuses)
+
+
+def test_sync_delivery_portal_csv_account_requests_upload_without_browser(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "collection_mode": "portal-csv",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fail_collect(*args, **kwargs):
+        raise AssertionError("portal-csv accounts must not start browser collection")
+
+    monkeypatch.setattr(collectors, "collect_account", fail_collect)
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-07-01",
+            "date_to": "2026-07-20",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "upload_required"
+    assert result["summary"][0]["error_code"] == "CSV_UPLOAD_REQUIRED"
+    assert result["totals"] == {"sales": 0, "settlements": 0, "reviews": 0}
+    assert service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-mia")[0]["message"]
 
 
 def test_import_settlement_csv_is_scoped_and_idempotent():

@@ -74,6 +74,7 @@ PLATFORM_LABELS = {
     key: CONNECTOR_LABELS[key]
     for key in ("baemin", "coupangeats", "yogiyo", "ddangyo")
 }
+DELIVERY_UPLOAD_COLLECTION_MODES = {"portal-csv", "csv-upload", "statement-upload", "upload_queue", "manual"}
 FINANCIAL_TRANSACTION_SERVICES = {
     "shinhan_business",
     "ibk_business",
@@ -964,6 +965,17 @@ def _masked_digits(value: Any, *, visible_tail: int = 4) -> str:
 def _has_secret_value(row: dict[str, Any], plaintext_field: str) -> bool:
     encrypted_field = _ACCOUNT_SECRET_FIELD_MAP.get(plaintext_field, "")
     return bool(encrypted_field and row.get(encrypted_field))
+
+
+def _public_platform_account_status(row: dict[str, Any]) -> str:
+    status = str(row.get("status") or "ready").strip()
+    service = str(row.get("service") or "").strip()
+    collection_mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()
+    if service in PLATFORM_LABELS and not _has_secret_value(row, "password"):
+        return "credential_required"
+    if service in PLATFORM_LABELS and collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:
+        return "upload_required"
+    return status
 
 
 # Fields that must never appear in API responses or logs.
@@ -2479,6 +2491,7 @@ def list_accounts(user: dict[str, Any], business_id: str | None = None) -> list[
         item = {k: v for k, v in row.items() if k not in _ACCOUNT_SECRET_FIELDS}
         item["branch"] = BRANCH_ALIASES.get(str(item.get("branch") or ""), str(item.get("branch") or ""))
         item["password_masked"] = "********" if _has_account_secret(row) else ""
+        item["status"] = _public_platform_account_status(row)
         result.append(item)
     return result
 
@@ -3104,8 +3117,25 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         if not account:
             result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
         else:
-            secret = _decrypt_secret(str(account.get("password_enc") or ""))
-            result = collect_account(account, secret, date_from.isoformat(), date_to.isoformat())
+            collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
+            if collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:
+                result = {
+                    "status": "upload_required",
+                    "error_code": "CSV_UPLOAD_REQUIRED",
+                    "records": {},
+                    "diagnostics": {"collection_mode": collection_mode},
+                    "message": "배민 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
+                }
+            elif not _has_secret_value(account, "password"):
+                result = {
+                    "status": "credential_required",
+                    "error_code": "CREDENTIAL_REQUIRED",
+                    "records": {},
+                    "message": "배민 계정 비밀번호가 등록되지 않았습니다.",
+                }
+            else:
+                secret = _decrypt_secret(str(account.get("password_enc") or ""))
+                result = collect_account(account, secret, date_from.isoformat(), date_to.isoformat())
 
         counts = {"sales": 0, "settlements": 0, "reviews": 0}
         for kind, ledger_name in ledger_names.items():
@@ -3122,6 +3152,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 "counts": counts,
                 "error_code": result.get("error_code") or "",
                 "diagnostics": result.get("diagnostics") or {},
+                "message": result.get("message") or "",
                 "finished_at": finished_at,
                 "updated_at": finished_at,
             }
@@ -3133,6 +3164,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 "error_code": status_record["error_code"],
                 "counts": counts,
                 "run_id": run_id,
+                "message": status_record["message"],
             }
         )
 
