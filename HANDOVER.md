@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-08-04 06:11 KST - Yeoljeong Jung-hwa Baemin collection final verification
+
+- Request: Continue the Jung-hwa branch Baemin integration work until the final reporting contract is satisfied.
+- Current code state:
+  - `HEAD` and `origin/main` both point to `959bd37e Fix Baemin delivery sync reporting`.
+  - The commit contains `app/services/yeoljeong_delivery_collectors.py`, `app/services/yeoljeong_finance_service.py`, `app/static/apps/yeoljeong-finance/index.html`, `tests/unit/test_yeoljeong_delivery_collectors.py`, `tests/unit/test_yeoljeong_finance_service.py`, and this handover.
+- Runtime verification:
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 59 passed.
+  - `curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200 and `Last-Modified: Mon, 03 Aug 2026 21:04:16 GMT`.
+  - `docker exec aads-server curl -I https://biz-member.baemin.com/login?returnUrl=https%3A%2F%2Fself.baemin.com%2F` returned HTTP 403 from Cloudflare/Baemin.
+- Account and ledger state:
+  - Jung-hwa Baemin account `83c5b12f-0b3d-46b6-bcbe-b5c00dc0fd51` is registered for `business_id=biz-junghwa`, `branch=중화점`, `collection_mode=browser-automation`, and local protected `password_enc` exists.
+  - PostgreSQL `yeoljeong_platform_accounts.payload` intentionally excludes `password`/`password_enc`; secrets are restored from the protected local account ledger at runtime via `_attach_local_account_secrets()`.
+  - Live sync for Jung-hwa Baemin returned `status=portal_action_required`, `error_code=BAEMIN_SECURITY_BLOCKED`, totals `sales=0`, `settlements=0`, `reviews=0`, and wrote the same status to `yeoljeong_delivery_collection_status` at `2026-08-04 06:10:41+09`.
+  - PostgreSQL ledgers currently have Jung-hwa Baemin counts: sales 0, settlements 0, reviews 0.
+- Final status:
+  - Code for parsing/upserting sales, settlements, and reviews is implemented and covered by tests.
+  - Real Baemin portal collection is blocked by Baemin/Cloudflare server-access protection, not by missing parser/API code.
+  - No fake Baemin sales, settlements, or review rows were generated.
+  - Remaining operational options: run collection from a CEO/store PC authenticated browser session, or upload Baemin CSV/Excel settlement/review exports through the manual import fallback.
+
 ## 2026-08-03 14:06 KST - Yeoljeong Baemin integration priority handling
 
 - Request: Prioritize Baemin integration processing and immediately report blocking issues.
