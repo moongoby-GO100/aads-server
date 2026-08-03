@@ -46,7 +46,7 @@ def test_integrations_detail_buttons_have_operational_drawer_and_api_ctas():
     assert "/transactions/import" in HTML
 
 
-def test_integration_add_opens_mockup_setup_form_without_extra_fields():
+def test_integration_add_opens_service_specific_setup_forms():
     connect_spec = HTML.split("connect: {", 1)[1].split('"connect-form": {', 1)[0]
     form_html = HTML.split("function integrationConnectFormHtml", 1)[1].split("function integrationAddLandingHtml", 1)[0]
 
@@ -55,11 +55,14 @@ def test_integration_add_opens_mockup_setup_form_without_extra_fields():
     assert "연동 설정 페이지" in form_html
     assert "integration-preset-strip" in form_html
     assert "credential-grid" in form_html
-    assert "계좌/가맹점번호" in form_html
-    assert "계좌비밀번호/API Secret" in form_html
+    assert "플랫폼 매장코드" in form_html
+    assert "2차 인증 수단" in form_html
+    assert "정산 CSV 업로드 대기열" in form_html
+    assert "조회 계좌번호" in form_html
+    assert "계좌비밀번호" in form_html
     assert "사업자등록번호" in form_html
+    assert "거래명세서 OCR" in form_html
+    assert "공동/금융인증서 비밀번호" in form_html
     assert 'name="passwordConfirm"' not in form_html
-    assert 'name="authOwner"' not in form_html
-    assert 'name="mfaMethod"' not in form_html
-    assert 'name="oneTimePassword"' not in form_html
-    assert 'name="credentialExpiresAt"' not in form_html
+    assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
+    assert "rerenderIntegrationConnectForm(service, form)" in HTML

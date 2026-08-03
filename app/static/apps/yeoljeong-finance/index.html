@@ -7084,10 +7084,153 @@
       const selectedBusiness = selectedSettingsBusinessId();
       const selectedBranch = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "";
       const activePreset = presetService => presetService === service ? " class=\"active\"" : "";
+      const option = (value, label, selected = "") => `<option value="${escapeHtml(value)}"${selectedOption(value, selected)}>${escapeHtml(label)}</option>`;
+      const selectField = (name, label, options, selected = "") => `<label>${escapeHtml(label)}
+            <select name="${escapeHtml(name)}">${options.map(([value, text]) => option(value, text, selected)).join("")}</select>
+          </label>`;
+      const inputField = (name, label, type = "text", placeholder = "", attrs = "") => `<label>${escapeHtml(label)}
+            <input name="${escapeHtml(name)}" type="${escapeHtml(type)}" placeholder="${escapeHtml(placeholder)}"${attrs ? ` ${attrs}` : ""}>
+          </label>`;
+      const textAreaField = (name, label, placeholder = "") => `<label class="wide">${escapeHtml(label)}
+            <textarea name="${escapeHtml(name)}" placeholder="${escapeHtml(placeholder)}"></textarea>
+          </label>`;
+      const businessField = `<label>소속 사업자
+            <select name="businessId" required>${integrationBusinessOptions(selectedBusiness)}</select>
+          </label>`;
+      const branchField = `<label>대상 지점
+            <select name="branch">${integrationBranchOptions(selectedBranch)}</select>
+          </label>`;
+      const serviceField = `<label>연동 구분
+            <select name="service" required>${integrationServiceOptions(service)}</select>
+          </label>`;
+      const labelField = inputField("label", "표시명", "text", "예: 성신점 신한은행 간편서비스", "required");
+      const loginUrlField = inputField("loginUrl", "로그인/관리 URL", "url", catalog.loginUrl || "https://...");
+      const isSales = catalog.category === "판매사이트" || service === "matepos";
+      const isBank = ["shinhan_business", "ibk_business"].includes(service);
+      const isSupplier = catalog.category === "매입처";
+      const isTax = catalog.category === "세무·계산서";
+      const isCardPg = service === "card_pg";
+      const syncScopeOptions = (() => {
+        if (isBank) return [
+          ["bank_balance_transactions", "거래내역+잔액+입금자명"],
+          ["bank_deposit_match", "입금 매칭"],
+          ["bank_balance_only", "잔액 조회"],
+          ["bank_excel_upload", "엑셀/CSV 업로드 대체"]
+        ];
+        if (isSupplier) return [
+          ["purchase_statement_inventory", "발주+거래명세서+입고"],
+          ["purchase_invoice_only", "거래명세서+계산서"],
+          ["receipt_photo_ocr", "영수증 사진/OCR"],
+          ["purchase_manual_queue", "수기 승인 대기열"]
+        ];
+        if (isTax) return [
+          ["tax_invoice_receipt", "전자세금계산서+현금영수증"],
+          ["tax_invoice_only", "전자세금계산서만"],
+          ["tax_purchase_evidence", "매입 증빙만"],
+          ["tax_report_file", "신고서 파일"]
+        ];
+        if (isCardPg) return [
+          ["card_approval_deposit", "승인+취소+입금대사"],
+          ["card_sales_fee", "카드 매출+수수료"],
+          ["pg_deposit_report", "PG 입금 리포트"],
+          ["card_file_upload", "카드/PG 파일 업로드"]
+        ];
+        return [
+          ["sales_settlement_review", "주문+매출+정산+리뷰"],
+          ["sales_settlement", "주문+정산"],
+          ["settlement_only", "정산만"],
+          ["sales_without_review", "리뷰 제외"]
+        ];
+      })();
+      const selectedScope = isBank ? "bank_balance_transactions"
+        : isSupplier ? "purchase_statement_inventory"
+        : isTax ? "tax_invoice_receipt"
+        : isCardPg ? "card_approval_deposit"
+        : "sales_settlement_review";
+      const serviceSpecificFields = (() => {
+        if (isSales) return `
+          ${serviceField}
+          ${businessField}
+          ${branchField}
+          ${labelField}
+          ${loginUrlField}
+          ${selectField("serviceVariant", "판매사이트", [["baemin", "배달의민족"], ["coupangeats", "쿠팡이츠"], ["yogiyo", "요기요"], ["ddangyo", "땡겨요"], ["matepos", "POS/메이트포스"]], service)}
+          ${inputField("accountNo", "플랫폼 매장코드", "text", "store-12345")}
+          ${inputField("username", "계정 ID", "text", "owner@store.com", "autocomplete=\"username\"")}
+          ${inputField("password", "비밀번호", "password", "Vault에 암호화 저장", "autocomplete=\"new-password\"")}
+          ${selectField("mfaMethod", "2차 인증 수단", [["sms", "문자 OTP"], ["email", "이메일 OTP"], ["push", "앱 푸시 승인"], ["manual", "관리자 수동 승인"]], "sms")}
+          ${inputField("apiKey", "API 토큰·승인키", "password", "제공되는 경우 입력", "autocomplete=\"new-password\"")}
+          ${selectField("collectionMode", "수집 방식", [["portal-csv", "포털 정산서/CSV 다운로드"], ["browser-automation", "브라우저 자동화"], ["api", "공식 API"], ["pos-export", "POS 내보내기"]], catalog.collectionMode || "portal-csv")}
+          ${selectField("syncScope", "수집 범위", syncScopeOptions, selectedScope)}
+          ${selectField("permissionScope", "권한 범위", [["read_only", "조회 전용"], ["settlement_read", "정산 조회"], ["review_reply", "리뷰 답변 포함"], ["admin_exception", "관리자 전체"]], "read_only")}
+          ${selectField("failureFallback", "연동 실패 시 대체", [["csv_upload_queue", "정산 CSV 업로드 대기열"], ["manual_review", "관리자 수동 검수"], ["credential_refresh_alert", "대표에게 인증 갱신 알림"], ["branch_manual_entry", "해당 지점 수기 입력"]], "csv_upload_queue")}
+          ${textAreaField("memo", "검증 메모", "매장 권한, 2차 인증 방식, 정산 파일 대체 경로")}`;
+        if (isBank) return `
+          ${serviceField}
+          ${businessField}
+          ${branchField}
+          ${labelField}
+          ${loginUrlField}
+          ${inputField("username", "기업뱅킹 ID", "text", "company-admin", "autocomplete=\"username\"")}
+          ${inputField("password", "기업뱅킹 비밀번호", "password", "Vault에 암호화 저장", "autocomplete=\"new-password\"")}
+          ${inputField("accountNo", "조회 계좌번호", "text", "숫자만 입력", "inputmode=\"numeric\" autocomplete=\"off\"")}
+          ${inputField("accountPassword", "계좌비밀번호", "password", "은행 빠른조회 보안값", "autocomplete=\"new-password\"")}
+          ${inputField("businessRegistrationNo", "사업자등록번호", "text", "000-00-00000", "autocomplete=\"off\"")}
+          ${selectField("settlementCycle", "계좌 용도", [["operating", "운영계좌"], ["settlement", "정산계좌"], ["payroll", "급여계좌"], ["tax", "세금 납부계좌"]], "operating")}
+          ${inputField("clientSecret", "인증서 비밀번호", "password", "공동/금융인증서 암호", "autocomplete=\"new-password\"")}
+          ${inputField("apiKey", "OTP/보안카드 식별값", "text", "기기명 또는 일련번호")}
+          ${selectField("collectionMode", "인증 방식", [["bank-quick-service", "은행 간편/빠른조회"], ["bank-openbanking", "기업뱅킹 인증서 조회"], ["api", "API 제휴 토큰"], ["bank-excel", "읽기 전용 파일 업로드"]], catalog.collectionMode || "bank-quick-service")}
+          ${selectField("syncScope", "수집 범위", syncScopeOptions, selectedScope)}
+          ${selectField("permissionScope", "권한 범위", [["read_only", "조회 전용"], ["transaction_read", "거래내역 조회"], ["balance_transaction_read", "잔액+입출금 조회"], ["transfer_excluded", "이체 권한 제외"]], "read_only")}
+          ${textAreaField("memo", "검증 메모", "간편조회 허용계좌, 인증 만료일, 엑셀 대체 경로")}`;
+        if (isSupplier) return `
+          ${serviceField}
+          ${businessField}
+          ${branchField}
+          ${labelField}
+          ${loginUrlField}
+          ${selectField("collectionMode", "연동 방식", [["purchase-portal", "주문 프로그램 계정"], ["api", "API Key"], ["statement-upload", "발주서 파일 업로드"], ["receipt-photo", "거래명세서 OCR"], ["receipt-photo", "영수증 사진 등록"]], catalog.collectionMode || "purchase-portal")}
+          ${inputField("username", "주문 프로그램 ID 또는 매입처명", "text", "없으면 매입처명 입력")}
+          ${inputField("password", "주문 프로그램 비밀번호", "password", "Vault에 암호화 저장", "autocomplete=\"new-password\"")}
+          ${inputField("apiKey", "API Key·거래처 코드", "password", "제공되는 경우 입력", "autocomplete=\"new-password\"")}
+          ${inputField("accountNo", "거래처 코드", "text", "거래처/납품처 코드")}
+          ${selectField("syncScope", "반영 범위", syncScopeOptions, selectedScope)}
+          ${selectField("failureFallback", "주문 프로그램 없음 처리", [["receipt_ocr", "거래명세서 사진/OCR 기본"], ["receipt_photo", "영수증 사진 기본"], ["messenger_capture", "카카오톡 주문 캡처 허용"], ["monthly_file", "월말 파일 일괄 등록"]], "receipt_ocr")}
+          ${selectField("permissionScope", "반영 승인", [["owner_approval", "대표 승인 후 매입/재고 반영"], ["manager_then_owner", "점장 확인 후 대표 승인"], ["amount_auto", "금액 기준 자동 승인"], ["accounting_review", "회계 검토 필요"]], "owner_approval")}
+          ${textAreaField("memo", "검증 메모", "품목 분류, 부가세 처리, 반복 매입처 템플릿")}`;
+        if (isTax) return `
+          ${serviceField}
+          ${businessField}
+          ${branchField}
+          ${labelField}
+          ${loginUrlField}
+          ${inputField("username", "홈택스 ID", "text", "사업자 계정", "autocomplete=\"username\"")}
+          ${inputField("password", "홈택스 비밀번호", "password", "Vault에 암호화 저장", "autocomplete=\"new-password\"")}
+          ${inputField("clientSecret", "공동/금융인증서 비밀번호", "password", "인증서 암호", "autocomplete=\"new-password\"")}
+          ${inputField("authOwner", "세무대리인/인증 담당자", "text", "담당 세무사 또는 대표")}
+          ${inputField("businessRegistrationNo", "사업자등록번호", "text", "000-00-00000", "autocomplete=\"off\"")}
+          ${selectField("collectionMode", "인증 방식", [["hometax-certificate", "공동/금융인증서"], ["browser-automation", "홈택스 ID/PW"], ["api", "세무대리인 위임"], ["tax-invoice-upload", "자료 파일 업로드"]], catalog.collectionMode || "hometax-certificate")}
+          ${selectField("syncScope", "수집 범위", syncScopeOptions, selectedScope)}
+          ${selectField("permissionScope", "열람 권한", [["owner_accounting", "대표+회계"], ["owner_tax_agent", "대표+세무대리인"], ["business_manager", "사업자별 담당자"], ["owner_only", "대표 전용"]], "owner_accounting")}
+          ${textAreaField("memo", "검증 메모", "위임 상태, 신고 알림일, 계산서 누락 알림")}`;
+        return `
+          ${serviceField}
+          ${businessField}
+          ${branchField}
+          ${labelField}
+          ${loginUrlField}
+          ${inputField("username", "관리자 ID 또는 기준명", "text", "카드사/PG 관리자 ID")}
+          ${inputField("password", "비밀번호", "password", "Vault에 암호화 저장", "autocomplete=\"new-password\"")}
+          ${inputField("accountNo", "가맹점번호", "text", "카드사/PG 가맹점번호")}
+          ${inputField("apiKey", "API 토큰", "password", "제공되는 경우 입력", "autocomplete=\"new-password\"")}
+          ${selectField("collectionMode", "수집 방식", [["card-pg-report", "카드사/PG 리포트"], ["api", "공식 API"], ["statement-upload", "엑셀/CSV 업로드"], ["browser-automation", "브라우저 자동화"]], catalog.collectionMode || "card-pg-report")}
+          ${selectField("syncScope", "수집 범위", syncScopeOptions, selectedScope)}
+          ${textAreaField("memo", "검증 메모", "승인/취소/입금대사 기준과 리포트 대체 경로")}`;
+      })();
       return `<form class="auth-form integration-setup-form" data-integration-connect-form>
         <div class="integration-setup-band">
           <h3>연동 설정 페이지</h3>
-          <p>사업자와 지점, 서비스 유형, 로그인/Vault 보관값, 계좌·가맹점번호, 수집 범위를 한 화면에서 등록하는 시안입니다.</p>
+          <p>${isSales ? "판매채널은 매장코드, 계정, 2차 인증, 정산 CSV 대체 경로를 등록합니다." : isBank ? "은행은 간편/빠른조회에 필요한 ID, 계좌번호, 계좌비밀번호, 사업자번호를 분리해 등록합니다." : isSupplier ? "매입처는 주문 프로그램 계정과 수기 증빙/OCR 대체 경로를 함께 등록합니다." : isTax ? "홈택스와 계산서는 인증서, 위임 상태, 수집 범위를 사업자별로 관리합니다." : "카드/PG 등 기타 연동은 가맹점번호와 리포트/API 수집 기준을 등록합니다."}</p>
         </div>
         <div class="integration-preset-strip">
           <button type="button"${activePreset("shinhan_business")} data-integration-connect-service="shinhan_business" data-label="성신점 신한은행 빠른계좌조회" data-url="https://bizbank.shinhan.com"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
@@ -7095,62 +7238,11 @@
           <button type="button"${activePreset("baemin")} data-integration-connect-service="baemin" data-label="성신점 배달의민족 정산" data-url="https://self.baemin.com"><b>판매채널</b><span>주문·매출·정산·리뷰</span></button>
           <button type="button"${activePreset("supplier_statement_upload")} data-integration-connect-service="supplier_statement_upload" data-label="성신점 매입처 수기증빙" data-url=""><b>매입·증빙</b><span>발주 프로그램·사진 OCR</span></button>
         </div>
-        <div class="credential-grid">
-          <label>연동 구분
-            <select name="service" required>${integrationServiceOptions(service)}</select>
-          </label>
-          <label>소속 사업자
-            <select name="businessId" required>${integrationBusinessOptions(selectedBusiness)}</select>
-          </label>
-          <label>대상 지점
-            <select name="branch">${integrationBranchOptions(selectedBranch)}</select>
-          </label>
-          <label>표시명
-            <input name="label" placeholder="예: 중화점 신한은행 간편서비스" required>
-          </label>
-          <label>로그인/관리 URL
-            <input name="loginUrl" type="url" placeholder="https://...">
-          </label>
-          <label>아이디/업로드 기준명
-            <input name="username" autocomplete="username" placeholder="로그인 ID, 휴대폰번호 또는 매입처명">
-          </label>
-          <label>비밀번호
-            <input name="password" type="password" autocomplete="new-password" placeholder="서버 Vault 암호화 저장">
-          </label>
-          <label>계좌/가맹점번호
-            <input name="accountNo" inputmode="numeric" autocomplete="off" placeholder="숫자 또는 플랫폼 매장코드">
-          </label>
-          <label>계좌비밀번호/API Secret
-            <input name="accountPassword" type="password" autocomplete="new-password" placeholder="은행 조회·API 연동 보안값">
-          </label>
-          <label>사업자등록번호
-            <input name="businessRegistrationNo" autocomplete="off" placeholder="000-00-00000">
-          </label>
-          <label>수집 방식
-            <select name="collectionMode">${integrationCollectionModeOptions(catalog.collectionMode || "bank-quick-service")}</select>
-          </label>
-          <label>수집 범위
-            <select name="syncScope">
-              <option value="sales_settlement_review">주문+매출+정산+리뷰</option>
-              <option value="bank_balance_transactions">거래내역+잔액+입금자명</option>
-              <option value="purchase_statement_inventory">발주+거래명세서+입고</option>
-              <option value="tax_invoice_receipt">전자세금계산서+현금영수증</option>
-              <option value="card_approval_deposit">승인+취소+입금대사</option>
-            </select>
-          </label>
-          <label class="wide">검증 메모
-            <textarea name="memo" placeholder="조회 전용 권한, 인증 만료일, 파일 대체 경로"></textarea>
-          </label>
-        </div>
+        <div class="credential-grid">${serviceSpecificFields}</div>
         <input type="hidden" name="status" value="ready">
-        <input type="hidden" name="permissionScope" value="read_only">
-        <input type="hidden" name="failureFallback" value="upload_queue">
         <input type="hidden" name="fallbackAuth" value="admin_registration">
         <input type="hidden" name="institutionCode" value="">
         <input type="hidden" name="accountNoMasked" value="">
-        <input type="hidden" name="settlementCycle" value="">
-        <input type="hidden" name="apiKey" value="">
-        <input type="hidden" name="clientSecret" value="">
         <div class="detail-grid">
           ${integrationDetailCard("저장", "서버 Vault 암호화 · 평문 재표시 금지")}
           ${integrationDetailCard("권한", "대표/회계 관리자만 등록 · 조회 전용 우선")}
@@ -7295,6 +7387,21 @@
       if (modalForm) applyIntegrationPreset(modalForm.service?.value || defaultService || "shinhan_business", true, modalForm);
       els.integrationDetailModal.classList.remove("hidden");
       els.closeIntegrationDetailBtn?.focus();
+    }
+
+    function rerenderIntegrationConnectForm(service, sourceForm = null) {
+      if (!els.integrationDetailBody) return;
+      const current = sourceForm ? Object.fromEntries(new FormData(sourceForm).entries()) : {};
+      const template = document.createElement("template");
+      template.innerHTML = integrationConnectFormHtml(service);
+      const nextForm = template.content.querySelector("[data-integration-connect-form]");
+      if (!nextForm) return;
+      sourceForm?.replaceWith(nextForm);
+      if (current.businessId && nextForm.businessId) nextForm.businessId.value = current.businessId;
+      if (current.branch && nextForm.branch) nextForm.branch.value = current.branch;
+      applyIntegrationPreset(service, true, nextForm);
+      const firstInput = nextForm.querySelector("input[name='username'], input[name='accountNo'], input[name='label']");
+      firstInput?.focus();
     }
 
     function closeIntegrationDetailModal() {
@@ -9490,7 +9597,7 @@
       document.body.addEventListener("change", event => {
         const modalForm = event.target.closest("[data-integration-connect-form]");
         if (modalForm && event.target.name === "service") {
-          applyIntegrationPreset(event.target.value, true, modalForm);
+          rerenderIntegrationConnectForm(event.target.value, modalForm);
         }
       });
       document.body.addEventListener("submit", event => {
@@ -9581,8 +9688,7 @@
           event.preventDefault();
           const form = integrationConnectService.closest("[data-integration-connect-form]") || els.integrationDetailBody?.querySelector("[data-integration-connect-form]");
           const service = integrationConnectService.dataset.integrationConnectService || "shinhan_business";
-          if (form?.service) form.service.value = service;
-          if (form) applyIntegrationPreset(service, true, form);
+          if (form) rerenderIntegrationConnectForm(service, form);
           return;
         }
         const viewShortcut = event.target.closest("[data-view]:not(.tab)");

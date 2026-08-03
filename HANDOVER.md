@@ -5426,3 +5426,29 @@
   - 컨테이너 내부 `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py -q` 결과 18 passed, 1 warning.
 - 운영 주의:
   - 실제 은행 실시간 조회는 관리자 등록 자격증명과 은행 2차 인증/커넥터 설정이 있어야 실행된다. 커넥터 미설정 상태에서는 더미 거래를 생성하지 않는다.
+
+## 2026-08-03 09:28 KST - FB 연동설정 서비스별 입력폼 분리 보정
+
+- 요청: 운영 연동설정에서 판매채널과 은행 계좌 입력폼이 동일하게 보이는 문제를 `mockup-v2.html#integrations` 기준으로 수정.
+- 원인:
+  - 운영 `integrationConnectFormHtml()`이 판매채널, 은행, 매입처, 홈택스, 카드/PG를 하나의 공통 계좌/가맹점 폼으로 렌더링했다.
+  - 프리셋 버튼 또는 `연동 구분` 변경 시 기존 폼 DOM을 다시 그리지 않고 값만 바꿔, 판매채널 선택 후에도 은행 필드가 남을 수 있었다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 연동설정 폼을 서비스 유형별로 분리했다.
+  - 판매채널: 플랫폼 매장코드, 계정 ID, 비밀번호, 2차 인증 수단, API 토큰, 정산 CSV 대체 경로, 권한 범위.
+  - 은행: 기업뱅킹 ID/PW, 조회 계좌번호, 계좌비밀번호, 사업자등록번호, 계좌 용도, 인증서 비밀번호, OTP/보안카드, 조회 전용 권한.
+  - 매입처: 주문 프로그램 ID/PW, API Key, 거래처 코드, 거래명세서 OCR/영수증 사진 대체, 승인 흐름.
+  - 홈택스: 홈택스 ID/PW, 공동/금융인증서 비밀번호, 세무대리인/인증 담당자, 사업자번호, 수집 범위.
+  - 카드/PG: 가맹점번호, API 토큰, 승인/취소/입금대사 리포트 수집 기준.
+  - `rerenderIntegrationConnectForm()`을 추가해 프리셋 버튼과 서비스 select 변경 시 폼을 서비스별 입력폼으로 즉시 교체하도록 했다.
+  - 기존 `/accounts` Vault 저장과 `/transactions/sync` 실행에 쓰는 `name` 값은 유지해 API 연동을 끊지 않았다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node `new Function()` 인라인 스크립트 문법 검사 성공(`scripts_ok=1`).
+  - 직접 정적 assert 성공: 판매채널 전용 `플랫폼 매장코드`, `2차 인증 수단`, `정산 CSV 업로드 대기열` 확인.
+  - 직접 정적 assert 성공: 은행 전용 `조회 계좌번호`, `계좌비밀번호`, `사업자등록번호` 확인.
+  - 직접 정적 assert 성공: 매입처 `거래명세서 OCR`, 홈택스 `공동/금융인증서 비밀번호`, 프리셋 재렌더 훅 확인.
+  - `python3` 직접 호출로 `tests/unit/test_yeoljeong_finance_print_static.py`의 `test_*` 함수 전체 실행 성공(`static_tests_ok`).
+  - 로컬 `python3 -m pytest`는 현재 환경에 pytest 미설치로 실행 불가.
+- 운영 주의:
+  - 이번 조치는 UI/API 입력 경로 보정이다. 은행 실사이트 조회는 관리자 자격증명과 은행 2차 인증/커넥터 설정 후 별도 실조회 검증이 필요하다.
