@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-04 06:16 KST - Yeoljeong Jung-hwa Baemin collection final verification update
+
+- Request: Resolve the previous final-report ledger conflict and continue verification instead of stopping at an intermediate report.
+- Ledger reconciliation:
+  - `HEAD` and `origin/main` both point to `162d90b2 docs: record Baemin collection final verification`.
+  - The previous handover line that referenced `959bd37e` was stale after the follow-up documentation commit.
+- Runtime verification:
+  - `docker ps --format ...` shows `aads-server`, `aads-server-green`, `aads-dashboard`, `aads-dashboard-green`, PostgreSQL, Redis, LiteLLM, and Nginx running healthy where healthchecks exist.
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 59 passed.
+  - `curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200.
+  - `docker exec aads-server curl -I https://biz-member.baemin.com/login?returnUrl=https%3A%2F%2Fself.baemin.com%2F` returned HTTP 403 from Cloudflare/Baemin.
+- Live Jung-hwa Baemin sync:
+  - Payload: `services=["baemin"]`, `business_id=biz-junghwa`, `branch=중화점`, `date_from=2026-08-01`, `date_to=2026-08-04`.
+  - Result: `status=portal_action_required`, `error_code=BAEMIN_SECURITY_BLOCKED`, `run_id=0849715d-ac07-4af8-b38b-d9bc27e8a860`, totals `sales=0`, `settlements=0`, `reviews=0`.
+  - Latest status row was written with diagnostics `http_status=403`.
+  - DB count cross-check still shows Jung-hwa Baemin ledgers `sales=0`, `settlements=0`, `reviews=0`.
+- Final status:
+  - Parser/upsert/UI reporting code is implemented and pushed.
+  - Real Baemin data collection from the server remains blocked by Baemin/Cloudflare security policy, so no real sales/settlement/review rows were collected.
+  - No fake Baemin rows were inserted.
+  - Runtime JSON ledger files created/changed by verification are intentionally not committed because they are operational data and may contain protected local account metadata.
+
 ## 2026-08-04 06:11 KST - Yeoljeong Jung-hwa Baemin collection final verification
 
 - Request: Continue the Jung-hwa branch Baemin integration work until the final reporting contract is satisfied.
