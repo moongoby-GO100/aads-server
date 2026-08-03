@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-04 06:20 KST - Yeoljeong Jung-hwa Baemin final-report ledger reconciliation
+
+- Request: Continue the Jung-hwa Baemin collection task because the prior response conflicted with the commit/push/deploy/document ledger.
+- Actual ledger at verification time:
+  - `HEAD` and `origin/main` both pointed to `a167653c docs: reconcile Baemin collection verification` before this entry.
+  - Baemin implementation commits already on `origin/main`: `f0c1b690 fix: clarify baemin integration sync states`, `959bd37e Fix Baemin delivery sync reporting`, `162d90b2 docs: record Baemin collection final verification`, `a167653c docs: reconcile Baemin collection verification`.
+  - Dirty worktree remains, but Baemin code/UI/test/HANDOVER target files had no uncommitted diff before this entry. Runtime JSON ledgers and protected account/settings JSON are operational data and are not committed.
+- Verification rerun:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed.
+  - Node inline script parse passed: `inline scripts ok 1`.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 59 passed.
+  - `curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200.
+  - External Baemin login URL returned HTTP 403 from Cloudflare/Baemin.
+- Live Jung-hwa sync rerun:
+  - Payload: `services=["baemin"]`, `business_id=biz-junghwa`, `branch=중화점`, `date_from=2026-08-01`, `date_to=2026-08-04`.
+  - Result: `status=portal_action_required`, `error_code=BAEMIN_SECURITY_BLOCKED`, `run_id=493c1eef-0ec2-4c1c-af46-28a382fa0d04`, totals `sales=0`, `settlements=0`, `reviews=0`.
+- Final interpretation:
+  - Parser/upsert/API/UI reporting path is implemented and deployed.
+  - Real Baemin sales/settlement/review data is not collected from the server because the portal blocks server-side browser access. No fake rows were inserted.
+  - Next operational paths are authenticated PC Browser Bridge collection or Baemin CSV/Excel upload/import.
+
 ## 2026-08-04 06:16 KST - Yeoljeong Jung-hwa Baemin collection final verification update
 
 - Request: Resolve the previous final-report ledger conflict and continue verification instead of stopping at an intermediate report.
