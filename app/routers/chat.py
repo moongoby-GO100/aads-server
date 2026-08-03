@@ -1216,6 +1216,7 @@ async def send_message(
         reply_to_id=reply_to_id,
         idempotency_key=idempotency_key,
         tenant_id=tenant_id,
+        user_id=_user_id(context),
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)

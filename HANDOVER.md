@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-04 08:31 KST - OHVIS app branding and push notification implementation
+
+- Request: Keep the AI glasses investigation as a deferred OHVIS idea, rename the current AADS app to OHVIS, and add app push notifications for response completion.
+- Deferred idea: `docs/plans/20260804_OHVIS_AI_GLASSES_POC_IDEA.md` records the AI glasses PoC as deferred until purchase timing is approved.
+- Backend changes:
+  - Added `app/api/notifications.py` for VAPID public-key lookup, authenticated push subscription upsert/delete, and test push.
+  - Added `app/services/push_notifications.py` with tenant/user scoped subscription storage and best-effort Web Push delivery. The subscription uniqueness constraint uses `UNIQUE NULLS NOT DISTINCT` so tenantless and tenant-scoped sessions do not accumulate duplicate endpoint rows.
+  - Registered the notification router in `app/main.py`.
+  - Passed chat `user_id` from `app/routers/chat.py` into `send_message_stream`.
+  - Added a chat response-complete notification hook in `app/services/chat_service.py`; failures are logged and do not block message persistence.
+  - Added `migrations/118_ohvis_app_push_subscriptions.sql` and `pywebpush>=2.0.0`.
+- Runtime config required before real server push delivery: set `OHVIS_WEB_PUSH_VAPID_PUBLIC_KEY` and `OHVIS_WEB_PUSH_VAPID_PRIVATE_KEY` (or the `AADS_WEB_PUSH_*` fallbacks). Without those, the frontend button reports server key not configured and no push is sent.
+- Verification:
+  - Rechecked at 2026-08-04 08:42 KST: `python3 -m py_compile app/api/notifications.py app/services/push_notifications.py app/main.py app/routers/chat.py app/services/chat_service.py` passed.
+  - Rechecked at 2026-08-04 08:42 KST: `git diff --check -- app/api/notifications.py app/services/push_notifications.py app/main.py app/routers/chat.py app/services/chat_service.py migrations/118_ohvis_app_push_subscriptions.sql pyproject.toml HANDOVER.md docs/plans/20260804_OHVIS_AI_GLASSES_POC_IDEA.md` passed.
+  - Dashboard `npx tsc --noEmit --pretty false` passed.
+  - Dashboard focused `npx eslint src/services/pushNotifications.ts src/app/chat/page.tsx src/app/layout.tsx src/app/login/page.tsx src/app/signup/page.tsx src/components/Sidebar.tsx` passed with pre-existing warnings in `src/app/chat/page.tsx` only.
+  - Dashboard `npm run build` passed with 62 app routes generated.
+- Commit/push/deploy: not performed in this step. Existing unrelated dirty files remain in the worktree.
+
 ## 2026-08-04 06:20 KST - Yeoljeong Jung-hwa Baemin final-report ledger reconciliation
 
 - Request: Continue the Jung-hwa Baemin collection task because the prior response conflicted with the commit/push/deploy/document ledger.

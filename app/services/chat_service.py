@@ -7077,6 +7077,7 @@ async def _save_and_update_session(
     auto_save_check: bool = False,
     parent_artifact_id: Optional[uuid.UUID] = None,
     edit_intent: bool = False,
+    notify_user_id: Optional[str] = None,
 ) -> None:
     """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
     BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
@@ -7405,6 +7406,25 @@ async def _save_and_update_session(
                     _asyncio.create_task(_auto_extract_mid_conversation_lessons(session_id_str, raw_messages or []))
             except Exception:
                 pass
+
+        if _assistant_msg_id:
+            try:
+                import asyncio as _notify_asyncio
+                from app.services.push_notifications import notify_chat_response_complete
+
+                _notify_asyncio.create_task(
+                    notify_chat_response_complete(
+                        session_id=str(sid),
+                        assistant_message_id=str(_assistant_msg_id),
+                        fallback_user_id=notify_user_id,
+                    )
+                )
+            except Exception as _notify_err:
+                logger.debug(
+                    "chat_response_push_notify_launch_failed session=%s error=%s",
+                    str(sid)[:8],
+                    _notify_err,
+                )
 
 
 async def run_discussion(
@@ -10221,6 +10241,7 @@ async def send_message_stream(
             thinking_summary=_thinking_truncated,
             response_duration_sec=_final_response_duration_sec,
             auto_save_check=True,
+            notify_user_id=user_id,
             **_artifact_chain_kwargs,
         )
 

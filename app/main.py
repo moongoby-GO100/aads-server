@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
-from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, yeoljeong_finance
+from app.api import health, projects, checkpoints, stream, auth, context, chat, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, yeoljeong_finance, notifications
 from app.api.channels import router as channels_router
 from app.api.managers import router as managers_router
 from app.api.conversations import router as conversations_router
@@ -1946,6 +1946,7 @@ app.include_router(design_modifications.router, prefix="/api/v1", tags=["design-
 app.include_router(yeoljeong_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 app.include_router(google_sheets.router, prefix="/api/v1", tags=["google-sheets"])
+app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
 app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(braming_router)
