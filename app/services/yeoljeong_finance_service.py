@@ -2836,6 +2836,36 @@ def list_collection_status(user: dict[str, Any], business_id: str | None = None)
     return rows
 
 
+def _delivery_entry_record(record: dict[str, Any]) -> dict[str, Any]:
+    service = str(record.get("service") or "")
+    record_type = str(record.get("record_type") or "")
+    amount = int(record.get("gross_amount") or record.get("settlement_amount") or 0)
+    label = CONNECTOR_LABELS.get(service, service or "배달플랫폼")
+    date_value = str(record.get("occurred_on") or datetime.now(KST).date().isoformat())
+    if record_type == "settlements":
+        entry_type = "bank"
+        vendor = f"{label} 정산입금"
+        memo = str(record.get("settlement_status") or record.get("settlement_id") or "")
+    else:
+        entry_type = "sales"
+        vendor = f"{label} 매출"
+        memo = str(record.get("order_status") or record.get("order_id") or "")
+    return {
+        "id": f"entry-{record.get('id') or uuid4()}",
+        "source_record_id": record.get("id") or "",
+        "source_type": "delivery",
+        "type": entry_type,
+        "service": service,
+        "business_id": record.get("business_id") or "",
+        "branch": record.get("branch") or "",
+        "date": date_value,
+        "vendor": vendor,
+        "amount": amount,
+        "status": "confirmed",
+        "memo": memo,
+    }
+
+
 def automation_status(user: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": True,
@@ -3095,6 +3125,8 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
     ledgers = {name: _read(name) for name in ledger_names.values()}
     statuses = _read("delivery_collection_status")
+    response_ledgers = {"sales": [], "settlements": [], "reviews": []}
+    response_records: list[dict[str, Any]] = []
 
     for service in requested_services:
         account = accounts_by_service.get(service)
@@ -3145,6 +3177,9 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 by_id[str(record["id"])] = record
             ledgers[ledger_name] = list(by_id.values())
             counts[kind] = len(incoming)
+            response_ledgers[kind].extend(incoming)
+            if kind in {"sales", "settlements"}:
+                response_records.extend(_delivery_entry_record(record) for record in incoming)
         finished_at = _now()
         status_record.update(
             {
@@ -3161,10 +3196,14 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             {
                 "service": service,
                 "status": status_record["status"],
+                "portal_status": status_record["status"],
                 "error_code": status_record["error_code"],
                 "counts": counts,
                 "run_id": run_id,
+                "account_id": account.get("id") if account else "",
+                "collection_mode": str(account.get("collection_mode") or account.get("collectionMode") or "") if account else "",
                 "message": status_record["message"],
+                "portal_message": status_record["message"],
             }
         )
 
@@ -3178,6 +3217,10 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "summary": summary,
+        "records": response_records,
+        "sales": response_ledgers["sales"],
+        "settlements": response_ledgers["settlements"],
+        "reviews": response_ledgers["reviews"],
         "totals": {
             "sales": sum(item["counts"]["sales"] for item in summary),
             "settlements": sum(item["counts"]["settlements"] for item in summary),

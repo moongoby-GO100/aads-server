@@ -5513,3 +5513,25 @@
   - 직접 정적 assert 성공: `body: integrationAddLandingHtml()`, 판매채널/은행 계좌/카드PG/매입처/기타 매입처 메뉴, `연동 설정 수정`, `is-editing`, `data-edit-integration` 확인.
   - `git diff --quiet -- app/static/apps/yeoljeong-finance/mockup-v2.html` 성공.
   - 로컬 `python3 -m pytest tests/unit/test_yeoljeong_finance_print_static.py`는 현재 환경에 pytest 미설치로 실행 불가.
+
+## 2026-08-04 06:00 KST - 중화점 배민 자동수집 실행 경로 보강
+
+- 요청: 중화점 배민 아이디/비밀번호로 배민 접속 후 매출, 정산, 리뷰 수집 가능 데이터를 파싱해 매장비서에 반영.
+- 확인:
+  - 중화점 배민 계정 `83c5b12f-0b3d-46b6-bcbe-b5c00dc0fd51`은 Vault 암호화 비밀번호가 있고 `business_id=biz-junghwa`, `branch=중화점`으로 등록되어 있었다.
+  - 기존 `collection_mode=portal-csv` 때문에 `/sync`가 브라우저 자동수집을 실행하지 않고 `CSV_UPLOAD_REQUIRED`로 종료됐다.
+  - 서버에서 배민 로그인 URL에 접근하면 HTTP 403 `보안 위배 접근 제한 페이지`가 반환된다.
+- 조치:
+  - `app/services/yeoljeong_delivery_collectors.py`에 배민 보안 차단 페이지 감지(`BAEMIN_SECURITY_BLOCKED`)를 추가했다.
+  - 배민 계정의 로그인 URL이 `self.baemin.com`만 저장되어 있어도 실제 로그인 URL(`biz-member.baemin.com/login`)을 우선 사용하도록 보정했다.
+  - `app/services/yeoljeong_finance_service.py`의 `/sync` 응답에 수집된 `sales`, `settlements`, `reviews`, 화면 즉시 반영용 `records`, `portal_status`, `portal_message`, `collection_mode`를 포함하도록 보강했다.
+  - `app/static/apps/yeoljeong-finance/index.html`이 `succeeded` 상태와 배민 보안차단 메시지, 매출/정산/리뷰 반영 건수를 표시하도록 수정했다.
+  - 운영 데이터의 중화점 배민 계정은 `browser-automation`으로 전환했다. 암호화된 계정 데이터 파일은 커밋 대상에서 제외한다.
+- 검증:
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` 결과 59 passed.
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node 인라인 스크립트 문법 검사 성공(`inline-js-ok 2`).
+  - 실제 중화점 배민 수집 실행 결과: `BAEMIN_SECURITY_BLOCKED`, totals `sales=0`, `settlements=0`, `reviews=0`.
+- 운영 주의:
+  - 현재 장애는 코드 누락이 아니라 배민 포털의 서버 자동접속 보안 차단이다. PC 인증 세션 전달 또는 배민 정산 CSV/엑셀 업로드로 대체 수집해야 실제 데이터가 반영된다.

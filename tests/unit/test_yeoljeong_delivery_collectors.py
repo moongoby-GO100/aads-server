@@ -124,3 +124,22 @@ def test_page_state_rejects_logged_out_landing_page_without_password_input():
             return FakeLocator()
 
     assert collectors._page_state(FakePage()) == ("failed", "PORTAL_LOGIN_NOT_COMPLETED")
+
+
+def test_security_block_result_detects_baemin_block_page():
+    class FakeBody:
+        def inner_text(self, timeout):
+            return "죄송합니다. 올바르지 않은 요청으로 페이지를 보실 수 없습니다. 보안 위배 접근 제한 페이지"
+
+    class FakePage:
+        def locator(self, selector):
+            return FakeBody()
+
+    class FakeResponse:
+        status = 403
+
+    result = collectors._security_block_result(FakePage(), FakeResponse())
+
+    assert result["status"] == "portal_action_required"
+    assert result["error_code"] == "BAEMIN_SECURITY_BLOCKED"
+    assert "records" in result

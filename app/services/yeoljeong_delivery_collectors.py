@@ -76,6 +76,12 @@ LOGIN_FAILURE_TERMS = ("비밀번호가 일치", "아이디 또는 비밀번호"
 LOGGED_OUT_TERMS = ("로그인해주세요", "로그인이 필요", "사장님 로그인")
 EXPORT_TERMS = ("엑셀", "excel", "csv", "다운로드", "내보내기")
 SEARCH_TERMS = ("조회", "검색", "적용")
+SECURITY_BLOCK_TERMS = (
+    "보안 위배 접근 제한",
+    "올바르지 않은 요청",
+    "access denied",
+    "forbidden",
+)
 
 
 def _clean(value: Any) -> str:
@@ -293,6 +299,8 @@ def _fill_login(page: Any, username: str, password: str) -> bool:
 
 def _page_state(page: Any) -> tuple[str, str]:
     body = _clean(page.locator("body").inner_text(timeout=5000)).lower()
+    if any(term in body for term in SECURITY_BLOCK_TERMS):
+        return "portal_action_required", "BAEMIN_SECURITY_BLOCKED"
     if any(term in body for term in CHALLENGE_TERMS):
         return "portal_action_required", "PORTAL_AUTH_CHALLENGE"
     if any(term in body for term in LOGIN_FAILURE_TERMS):
@@ -307,6 +315,31 @@ def _page_state(page: Any) -> tuple[str, str]:
         except Exception:
             continue
     return "authenticated", ""
+
+
+def _security_block_result(page: Any, response: Any | None) -> dict[str, Any] | None:
+    status = int(getattr(response, "status", 0) or 0)
+    try:
+        body = _clean(page.locator("body").inner_text(timeout=3000)).lower()
+    except Exception:
+        body = ""
+    if status in {401, 403} or any(term in body for term in SECURITY_BLOCK_TERMS):
+        return {
+            "status": "portal_action_required",
+            "error_code": "BAEMIN_SECURITY_BLOCKED",
+            "records": {},
+            "diagnostics": {"http_status": status or ""},
+            "message": "배민 포털이 서버 자동접속을 보안 정책으로 차단했습니다. PC 인증 세션 또는 정산 CSV 업로드가 필요합니다.",
+        }
+    return None
+
+
+def _login_url(account: dict[str, Any], config: dict[str, Any]) -> str:
+    service = str(account.get("service") or "")
+    configured = str(account.get("login_url") or "").strip()
+    if service == "baemin" and "biz-member.baemin.com/login" not in configured:
+        return str(config["login_url"])
+    return configured or str(config["login_url"])
 
 
 def _set_period(page: Any, date_from: str, date_to: str) -> None:
@@ -452,7 +485,11 @@ def collect_account(
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context(accept_downloads=True, locale="ko-KR")
             page = context.new_page()
-            page.goto(str(account.get("login_url") or config["login_url"]), wait_until="domcontentloaded", timeout=30000)
+            response = page.goto(_login_url(account, config), wait_until="domcontentloaded", timeout=30000)
+            blocked = _security_block_result(page, response)
+            if blocked:
+                browser.close()
+                return blocked
             if not _fill_login(page, str(account.get("username") or ""), password):
                 browser.close()
                 return {"status": "portal_action_required", "error_code": "LOGIN_FORM_NOT_FOUND", "records": {}}

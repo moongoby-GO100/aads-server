@@ -531,8 +531,29 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
                         "gross_amount": 12000,
                     }
                 ],
-                "settlements": [],
-                "reviews": [],
+                "settlements": [
+                    {
+                        "id": "settlement-1",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "record_type": "settlements",
+                        "occurred_on": "2026-07-02",
+                        "settlement_amount": 11000,
+                    }
+                ],
+                "reviews": [
+                    {
+                        "id": "review-1",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "record_type": "reviews",
+                        "occurred_on": "2026-07-03",
+                        "rating": 5,
+                        "review_text": "맛있어요",
+                    }
+                ],
             },
             "diagnostics": {"sales": "fixture"},
         }
@@ -551,8 +572,17 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
     second = service.sync_delivery(payload, user)
 
     assert first["totals"]["sales"] == 1
+    assert first["totals"]["settlements"] == 1
+    assert first["totals"]["reviews"] == 1
+    assert len(first["records"]) == 2
+    assert len(first["sales"]) == 1
+    assert len(first["settlements"]) == 1
+    assert len(first["reviews"]) == 1
+    assert first["summary"][0]["portal_status"] == "succeeded"
     assert second["totals"]["sales"] == 1
     assert len(service.list_sales(user, "biz-mia")) == 1
+    assert len(service.list_settlements(user, "biz-mia")) == 1
+    assert len(service.list_reviews(user, "biz-mia")) == 1
     statuses = service.list_collection_status(user, "biz-mia")
     assert len(statuses) == 2
     assert all(row["status"] == "succeeded" for row in statuses)

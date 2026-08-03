@@ -4278,6 +4278,7 @@
       ready: ["연동준비", "info"],
       manual: ["수동업로드", "warn"],
       blocked: ["확인필요", "bad"],
+      succeeded: ["수집완료", "good"],
       completed: ["수집완료", "good"],
       no_records: ["신규없음", "info"],
       upload_required: ["파일필요", "warn"],
@@ -4286,6 +4287,7 @@
       "bank-quick-ready": ["간편조회준비", "good"],
       downloaded: ["파일다운로드", "good"],
       portal_action_required: ["추가인증필요", "warn"],
+      baemin_security_blocked: ["배민보안차단", "bad"],
       download_not_found: ["다운로드확인필요", "warn"],
       portal_timeout: ["수집시간초과", "warn"],
       portal_error: ["포털오류", "bad"],
@@ -4737,7 +4739,9 @@
       ],
       contracts: [],
       payrollStatements: [],
+      deliverySales: [],
       deliverySettlements: [],
+      deliveryReviews: [],
       settings: structuredClone(defaultSettings),
       meta: {
         createdAt: new Date().toISOString(),
@@ -4782,7 +4786,9 @@
           shifts: Array.isArray(parsed.shifts) ? parsed.shifts : [],
           contracts: Array.isArray(parsed.contracts) ? parsed.contracts : [],
           payrollStatements: Array.isArray(parsed.payrollStatements) ? parsed.payrollStatements : [],
+          deliverySales: Array.isArray(parsed.deliverySales) ? parsed.deliverySales : [],
           deliverySettlements: Array.isArray(parsed.deliverySettlements) ? parsed.deliverySettlements : [],
+          deliveryReviews: Array.isArray(parsed.deliveryReviews) ? parsed.deliveryReviews : [],
           settings: mergeSettings(parsed.settings),
           meta: parsed.meta || {}
         };
@@ -8916,6 +8922,8 @@
         saveState();
       }
       mergeDeliverySettlements(payload.settlements || []);
+      if (Array.isArray(payload.sales)) state.deliverySales = payload.sales;
+      if (Array.isArray(payload.reviews)) state.deliveryReviews = payload.reviews;
       (payload.summary || []).forEach(summary => {
         settings().integrations
           .filter(item => item.service === summary.service)
@@ -8929,12 +8937,20 @@
       });
       saveState();
       renderAll();
-      const blocked = (payload.summary || []).filter(item => item.status !== "completed").length;
+      const okStatuses = new Set(["completed", "succeeded", "no_records"]);
+      const blocked = (payload.summary || []).filter(item => !okStatuses.has(String(item.status || "").toLowerCase())).length;
       const messages = (payload.summary || [])
-        .filter(item => item.status !== "completed")
-        .map(item => `${integrationLabels[item.service] || item.service}: ${item.portal_message || item.message || item.status}`)
+        .filter(item => !okStatuses.has(String(item.status || "").toLowerCase()))
+        .map(item => `${integrationLabels[item.service] || item.service}: ${item.portal_message || item.message || item.error_code || item.status}`)
         .slice(0, 2);
-      return { recordsCount: records.length, settlementsCount: (payload.settlements || []).length, blocked, messages };
+      return {
+        recordsCount: records.length,
+        salesCount: (payload.sales || []).length,
+        settlementsCount: (payload.settlements || []).length,
+        reviewsCount: (payload.reviews || []).length,
+        blocked,
+        messages
+      };
     }
 
     async function loadDeliverySettlements() {
@@ -8970,7 +8986,7 @@
         })
       });
       const result = applySyncPayload(payload);
-      showToast(result.recordsCount ? `자동 수집 ${result.recordsCount}건 / 정산 ${result.settlementsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
+      showToast(result.recordsCount ? `자동 수집 매출 ${result.salesCount}건 / 정산 ${result.settlementsCount}건 / 리뷰 ${result.reviewsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
     }
 
     function applyFinancialSyncPayload(payload) {
