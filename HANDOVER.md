@@ -5733,9 +5733,10 @@
   - `python3 -m py_compile app/api/kakao_bot.py pc_agent/launcher.py` 성공.
   - `docker exec aads-server python -m pytest tests/unit/test_pc_agent_download.py tests/unit/test_pc_agent_launcher_startup.py` 성공: 6 passed.
   - `tests/unit/test_pc_agent_release_guards.py`까지 포함 실행 시 컨테이너에 `/app/.github/workflows/build-pc-agent.yml`이 없어 기존 파일 의존 테스트 1건이 실패했다. 이번 변경 파일의 신규/관련 테스트는 통과했다.
-- 배포 주의:
-  - 백엔드 배포 후 최초 API 호출 시 install ticket 테이블이 자동 생성된다.
-  - 운영 반영 후 실제 사용자 PC에서 자동 설치 파일 다운로드 → 실행 → `config.json` 자동 저장 → WebSocket online 검증이 필요하다.
+- 운영 반영/재검증:
+  - 2026-08-04 19:45 KST 재검증에서 백엔드 Blue/Green 컨테이너 모두 `POST /api/v1/kakao-bot/agent/install-ticket`와 `/exchange` 라우트를 포함했다.
+  - 공개 `POST /api/v1/kakao-bot/agent/install-ticket`는 비로그인 `401`로 응답해 인증 보호된 운영 라우트 존재를 확인했고, 공개 `/api/v1/kakao-bot/agent/download-exe`는 HTTP 200 및 21,488,046 bytes 다운로드를 확인했다.
+  - 대시보드 Blue/Green 빌드 산출물 모두 `install-ticket`, `PC 에이전트 자동 설치`, `수동 백업` 문구를 포함해 자동 페어링 UI 배포가 완료된 상태다.
 
 ## 2026-08-04 KST - 검수 피드백 후속 수정
 
