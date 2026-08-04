@@ -7,6 +7,14 @@ _생성: AADS-191 | 2026-04-01_
 
 ## 경로 A: 채팅 직접 수정 체크리스트
 
+### 직접 작업 의존성 프리플라이트
+- ✅ 정책 문서: `docs/knowledge/DIRECT-WORK-DEPENDENCY-POLICY-v1.0.md`
+- ✅ 직접 수정 전 `git status --short` 확인
+- ✅ 활성 `pipeline_jobs` 확인 — 같은 프로젝트 running/queued/claimed/awaiting_approval 충돌 여부
+- ✅ `chat_workspace_change_ledger` 확인 — 다른 세션의 같은 repo/file dirty 변경 여부
+- ✅ 동일 파일/영역 충돌 시 직접 수정 중단 → Pipeline Runner `depends_on`/`depends_on_key` 사용
+- ✅ DB 직접 변경은 비파괴·명시 요청·전후 SELECT 검증·롤백 가능성 보고 조건에서만 허용
+
 ### 동시성 보호
 - ✅ 파일별 `asyncio.Lock` — 동일 파일 동시 write/patch 순차 처리 (`_file_locks`)
 - ✅ 메타 잠금(`_file_locks_meta_lock`) — 딕셔너리 동시 생성 경쟁 방지

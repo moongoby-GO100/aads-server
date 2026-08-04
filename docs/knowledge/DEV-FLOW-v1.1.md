@@ -38,6 +38,14 @@ CEO 채팅에서 AI에게 파일 수정을 지시하면 즉시 반영되는 경�
 **대상**: AADS 프로젝트의 `.py` 파일 및 일반 파일.
 **제약**: `.env`, `.ssh`, `credentials` 등 민감 파일은 보안 차단.
 
+**의존성 정책(v1.2 보강)**: 채팅 직접 수정은 Runner의 `depends_on`
+그래프에 자동 편입된다고 단정하지 않는다. 직접 수정 전에는 반드시
+활성 `pipeline_jobs`, 같은 repo/file의 `chat_workspace_change_ledger`
+dirty 변경, 현재 `git status`를 확인한다. 동일 파일 또는 활성 Runner
+충돌이 있으면 직접 수정하지 말고 Pipeline Runner `depends_on` 또는
+`depends_on_key`로 전환한다. 상세 기준은
+`docs/knowledge/DIRECT-WORK-DEPENDENCY-POLICY-v1.0.md`를 따른다.
+
 ### 경로 B: Pipeline Runner (대규모 변경 / 배포)
 
 CEO 채팅에서 `pipeline_runner_submit`으로 시작하거나 자동 트리거(`auto_trigger.sh`)로 실행되는 경로.
@@ -251,3 +259,4 @@ pre-push hook이 push 시 이 서명의 유효성을 검증 (120초 이내).
 | v1.0 | 2026-04-01 | 최초 작성. 경로 A/B 실측 기반 전체 흐름 문서화 (AADS-191) |
 | v1.0.1 | 2026-04-01 | asyncio.Lock 동시수정 보호 추가, AI리뷰 3버그 수정 |
 | **v1.1** | **2026-04-02** | **P2 배포이력 DB, P4 fcntl git lock, I1 pre-push hook, Cross-Monitor SSH 경유, Watchdog 자동복구, Blue-Green 스크립트, 사전검증 스크립트** |
+| **v1.2** | **2026-07-31** | **채팅 직접 작업 의존성 게이트 운영정책 추가** |
