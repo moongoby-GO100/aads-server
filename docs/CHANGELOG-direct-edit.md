@@ -3833,3 +3833,849 @@ with open(p) as f:
 
 ## [2026-07-25 18:49:56 KST] [aads-server] scripts/build-dashboard.sh
 - Chat-Direct 수정: write: scripts/build-dashboard.sh
+
+## [2026-07-26 07:58:41 KST] [aads-server] scripts/patch_task_plan.py
+- Chat-Direct 수정: write: scripts/patch_task_plan.py
+
+## [2026-07-26 08:02:18 KST] [aads-server] scripts/deploy_dashboard_bg.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg.sh
+
+## [2026-07-26 08:03:28 KST] [aads-server] scripts/deploy_dash.sh
+- Chat-Direct 수정: write: scripts/deploy_dash.sh
+
+## [2026-07-26 08:14:07 KST] [aads-server] scripts/patch_task_plan.py
+- Chat-Direct 수정: write: scripts/patch_task_plan.py
+
+## [2026-07-26 08:15:32 KST] [aads-server] scripts/deploy_dashboard_bg.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard_bg.sh
+
+## [2026-07-26 08:16:27 KST] [aads-server] scripts/deploy_dash.sh
+- Chat-Direct 수정: write: scripts/deploy_dash.sh
+
+## [2026-07-26 08:35:27 KST] [aads-server] scripts/patch_workspace_delete.py
+- Chat-Direct 수정: write: scripts/patch_workspace_delete.py
+
+## [2026-07-26 08:38:20 KST] [aads-server] scripts/patch_markdown_filepath.py
+- Chat-Direct 수정: write: scripts/patch_markdown_filepath.py
+
+## [2026-07-26 08:39:51 KST] [aads-server] scripts/deploy_dashboard.sh
+- Chat-Direct 수정: write: scripts/deploy_dashboard.sh
+
+## [2026-07-26 08:50:08 KST] [aads-server] scripts/fix_regex.py
+- Chat-Direct 수정: write: scripts/fix_regex.py
+
+## [2026-07-26 18:16:31 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:     "XL": "claude-opus-4-8",→    "XL": "claude-opus-5",
+
+## [2026-07-26 18:27:44 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 2026-07-25 09:31 KST→# AADS HANDOVER
+
+## 2026-07-26 18:18 KST
+
+## [2026-07-26 18:28:07 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-07-25 09:31 KST - OHVIS 3-Tier t→## 2026-07-26 18:18 KST - Claude Opus 5
+
+## [2026-07-26 18:28:21 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: sed -i '2a\\n## 2026-07-26 18:18 KST - Claude Opus 5 full-stack integration\n\n-
+
+## [2026-07-26 18:58:13 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch: _CODEX_AVAILABLE_MODELS = {"default", "g→_CODEX_AVAILABLE_MODELS = {"default", "g
+
+## [2026-07-26 19:01:08 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch: _CODEX_AVAILABLE_MODELS = {"default", "g→_CODEX_AVAILABLE_MODELS = {"default", "g
+
+## [2026-07-26 19:35:46 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cat > /tmp/handover_prepend.txt << 'HANDOVER_EOF'
+## 2026-07-26 19:30 KST - 세션 9
+
+## [2026-07-26 19:36:55 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-07-26 18:18 KST - Claude Opus 5 →## 2026-07-26 19:30 KST - 세션 94a1dc9e "언
+
+## [2026-07-26 19:37:59 KST] [aads-server] /tmp/ho_section.md
+- Chat-Direct 수정: write: /tmp/ho_section.md
+
+## [2026-07-26 19:41:48 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:8100/api/v1/ops/health-check | python3 -c "import sys,j
+
+## [2026-07-26 20:10:06 KST] [aads-server] app/data/yeoljeong_finance/settings.json
+- Chat-Direct 수정: run_remote_command: docker ps --format "{{.Names}}\t{{.Status}}" | grep dashboard
+
+## [2026-07-26 20:10:10 KST] [aads-server] app/data/yeoljeong_finance/delivery_sales.json
+- Chat-Direct 수정: run_remote_command: docker compose -f /root/aads/aads-dashboard/docker-compose.yml build aads-dashbo
+
+## [2026-07-26 20:39:59 KST] [aads-server] nginx-fb.conf
+- Chat-Direct 수정: run_remote_command: grep -n -i "gemini\|fallback\|dummy\|openai\|def " /root/aads/aads-server/app/se
+
+## [2026-07-26 20:42:35 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _GEMINI_FALLBACK_MODEL = "gemini-2.5-fla→_GEMINI_FALLBACK_MODEL = "gemini-2.5-fla
+
+## [2026-07-26 20:43:41 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:             # 실패 시 Gemini 폴백
+           →            # 실패 시 Gemini 폴백 — 기본 비활성(크레
+
+## [2026-07-26 20:44:45 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:     _lc = get_litellm_config()
+    if _l→    _lc = get_litellm_config()
+    if _G
+
+## [2026-07-26 20:46:03 KST] [aads-server] app/services/chat_embedding_service.py
+- Chat-Direct 수정: patch: _EMBED_CACHE_MAX = int(os.getenv("EMBED_→_EMBED_CACHE_MAX = int(os.getenv("EMBED_
+
+## [2026-07-26 20:50:24 KST] [aads-server] app/services/chat_embedding_service.py
+- Chat-Direct 수정: patch:     api_key = os.getenv("GOOGLE_API_KEY"→    global _gemini_blocked_until
+    api
+
+## [2026-07-26 20:51:26 KST] [aads-server] app/services/code_indexer_service.py
+- Chat-Direct 수정: patch:     async def _embed_texts(self, texts: →    _gemini_blocked_until: float = 0.0
+
+
+
+## [2026-07-26 20:52:57 KST] [aads-server] app/services/code_indexer_service.py
+- Chat-Direct 수정: patch: import ast as python_ast
+import asyncio
+→import ast as python_ast
+import asyncio
+
+
+## [2026-07-26 21:07:39 KST] [aads-server] app/services/chat_embedding_service.py
+- Chat-Direct 수정: patch: _EMBED_GEMINI_ENABLED = os.getenv("EMBED→_EMBED_GEMINI_ENABLED = os.getenv("EMBED
+
+## [2026-07-26 21:14:22 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 2026-07-24 23:00 KST→# AADS HANDOVER
+
+## 2026-07-26 21:10 KST
+
+## [2026-07-26 21:16:17 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: python3 -c "
+p='/root/aads/aads-server/HANDOVER.md'
+t=open(p).read()
+s='\n## 202
+
+## [2026-07-27 07:16:30 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: write: docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+
+## [2026-07-27 07:16:46 KST] [aads-server] docs/layout/AADS-LAYOUT-001_OHVIS_Loop_Engineering.md
+- Chat-Direct 수정: write: docs/layout/AADS-LAYOUT-001_OHVIS_Loop_Engineering.md
+
+## [2026-07-27 07:20:02 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 2026-07-26 19:41 KST→# AADS HANDOVER
+
+## 2026-07-27 07:19 KST
+
+## [2026-07-27 07:21:27 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: sed -i '1a\\n## 2026-07-27 07:19 KST - AADS-LAYOUT-001 OHVIS 루프 시스템 기획서 커밋/푸시\n\
+
+## [2026-07-27 07:33:45 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: | 비용 상한 | $0.50 | $2.00 | $5.00 | CEO 지정→| 비용 상한 (Sonnet 기준) | $0.50 | $3.00 | $6
+
+## [2026-07-27 07:34:09 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: ### 6.3 CEO 오버라이드 명령어→### 6.3 모델별 자동 비용 조정 (P0 — 2026-07-27 추가
+
+## [2026-07-27 07:34:19 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch:     max_cost_usd    DECIMAL(8,4) DEFAULT→    max_cost_usd    DECIMAL(8,4) DEFAULT
+
+## [2026-07-27 07:34:29 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: | 루프 유형 | 일반 시나리오 | LLM 호출 | 예상 비용 |
+|--→| 루프 유형 | 일반 시나리오 | LLM 호출 | Sonnet 예상 |
+
+## [2026-07-27 07:34:34 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: ```python
+iteration_cost = sum(llm_call_→```python
+max_cost_usd = await resolve_m
+
+## [2026-07-27 07:34:39 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch:     "default_max_iterations": 5,
+    "de→    "default_max_iterations": 5,
+    "de
+
+## [2026-07-27 07:34:46 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: | Loop Controller 모듈 | 핵심 제어 로직 | `app/s→| Loop Controller 모듈 | 핵심 제어 로직 | `app/s
+
+## [2026-07-27 07:34:51 KST] [aads-server] docs/layout/AADS-LAYOUT-001_OHVIS_Loop_Engineering.md
+- Chat-Direct 수정: patch: | 루프당 예산 | $5.00 | 초과 시 CEO 승인 (기존 러너 규칙→| 루프당 예산 | 모델별 자동 산출 (Sonnet $3.00 / Opu
+
+## [2026-07-27 07:36:06 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 2026-07-27 07:19 KST→# AADS HANDOVER
+
+## 2026-07-27 07:35 KST
+
+## [2026-07-27 07:36:50 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: sleep 30 && tail -5 /tmp/dashboard-build.log
+
+## [2026-07-27 07:37:18 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: grep -n "volumes" -A 12 /root/aads/aads-server/docker-compose.prod.yml
+
+## [2026-07-27 07:37:18 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: ps -p 1085673 -o pid,state 2>/dev/null | grep -v PID
+
+## [2026-07-27 07:37:54 KST] [aads-server] scripts/handover_prepend_loop_cost.py
+- Chat-Direct 수정: write: scripts/handover_prepend_loop_cost.py
+
+## [2026-07-27 07:51:39 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: | 모델 | input $/1M | output $/1M | 배율 |
+|→| 모델 | Provider | input $/1M | output $/
+
+## [2026-07-27 07:52:07 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: ## 교훈
+
+- Loop은 "반복"이 아니라 "자율 위임"의 핵심 인프라→## 16. 멀티프로젝트 지원 (2026-07-27 추가)
+
+### 16
+
+## [2026-07-27 07:52:31 KST] [aads-server] docs/AADS-LAYOUT-001_OHVIS-LOOP-SYSTEM.md
+- Chat-Direct 수정: patch: | 루프 유형 | 기준 예산 | Haiku | Luna | Terra |→| 루프 유형 | 기준 예산 | Mini | Haiku | Luna | 
+
+## [2026-07-27 07:54:48 KST] [aads-server] migrations/20260727_create_loop_tables.sql
+- Chat-Direct 수정: write: migrations/20260727_create_loop_tables.sql
+
+## [2026-07-27 07:56:32 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: write: app/services/loop_controller.py
+
+## [2026-07-27 07:57:00 KST] [aads-server] tests/unit/test_loop_controller.py
+- Chat-Direct 수정: write: tests/unit/test_loop_controller.py
+
+## [2026-07-27 07:57:46 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch: from app.core.database import get_db_poo→from app.core.db_pool import get_pool as
+
+## [2026-07-27 07:57:48 KST] [aads-server] tests/unit/test_loop_controller.py
+- Chat-Direct 수정: patch: @pytest.fixture
+def mock_db_pool():
+    →@pytest.fixture(autouse=True)
+def mock_d
+
+## [2026-07-27 07:58:33 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m py_compile app/services/loop_controller.py
+
+## [2026-07-27 07:58:43 KST] [aads-server] tests/unit/test_loop_controller.py
+- Chat-Direct 수정: patch: @pytest.fixture(autouse=True)
+def mock_d→@pytest.fixture(autouse=True)
+def mock_d
+
+## [2026-07-27 08:00:15 KST] [aads-server] tests/unit/test_loop_controller.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_loop_controller.py /root/aads/aads-se
+
+## [2026-07-27 08:18:44 KST] [aads-server] app/api/loops.py
+- Chat-Direct 수정: write: app/api/loops.py
+
+## [2026-07-27 08:19:34 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: write: app/services/loop_executor.py
+
+## [2026-07-27 08:29:46 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: write: app/services/loop_executor.py
+
+## [2026-07-27 09:15:30 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: grep -R "model_fallback" /root/aads/aads-dashboard/src
+
+## [2026-07-28 06:18:44 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:         scheduler.add_job(_mcp_health_ch→        scheduler.add_job(_mcp_health_ch
+
+## [2026-07-28 06:19:08 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: write: app/services/loop_chat_handler.py
+
+## [2026-07-28 06:19:20 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 logger.info("ohvis_tier1→                logger.info("ohvis_tier1
+
+## [2026-07-28 06:27:04 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:             CASE WHEN $4 IS NOT NULL THE→            CASE WHEN $4 IS NOT NULL THE
+
+## [2026-07-28 06:28:49 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:         loop_type,
+        original_comm→        loop_type,
+        original_comm
+
+## [2026-07-28 06:30:04 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:             CASE WHEN $4 IS NOT NULL THE→            CASE WHEN $4 IS NOT NULL THE
+
+## [2026-07-28 06:30:10 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:         float(interval_seconds) if inter→        interval_seconds,
+
+## [2026-07-28 06:31:21 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:             $13, $14, NOW(),
+           →            $13, $14, NOW(),
+           
+
+## [2026-07-28 06:31:59 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch: CASE WHEN $15 IS NOT NULL THEN NOW() + (→CASE WHEN $15 IS NOT NULL THEN NOW() + (
+
+## [2026-07-28 06:32:52 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:     pool = get_db_pool()
+    row = await→    next_run_at = None
+    if interval_s
+
+## [2026-07-28 06:34:05 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:             last_result = COALESCE(last_→            last_result = COALESCE(last_
+
+## [2026-07-28 06:34:37 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:     parsed_intent: dict | None = None,→    parsed_intent: dict | None = None,  
+
+## [2026-07-28 06:34:43 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:         _json_or_null(parsed_intent),→        _json_or_null(parsed_intent or {
+
+## [2026-07-28 06:35:02 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch:     result = await create_loop(
+        →    result = await create_loop(
+        
+
+## [2026-07-28 06:36:35 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: def detect_loop_intent(content: str) -> →_LOOP_ANCHOR = re.compile(r"루프|loop|감시|모
+
+## [2026-07-28 06:49:37 KST] [aads-server] app/api/loops.py
+- Chat-Direct 수정: patch: def _serialize_list(rows: list[dict]) ->→def _serialize_list(rows: list[dict]) ->
+
+## [2026-07-28 06:59:38 KST] [aads-server] docs/reports/20260728_UNNI_NAENGMYEON_BROTH_DADAEGI_COST_REPORT.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git status --short | head -10
+
+## [2026-07-28 07:01:07 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 2026-07-27 08:45 KST→# AADS HANDOVER
+
+## 2026-07-28 07:00 KST
+
+## [2026-07-29 07:13:22 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -I https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html
+
+## [2026-07-30 08:28:49 KST] [aads-server] tests/unit/test_yeoljeong_finance_print_static.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -A -F"|" -c "SELECT s.id, s.cr
+
+## [2026-07-30 08:29:53 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-server/app/services/loop_chat_handler.py /root/aads/aads-
+
+## [2026-07-30 08:36:34 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             _loop_intent = detect_loop_i→            _loop_intent = detect_loop_i
+
+## [2026-07-30 08:36:36 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: docker logs --since 90m aads-server 2>&1 | grep -c "codex-stream \\\\\"HTTP/1.1 
+
+## [2026-07-30 08:38:47 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         _lr = await hand→                        _lr = await hand
+
+## [2026-07-30 08:38:58 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         _lr = await hand→                        _lr = await hand
+
+## [2026-07-30 08:39:06 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                         _lr = await hand→                        _lr = await hand
+
+## [2026-07-30 08:39:32 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: _LOOP_ANCHOR = re.compile(r"루프|loop|감시|모→# ── 오탐 방지 가드 (AADS-LOOP-FP-001) ───────
+
+## [2026-07-30 08:39:55 KST] [aads-server] scripts/_verify_loop_intent.py
+- Chat-Direct 수정: write: scripts/_verify_loop_intent.py
+
+## [2026-07-30 08:42:51 KST] [aads-server] docs/handover/AADS-LOOP-FP-001.md
+- Chat-Direct 수정: write: docs/handover/AADS-LOOP-FP-001.md
+
+## [2026-07-30 09:23:53 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: write: app/services/loop_executor.py
+
+## [2026-07-30 09:24:06 KST] [aads-server] app/static/apps/yeoljeong-finance/mockup-v2.html
+- Chat-Direct 수정: run_remote_command: grep -n "parallel_group\|depends_on\|_project_locks\|lock\|conflict\|concurrent\
+
+## [2026-07-30 09:26:21 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import asyncio
+async def test():
+    from a
+
+## [2026-07-30 09:30:46 KST] [aads-server] app/core/auth_provider.py
+- Chat-Direct 수정: patch: def create_anthropic_client(token: Optio→def create_anthropic_client(token: Optio
+
+## [2026-07-30 09:33:57 KST] [aads-server] app/data/yeoljeong_finance/delivery_collection_status.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:33:58 KST] [aads-server] app/data/yeoljeong_finance/delivery_reviews.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:33:58 KST] [aads-server] app/data/yeoljeong_finance/delivery_sales.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:33:59 KST] [aads-server] app/data/yeoljeong_finance/delivery_settlements.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:00 KST] [aads-server] app/data/yeoljeong_finance/settings.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:07 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:12 KST] [aads-server] app/static/apps/yeoljeong-finance/mockup-v2.html
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:18 KST] [aads-server] app/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:26 KST] [aads-server] docker-compose.prod.yml
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:27 KST] [aads-server] docs/CHANGELOG-dashboard-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:33 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:34:40 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop
+
+## [2026-07-30 09:52:40 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp = await call_llm_with_fallback(
+
+## [2026-07-30 09:52:47 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp = await call_llm_with_fallback(
+
+## [2026-07-30 09:56:08 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp = await call_llm_with_fallback(
+
+## [2026-07-30 09:56:43 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     iteration_num = (loop["current_itera→    iteration_num = (loop["current_itera
+
+## [2026-07-30 10:01:40 KST] [aads-server] app/api/hot_reload.py
+- Chat-Direct 수정: patch:         module = sys.modules.get(module_→        module = sys.modules.get(module_
+
+## [2026-07-30 10:10:55 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: async def run_iteration(loop_id: int) ->→async def run_iteration(loop_id: int) ->
+
+## [2026-07-30 10:11:11 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp = await call_llm_with_fallback(
+
+## [2026-07-30 10:11:26 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp = await call_llm_with_fallback(
+
+## [2026-07-30 10:11:38 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp = await call_llm_with_fallback(
+
+## [2026-07-30 16:17:45 KST] [aads-server] tmp_duct_vision/analyze.py
+- Chat-Direct 수정: write: tmp_duct_vision/analyze.py
+
+## [2026-07-30 16:21:29 KST] [aads-server] tmp_duct_vision/analyze2.py
+- Chat-Direct 수정: write: tmp_duct_vision/analyze2.py
+
+## [2026-07-30 16:31:18 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _DASHSCOPE_BASE_URL = "https://dashscope→_DASHSCOPE_BASE_URL = "https://dashscope
+
+## [2026-07-30 16:31:34 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:             return await _call_dashscope→            return await _call_dashscope
+
+## [2026-07-30 16:31:53 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 except Exception as e2:
+→                except Exception as e2:
+
+
+## [2026-07-30 16:35:09 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         max_tokens=1000,
+        system=→        max_tokens=1000,
+        system=
+
+## [2026-07-30 16:35:24 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         max_tokens=2000,
+        system=→        max_tokens=2000,
+        system=
+
+## [2026-07-30 16:35:33 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         max_tokens=2000,
+        system=→        max_tokens=2000,
+        system=
+
+## [2026-07-30 16:36:08 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: import asyncio
+import logging
+import tim→import asyncio
+import logging
+import re
+
+
+## [2026-07-30 16:41:47 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: import asyncio
+import logging
+import re
+→import asyncio
+import logging
+import os
+
+
+## [2026-07-30 16:42:09 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     tid = loop.get("tenant_id")
+    if i→    tid = loop.get("tenant_id")
+    if i
+
+## [2026-07-30 16:42:21 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp, used_model = await _call_llm_r
+
+## [2026-07-30 16:42:49 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         "llm_calls": 1,
+        "cost_us→        "llm_calls": 1,
+        "cost_us
+
+## [2026-07-30 16:43:03 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp, used_model = await _call_llm_r
+
+## [2026-07-30 16:43:27 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp, used_model = await _call_llm_r
+
+## [2026-07-30 16:43:39 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         "data": {**(parsed or {}), "task→        "data": {**(parsed or {}), "task
+
+## [2026-07-30 16:43:50 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:             duration_ms=duration_ms,
+   →            duration_ms=duration_ms,
+   
+
+## [2026-07-30 16:49:26 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch: async def list_active_loops(project: str→async def list_active_loops(
+    project
+
+## [2026-07-30 16:49:33 KST] [aads-server] app/api/loops.py
+- Chat-Direct 수정: patch: async def api_list_loops(
+    project: O→async def api_list_loops(
+    project: O
+
+## [2026-07-30 16:55:22 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: _DASHSCOPE_BASE_URL = "https://dashscope→_DASHSCOPE_BASE_URL = "https://dashscope
+
+## [2026-07-30 16:55:28 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:             return await _call_dashscope→            return await _call_dashscope
+
+## [2026-07-30 16:55:35 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch:                 except Exception as e2:
+→                except Exception as e2:
+
+
+## [2026-07-30 16:57:31 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         max_tokens=1000,
+        system=→        max_tokens=1000,
+        system=
+
+## [2026-07-30 16:57:32 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         max_tokens=2000,
+        system=→        max_tokens=2000,
+        system=
+
+## [2026-07-30 16:57:33 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         max_tokens=2000,
+        system=→        max_tokens=2000,
+        system=
+
+## [2026-07-30 16:57:34 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: import asyncio
+import logging
+import tim→import asyncio
+import logging
+import re
+
+
+## [2026-07-30 17:00:22 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: import asyncio
+import logging
+import re
+→import asyncio
+import logging
+import os
+
+
+## [2026-07-30 17:00:24 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     tid = loop.get("tenant_id")
+    if i→    tid = loop.get("tenant_id")
+    if i
+
+## [2026-07-30 17:00:31 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp, used_model = await _call_llm_r
+
+## [2026-07-30 17:00:40 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         "llm_calls": 1,
+        "cost_us→        "llm_calls": 1,
+        "cost_us
+
+## [2026-07-30 17:00:48 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp, used_model = await _call_llm_r
+
+## [2026-07-30 17:00:58 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     resp = await call_llm_with_fallback(→    resp, used_model = await _call_llm_r
+
+## [2026-07-30 17:01:06 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:         "data": {**(parsed or {}), "task→        "data": {**(parsed or {}), "task
+
+## [2026-07-30 17:01:14 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:             duration_ms=duration_ms,
+   →            duration_ms=duration_ms,
+   
+
+## [2026-07-30 17:05:04 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch: async def list_active_loops(project: str→async def list_active_loops(
+    project
+
+## [2026-07-30 17:05:06 KST] [aads-server] app/api/loops.py
+- Chat-Direct 수정: patch: async def api_list_loops(
+    project: O→async def api_list_loops(
+    project: O
+
+## [2026-07-30 17:12:52 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: # 루프 실행용 최종 폴백 모델 체인 (LiteLLM 경유).
+# Cla→async def _call_llm_resilient(
+
+## [2026-07-30 17:13:08 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     return None, model
+
+
+# 루프 실행용 최종 폴백 →    return None, model
+
+
+async def _call
+
+## [2026-07-30 17:13:27 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: async def _execute_monitor(loop: dict, i→async def _execute_monitor(loop: dict, i
+
+## [2026-07-30 17:13:30 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: async def _execute_task(loop: dict, iter→async def _execute_task(loop: dict, iter
+
+## [2026-07-30 17:13:33 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     current_task = task_list[task_idx]
+
+→    current_task = task_list[task_idx]
+
+
+
+## [2026-07-30 17:15:52 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     return None, model
+
+
+async def _call→    return None, model
+
+
+async def run_i
+
+## [2026-07-30 17:16:22 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     model_id = loop["execution_model_id"→    model_id = loop["execution_model_id"
+
+## [2026-07-31 10:24:06 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIX→_AUTO_RESUME_PROCESS_INTERRUPTION_PREFIX
+
+## [2026-07-31 10:24:12 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:         elif backend == "codex_cli":
+   →        elif backend == "codex_cli":
+   
+
+## [2026-07-31 10:24:36 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     return {
+        "scanned": len(rows→    # P1: stale retrying 정리 — resume tas
+
+## [2026-07-31 10:25:13 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: LOOP_START_KW = ("감시해", "감시하고", "모니터링해",→LOOP_START_KW = (
+    "감시해", "감시하고", "모니
+
+## [2026-07-31 10:25:30 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: def detect_loop_intent(content: str) -> →def detect_loop_intent(content: str) -> 
+
+## [2026-07-31 10:25:47 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: async def handle_loop_start(
+    content→async def handle_loop_start_confirm(
+   
+
+## [2026-07-31 10:26:08 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     if _loop_intent == "→                    if _loop_intent == "
+
+## [2026-07-31 10:26:35 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: LOOP_START_KW = (
+    "감시해", "감시하고", "모니→LOOP_START_KW = (
+    "감시해", "감시하고", "모니
+
+## [2026-07-31 10:26:44 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch:     # START는 _NON_COMMAND_HINT 가드 없이 판정 →    # CEO 승인 응답 → 즉시 루프 생성 (확인 프롬프트 스킵)
+
+
+## [2026-07-31 10:34:04 KST] [aads-server] scripts/verify_loop_p0p1.py
+- Chat-Direct 수정: write: scripts/verify_loop_p0p1.py
+
+## [2026-07-31 10:42:43 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: import re
+import logging
+from typing imp→import re
+import time
+import logging
+fro
+
+## [2026-07-31 10:42:48 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+최종 업데이트: 2026-07-30
+
+## →# AADS HANDOVER
+최종 업데이트: 2026-07-31
+
+## 
+
+## [2026-07-31 10:43:49 KST] [aads-server] migrations/112_pipeline_jobs_actual_changed_files.sql
+- Chat-Direct 수정: run_remote_command: grep -n "loop_start_confirm" app/services/chat_service.py
+
+## [2026-07-31 10:44:41 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: → **'진행해'** 또는 **'루프 시작'**으로 승인하시면 루프를 생→→ **'루프 진행'** 또는 **'루프 시작'**으로 승인하시면 루프를
+
+## [2026-07-31 10:45:38 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: import re
+import time
+import logging→import re
+import logging
+
+## [2026-07-31 10:46:00 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: import re
+import logging
+from typing imp→import re
+import time
+import logging
+fro
+
+## [2026-07-31 10:46:12 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: # CEO 확인 프롬프트 승인 키워드 → loop_start (확인 없이→# CEO 확인 프롬프트 승인 키워드 → loop_start (확인 없이
+
+## [2026-07-31 10:46:18 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch:     """P1: 루프 생성 전 확인 프롬프트를 반환한다."""
+   →    """P1: 루프 생성 전 확인 프롬프트를 반환한다."""
+   
+
+## [2026-07-31 10:46:22 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: patch: 
+## 2026-07-30
+→- AADS-LOOP-P0P1-CONFIRM-KEYWORD-FIX-202
+
+## [2026-07-31 10:46:24 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: async def handle_loop_start(
+    content→async def handle_loop_start(
+    content
+
+## [2026-07-31 10:46:45 KST] [aads-server] /tmp/verify_loop_p0p1.py
+- Chat-Direct 수정: write: /tmp/verify_loop_p0p1.py
+
+## [2026-07-31 13:30:08 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: LOOP_START_KW = (
+    "감시해", "감시하고", "모니→LOOP_START_KW = (
+    "감시해", "감시하고", "모니
+
+## [2026-07-31 13:30:13 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프→LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프
+
+## [2026-07-31 13:30:14 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch:     # CEO 승인 응답 → 즉시 루프 생성 (확인 프롬프트 스킵)
+→    # CEO 승인 응답 → 즉시 루프 생성 (50자 이하 짧은 승인
+
+## [2026-07-31 14:01:28 KST] [aads-server] app/services/loop_chat_handler.py
+- Chat-Direct 수정: patch: LOOP_START_KW = (
+    "감시해", "감시하고", "모니→LOOP_START_KW = (
+    "감시해", "감시하고", "모니
+
+## [2026-07-31 14:15:18 KST] [aads-server] app/services/loop_controller.py
+- Chat-Direct 수정: patch:     next_run_at = None
+    if interval_s→    next_run_at = None
+    if interval_s
+
+## [2026-07-31 14:38:07 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:                 else:
+                  →                elif fname.lower().endsw
+
+## [2026-07-31 14:38:09 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:                 elif mime == "applicatio→                elif mime == "applicatio
+
+## [2026-07-31 14:41:48 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:                         import io as _io→                        import io as _io
+
+## [2026-07-31 14:45:27 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         elif mime_type.startswith("text/→        elif Path(filename).suffix.lower
+
+## [2026-07-31 14:46:29 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 elif mime.startswith("te→                elif Path(fname).suffix.
+
+## [2026-07-31 14:59:33 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         elif mime_type.startswith("text/→        elif Path(filename).suffix.lower
+
+## [2026-07-31 15:00:21 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 elif mime.startswith("te→                elif Path(fname).suffix.
+
+## [2026-07-31 15:23:20 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                     _now = _bg_time.mono→                    _now = _bg_time.mono
+
+## [2026-07-31 15:23:35 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                         WHERE te.status →                        WHERE te.status 
+
+## [2026-07-31 15:24:16 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                               AND status→                              AND status
+
+## [2026-07-31 15:27:32 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIX→_AUTO_RESUME_PROCESS_INTERRUPTION_PREFIX
+
+## [2026-07-31 15:30:35 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: patch: # AADS HANDOVER
+
+## 2026-07-30 08:44 KST→# AADS HANDOVER
+
+## 2026-07-31 15:29 KST
+
+## [2026-07-31 15:36:12 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:                           AND (
+        →                          AND (
+        
+
+## [2026-08-02 20:55:55 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: async def run_iteration(loop_id: int) ->→async def _write_loop_result_to_chat(loo
+
+## [2026-08-02 20:56:04 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:             alert_channel=result.get("al→            alert_channel=result.get("al
+
+## [2026-08-02 20:57:37 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     import uuid as _uuid
+    from app.co→    import uuid as _uuid
+
+    from app.c
+
+## [2026-08-02 20:57:45 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     except Exception as exc:
+        log→    except (OSError, ValueError, Runtime
+
+## [2026-08-02 21:00:20 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: async def run_iteration(loop_id: int) ->→async def _write_loop_result_to_chat(loo
+
+## [2026-08-02 21:00:22 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:             alert_channel=result.get("al→            alert_channel=result.get("al
+
+## [2026-08-02 21:01:04 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     import uuid as _uuid
+    from app.co→    import uuid as _uuid
+
+    from app.c
+
+## [2026-08-02 21:01:06 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch:     except Exception as exc:
+        log→    except (OSError, ValueError, Runtime
+
+## [2026-08-02 21:28:58 KST] [aads-server] docs/reports/20260802_OHVIS_5SEC_ARCHITECTURE_REVIEW.md
+- Chat-Direct 수정: write: docs/reports/20260802_OHVIS_5SEC_ARCHITECTURE_REVIEW.md
+
+## [2026-08-02 21:43:19 KST] [aads-server] docs/reports/20260802_OHVIS_PERFECT_RESPONSE_SYSTEM_BLUEPRINT.md
+- Chat-Direct 수정: write: docs/reports/20260802_OHVIS_PERFECT_RESPONSE_SYSTEM_BLUEPRINT.md
+
+## [2026-08-02 21:52:37 KST] [aads-server] app/services/loop_executor.py
+- Chat-Direct 수정: patch: async def _write_loop_result_to_chat(loo→async def _write_loop_result_to_chat(loo
+
+## [2026-08-02 22:26:06 KST] [aads-server] docs/reports/20260802_OHVIS_SYSTEM_CONSTRUCTION_PLAN.md
+- Chat-Direct 수정: write: docs/reports/20260802_OHVIS_SYSTEM_CONSTRUCTION_PLAN.md
+
+## [2026-08-02 23:20:07 KST] [aads-server] docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+- Chat-Direct 수정: write: docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+
+## [2026-08-03 06:36:24 KST] [aads-server] docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+- Chat-Direct 수정: write: docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+
+## [2026-08-03 06:37:08 KST] [aads-server] docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+- Chat-Direct 수정: write: docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+
+## [2026-08-03 06:54:15 KST] [aads-server] docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+- Chat-Direct 수정: write: docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+
+## [2026-08-03 06:55:51 KST] [aads-server] docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+- Chat-Direct 수정: write: docs/AADS-LAYOUT-002_AUTONOMOUS-LOOP-AGENT.md
+
+## [2026-08-04 18:28:47 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/

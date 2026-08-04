@@ -804,3 +804,145 @@ with open(p
 
 ## [2026-07-25 18:49:47 KST] [aads-dashboard] ../aads-dashboard/build-opus5.sh
 - Chat-Direct 수정: write: ../aads-dashboard/build-opus5.sh
+
+## [2026-07-26 07:57:08 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch: } else if (ev.type === "model_fallback")→} else if (ev.type === "model_fallback")
+
+## [2026-07-26 07:58:51 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_task_plan.py
+
+## [2026-07-26 08:05:21 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '6128s/} else if/if/' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-07-26 08:07:04 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git reset --soft HEAD~1
+
+## [2026-07-26 08:07:50 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git pull --rebase origin main
+
+## [2026-07-26 08:08:25 KST] [aads-dashboard] public/manager/env_unknown.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git stash pop && git push origin main
+
+## [2026-07-26 08:13:43 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch: } else if (ev.type === "model_fallback")→} else if (ev.type === "model_fallback")
+
+## [2026-07-26 08:17:35 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '6133a\            }' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-07-26 08:18:14 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git reset --soft HEAD~1
+
+## [2026-07-26 08:18:43 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git pull --rebase origin main
+
+## [2026-07-26 08:19:01 KST] [aads-dashboard] public/manager/env_unknown.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && git stash pop && git push origin main
+
+## [2026-07-26 08:32:42 KST] [aads-dashboard] src/app/chat/ChatArtifactPanel.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/const ARTIFACT_PANEL_DEFAULT_WIDTH = ARTIFACT_PANEL_MIN_WIDTH;/const A
+
+## [2026-07-26 08:35:35 KST] [aads-dashboard] src/app/chat/ChatSidebar.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_workspace_delete.py
+
+## [2026-07-26 08:35:35 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_workspace_delete.py
+
+## [2026-07-26 08:38:29 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_markdown_filepath.py
+
+## [2026-07-26 08:44:42 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '6144d' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-07-26 08:47:24 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/title={copied ? "\\u2705 \\ubcf5\\uc0ac\\ub428" : "\\ud074\\ub9ad\\ud5
+
+## [2026-07-26 08:50:17 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_regex.py
+
+## [2026-07-26 18:22:18 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: grep -n "task_plan" /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-07-26 19:27:06 KST] [aads-dashboard] public/manager/env_unknown.json
+- Chat-Direct 수정: run_remote_command: docker logs aads-server --since=1m 2>&1 | grep "429 Too Many"
+
+## [2026-07-26 20:08:31 KST] [aads-dashboard] src/app/unni-naengmyeon/recipes/RecipePrintActions.tsx
+- Chat-Direct 수정: run_remote_command: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep dashboard
+
+## [2026-07-26 20:09:11 KST] [aads-dashboard] src/app/unni-naengmyeon/recipes/page.tsx
+- Chat-Direct 수정: run_remote_command: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -e dashboa
+
+## [2026-07-27 07:29:47 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     // PERF P1: 렌더링 cap — DOM 노드 과부하 방지 →    // PERF P1: 렌더링 cap — DOM 노드 과부하 방지 
+
+## [2026-07-27 07:29:49 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:             overflowAnchor: "none" as ne→            padding: screenSize === "mob
+
+## [2026-07-27 07:29:51 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:         overflowAnchor: "none" as never,→        overflowAnchor: "auto" as never,
+
+## [2026-07-27 07:30:00 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/    const MAX_RENDER = 150;/    const MAX_RENDER = messages.length > 5
+
+## [2026-07-27 07:30:00 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT worker_model, count
+
+## [2026-07-27 07:31:11 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/^function MarkdownBlock({ text, linkColor }: { text: string; linkColor
+
+## [2026-07-27 07:39:30 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '7785d' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-07-27 08:11:19 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8100/api/v1/loops 2>/dev/null
+
+## [2026-07-28 06:18:25 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "sid_short\|_artifact_chain" /app/app/services/c
+
+## [2026-07-28 06:20:49 KST] [aads-dashboard] src/app/admin/loops/page.tsx
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/app/admin/loops/page.tsx << 'PAGEEOF'
+"use c
+
+## [2026-07-28 06:21:01 KST] [aads-dashboard] src/components/Sidebar.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-dashboard && sed -i 's|{ href: "/admin/deploy", label: "배포 현황
+
+## [2026-07-28 06:37:59 KST] [aads-dashboard] public/manager/env_unknown.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git commit -m "feat: OHVIS Loop System Phase 2 — sc
+
+## [2026-07-30 16:33:19 KST] [aads-dashboard] src/app/unni-naengmyeon/page.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard ls -la /app/.next/server/app/admin/ | grep -i loop
+
+## [2026-07-30 17:00:16 KST] [aads-dashboard] public/manager/env_unknown.json
+- Chat-Direct 수정: run_remote_command: ALLOW_AUTH_COMMIT=1 git -C /root/aads/aads-server commit -m "fix(loop): 배경 LLM 최
+
+## [2026-07-31 14:47:42 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const currentExecutionIdRef = useRef<s→  const currentExecutionIdRef = useRef<s
+
+## [2026-07-31 14:48:00 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/  const currentExecutionIdRef = useRef<string | null>(null);/  const c
+
+## [2026-07-31 15:01:20 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:   const currentExecutionIdRef = useRef<s→  const currentExecutionIdRef = useRef<s
+
+## [2026-07-31 15:01:30 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/  const currentExecutionIdRef = useRef<string | null>(null);/  const c
+
+## [2026-07-31 15:37:26 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '2909d' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-08-04 18:33:15 KST] [aads-dashboard] /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/logo.svg
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/logo.svg
+
+## [2026-08-04 18:50:58 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/page.tsx
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/page.tsx
+
+## [2026-08-04 18:52:31 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/page.module.css
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/page.module.css
+
+## [2026-08-04 18:52:42 KST] [aads-dashboard] /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/logo.svg
+- Chat-Direct 수정: write: /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/logo.svg
+
+## [2026-08-04 18:54:16 KST] [aads-dashboard] public/brands/gomyunghee-naengmyeon/logo.svg
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/logo.svg << 
+
+## [2026-08-04 18:56:04 KST] [aads-dashboard] src/app/gomyunghee-naengmyeon/page.module.css
+- Chat-Direct 수정: run_remote_command: cat > /root/aads/aads-dashboard/src/app/gomyunghee-naengmyeon/page.module.css <<
