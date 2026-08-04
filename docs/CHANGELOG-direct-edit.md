@@ -4679,3 +4679,9 @@ fro
 
 ## [2026-08-04 18:28:47 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-dashboard/public/brands/gomyunghee-naengmyeon/
+
+## [2026-08-04 19:01:36 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: nohup bash -c 'cd /root/aads/aads-dashboard && docker compose -f docker-compose.
+
+## [2026-08-04 19:01:36 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: nohup bash -c 'cd /root/aads/aads-dashboard && docker compose -f docker-compose.
