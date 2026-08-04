@@ -778,6 +778,78 @@ def test_sync_delivery_uses_baemin_storage_state_without_password(tmp_path, monk
     assert result["summary"][0]["error_code"] == "AUTHENTICATED_NO_ROWS"
 
 
+def test_sync_delivery_uses_baemin_pc_agent_session_without_password(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": str(payload.get("browser_session_id") or ""),
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+
+    def fake_bridge_collect(account, browser_auth):
+        assert account["service"] == "baemin"
+        assert account.get("password") in (None, "")
+        assert browser_auth["browser_session_id"] == "bb-pc-agent"
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "baemin-pc-sale-1",
+                        "source_id": "sale-1",
+                        "business_id": "biz-junghwa",
+                        "branch": "중화점",
+                        "service": "baemin",
+                        "platform": "baemin",
+                        "record_type": "sales",
+                        "occurred_on": "2026-08-04",
+                        "gross_amount": 31000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+            },
+            "diagnostics": {"auth_mode": "pc_agent_browser"},
+        }
+
+    monkeypatch.setattr(service, "_collect_baemin_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+            "browser_session_id": "bb-pc-agent",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "succeeded"
+    assert result["summary"][0]["counts"]["sales"] == 1
+    assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (

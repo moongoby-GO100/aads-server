@@ -320,6 +320,25 @@ def _run_db(coro: Any) -> Any:
         return None
 
 
+def _run_async(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return None
+    try:
+        return asyncio.run(coro)
+    except Exception:
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        return None
+
+
 async def _db_table_exists(table: str) -> bool:
     import asyncpg
 
@@ -3096,6 +3115,115 @@ def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _baemin_bridge_page_kind(text: str) -> str:
+    lowered = text.lower()
+    if "리뷰" in text or "review" in lowered:
+        return "reviews"
+    if "정산" in text or "입금" in text or "settlement" in lowered:
+        return "settlements"
+    return "sales"
+
+
+async def _collect_baemin_from_browser_bridge_session_async(
+    account: dict[str, Any],
+    browser_auth: dict[str, str],
+) -> dict[str, Any]:
+    session_id = str(browser_auth.get("browser_session_id") or "").strip()
+    if not session_id:
+        return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_REQUIRED", "records": {}}
+    try:
+        from app.browser_bridge.service import get_browser_bridge_service
+        from app.services.yeoljeong_delivery_collectors import parse_portal_export
+
+        bridge = get_browser_bridge_service()
+        session = bridge.sessions.get(session_id)
+        if not session:
+            return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_NOT_FOUND", "records": {}}
+        context = await bridge._context_for_session(session)
+        page = context.pages[0] if getattr(context, "pages", None) else await context.new_page()
+        url = str(getattr(page, "url", "") or "")
+        try:
+            url = str(await page.evaluate("window.location.href") or url)
+        except Exception:
+            pass
+        text = ""
+        html = ""
+        try:
+            text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
+        except Exception:
+            text = ""
+        try:
+            html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+        except Exception:
+            html = text
+        if "login" in url.lower() or all(marker in text for marker in ("로그인", "회원가입")):
+            return {
+                "status": "credential_required",
+                "error_code": "PC_AGENT_LOGIN_REQUIRED",
+                "records": {},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                    "url": url,
+                },
+                "message": "PC Agent 브라우저가 배민 로그인 화면입니다. 먼저 해당 브라우저에서 배민 관리자 로그인이 필요합니다.",
+            }
+        source = html or text
+        kind = _baemin_bridge_page_kind(text)
+        parsed = parse_portal_export(
+            "baemin",
+            kind,
+            source,
+            str(account.get("business_id") or ""),
+            str(account.get("branch") or ""),
+        )
+        records = {name: [] for name in ("sales", "settlements", "reviews")}
+        records.update(parsed.get("records") or {})
+        status = str(parsed.get("status") or "partial")
+        error_code = str(parsed.get("error_code") or "")
+        diagnostics = dict(parsed.get("diagnostics") or {})
+        diagnostics.update(
+            {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                "url": url,
+                "parsed_page_kind": kind,
+            }
+        )
+        return {
+            "status": status,
+            "error_code": error_code,
+            "records": records,
+            "diagnostics": diagnostics,
+            "message": parsed.get("message") or "",
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "error_code": f"PC_AGENT_COLLECTOR_{exc.__class__.__name__.upper()}",
+            "records": {},
+            "diagnostics": {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+            },
+            "message": str(exc)[:300],
+        }
+
+
+def _collect_baemin_from_browser_bridge_session(
+    account: dict[str, Any],
+    browser_auth: dict[str, str],
+) -> dict[str, Any] | None:
+    if str(browser_auth.get("browser_bridge_mode") or "") != "local_agent":
+        return None
+    if not str(browser_auth.get("browser_session_id") or "").strip():
+        return None
+    return _run_async(_collect_baemin_from_browser_bridge_session_async(account, browser_auth))
+
+
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
@@ -3175,7 +3303,14 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             if service == "baemin" and browser_auth["storage_state_path"]:
                 collection_account["storage_state_path"] = browser_auth["storage_state_path"]
             can_use_stored_browser_session = service == "baemin" and bool(browser_auth["storage_state_path"])
-            if collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
+            bridge_result = (
+                _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
+                if service == "baemin"
+                else None
+            )
+            if bridge_result is not None:
+                result = bridge_result
+            elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
                 result = {
                     "status": "upload_required",
                     "error_code": "CSV_UPLOAD_REQUIRED",

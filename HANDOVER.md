@@ -5818,3 +5818,21 @@
   - 대시보드 blue-green 배포 완료. active 슬롯은 `aads-dashboard:3100`, 외부 헬스체크 통과.
 - 남은 주의:
   - 기존 사용자의 브라우저가 오래된 서비스워커를 잡고 있으면 다음 service worker update/refresh 후 새 클릭 동작이 적용된다.
+
+## 2026-08-04 23:47 KST - 배민 PC Agent 브라우저 직접 파싱 경로 보강
+
+- 요청: 저장된 배민 연동 계정으로 CEO PC Agent 브라우저를 통해 직접 접속하고 매출/정산/리뷰 수집 가능 여부를 테스트.
+- 실측:
+  - PC Agent 전용 세션 `bb-9bb5b16ac7f8`로 `https://self.baemin.com/` 접속은 성공했으나 화면은 배민 통합로그인 상태였다.
+  - DB의 중화점 배민 계정은 `username=yunhee1`, `collection_mode=browser-automation`이나 비밀번호 필드가 없었다. JSON 보호 원장에도 중화점 매칭 비밀값 또는 storage_state가 없었다.
+  - 기존 `/sync`는 Browser Bridge가 `local_agent` 모드를 반환해도 `storage_state_path`만 수집기에 전달해 PC Agent 현재 화면을 직접 파싱하지 못했다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`에 PC Agent `local_agent` 세션 현재 페이지를 읽어 배민 HTML/표 파서로 넘기는 경로를 추가했다.
+  - PC Agent가 로그인 화면이면 `PC_AGENT_LOGIN_REQUIRED`로 명확히 남기고, 로그인된 표 화면이면 현재 페이지 종류를 매출/정산/리뷰로 추정해 기존 `parse_portal_export()` 정규화/원장 upsert 경로를 재사용하게 했다.
+  - 비밀번호가 없어도 `browser_session_id`가 들어온 배민 동기화 요청은 업로드/비밀번호 누락 분기보다 PC Agent 파싱을 우선 시도하도록 바꿨다.
+- 검증:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py` 성공.
+  - 신규 단위 테스트 `test_sync_delivery_uses_baemin_pc_agent_session_without_password`를 추가했다.
+  - 로컬 기본 Python에는 pytest가 없고 `.venv`의 Python symlink가 깨져 있어 배포 전 로컬 pytest는 미실행 상태다.
+- 남은 주의:
+  - 현재 PC Agent 배민 화면은 로그인 페이지라 실데이터 수집은 아직 불가하다. CEO PC에서 배민 로그인 완료 후 같은 세션으로 `/sync`를 실행해야 실제 매출/정산/리뷰 원장 반영을 검증할 수 있다.
