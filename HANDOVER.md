@@ -5811,7 +5811,7 @@
 - 검증:
   - 백엔드 커밋 `0b51bd47`, 대시보드 커밋 `f36ef5c`는 각각 원격 `main`에 포함됐다.
   - 2026-08-04 22:19 KST 기준 `aads-server`와 `aads-dashboard` Docker 컨테이너 모두 `healthy`.
-  - `curl -fsS http://127.0.0.1:8100/health` 성공.
+  - `curl -fsS https://aads.newtalk.kr/api/v1/health`에서 `status=ok` 확인.
   - `curl -fsS https://aads.newtalk.kr/sw.js`에서 배포된 서비스워커의 세션 이동 코드 확인.
 - 배포:
   - 백엔드 blue-green 배포 완료. active 슬롯은 `aads-server:8100`.
