@@ -1811,6 +1811,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/devices/android/manifest",
     "/api/v1/devices/android/install",
     "/api/v1/devices/android/download",
+    "/api/v1/devices/android/auto-register",
     "/api/v1/devices/android/source.zip",
     "/api/v1/browser-bridge/sessions/register",
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)

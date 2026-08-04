@@ -123,7 +123,7 @@ async def _ensure_pairing_table() -> bool:
         return False
 
 
-async def _verify_token(token: str) -> bool:
+async def _verify_token(token: str, agent_id: str = "", device_type: str = "") -> bool:
     if not token:
         return False
     expected = os.environ.get("PC_AGENT_TOKEN", "")
@@ -139,11 +139,15 @@ async def _verify_token(token: str) -> bool:
                         UPDATE device_pairing_tokens
                         SET last_used_at = NOW()
                         WHERE token_hash = $1
+                          AND ($2 = '' OR agent_id = $2)
+                          AND ($3 = '' OR device_type = $3)
                           AND revoked_at IS NULL
-                          AND (expires_at IS NULL OR expires_at > NOW())
+                          AND (expires_at IS NULL OR expires_at > NOW() OR last_used_at IS NOT NULL)
                         RETURNING id
                         """,
                         _token_hash(token),
+                        agent_id,
+                        device_type,
                     )
                     if row is not None:
                         return True
@@ -169,7 +173,7 @@ async def ws_device(
     token: str = Query(""),
     device_type: str = Query("pc"),
 ):
-    if not await _verify_token(token):
+    if not await _verify_token(token, agent_id, device_type):
         await websocket.close(code=4001, reason="인증 실패")
         return
 
@@ -238,6 +242,11 @@ class AndroidPairingRequest(BaseModel):
     label: str = Field(default="", max_length=120)
     device_type: str = Field(default="android", pattern="^(android|pc|ios)$")
     expires_hours: int = Field(default=24, ge=1, le=720)
+
+
+class AndroidAutoRegisterRequest(BaseModel):
+    device_id: str = Field(..., min_length=3, max_length=160)
+    device_name: str = Field(default="", max_length=160)
 
 
 async def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
@@ -315,6 +324,8 @@ async def android_agent_manifest():
         "fresh_apk_download_url": _download_base_url() + "/download-fresh",
         "source_zip_url": _download_base_url() + "/source.zip",
         "pairing_api": "/api/v1/devices/android/pairing",
+        "auto_register_api": "/api/v1/devices/android/auto-register",
+        "deep_link_scheme": "aads-agent://pair",
         "apk_available": apk_available,
         "apk_size": apk_path.stat().st_size if apk_path else 0,
         "fresh_apk_available": fresh_apk_path is not None,
@@ -397,6 +408,50 @@ async def revoke_android_pairing(
             agent_id,
         )
     return {"agent_id": agent_id, "result": result, "revoked_by": current_user.get("email", "")}
+
+
+@router.post("/devices/android/auto-register")
+async def android_auto_register(req: AndroidAutoRegisterRequest):
+    """Issue a first-run Android pairing token for the APK auto-registration path."""
+    if os.environ.get("AADS_ANDROID_AUTO_REGISTER_ENABLED", "1").strip().lower() in {"0", "false", "no"}:
+        raise HTTPException(status_code=403, detail="Android auto-register is disabled")
+    if not await _ensure_pairing_table():
+        raise HTTPException(status_code=503, detail="DB pool 또는 페어링 테이블을 사용할 수 없습니다")
+
+    device_fingerprint = req.device_id.strip()
+    device_name = req.device_name.strip() or "Android device"
+    agent_id = "android-" + hashlib.sha256(device_fingerprint.encode("utf-8")).hexdigest()[:10]
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    pool = await _get_pool_or_none()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB pool을 사용할 수 없습니다")
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO device_pairing_tokens (
+                agent_id, device_type, token_hash, label, created_by, expires_at
+            )
+            VALUES ($1, 'android', $2, $3, 'android-auto-register', $4)
+            """,
+            agent_id,
+            _token_hash(token),
+            f"auto:{device_name[:100]}",
+            expires_at,
+        )
+
+    return {
+        "agent_id": agent_id,
+        "device_type": "android",
+        "server_url": _public_ws_base_url(),
+        "token": token,
+        "expires_at": expires_at.isoformat(),
+        "note": (
+            "첫 연결 전 24시간 동안 유효합니다. 한 번 연결 성공한 토큰은 agent_id/device_type에 "
+            "묶여 Android Agent 재연결에 계속 사용할 수 있습니다."
+        ),
+    }
 
 
 @router.get("/devices/android/download")
@@ -501,11 +556,14 @@ async def android_install_page():
     <a class="button" href="/api/v1/devices/android/source.zip">소스 ZIP 다운로드</a>
   </p>
   <h2>페어링</h2>
-  <p>관리자 로그인 후 <code>POST /api/v1/devices/android/pairing</code>으로 페어링 토큰을 만들고,
-  앱의 QR/manual 입력칸에 반환된 <code>pairing_payload</code> JSON 또는 <code>full_ws_url</code>을 붙여넣으십시오.</p>
+  <p>대시보드의 Android Agent 설치 화면에서 페어링을 생성한 뒤 <code>앱에 자동 적용</code>을 누르면
+  <code>aads-agent://pair</code> 딥링크로 서버 URL, Agent ID, 토큰이 앱에 저장되고 foreground service가 시작됩니다.</p>
+  <p>딥링크가 막힌 기기에서만 아래 API 응답의 <code>pairing_payload</code> JSON 또는 <code>full_ws_url</code>을
+  앱의 QR/manual 입력칸에 붙여넣으십시오.</p>
   <pre>POST /api/v1/devices/android/pairing
 Authorization: Bearer &lt;admin-jwt&gt;
 {{"label":"CEO phone","expires_hours":24}}</pre>
+  <p>앱 자체 자동 등록 API: <code>POST /api/v1/devices/android/auto-register</code></p>
   <p>WebSocket base: <code>{_public_ws_base_url()}</code></p>
 </main>
 </body>

@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-04 22:15 KST - Android Agent automatic pairing and reconnect hardening
+
+- Request: After PC Agent auto-pair installation was verified, check and fix Android Agent installation/management so it can connect without manual token entry where possible.
+- Findings:
+  - PC Agent production status was healthy at 22:07 KST: `/api/v1/pc-agent/status` returned `online_count=1`, agent `2e9379a1-fed`, heartbeat age 21.5s.
+  - Android `device_command get_device_info` failed because ADB is not installed in the server execution environment; Android status must be verified through AADS device WebSocket/API until a device reconnects.
+  - `/api/v1/devices` correctly requires auth, but public Android install helpers lacked `/devices/android/auto-register`; the APK had `AutoRegisterClient` code pointing to that route, so first-run automatic registration fell back to manual pairing.
+  - `device_pairing_tokens` verification treated `expires_at` as both first-pairing expiry and long-term auth expiry, so an already-paired Android device could fail reconnect after the pairing window passed.
+- Changes:
+  - `app/api/device.py`: added `POST /devices/android/auto-register`, added manifest fields for auto-register and deep link, bound token verification to `agent_id`/`device_type`, and allowed reconnect after first successful token use.
+  - `app/main.py`: added `/api/v1/devices/android/auto-register` to auth-exempt install helper prefixes.
+  - `android_agent`: added `aads-agent://pair` deep link handling, automatic pairing save/service start, and foreground-service auto-register when pairing is missing.
+  - `aads-dashboard/src/app/ops/mobile-agent/page.tsx`: added "앱에 자동 적용" deep link button after pairing generation.
+- Verification:
+  - `python3 -m py_compile app/api/device.py app/main.py` passed.
+  - Container route import confirmed `/devices/android/auto-register` is present in the device router.
+  - Dashboard `npx tsc --noEmit` and `npx eslint src/app/ops/mobile-agent/page.tsx` passed.
+  - Android release APK build was started through `android_agent/build_release_apk.sh` using Docker Android SDK fallback; result must be checked before final deploy report.
+- Pending:
+  - Build result, selected commit/push, blue-green deploy, public API health, Android manifest/auto-register HTTP verification.
+
 ## 2026-08-04 20:38 KST - PC Agent auto-pair production deployment verification
 
 - Request: Complete commit/push/production deployment reporting for the PC Agent automatic pairing install flow.

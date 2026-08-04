@@ -20,7 +20,10 @@ final class PairingParser {
                 return parsed;
             }
         }
-        if (value.startsWith("wss://") || value.startsWith("ws://") || value.startsWith("https://")) {
+        if (value.startsWith("wss://")
+                || value.startsWith("ws://")
+                || value.startsWith("https://")
+                || value.startsWith("aads-agent://")) {
             PairingData parsed = parseUri(value, fallback);
             if (parsed != null) {
                 return parsed;
@@ -48,14 +51,34 @@ final class PairingParser {
     private static PairingData parseUri(String value, AgentConfig fallback) {
         try {
             Uri uri = Uri.parse(value);
+            String payload = uri.getQueryParameter("payload");
+            if (payload != null && !payload.trim().isEmpty()) {
+                return parse(payload, fallback);
+            }
+            String fullWsUrl = uri.getQueryParameter("full_ws_url");
+            if (fullWsUrl != null && !fullWsUrl.trim().isEmpty()) {
+                return parse(fullWsUrl, fallback);
+            }
             String token = firstNonEmpty(uri.getQueryParameter("token"), fallback.token);
-            String agentId = fallback.agentId;
+            String agentId = firstNonEmpty(
+                    uri.getQueryParameter("agent_id"),
+                    uri.getQueryParameter("agentId"),
+                    fallback.agentId
+            );
             String path = uri.getPath();
-            String serverUrl = fallback.serverUrl;
+            String serverUrl = firstNonEmpty(
+                    uri.getQueryParameter("server_url"),
+                    uri.getQueryParameter("serverUrl"),
+                    fallback.serverUrl
+            );
             if (path != null && !path.isEmpty()) {
                 int lastSlash = path.lastIndexOf('/');
                 String lastSegment = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
-                if (!lastSegment.isEmpty() && !"ws".equals(lastSegment)) {
+                if (!lastSegment.isEmpty()
+                        && !"ws".equals(lastSegment)
+                        && !"pair".equals(lastSegment)
+                        && uri.getScheme() != null
+                        && !"aads-agent".equals(uri.getScheme())) {
                     agentId = lastSegment;
                     String basePath = lastSlash <= 0 ? "" : path.substring(0, lastSlash);
                     serverUrl = uri.buildUpon().path(basePath).query(null).fragment(null).build().toString();

@@ -20,6 +20,7 @@ Server-side install helpers are exposed by AADS:
 - APK download: `https://aads.newtalk.kr/api/v1/devices/android/download`
 - Source ZIP fallback: `https://aads.newtalk.kr/api/v1/devices/android/source.zip`
 - Manifest: `https://aads.newtalk.kr/api/v1/devices/android/manifest`
+- Auto-register fallback: `https://aads.newtalk.kr/api/v1/devices/android/auto-register`
 
 Create a per-device pairing payload from an authenticated admin session:
 
@@ -30,10 +31,13 @@ curl -X POST https://aads.newtalk.kr/api/v1/devices/android/pairing \
   -d '{"label":"CEO phone","expires_hours":24}'
 ```
 
-The response contains a one-time-visible `pairing_payload` and `full_ws_url`.
-Paste either value into the app's QR/manual input hook.
+The response contains a one-time-visible `pairing_payload`, `full_ws_url`, and
+the dashboard can open an `aads-agent://pair?payload=...` deep link. On Android
+devices with the APK installed, that link saves the pairing values and starts
+the foreground service automatically. Paste values manually only when the device
+blocks the deep link.
 
-On first launch:
+On first launch without a deep link:
 
 1. Confirm or edit the server URL. Default:
    `wss://aads.newtalk.kr/api/v1/devices/ws`
@@ -55,7 +59,10 @@ wss://aads.newtalk.kr/api/v1/devices/ws/android001?token=...&device_type=android
 ```
 
 The token is not hardcoded. It is saved in app private SharedPreferences as the
-fallback storage path for devices where Jetpack Security is not included.
+fallback storage path for devices where Jetpack Security is not included. Pairing
+expiration limits first use; after a successful WebSocket registration, reconnect
+uses the same agent-bound token so normal network or reboot recovery does not
+break when the original pairing window has passed.
 
 ## Protocol
 

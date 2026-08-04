@@ -59,6 +59,15 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(buildContent());
         loadPairingFields();
+        applyPairingIntent(getIntent());
+        refreshState();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyPairingIntent(intent);
         refreshState();
     }
 
@@ -163,6 +172,29 @@ public final class MainActivity extends Activity {
         agentIdView.setText(data.agentId);
         tokenEdit.setText(data.token);
         savePairing(view);
+    }
+
+    private void applyPairingIntent(Intent intent) {
+        if (intent == null || intent.getData() == null) {
+            return;
+        }
+        Uri dataUri = intent.getData();
+        String raw = dataUri.toString();
+        AgentConfig fallback = new AgentConfig(
+                serverUrlEdit.getText().toString(),
+                agentIdView.getText().toString(),
+                tokenEdit.getText().toString()
+        );
+        PairingData data = PairingParser.parse(raw, fallback);
+        if (data.token == null || data.token.trim().isEmpty()) {
+            return;
+        }
+        serverUrlEdit.setText(AgentPrefs.normalizeServerUrl(data.serverUrl));
+        agentIdView.setText(data.agentId);
+        tokenEdit.setText(data.token);
+        savePairing(null);
+        startAgentService(null);
+        toast("Pairing applied");
     }
 
     private void startAgentService(View view) {

@@ -36,6 +36,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
     private String currentStatus = AgentStateStore.STATUS_DISCONNECTED;
     private String currentError = "";
     private String activeCommand = "";
+    private boolean autoRegisterInFlight = false;
 
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private long lastHeartbeatMs = 0;
@@ -149,8 +150,36 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             return;
         }
         AgentConfig config = AgentPrefs.load(this);
+        if (!config.isPairingReady()) {
+            startAutoRegister();
+            return;
+        }
         client = new AadsWebSocketClient(this, config, this);
         client.start();
+    }
+
+    private void startAutoRegister() {
+        if (autoRegisterInFlight) {
+            return;
+        }
+        autoRegisterInFlight = true;
+        onState(AgentStateStore.STATUS_CONNECTING, "auto-registering");
+        new Thread(() -> {
+            try {
+                PairingData data = AutoRegisterClient.register(getApplicationContext());
+                AgentPrefs.save(getApplicationContext(), data.serverUrl, data.agentId, data.token);
+                watchdogHandler.post(() -> {
+                    autoRegisterInFlight = false;
+                    startClient();
+                });
+            } catch (Exception e) {
+                watchdogHandler.post(() -> {
+                    autoRegisterInFlight = false;
+                    onState(AgentStateStore.STATUS_DISCONNECTED, "auto-register failed: " + e.getMessage());
+                    scheduleServiceRestart("auto_register_failed");
+                });
+            }
+        }, "aads-auto-register").start();
     }
 
     private void stopClient() {
