@@ -294,12 +294,14 @@ async def notify_chat_response_complete(
         payload = {
             "title": "오비스",
             "body": f"{title}: {body}"[:240],
-            "url": f"/chat#{session_id}",
+            "url": f"/chat#{sid}",
             "tag": f"chat-complete-{session_id}",
+            "actions": [{"action": "open-chat", "title": "확인"}],
             "data": {
                 "session_id": session_id,
                 "message_id": assistant_message_id,
                 "event": "chat_response_complete",
+                "url": f"/chat#{sid}",
             },
         }
         return await send_web_push_to_user(
