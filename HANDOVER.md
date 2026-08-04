@@ -5896,3 +5896,16 @@
   - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?codex_check=202608050744#auth-invite` 응답에서 신규 표식 확인.
 - 남은 주의:
   - 비로그인 브라우저 E2E는 게이트 화면에서 막혀 내부 연동관리 클릭 검증을 수행하지 못했다. HTML/API 표식 검증으로 대체했다.
+
+## 2026-08-05 07:52 KST - FB 연동추가 기타매입처 메뉴 표식 보정
+
+- 요청: 이전 완료보고 충돌 후 `mockup-v2.html#integrations` 디자인과 입력폼 운영 반영을 재검증하고, 판매채널/계좌연동/기타매입처 연동 메뉴와 저장 리스트 수정 페이지 누락 여부를 확정.
+- 조치:
+  - 운영 `연동 추가` 선택 메뉴의 기타 매입처 항목명을 `기타 매입처 연동`으로 명확히 보정했다.
+  - 기존 서비스별 전용 폼 구조는 유지했다: 판매채널, 은행 계좌, 카드/PG, 매입처, 기타 매입처, 홈택스가 각각 별도 설정 페이지로 진입한다.
+  - 입력된 연동 목록의 `수정` 버튼과 `연동 설정 수정` 드로어는 기존 행을 `data-edit-integration-id` 기준으로 갱신하는 구조로 유지했다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - 인라인 `<script>` `new Function()` 파싱 성공.
+  - 운영 컨테이너 테스트 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 4 passed.
+  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?codex_check=202608050758#auth-invite` 응답에서 `판매채널 추가`, `은행 계좌 연결`, `매입처 등록`, `기타 매입처 연동`, `연동 설정 수정`, `data-edit-integration`, `/accounts`, `/transactions/sync` 표식 확인.

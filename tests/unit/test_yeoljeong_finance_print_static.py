@@ -63,7 +63,7 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "은행 계좌 연결" in landing_html
     assert "카드/PG 리포트" in landing_html
     assert "매입처 등록" in landing_html
-    assert "기타 매입처 수기 증빙" in landing_html
+    assert "기타 매입처 연동" in landing_html
     assert "플랫폼 매장코드" in form_html
     assert "2차 인증 수단" in form_html
     assert "정산 CSV 업로드 대기열" in form_html
