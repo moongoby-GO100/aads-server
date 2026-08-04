@@ -4685,3 +4685,45 @@ fro
 
 ## [2026-08-04 19:01:36 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
 - Chat-Direct 수정: run_remote_command: nohup bash -c 'cd /root/aads/aads-dashboard && docker compose -f docker-compose.
+
+## [2026-08-04 19:10:45 KST] [aads-server] app/static/reports/naengmyeon_oem_report.html
+- Chat-Direct 수정: write: app/static/reports/naengmyeon_oem_report.html
+
+## [2026-08-04 19:11:35 KST] [aads-server] app/static/reports/_mkpdf_naengmyeon.py
+- Chat-Direct 수정: write: app/static/reports/_mkpdf_naengmyeon.py
+
+## [2026-08-04 19:11:47 KST] [aads-server] app/static/reports/naengmyeon_oem_report.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/app/static/reports/_mkpdf_naengmyeon.py
+
+## [2026-08-04 19:12:22 KST] [aads-server] app/static/reports/\353\203\211\353\251\264\354\234\241\354\210\230_OEM_ODM_\354\240\234\354\241\260\352\263\265\354\236\245_\354\241\260\354\202\254\353\263\264\352\263\240\354\204\234.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import shutil,os;shutil.copy('/app/app/stati
+
+## [2026-08-04 19:14:01 KST] [aads-server] app/static/gallery/naengmyeon_oem_report.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python3 -c "import shutil;shutil.copy('/app/app/st
+
+## [2026-08-04 19:15:33 KST] [aads-server] scripts/_mkpdf_naengmyeon.py
+- Chat-Direct 수정: write: scripts/_mkpdf_naengmyeon.py
+
+## [2026-08-04 19:24:35 KST] [aads-server] app/static/reports/naengmyeon_oem_email_draft.html
+- Chat-Direct 수정: write: app/static/reports/naengmyeon_oem_email_draft.html
+
+## [2026-08-04 19:24:46 KST] [aads-server] app/static/reports/gen_email_pdf.py
+- Chat-Direct 수정: write: app/static/reports/gen_email_pdf.py
+
+## [2026-08-04 19:26:29 KST] [aads-server] app/static/reports/gen_email_pdf.py
+- Chat-Direct 수정: write: app/static/reports/gen_email_pdf.py
+
+## [2026-08-04 19:26:38 KST] [aads-server] app/static/reports/gen_email_pdf.py
+- Chat-Direct 수정: write: app/static/reports/gen_email_pdf.py
+
+## [2026-08-04 19:26:43 KST] [aads-server] app/static/reports/\353\203\211\353\251\264\354\234\241\354\210\230_OEM_\353\254\270\354\235\230_\354\235\264\353\251\224\354\235\274_\354\264\210\354\225\210.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python3 /app/app/static/reports/gen_email_pdf.py
+
+## [2026-08-04 19:26:44 KST] [aads-server] app/static/reports/naengmyeon_oem_email_draft.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python3 /app/app/static/reports/gen_email_pdf.py
+
+## [2026-08-04 19:26:46 KST] [aads-server] app/static/reports/\353\203\211\353\251\264\354\234\241\354\210\230_OEM_\353\254\270\354\235\230_\354\235\264\353\251\224\354\235\274_\354\264\210\354\225\210.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server apt-get install -y -qq libgdk-pixbuf-2.0-0 2>&1 | tail -
+
+## [2026-08-04 19:26:47 KST] [aads-server] app/static/reports/naengmyeon_oem_email_draft.pdf
+- Chat-Direct 수정: run_remote_command: docker exec aads-server apt-get install -y -qq libgdk-pixbuf-2.0-0 2>&1 | tail -

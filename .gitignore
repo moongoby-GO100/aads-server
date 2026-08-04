@@ -63,6 +63,7 @@ playwright/.auth/
 # Server-local task/runtime artifacts
 .tmp-*/
 app/data/yeoljeong_finance/contracts.json
+app/data/yeoljeong_finance/delivery_*.json
 app/data/yeoljeong_finance/employee_join_requests.json
 app/data/yeoljeong_finance/onboarding_documents.json
 app/data/yeoljeong_finance/uploads/
@@ -80,4 +81,5 @@ scripts/run_dashboard_deploy.sh
 scripts/auto_collect_trends.sh
 test-results/
 tmp/
+tmp_ntv2_hotfix/
 exports/

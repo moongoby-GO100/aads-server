@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>고명희 냉면 로고 디자인 시안 6종</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212b;
+      --muted: #66717e;
+      --paper: #f7f5ef;
+      --paper-2: #fffdf7;
+      --line: rgba(24, 33, 43, .14);
+      --red: #b72d24;
+      --deep-red: #7d1c18;
+      --blue: #1f6f91;
+      --ice: #b9e1e7;
+      --navy: #17364a;
+      --brass: #b98932;
+      --green: #2d6f53;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 20% 12%, rgba(185, 225, 231, .42), transparent 32rem),
+        linear-gradient(135deg, #fcfaf4 0%, #eef5f6 48%, #f9f3e5 100%);
+      min-height: 100vh;
+      letter-spacing: 0;
+    }
+
+    .page {
+      width: min(1280px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 44px 0 56px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 24px;
+      align-items: end;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--deep-red);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: "Noto Serif KR", "Nanum Myeongjo", serif;
+      font-size: clamp(34px, 5vw, 72px);
+      line-height: 1.02;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .header-copy {
+      max-width: 650px;
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.68;
+    }
+
+    .badge {
+      display: grid;
+      place-items: center;
+      width: 122px;
+      height: 122px;
+      border: 1px solid rgba(183, 45, 36, .3);
+      border-radius: 50%;
+      color: var(--deep-red);
+      background: rgba(255, 253, 247, .68);
+      font-family: "Noto Serif KR", serif;
+      font-weight: 900;
+      text-align: center;
+      line-height: 1.22;
+      box-shadow: 0 18px 40px rgba(24, 33, 43, .08);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 22px;
+      margin-top: 32px;
+    }
+
+    .concept {
+      min-height: 720px;
+      background: rgba(255, 253, 247, .92);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 24px 50px rgba(24, 33, 43, .10);
+      display: grid;
+      grid-template-rows: 390px auto;
+    }
+
+    .stage {
+      position: relative;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      overflow: hidden;
+    }
+
+    .stage svg {
+      width: min(100%, 340px);
+      height: auto;
+      display: block;
+    }
+
+    .stage.traditional {
+      background: #f8efe4;
+    }
+
+    .stage.modern {
+      background: linear-gradient(180deg, #eaf7f8, #ffffff 64%, #edf5f1);
+    }
+
+    .stage.signage {
+      background: #112534;
+    }
+
+    .stage.round-mark {
+      background: #f5eadb;
+    }
+
+    .stage.heritage {
+      background: #fffaf0;
+    }
+
+    .stage.delivery {
+      background: linear-gradient(180deg, #fff7ee 0%, #f0fbfc 100%);
+    }
+
+    .meta {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.24;
+      letter-spacing: 0;
+    }
+
+    .tagline {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 13px;
+      color: #4d5964;
+      background: #fff;
+    }
+
+    .swatches {
+      display: flex;
+      gap: 10px;
+      margin-top: auto;
+      padding-top: 8px;
+    }
+
+    .swatch {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 1px solid rgba(24, 33, 43, .18);
+      box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .45);
+    }
+
+    .usecase {
+      margin: 0;
+      color: #37424e;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .applications {
+      margin-top: 28px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .mock {
+      min-height: 160px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, .74);
+      padding: 20px;
+      display: grid;
+      align-content: center;
+      gap: 10px;
+    }
+
+    .mock strong {
+      font-size: 15px;
+    }
+
+    .mock p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .mini-logo {
+      width: 92px;
+      height: 52px;
+      border-radius: 8px;
+      border: 1px solid rgba(24, 33, 43, .14);
+      display: grid;
+      place-items: center;
+      font-family: "Noto Serif KR", serif;
+      font-weight: 900;
+      color: var(--deep-red);
+      background: #fbf3e7;
+    }
+
+    .mini-logo.modern-mini {
+      color: var(--navy);
+      background: #eaf7f8;
+      font-family: inherit;
+    }
+
+    .mini-logo.signage-mini {
+      color: #f3d69a;
+      background: #112534;
+    }
+
+    @media (max-width: 1100px) {
+      .grid,
+      .applications {
+        grid-template-columns: 1fr;
+      }
+
+      .concept {
+        min-height: auto;
+        grid-template-rows: auto auto;
+      }
+
+      .stage {
+        min-height: 360px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: min(100% - 24px, 1280px);
+        padding-top: 28px;
+      }
+
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      .badge {
+        width: 94px;
+        height: 94px;
+        font-size: 14px;
+      }
+
+      .stage {
+        padding: 18px;
+        min-height: 320px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <p class="eyebrow">Logo proposal / Korean cold noodle brand</p>
+        <h1>고명희 냉면<br>로고 디자인 시안 6종</h1>
+        <p class="header-copy">전통 냉면집의 신뢰감, 시원한 육수의 청량감, 간판과 포장재에서 바로 읽히는 가독성을 기준으로 여섯 가지 방향을 나눴습니다.</p>
+      </div>
+      <div class="badge">고명희<br>냉면</div>
+    </header>
+
+    <section class="grid" aria-label="로고 시안 6종">
+      <article class="concept">
+        <div class="stage traditional">
+          <svg viewBox="0 0 360 360" role="img" aria-label="전통 원형 인장형 고명희 냉면 로고">
+            <defs>
+              <filter id="softShadowA" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="16" stdDeviation="14" flood-color="#3d1d18" flood-opacity=".16"/>
+              </filter>
+            </defs>
+            <circle cx="180" cy="180" r="148" fill="#fff8ed" stroke="#b72d24" stroke-width="9" filter="url(#softShadowA)"/>
+            <circle cx="180" cy="180" r="125" fill="none" stroke="#b72d24" stroke-width="2" stroke-dasharray="9 9"/>
+            <path d="M88 204c34 39 150 39 184 0 7 50-29 86-92 86s-99-36-92-86Z" fill="#dceff0" stroke="#18212b" stroke-width="5"/>
+            <path d="M110 202c30 25 110 26 140 0" fill="none" stroke="#1f6f91" stroke-width="7" stroke-linecap="round"/>
+            <path d="M128 190c22-18 83-18 104 0" fill="none" stroke="#b98932" stroke-width="5" stroke-linecap="round"/>
+            <path d="M141 174c28 12 52 12 78 0" fill="none" stroke="#18212b" stroke-width="4" stroke-linecap="round"/>
+            <path d="M137 132c8-20 29-26 43-8 15-18 36-12 43 8" fill="none" stroke="#2d6f53" stroke-width="8" stroke-linecap="round"/>
+            <text x="180" y="116" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="50" font-weight="900" fill="#7d1c18">고명희</text>
+            <text x="180" y="330" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="34" font-weight="900" fill="#7d1c18">냉면</text>
+            <text x="180" y="58" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="800" fill="#7d1c18">SINCE 2026</text>
+          </svg>
+        </div>
+        <div class="meta">
+          <h2>시안 A. 전통 원형 인장형</h2>
+          <p class="tagline">어머니 손맛, 오래된 맛집, 정갈한 평양/함흥 냉면 이미지를 주는 방향입니다. 붉은 인장선으로 멀리서도 한식 브랜드로 읽히게 했습니다.</p>
+          <div class="chips">
+            <span class="chip">맛집 간판</span>
+            <span class="chip">원형 스티커</span>
+            <span class="chip">배달 봉투</span>
+          </div>
+          <p class="usecase">추천 용도: 동네 단골형 매장, 가족 외식, 전통성을 앞세운 메뉴판.</p>
+          <div class="swatches">
+            <span class="swatch" style="background:#b72d24"></span>
+            <span class="swatch" style="background:#fff8ed"></span>
+            <span class="swatch" style="background:#dceff0"></span>
+            <span class="swatch" style="background:#18212b"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage modern">
+          <svg viewBox="0 0 360 360" role="img" aria-label="현대적인 그릇 심볼형 고명희 냉면 로고">
+            <defs>
+              <linearGradient id="bowlBlue" x1="0" x2="1" y1="0" y2="1">
+                <stop offset="0" stop-color="#d7f3f5"/>
+                <stop offset="1" stop-color="#1f6f91"/>
+              </linearGradient>
+              <filter id="softShadowB" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#17364a" flood-opacity=".14"/>
+              </filter>
+            </defs>
+            <rect x="33" y="34" width="294" height="294" rx="48" fill="#ffffff" filter="url(#softShadowB)"/>
+            <path d="M76 174c35 42 173 42 208 0 7 58-35 99-104 99S69 232 76 174Z" fill="url(#bowlBlue)"/>
+            <path d="M96 171c42 24 126 24 168 0" fill="none" stroke="#17364a" stroke-width="7" stroke-linecap="round"/>
+            <path d="M112 159c36-19 100-19 136 0" fill="none" stroke="#b9e1e7" stroke-width="9" stroke-linecap="round"/>
+            <circle cx="137" cy="141" r="10" fill="#b72d24"/>
+            <circle cx="180" cy="133" r="12" fill="#f6d45d"/>
+            <path d="M213 141c18-18 34-18 48-2-18 16-33 17-48 2Z" fill="#2d6f53"/>
+            <path d="M126 112c26-17 82-17 108 0" fill="none" stroke="#17364a" stroke-width="7" stroke-linecap="round"/>
+            <text x="180" y="87" text-anchor="middle" font-family="system-ui, sans-serif" font-size="28" font-weight="900" fill="#17364a">고명희</text>
+            <text x="180" y="316" text-anchor="middle" font-family="system-ui, sans-serif" font-size="36" font-weight="900" fill="#17364a">NAENGMYEON</text>
+          </svg>
+        </div>
+        <div class="meta">
+          <h2>시안 B. 모던 청량 그릇형</h2>
+          <p class="tagline">젊고 깔끔한 매장, 배달앱 썸네일, SNS 노출을 고려한 방향입니다. 얼음색 그라데이션과 굵은 심볼로 작은 크기에서도 브랜드가 선명합니다.</p>
+          <div class="chips">
+            <span class="chip">배달앱 아이콘</span>
+            <span class="chip">SNS 프로필</span>
+            <span class="chip">패키지 라벨</span>
+          </div>
+          <p class="usecase">추천 용도: 신규 오픈, 프랜차이즈 확장, 디지털 메뉴판.</p>
+          <div class="swatches">
+            <span class="swatch" style="background:#17364a"></span>
+            <span class="swatch" style="background:#1f6f91"></span>
+            <span class="swatch" style="background:#b9e1e7"></span>
+            <span class="swatch" style="background:#ffffff"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage signage">
+          <svg viewBox="0 0 360 360" role="img" aria-label="간판 포장용 세로 배지형 고명희 냉면 로고">
+            <defs>
+              <filter id="softShadowC" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="20" stdDeviation="16" flood-color="#000000" flood-opacity=".24"/>
+              </filter>
+            </defs>
+            <path d="M104 41h152c22 0 40 18 40 40v198c0 22-18 40-40 40H104c-22 0-40-18-40-40V81c0-22 18-40 40-40Z" fill="#17364a" stroke="#f3d69a" stroke-width="8" filter="url(#softShadowC)"/>
+            <path d="M90 94h180" stroke="#f3d69a" stroke-width="3"/>
+            <path d="M90 267h180" stroke="#f3d69a" stroke-width="3"/>
+            <text x="180" y="151" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="62" font-weight="900" fill="#fff8ed">고명희</text>
+            <text x="180" y="217" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="56" font-weight="900" fill="#f3d69a">냉면</text>
+            <path d="M126 241c18 14 90 14 108 0" fill="none" stroke="#b9e1e7" stroke-width="8" stroke-linecap="round"/>
+            <path d="M143 77c12-17 25-17 37 0 12-17 25-17 37 0" fill="none" stroke="#f3d69a" stroke-width="6" stroke-linecap="round"/>
+            <text x="180" y="298" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="800" fill="#b9e1e7">COLD NOODLES</text>
+          </svg>
+        </div>
+        <div class="meta">
+          <h2>시안 C. 프리미엄 세로 배지형</h2>
+          <p class="tagline">야간 간판, 유니폼 자수, 선물세트 포장까지 염두에 둔 고급형입니다. 남색 바탕과 황동 포인트로 냉면 전문점의 단정한 인상을 강화했습니다.</p>
+          <div class="chips">
+            <span class="chip">간판</span>
+            <span class="chip">앞치마 자수</span>
+            <span class="chip">선물 포장</span>
+          </div>
+          <p class="usecase">추천 용도: 고급 한식 톤, 저녁 매장 가시성, 브랜드 굿즈.</p>
+          <div class="swatches">
+            <span class="swatch" style="background:#112534"></span>
+            <span class="swatch" style="background:#f3d69a"></span>
+            <span class="swatch" style="background:#fff8ed"></span>
+            <span class="swatch" style="background:#b9e1e7"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage round-mark">
+          <svg viewBox="0 0 360 360" role="img" aria-label="붉은 원형 마크형 고명희 냉면 로고">
+            <defs>
+              <filter id="softShadowD" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="18" stdDeviation="15" flood-color="#5a1b16" flood-opacity=".18"/>
+              </filter>
+            </defs>
+            <circle cx="180" cy="180" r="150" fill="#b72d24" filter="url(#softShadowD)"/>
+            <circle cx="180" cy="180" r="128" fill="#fff8ed"/>
+            <circle cx="180" cy="180" r="112" fill="none" stroke="#b72d24" stroke-width="3"/>
+            <path d="M101 206c32 36 126 43 158 0 4 47-27 78-79 78s-83-31-79-78Z" fill="#f7f2e8" stroke="#7d1c18" stroke-width="5"/>
+            <path d="M122 199c25 17 91 17 116 0" fill="none" stroke="#1f6f91" stroke-width="7" stroke-linecap="round"/>
+            <path d="M137 187c24-14 62-14 86 0" fill="none" stroke="#b98932" stroke-width="5" stroke-linecap="round"/>
+            <circle cx="163" cy="170" r="8" fill="#b72d24"/>
+            <path d="M192 170c13-12 26-12 38 0-13 10-25 11-38 0Z" fill="#2d6f53"/>
+            <text x="180" y="115" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="46" font-weight="900" fill="#7d1c18">고명희</text>
+            <text x="180" y="320" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="28" font-weight="900" fill="#fff8ed">냉면 전문점</text>
+            <text x="180" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="900" fill="#fff8ed">SIGNATURE COLD NOODLES</text>
+          </svg>
+        </div>
+        <div class="meta">
+          <h2>시안 D. 붉은 원형 마크형</h2>
+          <p class="tagline">첨부 이미지처럼 강한 붉은 인장감을 살린 방향입니다. 배달앱 썸네일, 스티커, 원형 간판에서 상호가 빠르게 읽히도록 구성했습니다.</p>
+          <div class="chips">
+            <span class="chip">배달앱 대표 이미지</span>
+            <span class="chip">원형 간판</span>
+            <span class="chip">포장 씰</span>
+          </div>
+          <p class="usecase">추천 용도: 신규 고객에게 기억시키는 대표 로고, 후기 답글 하단 홍보 이미지.</p>
+          <div class="swatches">
+            <span class="swatch" style="background:#b72d24"></span>
+            <span class="swatch" style="background:#7d1c18"></span>
+            <span class="swatch" style="background:#fff8ed"></span>
+            <span class="swatch" style="background:#1f6f91"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage heritage">
+          <svg viewBox="0 0 360 360" role="img" aria-label="한글 간판형 고명희 냉면 로고">
+            <defs>
+              <filter id="softShadowE" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="16" stdDeviation="13" flood-color="#24170f" flood-opacity=".14"/>
+              </filter>
+            </defs>
+            <rect x="44" y="70" width="272" height="220" rx="22" fill="#fff8ed" stroke="#7d1c18" stroke-width="8" filter="url(#softShadowE)"/>
+            <rect x="66" y="92" width="228" height="176" rx="10" fill="none" stroke="#b98932" stroke-width="3"/>
+            <path d="M85 135h190" stroke="#7d1c18" stroke-width="5" stroke-linecap="round"/>
+            <text x="180" y="183" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="60" font-weight="900" fill="#18212b">고명희</text>
+            <text x="180" y="236" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="48" font-weight="900" fill="#b72d24">냉면</text>
+            <path d="M113 254c31 17 103 17 134 0" fill="none" stroke="#1f6f91" stroke-width="7" stroke-linecap="round"/>
+            <circle cx="180" cy="106" r="13" fill="#b72d24"/>
+            <path d="M152 109c-18 7-31 19-38 35" fill="none" stroke="#2d6f53" stroke-width="6" stroke-linecap="round"/>
+            <path d="M208 109c18 7 31 19 38 35" fill="none" stroke="#2d6f53" stroke-width="6" stroke-linecap="round"/>
+            <text x="180" y="312" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="900" fill="#7d1c18">SINCE 2026 · SEOUL</text>
+          </svg>
+        </div>
+        <div class="meta">
+          <h2>시안 E. 한글 간판형</h2>
+          <p class="tagline">상호명 자체를 크게 읽히게 한 실전 간판형입니다. 멀리서도 `고명희 냉면`이 바로 보여 오프라인 노출과 메뉴판 상단에 적합합니다.</p>
+          <div class="chips">
+            <span class="chip">매장 간판</span>
+            <span class="chip">메뉴판 상단</span>
+            <span class="chip">현수막</span>
+          </div>
+          <p class="usecase">추천 용도: 글자 가독성이 최우선인 외부 간판, 배달 포장 박스 전면.</p>
+          <div class="swatches">
+            <span class="swatch" style="background:#18212b"></span>
+            <span class="swatch" style="background:#b72d24"></span>
+            <span class="swatch" style="background:#b98932"></span>
+            <span class="swatch" style="background:#fff8ed"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage delivery">
+          <svg viewBox="0 0 360 360" role="img" aria-label="배달 스티커형 고명희 냉면 로고">
+            <defs>
+              <filter id="softShadowF" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#17364a" flood-opacity=".16"/>
+              </filter>
+            </defs>
+            <path d="M78 56h204c22 0 40 18 40 40v168c0 22-18 40-40 40H78c-22 0-40-18-40-40V96c0-22 18-40 40-40Z" fill="#ffffff" stroke="#17364a" stroke-width="7" filter="url(#softShadowF)"/>
+            <path d="M59 118h242" stroke="#b9e1e7" stroke-width="18" stroke-linecap="round"/>
+            <path d="M72 119h216" stroke="#1f6f91" stroke-width="4" stroke-linecap="round"/>
+            <text x="180" y="104" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="900" fill="#1f6f91">COOL BROTH · SPICY SAUCE</text>
+            <text x="180" y="172" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="54" font-weight="900" fill="#17364a">고명희</text>
+            <text x="180" y="226" text-anchor="middle" font-family="'Noto Serif KR', serif" font-size="46" font-weight="900" fill="#b72d24">냉면</text>
+            <path d="M111 249c25 19 113 19 138 0" fill="none" stroke="#b98932" stroke-width="8" stroke-linecap="round"/>
+            <circle cx="126" cy="255" r="7" fill="#b72d24"/>
+            <circle cx="234" cy="255" r="7" fill="#2d6f53"/>
+            <text x="180" y="286" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="900" fill="#66717e">물냉면 · 비빔냉면 · 명태회냉면</text>
+          </svg>
+        </div>
+        <div class="meta">
+          <h2>시안 F. 배달 스티커형</h2>
+          <p class="tagline">배달 포장 뚜껑, 리뷰 이미지, 쿠폰 배너에 바로 쓰기 좋은 가로형입니다. 작은 화면에서도 메뉴 카테고리와 상호가 함께 전달됩니다.</p>
+          <div class="chips">
+            <span class="chip">포장 용기 스티커</span>
+            <span class="chip">쿠폰 배너</span>
+            <span class="chip">리뷰 답글 이미지</span>
+          </div>
+          <p class="usecase">추천 용도: 배달전문점 운영물, 영수증 하단 홍보, SNS 카드뉴스.</p>
+          <div class="swatches">
+            <span class="swatch" style="background:#17364a"></span>
+            <span class="swatch" style="background:#b72d24"></span>
+            <span class="swatch" style="background:#b9e1e7"></span>
+            <span class="swatch" style="background:#ffffff"></span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="applications" aria-label="적용 예시">
+      <div class="mock">
+        <div class="mini-logo">고명희<br>냉면</div>
+        <strong>1순위 추천: 시안 A</strong>
+        <p>상호명이 사람 이름이라 전통 인장형이 신뢰감을 가장 빠르게 전달합니다.</p>
+      </div>
+      <div class="mock">
+        <div class="mini-logo modern-mini">고명희<br>냉면</div>
+        <strong>디지털 확장: 시안 B</strong>
+        <p>배달앱과 SNS에서는 그릇 심볼이 작게 줄어도 식별성이 좋습니다.</p>
+      </div>
+      <div class="mock">
+        <div class="mini-logo signage-mini">고명희<br>냉면</div>
+        <strong>간판 확장: 시안 C</strong>
+        <p>남색 바탕 버전은 야간 조명 간판과 포장 스티커에 안정적으로 맞습니다.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>냉면육수 OEM 문의 이메일 초안</title>
+<style>
+@page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+@page :first { margin-top: 0; }
+* { box-sizing: border-box; }
+body { font-family: 'Pretendard', 'Noto Sans KR', 'WenQuanYi Zen Hei', 'Malgun Gothic', sans-serif; font-size: 10.5pt; line-height: 1.68; color: #1c1f24; margin: 0; }
+h1 { font-size: 22pt; font-weight: 800; letter-spacing: -0.6px; margin: 0 0 6px; color: #0f172a; }
+h2 { font-size: 14pt; font-weight: 800; margin: 28px 0 12px; padding: 8px 14px; background: #0f172a; color: #fff; border-radius: 4px; letter-spacing: -0.3px; page-break-after: avoid; }
+h3 { font-size: 12pt; font-weight: 700; margin: 20px 0 8px; color: #0f172a; border-left: 4px solid #2563eb; padding-left: 10px; page-break-after: avoid; }
+h4 { font-size: 10.8pt; font-weight: 700; margin: 14px 0 6px; color: #334155; }
+p { margin: 5px 0; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 9.2pt; }
+th { background: #eef2f7; color: #0f172a; font-weight: 700; border: 1px solid #c3ccd8; padding: 7px 8px; text-align: left; }
+td { border: 1px solid #d6dde6; padding: 7px 8px; vertical-align: top; }
+tr:nth-child(even) td { background: #fafbfc; }
+.cover { text-align: center; padding: 58mm 0 0; page-break-after: always; }
+.cover .eyebrow { font-size: 10pt; letter-spacing: 5px; color: #64748b; font-weight: 700; }
+.cover h1 { font-size: 28pt; margin: 14px 0 8px; }
+.cover .sub { font-size: 13pt; color: #475569; font-weight: 600; margin-bottom: 36px; }
+.cover .meta { display: inline-block; text-align: left; border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; padding: 14px 34px; font-size: 10pt; line-height: 2; }
+.cover .meta b { display: inline-block; width: 100px; color: #0f172a; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 8.4pt; font-weight: 700; }
+.b-ok { background: #dcfce7; color: #15803d; }
+.b-warn { background: #fef3c7; color: #b45309; }
+.b-no { background: #fee2e2; color: #b91c1c; }
+.b-blue { background: #dbeafe; color: #1d4ed8; }
+.box { border: 1px solid #cbd5e1; border-left: 4px solid #2563eb; background: #f8fafc; padding: 12px 15px; margin: 12px 0; border-radius: 3px; font-size: 9.8pt; }
+.box.warn { border-left-color: #d97706; background: #fffbeb; }
+.box.danger { border-left-color: #dc2626; background: #fef2f2; }
+.box.success { border-left-color: #16a34a; background: #f0fdf4; }
+.email-block { border: 2px solid #2563eb; border-radius: 8px; padding: 20px 22px; margin: 16px 0; background: #fff; page-break-inside: avoid; }
+.email-header { background: #f1f5f9; border-radius: 5px; padding: 10px 14px; margin-bottom: 14px; font-size: 9.5pt; }
+.email-header div { margin: 3px 0; }
+.email-header b { display: inline-block; width: 46px; color: #475569; }
+.email-body { font-size: 10.2pt; line-height: 1.8; }
+.email-body p { margin: 8px 0; }
+.email-sig { margin-top: 16px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 9.2pt; color: #64748b; }
+.pb { page-break-before: always; }
+.small { font-size: 8.6pt; color: #64748b; }
+.foot { margin-top: 30px; border-top: 1px solid #cbd5e1; padding-top: 10px; font-size: 8.4pt; color: #64748b; }
+.highlight { background: #fef08a; padding: 1px 4px; border-radius: 2px; }
+.checklist { list-style: none; padding: 0; margin: 8px 0; }
+.checklist li { padding: 5px 0 5px 28px; position: relative; border-bottom: 1px dotted #e2e8f0; }
+.checklist li:before { content: "☐"; position: absolute; left: 6px; font-size: 13pt; color: #94a3b8; }
+ul, ol { margin: 6px 0 6px 20px; padding: 0; }
+li { margin: 4px 0; }
+.company-tag { display: inline-block; background: #0f172a; color: #fff; padding: 3px 12px; border-radius: 4px; font-size: 9pt; font-weight: 700; margin-bottom: 8px; }
+.kv { font-size: 9.4pt; margin: 3px 0; }
+.kv b { display: inline-block; min-width: 80px; color: #475569; }
+</style>
+</head>
+<body>
+
+<!-- 표지 -->
+<div class="cover">
+  <div class="eyebrow">OEM INQUIRY EMAIL DRAFT</div>
+  <h1>냉면육수 OEM/ODM<br>문의 이메일 초안</h1>
+  <div class="sub">상위 5개사 맞춤 이메일 · RFQ 양식 · 발송 전 체크리스트</div>
+  <div class="meta">
+    <div><b>보고 대상</b> CEO (moongoby)</div>
+    <div><b>작성</b> AADS CTO AI</div>
+    <div><b>작성일</b> 2026-08-04 (KST)</div>
+    <div><b>문서번호</b> FOOD-FIND-002-A (부속문서)</div>
+    <div><b>사업 현황</b> 매장 3개점 운영 · 1일 500인분 · 월 약 10톤</div>
+    <div><b>연계 문서</b> FOOD-FIND-002 냉면육수 OEM/ODM 제조공장 조사보고서</div>
+  </div>
+</div>
+
+<!-- 1. 발송 개요 -->
+<h2>1. 이메일 발송 개요</h2>
+
+<h3>1-1. 사업 현황 요약 (이메일 반영 내용)</h3>
+<table>
+<thead><tr><th style="width:28%">항목</th><th>내용</th></tr></thead>
+<tbody>
+<tr><td><b>업태</b></td><td>배달전문 한식 프랜차이즈 (돼지국밥 전문)</td></tr>
+<tr><td><b>현재 매장 수</b></td><td><b>3개점</b> 운영 중</td></tr>
+<tr><td><b>확장 계획</b></td><td>프랜차이즈 확장 운영 예정</td></tr>
+<tr><td><b>일일 판매량</b></td><td><b>1일 500인분</b> (3개점 합산)</td></tr>
+<tr><td><b>월간 소요량</b></td><td><b>월 약 10톤</b> (연간 약 120톤)</td></tr>
+<tr><td><b>샘플 육수</b></td><td>자체 샘플 육수 <b>보유</b> (OEM 방식 우선 검토)</td></tr>
+<tr><td><b>향후 물량 전망</b></td><td>프랜차이즈 확장 시 매장당 월 약 3.3톤 기준 비례 증가</td></tr>
+</tbody>
+</table>
+
+<div class="box success">
+<b>💡 핵심 어필 포인트</b><br>
+월 10톤은 소형 OEM 공장 기준 <b>중상급 물량</b>입니다. 프랜차이즈 확장까지 언급하면 공장 입장에서 <b>장기 대량 거래처</b>로 인식하므로, 초도 단가 협상에서 유리한 위치를 점할 수 있습니다. 단, 초도 발주는 보수적으로 제시하고, 정상 운영 물량과 확장 시 물량을 단계별로 나누어 제시하는 것이 전략적입니다.
+</div>
+
+<h3>1-2. 발송 대상 및 우선순위</h3>
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:18%">업체명</th><th style="width:22%">이메일</th><th style="width:12%">우선순위</th><th>선정 사유</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>(주)조리쿡</b></td><td>joricook123@naver.com</td><td><span class="badge b-ok">1순위</span></td><td>냉면 특화 OEM/ODM 명시 · 수도권(파주) 물류 유리</td></tr>
+<tr><td>2</td><td><b>청우F&C</b></td><td>cwf-c@hanmail.net</td><td><span class="badge b-ok">1순위</span></td><td>냉면 소스 전용 라인 · 다품목 묶음발주 가능</td></tr>
+<tr><td>3</td><td><b>(주)다담</b></td><td>chloe@sonojung.com</td><td><span class="badge b-blue">2순위</span></td><td>일 12톤 최대급 캐파 · 국밥육수 동시 가능</td></tr>
+<tr><td>4</td><td><b>(주)토부리식품</b></td><td>블로그 문의<br><span class="small">070-7764-0792</span></td><td><span class="badge b-blue">2순위</span></td><td>돼지국밥+냉면육수 동시 보유 · 수도권(인천)</td></tr>
+<tr><td>5</td><td><b>희찬푸드(주)</b></td><td>블로그 문의<br><span class="small">blog.naver.com/qls2ek1004</span></td><td><span class="badge b-warn">3순위</span></td><td>냉면 특화 최고 · 단, 연락처 미확보</td></tr>
+</tbody>
+</table>
+
+<div class="box warn">
+<b>⚠️ 발송 전 필수 확인</b><br>
+① <b>가맹계약서 필수품목 조항</b> — 본사 지정품목 외 구매 가능 여부 확인 완료 후 발송<br>
+② 토부리식품·희찬푸드는 이메일 미확보 — <b>전화(070-7764-0792) 또는 블로그 문의</b>로 이메일 확보 후 발송<br>
+③ 모든 이메일은 <b>같은 날 동시 발송</b> — 회신 조건을 동일하게 맞춰야 비교 가능
+</div>
+
+<!-- 2. 발송 전 체크리스트 -->
+<h2 class="pb">2. 발송 전 체크리스트</h2>
+<ul class="checklist">
+<li>가맹계약서 "필수품목/지정품목" 조항 확인 완료</li>
+<li>자체 샘플 육수 배합비 정리 (이관 가능 수준)</li>
+<li>NDA(비밀유지계약) 양식 준비 (레시피 공유 전 선행 체결용)</li>
+<li>발주사 정보 확정: 상호명, 사업자등록번호, 대표자명, 연락처</li>
+<li>희망 포장 규격 결정 (1kg/2kg/5kg 파우치 중 선택)</li>
+<li>희망 유통 조건 결정 (냉장/냉동/레토르트 중 선택)</li>
+<li>목표 단가 범위 설정 (kg당 ____원 이하)</li>
+<li>회신 요청 기한 설정 (발송일 기준 7영업일 권장)</li>
+<li>토부리식품 이메일 주소 전화 확인 (070-7764-0792)</li>
+<li>희찬푸드 이메일 주소 블로그/전화 확인</li>
+</ul>
+
+<!-- 3. 공통 이메일 본문 -->
+<h2 class="pb">3. 공통 이메일 본문 (표준 템플릿)</h2>
+<div class="box">아래 본문을 기본으로 사용하되, <span class="highlight">노란색 하이라이트</span> 부분을 업체별로 수정합니다. 4장의 업체별 맞춤 이메일은 이 템플릿을 기반으로 각 업체 특성에 맞게 조정한 버전입니다.</div>
+
+<div class="email-block">
+<div class="email-header">
+<div><b>받는이</b> <span class="highlight">[업체 이메일]</span></div>
+<div><b>제목</b> [OEM 견적문의] 배달전문 한식 프랜차이즈 — 냉면육수 월 10톤 생산 문의드립니다</div>
+</div>
+<div class="email-body">
+<p><span class="highlight">[업체명]</span> 담당자님께,</p>
+
+<p>안녕하세요.<br>
+배달전문 한식(돼지국밥) 프랜차이즈를 운영하고 있는 <span class="highlight">[상호명]</span>의 <span class="highlight">[담당자명]</span>입니다.</p>
+
+<p>현재 <b>3개 매장</b>을 운영 중이며, <b>프랜차이즈로 추가 확장을 준비</b>하고 있습니다.<br>
+신메뉴로 냉면을 도입하면서, 냉면육수의 안정적인 OEM 생산 파트너를 찾고 있어 문의드립니다.</p>
+
+<p><b>■ 현재 사업 현황</b></p>
+<ul>
+<li>업태: 배달전문 한식 프랜차이즈 (돼지국밥 전문)</li>
+<li>운영 매장: 현재 3개점, 프랜차이즈 확장 예정</li>
+<li>일일 판매량: 약 500인분 (3개점 합산)</li>
+<li>냉면육수 자체 샘플: <b>보유</b> (자사 레시피 기반 OEM 희망)</li>
+</ul>
+
+<p><b>■ 견적 요청 내용</b></p>
+<ul>
+<li>요청 품목: ① 물냉면 육수 ② 비빔냉면 양념장</li>
+<li>희망 방식: <b>OEM</b> (자사 샘플 레시피 이관) — 상담 후 ODM/공동개발도 검토 가능</li>
+<li>월 예상 물량: <b>약 10톤</b> (프랜차이즈 확장 시 비례 증가)</li>
+<li>포장 규격: <span class="highlight">[1kg 파우치 / 2kg 파우치 — 선택]</span></li>
+<li>유통 조건: <span class="highlight">[냉장 / 레토르트 — 선택]</span></li>
+</ul>
+
+<p><b>■ 회신 요청 사항</b></p>
+<ol>
+<li>냉면육수 생산 이력 및 기존 레퍼런스</li>
+<li>MOQ(최소주문량) 및 물량 구간별 kg당 단가표</li>
+<li>단가 포함 범위 (원료비/가공비/포장재비/물류비 각 포함 여부)</li>
+<li>ODM 개발비 유무 및 발주 시 상계 조건</li>
+<li>리드타임 (샘플 제작 / 초도 생산 / 정기 발주 각각)</li>
+<li>HACCP 인증 현황 (인증번호 · 유효기간)</li>
+<li>레시피 지식재산권 귀속 주체</li>
+<li>동일 레시피 타사 공급 제한(독점) 가능 여부</li>
+<li>생산물배상책임보험(PL보험) 가입 여부 및 한도</li>
+<li>샘플 제공 조건 (무상/유상, 수량, 소요일)</li>
+<li>결제 조건 (선금 비율, 결제기일, 현금 결제 할인율)</li>
+</ol>
+
+<p><b>회신은 <span class="highlight">[20XX년 X월 X일]</span>까지 부탁드리겠습니다.</b><br>
+가능하시다면 <b>샘플 발송</b>도 함께 요청드립니다.</p>
+
+<p>상세 레시피는 비밀유지계약(NDA) 체결 후 전달드리겠습니다.<br>
+공장 방문 및 현장 실사도 희망하오니, 가능한 일정도 함께 알려주시면 감사하겠습니다.</p>
+
+<p>검토 부탁드립니다.<br>감사합니다.</p>
+
+<div class="email-sig">
+<b><span class="highlight">[담당자명]</span></b> / <span class="highlight">[직함]</span><br>
+<span class="highlight">[상호명]</span><br>
+Tel. <span class="highlight">[전화번호]</span> · E-mail. <span class="highlight">[이메일]</span><br>
+사업자등록번호: <span class="highlight">[사업자번호]</span>
+</div>
+</div>
+</div>
+
+<!-- 4. 업체별 맞춤 이메일 -->
+<h2 class="pb">4. 업체별 맞춤 이메일 (5통)</h2>
+<div class="box">각 업체의 특성을 반영하여 공통 템플릿을 맞춤 수정한 버전입니다. <span class="highlight">노란색</span> 부분만 CEO님 정보로 채우신 뒤 그대로 발송하시면 됩니다.</div>
+
+<!-- 이메일 1: 조리쿡 -->
+<h3>이메일 ① — (주)조리쿡 <span class="badge b-ok">1순위</span></h3>
+<div class="kv"><b>보내는 곳</b> joricook123@naver.com</div>
+<div class="kv"><b>전화</b> 031-977-9937</div>
+<div class="kv"><b>선정 사유</b> 냉면 육수·소스 OEM/ODM 직접 명시, 수도권(파주) 소재</div>
+
+<div class="email-block">
+<div class="email-header">
+<div><b>받는이</b> joricook123@naver.com</div>
+<div><b>제목</b> [OEM 견적문의] 한식 프랜차이즈 3개점 — 냉면육수 월 10톤 생산 파트너 문의</div>
+</div>
+<div class="email-body">
+<p>(주)조리쿡 담당자님께,</p>
+
+<p>안녕하세요.<br>
+배달전문 한식(돼지국밥) 프랜차이즈를 운영하고 있는 <span class="highlight">[상호명]</span>의 <span class="highlight">[담당자명]</span>입니다.</p>
+
+<p>귀사 홈페이지에서 <b>냉면 육수·소스 OEM/ODM 맞춤 제작</b>이 가능하다는 것을 확인하고 연락드립니다.</p>
+
+<p>현재 <b>3개 매장</b>을 운영 중이며, <b>프랜차이즈로 추가 확장을 준비</b>하고 있습니다. 신메뉴로 냉면을 도입하면서 안정적인 OEM 생산 파트너를 찾고 있습니다.</p>
+
+<p><b>■ 사업 현황</b></p>
+<ul>
+<li>업태: 배달전문 한식 프랜차이즈 (돼지국밥 전문)</li>
+<li>운영 매장: 현재 3개점, 향후 프랜차이즈 가맹점 확장 예정</li>
+<li>일일 판매량: 약 500인분 (3개점 합산 기준)</li>
+<li>월간 예상 소요량: <b>약 10톤</b></li>
+<li>냉면육수 자체 샘플: <b>보유 중</b></li>
+</ul>
+
+<p><b>■ 요청 사항</b></p>
+<ul>
+<li>품목: ① 물냉면 육수 ② 비빔냉면 양념장</li>
+<li>방식: <b>OEM (자사 샘플 레시피 이관)</b> — 귀사의 냉면 전문 노하우를 바탕으로 양산화 튜닝 희망</li>
+<li>월 물량: 초도 약 3톤 → 정상 운영 월 10톤 → 확장 시 비례 증가</li>
+<li>포장: 배달전문점 특성상 <b>1~2kg 냉장 소분팩</b> 선호</li>
+</ul>
+
+<p><b>■ 회신 요청 (아래 항목에 대해 답변 부탁드립니다)</b></p>
+<ol>
+<li>냉면육수 기존 생산 레퍼런스 (납품 업종·규모)</li>
+<li>MOQ 및 3톤/5톤/10톤 구간별 kg당 단가표</li>
+<li>단가에 포장재비·수도권 물류비 포함 여부</li>
+<li>샘플 제작 → 초도 생산까지의 리드타임</li>
+<li>HACCP 인증 현황</li>
+<li>자사 레시피 이관 시 지식재산권 귀속 및 독점 가능 여부</li>
+<li>PL보험 가입 현황</li>
+<li>공장 방문·실사 가능 일정</li>
+</ol>
+
+<p><b>회신은 <span class="highlight">[20XX년 X월 X일]</span>까지 부탁드리겠습니다.</b><br>
+가능하시다면 <b>귀사 기존 냉면육수 샘플</b>도 함께 보내주시면, 자사 샘플과 비교 관능평가를 진행하겠습니다.</p>
+
+<p>상세 레시피 배합비는 비밀유지계약(NDA) 체결 후 전달드리겠습니다.<br>
+귀사가 파주 소재여서 서울 배송 접근성이 좋다고 판단하여 <b>1순위 파트너 후보</b>로 검토하고 있습니다.</p>
+
+<p>검토 후 회신 부탁드립니다.<br>감사합니다.</p>
+
+<div class="email-sig">
+<b><span class="highlight">[담당자명]</span></b> / <span class="highlight">[직함]</span><br>
+<span class="highlight">[상호명]</span><br>
+Tel. <span class="highlight">[전화번호]</span> · E-mail. <span class="highlight">[이메일]</span>
+</div>
+</div>
+</div>
+
+<!-- 이메일 2: 청우F&C -->
+<h3 class="pb">이메일 ② — 청우F&C (청우에프엔씨) <span class="badge b-ok">1순위</span></h3>
+<div class="kv"><b>보내는 곳</b> cwf-c@hanmail.net</div>
+<div class="kv"><b>전화</b> 053-964-3795 (상담 09:00~18:00)</div>
+<div class="kv"><b>선정 사유</b> 냉면 소스 전용 라인 보유, 다대기·양념장까지 묶음발주 가능</div>
+
+<div class="email-block">
+<div class="email-header">
+<div><b>받는이</b> cwf-c@hanmail.net</div>
+<div><b>제목</b> [OEM 견적문의] 한식 프랜차이즈 — 냉면육수 + 비빔장 월 10톤 견적 요청</div>
+</div>
+<div class="email-body">
+<p>청우에프엔씨 담당자님께,</p>
+
+<p>안녕하세요.<br>
+배달전문 한식(돼지국밥) 프랜차이즈를 운영하고 있는 <span class="highlight">[상호명]</span>의 <span class="highlight">[담당자명]</span>입니다.</p>
+
+<p>귀사의 블로그에서 <b>업소용 물냉면 소스·비빔냉면 소스 OEM/ODM 전문 제조</b> 내용을 확인하고 연락드립니다.</p>
+
+<p>현재 <b>3개 매장</b>을 운영하고 있으며, <b>프랜차이즈 가맹점 확장을 준비</b> 중입니다. 이번에 냉면을 신메뉴로 도입하면서, 냉면육수와 비빔장을 안정적으로 공급받을 OEM 파트너를 찾고 있습니다.</p>
+
+<p><b>■ 사업 현황</b></p>
+<ul>
+<li>업태: 배달전문 한식 프랜차이즈 (돼지국밥 전문)</li>
+<li>운영 매장: 현재 3개점, 프랜차이즈 확장 예정</li>
+<li>일일 판매량: 약 500인분</li>
+<li>월간 소요량: <b>약 10톤</b></li>
+<li>자체 샘플 육수: <b>보유</b></li>
+</ul>
+
+<p><b>■ 요청 품목 (다품목 묶음 견적 희망)</b></p>
+<table style="font-size:9pt; margin:8px 0;">
+<tr><th>품목</th><th>우선순위</th><th>비고</th></tr>
+<tr><td>① 물냉면 육수</td><td>필수</td><td>자사 샘플 레시피 기반 OEM</td></tr>
+<tr><td>② 비빔냉면 양념장</td><td>필수</td><td>ODM 또는 공동개발 가능</td></tr>
+<tr><td>③ 국밥 다대기/양념장</td><td>선택</td><td>기존 국밥 메뉴용 — 묶음 시 단가 인하 기대</td></tr>
+</table>
+
+<p>귀사가 냉면 소스 외에도 <b>드레싱·소스 전 카테고리</b>를 다루신다고 파악했습니다. 향후 국밥 양념장·다대기까지 <b>묶음 발주</b>가 가능하다면, 전체 물량을 합산한 단가 조건을 함께 검토하고 싶습니다.</p>
+
+<p><b>■ 회신 요청 사항</b></p>
+<ol>
+<li>냉면 소스류 기존 납품 레퍼런스</li>
+<li>MOQ 및 구간별 단가 (냉면육수 · 비빔장 · 다대기 각각)</li>
+<li>3개 품목 묶음 발주 시 단가 할인 조건</li>
+<li>서울·수도권 배송 리드타임 및 물류비 (대구→서울)</li>
+<li>냉장 콜드체인 배송 가능 여부</li>
+<li>HACCP 인증 현황</li>
+<li>레시피 귀속 및 독점 조건</li>
+<li>PL보험, 결제 조건</li>
+<li>공장 방문 가능 일정</li>
+</ol>
+
+<p><b>회신은 <span class="highlight">[20XX년 X월 X일]</span>까지 부탁드리겠습니다.</b><br>
+가능하시다면 물냉면 육수 · 비빔장 <b>샘플 세트</b>를 함께 보내주시면 감사하겠습니다.</p>
+
+<p>레시피 상세 배합은 NDA 체결 후 전달드리겠습니다.<br>감사합니다.</p>
+
+<div class="email-sig">
+<b><span class="highlight">[담당자명]</span></b> / <span class="highlight">[직함]</span><br>
+<span class="highlight">[상호명]</span><br>
+Tel. <span class="highlight">[전화번호]</span> · E-mail. <span class="highlight">[이메일]</span>
+</div>
+</div>
+</div>
+
+<!-- 이메일 3: 다담 -->
+<h3 class="pb">이메일 ③ — (주)다담 <span class="badge b-blue">2순위</span></h3>
+<div class="kv"><b>보내는 곳</b> chloe@sonojung.com</div>
+<div class="kv"><b>전화</b> 070-7769-0811</div>
+<div class="kv"><b>선정 사유</b> 일 12톤 최대급 캐파, 사골육수 전문 — 국밥육수 동시 검토 가능</div>
+
+<div class="email-block">
+<div class="email-header">
+<div><b>받는이</b> chloe@sonojung.com</div>
+<div><b>제목</b> [OEM 견적문의] 돼지국밥 프랜차이즈 — 냉면육수 + 국밥육수 OEM 통합 문의</div>
+</div>
+<div class="email-body">
+<p>(주)다담 OEM 담당자님께,</p>
+
+<p>안녕하세요.<br>
+배달전문 돼지국밥 프랜차이즈를 운영하고 있는 <span class="highlight">[상호명]</span>의 <span class="highlight">[담당자명]</span>입니다.</p>
+
+<p>귀사의 홈페이지에서 <b>10톤 가마솥 기반 육수 전문 OEM/ODM</b>(일 최대 12톤 생산) 역량을 확인하고 연락드립니다.</p>
+
+<p>현재 <b>3개 매장(1일 500인분)</b>을 운영하며 <b>프랜차이즈 확장을 준비</b> 중입니다. 이번에 냉면을 신메뉴로 추가하면서, 기존 국밥 육수까지 포함한 <b>육수류 전체를 한 곳에서 통합 OEM</b>하는 방안을 검토하고 있습니다.</p>
+
+<p><b>■ 견적 요청</b></p>
+<table style="font-size:9pt; margin:8px 0;">
+<tr><th>품목</th><th>월 물량</th><th>방식</th><th>비고</th></tr>
+<tr><td>① 물냉면 육수</td><td>약 10톤</td><td>OEM (자사 샘플 보유)</td><td>냉장 파우치 선호</td></tr>
+<tr><td>② 비빔냉면 양념장</td><td>약 2~3톤</td><td>ODM 또는 공동개발</td><td></td></tr>
+<tr><td>③ 돼지국밥 육수</td><td>향후 협의</td><td>OEM</td><td>현재 자체 조리 → 외주 전환 검토</td></tr>
+</table>
+
+<p>귀사가 사골·곰탕류에 강점이 있다고 파악했습니다. 냉면육수는 사골 기반이 많으므로 <b>귀사의 기존 설비와 노하우로 양산화가 가능할 것</b>으로 기대합니다. 특히 프랜차이즈 확장 시 <b>국밥육수+냉면육수를 동일 공장에서 통합 관리</b>하는 것이 품질·물류·원가 면에서 가장 효율적이라 판단합니다.</p>
+
+<p><b>■ 회신 요청 사항</b></p>
+<ol>
+<li>냉면육수 생산 이력 (사골육수 기반 냉면 대응 가능 여부)</li>
+<li>MOQ 및 구간별 단가 (냉면육수 · 국밥육수 각각 + 통합 시)</li>
+<li>레토르트 상온유통 vs 냉장 선택 가능 여부 및 유통기한</li>
+<li>리드타임 (샘플 / 초도 / 정기)</li>
+<li>HACCP·FDA 인증 현황</li>
+<li>레시피 귀속 및 독점 조건</li>
+<li>PL보험, 결제 조건</li>
+<li>서울지사(종로) 또는 구미 본사 미팅 가능 일정</li>
+</ol>
+
+<p><b>회신은 <span class="highlight">[20XX년 X월 X일]</span>까지 부탁드리겠습니다.</b><br>
+샘플 발송도 함께 요청드립니다.</p>
+
+<p>레시피 상세는 NDA 체결 후 전달드리겠습니다.<br>감사합니다.</p>
+
+<div class="email-sig">
+<b><span class="highlight">[담당자명]</span></b> / <span class="highlight">[직함]</span><br>
+<span class="highlight">[상호명]</span><br>
+Tel. <span class="highlight">[전화번호]</span> · E-mail. <span class="highlight">[이메일]</span>
+</div>
+</div>
+</div>
+
+<!-- 이메일 4: 토부리식품 -->
+<h3 class="pb">이메일 ④ — (주)토부리식품 <span class="badge b-blue">2순위</span></h3>
+<div class="kv"><b>보내는 곳</b> ⚠️ 이메일 미확보 — 전화(070-7764-0792)로 이메일 확인 후 발송</div>
+<div class="kv"><b>선정 사유</b> 돼지국밥육수 + 냉면육수 동시 보유, 수도권(인천) 소재</div>
+
+<div class="email-block">
+<div class="email-header">
+<div><b>받는이</b> <span class="highlight">[전화 확인 후 기재]</span></div>
+<div><b>제목</b> [OEM 견적문의] 돼지국밥 프랜차이즈 — 국밥육수 + 냉면육수 동시 OEM 문의</div>
+</div>
+<div class="email-body">
+<p>(주)토부리식품 담당자님께,</p>
+
+<p>안녕하세요.<br>
+배달전문 돼지국밥 프랜차이즈를 운영하는 <span class="highlight">[상호명]</span>의 <span class="highlight">[담당자명]</span>입니다.</p>
+
+<p>귀사의 블로그에서 <b>돼지국밥 육수와 냉면육수를 함께 생산</b>하신다는 것을 확인했습니다. 저희 사업과 품목이 가장 직접적으로 맞는다고 판단하여 연락드립니다.</p>
+
+<p>현재 <b>3개 매장(1일 500인분)</b>을 운영하며, <b>프랜차이즈 확장을 앞두고</b> 있습니다. 냉면을 신메뉴로 추가하면서 냉면육수 OEM을 찾고 있고, 향후 기존 국밥 육수까지 외주로 전환하는 것도 함께 검토 중입니다.</p>
+
+<p><b>■ 요청 사항</b></p>
+<ul>
+<li>품목: ① 물냉면 육수 (월 약 10톤) ② 돼지국밥 육수 (향후 협의)</li>
+<li>방식: OEM (자사 샘플 육수 보유)</li>
+<li>포장: 1~2kg 냉장 소분팩</li>
+</ul>
+
+<p>귀사가 인천 소재여서 <b>서울 매장으로의 배송 접근성이 좋다</b>는 점도 큰 장점으로 보고 있습니다. 돼지국밥 육수와 냉면 육수를 한 곳에서 안정적으로 공급받을 수 있다면 <b>장기 파트너십</b>을 희망합니다.</p>
+
+<p><b>■ 회신 요청 사항</b></p>
+<ol>
+<li>냉면육수·돼지국밥육수 각각의 MOQ 및 단가</li>
+<li>2개 품목 동시 발주 시 단가 조건</li>
+<li>소량 발주(블로그 언급) 최소 물량 기준</li>
+<li>설비 현황 및 생산 캐파</li>
+<li>HACCP 인증 현황</li>
+<li>레시피 귀속, 독점 조건, PL보험</li>
+<li>공장(계양구) 방문 가능 일정</li>
+</ol>
+
+<p><b>회신은 <span class="highlight">[20XX년 X월 X일]</span>까지 부탁드리겠습니다.</b><br>감사합니다.</p>
+
+<div class="email-sig">
+<b><span class="highlight">[담당자명]</span></b> / <span class="highlight">[직함]</span><br>
+<span class="highlight">[상호명]</span><br>
+Tel. <span class="highlight">[전화번호]</span> · E-mail. <span class="highlight">[이메일]</span>
+</div>
+</div>
+</div>
+
+<!-- 이메일 5: 희찬푸드 -->
+<h3 class="pb">이메일 ⑤ — 희찬푸드(주) <span class="badge b-warn">3순위 — 연락처 확보 필요</span></h3>
+<div class="kv"><b>보내는 곳</b> ⚠️ 이메일 미확보 — 블로그(blog.naver.com/qls2ek1004) 문의 또는 전화 확인 필요</div>
+<div class="kv"><b>선정 사유</b> 냉면 육수·비빔장 단일 주력 최고 특화, 공장 견학 개방</div>
+
+<div class="email-block">
+<div class="email-header">
+<div><b>받는이</b> <span class="highlight">[블로그/전화로 확인 후 기재]</span></div>
+<div><b>제목</b> [OEM 견적문의] 한식 프랜차이즈 3개점 — 냉면육수 ODM/공동개발 문의</div>
+</div>
+<div class="email-body">
+<p>희찬푸드 담당자님께,</p>
+
+<p>안녕하세요.<br>
+배달전문 돼지국밥 프랜차이즈를 운영하는 <span class="highlight">[상호명]</span>의 <span class="highlight">[담당자명]</span>입니다.</p>
+
+<p>귀사 블로그에서 <b>물냉면 육수·비빔냉면 소스 전문 제조</b>와 <b>공장 견학·투어</b>를 운영하신다는 것을 보고 연락드립니다.</p>
+
+<p>현재 <b>3개 매장(1일 500인분)</b>을 운영하며 <b>프랜차이즈 확장을 준비</b> 중입니다. 자체 냉면 육수 샘플을 보유하고 있어 OEM 방식을 우선 검토하고 있으나, 귀사가 냉면 카테고리에 가장 특화된 공장으로 판단되어 <b>귀사 노하우를 접목한 공동개발</b>도 열린 마음으로 검토하겠습니다.</p>
+
+<p><b>■ 요청 사항</b></p>
+<ul>
+<li>품목: ① 물냉면 육수 ② 비빔냉면 양념장</li>
+<li>방식: OEM (자사 샘플 이관) 또는 ODM/공동개발</li>
+<li>월 물량: 약 10톤 (프랜차이즈 확장 시 비례 증가)</li>
+</ul>
+
+<p><b>■ 특별 요청</b></p>
+<ul>
+<li><b>공장 견학</b> 참여 희망 — 가능한 가장 빠른 일정을 알려주시면 방문하겠습니다</li>
+<li>견학 시 <b>현장 샘플 시식</b>도 가능한지 확인 부탁드립니다</li>
+</ul>
+
+<p><b>■ 회신 요청 사항</b></p>
+<ol>
+<li>MOQ 및 구간별 단가</li>
+<li>OEM vs ODM 진행 시 각각의 조건 차이</li>
+<li>리드타임, HACCP 인증, 레시피 귀속, 독점 조건</li>
+<li>PL보험, 결제 조건</li>
+<li>공장 견학 가능 일정 (포천 소재)</li>
+</ol>
+
+<p><b>회신은 <span class="highlight">[20XX년 X월 X일]</span>까지 부탁드리겠습니다.</b><br>감사합니다.</p>
+
+<div class="email-sig">
+<b><span class="highlight">[담당자명]</span></b> / <span class="highlight">[직함]</span><br>
+<span class="highlight">[상호명]</span><br>
+Tel. <span class="highlight">[전화번호]</span> · E-mail. <span class="highlight">[이메일]</span>
+</div>
+</div>
+</div>
+
+<!-- 5. 발송 후 관리 -->
+<h2 class="pb">5. 발송 후 관리 가이드</h2>
+
+<h3>5-1. 회신 비교표 (회신 수령 후 작성용)</h3>
+<table>
+<thead><tr><th style="width:22%">비교 항목</th><th style="width:19.5%">조리쿡</th><th style="width:19.5%">청우F&C</th><th style="width:19.5%">다담</th><th style="width:19.5%">토부리</th></tr></thead>
+<tbody>
+<tr><td>MOQ</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>kg당 단가 (10톤 기준)</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>단가 포함 범위</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>물류비 별도 여부</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>개발비</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>샘플 리드타임</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>초도생산 리드타임</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>HACCP 인증</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>레시피 귀속</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>독점 조건</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>PL보험</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>결제 조건</td><td></td><td></td><td></td><td></td></tr>
+<tr><td>공장 실사 가능</td><td></td><td></td><td></td><td></td></tr>
+<tr><td><b>종합 점수 (/100)</b></td><td></td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+
+<h3>5-2. 미회신 시 팔로업 일정</h3>
+<table>
+<thead><tr><th style="width:15%">시점</th><th style="width:25%">액션</th><th>내용</th></tr></thead>
+<tbody>
+<tr><td>D+0</td><td>이메일 발송</td><td>5개사 동시 발송, 회신 기한 D+7 명시</td></tr>
+<tr><td>D+3</td><td>미회신 업체 전화</td><td>"이메일 확인하셨는지 여쭤봅니다" — 수신 확인 및 검토 일정 문의</td></tr>
+<tr><td>D+7</td><td>회신 기한</td><td>회신 업체 비교표 작성, 미회신 업체 최종 전화</td></tr>
+<tr><td>D+10</td><td>샘플 요청</td><td>견적 조건 유리한 상위 2~3사에 샘플 요청</td></tr>
+<tr><td>D+14~21</td><td>샘플 수령 · 관능평가</td><td>부록 D(관능평가 시트) 활용, 3인 이상 블라인드</td></tr>
+<tr><td>D+21~28</td><td>공장 실사</td><td>최종 후보 1~2사 방문, 설비·위생·캐파 직접 확인</td></tr>
+<tr><td>D+30</td><td>최종 선정 · NDA · 계약</td><td>부록 B(필수 특약) 반영 계약서 작성</td></tr>
+</tbody>
+</table>
+
+<h3>5-3. 주의사항</h3>
+<div class="box danger">
+<b>⚠️ 절대 하지 말 것</b>
+<ul style="margin:6px 0;">
+<li>NDA 체결 전 상세 배합비(g 단위 레시피)를 이메일·전화로 전달하지 않는다</li>
+<li>특정 업체와 단독 상담에 들어가기 전에 비교 견적을 먼저 확보한다</li>
+<li>구두 합의만으로 초도 발주하지 않는다 — 반드시 계약서 체결 후 발주</li>
+<li>"독점 구두 약속"을 신뢰하지 않는다 — 계약서 명문화 필수</li>
+</ul>
+</div>
+
+<div class="box success">
+<b>💡 협상 유리 포인트 (이메일에 이미 반영됨)</b>
+<ul style="margin:6px 0;">
+<li><b>월 10톤</b> — 소형 OEM 공장 기준 중상급 물량으로 단가 협상력 확보</li>
+<li><b>프랜차이즈 확장</b> — 장기 대량 거래 전망을 어필하여 초도 단가 우대 유도</li>
+<li><b>자사 샘플 보유</b> — OEM 방식 명시로 개발비 절감 가능성 제시</li>
+<li><b>동시 비교 견적</b> — "여러 곳에 문의 중"이라는 시그널이 경쟁 단가를 유도</li>
+</ul>
+</div>
+
+<!-- 푸터 -->
+<div class="foot">
+본 문서는 AADS CTO AI가 2026-08-04(KST) 기준으로 작성했습니다.<br>
+문서번호 FOOD-FIND-002-A (부속문서) · 연계문서: FOOD-FIND-002 냉면육수 OEM/ODM 제조공장 조사보고서<br>
+업체 연락처는 각 사 공식 홈페이지·블로그 공개 기재값 기준이며, 발송 전 유효성 재확인을 권장합니다.<br>
+<span class="highlight">노란색</span> 표시 부분은 CEO님이 직접 기재하셔야 할 항목입니다.
+</div>
+
+</body>
+</html>

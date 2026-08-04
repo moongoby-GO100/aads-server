@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>해면기 상부 덕트 설치 검토 도면</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #c7ced9;
+      --beam: #4b5565;
+      --duct: #1f7a8c;
+      --duct-soft: #d8f1f5;
+      --warn: #b54708;
+      --warn-soft: #fff3dc;
+      --ok: #087443;
+      --ok-soft: #e6f4ed;
+      --paper: #ffffff;
+      --band: #f5f7fa;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Apple SD Gothic Neo", "Noto Sans KR", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #eef2f6;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 24px auto 48px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+    }
+
+    header {
+      padding: 28px 32px 18px;
+      border-bottom: 2px solid #111827;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 18px;
+      font-size: 13px;
+    }
+
+    .meta div {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: #fafafa;
+    }
+
+    section {
+      padding: 24px 32px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 18px 0 10px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: 1.35fr 0.85fr;
+      gap: 16px;
+    }
+
+    .decision {
+      border-left: 6px solid var(--ok);
+      background: var(--ok-soft);
+      padding: 14px 16px;
+      font-weight: 700;
+    }
+
+    .notice {
+      border-left: 6px solid var(--warn);
+      background: var(--warn-soft);
+      padding: 14px 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f0f3f7;
+      text-align: left;
+      font-weight: 700;
+    }
+
+    .drawings {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+
+    .sheet {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 14px;
+    }
+
+    .sheet-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .scale {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid #d9dee7;
+      background: #fcfcfd;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #344054;
+    }
+
+    .legend span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .chip {
+      width: 18px;
+      height: 10px;
+      border: 1px solid #777;
+      flex: 0 0 auto;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .callout {
+      background: var(--band);
+      border: 1px solid var(--line);
+      padding: 14px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #e8eef8;
+      color: #1d3b68;
+      white-space: nowrap;
+    }
+
+    .badge.ok {
+      background: var(--ok-soft);
+      color: var(--ok);
+    }
+
+    .badge.warn {
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+
+    ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+
+    li { margin: 4px 0; }
+
+    footer {
+      padding: 18px 32px 26px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .print-actions {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 16px;
+      background: rgba(255,255,255,0.92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+    }
+
+    button {
+      border: 1px solid #344054;
+      background: #172033;
+      color: #fff;
+      border-radius: 6px;
+      padding: 9px 12px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    @media (max-width: 820px) {
+      main { width: 100%; margin: 0; border-left: 0; border-right: 0; }
+      header, section, footer { padding-left: 18px; padding-right: 18px; }
+      .summary, .grid-2, .meta { grid-template-columns: 1fr; }
+      .legend { grid-template-columns: 1fr 1fr; }
+      h1 { font-size: 23px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      main { width: 100%; margin: 0; border: 0; box-shadow: none; }
+      .print-actions { display: none; }
+      section { break-inside: avoid; }
+      button { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="print-actions">
+      <button type="button" onclick="window.print()">인쇄 / PDF 저장</button>
+    </div>
+
+    <header>
+      <h1>해면기 상부 덕트 설치 검토 도면</h1>
+      <p>천정 보 간섭으로 매립 배관이 어려운 조건에서, 보 하부 노출 우회 덕트를 기본안으로 제안합니다.</p>
+      <div class="meta">
+        <div><strong>현장</strong><br>열정국밥 주방 해면기 상부</div>
+        <div><strong>작성일</strong><br>2026-07-30 KST</div>
+        <div><strong>도면 성격</strong><br>현장 협의용 개념 도면</div>
+        <div><strong>전제</strong><br>정확 치수는 현장 실측 필요</div>
+      </div>
+    </header>
+
+    <section>
+      <h2>요약 판정</h2>
+      <div class="summary">
+        <div class="decision">
+          권장안은 천정 보를 관통하지 않고, 해면기 상부 후드에서 짧게 상승한 뒤 보 하부 또는 보 측면 아래로 노출 덕트를 우회시키는 방식입니다.
+        </div>
+        <div class="notice">
+          첨부 원본 이미지 파일은 현재 워크스페이스에서 직접 확인되지 않았습니다. 본 도면은 CEO님 지시의 핵심 조건인 “해면기 위쪽, 천정 보 간섭, 천정매립 곤란”을 기준으로 작성한 시공 협의안입니다.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>설치 방식 비교</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>안</th>
+            <th>구성</th>
+            <th>판정</th>
+            <th>주의점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge ok">A안 권장</span></td>
+            <td>해면기 후드 위 수직 상승 후, 보 아래에서 벽면 방향으로 노출 덕트 우회</td>
+            <td>구조체 손상 없이 시공 가능성이 가장 높음</td>
+            <td>덕트 하부 높이가 작업자 머리 간섭을 만들지 않도록 최소 유효고 확인</td>
+          </tr>
+          <tr>
+            <td><span class="badge">B안</span></td>
+            <td>보 앞쪽에 낮은 박스 천정 또는 커버를 만들어 덕트를 감춤</td>
+            <td>외관은 정리되지만 천정고가 낮아짐</td>
+            <td>점검구와 청소구를 반드시 남겨야 함</td>
+          </tr>
+          <tr>
+            <td><span class="badge warn">C안 비권장</span></td>
+            <td>천정 보 관통 또는 보 내부 매립</td>
+            <td>구조 검토 전에는 진행 금지</td>
+            <td>철근 절단, 내화 성능 훼손, 누수 및 진동 리스크가 큼</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>도면 1. 측면 단면도</h2>
+      <div class="sheet">
+        <div class="sheet-title">
+          <span>보 하부 노출 우회 덕트 기본안</span>
+          <span class="scale">개념 축척, 현장 실측 후 치수 확정</span>
+        </div>
+        <svg viewBox="0 0 1100 560" role="img" aria-label="해면기 상부 덕트 측면 단면도">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f7a8c"></path>
+            </marker>
+            <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="8" stroke="#98a2b3" stroke-width="2"></line>
+            </pattern>
+          </defs>
+
+          <rect x="0" y="0" width="1100" height="560" fill="#fcfcfd"></rect>
+          <line x1="70" y1="92" x2="1030" y2="92" stroke="#111827" stroke-width="5"></line>
+          <text x="76" y="72" font-size="18" fill="#111827" font-weight="700">기존 천정 슬라브</text>
+
+          <rect x="360" y="92" width="210" height="145" fill="#4b5565"></rect>
+          <text x="394" y="170" font-size="18" fill="#fff" font-weight="700">천정 보</text>
+          <text x="378" y="198" font-size="13" fill="#e5e7eb">관통 금지, 하부 우회</text>
+
+          <rect x="120" y="410" width="240" height="76" fill="#d1d5db" stroke="#667085" stroke-width="2"></rect>
+          <rect x="150" y="336" width="180" height="74" fill="#f1f5f9" stroke="#667085" stroke-width="2"></rect>
+          <text x="168" y="382" font-size="18" fill="#172033" font-weight="700">해면기</text>
+          <text x="146" y="462" font-size="14" fill="#344054">장비 상판 / 작업면</text>
+
+          <path d="M130 336 L150 295 L330 295 L350 336 Z" fill="#d8f1f5" stroke="#1f7a8c" stroke-width="4"></path>
+          <text x="173" y="285" font-size="15" fill="#1f7a8c" font-weight="700">해면기 상부 후드</text>
+
+          <path d="M240 295 L240 245 L310 245 L310 295 Z" fill="#d8f1f5" stroke="#1f7a8c" stroke-width="4"></path>
+          <path d="M310 245 L310 262 L350 262 L350 304 L570 304 L570 344 L800 344 L800 302 L945 302"
+                fill="none" stroke="#1f7a8c" stroke-width="48" stroke-linejoin="round" stroke-linecap="round"></path>
+          <path d="M310 245 L310 262 L350 262 L350 304 L570 304 L570 344 L800 344 L800 302 L945 302"
+                fill="none" stroke="#115e6e" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"></path>
+          <text x="610" y="390" font-size="15" fill="#115e6e" font-weight="700">보 아래로 낮춰 통과 후 벽면 배기구 방향 이동</text>
+
+          <rect x="945" y="248" width="74" height="108" fill="#f1f5f9" stroke="#667085" stroke-width="2"></rect>
+          <circle cx="982" cy="302" r="31" fill="#d8f1f5" stroke="#1f7a8c" stroke-width="4"></circle>
+          <text x="923" y="230" font-size="15" fill="#172033" font-weight="700">외벽 배출 또는 기존 배기 라인</text>
+
+          <rect x="570" y="304" width="92" height="48" fill="url(#hatch)" stroke="#98a2b3" stroke-width="1"></rect>
+          <text x="560" y="285" font-size="13" fill="#667085">탈착식 점검구</text>
+
+          <line x1="360" y1="252" x2="570" y2="252" stroke="#b54708" stroke-width="2" stroke-dasharray="8 6"></line>
+          <text x="382" y="272" font-size="13" fill="#b54708">보 하부 여유고 실측 필요</text>
+
+          <line x1="86" y1="507" x2="1040" y2="507" stroke="#98a2b3" stroke-width="2"></line>
+          <text x="86" y="532" font-size="13" fill="#667085">주방 바닥 기준선</text>
+        </svg>
+        <div class="legend">
+          <span><i class="chip" style="background:#4b5565"></i>천정 보</span>
+          <span><i class="chip" style="background:#d8f1f5;border-color:#1f7a8c"></i>신설 덕트</span>
+          <span><i class="chip" style="background:#f1f5f9"></i>해면기/후드</span>
+          <span><i class="chip" style="background:url(#hatch)"></i>점검구 위치</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>도면 2. 평면 배치도</h2>
+      <div class="sheet">
+        <div class="sheet-title">
+          <span>해면기 중심에서 벽면 방향으로 우회 배관</span>
+          <span class="scale">작업 동선과 화기 간섭은 현장 재확인</span>
+        </div>
+        <svg viewBox="0 0 1100 560" role="img" aria-label="해면기 상부 덕트 평면 배치도">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f7a8c"></path>
+            </marker>
+          </defs>
+
+          <rect x="0" y="0" width="1100" height="560" fill="#fcfcfd"></rect>
+          <rect x="70" y="70" width="960" height="420" fill="#fff" stroke="#98a2b3" stroke-width="3"></rect>
+          <text x="80" y="52" font-size="18" fill="#172033" font-weight="700">주방 상부 평면</text>
+
+          <rect x="120" y="290" width="260" height="120" fill="#f1f5f9" stroke="#667085" stroke-width="3"></rect>
+          <text x="202" y="356" font-size="19" fill="#172033" font-weight="700">해면기</text>
+
+          <rect x="438" y="70" width="110" height="420" fill="#4b5565"></rect>
+          <text x="454" y="282" font-size="17" fill="#fff" font-weight="700" transform="rotate(-90 454 282)">천정 보 라인</text>
+
+          <path d="M250 290 L250 230 L415 230 L415 180 L548 180 L548 230 L900 230"
+                fill="none" stroke="#1f7a8c" stroke-width="52" stroke-linejoin="round" stroke-linecap="round"></path>
+          <path d="M250 290 L250 230 L415 230 L415 180 L548 180 L548 230 L900 230"
+                fill="none" stroke="#115e6e" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow2)"></path>
+
+          <rect x="850" y="180" width="110" height="100" fill="#d8f1f5" stroke="#1f7a8c" stroke-width="3"></rect>
+          <text x="854" y="165" font-size="15" fill="#172033" font-weight="700">외벽 배기구</text>
+
+          <rect x="590" y="200" width="105" height="60" fill="#fff3dc" stroke="#b54708" stroke-width="2"></rect>
+          <text x="604" y="235" font-size="14" fill="#b54708" font-weight="700">청소구</text>
+
+          <line x1="438" y1="494" x2="548" y2="494" stroke="#b54708" stroke-width="3"></line>
+          <text x="395" y="526" font-size="14" fill="#b54708">보 폭/하부 돌출은 실측 후 덕트 높이 확정</text>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>시공 기준 메모</h2>
+      <div class="grid-2">
+        <div class="callout">
+          <h3>권장 상세</h3>
+          <ul>
+            <li>덕트는 가능한 직선으로 짧게 구성하고, 보 부근은 2단 엘보 또는 오프셋 덕트로 낮춰 우회합니다.</li>
+            <li>해면기 수증기와 열기를 바로 포집하도록 후드 폭은 장비 폭보다 좌우 여유를 둡니다.</li>
+            <li>덕트 하부는 작업자 머리, 선반, 조명, 소방설비와 간섭이 없는 높이로 맞춥니다.</li>
+            <li>보 관통은 구조기술자 검토 전 금지하고, 타공이 필요하면 외벽 또는 비구조 벽체 우선으로 검토합니다.</li>
+          </ul>
+        </div>
+        <div class="callout">
+          <h3>현장 실측 필요값</h3>
+          <ul>
+            <li>해면기 폭, 깊이, 상판 높이</li>
+            <li>천정고, 보 하단 높이, 보 폭</li>
+            <li>해면기 중심에서 외벽 배기구까지 거리</li>
+            <li>기존 배기팬 용량과 덕트 직경</li>
+            <li>스프링클러, 감지기, 전등, 가스배관 위치</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>자재 및 마감 제안</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>구분</th>
+            <th>권장 사양</th>
+            <th>이유</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>후드</td>
+            <td>스테인리스 후드, 탈착 필터 포함</td>
+            <td>수증기, 열, 오염 청소 대응</td>
+          </tr>
+          <tr>
+            <td>덕트</td>
+            <td>원형 스파이럴 또는 각형 아연/스텐 덕트</td>
+            <td>노출 시공 정리, 내구성, 유지관리성</td>
+          </tr>
+          <tr>
+            <td>연결부</td>
+            <td>점검 가능한 플랜지, 내열 실링</td>
+            <td>누기와 결로수 떨어짐 방지</td>
+          </tr>
+          <tr>
+            <td>팬</td>
+            <td>기존 팬 풍량 확인 후 부족하면 인라인팬 또는 외부팬 증설</td>
+            <td>보 우회로 엘보가 늘면 정압 손실 증가</td>
+          </tr>
+          <tr>
+            <td>마감</td>
+            <td>노출 덕트 도장 또는 얇은 금속 커버, 청소구 확보</td>
+            <td>외관 정리와 유지보수 동시 확보</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>시공 순서</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>순서</th>
+            <th>작업</th>
+            <th>완료 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>해면기, 천정고, 보 하부, 벽면 배기구 실측</td>
+            <td>보 하부 통과 가능 높이와 작업자 간섭 여부 확인</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>후드 위치와 덕트 오프셋 라인 먹줄 표시</td>
+            <td>장비 중심, 벽면 배출 방향, 소방설비 간섭 없음</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>브래킷 및 행거 설치</td>
+            <td>덕트 처짐 없음, 진동 방지 패드 반영</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>후드, 덕트, 점검구, 팬 연결</td>
+            <td>누기 없음, 결로수 떨어짐 없음, 청소 접근 가능</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>시운전 및 흡입 성능 확인</td>
+            <td>수증기 확산 없이 후드로 포집, 소음 과다 없음</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>결론</h2>
+      <p>
+        천정 보 때문에 매립이 어렵다면 보를 뚫는 방식보다 보 하부 노출 우회 덕트가 현실적입니다.
+        외관이 걱정되면 전체 매립이 아니라 덕트 노출 구간만 얇은 커버로 감싸고, 청소구는 반드시 열 수 있게 남기는 방식이 맞습니다.
+      </p>
+      <p>
+        시공업체에는 “보 관통 없이 후드에서 상승, 보 앞에서 하부 오프셋, 벽면 방향 배출, 점검구 포함, 팬 정압 재확인” 조건으로 견적을 받는 것을 권장합니다.
+      </p>
+    </section>
+
+    <footer>
+      본 도면은 현장 사진 원본 미확보 상태의 협의용 개념도입니다. 구조체 관통, 소방설비 이전, 외벽 타공은 건물 관리자와 전문 시공업체 확인 후 진행해야 합니다.
+    </footer>
+  </main>
+</body>
+</html>

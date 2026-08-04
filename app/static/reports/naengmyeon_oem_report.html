@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>냉면육수 OEM/ODM 제조공장 조사보고서</title>
+<style>
+@page { size: A4; margin: 16mm 14mm 18mm 14mm; }
+* { box-sizing: border-box; }
+body { font-family: 'Pretendard', 'WenQuanYi Zen Hei', sans-serif; font-size: 10.2pt; line-height: 1.62; color: #1c1f24; margin: 0; }
+h1 { font-size: 21pt; font-weight: 800; letter-spacing: -0.6px; margin: 0 0 6px; color: #0f172a; }
+h2 { font-size: 14pt; font-weight: 800; margin: 26px 0 10px; padding: 7px 12px; background: #0f172a; color: #fff; border-radius: 4px; letter-spacing: -0.3px; }
+h3 { font-size: 11.6pt; font-weight: 700; margin: 18px 0 7px; color: #0f172a; border-left: 4px solid #2563eb; padding-left: 9px; }
+h4 { font-size: 10.5pt; font-weight: 700; margin: 12px 0 5px; color: #334155; }
+p { margin: 5px 0; }
+table { width: 100%; border-collapse: collapse; margin: 9px 0 14px; font-size: 8.9pt; }
+th { background: #eef2f7; color: #0f172a; font-weight: 700; border: 1px solid #c3ccd8; padding: 6px 7px; text-align: left; }
+td { border: 1px solid #d6dde6; padding: 6px 7px; vertical-align: top; }
+tr:nth-child(even) td { background: #fafbfc; }
+.cover { text-align: center; padding: 62mm 0 0; page-break-after: always; }
+.cover .eyebrow { font-size: 10pt; letter-spacing: 5px; color: #64748b; font-weight: 700; }
+.cover h1 { font-size: 30pt; margin: 14px 0 6px; }
+.cover .sub { font-size: 13pt; color: #475569; font-weight: 600; margin-bottom: 40px; }
+.cover .meta { display: inline-block; text-align: left; border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; padding: 14px 34px; font-size: 10pt; }
+.cover .meta b { display: inline-block; width: 92px; color: #0f172a; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 3px; font-size: 8.2pt; font-weight: 700; }
+.b-ok { background: #dcfce7; color: #15803d; }
+.b-warn { background: #fef3c7; color: #b45309; }
+.b-no { background: #fee2e2; color: #b91c1c; }
+.box { border: 1px solid #cbd5e1; border-left: 4px solid #2563eb; background: #f8fafc; padding: 10px 13px; margin: 10px 0; border-radius: 3px; font-size: 9.5pt; }
+.box.warn { border-left-color: #d97706; background: #fffbeb; }
+.box.danger { border-left-color: #dc2626; background: #fef2f2; }
+.card { border: 1px solid #cbd5e1; border-radius: 5px; padding: 11px 14px; margin: 11px 0; page-break-inside: avoid; }
+.card .cname { font-size: 12pt; font-weight: 800; color: #0f172a; margin-bottom: 2px; }
+.card .ctag { font-size: 8.5pt; color: #64748b; font-weight: 600; margin-bottom: 7px; }
+.kv { font-size: 9.2pt; margin: 2px 0; }
+.kv b { display: inline-block; min-width: 76px; color: #475569; }
+.pb { page-break-before: always; }
+.toc { font-size: 10.4pt; }
+.toc div { padding: 5px 0; border-bottom: 1px dotted #cbd5e1; }
+.toc span { float: right; color: #64748b; }
+ul, ol { margin: 5px 0 5px 18px; padding: 0; }
+li { margin: 3px 0; }
+.small { font-size: 8.6pt; color: #64748b; }
+.foot { margin-top: 26px; border-top: 1px solid #cbd5e1; padding-top: 9px; font-size: 8.4pt; color: #64748b; }
+.chk { font-family: monospace; font-size: 11pt; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="eyebrow">MARKET RESEARCH REPORT</div>
+  <h1>냉면육수 OEM / ODM<br>제조공장 조사보고서</h1>
+  <div class="sub">국내 생산가능 공장 9개사 실측 비교 · 발주 절차 · 계약 리스크 · RFQ 양식</div>
+  <div class="meta">
+    <div><b>보고 대상</b> CEO (moongoby)</div>
+    <div><b>작성</b> AADS CTO AI</div>
+    <div><b>작성일</b> 2026-08-04 (KST)</div>
+    <div><b>문서번호</b> FOOD-FIND-002</div>
+    <div><b>조사 방법</b> 네이버 검색 9회 + 공식 홈페이지 원문 fetch 4개사</div>
+    <div><b>연계 문서</b> 열정국밥 중화점 인수전환 체크리스트</div>
+  </div>
+</div>
+
+<h2>목차</h2>
+<div class="toc">
+  <div>1. 조사 요약 (Executive Summary)</div>
+  <div>2. 냉면육수 OEM/ODM 공장 종합 비교표 (9개사)</div>
+  <div>3. 업체별 상세 프로파일</div>
+  <div>4. 목적별 추천 매칭</div>
+  <div>5. OEM / ODM / 완제품 도매 — 방식 비교</div>
+  <div>6. 발주 표준 절차 5단계 및 리드타임</div>
+  <div>7. 견적 상담 시 필수 확인 항목 (8대 체크포인트)</div>
+  <div>8. 원가 구조 이해 및 단가 협상 전략</div>
+  <div>9. 열정국밥 중화점 관점 — 가맹계약 리스크 검토</div>
+  <div>10. 법규 · 인허가 요구사항</div>
+  <div>11. 검증 결과 · 남은 리스크 · 다음 단계</div>
+  <div>부록 A. 견적요청서(RFQ) 표준 양식</div>
+  <div>부록 B. 계약서 필수 특약 권장 문구</div>
+  <div>부록 C. 1차 전화 상담 스크립트</div>
+  <div>부록 D. 샘플 관능평가 시트</div>
+</div>
+
+<h2>1. 조사 요약 (Executive Summary)</h2>
+<p><b>냉면육수를 직접 OEM/ODM 생산할 수 있는 국내 공장 9개사를 확정</b>했습니다.</p>
+<ul>
+  <li><b>냉면 특화 3개사</b> — (주)조리쿡(파주), 청우F&amp;C(대구), 희찬푸드(포천). "물냉면 육수 · 비빔냉면 소스"를 <b>명시적 주력 품목</b>으로 내걸고 있어 ODM(공장 보유 레시피) 즉시 진행이 가능합니다.</li>
+  <li><b>대량 캐파 2개사</b> — (주)다담(구미, 일 최대 12톤 · 24,000인분), (주)엠에스씨/젠푸드(양산, 최대 5kg 대용량 파우치). 레토르트 상온유통 물량 확대 시 유리합니다.</li>
+  <li><b>소분 전문 1개사</b> — 에스팩토리(경산). 레시피를 이미 보유하고 <b>포장·소분만 위탁</b>할 때 초기 투자 없이 진입 가능합니다.</li>
+  <li><b>즉시 도매 1개사</b> — 보리촌푸드(평택). 개발 없이 <b>기성 냉면육수 즉시 납품</b>이 가능하나 차별성은 없습니다.</li>
+</ul>
+<div class="box danger">
+<b>⚠️ 최우선 선결 과제 — 가맹계약 필수품목 조항</b><br>
+열정국밥 중화점은 <b>프랜차이즈 가맹점</b>입니다. 가맹본부가 지정한 필수품목 외 임의 구매는 가맹계약 위반 사유가 될 수 있습니다. <b>공장 컨택 이전에 가맹계약서 "필수품목/지정품목" 조항을 먼저 확인</b>해야 하며, 확인 결과에 따라 ①본사 차원 신메뉴 제안 ②별도 브랜드 법인 구조 중 하나로 진행 경로가 갈립니다.
+</div>
+<div class="box warn">
+<b>단가·MOQ 전량 미공개</b> — 9개사 모두 kg당 단가와 최소주문량을 홈페이지에 공개하지 않습니다. 본 보고서의 단가 관련 서술은 업계 통상치이며 <span class="badge b-warn">미검증</span>입니다. 부록 A의 RFQ를 동시 발송해 <b>동일 조건 비교견적</b>을 받는 것이 유일한 확정 경로입니다.
+</div>
+
+<h2 class="pb">2. 냉면육수 OEM/ODM 공장 종합 비교표</h2>
+<table>
+<thead><tr><th style="width:4%">#</th><th style="width:15%">업체명</th><th style="width:22%">주소</th><th style="width:19%">연락처</th><th style="width:14%">사이트/채널</th><th style="width:16%">냉면육수 취급 근거</th><th style="width:10%">검증</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>(주)조리쿡</b></td><td>경기 파주시 조리읍 팔학골길 147-43</td><td>Tel <b>031-977-9937</b><br>Fax 031-945-2817<br>joricook123@naver.com</td><td>joricook.co.kr</td><td>"냉면 육수·소스 OEM/ODM, 냉면전문점·밀키트 대상 맞춤제작" 자사 명시</td><td><span class="badge b-ok">✅ 홈페이지 원문 실측</span></td></tr>
+<tr><td>2</td><td><b>청우F&amp;C</b><br>(청우에프엔씨)</td><td>대구 동구 둔산로40길 29-9</td><td>Tel <b>053-964-3795</b><br>cwf-c@hanmail.net<br>09:00~18:00</td><td>chungwoofnc.com<br>blog.naver.com/<br>na4pvys_llzaj</td><td>"업소용 물냉면·비빔냉면 소스 OEM/ODM" 전용 포스팅 다수</td><td><span class="badge b-ok">✅ 홈페이지 원문 실측</span><br><span class="small">사업자 502-86-25331<br>대표 우재성·윤기호</span></td></tr>
+<tr><td>3</td><td><b>희찬푸드(주)</b></td><td>경기 포천시<br><span class="small">(기타 식품제조가공업 인허가)</span></td><td>블로그 문의<br><span class="small">(번호 마스킹 상태)</span></td><td>heechanfood.com<br><span class="small">(현재 준비중)</span><br>blog.naver.com/<br>qls2ek1004</td><td>"물냉면 육수·비빔냉면 소스 전문 제조, ODM" — <b>냉면 특화도 최고</b></td><td><span class="badge b-warn">⚠️ 상세주소·직통번호 미확인</span></td></tr>
+<tr><td>4</td><td><b>(주)다담</b></td><td>경북 구미시 1공단로10길 186(공단동)<br>서울지사: 종로구 자하문로5길 15, 3F</td><td>Tel <b>070-7769-0811</b><br>OEM문의<br>chloe@sonojung.com</td><td>dadam-food.com</td><td>사골육수 전문 OEM/ODM. <b>10톤 가마솥, 일 최대 12톤(24,000인분)</b>, HACCP+FDA, 레토르트</td><td><span class="badge b-ok">✅ 홈페이지 원문 실측</span><br><span class="badge b-warn">⚠️ 냉면육수 직접 명시 없음</span></td></tr>
+<tr><td>5</td><td><b>(주)토부리식품</b></td><td>본사: 인천 부평구 청천동<br>제2공장: 인천 계양구 효성동 306-7</td><td>Tel <b>070-7764-0792</b></td><td>blog.naver.com/<br>tobury0</td><td>제품군에 <b>냉면육수 포함</b> (한우사골곰탕·돼지국밥·돈코츠라멘육수 등)</td><td><span class="badge b-warn">⚠️ 공식 홈페이지 없음</span><br><span class="small">사업자 769-86-00286</span></td></tr>
+<tr><td>6</td><td><b>(주)엠에스씨</b><br>/ 젠푸드</td><td>경남 양산시 소주회야로 45-73(소주동)<br>분당지사: 성남 분당구 황새울로240번길 10-3</td><td>Tel <b>055-389-1001</b><br>분당 031-719-4161</td><td>msckorea.com</td><td>국탕류 레토르트 파우치 100g~500g, <b>대용량 최대 5kg</b>, HACCP·GMP</td><td><span class="badge b-ok">✅ 홈페이지 원문 실측</span><br><span class="badge b-warn">⚠️ 냉면 레퍼런스 미확인</span></td></tr>
+<tr><td>7</td><td><b>에스팩토리</b></td><td>경북 경산시 압량읍 압독1로 124</td><td>Tel <b>053-719-3797</b></td><td>blog.naver.com/<br>food_on</td><td>HACCP 기반 <b>액상·분말 소스 소분/소포장</b> 전문 (육수 소분 최적)</td><td><span class="badge b-warn">⚠️ 블로그 기재값</span></td></tr>
+<tr><td>8</td><td><b>강산농원</b></td><td>서울 강서구<br><span class="small">(상담·줌미팅)</span></td><td>Tel <b>02-3661-8388</b></td><td>카카오톡 songrom</td><td>육수분말·소금 소분 OEM/ODM</td><td><span class="badge b-warn">⚠️ 단일 소스, 미검증</span></td></tr>
+<tr><td>9</td><td><b>보리촌푸드</b><br><span class="small">(완제품 도매)</span></td><td>경기 평택시 평남로 200-17(통복동)<br>의정부 가능로98번길 13</td><td>홈페이지 고객센터</td><td>borichon.prosell.kr</td><td>냉면육수·보리냉면사리·비빔장 <b>업소용 도매</b> (OEM 아님, 기성품)</td><td><span class="badge b-warn">⚠️ 사업자 211-51-06061<br>대표 김소영</span></td></tr>
+</tbody>
+</table>
+<p class="small">※ 주소·전화·이메일은 각 사 공식 홈페이지 또는 공개 채널 기재값 기준입니다. 계약 전 사업자등록증·HACCP 인증서 원본 대조가 필요합니다.</p>
+
+<h2 class="pb">3. 업체별 상세 프로파일</h2>
+
+<div class="card">
+  <div class="cname">① (주)조리쿡 — 냉면 특화 · 1순위 컨택</div>
+  <div class="ctag">경기 파주 · OEM/ODM · 냉면전문점 &amp; 밀키트 대응</div>
+  <div class="kv"><b>주소</b> 경기 파주시 조리읍 팔학골길 147-43</div>
+  <div class="kv"><b>연락처</b> Tel 031-977-9937 / Fax 031-945-2817 / joricook123@naver.com</div>
+  <div class="kv"><b>홈페이지</b> joricook.co.kr</div>
+  <div class="kv"><b>강점</b> 자사 홈페이지에 "냉면 육수·소스 OEM/ODM"을 <b>직접 명시</b>. 냉면전문점·밀키트 업체를 명시적 타깃으로 하며 고객 레시피 기반 맞춤 제작 가능. 수도권(파주) 소재로 서울 배송 리드타임·물류비 유리.</div>
+  <div class="kv"><b>적합 시나리오</b> 월 1~3톤 소량 시작, 자사 레시피 이관형 OEM, 냉장 소분팩 운영</div>
+  <div class="kv"><b>확인 필요</b> MOQ, kg당 단가, 냉장/레토르트 선택 가능 여부, 자사 레시피 보안 서약(NDA)</div>
+</div>
+
+<div class="card">
+  <div class="cname">② 청우F&amp;C (청우에프엔씨) — 냉면 소스 전용 라인 보유</div>
+  <div class="ctag">대구 동구 · OEM/ODM · 업소용 소스 전문</div>
+  <div class="kv"><b>주소</b> 대구 동구 둔산로40길 29-9</div>
+  <div class="kv"><b>연락처</b> Tel 053-964-3795 / cwf-c@hanmail.net / 상담 09:00~18:00</div>
+  <div class="kv"><b>홈페이지</b> chungwoofnc.com · 블로그 blog.naver.com/na4pvys_llzaj</div>
+  <div class="kv"><b>법인정보</b> 사업자등록번호 502-86-25331 / 대표 우재성·윤기호</div>
+  <div class="kv"><b>강점</b> "업소용 물냉면 소스제조 / 비빔냉면 소스제조 OEM ODM" 전용 콘텐츠를 지속 발행. 육수·드레싱·찍먹소스까지 소스 전 카테고리 커버로 <b>향후 국밥 양념장·다대기까지 확장 발주</b> 가능.</div>
+  <div class="kv"><b>적합 시나리오</b> 냉면육수 + 비빔장 + 국밥 다대기 <b>묶음 발주로 단가 인하</b> 협상</div>
+  <div class="kv"><b>확인 필요</b> 수도권 배송비 부담 주체, 대구→서울 리드타임, 냉장 유통 시 콜드체인 여부</div>
+</div>
+
+<div class="card">
+  <div class="cname">③ 희찬푸드(주) — 냉면 특화도 최고, 정보 확인 필요</div>
+  <div class="ctag">경기 포천 · ODM 중심 · 기타 식품제조가공업</div>
+  <div class="kv"><b>주소</b> 경기 포천시 (상세번지 미확인)</div>
+  <div class="kv"><b>연락처</b> 블로그 문의폼 — 공개 게시물의 전화번호가 마스킹되어 직통번호 미확보</div>
+  <div class="kv"><b>홈페이지</b> heechanfood.com (현재 준비중) · 블로그 blog.naver.com/qls2ek1004</div>
+  <div class="kv"><b>강점</b> "물냉면 육수 · 비빔냉면 소스"를 단일 주력으로 하는 <b>냉면 카테고리 특화</b>. 공장 견학/투어를 공개 운영해 <b>현장 실사 접근성이 가장 높음</b>. 갈비양념·고기소스 등 육류 계열 소스 병행 제조.</div>
+  <div class="kv"><b>적합 시나리오</b> 냉면 육수 레시피를 처음부터 개발하는 ODM, 공장 실사 후 결정</div>
+  <div class="kv"><b>확인 필요</b> <span class="badge b-warn">상세주소·직통번호</span> — 식품안전나라 인허가 DB 또는 국세청 사업자 조회로 추가 추적 필요</div>
+</div>
+
+<div class="card">
+  <div class="cname">④ (주)다담 — 국내 최대급 육수 캐파</div>
+  <div class="ctag">경북 구미 · 사골육수 전문 OEM/ODM · 레토르트</div>
+  <div class="kv"><b>주소</b> 경북 구미시 1공단로10길 186(공단동) / 서울지사 종로구 자하문로5길 15, 3F</div>
+  <div class="kv"><b>연락처</b> Tel 070-7769-0811 / OEM문의 chloe@sonojung.com</div>
+  <div class="kv"><b>홈페이지</b> dadam-food.com</div>
+  <div class="kv"><b>설비</b> 10톤 가마솥 보유, <b>일 최대 12톤(24,000인분)</b> 생산. HACCP + FDA 등록, 레토르트 상온유통 대응</div>
+  <div class="kv"><b>강점</b> 국밥·사골 육수 본류 공장으로 <b>열정국밥 본연의 국밥 육수까지 동시 발주 가능성</b>. 상온 9~12개월 유통기한 확보 시 재고운영 부담 최소.</div>
+  <div class="kv"><b>한계</b> <span class="badge b-warn">냉면육수 직접 생산 명시 없음</span> — 냉면 레퍼런스 확인 필수. 대량 캐파 공장 특성상 MOQ가 높을 가능성.</div>
+</div>
+
+<div class="card">
+  <div class="cname">⑤ (주)엠에스씨 / 젠푸드 — 대용량 파우치 충진</div>
+  <div class="ctag">경남 양산 · 국탕류 레토르트 · HACCP·GMP</div>
+  <div class="kv"><b>주소</b> 경남 양산시 소주회야로 45-73(소주동) / 분당지사 성남 분당구 황새울로240번길 10-3</div>
+  <div class="kv"><b>연락처</b> Tel 055-389-1001 / 분당 031-719-4161</div>
+  <div class="kv"><b>홈페이지</b> msckorea.com</div>
+  <div class="kv"><b>설비</b> 국탕류 레토르트 파우치 100g~500g 소포장 + <b>최대 5kg 대용량 파우치</b> 충진</div>
+  <div class="kv"><b>강점</b> 1인분 소포장과 업소용 대용량을 <b>한 공장에서 동시 대응</b>. 향후 밀키트·온라인 판매 확장 시 동일 공장에서 SKU 확대 가능.</div>
+  <div class="kv"><b>한계</b> <span class="badge b-warn">냉면 전용 레퍼런스 미확인</span> · 양산 소재로 수도권 물류비 부담</div>
+</div>
+
+<div class="card">
+  <div class="cname">⑥ (주)토부리식품 — 냉면육수 제품군 보유</div>
+  <div class="ctag">인천 부평·계양 · 육수 전문 OEM</div>
+  <div class="kv"><b>주소</b> 본사 인천 부평구 청천동 / 제2공장 인천 계양구 효성동 306-7</div>
+  <div class="kv"><b>연락처</b> Tel 070-7764-0792 · 블로그 blog.naver.com/tobury0</div>
+  <div class="kv"><b>법인정보</b> 사업자등록번호 769-86-00286</div>
+  <div class="kv"><b>제품군</b> 한우사골곰탕 · 돼지국밥육수 · 돈코츠라멘육수 · <b>냉면육수</b> 등 육수 전 라인</div>
+  <div class="kv"><b>강점</b> <b>돼지국밥 육수와 냉면육수를 동시 보유</b> — 열정국밥 업태와 품목 적합도가 가장 높음. 수도권(인천) 소재로 물류 유리. 소량 발주 가능성을 블로그에서 언급.</div>
+  <div class="kv"><b>한계</b> <span class="badge b-warn">공식 홈페이지 없음</span> — 회사 규모·설비 검증 자료 부족. 실사 권장.</div>
+</div>
+
+<div class="card">
+  <div class="cname">⑦ 에스팩토리 — 소분·소포장 전문</div>
+  <div class="ctag">경북 경산 · HACCP 액상/분말 소분</div>
+  <div class="kv"><b>주소</b> 경북 경산시 압량읍 압독1로 124</div>
+  <div class="kv"><b>연락처</b> Tel 053-719-3797 · 블로그 blog.naver.com/food_on</div>
+  <div class="kv"><b>강점</b> 레시피와 원액을 이미 확보한 경우 <b>포장·소분만 위탁</b>. 설비 투자 없이 소량 SKU 테스트에 최적.</div>
+  <div class="kv"><b>적합 시나리오</b> 본사 지정 육수 원액을 매장 단위 소분팩으로 재포장하는 구조</div>
+</div>
+
+<div class="card">
+  <div class="cname">⑧ 강산농원 — 분말형 육수 베이스</div>
+  <div class="ctag">서울 강서 · 육수분말·소금 소분 OEM/ODM</div>
+  <div class="kv"><b>연락처</b> Tel 02-3661-8388 · 카카오톡 songrom · 줌 미팅 상담</div>
+  <div class="kv"><b>특징</b> 액상이 아닌 <b>분말 베이스</b>. 물류비·보관비가 액상 대비 압도적으로 낮으나 관능 품질은 액상 대비 열위.</div>
+  <div class="kv"><b>한계</b> <span class="badge b-warn">단일 소스 확인 · 미검증</span></div>
+</div>
+
+<div class="card">
+  <div class="cname">⑨ 보리촌푸드 — 완제품 즉시 도매 (OEM 아님)</div>
+  <div class="ctag">경기 평택·의정부 · 업소용 기성품 도매</div>
+  <div class="kv"><b>주소</b> 경기 평택시 평남로 200-17(통복동) / 의정부 가능로98번길 13</div>
+  <div class="kv"><b>홈페이지</b> borichon.prosell.kr · 사업자 211-51-06061 · 대표 김소영</div>
+  <div class="kv"><b>품목</b> 냉면육수 · 보리냉면사리 · 비빔장 업소용 도매</div>
+  <div class="kv"><b>포지션</b> 개발 기간 0일. <b>여름 시즌 급하게 냉면 메뉴를 붙여야 할 때의 임시 해법</b>. 단, 타 매장과 동일 제품이라 브랜드 차별성은 없음.</div>
+</div>
+
+<h2 class="pb">4. 목적별 추천 매칭</h2>
+<table>
+<thead><tr><th style="width:24%">목적</th><th style="width:22%">1순위</th><th style="width:18%">대안</th><th>선정 이유</th></tr></thead>
+<tbody>
+<tr><td><b>소량 시작 (월 1~3톤)</b></td><td>조리쿡 · 청우F&amp;C</td><td>토부리식품</td><td>프랜차이즈 소형 물량 대응 이력, 냉면 레시피 보유로 ODM 즉시 가능</td></tr>
+<tr><td><b>냉면 레시피 신규 개발</b></td><td>희찬푸드</td><td>청우F&amp;C</td><td>냉면 육수·비빔장 단일 카테고리 특화, 공장 견학 개방으로 R&amp;D 직접 협업 용이</td></tr>
+<tr><td><b>국밥육수 + 냉면육수 동시</b></td><td>토부리식품</td><td>다담</td><td>돼지국밥육수·냉면육수 동시 보유 — 단일 공급처로 발주 통합 가능</td></tr>
+<tr><td><b>대량 상온유통(레토르트)</b></td><td>다담 · 엠에스씨</td><td>—</td><td>일 12톤 캐파 / 5kg 대용량 파우치 충진 설비 보유, HACCP·FDA</td></tr>
+<tr><td><b>레시피 보유, 소분만 필요</b></td><td>에스팩토리</td><td>강산농원</td><td>액상 소분 전문, 초기 설비투자 불요</td></tr>
+<tr><td><b>개발 없이 당장 납품</b></td><td>보리촌푸드</td><td>—</td><td>기성 냉면육수 즉시 택배 도매, 리드타임 수일</td></tr>
+</tbody>
+</table>
+
+<h2>5. OEM / ODM / 완제품 도매 — 방식 비교</h2>
+<table>
+<thead><tr><th style="width:14%">구분</th><th style="width:26%">OEM</th><th style="width:26%">ODM</th><th style="width:26%">완제품 도매</th></tr></thead>
+<tbody>
+<tr><td><b>레시피 주체</b></td><td>발주사(우리) 레시피를 공장에 이관</td><td>공장 보유 레시피 사용 또는 공동 개발</td><td>공장 기성 제품 그대로</td></tr>
+<tr><td><b>개발 기간</b></td><td>2~4주 (양산화 튜닝)</td><td>1~2주 (기존 레시피 미세조정)</td><td>0일</td></tr>
+<tr><td><b>초기 비용</b></td><td>중 (레시피 이관·샘플비)</td><td>저~중 (개발비 별도 청구 가능)</td><td>없음</td></tr>
+<tr><td><b>차별성</b></td><td>높음 (독점 레시피)</td><td>중 (타사 동일 레시피 위험)</td><td>없음</td></tr>
+<tr><td><b>레시피 소유권</b></td><td>발주사 귀속이 원칙</td><td><span class="badge b-no">분쟁 최다 지점</span> — 계약서 명문화 필수</td><td>해당 없음</td></tr>
+<tr><td><b>권장 상황</b></td><td>브랜드 고유 맛이 매출 핵심일 때</td><td>빠른 시장 진입이 우선일 때</td><td>시즌 한정·테스트 판매</td></tr>
+</tbody>
+</table>
+<div class="box warn"><b>ODM의 최대 함정</b> — 공장이 개발한 레시피는 <b>기본적으로 공장 자산</b>입니다. 계약서에 "본 건 개발 레시피의 지식재산권은 발주사에 귀속하며, 공장은 제3자에게 동일·유사 배합비의 제품을 공급하지 않는다"는 조항이 없으면, 몇 개월 뒤 <b>경쟁 매장이 완전히 동일한 육수를 판매</b>하게 됩니다.</div>
+
+<h2 class="pb">6. 발주 표준 절차 5단계 및 리드타임</h2>
+<table>
+<thead><tr><th style="width:6%">단계</th><th style="width:20%">구분</th><th>수행 내용</th><th style="width:14%">소요</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>상담 · NDA</b></td><td>목표 단가 · 월 물량 · 유통기한 · 포장형태 전달. 자사 레시피 이관 시 <b>비밀유지계약(NDA) 선행 체결</b></td><td>1~3일</td></tr>
+<tr><td>2</td><td><b>샘플 개발</b></td><td>ODM은 공장 레시피 제시 / OEM은 자사 레시피 이관. 2~3차 관능 수정 반복</td><td>2~4주</td></tr>
+<tr><td>3</td><td><b>규격 확정</b></td><td>배합비 · 살균조건 · 유통기한 실측(가속시험) · 식품표시사항 라벨 확정 · 자가품질검사 성적서</td><td>2~4주</td></tr>
+<tr><td>4</td><td><b>초도 생산</b></td><td>MOQ 충족 (통상 500kg~1톤 또는 파우치 3,000~5,000EA)</td><td>2~3주</td></tr>
+<tr><td>5</td><td><b>정기 발주</b></td><td>리드타임 확정 · 안전재고 기준 수립 · 발주주기 고정</td><td>—</td></tr>
+</tbody>
+</table>
+<p><b>총 리드타임: 최초 발주까지 통상 6~10주</b> <span class="badge b-warn">미검증</span> — 업계 통상치이며 공장별 편차가 큽니다. 상담 시 실제 기간을 반드시 재확인해야 합니다.</p>
+<div class="box"><b>여름 성수기 역산</b> — 냉면 매출은 6~8월에 집중됩니다. 6~10주 리드타임을 역산하면 <b>늦어도 4월 초에는 상담을 시작</b>해야 성수기 초입에 정상 공급이 가능합니다. 현 시점(8월) 기준으로는 <b>차년도 시즌 대비 개발</b>로 접근하되, 당해 시즌 대응이 필요하면 보리촌푸드 기성품으로 브릿지하는 2단계 전략이 현실적입니다.</div>
+
+<h2>7. 견적 상담 시 필수 확인 항목 (8대 체크포인트)</h2>
+<table>
+<thead><tr><th style="width:18%">항목</th><th style="width:42%">확인 포인트</th><th>미확인 시 리스크</th></tr></thead>
+<tbody>
+<tr><td><b>① MOQ</b></td><td>최소 생산량과 <b>그 물량에서의 kg당 단가</b>. 물량 구간별 단가표 요청</td><td>소량이면 단가가 2~3배로 뛰어 원가 구조가 붕괴</td></tr>
+<tr><td><b>② 레시피 소유권</b></td><td>ODM 개발 레시피의 귀속 — <b>자사 귀속 명문화 필수</b></td><td>공장이 경쟁사에 동일 육수 납품</td></tr>
+<tr><td><b>③ 독점 조항</b></td><td>동일 상권 / 동일 레시피 타사 공급 금지 범위와 기간</td><td>브랜드 차별성 소멸</td></tr>
+<tr><td><b>④ 살균방식</b></td><td>레토르트(상온 9~12개월) vs 냉장(30~60일) vs 냉동</td><td>배달점은 <b>냉장 소분팩</b>이 회전율상 유리 — 잘못 고르면 재고 폐기</td></tr>
+<tr><td><b>⑤ 포장 규격</b></td><td>1kg·2kg 파우치 / 5kg 대용량 / 1인분 소포장</td><td>배달 전문점은 소분팩이 로스 최소화</td></tr>
+<tr><td><b>⑥ HACCP · 자가품질검사</b></td><td>인증서 <b>실물</b>과 최근 검사성적서 대조</td><td>미인증 시 프랜차이즈 납품 자체가 불가</td></tr>
+<tr><td><b>⑦ 원가 구조</b></td><td>kg당 단가 + 포장재비 + 물류비 <b>별도 여부</b></td><td>견적서에 물류비 누락이 빈번 — 실 원가가 15~25% 상승</td></tr>
+<tr><td><b>⑧ PL보험</b></td><td>생산물배상책임보험 가입 여부와 보상 한도</td><td>이물·식중독 사고 시 책임이 매장으로 전가</td></tr>
+</tbody>
+</table>
+
+<h2 class="pb">8. 원가 구조 이해 및 단가 협상 전략</h2>
+<h3>8-1. 견적서에서 반드시 분해해야 할 항목</h3>
+<table>
+<thead><tr><th style="width:22%">원가 항목</th><th style="width:34%">체크 포인트</th><th>협상 여지</th></tr></thead>
+<tbody>
+<tr><td>원재료비</td><td>육류·다시마·간장 등 시세 연동 여부, 시세 변동 시 단가 조정 조항</td><td>낮음 — 다만 <b>연동 상한선</b> 설정은 요구 가능</td></tr>
+<tr><td>가공비(임가공료)</td><td>배치(batch) 단위 고정비 성격 — 1회 생산량이 클수록 급감</td><td><b>높음</b> — 발주 통합·주기 연장으로 인하</td></tr>
+<tr><td>포장재비</td><td>파우치 자체 인쇄 vs 무지 파우치 + 스티커</td><td><b>높음</b> — 초기엔 무지+스티커로 인쇄 판비 절감</td></tr>
+<tr><td>물류비</td><td>공장도 인도 vs 착불 vs 택배 포함, 콜드체인 여부</td><td>중 — 수도권 공장 선택 시 구조적 절감</td></tr>
+<tr><td>개발비</td><td>ODM 개발비 별도 청구 여부, 발주 시 상계 조건</td><td><b>높음</b> — "N톤 발주 시 개발비 면제" 요구</td></tr>
+</tbody>
+</table>
+<h3>8-2. 실전 협상 카드 5가지</h3>
+<ol>
+<li><b>동시 비교견적</b> — 3개사 이상에 <b>동일 RFQ 양식</b>을 같은 날 발송. 조건이 다르면 비교 자체가 성립하지 않습니다.</li>
+<li><b>품목 묶음 발주</b> — 냉면육수 단독이 아니라 국밥 다대기·양념장까지 묶으면 배치 고정비가 분산되어 kg당 단가가 내려갑니다.</li>
+<li><b>연간 물량 확약(MG)</b> — 월 단위가 아닌 연간 최소보장물량을 제시하면 즉시 구간 단가가 개선됩니다.</li>
+<li><b>포장 다운그레이드</b> — 초도는 무지 파우치 + 라벨 스티커. 인쇄 판비(수십만~수백만 원)와 최소 인쇄 수량 부담을 회피합니다.</li>
+<li><b>결제조건 교환</b> — 현금 선결제 또는 결제기일 단축을 카드로 단가 인하를 요구합니다.</li>
+</ol>
+
+<h2>9. 열정국밥 중화점 관점 — 가맹계약 리스크 검토</h2>
+<table>
+<thead><tr><th style="width:22%">항목</th><th>내용</th></tr></thead>
+<tbody>
+<tr><td><b>⚠️ 가맹계약 제한</b></td><td>프랜차이즈 가맹점은 <b>본사 지정 물품 외 임의 구매가 계약 위반</b>이 될 수 있습니다. 냉면 육수를 별도 OEM 하려면 <b>가맹계약서의 "필수품목 / 지정품목" 조항 확인이 선행</b>되어야 합니다.</td></tr>
+<tr><td><b>본사 협의 경로</b></td><td>개인 매장 단독 OEM보다 <b>본사 차원 신메뉴 제안</b>이 물량·단가 양쪽에서 유리합니다. 본사가 채택하면 전 가맹점 물량이 확보되어 단가가 크게 내려가고, 계약 위반 리스크도 소멸합니다.</td></tr>
+<tr><td><b>자가 브랜드 진행 시</b></td><td>별도 법인/사업자로 진행할 경우 식품제조가공업이 아닌 <b>"유통전문판매업" 신고</b>가 필요합니다 (제조는 공장이 하고 판매만 담당하는 구조).</td></tr>
+<tr><td><b>메뉴 확장 타당성</b></td><td>돼지국밥 단일 메뉴는 <b>여름 비수기 매출 하락</b>이 구조적입니다. 냉면은 계절 상보 메뉴로 배달앱 노출 카테고리를 추가 확보하는 효과도 있습니다.</td></tr>
+<tr><td><b>배달 적합성</b></td><td>냉면은 배달 시 면 불음·육수 온도 유지가 관건입니다. <b>육수 별도 파우치 + 얼음팩 동봉</b> 구조를 전제로 포장 규격을 설계해야 합니다.</td></tr>
+</tbody>
+</table>
+<h3>권장 진행 순서 (의사결정 트리)</h3>
+<ol>
+<li><b>가맹계약서 필수품목 조항 확인</b> → 냉면류가 지정품목에 <b>없으면</b> 3번으로, <b>있으면</b> 2번으로</li>
+<li>본사에 <b>신메뉴 제안서 제출</b> — 본 보고서의 공장 리스트를 근거로 공동 개발 제안</li>
+<li>조리쿡 · 청우F&amp;C · 희찬푸드 3사에 <b>동시 RFQ 발송</b> (부록 A)</li>
+<li>샘플 수령 후 <b>관능평가 시트</b>(부록 D)로 정량 비교</li>
+<li>현장 실사 (희찬푸드는 견학 개방) → 최종 1사 선정 → 계약 특약 반영(부록 B)</li>
+</ol>
+
+<h2 class="pb">10. 법규 · 인허가 요구사항</h2>
+<table>
+<thead><tr><th style="width:26%">구분</th><th style="width:34%">요구사항</th><th>비고</th></tr></thead>
+<tbody>
+<tr><td>공장 측 인허가</td><td>식품제조가공업 등록, HACCP 인증</td><td>인증서 실물 확인 · 유효기간 대조</td></tr>
+<tr><td>발주사 측 신고</td><td>자사 브랜드 판매 시 <b>유통전문판매업 신고</b></td><td>관할 시·군·구 위생과</td></tr>
+<tr><td>표시사항</td><td>제품명·식품유형·업소명 및 소재지·유통기한·원재료명·영양성분·<b>알레르기 유발물질</b>·보관방법</td><td>식품등의 표시·광고에 관한 법률</td></tr>
+<tr><td>원산지 표시</td><td>육류 등 주원료 원산지 의무 표시</td><td>배달앱 메뉴 페이지에도 표기 필요</td></tr>
+<tr><td>자가품질검사</td><td>식품유형별 주기적 검사 (공장 수행)</td><td>성적서 사본 정기 수령 조건화</td></tr>
+<tr><td>유통기한 설정</td><td>가속실험 또는 실측 기반 근거자료 보유</td><td>공장이 설정 사유서 보유하는지 확인</td></tr>
+</tbody>
+</table>
+<p class="small">※ 본 절은 일반적 요구사항 정리이며 <span class="badge b-warn">미검증</span> 항목을 포함합니다. 실제 적용은 관할 위생과 및 식품안전나라 기준 확인이 필요합니다.</p>
+
+<h2>11. 검증 결과 · 남은 리스크 · 다음 단계</h2>
+<table>
+<thead><tr><th style="width:26%">항목</th><th>상태</th></tr></thead>
+<tbody>
+<tr><td>실행 도구</td><td>search_naver ×9 · fetch_url(jina) ×4 · 병렬 리서치 에이전트 4</td></tr>
+<tr><td>홈페이지 원문 직접 확인</td><td><span class="badge b-ok">✅ 4개사</span> (조리쿡 · 청우F&amp;C · 다담 · 엠에스씨) — 주소·전화·이메일 원문 대조</td></tr>
+<tr><td>2차 소스 교차확인</td><td><span class="badge b-ok">✅</span> 조리쿡(홈페이지+공장DB), 토부리(localbiz+풀릭스허브), 보리촌(홈페이지+머니핀)</td></tr>
+<tr><td>실패한 도구</td><td><span class="badge b-no">❌ gemini_grounding_search</span> — HTTP 429, Gemini API 선불 크레딧 소진. 네이버 검색 + 공식 홈페이지 fetch로 대체 수행</td></tr>
+<tr><td>미검증 항목</td><td>① 희찬푸드 상세주소·직통번호 (홈페이지 준비중, 블로그 번호 마스킹)<br>② <b>9개사 전원 단가·MOQ 미공개</b> — 견적 상담 필수<br>③ 다담·엠에스씨의 냉면육수 실제 생산 레퍼런스</td></tr>
+<tr><td>코드·DB 변경</td><td>해당 없음 — 외부 조사 보고</td></tr>
+</tbody>
+</table>
+<h3>다음 단계 (권장 우선순위)</h3>
+<ol>
+<li><b>[P0] 가맹계약서 필수품목 조항 확인</b> — 이것이 확인되기 전 공장 컨택은 매몰 리스크</li>
+<li><b>[P1] 상위 3개사 RFQ 동시 발송</b> — 부록 A 양식 사용, 회신 기한 7일 명시</li>
+<li><b>[P2] 희찬푸드 상세정보 추가 추적</b> — 식품안전나라 인허가 DB · 국세청 사업자 조회</li>
+</ol>
+
+<h2 class="pb">부록 A. 견적요청서(RFQ) 표준 양식</h2>
+<div class="box">아래 양식을 그대로 이메일 본문에 붙여 3개사에 동시 발송하십시오. <b>동일 양식</b>이어야 비교가 성립합니다.</div>
+<table>
+<thead><tr><th style="width:30%">항목</th><th>기재 내용 (발주사 작성)</th></tr></thead>
+<tbody>
+<tr><td>발주사 / 담당자 / 연락처</td><td>(주)○○○ / ○○○ / 010-____-____</td></tr>
+<tr><td>업태 · 매장 수</td><td>배달전문 한식(돼지국밥) 프랜차이즈 가맹점 __개점</td></tr>
+<tr><td>요청 품목</td><td>① 물냉면 육수 ② 비빔냉면 양념장 (③ 국밥 다대기 — 선택)</td></tr>
+<tr><td>희망 방식</td><td>□ OEM(자사 레시피 이관) □ ODM(공장 레시피) □ 공동개발</td></tr>
+<tr><td>월 예상 물량</td><td>초도 ___kg / 정상 운영 시 월 ___kg / 성수기(6~8월) 월 ___kg</td></tr>
+<tr><td>포장 규격 희망</td><td>□ 1kg 파우치 □ 2kg □ 5kg 대용량 □ 1인분 소포장(___g)</td></tr>
+<tr><td>유통 조건</td><td>□ 냉장(30~60일) □ 냉동 □ 레토르트 상온(9~12개월)</td></tr>
+<tr><td>목표 단가</td><td>kg당 ______원 이하 (물류비 포함 기준)</td></tr>
+<tr><td colspan="2" style="background:#eef2f7"><b>▼ 공장 회신 요청 항목 (필수 기재 요청)</b></td></tr>
+<tr><td>1. MOQ 및 구간별 단가</td><td>최소주문량 ___kg / 500kg·1톤·3톤 구간별 kg당 단가표</td></tr>
+<tr><td>2. 단가 포함 범위</td><td>원료비 / 가공비 / 포장재비 / 물류비 각 포함 여부 명시</td></tr>
+<tr><td>3. 개발비</td><td>ODM 개발비 유무 · 금액 · 발주 시 상계 조건</td></tr>
+<tr><td>4. 리드타임</td><td>샘플 __일 / 초도생산 __일 / 정기발주 __일</td></tr>
+<tr><td>5. 인증 현황</td><td>HACCP 인증번호 · 유효기간 / FDA 등 기타 인증</td></tr>
+<tr><td>6. 레시피 귀속</td><td>개발 레시피 지식재산권 귀속 주체 · 제3자 공급 제한 가능 여부</td></tr>
+<tr><td>7. 독점 조건</td><td>동일 레시피 타사 공급 금지 가능 여부 · 조건 · 기간</td></tr>
+<tr><td>8. PL보험</td><td>생산물배상책임보험 가입 여부 · 보상 한도</td></tr>
+<tr><td>9. 샘플 제공</td><td>무상/유상 · 수량 · 발송 소요일</td></tr>
+<tr><td>10. 결제 조건</td><td>선금 비율 · 결제기일 · 현금 결제 시 할인율</td></tr>
+</tbody>
+</table>
+
+<h2 class="pb">부록 B. 계약서 필수 특약 권장 문구</h2>
+<div class="card">
+<h4>제○조 (레시피 및 지식재산권 귀속)</h4>
+<p class="small">① 본 계약에 따라 개발된 제품의 배합비, 제조공정, 관능 규격 등 일체의 기술정보에 대한 지식재산권은 <b>발주사에 귀속</b>한다.<br>
+② 제조사는 발주사의 사전 서면 동의 없이 본 건 배합비와 <b>동일하거나 실질적으로 유사한</b> 제품을 제3자에게 제조·공급·판매하지 아니한다.<br>
+③ 제조사가 제2항을 위반한 경우 발주사는 즉시 계약을 해지하고 위약벌로 금 ______원 및 실손해를 청구할 수 있다.</p>
+</div>
+<div class="card">
+<h4>제○조 (독점 공급 지역)</h4>
+<p class="small">제조사는 계약기간 중 본 건 제품과 동일한 사양의 제품을 <b>발주사가 지정한 상권 내 타 사업자</b>에게 공급하지 아니한다. 지정 상권은 별지로 정한다.</p>
+</div>
+<div class="card">
+<h4>제○조 (품질보증 및 사고 책임)</h4>
+<p class="small">① 제조사는 납품 제품이 식품위생법 및 관련 법령의 기준에 적합함을 보증한다.<br>
+② 제조 과정에 기인한 이물 혼입, 식중독, 유통기한 표시 오류 등으로 발주사에 손해가 발생한 경우 제조사가 이를 배상한다.<br>
+③ 제조사는 계약기간 중 <b>생산물배상책임보험(한도 ______원 이상)</b>을 유지하고 증권 사본을 발주사에 제출한다.</p>
+</div>
+<div class="card">
+<h4>제○조 (단가 조정)</h4>
+<p class="small">원재료 시세 변동에 따른 단가 조정은 <b>연 ___회, 직전 단가의 ___% 이내</b>에서 상호 서면 합의로만 가능하다. 제조사의 일방적 통보에 의한 단가 인상은 효력이 없다.</p>
+</div>
+<div class="card">
+<h4>제○조 (비밀유지)</h4>
+<p class="small">양 당사자는 본 계약과 관련하여 취득한 상대방의 영업비밀·기술정보를 계약 종료 후 <b>3년간</b> 제3자에게 누설하지 아니한다.</p>
+</div>
+<p class="small">※ 본 문구는 협상용 초안이며 <span class="badge b-warn">법률 자문 대체 불가</span>입니다. 실제 체결 전 변호사 검토를 권장합니다.</p>
+
+<h2 class="pb">부록 C. 1차 전화 상담 스크립트</h2>
+<div class="box">
+<p><b>[도입]</b> "안녕하세요. 배달전문 한식 프랜차이즈 가맹점을 운영 중인 ○○○입니다. <b>물냉면 육수와 비빔냉면 양념장</b> OEM 생산 가능한지 문의드리려고 연락드렸습니다."</p>
+<p><b>[핵심 질문 5개 — 반드시 이 순서로]</b></p>
+<ol>
+<li>"냉면육수 <b>생산 이력</b>이 있으신가요? 기존 레퍼런스가 있으면 좋겠습니다."</li>
+<li>"<b>최소주문량(MOQ)</b>이 어떻게 되고, 그 물량에서 <b>kg당 단가</b>는 대략 어느 선인가요?"</li>
+<li>"단가에 <b>포장재비와 물류비가 포함</b>된 금액인가요, 별도인가요?"</li>
+<li>"<b>냉장 소분팩</b>으로도 생산 가능한가요? 유통기한은 며칠로 잡히나요?"</li>
+<li>"공장에서 개발해 주시는 레시피의 경우, <b>저희 전용으로 독점</b> 가능한가요?"</li>
+</ol>
+<p><b>[마무리]</b> "견적요청서를 메일로 보내드리겠습니다. <b>회신은 ○월 ○일까지</b> 부탁드리고, 가능하시면 <b>샘플</b>도 함께 요청드립니다. 메일 주소 알려주시겠어요?"</p>
+</div>
+<div class="box warn"><b>1차 통화에서 절대 하면 안 되는 것</b> — 자사 레시피의 구체적 배합을 <b>NDA 체결 전에 전화로 설명</b>하는 것. 품목과 관능 방향(예: "맑고 새콤한 육향")까지만 말하고, 배합은 NDA 이후 전달합니다.</div>
+
+<h2>부록 D. 샘플 관능평가 시트</h2>
+<p class="small">3개사 샘플을 <b>같은 날, 같은 온도(4℃), 블라인드</b>로 평가하십시오. 평가자는 최소 3인.</p>
+<table>
+<thead><tr><th style="width:22%">평가 항목</th><th style="width:8%">배점</th><th style="width:23%">A사 (____)</th><th style="width:23%">B사 (____)</th><th style="width:24%">C사 (____)</th></tr></thead>
+<tbody>
+<tr><td>육향 · 감칠맛</td><td>25</td><td class="chk">___ / 25</td><td class="chk">___ / 25</td><td class="chk">___ / 25</td></tr>
+<tr><td>산미 밸런스</td><td>20</td><td class="chk">___ / 20</td><td class="chk">___ / 20</td><td class="chk">___ / 20</td></tr>
+<tr><td>염도 적정성</td><td>15</td><td class="chk">___ / 15</td><td class="chk">___ / 15</td><td class="chk">___ / 15</td></tr>
+<tr><td>탁도 · 색상</td><td>10</td><td class="chk">___ / 10</td><td class="chk">___ / 10</td><td class="chk">___ / 10</td></tr>
+<tr><td>이취 없음</td><td>10</td><td class="chk">___ / 10</td><td class="chk">___ / 10</td><td class="chk">___ / 10</td></tr>
+<tr><td>배달 30분 후 품질</td><td>20</td><td class="chk">___ / 20</td><td class="chk">___ / 20</td><td class="chk">___ / 20</td></tr>
+<tr><td><b>합계</b></td><td><b>100</b></td><td class="chk"><b>___</b></td><td class="chk"><b>___</b></td><td class="chk"><b>___</b></td></tr>
+<tr><td>kg당 단가</td><td>—</td><td>____원</td><td>____원</td><td>____원</td></tr>
+<tr><td>MOQ</td><td>—</td><td>____kg</td><td>____kg</td><td>____kg</td></tr>
+<tr><td><b>점수/단가 효율</b></td><td>—</td><td class="chk">____</td><td class="chk">____</td><td class="chk">____</td></tr>
+</tbody>
+</table>
+<div class="box"><b>배달 30분 후 품질(20점)이 핵심 항목입니다.</b> 배달전문점은 매장 시식 기준으로 고르면 실패합니다. 반드시 <b>포장 후 30분 방치</b> 상태로 재평가하십시오.</div>
+
+<div class="foot">
+본 문서는 AADS CTO AI가 2026-08-04(KST) 기준으로 작성했습니다.<br>
+출처: 각 사 공식 홈페이지 원문(fetch 실측 4개사) · 네이버 웹문서/블로그 검색 · 공개 사업자정보.<br>
+단가·MOQ·리드타임 관련 서술은 업계 통상치로 미검증 항목이며, 실제 견적 상담으로 확정해야 합니다.<br>
+문서번호 FOOD-FIND-002 · 연계문서: 열정국밥 중화점 인수전환 체크리스트
+</div>
+
+</body>
+</html>

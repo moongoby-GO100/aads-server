@@ -21632,3 +21632,46 @@ entry=base64.b6
 ## [2026-08-04 19:05:29 KST] [GO100] backend/app/services/trading/v4_order_executor.py
 - Chat-Direct 수정: patch:             if not self._retry_handler.s→            if not self._retry_handler.s
 - finalize: pending
+
+## [2026-08-04 19:06:33 KST] [GO100] tests/go100/test_live_safety_p0_119.py
+- Chat-Direct 수정: patch: def test_check_active_sell_sql_includes_→def test_check_active_sell_sql_includes_
+- finalize: pending
+
+## [2026-08-04 19:06:38 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:     async def _ensure_positions_for_fill→    async def _sync_positions_for_filled
+- finalize: pending
+
+## [2026-08-04 19:08:03 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: 
+## 2026-08-04 18:56 KST — GO100-119-BUY→
+## 2026-08-04 19:02 KST — GO100-119-LIM
+- finalize: pending
+
+## [2026-08-04 19:08:11 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: 
+## 2026-08-04 18:56 KST — GO100-119-BUY→
+## 2026-08-04 19:01 KST — GO100-119-LIV
+- finalize: pending
+
+## [2026-08-04 19:08:27 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: venv/bin/python3 -c "from pathlib import Path
+p=Path('HANDOVER.md')
+s=p.read_tex
+- finalize: pending
+
+## [2026-08-04 19:08:42 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-07-30 07:05 KST — GO100 라이브매매 메뉴명→# 2026-08-04 19:01 KST — GO100-119-LIVE-
+- finalize: pending
+
+## [2026-08-04 19:10:08 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: - 검증: `python3 -m py_compile backend/app→- 검증: `python3 -m py_compile backend/app
+- finalize: pending
+
+## [2026-08-04 19:10:37 KST] [GO100] backend/scripts/go100_diagnose_card119_buyability.py
+- Chat-Direct 수정: patch:     nxt_live_order_enabled 는 세션 flag AND→    nxt_live_order_enabled 는 NXT AM 신규매수
+- finalize: pending
+
+## [2026-08-04 19:30:30 KST] [GO100] scripts/go100/verify_backfill_daily_results.py
+- Chat-Direct 수정: run_remote_command: python3 -c "from backend.app.core.database import sync_engine
+from sqlalchemy im
+- finalize: pending
