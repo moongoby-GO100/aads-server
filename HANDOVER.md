@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-04 18:46 KST - Baemin authenticated-session final verification reconciliation
+
+- Request: Resolve the previous final-report ledger conflict and continue Baemin server-side automatic parsing verification to completion.
+- Actual source ledger:
+  - `HEAD` and `origin/main` both point to `297b587f fix(deploy): deploy_dashboard.sh blue-green 로직 위임 수정` at verification time.
+  - Baemin authenticated-session implementation commits on `origin/main`: `a7e2db1f`, `be66b7fe`, `f877e3fd`, `e217a894`, `2d8a8f4b`.
+  - Baemin target files had no uncommitted diff: `app/api/yeoljeong_finance.py`, `app/services/yeoljeong_finance_service.py`, `app/services/yeoljeong_delivery_collectors.py`, related tests, and this document before this entry.
+- Runtime verification:
+  - Host `python3 -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
+  - Host `python3 -m pytest ...` could not run because host Python has no `pytest` module.
+  - Container `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 68 passed.
+  - Container focused storage-state gate tests passed: 4 passed.
+  - External/slot health passed: `https://aads.newtalk.kr/api/v1/health`, `127.0.0.1:8100`, and `127.0.0.1:8102` all returned status ok.
+  - Container schema confirmed `SyncPayload` exposes `browser_session_id` and write-only `storage_state_path`.
+  - Container source confirmed `portal-csv`/upload-mode Baemin accounts skip `CSV_UPLOAD_REQUIRED` when a valid `storage_state_path` is supplied.
+- Live behavior:
+  - Jung-hwa Baemin sync without storage-state returned `status=upload_required`, `error_code=CSV_UPLOAD_REQUIRED`, totals 0.
+  - Jung-hwa Baemin sync with a valid but empty Playwright storage-state file entered the browser collector path and returned `status=partial`, `error_code=AUTHENTICATED_NO_ROWS`, totals 0. This verifies the storage-state gate is active, but not a real authenticated Baemin session.
+  - Direct server request to Baemin login still returned HTTP 403 from Cloudflare/Baemin, so password-only server login remains blocked by portal security.
+- Final interpretation:
+  - Server-side automatic parsing is implemented for the allowed path: a normal authenticated Playwright storage-state/Browser Bridge session can be injected and parsed by the server collector.
+  - Real Jung-hwa sales/settlement/review rows were not collected in this verification because no real authenticated Baemin storage-state was provided. No fake rows were inserted.
+
 ## 2026-08-04 18:28 KST - Baemin storage-state collection gate fix
 
 - Request: Finish the remaining "server directly logs into Baemin and parses automatically" item so it can run when a normal authenticated browser session is supplied.
