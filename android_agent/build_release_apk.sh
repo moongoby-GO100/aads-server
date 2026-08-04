@@ -22,6 +22,8 @@ elif command -v docker >/dev/null 2>&1 && [[ "${AADS_ANDROID_DOCKER_FALLBACK:-1}
       /opt/gradle-8.10.2/bin/gradle :app:assembleRelease
       mkdir -p dist
       cp app/build/outputs/apk/release/app-release.apk dist/aads-agent-release.apk
+      cp app/build/outputs/apk/release/app-release.apk dist/aads-agent-fresh.apk
+      cp app/build/outputs/apk/release/app-release.apk dist/aads-agent-fresh-release.apk
       ls -lh dist/aads-agent-release.apk'
   exit $?
 else
@@ -34,4 +36,6 @@ fi
 
 mkdir -p dist
 cp app/build/outputs/apk/release/app-release.apk dist/aads-agent-release.apk
+cp app/build/outputs/apk/release/app-release.apk dist/aads-agent-fresh.apk
+cp app/build/outputs/apk/release/app-release.apk dist/aads-agent-fresh-release.apk
 echo "Built: $ROOT_DIR/dist/aads-agent-release.apk"
