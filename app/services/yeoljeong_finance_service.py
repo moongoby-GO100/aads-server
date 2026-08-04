@@ -3175,7 +3175,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             if service == "baemin" and browser_auth["storage_state_path"]:
                 collection_account["storage_state_path"] = browser_auth["storage_state_path"]
             can_use_stored_browser_session = service == "baemin" and bool(browser_auth["storage_state_path"])
-            if collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:
+            if collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
                 result = {
                     "status": "upload_required",
                     "error_code": "CSV_UPLOAD_REQUIRED",

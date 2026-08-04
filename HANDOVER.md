@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-04 18:28 KST - Baemin storage-state collection gate fix
+
+- Request: Finish the remaining "server directly logs into Baemin and parses automatically" item so it can run when a normal authenticated browser session is supplied.
+- Issue found:
+  - `sync_delivery()` accepted `storage_state_path`/Browser Bridge storage-state, but accounts with `collection_mode=portal-csv` still returned `CSV_UPLOAD_REQUIRED` before the Baemin collector could run.
+  - This blocked authenticated-session collection for branches that were previously set to CSV fallback.
+- Change:
+  - `app/services/yeoljeong_finance_service.py` now lets Baemin `portal-csv`/upload-mode accounts enter browser collection when a valid authenticated storage-state file is explicitly supplied.
+  - Default behavior without storage-state remains unchanged: upload-mode accounts still return `CSV_UPLOAD_REQUIRED` and do not start a browser.
+  - Added regression coverage in `tests/unit/test_yeoljeong_finance_service.py`.
+- Verification before deploy:
+  - Local `python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` passed.
+  - Local `python3 -m pytest ...` could not run because the host Python has no pytest module.
+  - Container pre-deploy still used the old mounted/image source, so new test names were not yet visible there. Re-run container tests after deploy.
+
 ## 2026-08-04 17:46 KST - Yeoljeong Baemin authenticated-session server collection
 
 - Request: Make the unfinished "server directly logs into Baemin and parses sales/settlement/review data" path actionable.
