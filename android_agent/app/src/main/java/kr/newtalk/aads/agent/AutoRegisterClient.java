@@ -36,6 +36,7 @@ final class AutoRegisterClient {
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("User-Agent", "AADS-Android-Agent/" + AgentConfig.VERSION);
         conn.setDoOutput(true);
         conn.setConnectTimeout(15_000);
         conn.setReadTimeout(15_000);
