@@ -139,6 +139,36 @@ def test_contract_preview_is_a4_modal():
     assert "체결 당시 저장본" in html
 
 
+def test_import_delivery_portal_text_persists_pc_parsed_baemin_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
+    monkeypatch.setattr(api.svc, "EVIDENCE_UPLOAD_DIR", tmp_path / "uploads" / "evidence")
+    monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
+    html = """
+    <table>
+      <tr><th>주문일</th><th>주문번호</th><th>결제금액</th><th>배달팁</th><th>주문상태</th></tr>
+      <tr><td>2026.08.03</td><td>B-1001</td><td>31,000원</td><td>3,000원</td><td>완료</td></tr>
+    </table>
+    """
+
+    result = api.svc.import_delivery_portal_text(
+        {
+            "service": "baemin",
+            "record_type": "sales",
+            "source_text": html,
+            "filename": "baemin-sales.html",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["totals"]["sales"] == 1
+    assert result["sales"][0]["order_id"] == "B-1001"
+    assert result["sales"][0]["gross_amount"] == 31000
+    assert api.svc._read("delivery_collection_status")[0]["diagnostics"]["collection_mode"] == "pc-browser-parse"
+
+
 @pytest.mark.asyncio
 async def test_account_upsert_runs_financial_sync_when_auto_sync_enabled(monkeypatch):
     saved_account = {

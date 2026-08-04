@@ -13,6 +13,7 @@ import re
 import shutil
 import tempfile
 from datetime import date, datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -205,6 +206,155 @@ def _read_download(path: Path) -> list[dict[str, Any]]:
     if not text:
         return []
     return [dict(row) for row in csv.DictReader(text.splitlines())]
+
+
+class _HtmlTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[str]]] = []
+        self.text: list[str] = []
+        self._table_index = -1
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        if tag == "table":
+            self.tables.append([])
+            self._table_index = len(self.tables) - 1
+        elif tag == "tr" and self._table_index >= 0:
+            self._row = []
+        elif tag in {"th", "td"} and self._row is not None:
+            self._cell = []
+        elif tag in {"br", "p", "div", "li"}:
+            self.text.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+        if tag in {"th", "td"} and self._row is not None and self._cell is not None:
+            self._row.append(_clean(" ".join(self._cell)))
+            self._cell = None
+        elif tag == "tr" and self._table_index >= 0 and self._row is not None:
+            if any(self._row):
+                self.tables[self._table_index].append(self._row)
+            self._row = None
+        elif tag == "table":
+            self._table_index = -1
+        elif tag in {"p", "div", "li"}:
+            self.text.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        cleaned = _clean(data)
+        if not cleaned:
+            return
+        if self._cell is not None:
+            self._cell.append(cleaned)
+        self.text.append(cleaned)
+
+
+def _rows_to_dicts(rows: list[list[str]]) -> list[dict[str, Any]]:
+    compact = [[_clean(cell) for cell in row] for row in rows if any(_clean(cell) for cell in row)]
+    if len(compact) < 2:
+        return []
+    header_index = 0
+    for index, row in enumerate(compact[:5]):
+        joined = " ".join(row)
+        if any(term in joined for term in ("일", "번호", "금액", "상태", "리뷰", "별점", "평점")):
+            header_index = index
+            break
+    headers = [value or f"column_{index + 1}" for index, value in enumerate(compact[header_index])]
+    parsed: list[dict[str, Any]] = []
+    for row in compact[header_index + 1 :]:
+        if len(row) < len(headers):
+            row = [*row, *([""] * (len(headers) - len(row)))]
+        parsed.append({headers[index] if index < len(headers) else f"column_{index + 1}": value for index, value in enumerate(row)})
+    return parsed
+
+
+def _parse_delimited_text(text: str) -> list[dict[str, Any]]:
+    lines = [line for line in text.splitlines() if _clean(line)]
+    if len(lines) < 2:
+        return []
+    sample = "\n".join(lines[:20])
+    delimiters = ["\t", ",", ";", "|"]
+    delimiter = "\t" if "\t" in sample else ","
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters="".join(delimiters))
+        delimiter = dialect.delimiter
+    except csv.Error:
+        pass
+    reader = csv.DictReader(lines, delimiter=delimiter)
+    if not reader.fieldnames:
+        return []
+    return [dict(row) for row in reader if any(_clean(value) for value in row.values())]
+
+
+def parse_portal_export(
+    service: str,
+    kind: str,
+    source_text: str,
+    business_id: str,
+    branch: str,
+) -> dict[str, Any]:
+    """Parse copied/saved portal tables from an already-authenticated PC browser.
+
+    This path is intentionally offline: it accepts only user-provided page/table
+    content and does not attempt to bypass portal IP, CAPTCHA, OTP, or device
+    checks from the server.
+    """
+    normalized_service = str(service or "").strip()
+    normalized_kind = str(kind or "").strip()
+    if normalized_service not in PORTAL_CONFIG:
+        return {"status": "failed", "error_code": "UNSUPPORTED_PLATFORM", "records": {}, "diagnostics": {}}
+    if normalized_kind not in {"sales", "settlements", "reviews"}:
+        return {"status": "failed", "error_code": "UNSUPPORTED_RECORD_TYPE", "records": {}, "diagnostics": {}}
+
+    raw = str(source_text or "")
+    if not raw.strip():
+        return {"status": "failed", "error_code": "EMPTY_SOURCE", "records": {}, "diagnostics": {}}
+
+    table_rows: list[dict[str, Any]] = []
+    source = "delimited_text"
+    if "<" in raw and ">" in raw:
+        parser = _HtmlTableParser()
+        parser.feed(raw)
+        for table in parser.tables:
+            table_rows.extend(_rows_to_dicts(table))
+        source = "html_table" if table_rows else "html_text"
+        if not table_rows:
+            table_rows = _parse_delimited_text("\n".join(parser.text))
+    if not table_rows:
+        table_rows = _parse_delimited_text(raw)
+    if not table_rows:
+        return {
+            "status": "partial",
+            "error_code": "NO_PARSEABLE_ROWS",
+            "records": {normalized_kind: []},
+            "diagnostics": {"source": source},
+            "message": "복사/저장한 페이지에서 표 형식 데이터를 찾지 못했습니다.",
+        }
+
+    normalized = [
+        normalize_record(normalized_service, normalized_kind, row, str(business_id or ""), str(branch or ""))
+        for row in table_rows
+    ]
+    return {
+        "status": "succeeded",
+        "error_code": "",
+        "records": {normalized_kind: normalized},
+        "diagnostics": {"source": source, "source_rows": len(table_rows)},
+    }
 
 
 def _click_first(page: Any, labels: tuple[str, ...], timeout: int = 2500) -> bool:

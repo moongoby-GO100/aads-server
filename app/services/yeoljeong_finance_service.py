@@ -3229,6 +3229,101 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     }
 
 
+def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="배달 포털 파싱 반영 권한이 없습니다")
+    from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG, parse_portal_export
+
+    service = str(payload.get("service") or "").strip()
+    record_type = str(payload.get("record_type") or payload.get("recordType") or "").strip()
+    if service not in PORTAL_CONFIG:
+        raise HTTPException(status_code=400, detail="지원하지 않는 배달 플랫폼입니다")
+    if record_type not in {"sales", "settlements", "reviews"}:
+        raise HTTPException(status_code=400, detail="반영 구분은 sales, settlements, reviews 중 하나여야 합니다")
+
+    business_id, branch = _normalize_delivery_scope(payload.get("business_id"), payload.get("branch"))
+    source_text = str(payload.get("source_text") or payload.get("sourceText") or "")
+    parsed = parse_portal_export(service, record_type, source_text, business_id, branch)
+    ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
+    ledger_name = ledger_names[record_type]
+    existing_rows = _read(ledger_name)
+    by_id = {str(row.get("id") or ""): row for row in existing_rows if row.get("id")}
+    imported: list[dict[str, Any]] = []
+    duplicate_rows = 0
+    now = _now()
+    for record in parsed.get("records", {}).get(record_type) or []:
+        record["source_file"] = Path(str(payload.get("filename") or "pc-browser-copy.html")).name
+        record["collection_mode"] = "pc-browser-parse"
+        record["created_at"] = record.get("created_at") or now
+        record["updated_at"] = now
+        record_id = str(record.get("id") or "")
+        if record_id in by_id:
+            duplicate_rows += 1
+        by_id[record_id] = record
+        imported.append(record)
+    if imported or parsed.get("status") != "succeeded":
+        _write(ledger_name, list(by_id.values()))
+
+    statuses = _read("delivery_collection_status")
+    counts = {"sales": 0, "settlements": 0, "reviews": 0}
+    counts[record_type] = len(imported)
+    run_id = str(uuid4())
+    statuses.insert(
+        0,
+        {
+            "id": run_id,
+            "service": service,
+            "business_id": business_id,
+            "branch": branch,
+            "date_from": str(payload.get("date_from") or ""),
+            "date_to": str(payload.get("date_to") or ""),
+            "status": parsed.get("status") or "failed",
+            "counts": counts,
+            "error_code": parsed.get("error_code") or "",
+            "diagnostics": {
+                **(parsed.get("diagnostics") or {}),
+                "collection_mode": "pc-browser-parse",
+                "record_type": record_type,
+                "duplicate_rows": duplicate_rows,
+            },
+            "message": parsed.get("message") or "PC에서 로그인 후 복사/저장한 배민 화면 데이터를 파싱해 반영했습니다.",
+            "started_at": now,
+            "finished_at": now,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+    _write("delivery_collection_status", statuses)
+
+    response_ledgers = {"sales": [], "settlements": [], "reviews": []}
+    response_ledgers[record_type] = imported
+    records = [_delivery_entry_record(record) for record in imported if record_type in {"sales", "settlements"}]
+    return {
+        "synced_at": now,
+        "business_id": business_id,
+        "branch": branch,
+        "summary": [
+            {
+                "service": service,
+                "status": parsed.get("status") or "failed",
+                "portal_status": parsed.get("status") or "failed",
+                "error_code": parsed.get("error_code") or "",
+                "counts": counts,
+                "run_id": run_id,
+                "collection_mode": "pc-browser-parse",
+                "message": parsed.get("message") or "PC 브라우저 파싱 반영 완료",
+                "portal_message": parsed.get("message") or "PC 브라우저 파싱 반영 완료",
+            }
+        ],
+        "records": records,
+        "sales": response_ledgers["sales"],
+        "settlements": response_ledgers["settlements"],
+        "reviews": response_ledgers["reviews"],
+        "totals": counts,
+        "import": {"imported": len(imported), "duplicate_rows": duplicate_rows},
+    }
+
+
 def import_settlement_csv(
     text: str,
     user: dict[str, Any],

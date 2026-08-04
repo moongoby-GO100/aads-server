@@ -143,3 +143,35 @@ def test_security_block_result_detects_baemin_block_page():
     assert result["status"] == "portal_action_required"
     assert result["error_code"] == "BAEMIN_SECURITY_BLOCKED"
     assert "records" in result
+
+
+def test_parse_baemin_pc_html_table_settlements():
+    html = """
+    <html><body>
+      <table>
+        <thead><tr><th>정산일</th><th>매출액</th><th>수수료</th><th>부가세</th><th>정산금액</th><th>상태</th></tr></thead>
+        <tbody><tr><td>2026.08.01</td><td>80,000원</td><td>7,000원</td><td>700원</td><td>72,300원</td><td>입금예정</td></tr></tbody>
+      </table>
+    </body></html>
+    """
+
+    result = collectors.parse_portal_export("baemin", "settlements", html, "biz-junghwa", "중화점")
+
+    assert result["status"] == "succeeded"
+    record = result["records"]["settlements"][0]
+    assert record["business_id"] == "biz-junghwa"
+    assert record["branch"] == "중화점"
+    assert record["occurred_on"] == "2026-08-01"
+    assert record["settlement_amount"] == 72300
+
+
+def test_parse_baemin_pc_copied_review_table():
+    copied = "작성일\t평점\t리뷰내용\t답글상태\n2026-08-02\t5\t냉면이 맛있어요\t미답변\n"
+
+    result = collectors.parse_portal_export("baemin", "reviews", copied, "biz-junghwa", "중화점")
+
+    assert result["status"] == "succeeded"
+    review = result["records"]["reviews"][0]
+    assert review["rating"] == 5
+    assert review["review_text"] == "냉면이 맛있어요"
+    assert review["reply_status"] == "미답변"

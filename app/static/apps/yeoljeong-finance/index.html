@@ -3962,7 +3962,7 @@
       <div class="panel-body grid">
         <div class="file-row">
           <label>파일
-            <input id="fileInput" type="file" accept=".csv,.json,.jpg,.jpeg,.png,.pdf,application/json,text/csv,image/*,application/pdf">
+            <input id="fileInput" type="file" accept=".csv,.json,.html,.htm,.txt,.jpg,.jpeg,.png,.pdf,application/json,text/csv,text/html,text/plain,image/*,application/pdf">
           </label>
           <button id="loadFileBtn" class="primary">불러오기</button>
         </div>
@@ -3975,7 +3975,15 @@
               <option value="ddangyo">땡겨요</option>
             </select>
           </label>
+          <label>PC 파싱 대상
+            <select id="deliveryPortalRecordType">
+              <option value="sales">매출/주문</option>
+              <option value="settlements">정산</option>
+              <option value="reviews">리뷰</option>
+            </select>
+          </label>
           <button id="serverImportSettlementBtn">서버 자동정리</button>
+          <button id="serverImportDeliveryPortalBtn" class="primary">배민 PC 파싱 반영</button>
         </div>
         <div class="file-row">
           <label>증빙 연동 구분
@@ -4028,8 +4036,8 @@
         <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
           <button id="uploadEvidenceBtn" class="primary">증빙 서버 등록</button>
         </div>
-        <label>CSV/엑셀 표 붙여넣기
-          <textarea id="csvText" placeholder="거래일자,적요,입금액,출금액,계좌명 또는 엑셀에서 복사한 표"></textarea>
+        <label>CSV/엑셀/배민 화면 표 붙여넣기
+          <textarea id="csvText" placeholder="은행 거래 CSV, 정산 CSV, 또는 CEO PC에서 로그인한 배민 셀프서비스의 매출/정산/리뷰 표를 복사하거나 저장 HTML을 불러오십시오."></textarea>
         </label>
         <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
           <button id="serverImportTransactionBtn">은행/카드 거래 서버반영</button>
@@ -4037,6 +4045,7 @@
           <button id="pasteShiftCsvBtn">근태 CSV 반영</button>
         </div>
         <div class="muted">
+          배민 PC 파싱: CEO PC에서 배민셀프서비스 로그인 후 매출/정산/리뷰 표 영역을 복사하거나 페이지 HTML 저장본을 불러온 뒤 대상 구분을 선택<br>
           은행 거래 헤더: 거래일자, 거래시간, 적요, 입금액, 출금액, 계좌명 또는 은행 엑셀 표 복사<br>
           거래 CSV 헤더: date, branch, type, vendor, channel, amount, status, memo<br>
           근태 CSV 헤더: date, branch, staff, start, end, breakMin, hourly, status, memo
@@ -9100,6 +9109,32 @@
       showToast(`서버 자동정리 ${records.length}건 / 정산 ${(payload.settlements || []).length}건 반영`);
     }
 
+    async function importDeliveryPortalTextToServer() {
+      if (!canManageAutomation()) {
+        showToast("총괄 운영관리자 로그인 후 배민 PC 파싱 데이터를 반영할 수 있습니다.");
+        return;
+      }
+      const sourceText = els.csvText.value.trim();
+      if (!sourceText) {
+        showToast("CEO PC에서 로그인한 배민 화면의 표를 복사하거나 저장 HTML을 불러오십시오.");
+        return;
+      }
+      const recordType = els.deliveryPortalRecordType?.value || "settlements";
+      const service = els.settlementService?.value || "baemin";
+      const payload = await financeApi("/delivery/import", {
+        method: "POST",
+        body: JSON.stringify({
+          service,
+          record_type: recordType,
+          source_text: sourceText,
+          filename: els.fileInput.files[0]?.name || "pc-browser-copy.html",
+          ...selectedAutomationScope()
+        })
+      });
+      const result = applySyncPayload(payload);
+      showToast(`PC 파싱 반영 완료: 매출 ${result.salesCount}건 / 정산 ${result.settlementsCount}건 / 리뷰 ${result.reviewsCount}건`);
+    }
+
     function evidenceKindForService(service) {
       if (["shinhan_business", "ibk_business"].includes(service)) return "bank_statement";
       if (["hometax", "tax_invoice_upload", "accountant_tax_agent"].includes(service)) return "tax_invoice";
@@ -9811,6 +9846,7 @@
         }
       });
       els.serverImportSettlementBtn.addEventListener("click", () => importSettlementCsvToServer().catch(err => showToast(err.message)));
+      els.serverImportDeliveryPortalBtn?.addEventListener("click", () => importDeliveryPortalTextToServer().catch(err => showToast(err.message)));
       els.uploadEvidenceBtn?.addEventListener("click", () => uploadIntegrationEvidenceToServer().catch(err => showToast(err.message)));
 
       document.body.addEventListener("click", event => {
@@ -10119,7 +10155,9 @@
         const lowerName = file.name.toLowerCase();
         const isJson = lowerName.endsWith(".json") || file.type === "application/json";
         const isCsv = lowerName.endsWith(".csv") || file.type === "text/csv";
-        if (!isJson && !isCsv) {
+        const isHtml = lowerName.endsWith(".html") || lowerName.endsWith(".htm") || file.type === "text/html";
+        const isText = lowerName.endsWith(".txt") || file.type === "text/plain";
+        if (!isJson && !isCsv && !isHtml && !isText) {
           const branch = Array.from(selectedBusinessBranchNames())[0] || settings().branches[0]?.name || "";
           state.entries.push({
             id: uid(),
@@ -10153,7 +10191,7 @@
           showToast("JSON 데이터를 반영했습니다.");
         } else {
           els.csvText.value = text;
-          showToast("CSV를 읽었습니다. 반영 대상을 선택하십시오.");
+          showToast(isHtml || isText ? "배민 화면 저장본을 읽었습니다. PC 파싱 대상을 선택하십시오." : "CSV를 읽었습니다. 반영 대상을 선택하십시오.");
         }
       });
     }

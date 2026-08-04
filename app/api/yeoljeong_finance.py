@@ -121,6 +121,17 @@ class CsvImportPayload(BaseModel):
     branch: str = "열정국밥_미아점"
 
 
+class DeliveryPortalImportPayload(BaseModel):
+    service: str = "baemin"
+    record_type: str = "settlements"
+    source_text: str
+    filename: str = "pc-browser-copy.html"
+    business_id: str = "biz-mia"
+    branch: str = "열정국밥_미아점"
+    date_from: str = ""
+    date_to: str = ""
+
+
 class TransactionCsvImportPayload(BaseModel):
     service: str
     csv_text: str = ""
@@ -425,3 +436,8 @@ async def import_settlements(payload: CsvImportPayload, current_user: dict = Dep
             filename=payload.filename,
         )
     )
+
+
+@router.post("/delivery/import")
+async def import_delivery_portal(payload: DeliveryPortalImportPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.import_delivery_portal_text, payload.model_dump(), current_user)

@@ -5631,3 +5631,25 @@
 - 상태:
   - 아이디어 저장 완료.
   - 구매/PoC 구현은 CEO 구매 검토 승인 후 재개.
+
+## 2026-08-04 09:11 KST - 중화점 배민 PC 브라우저 파싱 수집 경로 구현
+
+- 요청: CEO PC에서는 배민 어드민 로그인이 되는데 서버에서는 안 되는 이유 확인, API 방식이 아닌 파싱 방식 연구 및 구현.
+- 원인:
+  - 이전 실측과 `delivery_collection_status.json` 기준 서버 자동 브라우저는 배민 포털에서 `BAEMIN_SECURITY_BLOCKED`, `LOGIN_FORM_NOT_FOUND`가 반복됐다.
+  - CEO PC는 정상 로그인된 브라우저 세션, 신뢰 기기, 쿠키, IP 평판이 통과된 상태라 접속 가능하고, 서버 headless/IP는 포털 보안정책에 의해 차단된다.
+  - 포털 보안/OTP/CAPTCHA를 우회하는 코드는 넣지 않고, 정상 로그인된 PC에서 보이는 화면 표를 사용자가 제공하면 서버가 오프라인 파싱하는 구조로 전환했다.
+- 조치:
+  - `app/services/yeoljeong_delivery_collectors.py`에 HTML table, 탭/CSV 복사 표 파서 `parse_portal_export()`를 추가했다.
+  - `app/services/yeoljeong_finance_service.py`에 `import_delivery_portal_text()`를 추가해 배민 매출/정산/리뷰 원장에 `pc-browser-parse` 방식으로 upsert하고 수집상태를 기록하도록 했다.
+  - `app/api/yeoljeong_finance.py`에 `POST /api/v1/yeoljeong-finance/delivery/import`를 추가했다.
+  - `app/static/apps/yeoljeong-finance/index.html`의 데이터 가져오기 모달에 `.html/.htm/.txt` 파일 읽기, `PC 파싱 대상` 선택, `배민 PC 파싱 반영` 버튼을 추가했다.
+  - 매장비서 상태에는 기존 `applySyncPayload()` 경로로 매출, 정산, 리뷰가 즉시 반영된다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - Node 인라인 JS 문법 검사 성공(`inline scripts ok 1`).
+  - `python3 -m compileall -q app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_api.py` 성공: 22 passed, 1 warning.
+  - 로컬 기본 Python의 `pytest`는 미설치였으나 컨테이너 pytest와 파서 직접 호출로 대체 검증했다.
+- 운영 사용법:
+  - CEO PC에서 배민셀프서비스 로그인 → 매출/정산/리뷰 표 영역 복사 또는 HTML 저장 → 매장비서 데이터 가져오기 → `배달 정산 구분=배민`, `PC 파싱 대상=매출/정산/리뷰` 선택 → 붙여넣기/파일 불러오기 → `배민 PC 파싱 반영`.
