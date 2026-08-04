@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-08-05 00:35 KST - Baemin PC Agent collection test and route fallback hardening
+
+- Request: Use the saved Baemin integration account through the CEO PC Agent browser, collect all available sales, settlement, and review data, and report the result.
+- Findings:
+  - Credential Vault contains only the AADS dashboard E2E credential. No Baemin credential exists in Vault.
+  - `yeoljeong_platform_accounts` contains Baemin usernames, but every Baemin row has `password_enc_len=0` and `password_len=0`; no usable saved password is present.
+  - PC Agent `2e9379a1-fed` was online and a local-agent Browser Bridge session `bb-5c4f596f2c67` opened the Baemin integrated login page.
+  - Browser input succeeded for the saved Jung-hwa username `yunhee1`, but login submission was blocked because no password is stored.
+  - Live Jung-hwa sync with `browser_session_id=bb-5c4f596f2c67` finished at `2026-08-05T00:34:42+09:00` with `error_code=PC_AGENT_LOGIN_REQUIRED`; imported rows were sales 0, settlements 0, reviews 0.
+  - Live Mia sync finished at `2026-08-05T00:32:10+09:00` with `error_code=ACCOUNT_NOT_REGISTERED`; DB has Mia Baemin rows, but the runtime `_read("platform_accounts")` path currently returns only Jung-hwa Baemin accounts.
+  - Container route fallback showed the Docker default gateway is `172.18.0.1`, not fixed `172.17.0.1`.
+- Changes:
+  - `app/browser_bridge/service.py`: active API PC Agent fallback now includes `AADS_DOCKER_HOST_GATEWAY` and the runtime `/proc/net/route` default gateway before the legacy `172.17.0.1` fallback.
+  - `tests/unit/test_browser_bridge.py`: added coverage for dynamic Docker gateway parsing and updated active route URL expectations.
+- Verification:
+  - Temporary container with current workspace mounted: `python -m pytest tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_delivery_collectors.py -q` passed: 36 passed.
+  - Production container direct tests before this incremental commit: `tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_delivery_collectors.py -q` passed: 35 passed.
+  - `http://127.0.0.1:8100/api/v1/health` returned status ok.
+- Pending:
+  - Register or re-enter the real Baemin password/storage-state before a successful authenticated scrape can collect real rows.
+  - Reconcile Mia Baemin account DB rows with the runtime account read path so Mia does not return `ACCOUNT_NOT_REGISTERED`.
+
 ## 2026-08-04 22:15 KST - Android Agent automatic pairing and reconnect hardening
 
 - Request: After PC Agent auto-pair installation was verified, check and fix Android Agent installation/management so it can connect without manual token entry where possible.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import builtins
 
 import pytest
 
@@ -235,13 +236,39 @@ def test_pairing_manager_persists_unconsumed_pairings(tmp_path) -> None:
 
 def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
     monkeypatch.setenv("AADS_ACTIVE_CONTAINER", "aads-server-green")
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_docker_default_gateway_hosts",
+        staticmethod(lambda: ["172.18.0.1"]),
+    )
 
     urls = BrowserBridgeService._active_api_route_urls("8102")
 
     assert urls[0] == "http://127.0.0.1:8102/api/v1/pc-agent/route-execute"
     assert "http://host.docker.internal:8102/api/v1/pc-agent/route-execute" in urls
+    assert "http://172.18.0.1:8102/api/v1/pc-agent/route-execute" in urls
     assert "http://172.17.0.1:8102/api/v1/pc-agent/route-execute" in urls
     assert "http://aads-server-green:8080/api/v1/pc-agent/route-execute" in urls
+
+
+def test_docker_default_gateway_hosts_reads_proc_route(monkeypatch, tmp_path) -> None:
+    route_file = tmp_path / "route"
+    route_file.write_text(
+        "Iface\tDestination\tGateway \tFlags\n"
+        "eth0\t00000000\t010012AC\t0003\n",
+        encoding="utf-8",
+    )
+    real_open = builtins.open
+
+    def fake_open(path, *args, **kwargs):  # noqa: ANN001
+        if path == "/proc/net/route":
+            return real_open(route_file, *args, **kwargs)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setenv("AADS_DOCKER_HOST_GATEWAY", "172.19.0.1")
+    monkeypatch.setattr(service_module, "open", fake_open, raising=False)
+
+    assert BrowserBridgeService._docker_default_gateway_hosts() == ["172.19.0.1", "172.18.0.1"]
 
 
 def test_active_api_ports_include_blue_green_fallbacks(monkeypatch) -> None:
@@ -261,6 +288,11 @@ async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) 
         BrowserBridgeService,
         "_active_api_ports",
         classmethod(lambda cls: ["8102", "8100"]),
+    )
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_docker_default_gateway_hosts",
+        staticmethod(lambda: []),
     )
 
     def fake_urlopen(req, timeout):  # noqa: ANN001, ARG001

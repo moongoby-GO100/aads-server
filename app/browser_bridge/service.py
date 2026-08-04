@@ -858,12 +858,8 @@ class BrowserBridgeService:
     @classmethod
     def _active_api_route_urls(cls, active_port: str) -> list[str]:
         urls = [f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute"]
-        urls.extend(
-            [
-                f"http://host.docker.internal:{active_port}/api/v1/pc-agent/route-execute",
-                f"http://172.17.0.1:{active_port}/api/v1/pc-agent/route-execute",
-            ]
-        )
+        docker_hosts = ["host.docker.internal", *cls._docker_default_gateway_hosts(), "172.17.0.1"]
+        urls.extend(f"http://{host}:{active_port}/api/v1/pc-agent/route-execute" for host in docker_hosts)
         if active_port == "8100":
             urls.append("http://aads-server:8080/api/v1/pc-agent/route-execute")
         elif active_port == "8102":
@@ -875,6 +871,31 @@ class BrowserBridgeService:
         for url in urls:
             if url not in deduped:
                 deduped.append(url)
+        return deduped
+
+    @staticmethod
+    def _docker_default_gateway_hosts() -> list[str]:
+        hosts: list[str] = []
+        env_host = os.getenv("AADS_DOCKER_HOST_GATEWAY", "").strip()
+        if env_host:
+            hosts.append(env_host)
+        try:
+            with open("/proc/net/route", "r", encoding="utf-8") as handle:
+                for line in handle.readlines()[1:]:
+                    fields = line.split()
+                    if len(fields) < 3 or fields[1] != "00000000":
+                        continue
+                    gateway_hex = fields[2]
+                    gateway = ".".join(str(byte) for byte in bytes.fromhex(gateway_hex)[::-1])
+                    if gateway and gateway != "0.0.0.0":
+                        hosts.append(gateway)
+                    break
+        except (OSError, ValueError):
+            pass
+        deduped: list[str] = []
+        for host in hosts:
+            if host not in deduped:
+                deduped.append(host)
         return deduped
 
     @staticmethod
