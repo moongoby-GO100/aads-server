@@ -14,6 +14,11 @@
   - Local `python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` passed.
   - Local `python3 -m pytest ...` could not run because the host Python has no pytest module.
   - Container pre-deploy still used the old mounted/image source, so new test names were not yet visible there. Re-run container tests after deploy.
+- Production apply/verification:
+  - Commit `e217a894` was pushed to `origin/main`.
+  - Active slot `aads-server-green:8102` was hot-reloaded with `/app/scripts/reload-api.sh`; result: `Hot-Reload 완료 — 재로드=71개`.
+  - `http://127.0.0.1:8100/api/v1/health` and `http://127.0.0.1:8102/api/v1/health` returned HTTP 200.
+  - Direct container verification confirmed `portal-csv + storage_state_path` enters the collector path with diagnostics `auth_mode=storage_state`, `state_path_ok=True`.
 
 ## 2026-08-04 17:46 KST - Yeoljeong Baemin authenticated-session server collection
 
