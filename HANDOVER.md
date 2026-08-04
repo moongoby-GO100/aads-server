@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-04 17:46 KST - Yeoljeong Baemin authenticated-session server collection
+
+- Request: Make the unfinished "server directly logs into Baemin and parses sales/settlement/review data" path actionable.
+- Backend change:
+  - `app/services/yeoljeong_delivery_collectors.py` now accepts Playwright `storage_state` via account fields or environment (`YEOLJEONG_BAEMIN_STORAGE_STATE`, `BAEMIN_STORAGE_STATE_PATH`, `AADS_BROWSER_BRIDGE_STORAGE_STATE`).
+  - When a storage state exists, Baemin collection first opens `https://self.baemin.com/` with the authenticated browser cookies and only falls back to password login if the session is expired.
+  - `app/api/yeoljeong_finance.py` `SyncPayload` now accepts `browser_session_id` and write-only `storage_state_path`.
+  - `app/services/yeoljeong_finance_service.py` resolves Browser Bridge storage-state config and passes it to the Baemin collector without exposing the file path in API output.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed locally.
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py -q` passed: 80 passed, 1 warning.
+  - Live Jung-hwa sync without an authenticated storage state still returns `status=portal_action_required`, `error_code=BAEMIN_SECURITY_BLOCKED`, totals 0. This confirms the server IP/headless path is still blocked by Baemin security.
+  - PC Agent status at 17:44 KST: online agent `2e9379a1-fed` with `interactive_browser`; launched Chrome CDP on port 53454.
+  - PC Agent Baemin page read at 17:45 KST showed the `통합로그인` screen, meaning the PC Agent automation profile is not the same already-logged-in CEO Chrome profile yet.
+- Operational note:
+  - Real automatic parsing is now available when an authenticated Baemin Playwright storage-state file is registered or the PC Agent automation Chrome profile is logged in once.
+  - No fake Baemin rows were inserted.
+
 ## 2026-08-04 08:31 KST - OHVIS app branding and push notification implementation
 
 - Request: Keep the AI glasses investigation as a deferred OHVIS idea, rename the current AADS app to OHVIS, and add app push notifications for response completion.

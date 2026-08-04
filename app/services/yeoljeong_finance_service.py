@@ -3076,6 +3076,26 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
     }
 
 
+def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
+    storage_state_path = str(payload.get("storage_state_path") or "").strip()
+    browser_session_id = str(payload.get("browser_session_id") or "").strip()
+    bridge_mode = ""
+    if not storage_state_path:
+        try:
+            from app.browser_bridge.e2e_adapter import build_e2e_config
+
+            config = build_e2e_config(session_id=browser_session_id or None)
+            bridge_mode = str(config.get("mode") or "")
+            storage_state_path = str(config.get("storage_state_path") or "").strip()
+        except Exception:
+            storage_state_path = ""
+    return {
+        "storage_state_path": storage_state_path if storage_state_path and Path(storage_state_path).is_file() else "",
+        "browser_session_id": browser_session_id,
+        "browser_bridge_mode": bridge_mode,
+    }
+
+
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
@@ -3127,6 +3147,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     statuses = _read("delivery_collection_status")
     response_ledgers = {"sales": [], "settlements": [], "reviews": []}
     response_records: list[dict[str, Any]] = []
+    browser_auth = _delivery_browser_auth_options(payload)
 
     for service in requested_services:
         account = accounts_by_service.get(service)
@@ -3167,7 +3188,14 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 }
             else:
                 secret = _decrypt_secret(str(account.get("password_enc") or ""))
-                result = collect_account(account, secret, date_from.isoformat(), date_to.isoformat())
+                collection_account = dict(account)
+                if service == "baemin" and browser_auth["storage_state_path"]:
+                    collection_account["storage_state_path"] = browser_auth["storage_state_path"]
+                result = collect_account(collection_account, secret, date_from.isoformat(), date_to.isoformat())
+                if service == "baemin" and browser_auth["browser_session_id"]:
+                    result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]
+                if service == "baemin" and browser_auth["browser_bridge_mode"]:
+                    result.setdefault("diagnostics", {})["browser_bridge_mode"] = browser_auth["browser_bridge_mode"]
 
         counts = {"sales": 0, "settlements": 0, "reviews": 0}
         for kind, ledger_name in ledger_names.items():

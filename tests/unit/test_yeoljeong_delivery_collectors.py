@@ -92,6 +92,14 @@ def test_collect_account_requires_credential_without_opening_browser():
     }
 
 
+def test_storage_state_path_prefers_existing_account_file(tmp_path):
+    state_file = tmp_path / "baemin-state.json"
+    state_file.write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+
+    assert collectors._storage_state_path({"storage_state_path": str(state_file)}) == str(state_file)
+    assert collectors._storage_state_path({"storage_state_path": str(tmp_path / "missing.json")}) == ""
+
+
 def test_click_first_skips_hidden_duplicate_and_clicks_visible_match():
     hidden = _FakeElement(False)
     covered = _FakeElement(True, click_error=True)

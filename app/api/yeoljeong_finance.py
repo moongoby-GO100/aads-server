@@ -111,6 +111,8 @@ class SyncPayload(BaseModel):
     branch: str = "열정국밥_미아점"
     date_from: str = ""
     date_to: str = ""
+    browser_session_id: str = ""
+    storage_state_path: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
 
 
 class CsvImportPayload(BaseModel):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import re
 import shutil
 import tempfile
@@ -82,6 +83,16 @@ SECURITY_BLOCK_TERMS = (
     "올바르지 않은 요청",
     "access denied",
     "forbidden",
+)
+STORAGE_STATE_ACCOUNT_KEYS = (
+    "storage_state_path",
+    "browser_storage_state_path",
+    "baemin_storage_state_path",
+)
+STORAGE_STATE_ENV_KEYS = (
+    "YEOLJEONG_BAEMIN_STORAGE_STATE",
+    "BAEMIN_STORAGE_STATE_PATH",
+    "AADS_BROWSER_BRIDGE_STORAGE_STATE",
 )
 
 
@@ -492,6 +503,28 @@ def _login_url(account: dict[str, Any], config: dict[str, Any]) -> str:
     return configured or str(config["login_url"])
 
 
+def _portal_home_url(account: dict[str, Any], config: dict[str, Any]) -> str:
+    service = str(account.get("service") or "")
+    configured = str(account.get("portal_home_url") or account.get("home_url") or "").strip()
+    if configured:
+        return configured
+    if service == "baemin":
+        return "https://self.baemin.com/"
+    return _login_url(account, config)
+
+
+def _storage_state_path(account: dict[str, Any]) -> str:
+    for key in STORAGE_STATE_ACCOUNT_KEYS:
+        value = str(account.get(key) or "").strip()
+        if value and Path(value).expanduser().is_file():
+            return str(Path(value).expanduser())
+    for key in STORAGE_STATE_ENV_KEYS:
+        value = str(os.environ.get(key) or "").strip()
+        if value and Path(value).expanduser().is_file():
+            return str(Path(value).expanduser())
+    return ""
+
+
 def _set_period(page: Any, date_from: str, date_to: str) -> None:
     date_inputs = page.locator("input[type='date']")
     if date_inputs.count() >= 1:
@@ -624,33 +657,64 @@ def collect_account(
     config = PORTAL_CONFIG.get(service)
     if not config:
         return {"status": "failed", "error_code": "UNSUPPORTED_PLATFORM", "records": {}}
-    if not password:
+    storage_state = _storage_state_path(account)
+    if not password and not storage_state:
         return {"status": "credential_required", "error_code": "CREDENTIAL_REQUIRED", "records": {}}
-
     temp_dir = Path(tempfile.mkdtemp(prefix=f"yf-{service}-"))
     try:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context(accept_downloads=True, locale="ko-KR")
+            context_kwargs: dict[str, Any] = {"accept_downloads": True, "locale": "ko-KR"}
+            if storage_state:
+                context_kwargs["storage_state"] = storage_state
+            context = browser.new_context(**context_kwargs)
             page = context.new_page()
-            response = page.goto(_login_url(account, config), wait_until="domcontentloaded", timeout=30000)
+            auth_mode = "storage_state" if storage_state else "password_login"
+            response = page.goto(
+                _portal_home_url(account, config) if storage_state else _login_url(account, config),
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
             blocked = _security_block_result(page, response)
             if blocked:
+                blocked.setdefault("diagnostics", {})["auth_mode"] = auth_mode
                 browser.close()
                 return blocked
-            if not _fill_login(page, str(account.get("username") or ""), password):
-                browser.close()
-                return {"status": "portal_action_required", "error_code": "LOGIN_FORM_NOT_FOUND", "records": {}}
             state, error_code = _page_state(page)
             if state != "authenticated":
+                if not password:
+                    browser.close()
+                    return {
+                        "status": "credential_required",
+                        "error_code": "STORAGE_STATE_EXPIRED",
+                        "records": {},
+                        "diagnostics": {"auth_mode": auth_mode},
+                        "message": "저장된 PC 브라우저 인증 세션이 만료됐거나 로그인 상태가 아닙니다.",
+                    }
+                response = page.goto(_login_url(account, config), wait_until="domcontentloaded", timeout=30000)
+                blocked = _security_block_result(page, response)
+                if blocked:
+                    blocked.setdefault("diagnostics", {})["auth_mode"] = auth_mode
+                    browser.close()
+                    return blocked
+                if not _fill_login(page, str(account.get("username") or ""), password):
+                    browser.close()
+                    return {
+                        "status": "portal_action_required",
+                        "error_code": "LOGIN_FORM_NOT_FOUND",
+                        "records": {},
+                        "diagnostics": {"auth_mode": auth_mode},
+                    }
+                state, error_code = _page_state(page)
+            if state != "authenticated":
                 browser.close()
-                return {"status": state, "error_code": error_code, "records": {}}
+                return {"status": state, "error_code": error_code, "records": {}, "diagnostics": {"auth_mode": auth_mode}}
             _dismiss_optional_prompts(page, config)
 
             collected: dict[str, list[dict[str, Any]]] = {}
-            diagnostics: dict[str, str] = {}
+            diagnostics: dict[str, str] = {"auth_mode": auth_mode}
             for kind, labels in config["sections"].items():
                 rows, source = _collect_section(page, labels, date_from, date_to, temp_dir, config, kind)
                 collected[kind] = [
