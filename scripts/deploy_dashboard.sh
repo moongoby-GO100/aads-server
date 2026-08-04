@@ -1,11 +1,12 @@
 #!/bin/bash
-set -e
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dashboard build start"
-cd /root/aads/aads-dashboard
-docker compose build aads-dashboard 2>&1 | tail -10
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Build done, deploying..."
-docker compose up -d aads-dashboard 2>&1
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Deploy complete"
-sleep 15
-wget --spider -q http://127.0.0.1:3100 && echo "HEALTH: OK" || echo "HEALTH: FAIL"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Done"
+# Dashboard blue-green deploy — 대시보드의 자체 deploy.sh 위임
+# 사용법: bash scripts/deploy_dashboard.sh
+# 백그라운드 실행: bash scripts/deploy_dashboard_bg.sh
+set -euo pipefail
+DASHBOARD_DIR="/root/aads/aads-dashboard"
+if [[ ! -f "${DASHBOARD_DIR}/deploy.sh" ]]; then
+    echo "[deploy_dashboard.sh] ❌ ${DASHBOARD_DIR}/deploy.sh 없음"
+    exit 1
+fi
+cd "$DASHBOARD_DIR"
+exec bash deploy.sh "$@"
