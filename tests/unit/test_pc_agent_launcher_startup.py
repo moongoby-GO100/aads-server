@@ -10,6 +10,37 @@ from pc_agent import launcher
 
 
 class PcAgentLauncherStartupTest(TestCase):
+    def test_install_ticket_is_extracted_from_downloaded_exe_filename(self) -> None:
+        ticket = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEFGH"
+        exe = rf"C:\Users\CEO\Downloads\AADS-PC-Agent-Setup-1.0.57--ticket-{ticket}.exe"
+
+        with mock.patch.object(launcher.sys, "argv", [exe]), \
+             mock.patch.object(launcher.sys, "executable", exe):
+            self.assertEqual(launcher._extract_install_ticket(), ticket)
+
+    def test_install_ticket_exchange_returns_config(self) -> None:
+        ticket = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEFGH"
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):  # noqa: ANN002
+                return False
+
+            def read(self) -> bytes:
+                return (
+                    b'{"agent_token":"tok_123",'
+                    b'"server_url":"wss://example.test/api/v1/pc-agent/ws"}'
+                )
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            cfg = launcher._exchange_install_ticket(ticket)
+
+        self.assertEqual(cfg["agent_token"], "tok_123")
+        self.assertEqual(cfg["server_url"], "wss://example.test/api/v1/pc-agent/ws")
+        self.assertEqual(cfg["setup_method"], "install_ticket")
+
     def test_hidden_watchdog_vbs_uses_single_process_guard(self) -> None:
         script = launcher._build_hidden_watchdog_vbs(
             r"C:\Users\rkvs3\Downloads\AADS-PC-Agent-Setup-1.0.53.exe"

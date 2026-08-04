@@ -5692,3 +5692,24 @@
   - 로컬 기본 Python의 `pytest`는 미설치였으나 컨테이너 pytest와 파서 직접 호출로 대체 검증했다.
 - 운영 사용법:
   - CEO PC에서 배민셀프서비스 로그인 → 매출/정산/리뷰 표 영역 복사 또는 HTML 저장 → 매장비서 데이터 가져오기 → `배달 정산 구분=배민`, `PC 파싱 대상=매출/정산/리뷰` 선택 → 붙여넣기/파일 불러오기 → `배민 PC 파싱 반영`.
+
+## 2026-08-04 18:42 KST - PC Agent 자동 페어링 설치 티켓 구현
+
+- 요청: PC Agent 설치 시 수동 토큰 입력 없이 자동 반영되어 설치되도록 즉시 조치.
+- 원인:
+  - 기존 설치 페이지는 로그인 사용자별 토큰 발급/복사 UI를 제공하지만, 다운로드된 EXE에는 사용자 토큰이나 페어링 컨텍스트가 전달되지 않았다.
+  - 런처는 `config.json`에 `agent_token`이 없으면 tkinter 설정창을 띄우는 수동 입력 전제였다.
+- 조치:
+  - `app/api/kakao_bot.py`에 `kakao_pc_agent_install_tickets` 테이블 자동 생성, 10분 TTL 1회용 설치 티켓 발급 API `POST /api/v1/kakao-bot/agent/install-ticket`, 교환 API `POST /api/v1/kakao-bot/agent/install-ticket/exchange`를 추가했다.
+  - 장기 PC Agent 토큰은 URL에 노출하지 않고, 서버에는 설치 티켓의 SHA-256 hash만 저장하도록 했다.
+  - `download-exe?install_ticket=...` 요청 시 서버가 EXE 파일명을 `AADS-PC-Agent-Setup-{version}--ticket-{ticket}.exe`로 내려주도록 했다.
+  - `pc_agent/launcher.py`가 env/argv/다운로드 EXE 파일명에서 티켓을 감지하고, 첫 실행 시 서버에서 장기 토큰으로 교환해 `config.json`에 저장한 뒤 기존 등록·연결 흐름을 실행하도록 했다.
+  - 수동 토큰 입력창은 자동 교환 실패 시에만 fallback으로 남겼다.
+  - 기존 승인 대기 러너 `runner-af308d21`은 수동 토큰 UI 중심이라 새 자동 페어링 설계와 충돌해 반려했다.
+- 검증:
+  - `python3 -m py_compile app/api/kakao_bot.py pc_agent/launcher.py` 성공.
+  - `docker exec aads-server python -m pytest tests/unit/test_pc_agent_download.py tests/unit/test_pc_agent_launcher_startup.py` 성공: 6 passed.
+  - `tests/unit/test_pc_agent_release_guards.py`까지 포함 실행 시 컨테이너에 `/app/.github/workflows/build-pc-agent.yml`이 없어 기존 파일 의존 테스트 1건이 실패했다. 이번 변경 파일의 신규/관련 테스트는 통과했다.
+- 배포 주의:
+  - 백엔드 배포 후 최초 API 호출 시 install ticket 테이블이 자동 생성된다.
+  - 운영 반영 후 실제 사용자 PC에서 자동 설치 파일 다운로드 → 실행 → `config.json` 자동 저장 → WebSocket online 검증이 필요하다.

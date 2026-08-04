@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -33,6 +34,7 @@ CRASH_COUNT_FILE = INSTALL_DIR / ".crash_count"
 MAX_CRASHES_BEFORE_REDOWNLOAD = 3
 MAX_REDOWNLOADS_PER_HOUR = 3
 SELF_UPDATE_EXIT_CODE = 42
+INSTALL_TICKET_RE = re.compile(r"(?:--install-ticket[= ]|--ticket-)([A-Za-z0-9_-]{32,96})")
 
 # ---------------------------------------------------------------------------
 # 로깅 설정
@@ -193,6 +195,67 @@ def ask_token_gui() -> str | None:
 
     root.mainloop()
     return token_result[0]
+
+
+def _extract_install_ticket() -> str | None:
+    """Return an install ticket from env, argv, or the downloaded EXE filename."""
+    env_ticket = os.environ.get("KAKAOBOT_INSTALL_TICKET", "").strip()
+    if env_ticket:
+        return env_ticket
+
+    args = list(sys.argv[1:])
+    for idx, arg in enumerate(args[:-1]):
+        if str(arg) == "--install-ticket":
+            ticket = str(args[idx + 1]).strip()
+            if ticket:
+                return ticket
+
+    candidates = list(args)
+    candidates.append(str(getattr(sys, "executable", "")))
+    for raw in candidates:
+        text = str(raw or "")
+        if text == "--install-ticket":
+            continue
+        if text.startswith("--install-ticket="):
+            ticket = text.split("=", 1)[1].strip()
+            if ticket:
+                return ticket
+        match = INSTALL_TICKET_RE.search(text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _exchange_install_ticket(ticket: str) -> dict | None:
+    """Exchange one-time install ticket for the persistent agent token."""
+    try:
+        import json as _json
+        from urllib import request as _req
+
+        payload = _json.dumps({
+            "ticket": ticket,
+            "hostname": os.environ.get("COMPUTERNAME", "unknown"),
+            "os_info": sys.platform,
+        }).encode("utf-8")
+        req = _req.Request(
+            f"{HTTP_BASE}/api/v1/kakao-bot/agent/install-ticket/exchange",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with _req.urlopen(req, timeout=20) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        token = str(data.get("agent_token") or "").strip()
+        if not token:
+            logger.warning("설치 티켓 교환 응답에 agent_token 없음")
+            return None
+        return {
+            "server_url": str(data.get("server_url") or DEFAULT_SERVER_URL),
+            "agent_token": token,
+            "setup_method": "install_ticket",
+        }
+    except Exception as exc:
+        logger.warning("설치 티켓 자동 교환 실패: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -671,15 +734,23 @@ def main() -> None:
     # 1) 설정 로드 / 첫 실행 시 토큰 입력
     cfg = load_config()
     if cfg is None or not cfg.get("agent_token"):
-        token = ask_token_gui()
-        if not token:
-            logger.info("토큰 입력 취소 — 종료")
-            sys.exit(0)
-        cfg = {
-            "server_url": DEFAULT_SERVER_URL,
-            "agent_token": token,
-        }
-        save_config(cfg)
+        install_ticket = _extract_install_ticket()
+        if install_ticket:
+            logger.info("설치 티켓 감지 — 자동 페어링 시도")
+            cfg = _exchange_install_ticket(install_ticket)
+            if cfg:
+                save_config(cfg)
+        if cfg is None or not cfg.get("agent_token"):
+            token = ask_token_gui()
+            if not token:
+                logger.info("토큰 입력 취소 — 종료")
+                sys.exit(0)
+            cfg = {
+                "server_url": DEFAULT_SERVER_URL,
+                "agent_token": token,
+                "setup_method": "manual_token",
+            }
+            save_config(cfg)
 
     # 매 실행마다 시작프로그램 등록 보장 (idempotent)
     register_startup()

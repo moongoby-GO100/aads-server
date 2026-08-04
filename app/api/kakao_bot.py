@@ -5,6 +5,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -34,6 +35,8 @@ _ZIP_EXCLUDE_EXTS = {".pyc", ".pyo", ".exe", ".spec"}
 _ZIP_EXCLUDE_SUFFIXES = {".bak_aads"}  # 자동 백업 파일 제외
 # 에이전트 토큰 (환경변수에서 로드, 실제로는 DB 기반으로 확장 가능)
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
+PC_AGENT_INSTALL_TICKET_TTL_SECONDS = 10 * 60
+_INSTALL_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{32,96}$")
 
 # PC Agent 토큰 DB 관리
 _PC_AGENT_TOKEN_DDL = """
@@ -45,6 +48,18 @@ CREATE TABLE IF NOT EXISTS kakao_pc_agent_tokens (
     tenant_id UUID,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_used_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS kakao_pc_agent_install_tickets (
+    id SERIAL PRIMARY KEY,
+    ticket_hash VARCHAR(64) UNIQUE NOT NULL,
+    token VARCHAR(64) NOT NULL,
+    user_id TEXT NOT NULL,
+    tenant_id UUID,
+    label VARCHAR(100) DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ
 );
 """
 _PC_AGENT_TABLES_CREATED = False
@@ -73,6 +88,18 @@ async def _ensure_pc_agent_tables() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_kakao_pc_agent_tokens_owner_recent
                 ON kakao_pc_agent_tokens (user_id, tenant_id, id DESC)
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_kakao_pc_agent_install_tickets_hash
+                ON kakao_pc_agent_install_tickets (ticket_hash)
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_kakao_pc_agent_install_tickets_owner_recent
+                ON kakao_pc_agent_install_tickets (user_id, tenant_id, id DESC)
                 """
             )
         _PC_AGENT_TABLES_CREATED = True
@@ -266,7 +293,7 @@ async def agent_download(format: str = Query(default=None)):
 
 
 @router.get("/agent/download-exe")
-async def agent_download_exe():
+async def agent_download_exe(install_ticket: str | None = None):
     """PC Agent 설치 EXE 다운로드.
 
     PyInstaller로 빌드된 kakaobot-setup.exe를 스트리밍 응답.
@@ -276,6 +303,13 @@ async def agent_download_exe():
         version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
 
     exe_path = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
+    filename = f"AADS-PC-Agent-Setup-{version}.exe"
+    if install_ticket:
+        ticket = install_ticket.strip()
+        if not _INSTALL_TICKET_RE.fullmatch(ticket):
+            raise HTTPException(status_code=400, detail="invalid install_ticket")
+        filename = f"AADS-PC-Agent-Setup-{version}--ticket-{ticket}.exe"
+
     if not exe_path.exists():
         if version == "unknown":
             raise HTTPException(status_code=503, detail="PC Agent 버전을 확인할 수 없습니다")
@@ -302,8 +336,9 @@ async def agent_download_exe():
         iter_file(),
         media_type="application/octet-stream",
         headers={
-            "Content-Disposition": f'attachment; filename="AADS-PC-Agent-Setup-{version}.exe"',
+            "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(file_size),
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         },
     )
 
@@ -704,6 +739,178 @@ def _pc_agent_token_owner(current_user: dict) -> tuple[str, str | None]:
     return user_id, tenant_id
 
 
+def _new_pc_agent_token() -> str:
+    raw = f"pc-agent-{time.time()}-{os.urandom(16).hex()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:48]
+
+
+def _new_install_ticket() -> str:
+    # URL/file-name safe one-time secret. Only its hash is persisted server-side.
+    import secrets
+
+    return secrets.token_urlsafe(36)
+
+
+def _install_ticket_hash(ticket: str) -> str:
+    return hashlib.sha256(ticket.encode("utf-8")).hexdigest()
+
+
+async def _get_or_create_pc_agent_token(
+    conn: asyncpg.Connection,
+    *,
+    current_user: dict,
+    user_id: str,
+    tenant_id: str | None,
+) -> str:
+    row = await conn.fetchrow(
+        """
+        SELECT token
+          FROM kakao_pc_agent_tokens
+         WHERE user_id = $1
+           AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
+         ORDER BY id DESC
+         LIMIT 1
+        """,
+        user_id,
+        tenant_id,
+    )
+    if row:
+        return str(row["token"])
+
+    token = _new_pc_agent_token()
+    await conn.execute(
+        """
+        INSERT INTO kakao_pc_agent_tokens (token, label, user_id, tenant_id)
+        VALUES ($1, $2, $3, $4::uuid)
+        ON CONFLICT (token) DO NOTHING
+        """,
+        token,
+        str(current_user.get("email") or ""),
+        user_id,
+        tenant_id,
+    )
+    return token
+
+
+class AgentInstallTicketExchangeRequest(BaseModel):
+    """One-time install ticket exchange from the Windows PC Agent launcher."""
+
+    ticket: str = Field(..., description="대시보드 다운로드 버튼이 발급한 1회용 설치 티켓")
+    hostname: str = Field(default="", description="PC 호스트명")
+    os_info: str = Field(default="", description="OS 정보")
+
+
+@router.post("/agent/install-ticket")
+async def agent_install_ticket_create(current_user: dict = Depends(get_current_user)):
+    """Create a short-lived one-time ticket for automatic PC Agent pairing.
+
+    The dashboard never places the long-lived agent token in a URL. It receives
+    a download URL containing only this short-lived ticket; the launcher
+    exchanges it for the real token on first run and writes config.json locally.
+    """
+    await _ensure_pc_agent_tables()
+    user_id, tenant_id = _pc_agent_token_owner(current_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
+
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB 미연결")
+        ticket = _new_install_ticket()
+        ticket_hash = _install_ticket_hash(ticket)
+        async with pool.acquire() as conn:
+            token = await _get_or_create_pc_agent_token(
+                conn,
+                current_user=current_user,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO kakao_pc_agent_install_tickets
+                    (ticket_hash, token, user_id, tenant_id, label, expires_at)
+                VALUES ($1, $2, $3, $4::uuid, $5, NOW() + ($6::int * INTERVAL '1 second'))
+                RETURNING expires_at
+                """,
+                ticket_hash,
+                token,
+                user_id,
+                tenant_id,
+                str(current_user.get("email") or ""),
+                PC_AGENT_INSTALL_TICKET_TTL_SECONDS,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("pc_agent install ticket 발급 실패: %s", e)
+        raise HTTPException(status_code=500, detail="설치 티켓 발급 실패") from e
+
+    return {
+        "ticket": ticket,
+        "expires_at": str(row["expires_at"]) if row else None,
+        "ttl_seconds": PC_AGENT_INSTALL_TICKET_TTL_SECONDS,
+        "download_url": f"/api/v1/kakao-bot/agent/download-exe?install_ticket={ticket}",
+        "filename": f"AADS-PC-Agent-Setup--ticket-{ticket}.exe",
+        "message": "자동 페어링 설치 파일이 준비되었습니다.",
+    }
+
+
+@router.post("/agent/install-ticket/exchange")
+async def agent_install_ticket_exchange(req: AgentInstallTicketExchangeRequest):
+    """Exchange a one-time install ticket for the user's PC Agent token."""
+    await _ensure_pc_agent_tables()
+    ticket = req.ticket.strip()
+    if not _INSTALL_TICKET_RE.fullmatch(ticket):
+        raise HTTPException(status_code=400, detail="invalid install ticket")
+
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB 미연결")
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE kakao_pc_agent_install_tickets
+                   SET consumed_at = NOW()
+                 WHERE ticket_hash = $1
+                   AND consumed_at IS NULL
+                   AND expires_at > NOW()
+                RETURNING token, user_id, tenant_id, expires_at
+                """,
+                _install_ticket_hash(ticket),
+            )
+            if not row:
+                raise HTTPException(status_code=410, detail="설치 티켓이 만료되었거나 이미 사용되었습니다")
+            await conn.execute(
+                "UPDATE kakao_pc_agent_tokens SET last_used_at = NOW() WHERE token = $1",
+                row["token"],
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("pc_agent install ticket 교환 실패: %s", e)
+        raise HTTPException(status_code=500, detail="설치 티켓 교환 실패") from e
+
+    logger.info(
+        "pc_agent_install_ticket_exchanged user_id=%s tenant_id=%s hostname=%s os=%s",
+        row["user_id"],
+        row["tenant_id"],
+        req.hostname,
+        req.os_info,
+    )
+    return {
+        "agent_token": row["token"],
+        "server_url": "wss://aads.newtalk.kr/api/v1/pc-agent/ws",
+        "status": "paired",
+        "message": "PC Agent 자동 페어링이 완료되었습니다.",
+    }
+
+
 @router.get("/agent/token")
 async def agent_token_get(current_user: dict = Depends(get_current_user)):
     """Return the latest PC Agent token for the current SaaS user.
@@ -756,8 +963,7 @@ async def agent_token_generate(current_user: dict = Depends(get_current_user)):
     user_id, tenant_id = _pc_agent_token_owner(current_user)
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    raw = f"pc-agent-{time.time()}-{os.urandom(16).hex()}"
-    token = hashlib.sha256(raw.encode()).hexdigest()[:48]
+    token = _new_pc_agent_token()
     try:
         from app.core.db_pool import get_pool
         pool = get_pool()
