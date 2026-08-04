@@ -62,6 +62,22 @@ def test_extract_target_files_normalizes_server_and_dashboard_paths():
     assert "server:deploy.sh" in files
 
 
+def test_deploy_lock_work_lock_limit_uses_runner_env(monkeypatch):
+    from app.services import deploy_lock
+
+    monkeypatch.setenv("MAX_CONCURRENT_PER_PROJECT", "7")
+    monkeypatch.delenv("MAX_CONCURRENT_PER_PROJECT_AADS", raising=False)
+
+    assert deploy_lock._work_lock_max_concurrent("AADS") == 7
+
+
+def test_deploy_lock_work_lock_supports_parallel_group_scope():
+    from app.services import deploy_lock
+
+    assert deploy_lock._work_lock_key("AADS") == "work_lock:AADS"
+    assert deploy_lock._work_lock_key("AADS", "batch-a/b") == "work_lock:AADS:batch-a_b"
+
+
 @pytest.mark.asyncio
 async def test_find_active_file_conflict_detects_overlapping_instruction_files():
     from app.api.pipeline_runner import _find_active_file_conflict

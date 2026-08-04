@@ -323,17 +323,17 @@ async def get_lock_status():
 
 
 @router.post("/ops/locks/work/acquire")
-async def api_acquire_work_lock(project: str, session_id: str):
+async def api_acquire_work_lock(project: str, session_id: str, scope: str = ""):
     """프로젝트 작업 잠금 획득."""
     from app.services.deploy_lock import acquire_work_lock
-    return acquire_work_lock(project, session_id)
+    return acquire_work_lock(project, session_id, scope=scope)
 
 
 @router.post("/ops/locks/work/release")
-async def api_release_work_lock(project: str, session_id: str):
+async def api_release_work_lock(project: str, session_id: str, scope: str = ""):
     """프로젝트 작업 잠금 해제."""
     from app.services.deploy_lock import release_work_lock
-    return {"released": release_work_lock(project, session_id)}
+    return {"released": release_work_lock(project, session_id, scope=scope)}
 
 
 @router.post("/ops/locks/file/acquire")

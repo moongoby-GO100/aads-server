@@ -9,6 +9,8 @@ deploy_lock.py — 3단계 동시 작업 잠금 시스템
 from __future__ import annotations
 
 import logging
+import os
+import re
 import time
 from contextlib import contextmanager
 from typing import Optional
@@ -52,19 +54,35 @@ def _get_redis() -> Optional[redis_lib.Redis]:
 
 # ─── 1단계: 프로젝트 작업 잠금 (Work Lock) ─────────────────────
 
-# 프로젝트별 설정
-PROJECT_CONFIG = {
-    "AADS": {"max_concurrent": 2},
-    "KIS": {"max_concurrent": 2},
-    "GO100": {"max_concurrent": 2},
-    "SF": {"max_concurrent": 2},
-    "NTV2": {"max_concurrent": 2},
-    "NAS": {"max_concurrent": 1},
-}
+PROJECTS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _work_lock_max_concurrent(project: str) -> int:
+    """Keep Redis work lock limits aligned with the shell/API runner limit."""
+    project_key = re.sub(r"[^A-Z0-9_]", "_", (project or "").upper())
+    if project_key:
+        override = os.getenv(f"MAX_CONCURRENT_PER_PROJECT_{project_key}")
+        if override:
+            return _env_int(f"MAX_CONCURRENT_PER_PROJECT_{project_key}", 1)
+    if project_key == "NAS":
+        return _env_int("MAX_CONCURRENT_PER_PROJECT_NAS", 1)
+    return _env_int("MAX_CONCURRENT_PER_PROJECT", 6)
+
+
+def _work_lock_key(project: str, scope: str = "") -> str:
+    clean_scope = re.sub(r"[^A-Za-z0-9_.:-]", "_", (scope or "").strip())
+    return f"work_lock:{project}:{clean_scope}" if clean_scope else f"work_lock:{project}"
 
 
 def acquire_work_lock(
-    project: str, session_id: str, timeout: int = 7200
+    project: str, session_id: str, timeout: int = 7200, scope: str = ""
 ) -> dict:
     """
     프로젝트 작업 잠금 획득.
@@ -74,8 +92,8 @@ def acquire_work_lock(
     if r is None:
         return {"acquired": True, "holder": None, "queue_position": 0}
 
-    key = f"work_lock:{project}"
-    max_concurrent = PROJECT_CONFIG.get(project, {}).get("max_concurrent", 2)
+    key = _work_lock_key(project, scope)
+    max_concurrent = _work_lock_max_concurrent(project)
 
     try:
         # 현재 활성 세션 수 확인
@@ -95,21 +113,24 @@ def acquire_work_lock(
         # 잠금 획득
         r.hset(key, session_id, str(time.time()))
         r.expire(key, timeout)
-        logger.info("[work_lock] 획득: %s/%s (활성: %d/%d)", project, session_id, len(active) + 1, max_concurrent)
-        return {"acquired": True, "holder": None, "queue_position": 0}
+        logger.info(
+            "[work_lock] 획득: %s/%s scope=%s (활성: %d/%d)",
+            project, session_id, scope or "project", len(active) + 1, max_concurrent,
+        )
+        return {"acquired": True, "holder": None, "queue_position": 0, "scope": scope or ""}
     except Exception as e:
         logger.warning("[work_lock] Redis 오류 — 잠금 없이 진행: %s", e)
         return {"acquired": True, "holder": None, "queue_position": 0}
 
 
-def release_work_lock(project: str, session_id: str) -> bool:
+def release_work_lock(project: str, session_id: str, scope: str = "") -> bool:
     """프로젝트 작업 잠금 해제."""
     r = _get_redis()
     if r is None:
         return True
     try:
-        r.hdel(f"work_lock:{project}", session_id)
-        logger.info("[work_lock] 해제: %s/%s", project, session_id)
+        r.hdel(_work_lock_key(project, scope), session_id)
+        logger.info("[work_lock] 해제: %s/%s scope=%s", project, session_id, scope or "project")
         return True
     except Exception as e:
         logger.warning("[work_lock] 해제 실패: %s", e)
@@ -256,7 +277,7 @@ def get_all_lock_status() -> dict:
         return {"status": "redis_unavailable", "projects": {}}
 
     result = {}
-    projects = ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"]
+    projects = list(PROJECTS)
     try:
         for proj in projects:
             proj_status = {
@@ -266,10 +287,16 @@ def get_all_lock_status() -> dict:
             }
             # 작업 잠금
             work = r.hgetall(f"work_lock:{proj}")
+            scoped_work = {}
+            for key in r.scan_iter(match=f"work_lock:{proj}:*", count=100):
+                scope = key.replace(f"work_lock:{proj}:", "", 1)
+                scoped_work[scope] = list(r.hgetall(key).keys())
             proj_status["work_lock"] = {
                 "active_sessions": list(work.keys()),
                 "count": len(work),
-                "max": PROJECT_CONFIG.get(proj, {}).get("max_concurrent", 2),
+                "scoped_sessions": scoped_work,
+                "scoped_count": sum(len(items) for items in scoped_work.values()),
+                "max": _work_lock_max_concurrent(proj),
             }
             # 파일 잠금
             for key in r.scan_iter(match=f"file_lock:{proj}:*", count=100):
@@ -295,9 +322,9 @@ def get_all_lock_status() -> dict:
 # ─── Shell 스크립트 연동 헬퍼 ──────────────────────────────────
 
 
-def shell_acquire_work_lock(project: str, job_id: str) -> bool:
+def shell_acquire_work_lock(project: str, job_id: str, scope: str = "") -> bool:
     """pipeline-runner.sh에서 curl로 호출하는 간편 인터페이스."""
-    result = acquire_work_lock(project, job_id)
+    result = acquire_work_lock(project, job_id, scope=scope)
     return result["acquired"]
 
 
