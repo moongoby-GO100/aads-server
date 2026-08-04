@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-04 20:38 KST - PC Agent auto-pair production deployment verification
+
+- Request: Complete commit/push/production deployment reporting for the PC Agent automatic pairing install flow.
+- Result:
+  - Backend route registration is live in production: `/api/v1/kakao-bot/agent/install-ticket`, `/api/v1/kakao-bot/agent/token`, and `/api/v1/kakao-bot/agent/download-exe`.
+  - Dashboard `origin/main` is at `80ef273df6ab` and the dashboard blue-green deploy completed with green active.
+- Verification:
+  - `POST https://aads.newtalk.kr/api/v1/kakao-bot/agent/install-ticket` returned 401 instead of 404, confirming the authenticated route exists.
+  - `GET https://aads.newtalk.kr/api/v1/kakao-bot/agent/token` returned 401 instead of 404.
+  - `GET https://aads.newtalk.kr/api/v1/kakao-bot/agent/download-exe` returned 200.
+  - `GET https://aads.newtalk.kr/api/v1/health` returned status `ok`.
+  - `GET https://aads.newtalk.kr/kakaobot/agent` returned HTTP 200 after dashboard deployment.
+- Note:
+  - Dashboard deploy script frontend QA returned `UNKNOWN`, so manual HTTP/API/container fallback verification was used.
+  - Recent backend logs only showed unrelated `claude_ai_usage_fetch_failed: 403` warnings during this window.
+
 ## 2026-08-04 18:46 KST - Baemin authenticated-session final verification reconciliation
 
 - Request: Resolve the previous final-report ledger conflict and continue Baemin server-side automatic parsing verification to completion.
