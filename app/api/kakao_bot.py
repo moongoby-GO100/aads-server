@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS kakao_pc_agent_tokens (
     id SERIAL PRIMARY KEY,
     token VARCHAR(64) UNIQUE NOT NULL,
     label VARCHAR(100) DEFAULT '',
+    user_id TEXT,
+    tenant_id UUID,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_used_at TIMESTAMPTZ
 );
@@ -60,6 +62,19 @@ async def _ensure_pc_agent_tables() -> None:
             return
         async with pool.acquire() as conn:
             await conn.execute(_PC_AGENT_TOKEN_DDL)
+            await conn.execute(
+                """
+                ALTER TABLE kakao_pc_agent_tokens
+                    ADD COLUMN IF NOT EXISTS user_id TEXT,
+                    ADD COLUMN IF NOT EXISTS tenant_id UUID
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_kakao_pc_agent_tokens_owner_recent
+                ON kakao_pc_agent_tokens (user_id, tenant_id, id DESC)
+                """
+            )
         _PC_AGENT_TABLES_CREATED = True
     except Exception as e:
         logger.error("pc_agent 토큰 테이블 생성 실패: %s", e)
@@ -682,10 +697,65 @@ async def msgbot_logs(bot_token: str = Query(...), limit: int = Query(default=50
     }
 
 
+def _pc_agent_token_owner(current_user: dict) -> tuple[str, str | None]:
+    """Return the current SaaS user/tenant owner for PC Agent token rows."""
+    user_id = str(current_user.get("user_id") or current_user.get("id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip() or None
+    return user_id, tenant_id
+
+
+@router.get("/agent/token")
+async def agent_token_get(current_user: dict = Depends(get_current_user)):
+    """Return the latest PC Agent token for the current SaaS user.
+
+    The raw token is stored for the legacy PC Agent verifier, so the dashboard
+    can recover it when a user revisits the install page.
+    """
+    await _ensure_pc_agent_tables()
+    user_id, tenant_id = _pc_agent_token_owner(current_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
+
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT token, label, last_used_at
+                      FROM kakao_pc_agent_tokens
+                     WHERE user_id = $1
+                       AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
+                     ORDER BY id DESC
+                     LIMIT 1
+                    """,
+                    user_id,
+                    tenant_id,
+                )
+                if row:
+                    return {
+                        "token": row["token"],
+                        "label": row["label"] or "",
+                        "last_used_at": str(row["last_used_at"]) if row["last_used_at"] else None,
+                    }
+    except Exception as e:
+        logger.error("pc_agent 토큰 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="토큰 조회 실패") from e
+
+    return {
+        "token": "",
+        "message": "발급된 PC Agent 토큰이 없습니다. 토큰 발급하기를 눌러 생성하세요.",
+    }
+
+
 @router.post("/agent/token")
-async def agent_token_generate():
+async def agent_token_generate(current_user: dict = Depends(get_current_user)):
     """PC Agent 전용 토큰 발급 + DB 저장. 대시보드 '토큰 발급하기' 버튼에서 호출."""
     await _ensure_pc_agent_tables()
+    user_id, tenant_id = _pc_agent_token_owner(current_user)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
     raw = f"pc-agent-{time.time()}-{os.urandom(16).hex()}"
     token = hashlib.sha256(raw.encode()).hexdigest()[:48]
     try:
@@ -694,8 +764,15 @@ async def agent_token_generate():
         if pool:
             async with pool.acquire() as conn:
                 await conn.execute(
-                    "INSERT INTO kakao_pc_agent_tokens (token) VALUES ($1) ON CONFLICT (token) DO NOTHING",
+                    """
+                    INSERT INTO kakao_pc_agent_tokens (token, label, user_id, tenant_id)
+                    VALUES ($1, $2, $3, $4::uuid)
+                    ON CONFLICT (token) DO NOTHING
+                    """,
                     token,
+                    str(current_user.get("email") or ""),
+                    user_id,
+                    tenant_id,
                 )
     except Exception as e:
         logger.error("pc_agent 토큰 DB 저장 실패: %s", e)
