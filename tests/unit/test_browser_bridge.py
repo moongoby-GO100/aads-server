@@ -239,6 +239,8 @@ def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
     urls = BrowserBridgeService._active_api_route_urls("8102")
 
     assert urls[0] == "http://127.0.0.1:8102/api/v1/pc-agent/route-execute"
+    assert "http://host.docker.internal:8102/api/v1/pc-agent/route-execute" in urls
+    assert "http://172.17.0.1:8102/api/v1/pc-agent/route-execute" in urls
     assert "http://aads-server-green:8080/api/v1/pc-agent/route-execute" in urls
 
 
@@ -307,7 +309,12 @@ async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) 
         required_capabilities=["interactive_browser"],
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 4
+    assert calls[:3] == [
+        "http://127.0.0.1:8102/api/v1/pc-agent/route-execute",
+        "http://host.docker.internal:8102/api/v1/pc-agent/route-execute",
+        "http://172.17.0.1:8102/api/v1/pc-agent/route-execute",
+    ]
     assert result is not None
     assert result["message"] == "파일을 찾을 수 없습니다"
     assert result["result"]["result"]["missing"] == ["C:\\AADS_UPLOAD_PROBE_DO_NOT_EXIST.jpg"]

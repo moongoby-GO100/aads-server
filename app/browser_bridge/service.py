@@ -858,6 +858,12 @@ class BrowserBridgeService:
     @classmethod
     def _active_api_route_urls(cls, active_port: str) -> list[str]:
         urls = [f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute"]
+        urls.extend(
+            [
+                f"http://host.docker.internal:{active_port}/api/v1/pc-agent/route-execute",
+                f"http://172.17.0.1:{active_port}/api/v1/pc-agent/route-execute",
+            ]
+        )
         if active_port == "8100":
             urls.append("http://aads-server:8080/api/v1/pc-agent/route-execute")
         elif active_port == "8102":

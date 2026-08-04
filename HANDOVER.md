@@ -5836,3 +5836,23 @@
   - 로컬 기본 Python에는 pytest가 없고 `.venv`의 Python symlink가 깨져 있어 배포 전 로컬 pytest는 미실행 상태다.
 - 남은 주의:
   - 현재 PC Agent 배민 화면은 로그인 페이지라 실데이터 수집은 아직 불가하다. CEO PC에서 배민 로그인 완료 후 같은 세션으로 `/sync`를 실행해야 실제 매출/정산/리뷰 원장 반영을 검증할 수 있다.
+
+## 2026-08-05 00:22 KST - 배민 중화점 PC Agent 직접 접속/수집 재검증
+
+- 요청: 현재 연동 설정에 저장된 아이디/비밀번호로 PC Agent 브라우저 직접 접속 후 매출·정산·리뷰 등 수집 가능한 데이터 테스트.
+- 실측:
+  - DB `yeoljeong_platform_accounts` 기준 중화점 배민 계정은 `username=yunhee1`, `collection_mode=browser-automation`이며 `password`, `password_enc`, `storage_state_path`가 모두 없었다.
+  - 보호 JSON 원장 `app/data/yeoljeong_finance/platform_accounts.json`에도 중화점 배민 비밀번호 또는 storage_state가 없었다.
+  - Credential Vault `AADS/baemin` 필터 결과 등록 자격증명은 없었다.
+  - Browser Bridge 업무 세션 `bb-d25c615b8bd3`는 생성됐고 배민 로그인 화면 접근 및 아이디 입력은 성공했다.
+  - 같은 세션으로 운영 컨테이너에서 `svc.sync_delivery()`를 실행한 결과 `PC_AGENT_LOGIN_REQUIRED`, sales/settlements/reviews 각 0건이었다.
+- 조치:
+  - 컨테이너 내부 PC Agent fallback이 호스트 포트만 바라보다 실패하는 문제를 줄이기 위해 `app/browser_bridge/service.py`의 active API route 후보에 `host.docker.internal`, `172.17.0.1` 후보를 추가했다.
+  - `tests/unit/test_browser_bridge.py`에 신규 URL 후보 검증을 반영했다.
+- 검증:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server-green python -m pytest tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_delivery_collectors.py` 성공: 35 passed.
+  - 운영 배포 이미지 기준 `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py` 성공: 10 passed.
+  - PC Agent 화면 캡처: `https://aads.newtalk.kr/screenshots/screenshot_20260805_002206_cd9d45.png`.
+- 남은 주의:
+  - 현재 저장값만으로는 비밀번호 자동 로그인 테스트가 불가하다. 운영 설정 또는 Credential Vault에 배민 비밀번호를 등록하거나, CEO PC 배민 로그인 완료 세션을 유지한 뒤 같은 `browser_session_id`로 수집을 재실행해야 한다.
+  - 운영 컨테이너 배포 전에는 `app/browser_bridge/service.py` 보정이 실제 운영 이미지에 반영되지 않는다.
