@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-07-31
+최종 업데이트: 2026-08-04
+
+## 2026-08-04
+- AADS-PC-AGENT-TOKEN-UI-P0-20260804: P0 PC Agent 신규 사용자 설치 시 토큰 생성 UI 미표시 문제 수정. 확인된 원인: ①`launcher.py`가 config.json에 `agent_token` 없으면 설정창 진입 후 토큰 위치를 못 찾음, ②백엔드 `GET /agent/token`이 없어 설치 페이지에서 기존 토큰 조회 불가, ③설치 페이지(`/kakaobot/agent`)에 토큰 발급/복사 섹션이 없어 신규 사용자가 토큰 생성 위치를 찾지 못함. 조치: `app/api/kakao_bot.py`에 `GET /agent/token` (Depends(get_current_user), user_id+tenant_id 기준 최신 토큰 반환, 없으면 빈 token+안내 메시지)와 `kakao_pc_agent_tokens` 테이블 `ADD COLUMN IF NOT EXISTS user_id TEXT, tenant_id UUID` 마이그레이션 및 `idx_kakao_pc_agent_tokens_owner_recent` 인덱스를 추가했다(커밋 `a71e9f8f`). 대시보드 `src/app/kakaobot/agent/page.tsx`에 '에이전트 등록 토큰' 카드(GET 조회→없으면 발급 버튼, 있으면 토큰+복사+재발급) 추가, FAQ에서 잘못된 포트 8080 제거하고 토큰/방화벽/WebSocket 기준 안내로 교체했다(커밋 `8013586`). 설치 가이드 step 4의 '아래 에이전트 등록 섹션' 문구를 '위 에이전트 등록 토큰 섹션'으로 교정(토큰 카드가 가이드 상단에 위치), `settings/page.tsx` `handleGenerateToken`에 `!res.ok` 체크 추가 및 서버 오류 메시지 표시 보강(커밋 `c744d5d`). gksdk7466 판정: id=40/gksdk7466@gmail.com role=user(고객 워크스페이스 owner), id=df746609/gksdk7466@naver.com role=admin(internal). 특정 사용자 하드코딩 없음—현재 로그인 user_id+tenant_id 기준 동작. 검증: `python3 -m py_compile app/api/kakao_bot.py` 통과, `npx eslint src/app/kakaobot/agent/page.tsx settings/page.tsx` 경고 없음, `npx tsc --noEmit` exit=0, backend reload+health-check HTTP 200, 대시보드 빌드 배포 예정.
 
 ## 2026-08-03
 - AADS-RUNNER-ADMIN-MODEL-CLAIM-PATCH-20260803: 08:49 KST 기준 CEO 지시(`현재 러너 작업모델이 어드민 설정값으로 반영이 안되고 있는듯하다`, `즉시 권장 조치 진행하고 배포까지`)에 따라 Shell Pipeline Runner의 일반 claim 경로가 `worker_model`만 반환해 제출 단계에서 계산된 어드민 `model` 컬럼을 버리던 문제를 수정했다. `scripts/pipeline-runner.sh`와 `scripts/pipeline-runner.sh.local`의 일반 runner `model_return_expr`를 `COALESCE(worker_model, model, auto)`로 통일해, 직접 override가 없으면 `/admin/model-routing`의 `runner_model_config` 1순위 모델이 실행 모델로 내려간다. 회귀 테스트 `tests/unit/test_pipeline_runner_script_guards.py`에 일반 claim이 `model` 컬럼을 사용하는지 검증을 추가했다. 검증: `bash -n` 2개 스크립트 통과, `python3 -m py_compile app/api/pipeline_runner.py app/services/pipeline_runner_service.py` 통과, 컨테이너 `docker exec aads-server python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py` 10 passed. 로컬 pytest는 미설치로 실패해 컨테이너 테스트로 대체했다. 08:55 KST `deploy.sh bluegreen` 배포 완료, active 슬롯은 `:8102/aads-server-green`, health/DB/채팅/LLM 검증 통과, 프론트 변경 없음으로 QA skip. 배포 후 active 컨테이너에서 `_get_model_for_size('M') = codex:gpt-5.6-luna` 확인. 단, 08:57 KST 기준 NTV2/GO100 러너 2건이 실행 중이라 host `aads-pipeline-runner.service` 재시작은 작업 중단 방지를 위해 보류했다.
@@ -233,3 +236,21 @@
 - 신규 문서: `docs/reports/20260802_OHVIS_5SEC_IMMEDIATE_RESPONSE_ARCHITECTURE.md`.
 - 현재 실측: 최근 7일 `chat_turn_executions`는 `completed=169`, `interrupted=31`, `running=2`; 30분 초과 running/retrying stale은 0건; 최근 7일 assistant 소요시간 보유는 192/334건.
 - 구현 권장: P0는 additive migration + backend SSE/job 원장 + dashboard 진행 UI가 필요한 L 규모 작업이므로 Pipeline Runner로 `AADS-OHVIS-5SEC-IMMEDIATE-RESPONSE-P0-20260802`를 제출하는 방식이 적절하다.
+
+## 2026-08-04 10:39 KST - NTV2/V1 구뉴톡 이미지정렬 `{GoodsCode_15}` 토큰 제외
+
+- 요청: 구뉴톡 상품 이미지정렬 후 생성 HTML에 `{GoodsCode_15}`가 노출되는 문제 제거.
+- 원인: 정렬 저장 컬럼에는 토큰이 없었고, 기존 `goods_detail.DanharooDescription` 262건 끝부분에 `<br />` 뒤 `{GoodsCode_15}` 템플릿 토큰이 남아 있었다.
+- 조치:
+  - `/home/danharoo/www/application/controllers/products.php`에 정렬 이미지 공통 필터 `_get_existing_sort_images()`를 추가하고, 정렬 화면/API/MO/Skin8 상세 생성에서 `{}` 포함 값, 경로 값, 실제 썸네일 파일이 아닌 값을 제외하도록 했다.
+  - `/home/danharoo/www/application/views/products/goods_img_sorting_test1.php`의 저장/상세저장 JS에 `getValidSortImageTitle()`을 추가해 클라이언트에서도 `{GoodsCode_15}` 같은 토큰을 hidden sort list에 싣지 않게 했다.
+  - DB `goods_detail.DanharooDescription`에서 literal `{GoodsCode_15}` 잔여 토큰 262건을 제거했다. 정렬 컬럼 `GoodsSortImg1~4`는 변경 대상 0건.
+- 백업:
+  - `/home/danharoo/www/application/controllers/products.php.bak_aads_20260804_goodscode15_filter`
+  - `/home/danharoo/www/application/views/products/goods_img_sorting_test1.php.bak_aads_20260804_goodscode15_filter`
+- 검증:
+  - `php -l /home/danharoo/www/application/controllers/products.php` 성공.
+  - `php -l /home/danharoo/www/application/views/products/goods_img_sorting_test1.php` 성공.
+  - DB 잔여 `{GoodsCode_15}` count: `GoodsSortImg1~4=0`, `Description=0`, `DanharooDescription=0`.
+  - `https://newtalk.kr/products/goods_img_sorting_test1/set1600k18` 응답에서 `{GoodsCode_15}` 미검출.
+- 상태: 운영 파일 직접 핫픽스 반영. 커밋/푸시/정식 배포 없음.
