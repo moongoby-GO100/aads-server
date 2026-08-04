@@ -3171,6 +3171,10 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
         else:
             collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
+            collection_account = dict(account)
+            if service == "baemin" and browser_auth["storage_state_path"]:
+                collection_account["storage_state_path"] = browser_auth["storage_state_path"]
+            can_use_stored_browser_session = service == "baemin" and bool(browser_auth["storage_state_path"])
             if collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:
                 result = {
                     "status": "upload_required",
@@ -3179,7 +3183,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                     "diagnostics": {"collection_mode": collection_mode},
                     "message": "배민 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
                 }
-            elif not _has_secret_value(account, "password"):
+            elif not _has_secret_value(account, "password") and not can_use_stored_browser_session:
                 result = {
                     "status": "credential_required",
                     "error_code": "CREDENTIAL_REQUIRED",
@@ -3187,10 +3191,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                     "message": "배민 계정 비밀번호가 등록되지 않았습니다.",
                 }
             else:
-                secret = _decrypt_secret(str(account.get("password_enc") or ""))
-                collection_account = dict(account)
-                if service == "baemin" and browser_auth["storage_state_path"]:
-                    collection_account["storage_state_path"] = browser_auth["storage_state_path"]
+                secret = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
                 result = collect_account(collection_account, secret, date_from.isoformat(), date_to.isoformat())
                 if service == "baemin" and browser_auth["browser_session_id"]:
                     result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]

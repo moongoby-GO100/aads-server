@@ -680,6 +680,54 @@ def test_sync_delivery_passes_baemin_storage_state_to_collector(tmp_path, monkey
     ] == "storage_state"
 
 
+def test_sync_delivery_uses_baemin_storage_state_without_password(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    storage_state = tmp_path / "baemin-storage-state.json"
+    storage_state.write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fake_collect(account, password, date_from, date_to):
+        assert password == ""
+        assert account["storage_state_path"] == str(storage_state)
+        return {
+            "status": "partial",
+            "error_code": "AUTHENTICATED_NO_ROWS",
+            "records": {},
+            "diagnostics": {"auth_mode": "storage_state"},
+        }
+
+    monkeypatch.setattr(collectors, "collect_account", fake_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+            "storage_state_path": str(storage_state),
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "partial"
+    assert result["summary"][0]["error_code"] == "AUTHENTICATED_NO_ROWS"
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (
