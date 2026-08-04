@@ -1056,6 +1056,7 @@ async def get_job(
         "model": _record_get(row, "model") or "",
         "worker_model": _record_get(row, "worker_model") or "",
         "actual_model": _record_get(row, "actual_model") or "",
+        "actual_changed_files": _record_get(row, "actual_changed_files") or [],
         "size": _record_get(row, "size") or "M",
         **_runner_display_status(row["status"], row["phase"], _record_get(row, "error_detail")),
         "started_at": row["started_at"].isoformat() if _record_get(row, "started_at") else None,
