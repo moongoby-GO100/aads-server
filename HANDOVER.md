@@ -5736,3 +5736,26 @@
 - 배포 주의:
   - 백엔드 배포 후 최초 API 호출 시 install ticket 테이블이 자동 생성된다.
   - 운영 반영 후 실제 사용자 PC에서 자동 설치 파일 다운로드 → 실행 → `config.json` 자동 저장 → WebSocket online 검증이 필요하다.
+
+## 2026-08-04 KST - 검수 피드백 후속 수정
+
+- 요청: 이전 작업(PC Agent 자동 페어링 설치 티켓) 검수 피드백 반영.
+- 조치:
+  - `aads-dashboard/src/app/kakaobot/settings/page.tsx`: 에이전트 등록 토큰 카드를 자동 페어링 도입 후 상태에 맞게 수정. 테두리 강조 제거, '수동 백업' 뱃지 추가, 설명 문구를 '자동 설치가 실패한 경우에만 이 토큰을 사용하세요'로 변경. 대시보드 커밋 `0f26b84`, 푸시 완료.
+  - `scripts/deploy_dashboard_bg.sh`: bluegreen 인자 제거 + disown 방식 백그라운드 분리 + 로그 개선. 미커밋 상태였던 변경사항을 커밋 `e4b00397`으로 반영.
+  - `nginx-aads-upstream.conf`: green(8102)이 현재 활성이므로 주석 수정 (`d0200971`). 대시보드 배포 중 deploy.sh가 nginx 파일을 덮어씀 — 배포 후 재확인 필요.
+  - `docker-compose.prod.yml`: healthcheck URL `/api/v1/health` → `/health/live` (`d0200971`).
+  - 무관한 staged/unstaged 파일들을 논리적 단위로 분리 커밋:
+    - `181c0191`: work lock scope 기능 (ops.py, deploy_lock.py, tests)
+    - `73e888e4`: pipeline actual_changed_files + migration 112
+    - `c6dc49d9`: DEV-FLOW v1.2 의존성 정책 + migration 117
+    - `7a6f0855`: 체인지로그
+    - `3bdafc9d`: 열정재무 데이터 마스킹
+- 검증:
+  - `python3 -m pytest tests/unit/test_pipeline_runner_reliability.py -q`: 12 passed.
+  - pre-commit hook 통과 (Python 검수, API 키 감지).
+  - 대시보드 빌드: Next.js 16 webpack 빌드 진행 중.
+- 잔여:
+  - 대시보드 배포 후 `/kakaobot/settings` 토큰 카드 UI 운영 확인 필요.
+  - nginx 주석 대시보드 배포 후 working tree 수정본 확인 및 재커밋 필요 여부 점검.
+  - migration 112, 117 운영 DB에 아직 적용 안 됨 — 다음 마이그레이션 실행 시 반영.
