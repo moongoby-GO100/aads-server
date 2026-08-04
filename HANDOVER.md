@@ -5878,3 +5878,21 @@
 - 남은 주의:
   - 현재 저장값만으로는 비밀번호 자동 로그인 테스트가 불가하다. 운영 설정 또는 Credential Vault에 배민 비밀번호를 등록하거나, CEO PC 배민 로그인 완료 세션을 유지한 뒤 같은 `browser_session_id`로 수집을 재실행해야 한다.
   - 운영 컨테이너 배포 전에는 `app/browser_bridge/service.py` 보정이 실제 운영 이미지에 반영되지 않는다.
+
+## 2026-08-05 07:33 KST - FB 연동관리 mockup-v2 integrations 운영 동일화
+
+- 요청: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/mockup-v2.html#integrations` 디자인과 입력 폼을 운영 `index.html#auth-invite`에 동일하게 반영.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`의 연동관리 KPI를 시안과 같은 4개 카드로 정리했다.
+  - 연동 설정 바로가기 4개 카드에 시안형 로고, 상태 배지, 서비스 설명, 태그 구조를 반영했다.
+  - 빠른 설정을 시안과 같은 4개 버튼(판매채널 추가, 은행 계좌 연결, 매입처 등록, 계산서 수집)으로 정리했다.
+  - `+ 연동 추가` 드로어는 메뉴 선택 화면을 유지하고, 판매채널/은행/매입처/홈택스별 전용 입력폼으로 이동하도록 유지했다.
+  - 연동 목록 상세 테이블을 시안의 8열 구조(구분, 서비스, 사업자·지점, 수집 데이터, 필수 인증값, 최근 동기화, 상태, 설정)로 바꾸고, 저장된 연동마다 `수정` 버튼을 항상 노출해 우측 수정 페이지를 열도록 했다.
+  - 기준 시안 파일 `mockup-v2.html`은 수정하지 않았다.
+- 검증:
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` 성공.
+  - 인라인 `<script>` `new Function()` 파싱 성공.
+  - DOM 구간 검증 성공: 연동관리 4 KPI, 4 서비스 카드, 4 빠른설정, 8열 목록, 드로어 설정/수정 표식 확인.
+  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?codex_check=202608050744#auth-invite` 응답에서 신규 표식 확인.
+- 남은 주의:
+  - 비로그인 브라우저 E2E는 게이트 화면에서 막혀 내부 연동관리 클릭 검증을 수행하지 못했다. HTML/API 표식 검증으로 대체했다.
