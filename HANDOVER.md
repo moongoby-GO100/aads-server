@@ -17,9 +17,11 @@
   - `python3 -m py_compile app/api/device.py app/main.py` passed.
   - Container route import confirmed `/devices/android/auto-register` is present in the device router.
   - Dashboard `npx tsc --noEmit` and `npx eslint src/app/ops/mobile-agent/page.tsx` passed.
-  - Android release APK build was started through `android_agent/build_release_apk.sh` using Docker Android SDK fallback; result must be checked before final deploy report.
+  - Android release APK build completed through `android_agent/build_release_apk.sh` using Docker Android SDK fallback.
+  - `android_agent/dist/aads-agent-release.apk`, `aads-agent-fresh.apk`, and `aads-agent-fresh-release.apk` were synchronized to the 2026-08-04 22:16 KST build output.
+  - `android_agent/build_release_apk.sh` now copies future release builds to all served release/fresh APK filenames so the dashboard manifest cannot point to a stale APK.
 - Pending:
-  - Build result, selected commit/push, blue-green deploy, public API health, Android manifest/auto-register HTTP verification.
+  - Final commit/push, blue-green deploy, public API health, Android manifest/auto-register HTTP verification.
 
 ## 2026-08-04 20:38 KST - PC Agent auto-pair production deployment verification
 
@@ -5797,3 +5799,22 @@
   - 대시보드 배포 후 `/kakaobot/settings` 토큰 카드 UI 운영 확인 필요.
   - nginx 주석 대시보드 배포 후 working tree 수정본 확인 및 재커밋 필요 여부 점검.
   - migration 112, 117 운영 DB에 아직 적용 안 됨 — 다음 마이그레이션 실행 시 반영.
+## 2026-08-04 22:20 KST - 알림 확인 클릭 시 채팅 세션 이동 반영
+
+- 요청: 알람/푸시 알림의 `확인` 클릭 시 완료된 채팅 세션으로 바로 이동되도록 조치.
+- 서버 조치:
+  - `app/services/push_notifications.py`의 채팅 완료 Web Push payload에 `actions: [{ action: "open-chat", title: "확인" }]`를 추가했다.
+  - payload 최상위 `url`과 `data.url`을 모두 `/chat#<session_id>`로 내려 보내도록 보강했다.
+- 프론트 연계:
+  - 대시보드 커밋 `f36ef5c`에서 `public/sw.js`, `src/services/pushNotifications.ts`, `src/app/chat/page.tsx`가 같은 세션 URL 규칙을 사용한다.
+  - 운영 `https://aads.newtalk.kr/sw.js`에서 `notificationclick`이 열린 창을 `navigate(url)` 후 `focus()`하고, 열린 창이 없으면 `openWindow(url)` 하는 것을 확인했다.
+- 검증:
+  - 백엔드 커밋 `0b51bd47`, 대시보드 커밋 `f36ef5c`는 각각 원격 `main`에 포함됐다.
+  - 2026-08-04 22:19 KST 기준 `aads-server`와 `aads-dashboard` Docker 컨테이너 모두 `healthy`.
+  - `curl -fsS http://127.0.0.1:8100/health` 성공.
+  - `curl -fsS https://aads.newtalk.kr/sw.js`에서 배포된 서비스워커의 세션 이동 코드 확인.
+- 배포:
+  - 백엔드 blue-green 배포 완료. active 슬롯은 `aads-server:8100`.
+  - 대시보드 blue-green 배포 완료. active 슬롯은 `aads-dashboard:3100`, 외부 헬스체크 통과.
+- 남은 주의:
+  - 기존 사용자의 브라우저가 오래된 서비스워커를 잡고 있으면 다음 service worker update/refresh 후 새 클릭 동작이 적용된다.
