@@ -2779,6 +2779,7 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계정 등록 권한이 없습니다")
     rows = _read("platform_accounts")
+    account_id = str(payload.get("account_id") or payload.get("server_account_id") or "").strip()
     service = str(payload.get("service") or "").strip()
     username = str(payload.get("username") or "").strip()
     if not service or not username:
@@ -2786,17 +2787,23 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     if service not in CONNECTOR_LABELS:
         raise HTTPException(status_code=400, detail="지원하지 않는 연동 서비스입니다")
     business_id, branch = _normalize_connector_scope(service, payload.get("business_id"), payload.get("branch"))
-    existing = next(
-        (
-            row
-            for row in rows
-            if row.get("service") == service
-            and row.get("username") == username
-            and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
-            and str(row.get("business_id") or "") == business_id
-        ),
-        None,
-    )
+    existing = None
+    if account_id:
+        existing = next((row for row in rows if str(row.get("id") or "") == account_id), None)
+        if not existing:
+            raise HTTPException(status_code=404, detail="수정할 연동 계정을 찾지 못했습니다")
+    if existing is None:
+        existing = next(
+            (
+                row
+                for row in rows
+                if row.get("service") == service
+                and row.get("username") == username
+                and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
+                and str(row.get("business_id") or "") == business_id
+            ),
+            None,
+        )
     now = _now()
     record = existing or {"id": str(uuid4()), "created_at": now}
     collection_mode = str(payload.get("collection_mode") or "browser-automation").strip()

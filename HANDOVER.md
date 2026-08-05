@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-05 17:20 KST - FB integration edit save and list filters
+
+- Request: Fix the integration setup screen where existing saved values did not persist after clicking edit and save; also add grouping/search to the integration list.
+- Changes:
+  - `app/api/yeoljeong_finance.py`: `/accounts` accepts `account_id`/`server_account_id` for edit saves.
+  - `app/services/yeoljeong_finance_service.py`: account upsert can update an explicit existing account id and preserves encrypted password/account/business-number secrets when the edit form does not re-enter them.
+  - `app/static/apps/yeoljeong-finance/index.html`: edit-save flow now preserves existing masked account/business registration values, server account id, status fields, and saved metadata when unchanged values are not re-entered.
+  - Added stale server-account fallback: if a saved UI row points to an old server account id, the save path retries the same service/username/business/branch upsert instead of leaving the edit as a failed save.
+  - Added category/status/search filters to the integration detail table, and reused the same filtered result in the settings-tab integration cards.
+  - `tests/unit/test_yeoljeong_finance_service.py` and `tests/unit/test_yeoljeong_finance_print_static.py`: added regression checks for edit-save preservation and integration list filters.
+- Verification:
+  - Container pytest passed: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` -> 63 passed.
+  - Container pytest passed: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_delivery_collectors.py` -> 30 passed, 1 Starlette deprecation warning.
+  - Inline JS syntax check passed: `node -e "...new vm.Script(...)"` -> 2 inline scripts parsed.
+  - Public URL status check passed before final deploy: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` -> HTTP 200.
+- Pending:
+  - Browser click E2E was not run because the host has `playwright-core` but no browser executable, and the container has Python Playwright but no bundled browser path. Static, API, and screenshot verification were used instead.
+  - Worktree still contains unrelated pre-existing dirty files outside this request.
+
 ## 2026-08-05 16:43 KST - FB integration auto-sync priority
 
 - Request: Make integration automation the top priority, and clearly show which ID/PW/session values the CEO must enter in integration settings.

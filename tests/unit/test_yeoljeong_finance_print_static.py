@@ -80,6 +80,22 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert 'openIntegrationDetail("edit-form", service)' in HTML
     assert 'form.classList.add("is-editing")' in HTML
     assert "editIntegrationId" in HTML
+    assert "account_id: existingIntegration?.serverAccountId" in HTML
+    assert "await persistSettingsToServer()" in HTML
+    assert "accountNoMasked = String(data.accountNoMasked" in HTML
+    assert "existingIntegration?.accountNoMasked" in HTML
+    assert "serverAccount?.account_no_masked" in HTML
     assert 'name="passwordConfirm"' not in form_html
     assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
     assert "rerenderIntegrationConnectForm(service, form)" in HTML
+
+
+def test_integration_lists_have_category_status_and_search_filters():
+    assert 'id="integrationCategoryFilter"' in HTML
+    assert 'id="integrationStatusFilter"' in HTML
+    assert 'id="integrationSearchInput"' in HTML
+    assert "function filteredIntegrationItems" in HTML
+    assert "function integrationSearchText" in HTML
+    assert "els.integrationCategoryFilter?.addEventListener(\"change\", renderAll)" in HTML
+    assert "els.integrationSearchInput?.addEventListener(\"input\", renderAll)" in HTML
+    assert "filteredIntegrationItems(settings().integrations" in HTML

@@ -1372,6 +1372,33 @@
 
     .form-grid .span-2 { grid-column: span 2; }
 
+    .inline-filters {
+      display: grid;
+      grid-template-columns: 160px 160px minmax(220px, 1fr);
+      gap: 10px;
+      align-items: end;
+    }
+
+    .inline-filters label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .inline-filters select,
+    .inline-filters input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      min-width: 0;
+    }
+
     .contract-preview {
       margin-top: 14px;
       border: 1px solid var(--line);
@@ -2068,6 +2095,10 @@
       }
 
       .topbar-inner, .filters-inner {
+        grid-template-columns: 1fr;
+      }
+
+      .inline-filters {
         grid-template-columns: 1fr;
       }
 
@@ -3838,6 +3869,29 @@
             </div>
             <div class="panel-body">
               <div class="integration-status-note">은행 자격증명은 원문을 화면에 다시 표시하지 않고 서버 Vault에 암호화 저장합니다. 신한/IBK 값이 모두 등록되면 저장 직후 거래 연동 API를 호출하며, 외부 은행 실조회 커넥터가 아직 없으면 CSV/엑셀 업로드 대체 경로를 표시합니다.</div>
+              <div class="inline-filters" style="margin-top:12px">
+                <label>구분
+                  <select id="integrationCategoryFilter">
+                    <option value="all">전체</option>
+                    <option value="판매사이트">판매채널</option>
+                    <option value="은행">은행/카드</option>
+                    <option value="매입처">매입처</option>
+                    <option value="세무·계산서">세무·계산서</option>
+                    <option value="기타 운영">기타 운영</option>
+                  </select>
+                </label>
+                <label>상태
+                  <select id="integrationStatusFilter">
+                    <option value="all">전체</option>
+                    <option value="ready">정상/준비</option>
+                    <option value="blocked">확인필요</option>
+                    <option value="manual">수기/업로드</option>
+                  </select>
+                </label>
+                <label class="span-2">검색
+                  <input id="integrationSearchInput" type="search" placeholder="서비스, 지점, 사업자, ID, 계좌/가맹점번호, 메모 검색">
+                </label>
+              </div>
               <div class="table-wrap" style="margin-top:12px">
                 <table><thead><tr><th>구분</th><th>서비스</th><th>사업자·지점</th><th>수집 데이터</th><th>필수 인증값</th><th>최근 동기화</th><th>상태</th><th>설정</th></tr></thead><tbody id="integrationOpsRows"></tbody></table>
               </div>
@@ -5721,7 +5775,8 @@
         ].join("");
       }
       if (els.integrationOpsRows) {
-        els.integrationOpsRows.innerHTML = (settings().integrations || []).length ? settings().integrations.map(item => {
+        const visibleIntegrations = filteredIntegrationItems(settings().integrations || [], { businessScoped: false });
+        els.integrationOpsRows.innerHTML = visibleIntegrations.length ? visibleIntegrations.map(item => {
           const latestStatus = item.lastSyncStatus || item.portalStatus || item.status || "";
           const status = integrationStatusLabels[latestStatus] || integrationStatusLabels[item.status] || [latestStatus || "미지정", "warn"];
           const catalog = integrationCatalog[item.service] || {};
@@ -5745,7 +5800,7 @@
             <td>${badgeHtml(status[0], status[1])}</td>
             <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-edit-integration="${escapeHtml(item.id)}">수정</button>${action}</div></td>
           </tr>`;
-        }).join("") : tableEmpty(8, "연동 계정을 등록하십시오.");
+        }).join("") : tableEmpty(8, "검색 조건에 맞는 연동 계정이 없습니다.");
       }
       if (els.integrationIssueRows) {
         const issueRows = (settings().integrations || []).filter(item => ["blocked", "credential_required", "connector_not_configured", "credentials_missing", "portal_action_required", "upload_required"].includes(String(item.status || item.lastSyncStatus || item.portalStatus || "").toLowerCase()));
@@ -6947,6 +7002,63 @@
       ].join("\n");
     }
 
+    function integrationCategoryFor(item) {
+      const category = integrationCatalog[item.service]?.category || item.category || "기타";
+      if (category === "은행" || financialTransactionServices.has(item.service)) return "은행";
+      return category;
+    }
+
+    function integrationStatusGroup(item) {
+      const raw = String(item.lastSyncStatus || item.portalStatus || item.status || "").toLowerCase();
+      if (["blocked", "credential_required", "connector_not_configured", "credentials_missing", "portal_action_required", "upload_required"].includes(raw)) return "blocked";
+      if (["manual", "statement-upload", "receipt-photo", "tax-invoice-upload"].includes(raw) || /upload|photo|excel|report/.test(String(item.collectionMode || ""))) return "manual";
+      return "ready";
+    }
+
+    function integrationSearchText(item) {
+      const catalog = integrationCatalog[item.service] || {};
+      return [
+        integrationCategoryFor(item),
+        item.service,
+        integrationLabels[item.service],
+        item.label,
+        businessName(item.businessId || item.business_id || ""),
+        item.branch,
+        item.username,
+        item.institutionCode,
+        item.accountNoMasked,
+        item.merchantNo,
+        item.businessRegistrationNoMasked,
+        collectionModeLabel(item.collectionMode),
+        item.status,
+        item.lastSyncStatus,
+        item.portalStatus,
+        item.dataScope || catalog.dataScope,
+        item.requiredProof || catalog.requiredProof,
+        item.memo,
+        item.portalMessage
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+
+    function filteredIntegrationItems(sourceItems = settings().integrations, { businessScoped = true } = {}) {
+      const selectedBusinessId = selectedSettingsBusinessId();
+      const categoryFilter = els.integrationCategoryFilter?.value || "all";
+      const statusFilter = els.integrationStatusFilter?.value || "all";
+      const query = String(els.integrationSearchInput?.value || "").trim().toLowerCase();
+      return (sourceItems || []).filter(item => {
+        const itemBusinessId = item.businessId || item.business_id || businessIdForBranchName(item.branch || "");
+        if (businessScoped && selectedBusinessId && itemBusinessId !== selectedBusinessId) return false;
+        const category = integrationCategoryFor(item);
+        if (categoryFilter !== "all") {
+          if (categoryFilter === "은행" && !(category === "은행" || financialTransactionServices.has(item.service))) return false;
+          else if (categoryFilter !== "은행" && category !== categoryFilter) return false;
+        }
+        if (statusFilter !== "all" && integrationStatusGroup(item) !== statusFilter) return false;
+        if (query && !integrationSearchText(item).includes(query)) return false;
+        return true;
+      });
+    }
+
     function renderSettings() {
       const cfg = settings();
       const selectedBusinessId = selectedSettingsBusinessId();
@@ -6956,10 +7068,11 @@
       const filteredBranchNames = new Set(filteredBranches.map(item => item.name));
       const filteredAccounts = cfg.accounts.filter(item => item.businessId === selectedBusinessId);
       const filteredStaff = cfg.staff.filter(item => filteredBranchNames.has(item.branch));
-      const filteredIntegrations = cfg.integrations.filter(item => {
+      const businessIntegrations = cfg.integrations.filter(item => {
         const itemBusinessId = item.businessId || item.business_id || businessIdForBranchName(item.branch || "");
         return itemBusinessId === selectedBusinessId;
       });
+      const filteredIntegrations = filteredIntegrationItems(businessIntegrations, { businessScoped: false });
       const filteredContracts = (state.contracts || []).filter(isSelectedBusinessRecord);
       const filteredPayroll = (payrollStatements || []).filter(isSelectedBusinessRecord);
       const filteredSettlements = (deliverySettlements || []).filter(isSelectedBusinessRecord);
@@ -7677,8 +7790,12 @@
       const loginUrl = String(data.loginUrl || "").trim() || catalog.loginUrl || "";
       const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
       const memo = String(data.memo || "").trim() || catalog.memo || "";
-      const accountNoMasked = String(data.accountNoMasked || "").trim() || maskDigits(data.accountNo);
-      const businessRegistrationNoMasked = String(data.businessRegistrationNoMasked || "").trim() || maskDigits(data.businessRegistrationNo);
+      const accountNoMasked = String(data.accountNoMasked || "").trim()
+        || maskDigits(data.accountNo)
+        || String(existingIntegration?.accountNoMasked || existingIntegration?.merchantNo || "").trim();
+      const businessRegistrationNoMasked = String(data.businessRegistrationNoMasked || "").trim()
+        || maskDigits(data.businessRegistrationNo)
+        || String(existingIntegration?.businessRegistrationNoMasked || "").trim();
       let serverAccount = null;
       let pendingAutoSync = null;
       const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(String(data.username || "").trim());
@@ -7688,46 +7805,98 @@
       }
       if (canManageAutomation() && shouldUseServerVault) {
         try {
-          const result = await financeApi("/accounts", {
+          const accountPayload = {
+            account_id: existingIntegration?.serverAccountId || "",
+            server_account_id: existingIntegration?.serverAccountId || "",
+            service: data.service,
+            label: String(data.label || "").trim(),
+            login_url: loginUrl,
+            username: String(data.username || "").trim(),
+            password: data.password || "",
+            api_key: data.apiKey || "",
+            client_secret: data.clientSecret || "",
+            certificate_password: data.clientSecret || "",
+            account_no: data.accountNo || "",
+            account_password: data.accountPassword || "",
+            business_registration_no: data.businessRegistrationNo || "",
+            business_id: data.businessId,
+            branch: data.branch || "",
+            institution_code: data.institutionCode || existingIntegration?.institutionCode || "",
+            account_no_masked: accountNoMasked,
+            business_registration_no_masked: businessRegistrationNoMasked,
+            merchant_no: accountNoMasked,
+            settlement_cycle: data.settlementCycle || existingIntegration?.settlementCycle || "",
+            collection_mode: collectionMode,
+            category: catalog.category || "",
+            data_scope: catalog.dataScope || "",
+            required_proof: catalog.requiredProof || "",
+            auth_owner: data.authOwner || existingIntegration?.authOwner || "",
+            mfa_method: data.mfaMethod || existingIntegration?.mfaMethod || "",
+            credential_expires_at: data.credentialExpiresAt || existingIntegration?.credentialExpiresAt || "",
+            fallback_auth: data.fallbackAuth || existingIntegration?.fallbackAuth || "",
+            sync_scope: data.syncScope || existingIntegration?.syncScope || "",
+            permission_scope: data.permissionScope || existingIntegration?.permissionScope || "",
+            failure_fallback: data.failureFallback || existingIntegration?.failureFallback || "",
+            memo,
+            auto_sync: true
+          };
+          let result = await financeApi("/accounts", {
             method: "POST",
-            body: JSON.stringify({
-              service: data.service,
-              label: String(data.label || "").trim(),
-              login_url: loginUrl,
-              username: String(data.username || "").trim(),
-              password: data.password || "",
-              api_key: data.apiKey || "",
-              client_secret: data.clientSecret || "",
-              certificate_password: data.clientSecret || "",
-              account_no: data.accountNo || "",
-              account_password: data.accountPassword || "",
-              business_registration_no: data.businessRegistrationNo || "",
-              business_id: data.businessId,
-              branch: data.branch || "",
-              institution_code: data.institutionCode || "",
-              account_no_masked: accountNoMasked,
-              business_registration_no_masked: businessRegistrationNoMasked,
-              merchant_no: accountNoMasked,
-              settlement_cycle: data.settlementCycle || "",
-              collection_mode: collectionMode,
-              category: catalog.category || "",
-              data_scope: catalog.dataScope || "",
-              required_proof: catalog.requiredProof || "",
-              auth_owner: data.authOwner || "",
-              mfa_method: data.mfaMethod || "",
-              credential_expires_at: data.credentialExpiresAt || "",
-              fallback_auth: data.fallbackAuth || "",
-              sync_scope: data.syncScope || "",
-              permission_scope: data.permissionScope || "",
-              failure_fallback: data.failureFallback || "",
-              memo,
-              auto_sync: true
-            })
+            body: JSON.stringify(accountPayload)
           });
+          if (!result.account && existingIntegration?.serverAccountId) {
+            result = await financeApi("/accounts", {
+              method: "POST",
+              body: JSON.stringify({ ...accountPayload, account_id: "", server_account_id: "" })
+            });
+          }
           serverAccount = result.account;
           pendingAutoSync = result.sync || null;
         } catch (err) {
-          showToast(`서버 저장 실패: ${err.message}`);
+          if (existingIntegration?.serverAccountId && /찾지 못|404/.test(String(err.message || ""))) {
+            try {
+              const retryPayload = {
+                service: data.service,
+                label: String(data.label || "").trim(),
+                login_url: loginUrl,
+                username: String(data.username || "").trim(),
+                password: data.password || "",
+                api_key: data.apiKey || "",
+                client_secret: data.clientSecret || "",
+                certificate_password: data.clientSecret || "",
+                account_no: data.accountNo || "",
+                account_password: data.accountPassword || "",
+                business_registration_no: data.businessRegistrationNo || "",
+                business_id: data.businessId,
+                branch: data.branch || "",
+                institution_code: data.institutionCode || existingIntegration?.institutionCode || "",
+                account_no_masked: accountNoMasked,
+                business_registration_no_masked: businessRegistrationNoMasked,
+                merchant_no: accountNoMasked,
+                settlement_cycle: data.settlementCycle || existingIntegration?.settlementCycle || "",
+                collection_mode: collectionMode,
+                category: catalog.category || "",
+                data_scope: catalog.dataScope || "",
+                required_proof: catalog.requiredProof || "",
+                auth_owner: data.authOwner || existingIntegration?.authOwner || "",
+                mfa_method: data.mfaMethod || existingIntegration?.mfaMethod || "",
+                credential_expires_at: data.credentialExpiresAt || existingIntegration?.credentialExpiresAt || "",
+                fallback_auth: data.fallbackAuth || existingIntegration?.fallbackAuth || "",
+                sync_scope: data.syncScope || existingIntegration?.syncScope || "",
+                permission_scope: data.permissionScope || existingIntegration?.permissionScope || "",
+                failure_fallback: data.failureFallback || existingIntegration?.failureFallback || "",
+                memo,
+                auto_sync: true
+              };
+              const retryResult = await financeApi("/accounts", { method: "POST", body: JSON.stringify(retryPayload) });
+              serverAccount = retryResult.account;
+              pendingAutoSync = retryResult.sync || null;
+            } catch (retryErr) {
+              showToast(`서버 저장 실패: ${retryErr.message}`);
+            }
+          } else {
+            showToast(`서버 저장 실패: ${err.message}`);
+          }
         }
       }
       const nextIntegration = {
@@ -7741,22 +7910,22 @@
         business_id: data.businessId,
         businessId: data.businessId,
         branch: data.branch || "",
-        institutionCode: String(data.institutionCode || "").trim(),
-        accountNoMasked,
-        businessRegistrationNoMasked,
-        merchantNo: accountNoMasked,
-        settlementCycle: String(data.settlementCycle || "").trim(),
+        institutionCode: String(data.institutionCode || serverAccount?.institution_code || existingIntegration?.institutionCode || "").trim(),
+        accountNoMasked: serverAccount?.account_no_masked || accountNoMasked,
+        businessRegistrationNoMasked: serverAccount?.business_registration_no_masked || businessRegistrationNoMasked,
+        merchantNo: serverAccount?.merchant_no || serverAccount?.account_no_masked || accountNoMasked,
+        settlementCycle: String(data.settlementCycle || serverAccount?.settlement_cycle || existingIntegration?.settlementCycle || "").trim(),
         passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret || data.accountPassword) ? "브라우저 저장됨" : existingIntegration?.passwordMasked || "Vault/입력 필요"),
         collectionMode,
-        dataScope: catalog.dataScope || "",
+        dataScope: serverAccount?.data_scope || existingIntegration?.dataScope || catalog.dataScope || "",
         requiredProof: (serverAccount?.credential_requirements || []).length ? `필요정보: ${serverAccount.credential_requirements.join(", ")}` : catalog.requiredProof || "",
-        authOwner: data.authOwner || "",
-        mfaMethod: data.mfaMethod || "",
-        credentialExpiresAt: data.credentialExpiresAt || "",
-        fallbackAuth: data.fallbackAuth || "",
-        syncScope: data.syncScope || "",
-        permissionScope: data.permissionScope || "",
-        failureFallback: data.failureFallback || "",
+        authOwner: data.authOwner || existingIntegration?.authOwner || "",
+        mfaMethod: data.mfaMethod || existingIntegration?.mfaMethod || "",
+        credentialExpiresAt: data.credentialExpiresAt || existingIntegration?.credentialExpiresAt || "",
+        fallbackAuth: data.fallbackAuth || existingIntegration?.fallbackAuth || "",
+        syncScope: data.syncScope || existingIntegration?.syncScope || "",
+        permissionScope: data.permissionScope || existingIntegration?.permissionScope || "",
+        failureFallback: data.failureFallback || existingIntegration?.failureFallback || "",
         status: serverAccount?.status || (serverAccount ? "vault-ready" : data.status || existingIntegration?.status || "ready"),
         vaultService: serverAccount ? `server:${serverAccount.id}` : existingIntegration?.vaultService || `yeoljeong-${data.service}`,
         memo: (serverAccount?.credential_requirements || []).length ? `입력 필요: ${serverAccount.credential_requirements.join(", ")}` : memo
@@ -7767,7 +7936,7 @@
         settings().integrations.push(nextIntegration);
       }
       saveState();
-      syncSettingsToServer();
+      await persistSettingsToServer();
       if (pendingAutoSync) {
         const syncResult = deliveryAutomationServices.has(data.service)
           ? applySyncPayload(pendingAutoSync)
@@ -8948,7 +9117,13 @@
       const list = settings().integrations;
       accounts.forEach(account => {
         const service = account.service;
-        const existing = list.find(item => item.serverAccountId === account.id || item.service === service);
+        const normalizedBusiness = account.business_id || account.businessId || "";
+        const normalizedBranch = account.branch || "";
+        const existing = list.find(item => item.serverAccountId === account.id)
+          || list.find(item => item.service === service
+            && String(item.username || "") === String(account.username || "")
+            && String(item.businessId || item.business_id || "") === String(normalizedBusiness)
+            && String(item.branch || "") === String(normalizedBranch));
         const catalog = integrationCatalog[service] || {};
         const next = {
           id: existing?.id || `srv-${account.id}`,
@@ -9294,6 +9469,9 @@
     function bindEvents() {
       els.monthFilter.addEventListener("change", renderAll);
       els.branchFilter.addEventListener("change", renderAll);
+      els.integrationCategoryFilter?.addEventListener("change", renderAll);
+      els.integrationStatusFilter?.addEventListener("change", renderAll);
+      els.integrationSearchInput?.addEventListener("input", renderAll);
       document.querySelectorAll(".tab[data-view]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
       document.querySelectorAll('[data-external-tab="recipes"]').forEach(link => {
         link.addEventListener("click", event => {

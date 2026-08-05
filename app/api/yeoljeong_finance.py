@@ -68,6 +68,8 @@ class ContractSignPayload(BaseModel):
 
 class AccountUpsertPayload(BaseModel):
     model_config = {"extra": "forbid"}
+    account_id: str = ""
+    server_account_id: str = ""
     service: str
     username: str = ""
     password: str = Field(

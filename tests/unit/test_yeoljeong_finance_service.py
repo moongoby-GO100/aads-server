@@ -370,6 +370,52 @@ def test_upsert_bank_quick_service_requires_account_password_and_business_no(tmp
         raise AssertionError("quick service credentials should require account password and business no")
 
 
+def test_upsert_account_updates_existing_id_and_preserves_bank_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+
+    created = service.upsert_account(
+        {
+            "service": "ibk_business",
+            "label": "중화점 IBK 빠른조회",
+            "username": "quick-user",
+            "password": "login-secret",
+            "account_no": "12345678901234",
+            "account_password": "4321",
+            "business_registration_no": "7108604499",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "collection_mode": "bank-quick-service",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    updated = service.upsert_account(
+        {
+            "account_id": created["id"],
+            "service": "ibk_business",
+            "label": "중화점 IBK 빠른조회 수정",
+            "username": "quick-user",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "collection_mode": "bank-quick-service",
+            "sync_scope": "bank_deposit_match",
+            "memo": "수정 저장 확인",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    rows = service._read("platform_accounts")
+    assert len(rows) == 1
+    assert updated["id"] == created["id"]
+    assert updated["label"] == "중화점 IBK 빠른조회 수정"
+    assert updated["sync_scope"] == "bank_deposit_match"
+    assert rows[0]["password_enc"] == "encrypted:login-secret"
+    assert rows[0]["account_no_enc"] == "encrypted:12345678901234"
+    assert rows[0]["account_password_enc"] == "encrypted:4321"
+    assert rows[0]["business_registration_no_enc"] == "encrypted:7108604499"
+
+
 def test_sync_financial_transactions_reports_connector_gap(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
