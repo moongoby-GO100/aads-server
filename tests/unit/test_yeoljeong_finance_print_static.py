@@ -121,6 +121,10 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert 'data-sync-integration-id="${escapeHtml(item.id)}"' in HTML
     assert "syncIntegrationItem(integrationIdForSync, false)" in HTML
     assert "syncIntegrationItem(integrationIdForSync, true)" in HTML
+    assert "AbortController" in HTML
+    assert "API 응답 지연" in HTML
+    assert "${item.lastSyncStatus === \"running\" ? \"실행중...\" : \"수집 실행\"}" in HTML
+    assert ">수집 실행</button>`" not in HTML
     assert "integrationMatchesSyncSummary" in HTML
     assert "summaryCounts" in HTML
     assert "counts.sales" in HTML

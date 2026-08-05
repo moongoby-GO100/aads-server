@@ -5795,9 +5795,9 @@
           const latestSync = item.lastSyncAt || item.portalMessage || item.memo || "미실행";
           const latestSyncMessage = item.portalMessage || item.memo || "";
           const action = deliveryAutomationServices.has(item.service)
-            ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">수집 실행</button>`
+            ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
             : financialTransactionServices.has(item.service)
-              ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">거래 연동</button>`
+              ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "거래 연동"}</button>`
               : `<button type="button" data-open-import="${escapeHtml(item.service)}">파일/증빙</button>`;
           return `
           <tr>
@@ -8442,10 +8442,17 @@
     }
 
     async function financeApi(path, options = {}) {
+      const controller = new AbortController();
+      const timeoutMs = Number(options.timeoutMs || 15000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const response = await fetch(`/api/v1/yeoljeong-finance${path}`, {
         ...options,
-        headers: { ...apiHeaders(), ...(options.headers || {}) }
-      });
+        headers: { ...apiHeaders(), ...(options.headers || {}) },
+        signal: options.signal || controller.signal
+      }).catch(error => {
+        if (error?.name === "AbortError") throw new Error(`API 응답 지연: ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.`);
+        throw error;
+      }).finally(() => clearTimeout(timeoutId));
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || payload.message || `API ${response.status}`);
       return payload;
