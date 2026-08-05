@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-05 18:41 KST - FB integration run button visible feedback and account-scoped sync
+
+- Request: CEO reported that clicking "저장 후 연동 실행" / row "연동 실행" still showed no visible change in the production integration settings screen.
+- Root cause:
+  - `POST /api/v1/yeoljeong-finance/accounts` saved the account and then auto-ran `/sync` or `/transactions/sync` without passing the saved `account.id`, so the sync could execute against the service/business/branch representative account instead of the row that was just saved.
+  - Manual row sync sent only business/branch scope from the browser; the API schema did not accept `account_id`, so the selected saved-row result could fail to match back to the clicked row.
+  - The row action buttons did not change their own label to "실행중..." and failures from the API were only toast-level, making the UI look unchanged.
+- Changes:
+  - `app/api/yeoljeong_finance.py`: `SyncPayload` now accepts `account_id`; account upsert auto-sync now passes the saved account id for both delivery and bank/card sync.
+  - `app/services/yeoljeong_finance_service.py`: financial account matching and delivery account candidate selection now filter by explicit `account_id` when provided.
+  - `app/static/apps/yeoljeong-finance/index.html`: row action buttons now use `type="button"`, show "실행중..." while running, pass `account_id` from `serverAccountId`, return sync results, and write blocked/failure messages back to the row instead of leaving the screen unchanged.
+  - `tests/unit/test_yeoljeong_finance_api.py`: updated auto-sync regression expectations to include the saved account id.
+- Verification:
+  - Host syntax check passed: `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_print_static.py`.
+  - Host JS syntax check passed: extracted inline script from `index.html` and ran `node --check /tmp/yeoljeong-finance-index.js`.
+  - Current-image pytest with host repo mounted passed: `docker run --rm -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=sqlite:///tmp/test.db -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` -> 82 passed, 1 warning.
+  - Production static URL check passed: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` -> HTTP 200 and contains `account_id: item.serverAccountId`, `실행중...`, `markIntegrationFailed`, and `type="button" data-sync-integration`.
+  - Running container runtime check passed: `SyncPayload(account_id='acct-test', services=['baemin']).model_dump()` returned `account_id='acct-test'`.
+- Pending:
+  - Worktree still contains unrelated pre-existing dirty files outside this request: `app/data/yeoljeong_finance/settings.json`, `docs/CHANGELOG-*`, `nginx-aads-upstream.conf.dashboard.bak`, and OEM mail helper/report files.
+
 ## 2026-08-05 18:20 KST - FB integration list edit values and row sync feedback
 
 - Request: Fix the integration settings screen so saved integration rows are grouped/searchable, edit pages show existing baseline values, and "저장 후 연동 실행" / row sync clicks visibly update the screen.

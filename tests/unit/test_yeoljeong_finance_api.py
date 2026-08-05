@@ -187,6 +187,7 @@ async def test_account_upsert_runs_financial_sync_when_auto_sync_enabled(monkeyp
     def fake_sync_financial_transactions(payload, current_user):
         assert payload == {
             "services": ["shinhan_business"],
+            "account_id": "acct-shinhan",
             "business_id": "biz-junghwa",
             "branch": "중화점",
         }
@@ -231,6 +232,7 @@ async def test_account_upsert_runs_delivery_sync_when_auto_sync_enabled(monkeypa
     def fake_sync_delivery(payload, current_user):
         assert payload == {
             "services": ["baemin"],
+            "account_id": "acct-baemin",
             "business_id": "biz-junghwa",
             "branch": "중화점",
         }

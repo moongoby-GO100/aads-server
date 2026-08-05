@@ -109,6 +109,7 @@ class AccountUpsertPayload(BaseModel):
 
 class SyncPayload(BaseModel):
     services: list[str] = Field(default_factory=list)
+    account_id: str = ""
     business_id: str = "biz-mia"
     branch: str = "열정국밥_미아점"
     date_from: str = ""
@@ -336,6 +337,7 @@ async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Dep
             svc.sync_delivery,
             {
                 "services": [service],
+                "account_id": account.get("id") or data.get("account_id") or data.get("server_account_id") or "",
                 "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
                 "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
             },
@@ -346,6 +348,7 @@ async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Dep
             svc.sync_financial_transactions,
             {
                 "services": [service],
+                "account_id": account.get("id") or data.get("account_id") or data.get("server_account_id") or "",
                 "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
                 "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
             },

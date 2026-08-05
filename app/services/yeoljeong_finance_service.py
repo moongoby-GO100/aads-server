@@ -2962,14 +2962,17 @@ def _matching_accounts(
     services: list[str],
     business_id: str,
     branch: str,
+    account_id: str = "",
 ) -> dict[str, dict[str, Any]]:
     rows = _read("platform_accounts")
     if _migrate_platform_account_secrets(rows):
         _write("platform_accounts", rows)
+    requested_account_id = str(account_id or "").strip()
     candidates = [
         row
         for row in rows
         if str(row.get("service") or "") in services
+        and (not requested_account_id or str(row.get("id") or "") == requested_account_id)
         and str(row.get("business_id") or "") == business_id
         and (
             not branch
@@ -3045,6 +3048,7 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
         services=requested_services,
         business_id=business_id,
         branch=branch,
+        account_id=str(payload.get("account_id") or payload.get("server_account_id") or "").strip(),
     )
     synced_at = _now()
     transactions = _read("transactions")
@@ -3313,6 +3317,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     requested_business = str(payload.get("business_id") or MIA_BUSINESS_ID)
     requested_branch = str(payload.get("branch") or MIA_BRANCH_NAME)
     business_id, branch = _normalize_delivery_scope(requested_business, requested_branch)
+    requested_account_id = str(payload.get("account_id") or payload.get("server_account_id") or "").strip()
 
     all_accounts = _read("platform_accounts")
     if _migrate_platform_account_secrets(all_accounts):
@@ -3321,6 +3326,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         row
         for row in all_accounts
         if (not services or row.get("service") in services)
+        and (not requested_account_id or str(row.get("id") or "") == requested_account_id)
         and str(row.get("business_id") or "") == business_id
         and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
     ]

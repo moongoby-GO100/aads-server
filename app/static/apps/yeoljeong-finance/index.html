@@ -7206,11 +7206,11 @@
         const uploadMode = ["shinhan_business", "ibk_business", "supplier_statement_upload", "tax_invoice_upload", "utility_bills", "card_pg", "accountant_tax_agent"].includes(item.service)
           || ["bank-excel", "statement-upload", "receipt-photo", "tax-invoice-upload", "utility-bill-upload", "card-pg-report", "accounting-export"].includes(item.collectionMode);
         const actionButton = canRunPortalSync
-          ? `<button data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">수집 실행</button>`
+          ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
           : canRunFinancialSync
-            ? `<button data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">거래 연동 실행</button>`
+            ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "거래 연동 실행"}</button>`
           : uploadMode
-            ? `<button data-open-import="${escapeHtml(item.service)}">파일/사진 등록</button>`
+            ? `<button type="button" data-open-import="${escapeHtml(item.service)}">파일/사진 등록</button>`
             : `<button type="button" disabled title="설정 저장 후 전용 수집기가 연결됩니다.">계정/Vault 등록</button>`;
         return `
         <article class="master-card">
@@ -7983,6 +7983,7 @@
         settings().integrations.push(nextIntegration);
       }
       saveState();
+      markIntegrationRunning(nextIntegration, `${integrationLabels[nextIntegration.service] || nextIntegration.service} 저장 후 연동 실행 중`);
       await persistSettingsToServer();
       if (pendingAutoSync) {
         const syncResult = deliveryAutomationServices.has(data.service)
@@ -8000,6 +8001,15 @@
       form.reset();
       if (form.businessId) form.businessId.value = selectedSettingsBusinessId();
       applyIntegrationPreset(form.service?.value || data.service, true, form);
+      if (!pendingAutoSync) {
+        nextIntegration.lastSyncAt = new Date().toISOString();
+        nextIntegration.lastSyncStatus = canManageAutomation() && shouldUseServerVault ? "connector_not_configured" : "credential_required";
+        nextIntegration.portalStatus = nextIntegration.lastSyncStatus;
+        nextIntegration.portalMessage = canManageAutomation() && shouldUseServerVault
+          ? "서버 저장은 완료됐지만 자동 수집 응답이 없습니다. 계정/커넥터 상태를 확인하십시오."
+          : "총괄 운영관리자 로그인 또는 서버 Vault 계정 등록이 필요합니다.";
+        saveState();
+      }
       renderAll();
       showToast(syncNotice || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")));
       return true;
@@ -9249,6 +9259,17 @@
       renderAll();
     }
 
+    function markIntegrationFailed(item, message = "연동 실행에 실패했습니다.") {
+      if (!item) return;
+      item.lastSyncAt = new Date().toISOString();
+      item.lastSyncStatus = "blocked";
+      item.portalStatus = "blocked";
+      item.portalMessage = message;
+      item.memo = message || item.memo;
+      saveState();
+      renderAll();
+    }
+
     async function syncIntegrationItem(integrationId, financial = false) {
       const item = settings().integrations.find(candidate => candidate.id === integrationId);
       if (!item) {
@@ -9257,11 +9278,24 @@
       }
       const scope = {
         business_id: item.businessId || item.business_id || selectedSettingsBusinessId(),
-        branch: item.branch || selectedBranch()
+        branch: item.branch || selectedBranch(),
+        account_id: item.serverAccountId || ""
       };
       markIntegrationRunning(item, `${integrationLabels[item.service] || item.service} ${financial ? "거래 연동" : "수집"} 실행 중`);
-      if (financial) await syncFinancialServices([item.service], scope);
-      else await syncDeliveryServices([item.service], scope);
+      try {
+        const result = financial ? await syncFinancialServices([item.service], scope) : await syncDeliveryServices([item.service], scope);
+        if (item.lastSyncStatus === "running") {
+          item.lastSyncAt = new Date().toISOString();
+          item.lastSyncStatus = result?.blocked ? "blocked" : "no_records";
+          item.portalStatus = item.lastSyncStatus;
+          item.portalMessage = result?.messages?.[0] || "실행은 완료됐지만 이 항목에 매칭된 신규 데이터가 없습니다.";
+          saveState();
+          renderAll();
+        }
+      } catch (err) {
+        markIntegrationFailed(item, err.message || "연동 실행 실패");
+        showToast(`연동 실행 실패: ${err.message || err}`);
+      }
     }
 
     function applySyncPayload(payload) {
@@ -9336,6 +9370,7 @@
       });
       const result = applySyncPayload(payload);
       showToast(result.recordsCount ? `자동 수집 매출 ${result.salesCount}건 / 정산 ${result.settlementsCount}건 / 리뷰 ${result.reviewsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
+      return result;
     }
 
     function applyFinancialSyncPayload(payload) {
@@ -9391,6 +9426,7 @@
       } else {
         showToast(`은행/카드 연동 확인 완료. 확인필요 ${result.blocked}건${result.messages.length ? " · " + result.messages.join(" / ") : ""}`);
       }
+      return result;
     }
 
     async function importTransactionCsvToServer(service) {
