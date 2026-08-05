@@ -85,6 +85,11 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "accountNoMasked = String(data.accountNoMasked" in HTML
     assert "existingIntegration?.accountNoMasked" in HTML
     assert "serverAccount?.account_no_masked" in HTML
+    assert "field-note" in HTML
+    assert "setIntegrationExistingValue" in HTML
+    assert "markExistingSecretField" in HTML
+    assert "기존 기준값:" in HTML
+    assert "기존 Vault 등록됨" in HTML
     assert 'name="passwordConfirm"' not in form_html
     assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
     assert "rerenderIntegrationConnectForm(service, form)" in HTML
@@ -99,3 +104,8 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "els.integrationCategoryFilter?.addEventListener(\"change\", renderAll)" in HTML
     assert "els.integrationSearchInput?.addEventListener(\"input\", renderAll)" in HTML
     assert "filteredIntegrationItems(settings().integrations" in HTML
+    assert 'data-sync-integration-id="${escapeHtml(item.id)}"' in HTML
+    assert "syncIntegrationItem(integrationIdForSync, false)" in HTML
+    assert "syncIntegrationItem(integrationIdForSync, true)" in HTML
+    assert "integrationMatchesSyncSummary" in HTML
+    assert "저장 후 연동 실행 완료" in HTML

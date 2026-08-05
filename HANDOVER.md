@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-08-05 18:20 KST - FB integration list edit values and row sync feedback
+
+- Request: Fix the integration settings screen so saved integration rows are grouped/searchable, edit pages show existing baseline values, and "저장 후 연동 실행" / row sync clicks visibly update the screen.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: added field notes under integration setup inputs so edit pages show existing masked baseline values such as platform store code and business number, and show "existing Vault registered" for password/account-password/API-secret fields without exposing plaintext secrets.
+  - `app/static/apps/yeoljeong-finance/index.html`: added per-row `data-sync-integration-id` handling so "수집 실행" and "거래 연동" use the selected row's business/branch instead of only the currently selected global scope.
+  - `app/static/apps/yeoljeong-finance/index.html`: sync result updates now match by `account_id`/business/branch and show the result message in the "최근 동기화" table cell, so failures such as upload/credential-required are visible immediately.
+  - `app/static/apps/yeoljeong-finance/index.html`: save-after-sync toast is no longer overwritten by the generic save message; it reports counts or "확인필요" details.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`: added static regression assertions for edit baseline value notes and row-level sync wiring.
+- Verification:
+  - Container pytest passed: `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` -> 4 passed.
+  - Inline JS syntax check passed: `node --check /tmp/yeoljeong_index_inline.js`.
+  - Diff whitespace check passed: `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_print_static.py`.
+  - Production URL check passed: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` -> HTTP 200 and contained `data-sync-integration-id`, `setIntegrationExistingValue`, `latestSyncMessage`, and `저장 후 연동 실행 완료`.
+  - Playwright E2E against production URL passed in the `aads-server` container: opened 연동관리, filtered 판매사이트/search, opened saved-row 수정 page, verified existing baseline notes, clicked row 수집 실행, and verified `파일필요` plus API result message appeared.
+- Pending:
+  - Worktree still contains unrelated pre-existing dirty files outside this request: `app/data/yeoljeong_finance/settings.json`, `docs/CHANGELOG-*`, `nginx-aads-upstream.conf.dashboard.bak`, and OEM mail helper/report files.
+
 ## 2026-08-05 17:20 KST - FB integration edit save and list filters
 
 - Request: Fix the integration setup screen where existing saved values did not persist after clicking edit and save; also add grouping/search to the integration list.
