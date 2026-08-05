@@ -6018,3 +6018,29 @@
   - 인라인 `<script>` `new Function()` 파싱 성공.
   - 운영 컨테이너 테스트 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 4 passed.
   - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?codex_check=202608050758#auth-invite` 응답에서 `판매채널 추가`, `은행 계좌 연결`, `매입처 등록`, `기타 매입처 연동`, `연동 설정 수정`, `data-edit-integration`, `/accounts`, `/transactions/sync` 표식 확인.
+
+## 2026-08-05 19:05 KST - FB 연동설정 저장 후 연동실행 무반응 보정 및 운영 배포
+
+- 요청: 연동설정 화면에서 기존 입력값 저장 후 `저장 후 연동 실행` 또는 리스트 `연동 실행` 클릭 시 화면 변화가 없고, 실제 배포가 되었는지 확인.
+- 원인:
+  - 이전 피드백 커밋 `ec9a8164`가 로컬에는 있었지만 `origin/main`에 푸시되지 않아 운영 URL에 반영되지 않았다.
+  - 동적 연동설정 모달 submit 경로가 저장 완료 후 모달을 닫는 구조였고, 버튼/상태 영역에 즉시 진행 피드백이 없어 사용자가 무반응으로 인식할 수 있었다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에 `data-integration-submit-status` 상태 영역을 추가했다.
+  - `setIntegrationSubmitFeedback()`을 추가해 저장 클릭 즉시 버튼을 `저장·연동 실행중...`으로 바꾸고 중복 클릭을 막도록 했다.
+  - 동적 모달 저장 경로는 `saveIntegrationConnection(modalForm, { resetAfterSave: false })`로 바꿔 저장/연동 결과가 모달 안에 남게 했다.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`에 회귀 assert를 추가했다.
+- 배포:
+  - 커밋 `94b0bce2 fix(food): keep integration sync feedback visible`.
+  - 기존 로컬 미푸시 커밋 `ec9a8164 fix(food): show integration sync execution feedback`와 함께 `origin/main`에 푸시했다.
+  - `/root/aads/aads-server/deploy.sh` blue-green 배포 완료. active 슬롯은 `aads-server:8100`.
+- 검증:
+  - 로컬 `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py` 성공.
+  - 로컬 정적 assert 성공: 운영 HTML에 `data-integration-submit-status`, `저장·연동 실행중...`, `resetAfterSave: false` 존재.
+  - 배포 컨테이너 `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py -q` 성공: 22 passed, 1 warning.
+  - 외부 운영 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?deploy=94b0bce2`에서 신규 표식 확인.
+  - Playwright UI 검증: 관리자 세션 모양만 localStorage에 주입해 연동설정 폼을 열고 submit 클릭 시 상태 영역에 실패/진행 메시지가 표시되며 모달이 열린 상태로 유지됨을 확인했다. 실제 운영 자격증명은 사용하지 않았다.
+- 남은 주의:
+  - 비로그인 브라우저에서는 인증 게이트 때문에 연동관리 뷰가 숨겨진다.
+  - Playwright가 연동 추가 메뉴 내부 버튼 클릭에서 backdrop intercept를 감지해 해당 단계는 DOM click으로 우회 검증했다. submit 버튼 자체는 일반 click으로 동작 확인했다.
+  - 작업트리에는 기존 무관 dirty 파일이 남아 있으며 이번 커밋에는 포함하지 않았다.
