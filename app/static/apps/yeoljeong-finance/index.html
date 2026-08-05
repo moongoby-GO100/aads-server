@@ -7213,24 +7213,24 @@
       const selectedBranch = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "";
       const activePreset = presetService => presetService === service ? " class=\"active\"" : "";
       const option = (value, label, selected = "") => `<option value="${escapeHtml(value)}"${selectedOption(value, selected)}>${escapeHtml(label)}</option>`;
-      const selectField = (name, label, options, selected = "") => `<label>${escapeHtml(label)}
-            <select name="${escapeHtml(name)}">${options.map(([value, text]) => option(value, text, selected)).join("")}</select>
-          </label>`;
-      const inputField = (name, label, type = "text", placeholder = "", attrs = "") => `<label>${escapeHtml(label)}
-            <input name="${escapeHtml(name)}" type="${escapeHtml(type)}" placeholder="${escapeHtml(placeholder)}"${attrs ? ` ${attrs}` : ""}>
-          </label>`;
-      const textAreaField = (name, label, placeholder = "") => `<label class="wide">${escapeHtml(label)}
-            <textarea name="${escapeHtml(name)}" placeholder="${escapeHtml(placeholder)}"></textarea>
-          </label>`;
-      const businessField = `<label>소속 사업자
-            <select name="businessId" required>${integrationBusinessOptions(selectedBusiness)}</select>
-          </label>`;
-      const branchField = `<label>대상 지점
-            <select name="branch">${integrationBranchOptions(selectedBranch)}</select>
-          </label>`;
-      const serviceField = `<label>연동 구분
-            <select name="service" required>${integrationServiceOptions(service)}</select>
-          </label>`;
+      const selectField = (name, label, options, selected = "") => `<div class="field"><label for="integration-${escapeHtml(name)}">${escapeHtml(label)}</label>
+            <select id="integration-${escapeHtml(name)}" name="${escapeHtml(name)}">${options.map(([value, text]) => option(value, text, selected)).join("")}</select>
+          </div>`;
+      const inputField = (name, label, type = "text", placeholder = "", attrs = "") => `<div class="field"><label for="integration-${escapeHtml(name)}">${escapeHtml(label)}</label>
+            <input id="integration-${escapeHtml(name)}" name="${escapeHtml(name)}" type="${escapeHtml(type)}" placeholder="${escapeHtml(placeholder)}"${attrs ? ` ${attrs}` : ""}>
+          </div>`;
+      const textAreaField = (name, label, placeholder = "") => `<div class="field wide"><label for="integration-${escapeHtml(name)}">${escapeHtml(label)}</label>
+            <textarea id="integration-${escapeHtml(name)}" name="${escapeHtml(name)}" placeholder="${escapeHtml(placeholder)}"></textarea>
+          </div>`;
+      const businessField = `<div class="field"><label for="integration-businessId">소속 사업자</label>
+            <select id="integration-businessId" name="businessId" required>${integrationBusinessOptions(selectedBusiness)}</select>
+          </div>`;
+      const branchField = `<div class="field"><label for="integration-branch">대상 지점</label>
+            <select id="integration-branch" name="branch">${integrationBranchOptions(selectedBranch)}</select>
+          </div>`;
+      const serviceField = `<div class="field"><label for="integration-service">연동 구분</label>
+            <select id="integration-service" name="service" required>${integrationServiceOptions(service)}</select>
+          </div>`;
       const labelField = inputField("label", "표시명", "text", "예: 성신점 신한은행 간편서비스", "required");
       const loginUrlField = inputField("loginUrl", "로그인/관리 URL", "url", catalog.loginUrl || "https://...");
       const isSales = catalog.category === "판매사이트" || service === "matepos";
@@ -7383,7 +7383,7 @@
           ${selectField("syncScope", "수집 범위", syncScopeOptions, selectedScope)}
           ${textAreaField("memo", "검증 메모", "승인/취소/입금대사 기준과 리포트 대체 경로")}`;
       })();
-      return `<form class="auth-form integration-setup-form" data-integration-connect-form>
+      return `<form class="auth-form integration-setup-form" data-search-form data-integration-setup-form data-integration-connect-form>
         <div class="integration-edit-banner" data-integration-edit-banner>
           <b>저장된 연동 수정 페이지</b>
           <span>기존 리스트 항목을 불러와 수정 중입니다. 저장하면 같은 항목을 갱신하고 중복 연동을 만들지 않습니다.</span>

@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-08-05 16:07 KST - FB integration drawer design parity E2E
+
+- Request: Recheck E2E and make the production FB integration management page match `mockup-v2.html#integrations` exactly for the integration add/setup/edit flow.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: changed integration setup form field generators from plain label wrappers to the same `.field`/`.wide` grid markup used by the design mockup, and added `data-search-form data-integration-setup-form` to the operational connect form.
+  - Existing service-specific forms and saved-list edit flow were preserved: sales channel, bank account, card/PG, supplier, tax, and edit drawer still use the same `/accounts`, `/transactions/sync`, and import fallback hooks.
+- Verification:
+  - Production container: `python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q` passed: 4 passed.
+  - Inline JS parse check with Node `vm.Script` passed: 1 script parsed.
+  - External production HTML check confirmed the `.field` form markup, setup form marker, edit button marker, and add-menu marker are live at `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`.
+  - Playwright E2E on production URL passed by injecting a test auth token, opening `integrations`, clicking `+ 연동 추가`, verifying menu choices, opening `판매채널 추가`, and verifying saved-list `수정` opens the edit drawer. Result: add form 16 `.field` wrappers, edit buttons 14, edit form 16 `.field` wrappers. Screenshot: `/tmp/yeoljeong-integrations-e2e.png`.
+- Pending:
+  - No request-scope pending item. Worktree still has unrelated pre-existing dirty files: `app/data/yeoljeong_finance/settings.json`, `docs/CHANGELOG-go100-direct.md`, `nginx-aads-upstream.conf`, `nginx-aads-upstream.conf.dashboard.bak`.
+
 ## 2026-08-05 09:18 KST - Android Agent auto-register retry deployment
 
 - Request: After confirming PC Agent is installed and managed normally, verify and fix Android Agent installation/management so it reconnects without manual token handling.
