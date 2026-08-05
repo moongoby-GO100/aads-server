@@ -94,6 +94,9 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "function setIntegrationSubmitFeedback" in HTML
     assert 'saveIntegrationConnection(modalForm, { resetAfterSave: false })' in HTML
     assert "저장·연동 실행중..." in HTML
+    assert "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다." in HTML
+    assert "로컬에는 저장했습니다. 서버 기초설정 저장 실패" in HTML
+    assert "서버 저장은 운영관리자 로그인 후 가능합니다." in HTML
     assert 'name="passwordConfirm"' not in form_html
     assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
     assert "rerenderIntegrationConnectForm(service, form)" in HTML

@@ -7860,10 +7860,13 @@
       let serverAccount = null;
       let pendingAutoSync = null;
       let syncNotice = "";
+      let serverVaultWarning = "";
+      let serverPersistenceWarning = "";
       const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(String(data.username || "").trim());
       if (shouldUseServerVault && !canManageAutomation()) {
-        showToast("외부 서비스 계정 서버 등록은 총괄 운영관리자 로그인 후 가능합니다.");
-        return false;
+        serverVaultWarning = "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다. 입력값은 로컬 연동 목록에 먼저 저장했습니다.";
+        setIntegrationSubmitFeedback(form, serverVaultWarning, false);
+        showToast(serverVaultWarning);
       }
       if (canManageAutomation() && shouldUseServerVault) {
         try {
@@ -7999,7 +8002,16 @@
       }
       saveState();
       markIntegrationRunning(nextIntegration, `${integrationLabels[nextIntegration.service] || nextIntegration.service} 저장 후 연동 실행 중`);
-      await persistSettingsToServer();
+      if (hasServerAuth() && canManageSettings()) {
+        try {
+          await persistSettingsToServer();
+        } catch (err) {
+          serverPersistenceWarning = `로컬에는 저장했습니다. 서버 기초설정 저장 실패: ${err.message}`;
+          showToast(serverPersistenceWarning);
+        }
+      } else {
+        serverPersistenceWarning = "로컬에는 저장했습니다. 서버 저장은 운영관리자 로그인 후 가능합니다.";
+      }
       if (pendingAutoSync) {
         const syncResult = deliveryAutomationServices.has(data.service)
           ? applySyncPayload(pendingAutoSync)
@@ -8030,8 +8042,13 @@
         saveState();
       }
       renderAll();
-      setIntegrationSubmitFeedback(form, syncNotice || nextIntegration.portalMessage || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")), false);
-      showToast(syncNotice || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")));
+      const finalNotice = [
+        syncNotice || nextIntegration.portalMessage || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")),
+        serverVaultWarning,
+        serverPersistenceWarning
+      ].filter(Boolean).join(" · ");
+      setIntegrationSubmitFeedback(form, finalNotice, false);
+      showToast(finalNotice);
       return true;
     }
 
