@@ -6063,3 +6063,22 @@
   - 비로그인 브라우저에서는 인증 게이트 때문에 연동관리 뷰가 숨겨진다.
   - Playwright가 연동 추가 메뉴 내부 버튼 클릭에서 backdrop intercept를 감지해 해당 단계는 DOM click으로 우회 검증했다. submit 버튼 자체는 일반 click으로 동작 확인했다.
   - 작업트리에는 기존 무관 dirty 파일이 남아 있으며 이번 커밋에는 포함하지 않았다.
+
+## 2026-08-05 19:22 KST - FB 저장 후 연동실행 운영 재확인 및 테스트 기준 보정
+
+- 요청: CEO 화면에서 `저장 후 연동 실행` 버튼 클릭 후 여전히 반응이 없어 보이는 문제에 대해 배포 완료 여부를 재확인하고 즉시 조치.
+- 실측:
+  - 2026-08-05 19:17 KST 기준 로컬 `HEAD`와 `origin/main`은 `f27d559a`로 일치했다.
+  - Nginx upstream은 `aads_api` active를 `127.0.0.1:8102`, `127.0.0.1:8100` backup으로 전환한 상태였다.
+  - `aads-server-green:8102`, `aads-server:8100` 모두 healthy였고 양쪽 슬롯 모두 `저장·연동 실행중...`, `저장 후 연동 실행 요청을 접수했습니다.` 표식을 서빙했다.
+  - 외부 URL `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html`은 HTTP 200, `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`, `cf-cache-status: DYNAMIC`으로 응답했다.
+- 조치:
+  - 운영 기능 코드는 이미 `f27d559a`로 푸시 및 blue-green 반영되어 추가 런타임 코드는 수정하지 않았다.
+  - `tests/unit/test_yeoljeong_finance_nginx.py`의 Cache-Control 개수 기대값이 현재 `nginx-fb.conf` 구성과 맞지 않아 4회에서 6회로 보정했다. `/`, `/login`, 정적 HTML 각각 HTTP/HTTPS 양쪽에서 no-store를 부여하는 현재 설정이 기준이다.
+- 검증:
+  - 브라우저 MCP로 운영 페이지 로드 및 캡처 성공: `https://aads.newtalk.kr/screenshots/screenshot_20260805_192033_7723da.png`.
+  - 매장비서용 Credential Vault 계정은 없어 로그인 후 관리자 클릭 E2E는 수행하지 못했다.
+  - 배포 컨테이너 검증: `docker exec aads-server-green python3 -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_nginx.py tests/unit/test_yeoljeong_finance_print_static.py` 성공: 96 passed, 1 warning.
+- 남은 주의:
+  - CEO 브라우저에서 기존 탭/캐시가 남아 있으면 새 JS를 못 볼 수 있으므로 강력 새로고침 또는 `?v=f27d559a` 쿼리로 재접속이 필요할 수 있다.
+  - 실제 관리자 클릭 E2E는 매장비서 로그인 자격증명을 Vault에 등록해야 재현 가능하다.
