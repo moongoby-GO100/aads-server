@@ -221,7 +221,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
 
     private void scheduleServiceRestart(String reason) {
         AgentConfig config = AgentPrefs.load(this);
-        if (!config.isPairingReady()) {
+        if (!config.isPairingReady() && !"auto_register_failed".equals(reason)) {
             Log.i(TAG, "Skip restart schedule (" + reason + "): pairing not ready");
             return;
         }

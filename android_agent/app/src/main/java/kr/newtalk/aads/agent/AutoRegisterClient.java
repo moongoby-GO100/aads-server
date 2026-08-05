@@ -22,6 +22,10 @@ final class AutoRegisterClient {
     static PairingData register(Context context) throws Exception {
         String deviceId = Settings.Secure.getString(
                 context.getContentResolver(), Settings.Secure.ANDROID_ID);
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            deviceId = "fallback-" + Integer.toHexString(
+                    (Build.FINGERPRINT + ":" + Build.MANUFACTURER + ":" + Build.MODEL).hashCode());
+        }
         String deviceName = Build.MANUFACTURER + " " + Build.MODEL;
         String url = buildAutoRegisterUrl(AgentConfig.DEFAULT_SERVER_URL);
 
