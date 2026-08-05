@@ -6142,3 +6142,19 @@
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 66 passed.
 - 배포/E2E:
   - 이 항목 작성 시점에는 아직 커밋/푸시/배포 전이다. 커밋 후 blue-green 배포 및 운영 브라우저 E2E 결과를 최종 보고에 별도 기재한다.
+
+## 2026-08-06 08:48 KST - FB 연동설정 stale running localStorage 재발 방지
+
+- 요청: 다음 단계 진행 및 E2E 검증.
+- E2E에서 발견한 잔여 문제:
+  - 브라우저 메모리 상태는 `normalizeStaleIntegrationSyncStatuses()`로 정리되지만, 초기 로딩 직후 localStorage 원본이 즉시 저장되지 않으면 새로고침 시 오래된 `running` 상태가 반복될 수 있었다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에 `persistInitialNormalizedSettings()`를 추가해 로딩 정규화가 발생한 경우 즉시 localStorage에 정리 상태를 저장하도록 했다.
+  - `saveState()`에서도 내부 정규화 플래그가 저장 데이터에 남지 않도록 제거했다.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`에 정적 회귀 표식을 추가했다.
+- 검증:
+  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_print_static.py` 성공.
+  - 인라인 `<script>` 추출 후 `node --check --input-type=commonjs -` 성공.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 66 passed.
+- 배포/E2E:
+  - 이 항목 작성 시점에는 커밋/푸시/배포 전이다. 이후 커밋, blue-green 배포, 운영 브라우저 E2E 결과를 최종 보고에 포함한다.

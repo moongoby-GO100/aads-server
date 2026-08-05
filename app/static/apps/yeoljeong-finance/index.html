@@ -4912,6 +4912,8 @@
     let filePreviewObjectUrl = "";
     let filePreviewAbortController = null;
 
+    persistInitialNormalizedSettings();
+
     const els = {};
     document.querySelectorAll("[id]").forEach(el => els[el.id] = el);
 
@@ -5012,6 +5014,7 @@
       const now = Date.now();
       const staleMs = 60 * 1000;
       const uploadModes = new Set(["portal-csv", "csv-upload", "statement-upload", "upload_queue", "manual", "receipt-photo", "tax-invoice-upload"]);
+      let changed = false;
       (next.integrations || []).forEach(item => {
         if (String(item.lastSyncStatus || item.portalStatus || "").toLowerCase() !== "running") return;
         const startedAt = Date.parse(item.lastSyncAt || item.updatedAt || "");
@@ -5024,11 +5027,22 @@
         item.portalMessage = needsUpload
           ? "이전 연동 실행이 완료 응답 없이 종료되어 파일 업로드/브라우저 세션 확인이 필요합니다."
           : "이전 연동 실행이 완료 응답 없이 종료되어 계정값 또는 PC Agent 세션 확인이 필요합니다.";
+        changed = true;
       });
+      if (changed) next.__normalizedStaleIntegrationSyncStatuses = true;
       return next;
     }
 
+    function persistInitialNormalizedSettings() {
+      if (!state.settings?.__normalizedStaleIntegrationSyncStatuses) return;
+      delete state.settings.__normalizedStaleIntegrationSyncStatuses;
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    }
+
     function saveState() {
+      if (state.settings?.__normalizedStaleIntegrationSyncStatuses) {
+        delete state.settings.__normalizedStaleIntegrationSyncStatuses;
+      }
       state.meta.updatedAt = new Date().toISOString();
       localStorage.setItem(STORE_KEY, JSON.stringify(state));
     }
