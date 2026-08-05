@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-05 20:10 KST - FB integration sync click final E2E closeout
+
+- Request: CEO reported the previous answer did not satisfy final completion rules and that the production "저장 후 연동 실행" / row sync click still appeared unchanged.
+- Root cause:
+  - The production static file was already pushed, but the detailed integration table had a duplicate older button template that did not switch its label to "실행중...".
+  - A failed or blocked API request could leave the optimistic row state as `running`, so the screen still looked stuck.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: added 15s `financeApi()` abort handling for stalled yeoljeong-finance API calls.
+  - `app/static/apps/yeoljeong-finance/index.html`: updated the detailed integration table action buttons to show `실행중...` while the clicked row is running.
+  - `app/static/apps/yeoljeong-finance/index.html`: added `integrationSyncTimers` watchdog that converts a row from `running` to `확인필요` with `연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.` after 20s with no result.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`: added static regression assertions for timeout/watchdog/dynamic button text.
+- Verification:
+  - Host JS syntax check passed: extracted inline script from `index.html` and ran `node --check /tmp/yeoljeong-index-script.js`.
+  - Container pytest passed: `docker exec aads-server sh -lc "python -m pytest tests/unit/test_yeoljeong_finance_print_static.py -q"` -> 5 passed.
+  - External production static check passed: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html?v=227676e4` contains `integrationSyncTimers`, `연동 응답 지연`, `API 응답 지연`, and both detailed/card row dynamic `실행중...` button templates.
+  - Direct Browser Bridge E2E passed on production URL with E2E local token: opened `#auth-invite`, clicked first `[data-sync-integration-id]`, observed row button change to `실행중...`, waited 24s, then observed the same row recover to `확인필요` with `연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.`
+- Deploy:
+  - Commits pushed to `origin/main`: `db28144c fix(food): keep integration sync feedback responsive`, `227676e4 fix(food): prevent stuck integration sync state`.
+  - `deploy.sh` blue-green full rebuild was attempted but blocked by safety gate because inactive target `aads-server:8100` had 1 active stream. Static production serving was still confirmed on external URL plus both 8100/8102 local slots because this app path is served from the updated static tree.
+- Pending:
+  - No request-scope pending item for visible click feedback. Full blue-green rebuild remains blocked until the active stream on the target slot drains, or CEO explicitly authorizes the deploy script's busy-target override.
+  - Worktree still contains unrelated pre-existing dirty files outside this request.
+
 ## 2026-08-05 19:08 KST - FB integration submit click immediate feedback verification
 
 - Request: CEO reported that the previous final report conflicted with commit/push/deploy/document ledgers and that clicking "저장 후 연동 실행" still appeared to do nothing.
