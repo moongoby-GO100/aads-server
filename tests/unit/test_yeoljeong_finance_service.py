@@ -280,6 +280,30 @@ def test_list_accounts_marks_delivery_account_without_password_as_required(tmp_p
     assert listed[0]["password_masked"] == ""
 
 
+def test_list_accounts_normalizes_stale_running_delivery_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "collection_mode": "portal-csv",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "last_sync_status": "running",
+                "portal_status": "running",
+            }
+        ],
+    )
+
+    listed = service.list_accounts({"email": "owner@example.com", "is_admin": True})
+
+    assert listed[0]["status"] == "upload_required"
+
+
 def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")

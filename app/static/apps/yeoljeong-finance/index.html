@@ -4996,19 +4996,39 @@
 
     function mergeSettings(settings) {
       const base = structuredClone(defaultSettings);
-      if (!settings || typeof settings !== "object") return normalizeBusinessScope(base);
+      if (!settings || typeof settings !== "object") return normalizeStaleIntegrationSyncStatuses(normalizeBusinessScope(base));
       const branches = mergeCollectionById(settings.branches, base.branches);
       const branchIds = new Set(branches.map(item => item.id));
       base.branches.forEach(item => {
         if (!branchIds.has(item.id)) branches.push(structuredClone(item));
       });
-      return normalizeBusinessScope(normalizeMiaBusinessLinks({
+      return normalizeStaleIntegrationSyncStatuses(normalizeBusinessScope(normalizeMiaBusinessLinks({
         businesses: mergeCollectionById(settings.businesses, base.businesses),
         branches,
         accounts: mergeCollectionById(settings.accounts, base.accounts),
         staff: mergeCollectionById(settings.staff, base.staff),
         integrations: mergeCollectionById(settings.integrations, base.integrations)
-      }));
+      })));
+    }
+
+    function normalizeStaleIntegrationSyncStatuses(next) {
+      const now = Date.now();
+      const staleMs = 60 * 1000;
+      const uploadModes = new Set(["portal-csv", "csv-upload", "statement-upload", "upload_queue", "manual", "receipt-photo", "tax-invoice-upload"]);
+      (next.integrations || []).forEach(item => {
+        if (String(item.lastSyncStatus || item.portalStatus || "").toLowerCase() !== "running") return;
+        const startedAt = Date.parse(item.lastSyncAt || item.updatedAt || "");
+        if (Number.isFinite(startedAt) && now - startedAt < staleMs) return;
+        const collectionMode = String(item.collectionMode || item.collection_mode || "").trim();
+        const needsUpload = uploadModes.has(collectionMode) || /upload|photo|excel|report/.test(collectionMode);
+        const hasCredential = Boolean(item.passwordMasked && !String(item.passwordMasked).includes("필요"));
+        item.lastSyncStatus = needsUpload ? "upload_required" : (hasCredential ? "blocked" : "credential_required");
+        item.portalStatus = item.lastSyncStatus;
+        item.portalMessage = needsUpload
+          ? "이전 연동 실행이 완료 응답 없이 종료되어 파일 업로드/브라우저 세션 확인이 필요합니다."
+          : "이전 연동 실행이 완료 응답 없이 종료되어 계정값 또는 PC Agent 세션 확인이 필요합니다.";
+      });
+      return next;
     }
 
     function saveState() {

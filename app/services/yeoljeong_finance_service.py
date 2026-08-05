@@ -988,11 +988,23 @@ def _has_secret_value(row: dict[str, Any], plaintext_field: str) -> bool:
 
 def _public_platform_account_status(row: dict[str, Any]) -> str:
     status = str(row.get("status") or "ready").strip()
+    sync_status = str(row.get("last_sync_status") or row.get("portal_status") or "").strip()
     service = str(row.get("service") or "").strip()
     collection_mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()
     has_browser_state = bool(
         str(row.get("storage_state_path") or row.get("browser_storage_state_path") or row.get("baemin_storage_state_path") or "").strip()
     )
+    if sync_status == "running":
+        started_text = str(row.get("last_sync_at") or row.get("updated_at") or "").strip()
+        try:
+            started_at = datetime.fromisoformat(started_text.replace("Z", "+00:00"))
+        except ValueError:
+            started_at = None
+        if started_at and datetime.now(started_at.tzinfo or KST) - started_at < timedelta(seconds=60):
+            return "running"
+        if service in PLATFORM_LABELS and collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not has_browser_state:
+            return "upload_required"
+        return "credential_required" if service in PLATFORM_LABELS and not has_browser_state else "blocked"
     if service in PLATFORM_LABELS and not _has_secret_value(row, "password") and not has_browser_state:
         return "credential_required"
     if service in PLATFORM_LABELS and collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:

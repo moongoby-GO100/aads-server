@@ -6105,3 +6105,17 @@
 - 남은 주의:
   - CEO 브라우저에서 기존 탭/캐시가 남아 있으면 새 JS를 못 볼 수 있으므로 강력 새로고침 또는 `?v=f27d559a` 쿼리로 재접속이 필요할 수 있다.
   - 실제 관리자 클릭 E2E는 매장비서 로그인 자격증명을 Vault에 등록해야 재현 가능하다.
+
+## 2026-08-06 08:23 KST - FB 연동설정 running 고착 정리 및 E2E 검증
+
+- 요청: 연동설정 저장 후 `연동 실행` 상태가 오래 `running`처럼 보이는 다음 단계 조치와 E2E 검증.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에 `normalizeStaleIntegrationSyncStatuses()`를 추가해 localStorage에 남은 오래된 `running` 상태를 로딩 시 `upload_required`, `credential_required`, `blocked`로 정리하도록 했다.
+  - `app/services/yeoljeong_finance_service.py`의 공개 계정 상태도 `last_sync_status/portal_status=running`이 60초 이상 지난 경우 실제 필요 상태로 정규화하도록 보강했다. 실행 시작 60초 이내의 실제 진행 상태는 `running`으로 유지한다.
+  - 회귀 테스트에 서버 상태 정규화와 정적 HTML 표식 검증을 추가했다.
+- 검증:
+  - `node --check /tmp/yeoljeong-index-script.js` 성공.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` 성공.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 66 passed.
+- 배포/E2E:
+  - 이 항목 작성 시점에는 아직 커밋/푸시/배포 전이다. 커밋 후 blue-green 배포 및 운영 브라우저 E2E 결과를 최종 보고에 별도 기재한다.

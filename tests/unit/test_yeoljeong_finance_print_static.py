@@ -125,6 +125,8 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "API 응답 지연" in HTML
     assert "integrationSyncTimers" in HTML
     assert "연동 응답 지연: 서버 응답이 없어 확인이 필요합니다." in HTML
+    assert "normalizeStaleIntegrationSyncStatuses" in HTML
+    assert "이전 연동 실행이 완료 응답 없이 종료되어" in HTML
     assert "${item.lastSyncStatus === \"running\" ? \"실행중...\" : \"수집 실행\"}" in HTML
     assert ">수집 실행</button>`" not in HTML
     assert "integrationMatchesSyncSummary" in HTML
