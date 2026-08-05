@@ -102,6 +102,8 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다." in HTML
     assert "로컬에는 저장했습니다. 서버 기초설정 저장 실패" in HTML
     assert "서버 저장은 운영관리자 로그인 후 가능합니다." in HTML
+    assert "modalForm.reportValidity?.()" in HTML
+    assert 'setIntegrationSubmitFeedback(modalForm, "저장 후 연동 실행 요청을 접수했습니다.", true);' in HTML
     assert 'name="passwordConfirm"' not in form_html
     assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
     assert "rerenderIntegrationConnectForm(service, form)" in HTML

@@ -10245,14 +10245,15 @@
         if (!modalForm) return;
         if (!modalForm.checkValidity()) {
           setIntegrationSubmitFeedback(modalForm, "필수 입력값을 확인하십시오. 표시명, 사업자, 연동 구분이 필요합니다.", false);
+          modalForm.reportValidity?.();
           return;
         }
-        setIntegrationSubmitFeedback(modalForm, "저장 후 연동 실행 요청을 접수했습니다.", true);
       });
       document.body.addEventListener("submit", event => {
         const modalForm = event.target.closest("[data-integration-connect-form]");
         if (!modalForm) return;
         event.preventDefault();
+        setIntegrationSubmitFeedback(modalForm, "저장 후 연동 실행 요청을 접수했습니다.", true);
         saveIntegrationConnection(modalForm, { resetAfterSave: false })
           .catch(err => {
             setIntegrationSubmitFeedback(modalForm, `저장·연동 실행 실패: ${err.message || err}`, false);
