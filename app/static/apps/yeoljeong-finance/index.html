@@ -4190,7 +4190,7 @@
       baemin: {
         category: "판매사이트",
         loginUrl: "https://self.baemin.com/",
-        collectionMode: "portal-csv",
+        collectionMode: "browser-automation",
         dataScope: "주문, 매출, 배달팁, 쿠폰, 정산서",
         requiredProof: "사업자번호, 매장 권한, 2차 인증",
         memo: "배민셀프서비스에서 매출/정산 자료를 내려받아 월마감에 반영"
@@ -4198,7 +4198,7 @@
       coupangeats: {
         category: "판매사이트",
         loginUrl: "https://store.coupangeats.com/",
-        collectionMode: "portal-csv",
+        collectionMode: "browser-automation",
         dataScope: "주문, 매출, 정산, 프로모션",
         requiredProof: "스토어 계정, 매장 권한, 2차 인증",
         memo: "쿠팡이츠 사장님 포털 정산 자료 수집"
@@ -4206,7 +4206,7 @@
       yogiyo: {
         category: "판매사이트",
         loginUrl: "https://ceo.yogiyo.co.kr/",
-        collectionMode: "portal-csv",
+        collectionMode: "browser-automation",
         dataScope: "주문, 매출, 정산, 리뷰",
         requiredProof: "사장님사이트 계정, 매장 권한",
         memo: "요기요 사장님사이트 매출/정산 자료 수집"
@@ -4214,7 +4214,7 @@
       ddangyo: {
         category: "판매사이트",
         loginUrl: "https://boss.ddangyo.com/",
-        collectionMode: "portal-csv",
+        collectionMode: "browser-automation",
         dataScope: "주문, 매출, 즉시정산, 정산서",
         requiredProof: "땡겨요 사장님라운지 계정, 사업자 인증",
         memo: "땡겨요 사장님라운지 매출/정산 자료 수집"
@@ -7316,7 +7316,7 @@
           ${inputField("password", "비밀번호", "password", "Vault에 암호화 저장", "autocomplete=\"new-password\"")}
           ${selectField("mfaMethod", "2차 인증 수단", [["sms", "문자 OTP"], ["email", "이메일 OTP"], ["push", "앱 푸시 승인"], ["manual", "관리자 수동 승인"]], "sms")}
           ${inputField("apiKey", "API 토큰·승인키", "password", "제공되는 경우 입력", "autocomplete=\"new-password\"")}
-          ${selectField("collectionMode", "수집 방식", [["portal-csv", "포털 정산서/CSV 다운로드"], ["browser-automation", "브라우저 자동화"], ["api", "공식 API"], ["pos-export", "POS 내보내기"]], catalog.collectionMode || "portal-csv")}
+          ${selectField("collectionMode", "수집 방식", [["browser-automation", "브라우저 자동화"], ["portal-csv", "포털 정산서/CSV 다운로드"], ["api", "공식 API"], ["pos-export", "POS 내보내기"]], catalog.collectionMode || "browser-automation")}
           ${selectField("syncScope", "수집 범위", syncScopeOptions, selectedScope)}
           ${selectField("permissionScope", "권한 범위", [["read_only", "조회 전용"], ["settlement_read", "정산 조회"], ["review_reply", "리뷰 답변 포함"], ["admin_exception", "관리자 전체"]], "read_only")}
           ${selectField("failureFallback", "연동 실패 시 대체", [["csv_upload_queue", "정산 CSV 업로드 대기열"], ["manual_review", "관리자 수동 검수"], ["credential_refresh_alert", "대표에게 인증 갱신 알림"], ["branch_manual_entry", "해당 지점 수기 입력"]], "csv_upload_queue")}
@@ -7680,6 +7680,7 @@
       const accountNoMasked = String(data.accountNoMasked || "").trim() || maskDigits(data.accountNo);
       const businessRegistrationNoMasked = String(data.businessRegistrationNoMasked || "").trim() || maskDigits(data.businessRegistrationNo);
       let serverAccount = null;
+      let pendingAutoSync = null;
       const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(String(data.username || "").trim());
       if (shouldUseServerVault && !canManageAutomation()) {
         showToast("외부 서비스 계정 서버 등록은 총괄 운영관리자 로그인 후 가능합니다.");
@@ -7724,14 +7725,7 @@
             })
           });
           serverAccount = result.account;
-          if (result.sync) {
-            const syncResult = applyFinancialSyncPayload(result.sync);
-            if (syncResult.recordsCount) {
-              showToast(`계정 저장 후 은행/카드 거래 ${syncResult.recordsCount}건을 반영했습니다.`);
-            } else if (syncResult.blocked) {
-              showToast(`계정은 저장됐고 연동 상태를 확인했습니다. 확인필요 ${syncResult.blocked}건${syncResult.messages.length ? " · " + syncResult.messages.join(" / ") : ""}`);
-            }
-          }
+          pendingAutoSync = result.sync || null;
         } catch (err) {
           showToast(`서버 저장 실패: ${err.message}`);
         }
@@ -7755,7 +7749,7 @@
         passwordMasked: serverAccount?.password_masked || ((data.password || data.apiKey || data.clientSecret || data.accountPassword) ? "브라우저 저장됨" : existingIntegration?.passwordMasked || "Vault/입력 필요"),
         collectionMode,
         dataScope: catalog.dataScope || "",
-        requiredProof: catalog.requiredProof || "",
+        requiredProof: (serverAccount?.credential_requirements || []).length ? `필요정보: ${serverAccount.credential_requirements.join(", ")}` : catalog.requiredProof || "",
         authOwner: data.authOwner || "",
         mfaMethod: data.mfaMethod || "",
         credentialExpiresAt: data.credentialExpiresAt || "",
@@ -7763,9 +7757,9 @@
         syncScope: data.syncScope || "",
         permissionScope: data.permissionScope || "",
         failureFallback: data.failureFallback || "",
-        status: serverAccount ? "vault-ready" : data.status || existingIntegration?.status || "ready",
+        status: serverAccount?.status || (serverAccount ? "vault-ready" : data.status || existingIntegration?.status || "ready"),
         vaultService: serverAccount ? `server:${serverAccount.id}` : existingIntegration?.vaultService || `yeoljeong-${data.service}`,
-        memo
+        memo: (serverAccount?.credential_requirements || []).length ? `입력 필요: ${serverAccount.credential_requirements.join(", ")}` : memo
       };
       if (existingIntegration) {
         state.settings.integrations = settings().integrations.map(item => item.id === editIntegrationId ? nextIntegration : item);
@@ -7774,6 +7768,16 @@
       }
       saveState();
       syncSettingsToServer();
+      if (pendingAutoSync) {
+        const syncResult = deliveryAutomationServices.has(data.service)
+          ? applySyncPayload(pendingAutoSync)
+          : applyFinancialSyncPayload(pendingAutoSync);
+        if (syncResult.recordsCount || syncResult.salesCount || syncResult.settlementsCount || syncResult.reviewsCount) {
+          showToast(`계정 저장 후 자동 수집을 반영했습니다. 매출 ${syncResult.salesCount || 0}건 / 정산 ${syncResult.settlementsCount || 0}건 / 리뷰 ${syncResult.reviewsCount || 0}건 / 거래 ${syncResult.recordsCount || 0}건`);
+        } else if (syncResult.blocked) {
+          showToast(`계정은 저장됐고 자동 수집을 실행했습니다. 확인필요 ${syncResult.blocked}건${syncResult.messages.length ? " · " + syncResult.messages.join(" / ") : ""}`);
+        }
+      }
       delete form.dataset.editIntegrationId;
       form.reset();
       if (form.businessId) form.businessId.value = selectedSettingsBusinessId();

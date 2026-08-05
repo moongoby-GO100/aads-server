@@ -990,11 +990,65 @@ def _public_platform_account_status(row: dict[str, Any]) -> str:
     status = str(row.get("status") or "ready").strip()
     service = str(row.get("service") or "").strip()
     collection_mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()
-    if service in PLATFORM_LABELS and not _has_secret_value(row, "password"):
+    has_browser_state = bool(
+        str(row.get("storage_state_path") or row.get("browser_storage_state_path") or row.get("baemin_storage_state_path") or "").strip()
+    )
+    if service in PLATFORM_LABELS and not _has_secret_value(row, "password") and not has_browser_state:
         return "credential_required"
     if service in PLATFORM_LABELS and collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:
         return "upload_required"
     return status
+
+
+def _missing_connector_requirements(row: dict[str, Any]) -> list[str]:
+    service = str(row.get("service") or "").strip()
+    collection_mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()
+    missing: list[str] = []
+    if service in PLATFORM_LABELS:
+        if not str(row.get("username") or "").strip():
+            missing.append("아이디")
+        has_browser_state = bool(
+            str(row.get("storage_state_path") or row.get("browser_storage_state_path") or row.get("baemin_storage_state_path") or "").strip()
+        )
+        if not _has_secret_value(row, "password") and not has_browser_state:
+            missing.append("비밀번호 또는 PC Agent 로그인 세션")
+        if collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not has_browser_state:
+            missing.append("브라우저 자동화 방식 선택 또는 포털 CSV/엑셀 업로드")
+    if service in BANK_QUICK_SERVICE_CONFIG and collection_mode == "bank-quick-service":
+        for label, key in (
+            ("로그인 비밀번호", "password"),
+            ("조회용 계좌번호", "account_no"),
+            ("계좌비밀번호", "account_password"),
+            ("사업자번호", "business_registration_no"),
+        ):
+            if not _has_secret_value(row, key):
+                missing.append(label)
+    return list(dict.fromkeys(missing))
+
+
+def _mark_platform_account_sync_state(account: dict[str, Any], *, status: str, message: str, synced_at: str) -> None:
+    account["last_sync_status"] = status
+    account["portal_status"] = status
+    account["portal_message"] = message
+    account["last_sync_at"] = synced_at
+    account["updated_at"] = synced_at
+    account_id = str(account.get("id") or "")
+    if not account_id:
+        return
+    rows = _read("platform_accounts")
+    for row in rows:
+        if str(row.get("id") or "") == account_id:
+            row.update(
+                {
+                    "last_sync_status": status,
+                    "portal_status": status,
+                    "portal_message": message,
+                    "last_sync_at": synced_at,
+                    "updated_at": synced_at,
+                }
+            )
+            _write("platform_accounts", rows)
+            break
 
 
 # Fields that must never appear in API responses or logs.
@@ -2511,6 +2565,7 @@ def list_accounts(user: dict[str, Any], business_id: str | None = None) -> list[
         item["branch"] = BRANCH_ALIASES.get(str(item.get("branch") or ""), str(item.get("branch") or ""))
         item["password_masked"] = "********" if _has_account_secret(row) else ""
         item["status"] = _public_platform_account_status(row)
+        item["credential_requirements"] = _missing_connector_requirements(row)
         result.append(item)
     return result
 
@@ -3054,6 +3109,7 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
                     "imported_rows": 0,
                 }
             )
+            _mark_platform_account_sync_state(account, status=status, message=message, synced_at=synced_at)
             continue
         sample_rows = account.get("last_download_rows") if isinstance(account.get("last_download_rows"), list) else []
         count = 0
@@ -3080,6 +3136,9 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
                 "imported_rows": count,
             }
         )
+        status = "completed" if count else "no_records"
+        message = "저장된 다운로드 거래를 반영했습니다." if count else "반영할 신규 거래가 없습니다."
+        _mark_platform_account_sync_state(account, status=status, message=message, synced_at=synced_at)
 
     if imported_rows:
         _write("transactions", list(by_id.values()))
@@ -3356,6 +3415,12 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 "updated_at": finished_at,
             }
         )
+        if account:
+            account["last_sync_status"] = status_record["status"]
+            account["portal_status"] = status_record["status"]
+            account["portal_message"] = status_record["message"] or status_record["error_code"]
+            account["last_sync_at"] = finished_at
+            account["updated_at"] = finished_at
         summary.append(
             {
                 "service": service,
@@ -3373,6 +3438,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
 
     for name, rows in ledgers.items():
         _write(name, rows)
+    _write("platform_accounts", all_accounts)
     _write("delivery_collection_status", statuses)
     return {
         "synced_at": synced_at,

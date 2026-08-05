@@ -213,6 +213,47 @@ async def test_account_upsert_runs_financial_sync_when_auto_sync_enabled(monkeyp
     assert result == {"account": saved_account, "sync": sync_result}
 
 
+@pytest.mark.asyncio
+async def test_account_upsert_runs_delivery_sync_when_auto_sync_enabled(monkeypatch):
+    saved_account = {
+        "id": "acct-baemin",
+        "service": "baemin",
+        "business_id": "biz-junghwa",
+        "branch": "중화점",
+    }
+    sync_result = {"summary": [{"service": "baemin", "status": "credential_required"}]}
+
+    def fake_upsert_account(payload, current_user):
+        assert payload["auto_sync"] is True
+        assert payload["service"] == "baemin"
+        return saved_account
+
+    def fake_sync_delivery(payload, current_user):
+        assert payload == {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+        }
+        return sync_result
+
+    monkeypatch.setattr(api.svc, "upsert_account", fake_upsert_account)
+    monkeypatch.setattr(api.svc, "sync_delivery", fake_sync_delivery)
+
+    payload = api.AccountUpsertPayload(
+        service="baemin",
+        username="baemin-user",
+        password="login-secret",
+        business_id="biz-junghwa",
+        branch="중화점",
+        collection_mode="browser-automation",
+        auto_sync=True,
+    )
+
+    result = await api.upsert_account(payload, {"email": "owner@example.com", "is_admin": True})
+
+    assert result == {"account": saved_account, "sync": sync_result}
+
+
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
     html = html_path.read_text(encoding="utf-8")
@@ -337,7 +378,9 @@ def test_bank_quick_service_ui_collects_required_vault_fields():
     assert 'account_no: data.accountNo || ""' in html
     assert 'account_password: data.accountPassword || ""' in html
     assert 'business_registration_no: data.businessRegistrationNo || ""' in html
-    assert "const syncResult = applyFinancialSyncPayload(result.sync)" in html
+    assert "pendingAutoSync = result.sync || null" in html
+    assert "? applySyncPayload(pendingAutoSync)" in html
+    assert ": applyFinancialSyncPayload(pendingAutoSync)" in html
     assert "if (result.sync) applySyncPayload(result.sync)" not in html
     assert "신한은행 간편서비스 계좌조회 기준" in html
     assert "IBK기업은행 빠른서비스 계좌조회 기준" in html

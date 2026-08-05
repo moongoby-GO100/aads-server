@@ -66,6 +66,7 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "기타 매입처 연동" in landing_html
     assert "플랫폼 매장코드" in form_html
     assert "2차 인증 수단" in form_html
+    assert '["browser-automation", "브라우저 자동화"]' in form_html
     assert "정산 CSV 업로드 대기열" in form_html
     assert "조회 계좌번호" in form_html
     assert "계좌비밀번호" in form_html

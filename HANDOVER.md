@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-05 16:43 KST - FB integration auto-sync priority
+
+- Request: Make integration automation the top priority, and clearly show which ID/PW/session values the CEO must enter in integration settings.
+- Changes:
+  - `app/api/yeoljeong_finance.py`: `POST /api/v1/yeoljeong-finance/accounts` now runs delivery platform sync immediately when `auto_sync=true`, not only bank/card transaction sync.
+  - `app/services/yeoljeong_finance_service.py`: account list responses now include `credential_requirements`; sync results update the saved platform account status/message/last sync time so the UI can show "credential required", "upload required", or connector status after a run.
+  - `app/static/apps/yeoljeong-finance/index.html`: delivery platforms now default to `browser-automation`; save flow applies delivery sync results with `applySyncPayload()` and bank/card sync results with `applyFinancialSyncPayload()`. The saved integration row shows `필요정보` when password, PC Agent session, bank account password, business number, or upload fallback is missing.
+  - Tests updated for delivery auto-sync and UI static assertions.
+- Verification:
+  - Container pytest with updated test files: `python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` passed: 80 passed, 1 warning.
+  - Node inline JS parse check passed: `inline-js-ok`.
+  - Public static URL check: `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200.
+- Pending:
+  - Backend process reload/deploy is required before the new `/accounts` delivery auto-sync branch is live in the running API worker. Static `index.html` is bind-mounted and visible to the public URL, but Python route changes need an approved deploy/reload.
+  - Successful real Baemin collection still requires CEO to enter the missing Baemin password or provide an authenticated PC Agent/browser storage session in integration settings.
+
 ## 2026-08-05 16:07 KST - FB integration drawer design parity E2E
 
 - Request: Recheck E2E and make the production FB integration management page match `mockup-v2.html#integrations` exactly for the integration add/setup/edit flow.

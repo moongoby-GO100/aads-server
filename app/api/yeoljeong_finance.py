@@ -328,11 +328,22 @@ async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Dep
     data = payload.model_dump()
     account = await run_in_threadpool(svc.upsert_account, data, current_user)
     response: dict[str, Any] = {"account": account}
-    if data.get("auto_sync") and str(data.get("service") or "") in svc.FINANCIAL_TRANSACTION_SERVICES:
+    service = str(data.get("service") or "")
+    if data.get("auto_sync") and service in svc.PLATFORM_LABELS:
+        response["sync"] = await run_in_threadpool(
+            svc.sync_delivery,
+            {
+                "services": [service],
+                "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
+                "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
+            },
+            current_user,
+        )
+    elif data.get("auto_sync") and service in svc.FINANCIAL_TRANSACTION_SERVICES:
         response["sync"] = await run_in_threadpool(
             svc.sync_financial_transactions,
             {
-                "services": [data["service"]],
+                "services": [service],
                 "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
                 "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
             },
