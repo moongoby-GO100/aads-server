@@ -7530,6 +7530,7 @@
           ${integrationDetailCard("실패 대체", "CSV/엑셀/사진 업로드 대기열")}
           ${integrationDetailCard("검증", "저장 후 샘플 동기화와 감사로그 기록")}
         </div>
+        <div class="integration-status-note" data-integration-submit-status>저장 후 연동 실행을 누르면 이 영역에 저장·수집 진행 상태가 표시됩니다.</div>
         <div class="drawer-actions"><button type="button" data-integration-detail="integration-guide">설정 가이드</button><button type="button" data-open-import="${escapeHtml(service)}">CSV/엑셀 대체 등록</button><button type="submit" class="primary">저장 후 연동 실행</button></div>
       </form>`;
     }
@@ -7777,6 +7778,18 @@
       setIntegrationFormNote(form, name, `${label} 기존 Vault 등록됨 · 보안상 원문은 다시 표시하지 않습니다.`);
     }
 
+    function setIntegrationSubmitFeedback(form, message, busy = false) {
+      if (!form) return;
+      const submitButton = form.querySelector("button[type='submit']");
+      const statusNote = form.querySelector("[data-integration-submit-status]");
+      if (statusNote) statusNote.textContent = message;
+      if (submitButton) {
+        if (!submitButton.dataset.defaultText) submitButton.dataset.defaultText = submitButton.textContent;
+        submitButton.disabled = busy;
+        submitButton.textContent = busy ? "저장·연동 실행중..." : submitButton.dataset.defaultText;
+      }
+    }
+
     function openIntegrationEdit(integrationId) {
       const item = settings().integrations.find(candidate => candidate.id === integrationId);
       if (!item) {
@@ -7824,7 +7837,8 @@
       }, 50);
     }
 
-    async function saveIntegrationConnection(form) {
+    async function saveIntegrationConnection(form, options = {}) {
+      const { resetAfterSave = true } = options;
       const data = Object.fromEntries(new FormData(form).entries());
       const catalog = integrationCatalog[data.service] || {};
       const editIntegrationId = form.dataset.editIntegrationId || "";
@@ -7833,6 +7847,7 @@
         showToast("비밀번호 확인값이 일치하지 않습니다.");
         return false;
       }
+      setIntegrationSubmitFeedback(form, "저장값을 서버 Vault에 저장하고 연동 실행을 시작합니다.", true);
       const loginUrl = String(data.loginUrl || "").trim() || catalog.loginUrl || "";
       const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
       const memo = String(data.memo || "").trim() || catalog.memo || "";
@@ -7997,10 +8012,14 @@
           syncNotice = "저장 후 연동 실행 완료: 신규 반영 데이터는 없습니다.";
         }
       }
-      delete form.dataset.editIntegrationId;
-      form.reset();
-      if (form.businessId) form.businessId.value = selectedSettingsBusinessId();
-      applyIntegrationPreset(form.service?.value || data.service, true, form);
+      if (resetAfterSave) {
+        delete form.dataset.editIntegrationId;
+        form.reset();
+        if (form.businessId) form.businessId.value = selectedSettingsBusinessId();
+        applyIntegrationPreset(form.service?.value || data.service, true, form);
+      } else {
+        form.dataset.editIntegrationId = nextIntegration.id;
+      }
       if (!pendingAutoSync) {
         nextIntegration.lastSyncAt = new Date().toISOString();
         nextIntegration.lastSyncStatus = canManageAutomation() && shouldUseServerVault ? "connector_not_configured" : "credential_required";
@@ -8011,6 +8030,7 @@
         saveState();
       }
       renderAll();
+      setIntegrationSubmitFeedback(form, syncNotice || nextIntegration.portalMessage || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")), false);
       showToast(syncNotice || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")));
       return true;
     }
@@ -10165,9 +10185,11 @@
         const modalForm = event.target.closest("[data-integration-connect-form]");
         if (!modalForm) return;
         event.preventDefault();
-        saveIntegrationConnection(modalForm)
-          .then(saved => { if (saved) closeIntegrationDetailModal(); })
-          .catch(err => showToast(err.message));
+        saveIntegrationConnection(modalForm, { resetAfterSave: false })
+          .catch(err => {
+            setIntegrationSubmitFeedback(modalForm, `저장·연동 실행 실패: ${err.message || err}`, false);
+            showToast(err.message);
+          });
       });
 
       els.clearEntryBtn.addEventListener("click", () => {

@@ -90,6 +90,10 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "markExistingSecretField" in HTML
     assert "기존 기준값:" in HTML
     assert "기존 Vault 등록됨" in HTML
+    assert "data-integration-submit-status" in form_html
+    assert "function setIntegrationSubmitFeedback" in HTML
+    assert 'saveIntegrationConnection(modalForm, { resetAfterSave: false })' in HTML
+    assert "저장·연동 실행중..." in HTML
     assert 'name="passwordConfirm"' not in form_html
     assert "rerenderIntegrationConnectForm(event.target.value, modalForm)" in HTML
     assert "rerenderIntegrationConnectForm(service, form)" in HTML
