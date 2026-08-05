@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-05 19:08 KST - FB integration submit click immediate feedback verification
+
+- Request: CEO reported that the previous final report conflicted with commit/push/deploy/document ledgers and that clicking "저장 후 연동 실행" still appeared to do nothing.
+- Verified:
+  - `HEAD` and `origin/main` matched `679991cb0ddba158dfaa0a648e4d11d9692c28be` before this follow-up patch.
+  - Production `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returned HTTP 200 and contained the prior sync feedback markers.
+  - AADS blue/green containers were healthy.
+- Fix:
+  - `app/static/apps/yeoljeong-finance/index.html`
+    - Added `previewIntegrationFromForm()` so a new integration row is shown as `running` immediately before server save/sync returns.
+    - Updated save flow to reuse the optimistic row instead of creating a duplicate after server response.
+    - Added a click handler for `[data-integration-connect-form] button[type='submit']` so the drawer status changes immediately to "저장 후 연동 실행 요청을 접수했습니다." and shows a clear required-field message when browser validation blocks submit.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`
+    - Added static regression assertions for immediate submit feedback, required-field feedback, pending row, and optimistic integration id markers.
+- Validation:
+  - `docker exec aads-server pytest -q tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py` -> 82 passed, 1 warning.
+- Notes:
+  - Host browser E2E was not available because local Python Playwright/jsdom and system Chromium were missing. API/static/health verification was used as the fallback per R-E2E.
+
 ## 2026-08-05 18:41 KST - FB integration run button visible feedback and account-scoped sync
 
 - Request: CEO reported that clicking "저장 후 연동 실행" / row "연동 실행" still showed no visible change in the production integration settings screen.

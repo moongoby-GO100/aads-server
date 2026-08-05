@@ -92,6 +92,11 @@ def test_integration_add_opens_service_specific_setup_forms():
     assert "기존 Vault 등록됨" in HTML
     assert "data-integration-submit-status" in form_html
     assert "function setIntegrationSubmitFeedback" in HTML
+    assert "function previewIntegrationFromForm" in HTML
+    assert "저장 후 연동 실행 요청을 접수했습니다." in HTML
+    assert "필수 입력값을 확인하십시오." in HTML
+    assert "pending-${service}" in HTML
+    assert "optimisticIntegrationId" in HTML
     assert 'saveIntegrationConnection(modalForm, { resetAfterSave: false })' in HTML
     assert "저장·연동 실행중..." in HTML
     assert "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다." in HTML

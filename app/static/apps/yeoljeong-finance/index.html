@@ -7790,6 +7790,30 @@
       }
     }
 
+    function previewIntegrationFromForm(form) {
+      if (!form) return null;
+      const data = Object.fromEntries(new FormData(form).entries());
+      const service = data.service || "shinhan_business";
+      const catalog = integrationCatalog[service] || {};
+      return {
+        id: form.dataset.editIntegrationId || `pending-${service}-${Date.now()}`,
+        service,
+        label: String(data.label || "").trim() || integrationLabels[service] || service,
+        category: catalog.category || "기타",
+        loginUrl: String(data.loginUrl || "").trim() || catalog.loginUrl || "",
+        username: String(data.username || "").trim(),
+        business_id: data.businessId,
+        businessId: data.businessId,
+        branch: data.branch || "",
+        collectionMode: data.collectionMode || catalog.collectionMode || "browser-automation",
+        status: "running",
+        portalStatus: "running",
+        lastSyncStatus: "running",
+        lastSyncAt: new Date().toISOString(),
+        portalMessage: `${integrationLabels[service] || service} 저장 후 연동 실행 중`
+      };
+    }
+
     function openIntegrationEdit(integrationId) {
       const item = settings().integrations.find(candidate => candidate.id === integrationId);
       if (!item) {
@@ -7862,6 +7886,16 @@
       let syncNotice = "";
       let serverVaultWarning = "";
       let serverPersistenceWarning = "";
+      const previewIntegration = existingIntegration || previewIntegrationFromForm(form);
+      const optimisticIntegrationId = existingIntegration?.id || previewIntegration?.id || "";
+      if (!existingIntegration && previewIntegration) {
+        state.settings.integrations = [
+          previewIntegration,
+          ...settings().integrations.filter(item => item.id !== previewIntegration.id)
+        ];
+        form.dataset.editIntegrationId = previewIntegration.id;
+      }
+      if (previewIntegration) markIntegrationRunning(previewIntegration, `${integrationLabels[previewIntegration.service] || previewIntegration.service} 저장 후 연동 실행 중`);
       const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(String(data.username || "").trim());
       if (shouldUseServerVault && !canManageAutomation()) {
         serverVaultWarning = "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다. 입력값은 로컬 연동 목록에 먼저 저장했습니다.";
@@ -7965,7 +7999,7 @@
         }
       }
       const nextIntegration = {
-        id: existingIntegration?.id || uid(),
+        id: optimisticIntegrationId || uid(),
         serverAccountId: serverAccount?.id || existingIntegration?.serverAccountId || "",
         service: data.service,
         label: String(data.label || "").trim(),
@@ -7995,8 +8029,14 @@
         vaultService: serverAccount ? `server:${serverAccount.id}` : existingIntegration?.vaultService || `yeoljeong-${data.service}`,
         memo: (serverAccount?.credential_requirements || []).length ? `입력 필요: ${serverAccount.credential_requirements.join(", ")}` : memo
       };
-      if (existingIntegration) {
-        state.settings.integrations = settings().integrations.map(item => item.id === editIntegrationId ? nextIntegration : item);
+      if (existingIntegration || optimisticIntegrationId) {
+        let replaced = false;
+        state.settings.integrations = settings().integrations.map(item => {
+          if (item.id !== optimisticIntegrationId && item.id !== editIntegrationId) return item;
+          replaced = true;
+          return nextIntegration;
+        });
+        if (!replaced) settings().integrations.push(nextIntegration);
       } else {
         settings().integrations.push(nextIntegration);
       }
@@ -10197,6 +10237,17 @@
         if (modalForm && event.target.name === "service") {
           rerenderIntegrationConnectForm(event.target.value, modalForm);
         }
+      });
+      document.body.addEventListener("click", event => {
+        const submitButton = event.target.closest("[data-integration-connect-form] button[type='submit']");
+        if (!submitButton) return;
+        const modalForm = submitButton.closest("[data-integration-connect-form]");
+        if (!modalForm) return;
+        if (!modalForm.checkValidity()) {
+          setIntegrationSubmitFeedback(modalForm, "필수 입력값을 확인하십시오. 표시명, 사업자, 연동 구분이 필요합니다.", false);
+          return;
+        }
+        setIntegrationSubmitFeedback(modalForm, "저장 후 연동 실행 요청을 접수했습니다.", true);
       });
       document.body.addEventListener("submit", event => {
         const modalForm = event.target.closest("[data-integration-connect-form]");
