@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-06 08:43 KST - FB stale integration running normalization E2E closeout
+
+- Request: Continue the next step and report after E2E verification for the Yeoljeong finance integration settings flow.
+- Root cause found during E2E:
+  - `mergeCollectionById()` rebuilt integration settings from defaults first, but did not reliably preserve existing user/local integration state over defaults.
+  - Because of that, stale `running` fields could be hidden or overwritten before the stale-state normalizer and row rendering verified the actual user state.
+  - Server `list_accounts()` returned public normalized status, but did not persist stale `running` rows back to the protected platform account ledger.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: changed integration/settings merge so existing items override defaults by id while still adding default rows when missing.
+  - `app/services/yeoljeong_finance_service.py`: `list_accounts()` now persists stale `running` account statuses to `credential_required`, `upload_required`, or `blocked` when the 60s live window has passed.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`: added a regression assertion for existing-item merge precedence.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added persistence assertions for stale `running` normalization.
+- Verification:
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` -> 65 passed.
+  - Production browser E2E on `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html#integrations`: forced stale `running` state for `int-baemin` and `int-marketbom`, ran deployed JS normalizer/render, observed `credential_required` and `upload_required`; row text had no `실행중`.
+  - External production API E2E with JWT: `GET https://fb.newtalk.kr/api/v1/yeoljeong-finance/accounts` -> HTTP 200, 8 accounts, `running_count=0`, `secret_leak_count=0`.
+  - External static verification: deployed HTML contains `normalizeStaleIntegrationSyncStatuses`, both stale-recovery messages, and `연동 응답 지연`.
+- Deploy:
+  - Active slot remains `aads-server:8100`; `aads-server-green:8102` is healthy standby.
+  - Both slots bind mount `/root/aads/aads-server/app` to `/app/app`, so the pushed/checked-out static and service changes are visible in the active production slot without an additional upstream switch.
+- Pending:
+  - Worktree contains unrelated pre-existing data/docs/OEM mail changes outside this request.
+
 ## 2026-08-05 20:10 KST - FB integration sync click final E2E closeout
 
 - Request: CEO reported the previous answer did not satisfy final completion rules and that the production "저장 후 연동 실행" / row sync click still appeared unchanged.

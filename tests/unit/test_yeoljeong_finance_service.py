@@ -302,6 +302,11 @@ def test_list_accounts_normalizes_stale_running_delivery_status(tmp_path, monkey
     listed = service.list_accounts({"email": "owner@example.com", "is_admin": True})
 
     assert listed[0]["status"] == "upload_required"
+    assert listed[0]["last_sync_status"] == "upload_required"
+    assert listed[0]["portal_status"] == "upload_required"
+    raw = service._read("platform_accounts")[0]
+    assert raw["last_sync_status"] == "upload_required"
+    assert raw["portal_status"] == "upload_required"
 
 
 def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):

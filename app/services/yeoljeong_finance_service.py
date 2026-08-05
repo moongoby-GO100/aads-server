@@ -2566,7 +2566,21 @@ def list_accounts(user: dict[str, Any], business_id: str | None = None) -> list[
     if not _is_admin(user):
         return []
     rows = _read("platform_accounts")
-    if _migrate_platform_account_secrets(rows):
+    changed = _migrate_platform_account_secrets(rows)
+    now = _now()
+    for row in rows:
+        public_status = _public_platform_account_status(row)
+        raw_sync_status = str(row.get("last_sync_status") or row.get("portal_status") or "").strip()
+        if raw_sync_status == "running" and public_status != "running":
+            row["last_sync_status"] = public_status
+            row["portal_status"] = public_status
+            row["portal_message"] = (
+                row.get("portal_message")
+                or "이전 연동 실행이 완료 응답 없이 종료되어 연결 상태 확인이 필요합니다."
+            )
+            row["updated_at"] = now
+            changed = True
+    if changed:
         _write("platform_accounts", rows)
     result = []
     for row in rows:

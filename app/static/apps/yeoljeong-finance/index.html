@@ -4941,21 +4941,18 @@
     }
 
     function mergeCollectionById(currentItems, defaultItems) {
-      const merged = Array.isArray(currentItems) && currentItems.length
-        ? currentItems.map(item => ({ ...item }))
-        : structuredClone(defaultItems);
+      const merged = structuredClone(defaultItems);
       const byId = new Map(merged.map(item => [item.id, item]));
-      defaultItems.forEach(defaultItem => {
-        const existing = byId.get(defaultItem.id);
+      if (!Array.isArray(currentItems) || !currentItems.length) return merged;
+      currentItems.forEach(item => {
+        const existing = byId.get(item.id);
         if (!existing) {
-          merged.push(structuredClone(defaultItem));
+          const next = { ...item };
+          merged.push(next);
+          byId.set(next.id, next);
           return;
         }
-        Object.entries(defaultItem).forEach(([key, value]) => {
-          if (existing[key] === undefined || existing[key] === null || existing[key] === "") {
-            existing[key] = structuredClone(value);
-          }
-        });
+        Object.assign(existing, item);
       });
       return merged;
     }
