@@ -9403,11 +9403,18 @@
         .filter(item => !okStatuses.has(String(item.status || "").toLowerCase()))
         .map(item => `${integrationLabels[item.service] || item.service}: ${item.portal_message || item.message || item.error_code || item.status}`)
         .slice(0, 2);
+      const summaryCounts = (payload.summary || []).reduce((totals, item) => {
+        const counts = item.counts || {};
+        totals.sales += Number(counts.sales || item.sales_count || 0);
+        totals.settlements += Number(counts.settlements || item.settlements_count || 0);
+        totals.reviews += Number(counts.reviews || item.reviews_count || 0);
+        return totals;
+      }, { sales: 0, settlements: 0, reviews: 0 });
       return {
         recordsCount: records.length,
-        salesCount: (payload.sales || []).length,
-        settlementsCount: (payload.settlements || []).length,
-        reviewsCount: (payload.reviews || []).length,
+        salesCount: (payload.sales || []).length || summaryCounts.sales,
+        settlementsCount: (payload.settlements || []).length || summaryCounts.settlements,
+        reviewsCount: (payload.reviews || []).length || summaryCounts.reviews,
         blocked,
         messages
       };

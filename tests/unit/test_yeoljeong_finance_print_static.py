@@ -122,4 +122,8 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "syncIntegrationItem(integrationIdForSync, false)" in HTML
     assert "syncIntegrationItem(integrationIdForSync, true)" in HTML
     assert "integrationMatchesSyncSummary" in HTML
+    assert "summaryCounts" in HTML
+    assert "counts.sales" in HTML
+    assert "counts.settlements" in HTML
+    assert "counts.reviews" in HTML
     assert "저장 후 연동 실행 완료" in HTML
