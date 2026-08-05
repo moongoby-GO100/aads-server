@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-05 09:18 KST - Android Agent auto-register retry deployment
+
+- Request: After confirming PC Agent is installed and managed normally, verify and fix Android Agent installation/management so it reconnects without manual token handling.
+- Result:
+  - PC Agent is online in production: `/api/v1/pc-agent/status` returned `online_count=1`, agent `2e9379a1-fed`, heartbeat age 22.5s.
+  - Android install helpers are live in production: manifest returns `auto_register_api=/api/v1/devices/android/auto-register`, deep link `aads-agent://pair`, and fresh APK download URL.
+  - Android APK was rebuilt at 2026-08-05 09:11 KST and deployed; production manifest now reports APK size `1,073,402` bytes.
+- Changes:
+  - `android_agent/app/src/main/java/kr/newtalk/aads/agent/AadsForegroundService.java`: first-run auto-register failures now schedule a restart retry even before pairing is ready.
+  - `android_agent/app/src/main/java/kr/newtalk/aads/agent/AutoRegisterClient.java`: adds stable fallback device id when Android `ANDROID_ID` is blank, preventing 422 auto-register failures on affected devices.
+- Verification:
+  - `python3 -m py_compile app/api/device.py app/services/device_manager.py` passed.
+  - `android_agent/build_release_apk.sh` passed through Docker/Gradle Android SDK fallback.
+  - `POST https://aads.newtalk.kr/api/v1/devices/android/auto-register` returned 200 in smoke test; temporary smoke token was revoked immediately afterward.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` completed with backend health OK, DB schema OK, chat table OK, LLM OK, frontend QA skipped because no frontend change.
+  - `GET https://aads.newtalk.kr/api/v1/health` returned 200.
+- Commit:
+  - `5c30aa39 fix(android): retry auto registration on first-run failure` pushed to `origin/main`.
+- Pending:
+  - Physical Android command round-trip remains unverified until a real Android device installs/opens the updated APK and connects to the device WebSocket.
+
 ## 2026-08-05 00:35 KST - Baemin PC Agent collection test and route fallback hardening
 
 - Request: Use the saved Baemin integration account through the CEO PC Agent browser, collect all available sales, settlement, and review data, and report the result.
