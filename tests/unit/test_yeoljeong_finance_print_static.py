@@ -123,6 +123,8 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "syncIntegrationItem(integrationIdForSync, true)" in HTML
     assert "AbortController" in HTML
     assert "API 응답 지연" in HTML
+    assert "integrationSyncTimers" in HTML
+    assert "연동 응답 지연: 서버 응답이 없어 확인이 필요합니다." in HTML
     assert "${item.lastSyncStatus === \"running\" ? \"실행중...\" : \"수집 실행\"}" in HTML
     assert ">수집 실행</button>`" not in HTML
     assert "integrationMatchesSyncSummary" in HTML

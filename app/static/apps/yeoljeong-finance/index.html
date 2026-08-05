@@ -4438,6 +4438,7 @@
       automation_disabled: ["자동화꺼짐", "warn"],
       not_started: ["미실행", "info"]
     };
+    const integrationSyncTimers = new Map();
     const onboardingDocTypeLabels = {
       resident_register: "주민등록등본",
       bankbook_copy: "통장사본",
@@ -9335,16 +9336,29 @@
 
     function markIntegrationRunning(item, message = "연동 실행 중입니다.") {
       if (!item) return;
+      if (integrationSyncTimers.has(item.id)) clearTimeout(integrationSyncTimers.get(item.id));
       item.lastSyncAt = new Date().toISOString();
       item.lastSyncStatus = "running";
       item.portalStatus = "running";
       item.portalMessage = message;
       saveState();
       renderAll();
+      const timer = setTimeout(() => {
+        const current = settings().integrations.find(candidate => candidate.id === item.id);
+        if (current?.lastSyncStatus === "running") {
+          markIntegrationFailed(current, "연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.");
+        }
+        integrationSyncTimers.delete(item.id);
+      }, 20000);
+      integrationSyncTimers.set(item.id, timer);
     }
 
     function markIntegrationFailed(item, message = "연동 실행에 실패했습니다.") {
       if (!item) return;
+      if (integrationSyncTimers.has(item.id)) {
+        clearTimeout(integrationSyncTimers.get(item.id));
+        integrationSyncTimers.delete(item.id);
+      }
       item.lastSyncAt = new Date().toISOString();
       item.lastSyncStatus = "blocked";
       item.portalStatus = "blocked";
