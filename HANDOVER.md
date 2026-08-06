@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-06 09:08 KST - FB 연동설정 stale running 최종 운영 확인
+
+- Request: Continue the interrupted deploy/E2E step and report whether the Yeoljeong finance integration settings screen is actually reflected in production.
+- Confirmed:
+  - `HEAD` and `origin/main` both point to `bce3f452 fix(food): settle integration save fallback status`.
+  - External production HTML `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` returns HTTP 200 and contains `fallbackSyncStatus`, `persistInitialNormalizedSettings`, stale-running recovery text, and the fallback sync message.
+  - `aads-server:8100`, `aads-server-green:8102`, `aads-dashboard`, and `aads-dashboard-green` are healthy.
+- Final data correction:
+  - `app/data/yeoljeong_finance/settings.json` still had one default Mia Baemin UI integration with `lastSyncStatus=running` and `portalStatus=running`.
+  - Because that row has no username/server account id and uses `collectionMode=portal-csv`, it was corrected to `upload_required` with a CSV/settlement upload-required message.
+  - After correction: `settings.json running_count=0`, `platform_accounts.json running_count=0`.
+- Verification:
+  - Current-image pytest with host repo mounted passed: `docker run --rm -e JWT_SECRET_KEY=e2e-test-secret-key -e AADS_DB_DISABLED=1 -v /root/aads/aads-server:/work -w /work --entrypoint python aads-server-aads-server-green -m pytest tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py` -> 25 passed, 1 warning.
+  - Production browser E2E with injected admin session opened `#auth-invite`, opened integration add, opened the sales-channel setup form, submitted a Baemin test row, and observed the submit status change from the default prompt to the fallback result message. The new local row was visible in the integration list.
+  - Browser reload check on production confirmed no visible `실행중` text and `+ 연동 추가` was visible after auth session injection.
+- Pending:
+  - `app/data/yeoljeong_finance/settings.json` and `platform_accounts.json` remain dirty operational data files from earlier work; only the stale `running` status correction was added now and it was not committed to avoid bundling unrelated pre-existing data changes.
+  - Other unrelated dirty files remain outside this request.
+
 ## 2026-08-06 08:43 KST - FB stale integration running normalization E2E closeout
 
 - Request: Continue the next step and report after E2E verification for the Yeoljeong finance integration settings flow.
