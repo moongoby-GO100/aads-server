@@ -110,6 +110,16 @@ def test_ceo_model_strings_are_recognized():
     assert svc.recognize_model("kling-v2")["provider"] == "kling"
     assert svc._route_supported("image", "kling", "kling-v2-1") is True
     assert svc._route_supported("video", "kling", "kling-v3") is True
+    assert svc.recognize_model("genspark-image-ui") == {
+        "kind": "image",
+        "provider": "genspark_ui",
+        "model_id": "genspark-image-ui",
+    }
+    assert svc.recognize_model("genspark-video") == {
+        "kind": "video",
+        "provider": "genspark_ui",
+        "model_id": "genspark-video-ui",
+    }
     assert svc.recognize_model("gpt-5.5")["provider"] == "codex"
     assert svc.recognize_model("claude-opus-4-8")["provider"] == "anthropic"
     assert svc.recognize_model("gemini-3.1-pro-preview")["provider"] == "gemini"
@@ -320,6 +330,45 @@ async def test_generate_kling_video_submits_provider_job(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_genspark_ui_image_provider_queues_for_browser_agent():
+    conn = _Conn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    result = await svc.generate_image(
+        "make a clean product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="s1",
+    )
+
+    assert result["status"] == "queued"
+    assert result["provider"] == "genspark_ui"
+    assert result["availability"] == "queued_requires_agent"
+    metadata = conn.rows[result["job_id"]]["result_metadata"]
+    assert metadata["ui_automation"]["service"] == "genspark"
+    assert metadata["ui_automation"]["requires_logged_in_browser"] is True
+    assert metadata["ui_automation"]["stores_result_via"] == "media_generation_jobs.result_path/result_uri"
+
+
+@pytest.mark.asyncio
+async def test_genspark_ui_video_provider_queues_for_browser_agent():
+    conn = _Conn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    result = await svc.generate_video(
+        "make a short product video",
+        provider="genspark",
+        input_refs={"browser_work_key": "genspark-test"},
+    )
+
+    assert result["status"] == "queued"
+    assert result["provider"] == "genspark_ui"
+    assert result["model_id"] == "genspark-video-ui"
+    assert result["automation_state"] == "queued_requires_agent"
+    assert conn.rows[result["job_id"]]["result_metadata"]["ui_automation"]["work_key"] == "genspark-test"
+
+
+@pytest.mark.asyncio
 async def test_default_image_route_externalizes_base64_result(monkeypatch, tmp_path: Path):
     conn = _Conn()
     svc = MediaGenerationService(
@@ -412,8 +461,11 @@ def test_model_routing_migration_seeds_ceo_models_and_preferences():
         "kling-v2",
         "kling-v2-1",
         "kling-v3",
+        "genspark-image-ui",
+        "genspark-video-ui",
     ):
-        assert model_id in sql + hardening_sql + kling_sql
+        genspark_sql = Path("migrations/119_genspark_ui_media_fallback.sql").read_text()
+        assert model_id in sql + hardening_sql + kling_sql + genspark_sql
     assert "ON CONFLICT (route_key, provider, model_id)" in sql
     assert "CREATE TABLE IF NOT EXISTS runner_model_config" in hardening_sql
     assert "ON CONFLICT (size) DO NOTHING" in hardening_sql

@@ -50,6 +50,7 @@ IMAGE_MODELS = (
     "kling-v2",
     "kling-v2-1",
     "kling-v2-new",
+    "genspark-image-ui",
 )
 VIDEO_MODELS = (
     "sora-2",
@@ -63,6 +64,7 @@ VIDEO_MODELS = (
     "kling-v2-1",
     "kling-v2-5",
     "kling-v3",
+    "genspark-video-ui",
 )
 LLM_ROUTING_MODELS = (
     "gpt-5.5",
@@ -89,6 +91,11 @@ def _canonical_media_model_id(model_id: str) -> str:
         "gemini-3.1-pro-image-preview": "gemini-3-pro-image-preview",
         "gemini-3.1-pro-preview-image": "gemini-3-pro-image-preview",
         "gemini-3-pro-image": "gemini-3-pro-image-preview",
+        "genspark": "genspark-image-ui",
+        "genspark-ui": "genspark-image-ui",
+        "genspark_image_ui": "genspark-image-ui",
+        "genspark-video": "genspark-video-ui",
+        "genspark_video_ui": "genspark-video-ui",
     }
     return aliases.get(normalized, str(model_id or "").strip())
 
@@ -228,6 +235,10 @@ class MediaGenerationService:
             return {"kind": "video", "provider": "google", "model_id": model}
         if lowered.startswith("kling-") or lowered.startswith("kling-v"):
             return {"kind": "video", "provider": "kling", "model_id": model}
+        if lowered == "genspark-image-ui":
+            return {"kind": "image", "provider": "genspark_ui", "model_id": model}
+        if lowered == "genspark-video-ui":
+            return {"kind": "video", "provider": "genspark_ui", "model_id": model}
         if lowered == "gpt-5.5":
             return {"kind": "llm", "provider": "codex", "model_id": model}
         if lowered == "claude-opus-4-8":
@@ -331,6 +342,8 @@ class MediaGenerationService:
         normalized = str(provider or "").lower()
         if normalized in {"pc_local", "local_pc", "local", "ceo_pc", "pc_agent"}:
             return True
+        if normalized in {"genspark_ui", "genspark", "genspark_web"}:
+            return True
         if normalized == "openai":
             return bool(_secret_value(self.settings, "OPENAI_API_KEY"))
         if normalized == "google":
@@ -353,6 +366,8 @@ class MediaGenerationService:
         return bool(access_key and secret_key)
 
     def _default_model_for(self, kind: str, provider: str | None = None) -> str:
+        if provider in {"genspark_ui", "genspark", "genspark_web"}:
+            return "genspark-image-ui" if kind == "image" else "genspark-video-ui"
         if kind == "video":
             if provider == "google":
                 return "veo-3.1-generate-preview"
@@ -407,6 +422,7 @@ class MediaGenerationService:
 
         local_item: dict[str, Any] | None = None
         local_provider_requested = requested_provider in {"pc_local", "local_pc", "local", "ceo_pc", "pc_agent"}
+        genspark_provider_requested = requested_provider in {"genspark_ui", "genspark", "genspark_web"}
         try:
             from app.services.local_model_manager import LOCAL_PROVIDER_ALIASES, local_model_manager
 
@@ -475,8 +491,12 @@ class MediaGenerationService:
 
         if requested_provider in {"local", "local_pc", "ceo_pc", "pc_agent"}:
             requested_provider = "pc_local"
+        if requested_provider in {"genspark", "genspark_web"}:
+            requested_provider = "genspark_ui"
         if not requested_provider:
             requested_provider = "google" if _secret_value(self.settings, "GOOGLE_API_KEY") else "openai"
+        if genspark_provider_requested and requested_model not in {"genspark-image-ui", "genspark-video-ui"}:
+            requested_model = self._default_model_for(normalized_kind, "genspark_ui")
 
         configured = self._provider_configured(requested_provider)
         if requested_provider == "kling" and not configured:
@@ -532,6 +552,8 @@ class MediaGenerationService:
         if kind == "image":
             if provider == "pc_local":
                 return True
+            if provider == "genspark_ui":
+                return model_id == "genspark-image-ui"
             if provider == "kling":
                 return model_id in {
                     "kling-v1",
@@ -554,10 +576,14 @@ class MediaGenerationService:
         if kind == "edit_image":
             if provider == "pc_local":
                 return True
+            if provider == "genspark_ui":
+                return model_id == "genspark-image-ui"
             return provider == "openai" and model_id in {"gpt-image-2", "gpt-image-1"}
         if kind == "video":
             if provider == "pc_local":
                 return True
+            if provider == "genspark_ui":
+                return model_id == "genspark-video-ui"
             if provider == "kling":
                 return model_id in {
                     "kling-2.0",
@@ -875,6 +901,58 @@ class MediaGenerationService:
         )
         return public
 
+    async def _prepare_genspark_ui_job(
+        self,
+        *,
+        job: Mapping[str, Any],
+        kind: str,
+        prompt: str,
+        input_refs: dict[str, Any] | None,
+        route: MediaRoute,
+    ) -> dict[str, Any]:
+        refs = dict(input_refs or {})
+        work_key = str(refs.get("browser_work_key") or "genspark-media-fallback").strip()
+        download_dir = str(
+            refs.get("download_dir")
+            or os.getenv("AADS_GENSPARK_DOWNLOAD_DIR")
+            or "/tmp/aads-media/genspark-downloads"
+        ).strip()
+        metadata = {
+            "provider": route.provider,
+            "model_id": route.model_id,
+            "route_source": route.source,
+            "ui_automation": {
+                "service": "genspark",
+                "state": "queued_requires_agent",
+                "work_key": work_key,
+                "target_url": str(refs.get("target_url") or "https://www.genspark.ai/"),
+                "download_dir": download_dir,
+                "requires_logged_in_browser": True,
+                "stores_result_via": "media_generation_jobs.result_path/result_uri",
+                "policy": "use normal logged-in UI only; do not bypass captcha, paywalls, or rate limits",
+            },
+            "input_refs": refs,
+        }
+        updated = await self.update_job_status(
+            str(job.get("job_id") or ""),
+            "queued",
+            result_metadata=metadata,
+        )
+        public = _public_job(updated or job)
+        public.update(
+            {
+                "job_id": job.get("job_id"),
+                "kind": kind,
+                "status": "queued",
+                "provider": route.provider,
+                "model_id": route.model_id,
+                "availability": "queued_requires_agent",
+                "automation_state": "queued_requires_agent",
+                "message": "Genspark UI fallback job queued. A connected PC Agent/Browser Bridge session is required to generate, download, and store the result.",
+            }
+        )
+        return public
+
     async def generate_image(
         self,
         prompt: str,
@@ -902,7 +980,7 @@ class MediaGenerationService:
                 "image_size": image_size,
                 "reference_images": reference_images or [],
             },
-            status="queued" if route.provider in {"pc_local", "kling"} else "running",
+            status="queued" if route.provider in {"pc_local", "kling", "genspark_ui"} else "running",
             requested_by=requested_by,
             session_id=session_id,
         )
@@ -933,6 +1011,19 @@ class MediaGenerationService:
                 kind="image",
                 prompt=prompt,
                 input_refs={"size": size},
+                route=route,
+            )
+        if route.provider == "genspark_ui":
+            return await self._prepare_genspark_ui_job(
+                job=job,
+                kind="image",
+                prompt=prompt,
+                input_refs={
+                    "size": size,
+                    "aspect_ratio": aspect_ratio,
+                    "image_size": image_size,
+                    "reference_images": reference_images or [],
+                },
                 route=route,
             )
         if route.provider == "kling":
@@ -1480,7 +1571,7 @@ class MediaGenerationService:
             model_id=route.model_id,
             prompt=prompt,
             input_refs={**refs, "size": size},
-            status="queued" if route.provider == "pc_local" else "running",
+            status="queued" if route.provider in {"pc_local", "genspark_ui"} else "running",
             requested_by=requested_by,
             session_id=session_id,
         )
@@ -1507,6 +1598,14 @@ class MediaGenerationService:
             )
         if route.provider == "pc_local":
             return await self._prepare_local_media_job(
+                job=job,
+                kind="edit_image",
+                prompt=prompt,
+                input_refs={**refs, "size": size},
+                route=route,
+            )
+        if route.provider == "genspark_ui":
+            return await self._prepare_genspark_ui_job(
                 job=job,
                 kind="edit_image",
                 prompt=prompt,
@@ -1634,6 +1733,14 @@ class MediaGenerationService:
             )
         if route.provider == "pc_local":
             return await self._prepare_local_media_job(
+                job=job,
+                kind="video",
+                prompt=prompt,
+                input_refs=input_refs or {},
+                route=route,
+            )
+        if route.provider == "genspark_ui":
+            return await self._prepare_genspark_ui_job(
                 job=job,
                 kind="video",
                 prompt=prompt,

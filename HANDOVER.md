@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-06 15:31 KST - Genspark UI media fallback route
+
+- Request: Determine and act on whether blocked image/video generation APIs can fall back to a logged-in Genspark chat UI, then download and store results on the AADS server.
+- Changes:
+  - `app/services/media_generation_service.py`: added explicit `genspark_ui` image/edit/video provider recognition. Jobs are queued instead of failed and carry Browser Bridge/PC Agent automation metadata, download directory, work key, and server storage contract.
+  - `migrations/119_genspark_ui_media_fallback.sql`: registered `genspark-image-ui` and `genspark-video-ui` in `llm_models` plus non-default `model_routing_preferences` for `image`, `edit_image`, and `video`.
+  - `tests/unit/test_media_generation_service.py`: added regression coverage for Genspark image/video queued fallback routes.
+- Verification before commit:
+  - `python3 -m py_compile app/services/media_generation_service.py` passed.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -e AADS_DB_DISABLED=1 -v /root/aads/aads-server:/work -w /work --entrypoint python aads-server-aads-server -m pytest tests/unit/test_media_generation_service.py -q` -> 16 passed, 20 warnings.
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -f - < migrations/119_genspark_ui_media_fallback.sql` applied successfully.
+  - DB route check returned two `llm_models` rows and three routing preference rows for `genspark_ui`, all enabled/selectable but not default.
+- Pending:
+  - Actual Genspark UI generation/download/server-save E2E requires a connected PC Agent/Browser Bridge with a logged-in Genspark session. At this point `pc_list_agents` returned 0 connected agents.
+  - Existing unrelated dirty files in food/finance/mail/static outputs remain outside this request.
+
 ## 2026-08-06 09:08 KST - FB 연동설정 stale running 최종 운영 확인
 
 - Request: Continue the interrupted deploy/E2E step and report whether the Yeoljeong finance integration settings screen is actually reflected in production.
