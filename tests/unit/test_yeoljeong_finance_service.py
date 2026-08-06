@@ -663,6 +663,57 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
     assert all(row["status"] == "succeeded" for row in statuses)
 
 
+def test_sync_delivery_prefers_saved_browser_credentials_over_canonical_upload_account(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "decrypted-secret")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "portal-csv",
+                "last_sync_status": "upload_required",
+                "updated_at": "2026-08-06T18:18:06+09:00",
+            },
+            {
+                "id": "saved-baemin",
+                "service": "baemin",
+                "username": "saved-owner",
+                "password_enc": "ciphertext",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "browser-automation",
+                "updated_at": "2026-08-06T18:10:00+09:00",
+            },
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fake_collect(account, password, date_from, date_to):
+        assert account["id"] == "saved-baemin"
+        assert password == "decrypted-secret"
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {"sales": [], "settlements": [], "reviews": []},
+        }
+
+    monkeypatch.setattr(collectors, "collect_account", fake_collect)
+
+    result = service.sync_delivery(
+        {"services": ["baemin"], "business_id": "biz-junghwa", "branch": "중화점"},
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["account_id"] == "saved-baemin"
+    assert result["summary"][0]["status"] == "succeeded"
+
+
 def test_sync_delivery_portal_csv_account_requests_upload_without_browser(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(

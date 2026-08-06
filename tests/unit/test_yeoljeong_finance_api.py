@@ -139,6 +139,19 @@ def test_contract_preview_is_a4_modal():
     assert "체결 당시 저장본" in html
 
 
+def test_delivery_integration_normalization_preserves_selected_business_scope():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    normalizer = html.split("function normalizeMiaBusinessLinks(next)", 1)[1].split("function mergeSettings", 1)[0]
+
+    assert "branch?.businessId" in normalizer
+    assert "if (!item.branch) item.branch = MIA_BRANCH_NAME;" in normalizer
+    assert "item.branch = MIA_BRANCH_NAME;" not in normalizer.replace(
+        "if (!item.branch) item.branch = MIA_BRANCH_NAME;",
+        "",
+    )
+
+
 def test_import_delivery_portal_text_persists_pc_parsed_baemin_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")

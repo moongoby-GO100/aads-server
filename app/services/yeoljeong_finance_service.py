@@ -3358,13 +3358,26 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     ]
     candidates.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
     accounts_by_service: dict[str, dict[str, Any]] = {}
+    def _delivery_account_score(row: dict[str, Any], service: str) -> tuple[int, int, int, int, str]:
+        mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()
+        upload_mode = mode in DELIVERY_UPLOAD_COLLECTION_MODES
+        has_password = _has_secret_value(row, "password")
+        has_any_secret = _has_account_secret(row)
+        is_canonical_upload = str(row.get("id") or "") == f"acct-{service}" and upload_mode
+        return (
+            1 if has_password and not upload_mode else 0,
+            1 if has_any_secret and not upload_mode else 0,
+            1 if not upload_mode else 0,
+            0 if is_canonical_upload else 1,
+            str(row.get("updated_at") or row.get("created_at") or ""),
+        )
+
     for service in sorted(PORTAL_CONFIG):
         service_rows = [row for row in candidates if str(row.get("service") or "") == service]
-        canonical = next((row for row in service_rows if str(row.get("id") or "") == f"acct-{service}"), None)
-        if canonical:
-            accounts_by_service[service] = canonical
+        if requested_account_id and service_rows:
+            accounts_by_service[service] = service_rows[0]
         elif service_rows:
-            accounts_by_service[service] = next((row for row in service_rows if _has_account_secret(row)), service_rows[0])
+            accounts_by_service[service] = max(service_rows, key=lambda row: _delivery_account_score(row, service))
     requested_services = services or sorted(PORTAL_CONFIG)
     synced_at = _now()
     summary = []

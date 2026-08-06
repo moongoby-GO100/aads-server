@@ -4986,9 +4986,21 @@
       if (miaBranch) miaBranch.businessId = MIA_BUSINESS_ID;
       next.integrations.forEach(item => {
         if (!MIA_DELIVERY_SERVICES.has(item.service)) return;
+        const branch = next.branches.find(candidate => candidate.name === item.branch);
+        if (branch?.businessId && CANONICAL_BUSINESS_IDS.has(branch.businessId)) {
+          item.businessId = branch.businessId;
+          item.business_id = branch.businessId;
+          return;
+        }
+        const scopedBusinessId = item.businessId || item.business_id || "";
+        if (CANONICAL_BUSINESS_IDS.has(scopedBusinessId)) {
+          item.businessId = scopedBusinessId;
+          item.business_id = scopedBusinessId;
+          return;
+        }
         item.businessId = MIA_BUSINESS_ID;
         item.business_id = MIA_BUSINESS_ID;
-        item.branch = MIA_BRANCH_NAME;
+        if (!item.branch) item.branch = MIA_BRANCH_NAME;
       });
       return next;
     }
