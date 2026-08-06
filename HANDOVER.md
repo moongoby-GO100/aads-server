@@ -6148,13 +6148,16 @@
 - 요청: 다음 단계 진행 및 E2E 검증.
 - E2E에서 발견한 잔여 문제:
   - 브라우저 메모리 상태는 `normalizeStaleIntegrationSyncStatuses()`로 정리되지만, 초기 로딩 직후 localStorage 원본이 즉시 저장되지 않으면 새로고침 시 오래된 `running` 상태가 반복될 수 있었다.
+  - `저장 후 연동 실행` 클릭 경로에서 자동화 권한/서버 Vault가 없는 경우에도 중간 `markIntegrationRunning()` 상태가 저장 배열에 남아 최종 안내 문구와 localStorage 상태가 불일치했다.
 - 조치:
   - `app/static/apps/yeoljeong-finance/index.html`에 `persistInitialNormalizedSettings()`를 추가해 로딩 정규화가 발생한 경우 즉시 localStorage에 정리 상태를 저장하도록 했다.
   - `saveState()`에서도 내부 정규화 플래그가 저장 데이터에 남지 않도록 제거했다.
+  - 자동수집 응답(`pendingAutoSync`)이 있는 경우에만 `markIntegrationRunning()`을 적용하고, 자동화 권한/커넥터가 없는 저장은 즉시 `credential_required` 또는 `connector_not_configured`로 배열 항목에 병합 저장하도록 보정했다.
   - `tests/unit/test_yeoljeong_finance_print_static.py`에 정적 회귀 표식을 추가했다.
 - 검증:
   - `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_print_static.py` 성공.
   - 인라인 `<script>` 추출 후 `node --check --input-type=commonjs -` 성공.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` 성공: 66 passed.
+  - 로컬 HTML 라우팅 기반 Playwright E2E 성공: stale `running` 2건이 각각 `upload_required`, `credential_required`로 저장 정리되고, `저장 후 연동 실행` 신규 항목이 최종 `credential_required`로 표시/저장됨을 확인했다.
 - 배포/E2E:
-  - 이 항목 작성 시점에는 커밋/푸시/배포 전이다. 이후 커밋, blue-green 배포, 운영 브라우저 E2E 결과를 최종 보고에 포함한다.
+  - 이 항목 작성 시점에는 후속 커밋/푸시/배포 전이다. 이후 blue-green 배포 및 운영 브라우저 E2E 결과를 최종 보고에 포함한다.

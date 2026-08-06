@@ -8073,7 +8073,9 @@
         settings().integrations.push(nextIntegration);
       }
       saveState();
-      markIntegrationRunning(nextIntegration, `${integrationLabels[nextIntegration.service] || nextIntegration.service} 저장 후 연동 실행 중`);
+      if (pendingAutoSync) {
+        markIntegrationRunning(nextIntegration, `${integrationLabels[nextIntegration.service] || nextIntegration.service} 저장 후 연동 실행 중`);
+      }
       if (hasServerAuth() && canManageSettings()) {
         try {
           await persistSettingsToServer();
@@ -8105,12 +8107,19 @@
         form.dataset.editIntegrationId = nextIntegration.id;
       }
       if (!pendingAutoSync) {
-        nextIntegration.lastSyncAt = new Date().toISOString();
-        nextIntegration.lastSyncStatus = canManageAutomation() && shouldUseServerVault ? "connector_not_configured" : "credential_required";
-        nextIntegration.portalStatus = nextIntegration.lastSyncStatus;
-        nextIntegration.portalMessage = canManageAutomation() && shouldUseServerVault
+        const fallbackSyncStatus = canManageAutomation() && shouldUseServerVault ? "connector_not_configured" : "credential_required";
+        const fallbackSyncMessage = canManageAutomation() && shouldUseServerVault
           ? "서버 저장은 완료됐지만 자동 수집 응답이 없습니다. 계정/커넥터 상태를 확인하십시오."
           : "총괄 운영관리자 로그인 또는 서버 Vault 계정 등록이 필요합니다.";
+        Object.assign(nextIntegration, {
+          lastSyncAt: new Date().toISOString(),
+          lastSyncStatus: fallbackSyncStatus,
+          portalStatus: fallbackSyncStatus,
+          portalMessage: fallbackSyncMessage
+        });
+        state.settings.integrations = settings().integrations.map(item => (
+          item.id === nextIntegration.id ? { ...item, ...nextIntegration } : item
+        ));
         saveState();
       }
       renderAll();

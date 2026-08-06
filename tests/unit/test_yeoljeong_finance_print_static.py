@@ -128,6 +128,9 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "normalizeStaleIntegrationSyncStatuses" in HTML
     assert "persistInitialNormalizedSettings();" in HTML
     assert "__normalizedStaleIntegrationSyncStatuses" in HTML
+    assert "fallbackSyncStatus" in HTML
+    assert "item.id === nextIntegration.id ? { ...item, ...nextIntegration } : item" in HTML
+    assert "if (pendingAutoSync)" in HTML
     assert "이전 연동 실행이 완료 응답 없이 종료되어" in HTML
     assert "Object.assign(existing, item)" in HTML
     assert "${item.lastSyncStatus === \"running\" ? \"실행중...\" : \"수집 실행\"}" in HTML
