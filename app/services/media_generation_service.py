@@ -12,10 +12,12 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import mimetypes
 import os
 import re
+import socket
 import time
 import uuid
 from dataclasses import dataclass
@@ -23,6 +25,7 @@ from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 import httpx
 import logging
@@ -153,6 +156,31 @@ def _safe_job_filename(job_id: str, ext: str) -> str:
     safe_job_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(job_id or "media"))
     safe_ext = ext if ext.startswith(".") else f".{ext}"
     return f"{safe_job_id}{safe_ext}"
+
+
+def _is_public_http_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    host = parsed.hostname
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_global
+    except ValueError:
+        pass
+    if host.lower() in {"localhost"} or host.lower().endswith(".local"):
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    resolved = {info[4][0] for info in infos if info and info[4]}
+    if not resolved:
+        return False
+    try:
+        return all(ipaddress.ip_address(addr).is_global for addr in resolved)
+    except ValueError:
+        return False
 
 
 def _secret_value(settings_obj: Any, name: str) -> str:
@@ -978,6 +1006,8 @@ class MediaGenerationService:
         return result if isinstance(result, dict) else {"ok": False, "error": "MEDIA_NOT_FOUND"}
 
     async def _save_remote_media_url(self, *, job_id: str, url: str, kind: str) -> dict[str, Any]:
+        if not _is_public_http_url(url):
+            raise ValueError("remote media URL is not allowed")
         max_bytes = int(float(os.getenv("AADS_GENSPARK_MAX_DOWNLOAD_MB", "80")) * 1024 * 1024)
         async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
             response = await client.get(url)
