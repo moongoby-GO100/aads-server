@@ -812,6 +812,329 @@ class MediaGenerationService:
         except Exception:
             return None
 
+    async def _fetch_next_genspark_ui_job(self, job_id: str | None = None) -> dict[str, Any] | None:
+        pool = self._get_pool_or_none()
+        if not pool:
+            return None
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, job_id, kind, provider, model_id, prompt, input_refs, status,
+                           result_uri, result_path, result_metadata, error_message,
+                           requested_by, session_id, created_at, updated_at, completed_at
+                    FROM media_generation_jobs
+                    WHERE provider = 'genspark_ui'
+                      AND status = 'queued'
+                      AND ($1::text IS NULL OR job_id = $1)
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    job_id or None,
+                )
+                data = _normalize_job_row(row)
+                if data:
+                    data["storage"] = "db"
+                return data or None
+        except Exception as exc:
+            logger.warning("genspark_ui_fetch_job_failed job_id=%s error=%s", job_id, exc)
+            return None
+
+    async def _acquire_genspark_page(self, *, work_key: str, target_url: str) -> Any:
+        from app.api.ceo_chat_tools import _acquire_pw_context
+
+        ctx, err = await _acquire_pw_context("", work_key, target_url)
+        if err:
+            raise RuntimeError(err)
+        pages = getattr(ctx, "pages", [])
+        page = pages[-1] if pages else await ctx.new_page()
+        if target_url and hasattr(page, "goto"):
+            await page.goto(target_url, timeout=180000, wait_until="domcontentloaded")
+        return page
+
+    async def _read_genspark_page_text(self, page: Any) -> str:
+        try:
+            return str(await page.locator("body").first.aria_snapshot())
+        except Exception:
+            try:
+                return str(await page.evaluate("() => document.body ? document.body.innerText : ''"))
+            except Exception:
+                return ""
+
+    @staticmethod
+    def _looks_like_genspark_auth_gate(page_text: str) -> bool:
+        text = (page_text or "").lower()
+        return any(
+            marker in text
+            for marker in (
+                "로그인",
+                "가입하기",
+                "sign in",
+                "sign up",
+                "login",
+            )
+        )
+
+    async def _submit_prompt_to_genspark(self, page: Any, prompt: str) -> dict[str, Any]:
+        script = """
+        (prompt) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width > 20 && r.height > 20 && s.visibility !== 'hidden' && s.display !== 'none';
+          };
+          const candidates = [
+            ...document.querySelectorAll('textarea'),
+            ...document.querySelectorAll('[contenteditable="true"]'),
+            ...document.querySelectorAll('input[type="text"], input:not([type])')
+          ].filter(visible);
+          const el = candidates[candidates.length - 1];
+          if (!el) return {ok: false, error: 'PROMPT_INPUT_NOT_FOUND'};
+          el.focus();
+          if (el.isContentEditable) {
+            el.textContent = prompt;
+            el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: prompt}));
+          } else {
+            el.value = prompt;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+          }
+          el.dataset.aadsGensparkPrompt = '1';
+          return {ok: true, selector: '[data-aads-genspark-prompt="1"]'};
+        }
+        """
+        result = await page.evaluate(script, prompt)
+        if not isinstance(result, dict) or not result.get("ok"):
+            return {"ok": False, "error": str((result or {}).get("error") or "PROMPT_INPUT_NOT_FOUND")}
+
+        selector = str(result.get("selector") or '[data-aads-genspark-prompt="1"]')
+        try:
+            if hasattr(page, "press_key"):
+                await page.press_key("Enter", selector)
+            else:
+                await page.keyboard.press("Enter")
+        except Exception:
+            try:
+                await page.evaluate(
+                    """(selector) => {
+                      const el = document.querySelector(selector);
+                      if (!el) return false;
+                      el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', bubbles: true}));
+                      el.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', bubbles: true}));
+                      return true;
+                    }""",
+                    selector,
+                )
+            except Exception as exc:
+                return {"ok": False, "error": f"PROMPT_SUBMIT_FAILED: {exc}"}
+        return {"ok": True, "selector": selector}
+
+    async def _extract_genspark_media_candidate(self, page: Any) -> dict[str, Any]:
+        script = """
+        async () => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width >= 120 && r.height >= 120 && s.visibility !== 'hidden' && s.display !== 'none';
+          };
+          const nodes = [...document.querySelectorAll('img, video, source')]
+            .filter((el) => {
+              const src = el.currentSrc || el.src || el.getAttribute('src') || '';
+              const area = (el.naturalWidth || el.videoWidth || el.clientWidth || 0) *
+                           (el.naturalHeight || el.videoHeight || el.clientHeight || 0);
+              return src && !src.includes('data:image/svg') && visible(el) && area >= 40000;
+            })
+            .sort((a, b) => {
+              const aa = (a.naturalWidth || a.videoWidth || a.clientWidth || 0) *
+                         (a.naturalHeight || a.videoHeight || a.clientHeight || 0);
+              const bb = (b.naturalWidth || b.videoWidth || b.clientWidth || 0) *
+                         (b.naturalHeight || b.videoHeight || b.clientHeight || 0);
+              return bb - aa;
+            });
+          for (const el of nodes) {
+            const src = el.currentSrc || el.src || el.getAttribute('src') || '';
+            if (src.startsWith('data:')) return {ok: true, data_uri: src, tag: el.tagName.toLowerCase()};
+            if (src.startsWith('blob:')) {
+              try {
+                const resp = await fetch(src);
+                const blob = await resp.blob();
+                const dataUri = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => resolve(reader.result);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(blob);
+                });
+                return {ok: true, data_uri: dataUri, tag: el.tagName.toLowerCase()};
+              } catch (e) {
+                continue;
+              }
+            }
+            if (src.startsWith('http')) return {ok: true, url: src, tag: el.tagName.toLowerCase()};
+          }
+          return {ok: false, error: 'MEDIA_NOT_FOUND'};
+        }
+        """
+        result = await page.evaluate(script)
+        return result if isinstance(result, dict) else {"ok": False, "error": "MEDIA_NOT_FOUND"}
+
+    async def _save_remote_media_url(self, *, job_id: str, url: str, kind: str) -> dict[str, Any]:
+        max_bytes = int(float(os.getenv("AADS_GENSPARK_MAX_DOWNLOAD_MB", "80")) * 1024 * 1024)
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        body = response.content
+        if len(body) > max_bytes:
+            raise ValueError(f"download exceeds limit: {len(body)} bytes")
+        content_type = response.headers.get("content-type", "").split(";", 1)[0] or "application/octet-stream"
+        ext = mimetypes.guess_extension(content_type) or Path(url.split("?", 1)[0]).suffix or ".bin"
+        static_root = _app_static_dir().resolve()
+        media_dir = (static_root / "media" / "generated" / kind).resolve()
+        media_dir.mkdir(parents=True, exist_ok=True)
+        target = (media_dir / _safe_job_filename(job_id, ext)).resolve()
+        target.relative_to(media_dir)
+        target.write_bytes(body)
+        public_path = "/" + target.relative_to(static_root).as_posix()
+        return {
+            "url": f"/static{public_path}",
+            "path": str(target),
+            "bytes": len(body),
+            "content_type": content_type,
+        }
+
+    async def process_genspark_ui_job(
+        self,
+        *,
+        job_id: str | None = None,
+        browser_work_key: str | None = None,
+        target_url: str | None = None,
+        timeout_seconds: int = 240,
+    ) -> dict[str, Any]:
+        job = await self._fetch_next_genspark_ui_job(job_id)
+        if not job:
+            return {
+                "status": "idle",
+                "message": "queued genspark_ui media job not found",
+                "job_id": job_id,
+            }
+
+        refs = _as_dict(job.get("input_refs"))
+        metadata = _as_dict(job.get("result_metadata"))
+        automation = _as_dict(metadata.get("ui_automation"))
+        work_key = str(browser_work_key or automation.get("work_key") or "genspark-media-fallback").strip()
+        url = str(target_url or automation.get("target_url") or "https://www.genspark.ai/").strip()
+        job_kind = str(job.get("kind") or "image")
+        await self.update_job_status(
+            str(job["job_id"]),
+            "running",
+            result_metadata={
+                **metadata,
+                "ui_automation": {
+                    **automation,
+                    "state": "running",
+                    "work_key": work_key,
+                    "target_url": url,
+                    "started_at": datetime.utcnow().isoformat() + "Z",
+                },
+            },
+        )
+
+        try:
+            page = await self._acquire_genspark_page(work_key=work_key, target_url=url)
+            page_text = await self._read_genspark_page_text(page)
+            if self._looks_like_genspark_auth_gate(page_text):
+                updated = await self.update_job_status(
+                    str(job["job_id"]),
+                    "queued",
+                    result_metadata={
+                        **metadata,
+                        "ui_automation": {
+                            **automation,
+                            "state": "auth_required",
+                            "work_key": work_key,
+                            "target_url": url,
+                            "last_error": "GENSPARK_LOGIN_REQUIRED",
+                        },
+                    },
+                    error_message="Genspark login required in Browser Bridge/PC Agent session",
+                )
+                public = _public_job(updated)
+                public.update({"automation_state": "auth_required", "requires_login": True})
+                return public
+
+            submitted = await self._submit_prompt_to_genspark(page, str(job.get("prompt") or ""))
+            if not submitted.get("ok"):
+                raise RuntimeError(str(submitted.get("error") or "PROMPT_SUBMIT_FAILED"))
+
+            deadline = time.monotonic() + max(30, int(timeout_seconds))
+            candidate: dict[str, Any] = {"ok": False, "error": "MEDIA_NOT_FOUND"}
+            while time.monotonic() < deadline:
+                await page.wait_for_timeout(5000)
+                candidate = await self._extract_genspark_media_candidate(page)
+                if candidate.get("ok"):
+                    break
+            if not candidate.get("ok"):
+                raise RuntimeError(str(candidate.get("error") or "MEDIA_NOT_FOUND"))
+
+            if candidate.get("data_uri"):
+                saved = self._save_data_uri_media(
+                    job_id=str(job["job_id"]),
+                    data_uri=str(candidate["data_uri"]),
+                    kind=job_kind,
+                )
+                if not saved:
+                    raise RuntimeError("MEDIA_SAVE_FAILED")
+            else:
+                saved = await self._save_remote_media_url(
+                    job_id=str(job["job_id"]),
+                    url=str(candidate["url"]),
+                    kind=job_kind,
+                )
+
+            result_uri = f"/api/v1/image/gallery/{job['job_id']}/image" if job_kind in {"image", "edit_image"} else saved["url"]
+            updated = await self.update_job_status(
+                str(job["job_id"]),
+                "succeeded",
+                result_uri=result_uri,
+                result_path=saved["path"],
+                result_metadata={
+                    **metadata,
+                    "ui_automation": {
+                        **automation,
+                        "state": "succeeded",
+                        "work_key": work_key,
+                        "target_url": url,
+                        "completed_at": datetime.utcnow().isoformat() + "Z",
+                    },
+                    "storage": "static_file",
+                    "storage_url": saved["url"],
+                    "bytes": saved["bytes"],
+                    "content_type": saved["content_type"],
+                    "browser_candidate": {k: v for k, v in candidate.items() if k != "data_uri"},
+                },
+            )
+            public = _public_job(updated)
+            public.update({"automation_state": "succeeded", "result_path": saved["path"]})
+            return public
+        except Exception as exc:
+            updated = await self.update_job_status(
+                str(job["job_id"]),
+                "queued",
+                result_metadata={
+                    **metadata,
+                    "ui_automation": {
+                        **automation,
+                        "state": "retryable_error",
+                        "work_key": work_key,
+                        "target_url": url,
+                        "last_error": str(exc),
+                    },
+                },
+                error_message=str(exc),
+            )
+            public = _public_job(updated)
+            public.update({"automation_state": "retryable_error", "error": str(exc)})
+            return public
+
     def _job_error(
         self,
         *,

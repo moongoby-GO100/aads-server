@@ -58,6 +58,13 @@ class VideoDownloadRequest(BaseModel):
     output_dir: str | None = None
 
 
+class GensparkProcessRequest(BaseModel):
+    job_id: str | None = None
+    browser_work_key: str | None = None
+    target_url: str | None = None
+    timeout_seconds: int = Field(default=240, ge=30, le=900)
+
+
 class GalleryApprovalRequest(BaseModel):
     reference_ids: list[int] = Field(default_factory=list)
     approve: bool = True
@@ -158,6 +165,18 @@ async def video_download(job_id: str, req: VideoDownloadRequest | None = None):
     return await media_generation_service.video_download(
         job_id,
         output_dir=req.output_dir if req else None,
+    )
+
+
+@router.post("/genspark-ui/process-next", dependencies=[Depends(require_internal_admin)])
+async def process_genspark_ui_job(req: GensparkProcessRequest | None = None):
+    """대기 중인 Genspark UI media job 1건을 Browser Bridge로 실행한다."""
+    payload = req or GensparkProcessRequest()
+    return await media_generation_service.process_genspark_ui_job(
+        job_id=payload.job_id,
+        browser_work_key=payload.browser_work_key,
+        target_url=payload.target_url,
+        timeout_seconds=payload.timeout_seconds,
     )
 
 

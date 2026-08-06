@@ -369,6 +369,46 @@ async def test_genspark_ui_video_provider_queues_for_browser_agent():
 
 
 @pytest.mark.asyncio
+async def test_process_genspark_ui_job_keeps_auth_gate_retryable(monkeypatch):
+    class _FakeLocator:
+        @property
+        def first(self):
+            return self
+
+        async def aria_snapshot(self):
+            return "로그인 가입하기 Genspark AI 워크스페이스"
+
+    class _FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return _FakeLocator()
+
+    conn = _Conn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "make a clean product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="s1",
+    )
+
+    async def fake_acquire_page(**kwargs):
+        assert kwargs["work_key"] == "genspark-media-fallback"
+        return _FakePage()
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", fake_acquire_page)
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    assert result["status"] == "queued"
+    assert result["automation_state"] == "auth_required"
+    assert result["requires_login"] is True
+    row = conn.rows[queued["job_id"]]
+    assert row["result_metadata"]["ui_automation"]["state"] == "auth_required"
+    assert row["error_message"] == "Genspark login required in Browser Bridge/PC Agent session"
+
+
+@pytest.mark.asyncio
 async def test_default_image_route_externalizes_base64_result(monkeypatch, tmp_path: Path):
     conn = _Conn()
     svc = MediaGenerationService(

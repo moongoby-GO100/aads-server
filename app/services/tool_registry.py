@@ -2519,14 +2519,14 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── 미디어/생성 ──────────────────────────────────────────────────────────
     "generate_image": {
         "name": "generate_image",
-        "description": "이미지 생성. gpt-image-2, imagen-4.0-*, gemini-3.1-flash-image-preview 라우팅 문자열을 인식하며 기존 base64 data URI 응답을 유지한다.",
+        "description": "이미지 생성. gpt-image-2, imagen-4.0-*, gemini-3.1-flash-image-preview, genspark-image-ui 라우팅 문자열을 인식한다. genspark_ui는 로그인된 Browser Bridge/PC Agent 세션으로 생성·다운로드·서버저장 큐를 만든다.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "prompt": {"type": "string", "description": "이미지 생성 프롬프트"},
                 "size": {"type": "string", "default": "1024x1024"},
                 "model_id": {"type": "string", "description": "선택 모델 (예: gpt-image-2, imagen-4.0-generate-001)"},
-                "provider": {"type": "string", "description": "선택 provider (openai/google/gemini)"},
+                "provider": {"type": "string", "description": "선택 provider (openai/google/gemini/genspark_ui)"},
                 "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
             },
             "required": ["prompt"],
@@ -2553,7 +2553,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "generate_video": {
         "name": "generate_video",
-        "description": "비동기 동영상 생성 job 생성. sora-2, sora-2-pro, veo-3.1-generate-preview 라우팅 문자열을 인식한다.",
+        "description": "비동기 동영상 생성 job 생성. sora-2, sora-2-pro, veo-3.1-generate-preview, genspark-video-ui 라우팅 문자열을 인식한다. genspark_ui는 로그인된 Browser Bridge/PC Agent 세션으로 생성·다운로드·서버저장 큐를 만든다.",
         "input_schema": {
             "type": "object",
             "properties": {

@@ -477,7 +477,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── 이미지/팩트체크/검색/샌드박스/알림 도구 ──────────────────────────────
     {
         "name": "generate_image",
-        "description": "이미지 생성 (gpt-image-2 / imagen-4.0-* / gemini-3.1-flash-image-preview 라우팅 인식). 프롬프트로 이미지 생성 후 URL 반환.\n예: generate_image(prompt='한국 전통 한옥 마을 일러스트', size='1024x1024')",
+        "description": "이미지 생성 (gpt-image-2 / imagen-4.0-* / gemini-3.1-flash-image-preview / genspark-image-ui 라우팅 인식). genspark_ui는 로그인된 Browser Bridge/PC Agent 세션으로 생성·다운로드·서버저장 큐를 만든다.\n예: generate_image(prompt='한국 전통 한옥 마을 일러스트', size='1024x1024')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -527,7 +527,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "generate_video",
-        "description": "비동기 동영상 생성 job 생성. sora-2, sora-2-pro, veo-3.1-generate-preview 라우팅 문자열을 인식.",
+        "description": "비동기 동영상 생성 job 생성. sora-2, sora-2-pro, veo-3.1-generate-preview, genspark-video-ui 라우팅 문자열을 인식. genspark_ui는 로그인된 Browser Bridge/PC Agent 세션으로 생성·다운로드·서버저장 큐를 만든다.",
         "input_schema": {
             "type": "object",
             "properties": {

@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-06 16:02 KST - Genspark UI media fallback worker/API
+
+- Request: Continue the previous incomplete Genspark UI fallback response and finish remaining checks/actions/verification with explicit commit/push/deploy/document status.
+- Changes:
+  - `app/services/media_generation_service.py`: added `process_genspark_ui_job()` to consume queued `genspark_ui` media jobs through Browser Bridge/PC Agent, submit the prompt to the logged-in Genspark UI, detect generated image/video candidates, save data/blob/http media into `/static/media/generated/{kind}`, and update `media_generation_jobs.result_uri/result_path/result_metadata`.
+  - `app/api/image.py`: added internal-admin `POST /api/v1/image/genspark-ui/process-next` for manual/scheduled processing of one queued Genspark UI job.
+  - `app/services/tool_registry.py` and `app/api/ceo_chat_tools.py`: documented `genspark-image-ui`, `genspark-video-ui`, and `provider=genspark_ui` so chat/tool routing can select the fallback path.
+  - `tests/unit/test_media_generation_service.py`: added auth-gate regression coverage. If Genspark shows login/signup, the worker does not bypass it; the job returns to queued state with `ui_automation.state=auth_required`.
+- Verification before commit:
+  - `python3 -m py_compile app/services/media_generation_service.py app/api/image.py app/api/ceo_chat_tools.py app/services/tool_registry.py` passed.
+  - Host `python3 -m pytest ...` could not run because host Python has no pytest.
+  - `docker exec aads-server python -m pytest tests/unit/test_media_generation_service.py tests/unit/test_media_generation_tools.py` -> 22 passed, 20 warnings.
+  - `pc_list_agents` returned 0 connected agents; Browser Bridge work session opened Genspark landing page but showed login/signup, so real generation E2E requires CEO Genspark login session.
+- Pending:
+  - Commit/push/deploy and post-deploy endpoint/health verification are still pending at this handover write step.
+  - Existing unrelated dirty files in finance/static/OEM mail outputs remain outside this request.
+
 ## 2026-08-06 15:31 KST - Genspark UI media fallback route
 
 - Request: Determine and act on whether blocked image/video generation APIs can fall back to a logged-in Genspark chat UI, then download and store results on the AADS server.
