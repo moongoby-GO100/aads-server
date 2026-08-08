@@ -129,6 +129,8 @@ services:
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
       - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro
       - /root/aads/aads-dashboard/reports:/root/aads/aads-dashboard/reports:ro
+      - /root/aads/aads-dashboard/public/reports:/root/aads/aads-dashboard/public/reports:ro
+      - /root/aads/aads-dashboard/public/exports:/root/aads/aads-dashboard/public/exports:ro
       - /root/aads/aads-core/docs:/root/aads/aads-core/docs:ro
       - /root/aads/aads-core/reports:/root/aads/aads-core/reports:ro
       - /root/.ssh:/root/.ssh:rw
@@ -208,6 +210,8 @@ services:
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
       - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro
       - /root/aads/aads-dashboard/reports:/root/aads/aads-dashboard/reports:ro
+      - /root/aads/aads-dashboard/public/reports:/root/aads/aads-dashboard/public/reports:ro
+      - /root/aads/aads-dashboard/public/exports:/root/aads/aads-dashboard/public/exports:ro
       - /root/aads/aads-core/docs:/root/aads/aads-core/docs:ro
       - /root/aads/aads-core/reports:/root/aads/aads-core/reports:ro
       - /root/.ssh:/root/.ssh:rw

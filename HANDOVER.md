@@ -1,5 +1,43 @@
 # AADS HANDOVER
 
+## 2026-08-08 16:02 KST - Chat document links and project docs viewer hardening
+
+- Request: Make documents referenced in chat open directly instead of causing 404 or unsupported-extension failures.
+- Changes:
+  - `app/api/project_docs.py`: expanded project-doc path aliases, constrained `base_path`/relative path access, blocked sensitive path markers, added binary download fallback, and added Excel-to-CSV plus DOCX-to-text preview conversion paths.
+  - `/root/aads/aads-dashboard/src/lib/documentLinks.ts`: added `public/reports` and `public/exports` relative mappings for chat links.
+  - `/root/aads/aads-dashboard/src/app/chat/MarkdownRenderer.tsx`: widened inline file-chip detection for PDF, Office, image, archive, and media extensions.
+  - `/root/aads/aads-dashboard/src/app/docs/page.tsx`: shows converted Excel/Office text previews when the API returns text, and avoids dumping base64 for unsupported binaries.
+- Verification:
+  - `python3 -m py_compile app/api/project_docs.py app/routers/chat.py app/services/chat_service.py` passed.
+  - `docker exec aads-server python -m py_compile /app/app/api/project_docs.py` passed.
+  - `curl -H x-monitor-key ... /api/v1/project-docs/content?...20260802_OHVIS_SYSTEM_CONSTRUCTION_PLAN.md` returned HTTP 200 and text/markdown content.
+  - `curl -H x-monitor-key ... /api/v1/project-docs/scan?force=true` returned HTTP 200 and included `reports/20260802_OHVIS_SYSTEM_CONSTRUCTION_PLAN.md`.
+  - New-code import test converted a temporary `.xlsx` to `text/csv`; the temporary test file was removed.
+  - `npx eslint src/app/chat/MarkdownRenderer.tsx src/app/docs/page.tsx src/lib/documentLinks.ts` returned 0 errors, 1 pre-existing `<img>` warning.
+- Deployment status:
+  - Backend hot reload, dashboard rebuild/deploy, commit, push are not performed in this entry yet.
+  - Existing unrelated dirty files remain outside this request.
+
+## 2026-08-06 18:44 KST - Yeoljeong Finance Baemin integration save and auto-collection route
+
+- Request: Verify whether the saved Baemin integration was stored in DB, fix edit-save if missing, and make it eligible for automatic collection.
+- Confirmed:
+  - `yeoljeong_platform_accounts` contains active Jungwha/Baemin row `83c5b12f-0b3d-46b6-bcbe-b5c00dc0fd51` with `business_id=biz-junghwa`, `branch=중화점`, `username=yunhee1`, `collection_mode=browser-automation`.
+  - The DB payload intentionally excludes secret fields. The protected `platform_accounts.json` row for `yunhee1` currently has no `password_enc`, so live collection stops at `credential_required`.
+- Changes committed and pushed:
+  - `app/static/apps/yeoljeong-finance/index.html`: stopped forcing delivery integrations to Mia business scope; selected branch/business scope is preserved.
+  - `app/services/yeoljeong_finance_service.py`: delivery sync now prefers a matching saved browser-automation account over the canonical `acct-baemin` upload placeholder.
+  - Regression tests added in `tests/unit/test_yeoljeong_finance_api.py` and `tests/unit/test_yeoljeong_finance_service.py`.
+- Verification:
+  - Commit `e18c899e fix(food): route saved integrations to auto collection` is on `origin/main`.
+  - Production active container `aads-server-green` is healthy on `127.0.0.1:8102`; `https://fb.newtalk.kr/api/v1/health` returned `status=ok`.
+  - Container pytest: `3 passed, 1 warning`.
+  - Direct sync call for account `83c5b12f-0b3d-46b6-bcbe-b5c00dc0fd51` selected that account and returned `credential_required` with sales/settlements/reviews counts all 0.
+- Remaining:
+  - CEO must re-enter the Baemin password in edit-save. After that, the same saved Jungwha/Baemin browser-automation row is the automatic collection candidate.
+  - Existing unrelated dirty files and operational finance data files remain uncommitted.
+
 ## 2026-08-06 16:02 KST - Genspark UI media fallback worker/API
 
 - Request: Continue the previous incomplete Genspark UI fallback response and finish remaining checks/actions/verification with explicit commit/push/deploy/document status.
@@ -13,8 +51,14 @@
   - Host `python3 -m pytest ...` could not run because host Python has no pytest.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server -m pytest tests/unit/test_media_generation_service.py tests/unit/test_media_generation_tools.py` -> 25 passed, 27 warnings.
   - `pc_list_agents` returned 0 connected agents; Browser Bridge work session opened Genspark landing page but showed login/signup, so real generation E2E requires CEO Genspark login session.
-- Pending:
-  - Commit/push/deploy and post-deploy endpoint/health verification are still pending at this handover write step.
+- Deployment and final verification:
+  - Commits pushed to `origin/main`: `9f5a885a feat(media): process genspark ui fallback jobs`, `59b947d2 fix(media): guard genspark fallback downloads`.
+  - `deploy_safe(mode=bluegreen)` failed because the tool could not access host Docker/deploy script requirements.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` passed code validation but stopped at the safety gate because standby `aads-server-green:8102` had 1 active stream.
+  - `bash /root/aads/aads-server/scripts/reload-api.sh` completed active-slot hot-reload twice, reloading 59 modules each time while preserving PC Agent WebSocket mode.
+  - Post-deploy checks: active `http://localhost:8100/api/v1/health` returned `status=ok`; server68 `health_check` returned `HEALTHY`; unauthenticated `POST /api/v1/image/genspark-ui/process-next` returned 401, confirming route presence and internal-admin protection.
+- Remaining:
+  - Actual Genspark image/video generation E2E remains blocked by no connected PC Agent and Genspark page showing login/signup. The worker now handles this as `auth_required` and will not bypass login/captcha/paywall.
   - Existing unrelated dirty files in finance/static/OEM mail outputs remain outside this request.
 
 ## 2026-08-06 15:31 KST - Genspark UI media fallback route
@@ -6213,3 +6257,27 @@
   - 로컬 HTML 라우팅 기반 Playwright E2E 성공: stale `running` 2건이 각각 `upload_required`, `credential_required`로 저장 정리되고, `저장 후 연동 실행` 신규 항목이 최종 `credential_required`로 표시/저장됨을 확인했다.
 - 배포/E2E:
   - 이 항목 작성 시점에는 후속 커밋/푸시/배포 전이다. 이후 blue-green 배포 및 운영 브라우저 E2E 결과를 최종 보고에 포함한다.
+
+## 2026-08-08 16:10 KST - runner-44f6e06b approval_timeout 진단 및 문서 링크 복구
+
+- 요청: Pipeline Runner `runner-44f6e06b`가 `approval_timeout`으로 실패한 원인 진단 및 가능한 자율 조치.
+- 원인:
+  - 러너는 결과를 생성했지만 24시간 승인 대기 후 만료되어 `error_detail=approval_timeout` 상태가 됐다.
+  - 후속 의존 작업 `runner-beafce73`는 부모 실패로 `blocked_dependency/cancelled` 처리됐다.
+  - 백엔드 `app/api/project_docs.py` 변경은 커밋되지 않은 dirty 상태로 남았고, 대시보드 변경 일부는 로컬 커밋/dirty 상태로만 남아 push/배포가 진행되지 않았다.
+- 조치:
+  - `app/api/project_docs.py`에 `/app` 기준 상대경로 허용을 `docs/`, `reports/`, `app/static/`, `scripts/`, `tests/` prefix로 제한해 추가했다.
+  - `.env`, `secrets`, `credentials`, `id_rsa`, `.key`, `.pem` 민감 경로 차단을 추가했다.
+  - xlsx/xlsm Excel preview는 CSV 텍스트(`format=excel-csv`)로 반환하고, docx는 python-docx 가능 시 텍스트 preview(`format=word-text`)로 반환하도록 보강했다.
+  - `aads-dashboard/src/lib/documentLinks.ts`에 `scripts/`, `tests/` 상대경로 매핑을 추가하고, `src/lib/documentLinks.selftest.ts` 회귀 테스트를 추가했다.
+  - `aads-dashboard/src/app/docs/page.tsx`가 API `format` 힌트를 반영하고 `excel-csv`를 테이블로 렌더링하도록 보강했다.
+- 검증:
+  - `python3 -m py_compile app/api/project_docs.py` 성공.
+  - `npx tsc --module commonjs --target es2020 --skipLibCheck --outDir /tmp/aads-doclinks-test src/lib/documentLinks.ts src/lib/documentLinks.selftest.ts` 성공.
+  - `node /tmp/aads-doclinks-test/documentLinks.selftest.js` 성공.
+  - `npx tsc --noEmit` 성공.
+  - `npm run build` 성공.
+  - `docker exec -i aads-server python ... get_doc_content()` 직접 호출 성공: md 텍스트, xlsx `excel-csv`, `/app/scripts` 텍스트, `.env` 차단 확인.
+  - 인증 없는 `curl localhost:8100/api/v1/project-docs/content...`는 401로 API 직접 검증으로 대체했다.
+- 배포:
+  - push/배포는 승인 타임아웃 복구 작업의 후속 영향 범위가 있어 이 기록 시점에는 수행하지 않았다.
