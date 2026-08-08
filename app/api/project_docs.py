@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import csv
+import io
 import json
 import mimetypes
 import os
+import shlex
 import time
 from pathlib import Path
 from typing import Optional
@@ -32,6 +35,8 @@ SERVER_CONFIG = {
         "paths": [
             {"base": "/app/docs", "label": "서버 문서"},
             {"base": "/app/reports", "label": "서버 리포트"},
+            {"base": "/root/aads/aads-server/docs", "label": "서버 문서"},
+            {"base": "/root/aads/aads-server/reports", "label": "서버 리포트"},
             {"base": "/root/aads/aads-docs/docs", "label": "공용 문서"},
             {"base": "/root/aads/aads-docs/reports", "label": "공용 리포트", "exclude": ["ceo-documents/_index.json"]},
             {"base": "/root/aads/aads-dashboard/docs", "label": "대시보드 문서"},
@@ -91,14 +96,129 @@ EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico",
     # 오피스 문서 (다운로드 안내)
     ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+    # 일반 첨부/아카이브/미디어 (직접 링크 열람 및 다운로드 폴백)
+    ".xls", ".xlsm", ".doc", ".ppt",
+    ".zip", ".tar", ".gz", ".tgz", ".7z", ".rar",
+    ".mp3", ".wav", ".m4a", ".mp4", ".mov", ".webm",
 }
 
 # 바이너리 처리 대상 (텍스트로 읽지 않고 base64/raw)
 BINARY_EXTENSIONS = {
     ".pdf",
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico",
-    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+    ".docx", ".xlsx", ".xls", ".xlsm", ".pptx", ".odt", ".ods", ".odp",
+    ".doc", ".ppt",
+    ".zip", ".tar", ".gz", ".tgz", ".7z", ".rar",
+    ".mp3", ".wav", ".m4a", ".mp4", ".mov", ".webm",
 }
+
+BASE64_PREVIEW_EXTENSIONS = {
+    ".pdf",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico",
+}
+
+EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
+DOCX_EXTENSIONS = {".docx"}
+SENSITIVE_PATH_MARKERS = (".env", "secrets", "credentials", "id_rsa")
+SENSITIVE_EXTENSIONS = {".key", ".pem"}
+AADS_APP_ROOT = "/app"
+AADS_APP_REL_PREFIXES = ("docs/", "reports/", "app/static/", "scripts/", "tests/")
+
+LOCAL_BASE_ALIASES = {
+    "/app": ["/app", "/root/aads/aads-server"],
+    "/app/docs": ["/app/docs", "/root/aads/aads-server/docs"],
+    "/app/reports": ["/app/reports", "/root/aads/aads-server/reports"],
+    "/app/app/static/docs": ["/app/app/static/docs", "/root/aads/aads-server/app/static/docs"],
+    "/app/app/static/reports": ["/app/app/static/reports", "/root/aads/aads-server/app/static/reports"],
+    "/app/app/static/preview": ["/app/app/static/preview", "/root/aads/aads-server/app/static/preview"],
+    "/app/app/static/gallery": ["/app/app/static/gallery", "/root/aads/aads-server/app/static/gallery"],
+}
+
+
+def _configured_base_paths(project: str) -> set[str]:
+    config = SERVER_CONFIG.get(project) or {}
+    paths = {str(Path(path_cfg["base"])) for path_cfg in config.get("paths", [])}
+    if project == "AADS":
+        paths.add(AADS_APP_ROOT)
+    return paths
+
+
+def _is_safe_relative_path(file_path: str) -> bool:
+    normalized = file_path.replace("\\", "/")
+    path = Path(normalized)
+    if not normalized or path.is_absolute() or ".." in path.parts:
+        return False
+    parts = [part.lower() for part in normalized.split("/") if part]
+    if any(part in SENSITIVE_PATH_MARKERS or part.startswith(".env") or part.startswith("id_rsa") for part in parts):
+        return False
+    if any(marker in normalized.lower() for marker in ("secrets", "credentials")):
+        return False
+    return Path(normalized).suffix.lower() not in SENSITIVE_EXTENSIONS
+
+
+def _candidate_local_bases(base_path: str) -> list[Path]:
+    normalized = str(Path(base_path))
+    return [Path(p) for p in LOCAL_BASE_ALIASES.get(normalized, [normalized])]
+
+
+def _resolve_local_file(project: str, base_path: str, file_path: str) -> Path:
+    normalized_base = str(Path(base_path))
+    allowed = _configured_base_paths(project)
+    if normalized_base not in allowed:
+        raise HTTPException(400, "Unsupported base_path")
+    if not _is_safe_relative_path(file_path):
+        raise HTTPException(400, "Invalid file path")
+    normalized_file = file_path.replace("\\", "/")
+    if project == "AADS" and normalized_base == AADS_APP_ROOT and not normalized_file.startswith(AADS_APP_REL_PREFIXES):
+        raise HTTPException(403, "File path is not allowed under /app")
+
+    rel = Path(normalized_file)
+    first_candidate: Path | None = None
+    for base in _candidate_local_bases(normalized_base):
+        base_resolved = base.resolve()
+        candidate = (base_resolved / rel).resolve()
+        try:
+            candidate.relative_to(base_resolved)
+        except ValueError:
+            raise HTTPException(400, "Invalid file path")
+        if first_candidate is None:
+            first_candidate = candidate
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    return first_candidate or (Path(normalized_base) / rel)
+
+
+def _excel_bytes_to_csv_text(raw: bytes, filename: str) -> str:
+    try:
+        from openpyxl import load_workbook
+    except Exception as e:
+        raise RuntimeError(f"openpyxl unavailable: {e}") from e
+
+    wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    parts: list[str] = []
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            for row in ws.iter_rows(values_only=True):
+                writer.writerow(["" if cell is None else str(cell) for cell in row])
+            parts.append(f"## Sheet: {sheet_name}\n{buf.getvalue().rstrip()}")
+    finally:
+        wb.close()
+    return f"# {filename} CSV preview\n\n" + "\n\n".join(parts)
+
+
+def _docx_bytes_to_text(raw: bytes, filename: str) -> str:
+    try:
+        import docx
+    except Exception as e:
+        raise RuntimeError(f"python-docx unavailable: {e}") from e
+
+    doc = docx.Document(io.BytesIO(raw))
+    paragraphs = [p.text for p in doc.paragraphs if p.text]
+    return f"# {filename} text preview\n\n" + "\n".join(paragraphs)
 
 
 def _load_persistent_cache() -> Optional[dict]:
@@ -312,7 +432,9 @@ def _detect_format(name: str) -> str:
         "png": "image", "jpg": "image", "jpeg": "image", "gif": "image",
         "svg": "image", "webp": "image", "bmp": "image", "ico": "image",
         # 오피스
-        "docx": "word", "xlsx": "excel", "pptx": "powerpoint",
+        "docx": "word", "doc": "word",
+        "xlsx": "excel", "xls": "excel", "xlsm": "excel",
+        "pptx": "powerpoint", "ppt": "powerpoint",
         "odt": "word", "ods": "excel", "odp": "powerpoint",
     }
     return _FORMAT_MAP.get(ext, "other")
@@ -414,7 +536,7 @@ async def get_doc_content(
         raise HTTPException(400, f"Unknown project: {project}")
 
     # 경로 검증 (traversal 방지)
-    if ".." in file_path or file_path.startswith("/"):
+    if not _is_safe_relative_path(file_path):
         raise HTTPException(400, "Invalid file path")
 
     full_path = f"{base_path}/{file_path}"
@@ -427,10 +549,51 @@ async def get_doc_content(
 
     if host is None:
         # 로컬 파일
-        p = Path(full_path)
+        p = _resolve_local_file(project, base_path, file_path)
+        full_path = str(p)
         if not p.exists() or not p.is_file():
             raise HTTPException(404, "File not found")
         size_bytes = p.stat().st_size
+        if ext in EXCEL_EXTENSIONS:
+            raw = p.read_bytes()
+            try:
+                content = _excel_bytes_to_csv_text(raw, p.name)
+                return {
+                    "project": project,
+                    "file_path": file_path,
+                    "full_path": full_path,
+                    "content": content,
+                    "size": len(content),
+                    "encoding": "text",
+                    "mime_type": "text/csv",
+                    "is_binary": False,
+                    "source_mime_type": mime_type,
+                    "converted_from": ext.lstrip("."),
+                    "format": "excel-csv",
+                }
+            except Exception as e:
+                logger.warning("project_doc_excel_preview_failed", path=full_path, error=str(e))
+                is_binary = True
+        if ext in DOCX_EXTENSIONS:
+            raw = p.read_bytes()
+            try:
+                content = _docx_bytes_to_text(raw, p.name)
+                return {
+                    "project": project,
+                    "file_path": file_path,
+                    "full_path": full_path,
+                    "content": content,
+                    "size": len(content),
+                    "encoding": "text",
+                    "mime_type": "text/plain",
+                    "is_binary": False,
+                    "source_mime_type": mime_type,
+                    "converted_from": ext.lstrip("."),
+                    "format": "word-text",
+                }
+            except Exception as e:
+                logger.warning("project_doc_docx_preview_failed", path=full_path, error=str(e))
+                is_binary = True
         # 텍스트 1MB / 바이너리 10MB 한도
         max_size = 10_000_000 if is_binary else 1_000_000
         if size_bytes > max_size:
@@ -442,18 +605,77 @@ async def get_doc_content(
             content = p.read_text(encoding="utf-8", errors="replace")
     else:
         # 원격 파일
+        normalized_base = str(Path(base_path))
+        if normalized_base not in _configured_base_paths(project):
+            raise HTTPException(400, "Unsupported base_path")
+        if ext in EXCEL_EXTENSIONS:
+            quoted_full_path = shlex.quote(full_path)
+            b64_output = await _run_cmd(
+                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                timeout=15,
+            )
+            if not b64_output:
+                raise HTTPException(404, "File not found or empty")
+            raw = base64.b64decode(b64_output.strip())
+            try:
+                content = _excel_bytes_to_csv_text(raw, Path(file_path).name)
+                return {
+                    "project": project,
+                    "file_path": file_path,
+                    "full_path": full_path,
+                    "content": content,
+                    "size": len(content),
+                    "encoding": "text",
+                    "mime_type": "text/csv",
+                    "is_binary": False,
+                    "source_mime_type": mime_type,
+                    "converted_from": ext.lstrip("."),
+                    "format": "excel-csv",
+                }
+            except Exception as e:
+                logger.warning("project_doc_remote_excel_preview_failed", path=full_path, error=str(e))
+                is_binary = True
+        if ext in DOCX_EXTENSIONS:
+            quoted_full_path = shlex.quote(full_path)
+            b64_output = await _run_cmd(
+                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                timeout=15,
+            )
+            if not b64_output:
+                raise HTTPException(404, "File not found or empty")
+            raw = base64.b64decode(b64_output.strip())
+            try:
+                content = _docx_bytes_to_text(raw, Path(file_path).name)
+                return {
+                    "project": project,
+                    "file_path": file_path,
+                    "full_path": full_path,
+                    "content": content,
+                    "size": len(content),
+                    "encoding": "text",
+                    "mime_type": "text/plain",
+                    "is_binary": False,
+                    "source_mime_type": mime_type,
+                    "converted_from": ext.lstrip("."),
+                    "format": "word-text",
+                }
+            except Exception as e:
+                logger.warning("project_doc_remote_docx_preview_failed", path=full_path, error=str(e))
+                is_binary = True
         if is_binary:
             # SSH base64 인코딩으로 바이너리 안전 전송
+            quoted_full_path = shlex.quote(full_path)
             b64_output = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 '{full_path}' 2>/dev/null"],
+                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
                 timeout=15,
             )
             if not b64_output:
                 raise HTTPException(404, "File not found or empty")
             content = b64_output.strip()
         else:
+            quoted_full_path = shlex.quote(full_path)
             content = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"cat '{full_path}'"],
+                ["ssh", "-o", "ConnectTimeout=5", host, f"cat {quoted_full_path}"],
                 timeout=10,
             )
             if not content:
@@ -468,4 +690,5 @@ async def get_doc_content(
         "encoding": "base64" if is_binary else "text",
         "mime_type": mime_type,
         "is_binary": is_binary,
+        "format": "binary" if is_binary and ext not in BASE64_PREVIEW_EXTENSIONS else _detect_format(file_path),
     }
