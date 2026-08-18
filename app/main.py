@@ -56,6 +56,7 @@ from app.api.llm_keys import router as llm_keys_router
 from app.api.llm_models import router as llm_models_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
+from app.api.files import router as files_router
 from app.api.external_chat import router as external_chat_router
 from app.api.ohvis_tasks import router as ohvis_tasks_router
 from app.api.loops import router as loops_router
@@ -1817,6 +1818,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/hot-reload",  # 내부 hot-reload (127.0.0.1 전용)
     "/api/v1/ops/active-streams",  # 내부 스트림 drain 감지 (deploy.sh 전용)
     "/api/v1/image/gallery",  # AI 모델 이미지 갤러리 (공개 읽기전용)
+    "/api/v1/files/",  # 채팅 산출물 다운로드 (파일 API 자체에 경로 화이트리스트·민감파일 차단 내장)
     "/api/v1/ops/usage-stats",  # 사용량 통계 (읽기전용)
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
@@ -1952,6 +1954,7 @@ app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
 app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
+app.include_router(files_router, prefix="/api/v1", tags=["files"])
 app.include_router(terminal.router, prefix="/api/v1", tags=["terminal"])
 app.include_router(browser_bridge.router, prefix="/api/v1", tags=["browser-bridge"])
 app.include_router(external_chat_router, prefix="/api/v1", tags=["external-chat"])

@@ -305,6 +305,36 @@ async def _mark_group(
         )
 
 
+def _parse_porcelain_paths(text: str) -> set[str]:
+    """`git status --porcelain` 출력에서 실제 변경 경로만 뽑는다.
+
+    원격 실행 래퍼가 붙이는 헤더(`[AADS 명령 실행 …]`, `$ cmd`, `[STDERR] …`)는 버린다.
+    """
+    paths: set[str] = set()
+    for line in (text or "").splitlines():
+        raw = line.rstrip()
+        if not raw or raw.startswith("[") or raw.startswith("$ "):
+            continue
+        if len(raw) < 4:
+            continue
+        path = raw[3:].strip()
+        if " -> " in path:  # rename
+            path = path.split(" -> ", 1)[1].strip()
+        path = path.strip('"')
+        if path:
+            paths.add(path)
+    return paths
+
+
+def _is_committable_path(path: str) -> bool:
+    """레포 밖 경로(/tmp, /root/.ssh, ../..)는 git add에서 제외한다."""
+    if not path or path.startswith("/"):
+        return False
+    if path.startswith("../") or "/../" in path or path == "..":
+        return False
+    return True
+
+
 async def _finalize_group(
     *,
     session_id: str,
@@ -314,6 +344,23 @@ async def _finalize_group(
 ) -> dict[str, Any]:
     file_paths = [_normalize_repo_path(project, repo, row["file_path"]) for row in rows]
     file_paths = [path for path in dict.fromkeys(file_paths) if path]
+
+    # AADS-FILES(2026-08-18): 레포 밖 경로/이미 사라진 경로가 섞이면 `git add`가 exit 128로
+    # 죽어 배포 preflight 전체가 영구 차단됐다. 실제 커밋 가능한 경로만 남긴다.
+    skipped_outside = [path for path in file_paths if not _is_committable_path(path)]
+    file_paths = [path for path in file_paths if _is_committable_path(path)]
+    skipped_missing: list[str] = []
+    if file_paths:
+        try:
+            status_text = await _run_git_command(
+                project, repo, "git -c core.quotepath=false status --porcelain"
+            )
+            changed = _parse_porcelain_paths(status_text)
+            if changed:
+                skipped_missing = [path for path in file_paths if path not in changed]
+                file_paths = [path for path in file_paths if path in changed]
+        except Exception:  # 상태 조회 실패 시에는 기존 동작 유지
+            pass
     result: dict[str, Any] = {
         "project": project,
         "repo": repo,
@@ -324,16 +371,37 @@ async def _finalize_group(
         "commit_message": "",
         "detail": "",
     }
+    if skipped_outside or skipped_missing:
+        result["skipped_outside_repo"] = skipped_outside[:20]
+        result["skipped_not_dirty"] = skipped_missing[:20]
+
+    all_ledger_paths = [str(row.get("file_path") or "").strip() for row in rows]
+    all_ledger_paths = [path for path in dict.fromkeys(all_ledger_paths) if path]
+
     if not file_paths:
+        # 커밋 대상이 하나도 없으면 ledger를 정리해 다음 배포를 막지 않는다.
+        if all_ledger_paths:
+            try:
+                await _mark_group(
+                    session_id=session_id,
+                    project=project,
+                    repo=repo,
+                    file_paths=[],
+                    ledger_file_paths=all_ledger_paths,
+                    status=_STATUS_PUSHED,
+                    last_error="",
+                    commit_message="Chat-Finalize: no committable change",
+                )
+            except Exception:
+                pass
         result["ok"] = True
         result["status"] = _STATUS_PUSHED
-        result["detail"] = "no files"
+        result["detail"] = "no committable files"
         return result
 
     commit_message = _build_commit_message(session_id, repo, file_paths)
     quoted_files = " ".join(shlex.quote(path) for path in file_paths)
-    ledger_file_paths = [str(row.get("file_path") or "").strip() for row in rows]
-    ledger_file_paths = [path for path in dict.fromkeys(ledger_file_paths) if path]
+    ledger_file_paths = all_ledger_paths
     commit_sha = None
 
     try:

@@ -21675,3 +21675,124 @@ s=p.read_tex
 - Chat-Direct 수정: run_remote_command: python3 -c "from backend.app.core.database import sync_engine
 from sqlalchemy im
 - finalize: pending
+
+## [2026-08-18 19:46:50 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:     await _backfill_next_extreme_times(i→    await _backfill_next_extreme_times(t
+- finalize: pending
+
+## [2026-08-18 19:47:02 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch: async def get_holding_dates(trade_date: →async def get_holding_dates(trade_date: 
+- finalize: pending
+
+## [2026-08-18 19:47:43 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch: async def _backfill_next_extreme_times(i→async def _backfill_next_extreme_times(t
+- finalize: pending
+
+## [2026-08-18 19:48:39 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:                             "code": it["→                            "code": it["
+- finalize: pending
+
+## [2026-08-18 19:49:44 KST] [GO100] scripts/_q1.sql
+- Chat-Direct 수정: write: scripts/_q1.sql
+- finalize: pending
+
+## [2026-08-18 19:50:00 KST] [GO100] scripts/fix_814_next_trade_date.py
+- Chat-Direct 수정: patch:               AND e.next_trade_date = '2→              AND e.next_trade_date = '2
+- finalize: pending
+
+## [2026-08-18 19:50:04 KST] [GO100] scripts/fix_814_next_trade_date.py
+- Chat-Direct 수정: run_remote_command: find /root/kis-autotrade-v4/frontend -path '*limitup*' -newermt '2026-08-18 00:0
+- finalize: pending
+
+## [2026-08-18 19:52:17 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:         d1 = str(d1_row[0])
+
+        res→        d1_date = d1_row[0]
+        d1 =
+- finalize: pending
+
+## [2026-08-18 19:53:06 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:         d1 = str(d1_row[0])
+
+        res→        d1_date = d1_row[0]
+        if i
+- finalize: pending
+
+## [2026-08-18 19:53:21 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:         """), {"d1": d1})
+        subseq→        """), {"d1": d1_date})
+        s
+- finalize: pending
+
+## [2026-08-18 19:54:54 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:     for item in items:
+        if item["→    for item in items:
+        if item["
+- finalize: pending
+
+## [2026-08-18 19:55:46 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch: def _classify_theme_strength(items: list→_STRENGTH_EVENT_TYPES = frozenset({"limi
+- finalize: pending
+
+## [2026-08-18 19:57:42 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch: function fmt(v: number | null | undefine→/** 등락률 표기 — 소수점 첫째 자리까지 (CEO 요청) */
+fun
+- finalize: pending
+
+## [2026-08-18 19:58:41 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:   const holdingDates = (dailyData as { h→  const holdingDates = (dailyData as { h
+- finalize: pending
+
+## [2026-08-18 19:59:37 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                     {dailyItems.map((ite→                    {sortedDailyItems.ma
+- finalize: pending
+
+## [2026-08-18 20:00:01 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                   <thead>
+              →                  <thead>
+              
+- finalize: pending
+
+## [2026-08-18 20:00:35 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                             {!!(item.mar→                            {!!(item.mar
+- finalize: pending
+
+## [2026-08-18 20:01:23 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                     {dailyItems.map((ite→                    {sortedDailyItems.ma
+- finalize: pending
+
+## [2026-08-18 20:01:33 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                           <td className=→                          <td className=
+- finalize: pending
+
+## [2026-08-18 20:02:34 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                           <td className=→                          <td className=
+- finalize: pending
+
+## [2026-08-18 20:02:46 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                               {isLimitup→                              {isLimitup
+- finalize: pending
+
+## [2026-08-18 20:03:43 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                           <td className=→                          <td className=
+- finalize: pending
+
+## [2026-08-18 20:04:02 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                     <tr className="borde→                    <tr className="borde
+- finalize: pending
+
+## [2026-08-18 20:04:35 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                           <td className=→                          <td className=
+- finalize: pending
+
+## [2026-08-18 20:05:41 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                   <span className="text-→                  <span className="text-
+- finalize: pending
+
+## [2026-08-18 20:07:58 KST] [GO100] scripts/_fe_build.sh
+- Chat-Direct 수정: write: scripts/_fe_build.sh
+- finalize: pending
+
+## [2026-08-18 20:16:08 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: sleep 50; systemctl is-active go100-bg-deploy2; tail -6 /tmp/go100-frontend-depl
+- finalize: pending

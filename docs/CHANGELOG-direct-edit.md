@@ -4727,3 +4727,191 @@ fro
 
 ## [2026-08-04 19:26:47 KST] [aads-server] app/static/reports/naengmyeon_oem_email_draft.pdf
 - Chat-Direct 수정: run_remote_command: docker exec aads-server apt-get install -y -qq libgdk-pixbuf-2.0-0 2>&1 | tail -
+
+## [2026-08-05 16:12:51 KST] [aads-server] app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+- Chat-Direct 수정: write: app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+
+## [2026-08-05 16:26:27 KST] [aads-server] app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+- Chat-Direct 수정: patch: <tr><td>이메일</td><td>moongoby@gmail.com</→<tr><td>이메일</td><td><!--email_off-->moon
+
+## [2026-08-05 16:26:32 KST] [aads-server] app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+- Chat-Direct 수정: patch:  E. moongoby@gmail.com→ E. <!--email_off-->moongoby@gmail.com<!
+
+## [2026-08-05 16:26:36 KST] [aads-server] app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+- Chat-Direct 수정: patch: <td>joricook123@naver.com<br>031-977-993→<td><!--email_off-->joricook123@naver.co
+
+## [2026-08-05 16:56:41 KST] [aads-server] app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+- Chat-Direct 수정: write: app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+
+## [2026-08-05 17:10:29 KST] [aads-server] app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+- Chat-Direct 수정: write: app/static/reports/언니냉면_육수OEM_문의메일_초안.html
+
+## [2026-08-05 17:23:41 KST] [aads-server] scripts/send_oem_email.py
+- Chat-Direct 수정: write: scripts/send_oem_email.py
+
+## [2026-08-05 17:28:01 KST] [aads-server] scripts/send_oem_email.py
+- Chat-Direct 수정: write: scripts/send_oem_email.py
+
+## [2026-08-05 17:30:18 KST] [aads-server] scripts/send_oem_email_direct.py
+- Chat-Direct 수정: write: scripts/send_oem_email_direct.py
+
+## [2026-08-05 17:30:37 KST] [aads-server] scripts/send_oem_email_direct.py
+- Chat-Direct 수정: write: scripts/send_oem_email_direct.py
+
+## [2026-08-05 17:31:05 KST] [aads-server] scripts/send_oem_email_direct.py
+- Chat-Direct 수정: write: scripts/send_oem_email_direct.py
+
+## [2026-08-05 17:36:19 KST] [aads-server] app/static/reports/send_oem_email.py
+- Chat-Direct 수정: write: app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:38:31 KST] [aads-server] scripts/send_oem_mail.py
+- Chat-Direct 수정: write: scripts/send_oem_mail.py
+
+## [2026-08-05 17:45:17 KST] [aads-server] scripts/send_oem_mail_joricook.py
+- Chat-Direct 수정: write: scripts/send_oem_mail_joricook.py
+
+## [2026-08-05 17:46:10 KST] [aads-server] scripts/send_oem_mail_joricook.py
+- Chat-Direct 수정: write: scripts/send_oem_mail_joricook.py
+
+## [2026-08-05 17:47:47 KST] [aads-server] scripts/check_gmail_sent.py
+- Chat-Direct 수정: write: scripts/check_gmail_sent.py
+
+## [2026-08-05 17:48:14 KST] [aads-server] scripts/check_gmail_sent.py
+- Chat-Direct 수정: write: scripts/check_gmail_sent.py
+
+## [2026-08-05 18:39:53 KST] [aads-server] scripts/send_oem_mail_batch.py
+- Chat-Direct 수정: write: scripts/send_oem_mail_batch.py
+
+## [2026-08-05 18:41:01 KST] [aads-server] scripts/send_oem_mail_batch.py
+- Chat-Direct 수정: write: scripts/send_oem_mail_batch.py
+
+## [2026-08-05 18:52:29 KST] [aads-server] scripts/send_oem_mail_gsfarm.py
+- Chat-Direct 수정: write: scripts/send_oem_mail_gsfarm.py
+
+## [2026-08-05 19:38:00 KST] [aads-server] scripts/process_donkatsu_thumb.py
+- Chat-Direct 수정: write: scripts/process_donkatsu_thumb.py
+
+## [2026-08-05 19:38:49 KST] [aads-server] scripts/process_donkatsu_thumb.py
+- Chat-Direct 수정: write: scripts/process_donkatsu_thumb.py
+
+## [2026-08-06 09:18:46 KST] [aads-server] app/static/media/cheese_donkatsu_A.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_1_1280.jpg /root/aads/aads-server/app/static/media/chees
+
+## [2026-08-06 09:18:50 KST] [aads-server] app/static/media/cheese_donkatsu_B.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_2_1280.jpg /root/aads/aads-server/app/static/media/chees
+
+## [2026-08-06 09:18:54 KST] [aads-server] app/static/media/cheese_donkatsu_C.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_3_1280.jpg /root/aads/aads-server/app/static/media/chees
+
+## [2026-08-06 09:18:58 KST] [aads-server] app/static/media/cheese_donkatsu_D.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_turbo1_1280.jpg /root/aads/aads-server/app/static/media/
+
+## [2026-08-06 09:19:01 KST] [aads-server] app/static/media/cheese_donkatsu_E.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_turbo2_1280.jpg /root/aads/aads-server/app/static/media/
+
+## [2026-08-06 15:33:26 KST] [aads-server] migrations/119_genspark_ui_media_fallback.sql
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w "%{http_code} %{size_download}\n" https://aads.newtalk.k
+
+## [2026-08-06 15:33:41 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w "%{http_code}\n" https://aads.newtalk.kr/screenshots/che
+
+## [2026-08-06 18:33:23 KST] [aads-server] scripts/fit_donkatsu_square_nocrop.py
+- Chat-Direct 수정: write: scripts/fit_donkatsu_square_nocrop.py
+
+## [2026-08-06 18:35:07 KST] [aads-server] app/static/media/donkatsu_nocrop_v1.jpg
+- Chat-Direct 수정: run_remote_command: curl -sS -L -o /root/aads/aads-server/app/static/media/donkatsu_nocrop_v1.jpg -w
+
+## [2026-08-06 18:36:25 KST] [aads-server] scripts/donkatsu_square_contain.py
+- Chat-Direct 수정: write: scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:11 KST] [aads-server] scripts/donkatsu_square_contain.py
+- Chat-Direct 수정: write: scripts/donkatsu_square_contain.py
+
+## [2026-08-07 16:00:09 KST] [aads-server] scripts/_fix_doclinks.ts
+- Chat-Direct 수정: write: scripts/_fix_doclinks.ts
+
+## [2026-08-07 16:00:16 KST] [aads-server] scripts/_fix_chip.txt
+- Chat-Direct 수정: write: scripts/_fix_chip.txt
+
+## [2026-08-07 16:00:19 KST] [aads-server] scripts/_fix_deeplink.txt
+- Chat-Direct 수정: write: scripts/_fix_deeplink.txt
+
+## [2026-08-07 16:00:31 KST] [aads-server] scripts/apply_doc_fixes.py
+- Chat-Direct 수정: write: scripts/apply_doc_fixes.py
+
+## [2026-08-07 16:04:27 KST] [aads-server] scripts/_deploy_dashboard.sh
+- Chat-Direct 수정: write: scripts/_deploy_dashboard.sh
+
+## [2026-08-07 16:07:11 KST] [aads-server] nginx-aads-upstream.conf
+- Chat-Direct 수정: run_remote_command: sleep 40
+
+## [2026-08-07 16:07:12 KST] [aads-server] nginx-aads-upstream.conf.dashboard.bak
+- Chat-Direct 수정: run_remote_command: sleep 40
+
+## [2026-08-07 16:13:06 KST] [aads-server] scripts/_fix_doclinks.ts
+- Chat-Direct 수정: write: scripts/_fix_doclinks.ts
+
+## [2026-08-07 16:13:07 KST] [aads-server] scripts/_fix_chip.txt
+- Chat-Direct 수정: write: scripts/_fix_chip.txt
+
+## [2026-08-07 16:13:07 KST] [aads-server] scripts/_fix_deeplink.txt
+- Chat-Direct 수정: write: scripts/_fix_deeplink.txt
+
+## [2026-08-07 16:13:08 KST] [aads-server] scripts/apply_doc_fixes.py
+- Chat-Direct 수정: write: scripts/apply_doc_fixes.py
+
+## [2026-08-07 16:14:47 KST] [aads-server] scripts/_deploy_dashboard.sh
+- Chat-Direct 수정: write: scripts/_deploy_dashboard.sh
+
+## [2026-08-18 19:47:57 KST] [aads-server] app/api/files.py
+- Chat-Direct 수정: write: app/api/files.py
+
+## [2026-08-18 19:48:01 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: from app.api.project_docs import router →from app.api.project_docs import router 
+
+## [2026-08-18 19:48:08 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: app.include_router(project_docs_router, →app.include_router(project_docs_router, 
+
+## [2026-08-18 19:51:17 KST] [aads-server] app/api/files.py
+- Chat-Direct 수정: write: app/api/files.py
+
+## [2026-08-18 19:51:18 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: from app.api.project_docs import router →from app.api.project_docs import router 
+
+## [2026-08-18 19:52:07 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: app.include_router(project_docs_router, →app.include_router(project_docs_router, 
+
+## [2026-08-18 19:55:48 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-server/app/api/files.py /root/aads/aads-dashboard/src/lib
+
+## [2026-08-18 19:59:27 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: from app.api.files import router as file→from app.api.files import router as file
+
+## [2026-08-18 20:00:16 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: app.include_router(files_router, prefix=→app.include_router(files_router, prefix=
+
+## [2026-08-18 20:02:59 KST] [aads-server] app/api/files.py
+- Chat-Direct 수정: patch: def _is_allowed(path: Path) -> bool:
+   →def _is_allowed(path: Path) -> bool:
+   
+
+## [2026-08-18 20:03:07 KST] [aads-server] app/api/files.py
+- Chat-Direct 수정: patch: SENSITIVE_PARTS = (".env", ".ssh", ".git→# 저장소 루트 바로 아래 산출물 허용 (소스 유출 방지를 위해 확장자 
+
+## [2026-08-18 20:03:54 KST] [aads-server] scripts/_documentLinks_new.ts
+- Chat-Direct 수정: write: scripts/_documentLinks_new.ts
+
+## [2026-08-18 20:08:42 KST] [aads-server] app/services/workspace_change_tracker.py
+- Chat-Direct 수정: patch: async def _finalize_group(
+    *,
+    se→def _parse_porcelain_paths(text: str) ->
+
+## [2026-08-18 20:09:07 KST] [aads-server] app/services/workspace_change_tracker.py
+- Chat-Direct 수정: patch:     if not file_paths:
+        result["o→    if skipped_outside or skipped_missin
+
+## [2026-08-18 20:10:36 KST] [aads-server] tests/unit/test_yeoljeong_finance_api.py
+- Chat-Direct 수정: run_remote_command: cat /root/aads/aads-server/.active_container /root/aads/aads-server/.active_port
+
+## [2026-08-18 20:12:26 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/image/gallery",  # AI 모델 이미→    "/api/v1/image/gallery",  # AI 모델 이미
