@@ -6033,6 +6033,8 @@ async def _session_has_running_execution(conn: asyncpg.Connection, session_id: u
 
 _AUTO_MESSAGE_EXCLUDE_FILTER = (
     " AND intent IS DISTINCT FROM 'pipeline_c'"
+    " AND intent IS DISTINCT FROM 'pipeline_runner'"
+    " AND intent IS DISTINCT FROM 'runner_notification'"
     " AND intent IS DISTINCT FROM 'ai_review_warning'"
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"

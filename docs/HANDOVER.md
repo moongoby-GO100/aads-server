@@ -255,3 +255,11 @@
   - DB 잔여 `{GoodsCode_15}` count: `GoodsSortImg1~4=0`, `Description=0`, `DanharooDescription=0`.
   - `https://newtalk.kr/products/goods_img_sorting_test1/set1600k18` 응답에서 `{GoodsCode_15}` 미검출.
 - 상태: 운영 파일 직접 핫픽스 반영. 커밋/푸시/정식 배포 없음.
+
+## 2026-08-18 21:10 KST - AADS 채팅 CEO 지시 버블 사라짐 보강
+- 대상 세션 `77174902-a5e6-4705-9131-70e699bd0ee7`에서 총 메시지 735건 중 자동/러너성 메시지 357건이 확인됐다.
+- P0 러너 `runner-a79eebaa` 승인 diff에 `app/data/yeoljeong_finance/platform_accounts.json` 등 작업 범위 밖 변경이 섞여 반려했다.
+- 직접 보강: `app/services/chat_service.py`의 메인 메시지 조회 제외 필터에 `pipeline_runner`, `runner_notification` intent를 추가해 LIMIT 전에 자동 runner 이벤트를 제외한다.
+- 직접 보강: `aads-dashboard/src/app/chat/page.tsx`의 runner 판별에 `pipeline_runner`, `runner_notification` intent를 추가해 메인 대화 버블이 아니라 로그 레인 대상으로 분리한다.
+- 기존 정책 유지: `runner_response`는 2026-05-04 결정에 따라 저장된 검수/상태 보고가 보이도록 숨김 대상에 넣지 않는다.
+- 검증: `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 성공, `npm run build` 성공. 배포/푸시는 별도 상태 확인 필요.
