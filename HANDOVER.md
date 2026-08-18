@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-18 20:09 KST - Yeoljeong Finance integration auth refresh follow-up
+
+- Request: Make the integration filters match the existing category/status design and explain why Jungwha branch rows were separated in the lower list.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: reuses the resolved server auth token from `aads_token`, `fb_access_token`, and both cookies; refreshes the server session before auto-loading integration accounts; clears stale auth on 401/403 so the app does not show the local fallback list as if it were complete.
+  - `tests/unit/test_yeoljeong_finance_api.py`: updated the existing redirect/auth-cookie regression to validate the shared `serverAuthToken()` resolver instead of a removed inline expression.
+- Verification:
+  - `curl -L https://fb.newtalk.kr/apps/yeoljeong-finance` contains `multi-select-control`, `판매채널 자동수집 준비 현황`, and `ensureServerAccountsForIntegrations`.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` passed: 5 passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py` passed after copying the current test file into the running container test path: 19 passed.
+  - Active and green backend health checks on `127.0.0.1:8100/health` and `127.0.0.1:8102/health` returned `status: ok`.
+- Status:
+  - Commit `112b6d48 fix(food): load integration accounts after auth refresh` is pushed to `origin/main`.
+  - Follow-up test-only commit is required to record the corrected regression assertion.
+
 ## 2026-08-18 19:05 KST - Yeoljeong Finance integration detail branch filters
 
 - Request: Fix the integration detail list showing only four Mia branch rows, add multi-select dropdowns for service and business/branch, and prepare sales-channel-first collection status checks per business and sales site.

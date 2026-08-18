@@ -359,9 +359,13 @@ def test_employee_auth_gate_prioritizes_self_signup_over_invites():
 def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
     html = html_path.read_text(encoding="utf-8")
+    token_resolver = html.split("function serverAuthToken()", 1)[1].split("function apiHeaders()", 1)[0]
 
     assert "function syncServerAuthCookieFromStorage()" in html
-    assert 'localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY)' in html
+    assert "localStorage.getItem(SERVER_AUTH_TOKEN_KEY)" in token_resolver
+    assert "localStorage.getItem(FB_ACCESS_TOKEN_KEY)" in token_resolver
+    assert "cookieValue(SERVER_AUTH_TOKEN_KEY)" in token_resolver
+    assert "cookieValue(FB_ACCESS_TOKEN_KEY)" in token_resolver
     assert "SameSite=Lax${secure}" in html
     assert "const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();" in html
     assert "syncServerAuthCookieFromStorage();" in html
