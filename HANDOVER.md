@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-18 19:05 KST - Yeoljeong Finance integration detail branch filters
+
+- Request: Fix the integration detail list showing only four Mia branch rows, add multi-select dropdowns for service and business/branch, and prepare sales-channel-first collection status checks per business and sales site.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: added service and business/branch multi-select filters, query filtering, server account auto-refresh when entering the integration view, branch-scoped integration filtering, and a sales-channel readiness table with per-row collection/action buttons.
+  - `tests/unit/test_yeoljeong_finance_print_static.py`: added static regression assertions for the new filters, server-account refresh hook, and row-level sync CTAs.
+- Verification:
+  - Commit `c9c2cd86 fix(food): show branch-scoped integration filters` is pushed to `origin/main`.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_print_static.py` passed: 5 passed.
+  - Inline script syntax check passed through `node --check`.
+  - Active slot `aads-server` on `127.0.0.1:8100` is healthy and serves the new HTML with `integrationServiceFilter`, `integrationBusinessBranchFilter`, `ensureServerAccountsForIntegrations`, `salesChannelReadinessRows`, and `data-sync-integration-id`.
+  - Production `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` HTTP 200, last-modified `Tue, 18 Aug 2026 09:43:51 GMT`, and contains the new filter/readiness markers.
+  - Playwright smoke check on the active slot found desktop/mobile page errors 0 and the new filter/readiness DOM nodes present.
+- Data finding:
+  - Local platform account ledger currently has `중화점` rows: Baemin 5, IBK business 2, Shinhan business 1. Several rows still require credentials, portal action, or upload fallback before live collection can succeed.
+- Deployment:
+  - `deploy.sh bluegreen` completed after an initial safety-gate wait for one active stream; active slot is `aads-server:8100`.
+  - Existing unrelated data/docs/media/script dirty files were restored after deploy and left outside the request. `stash@{0}` is preserved because `docs/CHANGELOG-go100-direct.md` differed during stash restore.
+
 ## 2026-08-08 16:02 KST - Chat document links and project docs viewer hardening
 
 - Request: Make documents referenced in chat open directly instead of causing 404 or unsupported-extension failures.
