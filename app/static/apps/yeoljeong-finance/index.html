@@ -1382,7 +1382,7 @@
 
     .inline-filters {
       display: grid;
-      grid-template-columns: 150px 150px 190px 230px minmax(220px, 1fr);
+      grid-template-columns: 150px 150px 190px 230px minmax(240px, 1fr);
       gap: 10px;
       align-items: end;
     }
@@ -1393,6 +1393,7 @@
       color: var(--muted);
       font-size: 12px;
       font-weight: 800;
+      min-width: 0;
     }
 
     .inline-filters select,
@@ -1407,15 +1408,149 @@
       min-width: 0;
     }
 
+    .inline-filters select:not([multiple]),
+    .inline-filters input,
+    .multi-select-trigger {
+      min-height: 38px;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+    }
+
+    .inline-filters .span-2 {
+      grid-column: span 1;
+    }
+
     .inline-filters select[multiple] {
-      min-height: 78px;
-      padding: 8px;
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      border: 0;
+      opacity: 0;
+      pointer-events: none;
     }
 
     .inline-filters .filter-note {
       color: var(--muted);
       font-size: 12px;
       line-height: 1.35;
+    }
+
+    .multi-select-control {
+      position: relative;
+      min-width: 0;
+    }
+
+    .multi-select-trigger {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+    }
+
+    .multi-select-trigger::after {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid #64748b;
+      border-bottom: 2px solid #64748b;
+      transform: rotate(45deg) translateY(-2px);
+      flex: 0 0 auto;
+    }
+
+    .multi-select-control.open .multi-select-trigger {
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    }
+
+    .multi-select-menu {
+      position: absolute;
+      z-index: 25;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      max-height: 230px;
+      overflow: auto;
+      display: none;
+      padding: 6px;
+      border: 1px solid #d9e2ef;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 14px 35px rgba(15, 23, 42, 0.14);
+    }
+
+    .multi-select-control.open .multi-select-menu {
+      display: grid;
+      gap: 3px;
+    }
+
+    .multi-select-option {
+      display: flex !important;
+      grid-template-columns: none !important;
+      align-items: center;
+      gap: 8px !important;
+      min-height: 30px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: #1f2937 !important;
+      font-size: 12px !important;
+      font-weight: 800 !important;
+      cursor: pointer;
+    }
+
+    .multi-select-option:hover {
+      background: #f1f5f9;
+    }
+
+    .multi-select-option input {
+      width: 14px;
+      min-height: 14px;
+      accent-color: #2563eb;
+    }
+
+    .readiness-panel {
+      margin-top: 14px;
+      border: 1px solid #d8e2ef;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fbfdff;
+    }
+
+    .readiness-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid #d8e2ef;
+      background: #f5f9ff;
+    }
+
+    .readiness-head h3 {
+      margin: 0;
+      color: #172554;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    .readiness-head p {
+      margin: 4px 0 0;
+      color: #526173;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .readiness-head .status {
+      flex: 0 0 auto;
     }
 
     .contract-preview {
@@ -3909,11 +4044,9 @@
                 </label>
                 <label>서비스
                   <select id="integrationServiceFilter" multiple></select>
-                  <span class="filter-note">미선택 시 전체</span>
                 </label>
                 <label>사업자·지점
                   <select id="integrationBusinessBranchFilter" multiple></select>
-                  <span class="filter-note">미선택 시 전체</span>
                 </label>
                 <label class="span-2">검색
                   <input id="integrationSearchInput" type="search" placeholder="서비스, 지점, 사업자, ID, 계좌/가맹점번호, 메모 검색">
@@ -3922,8 +4055,17 @@
               <div class="table-wrap" style="margin-top:12px">
                 <table><thead><tr><th>구분</th><th>서비스</th><th>사업자·지점</th><th>수집 데이터</th><th>필수 인증값</th><th>최근 동기화</th><th>상태</th><th>설정</th></tr></thead><tbody id="integrationOpsRows"></tbody></table>
               </div>
-              <div class="table-wrap" style="margin-top:12px">
-                <table><thead><tr><th>판매사이트</th><th>사업자·지점</th><th>저장 계정</th><th>자동 수집 상태</th><th>수집 데이터</th><th>필요 조치</th></tr></thead><tbody id="salesChannelReadinessRows"></tbody></table>
+              <div class="readiness-panel">
+                <div class="readiness-head">
+                  <div>
+                    <h3>판매채널 자동수집 준비 현황</h3>
+                    <p>위 연동 목록에 저장된 계정을 사업자·지점과 판매사이트별로 다시 묶어, 어느 지점이 바로 수집 가능하고 어느 지점에 ID/PW·PC 인증·파일 업로드가 필요한지 확인하는 점검표입니다.</p>
+                  </div>
+                  <span class="status info">점검표</span>
+                </div>
+                <div class="table-wrap">
+                  <table><thead><tr><th>판매사이트</th><th>사업자·지점</th><th>저장 계정</th><th>자동 수집 상태</th><th>수집 데이터</th><th>필요 조치</th></tr></thead><tbody id="salesChannelReadinessRows"></tbody></table>
+                </div>
               </div>
             </div>
           </section>
@@ -7125,6 +7267,54 @@
         .filter(Boolean);
     }
 
+    function multiSelectSummary(select, placeholder = "전체") {
+      const selected = selectedMultiValues(select);
+      if (!selected.length) return placeholder;
+      const options = Array.from(select.options);
+      const labels = selected.map(value => options.find(option => option.value === value)?.textContent || value);
+      if (labels.length <= 2) return labels.join(", ");
+      return `${labels.slice(0, 2).join(", ")} 외 ${labels.length - 2}`;
+    }
+
+    function enhanceMultiSelect(select, placeholder) {
+      if (!select) return;
+      let control = select.nextElementSibling;
+      if (!control || !control.classList.contains("multi-select-control")) {
+        control = document.createElement("div");
+        control.className = "multi-select-control";
+        control.innerHTML = `<button type="button" class="multi-select-trigger"></button><div class="multi-select-menu"></div>`;
+        select.insertAdjacentElement("afterend", control);
+        control.querySelector(".multi-select-trigger").addEventListener("click", event => {
+          event.stopPropagation();
+          document.querySelectorAll(".multi-select-control.open").forEach(item => {
+            if (item !== control) item.classList.remove("open");
+          });
+          control.classList.toggle("open");
+        });
+        control.querySelector(".multi-select-menu").addEventListener("click", event => event.stopPropagation());
+        control.querySelector(".multi-select-menu").addEventListener("change", event => {
+          const checkbox = event.target.closest("input[type='checkbox']");
+          if (!checkbox) return;
+          const option = Array.from(select.options).find(item => item.value === checkbox.value);
+          if (option) option.selected = checkbox.checked;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      }
+      const selected = new Set(selectedMultiValues(select));
+      control.querySelector(".multi-select-trigger").textContent = multiSelectSummary(select, placeholder);
+      control.querySelector(".multi-select-menu").innerHTML = Array.from(select.options).map(option => `
+        <label class="multi-select-option">
+          <input type="checkbox" value="${escapeHtml(option.value)}" ${selected.has(option.value) ? "checked" : ""}>
+          <span>${escapeHtml(option.textContent || option.value)}</span>
+        </label>
+      `).join("") || `<span class="filter-note">선택할 항목이 없습니다.</span>`;
+    }
+
+    function refreshIntegrationMultiSelectControls() {
+      enhanceMultiSelect(els.integrationServiceFilter, "전체 서비스");
+      enhanceMultiSelect(els.integrationBusinessBranchFilter, "전체 사업자·지점");
+    }
+
     function integrationBusinessId(item) {
       return String(item.businessId || item.business_id || businessIdForBranchName(item.branch || "") || "").trim();
     }
@@ -7164,6 +7354,7 @@
           .map(([key, label]) => `<option value="${escapeHtml(key)}" ${selected.has(key) ? "selected" : ""}>${escapeHtml(label)}</option>`)
           .join("");
       }
+      refreshIntegrationMultiSelectControls();
     }
 
     function filteredIntegrationItems(sourceItems = settings().integrations, { businessScoped = true } = {}) {
@@ -9885,6 +10076,9 @@
       els.integrationServiceFilter?.addEventListener("change", renderAll);
       els.integrationBusinessBranchFilter?.addEventListener("change", renderAll);
       els.integrationSearchInput?.addEventListener("input", renderAll);
+      document.addEventListener("click", () => {
+        document.querySelectorAll(".multi-select-control.open").forEach(item => item.classList.remove("open"));
+      });
       document.querySelectorAll(".tab[data-view]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
       document.querySelectorAll('[data-external-tab="recipes"]').forEach(link => {
         link.addEventListener("click", event => {
