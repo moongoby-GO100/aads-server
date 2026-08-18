@@ -8698,8 +8698,23 @@
       ].join("\n");
     }
 
+    function cookieValue(name) {
+      const target = `${encodeURIComponent(name)}=`;
+      return document.cookie.split(";")
+        .map(item => item.trim())
+        .find(item => item.startsWith(target))
+        ?.slice(target.length) || "";
+    }
+
+    function serverAuthToken() {
+      return localStorage.getItem(SERVER_AUTH_TOKEN_KEY)
+        || localStorage.getItem(FB_ACCESS_TOKEN_KEY)
+        || cookieValue(SERVER_AUTH_TOKEN_KEY)
+        || cookieValue(FB_ACCESS_TOKEN_KEY);
+    }
+
     function apiHeaders() {
-      const token = localStorage.getItem(SERVER_AUTH_TOKEN_KEY);
+      const token = serverAuthToken();
       return {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {})
@@ -8707,7 +8722,7 @@
     }
 
     function hasServerAuth() {
-      return Boolean(localStorage.getItem(SERVER_AUTH_TOKEN_KEY));
+      return Boolean(serverAuthToken());
     }
 
     function persistServerAuthToken(token) {
@@ -8719,7 +8734,7 @@
     }
 
     function syncServerAuthCookieFromStorage() {
-      const token = localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY);
+      const token = serverAuthToken();
       if (!token) return false;
       persistServerAuthToken(token);
       return true;
@@ -8823,7 +8838,7 @@
     }
 
     function apiAuthOnlyHeaders() {
-      const token = localStorage.getItem("aads_token");
+      const token = serverAuthToken();
       return token ? { Authorization: `Bearer ${token}` } : {};
     }
 
@@ -9571,13 +9586,25 @@
         saveAuthSession(payload);
         return payload;
       } catch (err) {
+        if (/401|403|bearer|인증|권한/i.test(String(err?.message || ""))) {
+          clearServerAuthToken();
+          saveAuthSession(null);
+          renderAll();
+          showToast("로그인 세션이 만료되었습니다. 다시 로그인하면 서버 연동 계정을 불러옵니다.");
+          return null;
+        }
         return authSession;
       }
     }
 
     function refreshFinanceSessionInBackground() {
       refreshFinanceSession()
-        .then(() => renderAuthState())
+        .then(session => {
+          renderAuthState();
+          if (session && currentView === "integrations" && canManageAutomation()) {
+            refreshServerAccounts().catch(err => showToast(`서버 계정 자동 반영 실패: ${err.message}`));
+          }
+        })
         .catch(() => renderAuthState());
     }
 
@@ -9686,9 +9713,13 @@
     }
 
     function ensureServerAccountsForIntegrations() {
-      if (!canManageAutomation()) return null;
+      if (!hasServerAuth()) return null;
       if (!serverAccountsRefreshPromise) {
-        serverAccountsRefreshPromise = refreshServerAccounts()
+        serverAccountsRefreshPromise = refreshFinanceSession()
+          .then(session => {
+            if (!session || !canManageAutomation()) return null;
+            return refreshServerAccounts();
+          })
           .catch(err => showToast(`서버 계정 자동 반영 실패: ${err.message}`))
           .finally(() => {
             serverAccountsRefreshPromise = null;

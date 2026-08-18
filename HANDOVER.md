@@ -6300,3 +6300,21 @@
   - 인증 없는 `curl localhost:8100/api/v1/project-docs/content...`는 401로 API 직접 검증으로 대체했다.
 - 배포:
   - push/배포는 승인 타임아웃 복구 작업의 후속 영향 범위가 있어 이 기록 시점에는 수행하지 않았다.
+
+## 2026-08-18 19:51 KST - 매장비서 연동목록 중화점 누락 및 서버 계정 자동 반영 보강
+
+- 요청: 연동목록 상세에서 미아점 4개만 보이고 중화점이 누락되는 문제, 구분/상태와 동일한 필터 디자인, 판매채널 사업자/사이트별 수집 확인 준비를 최종 확인/조치.
+- 실측 원인:
+  - DB `yeoljeong_platform_accounts`에는 중화점 계정이 존재했다. 서비스 레이어 집계 기준 배민 5건, IBK 2건, 신한 1건이 `biz-junghwa/중화점`으로 반환된다.
+  - 운영 브라우저 E2E에서 `서버 계정 자동 반영 실패: 인증이 필요합니다. Bearer 토큰을 제공하세요.`가 재현됐다.
+  - 정적 앱이 `aads_token` localStorage만 헤더로 사용해 `fb_access_token` 또는 쿠키 기반 세션을 가진 경우 서버 계정 자동 병합이 실패할 수 있었고, 만료 토큰도 stale 로그인 UI로 남았다.
+- 조치:
+  - `app/static/apps/yeoljeong-finance/index.html`에 `serverAuthToken()`/`cookieValue()`를 추가해 `aads_token`, `fb_access_token`, 쿠키 토큰을 같은 인증 소스로 사용하도록 했다.
+  - 서버 계정 불러오기 전 `refreshFinanceSession()`을 먼저 수행하게 하여 권한 세션 복구 후 `/accounts`를 호출하도록 했다.
+  - 401/403/인증 오류 시 로컬 토큰과 auth session을 정리해 stale 로그인 상태로 서버 계정 병합을 시도하지 않도록 했다.
+  - `tests/unit/test_yeoljeong_finance_api.py`에 연동계정 인증 토큰 해석과 세션 우선 로딩 회귀 테스트를 추가했다.
+- 검증:
+  - `docker run --rm --env-file .env -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py::test_integration_accounts_use_resolved_auth_token_and_session_first_load tests/unit/test_yeoljeong_finance_api.py::test_account_upsert_runs_delivery_sync_when_auto_sync_enabled` 성공: 2 passed.
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공.
+  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_api.py` 성공.
+  - 배포와 운영 브라우저 재검증 결과는 후속 커밋/배포 완료 후 최종 보고에 반영한다.

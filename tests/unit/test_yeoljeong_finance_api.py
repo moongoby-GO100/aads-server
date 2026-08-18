@@ -152,6 +152,19 @@ def test_delivery_integration_normalization_preserves_selected_business_scope():
     )
 
 
+def test_integration_accounts_use_resolved_auth_token_and_session_first_load():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "function serverAuthToken()" in html
+    assert "localStorage.getItem(FB_ACCESS_TOKEN_KEY)" in html
+    assert "cookieValue(SERVER_AUTH_TOKEN_KEY)" in html
+    assert "const token = serverAuthToken();" in html
+    loader = html.split("function ensureServerAccountsForIntegrations()", 1)[1].split("function integrationMatchesSyncSummary", 1)[0]
+    assert "refreshFinanceSession()" in loader
+    assert "return refreshServerAccounts();" in loader
+
+
 def test_import_delivery_portal_text_persists_pc_parsed_baemin_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
