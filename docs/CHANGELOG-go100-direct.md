@@ -21796,3 +21796,23 @@ fun
 ## [2026-08-18 20:16:08 KST] [GO100] frontend/tsconfig.json
 - Chat-Direct 수정: run_remote_command: sleep 50; systemctl is-active go100-bg-deploy2; tail -6 /tmp/go100-frontend-depl
 - finalize: pending
+
+## [2026-08-18 20:27:10 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:                    e.holding_pnl_d2, e.h→                   e.holding_pnl_d2, e.h
+- finalize: pending
+
+## [2026-08-18 20:28:27 KST] [GO100] backend/app/services/go100/limitup_analyzer.py
+- Chat-Direct 수정: patch:             "open_price": _safe_float(r[→            "open_price": _safe_float(r[
+- finalize: pending
+
+## [2026-08-18 20:29:37 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: patch:                       <SortableTh label=→                      <SortableTh label=
+- finalize: pending
+
+## [2026-08-18 20:33:08 KST] [GO100] backend/app/services/data/dual_source_collector.py
+- Chat-Direct 수정: run_remote_command: systemctl is-active go100
+- finalize: pending
+
+## [2026-08-18 20:33:17 KST] [GO100] backend/app/routers/v4_stock_screener.py
+- Chat-Direct 수정: run_remote_command: systemctl is-active go100-ws-nxt-am.service
+- finalize: pending

@@ -970,3 +970,154 @@ with open(p
 
 ## [2026-08-04 19:13:08 KST] [aads-dashboard] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: cat /root/aads/aads-server/.active_container /root/aads/aads-server/.active_port
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/indoor-b1-glass-pickup-clean-300dpi.png
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/indoor-b2-cold-noodle-visual-300dpi.png
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/indoor-p4-glass-pickup-perforation-safe-300dpi.png
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/prints/manifest.json
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/stamps/biz-junghwa.png
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/stamps/biz-mia.png
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/assets/stamps/biz-sungshin.png
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/banners.html
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/haemyeon-duct-plan-20260730.html
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html.bak-20260714-1605-static-short
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html.pre-restore-20260714-162155
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/index.html.pre-sync-20260714-165533
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/mockup-v2.html
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 17:37:07 KST] [aads-dashboard] public/static/apps/yeoljeong-finance/modules/app-config.js
+- Chat-Direct 수정: run_remote_command: rm -f /root/aads/aads-server/app/static/reports/send_oem_email.py
+
+## [2026-08-05 19:39:20 KST] [aads-dashboard] public/brands/unni-naengmyeon/menu/cheese-donkatsu-thumb-67380488L.jpg
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/static/media/cheese-donkatsu-thumb-67380488L.jpg /roo
+
+## [2026-08-05 19:39:24 KST] [aads-dashboard] public/brands/unni-naengmyeon/menu/cheese-donkatsu-thumb-\354\271\230\354\246\210\353\217\210\352\271\214\354\212\244.jpg
+- Chat-Direct 수정: run_remote_command: docker cp "aads-server:/app/static/media/cheese-donkatsu-thumb-치즈돈까스.jpg" /root/
+
+## [2026-08-06 08:59:14 KST] [aads-dashboard] public/brands/unni-naengmyeon/menu/cheese-donkatsu-square-1280x1280-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "
+from PIL import Image, ImageFilter, ImageEnhance
+d='/root/aads/aads
+
+## [2026-08-06 08:59:24 KST] [aads-dashboard] public/reports/menu-images/cheese-donkatsu-square-1280x1280-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import shutil,os
+s='/root/aads/aads-dashboard/public/brands/unni-na
+
+## [2026-08-06 08:59:54 KST] [aads-dashboard] public/screenshots/cheese-donkatsu-square-1280x1280-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import shutil
+s='/root/aads/aads-dashboard/public/brands/unni-naeng
+
+## [2026-08-06 09:02:15 KST] [aads-dashboard] public/brands/unni-naengmyeon/menu/cheese-donkatsu-square-1280x1280-photo-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "
+from PIL import Image, ImageFilter, ImageEnhance, ImageStat
+d='/roo
+
+## [2026-08-06 09:02:15 KST] [aads-dashboard] public/brands/unni-naengmyeon/menu/cheese-donkatsu-square-1280x1280-photo2-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: python3 -c "
+from PIL import Image, ImageFilter, ImageEnhance, ImageStat
+d='/roo
+
+## [2026-08-06 09:28:02 KST] [aads-dashboard] public/reports/menu-images/cheese-donkatsu-A.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_1_1280.jpg /root/aads/aads-dashboard/public/reports/menu
+
+## [2026-08-06 09:28:06 KST] [aads-dashboard] public/reports/menu-images/cheese-donkatsu-B.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_2_1280.jpg /root/aads/aads-dashboard/public/reports/menu
+
+## [2026-08-06 09:28:09 KST] [aads-dashboard] public/reports/menu-images/cheese-donkatsu-C.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_3_1280.jpg /root/aads/aads-dashboard/public/reports/menu
+
+## [2026-08-06 09:28:14 KST] [aads-dashboard] public/reports/menu-images/cheese-donkatsu-D.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_turbo1_1280.jpg /root/aads/aads-dashboard/public/reports
+
+## [2026-08-06 09:28:17 KST] [aads-dashboard] public/reports/menu-images/cheese-donkatsu-E.jpg
+- Chat-Direct 수정: run_remote_command: cp /tmp/cheese_donkatsu_turbo2_1280.jpg /root/aads/aads-dashboard/public/reports
+
+## [2026-08-06 18:35:37 KST] [aads-dashboard] public/reports/menu-images/nocrop/cheese-donkatsu-67380488L-1280sq-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/static/media/nocrop/. /root/aads/aads-dashboard/publi
+
+## [2026-08-06 18:35:37 KST] [aads-dashboard] public/reports/menu-images/nocrop/cheese-donkatsu-\354\271\230\354\246\210\353\217\210\352\271\214\354\212\244-1280sq-nocrop.jpg
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/static/media/nocrop/. /root/aads/aads-dashboard/publi
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/donkatsu-A-1280sq-contain.jpg
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/donkatsu-B-1280sq-contain.jpg
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/donkatsu-C-1280sq-contain.jpg
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/donkatsu-D-1280sq-contain.jpg
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/donkatsu-E-1280sq-contain.jpg
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/donkatsu-F-1280sq-contain.jpg
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-06 18:37:21 KST] [aads-dashboard] public/screenshots/donkatsu-nocrop/index.html
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/donkatsu_square_contain.py
+
+## [2026-08-07 16:00:42 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/apply_doc_fixes.py
+
+## [2026-08-07 16:00:42 KST] [aads-dashboard] src/app/docs/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/apply_doc_fixes.py
+
+## [2026-08-07 16:00:42 KST] [aads-dashboard] src/lib/documentLinks.ts
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/apply_doc_fixes.py
+
+## [2026-08-18 20:04:04 KST] [aads-dashboard] src/lib/documentLinks.ts
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/scripts/_documentLinks_new.ts /root/aads/aads-dashboar
+
+## [2026-08-18 20:17:46 KST] [aads-dashboard] ../aads-dashboard/src/lib/fileDownload.ts
+- Chat-Direct 수정: write: ../aads-dashboard/src/lib/fileDownload.ts
+
+## [2026-08-18 20:18:41 KST] [aads-dashboard] src/app/chat/MarkdownRenderer.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/apply_file_download_fix.py
+
+## [2026-08-18 20:18:41 KST] [aads-dashboard] src/lib/fileDownload.ts
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/apply_file_download_fix.py
+
+## [2026-08-18 20:19:04 KST] [aads-dashboard] ../aads-dashboard/src/lib/documentLinks.ts
+- Chat-Direct 수정: patch:   { prefix: "/root/aads/aads-dashboard/p→  // nginx가 인증 없이 직접 서빙하는 공개 다운로드 디렉터리 (
+
+## [2026-08-18 20:48:26 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_msg_vanish_p0.py
+
+## [2026-08-18 20:48:26 KST] [aads-dashboard] src/app/chat/page.tsx.bak_msgvanish
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_msg_vanish_p0.py

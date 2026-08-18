@@ -4915,3 +4915,36 @@ fro
 
 ## [2026-08-18 20:12:26 KST] [aads-server] app/main.py
 - Chat-Direct 수정: patch:     "/api/v1/image/gallery",  # AI 모델 이미→    "/api/v1/image/gallery",  # AI 모델 이미
+
+## [2026-08-18 20:16:58 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/files/",  # 채팅 산출물 다운로드 (파일→
+
+## [2026-08-18 20:18:35 KST] [aads-server] scripts/apply_file_download_fix.py
+- Chat-Direct 수정: write: scripts/apply_file_download_fix.py
+
+## [2026-08-18 20:18:36 KST] [aads-server] scripts/apply_file_download_fix.py
+- Chat-Direct 수정: run_remote_command: cp -f "/root/aads/aads-server/세무신고_필요항목_정리_20260818.xlsx" /var/www/certbot/expor
+
+## [2026-08-18 20:21:10 KST] [aads-server] scripts/run_filefix_deploy.py
+- Chat-Direct 수정: write: scripts/run_filefix_deploy.py
+
+## [2026-08-18 20:23:17 KST] [aads-server] scripts/wait_filefix_deploy.py
+- Chat-Direct 수정: write: scripts/wait_filefix_deploy.py
+
+## [2026-08-18 20:25:07 KST] [aads-server] scripts/wait_filefix_deploy.py
+- Chat-Direct 수정: patch: DEADLINE = time.time() + 100→DEADLINE = time.time() + 40
+
+## [2026-08-18 20:27:42 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/wait_filefix_deploy.py
+
+## [2026-08-18 20:48:11 KST] [aads-server] scripts/fix_msg_vanish_p0.py
+- Chat-Direct 수정: write: scripts/fix_msg_vanish_p0.py
+
+## [2026-08-18 20:49:58 KST] [aads-server] scripts/bg_dashboard_build.py
+- Chat-Direct 수정: write: scripts/bg_dashboard_build.py
+
+## [2026-08-18 20:50:47 KST] [aads-server] scripts/bg_dashboard_build.py
+- Chat-Direct 수정: write: scripts/bg_dashboard_build.py
+
+## [2026-08-18 20:53:06 KST] [aads-server] scripts/bg_dashboard_deploy.py
+- Chat-Direct 수정: write: scripts/bg_dashboard_deploy.py
