@@ -1387,6 +1387,15 @@
       align-items: end;
     }
 
+    .inline-filters.integration-filter-bar {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid #d8e2ef;
+      border-radius: 8px;
+      background: #f8fafc;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    }
+
     .inline-filters label {
       display: grid;
       gap: 6px;
@@ -1415,11 +1424,21 @@
       box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
     }
 
+    .inline-filters select:not([multiple]):focus,
+    .inline-filters input:focus,
+    .multi-select-control.open .multi-select-trigger {
+      outline: 3px solid rgba(15, 118, 110, 0.13);
+      border-color: var(--accent);
+      background: #fff;
+    }
+
     .inline-filters .span-2 {
       grid-column: span 1;
     }
 
-    .inline-filters select[multiple] {
+    .inline-filters select[multiple],
+    #integrationServiceFilter,
+    #integrationBusinessBranchFilter {
       position: absolute;
       width: 1px;
       height: 1px;
@@ -1454,6 +1473,7 @@
       color: var(--text);
       font: inherit;
       font-size: 13px;
+      font-weight: 850;
       text-align: left;
     }
 
@@ -1467,9 +1487,26 @@
       flex: 0 0 auto;
     }
 
-    .multi-select-control.open .multi-select-trigger {
-      border-color: #93c5fd;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    .multi-select-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .multi-select-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      min-width: 34px;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #e8f6f4;
+      color: var(--accent-strong);
+      font-size: 11px;
+      font-weight: 900;
     }
 
     .multi-select-menu {
@@ -1508,21 +1545,22 @@
     }
 
     .multi-select-option:hover {
-      background: #f1f5f9;
+      background: #f1f8f7;
     }
 
     .multi-select-option input {
       width: 14px;
       min-height: 14px;
-      accent-color: #2563eb;
+      accent-color: var(--accent);
     }
 
     .readiness-panel {
-      margin-top: 14px;
-      border: 1px solid #d8e2ef;
+      margin-top: 18px;
+      border: 1px solid #cfdce8;
       border-radius: 8px;
       overflow: hidden;
-      background: #fbfdff;
+      background: #fff;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
     }
 
     .readiness-head {
@@ -1530,14 +1568,14 @@
       align-items: flex-start;
       justify-content: space-between;
       gap: 12px;
-      padding: 12px 14px;
+      padding: 14px 16px;
       border-bottom: 1px solid #d8e2ef;
-      background: #f5f9ff;
+      background: linear-gradient(180deg, #f8fafc 0%, #f3f7f6 100%);
     }
 
     .readiness-head h3 {
       margin: 0;
-      color: #172554;
+      color: #102a2d;
       font-size: 14px;
       letter-spacing: 0;
     }
@@ -1551,6 +1589,32 @@
 
     .readiness-head .status {
       flex: 0 0 auto;
+    }
+
+    .readiness-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      padding: 10px 16px;
+      border-bottom: 1px solid #e5ecf3;
+      background: #fbfcfd;
+    }
+
+    .readiness-summary .badge {
+      font-size: 11px;
+      min-height: 24px;
+      align-items: center;
+    }
+
+    .readiness-panel .table-wrap {
+      margin-top: 0;
+      border: 0;
+      border-radius: 0;
+    }
+
+    .readiness-panel table th {
+      background: #f8fafc;
+      color: #41525f;
     }
 
     .contract-preview {
@@ -4023,7 +4087,7 @@
             </div>
             <div class="panel-body">
               <div class="integration-status-note">은행 자격증명은 원문을 화면에 다시 표시하지 않고 서버 Vault에 암호화 저장합니다. 신한/IBK 값이 모두 등록되면 저장 직후 거래 연동 API를 호출하며, 외부 은행 실조회 커넥터가 아직 없으면 CSV/엑셀 업로드 대체 경로를 표시합니다.</div>
-              <div class="inline-filters" style="margin-top:12px">
+              <div class="inline-filters integration-filter-bar">
                 <label>구분
                   <select id="integrationCategoryFilter">
                     <option value="all">전체</option>
@@ -4058,11 +4122,12 @@
               <div class="readiness-panel">
                 <div class="readiness-head">
                   <div>
-                    <h3>판매채널 자동수집 준비 현황</h3>
-                    <p>위 연동 목록에 저장된 계정을 사업자·지점과 판매사이트별로 다시 묶어, 어느 지점이 바로 수집 가능하고 어느 지점에 ID/PW·PC 인증·파일 업로드가 필요한지 확인하는 점검표입니다.</p>
+                    <h3>판매채널 자동수집 점검표</h3>
+                    <p>연동 목록에 저장된 판매채널 계정을 사업자·지점별로 다시 계산한 준비 상태입니다. 실제 연동 목록은 위 표이며, 이 표는 수집 가능 여부만 점검합니다.</p>
                   </div>
-                  <span class="status info">점검표</span>
+                  <span class="status info">목록 아님 · 점검표</span>
                 </div>
+                <div id="salesChannelReadinessSummary" class="readiness-summary"></div>
                 <div class="table-wrap">
                   <table><thead><tr><th>판매사이트</th><th>사업자·지점</th><th>저장 계정</th><th>자동 수집 상태</th><th>수집 데이터</th><th>필요 조치</th></tr></thead><tbody id="salesChannelReadinessRows"></tbody></table>
                 </div>
@@ -7282,7 +7347,7 @@
       if (!control || !control.classList.contains("multi-select-control")) {
         control = document.createElement("div");
         control.className = "multi-select-control";
-        control.innerHTML = `<button type="button" class="multi-select-trigger"></button><div class="multi-select-menu"></div>`;
+        control.innerHTML = `<button type="button" class="multi-select-trigger"><span class="multi-select-text"></span><span class="multi-select-count">전체</span></button><div class="multi-select-menu"></div>`;
         select.insertAdjacentElement("afterend", control);
         control.querySelector(".multi-select-trigger").addEventListener("click", event => {
           event.stopPropagation();
@@ -7301,7 +7366,11 @@
         });
       }
       const selected = new Set(selectedMultiValues(select));
-      control.querySelector(".multi-select-trigger").textContent = multiSelectSummary(select, placeholder);
+      const selectedCount = selected.size;
+      const triggerText = control.querySelector(".multi-select-text");
+      const triggerCount = control.querySelector(".multi-select-count");
+      if (triggerText) triggerText.textContent = multiSelectSummary(select, placeholder);
+      if (triggerCount) triggerCount.textContent = selectedCount ? `${selectedCount}개` : "전체";
       control.querySelector(".multi-select-menu").innerHTML = Array.from(select.options).map(option => `
         <label class="multi-select-option">
           <input type="checkbox" value="${escapeHtml(option.value)}" ${selected.has(option.value) ? "checked" : ""}>
@@ -7390,6 +7459,10 @@
         .map(branch => ({ businessId: branch.businessId || "", branch: branch.name || "", key: `${branch.businessId || ""}|${branch.name || ""}` }))
         .filter(scope => !selectedScopes.length || selectedScopes.includes(scope.key));
       const rows = [];
+      let registeredCount = 0;
+      let readyCount = 0;
+      let blockedCount = 0;
+      let missingCount = 0;
       scopes.forEach(scope => {
         services.forEach(service => {
           const matches = (settings().integrations || []).filter(item => (
@@ -7399,11 +7472,17 @@
           ));
           const latest = matches.slice().sort((a, b) => String(b.lastSyncAt || "").localeCompare(String(a.lastSyncAt || "")))[0] || null;
           const rawStatus = latest?.lastSyncStatus || latest?.portalStatus || latest?.status || "";
+          const normalizedStatus = String(rawStatus || latest?.status || "").toLowerCase();
+          const isReady = ["completed", "no_records", "ready", "vault-ready", "credential_registered"].includes(normalizedStatus);
+          if (latest) registeredCount += 1;
+          else missingCount += 1;
+          if (latest && isReady) readyCount += 1;
+          if (latest && !isReady) blockedCount += 1;
           const status = latest
             ? (integrationStatusLabels[rawStatus] || integrationStatusLabels[latest.status] || [rawStatus || "저장됨", "warn"])
             : ["미등록", "bad"];
           const need = latest
-            ? (latest.portalMessage || latest.memo || (["completed", "no_records", "ready", "vault-ready", "credential_registered"].includes(String(rawStatus || latest.status || "")) ? "수집 실행 가능" : "계정/권한 확인"))
+            ? (latest.portalMessage || latest.memo || (isReady ? "수집 실행 가능" : "계정/권한 확인"))
             : "연동설정에서 ID/PW 또는 PC Agent 세션 등록";
           const action = latest
             ? `${escapeHtml(need)}<br><button type="button" data-sync-integration="${escapeHtml(service)}" data-sync-integration-id="${escapeHtml(latest.id)}">${latest.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
@@ -7420,6 +7499,15 @@
           `);
         });
       });
+      if (els.salesChannelReadinessSummary) {
+        els.salesChannelReadinessSummary.innerHTML = [
+          badgeHtml(`점검 ${rows.length}개`, "info"),
+          badgeHtml(`계정 있음 ${registeredCount}개`, registeredCount ? "good" : "warn"),
+          badgeHtml(`수집 가능 ${readyCount}개`, readyCount ? "good" : "warn"),
+          badgeHtml(`확인 필요 ${blockedCount}개`, blockedCount ? "warn" : "good"),
+          badgeHtml(`미등록 ${missingCount}개`, missingCount ? "bad" : "good")
+        ].join("");
+      }
       els.salesChannelReadinessRows.innerHTML = rows.length ? rows.join("") : tableEmpty(6, "선택한 서비스·사업자 조건에 맞는 판매채널 준비 항목이 없습니다.");
     }
 

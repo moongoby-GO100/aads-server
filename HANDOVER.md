@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-19 07:35 KST - Yeoljeong Finance integration filter design and readiness table clarification
+
+- Request: Make the integration detail filters match the existing category/status design and clarify why Jungwha branch rows appear in a lower list.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: restyled the service and business/branch multi-select filters as compact dropdown controls with selected-count badges, hardened the hidden native multi-select fallback, and wrapped the filter row in the same restrained panel language used by the category/status controls.
+  - `app/static/apps/yeoljeong-finance/index.html`: renamed the lower sales-channel section to `판매채널 자동수집 점검표`, added copy clarifying that it is not the main integration list, and added summary badges for total check rows, registered accounts, ready rows, blocked rows, and missing rows.
+  - `app/services/yeoljeong_finance_service.py`: fixed delivery account selection so canonical service accounts win over stale duplicate rows when otherwise equally eligible, while still preferring non-upload/browser-capable accounts over upload placeholders.
+- Verification:
+  - `node -e ... new Function(inline script)` passed: 1 inline script parsed.
+  - `git diff --check -- app/static/apps/yeoljeong-finance/index.html app/services/yeoljeong_finance_service.py` passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py` passed: 81 passed.
+  - DB check: `yeoljeong_platform_accounts` contains Jungwha rows for Baemin 5, IBK business 2, and Shinhan business 1.
+- Status:
+  - Local source changes are complete but not yet pushed or deployed in this entry.
+  - Existing unrelated dirty files remain outside the request.
+
 ## 2026-08-18 20:09 KST - Yeoljeong Finance integration auth refresh follow-up
 
 - Request: Make the integration filters match the existing category/status design and explain why Jungwha branch rows were separated in the lower list.
