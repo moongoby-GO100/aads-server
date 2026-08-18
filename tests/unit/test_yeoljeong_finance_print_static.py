@@ -112,12 +112,21 @@ def test_integration_add_opens_service_specific_setup_forms():
 def test_integration_lists_have_category_status_and_search_filters():
     assert 'id="integrationCategoryFilter"' in HTML
     assert 'id="integrationStatusFilter"' in HTML
+    assert 'id="integrationServiceFilter" multiple' in HTML
+    assert 'id="integrationBusinessBranchFilter" multiple' in HTML
     assert 'id="integrationSearchInput"' in HTML
+    assert 'id="salesChannelReadinessRows"' in HTML
+    assert "function updateIntegrationFilterOptions" in HTML
+    assert "function renderSalesChannelReadinessRows" in HTML
+    assert "function ensureServerAccountsForIntegrations" in HTML
     assert "function filteredIntegrationItems" in HTML
     assert "function integrationSearchText" in HTML
     assert "els.integrationCategoryFilter?.addEventListener(\"change\", renderAll)" in HTML
     assert "els.integrationSearchInput?.addEventListener(\"input\", renderAll)" in HTML
+    assert "els.integrationServiceFilter?.addEventListener(\"change\", renderAll)" in HTML
+    assert "els.integrationBusinessBranchFilter?.addEventListener(\"change\", renderAll)" in HTML
     assert "filteredIntegrationItems(settings().integrations" in HTML
+    assert 'if (currentView === "integrations") ensureServerAccountsForIntegrations();' in HTML
     assert 'data-sync-integration-id="${escapeHtml(item.id)}"' in HTML
     assert "syncIntegrationItem(integrationIdForSync, false)" in HTML
     assert "syncIntegrationItem(integrationIdForSync, true)" in HTML

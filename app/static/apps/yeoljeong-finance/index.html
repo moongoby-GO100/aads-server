@@ -1382,7 +1382,7 @@
 
     .inline-filters {
       display: grid;
-      grid-template-columns: 160px 160px minmax(220px, 1fr);
+      grid-template-columns: 150px 150px 190px 230px minmax(220px, 1fr);
       gap: 10px;
       align-items: end;
     }
@@ -1405,6 +1405,17 @@
       color: var(--text);
       font: inherit;
       min-width: 0;
+    }
+
+    .inline-filters select[multiple] {
+      min-height: 78px;
+      padding: 8px;
+    }
+
+    .inline-filters .filter-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
     }
 
     .contract-preview {
@@ -3896,12 +3907,23 @@
                     <option value="manual">수기/업로드</option>
                   </select>
                 </label>
+                <label>서비스
+                  <select id="integrationServiceFilter" multiple></select>
+                  <span class="filter-note">미선택 시 전체</span>
+                </label>
+                <label>사업자·지점
+                  <select id="integrationBusinessBranchFilter" multiple></select>
+                  <span class="filter-note">미선택 시 전체</span>
+                </label>
                 <label class="span-2">검색
                   <input id="integrationSearchInput" type="search" placeholder="서비스, 지점, 사업자, ID, 계좌/가맹점번호, 메모 검색">
                 </label>
               </div>
               <div class="table-wrap" style="margin-top:12px">
                 <table><thead><tr><th>구분</th><th>서비스</th><th>사업자·지점</th><th>수집 데이터</th><th>필수 인증값</th><th>최근 동기화</th><th>상태</th><th>설정</th></tr></thead><tbody id="integrationOpsRows"></tbody></table>
+              </div>
+              <div class="table-wrap" style="margin-top:12px">
+                <table><thead><tr><th>판매사이트</th><th>사업자·지점</th><th>저장 계정</th><th>자동 수집 상태</th><th>수집 데이터</th><th>필요 조치</th></tr></thead><tbody id="salesChannelReadinessRows"></tbody></table>
               </div>
             </div>
           </section>
@@ -4911,6 +4933,7 @@
     let contractSignatureDrawing = false;
     let filePreviewObjectUrl = "";
     let filePreviewAbortController = null;
+    let serverAccountsRefreshPromise = null;
 
     persistInitialNormalizedSettings();
 
@@ -5802,6 +5825,7 @@
         els.businessRows.innerHTML = [...businessRows, ...branchRows].map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td><td>${escapeHtml(row[2])}</td><td>${escapeHtml(row[3])}</td></tr>`).join("");
       }
 
+      updateIntegrationFilterOptions();
       if (els.integrationSummaryRows) {
         const integrations = settings().integrations || [];
         const categoryCount = label => integrations.filter(item => (integrationCatalog[item.service]?.category || "기타") === label).length;
@@ -5864,6 +5888,7 @@
           return progressRow(integrationLabels[item.service] || item.service, `${status[0]} · ${item.portalMessage || item.memo || "설정값 또는 커넥터 확인"}`, status[1], 55);
         }).join("") : progressRow("정상", "현재 오류·재연결 대기 항목이 없습니다.", "good", 100);
       }
+      renderSalesChannelReadinessRows();
 
       if (els.marginSummaryBadge) {
         els.marginSummaryBadge.textContent = `${profitRate.toFixed(1)}%`;
@@ -7094,14 +7119,65 @@
       ].filter(Boolean).join(" ").toLowerCase();
     }
 
+    function selectedMultiValues(select) {
+      return Array.from(select?.selectedOptions || [])
+        .map(option => option.value)
+        .filter(Boolean);
+    }
+
+    function integrationBusinessId(item) {
+      return String(item.businessId || item.business_id || businessIdForBranchName(item.branch || "") || "").trim();
+    }
+
+    function integrationScopeKey(item) {
+      return `${integrationBusinessId(item)}|${String(item.branch || "").trim()}`;
+    }
+
+    function integrationScopeLabel(item) {
+      const businessId = integrationBusinessId(item);
+      return `${businessName(businessId) || "사업자 미지정"} · ${item.branch || "공통/미지정"}`;
+    }
+
+    function updateIntegrationFilterOptions() {
+      const integrations = settings().integrations || [];
+      if (els.integrationServiceFilter) {
+        const selected = new Set(selectedMultiValues(els.integrationServiceFilter));
+        const services = Array.from(new Set(integrations.map(item => item.service).filter(Boolean)))
+          .sort((a, b) => String(integrationLabels[a] || a).localeCompare(String(integrationLabels[b] || b), "ko"));
+        els.integrationServiceFilter.innerHTML = services.map(service => (
+          `<option value="${escapeHtml(service)}" ${selected.has(service) ? "selected" : ""}>${escapeHtml(integrationLabels[service] || service)}</option>`
+        )).join("");
+      }
+      if (els.integrationBusinessBranchFilter) {
+        const selected = new Set(selectedMultiValues(els.integrationBusinessBranchFilter));
+        const optionMap = new Map();
+        settings().branches.forEach(branch => {
+          const key = `${branch.businessId || ""}|${branch.name || ""}`;
+          optionMap.set(key, `${businessName(branch.businessId || "")} · ${branch.name || "공통/미지정"}`);
+        });
+        integrations.forEach(item => {
+          const key = integrationScopeKey(item);
+          if (!optionMap.has(key)) optionMap.set(key, integrationScopeLabel(item));
+        });
+        els.integrationBusinessBranchFilter.innerHTML = Array.from(optionMap.entries())
+          .sort((a, b) => a[1].localeCompare(b[1], "ko"))
+          .map(([key, label]) => `<option value="${escapeHtml(key)}" ${selected.has(key) ? "selected" : ""}>${escapeHtml(label)}</option>`)
+          .join("");
+      }
+    }
+
     function filteredIntegrationItems(sourceItems = settings().integrations, { businessScoped = true } = {}) {
       const selectedBusinessId = selectedSettingsBusinessId();
       const categoryFilter = els.integrationCategoryFilter?.value || "all";
       const statusFilter = els.integrationStatusFilter?.value || "all";
+      const serviceFilters = selectedMultiValues(els.integrationServiceFilter);
+      const scopeFilters = selectedMultiValues(els.integrationBusinessBranchFilter);
       const query = String(els.integrationSearchInput?.value || "").trim().toLowerCase();
       return (sourceItems || []).filter(item => {
-        const itemBusinessId = item.businessId || item.business_id || businessIdForBranchName(item.branch || "");
+        const itemBusinessId = integrationBusinessId(item);
         if (businessScoped && selectedBusinessId && itemBusinessId !== selectedBusinessId) return false;
+        if (serviceFilters.length && !serviceFilters.includes(item.service)) return false;
+        if (scopeFilters.length && !scopeFilters.includes(integrationScopeKey(item))) return false;
         const category = integrationCategoryFor(item);
         if (categoryFilter !== "all") {
           if (categoryFilter === "은행" && !(category === "은행" || financialTransactionServices.has(item.service))) return false;
@@ -7111,6 +7187,49 @@
         if (query && !integrationSearchText(item).includes(query)) return false;
         return true;
       });
+    }
+
+    function renderSalesChannelReadinessRows() {
+      if (!els.salesChannelReadinessRows) return;
+      const selectedServices = selectedMultiValues(els.integrationServiceFilter);
+      const selectedScopes = selectedMultiValues(els.integrationBusinessBranchFilter);
+      const services = Array.from(deliveryAutomationServices)
+        .filter(service => !selectedServices.length || selectedServices.includes(service));
+      const scopes = settings().branches
+        .map(branch => ({ businessId: branch.businessId || "", branch: branch.name || "", key: `${branch.businessId || ""}|${branch.name || ""}` }))
+        .filter(scope => !selectedScopes.length || selectedScopes.includes(scope.key));
+      const rows = [];
+      scopes.forEach(scope => {
+        services.forEach(service => {
+          const matches = (settings().integrations || []).filter(item => (
+            item.service === service
+            && integrationBusinessId(item) === scope.businessId
+            && String(item.branch || "") === scope.branch
+          ));
+          const latest = matches.slice().sort((a, b) => String(b.lastSyncAt || "").localeCompare(String(a.lastSyncAt || "")))[0] || null;
+          const rawStatus = latest?.lastSyncStatus || latest?.portalStatus || latest?.status || "";
+          const status = latest
+            ? (integrationStatusLabels[rawStatus] || integrationStatusLabels[latest.status] || [rawStatus || "저장됨", "warn"])
+            : ["미등록", "bad"];
+          const need = latest
+            ? (latest.portalMessage || latest.memo || (["completed", "no_records", "ready", "vault-ready", "credential_registered"].includes(String(rawStatus || latest.status || "")) ? "수집 실행 가능" : "계정/권한 확인"))
+            : "연동설정에서 ID/PW 또는 PC Agent 세션 등록";
+          const action = latest
+            ? `${escapeHtml(need)}<br><button type="button" data-sync-integration="${escapeHtml(service)}" data-sync-integration-id="${escapeHtml(latest.id)}">${latest.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
+            : `${escapeHtml(need)}<br><button type="button" data-integration-detail="sales-channel-connect" data-default-service="${escapeHtml(service)}">연동설정</button>`;
+          rows.push(`
+            <tr>
+              <td><strong>${escapeHtml(integrationLabels[service] || service)}</strong></td>
+              <td>${escapeHtml(`${businessName(scope.businessId)} · ${scope.branch}`)}</td>
+              <td>${matches.length ? `${matches.length}건${latest?.username ? `<br><span class="muted">${escapeHtml(latest.username)}</span>` : ""}` : "0건"}</td>
+              <td>${badgeHtml(status[0], status[1])}</td>
+              <td>${escapeHtml(integrationCatalog[service]?.dataScope || "매출/정산/리뷰")}</td>
+              <td>${action}</td>
+            </tr>
+          `);
+        });
+      });
+      els.salesChannelReadinessRows.innerHTML = rows.length ? rows.join("") : tableEmpty(6, "선택한 서비스·사업자 조건에 맞는 판매채널 준비 항목이 없습니다.");
     }
 
     function renderSettings() {
@@ -7123,7 +7242,7 @@
       const filteredAccounts = cfg.accounts.filter(item => item.businessId === selectedBusinessId);
       const filteredStaff = cfg.staff.filter(item => filteredBranchNames.has(item.branch));
       const businessIntegrations = cfg.integrations.filter(item => {
-        const itemBusinessId = item.businessId || item.business_id || businessIdForBranchName(item.branch || "");
+        const itemBusinessId = integrationBusinessId(item);
         return itemBusinessId === selectedBusinessId;
       });
       const filteredIntegrations = filteredIntegrationItems(businessIntegrations, { businessScoped: false });
@@ -8186,6 +8305,7 @@
       if (currentView === "contracts" && hasServerAuth()) loadEmployeeContracts().catch(err => showToast(`계약서 조회 실패: ${err.message}`));
       if ((currentView === "contracts" || currentView === "payroll") && canManageOnboarding()) loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
       if (currentView === "payroll" && hasServerAuth()) loadPayrollStatements().catch(err => showToast(`급여내역서 조회 실패: ${err.message}`));
+      if (currentView === "integrations") ensureServerAccountsForIntegrations();
       applyAccessPolicy();
     }
 
@@ -9374,6 +9494,18 @@
       showToast(`서버 계정 ${payload.accounts?.length || 0}건을 반영했습니다.`);
     }
 
+    function ensureServerAccountsForIntegrations() {
+      if (!canManageAutomation()) return null;
+      if (!serverAccountsRefreshPromise) {
+        serverAccountsRefreshPromise = refreshServerAccounts()
+          .catch(err => showToast(`서버 계정 자동 반영 실패: ${err.message}`))
+          .finally(() => {
+            serverAccountsRefreshPromise = null;
+          });
+      }
+      return serverAccountsRefreshPromise;
+    }
+
     function integrationMatchesSyncSummary(item, summary, payload = {}) {
       if (!item || !summary || item.service !== summary.service) return false;
       if (summary.account_id && item.serverAccountId && String(item.serverAccountId) === String(summary.account_id)) return true;
@@ -9750,6 +9882,8 @@
       els.branchFilter.addEventListener("change", renderAll);
       els.integrationCategoryFilter?.addEventListener("change", renderAll);
       els.integrationStatusFilter?.addEventListener("change", renderAll);
+      els.integrationServiceFilter?.addEventListener("change", renderAll);
+      els.integrationBusinessBranchFilter?.addEventListener("change", renderAll);
       els.integrationSearchInput?.addEventListener("input", renderAll);
       document.querySelectorAll(".tab[data-view]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
       document.querySelectorAll('[data-external-tab="recipes"]').forEach(link => {
