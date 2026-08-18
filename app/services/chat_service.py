@@ -6036,17 +6036,10 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
     " AND intent IS DISTINCT FROM 'ai_review_warning'"
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"
-    " AND NOT content LIKE '🔧 [Pipeline Runner]%'"
-    " AND NOT content LIKE '🔔 [Pipeline Runner]%'"
-    " AND NOT content LIKE '✅ [Pipeline Runner]%'"
-    " AND NOT content LIKE '🚀 [Pipeline Runner]%'"
-    " AND NOT content LIKE '⚠️ [Pipeline Runner]%'"
-    " AND NOT content LIKE '↩️ [Pipeline Runner]%'"
-    " AND NOT content LIKE '❌ [Pipeline Runner]%'"
-    " AND NOT content LIKE '📋 [Pipeline Runner]%'"
-    " AND NOT content LIKE '🔴 [Pipeline Runner]%'"
-    " AND NOT content LIKE '🟡 [Pipeline Runner]%'"
-    " AND NOT content LIKE '🟢 [Pipeline Runner]%'"
+    # [AADS-MSG-VANISH-P0] 숨김 메시지를 LIMIT 적용 전에 제외 — 더 광범위한 패턴으로 통합
+    " AND NOT (role = 'assistant' AND content LIKE '%[Pipeline Runner]%')"
+    " AND NOT (role = 'assistant' AND content LIKE '%[Runner]%')"
+    " AND NOT (role = 'user' AND content LIKE '[시스템]%')"
 )
 
 
