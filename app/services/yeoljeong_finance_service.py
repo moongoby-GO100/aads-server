@@ -3409,10 +3409,38 @@ def _baemin_dashboard_records(text: str, business_id: str, branch: str) -> dict[
     return records
 
 
+def _baemin_bridge_login_state(url: str, text: str) -> str:
+    lowered_url = str(url or "").lower()
+    lowered_text = str(text or "").lower()
+    if any(term in lowered_text for term in ("보안 위배 접근 제한", "올바르지 않은 요청", "access denied", "forbidden")):
+        return "blocked"
+    if any(term in lowered_text for term in ("captcha", "캡차", "보안문자", "2차 인증", "추가 인증", "본인인증", "휴대폰 인증", "기기 인증", "인증번호")):
+        return "challenge"
+    if "login" in lowered_url or all(marker in text for marker in ("로그인", "회원가입")):
+        return "login"
+    return "authenticated"
+
+
+async def _baemin_bridge_first_visible(page: Any, selectors: tuple[str, ...]) -> Any | None:
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            if not hasattr(locator, "count") or not hasattr(locator, "is_visible"):
+                return locator
+            if await locator.count() and await locator.is_visible(timeout=700):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
 async def _baemin_bridge_fill_first(page: Any, selectors: tuple[str, ...], value: str) -> bool:
     for selector in selectors:
+        locator = page.locator(selector).first
         try:
-            locator = page.locator(selector).first
+            if hasattr(locator, "count") and hasattr(locator, "is_visible"):
+                if not await locator.count() or not await locator.is_visible(timeout=700):
+                    continue
             await locator.fill(value)
             return True
         except Exception:
@@ -3420,10 +3448,18 @@ async def _baemin_bridge_fill_first(page: Any, selectors: tuple[str, ...], value
     return False
 
 
-async def _baemin_bridge_click_first(page: Any, selectors: tuple[str, ...]) -> bool:
-    for selector in selectors:
+async def _baemin_bridge_click_login(page: Any) -> bool:
+    for selector in (
+        "button[type='submit']",
+        "input[type='submit']",
+        "input[type='button'][value*='로그인']",
+        "text=로그인",
+    ):
+        locator = page.locator(selector).first
         try:
-            locator = page.locator(selector).first
+            if hasattr(locator, "count") and hasattr(locator, "is_visible"):
+                if not await locator.count() or not await locator.is_visible(timeout=700):
+                    continue
             await locator.click(timeout=4000)
             return True
         except Exception:
@@ -3446,7 +3482,11 @@ async def _baemin_bridge_login_with_saved_secret(page: Any, account: dict[str, A
             await page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
             pass
-        await _baemin_bridge_fill_first(
+        try:
+            await page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
+        except Exception:
+            pass
+        username_filled = await _baemin_bridge_fill_first(
             page,
             (
                 "input[autocomplete='username']",
@@ -3462,12 +3502,20 @@ async def _baemin_bridge_login_with_saved_secret(page: Any, account: dict[str, A
             ("input[autocomplete='current-password']", "input[type='password']"),
             password,
         )
-        if not password_filled:
-            return {"status": "portal_action_required", "error_code": "LOGIN_FORM_NOT_FOUND", "records": {}}
-        await _baemin_bridge_click_first(
-            page,
-            ("button[type='submit']", "input[type='submit']", "input[type='button'][value*='로그인']", "text=로그인"),
-        )
+        if not username_filled or not password_filled:
+            return {
+                "status": "portal_action_required",
+                "error_code": "LOGIN_FORM_NOT_FOUND",
+                "records": {},
+            }
+        clicked = await _baemin_bridge_click_login(page)
+        if not clicked:
+            password_input = await _baemin_bridge_first_visible(
+                page,
+                ("input[autocomplete='current-password']", "input[type='password']"),
+            )
+            if password_input is not None and hasattr(password_input, "press"):
+                await password_input.press("Enter")
         await page.wait_for_timeout(5000)
         try:
             await page.wait_for_load_state("networkidle", timeout=5000)
@@ -3510,7 +3558,34 @@ async def _collect_baemin_from_browser_bridge_session_async(
             html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
         except Exception:
             html = text
-        if "login" in url.lower() or all(marker in text for marker in ("로그인", "회원가입")):
+        login_state = _baemin_bridge_login_state(url, text)
+        if login_state == "blocked":
+            return {
+                "status": "portal_action_required",
+                "error_code": "BAEMIN_SECURITY_BLOCKED",
+                "records": {},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                    "url": url,
+                },
+                "message": "배민 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 직접 인증 또는 정산 CSV 업로드가 필요합니다.",
+            }
+        if login_state == "challenge":
+            return {
+                "status": "portal_action_required",
+                "error_code": "PORTAL_AUTH_CHALLENGE",
+                "records": {},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                    "url": url,
+                },
+                "message": "배민 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다.",
+            }
+        if login_state == "login":
             login_result = await _baemin_bridge_login_with_saved_secret(page, account)
             if login_result is not None:
                 login_result.setdefault("diagnostics", {}).update(
@@ -3534,7 +3609,8 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
             except Exception:
                 html = text
-        if "login" in url.lower() or all(marker in text for marker in ("로그인", "회원가입")):
+            login_state = _baemin_bridge_login_state(url, text)
+        if login_state == "login":
             return {
                 "status": "credential_required",
                 "error_code": "PC_AGENT_LOGIN_REQUIRED",
@@ -3546,6 +3622,32 @@ async def _collect_baemin_from_browser_bridge_session_async(
                     "url": url,
                 },
                 "message": "PC Agent 브라우저가 배민 로그인 화면입니다. 먼저 해당 브라우저에서 배민 관리자 로그인이 필요합니다.",
+            }
+        if login_state == "challenge":
+            return {
+                "status": "portal_action_required",
+                "error_code": "PORTAL_AUTH_CHALLENGE",
+                "records": {},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                    "url": url,
+                },
+                "message": "배민 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다.",
+            }
+        if login_state == "blocked":
+            return {
+                "status": "portal_action_required",
+                "error_code": "BAEMIN_SECURITY_BLOCKED",
+                "records": {},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                    "url": url,
+                },
+                "message": "배민 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 직접 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         source = html or text
         dashboard_records = _baemin_dashboard_records(
