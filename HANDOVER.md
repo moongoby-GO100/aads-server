@@ -6473,6 +6473,7 @@
 - 조치:
   - `app/services/yeoljeong_finance_service.py`에서 배민 전용 PC Agent 수집 경로를 쿠팡이츠/요기요/땡겨요까지 확장했다.
   - PC Agent 페이지 facade에서도 텍스트 기반 탭/버튼 클릭과 기간 입력을 JS fallback으로 수행하도록 보강했다.
+  - 백그라운드 수집이 길어질 때 `queued`로만 보이지 않도록 서비스별 `running` 시작과 완료 상태를 즉시 `delivery_collection_status`에 flush하도록 수정했다.
   - `tests/unit/test_yeoljeong_finance_service.py`에 배민 외 판매채널이 PC Agent 세션을 서버 headless보다 우선 사용하는 회귀 테스트를 추가했다.
 - 검증:
   - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -k "pc_agent_session or queue_delivery_sync or sync_delivery_updates_queued or upload_required_message or credential_required_message"` 성공: 6 passed.

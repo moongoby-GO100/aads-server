@@ -4158,6 +4158,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             status_record = queued_status
         else:
             statuses.insert(0, status_record)
+        _write("delivery_collection_status", statuses)
         if not account:
             result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
         else:
@@ -4227,6 +4228,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 "updated_at": finished_at,
             }
         )
+        _write("delivery_collection_status", statuses)
         if account:
             account["last_sync_status"] = status_record["status"]
             account["portal_status"] = status_record["status"]
