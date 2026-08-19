@@ -6911,13 +6911,14 @@
 - Changes:
   - `app/services/yeoljeong_finance_service.py` now allows saved-password `browser-automation` accounts to continue into the server headless collector when no PC Agent session is available.
   - Saved-password delivery accounts now skip ambient PC Agent work-session creation by default and use `server_headless_password_first`, avoiding PC Agent route timeouts before the login attempt.
+  - Missing-password delivery accounts now skip default PC Agent work-session creation and return `missing_password_no_pc_agent`/`MISSING_CREDENTIALS` immediately, so one incomplete account no longer blocks the full auto-collect loop.
   - `app/services/yeoljeong_delivery_collectors.py` now has service-specific login selectors for Baemin, Coupang Eats, Yogiyo, and Ddangyo in the headless collector.
   - Added DOM fallback login injection for the headless collector so React/Vue/WebSquare forms receive native value updates plus input/change/keyup events before submit.
   - Updated regression tests to assert saved-password server fallback and Ddangyo DOM fallback behavior.
 - Verification:
   - `git diff --check` succeeded.
   - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py` succeeded.
-  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 95 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 96 passed.
 - Remaining:
   - Live portal collection still cannot bypass CAPTCHA, OTP, phone/device verification, or missing passwords. Those cases remain `action_required` or `credential_required` by design.
   - Live effect requires commit, push, and restarting only `yeoljeong-finance` plus `yeoljeong-finance-worker`.

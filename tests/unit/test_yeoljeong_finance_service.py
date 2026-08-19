@@ -1448,7 +1448,7 @@ def test_delivery_browser_auth_for_account_ensures_service_work_session(monkeypa
     monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
 
     auth = service._delivery_browser_auth_for_account(
-        {},
+        {"prefer_pc_agent": True},
         {"service": "coupangeats", "business_id": "biz-junghwa", "branch": "중화점"},
         "coupangeats",
         "biz-junghwa",
@@ -1493,7 +1493,7 @@ def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypa
     monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
 
     auth = service._delivery_browser_auth_for_account(
-        {},
+        {"prefer_pc_agent": True},
         {"service": "coupangeats", "business_id": "biz-junghwa", "branch": "중화점"},
         "coupangeats",
         "biz-junghwa",
@@ -1535,7 +1535,7 @@ def test_delivery_browser_auth_for_account_retries_multiple_stale_cdp_sessions(m
     monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
 
     auth = service._delivery_browser_auth_for_account(
-        {},
+        {"prefer_pc_agent": True},
         {"service": "yogiyo", "business_id": "biz-junghwa", "branch": "중화점"},
         "yogiyo",
         "biz-junghwa",
@@ -1550,7 +1550,7 @@ def test_delivery_browser_auth_for_account_retries_multiple_stale_cdp_sessions(m
     assert [call["force_recreate"] for call in fake_bridge.calls] == [False, True, True]
 
 
-def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_path, monkeypatch):
+def test_sync_delivery_no_password_does_not_create_pc_agent_by_default(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(
         "platform_accounts",
@@ -1566,12 +1566,9 @@ def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_pat
         ],
     )
 
-    class FakeSession:
-        session_id = "bb-auto-coupang"
-
     class FakeBridge:
         async def ensure_work_session(self, **kwargs):
-            return FakeSession()
+            raise AssertionError("PC Agent should not be opened for missing-password accounts by default")
 
     import app.browser_bridge.service as bridge_service
     from app.services import yeoljeong_delivery_collectors as collectors
@@ -1585,36 +1582,8 @@ def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_pat
     monkeypatch.setattr(
         collectors,
         "collect_account",
-        lambda *args, **kwargs: pytest.fail("PC Agent work session must run before headless collection"),
+        lambda *args, **kwargs: pytest.fail("headless collection requires a saved password"),
     )
-
-    def fake_bridge_collect(account, browser_auth, date_from, date_to):
-        assert account["service"] == "coupangeats"
-        assert browser_auth["browser_session_id"] == "bb-auto-coupang"
-        return {
-            "status": "succeeded",
-            "error_code": "",
-            "records": {
-                "sales": [
-                    {
-                        "id": "coupang-pc-sale-1",
-                        "source_id": "sale-1",
-                        "business_id": "biz-junghwa",
-                        "branch": "중화점",
-                        "service": "coupangeats",
-                        "platform": "coupangeats",
-                        "record_type": "sales",
-                        "occurred_on": "2026-08-04",
-                        "gross_amount": 31000,
-                    }
-                ],
-                "settlements": [],
-                "reviews": [],
-            },
-            "diagnostics": {"auth_mode": "pc_agent_browser"},
-        }
-
-    monkeypatch.setattr(service, "_collect_delivery_from_browser_bridge_session", fake_bridge_collect)
 
     result = service.sync_delivery(
         {
@@ -1627,9 +1596,10 @@ def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_pat
         {"email": "owner@example.com", "is_admin": True},
     )
 
-    assert result["summary"][0]["status"] == "succeeded"
-    assert result["summary"][0]["counts"]["sales"] == 1
-    assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "MISSING_CREDENTIALS"
+    assert "비밀번호" in result["summary"][0]["message"]
+    assert service._read("delivery_collection_status")[0]["error_code"] == "MISSING_CREDENTIALS"
 
 
 def test_sync_delivery_browser_automation_password_uses_server_headless_fallback_by_default(tmp_path, monkeypatch):
@@ -1759,7 +1729,7 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
     monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
 
     auth = service._delivery_browser_auth_for_account(
-        {},
+        {"prefer_pc_agent": True},
         {"service": "baemin", "business_id": "biz-junghwa", "branch": "중화점"},
         "baemin",
         "biz-junghwa",

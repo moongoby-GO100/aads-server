@@ -3558,6 +3558,15 @@ def _delivery_browser_auth_for_account(
     if auth.get("storage_state_path") or auth.get("browser_session_id_explicit") or legacy_explicit_session:
         return auth
     if (
+        not _has_secret_value(account, "password")
+        and not payload.get("prefer_pc_agent")
+        and not payload.get("force_pc_agent")
+    ):
+        auth["browser_session_id"] = ""
+        auth["browser_bridge_mode"] = ""
+        auth["browser_auth_strategy"] = "missing_password_no_pc_agent"
+        return auth
+    if (
         _has_secret_value(account, "password")
         and not payload.get("prefer_pc_agent")
         and not payload.get("force_pc_agent")
