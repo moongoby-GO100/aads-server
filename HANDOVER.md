@@ -6671,3 +6671,22 @@
 - 남은 주의:
   - 18:26 KST 현재 `pc_list_agents` 결과 연결된 PC Agent 0개다. PC Agent가 연결되지 않으면 보안 차단 포털은 서버 단독으로 정상 적재가 불가능하다.
   - 이번 코드 변경은 아직 커밋 전이며, 배포/재시작은 수행하지 않았다.
+
+## 2026-08-19 19:38 KST - Genspark UI fallback logged-in session routing hardening
+
+- Request: CEO logged into the currently open Genspark browser window and asked AADS to continue image generation/download/server-save automation with that session.
+- Findings:
+  - PC Agent `2e9379a1-fed` was online and had `chrome_cdp`, `interactive_browser`, and `pc_control` capabilities.
+  - Genspark loaded in Browser Bridge session `bb-1e975480c694`, but the media processing endpoint only accepted `browser_work_key`. That forced isolated work-session creation instead of using the already logged-in window.
+  - A smoke run left `media-0a5376e204ba4b5c` in `running` because `timeout_seconds` only applied to media polling, not page acquisition/navigation/evaluate steps.
+- Changes:
+  - Added `browser_session_id` to `POST /api/v1/image/genspark-ui/process-next`.
+  - Threaded `browser_session_id` through `MediaGenerationService.process_genspark_ui_job()` and `_acquire_genspark_page()` so an existing logged-in Browser Bridge session can be used directly.
+  - Added step-level timeouts for page acquire, page read, prompt submit, wait, and media extraction; reduced Genspark page navigation timeout from 180s to configurable 25s default.
+  - Reset the stuck smoke job back to `queued` with retryable error metadata.
+- Verification:
+  - `python3 -m py_compile app/api/image.py app/services/media_generation_service.py` succeeded.
+  - `docker exec aads-server python -m pytest tests/unit/test_media_generation_service.py -q` succeeded: 19 passed.
+  - Retried smoke job with 45s service timeout; it returned `queued` with `GENSPARK_PAGE_ACQUIRE_TIMEOUT` instead of remaining stuck in `running`.
+- Status:
+  - Code is ready for commit/deploy. Actual Genspark media generation still needs a post-deploy API call with `browser_session_id=bb-1e975480c694`.

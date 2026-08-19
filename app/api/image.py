@@ -60,6 +60,7 @@ class VideoDownloadRequest(BaseModel):
 
 class GensparkProcessRequest(BaseModel):
     job_id: str | None = None
+    browser_session_id: str | None = None
     browser_work_key: str | None = None
     target_url: str | None = None
     timeout_seconds: int = Field(default=240, ge=30, le=900)
@@ -174,6 +175,7 @@ async def process_genspark_ui_job(req: GensparkProcessRequest | None = None):
     payload = req or GensparkProcessRequest()
     return await media_generation_service.process_genspark_ui_job(
         job_id=payload.job_id,
+        browser_session_id=payload.browser_session_id,
         browser_work_key=payload.browser_work_key,
         target_url=payload.target_url,
         timeout_seconds=payload.timeout_seconds,

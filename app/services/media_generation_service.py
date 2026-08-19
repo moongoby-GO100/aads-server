@@ -868,16 +868,23 @@ class MediaGenerationService:
             logger.warning("genspark_ui_fetch_job_failed job_id=%s error=%s", job_id, exc)
             return None
 
-    async def _acquire_genspark_page(self, *, work_key: str, target_url: str) -> Any:
+    async def _acquire_genspark_page(
+        self,
+        *,
+        work_key: str,
+        target_url: str,
+        browser_session_id: str | None = None,
+    ) -> Any:
         from app.api.ceo_chat_tools import _acquire_pw_context
 
-        ctx, err = await _acquire_pw_context("", work_key, target_url)
+        ctx, err = await _acquire_pw_context(browser_session_id or "", "" if browser_session_id else work_key, target_url)
         if err:
             raise RuntimeError(err)
         pages = getattr(ctx, "pages", [])
         page = pages[-1] if pages else await ctx.new_page()
         if target_url and hasattr(page, "goto"):
-            await page.goto(target_url, timeout=180000, wait_until="domcontentloaded")
+            goto_timeout_ms = int(float(os.getenv("AADS_GENSPARK_UI_GOTO_TIMEOUT_SECONDS", "25")) * 1000)
+            await page.goto(target_url, timeout=goto_timeout_ms, wait_until="domcontentloaded")
         return page
 
     async def _read_genspark_page_text(self, page: Any) -> str:
@@ -1035,6 +1042,7 @@ class MediaGenerationService:
         self,
         *,
         job_id: str | None = None,
+        browser_session_id: str | None = None,
         browser_work_key: str | None = None,
         target_url: str | None = None,
         timeout_seconds: int = 240,
@@ -1050,9 +1058,29 @@ class MediaGenerationService:
         refs = _as_dict(job.get("input_refs"))
         metadata = _as_dict(job.get("result_metadata"))
         automation = _as_dict(metadata.get("ui_automation"))
+        session_id = str(browser_session_id or automation.get("browser_session_id") or "").strip()
         work_key = str(browser_work_key or automation.get("work_key") or "genspark-media-fallback").strip()
         url = str(target_url or automation.get("target_url") or "https://www.genspark.ai/").strip()
         job_kind = str(job.get("kind") or "image")
+        effective_timeout = max(30, int(timeout_seconds or 240))
+        step_timeout = max(5.0, min(45.0, float(os.getenv("AADS_GENSPARK_UI_STEP_TIMEOUT_SECONDS", "25"))))
+        deadline = time.monotonic() + effective_timeout
+
+        def remaining_timeout() -> float:
+            return max(1.0, deadline - time.monotonic())
+
+        async def run_step(label: str, awaitable: Any, *, cap: float | None = None) -> Any:
+            limit = min(cap or step_timeout, remaining_timeout())
+            if limit <= 1.0:
+                close = getattr(awaitable, "close", None)
+                if callable(close):
+                    close()
+                raise TimeoutError(f"{label}_TIMEOUT")
+            try:
+                return await asyncio.wait_for(awaitable, timeout=limit)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(f"{label}_TIMEOUT") from exc
+
         await self.update_job_status(
             str(job["job_id"]),
             "running",
@@ -1061,6 +1089,7 @@ class MediaGenerationService:
                 "ui_automation": {
                     **automation,
                     "state": "running",
+                    "browser_session_id": session_id or None,
                     "work_key": work_key,
                     "target_url": url,
                     "started_at": datetime.utcnow().isoformat() + "Z",
@@ -1069,8 +1098,15 @@ class MediaGenerationService:
         )
 
         try:
-            page = await self._acquire_genspark_page(work_key=work_key, target_url=url)
-            page_text = await self._read_genspark_page_text(page)
+            page = await run_step(
+                "GENSPARK_PAGE_ACQUIRE",
+                self._acquire_genspark_page(
+                    work_key=work_key,
+                    target_url=url,
+                    browser_session_id=session_id or None,
+                ),
+            )
+            page_text = await run_step("GENSPARK_PAGE_READ", self._read_genspark_page_text(page))
             if self._looks_like_genspark_auth_gate(page_text):
                 updated = await self.update_job_status(
                     str(job["job_id"]),
@@ -1080,6 +1116,7 @@ class MediaGenerationService:
                         "ui_automation": {
                             **automation,
                             "state": "auth_required",
+                            "browser_session_id": session_id or None,
                             "work_key": work_key,
                             "target_url": url,
                             "last_error": "GENSPARK_LOGIN_REQUIRED",
@@ -1091,15 +1128,21 @@ class MediaGenerationService:
                 public.update({"automation_state": "auth_required", "requires_login": True})
                 return public
 
-            submitted = await self._submit_prompt_to_genspark(page, str(job.get("prompt") or ""))
+            submitted = await run_step(
+                "GENSPARK_PROMPT_SUBMIT",
+                self._submit_prompt_to_genspark(page, str(job.get("prompt") or "")),
+            )
             if not submitted.get("ok"):
                 raise RuntimeError(str(submitted.get("error") or "PROMPT_SUBMIT_FAILED"))
 
-            deadline = time.monotonic() + max(30, int(timeout_seconds))
             candidate: dict[str, Any] = {"ok": False, "error": "MEDIA_NOT_FOUND"}
             while time.monotonic() < deadline:
-                await page.wait_for_timeout(5000)
-                candidate = await self._extract_genspark_media_candidate(page)
+                await run_step("GENSPARK_WAIT", page.wait_for_timeout(5000), cap=6.0)
+                candidate = await run_step(
+                    "GENSPARK_MEDIA_EXTRACT",
+                    self._extract_genspark_media_candidate(page),
+                    cap=20.0,
+                )
                 if candidate.get("ok"):
                     break
             if not candidate.get("ok"):
@@ -1131,6 +1174,7 @@ class MediaGenerationService:
                     "ui_automation": {
                         **automation,
                         "state": "succeeded",
+                        "browser_session_id": session_id or None,
                         "work_key": work_key,
                         "target_url": url,
                         "completed_at": datetime.utcnow().isoformat() + "Z",
@@ -1154,6 +1198,7 @@ class MediaGenerationService:
                     "ui_automation": {
                         **automation,
                         "state": "retryable_error",
+                        "browser_session_id": session_id or None,
                         "work_key": work_key,
                         "target_url": url,
                         "last_error": str(exc),

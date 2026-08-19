@@ -394,17 +394,19 @@ async def test_process_genspark_ui_job_keeps_auth_gate_retryable(monkeypatch):
 
     async def fake_acquire_page(**kwargs):
         assert kwargs["work_key"] == "genspark-media-fallback"
+        assert kwargs["browser_session_id"] == "bb-logged-in"
         return _FakePage()
 
     monkeypatch.setattr(svc, "_acquire_genspark_page", fake_acquire_page)
 
-    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"], browser_session_id="bb-logged-in")
 
     assert result["status"] == "queued"
     assert result["automation_state"] == "auth_required"
     assert result["requires_login"] is True
     row = conn.rows[queued["job_id"]]
     assert row["result_metadata"]["ui_automation"]["state"] == "auth_required"
+    assert row["result_metadata"]["ui_automation"]["browser_session_id"] == "bb-logged-in"
     assert row["error_message"] == "Genspark login required in Browser Bridge/PC Agent session"
 
 
