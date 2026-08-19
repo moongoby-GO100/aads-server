@@ -6429,3 +6429,21 @@
 - 남은 주의:
   - 쿠팡이츠는 서버 자동접속 보안 차단, 땡겨요는 추가 인증 요구, 요기요는 인증 후 조회 구간 내 표 데이터 0건 상태다.
   - 쿠팡이츠/땡겨요/요기요도 배민과 같은 PC Agent 페이지 파싱 커넥터가 필요하다.
+
+## 2026-08-19 14:05 KST - 채팅 응답 작성 후 세션 미노출 원인 복구
+
+- 요청: 지시에 대한 응답이 작성된 듯한데 세션 화면에 나오지 않는 원인 확인.
+- 원인:
+  - 직전 응답 row `3ce81cfa-d2b5-4b94-979c-9a22e839afb9`가 DB에는 저장됐으나 `intent='pipeline_runner'`, `is_hidden=true`로 기록됐다.
+  - `migrations/120_chat_messages_is_hidden.sql`의 trigger와 `chat_service._visible_message_filter()`가 runner/system intent를 화면 목록에서 제외해 내용이 숨겨졌다.
+  - 실제 내용은 CEO 보고문이었으므로 `pipeline_runner` intent 오분류가 직접 원인이다.
+- 조치:
+  - 해당 row 1건을 `intent='execute'`로 복구해 trigger 기준 `is_hidden=false`가 되도록 DB에서 좁게 수정했다.
+  - `app/services/chat_service.py`에 최종 assistant 저장 전 intent 정규화를 추가했다. 실제 runner 알림은 숨김 유지, 일반 CEO 보고문은 `execute`로 저장한다.
+  - `tests/unit/test_chat_service.py`에 일반 보고문/runner 알림 분기 회귀 테스트를 추가했다.
+- 검증:
+  - DB 재조회: row `3ce81cfa-d2b5-4b94-979c-9a22e839afb9`가 `intent=execute`, `is_hidden=false`, 길이 5,848자로 복구됨.
+  - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 성공.
+- 남은 주의:
+  - 호스트 `pytest`는 미설치이고 `.venv` python symlink가 깨져 직접 pytest는 실행하지 못했다.
+  - 실행 중 컨테이너는 이전 이미지라 새 테스트가 선택되지 않았다. 배포 전 컨테이너 재빌드 후 테스트 재실행이 필요하다.

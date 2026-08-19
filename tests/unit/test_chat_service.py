@@ -91,6 +91,18 @@ def test_runner_fast_path_prompt_block_instructs_batch_background_work():
     assert "채팅 응답을 완료" in prompt
 
 
+def test_normalize_pipeline_runner_intent_keeps_ceo_report_visible():
+    content = "즉시 수집 실행을 다시 실측하겠습니다. DB 반영 건수와 차단 원인을 보고합니다."
+
+    assert chat_service._normalize_final_assistant_intent("pipeline_runner", content) == "execute"
+
+
+def test_normalize_pipeline_runner_intent_keeps_runner_notifications_hidden():
+    content = "🔔 **[CEO 승인 요청]** `runner-12345678` 프로젝트: AADS"
+
+    assert chat_service._normalize_final_assistant_intent("pipeline_runner", content) == "pipeline_runner"
+
+
 def test_fast_response_mode_skips_completion_contract():
     assert chat_service._should_enforce_completion_contract("fast") is False
     assert chat_service._should_enforce_completion_contract("quality") is True
