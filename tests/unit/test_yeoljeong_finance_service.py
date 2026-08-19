@@ -1127,6 +1127,85 @@ def test_sync_delivery_uses_baemin_pc_agent_session_without_password(tmp_path, m
     assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
 
 
+def test_sync_delivery_uses_pc_agent_session_for_all_delivery_services(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    services = ["coupangeats", "yogiyo", "ddangyo"]
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": f"acct-{name}-junghwa",
+                "service": name,
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+            for name in services
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-pc-agent",
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fail_headless_collect(*args, **kwargs):
+        raise AssertionError("PC Agent session must be attempted before server headless collection")
+
+    def fake_bridge_collect(account, browser_auth, date_from, date_to):
+        assert account["service"] in services
+        assert browser_auth["browser_session_id"] == "bb-pc-agent"
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": f"{account['service']}-pc-sale-1",
+                        "source_id": "sale-1",
+                        "business_id": "biz-junghwa",
+                        "branch": "중화점",
+                        "service": account["service"],
+                        "platform": account["service"],
+                        "record_type": "sales",
+                        "occurred_on": "2026-08-04",
+                        "gross_amount": 31000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+            },
+            "diagnostics": {"auth_mode": "pc_agent_browser"},
+        }
+
+    monkeypatch.setattr(collectors, "collect_account", fail_headless_collect)
+    monkeypatch.setattr(service, "_collect_delivery_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": services,
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert [item["status"] for item in result["summary"]] == ["succeeded", "succeeded", "succeeded"]
+    assert result["totals"]["sales"] == 3
+    assert {row["diagnostics"]["auth_mode"] for row in service._read("delivery_collection_status")} == {
+        "pc_agent_browser"
+    }
+
+
 def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):
     def fake_build_e2e_config(session_id=None):
         assert session_id is None

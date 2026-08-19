@@ -3325,6 +3325,17 @@ def _baemin_bridge_page_kind(text: str) -> str:
     return "sales"
 
 
+def _delivery_bridge_page_kind(text: str) -> str:
+    lowered = str(text or "").lower()
+    if "리뷰" in text or "review" in lowered:
+        return "reviews"
+    if any(term in text for term in ("정산", "입금", "지급")) or any(
+        term in lowered for term in ("settlement", "deposit", "payout")
+    ):
+        return "settlements"
+    return "sales"
+
+
 def _money_from_text(value: str) -> int:
     digits = re.sub(r"[^0-9]", "", str(value or ""))
     return int(digits or 0)
@@ -3418,6 +3429,18 @@ def _baemin_bridge_login_state(url: str, text: str) -> str:
     if any(term in lowered_text for term in ("captcha", "캡차", "보안문자", "2차 인증", "추가 인증", "본인인증", "휴대폰 인증", "기기 인증", "인증번호")):
         return "challenge"
     if "login" in lowered_url or all(marker in text for marker in ("로그인", "회원가입")):
+        return "login"
+    return "authenticated"
+
+
+def _delivery_bridge_login_state(url: str, text: str) -> str:
+    lowered_url = str(url or "").lower()
+    lowered_text = str(text or "").lower()
+    if any(term in lowered_text for term in ("보안 위배 접근 제한", "올바르지 않은 요청", "access denied", "forbidden")):
+        return "blocked"
+    if any(term in lowered_text for term in ("captcha", "캡차", "보안문자", "2차 인증", "추가 인증", "본인인증", "휴대폰 인증", "기기 인증", "인증번호", "약관 동의")):
+        return "challenge"
+    if "login" in lowered_url or any(term in text for term in ("로그인", "회원가입", "아이디", "비밀번호")):
         return "login"
     return "authenticated"
 
@@ -3525,6 +3548,320 @@ async def _baemin_bridge_login_with_saved_secret(page: Any, account: dict[str, A
     finally:
         password = ""
     return None
+
+
+async def _delivery_bridge_login_with_saved_secret(
+    page: Any,
+    account: dict[str, Any],
+    service_label: str,
+) -> dict[str, Any] | None:
+    username = str(account.get("username") or "").strip()
+    password = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
+    if not username or not password:
+        return {
+            "status": "credential_required",
+            "error_code": "PC_AGENT_LOGIN_REQUIRED",
+            "records": {},
+            "message": f"PC Agent 브라우저가 {service_label} 로그인 화면입니다. 저장된 계정 ID/PW가 필요합니다.",
+        }
+    try:
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        try:
+            await page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
+        except Exception:
+            pass
+        username_filled = await _baemin_bridge_fill_first(
+            page,
+            (
+                "input[autocomplete='username']",
+                "input[name*='id' i]",
+                "input[name*='user' i]",
+                "input[type='email']",
+                "input[type='text']",
+            ),
+            username,
+        )
+        password_filled = await _baemin_bridge_fill_first(
+            page,
+            ("input[autocomplete='current-password']", "input[type='password']"),
+            password,
+        )
+        if not username_filled or not password_filled:
+            return {"status": "portal_action_required", "error_code": "LOGIN_FORM_NOT_FOUND", "records": {}}
+        clicked = await _baemin_bridge_click_login(page)
+        if not clicked:
+            password_input = await _baemin_bridge_first_visible(
+                page,
+                ("input[autocomplete='current-password']", "input[type='password']"),
+            )
+            if password_input is not None and hasattr(password_input, "press"):
+                await password_input.press("Enter")
+        await page.wait_for_timeout(5000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+    finally:
+        password = ""
+    return None
+
+
+async def _delivery_bridge_click_first(page: Any, labels: tuple[str, ...], timeout: int = 2500) -> bool:
+    if not hasattr(page, "get_by_role"):
+        try:
+            clicked = await page.evaluate(
+                r"""
+                labels => {
+                  const normalizedLabels = labels.map(value => String(value || '').toLowerCase());
+                  const candidates = [
+                    ...document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"],li,span,div')
+                  ];
+                  const visible = element => {
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                  };
+                  const textOf = element => String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
+                  const target = candidates.find(element => {
+                    if (!visible(element)) return false;
+                    const text = textOf(element);
+                    return text && normalizedLabels.some(label => text.includes(label));
+                  });
+                  if (!target) return false;
+                  target.click();
+                  return true;
+                }
+                """,
+                list(labels),
+            )
+            if clicked:
+                await page.wait_for_timeout(800)
+                return True
+        except Exception:
+            return False
+    for label in labels:
+        pattern = re.compile(re.escape(label), re.I)
+        for role in ("button", "link", None):
+            try:
+                matches = page.get_by_role(role, name=pattern) if role else page.get_by_text(pattern)
+                count = await matches.count() if hasattr(matches, "count") else 0
+            except Exception:
+                continue
+            for index in range(min(count, 20)):
+                locator = matches.nth(index)
+                try:
+                    if await locator.is_visible(timeout=500):
+                        await locator.click(timeout=timeout)
+                        await page.wait_for_timeout(800)
+                        return True
+                except Exception:
+                    continue
+    return False
+
+
+async def _delivery_bridge_set_period(page: Any, date_from: str, date_to: str) -> None:
+    try:
+        if not hasattr(page.locator("body"), "count"):
+            await page.evaluate(
+                r"""
+                ({dateFrom, dateTo}) => {
+                  const dateInputs = [...document.querySelectorAll('input[type="date"]')];
+                  if (dateInputs[0]) dateInputs[0].value = dateFrom;
+                  if (dateInputs[1]) dateInputs[1].value = dateTo;
+                  const startInputs = [...document.querySelectorAll('input[title*="시작 날짜"],input[placeholder*="시작"]')];
+                  const endInputs = [...document.querySelectorAll('input[title*="종료 날짜"],input[placeholder*="종료"]')];
+                  if (!dateInputs[0] && startInputs[0]) startInputs[0].value = dateFrom;
+                  if (!dateInputs[1] && endInputs[0]) endInputs[0].value = dateTo;
+                  [...dateInputs, ...startInputs, ...endInputs].forEach(input => {
+                    input.dispatchEvent(new Event('input', {bubbles: true}));
+                    input.dispatchEvent(new Event('change', {bubbles: true}));
+                  });
+                }
+                """,
+                {"dateFrom": date_from, "dateTo": date_to},
+            )
+            await _delivery_bridge_click_first(page, ("조회", "검색", "적용"), timeout=2500)
+            return
+        date_inputs = page.locator("input[type='date']")
+        count = await date_inputs.count()
+        if count >= 1:
+            await date_inputs.nth(0).fill(date_from)
+        if count >= 2:
+            await date_inputs.nth(1).fill(date_to)
+        if count < 2:
+            for selector, value in (("input[title*='시작 날짜']", date_from), ("input[title*='종료 날짜']", date_to)):
+                locator = page.locator(selector).first
+                try:
+                    if await locator.count() and await locator.is_visible(timeout=400):
+                        await locator.fill(value)
+                except Exception:
+                    continue
+        await _delivery_bridge_click_first(page, ("조회", "검색", "적용"), timeout=2500)
+    except Exception:
+        return
+
+
+async def _collect_delivery_from_browser_bridge_session_async(
+    account: dict[str, Any],
+    browser_auth: dict[str, str],
+    date_from: str,
+    date_to: str,
+) -> dict[str, Any]:
+    service = str(account.get("service") or "").strip()
+    session_id = str(browser_auth.get("browser_session_id") or "").strip()
+    if not session_id:
+        return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_REQUIRED", "records": {}}
+    try:
+        from app.browser_bridge.service import get_browser_bridge_service
+        from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG, parse_portal_export
+
+        config = PORTAL_CONFIG.get(service)
+        if not config:
+            return {"status": "failed", "error_code": "UNSUPPORTED_PLATFORM", "records": {}}
+        service_label = _delivery_platform_label(service)
+        bridge = get_browser_bridge_service()
+        session = bridge.sessions.get(session_id)
+        if not session:
+            return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_NOT_FOUND", "records": {}}
+        context = await bridge._context_for_session(session)
+        page = context.pages[0] if getattr(context, "pages", None) else await context.new_page()
+
+        if service == "baemin":
+            home_url = "https://self.baemin.com/"
+        else:
+            home_url = str(account.get("portal_home_url") or account.get("home_url") or account.get("login_url") or config["login_url"])
+        try:
+            await page.goto(home_url, wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            pass
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+
+        url = ""
+        text = ""
+        html = ""
+        try:
+            url = str(await page.evaluate("window.location.href") or "")
+            text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
+            html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+        except Exception:
+            pass
+
+        login_state = _baemin_bridge_login_state(url, text) if service == "baemin" else _delivery_bridge_login_state(url, text)
+        if login_state == "login":
+            login_result = (
+                await _baemin_bridge_login_with_saved_secret(page, account)
+                if service == "baemin"
+                else await _delivery_bridge_login_with_saved_secret(page, account, service_label)
+            )
+            if login_result is not None:
+                login_result.setdefault("diagnostics", {}).update(
+                    {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url}
+                )
+                return login_result
+            try:
+                url = str(await page.evaluate("window.location.href") or url)
+                text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
+                html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+            except Exception:
+                pass
+            login_state = _baemin_bridge_login_state(url, text) if service == "baemin" else _delivery_bridge_login_state(url, text)
+        if login_state == "blocked":
+            return {
+                "status": "portal_action_required",
+                "error_code": f"{service.upper()}_SECURITY_BLOCKED",
+                "records": {},
+                "diagnostics": {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url},
+                "message": f"{service_label} 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 인증 또는 정산 CSV 업로드가 필요합니다.",
+            }
+        if login_state == "challenge":
+            return {
+                "status": "portal_action_required",
+                "error_code": "PORTAL_AUTH_CHALLENGE",
+                "records": {},
+                "diagnostics": {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url},
+                "message": f"{service_label} 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다.",
+            }
+        if login_state == "login":
+            return {
+                "status": "credential_required",
+                "error_code": "PC_AGENT_LOGIN_REQUIRED",
+                "records": {},
+                "diagnostics": {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url},
+                "message": f"PC Agent 브라우저가 {service_label} 로그인 화면입니다. 먼저 해당 포털 로그인이 필요합니다.",
+            }
+
+        records: dict[str, list[dict[str, Any]]] = {"sales": [], "settlements": [], "reviews": []}
+        diagnostics: dict[str, str] = {
+            "auth_mode": "pc_agent_browser",
+            "browser_session_id": session_id,
+            "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+            "url": url,
+        }
+        if service == "baemin":
+            dashboard_records = _baemin_dashboard_records(
+                text,
+                str(account.get("business_id") or ""),
+                str(account.get("branch") or ""),
+            )
+            for name, rows in dashboard_records.items():
+                if rows:
+                    records[name] = rows
+            diagnostics["dashboard_sales"] = str(len(dashboard_records["sales"]))
+            diagnostics["dashboard_settlements"] = str(len(dashboard_records["settlements"]))
+            diagnostics["dashboard_reviews"] = str(len(dashboard_records["reviews"]))
+
+        for kind, labels in config["sections"].items():
+            clicked = await _delivery_bridge_click_first(page, tuple(labels), timeout=3500)
+            if clicked:
+                await _delivery_bridge_set_period(page, date_from, date_to)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+            try:
+                section_text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
+                section_html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+            except Exception:
+                section_text = text
+                section_html = html
+            parsed = parse_portal_export(
+                service,
+                kind,
+                section_html or section_text,
+                str(account.get("business_id") or ""),
+                str(account.get("branch") or ""),
+            )
+            incoming = parsed.get("records", {}).get(kind) or []
+            if incoming:
+                records[kind] = incoming
+            diagnostics[kind] = str(parsed.get("diagnostics", {}).get("source") or ("clicked" if clicked else "section_not_found"))
+
+        total_records = sum(len(rows) for rows in records.values())
+        return {
+            "status": "succeeded" if total_records else "partial",
+            "error_code": "" if total_records else "AUTHENTICATED_NO_ROWS",
+            "records": records,
+            "diagnostics": diagnostics,
+            "message": "" if total_records else f"{service_label} 로그인은 확인됐지만 조회 구간에서 표 데이터를 찾지 못했습니다.",
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "error_code": f"PC_AGENT_COLLECTOR_{exc.__class__.__name__.upper()}",
+            "records": {},
+            "diagnostics": {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+            },
+            "message": str(exc)[:300],
+        }
 
 
 async def _collect_baemin_from_browser_bridge_session_async(
@@ -3717,6 +4054,19 @@ def _collect_baemin_from_browser_bridge_session(
     return _run_async(_collect_baemin_from_browser_bridge_session_async(account, browser_auth))
 
 
+def _collect_delivery_from_browser_bridge_session(
+    account: dict[str, Any],
+    browser_auth: dict[str, str],
+    date_from: str,
+    date_to: str,
+) -> dict[str, Any] | None:
+    if str(browser_auth.get("browser_bridge_mode") or "") != "local_agent":
+        return None
+    if not str(browser_auth.get("browser_session_id") or "").strip():
+        return None
+    return _run_async(_collect_delivery_from_browser_bridge_session_async(account, browser_auth, date_from, date_to))
+
+
 def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) -> dict[str, Any]:
     if service != "baemin" and str(result.get("error_code") or "") == "BAEMIN_SECURITY_BLOCKED":
         label = _delivery_platform_label(service)
@@ -3819,7 +4169,12 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             bridge_result = (
                 _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
                 if service == "baemin"
-                else None
+                else _collect_delivery_from_browser_bridge_session(
+                    collection_account,
+                    browser_auth,
+                    date_from.isoformat(),
+                    date_to.isoformat(),
+                )
             )
             if bridge_result is not None:
                 result = bridge_result

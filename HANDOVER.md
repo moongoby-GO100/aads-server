@@ -6462,3 +6462,20 @@
   - DB 집계: assistant `intent='pipeline_runner'` 메시지 991건은 `is_hidden=true`로 유지되어 실제 runner/system 알림 숨김 정책은 유지된다.
 - 남은 주의:
   - 작업트리에는 요청 범위 밖 변경 `app/data/yeoljeong_finance/platform_accounts.json`, `docs/CHANGELOG-go100-direct.md` 2건이 dirty로 남아 있다. 이번 조치에는 포함하지 않았다.
+
+## 2026-08-19 14:42 KST - 중화점 판매채널 전체 자동수집 경로 확장
+
+- 요청: 저장된 중화점 연동 계정으로 모든 판매채널이 자동 수집될 수 있게 진행.
+- 실측:
+  - DB 기준 중화점에는 배민 5건, 쿠팡이츠 1건, 요기요 1건, 땡겨요 1건의 판매채널 계정이 저장되어 있다.
+  - 기존 수집 원장에는 중화점 배민 매출 3건, 정산 1건, 리뷰 172건이 있고, 쿠팡이츠/요기요/땡겨요 중화점 원장은 아직 0건이다.
+  - 활성 PC Agent는 online이며 세션 `bb-718045d90655`, agent `2e9379a1-fed`가 확인됐다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`에서 배민 전용 PC Agent 수집 경로를 쿠팡이츠/요기요/땡겨요까지 확장했다.
+  - PC Agent 페이지 facade에서도 텍스트 기반 탭/버튼 클릭과 기간 입력을 JS fallback으로 수행하도록 보강했다.
+  - `tests/unit/test_yeoljeong_finance_service.py`에 배민 외 판매채널이 PC Agent 세션을 서버 headless보다 우선 사용하는 회귀 테스트를 추가했다.
+- 검증:
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -k "pc_agent_session or queue_delivery_sync or sync_delivery_updates_queued or upload_required_message or credential_required_message"` 성공: 6 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
+- 남은 주의:
+  - 새 코드 배포 전 운영 API 프로세스는 이전 모듈을 계속 사용한다. 배포 후 `/sync background=true`로 전체 판매채널 수집을 큐잉하고 상태 원장을 재확인해야 한다.
