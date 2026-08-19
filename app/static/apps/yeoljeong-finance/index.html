@@ -4647,6 +4647,7 @@
       credential_registered: ["자격증명등록", "good"],
       ready: ["연동준비", "info"],
       manual: ["수동업로드", "warn"],
+      queued: ["수집대기", "info"],
       running: ["실행중", "info"],
       blocked: ["확인필요", "bad"],
       succeeded: ["수집완료", "good"],
@@ -6070,9 +6071,9 @@
           const latestSync = item.lastSyncAt || item.portalMessage || item.memo || "미실행";
           const latestSyncMessage = item.portalMessage || item.memo || "";
           const action = deliveryAutomationServices.has(item.service)
-            ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
+            ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${isIntegrationSyncActive(item) ? "처리중..." : "수집 실행"}</button>`
             : financialTransactionServices.has(item.service)
-              ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "거래 연동"}</button>`
+              ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${isIntegrationSyncActive(item) ? "처리중..." : "거래 연동"}</button>`
               : `<button type="button" data-open-import="${escapeHtml(item.service)}">파일/증빙</button>`;
           return `
           <tr>
@@ -7301,6 +7302,10 @@
       return "ready";
     }
 
+    function isIntegrationSyncActive(item) {
+      return ["queued", "running"].includes(String(item?.lastSyncStatus || item?.portalStatus || "").toLowerCase());
+    }
+
     function integrationSearchText(item) {
       const catalog = integrationCatalog[item.service] || {};
       return [
@@ -7485,7 +7490,7 @@
             ? (latest.portalMessage || latest.memo || (isReady ? "수집 실행 가능" : "계정/권한 확인"))
             : "연동설정에서 ID/PW 또는 PC Agent 세션 등록";
           const action = latest
-            ? `${escapeHtml(need)}<br><button type="button" data-sync-integration="${escapeHtml(service)}" data-sync-integration-id="${escapeHtml(latest.id)}">${latest.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
+            ? `${escapeHtml(need)}<br><button type="button" data-sync-integration="${escapeHtml(service)}" data-sync-integration-id="${escapeHtml(latest.id)}">${isIntegrationSyncActive(latest) ? "처리중..." : "수집 실행"}</button>`
             : `${escapeHtml(need)}<br><button type="button" data-integration-detail="sales-channel-connect" data-default-service="${escapeHtml(service)}">연동설정</button>`;
           rows.push(`
             <tr>
@@ -7648,9 +7653,9 @@
         const uploadMode = ["shinhan_business", "ibk_business", "supplier_statement_upload", "tax_invoice_upload", "utility_bills", "card_pg", "accountant_tax_agent"].includes(item.service)
           || ["bank-excel", "statement-upload", "receipt-photo", "tax-invoice-upload", "utility-bill-upload", "card-pg-report", "accounting-export"].includes(item.collectionMode);
         const actionButton = canRunPortalSync
-          ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "수집 실행"}</button>`
+          ? `<button type="button" data-sync-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${isIntegrationSyncActive(item) ? "처리중..." : "수집 실행"}</button>`
           : canRunFinancialSync
-            ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${item.lastSyncStatus === "running" ? "실행중..." : "거래 연동 실행"}</button>`
+            ? `<button type="button" data-sync-financial-integration="${escapeHtml(item.service)}" data-sync-integration-id="${escapeHtml(item.id)}">${isIntegrationSyncActive(item) ? "처리중..." : "거래 연동 실행"}</button>`
           : uploadMode
             ? `<button type="button" data-open-import="${escapeHtml(item.service)}">파일/사진 등록</button>`
             : `<button type="button" disabled title="설정 저장 후 전용 수집기가 연결됩니다.">계정/Vault 등록</button>`;
@@ -8500,7 +8505,9 @@
         const syncResult = deliveryAutomationServices.has(data.service)
           ? applySyncPayload(pendingAutoSync)
           : applyFinancialSyncPayload(pendingAutoSync);
-        if (syncResult.recordsCount || syncResult.salesCount || syncResult.settlementsCount || syncResult.reviewsCount) {
+        if (syncResult.queued) {
+          syncNotice = `저장 후 백그라운드 수집 등록: ${syncResult.queuedCount || 1}건${syncResult.jobId ? " · " + syncResult.jobId : ""}`;
+        } else if (syncResult.recordsCount || syncResult.salesCount || syncResult.settlementsCount || syncResult.reviewsCount) {
           syncNotice = `저장 후 연동 실행 완료: 매출 ${syncResult.salesCount || 0}건 / 정산 ${syncResult.settlementsCount || 0}건 / 리뷰 ${syncResult.reviewsCount || 0}건 / 거래 ${syncResult.recordsCount || 0}건`;
         } else if (syncResult.blocked) {
           syncNotice = `저장 후 연동 실행 완료: 확인필요 ${syncResult.blocked}건${syncResult.messages.length ? " · " + syncResult.messages.join(" / ") : ""}`;
@@ -9839,11 +9846,11 @@
       renderAll();
       const timer = setTimeout(() => {
         const current = settings().integrations.find(candidate => candidate.id === item.id);
-        if (current?.lastSyncStatus === "running") {
-          markIntegrationFailed(current, "연동 응답 지연: 서버 응답이 없어 확인이 필요합니다.");
+        if (isIntegrationSyncActive(current)) {
+          markIntegrationFailed(current, "백그라운드 수집이 장시간 종료되지 않았습니다. 수집 상태 원장을 새로고침해 결과를 확인하십시오.");
         }
         integrationSyncTimers.delete(item.id);
-      }, 20000);
+      }, 10 * 60 * 1000);
       integrationSyncTimers.set(item.id, timer);
     }
 
@@ -9903,6 +9910,10 @@
         settings().integrations
           .filter(item => integrationMatchesSyncSummary(item, summary, payload))
           .forEach(item => {
+            if (!["queued", "running"].includes(String(summary.status || "").toLowerCase()) && integrationSyncTimers.has(item.id)) {
+              clearTimeout(integrationSyncTimers.get(item.id));
+              integrationSyncTimers.delete(item.id);
+            }
             item.lastSyncAt = payload.synced_at || new Date().toISOString();
             item.lastSyncStatus = summary.status;
             item.portalStatus = summary.portal_status || summary.status;
@@ -9912,8 +9923,9 @@
       });
       saveState();
       renderAll();
-      const okStatuses = new Set(["completed", "succeeded", "no_records"]);
+      const okStatuses = new Set(["completed", "succeeded", "no_records", "queued", "running"]);
       const blocked = (payload.summary || []).filter(item => !okStatuses.has(String(item.status || "").toLowerCase())).length;
+      const queued = (payload.summary || []).filter(item => ["queued", "running"].includes(String(item.status || "").toLowerCase())).length;
       const messages = (payload.summary || [])
         .filter(item => !okStatuses.has(String(item.status || "").toLowerCase()))
         .map(item => `${integrationLabels[item.service] || item.service}: ${item.portal_message || item.message || item.error_code || item.status}`)
@@ -9930,6 +9942,9 @@
         salesCount: (payload.sales || []).length || summaryCounts.sales,
         settlementsCount: (payload.settlements || []).length || summaryCounts.settlements,
         reviewsCount: (payload.reviews || []).length || summaryCounts.reviews,
+        queuedCount: queued,
+        queued: Boolean(payload.queued),
+        jobId: payload.job_id || "",
         blocked,
         messages
       };
@@ -9963,12 +9978,17 @@
         body: JSON.stringify({
           services: runnableServices,
           ...scope,
+          background: true,
           date_from: `${month}-01`,
           date_to: new Date().toISOString().slice(0, 10)
         })
       });
       const result = applySyncPayload(payload);
-      showToast(result.recordsCount ? `자동 수집 매출 ${result.salesCount}건 / 정산 ${result.settlementsCount}건 / 리뷰 ${result.reviewsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
+      if (result.queued) {
+        showToast(`백그라운드 수집 등록: ${result.queuedCount || runnableServices.length}건${result.jobId ? ` · ${result.jobId}` : ""}`);
+      } else {
+        showToast(result.recordsCount ? `자동 수집 매출 ${result.salesCount}건 / 정산 ${result.settlementsCount}건 / 리뷰 ${result.reviewsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
+      }
       return result;
     }
 

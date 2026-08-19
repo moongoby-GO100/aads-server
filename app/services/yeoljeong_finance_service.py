@@ -2943,6 +2943,106 @@ def list_collection_status(user: dict[str, Any], business_id: str | None = None)
     return rows
 
 
+def _delivery_sync_window(payload: dict[str, Any]) -> tuple[date, date]:
+    today = datetime.now(KST).date()
+    default_from = today.replace(day=1).isoformat()
+    date_from_text = str(payload.get("date_from") or default_from)
+    date_to_text = str(payload.get("date_to") or today.isoformat())
+    try:
+        date_from = date.fromisoformat(date_from_text)
+        date_to = date.fromisoformat(date_to_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="수집 기간은 YYYY-MM-DD 형식이어야 합니다") from exc
+    if date_from > date_to or (date_to - date_from).days > 62:
+        raise HTTPException(status_code=400, detail="수집 기간은 시작일 이후 최대 63일입니다")
+    return date_from, date_to
+
+
+def _delivery_requested_services(payload: dict[str, Any]) -> list[str]:
+    from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG
+
+    services = [str(item) for item in (payload.get("services") or []) if str(item).strip()]
+    requested_services = services or sorted(PORTAL_CONFIG)
+    unsupported = sorted(set(requested_services) - set(PORTAL_CONFIG))
+    if unsupported:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 플랫폼: {', '.join(unsupported)}")
+    return requested_services
+
+
+def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
+
+    requested_services = _delivery_requested_services(payload)
+    date_from, date_to = _delivery_sync_window(payload)
+    business_id, branch = _normalize_delivery_scope(
+        str(payload.get("business_id") or MIA_BUSINESS_ID),
+        str(payload.get("branch") or MIA_BRANCH_NAME),
+    )
+    queued_at = _now()
+    job_id = str(payload.get("sync_job_id") or f"delivery-sync-{uuid4().hex[:12]}")
+    statuses = _read("delivery_collection_status")
+    queued_run_ids: dict[str, str] = {}
+    summary: list[dict[str, Any]] = []
+
+    for service in requested_services:
+        run_id = str(uuid4())
+        queued_run_ids[service] = run_id
+        message = f"{PLATFORM_LABELS.get(service, service)} 백그라운드 수집 대기 중입니다."
+        statuses.insert(
+            0,
+            {
+                "id": run_id,
+                "job_id": job_id,
+                "service": service,
+                "business_id": business_id,
+                "branch": branch,
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "status": "queued",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "error_code": "",
+                "message": message,
+                "queued_at": queued_at,
+                "created_at": queued_at,
+                "updated_at": queued_at,
+            },
+        )
+        summary.append(
+            {
+                "service": service,
+                "status": "queued",
+                "portal_status": "queued",
+                "error_code": "",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "run_id": run_id,
+                "job_id": job_id,
+                "account_id": str(payload.get("account_id") or payload.get("server_account_id") or ""),
+                "message": message,
+                "portal_message": message,
+            }
+        )
+
+    _write("delivery_collection_status", statuses)
+    return {
+        "queued": True,
+        "job_id": job_id,
+        "queued_run_ids": queued_run_ids,
+        "synced_at": queued_at,
+        "queued_at": queued_at,
+        "business_id": business_id,
+        "branch": branch,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "summary": summary,
+        "records": [],
+        "sales": [],
+        "settlements": [],
+        "reviews": [],
+        "totals": {"sales": 0, "settlements": 0, "reviews": 0},
+    }
+
+
 def _delivery_entry_record(record: dict[str, Any]) -> dict[str, Any]:
     service = str(record.get("service") or "")
     record_type = str(record.get("record_type") or "")
@@ -3323,27 +3423,16 @@ def _collect_baemin_from_browser_bridge_session(
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
-    from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG, collect_account
+    from app.services.yeoljeong_delivery_collectors import collect_account
 
-    services = [str(item) for item in (payload.get("services") or [])]
-    unsupported = sorted(set(services) - set(PORTAL_CONFIG))
-    if unsupported:
-        raise HTTPException(status_code=400, detail=f"지원하지 않는 플랫폼: {', '.join(unsupported)}")
-    today = datetime.now(KST).date()
-    default_from = today.replace(day=1).isoformat()
-    date_from_text = str(payload.get("date_from") or default_from)
-    date_to_text = str(payload.get("date_to") or today.isoformat())
-    try:
-        date_from = date.fromisoformat(date_from_text)
-        date_to = date.fromisoformat(date_to_text)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="수집 기간은 YYYY-MM-DD 형식이어야 합니다") from exc
-    if date_from > date_to or (date_to - date_from).days > 62:
-        raise HTTPException(status_code=400, detail="수집 기간은 시작일 이후 최대 63일입니다")
+    requested_services = _delivery_requested_services(payload)
+    date_from, date_to = _delivery_sync_window(payload)
     requested_business = str(payload.get("business_id") or MIA_BUSINESS_ID)
     requested_branch = str(payload.get("branch") or MIA_BRANCH_NAME)
     business_id, branch = _normalize_delivery_scope(requested_business, requested_branch)
     requested_account_id = str(payload.get("account_id") or payload.get("server_account_id") or "").strip()
+    queued_run_ids = payload.get("queued_run_ids") if isinstance(payload.get("queued_run_ids"), dict) else {}
+    sync_job_id = str(payload.get("sync_job_id") or "").strip()
 
     all_accounts = _read("platform_accounts")
     if _migrate_platform_account_secrets(all_accounts):
@@ -3351,7 +3440,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     candidates = [
         row
         for row in all_accounts
-        if (not services or row.get("service") in services)
+        if (not requested_services or row.get("service") in requested_services)
         and (not requested_account_id or str(row.get("id") or "") == requested_account_id)
         and str(row.get("business_id") or "") == business_id
         and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
@@ -3374,13 +3463,12 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             str(row.get("updated_at") or row.get("created_at") or ""),
         )
 
-    for service in sorted(PORTAL_CONFIG):
+    for service in requested_services:
         service_rows = [row for row in candidates if str(row.get("service") or "") == service]
         if requested_account_id and service_rows:
             accounts_by_service[service] = service_rows[0]
         elif service_rows:
             accounts_by_service[service] = max(service_rows, key=lambda row: _delivery_account_score(row, service))
-    requested_services = services or sorted(PORTAL_CONFIG)
     synced_at = _now()
     summary = []
     ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
@@ -3392,9 +3480,11 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
 
     for service in requested_services:
         account = accounts_by_service.get(service)
-        run_id = str(uuid4())
+        run_id = str(queued_run_ids.get(service) or uuid4())
+        queued_status = next((row for row in statuses if str(row.get("id") or "") == run_id), None)
         status_record = {
             "id": run_id,
+            "job_id": sync_job_id,
             "service": service,
             "business_id": business_id,
             "branch": branch,
@@ -3407,7 +3497,11 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             "created_at": synced_at,
             "updated_at": synced_at,
         }
-        statuses.insert(0, status_record)
+        if queued_status:
+            queued_status.update(status_record)
+            status_record = queued_status
+        else:
+            statuses.insert(0, status_record)
         if not account:
             result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
         else:

@@ -309,6 +309,91 @@ def test_list_accounts_normalizes_stale_running_delivery_status(tmp_path, monkey
     assert raw["portal_status"] == "upload_required"
 
 
+def test_queue_delivery_sync_records_queued_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    queued = service.queue_delivery_sync(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-19",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    assert queued["queued"] is True
+    assert queued["job_id"].startswith("delivery-sync-")
+    assert queued["queued_run_ids"]["baemin"] == statuses[0]["id"]
+    assert statuses[0]["status"] == "queued"
+    assert statuses[0]["business_id"] == "biz-junghwa"
+    assert statuses[0]["branch"] == "중화점"
+
+
+def test_sync_delivery_updates_queued_status_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "plain-secret")
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    monkeypatch.setattr(
+        collectors,
+        "collect_account",
+        lambda account, secret, date_from, date_to: {
+            "status": "no_records",
+            "error_code": "",
+            "records": {},
+            "message": "신규 데이터 없음",
+        },
+    )
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin-junghwa",
+                "service": "baemin",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    queued = service.queue_delivery_sync(
+        {
+            "services": ["baemin"],
+            "account_id": "acct-baemin-junghwa",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-19",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "account_id": "acct-baemin-junghwa",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-19",
+            "sync_job_id": queued["job_id"],
+            "queued_run_ids": queued["queued_run_ids"],
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    assert result["summary"][0]["run_id"] == queued["queued_run_ids"]["baemin"]
+    assert statuses[0]["id"] == queued["queued_run_ids"]["baemin"]
+    assert statuses[0]["status"] == "no_records"
+    assert len(statuses) == 1
+
+
 def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")

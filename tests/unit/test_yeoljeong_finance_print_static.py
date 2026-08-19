@@ -133,7 +133,11 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "AbortController" in HTML
     assert "API 응답 지연" in HTML
     assert "integrationSyncTimers" in HTML
-    assert "연동 응답 지연: 서버 응답이 없어 확인이 필요합니다." in HTML
+    assert "백그라운드 수집이 장시간 종료되지 않았습니다." in HTML
+    assert 'queued: ["수집대기", "info"]' in HTML
+    assert "function isIntegrationSyncActive" in HTML
+    assert "background: true" in HTML
+    assert "백그라운드 수집 등록" in HTML
     assert "normalizeStaleIntegrationSyncStatuses" in HTML
     assert "persistInitialNormalizedSettings();" in HTML
     assert "__normalizedStaleIntegrationSyncStatuses" in HTML
@@ -142,7 +146,7 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "if (pendingAutoSync)" in HTML
     assert "이전 연동 실행이 완료 응답 없이 종료되어" in HTML
     assert "Object.assign(existing, item)" in HTML
-    assert "${item.lastSyncStatus === \"running\" ? \"실행중...\" : \"수집 실행\"}" in HTML
+    assert "isIntegrationSyncActive(item) ? \"처리중...\" : \"수집 실행\"" in HTML
     assert ">수집 실행</button>`" not in HTML
     assert "integrationMatchesSyncSummary" in HTML
     assert "summaryCounts" in HTML

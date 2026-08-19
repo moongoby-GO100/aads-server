@@ -1,10 +1,11 @@
 """API routes for the Yeoljeong store assistant app."""
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -13,6 +14,7 @@ from app.auth import get_current_user
 from app.services import yeoljeong_finance_service as svc
 
 router = APIRouter(prefix="/yeoljeong-finance", tags=["yeoljeong-finance"])
+logger = logging.getLogger(__name__)
 
 
 class GenericPayload(BaseModel):
@@ -116,6 +118,16 @@ class SyncPayload(BaseModel):
     date_to: str = ""
     browser_session_id: str = ""
     storage_state_path: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    background: bool = False
+    sync_job_id: str = ""
+    queued_run_ids: dict[str, str] = Field(default_factory=dict)
+
+
+def _run_delivery_sync_background(payload: dict[str, Any], current_user: dict[str, Any]) -> None:
+    try:
+        svc.sync_delivery(payload, current_user)
+    except Exception as exc:
+        logger.exception("yeoljeong_delivery_background_sync_failed: %s", exc)
 
 
 class CsvImportPayload(BaseModel):
@@ -327,22 +339,33 @@ async def get_storage_status(current_user: dict = Depends(get_current_user)) -> 
 
 
 @router.post("/accounts")
-async def upsert_account(payload: AccountUpsertPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+async def upsert_account(
+    payload: AccountUpsertPayload,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
     data = payload.model_dump()
     account = await run_in_threadpool(svc.upsert_account, data, current_user)
     response: dict[str, Any] = {"account": account}
     service = str(data.get("service") or "")
     if data.get("auto_sync") and service in svc.PLATFORM_LABELS:
-        response["sync"] = await run_in_threadpool(
-            svc.sync_delivery,
+        sync_payload = {
+            "services": [service],
+            "account_id": account.get("id") or data.get("account_id") or data.get("server_account_id") or "",
+            "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
+            "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
+        }
+        queued = await run_in_threadpool(svc.queue_delivery_sync, sync_payload, current_user)
+        background_tasks.add_task(
+            _run_delivery_sync_background,
             {
-                "services": [service],
-                "account_id": account.get("id") or data.get("account_id") or data.get("server_account_id") or "",
-                "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
-                "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
+                **sync_payload,
+                "sync_job_id": queued.get("job_id") or "",
+                "queued_run_ids": queued.get("queued_run_ids") or {},
             },
             current_user,
         )
+        response["sync"] = queued
     elif data.get("auto_sync") and service in svc.FINANCIAL_TRANSACTION_SERVICES:
         response["sync"] = await run_in_threadpool(
             svc.sync_financial_transactions,
@@ -422,8 +445,26 @@ async def get_automation_status(current_user: dict = Depends(get_current_user)) 
 
 
 @router.post("/sync")
-async def sync_delivery(payload: SyncPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return await run_in_threadpool(svc.sync_delivery, payload.model_dump(), current_user)
+async def sync_delivery(
+    payload: SyncPayload,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    data = payload.model_dump()
+    if data.get("background"):
+        queued = await run_in_threadpool(svc.queue_delivery_sync, data, current_user)
+        background_tasks.add_task(
+            _run_delivery_sync_background,
+            {
+                **data,
+                "background": False,
+                "sync_job_id": queued.get("job_id") or "",
+                "queued_run_ids": queued.get("queued_run_ids") or {},
+            },
+            current_user,
+        )
+        return queued
+    return await run_in_threadpool(svc.sync_delivery, data, current_user)
 
 
 @router.get("/transactions")

@@ -3,7 +3,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI, UploadFile
+from fastapi import BackgroundTasks, FastAPI, UploadFile
 from fastapi.testclient import TestClient
 
 from app.api import yeoljeong_finance as api
@@ -235,27 +235,33 @@ async def test_account_upsert_runs_financial_sync_when_auto_sync_enabled(monkeyp
         auto_sync=True,
     )
 
-    result = await api.upsert_account(payload, {"email": "owner@example.com", "is_admin": True})
+    result = await api.upsert_account(payload, BackgroundTasks(), {"email": "owner@example.com", "is_admin": True})
 
     assert result == {"account": saved_account, "sync": sync_result}
 
 
 @pytest.mark.asyncio
-async def test_account_upsert_runs_delivery_sync_when_auto_sync_enabled(monkeypatch):
+async def test_account_upsert_queues_delivery_sync_when_auto_sync_enabled(monkeypatch):
     saved_account = {
         "id": "acct-baemin",
         "service": "baemin",
         "business_id": "biz-junghwa",
         "branch": "중화점",
     }
-    sync_result = {"summary": [{"service": "baemin", "status": "credential_required"}]}
+    sync_result = {
+        "queued": True,
+        "job_id": "delivery-sync-test",
+        "queued_run_ids": {"baemin": "run-baemin"},
+        "summary": [{"service": "baemin", "status": "queued"}],
+    }
+    background_payloads = []
 
     def fake_upsert_account(payload, current_user):
         assert payload["auto_sync"] is True
         assert payload["service"] == "baemin"
         return saved_account
 
-    def fake_sync_delivery(payload, current_user):
+    def fake_queue_delivery_sync(payload, current_user):
         assert payload == {
             "services": ["baemin"],
             "account_id": "acct-baemin",
@@ -264,8 +270,12 @@ async def test_account_upsert_runs_delivery_sync_when_auto_sync_enabled(monkeypa
         }
         return sync_result
 
+    def fake_background(payload, current_user):
+        background_payloads.append(payload)
+
     monkeypatch.setattr(api.svc, "upsert_account", fake_upsert_account)
-    monkeypatch.setattr(api.svc, "sync_delivery", fake_sync_delivery)
+    monkeypatch.setattr(api.svc, "queue_delivery_sync", fake_queue_delivery_sync)
+    monkeypatch.setattr(api, "_run_delivery_sync_background", fake_background)
 
     payload = api.AccountUpsertPayload(
         service="baemin",
@@ -277,9 +287,20 @@ async def test_account_upsert_runs_delivery_sync_when_auto_sync_enabled(monkeypa
         auto_sync=True,
     )
 
-    result = await api.upsert_account(payload, {"email": "owner@example.com", "is_admin": True})
+    background_tasks = BackgroundTasks()
+    result = await api.upsert_account(payload, background_tasks, {"email": "owner@example.com", "is_admin": True})
 
     assert result == {"account": saved_account, "sync": sync_result}
+    assert len(background_tasks.tasks) == 1
+    await background_tasks()
+    assert background_payloads == [{
+        "services": ["baemin"],
+        "account_id": "acct-baemin",
+        "business_id": "biz-junghwa",
+        "branch": "중화점",
+        "sync_job_id": "delivery-sync-test",
+        "queued_run_ids": {"baemin": "run-baemin"},
+    }]
 
 
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():
