@@ -5003,3 +5003,11 @@ fro
 
 ## [2026-08-19 14:11:47 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: run_remote_command: docker inspect aads-dashboard-green --format "{{.State.StartedAt}}"
+
+## [2026-08-19 14:16:15 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: # Server-local task/runtime artifacts
+.t→# Server-local task/runtime artifacts
+.t
+
+## [2026-08-19 14:16:17 KST] [aads-server] docs/CHANGELOG-direct-edit.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_chat_service.py -q 2>&
