@@ -16,7 +16,7 @@
   - `bash -n scripts/reload-api.sh` passed.
   - `git diff --check` passed.
 - Status:
-  - Main workdir had unrelated dirty changes from other tasks; those were preserved in git stash before applying this P0 patch.
+  - Main workdir had a transient unrelated GO100 changelog dirty entry during diagnosis; it was gone before commit and no stash was created.
   - Commit, push, and API deploy are being completed in this session.
 
 ## 2026-08-19 14:57 KST - Yeoljeong delivery sync HTTP response detachment
