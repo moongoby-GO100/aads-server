@@ -1,5 +1,16 @@
 # AADS HANDOVER
 
+## 2026-08-19 17:29 KST - Yeoljeong Worker Separation Completion
+
+- Request: CEO approved immediate continuation of the recommended store assistant separation.
+- Changes:
+  - `docker-compose.prod.yml`: added `yeoljeong-finance-worker` so delivery auto-collection runs outside the AADS API and outside the Yeoljeong web API process.
+  - `nginx-fb.conf`: routed `fb.newtalk.kr/health/live` directly to the dedicated Yeoljeong container for external health checks.
+- Status:
+  - Runtime/API separation is live.
+  - Worker separation is ready for deployment.
+  - Physical PostgreSQL database separation remains the next migration phase; current phase keeps `yeoljeong_*` tables on the existing DB for rollback safety.
+
 ## 2026-08-19 16:30 KST - Yeoljeong Store Assistant Docker isolation phase 1
 
 - Request: Separate 매장비서 from the full AADS runtime so it can be managed independently now and moved to a separate server later.

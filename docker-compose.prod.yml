@@ -300,6 +300,60 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  yeoljeong-finance-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yeoljeong-finance-worker
+    restart: always
+    stop_grace_period: 30s
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - AADS_SERVICE_ROLE=yeoljeong-finance-worker
+      - DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
+      - YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-postgresql://aads:aads2026secure@aads-postgres:5432/aads}
+      - YEOLJEONG_FINANCE_DATA_DIR=/app/yeoljeong-data
+      - TZ=Asia/Seoul
+      - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
+      - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
+      - YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS=${YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS:-1800}
+    volumes:
+      - /root/aads/aads-server/app:/app/app:rw
+      - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
+      - /root/aads/aads-server/app/data/yeoljeong_finance:/app/yeoljeong-data:rw
+      - /root/aads/aads-server/migrations:/app/migrations:rw
+      - /root/aads/aads-server/scripts:/app/scripts:rw
+      - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python scripts/yeoljeong_auto_collect.py --business-id all --branch 전체 || true
+          sleep "$${YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS:-1800}"
+        done
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - aads_network
+    depends_on:
+      aads-postgres:
+        condition: service_healthy
+      yeoljeong-finance:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   aads-litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: aads-litellm
