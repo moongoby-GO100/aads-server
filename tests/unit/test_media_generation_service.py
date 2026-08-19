@@ -519,59 +519,6 @@ async def test_process_genspark_ui_job_saves_data_uri_result(monkeypatch, tmp_pa
     assert row["result_uri"] == f"/api/v1/image/gallery/{queued['job_id']}/image"
 
 
-@pytest.mark.asyncio
-async def test_process_genspark_ui_job_does_not_auth_gate_ready_agent_page(monkeypatch, tmp_path: Path):
-    class _FakeLocator:
-        @property
-        def first(self):
-            return self
-
-        async def aria_snapshot(self):
-            return "Genspark agent chat prompt generate image sign in"
-
-    class _FakePage:
-        def locator(self, selector):
-            assert selector == "body"
-            return _FakeLocator()
-
-        async def wait_for_timeout(self, timeout):
-            assert timeout == 5000
-
-    conn = _Conn()
-    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
-    queued = await svc.generate_image(
-        "make a clean product image",
-        provider="genspark_ui",
-        model_id="genspark-image-ui",
-        session_id="s1",
-    )
-    payload = base64.b64encode(b"ready-agent-image").decode()
-
-    monkeypatch.setenv("AADS_MEDIA_STATIC_DIR", str(tmp_path))
-    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kwargs: _coro(_FakePage()))
-
-    async def fail_login(*args, **kwargs):
-        raise AssertionError("ready agent page must not trigger Agent Vault login")
-
-    async def fake_submit(page, prompt):
-        assert prompt == "make a clean product image"
-        return {"ok": True}
-
-    async def fake_extract(page):
-        return {"ok": True, "data_uri": f"data:image/png;base64,{payload}", "tag": "img"}
-
-    monkeypatch.setattr(svc, "_attempt_genspark_login", fail_login)
-    monkeypatch.setattr(svc, "_submit_prompt_to_genspark", fake_submit)
-    monkeypatch.setattr(svc, "_extract_genspark_media_candidate", fake_extract)
-
-    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
-
-    assert result["status"] == "succeeded"
-    row = conn.rows[queued["job_id"]]
-    assert row["result_metadata"]["ui_automation"]["state"] == "succeeded"
-    assert Path(row["result_path"]).read_bytes() == b"ready-agent-image"
-
-
 def test_genspark_remote_media_url_guard_blocks_local_targets():
     assert _is_public_http_url("http://127.0.0.1/image.png") is False
     assert _is_public_http_url("http://localhost/image.png") is False

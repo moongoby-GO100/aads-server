@@ -911,26 +911,6 @@ class MediaGenerationService:
         )
 
     @staticmethod
-    def _looks_like_genspark_ready_page(page_text: str) -> bool:
-        text = (page_text or "").lower()
-        ready_markers = (
-            "prompt",
-            "message",
-            "generate",
-            "create",
-            "ai image",
-            "agent",
-            "ask",
-            "chat",
-            "프롬프트",
-            "메시지",
-            "생성",
-            "이미지",
-            "채팅",
-        )
-        return any(marker in text for marker in ready_markers)
-
-    @staticmethod
     def _default_genspark_ui_target_url(kind: str) -> str:
         if kind in {"image", "edit_image"}:
             return "https://www.genspark.ai/ai_image"
@@ -1394,7 +1374,7 @@ class MediaGenerationService:
                 ),
             )
             page_text = await run_step("GENSPARK_PAGE_READ", self._read_genspark_page_text(page))
-            if self._looks_like_genspark_auth_gate(page_text) and not self._looks_like_genspark_ready_page(page_text):
+            if self._looks_like_genspark_auth_gate(page_text):
                 _session_id_for_vault = str(job.get("session_id") or "").strip()
                 _vault_tenant_id = (
                     await self._fetch_tenant_id_for_session(_session_id_for_vault)
@@ -1432,10 +1412,7 @@ class MediaGenerationService:
                             "GENSPARK_POST_LOGIN_READ",
                             self._read_genspark_page_text(page),
                         )
-                        if (
-                            not self._looks_like_genspark_auth_gate(_post_text)
-                            or self._looks_like_genspark_ready_page(_post_text)
-                        ):
+                        if not self._looks_like_genspark_auth_gate(_post_text):
                             _auto_login_ok = True
                         else:
                             _login_err = "AUTH_GATE_PERSISTS_AFTER_LOGIN"
