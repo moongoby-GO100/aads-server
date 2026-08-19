@@ -5022,3 +5022,6 @@ fro
 
 ## [2026-08-19 14:21:06 KST] [aads-server] docs/CHANGELOG-go100-direct.md
 - Chat-Direct 수정: run_remote_command: grep -n "platform_accounts" .gitignore
+
+## [2026-08-19 15:50:08 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:                         WHEN retry_count→                        WHEN retry_count

@@ -2565,7 +2565,7 @@ async def resume_interrupted(
                 """
                 UPDATE chat_turn_executions
                 SET retry_count = CASE
-                        WHEN retry_count < 5 THEN retry_count + 1
+                        WHEN retry_count < 8 THEN retry_count + 1
                         ELSE retry_count
                     END,
                     status = 'retrying',

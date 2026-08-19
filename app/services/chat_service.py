@@ -4854,6 +4854,32 @@ async def preserve_active_streams_for_shutdown(reason: str = "api_shutdown") -> 
                         partial_content=partial_content,
                         delete_empty_placeholder=False,
                     )
+                    # P0-1: shutdown 후 M-9 스캐너가 감지할 수 있도록 retrying으로 전환
+                    _eid_uuid = uuid.UUID(str(execution_id))
+                    _sid_uuid = uuid.UUID(session_id)
+                    _still_terminal = await conn.fetchval(
+                        "SELECT id FROM chat_turn_executions WHERE id = $1 AND status = 'interrupted'",
+                        _eid_uuid,
+                    )
+                    if _still_terminal:
+                        await conn.execute(
+                            "UPDATE chat_turn_executions SET status = 'retrying', "
+                            "error_message = $2, updated_at = NOW() "
+                            "WHERE id = $1 AND status = 'interrupted'",
+                            _eid_uuid,
+                            f"shutdown_pending_resume:{reason}"[:1000],
+                        )
+                        await conn.execute(
+                            "UPDATE chat_sessions SET current_execution_id = $2, "
+                            "updated_at = NOW() WHERE id = $1 AND current_execution_id IS NULL",
+                            _sid_uuid,
+                            _eid_uuid,
+                        )
+                        logger.info(
+                            "shutdown_retrying_for_resume session=%s execution=%s",
+                            session_id[:8],
+                            str(execution_id)[:8],
+                        )
                 preserved += 1
             except Exception as mark_err:
                 logger.warning(

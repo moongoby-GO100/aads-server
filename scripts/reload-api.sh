@@ -49,4 +49,7 @@ if [ "$FAILED" -gt 0 ]; then
     exit 1
 fi
 
+# M-9 resume scanner owner marker: /tmp/aads_execution_resume_owner (bluegreen stale false 방지)
+printf true > /tmp/aads_execution_resume_owner 2>/dev/null || true
+
 log "[OK] Hot-Reload 완료 — 재로드=$SUCCESS개"

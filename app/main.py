@@ -1538,6 +1538,37 @@ async def lifespan(app: FastAPI):
         import asyncio as _resume_asyncio
         await _resume_asyncio.sleep(5)
         _startup_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS", "15"))
+        # P0-3: Rescue interrupted executions from prior shutdown
+        try:
+            from app.core.db_pool import get_pool as _gp_rescue
+            _pool_rescue = _gp_rescue()
+            async with _pool_rescue.acquire() as _conn_rescue:
+                _rescued_count = await _conn_rescue.execute(
+                    "UPDATE chat_turn_executions "
+                    "SET status = 'retrying', "
+                    "    error_message = COALESCE(error_message, '') || ' [startup_rescue]', "
+                    "    updated_at = NOW() "
+                    "WHERE status = 'interrupted' "
+                    "  AND updated_at > NOW() - INTERVAL '30 minutes' "
+                    "  AND (error_message LIKE 'api_shutdown%' "
+                    "       OR error_message LIKE 'deploy_shutdown%' "
+                    "       OR error_message LIKE 'server_shutdown%' "
+                    "       OR error_message LIKE 'shutdown_pending_resume%')"
+                )
+                _rescued_sessions = await _conn_rescue.fetch(
+                    "UPDATE chat_sessions s "
+                    "SET current_execution_id = te.id, updated_at = NOW() "
+                    "FROM chat_turn_executions te "
+                    "WHERE te.session_id = s.id "
+                    "  AND te.status = 'retrying' "
+                    "  AND te.error_message LIKE '%startup_rescue%' "
+                    "  AND s.current_execution_id IS NULL "
+                    "RETURNING s.id::text AS session_id"
+                )
+                if _rescued_sessions:
+                    logger.info(f"startup_rescue_interrupted: restored {len(_rescued_sessions)} session(s)")
+        except Exception as _rescue_err:
+            logger.warning(f"startup_rescue_failed: {_rescue_err}")
         await _resume_pending_executions_once(
             max_rows=10,
             reclaim_before=_execution_resume_started_at,

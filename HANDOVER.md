@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-19 15:49 KST - Deploy interruption auto-resume P0
+
+- Request: Fix the case where chat responses cannot complete after API deploy/reload interrupts an active stream.
+- Cause confirmed:
+  - During API shutdown/reload, active stream preservation saved partial output but left the execution in a terminal `interrupted` path that the M-9 resume scanner did not reliably reclaim.
+  - Startup resume ownership can be skipped when the owner marker is absent or stale during blue-green/reload transitions.
+- Changes:
+  - `app/services/chat_service.py`: after preserving an active stream on shutdown, terminal `interrupted` executions are moved back to `retrying` with `shutdown_pending_resume:*` so the scanner can reclaim them.
+  - `app/main.py`: startup rescue requeues recent shutdown-related `interrupted` executions and restores `chat_sessions.current_execution_id` when missing.
+  - `app/routers/chat.py`: increases explicit resume retry allowance from 5 to 8 before hard capping.
+  - `scripts/reload-api.sh`: writes `/tmp/aads_execution_resume_owner` after successful reload to prevent owner-marker false negatives.
+- Verification before commit/deploy:
+  - `python3 -m py_compile app/main.py app/services/chat_service.py app/routers/chat.py` passed.
+  - `bash -n scripts/reload-api.sh` passed.
+  - `git diff --check` passed.
+- Status:
+  - Main workdir had unrelated dirty changes from other tasks; those were preserved in git stash before applying this P0 patch.
+  - Commit, push, and API deploy are being completed in this session.
+
 ## 2026-08-19 14:57 KST - Yeoljeong delivery sync HTTP response detachment
 
 - Request: Continue making all Jungwha delivery channels auto-collect in the background, and fix the no-response behavior when the sync button is clicked.
