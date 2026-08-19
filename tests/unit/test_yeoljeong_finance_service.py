@@ -370,6 +370,36 @@ def test_list_collection_status_marks_stale_background_sync(tmp_path, monkeypatc
     assert raw["status"] == "stale"
 
 
+def test_list_collection_status_marks_stale_queued_without_started_at(tmp_path, monkeypatch):
+    """A queued row with only queued_at > 15 min (no started_at) must also become stale."""
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    old = (datetime.now(service.KST) - timedelta(minutes=20)).isoformat(timespec="seconds")
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "run-queued-stale",
+                "job_id": "delivery-sync-queued",
+                "service": "coupangeats",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "status": "queued",
+                "queued_at": old,
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+            }
+        ],
+    )
+
+    statuses = service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-mia")
+
+    assert statuses[0]["status"] == "stale"
+    assert statuses[0]["error_code"] == "BACKGROUND_SYNC_STALE"
+    assert "15분" in statuses[0]["message"]
+    assert statuses[0]["finished_at"]
+    raw = service._read("delivery_collection_status")[0]
+    assert raw["status"] == "stale"
+
+
 def test_queue_delivery_sync_all_scope_records_registered_branch_services(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(
@@ -904,6 +934,7 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
 
 def test_sync_delivery_prefers_saved_browser_credentials_over_canonical_upload_account(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    disable_delivery_browser_auth(monkeypatch)
     monkeypatch.setattr(service, "_decrypt_secret", lambda value: "decrypted-secret")
     service._write(
         "platform_accounts",

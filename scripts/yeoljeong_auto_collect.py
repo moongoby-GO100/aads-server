@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from datetime import datetime, timezone, timedelta
@@ -15,12 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-_SERVICE_PATH = ROOT / "app" / "services" / "yeoljeong_finance_service.py"
-_SPEC = importlib.util.spec_from_file_location("yeoljeong_finance_service", _SERVICE_PATH)
-if not _SPEC or not _SPEC.loader:
-    raise RuntimeError(f"Cannot load service module: {_SERVICE_PATH}")
-svc = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(svc)
+from app.services.yeoljeong_finance_service import queue_delivery_sync, sync_delivery  # noqa: E402
 
 
 KST = timezone(timedelta(hours=9))
@@ -94,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     user = {"email": "system@aads.local", "is_admin": True}
     payload = _payload(args)
-    result = svc.queue_delivery_sync(payload, user) if args.queue_only else svc.sync_delivery(payload, user)
+    result = queue_delivery_sync(payload, user) if args.queue_only else sync_delivery(payload, user)
     print(json.dumps(_summary(result), ensure_ascii=False, indent=2))
     return 0
 

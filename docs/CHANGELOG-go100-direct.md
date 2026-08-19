@@ -22107,3 +22107,53 @@ backend/scripts
 ## [2026-08-19 14:13:09 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && cp HANDOVER.md /tmp/HANDOVER_prev.md && printf '%s\
 - finalize: pending
+
+## [2026-08-19 15:58:40 KST] [GO100] frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- Chat-Direct 수정: patch:           <b>근거 — 수수료·세금 계산</b><br>
+    →          <b>근거 — 왕복 거래비용 실측 (코드 기준)</b>
+- finalize: pending
+
+## [2026-08-19 15:58:54 KST] [GO100] frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- Chat-Direct 수정: patch:           <li>장 마감 청산: 잔여 포지션은 장 마감 처리로 →          <li>장 마감 청산: 잔여 포지션은 장 마감 처리로
+- finalize: pending
+
+## [2026-08-19 15:59:01 KST] [GO100] frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- Chat-Direct 수정: run_remote_command: psql -U kis_admin -d kisautotrade -h localhost -p 5432 -c "SELECT id, title, sta
+- finalize: pending
+
+## [2026-08-19 15:59:49 KST] [GO100] frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- Chat-Direct 수정: patch: DB exit_rules adaptive_exit 규칙 추가 (migra→DB exit_rules에 adaptive_exit 규칙을 직접 적용하고
+- finalize: pending
+
+## [2026-08-19 16:02:26 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ### DB 변경 상태
+- `go100_strategy_cards.exi→### DB 변경 상태 (2026-08-19 15:56 KST 정정 —
+- finalize: pending
+
+## [2026-08-19 16:23:03 KST] [GO100] scripts/go100/migrate_303_adaptive_exit_params.py
+- Chat-Direct 수정: patch: import argparse
+import json
+import os
+im→import argparse
+import json
+import os
+im
+- finalize: pending
+
+## [2026-08-19 16:23:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-08-19 15:30 KST - GO100 #303 적응형→## 2026-08-19 16:21 KST - runner-08f8d7f
+- finalize: pending
+
+## [2026-08-19 16:23:53 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: find frontend -path '*.next*reports*'
+- finalize: pending
+
+## [2026-08-19 16:24:47 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - `scripts/go100/migrate_303_adaptive_ex→- `scripts/go100/migrate_303_adaptive_ex
+- finalize: pending
+
+## [2026-08-19 16:25:43 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ### 서비스 재시작/배포
+- 코드 변경만 수행. DB 마이그레이션 스크→### 서비스 재시작/배포
+- DB #303 adaptive_exit는
+- finalize: pending

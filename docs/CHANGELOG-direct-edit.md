@@ -5025,3 +5025,6 @@ fro
 
 ## [2026-08-19 15:50:08 KST] [aads-server] app/routers/chat.py
 - Chat-Direct 수정: patch:                         WHEN retry_count→                        WHEN retry_count
+
+## [2026-08-19 16:04:08 KST] [aads-server] scripts/yeoljeong_auto_collect.py
+- Chat-Direct 수정: run_remote_command: df -h

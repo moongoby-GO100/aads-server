@@ -255,6 +255,31 @@ def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
     assert "http://aads-server-green:8080/api/v1/pc-agent/route-execute" in urls
 
 
+def test_active_api_route_urls_loopback_8080_before_named_container_and_external_ports(monkeypatch) -> None:
+    """Without an active container, 127.0.0.1:8080 must be tried before
+    named-container DNS names and before external blue/green port candidates."""
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_active_container_name",
+        staticmethod(lambda: ""),
+    )
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_docker_default_gateway_hosts",
+        staticmethod(lambda: []),
+    )
+
+    urls = BrowserBridgeService._active_api_route_urls("8100")
+
+    loopback_idx = urls.index("http://127.0.0.1:8080/api/v1/pc-agent/route-execute")
+    named_idx = urls.index("http://aads-server:8080/api/v1/pc-agent/route-execute")
+    external_idx = urls.index("http://127.0.0.1:8100/api/v1/pc-agent/route-execute")
+
+    assert urls[0] == "http://127.0.0.1:8080/api/v1/pc-agent/route-execute"
+    assert loopback_idx < named_idx
+    assert loopback_idx < external_idx
+
+
 def test_docker_default_gateway_hosts_reads_proc_route(monkeypatch, tmp_path) -> None:
     route_file = tmp_path / "route"
     route_file.write_text(
@@ -291,17 +316,25 @@ async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) 
     monkeypatch.setattr(
         BrowserBridgeService,
         "_active_api_ports",
-        classmethod(lambda cls: ["8102", "8100"]),
+        classmethod(lambda cls: ["8102"]),
     )
     monkeypatch.setattr(
         BrowserBridgeService,
         "_docker_default_gateway_hosts",
         staticmethod(lambda: []),
     )
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_active_container_name",
+        staticmethod(lambda: ""),
+    )
 
     def fake_urlopen(req, timeout):  # noqa: ANN001, ARG001
         calls.append(req.full_url)
-        if "8102" in req.full_url:
+        if req.full_url in {
+            "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
+            "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
+        }:
             body = {
                 "detail": {
                     "status": "error",
@@ -345,11 +378,10 @@ async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) 
         required_capabilities=["interactive_browser"],
     )
 
-    assert len(calls) == 4
-    assert calls[:3] == [
+    assert calls == [
+        "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
+        "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
         "http://127.0.0.1:8102/api/v1/pc-agent/route-execute",
-        "http://host.docker.internal:8102/api/v1/pc-agent/route-execute",
-        "http://172.17.0.1:8102/api/v1/pc-agent/route-execute",
     ]
     assert result is not None
     assert result["message"] == "파일을 찾을 수 없습니다"
