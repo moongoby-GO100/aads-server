@@ -46,6 +46,13 @@ def disable_delivery_browser_auth(monkeypatch):
     )
 
 
+def test_delivery_public_error_code_keeps_pc_agent_session_required():
+    assert (
+        service._delivery_public_error_code("action_required", "PC_AGENT_SESSION_REQUIRED")
+        == "PC_AGENT_SESSION_REQUIRED"
+    )
+
+
 def valid_employment_contract(**overrides):
     payload = {
         "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",

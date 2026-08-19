@@ -1098,7 +1098,9 @@ def _delivery_public_error_code(status: str, error_code: Any) -> str:
         if status == "partial":
             return "AUTHENTICATED_NO_ROWS"
         return ""
-    if upper in {"ACCOUNT_NOT_REGISTERED", "CREDENTIAL_REQUIRED", "CREDENTIALS_MISSING", "PC_AGENT_SESSION_REQUIRED"}:
+    if upper == "PC_AGENT_SESSION_REQUIRED":
+        return "PC_AGENT_SESSION_REQUIRED"
+    if upper in {"ACCOUNT_NOT_REGISTERED", "CREDENTIAL_REQUIRED", "CREDENTIALS_MISSING"}:
         return "MISSING_CREDENTIALS"
     if upper.endswith("_SECURITY_BLOCKED") or upper in {"SECURITY_BLOCKED", "PORTAL_BLOCKED"}:
         return "PORTAL_BLOCKED"

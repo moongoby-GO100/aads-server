@@ -6794,6 +6794,7 @@
   - Concurrent attempts now record `action_required / COLLECTION_ALREADY_RUNNING` instead of opening more PC Agent browser sessions.
   - Ambient Browser Bridge session metadata is no longer reported as active `local_agent` after the session id is cleared for a dedicated work session.
   - `browser-automation` accounts no longer silently fall back to server headless collection when PC Agent work session is unavailable; they return `PC_AGENT_SESSION_REQUIRED` with diagnostics.
+  - Public error-code normalization now preserves `PC_AGENT_SESSION_REQUIRED` instead of collapsing it into `MISSING_CREDENTIALS`.
 - Verification:
   - `docker exec yeoljeong-finance python -m py_compile app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e YEOLJEONG_FINANCE_DATA_DIR=/tmp/yeoljeong-test aads-server-yeoljeong-finance timeout 60 python -m pytest ...` succeeded: 5 passed.
