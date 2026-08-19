@@ -19,10 +19,11 @@ logger = logging.getLogger(__name__)
 
 CDP_HOST = "localhost"
 CDP_PORT = 9222
-CDP_CONNECT_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_CONNECT_TIMEOUT_SECONDS", "5") or "5")
+CDP_CONNECT_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_CONNECT_TIMEOUT_SECONDS", "12") or "12")
 CDP_COMMAND_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_TIMEOUT_SECONDS", "15") or "15")
 CDP_EVALUATE_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_EVALUATE_TIMEOUT_SECONDS", "12") or "12")
-CDP_RECOVERY_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_RECOVERY_RETRY_LIMIT", "1") or "1"))
+CDP_RECOVERY_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_RECOVERY_RETRY_LIMIT", "2") or "2"))
+CDP_WS_CONNECT_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_WS_CONNECT_RETRY_LIMIT", "2") or "2"))
 CDP_COMMAND_GUARD_WAIT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_GUARD_WAIT_SECONDS", "4.0") or "4.0")
 CDP_COMMAND_GUARD_STALE_SECONDS = float(os.getenv("AADS_CDP_COMMAND_GUARD_STALE_SECONDS", "45") or "45")
 VVIC_SPA_MIN_TEXT_LENGTH = max(40, int(os.getenv("AADS_VVIC_SPA_MIN_TEXT_LENGTH", "120") or "120"))
@@ -611,11 +612,10 @@ async def _send_cdp(
 ) -> Dict[str, Any]:
     import websockets
 
-    async with websockets.connect(
+    async with await _connect_cdp_ws(
+        websockets,
         ws_url,
-        open_timeout=CDP_CONNECT_TIMEOUT_SECONDS,
-        close_timeout=1,
-        max_size=10 * 1024 * 1024,
+        open_timeout=min(CDP_CONNECT_TIMEOUT_SECONDS, max(0.5, timeout_seconds)),
     ) as ws:
         return await _request_cdp(
             ws,
@@ -624,6 +624,35 @@ async def _send_cdp(
             timeout_seconds=timeout_seconds,
             session_id=session_id,
         )
+
+
+async def _connect_cdp_ws(
+    websockets: Any,
+    ws_url: str,
+    *,
+    open_timeout: float,
+) -> Any:
+    last_exc: Exception | None = None
+    attempts = max(1, CDP_WS_CONNECT_RETRY_LIMIT + 1)
+    timeout = max(0.5, float(open_timeout or CDP_CONNECT_TIMEOUT_SECONDS))
+    for attempt in range(attempts):
+        try:
+            return await websockets.connect(
+                ws_url,
+                open_timeout=timeout,
+                close_timeout=1,
+                max_size=10 * 1024 * 1024,
+            )
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts - 1:
+                break
+            await asyncio.sleep(min(1.5, 0.35 * (attempt + 1)))
+    raise CDPCommandError(
+        _ERROR_CDP_NOT_READY,
+        f"CDP websocket opening handshake failed after {attempts} attempts: {last_exc}",
+        details={"ws_url": ws_url, "attempts": attempts, "open_timeout": timeout},
+    )
 
 
 async def _best_effort_runtime_terminate(
@@ -747,11 +776,10 @@ async def _send_cdp_command(
         candidate_url = str(candidate.get("url") or "")
         candidate_title = str(candidate.get("title") or "")
         try:
-            async with websockets.connect(
+            async with await _connect_cdp_ws(
+                websockets,
                 browser_ws_url,
                 open_timeout=max(0.5, min(CDP_CONNECT_TIMEOUT_SECONDS, per_attempt_timeout)),
-                close_timeout=1,
-                max_size=10 * 1024 * 1024,
             ) as ws:
                 try:
                     await _request_cdp(

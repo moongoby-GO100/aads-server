@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-19 19:04 KST - Genspark UI fallback CDP handshake hardening
+
+- Request: Continue the next step for Genspark chat-window image generation automation and verify generation/download/server-save flow.
+- Confirmed:
+  - `genspark_ui` smoke job exists in `media_generation_jobs`, but processing stopped before Genspark submission.
+  - PC Agent `2e9379a1-fed` is online and `system_info` succeeds.
+  - `browser_launch` for `genspark-media-fallback` succeeds with CDP ready, but `browser_eval` fails with `timed out during opening handshake`.
+  - PC C: drive is critically full at 99.2%, which remains an operational risk for Chrome profile creation and browser automation stability.
+- Changes:
+  - `pc_agent/commands/browser_auto.py`: increased default CDP WebSocket opening timeout, raised recovery retry count, and added WebSocket connect retries with short backoff before declaring `CDP_NOT_READY`.
+  - `pc_agent/VERSION`: bumped to `1.0.58` so running agents can self-update.
+  - `pc_agent/CHANGELOG`: added the v1.0.58 CDP handshake hardening note.
+- Verification:
+  - `python3 -m py_compile pc_agent/commands/browser_auto.py` passed.
+  - `docker exec aads-server python -m py_compile pc_agent/commands/browser_auto.py` passed.
+  - `docker exec aads-server pytest tests/unit/test_browser_auto_eval.py tests/unit/test_browser_bridge.py -q` passed: 32 passed.
+- Remaining:
+  - Commit, push, blue-green deploy, PC Agent self-update, then rerun `media-0a5376e204ba4b5c` Genspark smoke job.
+
 ## 2026-08-19 19:00 KST - Yeoljeong P0 status normalization deployment follow-up
 
 - Request: P0/P1 immediate implementation for store assistant separation and delivery auto-collection.
