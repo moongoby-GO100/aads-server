@@ -3482,7 +3482,7 @@ def _delivery_browser_auth_for_account(
             or config.get("login_url")
             or "about:blank"
         )
-        work_key = f"yeoljeong-delivery-{service}-{business_id}-{branch}"
+        work_key = _delivery_browser_work_key(service, business_id, branch)
         session = _run_async(
             get_browser_bridge_service().ensure_work_session(
                 work_key=work_key,
@@ -3497,6 +3497,13 @@ def _delivery_browser_auth_for_account(
     except Exception as exc:
         auth["browser_bridge_error"] = str(exc)[:300]
     return auth
+
+
+def _delivery_browser_work_key(service: str, business_id: str, branch: str) -> str:
+    normalized_service = re.sub(r"[^a-z0-9._:-]+", "-", str(service or "").strip().lower()).strip("-")
+    normalized_business = re.sub(r"[^a-z0-9._:-]+", "-", str(business_id or "").strip().lower()).strip("-")
+    branch_hash = hashlib.sha256(str(branch or "").encode("utf-8")).hexdigest()[:10]
+    return f"yeoljeong-delivery-{normalized_service or 'portal'}-{normalized_business or 'business'}-{branch_hash}"
 
 
 _DELIVERY_SERVICE_URL_MARKERS = {

@@ -1444,7 +1444,8 @@ def test_delivery_browser_auth_for_account_ensures_service_work_session(monkeypa
 
     assert auth["browser_session_id"] == "bb-auto-coupang"
     assert auth["browser_bridge_mode"] == "local_agent"
-    assert auth["browser_work_key"] == "yeoljeong-delivery-coupangeats-biz-junghwa-중화점"
+    assert auth["browser_work_key"].startswith("yeoljeong-delivery-coupangeats-biz-junghwa-")
+    assert "중화점" not in auth["browser_work_key"]
     assert fake_bridge.calls[0]["url"].startswith("https://")
 
 
@@ -1588,7 +1589,8 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
 
     assert auth["browser_session_id"] == "bb-work-baemin"
     assert auth["ambient_browser_session_id"] == "bb-active-ddangyo"
-    assert auth["browser_work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-중화점"
+    assert auth["browser_work_key"].startswith("yeoljeong-delivery-baemin-biz-junghwa-")
+    assert "중화점" not in auth["browser_work_key"]
     assert fake_bridge.calls[0]["url"].startswith("https://")
 
 

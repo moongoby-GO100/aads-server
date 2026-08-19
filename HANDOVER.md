@@ -6734,7 +6734,7 @@
   - Latest collection status showed Baemin diagnostics with `url=https://boss.ddangyo.com/`, which means multiple delivery portals reused the same active PC Agent browser session.
   - That caused Baemin to parse a Ddangyo page and return `EMPTY_SOURCE`; Coupang Eats/Yogiyo/Ddangyo returned `partial/AUTHENTICATED_NO_ROWS` with all sections marked `section_not_found`.
 - Changes:
-  - `app/services/yeoljeong_finance_service.py` now treats only explicitly supplied `browser_session_id` as reusable. Ambient active Browser Bridge sessions are preserved in diagnostics but replaced with a per-service work session using `yeoljeong-delivery-{service}-{business_id}-{branch}`.
+  - `app/services/yeoljeong_finance_service.py` now treats only explicitly supplied `browser_session_id` as reusable. Ambient active Browser Bridge sessions are preserved in diagnostics but replaced with a per-service ASCII work session key using service, business id, and a branch hash.
   - Baemin PC Agent collection now navigates to `https://self.baemin.com/` before parsing when the selected page is not a Baemin domain.
   - Wrong-portal and no-visible-section results are normalized to `action_required` with `PC_AGENT_WRONG_PORTAL_SESSION` or `PORTAL_TABLE_NOT_FOUND`, instead of being hidden as `partial`.
   - Added regression tests for active-session isolation and PC Agent section-not-found status handling.
@@ -6743,3 +6743,22 @@
   - `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_api.py` succeeded: 108 passed.
 - Remaining:
   - Live portal rows still depend on valid saved credentials or an online PC Agent session logged into each delivery portal. Missing Mia Baemin account and missing Mia portal passwords remain operational prerequisites.
+
+## 2026-08-19 20:08 KST - Genspark UI fallback prompt-submit timeout hardening
+
+- Request: CEO confirmed the currently open Genspark window is logged in and asked to continue using it.
+- Findings:
+  - Logged-in Genspark Browser Bridge session `bb-1e975480c694` was confirmed. Snapshot showed account state `Standard` and Genspark UI text.
+  - Smoke job `media-0a5376e204ba4b5c` repeatedly returned `GENSPARK_PROMPT_SUBMIT_TIMEOUT`; PC Agent route calls intermittently returned 503/504 and one direct smoke execution left the job in `running`.
+  - The Genspark UI entered a draft generation screen where a visible `button.submit-btn` remained after Enter, so text-based submit was not enough.
+- Changes:
+  - `app/services/media_generation_service.py` now clicks a visible `button.submit-btn`/submit-like button after Enter as a fallback.
+  - Genspark UI step timeout default was raised from 25s/45s cap to 90s/90s cap to tolerate slow PC Agent Browser Bridge calls.
+  - `asyncio.CancelledError` is now handled by resetting the media job to `queued` with retryable metadata instead of leaving it in `running`.
+  - Smoke job `media-0a5376e204ba4b5c` was manually recovered to `queued` with `GENSPARK_PC_AGENT_ROUTE_TIMEOUT_RECOVERED`.
+- Verification:
+  - `python3 -m py_compile app/services/media_generation_service.py app/api/image.py` succeeded.
+  - `docker exec aads-server pytest -q tests/unit/test_media_generation_service.py` succeeded: 19 passed.
+- Remaining:
+  - Live smoke did not complete image generation because Browser Bridge/PC Agent route calls still intermittently fail with 503/504 and the Genspark menu did not reliably switch to the AI Image workspace from text click.
+  - Code is not deployed yet. Deploying this patch requires AADS backend blue-green deploy or reload after CEO approval.
