@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-19 19:51 KST - Completion toast one-shot fallback hotfix
+
+- Request: Re-review approval-waiting Runner `runner-4d9f73a6` for repeated "응답이 완료되었습니다" toast handling and process it immediately.
+- Confirmed:
+  - `runner-4d9f73a6` was initially `awaiting_approval`, but an approval path moved it to `deploying` before the reject call could apply.
+  - The deployed commit `f61e85a5` added `completion_token` and `acked_completion_token`, but only the in-memory service path used the ack counter.
+  - Router DB fallback paths for recently completed executions and recovered messages still returned `just_completed=True` without ack suppression.
+- Changes:
+  - `app/services/chat_service.py`: extracted `should_emit_completion_signal()` so the same capped one-shot decision can be reused outside the in-memory status path.
+  - `app/routers/chat.py`: applied the shared one-shot decision to completed DB fallback and recovered-message fallback, returning `completion_token` only when the completion signal is emitted.
+  - Forced-terminated `runner-4d9f73a6` after detecting the incomplete deployed state; runner status became `error`.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/models/chat.py` passed.
+  - `docker exec -i aads-server python3 -` helper smoke passed: first token delivery true, ack delivery false, fourth no-ack delivery false.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -q` passed: 56 passed, 1 warning.
+  - `curl http://127.0.0.1:8100/api/v1/health` returned `status=ok`; `docker ps` showed `aads-server` healthy.
+- Remaining:
+  - `app/services/media_generation_service.py` had a separate pre-existing dirty change for Genspark timeout and was intentionally excluded from this hotfix commit.
+  - Browser E2E was not run; this was validated through code path review, unit tests, API health, and container status.
+
 ## 2026-08-19 19:27 KST - OHVIS Aside browser agent architecture plan
 
 - Request: Create a detailed planning and architecture document for applying Aside-like browser agent capabilities to OHVIS/AADS, including a stronger PC Agent, password manager, and authentication handling.

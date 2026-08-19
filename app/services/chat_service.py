@@ -5606,6 +5606,28 @@ def _cleanup_completion_ack_state() -> None:
             _completion_ack_state.pop(sid, None)
 
 
+def should_emit_completion_signal(
+    session_id: str,
+    completion_token: str,
+    acked_completion_token: Optional[str] = None,
+) -> bool:
+    """Return True when a completion signal should still be emitted for a token."""
+    if not completion_token:
+        return False
+    _ack_entry = _completion_ack_state.get(session_id)
+    _now_mono = _bg_time.monotonic()
+    if _ack_entry and _ack_entry.get("token") == completion_token:
+        _ack_entry["count"] = _ack_entry.get("count", 0) + 1
+        return not (
+            acked_completion_token == completion_token
+            or _ack_entry["count"] > _COMPLETION_ACK_MAX_DELIVERIES
+        )
+    if len(_completion_ack_state) >= _COMPLETION_ACK_MAX_ENTRIES:
+        _cleanup_completion_ack_state()
+    _completion_ack_state[session_id] = {"token": completion_token, "count": 1, "first_seen": _now_mono}
+    return True
+
+
 def get_streaming_status(session_id: str, acked_completion_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """특정 세션의 스트리밍 상태 반환 (프론트엔드 폴링용).
 
@@ -5659,21 +5681,13 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
         _execution_id = s.get("execution_id")
         _completion_token: Optional[str] = (_execution_id or session_id) if is_completed else None
 
-        # ack 기반 one-shot: 완료 신호를 최대 _COMPLETION_ACK_MAX_DELIVERIES 회만 전달
         _emit_just_completed = is_completed
         if is_completed and _completion_token:
-            _ack_entry = _completion_ack_state.get(session_id)
-            _now_mono = _bg_time.monotonic()
-            if _ack_entry and _ack_entry.get("token") == _completion_token:
-                _ack_entry["count"] = _ack_entry.get("count", 0) + 1
-                # 클라이언트 ack 수신 또는 3회 초과 → 억제
-                if acked_completion_token == _completion_token or _ack_entry["count"] > _COMPLETION_ACK_MAX_DELIVERIES:
-                    _emit_just_completed = False
-            else:
-                # 신규 completion_token — 카운터 초기화, 필요 시 정리
-                if len(_completion_ack_state) >= _COMPLETION_ACK_MAX_ENTRIES:
-                    _cleanup_completion_ack_state()
-                _completion_ack_state[session_id] = {"token": _completion_token, "count": 1, "first_seen": _now_mono}
+            _emit_just_completed = should_emit_completion_signal(
+                session_id,
+                _completion_token,
+                acked_completion_token,
+            )
 
         result = {
             "is_streaming": not is_completed,

@@ -1760,9 +1760,16 @@ async def get_streaming_status(
                 )
                 if _finished_recently:
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
+                    _completion_token = str(execution_row["execution_id"])
+                    _emit_just_completed = svc.should_emit_completion_signal(
+                        str(session_id),
+                        _completion_token,
+                        acked_completion_token,
+                    )
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
-                        "just_completed": True,
+                        "just_completed": _emit_just_completed,
+                        "completion_token": _completion_token if _emit_just_completed else None,
                         "content_length": len(execution_row["partial_content"] or ""),
                         "token_count": 0,
                         "tool_count": _tc,
@@ -1879,13 +1886,20 @@ async def get_streaming_status(
                 session_id,
             )
             if recovered_row:
+                _completion_token = f"recovered:{recovered_row['id']}"
+                _emit_just_completed = svc.should_emit_completion_signal(
+                    str(session_id),
+                    _completion_token,
+                    acked_completion_token,
+                )
                 logger.info(
                     "streaming_status_recovered_detected session=%s",
                     str(session_id)[:8],
                 )
                 return await _finalize_streaming_status(session_id, {
                     "is_streaming": False,
-                    "just_completed": True,
+                    "just_completed": _emit_just_completed,
+                    "completion_token": _completion_token if _emit_just_completed else None,
                     "recovered": True,
                     "content_length": 0,
                     "token_count": 0,
