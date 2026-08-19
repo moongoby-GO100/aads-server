@@ -1121,3 +1121,18 @@ d='/roo
 
 ## [2026-08-18 20:48:26 KST] [aads-dashboard] src/app/chat/page.tsx.bak_msgvanish
 - Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/fix_msg_vanish_p0.py
+
+## [2026-08-19 10:05:24 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/Sidebar.tsx
+- Chat-Direct 수정: patch:   { href: "/server-status", label: "Serv→
+
+## [2026-08-19 10:05:33 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/ops/servers/page.tsx
+- Chat-Direct 수정: patch: const SERVERS = [
+  { id: "211", ip: "21→const SERVERS = [
+  { id: "68",       ip
+
+## [2026-08-19 10:05:45 KST] [aads-dashboard] src/components/Sidebar.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '/{ href: "\/server-status", label: "Server Status"/d' /root/aads/aads-da
+
+## [2026-08-19 10:06:20 KST] [aads-dashboard] src/app/ops/servers/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i '167,171c\const SERVERS = [\
+  { id: "68",       ip: "68.183.183.11",  ro

@@ -4948,3 +4948,33 @@ fro
 
 ## [2026-08-18 20:53:06 KST] [aads-server] scripts/bg_dashboard_deploy.py
 - Chat-Direct 수정: write: scripts/bg_dashboard_deploy.py
+
+## [2026-08-19 10:43:01 KST] [aads-server] app/core/project_config.py
+- Chat-Direct 수정: write: app/core/project_config.py
+
+## [2026-08-19 10:46:13 KST] [aads-server] app/services/server_registry.py
+- Chat-Direct 수정: write: app/services/server_registry.py
+
+## [2026-08-19 10:46:21 KST] [aads-server] app/services/server_registry.py
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w "211=%{http_code}" --max-time 5 http://211.188.51.113:82
+
+## [2026-08-19 10:47:30 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch: from app.services.server_registry import→from app.services.server_registry import
+
+## [2026-08-19 10:48:27 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch: # ─── 로컬 (서버 68) 스캔 ────────────────────→# ─── 로컬 (contabo116) 스캔 ───────────────
+
+## [2026-08-19 10:49:38 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch: _parse_directive_content(content, fname,→_parse_directive_content(content, fname,
+
+## [2026-08-19 10:49:46 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch:                         "server": "68",→                        "server": "conta
+
+## [2026-08-19 10:50:39 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch:     remote_211_task = _scan_remote_serve→    remote_contabo14_task = _scan_remote
+
+## [2026-08-19 10:51:31 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch:     server_ids = ["68", "211", "114"]→    server_ids = list(CANONICAL_SERVER_I
+
+## [2026-08-19 10:52:23 KST] [aads-server] app/services/cross_server_checker.py
+- Chat-Direct 수정: patch:     for sid in ["68", "211", "114"]:→    for sid in CANONICAL_SERVER_IDS:

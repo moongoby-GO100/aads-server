@@ -21973,3 +21973,60 @@ backend/scripts
 ## [2026-08-19 10:03:51 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: psql -h localhost -p 5432 -U kisadmin -d kisautotrade -t -c "SELECT order_side, 
 - finalize: pending
+
+## [2026-08-19 10:36:16 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         else:
+            fallback_budge→        elif _card_sizing_mode in ("risk
+- finalize: pending
+
+## [2026-08-19 10:37:43 KST] [GO100] tests/go100/test_card119_p1_p2_risk_unit_and_breaker.py
+- Chat-Direct 수정: write: tests/go100/test_card119_p1_p2_risk_unit_and_breaker.py
+- finalize: pending
+
+## [2026-08-19 10:38:18 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             consec: dict[int, int] = {}
+→            consec: dict[int, int] = {}
+
+- finalize: pending
+
+## [2026-08-19 10:38:30 KST] [GO100] tests/go100/test_card119_p1_p2_risk_unit_and_breaker.py
+- Chat-Direct 수정: patch:     consec: dict[int, int] = {}
+    dail→    consec: dict[int, int] = {}
+    coun
+- finalize: pending
+
+## [2026-08-19 10:38:37 KST] [GO100] tests/go100/test_card119_p1_p2_risk_unit_and_breaker.py
+- Chat-Direct 수정: patch:         assert "_maybe_load_daily_risk_s→        assert "_maybe_load_daily_risk_s
+- finalize: pending
+
+## [2026-08-19 10:45:33 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: python3 -c "from pathlib import Path; p=Path('/root/kis-autotrade-v4/backend/app
+- finalize: pending
+
+## [2026-08-19 10:52:09 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: python3 -c "from pathlib import Path; p=Path('/root/kis-autotrade-v4/backend/app
+- finalize: pending
+
+## [2026-08-19 10:54:24 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                     is_card303_real_one_→                    is_card303_real_live
+- finalize: pending
+
+## [2026-08-19 10:55:18 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                                 "overrid→                                "overrid
+- finalize: pending
+
+## [2026-08-19 10:56:22 KST] [GO100] backend/tests/test_card303_p0.py
+- Chat-Direct 수정: patch:     def test_card303_canary_warn_overrid→    def test_card303_canary_warn_overrid
+- finalize: pending
+
+## [2026-08-19 10:57:28 KST] [GO100] backend/tests/test_card303_p0.py
+- Chat-Direct 수정: patch:         assert "canary_quality_warn_over→        assert "canary_quality_warn_over
+- finalize: pending
+
+## [2026-08-19 11:04:56 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-08-19 KST — GO100-303-KIWOOM-LIV→## 2026-08-19 11:03 KST — GO100-303-LIVE
+- finalize: pending
+
+## [2026-08-19 11:36:33 KST] [GO100] backend/scripts/go100_probe_restart_safety.py
+- Chat-Direct 수정: write: backend/scripts/go100_probe_restart_safety.py
+- finalize: pending
