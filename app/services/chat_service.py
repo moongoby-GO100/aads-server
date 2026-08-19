@@ -2298,12 +2298,48 @@ async def cleanup_stale_streaming_placeholders(
     }
 
 
+async def _reconcile_streaming_state_with_db() -> int:
+    """_streaming_state에 completed=False로 남았지만 DB execution이 이미 terminal인 엔트리를 정리."""
+    stale_candidates = [
+        (sid, state) for sid, state in list(_streaming_state.items())
+        if state and not state.get("completed", False) and state.get("execution_id")
+    ]
+    if not stale_candidates:
+        return 0
+    reconciled = 0
+    try:
+        async with get_pool().acquire() as conn:
+            for sid, state in stale_candidates:
+                eid = state.get("execution_id")
+                if not eid:
+                    continue
+                try:
+                    exec_status = await conn.fetchval(
+                        "SELECT status FROM chat_turn_executions WHERE id = $1",
+                        uuid.UUID(str(eid)),
+                    )
+                    if exec_status is None or exec_status not in ("running", "retrying"):
+                        state["completed"] = True
+                        state["completed_at"] = _bg_time.monotonic()
+                        reconciled += 1
+                        logger.info(
+                            "streaming_state_reconciled session=%s execution=%s db_status=%s",
+                            sid[:8], str(eid)[:8], exec_status,
+                        )
+                except Exception as exc:
+                    logger.debug(f"reconcile_check_failed session={sid[:8]}: {exc}")
+    except Exception as exc:
+        logger.warning(f"reconcile_streaming_state_pool_error: {exc}")
+    return reconciled
+
+
 async def _stale_placeholder_cleanup_loop() -> None:
     global _stale_cleanup_task
     try:
         while True:
             await _heartbeat_asyncio.sleep(get_stale_cleanup_interval_sec())
             try:
+                await _reconcile_streaming_state_with_db()
                 await cleanup_overlong_running_executions()
                 await cleanup_stale_streaming_placeholders()
             except _heartbeat_asyncio.CancelledError:
@@ -3385,7 +3421,27 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
             _sc,
         )
     except Exception as e:
-        logger.warning(f"interim_save_failed session={session_id[:8]}: {e}")
+        _err_str = str(e)
+        if "idx_one_assistant_per_execution" in _err_str or "23505" in getattr(e, "sqlstate", ""):
+            state["completed"] = True
+            state["_terminal_execution_closed"] = True
+            logger.info(
+                "interim_save_skipped_already_finalized session=%s execution=%s",
+                session_id[:8],
+                str(state.get("execution_id", "-"))[:8],
+            )
+            return
+        _fail_count = state.get("_interim_save_fail_count", 0) + 1
+        state["_interim_save_fail_count"] = _fail_count
+        if _fail_count >= 3:
+            state["completed"] = True
+            state["_interim_save_gave_up"] = True
+            logger.warning(
+                "interim_save_gave_up session=%s after %d consecutive failures: %s",
+                session_id[:8], _fail_count, e,
+            )
+        else:
+            logger.warning(f"interim_save_failed session={session_id[:8]} attempt={_fail_count}: {e}")
 
 
 async def _delete_streaming_placeholder(
@@ -4448,6 +4504,9 @@ async def with_background_completion(
     old_task = _active_bg_tasks.pop(session_id, None)
     if old_task and not old_task.done():
         _old_state = _streaming_state.get(session_id)
+        if _old_state:
+            _old_state["completed"] = True
+            _old_state["completed_at"] = _bg_time.monotonic()
         _had_content = False
         if _old_state and (
             _strip_streaming_progress_markers(_old_state.get("content", "")).strip()
