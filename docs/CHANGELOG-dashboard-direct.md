@@ -1136,3 +1136,6 @@ d='/roo
 ## [2026-08-19 10:06:20 KST] [aads-dashboard] src/app/ops/servers/page.tsx
 - Chat-Direct 수정: run_remote_command: sed -i '167,171c\const SERVERS = [\
   { id: "68",       ip: "68.183.183.11",  ro
+
+## [2026-08-19 17:02:08 KST] [aads-dashboard] public/manager/env_contabo116.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git commit -m "fix(chat): dedup 2차 가드 개선 — assistan

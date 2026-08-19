@@ -22256,3 +22256,20 @@ im
 ## [2026-08-19 18:36:48 KST] [GO100] backend/scripts/go100_probe119_cash_sources.py
 - Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
 - finalize: pending
+
+## [2026-08-19 19:04:19 KST] [GO100] backend/scripts/go100_probe119_downstream.py
+- Chat-Direct 수정: patch:         SELECT p.id, p.go100_card_id, p.→        SELECT p.portfolio_id, p.go100_c
+- finalize: pending
+
+## [2026-08-19 19:04:28 KST] [GO100] backend/scripts/go100_probe119_downstream.py
+- Chat-Direct 수정: patch:         SELECT * FROM v4_market_calendar→        SELECT date, event_type, is_trad
+- finalize: pending
+
+## [2026-08-19 19:05:32 KST] [GO100] backend/scripts/go100_probe119_downstream.py
+- Chat-Direct 수정: patch:         SELECT date, event_type, is_trad→        SELECT CURRENT_DATE AS today,
+
+- finalize: pending
+
+## [2026-08-19 19:07:12 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-08-19 KST — GO100 #119 현금 출처 분리 →## 2026-08-19 19:05 KST — 잔여 미커밋 항목 일괄 반
+- finalize: pending
