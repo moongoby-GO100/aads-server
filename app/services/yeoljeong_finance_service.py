@@ -289,7 +289,7 @@ def _write_json_object(name: str, data: dict[str, Any]) -> None:
 
 
 def _db_url() -> str:
-    url = os.getenv("DATABASE_URL", "")
+    url = os.getenv("YEOLJEONG_FINANCE_DATABASE_URL") or os.getenv("DATABASE_URL", "")
     return url.replace("postgresql://", "postgres://") if url else ""
 
 

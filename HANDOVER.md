@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-19 16:30 KST - Yeoljeong Store Assistant Docker isolation phase 1
+
+- Request: Separate 매장비서 from the full AADS runtime so it can be managed independently now and moved to a separate server later.
+- Changes:
+  - `app/yeoljeong_main.py`: added a dedicated FastAPI entrypoint for fb.newtalk.kr with only auth, Yeoljeong finance API, static files, and health endpoints. Chat, pipeline runner, MCP, model, dashboard, and other AADS routers are intentionally excluded.
+  - `docker-compose.prod.yml`: added `yeoljeong-finance` container on host-only `127.0.0.1:8110`, with its own process, memory limit, healthcheck, and `YEOLJEONG_FINANCE_DATA_DIR`.
+  - `nginx-aads-upstream.conf` and `nginx-fb.conf`: prepared `yeoljeong_finance_api` upstream and routed fb.newtalk.kr `/api/v1/` plus `/static/` to the dedicated container instead of `aads_api`.
+  - `app/services/yeoljeong_finance_service.py`: added `YEOLJEONG_FINANCE_DATABASE_URL` override so the same code can move to a dedicated Postgres/database without touching AADS `DATABASE_URL`.
+- Verification:
+  - `python3 -m py_compile app/yeoljeong_main.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/api/auth.py` passed.
+  - `docker compose -f docker-compose.prod.yml config` passed.
+  - `docker compose -f docker-compose.prod.yml up -d --build yeoljeong-finance` started the dedicated container.
+  - `curl -fsS http://127.0.0.1:8110/health/live` returned `{"status":"ok","service":"yeoljeong-finance"}`.
+  - `docker exec aads-nginx nginx -t` passed, then `docker exec aads-nginx nginx -s reload` completed.
+  - `curl -fsS https://fb.newtalk.kr/api/v1/health/live` returned the Yeoljeong service health response.
+  - `curl -fsS https://aads.newtalk.kr/api/v1/health/live` returned AADS API health.
+- Status:
+  - Phase 1 is live. It keeps the current Postgres database by default for continuity, but the env override is ready for a separate DB/server migration.
+
 ## 2026-08-19 16:06 KST - Yeoljeong delivery auto-collect runner hardening
 
 - Request: Make every Yeoljeong sales channel capable of automatic collection, with background execution and actual status visibility.
