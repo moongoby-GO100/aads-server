@@ -7051,3 +7051,17 @@
 - Remaining:
   - Commit/push and targeted restart of `yeoljeong-finance` and `yeoljeong-finance-worker` are required before the PC Agent-first routing change affects live workers.
   - Ddangyo still requires the operator-confirmed captcha digits from the screenshot; the code inputs the digits and resumes collection, but it does not bypass captcha.
+
+## 2026-08-20 05:14 KST - Yeoljeong PC Agent-first deployment verification
+
+- Deployment:
+  - Commits pushed to `origin/main`: `125232e2` and `39090f48`.
+  - Restarted only `yeoljeong-finance` and `yeoljeong-finance-worker`; AADS main API containers were not restarted.
+- Verification:
+  - `yeoljeong-finance` is healthy on `127.0.0.1:8110`.
+  - `main` is clean and aligned with `origin/main`.
+  - Auto-collect worker completed one cycle after restart.
+  - Latest Junghwa delivery status now reports `PC_AGENT_SESSION_REQUIRED` for Baemin, Coupang Eats, Yogiyo, and Ddangyo when PC Agent is offline, instead of misleading server-headless `PORTAL_BLOCKED`.
+- Remaining:
+  - At 05:13 KST, `/api/v1/pc-agent/status` reported `online_count=0`, so live portal login could not complete.
+  - Mia branch delivery accounts still have missing credentials for several platforms.
