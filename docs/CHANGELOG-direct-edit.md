@@ -5016,3 +5016,9 @@ fro
 - Chat-Direct 수정: patch: # Server-local task/runtime artifacts
 .t→# Server-local task/runtime artifacts
 .t
+
+## [2026-08-19 14:20:18 KST] [aads-server] app/data/yeoljeong_finance/platform_accounts.json
+- Chat-Direct 수정: run_remote_command: grep -n "platform_accounts" .gitignore
+
+## [2026-08-19 14:21:06 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: grep -n "platform_accounts" .gitignore
