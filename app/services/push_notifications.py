@@ -312,3 +312,46 @@ async def notify_chat_response_complete(
     except Exception as exc:
         logger.warning("chat_response_push_notify_failed session=%s error=%s", session_id[:8], exc)
         return {"sent": 0, "failed": 1, "error": str(exc)[:300]}
+
+
+async def notify_managed_browser_task(
+    *,
+    tenant_id: Optional[str],
+    user_id: str,
+    task_id: str,
+    session_id: Optional[str],
+    status: str,
+    current_step: str = "",
+) -> dict[str, Any]:
+    """Send a best-effort push for managed browser task status changes."""
+    uid = str(user_id or "").strip()
+    if not uid:
+        return {"sent": 0, "failed": 0, "skipped": "task_user_missing"}
+    url = f"/browser-tasks?task_id={task_id}"
+    if session_id:
+        url += f"&session_id={session_id}"
+    title_by_status = {
+        "approval_required": "오비스 브라우저 승인 필요",
+        "auth_required": "오비스 브라우저 인증 필요",
+        "completed": "오비스 브라우저 작업 완료",
+        "failed": "오비스 브라우저 작업 실패",
+    }
+    payload = {
+        "title": title_by_status.get(status, "오비스 브라우저"),
+        "body": (current_step or status or "상태가 변경되었습니다.")[:240],
+        "url": url,
+        "tag": f"browser-task-{task_id}-{status}",
+        "actions": [{"action": "open-browser-task", "title": "확인"}],
+        "data": {
+            "event": "managed_browser_task",
+            "task_id": task_id,
+            "session_id": session_id,
+            "status": status,
+            "url": url,
+        },
+    }
+    try:
+        return await send_web_push_to_user(tenant_id=tenant_id, user_id=uid, payload=payload)
+    except Exception as exc:
+        logger.warning("browser_task_push_notify_failed task=%s error=%s", task_id[:8], exc)
+        return {"sent": 0, "failed": 1, "error": str(exc)[:300]}

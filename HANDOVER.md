@@ -1,5 +1,31 @@
 # AADS HANDOVER
 
+## 2026-08-19 21:31 KST - AADS-186 OHVIS Managed Browser + Agent Vault P0 direct implementation
+
+- Request: Track the failed AADS-186 runner work until implementation completes, then report.
+- Runner handling:
+  - Rejected `runner-17341ef7` because it claimed new Agent Vault files but its actual diff contained only `app/main.py`.
+  - Rejected `runner-3c47740c` because it had `process_died` and did not leave the claimed new files in the main worktree.
+  - Submitted `runner-5839fe73`, then terminated it after it showed empty logs, dead local PID, and no new implementation files.
+- Changes:
+  - Added `migrations/122_ohvis_managed_browser_agent_vault.sql` with additive Agent Vault, autofill token, permission request, browser task, browser task event, and routine tables.
+  - Added Agent Vault credential storage/autofill-token service with existing Fernet helpers and sensitive payload masking.
+  - Added browser permission policy for allow/ask/deny gating and managed browser profile helpers.
+  - Added DB-backed browser task lifecycle service with approval request flow and push notification hook.
+  - Added `/api/v1/agent-vault/*` and `/api/v1/browser-tasks/*` FastAPI routers and registered them in `app/main.py`.
+  - Added browser task status web-push helper in `app/services/push_notifications.py`.
+  - Added `tests/unit/test_browser_task_policy.py` coverage for policy gates, masking, origin normalization, profile isolation, and migration destructive-token checks.
+- Verification:
+  - `JWT_SECRET_KEY=test-secret python3 -m py_compile ...` succeeded for new services, routers, `push_notifications.py`, `main.py`, and the new test.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile ...` succeeded.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_browser_task_policy.py -q` passed: 10 passed.
+  - Docker route import check passed: 15 browser-task/agent-vault routes registered.
+  - `git diff --check` succeeded.
+- Remaining:
+  - Dashboard console implementation is intentionally excluded from this backend P0 direct patch and should be a separate dashboard task.
+  - DB migration was applied later in the same deployment session with `migrations/122_ohvis_managed_browser_agent_vault.sql`.
+  - Source commit, push, and blue-green deployment were handled after this implementation verification.
+
 ## 2026-08-19 20:29 KST - Yeoljeong delivery sync dirty follow-up cleanup
 
 - Request: Continue remediation of delivery auto-collection after a concurrent edit reintroduced server headless fallback for saved-password portal accounts.
