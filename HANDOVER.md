@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-19 19:00 KST - Yeoljeong P0 status normalization deployment follow-up
+
+- Request: P0/P1 immediate implementation for store assistant separation and delivery auto-collection.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: normalized delivery collection public statuses to `queued/running/succeeded/partial/action_required/failed`, preserved raw collector status, mapped missing credentials/security/MFA/no-row cases to stable public error codes, and converted stale queued/running rows to `failed` with `raw_status=stale`.
+  - `app/api/yeoljeong_finance.py`: account save + auto-sync now uses the persisted account business/branch first, so edit-save sync follows the row actually saved.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` passed.
+  - `git diff --check` passed.
+  - `python3 -m pytest -q tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py` not run: host Python has no `pytest`.
+  - Live CLI after prior deployment completed for all registered delivery accounts; totals were sales 0, settlements 0, reviews 0 for this run. Current ledger totals remain sales 116, settlements 110, reviews 445.
+- Remaining:
+  - Portal extraction still needs selector/PC Agent source capture work: Baemin returned `EMPTY_SOURCE`, Coupang Eats/Yogiyo/Ddangyo returned `AUTHENTICATED_NO_ROWS`.
+  - P1 separation hardening runner must be resubmitted because the earlier dependency chain errored before start.
+
 ## 2026-08-19 17:29 KST - Yeoljeong Worker Separation Completion
 
 - Request: CEO approved immediate continuation of the recommended store assistant separation.

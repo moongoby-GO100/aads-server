@@ -363,8 +363,8 @@ async def upsert_account(
         sync_payload = {
             "services": [service],
             "account_id": account.get("id") or data.get("account_id") or data.get("server_account_id") or "",
-            "business_id": data.get("business_id") or account.get("business_id") or "biz-mia",
-            "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
+            "business_id": account.get("business_id") or data.get("business_id") or "biz-mia",
+            "branch": account.get("branch") or data.get("branch") or "열정국밥_미아점",
         }
         queued = await run_in_threadpool(svc.queue_delivery_sync, sync_payload, current_user)
         _start_delivery_sync_background(

@@ -76,6 +76,15 @@ PLATFORM_LABELS = {
     for key in ("baemin", "coupangeats", "yogiyo", "ddangyo")
 }
 DELIVERY_UPLOAD_COLLECTION_MODES = {"portal-csv", "csv-upload", "statement-upload", "upload_queue", "manual"}
+DELIVERY_COLLECTION_STATUSES = {"queued", "running", "succeeded", "partial", "action_required", "failed"}
+DELIVERY_ACTION_REQUIRED_STATUSES = {
+    "blocked",
+    "credential_required",
+    "credentials_missing",
+    "connector_not_configured",
+    "portal_action_required",
+    "upload_required",
+}
 FINANCIAL_TRANSACTION_SERVICES = {
     "shinhan_business",
     "ibk_business",
@@ -995,6 +1004,8 @@ def _public_platform_account_status(row: dict[str, Any]) -> str:
     has_browser_state = bool(
         str(row.get("storage_state_path") or row.get("browser_storage_state_path") or row.get("baemin_storage_state_path") or "").strip()
     )
+    if sync_status in {"queued", "succeeded", "partial", "action_required", "failed"}:
+        return sync_status
     if sync_status == "running":
         started_text = str(row.get("last_sync_at") or row.get("updated_at") or "").strip()
         try:
@@ -1062,6 +1073,39 @@ def _mark_platform_account_sync_state(account: dict[str, Any], *, status: str, m
             )
             _write("platform_accounts", rows)
             break
+
+
+def _delivery_public_collection_status(status: Any) -> str:
+    raw = str(status or "").strip().lower()
+    if raw in DELIVERY_COLLECTION_STATUSES:
+        return raw
+    if raw in {"completed", "success"}:
+        return "succeeded"
+    if raw in {"no_records", "empty", "authenticated_no_rows"}:
+        return "partial"
+    if raw in DELIVERY_ACTION_REQUIRED_STATUSES:
+        return "action_required"
+    if raw in {"stale", "error"}:
+        return "failed"
+    return "failed" if raw else "failed"
+
+
+def _delivery_public_error_code(status: str, error_code: Any) -> str:
+    raw = str(error_code or "").strip()
+    upper = raw.upper()
+    if upper in {"", "NONE", "NULL"}:
+        if status == "partial":
+            return "AUTHENTICATED_NO_ROWS"
+        return ""
+    if upper in {"ACCOUNT_NOT_REGISTERED", "CREDENTIAL_REQUIRED", "CREDENTIALS_MISSING", "PC_AGENT_SESSION_REQUIRED"}:
+        return "MISSING_CREDENTIALS"
+    if upper.endswith("_SECURITY_BLOCKED") or upper in {"SECURITY_BLOCKED", "PORTAL_BLOCKED"}:
+        return "PORTAL_BLOCKED"
+    if upper in {"MFA_REQUIRED", "CAPTCHA_REQUIRED", "PORTAL_AUTH_CHALLENGE"}:
+        return "PORTAL_AUTH_CHALLENGE"
+    if upper in {"NO_RECORDS", "NO_ROWS", "AUTHENTICATED_NO_ROWS"}:
+        return "AUTHENTICATED_NO_ROWS"
+    return upper
 
 
 # Fields that must never appear in API responses or logs.
@@ -2964,7 +3008,8 @@ def _normalize_stale_delivery_collection_statuses(rows: list[dict[str, Any]]) ->
         )
         if not started_at or now_dt - started_at < DELIVERY_SYNC_STALE_AFTER:
             continue
-        row["status"] = "stale"
+        row["status"] = "failed"
+        row["raw_status"] = "stale"
         row["error_code"] = "BACKGROUND_SYNC_STALE"
         row["message"] = "백그라운드 수집 작업이 15분 이상 완료 갱신 없이 멈춰 상태를 정리했습니다. 다시 수집 실행이 필요합니다."
         row["finished_at"] = now_text
@@ -4357,11 +4402,14 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 if kind in {"sales", "settlements"}:
                     response_records.extend(_delivery_entry_record(record) for record in incoming)
             finished_at = _now()
+            public_status = _delivery_public_collection_status(result.get("status"))
+            public_error_code = _delivery_public_error_code(public_status, result.get("error_code"))
             status_record.update(
                 {
-                    "status": result.get("status") or "failed",
+                    "status": public_status,
+                    "raw_status": result.get("status") or "",
                     "counts": counts,
-                    "error_code": result.get("error_code") or "",
+                    "error_code": public_error_code,
                     "diagnostics": result.get("diagnostics") or {},
                     "message": result.get("message") or "",
                     "finished_at": finished_at,
