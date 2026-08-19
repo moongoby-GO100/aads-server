@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-08-20 07:43 KST - Agent Vault credential edit/delete production verification
+
+- Request: Continue interrupted Agent Vault edit/delete deployment and verify production state.
+- Backend result:
+  - Active backend slot is `aads-server-green` on `:8102`.
+  - `GET http://127.0.0.1:8102/health` returned `status=ok`.
+  - OpenAPI on `:8102` includes `PATCH /api/v1/agent-vault/credentials/{credential_id}` and `DELETE /api/v1/agent-vault/credentials/{credential_id}`.
+  - Internal and external unauthenticated `PATCH`/`DELETE` probes returned HTTP 401, confirming the routes reach the auth gate instead of 404.
+- Dashboard result:
+  - `/root/aads/aads-dashboard/deploy.sh` completed blue-green deploy for release `e87821bc4fc6`.
+  - Active dashboard slot is `aads-dashboard-green` on `:3101`; standby `aads-dashboard` was synced to the same release.
+  - External `/agent-vault` returns 307 to `/login?redirect=%2Fagent-vault`, confirming the protected route is live.
+  - Built production bundle contains Agent Vault edit/delete UI controls and `updateAgentVaultCredential` / `disableAgentVaultCredential` calls.
+- Verification note:
+  - Dashboard deploy script Step 7 returned `QA UNKNOWN`; this was not counted as pass. Manual HTTP/API/container/bundle verification was completed instead.
+- Remaining:
+  - Authenticated browser E2E for editing and deleting a real credential was not run in this entry.
+
 ## 2026-08-20 KST - AADS-GENSPARK-READY-PAGE-AUTH-GATE-FIX
 
 - Request: After approving Genspark Agent Vault auto-login deployment, run image generation tests in the specified Genspark agent session and use OHVIS/Agent Vault automation where possible.
