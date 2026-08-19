@@ -6814,6 +6814,9 @@
 - Verification:
   - `docker exec yeoljeong-finance python -m py_compile app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e YEOLJEONG_FINANCE_DATA_DIR=/tmp/yeoljeong-test aads-server-yeoljeong-finance timeout 60 python -m pytest ...` succeeded: 5 passed.
+- Runtime status:
+  - Changes were committed and pushed through `6a952f09`.
+  - `yeoljeong-finance` and `yeoljeong-finance-worker` were restarted after the change.
+  - Duplicate runtime collection attempts now return `action_required / COLLECTION_ALREADY_RUNNING`.
 - Remaining:
   - Actual portal row import still requires valid portal credentials and a PC Agent browser that can pass each portal's security checks. Mia Baemin account is still missing, and Mia Coupang Eats/Yogiyo/Ddangyo passwords are still not registered.
-  - Current change needs commit, push, and `yeoljeong-finance`/`yeoljeong-finance-worker` restart to become the active runtime.
