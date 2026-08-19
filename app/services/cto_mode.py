@@ -375,7 +375,7 @@ TITLE: {description[:80]}
 PRIORITY: {priority}
 SIZE: {size}
 MODEL: sonnet
-ASSIGNEE: Claude (서버68)
+ASSIGNEE: Claude (contabo116)
 CREATED_AT: {now}
 
 DESCRIPTION:

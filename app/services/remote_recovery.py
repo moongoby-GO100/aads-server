@@ -8,26 +8,31 @@ import subprocess
 import time
 from typing import Dict, List, Optional, Tuple
 import structlog
+from app.services.server_registry import get_server_host
 
 logger = structlog.get_logger()
 
 # ─── 복구 경로 정의 ────────────────────────────────────────────────────────────
 
+_CONTABO116_HOST = get_server_host("contabo116")
+_CONTABO14_HOST = get_server_host("contabo14")
+_CAFE24_114_HOST = get_server_host("cafe24_114")
+
 RECOVERY_ROUTES: Dict[str, List[Dict]] = {
     "114": [
-        {"via": "direct",     "method": "ssh",       "host": "서버114_IP"},
-        {"via": "relay_211",  "method": "ssh_relay",  "relay": "211.188.51.113", "target": "서버114_IP"},
-        {"via": "relay_68",   "method": "ssh_relay",  "relay": "서버68_IP",      "target": "서버114_IP"},
+        {"via": "direct",     "method": "ssh",       "host": _CAFE24_114_HOST},
+        {"via": "relay_211",  "method": "ssh_relay",  "relay": _CONTABO14_HOST, "target": _CAFE24_114_HOST},
+        {"via": "relay_68",   "method": "ssh_relay",  "relay": _CONTABO116_HOST, "target": _CAFE24_114_HOST},
     ],
     "211": [
-        {"via": "direct",     "method": "ssh",       "host": "211.188.51.113"},
-        {"via": "relay_68",   "method": "ssh_relay",  "relay": "서버68_IP",      "target": "211.188.51.113"},
-        {"via": "relay_114",  "method": "ssh_relay",  "relay": "서버114_IP",     "target": "211.188.51.113"},
+        {"via": "direct",     "method": "ssh",       "host": _CONTABO14_HOST},
+        {"via": "relay_68",   "method": "ssh_relay",  "relay": _CONTABO116_HOST, "target": _CONTABO14_HOST},
+        {"via": "relay_114",  "method": "ssh_relay",  "relay": _CAFE24_114_HOST, "target": _CONTABO14_HOST},
     ],
     "68": [
-        {"via": "direct",     "method": "ssh",       "host": "서버68_IP"},
-        {"via": "relay_211",  "method": "ssh_relay",  "relay": "211.188.51.113", "target": "서버68_IP"},
-        {"via": "relay_114",  "method": "ssh_relay",  "relay": "서버114_IP",     "target": "서버68_IP"},
+        {"via": "direct",     "method": "ssh",       "host": _CONTABO116_HOST},
+        {"via": "relay_211",  "method": "ssh_relay",  "relay": _CONTABO14_HOST, "target": _CONTABO116_HOST},
+        {"via": "relay_114",  "method": "ssh_relay",  "relay": _CAFE24_114_HOST, "target": _CONTABO116_HOST},
     ],
 }
 

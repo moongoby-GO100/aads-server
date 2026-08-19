@@ -908,7 +908,7 @@ class ToolExecutor:
             f"SIZE: {size}\n"
             f"MODEL: {model}\n"
             f"DEPENDS_ON: {depends_on}\n"
-            f"ASSIGNEE: Claude (서버 68, /root/aads)\n"
+            f"ASSIGNEE: Claude (contabo116, /root/aads)\n"
             f"\nDESCRIPTION: {description}\n"
             f">>>DIRECTIVE_END"
         )
@@ -2701,13 +2701,17 @@ class ToolExecutor:
         include_details = inp.get("include_details", False)
 
         # 헬스체크 URL 정의
+        from app.services.server_registry import get_server_host
+
+        contabo14_host = get_server_host("contabo14")
+        cafe24_host = get_server_host("cafe24_114")
         services = {
             "AADS": f"{_AADS_API_BASE}/api/v1/ops/health-check",
-            "KIS":  "http://211.188.51.113:8082/health",
-            "GO100":"http://5.104.86.14:8002/health",
-            "SF":   "http://116.120.58.155:7916/health",
-            "NTV2": "http://116.120.58.155:8080/health",
-            "NAS":  "http://cafe24-nas-placeholder/health",
+            "KIS":  f"http://{contabo14_host}:8082/health",
+            "GO100": f"http://{contabo14_host}:8002/health",
+            "SF":   f"http://{cafe24_host}:7916/health",
+            "NTV2": f"http://{cafe24_host}:8080/health",
+            "NAS":  f"http://{cafe24_host}/health",
         }
 
         async def check_one(name: str, url: str) -> Dict[str, Any]:
@@ -2788,7 +2792,7 @@ class ToolExecutor:
             f"PRIORITY: {priority}\n"
             f"SIZE: {size}\n"
             f"MODEL: {model}\n"
-            f"ASSIGNEE: Claude (서버 68, /root/aads)\n"
+            f"ASSIGNEE: Claude (contabo116, /root/aads)\n"
             f"\nDESCRIPTION:\n{description}\n"
             f">>>DIRECTIVE_END"
         )

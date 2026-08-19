@@ -119,8 +119,8 @@ class AlertManager:
                 severity="CRITICAL",
                 category="disk_full",
                 title="디스크 사용량 초과",
-                message=f"서버 68 디스크 사용량 {disk_pct:.1f}% (임계값: 80%)",
-                server="68",
+                message=f"contabo116 디스크 사용량 {disk_pct:.1f}% (임계값: 80%)",
+                server="contabo116",
             ))
 
         # cost_exceed: 오늘 AI 비용 조회
@@ -150,8 +150,8 @@ class AlertManager:
                 severity="WARNING",
                 category="memory_high",
                 title="메모리 사용량 높음",
-                message=f"서버 68 메모리 사용량 {mem_pct:.1f}% (임계값: 85%)",
-                server="68",
+                message=f"contabo116 메모리 사용량 {mem_pct:.1f}% (임계값: 85%)",
+                server="contabo116",
             ))
 
         # pat_expiry
@@ -171,7 +171,7 @@ class AlertManager:
         import shutil
         metrics: Dict[str, Any] = {}
 
-        # 디스크 사용량 (서버 68)
+        # 디스크 사용량 (contabo116)
         try:
             usage = shutil.disk_usage("/")
             metrics["disk_usage_percent"] = usage.used / usage.total * 100

@@ -63,7 +63,7 @@ class CrossProjectResult:
 
 async def _ssh_run(host: str, cmd: str, timeout: float = 30.0) -> str:
     """원격 서버에서 명령 실행 → stdout 반환. 실패 시 빈 문자열."""
-    if host == "localhost" or host == "68.183.183.11":
+    if host in {"localhost", "5.104.86.116"}:
         # 로컬 실행
         try:
             proc = await asyncio.wait_for(

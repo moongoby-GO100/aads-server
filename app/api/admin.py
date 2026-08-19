@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.auth import require_internal_admin
+from app.services.server_registry import list_servers
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_internal_admin)])
@@ -56,12 +57,16 @@ _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
     "profile_role",
     "agent",
 )
-_DEPLOY_SERVER_GROUPS = (
-    {"id": "68", "name": "서버68", "ip": "68.183.183.11", "projects": ("AADS",)},
-    {"id": "211", "name": "서버211", "ip": "211.188.51.113", "projects": ("KIS",)},
-    {"id": "contabo14", "name": "contabo14", "ip": "5.104.86.14", "projects": ("GO100",)},
-    {"id": "114", "name": "서버114", "ip": "116.120.58.155", "projects": ("SF", "NTV2")},
-)
+def _deploy_server_groups() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": server["id"],
+            "name": server.get("display_name", server["id"]),
+            "ip": server.get("host", ""),
+            "projects": tuple(server.get("projects", ())),
+        }
+        for server in list_servers()
+    ]
 _DEPLOY_STATUS_OK = {"done"}
 _DEPLOY_STATUS_ERROR = {"error", "failed", "rejected", "cancelled", "canceled"}
 
@@ -1176,7 +1181,7 @@ async def get_admin_deploy_status():
     """서버별 마지막 배포 상태 조회."""
     from app.core.db_pool import get_pool
 
-    projects = [project for server in _DEPLOY_SERVER_GROUPS for project in server["projects"]]
+    projects = [project for server in _deploy_server_groups() for project in server["projects"]]
     latest_done_rows: dict[str, Any] = {}
     latest_rows: dict[str, Any] = {}
 
@@ -1222,7 +1227,7 @@ async def get_admin_deploy_status():
             latest_rows = {str(row["project"]).upper(): row for row in status_rows}
 
     servers = []
-    for server in _DEPLOY_SERVER_GROUPS:
+    for server in _deploy_server_groups():
         server_projects = []
         for project in server["projects"]:
             done_row = latest_done_rows.get(project)

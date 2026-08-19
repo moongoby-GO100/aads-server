@@ -4,6 +4,11 @@
 모든 프로젝트 매핑은 이 파일에서만 관리.
 다른 모듈은 여기서 import해서 사용.
 
+서버 명칭 (2026-08-19 확정):
+  contabo116 = 5.104.86.116 (AADS 본체)
+  contabo14  = 5.104.86.14  (GO100/KIS)
+  cafe24_114 = 114.207.244.86 (SF/NTV2/NAS)
+
 보안: 하드코딩 — LLM 우회 불가.
 """
 from __future__ import annotations
@@ -15,11 +20,11 @@ from typing import Dict
 # workdir: 프로젝트 루트 디렉터리
 # lang: 주 프로그래밍 언어
 PROJECT_MAP: Dict[str, Dict[str, str]] = {
-    "KIS":   {"server": "211.188.51.113", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
+    "KIS":   {"server": "5.104.86.14", "server_name": "contabo14", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
     "GO100": {"server": "5.104.86.14", "server_name": "contabo14", "workdir": "/root/kis-autotrade-v4", "lang": "python"},
-    "SF":    {"server": "114.207.244.86", "port": "7916", "workdir": "/",                     "lang": "python"},
-    "NTV2":  {"server": "114.207.244.86", "port": "7916", "workdir": "/srv/newtalk-v2", "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
-    "AADS":  {"server": "host.docker.internal", "workdir": "/root/aads/aads-server", "lang": "python"},
+    "SF":    {"server": "114.207.244.86", "server_name": "cafe24_114", "port": "7916", "workdir": "/",                     "lang": "python"},
+    "NTV2":  {"server": "114.207.244.86", "server_name": "cafe24_114", "port": "7916", "workdir": "/srv/newtalk-v2", "lang": "php", "workdir_v2": "/srv/newtalk-v2"},
+    "AADS":  {"server": "host.docker.internal", "server_name": "contabo116", "workdir": "/root/aads/aads-server", "lang": "python"},
 }
 
 ALL_PROJECTS = list(PROJECT_MAP.keys())
@@ -39,10 +44,14 @@ def get_server(project: str) -> str:
 
 
 def get_server_by_number(server_num: str) -> dict:
-    """서버 번호(211, 114, 68) → {server, workdir} 매핑."""
+    """서버 번호/명칭 → {server, workdir} 매핑."""
     _SERVER_NUM_MAP = {
+        "contabo116": {"server": "host.docker.internal", "workdir": "/root/aads/aads-server"},
+        "contabo14": {"server": "5.104.86.14", "workdir": "/root/kis-autotrade-v4"},
+        "cafe24_114": {"server": "114.207.244.86", "port": "7916", "workdir": "/"},
+        # 하위호환: 구 번호 → 신 명칭
         "68": {"server": "host.docker.internal", "workdir": "/root/aads/aads-server"},
-        "211": {"server": "211.188.51.113", "workdir": "/root"},
+        "211": {"server": "5.104.86.14", "workdir": "/root/kis-autotrade-v4"},
         "114": {"server": "114.207.244.86", "port": "7916", "workdir": "/"},
     }
     return _SERVER_NUM_MAP.get(server_num, {"server": "", "workdir": "/root"})

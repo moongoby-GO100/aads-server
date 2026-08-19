@@ -81,7 +81,7 @@ def _resolve_task_scope(params: Dict[str, Any], chat_session_id: str = "") -> tu
 TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "read_file",
-        "description": "서버 68 로컬 파일 읽기. /root/aads/ 하위만 허용. 최대 50KB.\n예: read_file(path='/root/aads/aads-server/app/main.py')",
+        "description": "contabo116 로컬 파일 읽기. /root/aads/ 하위만 허용. 최대 50KB.\n예: read_file(path='/root/aads/aads-server/app/main.py')",
         "input_schema": {
             "type": "object",
             "properties": {

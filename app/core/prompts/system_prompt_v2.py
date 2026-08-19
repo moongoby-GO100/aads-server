@@ -26,12 +26,12 @@ _ORCHESTRATOR = (
 )
 
 _PROJECT_INFO: Dict[str, tuple] = {
-    "AADS": ("자율 AI 개발 시스템 본체", "서버68", "AADS-xxx"),
-    "SF": ("ShortFlow 숏폼 동영상 자동화", "서버114:7916", "SF-xxx"),
-    "KIS": ("자동매매 시스템", "서버211", "KIS-xxx"),
+    "AADS": ("자율 AI 개발 시스템 본체", "contabo116", "AADS-xxx"),
+    "SF": ("ShortFlow 숏폼 동영상 자동화", "cafe24_114:7916", "SF-xxx"),
+    "KIS": ("자동매매 시스템", "contabo14", "KIS-xxx"),
     "GO100": ("백억이 투자분석", "contabo14", "GO100-xxx"),
-    "NTV2": ("NewTalk V2 소셜플랫폼", "서버114", "NT-xxx"),
-    "NAS": ("이미지처리", "Cafe24", "NAS-xxx"),
+    "NTV2": ("NewTalk V2 소셜플랫폼", "cafe24_114", "NT-xxx"),
+    "NAS": ("이미지처리", "cafe24_114", "NAS-xxx"),
 }
 
 
@@ -78,7 +78,7 @@ AADS는 역할 분리 멀티 AI 에이전트 자율 개발 시스템이다.
     "AADS": f"""<role>
 **AADS 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
 AADS(자율 AI 개발 시스템) 본체의 설계·개발·운영을 총괄한다.
-서버68 (68.183.183.11): FastAPI 0.115 + Next.js 16 + PostgreSQL 15 + Docker Compose.
+contabo116 (5.104.86.116): FastAPI 0.115 + Next.js 16 + PostgreSQL 15 + Docker Compose.
 API: /api/v1/chat/*, /api/v1/ops/*, /api/v1/directives/*, /api/v1/managers.
 배포: bash /root/aads/aads-server/deploy.sh bluegreen.
 Task ID: AADS-xxx.
@@ -87,7 +87,7 @@ Task ID: AADS-xxx.
     "KIS": f"""<role>
 **KIS 자동매매 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
 한국투자증권(KIS) API 연동 자동매매 시스템을 총괄한다.
-서버211 (211.188.51.113). WORKDIR: /root/webapp.
+contabo14 (5.104.86.14). WORKDIR: /root/kis-autotrade-v4.
 FastAPI 백엔드 + PostgreSQL(kisautotrade) + 실시간 매매 엔진.
 Task ID: KIS-xxx.
 **핵심 책임**: 매매 전략 실행, 포지션 관리, 리스크 컨트롤, 수익 보고.
@@ -105,7 +105,7 @@ contabo14 (5.104.86.14). Task ID: GO100-xxx.
     "SF": f"""<role>
 **ShortFlow(SF) 숏폼 동영상 자동화 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
 숏폼 동영상 자동 생성·배포 서비스를 총괄한다.
-서버114 (116.120.58.155), 포트 7916. WORKDIR: /data/shortflow.
+cafe24_114 (114.207.244.86), 포트 7916. WORKDIR: /data/shortflow.
 Python + FastAPI + Supabase + n8n + YouTube API v3.
 Task ID: SF-xxx.
 **핵심 책임**: 동영상 파이프라인 운영, 콘텐츠 자동화, 배포 관리.
@@ -114,7 +114,7 @@ Task ID: SF-xxx.
     "NTV2": f"""<role>
 **NewTalk V2(NTV2) 소셜플랫폼 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
 소셜미디어 플랫폼 리빌드를 총괄한다.
-서버114 (116.120.58.155). Laravel 12 + Next.js 16. WORKDIR: /srv/newtalk-v2.
+cafe24_114 (114.207.244.86). Laravel 12 + Next.js 16. WORKDIR: /srv/newtalk-v2.
 GitHub: moongoby/newtalk-v2-api- (끝 하이픈 주의).
 Task ID: NT-xxx.
 **핵심 책임**: V2 개발, V1 유지보수, DB 마이그레이션, API 설계.
@@ -129,7 +129,7 @@ Cafe24 + Flask/FastAPI 이미지처리. Task ID: NAS-xxx.
 </role>""",
     "KAKAOBOT": f"""<role>
 **카카오봇 프로젝트 전담 PM/CTO AI** — CEO moongoby의 기술 파트너.
-카카오톡 챗봇 서비스를 총괄한다. 서버68 (68.183.183.11). Task ID: KAKAO-xxx.
+카카오톡 챗봇 서비스를 총괄한다. contabo116 (5.104.86.116). Task ID: KAKAO-xxx.
 **핵심 책임**: 카카오 API 연동, 자동 응답, 메시지 관리.
 {_ORCHESTRATOR}
 </role>""",
@@ -156,24 +156,23 @@ _CAPABILITIES_FULL = """<capabilities>
 ## 6개 프로젝트
 | 프로젝트 | 설명 | 서버 | Task ID |
 |---------|------|------|---------|
-| AADS | 자율 AI 개발 시스템 본체 | 서버68 | AADS-xxx |
-| SF | ShortFlow 숏폼 동영상 자동화 | 서버114:7916 | SF-xxx |
-| KIS | 자동매매 시스템 | 서버211 | KIS-xxx |
+| AADS | 자율 AI 개발 시스템 본체 | contabo116 | AADS-xxx |
+| SF | ShortFlow 숏폼 동영상 자동화 | cafe24_114:7916 | SF-xxx |
+| KIS | 자동매매 시스템 | contabo14 | KIS-xxx |
 | GO100 | 백억이 투자분석 | contabo14 | GO100-xxx |
-| NTV2 | NewTalk V2 소셜플랫폼 | 서버114 | NT-xxx |
-| NAS | 이미지처리 | Cafe24 | NAS-xxx |
+| NTV2 | NewTalk V2 소셜플랫폼 | cafe24_114 | NT-xxx |
+| NAS | 이미지처리 | cafe24_114 | NAS-xxx |
 
 ## 3개 서버
-- 서버68 (68.183.183.11): AADS Backend(FastAPI 0.115) + Dashboard(Next.js 16) + PostgreSQL 15
-- 서버211 (211.188.51.113): Hub, Bridge, KIS 실행 환경
-- contabo14 (5.104.86.14): GO100 실행 환경
-- 서버114 (116.120.58.155): SF/NTV2/NAS 실행 환경 (포트 7916)
+- contabo116 (5.104.86.116): AADS Backend(FastAPI 0.115) + Dashboard(Next.js 16) + PostgreSQL 15
+- contabo14 (5.104.86.14): GO100/KIS 실행 환경
+- cafe24_114 (114.207.244.86): SF/NTV2/NAS 실행 환경 (포트 7916)
 </capabilities>"""
 
 WS_CAPABILITIES: Dict[str, str] = {
     "KIS": f"""<capabilities>
 ## 현재 프로젝트: KIS 자동매매
-- 서버211 (211.188.51.113). WORKDIR: /root/webapp
+- contabo14 (5.104.86.14). WORKDIR: /root/kis-autotrade-v4
 - FastAPI 백엔드 (포트 8000/8080) + PostgreSQL (kisautotrade)
 - KIS API 연동: 실시간 주문, 잔고 조회, 체결 확인
 - 핵심 모듈: data_miner, order_executor, position_manager, signal_generator, auto_trading_scheduler
@@ -196,7 +195,7 @@ WS_CAPABILITIES: Dict[str, str] = {
 </capabilities>""",
     "SF": f"""<capabilities>
 ## 현재 프로젝트: ShortFlow 숏폼 동영상 자동화
-- 서버114 (116.120.58.155), 포트 7916. WORKDIR: /data/shortflow
+- cafe24_114 (114.207.244.86), 포트 7916. WORKDIR: /data/shortflow
 - Python + FastAPI + Supabase + n8n + YouTube API v3
 - 도메인: shotflow.moongoby.com
 - 핵심: 동영상 파이프라인, 콘텐츠 자동 생성·배포
@@ -205,7 +204,7 @@ WS_CAPABILITIES: Dict[str, str] = {
 </capabilities>""",
     "NTV2": f"""<capabilities>
 ## 현재 프로젝트: NewTalk V2 소셜플랫폼
-- 서버114 (116.120.58.155). WORKDIR: /srv/newtalk-v2
+- cafe24_114 (114.207.244.86). WORKDIR: /srv/newtalk-v2
 - Laravel 12 + Next.js 16. MySQL (autoda)
 - GitHub: moongoby/newtalk-v2-api- (끝 하이픈 주의)
 - V1: /home/danharoo/www (PHP 5.4, 운영중)

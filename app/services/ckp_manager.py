@@ -61,7 +61,7 @@ class CKPManager:
     # ─── 로컬 프로젝트 스캔 ──────────────────────────────────────────────────
 
     async def scan_local_project(self) -> CKPScanResult:
-        """AADS 프로젝트(서버 68 /root/aads) 스캔 → CKP 파일 5종 생성."""
+        """AADS 프로젝트(contabo116 /root/aads) 스캔 → CKP 파일 5종 생성."""
         return await self.scan_project("AADS", str(AADS_ROOT))
 
     async def scan_project(self, project: str, root_path: str) -> CKPScanResult:
@@ -521,7 +521,7 @@ _자동 생성: {now_str}_
 - **교훈**: SSE 이벤트 타입은 백엔드-프론트 간 반드시 계약 문서화
 
 ### AADS-148: /proc grep 블로킹 장애
-- **이슈**: `grep -r /proc` 실행으로 서버 211 3일 장애 (PID 20812)
+- **이슈**: `grep -r /proc` 실행으로 contabo14 계열 서버 3일 장애 (PID 20812)
 - **해결**: `pgrep`, `ps`, `lsof` 전용 사용, `/proc grep -r` 절대 금지
 - **교훈**: L-010 등록 — 좀비 프로세스 탐색은 PGID kill 체인 필수
 
@@ -531,7 +531,7 @@ _자동 생성: {now_str}_
 
 ## 알려진 제약사항
 
-- 서버 211 SSH 불안정 → bridge.py 경유 간접 접근
+- contabo14 SSH 불안정 → bridge.py 경유 간접 접근
 - Gemini Flash 직접 호출 금지 (LiteLLM proxy 경유 필수)
 - claudebot → /root/.genspark/ 쓰기 불가 (root 소유)
 - /proc grep -r 절대 금지 (pgrep/ps/lsof 사용)
@@ -539,7 +539,7 @@ _자동 생성: {now_str}_
 
 ## 향후 개선 사항
 
-- CKP 원격 스캔 (SSH key 확보 후 서버 211/114 직접 스캔)
+- CKP 원격 스캔 (SSH key 확보 후 contabo14/cafe24_114 직접 스캔)
 - CKP 벡터 검색 (pgvector 활용)
 - 자동 지시서 생성 품질 개선 (CKP 기반 ACCEPTANCE_CRITERIA 자동 작성)
 """
@@ -558,7 +558,7 @@ _자동 생성: {now_str}_
 
 ## 프로젝트 개요
 AADS(Autonomous AI Development System): 6개 서비스 자율 AI 개발/운영 시스템
-CEO moongoby 전용, 서버 68(68.183.183.11)에서 실행
+CEO moongoby 전용, contabo116(5.104.86.116)에서 실행
 
 ## 기술 스택
 - **백엔드**: FastAPI 0.115, Python 3.11, LangGraph 1.0.10, asyncpg

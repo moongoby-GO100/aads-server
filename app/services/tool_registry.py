@@ -304,7 +304,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── system 그룹 ──────────────────────────────────────────────────────────
     "health_check": {
         "name": "health_check",
-        "description": "AADS 서버 헬스체크. 서버68/211/114의 프로세스, 메모리, 디스크 상태를 조회합니다.",
+        "description": "AADS 서버 헬스체크. contabo116/contabo14/cafe24_114의 프로세스, 메모리, 디스크 상태를 조회합니다.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -402,7 +402,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "priority": "P1-HIGH",
                 "size": "S",
                 "model": "sonnet",
-                "description": "NTV2 서버114 헬스체크 엔드포인트가 500 에러 반환. 원인 파악 후 수정.",
+                "description": "NTV2 cafe24_114 헬스체크 엔드포인트가 500 에러 반환. 원인 파악 후 수정.",
             },
             {
                 "task_id": "AADS-190",
@@ -1436,7 +1436,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "input_examples": [
             {"title": "마이크로서비스 전환 결정", "content": "6개 서비스 중 KIS와 NTV2를 우선 분리", "category": "decision"},
-            {"title": "서버211 SSH 불안정", "content": "ConnectTimeout=30 설정 필요, 이유: 망 레이턴시", "category": "known_issue"},
+            {"title": "contabo14 SSH 불안정", "content": "ConnectTimeout=30 설정 필요, 이유: 망 레이턴시", "category": "known_issue"},
         ],
         "defer_loading": True,
     },
@@ -1495,7 +1495,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "learn_pattern",
         "description": (
             "CEO 선호도, 프로젝트 특이사항, 반복 패턴을 기억한다. "
-            "예: CEO가 항상 한국어로 답하길 원한다, 서버211이 불안정하다."
+            "예: CEO가 항상 한국어로 답하길 원한다, contabo14가 불안정하다."
         ),
         "input_schema": {
             "type": "object",

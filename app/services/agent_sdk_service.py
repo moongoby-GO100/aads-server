@@ -187,7 +187,7 @@ def _build_aads_sdk_tools() -> list:
         return _handler
 
     tools = [
-        _wrap("health_check",   "서버 68 및 6개 서비스 헬스체크",
+        _wrap("health_check",   "contabo116 및 6개 서비스 헬스체크",
               {"server": str}),
         _wrap("query_database", "PostgreSQL SELECT 쿼리 실행 (읽기 전용, AADS 내부 DB)",
               {"query": str, "limit": int}),

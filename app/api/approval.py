@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from app.api.context import verify_monitor_key
 from app.memory.store import memory_store
+from app.services.server_registry import get_server_host
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -292,8 +293,8 @@ async def _run_command(command: str, target_server: str) -> dict:
                 "114": "/root/.ssh/id_ed25519_newtalk",
             }
             ssh_host_map = {
-                "211": os.getenv("SERVER_211_HOST", "211.188.51.113"),
-                "114": os.getenv("SERVER_114_HOST", ""),
+                "211": os.getenv("SERVER_211_HOST", get_server_host("contabo14")),
+                "114": os.getenv("SERVER_114_HOST", get_server_host("cafe24_114")),
             }
             key = ssh_key_map.get(target_server, "")
             host = ssh_host_map.get(target_server, "")

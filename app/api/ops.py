@@ -19,6 +19,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 import asyncpg
 from app.core.claude_md_merger import build_merged_claude_md, get_merged_claude_md_sha256
+from app.services.server_registry import get_server_config, get_server_host, resolve_server_id
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -1029,16 +1030,20 @@ async def health_check():
         }
 
 
-_REMOTE_HEALTH_SERVERS = {
-    "211": {"host": "211.188.51.113", "port": 9090, "ssh": "root@211.188.51.113"},
-    "114": {"host": "116.120.58.155", "port": 9090, "ssh": "root@116.120.58.155 -p 7916"},
-    "contabo14": {"host": "5.104.86.14", "port": 9090, "ssh": "root@5.104.86.14"},
-}
+def _remote_health_config(server_id: str) -> dict[str, Any] | None:
+    sid = resolve_server_id(server_id)
+    cfg = get_server_config(sid)
+    if not cfg:
+        return None
+    ssh = f"root@{cfg['host']}"
+    if int(cfg.get("ssh_port", 22)) != 22:
+        ssh = f"{ssh} -p {cfg['ssh_port']}"
+    return {"host": cfg["host"], "port": 9090, "ssh": ssh}
 
 @router.get("/ops/server-health/{server_id}")
 async def remote_server_health(server_id: str):
     """원격 서버 헬스체크 프록시 — 브라우저 CORS/방화벽 우회."""
-    cfg = _REMOTE_HEALTH_SERVERS.get(server_id)
+    cfg = _remote_health_config(server_id)
     if not cfg:
         raise HTTPException(404, f"Unknown server: {server_id}")
     try:
@@ -1734,7 +1739,7 @@ import subprocess as _subprocess # noqa: E402
 
 _WATCHDOG_LOG_DIR = "/root/aads/logs/watchdog_reports"
 _WATCHDOG_SCRIPT = "/root/aads/scripts/claude_watchdog.py"
-_SERVER_211_HOST_OPS = "211.188.51.113"
+_SERVER_211_HOST_OPS = get_server_host("contabo14")
 _SSH_KEY_OPS = "/root/.ssh/id_ed25519_newtalk"
 
 
@@ -1882,7 +1887,7 @@ async def claude_cleanup(req: ClaudeCleanupRequest):
 
 @router.post("/ops/bridge-restart")
 async def bridge_restart(req: BridgeRestartRequest):
-    """bridge.py 원격 재시작 (서버 211 SSH)."""
+    """bridge.py 원격 재시작 (contabo14 SSH)."""
     try:
         ssh_cmd = [
             "ssh",

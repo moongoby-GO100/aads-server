@@ -385,7 +385,7 @@ async def query_database(message: str, workspace_id: str) -> Dict[str, Any]:
 
 async def read_remote_file(message: str, workspace_id: str) -> Dict[str, Any]:
     """
-    서버 211/114의 파일 SSH로 읽기.
+    contabo14/cafe24_114의 파일 SSH로 읽기.
     기존 ceo_chat_tools.py의 tool_read_remote_file 재사용.
     """
     try:
@@ -526,7 +526,7 @@ IMPACT: M
 EFFORT: M
 MODEL: sonnet
 REVIEW_REQUIRED: false
-ASSIGNEE: Claude (서버 68, /root/aads)
+ASSIGNEE: Claude (contabo116, /root/aads)
 DESCRIPTION: |
   {title}
 SUCCESS_CRITERIA: |

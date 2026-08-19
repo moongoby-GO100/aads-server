@@ -2,8 +2,8 @@
 AADS-181: 크로스 서버 디렉티브 체커
 3대 서버에서 directives 폴더를 스캔하여 통합 현황을 반환한다.
 
-- 서버 68: 로컬 파일 스캔
-- 서버 211/114: SSH로 스캔, 실패 시 HTTP fallback
+- contabo116: 로컬 파일 스캔
+- contabo14/cafe24_114: SSH로 스캔, 실패 시 HTTP fallback
 - 결과 캐싱: 30초 TTL (반복 SSH 호출 방지)
 - 파싱: TASK_ID/TITLE/PRIORITY/MODEL/SIZE/project 필드 추출
 """
@@ -152,7 +152,7 @@ async def _scan_local_server(statuses: List[str]) -> Dict[str, Any]:
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="replace") as f:
                         content = f.read(2000)
-                    parsed = _parse_directive_content(content, fname, status, "68")
+                    parsed = _parse_directive_content(content, fname, status, "contabo116")
                     # 완료 시각: 파일 mtime 활용
                     if status == "done":
                         try:
@@ -166,7 +166,7 @@ async def _scan_local_server(statuses: List[str]) -> Dict[str, Any]:
                         "task_id": fname.replace(".md", ""),
                         "filename": fname,
                         "status": status,
-                        "server": "68",
+                        "server": "contabo116",
                         "error": str(e),
                     })
         except Exception as e:
@@ -178,7 +178,7 @@ async def _scan_local_server(statuses: List[str]) -> Dict[str, Any]:
     return result
 
 
-# ─── SSH (서버 211/114) 스캔 ─────────────────────────────────────────────────
+# ─── SSH (contabo14/cafe24_114) 스캔 ─────────────────────────────────────────
 
 async def _scan_remote_server(server_id: str, statuses: List[str]) -> Dict[str, Any]:
     """SSH로 원격 서버 directives 폴더 스캔."""
@@ -281,11 +281,11 @@ async def scan_all_servers(
 
     # 3서버 병렬 스캔
     local_task = _scan_local_server(statuses)
-    remote_211_task = _scan_remote_server("211", statuses)
-    remote_114_task = _scan_remote_server("114", statuses)
+    remote_contabo14_task = _scan_remote_server("contabo14", statuses)
+    remote_cafe24_task = _scan_remote_server("cafe24_114", statuses)
 
     results_list = await asyncio.gather(
-        local_task, remote_211_task, remote_114_task,
+        local_task, remote_contabo14_task, remote_cafe24_task,
         return_exceptions=True,
     )
 
@@ -293,7 +293,7 @@ async def scan_all_servers(
     all_directives: List[Dict[str, Any]] = []
     total_counts: Dict[str, int] = {s: 0 for s in statuses}
 
-    server_ids = ["68", "211", "114"]
+    server_ids = list(CANONICAL_SERVER_IDS)
     for sid, res in zip(server_ids, results_list):
         if isinstance(res, Exception):
             by_server[sid] = {"server": sid, "error": str(res), "reachable": False, "directives": [], "counts": {}, "total": 0}
@@ -336,7 +336,7 @@ async def get_server_summary() -> Dict[str, Any]:
 
     servers_summary: Dict[str, Any] = {}
 
-    for sid in ["68", "211", "114"]:
+    for sid in CANONICAL_SERVER_IDS:
         cfg = SERVER_REGISTRY[sid]
         srv_data = scan["by_server"].get(sid, {})
         counts = srv_data.get("counts", {})

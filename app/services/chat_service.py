@@ -8558,7 +8558,7 @@ async def send_message_stream(
                 _mention_desc = {
                     "KIS": "KIS AI 자동매매 시스템 (서버62, /root/kis/)",
                     "GO100": "GO100 백억이 투자분석 플랫폼 (contabo14, /root/kis-autotrade-v4/)",
-                    "AADS": "AADS 자율 AI 개발 시스템 (서버68, /root/aads/)",
+                    "AADS": "AADS 자율 AI 개발 시스템 (contabo116, /root/aads/)",
                     "SF": "SmartFarm 스마트팜 시스템 (서버65, /root/sf/)",
                     "NTV2": "NTV2 뉴톡 v2 서비스 (서버65, /root/ntv2/)",
                     "NAS": "NAS 스토리지 시스템 (서버65, /root/nas/)",

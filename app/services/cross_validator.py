@@ -450,7 +450,7 @@ class CrossValidator(AutoRecovery):
             except Exception as e:
                 logger.error("seen_tasks_save_failed", error=str(e))
 
-        # 서버 211 SSH 체크
+        # contabo14 SSH 체크
         await self._check_seen_tasks_server211(issues)
 
         self.blocked_tasks_count = len([i for i in issues if i.get("type") == "BLOCKED_TASK_RELEASED"])
@@ -512,7 +512,7 @@ class CrossValidator(AutoRecovery):
         return None
 
     async def _check_seen_tasks_server211(self, issues: list):
-        """서버 211의 seen_tasks도 동일 체크 (SSH, 68→211)."""
+        """contabo14의 seen_tasks도 동일 체크 (SSH, contabo116→contabo14)."""
         try:
             result = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",

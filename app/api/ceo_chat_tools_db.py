@@ -30,6 +30,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.services.server_registry import get_server_host
+
 logger = logging.getLogger(__name__)
 
 # ─── 프로젝트별 DB 설정 ──────────────────────────────────────────────────────
@@ -131,11 +133,11 @@ def _ssh_tunnel_config(
     }
 
 
-# SSH 터널 필요 프로젝트 (MySQL on 114서버)
+# SSH 터널 필요 프로젝트 (MySQL on cafe24_114)
 _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     "SF": _ssh_tunnel_config(
         "SF",
-        ssh_host="116.120.58.155",
+        ssh_host=get_server_host("cafe24_114"),
         ssh_port=22,
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519_newtalk",
@@ -144,7 +146,7 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
     ),
     "NTV2": _ssh_tunnel_config(
         "NTV2",
-        ssh_host="116.120.58.155",
+        ssh_host=get_server_host("cafe24_114"),
         ssh_port=22,
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519_newtalk",

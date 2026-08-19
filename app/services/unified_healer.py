@@ -326,7 +326,7 @@ async def _execute_command(command: str, target_server: str = "68") -> dict:
                 "114": "/root/.ssh/id_ed25519_newtalk",
             }
             ssh_host_map = {
-                "211": os.getenv("SERVER_211_HOST", "211.188.51.113"),
+                "211": os.getenv("SERVER_211_HOST", "5.104.86.14"),
                 "114": os.getenv("SERVER_114_HOST", ""),
             }
             key = ssh_key_map.get(target_server, "")

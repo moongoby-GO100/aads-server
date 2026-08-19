@@ -127,9 +127,9 @@ class TelegramBot:
             "",
             "━━━━━━━━━━━━━━━━━━━━",
             f"🖥️ *서버 상태*",
-            f"  • 서버 68 (AADS): 운영 중",
-            f"  • 서버 211 (Hub): -",
-            f"  • 서버 114 (SF/NTV2): -",
+            f"  • contabo116 (AADS): 운영 중",
+            f"  • contabo14 (GO100/KIS): -",
+            f"  • cafe24_114 (SF/NTV2/NAS): -",
             "",
             f"✅ *완료 태스크*: {completed_tasks}건",
             f"💰 *일일 AI 비용*: ${daily_cost:.2f}",
@@ -216,10 +216,9 @@ class TelegramBot:
         now_kst = datetime.now(KST).strftime("%H:%M KST")
         return (
             f"🖥️ *서버 상태* ({now_kst})\n\n"
-            "• 서버 68 (68.183.183.11) — AADS\n"
-            "• 서버 211 (211.188.51.113) — Hub/Bridge/KIS\n"
-            "• contabo14 (5.104.86.14) — GO100\n"
-            "• 서버 114 (116.120.58.155) — SF/NTV2/NAS"
+            "• contabo116 (5.104.86.116) — AADS\n"
+            "• contabo14 (5.104.86.14) — GO100/KIS\n"
+            "• cafe24_114 (114.207.244.86) — SF/NTV2/NAS"
         )
 
     async def _cmd_cost(self) -> str:

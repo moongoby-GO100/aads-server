@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import structlog
 import asyncpg
+from app.services.server_registry import get_server_config, get_server_host
 
 logger = structlog.get_logger()
 
@@ -22,8 +23,10 @@ DATABASE_URL = os.getenv(
 DIRECTIVE_BASE = "/root/.genspark/directives"
 GITHUB_PAT = os.getenv("GITHUB_PAT", "")
 SSH_SERVERS = {
-    "211": "211.188.51.113",
-    "114": "116.120.58.155",
+    "211": get_server_host("contabo14"),
+    "114": get_server_host("cafe24_114"),
+    "contabo14": get_server_host("contabo14"),
+    "cafe24_114": get_server_host("cafe24_114"),
 }
 
 
@@ -227,15 +230,10 @@ async def _check_github_pat() -> Dict[str, Any]:
 
 
 _HTTP_HEALTH_URLS = {
-    "211": [
-        "http://211.188.51.113:8200/health",
-        "http://211.188.51.113:8100/api/v1/health",
-        "http://211.188.51.113:8080/health",
-    ],
-    "114": [
-        "http://116.120.58.155:7916/api/health",
-        "http://116.120.58.155:7916/health",
-    ],
+    "211": get_server_config("contabo14").get("http_health_urls", []),
+    "114": get_server_config("cafe24_114").get("http_health_urls", []),
+    "contabo14": get_server_config("contabo14").get("http_health_urls", []),
+    "cafe24_114": get_server_config("cafe24_114").get("http_health_urls", []),
 }
 
 
@@ -322,7 +320,7 @@ async def _check_disk(server_key: Optional[str] = None) -> Dict[str, Any]:
 
 
 async def _check_memory() -> Dict[str, Any]:
-    """메모리 사용량 (서버 68) — /proc/meminfo 기반 (Docker 컨테이너 호환)."""
+    """메모리 사용량 (contabo116) — /proc/meminfo 기반 (Docker 컨테이너 호환)."""
     try:
         with open("/proc/meminfo", "r") as f:
             lines = f.readlines()
@@ -370,7 +368,7 @@ async def _check_memory() -> Dict[str, Any]:
 
 
 async def _check_cpu() -> Dict[str, Any]:
-    """CPU 부하 (서버 68) — /proc/loadavg + /proc/stat 기반 (Docker 컨테이너 호환)."""
+    """CPU 부하 (contabo116) — /proc/loadavg + /proc/stat 기반 (Docker 컨테이너 호환)."""
     try:
         with open("/proc/loadavg", "r") as f:
             parts = f.read().split()
