@@ -4812,7 +4812,8 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 elif (
                     collection_mode == "browser-automation"
                     and not can_use_browser_auth
-                    and not payload.get("allow_server_headless_fallback")
+                    and not _has_secret_value(account, "password")
+                    and payload.get("require_pc_agent")
                 ):
                     label = _delivery_platform_label(service)
                     result = {
@@ -4825,7 +4826,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                             "ambient_browser_session_id": browser_auth.get("ambient_browser_session_id") or "",
                             "ambient_browser_bridge_mode": browser_auth.get("ambient_browser_bridge_mode") or "",
                         },
-                        "message": f"{label} 자동수집은 PC Agent 전용 세션이 필요합니다. 서버 headless 접속은 포털 보안 차단 때문에 사용하지 않습니다.",
+                        "message": f"{label} 자동수집은 저장된 비밀번호 또는 PC Agent 전용 세션이 필요합니다.",
                     }
                 elif not _has_secret_value(account, "password") and not can_use_browser_auth:
                     label = _delivery_platform_label(service)

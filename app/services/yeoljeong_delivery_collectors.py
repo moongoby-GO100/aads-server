@@ -84,6 +84,91 @@ SECURITY_BLOCK_TERMS = (
     "access denied",
     "forbidden",
 )
+LOGIN_SELECTOR_CONFIG: dict[str, dict[str, tuple[str, ...]]] = {
+    "baemin": {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name='id']",
+            "input[name*='id' i]",
+            "input[name*='user' i]",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": (
+            "input[autocomplete='current-password']",
+            "input[name='password']",
+            "input[name*='pw' i]",
+            "input[type='password']",
+        ),
+        "submit": ("button[type='submit']", "input[type='submit']"),
+    },
+    "coupangeats": {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name*='email' i]",
+            "input[name*='id' i]",
+            "input[name*='user' i]",
+            "input[placeholder*='아이디']",
+            "input[placeholder*='이메일']",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": (
+            "input[autocomplete='current-password']",
+            "input[name*='password' i]",
+            "input[name*='pw' i]",
+            "input[placeholder*='비밀번호']",
+            "input[type='password']",
+        ),
+        "submit": ("button[type='submit']", "input[type='submit']"),
+    },
+    "yogiyo": {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name*='id' i]",
+            "input[name*='email' i]",
+            "input[name*='user' i]",
+            "input[placeholder*='아이디']",
+            "input[placeholder*='이메일']",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": (
+            "input[autocomplete='current-password']",
+            "input[name*='password' i]",
+            "input[name*='pw' i]",
+            "input[placeholder*='비밀번호']",
+            "input[type='password']",
+        ),
+        "submit": ("button[type='submit']", "input[type='submit']"),
+    },
+    "ddangyo": {
+        "username": (
+            "#mf_wfm_login_id",
+            "#mf_ipt_usrId",
+            "#userId",
+            "input[name*='user' i]",
+            "input[name*='id' i]",
+            "input[placeholder*='아이디']",
+            "input[type='text']",
+        ),
+        "password": (
+            "#mf_wfm_login_pw",
+            "#mf_ipt_pw",
+            "#password",
+            "input[name*='password' i]",
+            "input[name*='pw' i]",
+            "input[placeholder*='비밀번호']",
+            "input[type='password']",
+        ),
+        "submit": (
+            "#mf_btn_webLogin",
+            "input[type='button'][value*='로그인']",
+            "button[type='submit']",
+            "input[type='submit']",
+        ),
+    },
+}
 STORAGE_STATE_ACCOUNT_KEYS = (
     "storage_state_path",
     "browser_storage_state_path",
@@ -217,6 +302,111 @@ def _read_download(path: Path) -> list[dict[str, Any]]:
     if not text:
         return []
     return [dict(row) for row in csv.DictReader(text.splitlines())]
+
+
+def _login_selectors(service: str) -> dict[str, tuple[str, ...]]:
+    fallback = {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name*='id' i]",
+            "input[name*='user' i]",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": ("input[autocomplete='current-password']", "input[type='password']"),
+        "submit": (
+            "button[type='submit']",
+            "input[type='submit']",
+            "input[type='button'][value*='로그인']",
+        ),
+    }
+    configured = LOGIN_SELECTOR_CONFIG.get(str(service or "").strip().lower(), {})
+    return {
+        "username": tuple(configured.get("username") or fallback["username"]),
+        "password": tuple(configured.get("password") or fallback["password"]),
+        "submit": tuple(configured.get("submit") or fallback["submit"]),
+    }
+
+
+def _fill_login_dom(page: Any, service: str, username: str, password: str) -> dict[str, Any]:
+    selectors = _login_selectors(service)
+    try:
+        result = page.evaluate(
+            r"""
+            ({username, password, usernameSelectors, passwordSelectors, submitSelectors}) => {
+              const visible = element => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0
+                  && element.type !== 'hidden'
+                  && !element.disabled;
+              };
+              const firstVisible = selectors => {
+                for (const selector of selectors) {
+                  try {
+                    const found = [...document.querySelectorAll(selector)].find(visible);
+                    if (found) return found;
+                  } catch (_) {}
+                }
+                return null;
+              };
+              const setNativeValue = (element, value) => {
+                const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value');
+                if (descriptor && descriptor.set) descriptor.set.call(element, value);
+                else element.value = value;
+                element.dispatchEvent(new Event('input', {bubbles: true}));
+                element.dispatchEvent(new Event('change', {bubbles: true}));
+                element.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Unidentified'}));
+              };
+              const userInput = firstVisible(usernameSelectors);
+              const passwordInput = firstVisible(passwordSelectors);
+              if (!userInput || !passwordInput) {
+                return {filled: false, clicked: false, reason: 'LOGIN_FORM_NOT_FOUND'};
+              }
+              userInput.focus();
+              setNativeValue(userInput, username);
+              passwordInput.focus();
+              setNativeValue(passwordInput, password);
+              let submit = firstVisible(submitSelectors);
+              if (!submit) {
+                const labels = ['로그인', 'login', 'sign in', '확인'];
+                submit = [...document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]')]
+                  .find(element => {
+                    if (!visible(element)) return false;
+                    const text = String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
+                    return labels.some(label => text.includes(label));
+                  });
+              }
+              if (submit) {
+                submit.click();
+                return {filled: true, clicked: true, reason: ''};
+              }
+              const form = passwordInput.closest('form') || userInput.closest('form');
+              if (form) {
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+                return {filled: true, clicked: true, reason: 'FORM_SUBMIT'};
+              }
+              passwordInput.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              passwordInput.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              return {filled: true, clicked: false, reason: 'ENTER_DISPATCHED'};
+            }
+            """,
+            {
+                "username": username,
+                "password": password,
+                "usernameSelectors": list(selectors["username"]),
+                "passwordSelectors": list(selectors["password"]),
+                "submitSelectors": list(selectors["submit"]),
+            },
+        )
+        return result if isinstance(result, dict) else {"filled": bool(result), "clicked": False, "reason": ""}
+    except Exception as exc:
+        return {"filled": False, "clicked": False, "reason": exc.__class__.__name__}
 
 
 class _HtmlTableParser(HTMLParser):
@@ -395,7 +585,7 @@ def _click_first(page: Any, labels: tuple[str, ...], timeout: int = 2500) -> boo
     return False
 
 
-def _fill_login(page: Any, username: str, password: str) -> bool:
+def _fill_login(page: Any, username: str, password: str, service: str = "") -> bool:
     # Several merchant portals render their login controls after
     # ``domcontentloaded``.  Wait for the dynamic form instead of treating the
     # first empty DOM snapshot as a missing/changed login page.
@@ -408,14 +598,7 @@ def _fill_login(page: Any, username: str, password: str) -> bool:
     except Exception:
         pass
 
-    username_selectors = (
-        "input[autocomplete='username']",
-        "input[name*='id' i]",
-        "input[name*='user' i]",
-        "input[type='email']",
-        "input[type='text']",
-    )
-    password_selectors = ("input[autocomplete='current-password']", "input[type='password']")
+    selectors = _login_selectors(service)
     def first_visible(selectors: tuple[str, ...]) -> Any | None:
         for selector in selectors:
             locator = page.locator(selector).first
@@ -426,20 +609,21 @@ def _fill_login(page: Any, username: str, password: str) -> bool:
                 continue
         return None
 
-    user_input = first_visible(username_selectors)
-    password_input = first_visible(password_selectors)
+    user_input = first_visible(selectors["username"])
+    password_input = first_visible(selectors["password"])
+    clicked = False
     if user_input is None or password_input is None:
-        return False
-    user_input.fill(username)
-    password_input.fill(password)
-    if not _click_first(page, ("로그인", "login"), timeout=4000):
+        dom_result = _fill_login_dom(page, service, username, password)
+        if not dom_result.get("filled"):
+            return False
+        clicked = bool(dom_result.get("clicked"))
+    else:
+        user_input.fill(username)
+        password_input.fill(password)
+        clicked = _click_first(page, ("로그인", "login"), timeout=4000)
+    if not clicked:
         clicked = False
-        for selector in (
-            "button[type='submit']",
-            "input[type='submit']",
-            "input[type='button'][value*='로그인']",
-            "#mf_btn_webLogin",
-        ):
+        for selector in selectors["submit"]:
             control = page.locator(selector).first
             try:
                 if control.count() and control.is_visible(timeout=500):
@@ -448,7 +632,7 @@ def _fill_login(page: Any, username: str, password: str) -> bool:
                     break
             except Exception:
                 continue
-        if not clicked:
+        if not clicked and password_input is not None:
             password_input.press("Enter")
     page.wait_for_timeout(5000)
     try:
@@ -699,7 +883,7 @@ def collect_account(
                     blocked.setdefault("diagnostics", {})["auth_mode"] = auth_mode
                     browser.close()
                     return blocked
-                if not _fill_login(page, str(account.get("username") or ""), password):
+                if not _fill_login(page, str(account.get("username") or ""), password, service):
                     browser.close()
                     return {
                         "status": "portal_action_required",

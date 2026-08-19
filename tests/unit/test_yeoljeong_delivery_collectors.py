@@ -134,6 +134,45 @@ def test_page_state_rejects_logged_out_landing_page_without_password_input():
     assert collectors._page_state(FakePage()) == ("failed", "PORTAL_LOGIN_NOT_COMPLETED")
 
 
+def test_fill_login_uses_dom_fallback_for_websquare_portal():
+    class EmptyLocator:
+        @property
+        def first(self):
+            return self
+
+        def count(self):
+            return 0
+
+    class FakePage:
+        def __init__(self):
+            self.evaluate_arg = None
+            self.timeout_ms = 0
+
+        def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+        def wait_for_selector(self, *args, **kwargs):
+            return None
+
+        def locator(self, selector):
+            return EmptyLocator()
+
+        def evaluate(self, expression, arg=None):
+            self.evaluate_arg = arg
+            return {"filled": True, "clicked": True, "reason": ""}
+
+        def wait_for_timeout(self, timeout):
+            self.timeout_ms = timeout
+
+    page = FakePage()
+
+    assert collectors._fill_login(page, "owner", "secret", "ddangyo") is True
+    assert page.evaluate_arg["username"] == "owner"
+    assert page.evaluate_arg["password"] == "secret"
+    assert "#mf_btn_webLogin" in page.evaluate_arg["submitSelectors"]
+    assert page.timeout_ms == 5000
+
+
 def test_security_block_result_detects_baemin_block_page():
     class FakeBody:
         def inner_text(self, timeout):

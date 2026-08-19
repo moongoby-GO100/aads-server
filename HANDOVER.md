@@ -6901,3 +6901,22 @@
 - Remaining:
   - Portal OTP/CAPTCHA/device challenges remain user-action states.
   - Mia delivery portal passwords are not registered, so those accounts cannot perform saved-password login until credentials are added.
+
+## 2026-08-20 03:34 KST - Yeoljeong delivery auto-collection completion pass
+
+- Request: "자동수집 구현 완료해"
+- Findings:
+  - `browser-automation` accounts with saved encrypted passwords were still blocked from server headless fallback when no PC Agent session was available.
+  - The synchronous collector used generic login selectors and could miss portal SPA/WebSquare login forms that require native value setters and input/change events.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` now allows saved-password `browser-automation` accounts to continue into the server headless collector when no PC Agent session is available.
+  - `app/services/yeoljeong_delivery_collectors.py` now has service-specific login selectors for Baemin, Coupang Eats, Yogiyo, and Ddangyo in the headless collector.
+  - Added DOM fallback login injection for the headless collector so React/Vue/WebSquare forms receive native value updates plus input/change/keyup events before submit.
+  - Updated regression tests to assert saved-password server fallback and Ddangyo DOM fallback behavior.
+- Verification:
+  - `git diff --check` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 95 passed.
+- Remaining:
+  - Live portal collection still cannot bypass CAPTCHA, OTP, phone/device verification, or missing passwords. Those cases remain `action_required` or `credential_required` by design.
+  - Live effect requires commit, push, and restarting only `yeoljeong-finance` plus `yeoljeong-finance-worker`.
