@@ -485,8 +485,13 @@ class BrowserBridgeService:
         }
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
-        if isolation_id or normalized_work_key:
-            launch_params["isolation_id"] = isolation_id or normalized_work_key
+        base_isolation_id = isolation_id or normalized_work_key
+        if base_isolation_id:
+            if force_recreate:
+                suffix = new_session_id().replace("bb-", "", 1)[:12]
+                launch_params["isolation_id"] = f"{base_isolation_id[:90]}-{suffix}"
+            else:
+                launch_params["isolation_id"] = base_isolation_id
         if normalized_work_key:
             launch_params["work_key"] = normalized_work_key
 

@@ -481,6 +481,47 @@ async def test_ensure_pc_agent_cdp_falls_back_to_active_api_when_no_local_agent(
 
 
 @pytest.mark.asyncio
+async def test_ensure_pc_agent_cdp_force_recreate_uses_fresh_isolation_profile(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    captured_kwargs = {}
+
+    async def fake_execute_routed_command(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "status": "success",
+            "lease": {"agent_id": "ceo-pc"},
+            "result": {
+                "result": {
+                    "port": 9555,
+                    "user_data_dir": "C:/AADS/chrome/yeoljeong-fresh",
+                    "websocket_debugger_url": "ws://127.0.0.1:9555/devtools/browser/test",
+                }
+            },
+        }
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        label="Yeoljeong Baemin",
+        url="https://self.baemin.com/",
+        work_key="yeoljeong-delivery-baemin-biz-junghwa-test",
+        force_recreate=True,
+    )
+
+    assert session.work_key == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["isolation_id"].startswith("yeoljeong-delivery-baemin-biz-junghwa-test-")
+    assert captured_kwargs["params"]["isolation_id"] != "yeoljeong-delivery-baemin-biz-junghwa-test"
+
+
+@pytest.mark.asyncio
 async def test_local_agent_context_does_not_require_server_playwright(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
