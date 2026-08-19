@@ -5136,9 +5136,15 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 elif (
                     collection_mode == "browser-automation"
                     and not can_use_browser_auth
-                    and (payload.get("require_pc_agent") or payload.get("requirePcAgent") or payload.get("force_pc_agent") or payload.get("forcePcAgent"))
+                    and _has_secret_value(account, "password")
+                    and not payload.get("allow_server_headless_fallback")
+                    and not payload.get("allowServerHeadlessFallback")
                 ):
                     label = _delivery_platform_label(service)
+                    if service == "ddangyo":
+                        message = "땡겨요는 숫자 캡챠 입력이 필요하므로 PC Agent 브라우저 세션이 연결되어야 자동로그인과 수집을 계속할 수 있습니다."
+                    else:
+                        message = f"{label} 자동수집은 PC Agent 전용 브라우저 세션 생성 후 실행해야 합니다."
                     result = {
                         "status": "credential_required",
                         "error_code": "PC_AGENT_SESSION_REQUIRED",
@@ -5148,7 +5154,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                             "browser_bridge_error": browser_auth.get("browser_bridge_error") or "",
                             "browser_auth_strategy": browser_auth.get("browser_auth_strategy") or "",
                         },
-                        "message": f"{label} 자동수집은 PC Agent 전용 브라우저 세션 생성 후 실행해야 합니다.",
+                        "message": message,
                     }
                 elif not _has_secret_value(account, "password") and not can_use_browser_auth:
                     label = _delivery_platform_label(service)

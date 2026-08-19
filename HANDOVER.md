@@ -7041,6 +7041,7 @@
   - `app/services/yeoljeong_finance_service.py` now treats `browser-automation` accounts as PC Agent-first even when saved passwords exist.
   - `preferPcAgent`, `forcePcAgent`, `requirePcAgent`, and snake_case equivalents are honored consistently.
   - Strict `require_pc_agent`/`force_pc_agent` requests now fail as `PC_AGENT_SESSION_REQUIRED` if a PC Agent work session cannot be created, instead of silently falling back to server headless collection.
+  - Follow-up hardening: all `browser-automation` accounts now stop as `PC_AGENT_SESSION_REQUIRED` when a PC Agent work session cannot be created, preventing misleading server-headless `PORTAL_BLOCKED` results for Baemin/Coupang Eats/Yogiyo.
   - Added regression coverage that ordinary saved-password accounts can still use server headless first, while `browser-automation` accounts create a service-specific PC Agent work session.
 - Verification:
   - `docker exec aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.

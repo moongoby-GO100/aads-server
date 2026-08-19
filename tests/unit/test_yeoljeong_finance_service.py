@@ -1602,7 +1602,7 @@ def test_sync_delivery_no_password_does_not_create_pc_agent_by_default(tmp_path,
     assert service._read("delivery_collection_status")[0]["error_code"] == "MISSING_CREDENTIALS"
 
 
-def test_sync_delivery_browser_automation_password_uses_server_headless_fallback_by_default(tmp_path, monkeypatch):
+def test_sync_delivery_browser_automation_password_requires_pc_agent_session(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_decrypt_secret", lambda value: "plain-secret")
     service._write(
@@ -1628,40 +1628,12 @@ def test_sync_delivery_browser_automation_password_uses_server_headless_fallback
         "storage_state_path": "",
         "browser_session_id": "",
         "browser_bridge_mode": "",
-        "browser_bridge_error": "pc unavailable",
-    })
+            "browser_bridge_error": "pc unavailable",
+        })
 
     from app.services import yeoljeong_delivery_collectors as collectors
 
-    def fake_collect(account, password, date_from, date_to):
-        assert account["service"] == "baemin"
-        assert password == "plain-secret"
-        assert date_from == "2026-08-01"
-        assert date_to == "2026-08-04"
-        return {
-            "status": "succeeded",
-            "error_code": "",
-            "records": {
-                "sales": [
-                    {
-                        "id": "baemin-headless-sale-1",
-                        "source_id": "sale-1",
-                        "business_id": "biz-junghwa",
-                        "branch": "중화점",
-                        "service": "baemin",
-                        "platform": "baemin",
-                        "record_type": "sales",
-                        "occurred_on": "2026-08-04",
-                        "gross_amount": 31000,
-                    }
-                ],
-                "settlements": [],
-                "reviews": [],
-            },
-            "diagnostics": {"auth_mode": "password_login"},
-        }
-
-    monkeypatch.setattr(collectors, "collect_account", fake_collect)
+    monkeypatch.setattr(collectors, "collect_account", lambda *args, **kwargs: pytest.fail("browser-automation must use PC Agent"))
 
     result = service.sync_delivery(
         {
@@ -1674,10 +1646,11 @@ def test_sync_delivery_browser_automation_password_uses_server_headless_fallback
         {"email": "owner@example.com", "is_admin": True},
     )
 
-    assert result["summary"][0]["status"] == "succeeded"
-    assert result["summary"][0]["error_code"] == ""
-    assert result["summary"][0]["counts"]["sales"] == 1
-    assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "password_login"
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "PC_AGENT_SESSION_REQUIRED"
+    status = service._read("delivery_collection_status")[0]
+    assert status["error_code"] == "PC_AGENT_SESSION_REQUIRED"
+    assert status["diagnostics"]["browser_bridge_error"] == "pc unavailable"
 
 
 def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):
