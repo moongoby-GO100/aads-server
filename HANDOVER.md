@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-08-19 14:57 KST - Yeoljeong delivery sync HTTP response detachment
+
+- Request: Continue making all Jungwha delivery channels auto-collect in the background, and fix the no-response behavior when the sync button is clicked.
+- Cause confirmed:
+  - `POST /api/v1/yeoljeong-finance/sync` with `background=true` queued rows, but FastAPI `BackgroundTasks` kept the long PC Agent collection attached to the same HTTP request lifecycle.
+  - A direct API run at 14:55 KST timed out after 20 seconds while server logs later showed the route finishing with HTTP 200, matching the UI symptom where the button appears to do nothing.
+- Changes:
+  - `app/api/yeoljeong_finance.py`: added `_start_delivery_sync_background()` to run delivery sync in a daemon thread after queueing.
+  - `app/api/yeoljeong_finance.py`: moved both account-save `auto_sync` and `/sync background=true` from FastAPI `BackgroundTasks.add_task()` to the detached background starter.
+  - `tests/unit/test_yeoljeong_finance_api.py`: updated the auto-sync test and added coverage proving `/sync background=true` returns the queued response without executing the long collector inline.
+- Verification:
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_api.py -k 'delivery_sync or auto_sync_enabled'` passed: 2 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'pc_agent_session or queue_delivery_sync or sync_delivery_updates_queued or upload_required_message or credential_required_message'` passed: 6 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` passed.
+- Status:
+  - This entry records the API detachment fix before commit/deploy.
+  - Existing unrelated dirty docs remain outside the request.
+
 ## 2026-08-19 14:57 KST - Yeoljeong delivery auto-sync status flush
 
 - Request: Make all delivery sales channels auto-collect through the available PC Agent/browser path.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from functools import partial
 from typing import Any
 
@@ -128,6 +129,16 @@ def _run_delivery_sync_background(payload: dict[str, Any], current_user: dict[st
         svc.sync_delivery(payload, current_user)
     except Exception as exc:
         logger.exception("yeoljeong_delivery_background_sync_failed: %s", exc)
+
+
+def _start_delivery_sync_background(payload: dict[str, Any], current_user: dict[str, Any]) -> None:
+    worker = threading.Thread(
+        target=_run_delivery_sync_background,
+        args=(dict(payload), dict(current_user)),
+        name=f"yeoljeong-delivery-sync-{str(payload.get('sync_job_id') or 'job')[:24]}",
+        daemon=True,
+    )
+    worker.start()
 
 
 class CsvImportPayload(BaseModel):
@@ -356,8 +367,7 @@ async def upsert_account(
             "branch": data.get("branch") or account.get("branch") or "열정국밥_미아점",
         }
         queued = await run_in_threadpool(svc.queue_delivery_sync, sync_payload, current_user)
-        background_tasks.add_task(
-            _run_delivery_sync_background,
+        _start_delivery_sync_background(
             {
                 **sync_payload,
                 "sync_job_id": queued.get("job_id") or "",
@@ -453,8 +463,7 @@ async def sync_delivery(
     data = payload.model_dump()
     if data.get("background"):
         queued = await run_in_threadpool(svc.queue_delivery_sync, data, current_user)
-        background_tasks.add_task(
-            _run_delivery_sync_background,
+        _start_delivery_sync_background(
             {
                 **data,
                 "background": False,

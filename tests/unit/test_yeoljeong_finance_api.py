@@ -270,12 +270,12 @@ async def test_account_upsert_queues_delivery_sync_when_auto_sync_enabled(monkey
         }
         return sync_result
 
-    def fake_background(payload, current_user):
-        background_payloads.append(payload)
+    def fake_start_background(payload, current_user):
+        background_payloads.append((payload, current_user))
 
     monkeypatch.setattr(api.svc, "upsert_account", fake_upsert_account)
     monkeypatch.setattr(api.svc, "queue_delivery_sync", fake_queue_delivery_sync)
-    monkeypatch.setattr(api, "_run_delivery_sync_background", fake_background)
+    monkeypatch.setattr(api, "_start_delivery_sync_background", fake_start_background)
 
     payload = api.AccountUpsertPayload(
         service="baemin",
@@ -291,16 +291,68 @@ async def test_account_upsert_queues_delivery_sync_when_auto_sync_enabled(monkey
     result = await api.upsert_account(payload, background_tasks, {"email": "owner@example.com", "is_admin": True})
 
     assert result == {"account": saved_account, "sync": sync_result}
-    assert len(background_tasks.tasks) == 1
-    await background_tasks()
-    assert background_payloads == [{
-        "services": ["baemin"],
-        "account_id": "acct-baemin",
-        "business_id": "biz-junghwa",
-        "branch": "중화점",
-        "sync_job_id": "delivery-sync-test",
-        "queued_run_ids": {"baemin": "run-baemin"},
-    }]
+    assert background_tasks.tasks == []
+    assert background_payloads == [(
+        {
+            "services": ["baemin"],
+            "account_id": "acct-baemin",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "sync_job_id": "delivery-sync-test",
+            "queued_run_ids": {"baemin": "run-baemin"},
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )]
+
+
+@pytest.mark.asyncio
+async def test_sync_delivery_background_returns_after_queueing(monkeypatch):
+    sync_result = {
+        "queued": True,
+        "job_id": "delivery-sync-test",
+        "queued_run_ids": {"baemin": "run-baemin", "yogiyo": "run-yogiyo"},
+        "summary": [{"service": "baemin", "status": "queued"}],
+    }
+    background_payloads = []
+
+    def fake_queue_delivery_sync(payload, current_user):
+        assert payload["background"] is True
+        assert payload["services"] == ["baemin", "yogiyo"]
+        return sync_result
+
+    def fake_start_background(payload, current_user):
+        background_payloads.append((payload, current_user))
+
+    monkeypatch.setattr(api.svc, "queue_delivery_sync", fake_queue_delivery_sync)
+    monkeypatch.setattr(api, "_start_delivery_sync_background", fake_start_background)
+
+    payload = api.SyncPayload(
+        services=["baemin", "yogiyo"],
+        business_id="biz-junghwa",
+        branch="중화점",
+        background=True,
+    )
+    background_tasks = BackgroundTasks()
+    result = await api.sync_delivery(payload, background_tasks, {"email": "owner@example.com", "is_admin": True})
+
+    assert result == sync_result
+    assert background_tasks.tasks == []
+    assert background_payloads == [(
+        {
+            "services": ["baemin", "yogiyo"],
+            "account_id": "",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "",
+            "date_to": "",
+            "browser_session_id": "",
+            "storage_state_path": "",
+            "background": False,
+            "sync_job_id": "delivery-sync-test",
+            "queued_run_ids": {"baemin": "run-baemin", "yogiyo": "run-yogiyo"},
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )]
 
 
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():
