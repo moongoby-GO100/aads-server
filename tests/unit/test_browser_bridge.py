@@ -435,6 +435,52 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_ensure_pc_agent_cdp_falls_back_to_active_api_when_no_local_agent(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    async def fake_local_execute(**_kwargs):
+        return {"status": "error", "error_code": "NO_CAPABLE_AGENT", "message": "no capable local agent"}
+
+    active_calls: list[dict] = []
+
+    async def fake_active_execute(**kwargs):
+        active_calls.append(kwargs)
+        return {
+            "status": "success",
+            "lease": {"agent_id": "ceo-pc"},
+            "result": {
+                "result": {
+                    "port": 9444,
+                    "user_data_dir": "C:/AADS/chrome/yeoljeong",
+                    "websocket_debugger_url": "ws://127.0.0.1:9444/devtools/browser/test",
+                }
+            },
+        }
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_local_execute)
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_active_execute)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        label="Yeoljeong Baemin",
+        url="https://self.baemin.com/",
+        work_key="yeoljeong-delivery-baemin-biz-junghwa-test",
+    )
+
+    assert active_calls
+    assert active_calls[0]["command_type"] == "browser_launch"
+    assert active_calls[0]["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
+    assert session.endpoint.metadata["agent_id"] == "ceo-pc"
+    assert session.endpoint.metadata["port"] == "9444"
+
+
+@pytest.mark.asyncio
 async def test_local_agent_context_does_not_require_server_playwright(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),

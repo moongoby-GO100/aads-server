@@ -3592,11 +3592,6 @@ def _delivery_browser_auth_for_account(
             auth["browser_work_key"] = work_key
     except Exception as exc:
         auth["browser_bridge_error"] = str(exc)[:300]
-    if not auth.get("browser_session_id") and ambient_browser_session_id:
-        auth["browser_session_id"] = ambient_browser_session_id
-        auth["browser_bridge_mode"] = str(auth.get("ambient_browser_bridge_mode") or "local_agent")
-        auth["browser_work_key"] = auth.get("browser_work_key") or _delivery_browser_work_key(service, business_id, branch)
-        auth["browser_bridge_fallback"] = "ambient_session"
     return auth
 
 

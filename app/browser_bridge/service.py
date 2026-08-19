@@ -502,7 +502,7 @@ class BrowserBridgeService:
             lease_ttl_seconds=120,
             command_timeout_seconds=90,
         )
-        if routed.get("status") != "success" and str(routed.get("error_code") or "") == "PC_AGENT_OFFLINE":
+        if routed.get("status") != "success" and str(routed.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
             active_routed = await self._execute_pc_agent_route_via_active_api(
                 command_type="browser_launch",
                 params=launch_params,
