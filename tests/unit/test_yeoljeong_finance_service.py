@@ -394,6 +394,72 @@ def test_sync_delivery_updates_queued_status_record(tmp_path, monkeypatch):
     assert len(statuses) == 1
 
 
+def test_sync_delivery_uses_service_label_for_upload_required_message(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-coupangeats-junghwa",
+                "service": "coupangeats",
+                "username": "owner",
+                "collection_mode": "portal-csv",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["coupangeats"],
+            "account_id": "acct-coupangeats-junghwa",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-19",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "upload_required"
+    assert "쿠팡이츠 포털 CSV/엑셀" in result["summary"][0]["message"]
+    assert "배민 포털" not in result["summary"][0]["message"]
+
+
+def test_sync_delivery_uses_service_label_for_credential_required_message(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-yogiyo-junghwa",
+                "service": "yogiyo",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["yogiyo"],
+            "account_id": "acct-yogiyo-junghwa",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-19",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "credential_required"
+    assert "요기요 계정 비밀번호" in result["summary"][0]["message"]
+    assert "배민 계정" not in result["summary"][0]["message"]
+
+
 def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")

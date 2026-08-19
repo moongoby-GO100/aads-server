@@ -2969,6 +2969,10 @@ def _delivery_requested_services(payload: dict[str, Any]) -> list[str]:
     return requested_services
 
 
+def _delivery_platform_label(service: str) -> str:
+    return PLATFORM_LABELS.get(service, service or "배달플랫폼")
+
+
 def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
@@ -2988,7 +2992,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     for service in requested_services:
         run_id = str(uuid4())
         queued_run_ids[service] = run_id
-        message = f"{PLATFORM_LABELS.get(service, service)} 백그라운드 수집 대기 중입니다."
+        message = f"{_delivery_platform_label(service)} 백그라운드 수집 대기 중입니다."
         statuses.insert(
             0,
             {
@@ -3518,19 +3522,21 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             if bridge_result is not None:
                 result = bridge_result
             elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
+                label = _delivery_platform_label(service)
                 result = {
                     "status": "upload_required",
                     "error_code": "CSV_UPLOAD_REQUIRED",
                     "records": {},
                     "diagnostics": {"collection_mode": collection_mode},
-                    "message": "배민 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
+                    "message": f"{label} 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
                 }
             elif not _has_secret_value(account, "password") and not can_use_stored_browser_session:
+                label = _delivery_platform_label(service)
                 result = {
                     "status": "credential_required",
                     "error_code": "CREDENTIAL_REQUIRED",
                     "records": {},
-                    "message": "배민 계정 비밀번호가 등록되지 않았습니다.",
+                    "message": f"{label} 계정 비밀번호가 등록되지 않았습니다.",
                 }
             else:
                 secret = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
