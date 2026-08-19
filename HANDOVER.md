@@ -7198,11 +7198,13 @@
 - Changes:
   - `scripts/yeoljeong_auto_collect.py` now treats wrong portal/session-not-found/PC Agent collector timeout as session-recreate errors.
   - The until-complete loop dynamically sets `force_recreate_portal_sessions=true` on the next attempt after those errors, so the next cycle recreates portal-specific Browser Bridge work sessions instead of reusing the wrong session.
+  - The loop also inspects the latest collection status on startup; if a previous run ended with a session-recreate error, the first attempt after worker restart now force-recreates portal sessions immediately.
   - Added a regression test proving the second loop attempt force-recreates sessions after `PC_AGENT_WRONG_PORTAL_SESSION`.
 - Verification:
   - `python3 -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/browser_bridge/service.py` succeeded.
   - Host `python3 -m pytest tests/unit/test_yeoljeong_auto_collect.py` could not run because host pytest is not installed.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py` succeeded: 5 passed.
   - `docker exec yeoljeong-finance-worker python -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/browser_bridge/service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py` succeeded against the live source tree: 8 passed.
 - Remaining:
   - Commit/push selected files, restart only `yeoljeong-finance-worker`, and inspect the next live loop output.

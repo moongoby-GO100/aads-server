@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.services.yeoljeong_finance_service import queue_delivery_sync, sync_delivery  # noqa: E402
+from app.services.yeoljeong_finance_service import list_collection_status, queue_delivery_sync, sync_delivery  # noqa: E402
 
 
 KST = timezone(timedelta(hours=9))
@@ -170,6 +170,41 @@ def _should_force_recreate_portal_sessions(state: dict[str, Any]) -> bool:
     return bool(codes & SESSION_RECREATE_ERROR_CODES)
 
 
+def _initial_force_recreate_portal_sessions(payload: dict[str, Any], user: dict[str, Any]) -> bool:
+    if payload.get("force_recreate_portal_sessions"):
+        return True
+    try:
+        rows = list_collection_status(user, None)
+    except Exception:
+        return False
+
+    requested_services = {
+        str(service or "").strip()
+        for service in (payload.get("services") if isinstance(payload.get("services"), list) else DEFAULT_SERVICES)
+        if str(service or "").strip()
+    }
+    business_id = str(payload.get("business_id") or "").strip()
+    branch = str(payload.get("branch") or "").strip()
+    all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"} or branch == "전체"
+    latest_by_scope: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        service = str(row.get("service") or "").strip()
+        row_business_id = str(row.get("business_id") or "").strip()
+        row_branch = str(row.get("branch") or "").strip()
+        if requested_services and service not in requested_services:
+            continue
+        if not all_businesses:
+            if business_id and row_business_id != business_id:
+                continue
+            if branch and row_branch != branch:
+                continue
+        key = (service, row_business_id, row_branch)
+        latest_by_scope.setdefault(key, row)
+
+    state = _completion_state({"summary": list(latest_by_scope.values())})
+    return _should_force_recreate_portal_sessions(state)
+
+
 def _sleep(seconds: int) -> None:
     if seconds > 0:
         time.sleep(seconds)
@@ -233,7 +268,7 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
     success_sleep_seconds = max(1, int(args.success_sleep_seconds or retry_seconds))
     attempt_timeout_seconds = max(0, int(args.attempt_timeout_seconds or 0))
     attempt = 0
-    force_recreate_next = bool(base_payload.get("force_recreate_portal_sessions"))
+    force_recreate_next = _initial_force_recreate_portal_sessions(base_payload, user)
 
     while True:
         attempt += 1

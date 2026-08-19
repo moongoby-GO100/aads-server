@@ -106,6 +106,7 @@ def test_until_complete_retries_until_imported_rows(monkeypatch):
     monkeypatch.setattr(auto_collect, "_payload", lambda args: {"business_id": "all"})
     monkeypatch.setattr(auto_collect, "_run_sync", fake_run_sync)
     monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
 
     args = SimpleNamespace(
         max_attempts=3,
@@ -161,6 +162,7 @@ def test_until_complete_force_recreates_after_wrong_portal_session(monkeypatch):
     )
     monkeypatch.setattr(auto_collect, "_run_sync", fake_run_sync)
     monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
 
     args = SimpleNamespace(
         max_attempts=3,
@@ -175,6 +177,66 @@ def test_until_complete_force_recreates_after_wrong_portal_session(monkeypatch):
     assert calls[0]["force_recreate_portal_sessions"] is False
     assert calls[1]["force_recreate_portal_sessions"] is True
     assert sleeps == [7]
+
+
+def test_until_complete_force_recreates_on_first_attempt_from_existing_status(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "_payload",
+        lambda args: {
+            "services": ["ddangyo"],
+            "business_id": "all",
+            "branch": "전체",
+            "all_businesses": True,
+            "force_recreate_portal_sessions": False,
+        },
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "list_collection_status",
+        lambda user, business_id=None: [
+            {
+                "service": "ddangyo",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "status": "action_required",
+                "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_sync",
+        lambda payload, user, *, queue_only=False: (
+            calls.append(dict(payload))
+            or {
+                "summary": [
+                    {
+                        "service": "ddangyo",
+                        "status": "succeeded",
+                        "error_code": "",
+                        "counts": {"sales": 1, "settlements": 0, "reviews": 0},
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: None)
+
+    args = SimpleNamespace(
+        max_attempts=1,
+        retry_seconds=7,
+        blocked_retry_seconds=19,
+        success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
+        repeat_after_complete=False,
+    )
+
+    assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 0
+    assert calls[0]["force_recreate_portal_sessions"] is True
 
 
 def test_until_complete_uses_blocked_retry_interval(monkeypatch):
@@ -196,6 +258,7 @@ def test_until_complete_uses_blocked_retry_interval(monkeypatch):
         },
     )
     monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
 
     args = SimpleNamespace(
         max_attempts=2,
