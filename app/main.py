@@ -1176,12 +1176,23 @@ async def lifespan(app: FastAPI):
     _execution_resume_started_at = _resume_datetime.now(_resume_timezone.utc)
 
     def _is_execution_resume_owner() -> bool:
+        owner, _source = _resolve_execution_resume_owner()
+        return owner
+
+    def _resolve_execution_resume_owner() -> tuple[bool, str]:
         """Only the currently published API container should claim DB resume jobs.
 
         Blue/green backup instances are healthy and can serve failover traffic, but
         if they claim background stream recovery while nginx still points clients at
         the active slot, the chat UI sees a DB-running stream owned by another
         process. The active container marker is updated by deploy.sh.
+
+        Priority:
+          1. /tmp/aads_execution_resume_owner file, written by deploy.sh or startup self-heal
+          2. .active_container file comparison, with AADS_EXECUTION_RESUME_FORCE_OWNER override
+          3. .active_port file comparison as a legacy fallback
+          4. AADS_ENABLE_EXECUTION_RESUME_SCANNER env override
+          5. True, preserving the single-container default
         """
         expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
         expected_port = os.getenv("AADS_PUBLIC_PORT", "").strip()
@@ -1194,7 +1205,7 @@ async def lifespan(app: FastAPI):
             with open(owner_flag_file, "r", encoding="utf-8") as fh:
                 owner_flag = fh.read().strip().lower()
             if owner_flag:
-                return owner_flag in {"1", "true", "yes", "on", "active"}
+                return owner_flag in {"1", "true", "yes", "on", "active"}, "marker"
         except Exception:
             pass
 
@@ -1203,7 +1214,12 @@ async def lifespan(app: FastAPI):
                 with open(active_container_file, "r", encoding="utf-8") as fh:
                     active_container = fh.read().strip()
                 if active_container:
-                    return active_container == expected_container
+                    if active_container == expected_container:
+                        return True, "active_file"
+                    force_owner = os.getenv("AADS_EXECUTION_RESUME_FORCE_OWNER", "").strip().lower()
+                    if force_owner in {"1", "true", "yes", "on"}:
+                        return True, "env_force"
+                    return False, "active_file"
             except Exception:
                 pass
 
@@ -1212,15 +1228,51 @@ async def lifespan(app: FastAPI):
                 with open(active_port_file, "r", encoding="utf-8") as fh:
                     active_port = fh.read().strip()
                 if active_port:
-                    return active_port == expected_port
+                    return active_port == expected_port, "active_port"
             except Exception:
                 pass
 
         override = os.getenv("AADS_ENABLE_EXECUTION_RESUME_SCANNER")
         if override is not None:
-            return override.lower() in {"1", "true", "yes", "on"}
+            return override.lower() in {"1", "true", "yes", "on"}, "env_override"
 
-        return True
+        return True, "default"
+
+    def _selfheal_execution_resume_owner_marker() -> None:
+        """Write the resume owner marker at startup only when it is missing."""
+        owner_flag_file = os.getenv("AADS_RESUME_OWNER_FILE", "/tmp/aads_execution_resume_owner")
+        active_container_file = os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container")
+        expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
+        marker_written = False
+
+        try:
+            if not os.path.exists(owner_flag_file):
+                is_owner = True
+                source = "default"
+                if expected_container:
+                    try:
+                        with open(active_container_file, "r", encoding="utf-8") as fh:
+                            active_container = fh.read().strip()
+                        if active_container:
+                            is_owner = active_container == expected_container
+                            source = "active_file"
+                    except Exception:
+                        source = "default"
+
+                with open(owner_flag_file, "w", encoding="utf-8") as fh:
+                    fh.write("true" if is_owner else "false")
+                marker_written = True
+
+            owner, source = _resolve_execution_resume_owner()
+            logger.info(
+                "execution_resume_owner_resolved",
+                owner=owner,
+                source=source,
+                container=expected_container or "(unset)",
+                marker_written=marker_written,
+            )
+        except Exception as exc:
+            logger.warning(f"execution_resume_owner_selfheal_failed: {exc}")
 
     async def _resume_pending_executions_once(
         max_rows: int = 5,
@@ -1589,6 +1641,7 @@ async def lifespan(app: FastAPI):
             except Exception as _e:
                 logger.warning(f"execution_resume_scanner_error: {_e}")
 
+    _selfheal_execution_resume_owner_marker()
     _startup_asyncio.create_task(_resume_pending_executions_startup())
     _startup_asyncio.create_task(_periodic_execution_resume_scanner())
 

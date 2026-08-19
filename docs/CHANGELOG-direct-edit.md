@@ -5043,3 +5043,16 @@ fro
 
 ## [2026-08-19 18:33:09 KST] [aads-server] .active_port
 - Chat-Direct 수정: write: .active_port
+
+## [2026-08-19 20:05:00 KST] [aads-server] app/services/media_generation_service.py
+- Genspark UI fallback: 프롬프트 입력 후 생성 화면의 보조 `제출` 버튼을 JS click으로 처리하도록 보강.
+- Genspark UI fallback: 단계 timeout 상한을 확장해 로그인된 Browser Bridge 세션의 느린 UI 전환을 retryable error로 회수.
+
+## [2026-08-19 20:03:48 KST] [aads-server] tests/unit/test_media_generation_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cat /tmp/aads_execution_resume_owner
+
+## [2026-08-19 20:17:26 KST] [aads-server] app/main.py
+- Pipeline Runner 실패 복구: `runner-a0462807` deploy preflight dirty workdir 차단 원인 진단 후 resume owner marker startup self-heal 직접 반영.
+
+## [2026-08-19 20:17:26 KST] [aads-server] HANDOVER.md
+- Runner preflight 복구 내역, 검증 결과, commit/push 필요 조건 기록.

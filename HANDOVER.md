@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-19 20:17 KST - Runner deploy preflight dirty workdir recovery
+
+- Request: Diagnose and remediate Pipeline Runner `runner-a0462807` failure `deploy_preflight_git_state`.
+- Confirmed:
+  - Runner status was `error`; result output was `배포 차단: main workdir은 clean/latest여야 함 (dirty=2, behind=0, ahead=0)`.
+  - Current main workdir had 5 dirty files at diagnosis: `app/main.py`, `app/services/media_generation_service.py`, `tests/unit/test_media_generation_service.py`, `docs/CHANGELOG-direct-edit.md`, `docs/CHANGELOG-go100-direct.md`.
+  - Runner intended diff for `app/main.py` was present in the main workdir but uncommitted, so deploy preflight could not proceed.
+- Changes:
+  - `app/main.py`: added resume owner resolution source tracking, startup-only `/tmp/aads_execution_resume_owner` self-heal when marker is missing, and `execution_resume_owner_resolved` startup logging.
+  - `docs/CHANGELOG-go100-direct.md`: removed trailing whitespace that blocked `git diff --check`.
+  - Preserved pre-existing Genspark UI fallback changes in `app/services/media_generation_service.py` and `tests/unit/test_media_generation_service.py` so worktree cleanup does not discard prior work.
+- Verification:
+  - `python3 -m py_compile app/main.py app/services/media_generation_service.py` passed.
+  - `docker exec aads-server python3 -m py_compile /app/app/main.py /app/app/services/media_generation_service.py` passed.
+  - `docker exec aads-server python3 -m pytest -q /app/tests/unit/test_media_generation_service.py` passed: 19 passed, 27 warnings.
+  - `git diff --check` passed.
+- Remaining:
+  - Commit and push are required after this entry because Pipeline deploy preflight requires `clean/latest`; a local commit without push would leave `ahead=1`.
+
 ## 2026-08-19 19:51 KST - Completion toast one-shot fallback hotfix
 
 - Request: Re-review approval-waiting Runner `runner-4d9f73a6` for repeated "응답이 완료되었습니다" toast handling and process it immediately.

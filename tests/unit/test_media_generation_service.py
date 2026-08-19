@@ -411,6 +411,41 @@ async def test_process_genspark_ui_job_keeps_auth_gate_retryable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_submit_prompt_to_genspark_clicks_secondary_submit_button():
+    class _FakeKeyboard:
+        def __init__(self):
+            self.keys: list[str] = []
+
+        async def press(self, key):
+            self.keys.append(key)
+
+    class _FakePage:
+        def __init__(self):
+            self.keyboard = _FakeKeyboard()
+            self.evaluated: list[tuple[str, tuple]] = []
+            self.waits: list[int] = []
+
+        async def evaluate(self, script, *args):
+            self.evaluated.append((script, args))
+            if args:
+                return {"ok": True, "selector": '[data-aads-genspark-prompt="1"]'}
+            return True
+
+        async def wait_for_timeout(self, timeout):
+            self.waits.append(timeout)
+
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(_Conn()))
+    page = _FakePage()
+
+    result = await svc._submit_prompt_to_genspark(page, "make a clean product image")
+
+    assert result["ok"] is True
+    assert page.keyboard.keys == ["Enter"]
+    assert page.waits == [1000]
+    assert any("button.submit-btn" in script for script, _ in page.evaluated)
+
+
+@pytest.mark.asyncio
 async def test_process_genspark_ui_job_saves_data_uri_result(monkeypatch, tmp_path: Path):
     class _FakeLocator:
         @property

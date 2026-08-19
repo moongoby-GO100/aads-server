@@ -962,6 +962,26 @@ class MediaGenerationService:
                 )
             except Exception as exc:
                 return {"ok": False, "error": f"PROMPT_SUBMIT_FAILED: {exc}"}
+        try:
+            if hasattr(page, "wait_for_timeout"):
+                await page.wait_for_timeout(1000)
+            await page.evaluate(
+                """() => {
+                  const visible = (el) => {
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+                  };
+                  const buttons = [...document.querySelectorAll('button.submit-btn, button')]
+                    .filter((el) => visible(el) && /제출|Submit|Generate|생성/.test(el.textContent || ''));
+                  const button = buttons.find((el) => el.matches('button.submit-btn')) || buttons[0];
+                  if (!button) return false;
+                  button.click();
+                  return true;
+                }"""
+            )
+        except Exception:
+            pass
         return {"ok": True, "selector": selector}
 
     async def _extract_genspark_media_candidate(self, page: Any) -> dict[str, Any]:
@@ -1063,7 +1083,7 @@ class MediaGenerationService:
         url = str(target_url or automation.get("target_url") or "https://www.genspark.ai/").strip()
         job_kind = str(job.get("kind") or "image")
         effective_timeout = max(30, int(timeout_seconds or 240))
-        step_timeout = max(5.0, min(45.0, float(os.getenv("AADS_GENSPARK_UI_STEP_TIMEOUT_SECONDS", "25"))))
+        step_timeout = max(5.0, min(90.0, float(os.getenv("AADS_GENSPARK_UI_STEP_TIMEOUT_SECONDS", "90"))))
         deadline = time.monotonic() + effective_timeout
 
         def remaining_timeout() -> float:
@@ -1188,6 +1208,27 @@ class MediaGenerationService:
             )
             public = _public_job(updated)
             public.update({"automation_state": "succeeded", "result_path": saved["path"]})
+            return public
+        except asyncio.CancelledError as exc:
+            message = str(exc) or "GENSPARK_PROCESS_CANCELLED"
+            updated = await self.update_job_status(
+                str(job["job_id"]),
+                "queued",
+                result_metadata={
+                    **metadata,
+                    "ui_automation": {
+                        **automation,
+                        "state": "retryable_error",
+                        "browser_session_id": session_id or None,
+                        "work_key": work_key,
+                        "target_url": url,
+                        "last_error": message,
+                    },
+                },
+                error_message=message,
+            )
+            public = _public_job(updated)
+            public.update({"automation_state": "retryable_error", "error": message})
             return public
         except Exception as exc:
             updated = await self.update_job_status(

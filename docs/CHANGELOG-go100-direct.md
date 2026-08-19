@@ -22273,3 +22273,38 @@ im
 ## [2026-08-19 19:07:12 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 2026-08-19 KST — GO100 #119 현금 출처 분리 →## 2026-08-19 19:05 KST — 잔여 미커밋 항목 일괄 반
 - finalize: pending
+
+## [2026-08-19 20:05:12 KST] [GO100] backend/app/services/data/program_trades_collector.py
+- Chat-Direct 수정: patch: def _get_kiwoom_client():
+    from backe→_CLIENT_CACHE: Dict[str, Any] = {}
+
+
+def
+- finalize: pending
+
+## [2026-08-19 20:05:23 KST] [GO100] backend/app/services/data/program_trades_collector.py
+- Chat-Direct 수정: patch:     for stock_code in codes:
+        try→    commit_every = int(os.environ.get("P
+- finalize: pending
+
+## [2026-08-19 20:06:19 KST] [GO100] backend/app/services/data/program_trades_collector.py
+- Chat-Direct 수정: patch:         except Exception as e:
+         →        except Exception as e:
+
+- finalize: pending
+
+## [2026-08-19 20:07:12 KST] [GO100] scripts/cron/collect_program_trades.sh
+- Chat-Direct 수정: patch:   timeout --kill-after=15s 300s \→  timeout --kill-after=30s 3600s \
+- finalize: pending
+
+## [2026-08-19 20:10:53 KST] [GO100] scripts/cron/go100_daily_stats_collectors.cron
+- Chat-Direct 수정: write: scripts/cron/go100_daily_stats_collectors.cron
+- finalize: pending
+
+## [2026-08-19 20:14:37 KST] [GO100] backend/app/services/go100/monitoring/data_auto_healer.py
+- Chat-Direct 수정: patch:         if latest_vk and latest_vk < las→        # GO100-DATA-P1(2026-08-19): 공공데
+- finalize: pending
+
+## [2026-08-19 20:16:11 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-08-19 19:05 KST — 잔여 미커밋 항목 일괄 반→## 2026-08-19 20:15 KST — 데이터 신선도 P0 복구
+- finalize: pending
