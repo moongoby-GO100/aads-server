@@ -134,7 +134,7 @@ def _first(row: dict[str, Any], terms: tuple[str, ...]) -> str:
 
 def _source_id(service: str, kind: str, row: dict[str, Any]) -> str:
     explicit = _first(row, ("주문번호", "정산번호", "리뷰번호", "order id", "id"))
-    material = explicit or "|".join(f"{_clean(k)}={_clean(v)}" for k, v in sorted(row.items()))
+    material = explicit or "|".join(f"{_clean(k)}={_clean(v)}" for k, v in sorted(row.items(), key=lambda item: str(item[0])))
     return hashlib.sha256(f"{service}|{kind}|{material}".encode("utf-8")).hexdigest()[:32]
 
 

@@ -267,3 +267,12 @@
 - 직접 보강: `aads-dashboard/src/app/chat/page.tsx`의 runner 판별에 `pipeline_runner`, `runner_notification` intent를 추가해 메인 대화 버블이 아니라 로그 레인 대상으로 분리한다.
 - 기존 정책 유지: `runner_response`는 2026-05-04 결정에 따라 저장된 검수/상태 보고가 보이도록 숨김 대상에 넣지 않는다.
 - 검증: `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` 성공, `npm run build` 성공. 배포/푸시는 별도 상태 확인 필요.
+
+## 2026-08-19 11:52 KST - 열정국밥 중화점 배민 PC Agent 자동수집 반영
+- 요청: 연동설정에 저장된 중화점 판매채널 계정으로 즉시 수집을 실행하고 정상 수집되게 조치.
+- 조치: `app/services/yeoljeong_finance_service.py`에서 배민 PC Agent 로그인 세션 홈 대시보드의 주문금액, 입금예정금액, 리뷰 스니펫을 원장 레코드로 반영하도록 보강했다.
+- 조치: `app/services/yeoljeong_delivery_collectors.py`에서 포털 HTML 파싱 중 `None` 컬럼 키가 섞여도 source id 생성이 실패하지 않게 수정했다.
+- 조치: 쿠팡이츠 등 비배민 포털 보안 차단 시 배민 메시지로 표시되던 상태 메시지를 서비스명 기준으로 보정했다.
+- 실측 결과: PC Agent 배민 세션 로그인 후 중화점 배민 수집 성공, 응답 기준 매출 1건/정산 1건/리뷰 288건 수집. 원장 병합 후 중화점 배민 원장에는 매출 3건, 정산 1건, 리뷰 167건이 존재한다.
+- 남은 이슈: 쿠팡이츠는 포털 보안 차단, 땡겨요는 추가 인증 요구, 요기요는 인증 후 조회기간 내 0건 상태다. 각 포털별 PC 로그인 세션 또는 인증 처리가 필요하다.
+- 검증: `pytest tests/unit/test_yeoljeong_finance_service.py::test_baemin_dashboard_records_extracts_home_summary tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_uses_baemin_pc_agent_session_without_password tests/unit/test_yeoljeong_delivery_collectors.py::test_normalize_record_tolerates_none_header_key -q` 컨테이너 기준 3 passed.

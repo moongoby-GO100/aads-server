@@ -173,6 +173,19 @@ def test_parse_baemin_pc_html_table_settlements():
     assert record["settlement_amount"] == 72300
 
 
+def test_normalize_record_tolerates_none_header_key():
+    record = collectors.normalize_record(
+        "baemin",
+        "sales",
+        {None: "extra", "주문일": "2026.08.19", "주문금액": "17,000원"},
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert record["gross_amount"] == 17000
+    assert record["occurred_on"] == "2026-08-19"
+
+
 def test_parse_baemin_pc_copied_review_table():
     copied = "작성일\t평점\t리뷰내용\t답글상태\n2026-08-02\t5\t냉면이 맛있어요\t미답변\n"
 

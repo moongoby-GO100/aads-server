@@ -3324,6 +3324,91 @@ def _baemin_bridge_page_kind(text: str) -> str:
     return "sales"
 
 
+def _money_from_text(value: str) -> int:
+    digits = re.sub(r"[^0-9]", "", str(value or ""))
+    return int(digits or 0)
+
+
+def _baemin_dashboard_records(text: str, business_id: str, branch: str) -> dict[str, list[dict[str, Any]]]:
+    """Capture summary data visible on the authenticated Baemin home dashboard."""
+    compact = re.sub(r"\r\n?", "\n", str(text or ""))
+    compact = "\n".join(line.strip() for line in compact.splitlines() if line.strip())
+    today = datetime.now(KST).date()
+    yesterday = today - timedelta(days=1)
+    collected_at = _now()
+    records: dict[str, list[dict[str, Any]]] = {"sales": [], "settlements": [], "reviews": []}
+
+    sales_match = re.search(r"어제\s*주문금액\s*([0-9,]+)\s*원.*?어제\s*주문수\s*([0-9,]+)\s*건", compact, re.S)
+    if sales_match:
+        amount = _money_from_text(sales_match.group(1))
+        order_count = _money_from_text(sales_match.group(2))
+        source_id = f"baemin-dashboard-sales-{yesterday.isoformat()}"
+        records["sales"].append(
+            {
+                "id": hashlib.sha256(f"{business_id}|{branch}|{source_id}".encode("utf-8")).hexdigest(),
+                "source_id": source_id,
+                "business_id": business_id,
+                "branch": branch,
+                "service": "baemin",
+                "platform": "baemin",
+                "record_type": "sales",
+                "occurred_on": yesterday.isoformat(),
+                "gross_amount": amount,
+                "order_count": order_count,
+                "order_status": "dashboard_summary",
+                "collected_at": collected_at,
+            }
+        )
+
+    settlement_match = re.search(r"입금\s*예정\s*금액\s*([0-9,]+)\s*원", compact)
+    if settlement_match:
+        amount = _money_from_text(settlement_match.group(1))
+        source_id = f"baemin-dashboard-settlement-{today.isoformat()}"
+        records["settlements"].append(
+            {
+                "id": hashlib.sha256(f"{business_id}|{branch}|{source_id}".encode("utf-8")).hexdigest(),
+                "source_id": source_id,
+                "settlement_id": source_id,
+                "business_id": business_id,
+                "branch": branch,
+                "service": "baemin",
+                "platform": "baemin",
+                "record_type": "settlements",
+                "occurred_on": today.isoformat(),
+                "settlement_amount": amount,
+                "settlement_status": "입금예정",
+                "collected_at": collected_at,
+            }
+        )
+
+    review_matches = re.finditer(r"(오늘|어제)\n(.{8,800}?)\n열정국밥\s+중랑구중화점", compact, re.S)
+    for index, match in enumerate(review_matches, start=1):
+        review_text = re.sub(r"\s+", " ", match.group(2)).strip()
+        if not review_text or review_text == "열정국밥 중랑구중화점":
+            continue
+        occurred_on = today if match.group(1) == "오늘" else yesterday
+        source_material = f"baemin-dashboard-review-{occurred_on.isoformat()}-{index}-{review_text[:80]}"
+        source_id = hashlib.sha256(source_material.encode("utf-8")).hexdigest()[:32]
+        records["reviews"].append(
+            {
+                "id": hashlib.sha256(f"{business_id}|{branch}|baemin|reviews|{source_id}".encode("utf-8")).hexdigest(),
+                "source_id": source_id,
+                "review_id": source_id,
+                "business_id": business_id,
+                "branch": branch,
+                "service": "baemin",
+                "platform": "baemin",
+                "record_type": "reviews",
+                "occurred_on": occurred_on.isoformat(),
+                "rating": 0,
+                "review_text": review_text[:4000],
+                "reply_status": "",
+                "collected_at": collected_at,
+            }
+        )
+    return records
+
+
 async def _collect_baemin_from_browser_bridge_session_async(
     account: dict[str, Any],
     browser_auth: dict[str, str],
@@ -3370,6 +3455,11 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "message": "PC Agent 브라우저가 배민 로그인 화면입니다. 먼저 해당 브라우저에서 배민 관리자 로그인이 필요합니다.",
             }
         source = html or text
+        dashboard_records = _baemin_dashboard_records(
+            text,
+            str(account.get("business_id") or ""),
+            str(account.get("branch") or ""),
+        )
         kind = _baemin_bridge_page_kind(text)
         parsed = parse_portal_export(
             "baemin",
@@ -3379,9 +3469,13 @@ async def _collect_baemin_from_browser_bridge_session_async(
             str(account.get("branch") or ""),
         )
         records = {name: [] for name in ("sales", "settlements", "reviews")}
-        records.update(parsed.get("records") or {})
-        status = str(parsed.get("status") or "partial")
-        error_code = str(parsed.get("error_code") or "")
+        records.update({name: rows for name, rows in dashboard_records.items() if rows})
+        for name, rows in (parsed.get("records") or {}).items():
+            if rows:
+                records[name] = rows
+        total_records = sum(len(rows) for rows in records.values())
+        status = "succeeded" if total_records else str(parsed.get("status") or "partial")
+        error_code = "" if total_records else str(parsed.get("error_code") or "")
         diagnostics = dict(parsed.get("diagnostics") or {})
         diagnostics.update(
             {
@@ -3390,6 +3484,9 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
                 "parsed_page_kind": kind,
+                "dashboard_sales": str(len(dashboard_records["sales"])),
+                "dashboard_settlements": str(len(dashboard_records["settlements"])),
+                "dashboard_reviews": str(len(dashboard_records["reviews"])),
             }
         )
         return {
@@ -3422,6 +3519,15 @@ def _collect_baemin_from_browser_bridge_session(
     if not str(browser_auth.get("browser_session_id") or "").strip():
         return None
     return _run_async(_collect_baemin_from_browser_bridge_session_async(account, browser_auth))
+
+
+def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) -> dict[str, Any]:
+    if service != "baemin" and str(result.get("error_code") or "") == "BAEMIN_SECURITY_BLOCKED":
+        label = _delivery_platform_label(service)
+        result = {**result}
+        result["error_code"] = f"{service.upper()}_SECURITY_BLOCKED"
+        result["message"] = f"{label} 포털이 서버 자동접속을 보안 정책으로 차단했습니다. PC 인증 세션 또는 정산 CSV 업로드가 필요합니다."
+    return result
 
 
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -3545,6 +3651,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                     result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]
                 if service == "baemin" and browser_auth["browser_bridge_mode"]:
                     result.setdefault("diagnostics", {})["browser_bridge_mode"] = browser_auth["browser_bridge_mode"]
+            result = _normalize_delivery_collection_result(service, result)
 
         counts = {"sales": 0, "settlements": 0, "reviews": 0}
         for kind, ledger_name in ledger_names.items():

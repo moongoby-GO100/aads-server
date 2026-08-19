@@ -1127,6 +1127,35 @@ def test_sync_delivery_uses_baemin_pc_agent_session_without_password(tmp_path, m
     assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
 
 
+def test_baemin_dashboard_records_extracts_home_summary(monkeypatch):
+    class FixedDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            from datetime import datetime
+
+            return datetime(2026, 8, 19, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(service, "datetime", FixedDateTime)
+    text = """
+    입금 예정 금액
+    6,779,643원
+    어제 주문금액
+    1,719,000원
+    어제 주문수
+    78건
+    오늘
+    첫주문인데 음식은 대체적으로 맛있게먹었습니다
+    열정국밥 중랑구중화점
+    """
+
+    records = service._baemin_dashboard_records(text, "biz-junghwa", "중화점")
+
+    assert records["sales"][0]["gross_amount"] == 1719000
+    assert records["sales"][0]["order_count"] == 78
+    assert records["settlements"][0]["settlement_amount"] == 6779643
+    assert records["reviews"][0]["review_text"].startswith("첫주문인데")
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (
