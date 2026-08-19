@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-19 14:57 KST - Yeoljeong delivery auto-sync status flush
+
+- Request: Make all delivery sales channels auto-collect through the available PC Agent/browser path.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: added a delivery collection status writer that persists the current run row directly after queue/running/finished/import updates, preventing DB status from staying `queued` when the JSON ledger has already completed.
+- Operations:
+  - PC Agent work session prepared: `bb-8824c468e79f`, agent `2e9379a1-fed`.
+  - Submitted Jungwha delivery sync job `delivery-sync-b391fe685297` for Baemin, Coupang Eats, Yogiyo, and Ddangyo covering `2026-08-01` to `2026-08-19`.
+  - Backfilled the same job's PostgreSQL status rows from the completed JSON ledger.
+- Result:
+  - Baemin: `portal_action_required`, `BAEMIN_SECURITY_BLOCKED`.
+  - Coupang Eats: `portal_action_required`, `COUPANGEATS_SECURITY_BLOCKED`.
+  - Yogiyo: `partial`, `AUTHENTICATED_NO_ROWS`.
+  - Ddangyo: `partial`, `AUTHENTICATED_NO_ROWS`.
+  - Existing Jungwha DB data still contains Yogiyo rows: sales 103, settlements 85, reviews 85.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py` passed.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=sqlite:///tmp/test.db -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server -m pytest tests/unit/test_yeoljeong_finance_service.py -q` passed: 69 passed.
+
 ## 2026-08-19 12:12 KST - Canonical server naming and dashboard deploy follow-up
 
 - Request: Standardize server names as `contabo116`, `contabo14`, `cafe24_114`; proceed immediately and defer disk cleanup.

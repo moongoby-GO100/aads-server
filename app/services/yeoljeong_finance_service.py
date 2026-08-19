@@ -2973,6 +2973,12 @@ def _delivery_platform_label(service: str) -> str:
     return PLATFORM_LABELS.get(service, service or "배달플랫폼")
 
 
+def _write_delivery_collection_statuses(rows: list[dict[str, Any]], current: dict[str, Any] | None = None) -> None:
+    _write("delivery_collection_status", rows)
+    if current and current.get("id"):
+        _run_db(_db_upsert_ledger("delivery_collection_status", current))
+
+
 def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
@@ -3027,7 +3033,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             }
         )
 
-    _write("delivery_collection_status", statuses)
+    _write_delivery_collection_statuses(statuses)
     return {
         "queued": True,
         "job_id": job_id,
@@ -4158,7 +4164,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             status_record = queued_status
         else:
             statuses.insert(0, status_record)
-        _write("delivery_collection_status", statuses)
+        _write_delivery_collection_statuses(statuses, status_record)
         if not account:
             result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
         else:
@@ -4228,7 +4234,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 "updated_at": finished_at,
             }
         )
-        _write("delivery_collection_status", statuses)
+        _write_delivery_collection_statuses(statuses, status_record)
         if account:
             account["last_sync_status"] = status_record["status"]
             account["portal_status"] = status_record["status"]
@@ -4253,7 +4259,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     for name, rows in ledgers.items():
         _write(name, rows)
     _write("platform_accounts", all_accounts)
-    _write("delivery_collection_status", statuses)
+    _write_delivery_collection_statuses(statuses)
     return {
         "synced_at": synced_at,
         "business_id": business_id,
@@ -4337,7 +4343,7 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
             "updated_at": now,
         },
     )
-    _write("delivery_collection_status", statuses)
+    _write_delivery_collection_statuses(statuses, statuses[0] if statuses else None)
 
     response_ledgers = {"sales": [], "settlements": [], "reviews": []}
     response_ledgers[record_type] = imported
