@@ -320,6 +320,7 @@ services:
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS=${YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS:-1800}
+      - YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS=${YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS:-1200}
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
       - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
@@ -332,7 +333,7 @@ services:
       - -c
       - |
         while true; do
-          python scripts/yeoljeong_auto_collect.py --business-id all --branch 전체 || true
+          timeout "$${YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS:-1200}" python scripts/yeoljeong_auto_collect.py --business-id all --branch 전체 || true
           sleep "$${YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS:-1800}"
         done
     extra_hosts:

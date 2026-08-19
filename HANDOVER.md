@@ -5,6 +5,7 @@
 - Request: CEO approved immediate continuation of the recommended store assistant separation.
 - Changes:
   - `docker-compose.prod.yml`: added `yeoljeong-finance-worker` so delivery auto-collection runs outside the AADS API and outside the Yeoljeong web API process.
+  - Worker loop uses `YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS` default 1200 seconds and `YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS` default 1800 seconds so a blocked portal run cannot stop later cycles.
   - `nginx-fb.conf`: routed `fb.newtalk.kr/health/live` directly to the dedicated Yeoljeong container for external health checks.
 - Status:
   - Runtime/API separation is live.
