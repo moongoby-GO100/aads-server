@@ -6910,6 +6910,7 @@
   - The synchronous collector used generic login selectors and could miss portal SPA/WebSquare login forms that require native value setters and input/change events.
 - Changes:
   - `app/services/yeoljeong_finance_service.py` now allows saved-password `browser-automation` accounts to continue into the server headless collector when no PC Agent session is available.
+  - Saved-password delivery accounts now skip ambient PC Agent work-session creation by default and use `server_headless_password_first`, avoiding PC Agent route timeouts before the login attempt.
   - `app/services/yeoljeong_delivery_collectors.py` now has service-specific login selectors for Baemin, Coupang Eats, Yogiyo, and Ddangyo in the headless collector.
   - Added DOM fallback login injection for the headless collector so React/Vue/WebSquare forms receive native value updates plus input/change/keyup events before submit.
   - Updated regression tests to assert saved-password server fallback and Ddangyo DOM fallback behavior.
