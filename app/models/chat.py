@@ -162,6 +162,7 @@ class StreamingStatusOut(BaseModel):
     message_revision: Optional[str] = None
     placeholder_revision: Optional[str] = None
     artifact_revision: Optional[str] = None
+    completion_token: Optional[str] = None
 
 
 # ─── Session Todo ────────────────────────────────────────────────────────────

@@ -1398,6 +1398,7 @@ async def list_discussion_presets():
 @router.get("/chat/sessions/{session_id}/streaming-status", response_model=StreamingStatusOut, tags=["chat-session"])
 async def get_streaming_status(
     session_id: UUID,
+    acked_completion_token: Optional[str] = None,
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """세션의 AI 응답 생성 상태 조회 (세션 이동 후 돌아왔을 때 '생성 중' 표시용).
@@ -1407,6 +1408,8 @@ async def get_streaming_status(
     서버 재시작 후 recovered 메시지가 있으면 just_completed+recovered=True 반환
     (클라이언트가 메시지를 다시 로드하도록 트리거).
     응답에는 revision 필드가 포함되며, 클라이언트는 이전 값과 같으면 /messages 재조회를 생략할 수 있다.
+
+    acked_completion_token: 이전 응답에서 받은 completion_token 값. 전달하면 이후 just_completed=False 반환(one-shot ack).
     """
     if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
         raise _NOT_FOUND("session")
@@ -1419,7 +1422,7 @@ async def get_streaming_status(
             or "응답 생성이 중단" in content
         )
 
-    status = svc.get_streaming_status(str(session_id))
+    status = svc.get_streaming_status(str(session_id), acked_completion_token=acked_completion_token)
     memory_terminal_status = None
     if status:
         if status.get("is_streaming"):

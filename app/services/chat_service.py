@@ -175,6 +175,15 @@ _streaming_state: Dict[str, Dict[str, Any]] = getattr(
 _stale_cleanup_task: _heartbeat_asyncio.Task | None = getattr(
     _sys.modules.get(__name__), "_stale_cleanup_task", None
 ) or None
+
+# just_completed ack 추적: session_id → {token, count, first_seen}
+_completion_ack_state: Dict[str, Dict[str, Any]] = getattr(
+    _sys.modules.get(__name__), '_completion_ack_state', None
+) or {}
+_JUST_COMPLETED_GRACE_SECS = int(os.getenv("AADS_JUST_COMPLETED_GRACE_SECONDS", "60"))
+_COMPLETION_ACK_MAX_ENTRIES = 500
+_COMPLETION_ACK_MAX_DELIVERIES = 3
+
 # 클라이언트 이탈 후 자동 종료 시간 (초): stale watchdog(최대 45분+20분)보다 먼저
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
@@ -5585,15 +5594,31 @@ async def _resume_single_stream(
             _active_bg_tasks.pop(session_id, None)
 
 
-def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
+def _cleanup_completion_ack_state() -> None:
+    """_completion_ack_state 크기 상한(500) 및 만료 항목 정리."""
+    cutoff = _bg_time.monotonic() - (_JUST_COMPLETED_GRACE_SECS + 30)
+    expired = [sid for sid, v in list(_completion_ack_state.items()) if v.get("first_seen", 0) < cutoff]
+    for sid in expired:
+        _completion_ack_state.pop(sid, None)
+    if len(_completion_ack_state) > _COMPLETION_ACK_MAX_ENTRIES:
+        sorted_keys = sorted(_completion_ack_state, key=lambda k: _completion_ack_state[k].get("first_seen", 0))
+        for sid in sorted_keys[:len(_completion_ack_state) - _COMPLETION_ACK_MAX_ENTRIES]:
+            _completion_ack_state.pop(sid, None)
+
+
+def get_streaming_status(session_id: str, acked_completion_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """특정 세션의 스트리밍 상태 반환 (프론트엔드 폴링용).
 
     Returns:
         is_streaming: True if still generating
-        just_completed: True if finished within last 30s (세션 복귀 시 즉시 메시지 reload 트리거)
+        just_completed: True if finished within last grace period (세션 복귀 시 즉시 메시지 reload 트리거)
+        completion_token: just_completed=True 시 완료 이벤트 식별 토큰
         content_length: 현재까지 생성된 텍스트 길이
         tool_count: 도구 호출 횟수
         last_tool: 마지막 호출 도구 이름
+
+    acked_completion_token: 클라이언트가 이미 수신한 completion_token. 동일 토큰을 보내면
+        이후 just_completed=False로 응답(one-shot ack). ack 없어도 3회 이상 수신 시 자동 억제.
     """
     if session_id in _streaming_state:
         s = _streaming_state[session_id]
@@ -5631,24 +5656,45 @@ def get_streaming_status(session_id: str) -> Optional[Dict[str, Any]]:
                 if task is not None and task is not current_task and not task.done():
                     task.cancel()
 
+        _execution_id = s.get("execution_id")
+        _completion_token: Optional[str] = (_execution_id or session_id) if is_completed else None
+
+        # ack 기반 one-shot: 완료 신호를 최대 _COMPLETION_ACK_MAX_DELIVERIES 회만 전달
+        _emit_just_completed = is_completed
+        if is_completed and _completion_token:
+            _ack_entry = _completion_ack_state.get(session_id)
+            _now_mono = _bg_time.monotonic()
+            if _ack_entry and _ack_entry.get("token") == _completion_token:
+                _ack_entry["count"] = _ack_entry.get("count", 0) + 1
+                # 클라이언트 ack 수신 또는 3회 초과 → 억제
+                if acked_completion_token == _completion_token or _ack_entry["count"] > _COMPLETION_ACK_MAX_DELIVERIES:
+                    _emit_just_completed = False
+            else:
+                # 신규 completion_token — 카운터 초기화, 필요 시 정리
+                if len(_completion_ack_state) >= _COMPLETION_ACK_MAX_ENTRIES:
+                    _cleanup_completion_ack_state()
+                _completion_ack_state[session_id] = {"token": _completion_token, "count": 1, "first_seen": _now_mono}
+
         result = {
             "is_streaming": not is_completed,
-            "just_completed": is_completed,
+            "just_completed": _emit_just_completed,
+            "completion_token": _completion_token if _emit_just_completed else None,
             "content_length": len(_content),
             "token_count": len(_content) // 4,  # 근사 토큰 수 (프론트 진행도 판단용)
             "tool_count": s.get("tool_count", 0),
             "last_tool": s.get("last_tool", ""),
             "partial_content": _content,
-            "execution_id": s.get("execution_id"),
+            "execution_id": _execution_id,
             "last_event_id": s.get("last_event_id"),
         }
-        # P1-FIX→P0-FIX: just_completed 반환 후 60초 유예 (one-shot 삭제 시 프론트 미수신 문제 해결)
+        # grace period: AADS_JUST_COMPLETED_GRACE_SECONDS 후 메모리에서 제거
         if is_completed:
             _completed_at = s.get("_completed_delivered_at")
             if not _completed_at:
                 s["_completed_delivered_at"] = _bg_time.monotonic()
-            elif (_bg_time.monotonic() - _completed_at) > 60:
+            elif (_bg_time.monotonic() - _completed_at) > _JUST_COMPLETED_GRACE_SECS:
                 _streaming_state.pop(session_id, None)
+                _completion_ack_state.pop(session_id, None)
         return result
 
     if session_id in _active_bg_tasks:
