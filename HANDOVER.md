@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-08-19 20:29 KST - Yeoljeong delivery sync dirty follow-up cleanup
+
+- Request: Continue remediation of delivery auto-collection after a concurrent edit reintroduced server headless fallback for saved-password portal accounts.
+- Confirmed:
+  - `git status -sb` after push showed a new dirty edit in `app/services/yeoljeong_finance_service.py`.
+  - The edit allowed `browser-automation` accounts with saved passwords to fall back to server headless collection, which would reintroduce Baemin/Coupang Eats portal 403 loops.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: kept PC Agent requirement as the default for `browser-automation`; server headless fallback is allowed only when `allow_server_headless_fallback` is explicitly set.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added a regression test proving saved-password `browser-automation` accounts do not call the server collector by default.
+- Verification:
+  - `docker exec yeoljeong-finance python -m py_compile app/services/yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e YEOLJEONG_FINANCE_DATA_DIR=/tmp/yeoljeong-test aads-server-yeoljeong-finance timeout 90 python -m pytest ...` succeeded: 4 passed.
+  - `git diff --check -- HANDOVER.md app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+
 ## 2026-08-19 20:17 KST - Runner deploy preflight dirty workdir recovery
 
 - Request: Diagnose and remediate Pipeline Runner `runner-a0462807` failure `deploy_preflight_git_state`.
@@ -6793,7 +6807,7 @@
   - Added a non-blocking `.delivery_sync.lock` around `sync_delivery()` so only one delivery auto-collection can run at a time across API background jobs, worker jobs, and script executions.
   - Concurrent attempts now record `action_required / COLLECTION_ALREADY_RUNNING` instead of opening more PC Agent browser sessions.
   - Ambient Browser Bridge session metadata is no longer reported as active `local_agent` after the session id is cleared for a dedicated work session.
-  - `browser-automation` accounts no longer silently fall back to server headless collection when PC Agent work session is unavailable; they return `PC_AGENT_SESSION_REQUIRED` with diagnostics.
+  - `browser-automation` accounts no longer silently fall back to server headless collection when PC Agent work session is unavailable; unless `allow_server_headless_fallback` is explicitly set, they return `PC_AGENT_SESSION_REQUIRED` with diagnostics.
   - Public error-code normalization now preserves `PC_AGENT_SESSION_REQUIRED` instead of collapsing it into `MISSING_CREDENTIALS`.
 - Verification:
   - `docker exec yeoljeong-finance python -m py_compile app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.

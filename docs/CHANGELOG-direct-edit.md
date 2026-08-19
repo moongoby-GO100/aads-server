@@ -5056,3 +5056,9 @@ fro
 
 ## [2026-08-19 20:17:26 KST] [aads-server] HANDOVER.md
 - Runner preflight 복구 내역, 검증 결과, commit/push 필요 조건 기록.
+
+## [2026-08-19 20:29:08 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- 배달 자동수집 PC Agent 정책 정리: browser-automation 계정은 기본적으로 서버 headless 폴백을 막고, `allow_server_headless_fallback` 명시 시에만 허용.
+
+## [2026-08-19 20:29:08 KST] [aads-server] tests/unit/test_yeoljeong_finance_service.py
+- saved-password browser-automation 계정도 기본값에서는 서버 collector를 호출하지 않는 회귀 테스트 추가.

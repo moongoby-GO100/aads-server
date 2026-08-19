@@ -4556,7 +4556,11 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                         "diagnostics": {"collection_mode": collection_mode},
                         "message": f"{label} 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
                     }
-                elif collection_mode == "browser-automation" and not can_use_browser_auth:
+                elif (
+                    collection_mode == "browser-automation"
+                    and not can_use_browser_auth
+                    and not payload.get("allow_server_headless_fallback")
+                ):
                     label = _delivery_platform_label(service)
                     result = {
                         "status": "credential_required",

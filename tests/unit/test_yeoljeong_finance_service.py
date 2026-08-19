@@ -989,7 +989,12 @@ def test_sync_delivery_prefers_saved_browser_credentials_over_canonical_upload_a
     monkeypatch.setattr(collectors, "collect_account", fake_collect)
 
     result = service.sync_delivery(
-        {"services": ["baemin"], "business_id": "biz-junghwa", "branch": "중화점"},
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "allow_server_headless_fallback": True,
+        },
         {"email": "owner@example.com", "is_admin": True},
     )
 
@@ -1405,6 +1410,7 @@ def test_sync_delivery_all_scope_collects_registered_accounts_across_branches(tm
             "branch": "전체",
             "date_from": "2026-08-01",
             "date_to": "2026-08-04",
+            "allow_server_headless_fallback": True,
         },
         {"email": "owner@example.com", "is_admin": True},
     )
@@ -1536,6 +1542,57 @@ def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_pat
     assert result["summary"][0]["status"] == "succeeded"
     assert result["summary"][0]["counts"]["sales"] == 1
     assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
+
+
+def test_sync_delivery_browser_automation_password_requires_pc_agent_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin-junghwa",
+                "service": "baemin",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+    monkeypatch.setattr(service, "_delivery_browser_auth_for_account", lambda *args, **kwargs: {
+        "storage_state_path": "",
+        "browser_session_id": "",
+        "browser_bridge_mode": "",
+        "browser_bridge_error": "pc unavailable",
+    })
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    monkeypatch.setattr(
+        collectors,
+        "collect_account",
+        lambda *args, **kwargs: pytest.fail("browser automation must not fall back to server headless by default"),
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "PC_AGENT_SESSION_REQUIRED"
 
 
 def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):
