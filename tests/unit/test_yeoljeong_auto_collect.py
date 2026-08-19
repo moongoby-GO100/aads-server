@@ -91,6 +91,7 @@ def test_until_complete_retries_until_imported_rows(monkeypatch):
         retry_seconds=7,
         blocked_retry_seconds=19,
         success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
         repeat_after_complete=False,
     )
 
@@ -124,8 +125,30 @@ def test_until_complete_uses_blocked_retry_interval(monkeypatch):
         retry_seconds=7,
         blocked_retry_seconds=19,
         success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
         repeat_after_complete=False,
     )
 
     assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 2
     assert sleeps == [19]
+
+
+def test_timeout_result_is_retryable():
+    summary = auto_collect._summary(
+        auto_collect._timeout_result(
+            {
+                "services": ["baemin"],
+                "business_id": "all",
+                "branch": "전체",
+                "date_from": "2026-08-01",
+                "date_to": "2026-08-20",
+            },
+            1200,
+        )
+    )
+
+    state = auto_collect._completion_state(summary)
+
+    assert state["complete"] is False
+    assert state["blocked"] is False
+    assert state["retryable_codes"] == ["ATTEMPT_TIMEOUT"]

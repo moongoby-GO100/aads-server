@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -30,6 +31,7 @@ BLOCKING_ERROR_CODES = {
     "PORTAL_BLOCKED",
 }
 RETRYABLE_ERROR_CODES = {
+    "ATTEMPT_TIMEOUT",
     "AUTHENTICATED_NO_ROWS",
     "BACKGROUND_SYNC_STALE",
     "COLLECTION_ALREADY_RUNNING",
@@ -38,6 +40,10 @@ RETRYABLE_ERROR_CODES = {
     "NO_PARSEABLE_ROWS",
     "PORTAL_TABLE_NOT_FOUND",
 }
+
+
+class _AttemptTimedOut(TimeoutError):
+    pass
 
 
 def _split_csv(value: str) -> list[str]:
@@ -155,17 +161,64 @@ def _run_sync(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool
     return queue_delivery_sync(payload, user) if queue_only else sync_delivery(payload, user)
 
 
+def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    services = _split_csv(str(payload.get("services") or ",".join(DEFAULT_SERVICES)))
+    return {
+        "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
+        "business_id": payload.get("business_id") or "",
+        "branch": payload.get("branch") or "",
+        "date_from": payload.get("date_from") or "",
+        "date_to": payload.get("date_to") or "",
+        "totals": {"sales": 0, "settlements": 0, "reviews": 0},
+        "summary": [
+            {
+                "service": service,
+                "business_id": payload.get("business_id") or "",
+                "branch": payload.get("branch") or "",
+                "status": "failed",
+                "error_code": "ATTEMPT_TIMEOUT",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "run_id": "",
+                "account_id": "",
+                "message": f"자동수집 단일 시도가 {timeout_seconds}초를 초과해 중단됐습니다. 루프가 다음 시도로 재개합니다.",
+            }
+            for service in services
+        ],
+    }
+
+
+def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    if timeout_seconds <= 0:
+        return _run_sync(payload, user, queue_only=False)
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(signum: int, frame: Any) -> None:
+        raise _AttemptTimedOut()
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.alarm(timeout_seconds)
+    try:
+        return _run_sync(payload, user, queue_only=False)
+    except _AttemptTimedOut:
+        return _timeout_result(payload, timeout_seconds)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
 def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
     base_payload = _payload(args)
     max_attempts = max(0, int(args.max_attempts or 0))
     retry_seconds = max(1, int(args.retry_seconds or 1))
     blocked_retry_seconds = max(retry_seconds, int(args.blocked_retry_seconds or retry_seconds))
     success_sleep_seconds = max(1, int(args.success_sleep_seconds or retry_seconds))
+    attempt_timeout_seconds = max(0, int(args.attempt_timeout_seconds or 0))
     attempt = 0
 
     while True:
         attempt += 1
-        result = _run_sync(dict(base_payload), user, queue_only=False)
+        result = _run_sync_with_timeout(dict(base_payload), user, attempt_timeout_seconds)
         summary = _summary(result)
         state = _completion_state(summary)
         print(
@@ -211,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS", 60))
     parser.add_argument("--blocked-retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS", 180))
     parser.add_argument("--success-sleep-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS", 1800))
+    parser.add_argument("--attempt-timeout-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS", 1200))
     return parser
 
 

@@ -7112,6 +7112,7 @@
   - `scripts/yeoljeong_auto_collect.py` now supports `--until-complete`, `--repeat-after-complete`, retry intervals, blocked retry intervals, max attempts, and result-state classification.
   - Completion now requires each requested service/scope to be `succeeded` or to have at least one imported `sales`/`settlements`/`reviews` row.
   - Retryable empty-source/table states retry at the short interval; PC Agent, captcha, missing credential, portal challenge/block, and CSV-upload states remain action-required but are rechecked at a longer interval.
+  - Each loop attempt keeps `YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS` as an internal timeout so one hung portal session cannot stop later retries.
   - `docker-compose.prod.yml` now runs the worker through the script-owned until-complete loop, then sleeps for the normal interval after a complete cycle before starting the next cycle.
   - Added `tests/unit/test_yeoljeong_auto_collect.py` coverage for completion, retry, and blocked retry behavior.
 - Verification:
