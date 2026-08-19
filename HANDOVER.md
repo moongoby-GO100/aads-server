@@ -7101,3 +7101,23 @@
 - Remaining:
   - At 05:13 KST, `/api/v1/pc-agent/status` reported `online_count=0`, so live portal login could not complete.
   - Mia branch delivery accounts still have missing credentials for several platforms.
+
+## 2026-08-20 07:33 KST - Yeoljeong auto-collection until-complete worker loop
+
+- Request: "자동수집 완료될때까지 루프 설정하고 구현 적용해"
+- Findings:
+  - `yeoljeong-finance-worker` already had an outer shell `while true` every 30 minutes, but each cycle was single-shot and did not distinguish retryable 0-row states from PC Agent/captcha/account action-required states.
+  - That meant `AUTHENTICATED_NO_ROWS`/`PORTAL_TABLE_NOT_FOUND` could wait until the next broad cycle instead of retrying promptly until data appeared.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py` now supports `--until-complete`, `--repeat-after-complete`, retry intervals, blocked retry intervals, max attempts, and result-state classification.
+  - Completion now requires each requested service/scope to be `succeeded` or to have at least one imported `sales`/`settlements`/`reviews` row.
+  - Retryable empty-source/table states retry at the short interval; PC Agent, captcha, missing credential, portal challenge/block, and CSV-upload states remain action-required but are rechecked at a longer interval.
+  - `docker-compose.prod.yml` now runs the worker through the script-owned until-complete loop, then sleeps for the normal interval after a complete cycle before starting the next cycle.
+  - Added `tests/unit/test_yeoljeong_auto_collect.py` coverage for completion, retry, and blocked retry behavior.
+- Verification:
+  - `python3 -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work --entrypoint python aads-server-yeoljeong-finance-worker:latest -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_isolation.py -q` succeeded: 7 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work --entrypoint python aads-server-yeoljeong-finance-worker:latest -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py -q` succeeded: 101 passed, 9 warnings.
+- Remaining:
+  - Live effect requires committing/pushing these selected files and recreating only `yeoljeong-finance-worker`.
+  - The loop still cannot bypass captcha or missing credentials; it keeps retrying/rechecking and resumes once PC Agent/captcha/account prerequisites are satisfied.

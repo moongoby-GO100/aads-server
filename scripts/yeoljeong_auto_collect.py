@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,23 @@ from app.services.yeoljeong_finance_service import queue_delivery_sync, sync_del
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_SERVICES = ("baemin", "coupangeats", "yogiyo", "ddangyo")
+BLOCKING_ERROR_CODES = {
+    "CSV_UPLOAD_REQUIRED",
+    "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+    "MISSING_CREDENTIALS",
+    "PC_AGENT_SESSION_REQUIRED",
+    "PORTAL_AUTH_CHALLENGE",
+    "PORTAL_BLOCKED",
+}
+RETRYABLE_ERROR_CODES = {
+    "AUTHENTICATED_NO_ROWS",
+    "BACKGROUND_SYNC_STALE",
+    "COLLECTION_ALREADY_RUNNING",
+    "EMPTY_SOURCE",
+    "LOGIN_FORM_NOT_FOUND",
+    "NO_PARSEABLE_ROWS",
+    "PORTAL_TABLE_NOT_FOUND",
+}
 
 
 def _split_csv(value: str) -> list[str]:
@@ -70,6 +89,111 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _count_total(item: dict[str, Any]) -> int:
+    counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
+    return sum(int(counts.get(kind) or 0) for kind in ("sales", "settlements", "reviews"))
+
+
+def _completion_state(summary: dict[str, Any]) -> dict[str, Any]:
+    items = summary.get("summary") if isinstance(summary.get("summary"), list) else []
+    if not items:
+        return {
+            "complete": False,
+            "blocked": False,
+            "retryable": True,
+            "pending": 0,
+            "blocking_codes": [],
+            "retryable_codes": ["NO_SUMMARY"],
+        }
+
+    blocking_codes: set[str] = set()
+    retryable_codes: set[str] = set()
+    pending = 0
+    completed = 0
+    for item in items:
+        status = str(item.get("status") or "").strip().lower()
+        error_code = str(item.get("error_code") or "").strip().upper()
+        count_total = _count_total(item)
+        if status == "succeeded" or count_total > 0:
+            completed += 1
+            continue
+        pending += 1
+        if error_code in BLOCKING_ERROR_CODES:
+            blocking_codes.add(error_code)
+        elif error_code in RETRYABLE_ERROR_CODES:
+            retryable_codes.add(error_code)
+        elif error_code:
+            retryable_codes.add(error_code)
+        else:
+            retryable_codes.add(status.upper() or "PENDING")
+
+    return {
+        "complete": completed == len(items),
+        "blocked": bool(blocking_codes) and pending > 0,
+        "retryable": bool(retryable_codes) or pending > 0,
+        "pending": pending,
+        "completed": completed,
+        "total": len(items),
+        "blocking_codes": sorted(blocking_codes),
+        "retryable_codes": sorted(retryable_codes),
+    }
+
+
+def _sleep(seconds: int) -> None:
+    if seconds > 0:
+        time.sleep(seconds)
+
+
+def _run_sync(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool = False) -> dict[str, Any]:
+    return queue_delivery_sync(payload, user) if queue_only else sync_delivery(payload, user)
+
+
+def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
+    base_payload = _payload(args)
+    max_attempts = max(0, int(args.max_attempts or 0))
+    retry_seconds = max(1, int(args.retry_seconds or 1))
+    blocked_retry_seconds = max(retry_seconds, int(args.blocked_retry_seconds or retry_seconds))
+    success_sleep_seconds = max(1, int(args.success_sleep_seconds or retry_seconds))
+    attempt = 0
+
+    while True:
+        attempt += 1
+        result = _run_sync(dict(base_payload), user, queue_only=False)
+        summary = _summary(result)
+        state = _completion_state(summary)
+        print(
+            json.dumps(
+                {
+                    "loop": {
+                        "attempt": attempt,
+                        "state": state,
+                        "next_retry_seconds": 0 if state["complete"] else (blocked_retry_seconds if state["blocked"] else retry_seconds),
+                    },
+                    **summary,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            flush=True,
+        )
+        if state["complete"]:
+            if not args.repeat_after_complete:
+                return 0
+            _sleep(success_sleep_seconds)
+            attempt = 0
+            continue
+        if max_attempts and attempt >= max_attempts:
+            return 2 if state["blocked"] else 1
+        _sleep(blocked_retry_seconds if state["blocked"] else retry_seconds)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Yeoljeong delivery sales-channel collection.")
     parser.add_argument("--services", default=",".join(DEFAULT_SERVICES), help="Comma-separated services. Default: all delivery channels.")
@@ -81,14 +205,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--storage-state-path", default="", help="Optional Playwright storage state path.")
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
+    parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")
+    parser.add_argument("--repeat-after-complete", action="store_true", help="After a complete cycle, sleep and start the next collection cycle.")
+    parser.add_argument("--max-attempts", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_MAX_ATTEMPTS", 0), help="0 means unlimited attempts.")
+    parser.add_argument("--retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS", 60))
+    parser.add_argument("--blocked-retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS", 180))
+    parser.add_argument("--success-sleep-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS", 1800))
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.queue_only and args.until_complete:
+        raise SystemExit("--queue-only and --until-complete cannot be used together")
     user = {"email": "system@aads.local", "is_admin": True}
+    if args.until_complete:
+        return _run_until_complete(args, user)
     payload = _payload(args)
-    result = queue_delivery_sync(payload, user) if args.queue_only else sync_delivery(payload, user)
+    result = _run_sync(payload, user, queue_only=args.queue_only)
     print(json.dumps(_summary(result), ensure_ascii=False, indent=2))
     return 0
 
