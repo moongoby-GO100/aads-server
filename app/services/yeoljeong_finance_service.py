@@ -3559,10 +3559,18 @@ def _delivery_browser_auth_for_account(
     legacy_explicit_session = "browser_session_id_explicit" not in auth and bool(auth.get("browser_session_id"))
     if auth.get("storage_state_path") or auth.get("browser_session_id_explicit") or legacy_explicit_session:
         return auth
+    collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
+    prefer_pc_agent = bool(
+        payload.get("prefer_pc_agent")
+        or payload.get("preferPcAgent")
+        or payload.get("force_pc_agent")
+        or payload.get("forcePcAgent")
+        or payload.get("require_pc_agent")
+        or payload.get("requirePcAgent")
+    )
     if (
         not _has_secret_value(account, "password")
-        and not payload.get("prefer_pc_agent")
-        and not payload.get("force_pc_agent")
+        and not prefer_pc_agent
     ):
         auth["browser_session_id"] = ""
         auth["browser_bridge_mode"] = ""
@@ -3570,9 +3578,9 @@ def _delivery_browser_auth_for_account(
         return auth
     if (
         _has_secret_value(account, "password")
-        and not payload.get("prefer_pc_agent")
-        and not payload.get("force_pc_agent")
+        and not prefer_pc_agent
         and service != "ddangyo"
+        and collection_mode != "browser-automation"
     ):
         auth["browser_session_id"] = ""
         auth["browser_bridge_mode"] = ""
@@ -5124,6 +5132,23 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                             "ambient_browser_bridge_mode": browser_auth.get("ambient_browser_bridge_mode") or "",
                         },
                         "message": f"{label} 자동수집은 저장된 비밀번호 또는 PC Agent 전용 세션이 필요합니다.",
+                    }
+                elif (
+                    collection_mode == "browser-automation"
+                    and not can_use_browser_auth
+                    and (payload.get("require_pc_agent") or payload.get("requirePcAgent") or payload.get("force_pc_agent") or payload.get("forcePcAgent"))
+                ):
+                    label = _delivery_platform_label(service)
+                    result = {
+                        "status": "credential_required",
+                        "error_code": "PC_AGENT_SESSION_REQUIRED",
+                        "records": {},
+                        "diagnostics": {
+                            "collection_mode": collection_mode,
+                            "browser_bridge_error": browser_auth.get("browser_bridge_error") or "",
+                            "browser_auth_strategy": browser_auth.get("browser_auth_strategy") or "",
+                        },
+                        "message": f"{label} 자동수집은 PC Agent 전용 브라우저 세션 생성 후 실행해야 합니다.",
                     }
                 elif not _has_secret_value(account, "password") and not can_use_browser_auth:
                     label = _delivery_platform_label(service)

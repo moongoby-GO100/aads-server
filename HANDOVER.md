@@ -7030,3 +7030,23 @@
 - Remaining:
   - This does not bypass captcha. Ddangyo stops after saved ID/PW submit, records screenshot diagnostics, waits for human numeric captcha entry in the same PC Agent browser session, then collection can be retried.
   - Code is not deployed until commit/push and a targeted restart of `yeoljeong-finance` and `yeoljeong-finance-worker` are performed.
+
+## 2026-08-20 05:07 KST - Yeoljeong delivery PC Agent-first browser automation
+
+- Request: Continue the saved-login/captcha implementation and make delivery auto-collection use PC Agent browser automation.
+- Findings:
+  - Baemin/Coupang Eats/Yogiyo `browser-automation` accounts with saved passwords were still routed to server headless first unless `prefer_pc_agent` or `force_pc_agent` was explicitly set.
+  - Live verification with `require_pc_agent=true` showed PC Agent was online, but saved-password non-Ddangyo accounts could still report server-headless `PORTAL_BLOCKED` because of that routing priority.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` now treats `browser-automation` accounts as PC Agent-first even when saved passwords exist.
+  - `preferPcAgent`, `forcePcAgent`, `requirePcAgent`, and snake_case equivalents are honored consistently.
+  - Strict `require_pc_agent`/`force_pc_agent` requests now fail as `PC_AGENT_SESSION_REQUIRED` if a PC Agent work session cannot be created, instead of silently falling back to server headless collection.
+  - Added regression coverage that ordinary saved-password accounts can still use server headless first, while `browser-automation` accounts create a service-specific PC Agent work session.
+- Verification:
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 88 passed, 9 warnings.
+  - `curl -s -X POST http://127.0.0.1:8100/api/v1/pc-agent/route-execute ... browser_health ...` succeeded against online PC Agent `2e9379a1-fed`.
+  - Live sync before this patch reached Ddangyo `DDANGYO_NUMERIC_CAPTCHA_REQUIRED`, confirming saved ID/PW submit and numeric captcha wait state; Baemin/Coupang Eats still showed old server-headless block and should be retested after targeted restart.
+- Remaining:
+  - Commit/push and targeted restart of `yeoljeong-finance` and `yeoljeong-finance-worker` are required before the PC Agent-first routing change affects live workers.
+  - Ddangyo still requires the operator-confirmed captcha digits from the screenshot; the code inputs the digits and resumes collection, but it does not bypass captcha.

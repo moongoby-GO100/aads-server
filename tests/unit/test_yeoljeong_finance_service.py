@@ -1782,6 +1782,55 @@ def test_delivery_browser_auth_for_account_prefers_saved_password_headless(monke
     assert auth["browser_auth_strategy"] == "server_headless_password_first"
 
 
+def test_delivery_browser_auth_for_browser_automation_account_prefers_pc_agent(monkeypatch):
+    def fake_build_e2e_config(session_id=None):
+        assert session_id is None
+        return {
+            "mode": "local_agent",
+            "session_id": "",
+            "headless_fallback": False,
+        }
+
+    class FakeSession:
+        session_id = "bb-work-coupangeats"
+
+    class FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        async def ensure_work_session(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeSession()
+
+    fake_bridge = FakeBridge()
+
+    import app.browser_bridge.e2e_adapter as e2e_adapter
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(e2e_adapter, "build_e2e_config", fake_build_e2e_config)
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+    monkeypatch.setattr(service, "_has_secret_value", lambda account, key: key == "password")
+
+    auth = service._delivery_browser_auth_for_account(
+        {},
+        {
+            "service": "coupangeats",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "password_enc": "ciphertext",
+            "collection_mode": "browser-automation",
+        },
+        "coupangeats",
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert auth["browser_session_id"] == "bb-work-coupangeats"
+    assert auth["browser_bridge_mode"] == "local_agent"
+    assert auth["browser_work_key"].startswith("yeoljeong-delivery-coupangeats-biz-junghwa-")
+    assert fake_bridge.calls[0]["url"] == "about:blank"
+
+
 def test_sync_delivery_blocks_concurrent_runs_without_touching_collectors(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(
