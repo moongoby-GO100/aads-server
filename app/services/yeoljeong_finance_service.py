@@ -3017,7 +3017,7 @@ def _delivery_run_key(service: str, business_id: str, branch: str) -> str:
 
 
 def _write_delivery_collection_statuses(rows: list[dict[str, Any]], current: dict[str, Any] | None = None) -> None:
-    _write("delivery_collection_status", rows)
+    _write_file_rows("delivery_collection_status", rows)
     if current and current.get("id"):
         _run_db(_db_upsert_ledger("delivery_collection_status", current))
 
@@ -3035,6 +3035,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     statuses = _read("delivery_collection_status")
     queued_run_ids: dict[str, str] = {}
     summary: list[dict[str, Any]] = []
+    queued_records: list[dict[str, Any]] = []
 
     for business_id, branch in scopes:
         for service in requested_services:
@@ -3046,7 +3047,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             message = f"{branch} {_delivery_platform_label(service)} 백그라운드 수집 대기 중입니다."
             statuses.insert(
                 0,
-                {
+                status_record := {
                     "id": run_id,
                     "job_id": job_id,
                     "service": service,
@@ -3063,6 +3064,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
                     "updated_at": queued_at,
                 },
             )
+            queued_records.append(status_record)
             summary.append(
                 {
                     "service": service,
@@ -3081,6 +3083,8 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             )
 
     _write_delivery_collection_statuses(statuses)
+    for status_record in queued_records:
+        _run_db(_db_upsert_ledger("delivery_collection_status", status_record))
     return {
         "queued": True,
         "job_id": job_id,
