@@ -12,6 +12,8 @@
 - Verification:
   - `docker exec yeoljeong-finance python -m py_compile app/services/yeoljeong_finance_service.py` succeeded.
   - `docker run --rm -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e YEOLJEONG_FINANCE_DATA_DIR=/tmp/yeoljeong-test aads-server-yeoljeong-finance timeout 90 python -m pytest ...` succeeded: 4 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python3 -m pytest -q tests/unit/test_yeoljeong_finance_service.py` passed: 80 passed, 9 warnings.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/work -w /work aads-server-aads-server python3 -m pytest -q tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_api_contract.py tests/unit/test_yeoljeong_finance_isolation.py` passed: 26 passed.
   - `git diff --check -- HANDOVER.md app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
 
 ## 2026-08-19 20:17 KST - Runner deploy preflight dirty workdir recovery

@@ -4535,16 +4535,18 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 if browser_auth["storage_state_path"]:
                     collection_account["storage_state_path"] = browser_auth["storage_state_path"]
                 can_use_browser_auth = bool(browser_auth["storage_state_path"] or browser_auth["browser_session_id"])
-                bridge_result = (
-                    _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
-                    if service == "baemin"
-                    else _collect_delivery_from_browser_bridge_session(
-                        collection_account,
-                        browser_auth,
-                        date_from.isoformat(),
-                        date_to.isoformat(),
+                bridge_result = None
+                if can_use_browser_auth:
+                    bridge_result = (
+                        _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
+                        if service == "baemin"
+                        else _collect_delivery_from_browser_bridge_session(
+                            collection_account,
+                            browser_auth,
+                            date_from.isoformat(),
+                            date_to.isoformat(),
+                        )
                     )
-                )
                 if bridge_result is not None:
                     result = bridge_result
                 elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_browser_auth:
