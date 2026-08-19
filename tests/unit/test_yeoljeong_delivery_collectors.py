@@ -134,6 +134,21 @@ def test_page_state_rejects_logged_out_landing_page_without_password_input():
     assert collectors._page_state(FakePage()) == ("failed", "PORTAL_LOGIN_NOT_COMPLETED")
 
 
+def test_page_state_marks_ddangyo_numeric_captcha_as_action_required():
+    class FakeLocator:
+        def inner_text(self, timeout):
+            return "자동입력방지 숫자를 입력해 주세요"
+
+    class FakePage:
+        def locator(self, selector):
+            return FakeLocator()
+
+    assert collectors._page_state(FakePage(), "ddangyo") == (
+        "portal_action_required",
+        "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+    )
+
+
 def test_fill_login_uses_dom_fallback_for_websquare_portal():
     class EmptyLocator:
         @property

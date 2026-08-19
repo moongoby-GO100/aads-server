@@ -66,6 +66,7 @@ CHALLENGE_TERMS = (
     "captcha",
     "캡차",
     "보안문자",
+    "자동입력방지",
     "2차 인증",
     "추가 인증",
     "본인인증",
@@ -74,6 +75,7 @@ CHALLENGE_TERMS = (
     "인증번호",
     "약관 동의",
 )
+DDANGYO_NUMERIC_CAPTCHA_TERMS = ("captcha", "캡차", "보안문자", "자동입력방지", "숫자를 입력")
 LOGIN_FAILURE_TERMS = ("비밀번호가 일치", "아이디 또는 비밀번호", "로그인 정보를 확인", "로그인 실패")
 LOGGED_OUT_TERMS = ("로그인해주세요", "로그인이 필요", "사장님 로그인")
 EXPORT_TERMS = ("엑셀", "excel", "csv", "다운로드", "내보내기")
@@ -642,10 +644,12 @@ def _fill_login(page: Any, username: str, password: str, service: str = "") -> b
     return True
 
 
-def _page_state(page: Any) -> tuple[str, str]:
+def _page_state(page: Any, service: str = "") -> tuple[str, str]:
     body = _clean(page.locator("body").inner_text(timeout=5000)).lower()
     if any(term in body for term in SECURITY_BLOCK_TERMS):
         return "portal_action_required", "BAEMIN_SECURITY_BLOCKED"
+    if service == "ddangyo" and any(term in body for term in DDANGYO_NUMERIC_CAPTCHA_TERMS):
+        return "portal_action_required", "DDANGYO_NUMERIC_CAPTCHA_REQUIRED"
     if any(term in body for term in CHALLENGE_TERMS):
         return "portal_action_required", "PORTAL_AUTH_CHALLENGE"
     if any(term in body for term in LOGIN_FAILURE_TERMS):
@@ -866,7 +870,7 @@ def collect_account(
                 blocked.setdefault("diagnostics", {})["auth_mode"] = auth_mode
                 browser.close()
                 return blocked
-            state, error_code = _page_state(page)
+            state, error_code = _page_state(page, service)
             if state != "authenticated":
                 if not password:
                     browser.close()
@@ -891,7 +895,7 @@ def collect_account(
                         "records": {},
                         "diagnostics": {"auth_mode": auth_mode},
                     }
-                state, error_code = _page_state(page)
+                state, error_code = _page_state(page, service)
             if state != "authenticated":
                 browser.close()
                 return {"status": state, "error_code": error_code, "records": {}, "diagnostics": {"auth_mode": auth_mode}}

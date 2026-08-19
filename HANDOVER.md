@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-08-20 04:16 KST - Genspark UI fallback live retry and prompt submit hardening
+
+- Request: Continue the previous Genspark UI fallback verification.
+- Confirmed:
+  - Backend and dashboard git status were initially clean before this turn's edits.
+  - Current-session Pipeline Runner jobs were all terminal `rejected_done`; no active runner was blocking direct XS work.
+  - `media_generation_jobs` had queued `genspark_ui` image jobs, including `media-59b6fb2dce274d35`.
+  - Processing `media-59b6fb2dce274d35` with active Browser Bridge session `bb-3514a631acd2` returned `auth_required` and persisted `GENSPARK_LOGIN_REQUIRED`.
+  - Processing the same job with logged-in session `bb-1e975480c694` reached the Genspark image UI but returned retryable `GENSPARK_MEDIA_EXTRACT_TIMEOUT`.
+  - Browser snapshot after retry showed the `Genspark AI 이미지` page, but the submitted cheese-pork-cutlet prompt was not visible, indicating prompt input/submit targeting was also unstable before media extraction.
+- Changes:
+  - `app/services/media_generation_service.py`: default Genspark image/edit-image target URL now resolves to `https://www.genspark.ai/ai_image` instead of the generic home page.
+  - `app/services/media_generation_service.py`: hardened prompt input selection by scoring visible editable candidates, excluding search/login fields, using the native textarea/input value setter for SPA frameworks, and treating missing submit buttons as `PROMPT_SUBMIT_BUTTON_NOT_FOUND`.
+  - `tests/unit/test_media_generation_service.py`: added regression coverage for the Genspark image default target URL.
+- Verification:
+  - `python3 -m py_compile app/services/media_generation_service.py` succeeded.
+  - `docker exec aads-server sh -lc 'python -m pytest -q tests/unit/test_media_generation_service.py -q'` passed: 20 passed.
+- Remaining:
+  - Changes are not deployed; live API retries during this entry used the currently deployed code.
+  - Source commit/push/deploy were not performed in this entry.
+  - Worktree has unrelated Yeoljeong dirty files; preserve them and stage only Genspark files if committing this patch later.
+
 ## 2026-08-20 04:05 KST - Genspark UI fallback agent URL routing and deployment
 
 - Request: Approve deployment, run Genspark image tests in the specified agent sessions, and use OHVIS managed browser/password-manager automation where applicable.
@@ -6939,3 +6961,19 @@
 - Remaining:
   - Live portal collection still cannot bypass CAPTCHA, OTP, phone/device verification, or missing passwords. Those cases remain `action_required` or `credential_required` by design.
   - Live effect requires commit, push, and restarting only `yeoljeong-finance` plus `yeoljeong-finance-worker`.
+
+## 2026-08-20 04:17 KST - Yeoljeong delivery saved-login and Ddangyo captcha workflow
+
+- Request: "배민,쿠팡,요기요는 아이디비번 입력하면 로그인된다. 땡겨요는 아이디비번과 숫자 캡챠가 떠서 스크린샷으로 확인 후 추가인증하면 된다. 즉시 자동로그인 될 수 있게 구현테스트하고 구현해"
+- Changes:
+  - `app/services/yeoljeong_delivery_collectors.py` now treats Ddangyo numeric captcha text (`자동입력방지`, `숫자를 입력`, captcha/security text) as `DDANGYO_NUMERIC_CAPTCHA_REQUIRED` instead of generic login failure.
+  - `app/services/yeoljeong_finance_service.py` keeps Baemin/Coupang Eats/Yogiyo saved ID/PW login automation, and now preserves Ddangyo numeric captcha as a dedicated `action_required` state.
+  - PC Agent challenge handling now captures a PNG screenshot under `app/data/yeoljeong_finance/delivery_auth_challenges/` and stores `challenge_screenshot_path` in collection diagnostics.
+  - Public error-code normalization preserves `DDANGYO_NUMERIC_CAPTCHA_REQUIRED` so the UI/API can distinguish "captcha number input required" from generic `PORTAL_AUTH_CHALLENGE`.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py` succeeded.
+  - `git diff --check` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 98 passed.
+- Remaining:
+  - This does not bypass captcha. Ddangyo stops after saved ID/PW submit, records screenshot diagnostics, waits for human numeric captcha entry in the same PC Agent browser session, then collection can be retried.
+  - Code is not deployed until commit/push and a targeted restart of `yeoljeong-finance` and `yeoljeong-finance-worker` are performed.

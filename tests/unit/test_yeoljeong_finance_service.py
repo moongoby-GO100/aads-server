@@ -1958,6 +1958,83 @@ async def test_delivery_bridge_login_uses_dom_fallback_for_portal_spa(monkeypatc
     assert page.timeout_ms == 5000
 
 
+@pytest.mark.asyncio
+async def test_ddangyo_pc_agent_login_stops_at_numeric_captcha_with_screenshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://boss.ddangyo.com/"
+            self.text = "땡겨요 사장님 로그인 아이디 비밀번호"
+
+        async def goto(self, url, **kwargs):
+            self.url = url
+
+        async def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+        async def wait_for_timeout(self, *args, **kwargs):
+            return None
+
+        async def evaluate(self, expression, arg=None):
+            if "window.location.href" in expression:
+                return self.url
+            if "innerHTML" in expression:
+                return f"<main>{self.text}</main>"
+            if "innerText" in expression:
+                return self.text
+            return ""
+
+        async def screenshot(self, **kwargs):
+            return b"fake-png"
+
+    class FakeContext:
+        def __init__(self, page):
+            self.pages = [page]
+
+    class FakeBridge:
+        def __init__(self, page):
+            self.sessions = {"bb-ddangyo": object()}
+            self.page = page
+
+        async def _context_for_session(self, session):
+            return FakeContext(self.page)
+
+    page = FakePage()
+
+    async def fake_login(page_arg, account, service_label):
+        assert page_arg is page
+        assert account["service"] == "ddangyo"
+        assert service_label == "땡겨요"
+        page.text = "자동입력방지 숫자를 입력해 주세요"
+        return None
+
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: FakeBridge(page))
+    monkeypatch.setattr(service, "_delivery_bridge_login_with_saved_secret", fake_login)
+
+    result = await service._collect_delivery_from_browser_bridge_session_async(
+        {
+            "service": "ddangyo",
+            "username": "owner",
+            "password_enc": "encrypted",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+        },
+        {"browser_session_id": "bb-ddangyo", "browser_bridge_mode": "local_agent"},
+        "2026-08-01",
+        "2026-08-04",
+    )
+
+    assert result["status"] == "portal_action_required"
+    assert result["error_code"] == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED"
+    assert "숫자 캡챠" in result["message"]
+    screenshot_path = result["diagnostics"]["challenge_screenshot_path"]
+    assert screenshot_path.startswith(str(tmp_path))
+    assert service.Path(screenshot_path).read_bytes() == b"fake-png"
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (

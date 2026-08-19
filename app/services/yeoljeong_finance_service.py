@@ -1105,6 +1105,8 @@ def _delivery_public_error_code(status: str, error_code: Any) -> str:
         return "MISSING_CREDENTIALS"
     if upper.endswith("_SECURITY_BLOCKED") or upper in {"SECURITY_BLOCKED", "PORTAL_BLOCKED"}:
         return "PORTAL_BLOCKED"
+    if upper == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
+        return "DDANGYO_NUMERIC_CAPTCHA_REQUIRED"
     if upper in {"MFA_REQUIRED", "CAPTCHA_REQUIRED", "PORTAL_AUTH_CHALLENGE"}:
         return "PORTAL_AUTH_CHALLENGE"
     if upper in {"NO_RECORDS", "NO_ROWS", "AUTHENTICATED_NO_ROWS"}:
@@ -3931,11 +3933,74 @@ def _delivery_bridge_login_state(url: str, text: str) -> str:
     lowered_text = str(text or "").lower()
     if any(term in lowered_text for term in ("보안 위배 접근 제한", "올바르지 않은 요청", "access denied", "forbidden")):
         return "blocked"
-    if any(term in lowered_text for term in ("captcha", "캡차", "보안문자", "2차 인증", "추가 인증", "본인인증", "휴대폰 인증", "기기 인증", "인증번호", "약관 동의")):
+    if any(
+        term in lowered_text
+        for term in (
+            "captcha",
+            "캡차",
+            "보안문자",
+            "자동입력방지",
+            "숫자를 입력",
+            "2차 인증",
+            "추가 인증",
+            "본인인증",
+            "휴대폰 인증",
+            "기기 인증",
+            "인증번호",
+            "약관 동의",
+        )
+    ):
         return "challenge"
     if "login" in lowered_url or any(term in text for term in ("로그인", "회원가입", "아이디", "비밀번호")):
         return "login"
     return "authenticated"
+
+
+def _delivery_bridge_challenge_code(service: str, text: str) -> str:
+    lowered_text = str(text or "").lower()
+    if service == "ddangyo" and any(
+        term in lowered_text for term in ("captcha", "캡차", "보안문자", "자동입력방지", "숫자를 입력")
+    ):
+        return "DDANGYO_NUMERIC_CAPTCHA_REQUIRED"
+    return "PORTAL_AUTH_CHALLENGE"
+
+
+def _delivery_challenge_message(service: str, service_label: str) -> str:
+    if service == "ddangyo":
+        return (
+            "땡겨요 ID/PW 자동입력은 완료됐고 숫자 캡챠 확인이 필요합니다. "
+            "PC Agent 화면 또는 저장된 스크린샷에서 숫자를 입력한 뒤 같은 세션으로 다시 수집해야 합니다."
+        )
+    return f"{service_label} 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다."
+
+
+def _delivery_challenge_screenshot_path(service: str, business_id: str, branch: str, session_id: str) -> Path:
+    safe_service = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(service or "portal")).strip("-") or "portal"
+    safe_business = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(business_id or "business")).strip("-") or "business"
+    branch_hash = hashlib.sha256(str(branch or "").encode("utf-8")).hexdigest()[:10]
+    session_hash = hashlib.sha256(str(session_id or "").encode("utf-8")).hexdigest()[:10]
+    timestamp = datetime.now(KST).strftime("%Y%m%d-%H%M%S")
+    return DATA_DIR / "delivery_auth_challenges" / f"{timestamp}-{safe_service}-{safe_business}-{branch_hash}-{session_hash}.png"
+
+
+async def _capture_delivery_challenge_screenshot(
+    page: Any,
+    *,
+    service: str,
+    business_id: str,
+    branch: str,
+    session_id: str,
+) -> str:
+    try:
+        image = await page.screenshot(full_page=True)
+    except Exception:
+        return ""
+    if not image:
+        return ""
+    path = _delivery_challenge_screenshot_path(service, business_id, branch, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(image)
+    return str(path)
 
 
 async def _baemin_bridge_first_visible(page: Any, selectors: tuple[str, ...]) -> Any | None:
@@ -4364,12 +4429,23 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "message": f"{service_label} 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         if login_state == "challenge":
+            challenge_code = _delivery_bridge_challenge_code(service, text)
+            challenge_screenshot = await _capture_delivery_challenge_screenshot(
+                page,
+                service=service,
+                business_id=str(account.get("business_id") or ""),
+                branch=str(account.get("branch") or ""),
+                session_id=session_id,
+            )
+            diagnostics = {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url}
+            if challenge_screenshot:
+                diagnostics["challenge_screenshot_path"] = challenge_screenshot
             return {
                 "status": "portal_action_required",
-                "error_code": "PORTAL_AUTH_CHALLENGE",
+                "error_code": challenge_code,
                 "records": {},
-                "diagnostics": {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url},
-                "message": f"{service_label} 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다.",
+                "diagnostics": diagnostics,
+                "message": _delivery_challenge_message(service, service_label),
             }
         if login_state == "login":
             return {
@@ -4505,16 +4581,26 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "message": "배민 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 직접 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         if login_state == "challenge":
+            challenge_screenshot = await _capture_delivery_challenge_screenshot(
+                page,
+                service="baemin",
+                business_id=str(account.get("business_id") or ""),
+                branch=str(account.get("branch") or ""),
+                session_id=session_id,
+            )
+            diagnostics = {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                "url": url,
+            }
+            if challenge_screenshot:
+                diagnostics["challenge_screenshot_path"] = challenge_screenshot
             return {
                 "status": "portal_action_required",
                 "error_code": "PORTAL_AUTH_CHALLENGE",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-                    "url": url,
-                },
+                "diagnostics": diagnostics,
                 "message": "배민 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다.",
             }
         if login_state == "login":
@@ -4556,16 +4642,26 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "message": "PC Agent 브라우저가 배민 로그인 화면입니다. 먼저 해당 브라우저에서 배민 관리자 로그인이 필요합니다.",
             }
         if login_state == "challenge":
+            challenge_screenshot = await _capture_delivery_challenge_screenshot(
+                page,
+                service="baemin",
+                business_id=str(account.get("business_id") or ""),
+                branch=str(account.get("branch") or ""),
+                session_id=session_id,
+            )
+            diagnostics = {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                "url": url,
+            }
+            if challenge_screenshot:
+                diagnostics["challenge_screenshot_path"] = challenge_screenshot
             return {
                 "status": "portal_action_required",
                 "error_code": "PORTAL_AUTH_CHALLENGE",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-                    "url": url,
-                },
+                "diagnostics": diagnostics,
                 "message": "배민 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다.",
             }
         if login_state == "blocked":
@@ -4662,6 +4758,15 @@ def _collect_delivery_from_browser_bridge_session(
 
 
 def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) -> dict[str, Any]:
+    if service == "ddangyo" and str(result.get("error_code") or "").upper() == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
+        diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+        return {
+            **result,
+            "status": "portal_action_required",
+            "error_code": "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+            "message": _delivery_challenge_message("ddangyo", _delivery_platform_label("ddangyo")),
+            "diagnostics": diagnostics,
+        }
     if _delivery_result_is_wrong_portal(service, result):
         label = _delivery_platform_label(service)
         diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
