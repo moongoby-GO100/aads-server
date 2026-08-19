@@ -8464,17 +8464,22 @@ async def send_message_stream(
                     "ORDER BY created_at DESC LIMIT 1",
                     sid, persisted_user_content,
                 )
-                # 2차 dedup: 직전 visible user 메시지와 동일 content이면 중복 스킵
+                # 2차 dedup: 직전 visible 메시지가 같은 user content이면 중복 스킵.
+                # Assistant 응답 뒤 사용자가 같은 문장을 다시 입력하는 정상 케이스는 허용한다.
                 if not existing_dup and persisted_user_content:
-                    _prev_user = await conn.fetchval(
-                        "SELECT content FROM chat_messages "
-                        "WHERE session_id = $1 AND role = 'user' "
+                    _prev_visible = await conn.fetchrow(
+                        "SELECT role, content FROM chat_messages "
+                        "WHERE session_id = $1 "
                         "AND COALESCE(intent, '') NOT IN ('system_trigger', 'interruption_notice') "
                         "AND (is_hidden IS NULL OR is_hidden = false) "
                         "ORDER BY created_at DESC LIMIT 1",
                         sid,
                     )
-                    if _prev_user and _prev_user.strip() == persisted_user_content.strip():
+                    if (
+                        _prev_visible
+                        and _prev_visible["role"] == "user"
+                        and (_prev_visible["content"] or "").strip() == persisted_user_content.strip()
+                    ):
                         logger.info(f"user_msg_content_dedup session={session_id[:8]} — consecutive duplicate skipped: {persisted_user_content[:30]}")
                         existing_dup = await conn.fetchrow(
                             "SELECT id, content, created_at FROM chat_messages "
