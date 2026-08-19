@@ -3404,6 +3404,49 @@ def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _delivery_browser_auth_for_account(
+    payload: dict[str, Any],
+    account: dict[str, Any],
+    service: str,
+    business_id: str,
+    branch: str,
+) -> dict[str, str]:
+    auth = dict(_delivery_browser_auth_options(payload))
+    if auth.get("storage_state_path") or auth.get("browser_session_id"):
+        return auth
+    if payload.get("disable_pc_agent") or payload.get("disablePcAgent"):
+        return auth
+
+    try:
+        from app.browser_bridge.service import get_browser_bridge_service
+        from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG
+
+        config = PORTAL_CONFIG.get(service) or {}
+        label = _delivery_platform_label(service)
+        url = str(
+            account.get("portal_home_url")
+            or account.get("home_url")
+            or account.get("login_url")
+            or config.get("login_url")
+            or "about:blank"
+        )
+        work_key = f"yeoljeong-delivery-{service}-{business_id}-{branch}"
+        session = _run_async(
+            get_browser_bridge_service().ensure_work_session(
+                work_key=work_key,
+                label=f"열정국밥 {branch} {label} 자동수집",
+                url=url,
+            )
+        )
+        if session is not None:
+            auth["browser_session_id"] = str(getattr(session, "session_id", "") or "")
+            auth["browser_bridge_mode"] = "local_agent"
+            auth["browser_work_key"] = work_key
+    except Exception as exc:
+        auth["browser_bridge_error"] = str(exc)[:300]
+    return auth
+
+
 def _baemin_bridge_page_kind(text: str) -> str:
     lowered = text.lower()
     if "리뷰" in text or "review" in lowered:
@@ -4202,7 +4245,6 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     statuses = _read("delivery_collection_status")
     response_ledgers = {"sales": [], "settlements": [], "reviews": []}
     response_records: list[dict[str, Any]] = []
-    browser_auth = _delivery_browser_auth_options(payload)
 
     for business_id, branch in scopes:
         candidates = [
@@ -4259,9 +4301,10 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             else:
                 collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
                 collection_account = dict(account)
-                if service == "baemin" and browser_auth["storage_state_path"]:
+                browser_auth = _delivery_browser_auth_for_account(payload, collection_account, service, business_id, branch)
+                if browser_auth["storage_state_path"]:
                     collection_account["storage_state_path"] = browser_auth["storage_state_path"]
-                can_use_stored_browser_session = service == "baemin" and bool(browser_auth["storage_state_path"])
+                can_use_browser_auth = bool(browser_auth["storage_state_path"] or browser_auth["browser_session_id"])
                 bridge_result = (
                     _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
                     if service == "baemin"
@@ -4274,7 +4317,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 )
                 if bridge_result is not None:
                     result = bridge_result
-                elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
+                elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_browser_auth:
                     label = _delivery_platform_label(service)
                     result = {
                         "status": "upload_required",
@@ -4283,7 +4326,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                         "diagnostics": {"collection_mode": collection_mode},
                         "message": f"{label} 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
                     }
-                elif not _has_secret_value(account, "password") and not can_use_stored_browser_session:
+                elif not _has_secret_value(account, "password") and not can_use_browser_auth:
                     label = _delivery_platform_label(service)
                     result = {
                         "status": "credential_required",
@@ -4294,10 +4337,12 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                 else:
                     secret = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
                     result = collect_account(collection_account, secret, date_from.isoformat(), date_to.isoformat())
-                    if service == "baemin" and browser_auth["browser_session_id"]:
+                    if browser_auth["browser_session_id"]:
                         result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]
-                    if service == "baemin" and browser_auth["browser_bridge_mode"]:
+                    if browser_auth["browser_bridge_mode"]:
                         result.setdefault("diagnostics", {})["browser_bridge_mode"] = browser_auth["browser_bridge_mode"]
+                    if browser_auth.get("browser_bridge_error"):
+                        result.setdefault("diagnostics", {})["browser_bridge_error"] = browser_auth["browser_bridge_error"]
                 result = _normalize_delivery_collection_result(service, result)
 
             counts = {"sales": 0, "settlements": 0, "reviews": 0}

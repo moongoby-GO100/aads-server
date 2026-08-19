@@ -6584,3 +6584,29 @@
   - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` 성공.
 - 남은 주의:
   - 새 코드 배포 전 운영 API 프로세스는 이전 모듈을 계속 사용한다. 배포 후 `/sync background=true`로 전체 판매채널 수집을 큐잉하고 상태 원장을 재확인해야 한다.
+
+## 2026-08-19 18:26 KST - 매장비서 P0/P1 직접 구현 및 검증 보강
+
+- 요청: P0/P1 즉시 구현. Runner가 `running` 상태에서 로그 0건/PID 사망 의심으로 반복 정체되어 직접 작업으로 전환했다.
+- P0 조치:
+  - `app/services/yeoljeong_finance_service.py`에 서비스/사업자/지점별 PC Agent 업무 세션 자동 확보 경로를 추가했다.
+  - 기존에는 수집 요청이 명시적 `browser_session_id`를 받지 못하면 서버 headless 포털 접속으로 떨어질 수 있었다. 이제 `yeoljeong-delivery-{service}-{business_id}-{branch}` work_key로 배민/쿠팡이츠/요기요/땡겨요 모두 PC Agent 세션을 우선 확보한다.
+  - PC Agent가 없으면 기존 저장 계정 기반 서버 수집을 시도하고, 실패 사유를 `browser_bridge_error`, 보안 차단, 추가인증, 데이터 0건 상태로 원장에 남긴다.
+- P1 확인:
+  - `docker-compose.prod.yml`에는 `yeoljeong-finance` 전용 API 컨테이너와 `yeoljeong-finance-worker` 자동수집 worker가 분리되어 있다.
+  - `yeoljeong-finance`는 `127.0.0.1:8110`, worker는 `scripts/yeoljeong_auto_collect.py --business-id all --branch 전체`를 주기 실행한다.
+  - `nginx-fb.conf`와 `nginx-aads-upstream.conf`는 `fb.newtalk.kr`를 `yeoljeong_finance_api` upstream으로 보내는 분리 구조다.
+- 검증:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py app/browser_bridge/service.py scripts/yeoljeong_auto_collect.py` 성공.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_browser_bridge.py` 성공: 113 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python scripts/yeoljeong_auto_collect.py --queue-only --business-id all --branch 전체` 성공: 중화점/미아점 배달 4사 총 8개 queued 생성 확인.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python scripts/yeoljeong_auto_collect.py --business-id all --branch 전체` 성공 실행, 수집 결과 totals 0건.
+  - `curl -fsS http://127.0.0.1:8110/health/live` 성공: `{"status":"ok","service":"yeoljeong-finance"}`.
+  - `curl http://127.0.0.1:8110/api/v1/yeoljeong-finance/collection-status`는 HTTP 401로 전용 앱 인증층 도달 확인.
+- 실제 수집 결과:
+  - 중화점 배민/쿠팡이츠: 서버 자동접속 보안 차단으로 `portal_action_required`.
+  - 중화점 요기요/땡겨요: 로그인 후 조회 구간 표 데이터 0건으로 `partial/AUTHENTICATED_NO_ROWS`.
+  - 미아점 배민: 계정 미등록. 미아점 쿠팡이츠/요기요/땡겨요: 비밀번호 미등록.
+- 남은 주의:
+  - 18:26 KST 현재 `pc_list_agents` 결과 연결된 PC Agent 0개다. PC Agent가 연결되지 않으면 보안 차단 포털은 서버 단독으로 정상 적재가 불가능하다.
+  - 이번 코드 변경은 아직 커밋 전이며, 배포/재시작은 수행하지 않았다.
