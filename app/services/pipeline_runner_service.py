@@ -683,6 +683,27 @@ class PipelineCJob:
 
         self.status = "running"
         try:
+            # ★ Redis deploy lock — 프로젝트당 1건만 배포 허용
+            from app.services.deploy_lock import acquire_deploy_lock, release_deploy_lock
+            _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
+            if not _deploy_lock["acquired"]:
+                _holder = _deploy_lock.get("holder", "unknown")
+                for _dl_retry in range(3):
+                    self._log("deploy_lock_wait", f"배포 잠금 대기 ({_dl_retry+1}/3): holder={_holder}")
+                    await asyncio.sleep(min(30 * (_dl_retry + 1), 90))
+                    _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
+                    if _deploy_lock["acquired"]:
+                        break
+                else:
+                    self._log("deploy_lock_fail", f"배포 잠금 획득 실패: holder={_holder}")
+                    self.status = "error"
+                    self.error_msg = f"deploy_lock_fail: {_holder}가 배포 중"
+                    await self._save_to_db()
+                    await self._post_to_chat(
+                        f"⚠️ **[배포 잠금 실패]** `{self.job_id}` — {_holder}가 배포 중입니다."
+                    )
+                    return {"error": self.error_msg}
+
             # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
             # cross-process flock으로 Chat-Direct git 작업과 충돌 방지
             self._log("deploying", "git push 진행 중...")
@@ -750,6 +771,7 @@ class PipelineCJob:
                 # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
                 await self._run_frontend_qa_if_needed()
 
+                release_deploy_lock(self.project, self.job_id)
                 return {
                     "status": "done",
                     "summary": verify["summary"],
@@ -802,6 +824,7 @@ class PipelineCJob:
             # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
             await self._run_frontend_qa_if_needed()
 
+            release_deploy_lock(self.project, self.job_id)
             return {
                 "status": "done",
                 "summary": verify["summary"],
@@ -824,6 +847,7 @@ class PipelineCJob:
                 f"오류: {str(e)[:300]}\n\n"
                 f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
             )
+            release_deploy_lock(self.project, self.job_id)
             return {"error": str(e)}
 
     async def _run_frontend_qa_if_needed(self):

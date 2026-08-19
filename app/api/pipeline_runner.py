@@ -259,6 +259,26 @@ async def _find_active_file_conflict(
                 "phase": row["phase"],
                 "overlap": sorted(overlap),
             }
+    # Cross-session: chat-direct dirty 파일 충돌 확인
+    ledger_rows = await conn.fetch(
+        """
+        SELECT session_id, file_path, source_tool, updated_at
+        FROM chat_workspace_change_ledger
+        WHERE project = $1 AND status = 'dirty'
+          AND updated_at > NOW() - INTERVAL '24 hours'
+        """,
+        project,
+    )
+    for lrow in ledger_rows:
+        ledger_file = lrow["file_path"]
+        if ledger_file in target_files:
+            return {
+                "job_id": f"chat-direct:{lrow['session_id'][:8]}",
+                "status": "chat_direct_dirty",
+                "phase": "editing",
+                "overlap": [ledger_file],
+                "source": "chat_workspace_change_ledger",
+            }
     return None
 
 

@@ -332,3 +332,61 @@ def shell_acquire_deploy_lock(project: str, job_id: str) -> bool:
     """deploy.sh에서 curl로 호출하는 간편 인터페이스."""
     result = acquire_deploy_lock(project, job_id)
     return result["acquired"]
+
+
+async def get_project_active_work(project: str) -> dict:
+    """프로젝트의 활성 작업(Runner + Chat-Direct + Lock) 통합 조회."""
+    import asyncpg
+    db_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql://aads:aads2026secure@aads-postgres:5432/aads",
+    )
+    result = {
+        "project": project,
+        "runner_jobs": [],
+        "chat_direct_files": [],
+        "lock_status": {},
+    }
+    try:
+        conn = await asyncpg.connect(db_url)
+        try:
+            rows = await conn.fetch(
+                "SELECT job_id, status, phase, instruction, updated_at "
+                "FROM pipeline_jobs WHERE project=$1 AND status=ANY($2) "
+                "ORDER BY updated_at DESC LIMIT 20",
+                project,
+                ["queued", "running", "awaiting_approval", "deploying", "verifying"],
+            )
+            result["runner_jobs"] = [
+                {
+                    "job_id": r["job_id"],
+                    "status": r["status"],
+                    "phase": r["phase"],
+                    "summary": (r["instruction"] or "")[:100],
+                    "updated_at": str(r["updated_at"]),
+                }
+                for r in rows
+            ]
+            ledger = await conn.fetch(
+                "SELECT session_id, file_path, source_tool, updated_at "
+                "FROM chat_workspace_change_ledger "
+                "WHERE project=$1 AND status='dirty' "
+                "AND updated_at > NOW() - INTERVAL '24 hours' "
+                "ORDER BY updated_at DESC LIMIT 50",
+                project,
+            )
+            result["chat_direct_files"] = [
+                {
+                    "session_id": r["session_id"],
+                    "file": r["file_path"],
+                    "tool": r["source_tool"],
+                    "updated_at": str(r["updated_at"]),
+                }
+                for r in ledger
+            ]
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.warning("[active_work] DB 조회 실패: %s", e)
+    result["lock_status"] = get_all_lock_status().get("projects", {}).get(project, {})
+    return result

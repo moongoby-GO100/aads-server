@@ -137,11 +137,11 @@ _release_work_lock() {
     local project="$1" job_id="$2" scope="${3:-}"
     local scope_param=""
     [[ -n "$scope" ]] && scope_param="&scope=${scope}"
-    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}${scope_param}" 2>/dev/null || true
+    curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}${scope_param}" 2>/dev/null || true
 }
 _release_deploy_lock() {
     local project="$1" job_id="$2"
-    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+    curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
 }
 
 # DB 접속 방식
@@ -853,7 +853,7 @@ run_job() {
     local lock_result
     local work_lock_scope_param=""
     [[ -n "$parallel_group" ]] && work_lock_scope_param="&scope=${parallel_group}"
-    lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}" 2>/dev/null) || true
+    lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}" 2>/dev/null) || true
     if echo "$lock_result" | grep -q '"acquired":false'; then
         local holder
         holder=$(echo "$lock_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('holder','unknown'))" 2>/dev/null) || holder="unknown"
@@ -1499,25 +1499,35 @@ deploy_job() {
     log "[deploy_job] start job_id=$job_id project=$project"
     log "▶ DEPLOY job=$job_id project=$project target=$target_repo workdir=$workdir"
 
-    # Redis deploy lock 획득 (동시 배포 방지)
+    # Redis deploy lock 획득 (동시 배포 방지) — 3회 재시도 + 점진적 대기
     local deploy_lock_result=""
-    deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
-    if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
-        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project — 다른 배포 진행 중, 30초 후 재시도"
-        sleep 30
-        deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
-        if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
-            log "  DEPLOY_LOCK_FAIL job=$job_id — 배포 스킵"
-            db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
-                       error_detail='deploy_lock_fail',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 획득 실패 — 다른 배포가 장시간 점유',
-                       updated_at=NOW() WHERE job_id='${job_id}';"
-            post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 획득 실패 (다른 배포 진행 중): $job_id"
-            _release_deploy_lock "$project" "$job_id"
-            _notify_ai "$job_id"
-            promote_next_queued "$project"
-            return 1
+    local deploy_lock_acquired=false
+    for _dl_try in 1 2 3; do
+        deploy_lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+        if echo "$deploy_lock_result" | grep -q '"acquired":true'; then
+            deploy_lock_acquired=true
+            break
+        elif echo "$deploy_lock_result" | grep -q '"acquired":false'; then
+            local _wait=$((30 * _dl_try))
+            log "  DEPLOY_LOCK_WAIT job=$job_id project=$project try=${_dl_try}/3 — 다른 배포 진행 중, ${_wait}초 후 재시도"
+            sleep $_wait
+        else
+            log "  DEPLOY_LOCK_API_OK job=$job_id try=${_dl_try} — API 응답 없음, 잠금 없이 진행"
+            deploy_lock_acquired=true
+            break
         fi
+    done
+    if [[ "$deploy_lock_acquired" != "true" ]]; then
+        log "  DEPLOY_LOCK_FAIL job=$job_id — 3회 재시도 후 배포 스킵"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
+                   error_detail='deploy_lock_fail',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 3회 획득 실패 — 다른 배포가 장시간 점유',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 3회 획득 실패 (다른 배포 진행 중): $job_id"
+        _release_deploy_lock "$project" "$job_id"
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        return 1
     fi
 
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"

@@ -1911,6 +1911,8 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/ops/codex-usage",  # Codex 사용량 (읽기전용)
     "/api/v1/ops/claude-max-usage",  # Claude Max 사용량 (읽기전용)
     "/api/v1/external/chat",  # 외부 서비스 임베드 채팅: 자체 service-token/HMAC 인증
+    "/api/v1/ops/locks",        # 내부 서비스 잠금 API (pipeline-runner.sh 전용)
+    "/api/v1/ops/active-work",  # 내부 활성 작업 조회
     "/static",  # 정적 파일 (기술문서/보고서/갤러리)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)

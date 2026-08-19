@@ -364,6 +364,14 @@ async def api_release_deploy_lock(project: str, session_id: str):
     from app.services.deploy_lock import release_deploy_lock
     return {"released": release_deploy_lock(project, session_id)}
 
+
+@router.get("/ops/active-work/{project}")
+async def get_active_work(project: str):
+    """프로젝트 활성 작업(Runner + Chat-Direct + Lock) 통합 조회."""
+    from app.services.deploy_lock import get_project_active_work
+    return await get_project_active_work(project)
+
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://aads:aads2026secure@aads-postgres:5432/aads"
