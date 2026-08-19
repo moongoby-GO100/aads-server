@@ -16,7 +16,7 @@ from typing import Dict, List, Any, Optional
 
 import structlog
 
-from app.services.server_registry import SERVER_REGISTRY, ALL_STATUSES
+from app.services.server_registry import SERVER_REGISTRY, ALL_STATUSES, CANONICAL_SERVER_IDS
 
 logger = structlog.get_logger()
 
@@ -131,12 +131,12 @@ def _parse_directive_content(content: str, filename: str, status: str, server_id
     }
 
 
-# ─── 로컬 (서버 68) 스캔 ─────────────────────────────────────────────────────
+# ─── 로컬 (contabo116) 스캔 ──────────────────────────────────────────────────
 
 async def _scan_local_server(statuses: List[str]) -> Dict[str, Any]:
-    """서버 68 로컬 directives 폴더 스캔."""
-    base = SERVER_REGISTRY["68"]["directive_base"]
-    result: Dict[str, Any] = {"server": "68", "reachable": True, "method": "local", "directives": []}
+    """contabo116(AADS 본체) 로컬 directives 폴더 스캔."""
+    base = SERVER_REGISTRY["contabo116"]["directive_base"]
+    result: Dict[str, Any] = {"server": "contabo116", "reachable": True, "method": "local", "directives": []}
     counts: Dict[str, int] = {}
 
     for status in statuses:
