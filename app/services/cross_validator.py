@@ -13,6 +13,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 import structlog
 
+from app.services.server_registry import resolve_server_id
+
 logger = structlog.get_logger()
 
 KST = timezone(timedelta(hours=9))
@@ -332,11 +334,12 @@ class CrossValidator(AutoRecovery):
 
     async def check_env_trend(self) -> list:
         issues = []
+        server_id = resolve_server_id("contabo116")
         async with self.pool.acquire() as conn:
             trend = await conn.fetch("""
                 SELECT disk_percent FROM server_env_history
-                WHERE server='68' ORDER BY snapshot_at DESC LIMIT 6
-            """)
+                WHERE server=$1 ORDER BY snapshot_at DESC LIMIT 6
+            """, server_id)
         if len(trend) >= 3:
             values = [float(r["disk_percent"] or 0) for r in trend]
             # 최신 순 정렬 → 오래된 것부터 증가 추세인지 확인
@@ -345,7 +348,7 @@ class CrossValidator(AutoRecovery):
             if increasing and latest > 75:
                 issues.append({
                     "type": "disk_trend_warning",
-                    "server": "68",
+                    "server": server_id,
                     "latest_disk_percent": latest,
                     "trend": values,
                     "severity": "warning",

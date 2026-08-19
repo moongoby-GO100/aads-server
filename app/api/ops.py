@@ -771,16 +771,22 @@ async def bridge_log(
 @router.get("/ops/env-history/{server}")
 async def env_history(server: str, limit: int = Query(20, le=100)):
     """서버별 환경 이력 조회 (최근 N건)."""
+    canonical_server = resolve_server_id(server)
     try:
         conn = await _get_conn()
         try:
             rows = await conn.fetch(
                 "SELECT * FROM server_env_history WHERE server=$1 ORDER BY snapshot_at DESC LIMIT $2",
-                server, limit
+                canonical_server, limit
             )
         finally:
             await conn.close()
-        return {"server": server, "items": [dict(r) for r in rows], "count": len(rows)}
+        return {
+            "server": canonical_server,
+            "requested_server": server,
+            "items": [dict(r) for r in rows],
+            "count": len(rows),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

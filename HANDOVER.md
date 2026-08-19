@@ -16,6 +16,22 @@
   - Runtime containers report canonical `SERVER_REGISTRY` entries for `contabo116`, `contabo14`, and `cafe24_114` with legacy aliases retained for compatibility.
   - Dashboard blue-green deploy succeeded at release `9f3f968add04`; active container is `aads-dashboard-green` on port `3101`; external `/login` returned HTTP 200.
   - API health at `127.0.0.1:8100/api/v1/health` returned HTTP 200.
+
+## 2026-08-19 12:17 KST - Server env history refresh follow-up
+
+- Request follow-up: Complete the prior server menu/server-status cleanup report with actual remaining verification and no commit/push/deploy mismatch.
+- Changes:
+  - `app/api/ops.py` now resolves `/ops/env-history/{server}` through canonical server IDs, so legacy `68` resolves to `contabo116` while the response records `requested_server`.
+  - `app/services/cross_validator.py` now checks `server_env_history` for `contabo116` instead of hard-coded `68`.
+  - `app/services/unified_healer.py` now treats `contabo116` as the local server while retaining legacy `68` compatibility.
+  - Runtime script `/root/aads/scripts/collect_env_snapshot.py` (outside this git repo) now normalizes `SERVER_NAME=5/68/unknown` to `contabo116`, writes `env_contabo116.json`, and parses `Gi/Mi/Ki` memory units.
+- Verification:
+  - `python3 -m py_compile app/api/ops.py app/services/cross_validator.py app/services/unified_healer.py app/services/tool_registry.py` passed.
+  - `python3 -m py_compile /root/aads/scripts/collect_env_snapshot.py` passed.
+  - `env SERVER_NAME=5 ... python3 /root/aads/scripts/collect_env_snapshot.py light` inserted latest DB row: `server=contabo116`, `disk_percent=62.0`, `memory_percent=18.3`, `snapshot_at=2026-08-19 12:17:04 KST`.
+  - `/root/aads/aads-dashboard/public/manager/env_contabo116.json` exists and contains `server=contabo116`.
+  - `curl http://localhost:8100/api/v1/health` returned `status=ok`.
+- Still excluded by CEO instruction: disk cleanup.
 - Status:
   - Dashboard commit `9f3f968 fix(infra): update server dashboard inventory` is pushed and deployed.
   - Backend earlier commit `2210acad fix(infra): canonicalize remaining server names` was pushed; this follow-up backend string/script cleanup is captured with this HANDOVER entry and requires API redeploy to refresh long-lived runtime processes.

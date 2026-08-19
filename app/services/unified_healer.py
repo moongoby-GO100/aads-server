@@ -289,11 +289,11 @@ def _redirect_aads_core_restart(command: str, target_server: str = "68") -> str:
     return command
 
 
-async def _execute_command(command: str, target_server: str = "68") -> dict:
-    """명령 실행. 68서버 docker 명령은 Unix Socket API로, 그 외=SSH."""
+async def _execute_command(command: str, target_server: str = "contabo116") -> dict:
+    """명령 실행. contabo116 docker 명령은 Unix Socket API로, 그 외=SSH."""
     command = _redirect_aads_core_restart(command, target_server)
     try:
-        if target_server == "68":
+        if target_server in {"contabo116", "68"}:
             # docker 명령은 Docker Engine API로 직접 실행
             if command.strip().startswith("docker "):
                 action, container = _parse_docker_command(command)
@@ -308,7 +308,7 @@ async def _execute_command(command: str, target_server: str = "68") -> dict:
                 return {"success": False, "output": f"Cannot parse docker command: {command}"}
 
             # systemctl, supervisorctl 등은 호스트에서 실행 불가 → SSH로 fallback
-            # 68서버 자신에게 SSH (localhost)
+            # contabo116 자신에게 SSH (localhost)
             ssh_cmd = f'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@localhost "{command}"'
             proc = await asyncio.create_subprocess_shell(
                 ssh_cmd,
