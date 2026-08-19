@@ -6447,3 +6447,18 @@
 - 남은 주의:
   - 호스트 `pytest`는 미설치이고 `.venv` python symlink가 깨져 직접 pytest는 실행하지 못했다.
   - 실행 중 컨테이너는 이전 이미지라 새 테스트가 선택되지 않았다. 배포 전 컨테이너 재빌드 후 테스트 재실행이 필요하다.
+
+## 2026-08-19 14:12 KST - 채팅 미노출 복구 완료보고 충돌 정정
+
+- 요청: 이전 응답이 완료보고 조건을 만족하지 못했고 `deploy_report_conflicts_with_ledger`, `document_report_conflicts_with_ledger` 위반이므로 남은 확인/조치/검증을 계속 수행.
+- 정정:
+  - `main`과 `origin/main`은 `e8bf94d7559af32bbed2f047c4acf3a845b2f353`으로 일치한다.
+  - 운영 컨테이너 `aads-server`는 healthy이며, 런타임 대상 파일 `/app/app/services/chat_service.py` 해시가 로컬 `app/services/chat_service.py` 해시와 일치한다.
+  - 최신 문서/테스트 커밋 `e8bf94d7`의 `HANDOVER.md`와 `tests/unit/test_chat_service.py`는 런타임 컨테이너 이미지 파일과 해시가 다르다. 해당 커밋은 런타임 코드 변경이 아니므로 운영 동작 배포 완료로 보고하지 않고, 원격 Git 기록 완료로만 판정한다.
+- 검증:
+  - `docker run --rm --env-file .env -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest -q tests/unit/test_chat_service.py::test_normalize_pipeline_runner_intent_keeps_ceo_report_visible tests/unit/test_chat_service.py::test_normalize_pipeline_runner_intent_keeps_runner_notifications_hidden` 성공: 2 passed, 1 warning.
+  - `docker run --rm --env-file .env -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` 성공.
+  - `curl -fsS http://127.0.0.1:8100/health` 성공: `status=ok`, `graph_ready=true`.
+  - DB 집계: assistant `intent='pipeline_runner'` 메시지 991건은 `is_hidden=true`로 유지되어 실제 runner/system 알림 숨김 정책은 유지된다.
+- 남은 주의:
+  - 작업트리에는 요청 범위 밖 운영 데이터 파일 `app/data/yeoljeong_finance/platform_accounts.json` 1건이 dirty로 남아 있다. 이번 조치에는 포함하지 않았다.
