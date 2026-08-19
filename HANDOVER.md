@@ -4,9 +4,11 @@
 
 - Request: Continue the next step for Genspark chat-window image generation automation and verify generation/download/server-save flow.
 - Confirmed:
-  - `genspark_ui` smoke job exists in `media_generation_jobs`, but processing stopped before Genspark submission.
+  - `genspark_ui` smoke job `media-0a5376e204ba4b5c` exists in `media_generation_jobs`.
   - PC Agent `2e9379a1-fed` is online and `system_info` succeeds.
-  - `browser_launch` for `genspark-media-fallback` succeeds with CDP ready, but `browser_eval` fails with `timed out during opening handshake`.
+  - Initial `browser_launch` for `genspark-media-fallback` succeeded with CDP ready, but `browser_eval` failed with `timed out during opening handshake`.
+  - After v1.0.58 self-update, `browser_eval` and `browser_health` succeeded on `https://www.genspark.ai/` using `work_key=genspark-media-fallback`.
+  - Genspark smoke processing now reaches the UI session and stops at `auth_required` / `GENSPARK_LOGIN_REQUIRED`; Credential Vault has no `service=genspark` credential.
   - PC C: drive is critically full at 99.2%, which remains an operational risk for Chrome profile creation and browser automation stability.
 - Changes:
   - `pc_agent/commands/browser_auto.py`: increased default CDP WebSocket opening timeout, raised recovery retry count, and added WebSocket connect retries with short backoff before declaring `CDP_NOT_READY`.
@@ -16,8 +18,12 @@
   - `python3 -m py_compile pc_agent/commands/browser_auto.py` passed.
   - `docker exec aads-server python -m py_compile pc_agent/commands/browser_auto.py` passed.
   - `docker exec aads-server pytest tests/unit/test_browser_auto_eval.py tests/unit/test_browser_bridge.py -q` passed: 32 passed.
+  - `git push origin main` pushed `b5002b59 fix(pc-agent): harden CDP websocket handshake`.
+  - Server version endpoint returns `1.0.58`, `exe_available=true`, `file_size=20.5 MB`.
+  - `self_update force=true` returned `updated=true`, `restart_requested=true`; PC Agent reconnected at `2026-08-19T10:09:44Z`.
+  - Smoke job rerun returned `automation_state=auth_required`, `requires_login=true`.
 - Remaining:
-  - Commit, push, blue-green deploy, PC Agent self-update, then rerun `media-0a5376e204ba4b5c` Genspark smoke job.
+  - CEO must log in to Genspark in the `genspark-media-fallback` Browser Bridge session or register a Genspark credential before generation/download/server-save can complete.
 
 ## 2026-08-19 19:00 KST - Yeoljeong P0 status normalization deployment follow-up
 
