@@ -516,7 +516,8 @@ async def test_ensure_pc_agent_cdp_force_recreate_uses_fresh_isolation_profile(m
     )
 
     assert session.work_key == "yeoljeong-delivery-baemin-biz-junghwa-test"
-    assert captured_kwargs["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["work_key"].startswith("yeoljeong-delivery-baemin-biz-junghwa-test-")
+    assert captured_kwargs["params"]["work_key"] != "yeoljeong-delivery-baemin-biz-junghwa-test"
     assert captured_kwargs["params"]["isolation_id"].startswith("yeoljeong-delivery-baemin-biz-junghwa-test-")
     assert captured_kwargs["params"]["isolation_id"] != "yeoljeong-delivery-baemin-biz-junghwa-test"
 

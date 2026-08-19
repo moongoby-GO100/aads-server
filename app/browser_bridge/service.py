@@ -485,15 +485,18 @@ class BrowserBridgeService:
         }
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
+        recreate_suffix = ""
         base_isolation_id = isolation_id or normalized_work_key
         if base_isolation_id:
             if force_recreate:
-                suffix = new_session_id().replace("bb-", "", 1)[:12]
-                launch_params["isolation_id"] = f"{base_isolation_id[:90]}-{suffix}"
+                recreate_suffix = new_session_id().replace("bb-", "", 1)[:12]
+                launch_params["isolation_id"] = f"{base_isolation_id[:90]}-{recreate_suffix}"
             else:
                 launch_params["isolation_id"] = base_isolation_id
         if normalized_work_key:
-            launch_params["work_key"] = normalized_work_key
+            launch_params["work_key"] = (
+                f"{normalized_work_key[:90]}-{recreate_suffix}" if force_recreate and recreate_suffix else normalized_work_key
+            )
 
         routed = await pc_agent_manager.execute_routed_command(
             command_type="browser_launch",

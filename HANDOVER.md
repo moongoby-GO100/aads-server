@@ -6893,9 +6893,10 @@
 - Changes:
   - `app/services/yeoljeong_finance_service.py` now retries delivery portal work-session creation up to three times.
   - Retry attempts force a fresh isolated PC Agent profile after the first failure and preserve the combined failure reasons in `browser_bridge_errors` diagnostics.
+  - `app/browser_bridge/service.py` now also varies the PC Agent launch `work_key` during forced recreation so stale PC Agent-side browser caches are bypassed while the AADS work-session key remains stable.
   - Added regression coverage for repeated CDP failures recovering on the third attempt.
 - Verification:
-  - `python3 -m py_compile app/services/yeoljeong_finance_service.py` succeeded.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/browser_bridge/service.py` succeeded.
   - `docker run --rm -v /root/aads/aads-server:/work -w /work --entrypoint python aads-server-yeoljeong-finance-worker:latest -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_browser_bridge.py -q` succeeded: 112 passed.
 - Remaining:
   - Portal OTP/CAPTCHA/device challenges remain user-action states.
