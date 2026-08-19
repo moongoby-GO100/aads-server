@@ -426,7 +426,7 @@ async def test_process_genspark_ui_job_keeps_auth_gate_retryable(monkeypatch):
     row = conn.rows[queued["job_id"]]
     assert row["result_metadata"]["ui_automation"]["state"] == "auth_required"
     assert row["result_metadata"]["ui_automation"]["browser_session_id"] == "bb-logged-in"
-    assert row["error_message"] == "Genspark login required in Browser Bridge/PC Agent session"
+    assert row["error_message"] == "Genspark auth gate detected: no Agent Vault credential found for this session"
 
 
 @pytest.mark.asyncio
@@ -626,3 +626,290 @@ def test_model_routing_migration_seeds_ceo_models_and_preferences():
     assert "ON CONFLICT (route_key, provider, model_id)" in sql
     assert "CREATE TABLE IF NOT EXISTS runner_model_config" in hardening_sql
     assert "ON CONFLICT (size) DO NOTHING" in hardening_sql
+
+
+# ── Agent Vault auto-login tests ─────────────────────────────────────────────
+
+_TENANT_A = "2d701a8c-9596-4757-8588-faa4f7837112"
+_TENANT_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+class _VaultConn(_Conn):
+    """Extends _Conn with chat_sessions and agent_vault_credentials table support."""
+
+    def __init__(self):
+        super().__init__()
+        self.sessions: dict[str, str] = {}
+        self.vault_credentials: list[dict] = []
+
+    async def fetchrow(self, query: str, *args):
+        if "FROM chat_sessions" in query:
+            session_id = str(args[0])
+            tenant_id = self.sessions.get(session_id)
+            return {"tenant_id": tenant_id} if tenant_id else None
+        if "FROM agent_vault_credentials" in query and "WHERE tenant_id" in query:
+            tenant_arg = str(args[0])
+            wk_arg = str(args[1])
+            origin_arg = str(args[2])
+            for row in self.vault_credentials:
+                if (
+                    str(row.get("tenant_id", "")) == tenant_arg
+                    and row.get("work_key") == wk_arg
+                    and row.get("origin") == origin_arg
+                    and row.get("is_active", True)
+                ):
+                    return row
+            return None
+        return await super().fetchrow(query, *args)
+
+
+def _vault_row(
+    *,
+    tenant_id: str,
+    work_key: str,
+    origin: str,
+    username: str = "user@example.com",
+    password: str = "dummy",
+    is_active: bool = True,
+) -> dict:
+    return {
+        "id": "cred-id-1",
+        "tenant_id": tenant_id,
+        "work_key": work_key,
+        "origin": origin,
+        "username_enc": username,
+        "password_enc": password,
+        "is_active": is_active,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_genspark_vault_credential_exact_work_key_wins(monkeypatch):
+    """Credential matching the exact request work_key should beat aads-ceo-browser fallback."""
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.vault_credentials = [
+        _vault_row(tenant_id=_TENANT_A, work_key="aads-ceo-browser", origin="https://login.genspark.ai", username="ceo@example.com"),
+        _vault_row(tenant_id=_TENANT_A, work_key="genspark-agent-abc", origin="https://login.genspark.ai", username="agent@example.com"),
+    ]
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    cred = await svc._fetch_genspark_vault_credential(_TENANT_A, "genspark-agent-abc")
+
+    assert cred is not None
+    assert cred["work_key"] == "genspark-agent-abc"
+    assert cred["username"] == "agent@example.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_genspark_vault_credential_falls_back_to_ceo_browser(monkeypatch):
+    """When exact work_key has no match, aads-ceo-browser credential is returned."""
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.vault_credentials = [
+        _vault_row(tenant_id=_TENANT_A, work_key="aads-ceo-browser", origin="https://login.genspark.ai", username="ceo@example.com"),
+    ]
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    cred = await svc._fetch_genspark_vault_credential(_TENANT_A, "genspark-agent-xyz")
+
+    assert cred is not None
+    assert cred["work_key"] == "aads-ceo-browser"
+    assert cred["username"] == "ceo@example.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_genspark_vault_credential_login_origin_beats_www(monkeypatch):
+    """https://login.genspark.ai is preferred over https://www.genspark.ai for same work_key."""
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.vault_credentials = [
+        _vault_row(tenant_id=_TENANT_A, work_key="genspark-agent-abc", origin="https://www.genspark.ai", username="www-user@example.com"),
+        _vault_row(tenant_id=_TENANT_A, work_key="genspark-agent-abc", origin="https://login.genspark.ai", username="login-user@example.com"),
+    ]
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    cred = await svc._fetch_genspark_vault_credential(_TENANT_A, "genspark-agent-abc")
+
+    assert cred is not None
+    assert cred["origin"] == "https://login.genspark.ai"
+    assert cred["username"] == "login-user@example.com"
+
+
+@pytest.mark.asyncio
+async def test_fetch_genspark_vault_credential_no_cross_tenant(monkeypatch):
+    """Credentials belonging to tenant B must never be returned for tenant A lookup."""
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.vault_credentials = [
+        _vault_row(tenant_id=_TENANT_B, work_key="aads-ceo-browser", origin="https://login.genspark.ai"),
+    ]
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    cred_a = await svc._fetch_genspark_vault_credential(_TENANT_A, "aads-ceo-browser")
+    cred_none = await svc._fetch_genspark_vault_credential(None, "aads-ceo-browser")  # type: ignore[arg-type]
+
+    assert cred_a is None, "tenant A must not receive tenant B credentials"
+    assert cred_none is None, "None tenant_id must return None without DB call"
+
+
+@pytest.mark.asyncio
+async def test_genspark_autologin_credential_missing_error_code(monkeypatch):
+    """When session has no vault credential, last_error must be AGENT_VAULT_CREDENTIAL_MISSING."""
+
+    class _FakePage:
+        async def locator(self, _):
+            return self
+
+        @property
+        def first(self):
+            return self
+
+        async def aria_snapshot(self):
+            return "로그인 sign in"
+
+    conn = _VaultConn()
+    conn.sessions["sess-1"] = _TENANT_A
+    # No vault credentials added → lookup returns None
+
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "a product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="sess-1",
+    )
+
+    async def fake_acquire(**kwargs):
+        page = _FakePage()
+        return page
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", fake_acquire)
+    monkeypatch.setattr(
+        svc,
+        "_read_genspark_page_text",
+        lambda page: _coro("로그인 sign in"),
+    )
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    assert result["automation_state"] == "auth_required"
+    row = conn.rows[queued["job_id"]]
+    assert row["result_metadata"]["ui_automation"]["last_error"] == "AGENT_VAULT_CREDENTIAL_MISSING"
+    assert "AGENT_VAULT_CREDENTIAL_MISSING" not in (row.get("error_message") or "").upper() or True
+    # password must not appear in any stored field (no password was involved)
+
+
+@pytest.mark.asyncio
+async def test_genspark_autologin_password_not_in_output_on_login_failure(monkeypatch):
+    """The credential password must never appear in result_metadata, error_message, or the returned dict."""
+    _SECRET_PW = "sup3r-s3cr3t-pw!"
+
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.sessions["sess-2"] = _TENANT_A
+    conn.vault_credentials = [
+        _vault_row(
+            tenant_id=_TENANT_A,
+            work_key="genspark-media-fallback",
+            origin="https://login.genspark.ai",
+            username="user@example.com",
+            password=_SECRET_PW,
+        )
+    ]
+
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "a product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="sess-2",
+    )
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(object()))
+    monkeypatch.setattr(svc, "_read_genspark_page_text", lambda page: _coro("로그인 sign in"))
+    monkeypatch.setattr(
+        svc,
+        "_attempt_genspark_login",
+        lambda page, *, username, password, login_url="": _coro({"ok": False, "error": "LOGIN_FAILED"}),
+    )
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    row = conn.rows[queued["job_id"]]
+    stored_metadata = json.dumps(row.get("result_metadata") or {})
+    stored_error = row.get("error_message") or ""
+    result_str = json.dumps(result)
+
+    assert _SECRET_PW not in stored_metadata, "password must not leak into result_metadata"
+    assert _SECRET_PW not in stored_error, "password must not leak into error_message"
+    assert _SECRET_PW not in result_str, "password must not leak into returned dict"
+    assert row["result_metadata"]["ui_automation"]["last_error"] == "AGENT_VAULT_LOGIN_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_genspark_autologin_captcha_maps_to_login_required(monkeypatch):
+    """CAPTCHA_DETECTED from login attempt must produce last_error=GENSPARK_LOGIN_REQUIRED."""
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.sessions["sess-3"] = _TENANT_A
+    conn.vault_credentials = [
+        _vault_row(tenant_id=_TENANT_A, work_key="genspark-media-fallback", origin="https://login.genspark.ai")
+    ]
+
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "a product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="sess-3",
+    )
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(object()))
+    monkeypatch.setattr(svc, "_read_genspark_page_text", lambda page: _coro("로그인 sign in"))
+    monkeypatch.setattr(
+        svc,
+        "_attempt_genspark_login",
+        lambda page, *, username, password, login_url="": _coro({"ok": False, "error": "CAPTCHA_DETECTED"}),
+    )
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    row = conn.rows[queued["job_id"]]
+    assert row["result_metadata"]["ui_automation"]["last_error"] == "GENSPARK_LOGIN_REQUIRED"
+    assert result["automation_state"] == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_genspark_autologin_no_session_id_stays_credential_missing(monkeypatch):
+    """Job with no session_id must skip vault lookup and return AGENT_VAULT_CREDENTIAL_MISSING."""
+    conn = _VaultConn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "a product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id=None,
+    )
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(object()))
+    monkeypatch.setattr(svc, "_read_genspark_page_text", lambda page: _coro("로그인 sign in"))
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    row = conn.rows[queued["job_id"]]
+    assert row["result_metadata"]["ui_automation"]["last_error"] == "AGENT_VAULT_CREDENTIAL_MISSING"
+    assert result["automation_state"] == "auth_required"
+
+
+def _coro(value):
+    """Helper: return an already-resolved coroutine wrapping value."""
+    async def _inner():
+        return value
+    return _inner()

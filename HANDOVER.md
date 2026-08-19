@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-20 KST - AADS-GENSPARK-AGENT-VAULT-AUTOLOGIN-P0 Genspark UI auto-login via Agent Vault
+
+- Request: Connect Genspark UI image fallback jobs to Agent Vault stored credentials for auto-login on auth-gate detection.
+- Changes (commit-only, deploy pending CEO approval):
+  - `app/services/media_generation_service.py`: Added `_fetch_tenant_id_for_session`, `_fetch_genspark_vault_credential`, `_attempt_genspark_login`; modified `process_genspark_ui_job` auth-gate block to attempt vault autologin with 4-level priority (request_work_key+login.genspark.ai → request_work_key+www.genspark.ai → aads-ceo-browser+login.genspark.ai → aads-ceo-browser+www.genspark.ai). Password never written to logs/metadata/error_message. Captcha/2FA detection returns GENSPARK_LOGIN_REQUIRED, missing credential returns AGENT_VAULT_CREDENTIAL_MISSING, failed login returns AGENT_VAULT_LOGIN_FAILED.
+  - `tests/unit/test_media_generation_service.py`: Added 8 new tests (4 for credential fallback priority, 4 for autologin edge cases including password-not-leaked, no-cross-tenant, captcha handling, no-session-id).
+- Verification: `python3 -m pytest tests/unit/test_media_generation_service.py` → 29 passed, 0 failed.
+- Deploy: NOT deployed. Awaiting CEO approval for `bash /root/aads/aads-server/deploy.sh bluegreen`.
+
+## 2026-08-20 05:14 KST - AADS-187 Agent Vault account registration UI plan
+
+- Request: Re-plan the dedicated Agent Vault account registration UI using current benchmark evidence from Chrome Password Manager, Apple Passwords, Microsoft Edge Password Manager, 1Password, Bitwarden, Dashlane, Keeper, Aside, Browserbase, OpenAI Operator/ChatGPT Agent, W3C WebAuthn, and FIDO passkeys.
+- Added document: `docs/plans/20260820_OHVIS_AGENT_VAULT_ACCOUNT_REGISTRATION_UI_PLAN.md`.
+- Current-state findings:
+  - Agent Vault backend APIs already support credential save/list/disable, one-time autofill token issue/redeem, access logs, and deny rules for password/OTP/MFA disclosure.
+  - Dashboard currently mixes the Agent Vault credential form into `/browser-tasks`.
+  - The new plan requires a dedicated `/agent-vault` console, password-column removal from the dashboard UI, metadata/policy fields, access-log display, and future import/passkey/profile support.
+- No code, DB, deploy, or service restart was performed in this planning step.
+
 ## 2026-08-20 04:36 KST - AADS-186 remaining risk E2E and Agent Vault JSONB response fix
 
 - Request: Execute the remaining post-deploy risk check for OHVIS Managed Browser and Agent Vault.

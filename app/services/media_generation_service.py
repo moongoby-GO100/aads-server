@@ -1111,6 +1111,200 @@ class MediaGenerationService:
             "content_type": content_type,
         }
 
+    async def _fetch_tenant_id_for_session(self, session_id: str) -> str | None:
+        pool = self._get_pool_or_none()
+        if not pool or not session_id:
+            return None
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT tenant_id::text FROM chat_sessions WHERE id::text = $1 LIMIT 1",
+                    session_id,
+                )
+                return str(row["tenant_id"]) if row and row["tenant_id"] else None
+        except Exception:
+            return None
+
+    async def _fetch_genspark_vault_credential(
+        self,
+        tenant_id: str,
+        request_work_key: str,
+    ) -> dict[str, Any] | None:
+        """Return decrypted Genspark credential from Agent Vault for the given tenant.
+
+        Priority: (request_work_key, login.genspark.ai) > (request_work_key, www.genspark.ai)
+                  > (aads-ceo-browser, login.genspark.ai) > (aads-ceo-browser, www.genspark.ai).
+        Only returns credentials that belong to tenant_id — never crosses tenant boundary.
+        """
+        pool = self._get_pool_or_none()
+        if not pool or not tenant_id:
+            return None
+        try:
+            tenant_uuid = uuid.UUID(tenant_id)
+        except (ValueError, AttributeError):
+            return None
+        candidates: list[tuple[str, str]] = [
+            (request_work_key, "https://login.genspark.ai"),
+            (request_work_key, "https://www.genspark.ai"),
+            ("aads-ceo-browser", "https://login.genspark.ai"),
+            ("aads-ceo-browser", "https://www.genspark.ai"),
+        ]
+        seen: set[tuple[str, str]] = set()
+        unique_candidates: list[tuple[str, str]] = []
+        for pair in candidates:
+            if pair not in seen:
+                seen.add(pair)
+                unique_candidates.append(pair)
+        try:
+            from app.core.credential_vault import decrypt_value
+
+            async with pool.acquire() as conn:
+                for wk, origin in unique_candidates:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id::text AS id, username_enc, password_enc, work_key, origin
+                          FROM agent_vault_credentials
+                         WHERE tenant_id = $1
+                           AND work_key = $2
+                           AND origin = $3
+                           AND is_active = TRUE
+                         LIMIT 1
+                        """,
+                        tenant_uuid,
+                        wk,
+                        origin,
+                    )
+                    if row:
+                        return {
+                            "id": str(row["id"]),
+                            "username": decrypt_value(row["username_enc"]),
+                            "password": decrypt_value(row["password_enc"]),
+                            "work_key": row["work_key"],
+                            "origin": row["origin"],
+                        }
+        except Exception:
+            return None
+        return None
+
+    async def _attempt_genspark_login(
+        self,
+        page: Any,
+        *,
+        username: str,
+        password: str,
+        login_url: str = "https://login.genspark.ai",
+    ) -> dict[str, Any]:
+        """Attempt Playwright login on Genspark using stored credentials.
+
+        Returns {"ok": True} on apparent success, {"ok": False, "error": "CODE"} otherwise.
+        The password value is NEVER written to logs, error strings, or metadata.
+        If captcha / 2FA / additional consent is detected the method returns
+        immediately with ok=False so the caller can set auth_required.
+        """
+        try:
+            goto_timeout_ms = int(float(os.getenv("AADS_GENSPARK_UI_GOTO_TIMEOUT_SECONDS", "25")) * 1000)
+            await page.goto(login_url, timeout=goto_timeout_ms, wait_until="domcontentloaded")
+
+            page_text = await self._read_genspark_page_text(page)
+            lower = page_text.lower()
+            if any(
+                kw in lower
+                for kw in ("captcha", "recaptcha", "hcaptcha", "i'm not a robot", "verify you're human", "보안 인증")
+            ):
+                return {"ok": False, "error": "CAPTCHA_DETECTED"}
+
+            filled_email = await page.evaluate(
+                """(v) => {
+                  const inputs = [...document.querySelectorAll(
+                    'input[type="email"],input[type="text"],input:not([type])'
+                  )].filter(el => {
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                  });
+                  const el = inputs.find(i => /email|이메일|아이디/.test(
+                    [i.getAttribute('placeholder'), i.getAttribute('name'),
+                     i.getAttribute('id'), i.getAttribute('aria-label'), i.getAttribute('type')]
+                      .filter(Boolean).join(' ').toLowerCase())) || inputs[0];
+                  if (!el) return false;
+                  const proto = window.HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                  if (setter) setter.call(el, v); else el.value = v;
+                  el.dispatchEvent(new Event('input', {bubbles: true}));
+                  el.dispatchEvent(new Event('change', {bubbles: true}));
+                  return true;
+                }""",
+                username,
+            )
+            if not filled_email:
+                return {"ok": False, "error": "EMAIL_FIELD_NOT_FOUND"}
+
+            filled_pw = await page.evaluate(
+                """(v) => {
+                  const el = document.querySelector('input[type="password"]');
+                  if (!el) return false;
+                  const r = el.getBoundingClientRect();
+                  const s = window.getComputedStyle(el);
+                  if (r.width === 0 || r.height === 0 || s.display === 'none' || s.visibility === 'hidden') return false;
+                  const proto = window.HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                  if (setter) setter.call(el, v); else el.value = v;
+                  el.dispatchEvent(new Event('input', {bubbles: true}));
+                  el.dispatchEvent(new Event('change', {bubbles: true}));
+                  return true;
+                }""",
+                password,
+            )
+            if not filled_pw:
+                return {"ok": False, "error": "PASSWORD_FIELD_NOT_FOUND"}
+
+            clicked = await page.evaluate(
+                """() => {
+                  const btns = [...document.querySelectorAll('button[type="submit"],button')].filter(el => {
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && !el.disabled;
+                  });
+                  const btn = btns.find(el => /sign.in|login|로그인|submit|continue|계속/i.test(
+                    [el.textContent, el.getAttribute('aria-label')].filter(Boolean).join(' '))) || btns[0];
+                  if (!btn) return false;
+                  btn.click();
+                  return true;
+                }"""
+            )
+            if not clicked:
+                try:
+                    await page.keyboard.press("Enter")
+                except Exception:
+                    pass
+
+            try:
+                if hasattr(page, "wait_for_timeout"):
+                    await page.wait_for_timeout(3000)
+            except Exception:
+                pass
+
+            post_text = await self._read_genspark_page_text(page)
+            lower_post = post_text.lower()
+            if any(
+                kw in lower_post
+                for kw in ("two-factor", "2fa", "verification code", "otp", "약관", "terms of service", "terms of use")
+            ):
+                return {"ok": False, "error": "ADDITIONAL_AUTH_REQUIRED"}
+
+            current_url = str(getattr(page, "url", "") or "")
+            if any(m in current_url for m in ("login.genspark.ai", "/login", "/signin", "/sign-in")):
+                if any(kw in lower_post for kw in ("incorrect", "invalid", "wrong", "잘못된", "오류")):
+                    return {"ok": False, "error": "CREDENTIALS_REJECTED"}
+                return {"ok": False, "error": "LOGIN_FAILED"}
+
+            if self._looks_like_genspark_auth_gate(post_text):
+                return {"ok": False, "error": "LOGIN_FAILED"}
+
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": f"LOGIN_EXCEPTION:{type(exc).__name__}"}
+
     async def process_genspark_ui_job(
         self,
         *,
@@ -1181,25 +1375,79 @@ class MediaGenerationService:
             )
             page_text = await run_step("GENSPARK_PAGE_READ", self._read_genspark_page_text(page))
             if self._looks_like_genspark_auth_gate(page_text):
-                updated = await self.update_job_status(
-                    str(job["job_id"]),
-                    "queued",
-                    result_metadata={
-                        **metadata,
-                        "ui_automation": {
-                            **automation,
-                            "state": "auth_required",
-                            "browser_session_id": session_id or None,
-                            "work_key": work_key,
-                            "target_url": url,
-                            "last_error": "GENSPARK_LOGIN_REQUIRED",
-                        },
-                    },
-                    error_message="Genspark login required in Browser Bridge/PC Agent session",
+                _session_id_for_vault = str(job.get("session_id") or "").strip()
+                _vault_tenant_id = (
+                    await self._fetch_tenant_id_for_session(_session_id_for_vault)
+                    if _session_id_for_vault
+                    else None
                 )
-                public = _public_job(updated)
-                public.update({"automation_state": "auth_required", "requires_login": True})
-                return public
+                _vault_cred = (
+                    await self._fetch_genspark_vault_credential(_vault_tenant_id, work_key)
+                    if _vault_tenant_id
+                    else None
+                )
+
+                _auto_login_ok = False
+                _login_err = ""
+                if _vault_cred:
+                    _login_result = await run_step(
+                        "GENSPARK_VAULT_LOGIN",
+                        self._attempt_genspark_login(
+                            page,
+                            username=_vault_cred["username"],
+                            password=_vault_cred["password"],
+                            login_url=_vault_cred["origin"],
+                        ),
+                    )
+                    if _login_result.get("ok"):
+                        goto_ms = int(float(os.getenv("AADS_GENSPARK_UI_GOTO_TIMEOUT_SECONDS", "25")) * 1000)
+                        try:
+                            await run_step(
+                                "GENSPARK_POST_LOGIN_GOTO",
+                                page.goto(url, timeout=goto_ms, wait_until="domcontentloaded"),
+                            )
+                        except Exception:
+                            pass
+                        _post_text = await run_step(
+                            "GENSPARK_POST_LOGIN_READ",
+                            self._read_genspark_page_text(page),
+                        )
+                        if not self._looks_like_genspark_auth_gate(_post_text):
+                            _auto_login_ok = True
+                        else:
+                            _login_err = "AUTH_GATE_PERSISTS_AFTER_LOGIN"
+                    else:
+                        _login_err = str(_login_result.get("error") or "")
+
+                if not _auto_login_ok:
+                    if not _vault_cred:
+                        _last_error = "AGENT_VAULT_CREDENTIAL_MISSING"
+                        _err_msg = "Genspark auth gate detected: no Agent Vault credential found for this session"
+                    elif any(kw in _login_err for kw in ("CAPTCHA", "ADDITIONAL_AUTH")):
+                        _last_error = "GENSPARK_LOGIN_REQUIRED"
+                        _err_msg = "Genspark auth gate detected: additional authentication (captcha/2FA) required"
+                    else:
+                        _last_error = "AGENT_VAULT_LOGIN_FAILED"
+                        _err_msg = "Genspark auth gate detected: Agent Vault auto-login attempt failed"
+                    updated = await self.update_job_status(
+                        str(job["job_id"]),
+                        "queued",
+                        result_metadata={
+                            **metadata,
+                            "ui_automation": {
+                                **automation,
+                                "state": "auth_required",
+                                "browser_session_id": session_id or None,
+                                "work_key": work_key,
+                                "target_url": url,
+                                "last_error": _last_error,
+                            },
+                        },
+                        error_message=_err_msg,
+                    )
+                    public = _public_job(updated)
+                    public.update({"automation_state": "auth_required", "requires_login": True})
+                    return public
 
             submitted = await run_step(
                 "GENSPARK_PROMPT_SUBMIT",
