@@ -3431,6 +3431,7 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
 def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
     storage_state_path = str(payload.get("storage_state_path") or "").strip()
     browser_session_id = str(payload.get("browser_session_id") or "").strip()
+    explicit_browser_session_id = browser_session_id
     bridge_mode = ""
     if not storage_state_path:
         try:
@@ -3446,6 +3447,7 @@ def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
         "storage_state_path": storage_state_path if storage_state_path and Path(storage_state_path).is_file() else "",
         "browser_session_id": browser_session_id,
         "browser_bridge_mode": bridge_mode,
+        "browser_session_id_explicit": "1" if explicit_browser_session_id else "",
     }
 
 
@@ -3457,8 +3459,13 @@ def _delivery_browser_auth_for_account(
     branch: str,
 ) -> dict[str, str]:
     auth = dict(_delivery_browser_auth_options(payload))
-    if auth.get("storage_state_path") or auth.get("browser_session_id"):
+    legacy_explicit_session = "browser_session_id_explicit" not in auth and bool(auth.get("browser_session_id"))
+    if auth.get("storage_state_path") or auth.get("browser_session_id_explicit") or legacy_explicit_session:
         return auth
+    ambient_browser_session_id = str(auth.get("browser_session_id") or "").strip()
+    if ambient_browser_session_id:
+        auth["ambient_browser_session_id"] = ambient_browser_session_id
+        auth["browser_session_id"] = ""
     if payload.get("disable_pc_agent") or payload.get("disablePcAgent"):
         return auth
 
@@ -3490,6 +3497,35 @@ def _delivery_browser_auth_for_account(
     except Exception as exc:
         auth["browser_bridge_error"] = str(exc)[:300]
     return auth
+
+
+_DELIVERY_SERVICE_URL_MARKERS = {
+    "baemin": ("baemin.com",),
+    "coupangeats": ("coupangeats.com",),
+    "yogiyo": ("yogiyo.co.kr",),
+    "ddangyo": ("ddangyo.com",),
+}
+
+
+def _delivery_result_is_wrong_portal(service: str, result: dict[str, Any]) -> bool:
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    url = str(diagnostics.get("url") or "").lower()
+    if not url:
+        return False
+    markers = _DELIVERY_SERVICE_URL_MARKERS.get(service, ())
+    return bool(markers and not any(marker in url for marker in markers))
+
+
+def _delivery_result_has_no_visible_source(result: dict[str, Any]) -> bool:
+    error_code = str(result.get("error_code") or "").upper()
+    if error_code not in {"AUTHENTICATED_NO_ROWS", "EMPTY_SOURCE", "NO_PARSEABLE_ROWS"}:
+        return False
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    has_section_diagnostics = any(kind in diagnostics for kind in ("sales", "settlements", "reviews"))
+    section_values = [str(diagnostics.get(kind) or "").upper() for kind in ("sales", "settlements", "reviews")]
+    if has_section_diagnostics and all(value in {"SECTION_NOT_FOUND", "NO_EXPORT_OR_TABLE", "NO_PARSEABLE_ROWS", ""} for value in section_values):
+        return True
+    return error_code in {"EMPTY_SOURCE", "NO_PARSEABLE_ROWS"} and str(diagnostics.get("auth_mode") or "") == "pc_agent_browser"
 
 
 def _baemin_bridge_page_kind(text: str) -> str:
@@ -4062,6 +4098,16 @@ async def _collect_baemin_from_browser_bridge_session_async(
             url = str(await page.evaluate("window.location.href") or url)
         except Exception:
             pass
+        if "baemin.com" not in url.lower():
+            try:
+                await page.goto("https://self.baemin.com/", wait_until="domcontentloaded", timeout=45000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                url = str(await page.evaluate("window.location.href") or "")
+            except Exception:
+                pass
         text = ""
         html = ""
         try:
@@ -4244,6 +4290,32 @@ def _collect_delivery_from_browser_bridge_session(
 
 
 def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) -> dict[str, Any]:
+    if _delivery_result_is_wrong_portal(service, result):
+        label = _delivery_platform_label(service)
+        diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+        return {
+            **result,
+            "status": "portal_action_required",
+            "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
+            "message": (
+                f"{label} 자동수집 세션이 다른 포털 화면에 연결됐습니다. "
+                "플랫폼별 PC Agent 작업 세션을 다시 생성한 뒤 재수집해야 합니다."
+            ),
+            "diagnostics": diagnostics,
+        }
+    if _delivery_result_has_no_visible_source(result):
+        label = _delivery_platform_label(service)
+        diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+        return {
+            **result,
+            "status": "portal_action_required",
+            "error_code": "PORTAL_TABLE_NOT_FOUND",
+            "message": (
+                f"{label} 로그인은 확인됐지만 매출/정산/리뷰 표를 찾지 못했습니다. "
+                "포털 메뉴 구조 또는 조회 조건 확인 후 PC Agent 세션에서 다시 수집해야 합니다."
+            ),
+            "diagnostics": diagnostics,
+        }
     if service != "baemin" and str(result.get("error_code") or "") == "BAEMIN_SECURITY_BLOCKED":
         label = _delivery_platform_label(service)
         result = {**result}

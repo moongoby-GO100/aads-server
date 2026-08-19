@@ -6726,3 +6726,20 @@
   - Retried smoke job with 45s service timeout; it returned `queued` with `GENSPARK_PAGE_ACQUIRE_TIMEOUT` instead of remaining stuck in `running`.
 - Status:
   - Code is ready for commit/deploy. Actual Genspark media generation still needs a post-deploy API call with `browser_session_id=bb-1e975480c694`.
+
+## 2026-08-19 20:00 KST - Yeoljeong delivery auto-collection PC Agent session isolation fix
+
+- Request: "데이터를 못가져오는 자동수집이 어디있어 즉시 해결해"
+- Finding:
+  - Latest collection status showed Baemin diagnostics with `url=https://boss.ddangyo.com/`, which means multiple delivery portals reused the same active PC Agent browser session.
+  - That caused Baemin to parse a Ddangyo page and return `EMPTY_SOURCE`; Coupang Eats/Yogiyo/Ddangyo returned `partial/AUTHENTICATED_NO_ROWS` with all sections marked `section_not_found`.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` now treats only explicitly supplied `browser_session_id` as reusable. Ambient active Browser Bridge sessions are preserved in diagnostics but replaced with a per-service work session using `yeoljeong-delivery-{service}-{business_id}-{branch}`.
+  - Baemin PC Agent collection now navigates to `https://self.baemin.com/` before parsing when the selected page is not a Baemin domain.
+  - Wrong-portal and no-visible-section results are normalized to `action_required` with `PC_AGENT_WRONG_PORTAL_SESSION` or `PORTAL_TABLE_NOT_FOUND`, instead of being hidden as `partial`.
+  - Added regression tests for active-session isolation and PC Agent section-not-found status handling.
+- Verification:
+  - `python3 -m compileall app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_api.py` succeeded: 108 passed.
+- Remaining:
+  - Live portal rows still depend on valid saved credentials or an online PC Agent session logged into each delivery portal. Missing Mia Baemin account and missing Mia portal passwords remain operational prerequisites.

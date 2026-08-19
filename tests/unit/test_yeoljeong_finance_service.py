@@ -1550,6 +1550,102 @@ def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):
     assert auth["storage_state_path"] == ""
 
 
+def test_delivery_browser_auth_for_account_creates_service_session_instead_of_reusing_active(monkeypatch):
+    def fake_build_e2e_config(session_id=None):
+        assert session_id is None
+        return {
+            "mode": "local_agent",
+            "session_id": "bb-active-ddangyo",
+            "headless_fallback": False,
+        }
+
+    class FakeSession:
+        session_id = "bb-work-baemin"
+
+    class FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        async def ensure_work_session(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeSession()
+
+    fake_bridge = FakeBridge()
+
+    import app.browser_bridge.e2e_adapter as e2e_adapter
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(e2e_adapter, "build_e2e_config", fake_build_e2e_config)
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+
+    auth = service._delivery_browser_auth_for_account(
+        {},
+        {"service": "baemin", "business_id": "biz-junghwa", "branch": "중화점"},
+        "baemin",
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert auth["browser_session_id"] == "bb-work-baemin"
+    assert auth["ambient_browser_session_id"] == "bb-active-ddangyo"
+    assert auth["browser_work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-중화점"
+    assert fake_bridge.calls[0]["url"].startswith("https://")
+
+
+def test_sync_delivery_marks_pc_agent_section_not_found_as_action_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-coupangeats-junghwa",
+                "service": "coupangeats",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "bb-pc-agent", "browser_bridge_mode": "local_agent"},
+    )
+
+    def fake_bridge_collect(account, browser_auth, date_from, date_to):
+        return {
+            "status": "partial",
+            "error_code": "AUTHENTICATED_NO_ROWS",
+            "records": {"sales": [], "settlements": [], "reviews": []},
+            "diagnostics": {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": browser_auth["browser_session_id"],
+                "url": "https://store.coupangeats.com/merchant/",
+                "sales": "section_not_found",
+                "settlements": "section_not_found",
+                "reviews": "section_not_found",
+            },
+        }
+
+    monkeypatch.setattr(service, "_collect_delivery_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["coupangeats"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "PORTAL_TABLE_NOT_FOUND"
+    assert service._read("delivery_collection_status")[0]["status"] == "action_required"
+
+
 def test_baemin_dashboard_records_extracts_home_summary(monkeypatch):
     class FixedDateTime:
         @classmethod
