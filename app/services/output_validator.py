@@ -233,15 +233,15 @@ def _looks_progress_only_response(response_text: str, intent: str, *, tools_call
     normalized_intent = (intent or "").strip()
     if normalized_intent not in _REPORT_QUALITY_INTENTS:
         return False
-    if tools_called and normalized_intent in {"status_check", "task_query", "health_check", "execution_verify"}:
-        # 짧은 상태 조회는 실제 도구 결과가 있으면 진행형 꼬리말만으로 차단하지 않는다.
-        # 보고/러너/실행형 응답은 완료 아닌 버블이 completed로 저장되지 않게 기존 검사를 유지한다.
-        tail_is_progress = bool(_PROGRESS_TAIL_RE.search((response_text or "").strip()[-500:].strip()))
-        if len((response_text or "").strip()) >= _STATUS_REPORT_MIN_STRUCTURE_CHARS or not tail_is_progress:
-            return False
     text = response_text.strip()
     if not text:
         return False
+    if tools_called and normalized_intent in {"status_check", "task_query", "health_check", "execution_verify"}:
+        # 짧은 상태 조회는 실제 도구 결과가 있더라도 진행형 꼬리말만으로 끝나면 차단한다.
+        # 충분히 구조화된 상태 보고 또는 진행형 꼬리말이 아닌 응답은 통과시킨다.
+        tail_is_progress = bool(_PROGRESS_TAIL_RE.search(text[-500:].strip()))
+        if len(text) >= _STATUS_REPORT_MIN_STRUCTURE_CHARS or not tail_is_progress:
+            return False
     tail = text[-500:].strip()
     if _PROGRESS_TAIL_RE.search(tail):
         if _is_structured_next_action_tail(text):

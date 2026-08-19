@@ -226,9 +226,9 @@ join_by_comma() {
 
 log "=== Claude/Codex update started ==="
 
-update_remote_server "114" "114.207.244.86" "7916" || true
-update_local_server "68" || true
-update_remote_server "211" "211.188.51.113" "22" || true
+update_remote_server "cafe24_114" "114.207.244.86" "7916" || true
+update_local_server "contabo116" || true
+update_remote_server "contabo14" "5.104.86.14" "22" || true
 
 summary_message="<b>Claude/Codex update summary</b>
 Success: $(join_by_comma "${SUCCESS_SERVERS[@]}")

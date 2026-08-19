@@ -689,8 +689,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "read_remote_file",
         "description": (
             "프로젝트 서버의 파일을 읽습니다 (SSH 자동 매핑, Claude Code Read tool과 동일). "
-            "AADS=68서버(/root/aads/), KIS/GO100=211서버(/root/kis-autotrade-v4/), "
-            "SF=114서버(/data/shortflow/), NTV2=114서버(/var/www/newtalk/). "
+            "AADS=contabo116(/root/aads/), KIS/GO100=contabo14(/root/kis-autotrade-v4/), "
+            "SF=cafe24_114(/data/shortflow/), NTV2=cafe24_114(/var/www/newtalk/). "
             "기본 2000줄 읽기, offset/limit으로 대용량 파일 분할 읽기 가능. "
             "⚠️ AADS는 read_github_file도 가능하지만, SF/NTV2/KIS/GO100은 이 도구만 사용."
         ),
@@ -770,7 +770,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "원격 서버 파일 쓰기 (SSH). 기존 파일은 자동 백업(.bak_aads). "
             "민감 파일(.env, .ssh 등) 차단. 최대 1MB. "
-            "KIS/GO100=211서버, SF/NTV2=114서버. AADS는 로컬."
+            "KIS/GO100=contabo14, SF/NTV2=cafe24_114. AADS는 로컬(contabo116)."
         ),
         "input_schema": {
             "type": "object",
@@ -2243,7 +2243,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── Pipeline Runner: 호스트 독립 실행 (권장) ────────────────────────────
     "pipeline_runner_submit": {
         "name": "pipeline_runner_submit",
-        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출. 각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향. 서버매핑: AADS→68서버, KIS/GO100→211서버, SF/NTV2→114서버.",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출. 각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향. 서버매핑: AADS→contabo116, KIS/GO100→contabo14, SF/NTV2→cafe24_114.",
         "input_schema": {
             "type": "object",
             "properties": {

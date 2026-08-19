@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-19 12:12 KST - Canonical server naming and dashboard deploy follow-up
+
+- Request: Standardize server names as `contabo116`, `contabo14`, `cafe24_114`; proceed immediately and defer disk cleanup.
+- Changes:
+  - Backend runtime strings now describe Pipeline Runner, remote file tools, remote DB tools, and Codex sync targets using `contabo116`, `contabo14`, and `cafe24_114`.
+  - `scripts/update_claude_all_servers.sh` now targets `cafe24_114=114.207.244.86:7916`, local `contabo116`, and `contabo14=5.104.86.14:22`.
+  - `scripts/codex_auth_sync.sh` now syncs Codex auth to `contabo14` and `cafe24_114`; alert text now names `contabo116`.
+  - `app/services/output_validator.py` restores the guard that rejects thin status reports ending with only a next-step promise, matching the existing regression test.
+  - Earlier same-session changes updated `server_registry`, prompt/server mapping code, `/server-status` dashboard routing, `/ops/servers`, `/admin/deploy`, and server mini-card labels.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat.py app/api/ceo_chat_tools.py app/api/ceo_chat_tools_db.py app/services/tool_registry.py` passed.
+  - `bash -n scripts/update_claude_all_servers.sh scripts/codex_auth_sync.sh` passed.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -q` passed: 56 passed, 1 warning.
+  - Runtime containers report canonical `SERVER_REGISTRY` entries for `contabo116`, `contabo14`, and `cafe24_114` with legacy aliases retained for compatibility.
+  - Dashboard blue-green deploy succeeded at release `9f3f968add04`; active container is `aads-dashboard-green` on port `3101`; external `/login` returned HTTP 200.
+  - API health at `127.0.0.1:8100/api/v1/health` returned HTTP 200.
+- Status:
+  - Dashboard commit `9f3f968 fix(infra): update server dashboard inventory` is pushed and deployed.
+  - Backend earlier commit `2210acad fix(infra): canonicalize remaining server names` was pushed; this follow-up backend string/script cleanup is captured with this HANDOVER entry and requires API redeploy to refresh long-lived runtime processes.
+  - API blue-green deploy was not completed in this session because an existing deploy process stalled in docker compose; service stayed healthy and active API remains on `8100`.
+  - Existing unrelated dirty files were restored after deploy and left outside this request.
+  - Disk cleanup remains intentionally deferred.
+
 ## 2026-08-19 07:35 KST - Yeoljeong Finance integration filter design and readiness table clarification
 
 - Request: Make the integration detail filters match the existing category/status design and clarify why Jungwha branch rows appear in a lower list.

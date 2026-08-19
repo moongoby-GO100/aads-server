@@ -923,7 +923,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Pipeline Runner 도구 (호스트 독립 실행 — 권장) ─────────────────────
     {
         "name": "pipeline_runner_submit",
-        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→68서버, KIS/GO100→211서버, SF/NTV2→114서버.\n예: pipeline_runner_submit(project='KIS', instruction='order_executor.py null check 추가')",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→contabo116, KIS/GO100→contabo14, SF/NTV2→cafe24_114.\n예: pipeline_runner_submit(project='KIS', instruction='order_executor.py null check 추가')",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1451,9 +1451,9 @@ TOOL_DEFINITIONS: List[Dict] = [
         "name": "query_project_database",
         "description": (
             "프로젝트별 원격 DB에 SELECT 쿼리 실행.\n"
-            "- KIS/GO100: PostgreSQL (211서버)\n"
-            "- SF: MariaDB (114서버, SSH 터널)\n"
-            "- NTV2: MySQL 8.0 (114서버, SSH 터널)\n"
+            "- KIS/GO100: PostgreSQL (contabo14)\n"
+            "- SF: MariaDB (cafe24_114, SSH 터널)\n"
+            "- NTV2: MySQL 8.0 (cafe24_114, SSH 터널)\n"
             "보안: SELECT/WITH/EXPLAIN만 허용. DML/DDL 차단. password/token 컬럼 자동 마스킹.\n"
             "예: query_project_database(project='KIS', query='SELECT * FROM users LIMIT 5')"
         ),

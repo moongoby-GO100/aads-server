@@ -3,10 +3,10 @@ AADS-190: 프로젝트별 원격 DB 쿼리 도구.
 CEO 채팅에서 KIS/GO100/SF/NTV2 등 외부 프로젝트 DB에 SELECT 쿼리 실행.
 
 DB 매핑:
-- KIS: PostgreSQL 16 (211서버, host.docker.internal:5432, kisautotrade)
+- KIS: PostgreSQL 16 (contabo14, host.docker.internal:5432, kisautotrade)
 - GO100: KIS와 동일 DB (kisautotrade)
-- SF: MariaDB (114서버, SSH 터널 → localhost:3306, autoda)
-- NTV2: MySQL 8.0 Docker (114서버, SSH 터널 → localhost:3307, newtalk_v2)
+- SF: MariaDB (cafe24_114, SSH 터널 → localhost:3306, autoda)
+- NTV2: MySQL 8.0 Docker (cafe24_114, SSH 터널 → localhost:3307, newtalk_v2)
 
 보안:
 - SELECT/WITH/EXPLAIN만 허용 (DML/DDL 전면 차단)

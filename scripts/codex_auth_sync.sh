@@ -2,7 +2,7 @@
 # Codex CLI 인증 자동 유지 스크립트
 # 역할: (1) access_token 만료 감시 (2) 프리웜으로 자동 갱신 (3) 마스터→전서버 동기화
 # 크론: */30 * * * * /root/aads/aads-server/scripts/codex_auth_sync.sh
-# 마스터 서버: 68 (AADS) — 여기서 갱신 후 211, 114로 배포
+# 마스터 서버: contabo116 (AADS) — 여기서 갱신 후 contabo14, cafe24_114로 배포
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ WARN_DAYS=3
 TELEGRAM_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 
-SSH_211="211.188.51.113"
+SSH_211="5.104.86.14"
 SSH_114="-p 7916 114.207.244.86"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=no"
 
@@ -92,7 +92,7 @@ remaining=$(get_token_remaining_days)
 
 if [[ "$remaining" == "-1" ]]; then
     log "ERROR: auth.json 파싱 실패"
-    send_telegram "🔴 [Codex Auth] 68서버 auth.json 파싱 실패"
+    send_telegram "🔴 [Codex Auth] contabo116 auth.json 파싱 실패"
     exit 1
 fi
 
@@ -103,17 +103,17 @@ log "CHECK: access_token 잔여 ${remaining}일"
 # 1. 만료됨 또는 1일 이내 → 프리웜으로 갱신 시도
 if (( remaining_int < 1 )); then
     log "ALERT: 토큰 만료 임박 (${remaining}일) — 프리웜 갱신 시도"
-    send_telegram "🟡 [Codex Auth] 68서버 토큰 ${remaining}일 남음 — 자동 갱신 시도 중"
+    send_telegram "🟡 [Codex Auth] contabo116 토큰 ${remaining}일 남음 — 자동 갱신 시도 중"
 
     if prewarm_codex; then
         new_remaining=$(get_token_remaining_days)
         log "RENEWED: 갱신 후 잔여 ${new_remaining}일"
-        send_telegram "✅ [Codex Auth] 68서버 토큰 자동 갱신 성공 — ${new_remaining}일 남음"
+        send_telegram "✅ [Codex Auth] contabo116 토큰 자동 갱신 성공 — ${new_remaining}일 남음"
         # 갱신된 토큰을 전서버에 동기화
-        sync_to_remote "211서버" "$SSH_211"
-        sync_to_remote "114서버" $SSH_114
+        sync_to_remote "contabo14" "$SSH_211"
+        sync_to_remote "cafe24_114" $SSH_114
     else
-        send_telegram "🔴 [Codex Auth] 68서버 토큰 자동 갱신 실패 — CEO 수동 인증 필요: codex login --device-auth"
+        send_telegram "🔴 [Codex Auth] contabo116 토큰 자동 갱신 실패 — CEO 수동 인증 필요: codex login --device-auth"
     fi
 
 # 2. 3일 이내 → 경고만
@@ -134,8 +134,8 @@ else
     MIN=$(date +%M)
     if [[ "$HOUR" == "04" && "$MIN" -ge 25 && "$MIN" -le 35 ]]; then
         log "DAILY_SYNC: 정기 전서버 동기화"
-        sync_to_remote "211서버" "$SSH_211"
-        sync_to_remote "114서버" $SSH_114
+        sync_to_remote "contabo14" "$SSH_211"
+        sync_to_remote "cafe24_114" $SSH_114
     fi
 fi
 

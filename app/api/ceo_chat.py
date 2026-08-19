@@ -814,14 +814,14 @@ class ContextManager:
         # Pipeline C 가이드
         parts.append("")
         parts.append("""[Pipeline Runner — Claude Code 자율 작업 시스템]
-각 서버(211/114/68)에 설치된 Claude Code CLI에 직접 작업을 지시할 수 있습니다.
+각 서버(contabo14/cafe24_114/contabo116)에 설치된 Claude Code CLI에 직접 작업을 지시할 수 있습니다.
 
 사용 가능한 도구:
 - pipeline_runner_submit(project, instruction): 작업 제출
 - pipeline_runner_status(job_id): 진행 상황 확인
 - pipeline_runner_approve(job_id, action, feedback): 승인(approve) 또는 거부(reject)
 
-프로젝트: KIS(211서버), GO100(211서버), SF(114서버), NTV2(114서버), AADS(68서버)
+프로젝트: KIS(contabo14), GO100(contabo14), SF(cafe24_114), NTV2(cafe24_114), AADS(contabo116)
 
 ⚠️ 필수 작업 프로세스 v2.3 (모든 코드 수정에 적용 — Runner/에이전트SDK/직접수정 모두 동일):
 
