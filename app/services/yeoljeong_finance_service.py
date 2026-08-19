@@ -3579,13 +3579,14 @@ def _delivery_browser_auth_for_account(
             or "about:blank"
         )
         work_key = _delivery_browser_work_key(service, business_id, branch)
+        auth["browser_target_url"] = url
         bridge_service = get_browser_bridge_service()
         try:
             session = _run_delivery_browser_async(
                 bridge_service.ensure_work_session(
                     work_key=work_key,
                     label=f"열정국밥 {branch} {label} 자동수집",
-                    url=url,
+                    url="about:blank",
                 )
             )
         except Exception as first_exc:
@@ -3594,7 +3595,7 @@ def _delivery_browser_auth_for_account(
                 bridge_service.ensure_work_session(
                     work_key=work_key,
                     label=f"열정국밥 {branch} {label} 자동수집",
-                    url=url,
+                    url="about:blank",
                     force_recreate=True,
                 )
             )

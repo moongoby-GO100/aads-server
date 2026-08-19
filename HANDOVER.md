@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-08-19 21:55 KST - Yeoljeong delivery login CDP readiness hardening
+
+- Request: Automate delivery portal login immediately after repeated `PC_AGENT_SESSION_REQUIRED` results.
+- Confirmed:
+  - Latest Yeoljeong worker run after `c932736a` recorded `browser_bridge_error="CDP endpoint 준비 실패 (/json/version 응답 없음)"` for Baemin.
+  - PC Agent was online, but portal URL launch and CDP readiness were coupled during work-session creation.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: keep the account portal URL in `browser_target_url`, but create the dedicated PC Agent work session at `about:blank` first.
+  - Actual portal navigation remains in the collector step, after the local-agent Browser Bridge session exists.
+  - `tests/unit/test_yeoljeong_finance_service.py`: updated delivery browser auth tests to lock the `about:blank` launch contract and target URL preservation.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-yeoljeong-finance:latest python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_browser_bridge.py -q` passed: 111 passed.
+  - `git diff --check` succeeded.
+- Remaining:
+  - Commit, push, Yeoljeong container restart, and live collection verification are required after this entry.
+  - Portal MFA/additional-auth prompts still require CEO/PC-side confirmation when the portal asks for them.
+
 ## 2026-08-19 21:31 KST - AADS-186 OHVIS Managed Browser + Agent Vault P0 direct implementation
 
 - Request: Track the failed AADS-186 runner work until implementation completes, then report.

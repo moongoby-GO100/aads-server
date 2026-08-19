@@ -1459,7 +1459,8 @@ def test_delivery_browser_auth_for_account_ensures_service_work_session(monkeypa
     assert auth["browser_bridge_mode"] == "local_agent"
     assert auth["browser_work_key"].startswith("yeoljeong-delivery-coupangeats-biz-junghwa-")
     assert "중화점" not in auth["browser_work_key"]
-    assert fake_bridge.calls[0]["url"].startswith("https://")
+    assert auth["browser_target_url"].startswith("https://")
+    assert fake_bridge.calls[0]["url"] == "about:blank"
 
 
 def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypatch):
@@ -1504,6 +1505,8 @@ def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypa
     assert auth["browser_bridge_recovered"] == "force_recreate"
     assert fake_bridge.calls[0].get("force_recreate") is None
     assert fake_bridge.calls[1]["force_recreate"] is True
+    assert fake_bridge.calls[0]["url"] == "about:blank"
+    assert fake_bridge.calls[1]["url"] == "about:blank"
 
 
 def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_path, monkeypatch):
@@ -1699,7 +1702,8 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
     assert auth["ambient_browser_session_id"] == "bb-active-ddangyo"
     assert auth["browser_work_key"].startswith("yeoljeong-delivery-baemin-biz-junghwa-")
     assert "중화점" not in auth["browser_work_key"]
-    assert fake_bridge.calls[0]["url"].startswith("https://")
+    assert auth["browser_target_url"].startswith("https://")
+    assert fake_bridge.calls[0]["url"] == "about:blank"
 
 
 def test_sync_delivery_blocks_concurrent_runs_without_touching_collectors(tmp_path, monkeypatch):
