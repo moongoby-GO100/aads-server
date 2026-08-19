@@ -121,6 +121,62 @@ def test_until_complete_retries_until_imported_rows(monkeypatch):
     assert sleeps == [7]
 
 
+def test_until_complete_force_recreates_after_wrong_portal_session(monkeypatch):
+    calls = []
+    sleeps = []
+    results = [
+        {
+            "summary": [
+                {
+                    "service": "ddangyo",
+                    "status": "action_required",
+                    "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                }
+            ]
+        },
+        {
+            "summary": [
+                {
+                    "service": "ddangyo",
+                    "status": "succeeded",
+                    "error_code": "",
+                    "counts": {"sales": 1, "settlements": 0, "reviews": 0},
+                }
+            ]
+        },
+    ]
+
+    def fake_run_sync(payload, user, *, queue_only=False):
+        calls.append(dict(payload))
+        return results.pop(0)
+
+    monkeypatch.setattr(
+        auto_collect,
+        "_payload",
+        lambda args: {
+            "business_id": "all",
+            "force_recreate_portal_sessions": False,
+        },
+    )
+    monkeypatch.setattr(auto_collect, "_run_sync", fake_run_sync)
+    monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+
+    args = SimpleNamespace(
+        max_attempts=3,
+        retry_seconds=7,
+        blocked_retry_seconds=19,
+        success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
+        repeat_after_complete=False,
+    )
+
+    assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 0
+    assert calls[0]["force_recreate_portal_sessions"] is False
+    assert calls[1]["force_recreate_portal_sessions"] is True
+    assert sleeps == [7]
+
+
 def test_until_complete_uses_blocked_retry_interval(monkeypatch):
     sleeps = []
 

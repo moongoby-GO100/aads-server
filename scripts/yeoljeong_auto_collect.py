@@ -38,7 +38,15 @@ RETRYABLE_ERROR_CODES = {
     "EMPTY_SOURCE",
     "LOGIN_FORM_NOT_FOUND",
     "NO_PARSEABLE_ROWS",
+    "PC_AGENT_COLLECTOR_TIMEOUTERROR",
+    "PC_AGENT_SESSION_NOT_FOUND",
+    "PC_AGENT_WRONG_PORTAL_SESSION",
     "PORTAL_TABLE_NOT_FOUND",
+}
+SESSION_RECREATE_ERROR_CODES = {
+    "PC_AGENT_COLLECTOR_TIMEOUTERROR",
+    "PC_AGENT_SESSION_NOT_FOUND",
+    "PC_AGENT_WRONG_PORTAL_SESSION",
 }
 
 
@@ -153,6 +161,15 @@ def _completion_state(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _should_force_recreate_portal_sessions(state: dict[str, Any]) -> bool:
+    codes = {
+        str(code or "").strip().upper()
+        for key in ("retryable_codes", "blocking_codes")
+        for code in (state.get(key) if isinstance(state.get(key), list) else [])
+    }
+    return bool(codes & SESSION_RECREATE_ERROR_CODES)
+
+
 def _sleep(seconds: int) -> None:
     if seconds > 0:
         time.sleep(seconds)
@@ -216,10 +233,14 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
     success_sleep_seconds = max(1, int(args.success_sleep_seconds or retry_seconds))
     attempt_timeout_seconds = max(0, int(args.attempt_timeout_seconds or 0))
     attempt = 0
+    force_recreate_next = bool(base_payload.get("force_recreate_portal_sessions"))
 
     while True:
         attempt += 1
-        result = _run_sync_with_timeout(dict(base_payload), user, attempt_timeout_seconds)
+        attempt_payload = dict(base_payload)
+        if force_recreate_next:
+            attempt_payload["force_recreate_portal_sessions"] = True
+        result = _run_sync_with_timeout(attempt_payload, user, attempt_timeout_seconds)
         summary = _summary(result)
         state = _completion_state(summary)
         print(
@@ -228,6 +249,9 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
                     "loop": {
                         "attempt": attempt,
                         "state": state,
+                        "force_recreate_portal_sessions": bool(
+                            attempt_payload.get("force_recreate_portal_sessions")
+                        ),
                         "next_retry_seconds": 0 if state["complete"] else (blocked_retry_seconds if state["blocked"] else retry_seconds),
                     },
                     **summary,
@@ -245,6 +269,7 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
             continue
         if max_attempts and attempt >= max_attempts:
             return 2 if state["blocked"] else 1
+        force_recreate_next = bool(base_payload.get("force_recreate_portal_sessions")) or _should_force_recreate_portal_sessions(state)
         _sleep(blocked_retry_seconds if state["blocked"] else retry_seconds)
 
 

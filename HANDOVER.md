@@ -7188,3 +7188,21 @@
 - Remaining:
   - Commit/push selected P0 files only, deploy/restart Yeoljeong services, then run one forced session-refix collection attempt against the live PC Agent.
   - Follow-up: after live Baemin succeeded, diagnostics were further patched to include `browser_work_key` on the Baemin-specific collector path and server-headless fallback path. Re-verified with the same focused suite: 95 passed, 9 warnings.
+
+## 2026-08-20 08:43 KST - Yeoljeong auto-collect session refix loop
+
+- Request: Fix the next-step PC Agent session issue and proceed with auto-collection until completion.
+- Finding:
+  - Live worker had already imported Jungwha Baemin and Yogiyo data, but Coupang Eats was still at `PC_AGENT_LOGIN_REQUIRED` and Ddangyo was at `PC_AGENT_WRONG_PORTAL_SESSION`.
+  - The worker loop treated `PC_AGENT_WRONG_PORTAL_SESSION` as retryable, but the next attempt reused the same base payload and did not automatically set `force_recreate_portal_sessions`.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py` now treats wrong portal/session-not-found/PC Agent collector timeout as session-recreate errors.
+  - The until-complete loop dynamically sets `force_recreate_portal_sessions=true` on the next attempt after those errors, so the next cycle recreates portal-specific Browser Bridge work sessions instead of reusing the wrong session.
+  - Added a regression test proving the second loop attempt force-recreates sessions after `PC_AGENT_WRONG_PORTAL_SESSION`.
+- Verification:
+  - `python3 -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/browser_bridge/service.py` succeeded.
+  - Host `python3 -m pytest tests/unit/test_yeoljeong_auto_collect.py` could not run because host pytest is not installed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py` succeeded: 5 passed.
+  - `docker exec yeoljeong-finance-worker python -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/browser_bridge/service.py` succeeded.
+- Remaining:
+  - Commit/push selected files, restart only `yeoljeong-finance-worker`, and inspect the next live loop output.
