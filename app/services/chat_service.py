@@ -6104,6 +6104,14 @@ _AUTO_MESSAGE_EXCLUDE_FILTER = (
 )
 
 
+def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
+    hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate' AND is_hidden = FALSE"
+    if is_active and not include_streaming:
+        # 활성 스트리밍 중에는 SSE 버블과 DB placeholder 중복 렌더링을 막는다.
+        hidden_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
+    return hidden_filter
+
+
 def _message_select_fields(fields: str) -> str:
     _tool_events = (
         "(CASE WHEN tools_called IS NOT NULL AND jsonb_typeof(tools_called) = 'array' "
@@ -6292,11 +6300,7 @@ async def _hydrate_message_response_durations(
 
 
 def _message_list_filter(is_active: bool, include_streaming: bool) -> str:
-    intent_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
-    if is_active and not include_streaming:
-        # 활성 스트리밍 중 → placeholder 제외 (프론트 SSE 버블과 중복 방지)
-        intent_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
-    return intent_filter + _AUTO_MESSAGE_EXCLUDE_FILTER
+    return _visible_message_filter(is_active, include_streaming)
 
 
 async def _promote_inactive_streaming_placeholders(
@@ -6612,9 +6616,7 @@ async def list_messages_cursor(
         _is_active = (
             session_id in _streaming_state and not _streaming_state[session_id].get("completed", False)
         ) or await _session_has_running_execution(conn, sid)
-        _extra_filter = ""
-        if _is_active and not include_streaming:
-            _extra_filter = " AND intent IS DISTINCT FROM 'streaming_placeholder'"
+        _extra_filter = _visible_message_filter(_is_active, include_streaming)
         _select_fields = _message_select_fields(fields)
         if cursor:
             from datetime import datetime as _dt
@@ -6622,8 +6624,8 @@ async def list_messages_cursor(
             rows = await conn.fetch(
                 "SELECT * FROM ("
                 f"  SELECT {_select_fields} FROM chat_messages"
-                "  WHERE session_id = $1 AND tenant_id = $4 AND intent IS DISTINCT FROM '_deleted_duplicate'"
-                f"    {_extra_filter}{_AUTO_MESSAGE_EXCLUDE_FILTER}"
+                "  WHERE session_id = $1 AND tenant_id = $4"
+                f"    {_extra_filter}"
                 "    AND created_at < $2"
                 "  ORDER BY created_at DESC LIMIT $3"
                 ") sub ORDER BY created_at ASC",
@@ -6633,8 +6635,8 @@ async def list_messages_cursor(
             rows = await conn.fetch(
                 "SELECT * FROM ("
                 f"  SELECT {_select_fields} FROM chat_messages"
-                "  WHERE session_id = $1 AND tenant_id = $3 AND intent IS DISTINCT FROM '_deleted_duplicate'"
-                f"    {_extra_filter}{_AUTO_MESSAGE_EXCLUDE_FILTER}"
+                "  WHERE session_id = $1 AND tenant_id = $3"
+                f"    {_extra_filter}"
                 "  ORDER BY created_at DESC LIMIT $2"
                 ") sub ORDER BY created_at ASC",
                 sid, fetch_limit, tenant_uuid,
@@ -9896,6 +9898,25 @@ async def send_message_stream(
                 f"output_validator: {_validation.violation_type} — {_validation.message} "
                 f"(intent={intent}, model={model_used}, tokens_out={output_tokens})"
             )
+            if _validation.violation_type == "PROGRESS_ONLY_RESPONSE" and tools_called:
+                await _save_interrupted_partial_message(
+                    session_id=session_id,
+                    content=full_response,
+                    reason="output_validator_progress_only_no_retry",
+                    execution_id=_execution_id_str,
+                )
+                if _execution_id_str:
+                    async with get_pool().acquire() as _conn:
+                        await _mark_execution_interrupted(
+                            _conn,
+                            session_id,
+                            _execution_id_str,
+                            "output_validator_progress_only_no_retry",
+                            partial_content=full_response,
+                            delete_empty_placeholder=False,
+                        )
+                yield f"data: {json.dumps({'type': 'error', 'content': '최종 완료보고가 아니라 진행 안내로 끝나 완료 처리하지 않았습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': _validation.violation_type, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                return
             # F8: validator 거부 시 거부된 응답은 DB 저장/화면 노출 안 함 — 버블 중복 방지
             yield f"data: {json.dumps({'type': 'stream_reset', 'reason': _validation.violation_type})}\n\n"
             # DB 저장 시 재시도 응답만 사용하도록 원본 응답 별도 보관

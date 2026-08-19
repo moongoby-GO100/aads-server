@@ -228,10 +228,14 @@ def _is_structured_next_action_tail(text: str) -> bool:
     return group_hits >= 4 and has_evidence
 
 
-def _looks_progress_only_response(response_text: str, intent: str) -> bool:
+def _looks_progress_only_response(response_text: str, intent: str, *, tools_called: bool = False) -> bool:
     """완료 보고가 아니라 '지금 확인하겠다'는 진행 안내만 있는 응답을 차단한다."""
     normalized_intent = (intent or "").strip()
     if normalized_intent not in _REPORT_QUALITY_INTENTS:
+        return False
+    if tools_called and normalized_intent in {"status_check", "task_query", "health_check", "execution_verify"}:
+        # 짧은 상태 조회는 실제 도구 결과가 있으면 진행형 꼬리말만으로 차단하지 않는다.
+        # 보고/러너/실행형 응답은 완료 아닌 버블이 completed로 저장되지 않게 기존 검사를 유지한다.
         return False
     text = response_text.strip()
     if not text:
@@ -289,7 +293,7 @@ def validate_response(
 
     _skip_report_quality = _is_confirmation_question(user_message)
 
-    if _looks_progress_only_response(stripped, intent):
+    if _looks_progress_only_response(stripped, intent, tools_called=tools_called):
         return ValidationResult(
             is_valid=False,
             violation_type="PROGRESS_ONLY_RESPONSE",

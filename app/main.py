@@ -411,10 +411,12 @@ async def lifespan(app: FastAPI):
                             or _terminal_pipeline_review
                         )
 
+                    _watchdog_retry_enabled = os.getenv("AADS_WATCHDOG_AUTO_RETRY", "0") == "1"
                     _retry_rows = [
                         r for r in _claimable
                         if (
-                            (r["retry_count"] or 0) < 2
+                            _watchdog_retry_enabled
+                            and (r["retry_count"] or 0) < 2
                             and (r["last_user_msg"] or "").strip()
                             and not _should_settle_without_retry(r)
                         )
@@ -997,6 +999,7 @@ async def lifespan(app: FastAPI):
                     ("chat_messages", "branch_id", "UUID DEFAULT NULL"),
                     ("chat_messages", "intent", "TEXT DEFAULT NULL"),
                     ("chat_messages", "execution_id", "UUID DEFAULT NULL"),
+                    ("chat_messages", "is_hidden", "BOOLEAN NOT NULL DEFAULT FALSE"),
                     ("chat_sessions", "current_execution_id", "UUID DEFAULT NULL"),
                     ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
                     ("tool_results_archive", "result_summary", "TEXT"),

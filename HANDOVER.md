@@ -6349,3 +6349,25 @@
   - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공.
   - `git diff --check -- app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_api.py` 성공.
   - 배포와 운영 브라우저 재검증 결과는 후속 커밋/배포 완료 후 최종 보고에 반영한다.
+
+## 2026-08-19 11:01 KST - 채팅 응답 끊김/버블 조기 완료 P0-P2 긴급 조치
+
+- 요청: 채팅 응답이 계속 끊기고, 완료가 아닌 응답 버블이 완료 처리되는 문제를 P0/P1/P2 개선안까지 즉시 조치.
+- 원인:
+  - `output_validator`의 `PROGRESS_ONLY_RESPONSE`가 진행형 보고를 차단한 뒤 재작성 스트림을 다시 열어 응답 버블이 끊기거나 빈 완료처럼 보일 수 있었다.
+  - stale execution watchdog이 비활성 세션의 오래된 실행을 자동 재시도해 `streaming_placeholder`와 `current_execution_id` lock을 되살렸다.
+  - 숨김 메시지 필터가 intent/content LIKE 조합이라 조회마다 비용이 크고 신규 runner/system 메시지 분류가 일관되지 않았다.
+- 조치:
+  - `app/services/output_validator.py`: 상태조회 계열은 실제 도구 호출이 있으면 진행형 꼬리말 오탐을 완화하고, 보고/러너 응답은 기존 완료 아님 차단을 유지.
+  - `app/services/chat_service.py`: 도구 호출 후 `PROGRESS_ONLY_RESPONSE`가 나오면 재작성 루프 없이 중간 응답을 보존하고 execution을 interrupted 처리.
+  - `app/main.py`: `AADS_WATCHDOG_AUTO_RETRY=1`이 아닌 기본 운영에서는 stale watchdog이 비활성 세션을 재실행하지 않고 정리만 하도록 변경.
+  - `migrations/120_chat_messages_is_hidden.sql`: `chat_messages.is_hidden` 컬럼, 자동 분류 trigger, visible partial index 추가. 기존 숨김 후보 23,997건 백필 완료.
+  - stale execution/session lock 2건을 수동 중단 처리하고 lock 해제.
+- 검증:
+  - `python3 -m py_compile app/services/output_validator.py app/services/chat_service.py app/main.py` 성공.
+  - 컨테이너 기준 `python -m pytest -q tests/unit/test_output_validator.py` 성공: 7 passed.
+  - DB 검증: stale placeholders 0건, stale running executions 0건, stale session locks 0건, hidden 후보 잔여 0건.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` 성공, active slot `:8100`, health OK, 채팅 테이블 접근 정상, LLM 서비스 정상.
+- 남은 주의:
+  - 호스트 Python에는 `pytest`가 없어 호스트 직접 pytest는 실패했고, 운영 컨테이너에서 테스트를 수행했다.
+  - `deploy_safe` MCP는 호스트 Docker CLI/스크립트 경로 인식 실패로 사용하지 못해 프로젝트 배포 스크립트로 우회했다.

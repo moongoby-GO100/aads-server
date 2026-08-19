@@ -107,6 +107,17 @@ def test_pipeline_runner_rejects_short_progress_log_as_final_response():
     assert result.violation_type == "PROGRESS_ONLY_RESPONSE"
 
 
+def test_tool_backed_status_progress_tail_is_not_progress_only_blocked():
+    result = validate_response(
+        "상태 조회 결과 서버는 HEALTHY입니다. 추가 로그를 확인합니다.",
+        tools_called=True,
+        intent="status_check",
+        user_message="서버 상태 확인해",
+    )
+
+    assert result.is_valid is True
+
+
 def test_pipeline_runner_rejects_long_tool_backed_progress_tail_as_final_response():
     progress_log = (
         "핵심 확인 완료. #119는 LIVE 상태이고 실매매 차단 조건도 확인했습니다. "
