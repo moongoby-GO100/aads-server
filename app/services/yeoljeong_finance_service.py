@@ -3572,6 +3572,7 @@ def _delivery_browser_auth_for_account(
         _has_secret_value(account, "password")
         and not payload.get("prefer_pc_agent")
         and not payload.get("force_pc_agent")
+        and service != "ddangyo"
     ):
         auth["browser_session_id"] = ""
         auth["browser_bridge_mode"] = ""
@@ -3761,6 +3762,20 @@ _DELIVERY_LOGIN_SELECTORS = {
             "text=로그인",
         ),
     },
+}
+
+_DELIVERY_CAPTCHA_SELECTORS = {
+    "ddangyo": (
+        "#mf_wfm_login_captcha",
+        "#mf_ipt_captcha",
+        "#captcha",
+        "input[name*='captcha' i]",
+        "input[id*='captcha' i]",
+        "input[placeholder*='보안문자']",
+        "input[placeholder*='자동입력방지']",
+        "input[placeholder*='숫자']",
+        "input[type='text']",
+    ),
 }
 
 
@@ -3965,6 +3980,31 @@ def _delivery_bridge_challenge_code(service: str, text: str) -> str:
     return "PORTAL_AUTH_CHALLENGE"
 
 
+def _delivery_captcha_value_for_account(
+    payload: dict[str, Any],
+    account: dict[str, Any],
+    service: str,
+    business_id: str,
+    branch: str,
+) -> str:
+    values = payload.get("captcha_values") if isinstance(payload.get("captcha_values"), dict) else {}
+    run_key = _delivery_run_key(service, business_id, branch)
+    candidates = (
+        account.get("captcha_value"),
+        account.get("captcha"),
+        payload.get("captcha_value"),
+        payload.get("captcha"),
+        values.get(run_key),
+        values.get(str(account.get("id") or "")),
+        values.get(service),
+    )
+    for candidate in candidates:
+        digits = re.sub(r"[^0-9]", "", str(candidate or ""))
+        if 3 <= len(digits) <= 8:
+            return digits
+    return ""
+
+
 def _delivery_challenge_message(service: str, service_label: str) -> str:
     if service == "ddangyo":
         return (
@@ -3972,6 +4012,87 @@ def _delivery_challenge_message(service: str, service_label: str) -> str:
             "PC Agent 화면 또는 저장된 스크린샷에서 숫자를 입력한 뒤 같은 세션으로 다시 수집해야 합니다."
         )
     return f"{service_label} 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다."
+
+
+async def _delivery_bridge_fill_ddangyo_numeric_captcha(page: Any, captcha_value: str) -> bool:
+    digits = re.sub(r"[^0-9]", "", str(captcha_value or ""))
+    if not (3 <= len(digits) <= 8):
+        return False
+    selectors = _DELIVERY_CAPTCHA_SELECTORS.get("ddangyo", ())
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            if hasattr(locator, "count") and hasattr(locator, "is_visible"):
+                if not await locator.count() or not await locator.is_visible(timeout=700):
+                    continue
+            await locator.fill(digits)
+            clicked = await _delivery_bridge_click_login(page, "ddangyo")
+            if not clicked and hasattr(locator, "press"):
+                await locator.press("Enter")
+            await page.wait_for_timeout(3000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            continue
+    try:
+        result = await page.evaluate(
+            r"""
+            ({digits, selectors}) => {
+              const visible = element => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0
+                  && element.type !== 'hidden'
+                  && !element.disabled;
+              };
+              const setNativeValue = (element, value) => {
+                const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value');
+                if (descriptor && descriptor.set) descriptor.set.call(element, value);
+                else element.value = value;
+                element.dispatchEvent(new Event('input', {bubbles: true}));
+                element.dispatchEvent(new Event('change', {bubbles: true}));
+                element.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Unidentified'}));
+              };
+              let input = null;
+              for (const selector of selectors) {
+                try {
+                  input = [...document.querySelectorAll(selector)].find(visible);
+                  if (input) break;
+                } catch (_) {}
+              }
+              if (!input) return {filled: false, reason: 'CAPTCHA_INPUT_NOT_FOUND'};
+              input.focus();
+              setNativeValue(input, digits);
+              const submit = [...document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]')]
+                .find(element => {
+                  if (!visible(element)) return false;
+                  const text = String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
+                  return ['로그인', '확인', 'login', 'sign in'].some(label => text.includes(label));
+                });
+              if (submit) submit.click();
+              else input.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              return {filled: true, clicked: Boolean(submit), reason: ''};
+            }
+            """,
+            {"digits": digits, "selectors": list(selectors)},
+        )
+        if not (isinstance(result, dict) and result.get("filled")):
+            return False
+        await page.wait_for_timeout(3000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
 
 
 def _delivery_challenge_screenshot_path(service: str, business_id: str, branch: str, session_id: str) -> Path:
@@ -4401,6 +4522,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
         except Exception:
             pass
 
+        auth_diagnostics: dict[str, str] = {}
         login_state = _baemin_bridge_login_state(url, text) if service == "baemin" else _delivery_bridge_login_state(url, text)
         if login_state == "login":
             login_result = (
@@ -4440,13 +4562,61 @@ async def _collect_delivery_from_browser_bridge_session_async(
             diagnostics = {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url}
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
-            return {
-                "status": "portal_action_required",
-                "error_code": challenge_code,
-                "records": {},
-                "diagnostics": diagnostics,
-                "message": _delivery_challenge_message(service, service_label),
-            }
+            captcha_value = str(account.get("captcha_value") or "")
+            if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED" and captcha_value:
+                if await _delivery_bridge_fill_ddangyo_numeric_captcha(page, captcha_value):
+                    try:
+                        url = str(await page.evaluate("window.location.href") or url)
+                        text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
+                        html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+                    except Exception:
+                        pass
+                    login_state = _delivery_bridge_login_state(url, text)
+                    diagnostics.update(
+                        {
+                            "captcha_mode": "operator_confirmed_input",
+                            "captcha_input": "submitted",
+                            "url": url,
+                        }
+                    )
+                    if login_state == "challenge":
+                        diagnostics["captcha_input"] = "rejected_or_still_required"
+                        return {
+                            "status": "portal_action_required",
+                            "error_code": "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+                            "records": {},
+                            "diagnostics": diagnostics,
+                            "message": "땡겨요 숫자 캡챠를 입력했지만 포털이 다시 캡챠 확인을 요구했습니다. 새 스크린샷 숫자로 재입력이 필요합니다.",
+                        }
+                    if login_state != "authenticated":
+                        diagnostics["captcha_input"] = f"submitted_{login_state}"
+                        return {
+                            "status": "portal_action_required",
+                            "error_code": _delivery_bridge_challenge_code(service, text),
+                            "records": {},
+                            "diagnostics": diagnostics,
+                            "message": _delivery_challenge_message(service, service_label),
+                        }
+                    else:
+                        diagnostics["captcha_input"] = "accepted"
+                        auth_diagnostics.update({key: str(value) for key, value in diagnostics.items()})
+                else:
+                    diagnostics["captcha_input"] = "input_failed"
+                    return {
+                        "status": "portal_action_required",
+                        "error_code": challenge_code,
+                        "records": {},
+                        "diagnostics": diagnostics,
+                        "message": _delivery_challenge_message(service, service_label),
+                    }
+            else:
+                return {
+                    "status": "portal_action_required",
+                    "error_code": challenge_code,
+                    "records": {},
+                    "diagnostics": diagnostics,
+                    "message": _delivery_challenge_message(service, service_label),
+                }
         if login_state == "login":
             return {
                 "status": "credential_required",
@@ -4463,6 +4633,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
             "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
             "url": url,
         }
+        diagnostics.update(auth_diagnostics)
         if service == "baemin":
             dashboard_records = _baemin_dashboard_records(
                 text,
@@ -4905,6 +5076,9 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             else:
                 collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
                 collection_account = dict(account)
+                captcha_value = _delivery_captcha_value_for_account(payload, collection_account, service, business_id, branch)
+                if captcha_value:
+                    collection_account["captcha_value"] = captcha_value
                 browser_auth = _delivery_browser_auth_for_account(payload, collection_account, service, business_id, branch)
                 if browser_auth["storage_state_path"]:
                     collection_account["storage_state_path"] = browser_auth["storage_state_path"]
@@ -4958,6 +5132,18 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                         "error_code": "CREDENTIAL_REQUIRED",
                         "records": {},
                         "message": f"{label} 계정 비밀번호가 등록되지 않았습니다.",
+                    }
+                elif service == "ddangyo" and not can_use_browser_auth:
+                    result = {
+                        "status": "portal_action_required",
+                        "error_code": "PC_AGENT_SESSION_REQUIRED",
+                        "records": {},
+                        "diagnostics": {
+                            "collection_mode": collection_mode,
+                            "browser_bridge_error": browser_auth.get("browser_bridge_error") or "",
+                            "browser_auth_strategy": browser_auth.get("browser_auth_strategy") or "",
+                        },
+                        "message": "땡겨요는 숫자 캡챠 입력이 필요하므로 PC Agent 브라우저 세션이 연결되어야 자동로그인과 수집을 계속할 수 있습니다.",
                     }
                 else:
                     secret = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""

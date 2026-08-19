@@ -35,6 +35,18 @@ def _tenant_uuid(tenant_id: str) -> uuid.UUID:
     return uuid.UUID(str(tenant_id))
 
 
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _row_to_credential(row: Any, *, include_secret: bool = False) -> dict[str, Any]:
     item = dict(row)
     result = {
@@ -45,7 +57,7 @@ def _row_to_credential(row: Any, *, include_secret: bool = False) -> dict[str, A
         "label": item["label"],
         "username": decrypt_value(item["username_enc"]),
         "password": "********",
-        "metadata": item.get("metadata") or {},
+        "metadata": _json_dict(item.get("metadata")),
         "is_active": item["is_active"],
         "last_used_at": item["last_used_at"].isoformat() if item.get("last_used_at") else None,
         "created_at": item["created_at"].isoformat() if item.get("created_at") else None,
@@ -314,6 +326,7 @@ async def list_access_logs(*, tenant_id: str, limit: int = 50) -> list[dict[str,
     return [
         {
             **dict(row),
+            "details": _json_dict(row["details"]),
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         }
         for row in rows

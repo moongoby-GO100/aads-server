@@ -2035,6 +2035,161 @@ async def test_ddangyo_pc_agent_login_stops_at_numeric_captcha_with_screenshot(t
     assert service.Path(screenshot_path).read_bytes() == b"fake-png"
 
 
+def test_sync_delivery_passes_ddangyo_captcha_value_to_pc_agent_collector(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "plain-secret")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-ddangyo-junghwa",
+                "service": "ddangyo",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_for_account",
+        lambda payload, account, service_name, business_id, branch: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-ddangyo",
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+
+    def fake_bridge_collect(account, browser_auth, date_from, date_to):
+        assert account["captcha_value"] == "1234"
+        assert browser_auth["browser_session_id"] == "bb-ddangyo"
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {"sales": [], "settlements": [], "reviews": []},
+            "diagnostics": {"captcha_input": "accepted"},
+        }
+
+    monkeypatch.setattr(service, "_collect_delivery_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["ddangyo"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "captcha_value": "12 34",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "succeeded"
+    assert service._read("delivery_collection_status")[0]["diagnostics"]["captcha_input"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_ddangyo_pc_agent_enters_confirmed_numeric_captcha(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+
+    class FakeLocator:
+        def __init__(self, page, selector):
+            self.page = page
+            self.selector = selector
+
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            if self.selector == "#mf_wfm_login_captcha":
+                return 1
+            return 0
+
+        async def is_visible(self, timeout=0):
+            return self.selector == "#mf_wfm_login_captcha"
+
+        async def fill(self, value):
+            self.page.captcha_filled = value
+
+        async def press(self, key):
+            self.page.login_state = "authenticated"
+            self.page.text = "정산내역 주문내역 리뷰관리"
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://boss.ddangyo.com/"
+            self.text = "자동입력방지 숫자를 입력해 주세요"
+            self.captcha_filled = ""
+            self.login_state = "challenge"
+
+        async def goto(self, url, **kwargs):
+            self.url = url
+
+        async def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+        async def wait_for_timeout(self, *args, **kwargs):
+            return None
+
+        def locator(self, selector):
+            return FakeLocator(self, selector)
+
+        async def evaluate(self, expression, arg=None):
+            if "window.location.href" in expression:
+                return self.url
+            if "innerHTML" in expression:
+                return f"<main>{self.text}</main>"
+            if "innerText" in expression:
+                return self.text
+            return False
+
+        async def screenshot(self, **kwargs):
+            return b"fake-png"
+
+    class FakeContext:
+        def __init__(self, page):
+            self.pages = [page]
+
+    class FakeBridge:
+        def __init__(self, page):
+            self.sessions = {"bb-ddangyo": object()}
+            self.page = page
+
+        async def _context_for_session(self, session):
+            return FakeContext(self.page)
+
+    page = FakePage()
+
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: FakeBridge(page))
+
+    result = await service._collect_delivery_from_browser_bridge_session_async(
+        {
+            "service": "ddangyo",
+            "username": "owner",
+            "password_enc": "encrypted",
+            "captcha_value": "9876",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+        },
+        {"browser_session_id": "bb-ddangyo", "browser_bridge_mode": "local_agent"},
+        "2026-08-01",
+        "2026-08-04",
+    )
+
+    assert page.captcha_filled == "9876"
+    assert result["status"] == "partial"
+    assert result["diagnostics"]["captcha_input"] == "accepted"
+    assert result["error_code"] == "AUTHENTICATED_NO_ROWS"
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (

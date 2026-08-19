@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-20 04:25 KST - Genspark/OHVIS deployment follow-up and live test gate
+
+- Request: After deployment approval, continue checking extra instructions, test image generation in the current session, and use OHVIS managed browser/password-manager automation where applicable.
+- Confirmed:
+  - Current AADS active backend is `aads-server-green` on `:8102`; both `:8100` and `:8102` health endpoints returned 200.
+  - AADS Pipeline Runner had no active approval/running blocker; only a GO100 Pipeline B agent was in progress.
+  - `credential_list(project=AADS, service=genspark)` returned no Genspark credentials.
+  - Direct DB checks found 0 matching rows in both `e2e_credentials` and `agent_vault_credentials` for Genspark.
+  - Latest Genspark UI jobs remained queued/retryable: `media-b7442bfb75064671` had `CDP_NOT_READY`; `media-59b6fb2dce274d35` had `GENSPARK_MEDIA_EXTRACT_TIMEOUT`.
+- Changes kept for commit:
+  - `app/services/media_generation_service.py`: default image/edit-image Genspark UI target is the image app, and prompt input/submit selection is hardened for SPA controls.
+  - `tests/unit/test_media_generation_service.py`: added default image target regression coverage.
+- Verification:
+  - `python3 -m py_compile app/services/media_generation_service.py` succeeded.
+  - `docker exec aads-server-green pytest -q tests/unit/test_media_generation_service.py` passed: 20 passed.
+- Remaining:
+  - Live image generation cannot complete until a logged-in Genspark Browser Bridge/PC Agent session or Genspark credential is available.
+  - Blue-green redeploy may be blocked while active chat/browser streams are counted by `/api/v1/ops/active-streams`; do not force-rebuild a slot with active streams unless explicitly approved.
+
 ## 2026-08-20 04:16 KST - Genspark UI fallback live retry and prompt submit hardening
 
 - Request: Continue the previous Genspark UI fallback verification.

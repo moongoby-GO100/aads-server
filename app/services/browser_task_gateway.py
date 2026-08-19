@@ -17,6 +17,18 @@ def _tenant_uuid(tenant_id: str) -> uuid.UUID:
     return uuid.UUID(str(tenant_id))
 
 
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _task_to_dict(row: Any) -> dict[str, Any]:
     item = dict(row)
     for key in ("id", "tenant_id", "session_id", "approval_request_id"):
@@ -25,6 +37,7 @@ def _task_to_dict(row: Any) -> dict[str, Any]:
     for key in ("created_at", "updated_at"):
         if item.get(key):
             item[key] = item[key].isoformat()
+    item["result"] = _json_dict(item.get("result"))
     return item
 
 

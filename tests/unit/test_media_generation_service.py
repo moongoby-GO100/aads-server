@@ -373,6 +373,21 @@ async def test_genspark_ui_video_provider_queues_for_browser_agent():
 
 
 @pytest.mark.asyncio
+async def test_genspark_ui_image_default_target_is_image_app():
+    conn = _Conn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+
+    result = await svc.generate_image(
+        "make a clean product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+    )
+
+    metadata = conn.rows[result["job_id"]]["result_metadata"]
+    assert metadata["ui_automation"]["target_url"] == "https://www.genspark.ai/ai_image"
+
+
+@pytest.mark.asyncio
 async def test_process_genspark_ui_job_keeps_auth_gate_retryable(monkeypatch):
     class _FakeLocator:
         @property

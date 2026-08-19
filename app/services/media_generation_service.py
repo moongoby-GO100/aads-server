@@ -910,6 +910,12 @@ class MediaGenerationService:
             )
         )
 
+    @staticmethod
+    def _default_genspark_ui_target_url(kind: str) -> str:
+        if kind in {"image", "edit_image"}:
+            return "https://www.genspark.ai/ai_image"
+        return "https://www.genspark.ai/"
+
     async def _submit_prompt_to_genspark(self, page: Any, prompt: str) -> dict[str, Any]:
         script = """
         (prompt) => {
@@ -918,24 +924,59 @@ class MediaGenerationService:
             const s = window.getComputedStyle(el);
             return r.width > 20 && r.height > 20 && s.visibility !== 'hidden' && s.display !== 'none';
           };
+          const textOf = (el) => [
+            el.getAttribute('placeholder'),
+            el.getAttribute('aria-label'),
+            el.getAttribute('data-placeholder'),
+            el.getAttribute('title'),
+            el.className,
+            el.id
+          ].filter(Boolean).join(' ').toLowerCase();
+          const score = (el) => {
+            const text = textOf(el);
+            let value = 0;
+            if (el.tagName === 'TEXTAREA') value += 50;
+            if (el.isContentEditable) value += 35;
+            if (/prompt|프롬프트|describe|message|ask|무엇|입력|생성|image|이미지/.test(text)) value += 30;
+            if (/search|검색|filter|email|password|login|로그인/.test(text)) value -= 80;
+            const r = el.getBoundingClientRect();
+            if (r.bottom > window.innerHeight * 0.45) value += 10;
+            return value;
+          };
           const candidates = [
             ...document.querySelectorAll('textarea'),
             ...document.querySelectorAll('[contenteditable="true"]'),
             ...document.querySelectorAll('input[type="text"], input:not([type])')
-          ].filter(visible);
-          const el = candidates[candidates.length - 1];
+          ]
+            .filter(visible)
+            .filter((el) => score(el) > -20)
+            .sort((a, b) => score(b) - score(a));
+          const el = candidates[0];
           if (!el) return {ok: false, error: 'PROMPT_INPUT_NOT_FOUND'};
           el.focus();
           if (el.isContentEditable) {
-            el.textContent = prompt;
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.execCommand('insertText', false, prompt);
             el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: prompt}));
           } else {
-            el.value = prompt;
+            const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (setter) setter.call(el, prompt);
+            else el.value = prompt;
             el.dispatchEvent(new Event('input', {bubbles: true}));
             el.dispatchEvent(new Event('change', {bubbles: true}));
           }
           el.dataset.aadsGensparkPrompt = '1';
-          return {ok: true, selector: '[data-aads-genspark-prompt="1"]'};
+          return {
+            ok: true,
+            selector: '[data-aads-genspark-prompt="1"]',
+            tag: el.tagName.toLowerCase(),
+            candidate_count: candidates.length
+          };
         }
         """
         result = await page.evaluate(script, prompt)
@@ -965,21 +1006,33 @@ class MediaGenerationService:
         try:
             if hasattr(page, "wait_for_timeout"):
                 await page.wait_for_timeout(1000)
-            await page.evaluate(
+            clicked = await page.evaluate(
                 """() => {
                   const visible = (el) => {
                     const r = el.getBoundingClientRect();
                     const s = window.getComputedStyle(el);
                     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
                   };
-                  const buttons = [...document.querySelectorAll('button.submit-btn, button')]
-                    .filter((el) => visible(el) && /제출|Submit|Generate|생성/.test(el.textContent || ''));
-                  const button = buttons.find((el) => el.matches('button.submit-btn')) || buttons[0];
+                  const prompt = document.querySelector('[data-aads-genspark-prompt="1"]');
+                  const buttonText = (el) => [
+                    el.textContent,
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('title'),
+                    el.className,
+                    el.id
+                  ].filter(Boolean).join(' ');
+                  const scoped = prompt ? [...(prompt.closest('form, [role="form"], section, main') || document).querySelectorAll('button')] : [];
+                  const buttons = [...new Set([...document.querySelectorAll('button.submit-btn'), ...scoped, ...document.querySelectorAll('button')])]
+                    .filter((el) => visible(el) && !el.disabled);
+                  const button = buttons.find((el) => /submit|send|generate|create|arrow|제출|전송|생성|만들기/i.test(buttonText(el)))
+                    || buttons.find((el) => (el.querySelector('svg') || el.matches('button.submit-btn')) && prompt && Math.abs(el.getBoundingClientRect().top - prompt.getBoundingClientRect().top) < 120);
                   if (!button) return false;
                   button.click();
                   return true;
                 }"""
             )
+            if clicked is False:
+                return {"ok": False, "error": "PROMPT_SUBMIT_BUTTON_NOT_FOUND"}
         except Exception:
             pass
         return {"ok": True, "selector": selector}
@@ -1080,8 +1133,8 @@ class MediaGenerationService:
         automation = _as_dict(metadata.get("ui_automation"))
         session_id = str(browser_session_id or automation.get("browser_session_id") or "").strip()
         work_key = str(browser_work_key or automation.get("work_key") or "genspark-media-fallback").strip()
-        url = str(target_url or automation.get("target_url") or "https://www.genspark.ai/").strip()
         job_kind = str(job.get("kind") or "image")
+        url = str(target_url or automation.get("target_url") or self._default_genspark_ui_target_url(job_kind)).strip()
         effective_timeout = max(30, int(timeout_seconds or 240))
         step_timeout = max(5.0, min(90.0, float(os.getenv("AADS_GENSPARK_UI_STEP_TIMEOUT_SECONDS", "90"))))
         deadline = time.monotonic() + effective_timeout
@@ -1351,6 +1404,7 @@ class MediaGenerationService:
     ) -> dict[str, Any]:
         refs = dict(input_refs or {})
         work_key = str(refs.get("browser_work_key") or "genspark-media-fallback").strip()
+        target_url = str(refs.get("target_url") or self._default_genspark_ui_target_url(kind))
         download_dir = str(
             refs.get("download_dir")
             or os.getenv("AADS_GENSPARK_DOWNLOAD_DIR")
@@ -1364,7 +1418,7 @@ class MediaGenerationService:
                 "service": "genspark",
                 "state": "queued_requires_agent",
                 "work_key": work_key,
-                "target_url": str(refs.get("target_url") or "https://www.genspark.ai/"),
+                "target_url": target_url,
                 "download_dir": download_dir,
                 "requires_logged_in_browser": True,
                 "stores_result_via": "media_generation_jobs.result_path/result_uri",
