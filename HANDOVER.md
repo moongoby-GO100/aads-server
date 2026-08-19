@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-20 04:32 KST - Yeoljeong Ddangyo confirmed captcha input before deploy
+
+- Request: 운영 배포 전에 땡겨요 숫자 캡챠 정보를 직접 확인하고 입력까지 처리할 수 있어야 진정한 자동화이므로, 배민/쿠팡/요기요 ID/PW 자동로그인과 땡겨요 캡챠 입력 흐름을 구현·테스트·배포.
+- Changes:
+  - `app/api/yeoljeong_finance.py`: `/api/v1/yeoljeong-finance/sync` payload에 write-only `captcha_value`, `captcha_values`를 추가.
+  - `app/services/yeoljeong_finance_service.py`: sync payload의 캡챠 숫자를 서비스/계정/run key 기준으로 선택해 PC Agent collector에 전달.
+  - `app/services/yeoljeong_finance_service.py`: 땡겨요는 저장 비밀번호가 있어도 PC Agent 세션을 기본 우선 사용하도록 변경. 서버 headless만으로 캡챠 입력 완료처럼 오판하지 않게 함.
+  - `app/services/yeoljeong_finance_service.py`: 땡겨요 `DDANGYO_NUMERIC_CAPTCHA_REQUIRED` 상태에서 스크린샷을 저장하고, 확인된 숫자가 있으면 같은 PC Agent 세션에 입력·제출한 뒤 인증 상태를 재판정해 수집을 계속 진행.
+  - `tests/unit/test_yeoljeong_finance_service.py`: 캡챠 값 전달과 PC Agent 캡챠 입력 후 재판정 회귀 테스트 추가.
+- Verification:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_collectors.py` succeeded.
+  - `git diff --check` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 100 passed.
+- Deployment note:
+  - 배포 전 운영 PC Agent 연결과 실제 땡겨요 캡챠 스크린샷 확인/입력 재시도가 필요하다.
+
 ## 2026-08-20 04:25 KST - Genspark/OHVIS deployment follow-up and live test gate
 
 - Request: After deployment approval, continue checking extra instructions, test image generation in the current session, and use OHVIS managed browser/password-manager automation where applicable.
