@@ -474,7 +474,7 @@ def test_sync_delivery_updates_queued_status_record(tmp_path, monkeypatch):
                 "service": "baemin",
                 "username": "owner",
                 "password_enc": "ciphertext",
-                "collection_mode": "browser-automation",
+                "collection_mode": "api",
                 "business_id": "biz-junghwa",
                 "branch": "중화점",
             }
@@ -558,7 +558,7 @@ def test_sync_delivery_uses_service_label_for_credential_required_message(tmp_pa
                 "id": "acct-yogiyo-junghwa",
                 "service": "yogiyo",
                 "username": "owner",
-                "collection_mode": "browser-automation",
+                "collection_mode": "api",
                 "business_id": "biz-junghwa",
                 "branch": "중화점",
             }
