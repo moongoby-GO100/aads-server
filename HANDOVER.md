@@ -6410,3 +6410,22 @@
 - 남은 주의:
   - 호스트 Python에는 `pytest`가 없어 호스트 직접 pytest는 실패했고, 운영 컨테이너에서 테스트를 수행했다.
   - `deploy_safe` MCP는 호스트 Docker CLI/스크립트 경로 인식 실패로 사용하지 못해 프로젝트 배포 스크립트로 우회했다.
+
+## 2026-08-19 13:06 KST - 중화점 배민 PC Agent 수집 정상화
+
+- 요청: 중화점 로그인 데이터로 즉시 수집 실행, 정상 수집 가능하도록 조치.
+- 실측:
+  - 중화점 판매채널 계정은 DB/보호 원장에 저장되어 있다.
+  - PC Agent CDP 세션 `bb-718045d90655`에서 배민 셀프서비스 로그인 상태가 확인됐다.
+  - 서버 단독 로그인은 배민/쿠팡이츠에서 포털 보안 정책으로 차단된다.
+- 조치:
+  - `app/services/yeoljeong_finance_service.py`의 `_delivery_browser_auth_options()`가 활성 Browser Bridge 설정의 `session_id`를 배민 수집기로 전달하도록 수정했다.
+  - 화면/API가 `browser_session_id`를 직접 보내지 않는 백그라운드 수집에서도 활성 PC Agent 세션을 자동 사용할 수 있게 했다.
+  - `tests/unit/test_yeoljeong_finance_service.py`에 활성 Bridge 세션 자동 주입 회귀 테스트를 추가했다.
+- 검증:
+  - 컨테이너 기준 `python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'delivery_browser_auth_options_uses_active_bridge_session'` 성공.
+  - 컨테이너 기준 `python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'sync_delivery_uses_baemin_pc_agent_session_without_password'` 성공.
+  - UI와 같은 조건인 `browser_session_id` 미지정 수집 실행에서 중화점 배민 수집 성공: 매출 1건, 정산 1건, 리뷰 288건 반영.
+- 남은 주의:
+  - 쿠팡이츠는 서버 자동접속 보안 차단, 땡겨요는 추가 인증 요구, 요기요는 인증 후 조회 구간 내 표 데이터 0건 상태다.
+  - 쿠팡이츠/땡겨요/요기요도 배민과 같은 PC Agent 페이지 파싱 커넥터가 필요하다.

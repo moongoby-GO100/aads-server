@@ -3305,6 +3305,7 @@ def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
 
             config = build_e2e_config(session_id=browser_session_id or None)
             bridge_mode = str(config.get("mode") or "")
+            browser_session_id = browser_session_id or str(config.get("session_id") or "").strip()
             storage_state_path = str(config.get("storage_state_path") or "").strip()
         except Exception:
             storage_state_path = ""

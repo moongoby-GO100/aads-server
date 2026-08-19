@@ -1127,6 +1127,26 @@ def test_sync_delivery_uses_baemin_pc_agent_session_without_password(tmp_path, m
     assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
 
 
+def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):
+    def fake_build_e2e_config(session_id=None):
+        assert session_id is None
+        return {
+            "mode": "local_agent",
+            "session_id": "bb-active-pc-agent",
+            "headless_fallback": False,
+        }
+
+    import app.browser_bridge.e2e_adapter as e2e_adapter
+
+    monkeypatch.setattr(e2e_adapter, "build_e2e_config", fake_build_e2e_config)
+
+    auth = service._delivery_browser_auth_options({})
+
+    assert auth["browser_bridge_mode"] == "local_agent"
+    assert auth["browser_session_id"] == "bb-active-pc-agent"
+    assert auth["storage_state_path"] == ""
+
+
 def test_baemin_dashboard_records_extracts_home_summary(monkeypatch):
     class FixedDateTime:
         @classmethod
