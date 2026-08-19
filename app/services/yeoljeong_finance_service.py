@@ -4656,7 +4656,12 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "status": "credential_required",
                 "error_code": "PC_AGENT_LOGIN_REQUIRED",
                 "records": {},
-                "diagnostics": {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
+                    "url": url,
+                },
                 "message": f"PC Agent 브라우저가 {service_label} 로그인 화면입니다. 먼저 해당 포털 로그인이 필요합니다.",
             }
 
@@ -4781,6 +4786,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "diagnostics": {
                     "auth_mode": "pc_agent_browser",
                     "browser_session_id": session_id,
+                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                     "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                     "url": url,
                 },
@@ -4797,6 +4803,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
             diagnostics = {
                 "auth_mode": "pc_agent_browser",
                 "browser_session_id": session_id,
+                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
             }
@@ -4816,6 +4823,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
                     {
                         "auth_mode": "pc_agent_browser",
                         "browser_session_id": session_id,
+                        "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                         "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                         "url": url,
                     }
@@ -4842,6 +4850,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "diagnostics": {
                     "auth_mode": "pc_agent_browser",
                     "browser_session_id": session_id,
+                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                     "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                     "url": url,
                 },
@@ -4858,6 +4867,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
             diagnostics = {
                 "auth_mode": "pc_agent_browser",
                 "browser_session_id": session_id,
+                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
             }
@@ -4878,6 +4888,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "diagnostics": {
                     "auth_mode": "pc_agent_browser",
                     "browser_session_id": session_id,
+                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                     "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                     "url": url,
                 },
@@ -4910,6 +4921,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
             {
                 "auth_mode": "pc_agent_browser",
                 "browser_session_id": session_id,
+                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
                 "parsed_page_kind": kind,
@@ -4933,6 +4945,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
             "diagnostics": {
                 "auth_mode": "pc_agent_browser",
                 "browser_session_id": session_id,
+                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
             },
             "message": str(exc)[:300],
@@ -5208,6 +5221,8 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     result = collect_account(collection_account, secret, date_from.isoformat(), date_to.isoformat())
                     if browser_auth["browser_session_id"]:
                         result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]
+                    if browser_auth.get("browser_work_key"):
+                        result.setdefault("diagnostics", {})["browser_work_key"] = browser_auth["browser_work_key"]
                     if browser_auth["browser_bridge_mode"]:
                         result.setdefault("diagnostics", {})["browser_bridge_mode"] = browser_auth["browser_bridge_mode"]
                     if browser_auth.get("browser_bridge_error"):

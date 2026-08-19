@@ -7187,3 +7187,4 @@
   - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 95 passed, 9 warnings.
 - Remaining:
   - Commit/push selected P0 files only, deploy/restart Yeoljeong services, then run one forced session-refix collection attempt against the live PC Agent.
+  - Follow-up: after live Baemin succeeded, diagnostics were further patched to include `browser_work_key` on the Baemin-specific collector path and server-headless fallback path. Re-verified with the same focused suite: 95 passed, 9 warnings.
