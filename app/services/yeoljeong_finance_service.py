@@ -3409,6 +3409,75 @@ def _baemin_dashboard_records(text: str, business_id: str, branch: str) -> dict[
     return records
 
 
+async def _baemin_bridge_fill_first(page: Any, selectors: tuple[str, ...], value: str) -> bool:
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            await locator.fill(value)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _baemin_bridge_click_first(page: Any, selectors: tuple[str, ...]) -> bool:
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            await locator.click(timeout=4000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _baemin_bridge_login_with_saved_secret(page: Any, account: dict[str, Any]) -> dict[str, Any] | None:
+    username = str(account.get("username") or "").strip()
+    password = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
+    if not username or not password:
+        return {
+            "status": "credential_required",
+            "error_code": "PC_AGENT_LOGIN_REQUIRED",
+            "records": {},
+            "message": "PC Agent 브라우저가 배민 로그인 화면입니다. 저장된 배민 계정 비밀번호가 필요합니다.",
+        }
+    try:
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        await _baemin_bridge_fill_first(
+            page,
+            (
+                "input[autocomplete='username']",
+                "input[name*='id' i]",
+                "input[name*='user' i]",
+                "input[type='email']",
+                "input[type='text']",
+            ),
+            username,
+        )
+        password_filled = await _baemin_bridge_fill_first(
+            page,
+            ("input[autocomplete='current-password']", "input[type='password']"),
+            password,
+        )
+        if not password_filled:
+            return {"status": "portal_action_required", "error_code": "LOGIN_FORM_NOT_FOUND", "records": {}}
+        await _baemin_bridge_click_first(
+            page,
+            ("button[type='submit']", "input[type='submit']", "input[type='button'][value*='로그인']", "text=로그인"),
+        )
+        await page.wait_for_timeout(5000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+    finally:
+        password = ""
+    return None
+
+
 async def _collect_baemin_from_browser_bridge_session_async(
     account: dict[str, Any],
     browser_auth: dict[str, str],
@@ -3441,6 +3510,30 @@ async def _collect_baemin_from_browser_bridge_session_async(
             html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
         except Exception:
             html = text
+        if "login" in url.lower() or all(marker in text for marker in ("로그인", "회원가입")):
+            login_result = await _baemin_bridge_login_with_saved_secret(page, account)
+            if login_result is not None:
+                login_result.setdefault("diagnostics", {}).update(
+                    {
+                        "auth_mode": "pc_agent_browser",
+                        "browser_session_id": session_id,
+                        "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+                        "url": url,
+                    }
+                )
+                return login_result
+            try:
+                url = str(await page.evaluate("window.location.href") or url)
+            except Exception:
+                pass
+            try:
+                text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
+            except Exception:
+                text = ""
+            try:
+                html = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+            except Exception:
+                html = text
         if "login" in url.lower() or all(marker in text for marker in ("로그인", "회원가입")):
             return {
                 "status": "credential_required",
