@@ -3579,13 +3579,26 @@ def _delivery_browser_auth_for_account(
             or "about:blank"
         )
         work_key = _delivery_browser_work_key(service, business_id, branch)
-        session = _run_async(
-            get_browser_bridge_service().ensure_work_session(
-                work_key=work_key,
-                label=f"열정국밥 {branch} {label} 자동수집",
-                url=url,
+        bridge_service = get_browser_bridge_service()
+        try:
+            session = _run_delivery_browser_async(
+                bridge_service.ensure_work_session(
+                    work_key=work_key,
+                    label=f"열정국밥 {branch} {label} 자동수집",
+                    url=url,
+                )
             )
-        )
+        except Exception as first_exc:
+            auth["browser_bridge_error"] = str(first_exc)[:300]
+            session = _run_delivery_browser_async(
+                bridge_service.ensure_work_session(
+                    work_key=work_key,
+                    label=f"열정국밥 {branch} {label} 자동수집",
+                    url=url,
+                    force_recreate=True,
+                )
+            )
+            auth["browser_bridge_recovered"] = "force_recreate"
         if session is not None:
             auth["browser_session_id"] = str(getattr(session, "session_id", "") or "")
             auth["browser_bridge_mode"] = "local_agent"
@@ -3600,6 +3613,17 @@ def _delivery_browser_work_key(service: str, business_id: str, branch: str) -> s
     normalized_business = re.sub(r"[^a-z0-9._:-]+", "-", str(business_id or "").strip().lower()).strip("-")
     branch_hash = hashlib.sha256(str(branch or "").encode("utf-8")).hexdigest()[:10]
     return f"yeoljeong-delivery-{normalized_service or 'portal'}-{normalized_business or 'business'}-{branch_hash}"
+
+
+def _run_delivery_browser_async(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+    raise RuntimeError("delivery browser automation cannot run inside an active event loop")
 
 
 _DELIVERY_SERVICE_URL_MARKERS = {

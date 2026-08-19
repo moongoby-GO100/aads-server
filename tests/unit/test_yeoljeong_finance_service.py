@@ -1462,6 +1462,50 @@ def test_delivery_browser_auth_for_account_ensures_service_work_session(monkeypa
     assert fake_bridge.calls[0]["url"].startswith("https://")
 
 
+def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypatch):
+    class FakeSession:
+        session_id = "bb-recreated-coupang"
+
+    class FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        async def ensure_work_session(self, **kwargs):
+            self.calls.append(kwargs)
+            if not kwargs.get("force_recreate"):
+                raise RuntimeError("CDP endpoint 준비 실패")
+            return FakeSession()
+
+    fake_bridge = FakeBridge()
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-active-session",
+            "browser_bridge_mode": "local_agent",
+            "browser_session_id_explicit": "",
+        },
+    )
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+
+    auth = service._delivery_browser_auth_for_account(
+        {},
+        {"service": "coupangeats", "business_id": "biz-junghwa", "branch": "중화점"},
+        "coupangeats",
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert auth["browser_session_id"] == "bb-recreated-coupang"
+    assert auth["browser_bridge_mode"] == "local_agent"
+    assert auth["browser_bridge_recovered"] == "force_recreate"
+    assert fake_bridge.calls[0].get("force_recreate") is None
+    assert fake_bridge.calls[1]["force_recreate"] is True
+
+
 def test_sync_delivery_auto_work_session_for_non_baemin_without_password(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(
