@@ -5000,3 +5000,6 @@ fro
 - Chat-Direct 수정: patch:             if not _auto_val.is_valid:
  →            if not _auto_val.is_valid:
  
+
+## [2026-08-19 14:11:47 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: docker inspect aads-dashboard-green --format "{{.State.StartedAt}}"

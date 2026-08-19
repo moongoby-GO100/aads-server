@@ -2083,6 +2083,11 @@ async def cleanup_overlong_running_executions(
                 timeout,
             )
 
+    # Track execution_ids already interrupted above so the stale_retrying pass
+    # does not double-process retrying executions that were also caught by the
+    # overlong guard (status IN ('running','retrying') overlaps with status='retrying').
+    _already_interrupted = {row["execution_id"] for row in rows}
+
     # P1: stale retrying 정리 — resume task 실패 후 retrying 상태로 300초+ 잔류하는 실행을 자동 정리
     _retrying_timeout = max(timeout // 2, 300)
     retrying_rows = await conn.fetch(
@@ -2108,6 +2113,8 @@ async def cleanup_overlong_running_executions(
     for row in retrying_rows:
         session_id = row["session_id"]
         execution_id = row["execution_id"]
+        if execution_id in _already_interrupted:
+            continue
         await _mark_execution_interrupted(
             conn,
             session_id,
@@ -6172,10 +6179,12 @@ def _message_select_fields(fields: str) -> str:
         # Chat timeline projection: preserve the complete visible message while
         # omitting payloads that are only needed after an explicit detail action.
         # Full tool events remain available from GET /chat/messages/{id}.
+        # Heavy columns (quality_score, quality_details, thinking_summary,
+        # reply_to_id, branch_id) are excluded — fetch via GET /messages/{id}.
         return (
             "id, session_id, execution_id, role, content, model_used, intent, "
             "cost, tokens_in, tokens_out, bookmarked, attachments, sources, artifact_id, "
-            "created_at, edited_at, quality_score, quality_details, reply_to_id, branch_id, "
+            "created_at, edited_at, "
             "'[]'::jsonb AS tools_called, "
             f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
             f"(SELECT COUNT(*)::int FROM jsonb_array_elements({_tool_events}) AS tool_event(value) "
