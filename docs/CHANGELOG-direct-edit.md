@@ -5028,3 +5028,18 @@ fro
 
 ## [2026-08-19 16:04:08 KST] [aads-server] scripts/yeoljeong_auto_collect.py
 - Chat-Direct 수정: run_remote_command: df -h
+
+## [2026-08-19 17:39:03 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: grep -n "dedup\|중복.*방지\|duplicate.*skip\|_prev_user" app/services/chat_service.p
+
+## [2026-08-19 18:02:35 KST] [aads-server] migrations/121_chat_messages_is_hidden_falsepositive_fix.sql
+- Chat-Direct 수정: write: migrations/121_chat_messages_is_hidden_falsepositive_fix.sql
+
+## [2026-08-19 18:12:16 KST] [aads-server] migrations/121_chat_is_hidden_real_reply_fix.sql
+- Chat-Direct 수정: write: migrations/121_chat_is_hidden_real_reply_fix.sql
+
+## [2026-08-19 18:33:09 KST] [aads-server] .active_container
+- Chat-Direct 수정: write: .active_container
+
+## [2026-08-19 18:33:09 KST] [aads-server] .active_port
+- Chat-Direct 수정: write: .active_port

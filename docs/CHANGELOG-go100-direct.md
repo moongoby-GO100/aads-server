@@ -22157,3 +22157,102 @@ im
 - 코드 변경만 수행. DB 마이그레이션 스크→### 서비스 재시작/배포
 - DB #303 adaptive_exit는
 - finalize: pending
+
+## [2026-08-19 17:39:01 KST] [GO100] scripts/cron/data_integrity_auto_check.sh
+- Chat-Direct 수정: patch: LOCK="/tmp/go100_data_integrity_auto.loc→# 2026-08-19 FIX: crontab이 동일 파일에 flock 
+- finalize: pending
+
+## [2026-08-19 17:56:00 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: # ── KRX 정규장 시간 ────────────────────────→# ── KRX 정규장 시간 ────────────────────────
+- finalize: pending
+
+## [2026-08-19 17:56:24 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: # ── KRX 정규장 시간 ────────────────────────→# ── KRX 정규장 시간 ────────────────────────
+- finalize: pending
+
+## [2026-08-19 17:56:54 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         if rtype == "profit_target":
+   →        if rtype in ("profit_target", "t
+- finalize: pending
+
+## [2026-08-19 17:57:53 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: # ── KRX 정규장 시간 ────────────────────────→# ── KRX 정규장 시간 ────────────────────────
+- finalize: pending
+
+## [2026-08-19 17:57:55 KST] [GO100] scripts/patch_303_p0.py
+- Chat-Direct 수정: write: scripts/patch_303_p0.py
+- finalize: pending
+
+## [2026-08-19 17:58:55 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         return MARKET_OPEN <= now_t <= M→        return MARKET_OPEN <= now_t <= M
+- finalize: pending
+
+## [2026-08-19 17:59:04 KST] [GO100] scripts/fix_nxt_dup.py
+- Chat-Direct 수정: write: scripts/fix_nxt_dup.py
+- finalize: pending
+
+## [2026-08-19 18:08:47 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:             sell_code = stock_code[1:] i→            sell_code = stock_code[1:] i
+- finalize: pending
+
+## [2026-08-19 18:19:12 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # VWAP 누적 데이터 (당일 틱 기반 실시간 산출)
+ →        # VWAP 누적 데이터 (당일 틱 기반 실시간 산출)
+ 
+- finalize: pending
+
+## [2026-08-19 18:19:42 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         return reason, "entry_signal", "→        return reason, "entry_signal", "
+- finalize: pending
+
+## [2026-08-19 18:20:53 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             elif _rule_type == "orderboo→            elif _rule_type == "orderboo
+- finalize: pending
+
+## [2026-08-19 18:21:56 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                 # 틱 히스토리 축적. 세션 고가는 진입 평→                # 틱 히스토리 축적. 세션 고가는 진입 평
+- finalize: pending
+
+## [2026-08-19 18:23:16 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             self._vwap_data.clear()
+    →            self._vwap_data.clear()
+    
+- finalize: pending
+
+## [2026-08-19 18:24:19 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         history = self._tick_history[sto→        history = self._tick_history[sto
+- finalize: pending
+
+## [2026-08-19 18:25:30 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         elif rtype == "time_stop":
+     →        elif rtype == "time_stop":
+     
+- finalize: pending
+
+## [2026-08-19 18:26:46 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:     # ── 적응형 매도 조건 평가 ──────────────────→    # ── 전저점 손절 (마하세븐: 눌림목 저점 이탈 시 즉시 손절
+- finalize: pending
+
+## [2026-08-19 18:28:00 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                     # 4) partial_sold 후 →                    # 3-A) 전저점 손절 (마하세븐:
+- finalize: pending
+
+## [2026-08-19 18:29:17 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 "overnight_params": over→                "overnight_params": over
+- finalize: pending
+
+## [2026-08-19 18:30:53 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 "previous_low_stop": sca→                "previous_low_stop": sca
+- finalize: pending
+
+## [2026-08-19 18:35:56 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-19 18:36:45 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-19 18:36:48 KST] [GO100] backend/scripts/go100_probe119_cash_sources.py
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
