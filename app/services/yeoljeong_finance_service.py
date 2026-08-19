@@ -3568,6 +3568,13 @@ def _delivery_browser_auth_for_account(
         or payload.get("require_pc_agent")
         or payload.get("requirePcAgent")
     )
+    force_recreate_session = bool(
+        payload.get("force_recreate_portal_sessions")
+        or payload.get("forceRecreatePortalSessions")
+        or payload.get("force_recreate_sessions")
+        or payload.get("refresh_portal_sessions")
+        or payload.get("refreshPortalSessions")
+    )
     if (
         not _has_secret_value(account, "password")
         and not prefer_pc_agent
@@ -3619,11 +3626,13 @@ def _delivery_browser_auth_for_account(
                     bridge_service.ensure_work_session(
                         work_key=work_key,
                         label=f"열정국밥 {branch} {label} 자동수집",
-                        url="about:blank",
-                        force_recreate=attempt > 0,
+                        url=url if force_recreate_session else "about:blank",
+                        force_recreate=force_recreate_session or attempt > 0,
                     )
                 )
-                if attempt > 0:
+                if force_recreate_session:
+                    auth["browser_bridge_recovered"] = "force_recreate_requested"
+                elif attempt > 0:
                     auth["browser_bridge_recovered"] = f"force_recreate_attempt_{attempt + 1}"
                 break
             except Exception as exc:
@@ -3638,6 +3647,8 @@ def _delivery_browser_auth_for_account(
             auth["browser_session_id"] = str(getattr(session, "session_id", "") or "")
             auth["browser_bridge_mode"] = "local_agent"
             auth["browser_work_key"] = work_key
+            if force_recreate_session:
+                auth["browser_session_recreated"] = "1"
     except Exception as exc:
         auth["browser_bridge_error"] = str(exc)[:300]
     return auth
@@ -4540,7 +4551,12 @@ async def _collect_delivery_from_browser_bridge_session_async(
             )
             if login_result is not None:
                 login_result.setdefault("diagnostics", {}).update(
-                    {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url}
+                    {
+                        "auth_mode": "pc_agent_browser",
+                        "browser_session_id": session_id,
+                        "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
+                        "url": url,
+                    }
                 )
                 return login_result
             try:
@@ -4555,7 +4571,12 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "status": "portal_action_required",
                 "error_code": f"{service.upper()}_SECURITY_BLOCKED",
                 "records": {},
-                "diagnostics": {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url},
+                "diagnostics": {
+                    "auth_mode": "pc_agent_browser",
+                    "browser_session_id": session_id,
+                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
+                    "url": url,
+                },
                 "message": f"{service_label} 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         if login_state == "challenge":
@@ -4567,7 +4588,12 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 branch=str(account.get("branch") or ""),
                 session_id=session_id,
             )
-            diagnostics = {"auth_mode": "pc_agent_browser", "browser_session_id": session_id, "url": url}
+            diagnostics = {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
+                "url": url,
+            }
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
             captcha_value = str(account.get("captcha_value") or "")
@@ -4638,6 +4664,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
         diagnostics: dict[str, str] = {
             "auth_mode": "pc_agent_browser",
             "browser_session_id": session_id,
+            "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
             "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
             "url": url,
         }

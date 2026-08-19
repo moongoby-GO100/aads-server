@@ -7172,3 +7172,18 @@
   - Pre-deploy container pytest still used the old image `/app/tests`, so new tests require post-deploy image validation.
 - Remaining:
   - Commit, push, blue-green deploy, then re-run the queued Genspark job against the logged-in agent URL.
+
+## 2026-08-20 08:01 KST - Yeoljeong portal work-session refix P0
+
+- Request: Immediately apply and test portal-specific dedicated session refixing for Yeoljeong delivery auto-collection.
+- Changes:
+  - `SyncPayload` accepts `force_recreate_portal_sessions`.
+  - `scripts/yeoljeong_auto_collect.py` exposes `--force-recreate-sessions` and forwards it to `sync_delivery`.
+  - `app/services/yeoljeong_finance_service.py` recreates each service/business/branch Browser Bridge work session when requested, opens the portal URL for the recreated session, and records `browser_work_key` in diagnostics.
+  - Added regression tests for CLI payload forwarding and forced portal work-session recreation.
+- Verification:
+  - `python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - Host `python3 -m pytest ...` could not run because `pytest` is not installed on the host.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 95 passed, 9 warnings.
+- Remaining:
+  - Commit/push selected P0 files only, deploy/restart Yeoljeong services, then run one forced session-refix collection attempt against the live PC Agent.

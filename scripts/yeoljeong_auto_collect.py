@@ -64,6 +64,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "sync_job_id": args.job_id or "",
         "browser_session_id": args.browser_session_id or "",
         "storage_state_path": args.storage_state_path or "",
+        "force_recreate_portal_sessions": bool(args.force_recreate_sessions),
     }
 
 
@@ -256,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date-to", default="", help="YYYY-MM-DD. Default: today.")
     parser.add_argument("--browser-session-id", default="", help="Optional PC Agent browser session id.")
     parser.add_argument("--storage-state-path", default="", help="Optional Playwright storage state path.")
+    parser.add_argument(
+        "--force-recreate-sessions",
+        action="store_true",
+        help="Recreate each delivery portal work-key browser session before collecting.",
+    )
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
     parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")

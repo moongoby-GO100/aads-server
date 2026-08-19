@@ -3,6 +3,27 @@ from types import SimpleNamespace
 import scripts.yeoljeong_auto_collect as auto_collect
 
 
+def test_payload_passes_force_recreate_sessions_flag():
+    args = auto_collect.build_parser().parse_args(
+        [
+            "--services",
+            "baemin,ddangyo",
+            "--business-id",
+            "biz-junghwa",
+            "--branch",
+            "중화점",
+            "--force-recreate-sessions",
+        ]
+    )
+
+    payload = auto_collect._payload(args)
+
+    assert payload["services"] == ["baemin", "ddangyo"]
+    assert payload["business_id"] == "biz-junghwa"
+    assert payload["branch"] == "중화점"
+    assert payload["force_recreate_portal_sessions"] is True
+
+
 def test_completion_state_requires_success_or_imported_rows():
     summary = {
         "summary": [

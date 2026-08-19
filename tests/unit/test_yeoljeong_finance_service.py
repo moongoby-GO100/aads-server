@@ -1509,6 +1509,56 @@ def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypa
     assert fake_bridge.calls[1]["url"] == "about:blank"
 
 
+def test_delivery_browser_auth_for_account_force_recreates_portal_work_session(monkeypatch):
+    class FakeSession:
+        session_id = "bb-refixed-ddangyo"
+
+    class FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        async def ensure_work_session(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeSession()
+
+    fake_bridge = FakeBridge()
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+
+    auth = service._delivery_browser_auth_for_account(
+        {"prefer_pc_agent": True, "force_recreate_portal_sessions": True},
+        {
+            "service": "ddangyo",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "portal_home_url": "https://boss.ddangyo.com/",
+        },
+        "ddangyo",
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert auth["browser_session_id"] == "bb-refixed-ddangyo"
+    assert auth["browser_bridge_mode"] == "local_agent"
+    assert auth["browser_bridge_recovered"] == "force_recreate_requested"
+    assert auth["browser_session_recreated"] == "1"
+    assert auth["browser_work_key"].startswith("yeoljeong-delivery-ddangyo-biz-junghwa-")
+    assert fake_bridge.calls == [
+        {
+            "work_key": auth["browser_work_key"],
+            "label": "열정국밥 중화점 땡겨요 자동수집",
+            "url": "https://boss.ddangyo.com/",
+            "force_recreate": True,
+        }
+    ]
+
+
 def test_delivery_browser_auth_for_account_retries_multiple_stale_cdp_sessions(monkeypatch):
     class FakeSession:
         session_id = "bb-recovered-third"
