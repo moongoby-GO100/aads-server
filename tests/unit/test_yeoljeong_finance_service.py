@@ -363,11 +363,13 @@ def test_list_collection_status_marks_stale_background_sync(tmp_path, monkeypatc
 
     statuses = service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-junghwa")
 
-    assert statuses[0]["status"] == "stale"
+    assert statuses[0]["status"] == "failed"
+    assert statuses[0]["raw_status"] == "stale"
     assert statuses[0]["error_code"] == "BACKGROUND_SYNC_STALE"
     assert "15분" in statuses[0]["message"]
     raw = service._read("delivery_collection_status")[0]
-    assert raw["status"] == "stale"
+    assert raw["status"] == "failed"
+    assert raw["raw_status"] == "stale"
 
 
 def test_list_collection_status_marks_stale_queued_without_started_at(tmp_path, monkeypatch):
@@ -392,12 +394,14 @@ def test_list_collection_status_marks_stale_queued_without_started_at(tmp_path, 
 
     statuses = service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-mia")
 
-    assert statuses[0]["status"] == "stale"
+    assert statuses[0]["status"] == "failed"
+    assert statuses[0]["raw_status"] == "stale"
     assert statuses[0]["error_code"] == "BACKGROUND_SYNC_STALE"
     assert "15분" in statuses[0]["message"]
     assert statuses[0]["finished_at"]
     raw = service._read("delivery_collection_status")[0]
-    assert raw["status"] == "stale"
+    assert raw["status"] == "failed"
+    assert raw["raw_status"] == "stale"
 
 
 def test_queue_delivery_sync_all_scope_records_registered_branch_services(tmp_path, monkeypatch):
@@ -505,7 +509,8 @@ def test_sync_delivery_updates_queued_status_record(tmp_path, monkeypatch):
     statuses = service._read("delivery_collection_status")
     assert result["summary"][0]["run_id"] == queued["queued_run_ids"]["baemin"]
     assert statuses[0]["id"] == queued["queued_run_ids"]["baemin"]
-    assert statuses[0]["status"] == "no_records"
+    assert statuses[0]["status"] == "partial"
+    assert statuses[0]["raw_status"] == "no_records"
     assert len(statuses) == 1
 
 
@@ -538,7 +543,7 @@ def test_sync_delivery_uses_service_label_for_upload_required_message(tmp_path, 
         {"email": "owner@example.com", "is_admin": True},
     )
 
-    assert result["summary"][0]["status"] == "upload_required"
+    assert result["summary"][0]["status"] == "action_required"
     assert "쿠팡이츠 포털 CSV/엑셀" in result["summary"][0]["message"]
     assert "배민 포털" not in result["summary"][0]["message"]
 
@@ -572,7 +577,8 @@ def test_sync_delivery_uses_service_label_for_credential_required_message(tmp_pa
         {"email": "owner@example.com", "is_admin": True},
     )
 
-    assert result["summary"][0]["status"] == "credential_required"
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "MISSING_CREDENTIALS"
     assert "요기요 계정 비밀번호" in result["summary"][0]["message"]
     assert "배민 계정" not in result["summary"][0]["message"]
 
@@ -1019,7 +1025,7 @@ def test_sync_delivery_portal_csv_account_requests_upload_without_browser(tmp_pa
         {"email": "owner@example.com", "is_admin": True},
     )
 
-    assert result["summary"][0]["status"] == "upload_required"
+    assert result["summary"][0]["status"] == "action_required"
     assert result["summary"][0]["error_code"] == "CSV_UPLOAD_REQUIRED"
     assert result["totals"] == {"sales": 0, "settlements": 0, "reviews": 0}
     assert service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-mia")[0]["message"]

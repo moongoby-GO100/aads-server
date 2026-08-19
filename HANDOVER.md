@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-19 19:18 KST - Yeoljeong P1 isolation hardening follow-up
+
+- Request: Implement P0/P1 immediately for Yeoljeong store assistant auto-collection and AADS separation.
+- Changes:
+  - `tests/unit/test_yeoljeong_finance_isolation.py`: added regression coverage that the dedicated Yeoljeong FastAPI entrypoint exposes health/auth/Yeoljeong routes only and does not include AADS chat, pipeline, admin, or MCP route prefixes.
+  - `tests/unit/test_yeoljeong_finance_isolation.py`: added compose-boundary assertions for `yeoljeong-finance`, `yeoljeong-finance-worker`, `YEOLJEONG_FINANCE_DATABASE_URL`, `YEOLJEONG_FINANCE_DATA_DIR`, host-only data mount, and worker auto-collect interval configuration.
+  - `tests/unit/test_yeoljeong_finance_isolation.py`: added delivery collection public status contract coverage for `queued/running/succeeded/partial/action_required/failed`.
+  - `.gitignore`: `settings.json` and generated nginx upstream files are ignored so runtime state no longer dirties the main worktree and blocks deploy preflight.
+- Verification:
+  - `python3 -m py_compile app/yeoljeong_main.py app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py tests/unit/test_yeoljeong_finance_isolation.py` passed.
+  - `docker compose -f docker-compose.prod.yml config --quiet` passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server pytest -q tests/unit/test_yeoljeong_finance_isolation.py tests/unit/test_yeoljeong_finance_service.py` passed: 78 passed.
+  - `git diff --check` passed.
+- Separate DB/server migration checklist:
+  - Set `YEOLJEONG_FINANCE_DATABASE_URL` to a dedicated Postgres database and run Yeoljeong migrations `113`, `115`, and `116` against that database.
+  - Keep `/app/yeoljeong-data` on its own persistent volume or server path before moving the container to another host.
+  - Move `yeoljeong-finance` and `yeoljeong-finance-worker` together; the worker depends on the API healthcheck and the same data directory.
+  - Update nginx `yeoljeong_finance_api` upstream to the new host/port, then verify `https://fb.newtalk.kr/health/live` and authenticated `/api/v1/yeoljeong-finance/*`.
+- Remaining:
+  - Runtime separation is same-server Docker separation. Physical DB/server separation is intentionally left as the next migration phase.
+
 ## 2026-08-19 19:04 KST - Genspark UI fallback CDP handshake hardening
 
 - Request: Continue the next step for Genspark chat-window image generation automation and verify generation/download/server-save flow.
