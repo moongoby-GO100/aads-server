@@ -183,6 +183,28 @@ _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
+
+
+def _looks_like_runner_notification(content: str) -> bool:
+    text = str(content or "")
+    runner_markers = (
+        "[Pipeline Runner]",
+        "[Runner]",
+        "pipeline_runner_approve",
+        "runner-",
+        "[Claude Code 작업 완료]",
+        "[CEO 승인 요청]",
+        "검수 요청",
+        "검수 실패",
+        "재작업 완료",
+    )
+    return any(marker in text for marker in runner_markers)
+
+
+def _normalize_final_assistant_intent(intent: Optional[str], content: str) -> Optional[str]:
+    if intent == "pipeline_runner" and not _looks_like_runner_notification(content):
+        return "execute"
+    return intent
 _RECOVERY_PREFIX_LEN = 50
 _STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 1200
 _STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 300
@@ -7143,6 +7165,7 @@ async def _save_and_update_session(
     if _execution_uuid is None:
         _execution_id_str = _current_execution_id.get(None)
         _execution_uuid = uuid.UUID(_execution_id_str) if _execution_id_str else None
+    intent = _normalize_final_assistant_intent(intent, content)
     content = await _rewrite_incomplete_final_report_once(
         content,
         session_id=sid,

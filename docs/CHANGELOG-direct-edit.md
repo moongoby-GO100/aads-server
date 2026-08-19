@@ -4978,3 +4978,25 @@ fro
 
 ## [2026-08-19 10:52:23 KST] [aads-server] app/services/cross_server_checker.py
 - Chat-Direct 수정: patch:     for sid in ["68", "211", "114"]:→    for sid in CANONICAL_SERVER_IDS:
+
+## [2026-08-19 13:00:02 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:     if tools_called and normalized_inten→    if tools_called and normalized_inten
+
+## [2026-08-19 13:00:08 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:         if intent in {"status_check", "t→        if intent in {"status_check", "t
+
+## [2026-08-19 13:01:00 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             if not _auto_val.is_valid:
+ →            if not _auto_val.is_valid:
+ 
+
+## [2026-08-19 13:04:47 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:     if tools_called and normalized_inten→    if tools_called and normalized_inten
+
+## [2026-08-19 13:04:48 KST] [aads-server] app/services/output_validator.py
+- Chat-Direct 수정: patch:         if intent in {"status_check", "t→        if intent in {"status_check", "t
+
+## [2026-08-19 13:04:49 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             if not _auto_val.is_valid:
+ →            if not _auto_val.is_valid:
+ 

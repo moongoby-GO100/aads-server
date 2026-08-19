@@ -22030,3 +22030,62 @@ backend/scripts
 ## [2026-08-19 11:36:33 KST] [GO100] backend/scripts/go100_probe_restart_safety.py
 - Chat-Direct 수정: write: backend/scripts/go100_probe_restart_safety.py
 - finalize: pending
+
+## [2026-08-19 12:47:05 KST] [GO100] scripts/collectors/kiwoom_ohlcv_collector.py
+- Chat-Direct 수정: patch:                 for item in items
+      →                for item in items
+      
+- finalize: pending
+
+## [2026-08-19 12:48:14 KST] [GO100] scripts/collectors/kiwoom_ohlcv_collector.py
+- Chat-Direct 수정: patch: def count_today_ohlcv(trade_date: str) -→def count_today_ohlcv(trade_date: str) -
+- finalize: pending
+
+## [2026-08-19 12:49:11 KST] [GO100] scripts/collectors/kiwoom_ohlcv_collector.py
+- Chat-Direct 수정: patch:     # REST 클라이언트
+    from backend.app.se→    holiday_dates = get_holiday_dates(st
+- finalize: pending
+
+## [2026-08-19 12:50:04 KST] [GO100] scripts/collectors/kiwoom_ohlcv_collector.py
+- Chat-Direct 수정: patch:                 if item.get("close", 0) →                if item.get("close", 0) 
+- finalize: pending
+
+## [2026-08-19 12:50:21 KST] [GO100] scripts/collectors/kiwoom_ohlcv_collector.py
+- Chat-Direct 수정: patch:                 if item.get("close", 0) →                if item.get("close", 0) 
+- finalize: pending
+
+## [2026-08-19 12:53:20 KST] [GO100] frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- Chat-Direct 수정: run_remote_command: cp /root/kis-autotrade-v4/frontend/public/reports/go100_strategy_303_whitepaper_
+- finalize: pending
+
+## [2026-08-19 12:56:42 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ### 조치 요약
+- 실시간 주문 직전 품질 게이트()에 미래 times→### 조치 요약
+- 실시간 주문 직전 품질 게이트(`realtime_d
+- finalize: pending
+
+## [2026-08-19 13:03:32 KST] [GO100] scripts/cron/data_integrity_auto_check.sh
+- Chat-Direct 수정: write: scripts/cron/data_integrity_auto_check.sh
+- finalize: pending
+
+## [2026-08-19 13:04:39 KST] [GO100] scripts/cron/crontab_data_integrity.txt
+- Chat-Direct 수정: write: scripts/cron/crontab_data_integrity.txt
+- finalize: pending
+
+## [2026-08-19 13:05:53 KST] [GO100] scripts/cron/data_integrity_auto_check.sh
+- Chat-Direct 수정: patch:         AND next_trade_date IS NULL
+    →        AND next_trade_date IS NULL
+    
+- finalize: pending
+
+## [2026-08-19 13:29:32 KST] [GO100] frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- Chat-Direct 수정: write: frontend/public/reports/go100_strategy_303_desk2_3min_ma20_pullback_whitepaper_v2_20260803.html
+- finalize: pending
+
+## [2026-08-19 13:30:57 KST] [GO100] frontend/public/reports/go100_strategy_303_whitepaper_v3_20260819.html
+- Chat-Direct 수정: run_remote_command: cp /root/kis-autotrade-v4/frontend/public/reports/go100_strategy_303_desk2_3min_
+- finalize: pending
+
+## [2026-08-19 13:32:43 KST] [GO100] frontend/public/reports/go100_scalping10_card303_눌림목_스캘핑_whitepaper_20260731.html
+- Chat-Direct 수정: write: frontend/public/reports/go100_scalping10_card303_눌림목_스캘핑_whitepaper_20260731.html
+- finalize: pending
