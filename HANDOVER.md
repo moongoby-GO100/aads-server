@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-08-20 04:36 KST - AADS-186 remaining risk E2E and Agent Vault JSONB response fix
+
+- Request: Execute the remaining post-deploy risk check for OHVIS Managed Browser and Agent Vault.
+- Finding:
+  - Authenticated API E2E initially found that Agent Vault `metadata` JSONB could be returned as a string in the running asyncpg environment, which can break frontend/object-level consumers.
+- Changes:
+  - `app/services/agent_vault_service.py`: normalize credential `metadata` and access-log `details` to dictionaries in API responses.
+  - `app/services/browser_task_gateway.py`: normalize browser task `result` to a dictionary in API responses.
+  - `tests/unit/test_browser_task_policy.py`: added regression tests for JSONB string normalization.
+- Verification:
+  - `python3 -m py_compile app/services/agent_vault_service.py app/services/browser_task_gateway.py app/api/browser_tasks.py app/routers/agent_vault.py` succeeded.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_browser_task_policy.py` passed: 10 passed.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` completed after waiting for target-slot active streams to drain; active backend moved to `:8100`.
+  - Authenticated active-slot API E2E passed: policy allow/ask/deny, Vault save/list masking/token issue/redeem/reuse-block, task create/list, permission request/list/approve/reject, task complete, access-log dict response, exact work_key cleanup.
+  - Authenticated browser UI E2E passed on `https://aads.newtalk.kr/browser-tasks`: page rendered with title `OHVIS`, task create button persisted a task, Vault save button rendered masked password, approval button changed request to `approved` and task to `running`, no API 4xx/5xx, no console errors, exact work_key cleanup.
+- Remaining:
+  - Source commit/push status must be handled separately because this worktree also contains unrelated dirty Yeoljeong/media files from adjacent work.
+
 ## 2026-08-20 04:32 KST - Yeoljeong Ddangyo confirmed captcha input before deploy
 
 - Request: 운영 배포 전에 땡겨요 숫자 캡챠 정보를 직접 확인하고 입력까지 처리할 수 있어야 진정한 자동화이므로, 배민/쿠팡/요기요 ID/PW 자동로그인과 땡겨요 캡챠 입력 흐름을 구현·테스트·배포.
