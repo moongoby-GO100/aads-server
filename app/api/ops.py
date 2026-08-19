@@ -1031,7 +1031,8 @@ async def health_check():
 
 _REMOTE_HEALTH_SERVERS = {
     "211": {"host": "211.188.51.113", "port": 9090, "ssh": "root@211.188.51.113"},
-    "114": {"host": "114.207.244.86", "port": 9090, "ssh": "root@114.207.244.86 -p 7916"},
+    "114": {"host": "116.120.58.155", "port": 9090, "ssh": "root@116.120.58.155 -p 7916"},
+    "contabo14": {"host": "5.104.86.14", "port": 9090, "ssh": "root@5.104.86.14"},
 }
 
 @router.get("/ops/server-health/{server_id}")
