@@ -26,6 +26,7 @@ dependencies = [
     "google-api-python-client>=2.150.0",
     "google-auth>=2.35.0",
     "langchain-mcp-adapters==0.2.0",
+    "mcp==1.29.0",
     # Docker (D-011, 로컬 샌드박스)
     "docker>=7.0.0",
     # Visual QA (T-024)
