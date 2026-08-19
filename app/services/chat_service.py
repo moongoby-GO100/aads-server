@@ -9556,25 +9556,31 @@ async def send_message_stream(
                 user_message=content,
             )
             if not _auto_val.is_valid:
-                logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")
-                await _save_interrupted_partial_message(
-                    session_id=session_id,
-                    content=full_response,
-                    reason=f"output_validator_autonomous_failed:{_auto_val.violation_type}",
-                    execution_id=_execution_id_str,
-                )
-                if _execution_id_str:
-                    async with get_pool().acquire() as _conn:
-                        await _mark_execution_interrupted(
-                            _conn,
-                            session_id,
-                            _execution_id_str,
-                            f"output_validator_autonomous_failed:{_auto_val.violation_type}",
-                            partial_content=full_response,
-                            delete_empty_placeholder=False,
-                        )
-                yield f"data: {json.dumps({'type': 'error', 'content': _auto_val.message, 'recoverable': True, 'reason': f'output_validator_autonomous_failed:{_auto_val.violation_type}', 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                return
+                if _auto_val.violation_type == "REPORT_STRUCTURE_WEAK" and bool(tools_called):
+                    logger.warning(
+                        f"autonomous_executor_weak_report_bypassed: {_auto_val.message} "
+                        f"(tools_called={len(tools_called) if isinstance(tools_called, list) else tools_called})"
+                    )
+                else:
+                    logger.error(f"autonomous_executor_validation_failed: {_auto_val.violation_type} — {_auto_val.message}")
+                    await _save_interrupted_partial_message(
+                        session_id=session_id,
+                        content=full_response,
+                        reason=f"output_validator_autonomous_failed:{_auto_val.violation_type}",
+                        execution_id=_execution_id_str,
+                    )
+                    if _execution_id_str:
+                        async with get_pool().acquire() as _conn:
+                            await _mark_execution_interrupted(
+                                _conn,
+                                session_id,
+                                _execution_id_str,
+                                f"output_validator_autonomous_failed:{_auto_val.violation_type}",
+                                partial_content=full_response,
+                                delete_empty_placeholder=False,
+                            )
+                    yield f"data: {json.dumps({'type': 'error', 'content': _auto_val.message, 'recoverable': True, 'reason': f'output_validator_autonomous_failed:{_auto_val.violation_type}', 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                    return
             await _save_and_update_session(
                 sid, full_response, model_used=model_used, intent=intent,
                 cost=cost_usd, tools_called=tools_called,

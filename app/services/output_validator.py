@@ -242,6 +242,8 @@ def _looks_progress_only_response(response_text: str, intent: str, *, tools_call
         tail_is_progress = bool(_PROGRESS_TAIL_RE.search(text[-500:].strip()))
         if len(text) >= _STATUS_REPORT_MIN_STRUCTURE_CHARS or not tail_is_progress:
             return False
+    if tools_called and len(text) > 700:
+        return False
     tail = text[-500:].strip()
     if _PROGRESS_TAIL_RE.search(tail):
         if _is_structured_next_action_tail(text):
@@ -318,7 +320,8 @@ def validate_response(
         # completed bubble just because its report shape is imperfect. Structural
         # quality can be improved by the completion contract/critic path, but the
         # actual tool-backed answer must remain deliverable.
-        if intent in {"status_check", "task_query", "health_check", "execution_verify"}:
+        if intent in {"status_check", "task_query", "health_check", "execution_verify",
+                       "code_modify", "deploy", "pipeline", "pipeline_runner", "git_ops", "execute"}:
             return _OK
         if not _skip_report_quality:
             _report_quality = check_report_quality_structure(stripped, intent)
