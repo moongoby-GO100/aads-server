@@ -5011,3 +5011,8 @@ fro
 
 ## [2026-08-19 14:16:17 KST] [aads-server] docs/CHANGELOG-direct-edit.md
 - Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_chat_service.py -q 2>&
+
+## [2026-08-19 14:18:29 KST] [aads-server] .gitignore
+- Chat-Direct 수정: patch: # Server-local task/runtime artifacts
+.t→# Server-local task/runtime artifacts
+.t
