@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-20 04:05 KST - Genspark UI fallback agent URL routing and deployment
+
+- Request: Approve deployment, run Genspark image tests in the specified agent sessions, and use OHVIS managed browser/password-manager automation where applicable.
+- Changes:
+  - `app/api/image.py`: added `browser_work_key` and `target_url` to image generation requests.
+  - `app/services/media_generation_service.py`: persists those fields into Genspark UI queue metadata so a specific Genspark agent URL can be opened during `process-next`.
+  - `app/services/tool_executor.py`, `app/api/ceo_chat_tools.py`, `app/services/tool_registry.py`: exposed the same fields to chat/tool callers.
+  - `tests/unit/test_media_generation_service.py`: added regression assertions for the specified Genspark agent URL metadata.
+- Verification:
+  - `python3 -m py_compile app/api/image.py app/services/media_generation_service.py app/services/tool_executor.py app/api/ceo_chat_tools.py app/services/tool_registry.py` succeeded.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_media_generation_service.py tests/unit/test_browser_task_policy.py` passed: 30 passed.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` completed successfully; active backend moved to `:8102`.
+  - `curl https://aads.newtalk.kr/api/v1/health` returned 200.
+  - `GET /api/v1/image/genspark-ui/process-next` returned 401, confirming the route exists and is auth-gated rather than 404.
+- Remaining:
+  - Run live `genspark_ui` jobs against the two provided Genspark agent URLs and confirm generated file persistence in `media_generation_jobs.result_path/result_uri`.
+
 ## 2026-08-19 21:55 KST - Yeoljeong delivery login CDP readiness hardening
 
 - Request: Automate delivery portal login immediately after repeated `PC_AGENT_SESSION_REQUIRED` results.

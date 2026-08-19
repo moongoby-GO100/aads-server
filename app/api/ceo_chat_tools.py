@@ -502,6 +502,14 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "요청 채팅 세션 ID",
                 },
+                "browser_work_key": {
+                    "type": "string",
+                    "description": "Genspark UI 자동화용 Browser Bridge 업무 키",
+                },
+                "target_url": {
+                    "type": "string",
+                    "description": "Genspark agent/chat URL",
+                },
             },
             "required": ["prompt"],
         },
@@ -4983,6 +4991,8 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             model_id=params.get("model_id"),
             provider=params.get("provider"),
             session_id=params.get("session_id") or chat_session_id,
+            browser_work_key=params.get("browser_work_key"),
+            target_url=params.get("target_url"),
         )
         return json.dumps(result, ensure_ascii=False)
     elif name == "edit_image":

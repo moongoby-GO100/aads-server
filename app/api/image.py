@@ -30,6 +30,8 @@ class ImageRequest(BaseModel):
     aspect_ratio: str | None = None
     image_size: str | None = None
     reference_images: list[str] | None = None
+    browser_work_key: str | None = None
+    target_url: str | None = None
 
 
 class EditImageRequest(BaseModel):
@@ -95,6 +97,8 @@ async def generate_image(req: ImageRequest):
             aspect_ratio=req.aspect_ratio,
             image_size=req.image_size,
             reference_images=req.reference_images,
+            browser_work_key=req.browser_work_key,
+            target_url=req.target_url,
         )
         return result
     except ValueError as e:

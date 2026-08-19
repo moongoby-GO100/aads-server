@@ -1404,6 +1404,8 @@ class MediaGenerationService:
         aspect_ratio: str | None = None,
         image_size: str | None = None,
         reference_images: list[str] | None = None,
+        browser_work_key: str | None = None,
+        target_url: str | None = None,
     ) -> dict[str, Any]:
         if not str(prompt or "").strip():
             raise ValueError("프롬프트를 입력하세요")
@@ -1418,6 +1420,8 @@ class MediaGenerationService:
                 "aspect_ratio": aspect_ratio,
                 "image_size": image_size,
                 "reference_images": reference_images or [],
+                "browser_work_key": browser_work_key,
+                "target_url": target_url,
             },
             status="queued" if route.provider in {"pc_local", "kling", "genspark_ui"} else "running",
             requested_by=requested_by,
@@ -1462,6 +1466,8 @@ class MediaGenerationService:
                     "aspect_ratio": aspect_ratio,
                     "image_size": image_size,
                     "reference_images": reference_images or [],
+                    "browser_work_key": browser_work_key,
+                    "target_url": target_url,
                 },
                 route=route,
             )

@@ -339,6 +339,8 @@ async def test_genspark_ui_image_provider_queues_for_browser_agent():
         provider="genspark_ui",
         model_id="genspark-image-ui",
         session_id="s1",
+        browser_work_key="genspark-agent-559920e6",
+        target_url="https://www.genspark.ai/agents?id=559920e6-f81c-464a-be60-f0228124958b",
     )
 
     assert result["status"] == "queued"
@@ -346,6 +348,8 @@ async def test_genspark_ui_image_provider_queues_for_browser_agent():
     assert result["availability"] == "queued_requires_agent"
     metadata = conn.rows[result["job_id"]]["result_metadata"]
     assert metadata["ui_automation"]["service"] == "genspark"
+    assert metadata["ui_automation"]["work_key"] == "genspark-agent-559920e6"
+    assert metadata["ui_automation"]["target_url"] == "https://www.genspark.ai/agents?id=559920e6-f81c-464a-be60-f0228124958b"
     assert metadata["ui_automation"]["requires_logged_in_browser"] is True
     assert metadata["ui_automation"]["stores_result_via"] == "media_generation_jobs.result_path/result_uri"
 

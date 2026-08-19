@@ -2528,6 +2528,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "model_id": {"type": "string", "description": "선택 모델 (예: gpt-image-2, imagen-4.0-generate-001)"},
                 "provider": {"type": "string", "description": "선택 provider (openai/google/gemini/genspark_ui)"},
                 "session_id": {"type": "string", "description": "요청 채팅 세션 ID"},
+                "browser_work_key": {"type": "string", "description": "Genspark UI 자동화용 Browser Bridge 업무 키"},
+                "target_url": {"type": "string", "description": "Genspark agent/chat URL"},
             },
             "required": ["prompt"],
         },

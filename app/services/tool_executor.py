@@ -4816,6 +4816,8 @@ class ToolExecutor:
             model_id=inp.get("model_id"),
             provider=inp.get("provider"),
             session_id=inp.get("session_id") or _resolve_bound_chat_session_id(),
+            browser_work_key=inp.get("browser_work_key"),
+            target_url=inp.get("target_url"),
         )
 
     async def _edit_image(self, inp: Dict[str, Any]) -> Any:
