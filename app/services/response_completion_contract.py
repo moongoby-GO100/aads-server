@@ -143,6 +143,8 @@ _FINAL_REPORT_VIOLATIONS = {
     "awaiting_user_decision_without_completion",
 }
 
+_BLOCKING_VIOLATIONS = _FINAL_REPORT_VIOLATIONS
+
 _COMMIT_DONE_RE = re.compile(
     r"(?:커밋|commit).{0,18}(?:완료|성공|했습니다|했음|됨|done|pushed)",
     re.IGNORECASE | re.DOTALL,
@@ -175,9 +177,14 @@ class CompletionContractResult:
         return {
             "completion_contract_adjusted": self.adjusted,
             "completion_contract_violations": self.violation_types,
+            "completion_contract_requires_continue": self.requires_continue,
             "pending_change_count": self.pending_count,
             "pending_files": self.pending_files,
         }
+
+    @property
+    def requires_continue(self) -> bool:
+        return any(violation in _BLOCKING_VIOLATIONS for violation in self.violation_types)
 
 
 def _normalize_rows(

@@ -17,6 +17,7 @@ def test_completion_contract_appends_missing_pending_disclosure():
     )
 
     assert result.adjusted is True
+    assert result.requires_continue is False
     assert "missing_commit_push_disclosure" in result.violation_types
     assert "완료 상태 보정" in result.response_text
     assert "app/services/example.py" in result.response_text
@@ -39,6 +40,7 @@ def test_completion_contract_blocks_false_push_done():
     )
 
     assert result.adjusted is True
+    assert result.requires_continue is False
     assert "push_report_conflicts_with_ledger" in result.violation_types
     assert "커밋됨/미푸시" in result.response_text
 
@@ -145,6 +147,7 @@ def test_completion_contract_blocks_short_progress_log_without_final_report():
     )
 
     assert result.adjusted is True
+    assert result.requires_continue is True
     assert "final_report_missing" in result.violation_types
     assert "최종 완료보고가 아니라 진행 안내/중간 로그" in result.response_text
 
@@ -172,6 +175,7 @@ def test_completion_contract_blocks_long_progress_tail_without_final_report():
     )
 
     assert result.adjusted is True
+    assert result.requires_continue is True
     assert "final_report_missing" in result.violation_types
 
 
@@ -197,6 +201,7 @@ def test_completion_contract_blocks_awaiting_user_decision_with_incomplete_items
     )
 
     assert result.adjusted is True
+    assert result.requires_continue is True
     assert "awaiting_user_decision_without_completion" in result.violation_types
     assert "최종 완료보고가 아니라 진행 안내/중간 로그" in result.response_text
 

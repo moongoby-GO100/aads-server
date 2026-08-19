@@ -10210,6 +10210,16 @@ async def send_message_stream(
                         break
 
                     _violations = ",".join(_completion_contract.violation_types)
+                    if not _completion_contract.requires_continue:
+                        full_response = _completion_contract.response_text
+                        logger.info(
+                            "completion_contract_corrected_without_continue session=%s violations=%s pending=%s",
+                            session_id[:8],
+                            _violations,
+                            _completion_contract.pending_count,
+                        )
+                        break
+
                     logger.warning(
                         "completion_contract_needs_continue session=%s attempt=%s/%s violations=%s pending=%s",
                         session_id[:8],
