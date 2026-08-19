@@ -1785,6 +1785,55 @@ def test_baemin_dashboard_records_extracts_home_summary(monkeypatch):
     assert records["reviews"][0]["review_text"].startswith("첫주문인데")
 
 
+@pytest.mark.asyncio
+async def test_delivery_bridge_login_uses_dom_fallback_for_portal_spa(monkeypatch):
+    monkeypatch.setattr(service, "_has_secret_value", lambda account, key: key == "password")
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "saved-password")
+
+    class EmptyLocator:
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            return 0
+
+    class FakePage:
+        def __init__(self):
+            self.evaluate_arg = None
+            self.timeout_ms = 0
+
+        async def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+        async def wait_for_selector(self, *args, **kwargs):
+            return None
+
+        def locator(self, selector):
+            return EmptyLocator()
+
+        async def evaluate(self, expression, arg=None):
+            self.evaluate_arg = arg
+            return {"filled": True, "clicked": True, "reason": ""}
+
+        async def wait_for_timeout(self, ms):
+            self.timeout_ms = ms
+
+    page = FakePage()
+
+    result = await service._delivery_bridge_login_with_saved_secret(
+        page,
+        {"service": "ddangyo", "username": "owner", "password_enc": "encrypted"},
+        "땡겨요 사장님",
+    )
+
+    assert result is None
+    assert page.evaluate_arg["username"] == "owner"
+    assert page.evaluate_arg["password"] == "saved-password"
+    assert "#mf_btn_webLogin" in page.evaluate_arg["submitSelectors"]
+    assert page.timeout_ms == 5000
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (

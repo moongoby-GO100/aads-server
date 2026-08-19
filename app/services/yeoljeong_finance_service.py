@@ -3610,6 +3610,136 @@ _DELIVERY_SERVICE_URL_MARKERS = {
 }
 
 
+_DELIVERY_LOGIN_SELECTORS = {
+    "baemin": {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name='id']",
+            "input[name*='id' i]",
+            "input[name*='user' i]",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": (
+            "input[autocomplete='current-password']",
+            "input[name='password']",
+            "input[name*='pw' i]",
+            "input[type='password']",
+        ),
+        "submit": (
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('로그인')",
+            "text=로그인",
+        ),
+    },
+    "coupangeats": {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name*='email' i]",
+            "input[name*='id' i]",
+            "input[name*='user' i]",
+            "input[placeholder*='아이디']",
+            "input[placeholder*='이메일']",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": (
+            "input[autocomplete='current-password']",
+            "input[name*='password' i]",
+            "input[name*='pw' i]",
+            "input[placeholder*='비밀번호']",
+            "input[type='password']",
+        ),
+        "submit": (
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('로그인')",
+            "text=로그인",
+        ),
+    },
+    "yogiyo": {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name*='id' i]",
+            "input[name*='email' i]",
+            "input[name*='user' i]",
+            "input[placeholder*='아이디']",
+            "input[placeholder*='이메일']",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": (
+            "input[autocomplete='current-password']",
+            "input[name*='password' i]",
+            "input[name*='pw' i]",
+            "input[placeholder*='비밀번호']",
+            "input[type='password']",
+        ),
+        "submit": (
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('로그인')",
+            "text=로그인",
+        ),
+    },
+    "ddangyo": {
+        "username": (
+            "#mf_wfm_login_id",
+            "#mf_ipt_usrId",
+            "#userId",
+            "input[name*='user' i]",
+            "input[name*='id' i]",
+            "input[placeholder*='아이디']",
+            "input[type='text']",
+        ),
+        "password": (
+            "#mf_wfm_login_pw",
+            "#mf_ipt_pw",
+            "#password",
+            "input[name*='password' i]",
+            "input[name*='pw' i]",
+            "input[placeholder*='비밀번호']",
+            "input[type='password']",
+        ),
+        "submit": (
+            "#mf_btn_webLogin",
+            "input[type='button'][value*='로그인']",
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('로그인')",
+            "text=로그인",
+        ),
+    },
+}
+
+
+def _delivery_login_selectors(service: str) -> dict[str, tuple[str, ...]]:
+    fallback = {
+        "username": (
+            "input[autocomplete='username']",
+            "input[name*='id' i]",
+            "input[name*='user' i]",
+            "input[type='email']",
+            "input[type='text']",
+        ),
+        "password": ("input[autocomplete='current-password']", "input[type='password']"),
+        "submit": (
+            "button[type='submit']",
+            "input[type='submit']",
+            "input[type='button'][value*='로그인']",
+            "button:has-text('로그인')",
+            "text=로그인",
+        ),
+    }
+    configured = _DELIVERY_LOGIN_SELECTORS.get(str(service or "").strip().lower(), {})
+    return {
+        "username": tuple(configured.get("username") or fallback["username"]),
+        "password": tuple(configured.get("password") or fallback["password"]),
+        "submit": tuple(configured.get("submit") or fallback["submit"]),
+    }
+
+
 def _delivery_result_is_wrong_portal(service: str, result: dict[str, Any]) -> bool:
     diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
     url = str(diagnostics.get("url") or "").lower()
@@ -3787,13 +3917,91 @@ async def _baemin_bridge_fill_first(page: Any, selectors: tuple[str, ...], value
     return False
 
 
-async def _baemin_bridge_click_login(page: Any) -> bool:
-    for selector in (
-        "button[type='submit']",
-        "input[type='submit']",
-        "input[type='button'][value*='로그인']",
-        "text=로그인",
-    ):
+async def _delivery_bridge_fill_login_dom(page: Any, service: str, username: str, password: str) -> dict[str, Any]:
+    selectors = _delivery_login_selectors(service)
+    try:
+        result = await page.evaluate(
+            r"""
+            ({username, password, usernameSelectors, passwordSelectors, submitSelectors}) => {
+              const visible = element => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0
+                  && element.type !== 'hidden'
+                  && !element.disabled;
+              };
+              const firstVisible = selectors => {
+                for (const selector of selectors) {
+                  try {
+                    const match = [...document.querySelectorAll(selector)].find(visible);
+                    if (match) return match;
+                  } catch (_) {}
+                }
+                return null;
+              };
+              const setNativeValue = (element, value) => {
+                const prototype = Object.getPrototypeOf(element);
+                const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+                if (descriptor && descriptor.set) descriptor.set.call(element, value);
+                else element.value = value;
+                element.dispatchEvent(new Event('input', {bubbles: true}));
+                element.dispatchEvent(new Event('change', {bubbles: true}));
+                element.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Unidentified'}));
+              };
+              const userInput = firstVisible(usernameSelectors);
+              const passwordInput = firstVisible(passwordSelectors);
+              if (!userInput || !passwordInput) {
+                return {filled: false, clicked: false, reason: 'LOGIN_FORM_NOT_FOUND'};
+              }
+              userInput.focus();
+              setNativeValue(userInput, username);
+              passwordInput.focus();
+              setNativeValue(passwordInput, password);
+
+              let submit = firstVisible(submitSelectors);
+              if (!submit) {
+                const labels = ['로그인', 'login', 'sign in', '확인'];
+                submit = [...document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]')]
+                  .find(element => {
+                    if (!visible(element)) return false;
+                    const text = String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
+                    return labels.some(label => text.includes(label));
+                  });
+              }
+              if (submit) {
+                submit.click();
+                return {filled: true, clicked: true, reason: ''};
+              }
+              const form = passwordInput.closest('form') || userInput.closest('form');
+              if (form) {
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+                return {filled: true, clicked: true, reason: 'FORM_SUBMIT'};
+              }
+              passwordInput.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              passwordInput.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              return {filled: true, clicked: false, reason: 'ENTER_DISPATCHED'};
+            }
+            """,
+            {
+                "username": username,
+                "password": password,
+                "usernameSelectors": list(selectors["username"]),
+                "passwordSelectors": list(selectors["password"]),
+                "submitSelectors": list(selectors["submit"]),
+            },
+        )
+        return result if isinstance(result, dict) else {"filled": bool(result), "clicked": False, "reason": ""}
+    except Exception as exc:
+        return {"filled": False, "clicked": False, "reason": exc.__class__.__name__}
+
+
+async def _delivery_bridge_click_login(page: Any, service: str = "") -> bool:
+    for selector in _delivery_login_selectors(service)["submit"]:
         locator = page.locator(selector).first
         try:
             if hasattr(locator, "count") and hasattr(locator, "is_visible"):
@@ -3804,6 +4012,10 @@ async def _baemin_bridge_click_login(page: Any) -> bool:
         except Exception:
             continue
     return False
+
+
+async def _baemin_bridge_click_login(page: Any) -> bool:
+    return await _delivery_bridge_click_login(page, "baemin")
 
 
 async def _baemin_bridge_login_with_saved_secret(page: Any, account: dict[str, Any]) -> dict[str, Any] | None:
@@ -3825,36 +4037,38 @@ async def _baemin_bridge_login_with_saved_secret(page: Any, account: dict[str, A
             await page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
         except Exception:
             pass
+        selectors = _delivery_login_selectors("baemin")
         username_filled = await _baemin_bridge_fill_first(
             page,
-            (
-                "input[autocomplete='username']",
-                "input[name*='id' i]",
-                "input[name*='user' i]",
-                "input[type='email']",
-                "input[type='text']",
-            ),
+            selectors["username"],
             username,
         )
         password_filled = await _baemin_bridge_fill_first(
             page,
-            ("input[autocomplete='current-password']", "input[type='password']"),
+            selectors["password"],
             password,
         )
         if not username_filled or not password_filled:
-            return {
-                "status": "portal_action_required",
-                "error_code": "LOGIN_FORM_NOT_FOUND",
-                "records": {},
-            }
-        clicked = await _baemin_bridge_click_login(page)
+            dom_result = await _delivery_bridge_fill_login_dom(page, "baemin", username, password)
+            if not dom_result.get("filled"):
+                return {
+                    "status": "portal_action_required",
+                    "error_code": "LOGIN_FORM_NOT_FOUND",
+                    "records": {},
+                    "diagnostics": {"login_automation": "dom_fallback_failed", "login_reason": str(dom_result.get("reason") or "")},
+                }
+            clicked = bool(dom_result.get("clicked"))
+        else:
+            clicked = await _baemin_bridge_click_login(page)
         if not clicked:
             password_input = await _baemin_bridge_first_visible(
                 page,
-                ("input[autocomplete='current-password']", "input[type='password']"),
+                selectors["password"],
             )
             if password_input is not None and hasattr(password_input, "press"):
                 await password_input.press("Enter")
+            elif hasattr(page, "press_key"):
+                await page.press_key("Enter")
         await page.wait_for_timeout(5000)
         try:
             await page.wait_for_load_state("networkidle", timeout=5000)
@@ -3870,6 +4084,7 @@ async def _delivery_bridge_login_with_saved_secret(
     account: dict[str, Any],
     service_label: str,
 ) -> dict[str, Any] | None:
+    service = str(account.get("service") or "").strip()
     username = str(account.get("username") or "").strip()
     password = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
     if not username or not password:
@@ -3888,32 +4103,38 @@ async def _delivery_bridge_login_with_saved_secret(
             await page.wait_for_selector("input[type='password']", state="visible", timeout=8000)
         except Exception:
             pass
+        selectors = _delivery_login_selectors(service)
         username_filled = await _baemin_bridge_fill_first(
             page,
-            (
-                "input[autocomplete='username']",
-                "input[name*='id' i]",
-                "input[name*='user' i]",
-                "input[type='email']",
-                "input[type='text']",
-            ),
+            selectors["username"],
             username,
         )
         password_filled = await _baemin_bridge_fill_first(
             page,
-            ("input[autocomplete='current-password']", "input[type='password']"),
+            selectors["password"],
             password,
         )
         if not username_filled or not password_filled:
-            return {"status": "portal_action_required", "error_code": "LOGIN_FORM_NOT_FOUND", "records": {}}
-        clicked = await _baemin_bridge_click_login(page)
+            dom_result = await _delivery_bridge_fill_login_dom(page, service, username, password)
+            if not dom_result.get("filled"):
+                return {
+                    "status": "portal_action_required",
+                    "error_code": "LOGIN_FORM_NOT_FOUND",
+                    "records": {},
+                    "diagnostics": {"login_automation": "dom_fallback_failed", "login_reason": str(dom_result.get("reason") or "")},
+                }
+            clicked = bool(dom_result.get("clicked"))
+        else:
+            clicked = await _delivery_bridge_click_login(page, service)
         if not clicked:
             password_input = await _baemin_bridge_first_visible(
                 page,
-                ("input[autocomplete='current-password']", "input[type='password']"),
+                selectors["password"],
             )
             if password_input is not None and hasattr(password_input, "press"):
                 await password_input.press("Enter")
+            elif hasattr(page, "press_key"):
+                await page.press_key("Enter")
         await page.wait_for_timeout(5000)
         try:
             await page.wait_for_load_state("networkidle", timeout=5000)

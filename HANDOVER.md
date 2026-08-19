@@ -6820,3 +6820,22 @@
   - Duplicate runtime collection attempts now return `action_required / COLLECTION_ALREADY_RUNNING`.
 - Remaining:
   - Actual portal row import still requires valid portal credentials and a PC Agent browser that can pass each portal's security checks. Mia Baemin account is still missing, and Mia Coupang Eats/Yogiyo/Ddangyo passwords are still not registered.
+
+## 2026-08-19 21:24 KST - Yeoljeong delivery portal login automation hardening
+
+- Request: "로그인을 자동화 해야지 즉시 조치해"
+- Findings:
+  - The PC Agent collection path already detected portal login pages and attempted saved-password login, but the form fill path depended mostly on Playwright-style locators.
+  - Portal SPA/WebSquare forms can ignore plain fill calls unless native value setters and input/change events are dispatched.
+- Changes:
+  - Added service-specific login selector profiles for Baemin, Coupang Eats, Yogiyo, and Ddangyo.
+  - Added DOM fallback login automation that injects saved ID/PW through native value setters, dispatches input/change/keyup events, clicks a visible login button, submits a form, or dispatches Enter.
+  - Wired Baemin and generic delivery PC Agent login flows to retry the DOM fallback before returning `LOGIN_FORM_NOT_FOUND`.
+  - Added a unit test covering Ddangyo-style portal SPA fallback and submit selector propagation.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python3 -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'delivery_bridge_login_uses_dom_fallback_for_portal_spa or delivery_browser_auth_for_account_creates_service_session_instead_of_reusing_active or sync_delivery_marks_pc_agent_section_not_found_as_action_required'` succeeded: 3 passed.
+- Remaining:
+  - This automates saved-credential login attempts. CAPTCHA, OTP, phone/device verification, and portal security blocks are still intentionally reported as `portal_action_required` because bypassing them is not allowed.
+  - Code is not deployed yet. Live effect requires pushing the commit and rebuilding/restarting only `yeoljeong-finance` and `yeoljeong-finance-worker`.
