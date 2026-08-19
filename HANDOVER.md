@@ -6883,3 +6883,20 @@
 - Remaining:
   - This automates saved-credential login attempts. CAPTCHA, OTP, phone/device verification, and portal security blocks are still intentionally reported as `portal_action_required` because bypassing them is not allowed.
   - Code is not deployed yet. Live effect requires pushing the commit and rebuilding/restarting only `yeoljeong-finance` and `yeoljeong-finance-worker`.
+
+## 2026-08-19 22:05 KST - Yeoljeong delivery PC Agent CDP retry hardening
+
+- Request: "로그인을 자동화 해야지 즉시 조치해"
+- Findings:
+  - Live verification showed the saved-login automation could reach PC Agent work sessions, but Coupang Eats and Yogiyo intermittently failed at Chrome CDP readiness (`/json/version`) before the login form could be filled.
+  - Ddangyo work-session creation succeeded, proving the remaining blocker was transient PC Agent Chrome profile/CDP readiness rather than the delivery login form automation itself.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` now retries delivery portal work-session creation up to three times.
+  - Retry attempts force a fresh isolated PC Agent profile after the first failure and preserve the combined failure reasons in `browser_bridge_errors` diagnostics.
+  - Added regression coverage for repeated CDP failures recovering on the third attempt.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work --entrypoint python aads-server-yeoljeong-finance-worker:latest -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_browser_bridge.py -q` succeeded: 112 passed.
+- Remaining:
+  - Portal OTP/CAPTCHA/device challenges remain user-action states.
+  - Mia delivery portal passwords are not registered, so those accounts cannot perform saved-password login until credentials are added.

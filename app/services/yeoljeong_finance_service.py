@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import shutil
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -3581,25 +3582,29 @@ def _delivery_browser_auth_for_account(
         work_key = _delivery_browser_work_key(service, business_id, branch)
         auth["browser_target_url"] = url
         bridge_service = get_browser_bridge_service()
-        try:
-            session = _run_delivery_browser_async(
-                bridge_service.ensure_work_session(
-                    work_key=work_key,
-                    label=f"열정국밥 {branch} {label} 자동수집",
-                    url="about:blank",
+        session = None
+        errors: list[str] = []
+        for attempt in range(3):
+            try:
+                session = _run_delivery_browser_async(
+                    bridge_service.ensure_work_session(
+                        work_key=work_key,
+                        label=f"열정국밥 {branch} {label} 자동수집",
+                        url="about:blank",
+                        force_recreate=attempt > 0,
+                    )
                 )
-            )
-        except Exception as first_exc:
-            auth["browser_bridge_error"] = str(first_exc)[:300]
-            session = _run_delivery_browser_async(
-                bridge_service.ensure_work_session(
-                    work_key=work_key,
-                    label=f"열정국밥 {branch} {label} 자동수집",
-                    url="about:blank",
-                    force_recreate=True,
-                )
-            )
-            auth["browser_bridge_recovered"] = "force_recreate"
+                if attempt > 0:
+                    auth["browser_bridge_recovered"] = f"force_recreate_attempt_{attempt + 1}"
+                break
+            except Exception as exc:
+                errors.append(str(exc)[:300])
+                auth["browser_bridge_error"] = errors[-1]
+                auth["browser_bridge_errors"] = " | ".join(errors)[-900:]
+                if attempt < 2:
+                    time.sleep(2 + attempt)
+                    continue
+                raise
         if session is not None:
             auth["browser_session_id"] = str(getattr(session, "session_id", "") or "")
             auth["browser_bridge_mode"] = "local_agent"
