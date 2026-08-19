@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-20 KST - AADS-GENSPARK-READY-PAGE-AUTH-GATE-FIX
+
+- Request: After approving Genspark Agent Vault auto-login deployment, run image generation tests in the specified Genspark agent session and use OHVIS/Agent Vault automation where possible.
+- Live test:
+  - `media-2d5df3b6f43c44dd` (`work_key=genspark-agent-4d42823b`) returned retryable `GENSPARK_VAULT_LOGIN_TIMEOUT`.
+  - `media-829c3083b3264c2b` (`work_key=aads-ceo-browser`) returned retryable `GENSPARK_VAULT_LOGIN_TIMEOUT`.
+  - Both tests repeatedly logged Browser Bridge local_agent recovery with `reason=COMMAND_TIMEOUT`, so the remaining blocker was browser command responsiveness/auth-gate handling, not missing Agent Vault metadata.
+- Changes:
+  - `app/services/media_generation_service.py`: added ready-page detection so a logged-in Genspark agent/chat/image page containing prompt/generate/chat markers is not treated as an auth gate only because `sign in/login` text exists in the page chrome.
+  - `tests/unit/test_media_generation_service.py`: added regression coverage ensuring a ready agent page skips Agent Vault login and proceeds to prompt submission.
+- Verification:
+  - `python3 -m py_compile app/services/media_generation_service.py tests/unit/test_media_generation_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python3 -m pytest tests/unit/test_media_generation_service.py -v` succeeded: 30 passed.
+- Remaining:
+  - Deploy this patch, then rerun the same Genspark agent smoke job. If Browser Bridge still returns `COMMAND_TIMEOUT`, next work should target the local_agent command transport/session reuse layer.
+
 ## 2026-08-20 KST - AADS-GENSPARK-AGENT-VAULT-AUTOLOGIN-P0 Genspark UI auto-login via Agent Vault
 
 - Request: Connect Genspark UI image fallback jobs to Agent Vault stored credentials for auto-login on auth-gate detection.
