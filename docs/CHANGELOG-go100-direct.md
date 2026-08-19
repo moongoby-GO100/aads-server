@@ -21816,3 +21816,160 @@ fun
 ## [2026-08-18 20:33:17 KST] [GO100] backend/app/routers/v4_stock_screener.py
 - Chat-Direct 수정: run_remote_command: systemctl is-active go100-ws-nxt-am.service
 - finalize: pending
+
+## [2026-08-19 07:54:33 KST] [GO100] backend/scripts/tmp_sl_analysis_00_schema.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_00_schema.py
+- finalize: pending
+
+## [2026-08-19 07:55:43 KST] [GO100] backend/scripts/tmp_sl_analysis_01_base.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_01_base.py
+- finalize: pending
+
+## [2026-08-19 07:56:46 KST] [GO100] backend/scripts/tmp_sl_analysis_02_sim.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_02_sim.py
+- finalize: pending
+
+## [2026-08-19 07:57:41 KST] [GO100] backend/scripts/tmp_sl_analysis_03_clean.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_03_clean.py
+- finalize: pending
+
+## [2026-08-19 07:58:22 KST] [GO100] backend/scripts/tmp_sl_analysis_04_card.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_04_card.py
+- finalize: pending
+
+## [2026-08-19 07:58:47 KST] [GO100] backend/scripts/tmp_sl_analysis_05_trail.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_05_trail.py
+- finalize: pending
+
+## [2026-08-19 07:59:10 KST] [GO100] backend/scripts/tmp_sl_analysis_06_card119.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_06_card119.py
+- finalize: pending
+
+## [2026-08-19 07:59:21 KST] [GO100] backend/scripts/tmp_sl_analysis_06_card119.py
+- Chat-Direct 수정: patch:             "SELECT * FROM go100_strateg→            "SELECT * FROM go100_strateg
+- finalize: pending
+
+## [2026-08-19 07:59:26 KST] [GO100] backend/scripts/tmp_sl_analysis_06_card119.py
+- Chat-Direct 수정: patch:             print("\n===== card id=", ro→            print("\n===== card id=", ro
+- finalize: pending
+
+## [2026-08-19 08:00:06 KST] [GO100] backend/scripts/tmp_sl_analysis_07_exit119.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_07_exit119.py
+- finalize: pending
+
+## [2026-08-19 08:01:08 KST] [GO100] backend/scripts/tmp_sl_analysis_08_minute_path.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_08_minute_path.py
+- finalize: pending
+
+## [2026-08-19 08:01:21 KST] [GO100] backend/scripts/tmp_sl_analysis_09_minute_tables.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_09_minute_tables.py
+- finalize: pending
+
+## [2026-08-19 08:01:44 KST] [GO100] backend/scripts/tmp_sl_analysis_10_mincols.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_10_mincols.py
+- finalize: pending
+
+## [2026-08-19 08:02:45 KST] [GO100] backend/scripts/tmp_sl_analysis_11_path.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_11_path.py
+- finalize: pending
+
+## [2026-08-19 08:04:01 KST] [GO100] backend/scripts/tmp_sl_analysis_11_path.py
+- Chat-Direct 수정: patch:             WHERE (stock_code, trade_dat→            WHERE trade_date BETWEEN :d1
+- finalize: pending
+
+## [2026-08-19 08:04:06 KST] [GO100] backend/scripts/tmp_sl_analysis_11_path.py
+- Chat-Direct 수정: patch:         bars = (await conn.execute(text(→        d1 = min(e["next_trade_date"] fo
+- finalize: pending
+
+## [2026-08-19 08:05:59 KST] [GO100] backend/scripts/tmp_sl_analysis_12_final.py
+- Chat-Direct 수정: write: backend/scripts/tmp_sl_analysis_12_final.py
+- finalize: pending
+
+## [2026-08-19 08:07:54 KST] [GO100] reports/20260819_card119_stoploss_design_and_payoff.md
+- Chat-Direct 수정: write: reports/20260819_card119_stoploss_design_and_payoff.md
+- finalize: pending
+
+## [2026-08-19 08:18:12 KST] [GO100] docs/plans/20260819_card119_stoploss_design_and_payoff.md
+- Chat-Direct 수정: run_remote_command: cp reports/20260819_card119_stoploss_design_and_payoff.md docs/plans/20260819_ca
+- finalize: pending
+
+## [2026-08-19 08:38:22 KST] [GO100] backend/scripts/go100_update_card119_exit_params_20260819.py
+- Chat-Direct 수정: write: backend/scripts/go100_update_card119_exit_params_20260819.py
+- finalize: pending
+
+## [2026-08-19 08:43:03 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # [P0-FLAT-COOLDOWN] 보합 반복 방지: 종→        # [P0-FLAT-COOLDOWN] 보합 반복 방지: 종
+- finalize: pending
+
+## [2026-08-19 08:43:21 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             # [P0-FLAT-COOLDOWN] 일일 리셋
+ →            # [P0-FLAT-COOLDOWN] 일일 리셋
+ 
+- finalize: pending
+
+## [2026-08-19 08:49:00 KST] [GO100] backend/scripts/tmp_card119_param_check.py
+- Chat-Direct 수정: write: backend/scripts/tmp_card119_param_check.py
+- finalize: pending
+
+## [2026-08-19 08:49:14 KST] [GO100] backend/scripts/tmp_card119_param_check.py
+- Chat-Direct 수정: write: backend/scripts/tmp_card119_param_check.py
+- finalize: pending
+
+## [2026-08-19 09:00:37 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         self._card_initial_capital: dict→        self._card_initial_capital: dict
+- finalize: pending
+
+## [2026-08-19 09:00:52 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             self._last_risk_state_load =→            self._last_risk_state_load =
+- finalize: pending
+
+## [2026-08-19 09:01:18 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         except Exception as e:
+         →        except Exception as e:
+         
+- finalize: pending
+
+## [2026-08-19 09:02:14 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                     continue
+
+          →                    continue
+
+          
+- finalize: pending
+
+## [2026-08-19 09:02:30 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                     reason, reason_code,→                    # [P0 L0] 25% 도달 30분
+- finalize: pending
+
+## [2026-08-19 09:03:12 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         if trade_value < ep["min_amount_→        if trade_value < ep["min_amount_
+- finalize: pending
+
+## [2026-08-19 09:05:43 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             "min_amount_krw": float(tap.→            "min_amount_krw": float(tap.
+- finalize: pending
+
+## [2026-08-19 09:05:49 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # [2026-08-19 P0] L0 진입필터: 25% 도→        # [2026-08-19 P0] L0 진입필터: 25% 도
+- finalize: pending
+
+## [2026-08-19 09:06:22 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                         _reach_dt = self→                        _reach_dt = self
+- finalize: pending
+
+## [2026-08-19 09:07:26 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                     # [P0 L0] 25% 도달 30분→                    # [P0 L0] 25% 도달 30분
+- finalize: pending
+
+## [2026-08-19 09:08:24 KST] [GO100] tests/go100/test_card119_l0_entry_filter_p0.py
+- Chat-Direct 수정: write: tests/go100/test_card119_l0_entry_filter_p0.py
+- finalize: pending
+
+## [2026-08-19 09:52:18 KST] [GO100] .gitignore
+- Chat-Direct 수정: patch: scripts/tmp_patch_e2e.py→scripts/tmp_patch_e2e.py
+backend/scripts
+- finalize: pending
+
+## [2026-08-19 10:03:51 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: psql -h localhost -p 5432 -U kisadmin -d kisautotrade -t -c "SELECT order_side, 
+- finalize: pending
