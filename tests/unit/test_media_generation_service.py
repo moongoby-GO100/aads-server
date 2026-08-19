@@ -958,6 +958,78 @@ async def test_genspark_ready_page_with_login_text_does_not_trigger_vault_login(
 
 
 @pytest.mark.asyncio
+async def test_genspark_vault_login_timeout_continues_when_page_is_ready(monkeypatch):
+    """A slow login settle timeout should not fail the job if the page is already ready."""
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda v: v)
+
+    conn = _VaultConn()
+    conn.sessions["sess-timeout-ready"] = _TENANT_A
+    conn.vault_credentials = [
+        _vault_row(
+            tenant_id=_TENANT_A,
+            work_key="genspark-media-fallback",
+            origin="https://login.genspark.ai",
+        )
+    ]
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "a product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="sess-timeout-ready",
+    )
+
+    class _ReadyAfterTimeoutPage:
+        async def goto(self, *_args, **_kwargs):
+            return None
+
+        async def wait_for_timeout(self, _ms):
+            return None
+
+    reads = iter(["로그인 sign in", "Prompt Generate Agent Chat", "Prompt Generate Agent Chat"])
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(_ReadyAfterTimeoutPage()))
+    monkeypatch.setattr(svc, "_read_genspark_page_text", lambda page: _coro(next(reads)))
+
+    async def fake_timeout_login(*_args, **_kwargs):
+        raise TimeoutError("GENSPARK_VAULT_LOGIN_TIMEOUT")
+
+    monkeypatch.setattr(svc, "_attempt_genspark_login", fake_timeout_login)
+    monkeypatch.setattr(svc, "_submit_prompt_to_genspark", lambda page, prompt: _coro({"ok": True}))
+    monkeypatch.setattr(
+        svc,
+        "_extract_genspark_media_candidate",
+        lambda page: _coro({"ok": True, "data_uri": "data:image/png;base64,ZmFrZQ=="}),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_save_data_uri_media",
+        lambda *, job_id, data_uri, kind: {
+            "url": "/static/media/generated/image/fake.png",
+            "path": "/tmp/fake.png",
+            "bytes": 4,
+            "content_type": "image/png",
+        },
+    )
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    assert result["automation_state"] == "succeeded"
+
+
+def test_genspark_vault_login_timeout_has_independent_cap(monkeypatch):
+    monkeypatch.delenv("AADS_GENSPARK_VAULT_LOGIN_TIMEOUT_SECONDS", raising=False)
+
+    assert MediaGenerationService._genspark_vault_login_timeout_seconds(240) == 180.0
+
+    monkeypatch.setenv("AADS_GENSPARK_VAULT_LOGIN_TIMEOUT_SECONDS", "20")
+    assert MediaGenerationService._genspark_vault_login_timeout_seconds(240) == 30.0
+
+    monkeypatch.setenv("AADS_GENSPARK_VAULT_LOGIN_TIMEOUT_SECONDS", "999")
+    assert MediaGenerationService._genspark_vault_login_timeout_seconds(120) == 120.0
+
+
+@pytest.mark.asyncio
 async def test_attempt_genspark_login_handles_delayed_password_field():
     """Genspark can show a staged email -> continue -> password flow."""
 

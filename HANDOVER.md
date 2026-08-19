@@ -7154,3 +7154,21 @@
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python3 -m pytest tests/unit/test_media_generation_service.py -v` succeeded: 31 passed.
 - Remaining:
   - Live Genspark image generation must be re-run after backend deployment against the saved Agent Vault account/session.
+
+## 2026-08-20 07:47 KST - Genspark Vault login timeout recovery follow-up
+
+- Request: Quickly finish the Genspark login automation step that previously failed within the limited timeout, then test the image generation session.
+- Findings:
+  - `media_generation_jobs` had queued Genspark jobs with `last_error=GENSPARK_VAULT_LOGIN_TIMEOUT`.
+  - Agent Vault contained one active Genspark credential for tenant `2d701a8c-9596-4757-8588-faa4f7837112`, work key `aads-ceo-browser`, origin `https://login.genspark.ai`.
+  - PC Agent had reconnected at `2026-08-20 06:11 KST` as `2e9379a1-fed`.
+- Changes:
+  - `app/services/media_generation_service.py` now gives the Agent Vault login stage an independent timeout cap via `AADS_GENSPARK_VAULT_LOGIN_TIMEOUT_SECONDS` with default 180 seconds.
+  - If Playwright times out during login but the Genspark page has already become a ready chat/image page, processing continues instead of re-queueing as a login failure.
+  - Added regression tests for timeout-after-ready recovery and the independent login timeout cap.
+- Verification:
+  - `python3 -m py_compile app/services/media_generation_service.py tests/unit/test_media_generation_service.py` succeeded.
+  - `docker exec aads-server python3 -m py_compile /app/app/services/media_generation_service.py` succeeded.
+  - Pre-deploy container pytest still used the old image `/app/tests`, so new tests require post-deploy image validation.
+- Remaining:
+  - Commit, push, blue-green deploy, then re-run the queued Genspark job against the logged-in agent URL.

@@ -937,6 +937,15 @@ class MediaGenerationService:
             return "https://www.genspark.ai/ai_image"
         return "https://www.genspark.ai/"
 
+    @staticmethod
+    def _genspark_vault_login_timeout_seconds(effective_timeout: int) -> float:
+        raw = os.getenv("AADS_GENSPARK_VAULT_LOGIN_TIMEOUT_SECONDS", "180")
+        try:
+            configured = float(raw)
+        except (TypeError, ValueError):
+            configured = 180.0
+        return max(30.0, min(float(effective_timeout), configured))
+
     async def _submit_prompt_to_genspark(self, page: Any, prompt: str) -> dict[str, Any]:
         script = """
         (prompt) => {
@@ -1506,15 +1515,35 @@ class MediaGenerationService:
                 _auto_login_ok = False
                 _login_err = ""
                 if _vault_cred:
-                    _login_result = await run_step(
-                        "GENSPARK_VAULT_LOGIN",
-                        self._attempt_genspark_login(
-                            page,
-                            username=_vault_cred["username"],
-                            password=_vault_cred["password"],
-                            login_url=_vault_cred["origin"],
-                        ),
-                    )
+                    login_cap = self._genspark_vault_login_timeout_seconds(effective_timeout)
+                    try:
+                        _login_result = await run_step(
+                            "GENSPARK_VAULT_LOGIN",
+                            self._attempt_genspark_login(
+                                page,
+                                username=_vault_cred["username"],
+                                password=_vault_cred["password"],
+                                login_url=_vault_cred["origin"],
+                            ),
+                            cap=login_cap,
+                        )
+                    except TimeoutError as exc:
+                        # Genspark sometimes redirects after the click but before Playwright settles.
+                        # If the page is already usable, keep processing instead of re-queuing.
+                        _login_result = {"ok": False, "error": str(exc) or "GENSPARK_VAULT_LOGIN_TIMEOUT"}
+                        try:
+                            _timeout_text = await run_step(
+                                "GENSPARK_POST_TIMEOUT_LOGIN_READ",
+                                self._read_genspark_page_text(page),
+                                cap=15.0,
+                            )
+                            if (
+                                self._looks_like_genspark_ready_page(_timeout_text)
+                                and not self._looks_like_genspark_auth_gate(_timeout_text)
+                            ):
+                                _login_result = {"ok": True, "recovered_after_timeout": True}
+                        except Exception:
+                            pass
                     if _login_result.get("ok"):
                         goto_ms = int(float(os.getenv("AADS_GENSPARK_UI_GOTO_TIMEOUT_SECONDS", "25")) * 1000)
                         try:
