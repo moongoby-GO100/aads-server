@@ -871,7 +871,11 @@ async def test_genspark_autologin_captcha_maps_to_login_required(monkeypatch):
         session_id="sess-3",
     )
 
-    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(object()))
+    class _ReadyPage:
+        async def wait_for_timeout(self, _ms):
+            return None
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(_ReadyPage()))
     monkeypatch.setattr(svc, "_read_genspark_page_text", lambda page: _coro("로그인 sign in"))
     monkeypatch.setattr(
         svc,
@@ -906,6 +910,107 @@ async def test_genspark_autologin_no_session_id_stays_credential_missing(monkeyp
     row = conn.rows[queued["job_id"]]
     assert row["result_metadata"]["ui_automation"]["last_error"] == "AGENT_VAULT_CREDENTIAL_MISSING"
     assert result["automation_state"] == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_genspark_ready_page_with_login_text_does_not_trigger_vault_login(monkeypatch):
+    """A logged-in Genspark page can still contain Login text in nav; ready markers should win."""
+    conn = _VaultConn()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(conn))
+    queued = await svc.generate_image(
+        "a product image",
+        provider="genspark_ui",
+        model_id="genspark-image-ui",
+        session_id="sess-ready",
+    )
+
+    class _ReadyPage:
+        async def wait_for_timeout(self, _ms):
+            return None
+
+    monkeypatch.setattr(svc, "_acquire_genspark_page", lambda **kw: _coro(_ReadyPage()))
+    monkeypatch.setattr(svc, "_read_genspark_page_text", lambda page: _coro("Login Prompt Generate Agent Chat"))
+    monkeypatch.setattr(
+        svc,
+        "_attempt_genspark_login",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("vault login should not run")),
+    )
+    monkeypatch.setattr(svc, "_submit_prompt_to_genspark", lambda page, prompt: _coro({"ok": True}))
+    monkeypatch.setattr(
+        svc,
+        "_extract_genspark_media_candidate",
+        lambda page: _coro({"ok": True, "data_uri": "data:image/png;base64,ZmFrZQ=="}),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_save_data_uri_media",
+        lambda *, job_id, data_uri, kind: {
+            "url": "/static/media/generated/image/fake.png",
+            "path": "/tmp/fake.png",
+            "bytes": 4,
+            "content_type": "image/png",
+        },
+    )
+
+    result = await svc.process_genspark_ui_job(job_id=queued["job_id"])
+
+    assert result["automation_state"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_attempt_genspark_login_handles_delayed_password_field():
+    """Genspark can show a staged email -> continue -> password flow."""
+
+    class _Keyboard:
+        async def press(self, _key):
+            return None
+
+    class _StagedLoginPage:
+        def __init__(self):
+            self.url = "https://login.genspark.ai"
+            self.text = "Sign in"
+            self.password_visible = False
+            self.email_filled = False
+            self.password_filled = False
+            self.keyboard = _Keyboard()
+
+        async def goto(self, url, **_kwargs):
+            self.url = url
+
+        async def wait_for_timeout(self, _ms):
+            return None
+
+        async def evaluate(self, script, *args):
+            if "input[type=\"email\"]" in script and args:
+                self.email_filled = True
+                return True
+            if "continue|next" in script:
+                self.password_visible = True
+                self.text = "Password"
+                return True
+            if "input[type=\"password\"]" in script and "return r.width > 0" in script:
+                return self.password_visible
+            if "input[type=\"password\"]" in script and args:
+                self.password_filled = True
+                return True
+            if "button[type=\"submit\"],button" in script:
+                self.url = "https://www.genspark.ai/agents?id=test"
+                self.text = "Prompt Generate Agent Chat"
+                return True
+            return False
+
+    page = _StagedLoginPage()
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(_VaultConn()))
+    result = await svc._attempt_genspark_login(
+        page,
+        username="user@example.com",
+        password="secret-value",
+        login_url="https://login.genspark.ai",
+    )
+
+    assert result == {"ok": True}
+    assert page.email_filled is True
+    assert page.password_filled is True
 
 
 def _coro(value):

@@ -4329,6 +4329,7 @@ async def tool_credential_test_login(
 ) -> str:
     """저장된 자격증명으로 로그인 테스트. Browser Bridge 실패 시 HTTP 폴백."""
     from app.core.credential_vault import (
+        decrypt_value,
         execute_login_steps,
         get_credential,
         login_session_completed,
@@ -4336,9 +4337,93 @@ async def tool_credential_test_login(
     )
     import aiohttp
     try:
-        cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id or None)
+        try:
+            cred = await get_credential(credential_id, include_secrets=True, tenant_id=tenant_id or None)
+        except Exception:
+            cred = None
+        vault_type = "e2e_credentials"
+        agent_cred: dict[str, Any] | None = None
         if not cred:
-            return f"[ERROR] id={credential_id} 자격증명을 찾을 수 없습니다."
+            if not tenant_id:
+                return f"[ERROR] id={credential_id} 자격증명을 찾을 수 없습니다. Agent Vault 조회에는 tenant_id가 필요합니다."
+            try:
+                from app.core.db_pool import get_pool
+
+                row = await get_pool().fetchrow(
+                    """
+                    SELECT id::text AS id, tenant_id::text AS tenant_id, work_key, origin,
+                           label, username_enc, password_enc
+                      FROM agent_vault_credentials
+                     WHERE id = $1
+                       AND tenant_id = $2
+                       AND is_active = TRUE
+                     LIMIT 1
+                    """,
+                    uuid.UUID(str(credential_id)),
+                    uuid.UUID(str(tenant_id)),
+                )
+                if row:
+                    agent_cred = {
+                        "id": str(row["id"]),
+                        "tenant_id": str(row["tenant_id"]),
+                        "work_key": str(row["work_key"] or ""),
+                        "origin": str(row["origin"] or ""),
+                        "label": str(row["label"] or ""),
+                        "username": decrypt_value(row["username_enc"]),
+                        "password": decrypt_value(row["password_enc"]),
+                    }
+                    vault_type = "agent_vault"
+            except Exception:
+                agent_cred = None
+            if not agent_cred:
+                return f"[ERROR] id={credential_id} 자격증명을 찾을 수 없습니다."
+            if not agent_cred.get("origin"):
+                return "[ERROR] Agent Vault origin이 설정되지 않아 테스트할 수 없습니다."
+            browser_error = ""
+            try:
+                from app.browser_bridge.aads_adapter import acquire_browser_context
+                from app.services.media_generation_service import MediaGenerationService
+
+                work_key = browser_work_key or str(agent_cred.get("work_key") or "agent-vault-test")
+                ctx, err = await acquire_browser_context(
+                    browser_session_id=browser_session_id or None,
+                    browser_work_key=work_key if not browser_session_id else None,
+                    url=agent_cred["origin"],
+                )
+                if err:
+                    browser_error = err
+                else:
+                    page = await ctx.new_page()
+                    svc = MediaGenerationService()
+                    login_result = await svc._attempt_genspark_login(
+                        page,
+                        username=agent_cred["username"],
+                        password=agent_cred["password"],
+                        login_url=agent_cred["origin"],
+                    )
+                    final_url = str(getattr(page, "url", "") or "")
+                    return (
+                        "[Browser E2E 로그인 테스트]\n"
+                        f"status: {'success' if login_result.get('ok') else 'failed'}\n"
+                        "vault_type: agent_vault\n"
+                        f"error_code: {'' if login_result.get('ok') else login_result.get('error', 'LOGIN_FAILED')}\n"
+                        f"final_url: {final_url}\n"
+                        f"browser_work_key: {work_key}"
+                    )
+            except Exception as be:
+                browser_error = str(be)
+
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as _s:
+                    async with _s.get(agent_cred["origin"], ssl=False) as _r:
+                        _h = _r.status
+                return (
+                    f"[API 폴백] Agent Vault Browser E2E 실패 — HTTP {_h} 접근 확인.\n"
+                    "vault_type: agent_vault\n"
+                    f"browser_error: {browser_error or '(none)'}"
+                )
+            except Exception as ae:
+                return f"[ERROR] Agent Vault Browser E2E 실패 + API 폴백 실패: browser_error={browser_error or '(none)'} api_error={ae}"
         if not cred.get("login_url"):
             return "[ERROR] login_url이 설정되지 않아 테스트할 수 없습니다."
 
@@ -4365,6 +4450,7 @@ async def tool_credential_test_login(
                 return (
                     "[Browser E2E 로그인 테스트]\n"
                     f"status: {'success' if success else 'failed'}\n"
+                    f"vault_type: {vault_type}\n"
                     f"final_url: {final_url}\n"
                     f"browser_work_key: {work_key}"
                 )
@@ -4379,6 +4465,7 @@ async def tool_credential_test_login(
             if _h in (200, 302, 303):
                 return (
                     f"[API 폴백] Browser E2E 실패 — HTTP {_h}으로 로그인 페이지 접근 확인됨.\n"
+                    f"vault_type: {vault_type}\n"
                     f"browser_error: {browser_error or '(none)'}"
                 )
             return f"[API 폴백] 로그인 페이지 HTTP {_h} — 접근 이상. URL: {cred['login_url']}"

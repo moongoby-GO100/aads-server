@@ -7121,3 +7121,17 @@
 - Remaining:
   - Live effect requires committing/pushing these selected files and recreating only `yeoljeong-finance-worker`.
   - The loop still cannot bypass captcha or missing credentials; it keeps retrying/rechecking and resumes once PC Agent/captcha/account prerequisites are satisfied.
+
+## 2026-08-20 07:38 KST - Genspark Agent Vault login timeout hardening
+
+- Request: Fix the Genspark UI fallback stage where Agent Vault auto-login could not finish within the timeout and continue image generation through the logged-in Genspark chat window.
+- Changes:
+  - `app/services/media_generation_service.py` now treats ready Genspark chat/image pages as usable even when nav text still contains login words, preventing false auth-gate retries.
+  - Genspark Agent Vault login now handles staged email -> continue -> password flows, uses bounded per-step waits, and returns secret-free error codes for captcha/2FA, credential rejection, timeout, or missing fields.
+  - `credential_test_login` now falls back to `agent_vault_credentials` when the provided credential id is from Agent Vault, and reports `vault_type=agent_vault` without exposing username/password secrets.
+  - Added regression tests for ready-page auth-gate false positives and delayed password fields.
+- Verification:
+  - `python3 -m py_compile app/services/media_generation_service.py app/api/ceo_chat_tools.py tests/unit/test_media_generation_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python3 -m pytest tests/unit/test_media_generation_service.py -v` succeeded: 31 passed.
+- Remaining:
+  - Live Genspark image generation must be re-run after backend deployment against the saved Agent Vault account/session.

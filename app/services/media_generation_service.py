@@ -911,6 +911,27 @@ class MediaGenerationService:
         )
 
     @staticmethod
+    def _looks_like_genspark_ready_page(page_text: str) -> bool:
+        text = (page_text or "").lower()
+        ready_markers = (
+            "prompt",
+            "message",
+            "generate",
+            "create",
+            "agent",
+            "chat",
+            "ask",
+            "ai image",
+            "프롬프트",
+            "메시지",
+            "생성",
+            "이미지",
+            "채팅",
+            "무엇을",
+        )
+        return any(marker in text for marker in ready_markers)
+
+    @staticmethod
     def _default_genspark_ui_target_url(kind: str) -> str:
         if kind in {"image", "edit_image"}:
             return "https://www.genspark.ai/ai_image"
@@ -1202,18 +1223,46 @@ class MediaGenerationService:
         immediately with ok=False so the caller can set auth_required.
         """
         try:
+            async def eval_step(script: str, *args: Any, timeout: float = 8.0) -> Any:
+                return await asyncio.wait_for(page.evaluate(script, *args), timeout=timeout)
+
+            async def read_text_step(timeout: float = 6.0) -> str:
+                try:
+                    return str(await asyncio.wait_for(self._read_genspark_page_text(page), timeout=timeout))
+                except asyncio.TimeoutError:
+                    return ""
+
+            def additional_auth_required(text: str) -> bool:
+                lower_text = (text or "").lower()
+                return any(
+                    kw in lower_text
+                    for kw in (
+                        "captcha",
+                        "recaptcha",
+                        "hcaptcha",
+                        "i'm not a robot",
+                        "verify you're human",
+                        "보안 인증",
+                        "two-factor",
+                        "2fa",
+                        "verification code",
+                        "otp",
+                        "약관",
+                        "terms of service",
+                        "terms of use",
+                    )
+                )
+
             goto_timeout_ms = int(float(os.getenv("AADS_GENSPARK_UI_GOTO_TIMEOUT_SECONDS", "25")) * 1000)
             await page.goto(login_url, timeout=goto_timeout_ms, wait_until="domcontentloaded")
 
-            page_text = await self._read_genspark_page_text(page)
-            lower = page_text.lower()
-            if any(
-                kw in lower
-                for kw in ("captcha", "recaptcha", "hcaptcha", "i'm not a robot", "verify you're human", "보안 인증")
-            ):
+            page_text = await read_text_step()
+            if self._looks_like_genspark_ready_page(page_text) and not self._looks_like_genspark_auth_gate(page_text):
+                return {"ok": True}
+            if additional_auth_required(page_text):
                 return {"ok": False, "error": "CAPTCHA_DETECTED"}
 
-            filled_email = await page.evaluate(
+            filled_email = await eval_step(
                 """(v) => {
                   const inputs = [...document.querySelectorAll(
                     'input[type="email"],input[type="text"],input:not([type])'
@@ -1239,7 +1288,67 @@ class MediaGenerationService:
             if not filled_email:
                 return {"ok": False, "error": "EMAIL_FIELD_NOT_FOUND"}
 
-            filled_pw = await page.evaluate(
+            password_visible = await eval_step(
+                """() => {
+                  const el = document.querySelector('input[type="password"]');
+                  if (!el) return false;
+                  const r = el.getBoundingClientRect();
+                  const s = window.getComputedStyle(el);
+                  return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                }"""
+            )
+            if not password_visible:
+                await eval_step(
+                    """() => {
+                      const buttons = [...document.querySelectorAll('button[type="submit"],button')].filter(el => {
+                        const r = el.getBoundingClientRect();
+                        const s = window.getComputedStyle(el);
+                        return r.width > 0 && r.height > 0 && s.display !== 'none' && !el.disabled;
+                      });
+                      const btn = buttons.find(el => /continue|next|sign.in|login|로그인|계속|다음/i.test(
+                        [el.textContent, el.getAttribute('aria-label')].filter(Boolean).join(' '))) || buttons[0];
+                      if (!btn) return false;
+                      btn.click();
+                      return true;
+                    }""",
+                    timeout=5.0,
+                )
+                try:
+                    await page.keyboard.press("Enter")
+                except Exception:
+                    pass
+
+                password_deadline = time.monotonic() + float(os.getenv("AADS_GENSPARK_PASSWORD_FIELD_TIMEOUT_SECONDS", "18"))
+                while time.monotonic() < password_deadline:
+                    try:
+                        password_visible = await eval_step(
+                            """() => {
+                              const el = document.querySelector('input[type="password"]');
+                              if (!el) return false;
+                              const r = el.getBoundingClientRect();
+                              const s = window.getComputedStyle(el);
+                              return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                            }""",
+                            timeout=4.0,
+                        )
+                    except asyncio.TimeoutError:
+                        password_visible = False
+                    if password_visible:
+                        break
+                    interim_text = await read_text_step(timeout=4.0)
+                    if additional_auth_required(interim_text):
+                        return {"ok": False, "error": "ADDITIONAL_AUTH_REQUIRED"}
+                    try:
+                        if hasattr(page, "wait_for_timeout"):
+                            await page.wait_for_timeout(1000)
+                        else:
+                            await asyncio.sleep(1)
+                    except Exception:
+                        await asyncio.sleep(1)
+            if not password_visible:
+                return {"ok": False, "error": "PASSWORD_FIELD_NOT_FOUND"}
+
+            filled_pw = await eval_step(
                 """(v) => {
                   const el = document.querySelector('input[type="password"]');
                   if (!el) return false;
@@ -1258,7 +1367,7 @@ class MediaGenerationService:
             if not filled_pw:
                 return {"ok": False, "error": "PASSWORD_FIELD_NOT_FOUND"}
 
-            clicked = await page.evaluate(
+            clicked = await eval_step(
                 """() => {
                   const btns = [...document.querySelectorAll('button[type="submit"],button')].filter(el => {
                     const r = el.getBoundingClientRect();
@@ -1278,30 +1387,37 @@ class MediaGenerationService:
                 except Exception:
                     pass
 
-            try:
-                if hasattr(page, "wait_for_timeout"):
-                    await page.wait_for_timeout(3000)
-            except Exception:
-                pass
+            settle_deadline = time.monotonic() + float(os.getenv("AADS_GENSPARK_LOGIN_SETTLE_TIMEOUT_SECONDS", "45"))
+            post_text = ""
+            while time.monotonic() < settle_deadline:
+                try:
+                    if hasattr(page, "wait_for_timeout"):
+                        await page.wait_for_timeout(1500)
+                    else:
+                        await asyncio.sleep(1.5)
+                except Exception:
+                    await asyncio.sleep(1.5)
 
-            post_text = await self._read_genspark_page_text(page)
-            lower_post = post_text.lower()
-            if any(
-                kw in lower_post
-                for kw in ("two-factor", "2fa", "verification code", "otp", "약관", "terms of service", "terms of use")
-            ):
-                return {"ok": False, "error": "ADDITIONAL_AUTH_REQUIRED"}
-
-            current_url = str(getattr(page, "url", "") or "")
-            if any(m in current_url for m in ("login.genspark.ai", "/login", "/signin", "/sign-in")):
+                post_text = await read_text_step(timeout=5.0)
+                lower_post = post_text.lower()
+                if additional_auth_required(post_text):
+                    return {"ok": False, "error": "ADDITIONAL_AUTH_REQUIRED"}
                 if any(kw in lower_post for kw in ("incorrect", "invalid", "wrong", "잘못된", "오류")):
                     return {"ok": False, "error": "CREDENTIALS_REJECTED"}
-                return {"ok": False, "error": "LOGIN_FAILED"}
 
-            if self._looks_like_genspark_auth_gate(post_text):
+                current_url = str(getattr(page, "url", "") or "")
+                on_login_url = any(m in current_url for m in ("login.genspark.ai", "/login", "/signin", "/sign-in"))
+                if self._looks_like_genspark_ready_page(post_text):
+                    return {"ok": True}
+                if not on_login_url and not self._looks_like_genspark_auth_gate(post_text):
+                    return {"ok": True}
+
+            if self._looks_like_genspark_auth_gate(post_text) and not self._looks_like_genspark_ready_page(post_text):
                 return {"ok": False, "error": "LOGIN_FAILED"}
 
             return {"ok": True}
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "GENSPARK_VAULT_LOGIN_TIMEOUT"}
         except Exception as exc:
             return {"ok": False, "error": f"LOGIN_EXCEPTION:{type(exc).__name__}"}
 
@@ -1374,7 +1490,7 @@ class MediaGenerationService:
                 ),
             )
             page_text = await run_step("GENSPARK_PAGE_READ", self._read_genspark_page_text(page))
-            if self._looks_like_genspark_auth_gate(page_text):
+            if self._looks_like_genspark_auth_gate(page_text) and not self._looks_like_genspark_ready_page(page_text):
                 _session_id_for_vault = str(job.get("session_id") or "").strip()
                 _vault_tenant_id = (
                     await self._fetch_tenant_id_for_session(_session_id_for_vault)
@@ -1412,7 +1528,10 @@ class MediaGenerationService:
                             "GENSPARK_POST_LOGIN_READ",
                             self._read_genspark_page_text(page),
                         )
-                        if not self._looks_like_genspark_auth_gate(_post_text):
+                        if (
+                            not self._looks_like_genspark_auth_gate(_post_text)
+                            or self._looks_like_genspark_ready_page(_post_text)
+                        ):
                             _auto_login_ok = True
                         else:
                             _login_err = "AUTH_GATE_PERSISTS_AFTER_LOGIN"
