@@ -140,30 +140,106 @@ async def upsert_agent_credential(
     return _row_to_credential(row)
 
 
-async def disable_agent_credential(*, tenant_id: str, credential_id: str, user_id: str) -> bool:
+async def update_agent_credential(
+    *,
+    tenant_id: str,
+    user_id: str,
+    credential_id: str,
+    work_key: str,
+    origin: str,
+    label: str,
+    username: str,
+    password: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    origin_norm = normalize_origin(origin)
     async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
+        existing = await conn.fetchrow(
             """
-            UPDATE agent_vault_credentials
-               SET is_active = FALSE, updated_at = NOW()
-             WHERE id = $1 AND tenant_id = $2
-             RETURNING id, work_key, origin
+            SELECT *
+              FROM agent_vault_credentials
+             WHERE id = $1 AND tenant_id = $2 AND is_active = TRUE
             """,
             uuid.UUID(credential_id),
             _tenant_uuid(tenant_id),
         )
+        if not existing:
+            return None
+
+        password_enc = encrypt_value(password) if password else existing["password_enc"]
+        row = await conn.fetchrow(
+            """
+            UPDATE agent_vault_credentials
+               SET work_key = $3,
+                   origin = $4,
+                   label = $5,
+                   username_enc = $6,
+                   password_enc = $7,
+                   metadata = $8::jsonb,
+                   updated_at = NOW()
+             WHERE id = $1 AND tenant_id = $2 AND is_active = TRUE
+             RETURNING *
+            """,
+            uuid.UUID(credential_id),
+            _tenant_uuid(tenant_id),
+            work_key,
+            origin_norm,
+            label or "default",
+            encrypt_value(username),
+            password_enc,
+            json.dumps(mask_sensitive_value(metadata or {}), ensure_ascii=False),
+        )
+        await write_access_log(
+            conn=conn,
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            work_key=work_key,
+            origin=origin_norm,
+            action="credential_update",
+            status="success",
+            user_id=user_id,
+            details={"label": label or "default", "password_changed": bool(password)},
+        )
+    return _row_to_credential(row)
+
+
+async def disable_agent_credential(*, tenant_id: str, credential_id: str, user_id: str, hard_delete: bool = False) -> bool:
+    async with get_pool().acquire() as conn:
+        if hard_delete:
+            row = await conn.fetchrow(
+                """
+                DELETE FROM agent_vault_credentials
+                 WHERE id = $1 AND tenant_id = $2
+                 RETURNING id, work_key, origin
+                """,
+                uuid.UUID(credential_id),
+                _tenant_uuid(tenant_id),
+            )
+            action = "credential_delete"
+        else:
+            row = await conn.fetchrow(
+                """
+                UPDATE agent_vault_credentials
+                   SET is_active = FALSE, updated_at = NOW()
+                 WHERE id = $1 AND tenant_id = $2
+                 RETURNING id, work_key, origin
+                """,
+                uuid.UUID(credential_id),
+                _tenant_uuid(tenant_id),
+            )
+            action = "credential_disable"
         if not row:
             return False
         await write_access_log(
             conn=conn,
             tenant_id=tenant_id,
-            credential_id=credential_id,
+            credential_id=None if hard_delete else credential_id,
             work_key=row["work_key"],
             origin=row["origin"],
-            action="credential_disable",
+            action=action,
             status="success",
             user_id=user_id,
-            details={},
+            details={"credential_id": credential_id} if hard_delete else {},
         )
     return True
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,7 @@ from app.services.agent_vault_service import (
     list_access_logs,
     list_agent_credentials,
     redeem_autofill_token,
+    update_agent_credential,
     upsert_agent_credential,
 )
 from app.services.browser_permission_policy import classify_browser_action
@@ -29,6 +31,15 @@ class CredentialIn(BaseModel):
     label: str = Field(default="default", max_length=120)
     username: str = Field(min_length=1, max_length=500)
     password: str = Field(min_length=1, max_length=2000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CredentialUpdateIn(BaseModel):
+    work_key: str = Field(min_length=1, max_length=120)
+    origin: str = Field(min_length=1, max_length=500)
+    label: str = Field(default="default", max_length=120)
+    username: str = Field(min_length=1, max_length=500)
+    password: str | None = Field(default=None, max_length=2000)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -87,15 +98,46 @@ async def api_upsert_credential(
     return {"status": "saved", "credential": credential}
 
 
+@router.patch("/credentials/{credential_id}")
+async def api_update_credential(
+    credential_id: str,
+    body: CredentialUpdateIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    try:
+        credential = await update_agent_credential(
+            tenant_id=_tenant_id(context),
+            user_id=_user_id(context),
+            credential_id=credential_id,
+            work_key=body.work_key,
+            origin=body.origin,
+            label=body.label,
+            username=body.username,
+            password=body.password,
+            metadata=body.metadata,
+        )
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="credential_label_already_exists") from exc
+    if not credential:
+        raise HTTPException(status_code=404, detail="credential_not_found")
+    return {"status": "updated", "credential": credential}
+
+
 @router.delete("/credentials/{credential_id}")
 async def api_disable_credential(
     credential_id: str,
+    hard: bool = Query(default=False),
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
-    ok = await disable_agent_credential(tenant_id=_tenant_id(context), credential_id=credential_id, user_id=_user_id(context))
+    ok = await disable_agent_credential(
+        tenant_id=_tenant_id(context),
+        credential_id=credential_id,
+        user_id=_user_id(context),
+        hard_delete=hard,
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="credential_not_found")
-    return {"status": "disabled", "credential_id": credential_id}
+    return {"status": "deleted" if hard else "disabled", "credential_id": credential_id}
 
 
 @router.post("/autofill-token")
