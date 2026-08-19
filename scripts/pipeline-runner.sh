@@ -1089,7 +1089,7 @@ ${safe_instruction}"
                     > "$output_file" 2> "$err_file" &
             else
                 printf '%s' "$safe_instruction" > "$instr_file"
-                export LITELLM_BASE_URL="${LITELLM_BASE_URL:-http://68.183.183.11:4000}"
+                export LITELLM_BASE_URL="${LITELLM_BASE_URL:-http://5.104.86.116:4000}"
                 export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-litellm}"
                 local litellm_python="/root/aads-litellm-runner-venv/bin/python"
                 [[ -x "$litellm_python" ]] || litellm_python="python3"

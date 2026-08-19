@@ -52,7 +52,7 @@ SERVER_CONFIG = {
         ],
     },
     "KIS": {
-        "host": "server-211",
+        "host": "contabo14",
         "paths": [
             {"base": "/root/kis-autotrade-v4/docs", "label": "문서",
              "exclude": ["kis-api-portal", "GO100", "go100"]},
@@ -70,13 +70,13 @@ SERVER_CONFIG = {
         ],
     },
     "SF": {
-        "host": "server-114",
+        "host": "cafe24_114",
         "paths": [
             {"base": "/data/shortflow/docs", "label": "서비스 문서"},
         ],
     },
     "NTV2": {
-        "host": "server-114",
+        "host": "cafe24_114",
         "paths": [
             {"base": "/srv/newtalk-v2/docs", "label": "서비스 문서"},
         ],

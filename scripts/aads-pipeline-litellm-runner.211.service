@@ -17,13 +17,13 @@ Environment=DB_MODE=psql
 Environment=RUNNER_PROJECTS=KIS,GO100
 Environment=RUNNER_ENGINE_MODE=litellm
 Environment=RUNNER_LOCK_FILE=/tmp/pipeline-runner-litellm.lock
-Environment=AADS_API_URL=http://68.183.183.11:8100
+Environment=AADS_API_URL=http://5.104.86.116:8100
 Environment=POLL_INTERVAL=5
 Environment=MAX_RUNTIME=7200
 Environment=MAX_RETRIES=2
 Environment=MAX_CONCURRENT_GLOBAL=10
 Environment=MAX_CONCURRENT_PER_PROJECT=4
-Environment=LITELLM_BASE_URL=http://68.183.183.11:4000
+Environment=LITELLM_BASE_URL=http://5.104.86.116:4000
 Environment=LITELLM_MASTER_KEY=sk-litellm
 Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin

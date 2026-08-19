@@ -14,12 +14,12 @@ def test_go100_remote_tools_target_contabo14():
 
 def test_go100_server_registry_is_separate_from_kis():
     assert PROJECT_TO_SERVER["GO100"] == "contabo14"
-    assert PROJECT_TO_SERVER["KIS"] == "211"
+    assert PROJECT_TO_SERVER["KIS"] == "contabo14"
     assert SERVER_REGISTRY["contabo14"]["host"] == "5.104.86.14"
-    assert SERVER_REGISTRY["contabo14"]["projects"] == ["GO100"]
-    assert SERVER_REGISTRY["211"]["projects"] == ["KIS"]
+    assert SERVER_REGISTRY["contabo14"]["projects"] == ["GO100", "KIS"]
+    assert SERVER_REGISTRY["211"]["projects"] == ["GO100", "KIS"]
 
 
-def test_kis_remote_mapping_remains_on_server_211():
-    assert get_server("KIS") == "211.188.51.113"
-    assert SERVER_CONFIG["KIS"]["host"] == "server-211"
+def test_kis_remote_mapping_uses_contabo14():
+    assert get_server("KIS") == "5.104.86.14"
+    assert SERVER_CONFIG["KIS"]["host"] == "contabo14"
