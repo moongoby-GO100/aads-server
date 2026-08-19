@@ -6448,7 +6448,7 @@
   - 호스트 `pytest`는 미설치이고 `.venv` python symlink가 깨져 직접 pytest는 실행하지 못했다.
   - 실행 중 컨테이너는 이전 이미지라 새 테스트가 선택되지 않았다. 배포 전 컨테이너 재빌드 후 테스트 재실행이 필요하다.
 
-## 2026-08-19 14:12 KST - 채팅 미노출 복구 완료보고 충돌 정정
+## 2026-08-19 14:10 KST - 채팅 미노출 복구 완료보고 충돌 정정
 
 - 요청: 이전 응답이 완료보고 조건을 만족하지 못했고 `deploy_report_conflicts_with_ledger`, `document_report_conflicts_with_ledger` 위반이므로 남은 확인/조치/검증을 계속 수행.
 - 정정:
