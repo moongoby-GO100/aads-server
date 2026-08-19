@@ -6781,3 +6781,22 @@
 - Remaining:
   - Live smoke did not complete image generation because Browser Bridge/PC Agent route calls still intermittently fail with 503/504 and the Genspark menu did not reliably switch to the AI Image workspace from text click.
   - Code is not deployed yet. Deploying this patch requires AADS backend blue-green deploy or reload after CEO approval.
+
+## 2026-08-19 20:19 KST - Yeoljeong delivery auto-collection concurrency guard
+
+- Request: "데이터를 못가져오는 자동수집이 어디있어 즉시 해결해"
+- Findings:
+  - `yeoljeong-finance` API container was left in `Created` state after the previous deploy, so `127.0.0.1:8110` was temporarily unreachable while the worker stayed up.
+  - After starting the API service, worker full collection and manual verification collection overlapped. AADS PC Agent route logs showed mixed 200/503/504/424 results, and collection statuses stayed `running` or returned portal block/login-required states.
+  - Baemin auth setup did create ASCII `local_agent` work sessions, but when dedicated PC Agent work-session creation failed or timed out, server headless password login could still run and return a misleading portal-block result.
+- Changes:
+  - Added a non-blocking `.delivery_sync.lock` around `sync_delivery()` so only one delivery auto-collection can run at a time across API background jobs, worker jobs, and script executions.
+  - Concurrent attempts now record `action_required / COLLECTION_ALREADY_RUNNING` instead of opening more PC Agent browser sessions.
+  - Ambient Browser Bridge session metadata is no longer reported as active `local_agent` after the session id is cleared for a dedicated work session.
+  - `browser-automation` accounts no longer silently fall back to server headless collection when PC Agent work session is unavailable; they return `PC_AGENT_SESSION_REQUIRED` with diagnostics.
+- Verification:
+  - `docker exec yeoljeong-finance python -m py_compile app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e YEOLJEONG_FINANCE_DATA_DIR=/tmp/yeoljeong-test aads-server-yeoljeong-finance timeout 60 python -m pytest ...` succeeded: 5 passed.
+- Remaining:
+  - Actual portal row import still requires valid portal credentials and a PC Agent browser that can pass each portal's security checks. Mia Baemin account is still missing, and Mia Coupang Eats/Yogiyo/Ddangyo passwords are still not registered.
+  - Current change needs commit, push, and `yeoljeong-finance`/`yeoljeong-finance-worker` restart to become the active runtime.

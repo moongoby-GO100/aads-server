@@ -1594,6 +1594,50 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
     assert fake_bridge.calls[0]["url"].startswith("https://")
 
 
+def test_sync_delivery_blocks_concurrent_runs_without_touching_collectors(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-coupangeats-junghwa",
+                "service": "coupangeats",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    monkeypatch.setattr(
+        collectors,
+        "collect_account",
+        lambda *args, **kwargs: pytest.fail("concurrent sync must stop before collector execution"),
+    )
+    lock_fd = service._try_acquire_delivery_sync_lock()
+    assert lock_fd is not None
+    try:
+        result = service.sync_delivery(
+            {
+                "services": ["coupangeats"],
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "date_from": "2026-08-01",
+                "date_to": "2026-08-04",
+            },
+            {"email": "owner@example.com", "is_admin": True},
+        )
+    finally:
+        service._release_delivery_sync_lock(lock_fd)
+
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "COLLECTION_ALREADY_RUNNING"
+    assert service._read("delivery_collection_status")[0]["error_code"] == "COLLECTION_ALREADY_RUNNING"
+
+
 def test_sync_delivery_marks_pc_agent_section_not_found_as_action_required(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(

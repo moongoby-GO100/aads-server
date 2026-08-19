@@ -10,6 +10,7 @@ import asyncio
 import base64
 import binascii
 import csv
+import fcntl
 import hashlib
 import json
 import mimetypes
@@ -3098,6 +3099,97 @@ def _write_delivery_collection_statuses(rows: list[dict[str, Any]], current: dic
         _run_db(_db_upsert_ledger("delivery_collection_status", current))
 
 
+def _try_acquire_delivery_sync_lock() -> int | None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(DATA_DIR / ".delivery_sync.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    except Exception:
+        os.close(fd)
+        raise
+    os.ftruncate(fd, 0)
+    os.write(fd, f"{os.getpid()} {_now()}\n".encode("utf-8"))
+    return fd
+
+
+def _release_delivery_sync_lock(fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _delivery_sync_busy_result(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    requested_services = _delivery_requested_services(payload)
+    date_from, date_to = _delivery_sync_window(payload)
+    all_accounts = _read("platform_accounts")
+    scopes = _delivery_sync_scopes(payload, requested_services, all_accounts)
+    now_text = _now()
+    statuses = _read("delivery_collection_status")
+    message = "다른 배달 자동수집 작업이 실행 중이라 중복 실행을 차단했습니다. 현재 작업 완료 후 다시 실행하세요."
+    summary: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
+    for business_id, branch in scopes:
+        for service in requested_services:
+            status_record = {
+                "id": str(uuid4()),
+                "job_id": str(payload.get("sync_job_id") or ""),
+                "service": service,
+                "business_id": business_id,
+                "branch": branch,
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "status": "action_required",
+                "raw_status": "busy",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "error_code": "COLLECTION_ALREADY_RUNNING",
+                "message": message,
+                "started_at": now_text,
+                "finished_at": now_text,
+                "created_at": now_text,
+                "updated_at": now_text,
+            }
+            statuses.insert(0, status_record)
+            records.append(status_record)
+            summary.append(
+                {
+                    "service": service,
+                    "status": "action_required",
+                    "portal_status": "action_required",
+                    "error_code": "COLLECTION_ALREADY_RUNNING",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                    "run_id": status_record["id"],
+                    "account_id": "",
+                    "business_id": business_id,
+                    "branch": branch,
+                    "message": message,
+                    "portal_message": message,
+                }
+            )
+    _write_delivery_collection_statuses(statuses)
+    for status_record in records:
+        _run_db(_db_upsert_ledger("delivery_collection_status", status_record))
+    return {
+        "queued": False,
+        "synced_at": now_text,
+        "business_id": scopes[0][0] if len(scopes) == 1 else "all",
+        "branch": scopes[0][1] if len(scopes) == 1 else "전체",
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "totals": {"sales": 0, "settlements": 0, "reviews": 0},
+        "summary": summary,
+        "sales": [],
+        "settlements": [],
+        "reviews": [],
+        "records": [],
+    }
+
+
 def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
@@ -3466,6 +3558,8 @@ def _delivery_browser_auth_for_account(
     if ambient_browser_session_id:
         auth["ambient_browser_session_id"] = ambient_browser_session_id
         auth["browser_session_id"] = ""
+        auth["ambient_browser_bridge_mode"] = str(auth.get("browser_bridge_mode") or "")
+        auth["browser_bridge_mode"] = ""
     if payload.get("disable_pc_agent") or payload.get("disablePcAgent"):
         return auth
 
@@ -4334,6 +4428,16 @@ def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) 
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
+    lock_fd = _try_acquire_delivery_sync_lock()
+    if lock_fd is None:
+        return _delivery_sync_busy_result(payload, user)
+    try:
+        return _sync_delivery_unlocked(payload, user)
+    finally:
+        _release_delivery_sync_lock(lock_fd)
+
+
+def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     from app.services.yeoljeong_delivery_collectors import collect_account
 
     requested_services = _delivery_requested_services(payload)
@@ -4449,6 +4553,20 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
                         "records": {},
                         "diagnostics": {"collection_mode": collection_mode},
                         "message": f"{label} 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
+                    }
+                elif collection_mode == "browser-automation" and not can_use_browser_auth:
+                    label = _delivery_platform_label(service)
+                    result = {
+                        "status": "credential_required",
+                        "error_code": "PC_AGENT_SESSION_REQUIRED",
+                        "records": {},
+                        "diagnostics": {
+                            "collection_mode": collection_mode,
+                            "browser_bridge_error": browser_auth.get("browser_bridge_error") or "",
+                            "ambient_browser_session_id": browser_auth.get("ambient_browser_session_id") or "",
+                            "ambient_browser_bridge_mode": browser_auth.get("ambient_browser_bridge_mode") or "",
+                        },
+                        "message": f"{label} 자동수집은 PC Agent 전용 세션이 필요합니다. 서버 headless 접속은 포털 보안 차단 때문에 사용하지 않습니다.",
                     }
                 elif not _has_secret_value(account, "password") and not can_use_browser_auth:
                     label = _delivery_platform_label(service)
