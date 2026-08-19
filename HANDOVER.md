@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-19 16:06 KST - Yeoljeong delivery auto-collect runner hardening
+
+- Request: Make every Yeoljeong sales channel capable of automatic collection, with background execution and actual status visibility.
+- Changes:
+  - `app/browser_bridge/service.py`: PC Agent route fallback now tries the active API container on internal `:8080` and local `127.0.0.1:8080` before external blue/green host ports, reducing repeated route failures from inside containers.
+  - `app/services/yeoljeong_finance_service.py`: `list_collection_status()` now marks `queued/running` delivery jobs older than 15 minutes as `stale` with `BACKGROUND_SYNC_STALE` and persists the repaired status to JSON/DB.
+  - `scripts/yeoljeong_auto_collect.py`: added a no-UI CLI for all-branch/all-delivery collection. Defaults to Baemin, Coupang Eats, Yogiyo, and Ddangyo across every registered branch; outputs summary JSON without secrets.
+  - `tests/unit/test_browser_bridge.py` and `tests/unit/test_yeoljeong_finance_service.py`: added route-priority and stale-status regressions while keeping existing all-service PC Agent collection coverage.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python scripts/yeoljeong_auto_collect.py --help` passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_browser_bridge.py -k active_api_route_urls -q` passed: 1 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -q` passed: 72 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/browser_bridge/service.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
+- Status:
+  - Existing unrelated dirty changelog files remain outside this request.
+  - Actual portal success still depends on PC Agent browser sessions being authenticated for each portal; stale jobs will no longer appear as indefinitely running.
+
 ## 2026-08-19 15:49 KST - Deploy interruption auto-resume P0
 
 - Request: Fix the case where chat responses cannot complete after API deploy/reload interrupts an active stream.

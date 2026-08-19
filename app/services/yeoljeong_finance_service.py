@@ -30,6 +30,7 @@ UPLOAD_DIR = DATA_DIR / "uploads" / "onboarding"
 EVIDENCE_UPLOAD_DIR = DATA_DIR / "uploads" / "evidence"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 256 * 1024
+DELIVERY_SYNC_STALE_AFTER = timedelta(minutes=15)
 CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
 
 DOCUMENT_TYPES: list[dict[str, str]] = [
@@ -2938,9 +2939,39 @@ def list_collection_status(user: dict[str, Any], business_id: str | None = None)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="수집 상태 조회 권한이 없습니다")
     rows = _read("delivery_collection_status")
+    if _normalize_stale_delivery_collection_statuses(rows):
+        stale_rows = [row for row in rows if str(row.get("error_code") or "") == "BACKGROUND_SYNC_STALE"]
+        _write_delivery_collection_statuses(rows)
+        for row in stale_rows:
+            _run_db(_db_upsert_ledger("delivery_collection_status", row))
     if business_id:
         rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
     return rows
+
+
+def _normalize_stale_delivery_collection_statuses(rows: list[dict[str, Any]]) -> bool:
+    now_dt = datetime.now(KST)
+    now_text = now_dt.isoformat(timespec="seconds")
+    changed = False
+    for row in rows:
+        if str(row.get("status") or "").strip() not in {"queued", "running"}:
+            continue
+        started_at = (
+            _pg_ts(row.get("started_at"))
+            or _pg_ts(row.get("queued_at"))
+            or _pg_ts(row.get("updated_at"))
+            or _pg_ts(row.get("created_at"))
+        )
+        if not started_at or now_dt - started_at < DELIVERY_SYNC_STALE_AFTER:
+            continue
+        row["status"] = "stale"
+        row["error_code"] = "BACKGROUND_SYNC_STALE"
+        row["message"] = "백그라운드 수집 작업이 15분 이상 완료 갱신 없이 멈춰 상태를 정리했습니다. 다시 수집 실행이 필요합니다."
+        row["finished_at"] = now_text
+        row["updated_at"] = now_text
+        row.setdefault("counts", {"sales": 0, "settlements": 0, "reviews": 0})
+        changed = True
+    return changed
 
 
 def _delivery_sync_window(payload: dict[str, Any]) -> tuple[date, date]:

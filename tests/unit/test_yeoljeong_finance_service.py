@@ -1,6 +1,7 @@
 import base64
 import os
 import importlib.util
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -338,6 +339,35 @@ def test_queue_delivery_sync_records_queued_status(tmp_path, monkeypatch):
     assert statuses[0]["status"] == "queued"
     assert statuses[0]["business_id"] == "biz-junghwa"
     assert statuses[0]["branch"] == "중화점"
+
+
+def test_list_collection_status_marks_stale_background_sync(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    old = (datetime.now(service.KST) - timedelta(minutes=16)).isoformat(timespec="seconds")
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "run-stale",
+                "job_id": "delivery-sync-stale",
+                "service": "baemin",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "status": "running",
+                "started_at": old,
+                "updated_at": old,
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+            }
+        ],
+    )
+
+    statuses = service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-junghwa")
+
+    assert statuses[0]["status"] == "stale"
+    assert statuses[0]["error_code"] == "BACKGROUND_SYNC_STALE"
+    assert "15분" in statuses[0]["message"]
+    raw = service._read("delivery_collection_status")[0]
+    assert raw["status"] == "stale"
 
 
 def test_queue_delivery_sync_all_scope_records_registered_branch_services(tmp_path, monkeypatch):

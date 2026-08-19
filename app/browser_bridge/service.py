@@ -857,16 +857,22 @@ class BrowserBridgeService:
 
     @classmethod
     def _active_api_route_urls(cls, active_port: str) -> list[str]:
-        urls = [f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute"]
-        docker_hosts = ["host.docker.internal", *cls._docker_default_gateway_hosts(), "172.17.0.1"]
-        urls.extend(f"http://{host}:{active_port}/api/v1/pc-agent/route-execute" for host in docker_hosts)
+        urls: list[str] = []
+        active_container = cls._active_container_name()
+        if active_container:
+            urls.append(f"http://{active_container}:8080/api/v1/pc-agent/route-execute")
         if active_port == "8100":
             urls.append("http://aads-server:8080/api/v1/pc-agent/route-execute")
         elif active_port == "8102":
             urls.append("http://aads-server-green:8080/api/v1/pc-agent/route-execute")
-        active_container = cls._active_container_name()
-        if active_container:
-            urls.append(f"http://{active_container}:8080/api/v1/pc-agent/route-execute")
+        urls.append("http://127.0.0.1:8080/api/v1/pc-agent/route-execute")
+        urls.append(f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute")
+        if active_port == "8100":
+            urls.append("http://aads-server:8080/api/v1/pc-agent/route-execute")
+        elif active_port == "8102":
+            urls.append("http://aads-server-green:8080/api/v1/pc-agent/route-execute")
+        docker_hosts = ["host.docker.internal", *cls._docker_default_gateway_hosts(), "172.17.0.1"]
+        urls.extend(f"http://{host}:{active_port}/api/v1/pc-agent/route-execute" for host in docker_hosts)
         deduped: list[str] = []
         for url in urls:
             if url not in deduped:

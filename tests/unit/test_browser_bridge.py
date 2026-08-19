@@ -244,7 +244,11 @@ def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
 
     urls = BrowserBridgeService._active_api_route_urls("8102")
 
-    assert urls[0] == "http://127.0.0.1:8102/api/v1/pc-agent/route-execute"
+    assert urls[:3] == [
+        "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
+        "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
+        "http://127.0.0.1:8102/api/v1/pc-agent/route-execute",
+    ]
     assert "http://host.docker.internal:8102/api/v1/pc-agent/route-execute" in urls
     assert "http://172.18.0.1:8102/api/v1/pc-agent/route-execute" in urls
     assert "http://172.17.0.1:8102/api/v1/pc-agent/route-execute" in urls
