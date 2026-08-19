@@ -8464,6 +8464,26 @@ async def send_message_stream(
                     "ORDER BY created_at DESC LIMIT 1",
                     sid, persisted_user_content,
                 )
+                # 2차 dedup: 직전 visible user 메시지와 동일 content이면 중복 스킵
+                if not existing_dup and persisted_user_content:
+                    _prev_user = await conn.fetchval(
+                        "SELECT content FROM chat_messages "
+                        "WHERE session_id = $1 AND role = 'user' "
+                        "AND COALESCE(intent, '') NOT IN ('system_trigger', 'interruption_notice') "
+                        "AND (is_hidden IS NULL OR is_hidden = false) "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        sid,
+                    )
+                    if _prev_user and _prev_user.strip() == persisted_user_content.strip():
+                        logger.info(f"user_msg_content_dedup session={session_id[:8]} — consecutive duplicate skipped: {persisted_user_content[:30]}")
+                        existing_dup = await conn.fetchrow(
+                            "SELECT id, content, created_at FROM chat_messages "
+                            "WHERE session_id = $1 AND role = 'user' AND content = $2 "
+                            "AND COALESCE(intent, '') NOT IN ('system_trigger', 'interruption_notice') "
+                            "AND (is_hidden IS NULL OR is_hidden = false) "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            sid, persisted_user_content,
+                        )
                 if existing_dup:
                     logger.info(f"user_msg_dedup session={session_id[:8]} — duplicate skipped")
                     _saved_user_message_id = existing_dup["id"]
