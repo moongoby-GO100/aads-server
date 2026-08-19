@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-19 19:27 KST - OHVIS Aside browser agent architecture plan
+
+- Request: Create a detailed planning and architecture document for applying Aside-like browser agent capabilities to OHVIS/AADS, including a stronger PC Agent, password manager, and authentication handling.
+- Changes:
+  - Added `docs/plans/20260819_OHVIS_ASIDE_BROWSER_AGENT_ARCHITECTURE.md`.
+  - The document fixes the recommended direction as `OHVIS Managed Browser + Agent Vault + Approval Gate` before any Chromium fork, and maps Aside benchmark features to existing AADS components (`pc_agent`, `browser_bridge`, `credential_vault`, `notifications`).
+  - It includes product goals, feature priority table, architecture flow, component responsibilities, Agent Vault/autofill rules, MFA handling, DB/API drafts, UI screens, sprint breakdown, security risks, verification criteria, and an `AADS-186` Runner instruction draft.
+- Verification:
+  - Source basis checked at 2026-08-19 19:27 KST.
+  - AADS server worktree was clean before this document edit.
+  - AADS Pipeline Runner had 3 approval-waiting jobs and 0 queued/running jobs at verification time, so no executing Runner conflicted with this documentation edit.
+  - Local PC Agent status API returned `online_count=1` and agent `2e9379a1-fed` with `chrome_cdp`, `interactive_browser`, `pc_control` capabilities plus `shell`, `powershell`, and `notification` command types.
+  - Aside official pages checked: `https://aside.com`, `https://aside.com/features/browser-agent`, `https://aside.com/features/password-manager`, `https://aside.com/features/memory`, `https://docs.aside.com/help/tasks`, `https://docs.aside.com/help/security`, `https://docs.aside.com/help/password-manager`, `https://docs.aside.com/help/memory`, `https://docs.aside.com/help/automation`, `https://docs.aside.com/help/developers`, `https://aside.com/pricing`.
+- Status:
+  - Documentation only. No code, DB migration, deployment, commit, or push was performed in this turn.
+
 ## 2026-08-19 19:18 KST - Yeoljeong P1 isolation hardening follow-up
 
 - Request: Implement P0/P1 immediately for Yeoljeong store assistant auto-collection and AADS separation.
