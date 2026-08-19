@@ -5619,6 +5619,10 @@
       return { business_id: businessId, branch };
     }
 
+    function allAutomationScope() {
+      return { business_id: "all", branch: "전체", all_businesses: true };
+    }
+
     function recordBusinessId(record) {
       return String(record.businessId || record.business_id || businessIdForBranchName(record.branch || "") || "").trim();
     }
@@ -10856,7 +10860,7 @@
       els.integrationReconnectBtn?.addEventListener("click", () => openIntegrationDetail("integration-audit"));
       els.integrationSyncAllBtn?.addEventListener("click", async () => {
         try {
-          await syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+          await syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"], allAutomationScope());
           await syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]);
         } catch (err) {
           showToast(err.message);

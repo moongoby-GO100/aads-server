@@ -2973,6 +2973,49 @@ def _delivery_platform_label(service: str) -> str:
     return PLATFORM_LABELS.get(service, service or "배달플랫폼")
 
 
+def _delivery_all_scope_requested(payload: dict[str, Any]) -> bool:
+    markers = {"all", "*", "__all__", "전체"}
+    business = str(payload.get("business_id") or payload.get("businessId") or "").strip().lower()
+    branch = str(payload.get("branch") or "").strip().lower()
+    return bool(payload.get("all_businesses")) or business in markers or branch in markers
+
+
+def _delivery_sync_scopes(
+    payload: dict[str, Any],
+    requested_services: list[str],
+    all_accounts: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    if not _delivery_all_scope_requested(payload):
+        return [
+            _normalize_delivery_scope(
+                str(payload.get("business_id") or MIA_BUSINESS_ID),
+                str(payload.get("branch") or MIA_BRANCH_NAME),
+            )
+        ]
+
+    canonical_scopes = [(str(item["businessId"]), str(item["name"])) for item in CANONICAL_BRANCHES]
+    account_scopes: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    requested = set(requested_services)
+    for row in all_accounts:
+        service = str(row.get("service") or "").strip()
+        if service not in requested:
+            continue
+        branch = BRANCH_ALIASES.get(str(row.get("branch") or "").strip(), str(row.get("branch") or "").strip())
+        business_id = str(row.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip()
+        if business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id:
+            continue
+        scope = (business_id, branch)
+        if scope not in seen:
+            seen.add(scope)
+            account_scopes.append(scope)
+    return account_scopes or canonical_scopes
+
+
+def _delivery_run_key(service: str, business_id: str, branch: str) -> str:
+    return f"{business_id}|{branch}|{service}"
+
+
 def _write_delivery_collection_statuses(rows: list[dict[str, Any]], current: dict[str, Any] | None = None) -> None:
     _write("delivery_collection_status", rows)
     if current and current.get("id"):
@@ -2985,53 +3028,57 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
 
     requested_services = _delivery_requested_services(payload)
     date_from, date_to = _delivery_sync_window(payload)
-    business_id, branch = _normalize_delivery_scope(
-        str(payload.get("business_id") or MIA_BUSINESS_ID),
-        str(payload.get("branch") or MIA_BRANCH_NAME),
-    )
+    all_accounts = _read("platform_accounts")
+    scopes = _delivery_sync_scopes(payload, requested_services, all_accounts)
     queued_at = _now()
     job_id = str(payload.get("sync_job_id") or f"delivery-sync-{uuid4().hex[:12]}")
     statuses = _read("delivery_collection_status")
     queued_run_ids: dict[str, str] = {}
     summary: list[dict[str, Any]] = []
 
-    for service in requested_services:
-        run_id = str(uuid4())
-        queued_run_ids[service] = run_id
-        message = f"{_delivery_platform_label(service)} 백그라운드 수집 대기 중입니다."
-        statuses.insert(
-            0,
-            {
-                "id": run_id,
-                "job_id": job_id,
-                "service": service,
-                "business_id": business_id,
-                "branch": branch,
-                "date_from": date_from.isoformat(),
-                "date_to": date_to.isoformat(),
-                "status": "queued",
-                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
-                "error_code": "",
-                "message": message,
-                "queued_at": queued_at,
-                "created_at": queued_at,
-                "updated_at": queued_at,
-            },
-        )
-        summary.append(
-            {
-                "service": service,
-                "status": "queued",
-                "portal_status": "queued",
-                "error_code": "",
-                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
-                "run_id": run_id,
-                "job_id": job_id,
-                "account_id": str(payload.get("account_id") or payload.get("server_account_id") or ""),
-                "message": message,
-                "portal_message": message,
-            }
-        )
+    for business_id, branch in scopes:
+        for service in requested_services:
+            run_id = str(uuid4())
+            run_key = _delivery_run_key(service, business_id, branch)
+            queued_run_ids[run_key] = run_id
+            if len(scopes) == 1:
+                queued_run_ids[service] = run_id
+            message = f"{branch} {_delivery_platform_label(service)} 백그라운드 수집 대기 중입니다."
+            statuses.insert(
+                0,
+                {
+                    "id": run_id,
+                    "job_id": job_id,
+                    "service": service,
+                    "business_id": business_id,
+                    "branch": branch,
+                    "date_from": date_from.isoformat(),
+                    "date_to": date_to.isoformat(),
+                    "status": "queued",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                    "error_code": "",
+                    "message": message,
+                    "queued_at": queued_at,
+                    "created_at": queued_at,
+                    "updated_at": queued_at,
+                },
+            )
+            summary.append(
+                {
+                    "service": service,
+                    "status": "queued",
+                    "portal_status": "queued",
+                    "error_code": "",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "account_id": str(payload.get("account_id") or payload.get("server_account_id") or ""),
+                    "business_id": business_id,
+                    "branch": branch,
+                    "message": message,
+                    "portal_message": message,
+                }
+            )
 
     _write_delivery_collection_statuses(statuses)
     return {
@@ -3040,8 +3087,8 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
         "queued_run_ids": queued_run_ids,
         "synced_at": queued_at,
         "queued_at": queued_at,
-        "business_id": business_id,
-        "branch": branch,
+        "business_id": scopes[0][0] if len(scopes) == 1 else "all",
+        "branch": scopes[0][1] if len(scopes) == 1 else "전체",
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "summary": summary,
@@ -4089,9 +4136,6 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
 
     requested_services = _delivery_requested_services(payload)
     date_from, date_to = _delivery_sync_window(payload)
-    requested_business = str(payload.get("business_id") or MIA_BUSINESS_ID)
-    requested_branch = str(payload.get("branch") or MIA_BRANCH_NAME)
-    business_id, branch = _normalize_delivery_scope(requested_business, requested_branch)
     requested_account_id = str(payload.get("account_id") or payload.get("server_account_id") or "").strip()
     queued_run_ids = payload.get("queued_run_ids") if isinstance(payload.get("queued_run_ids"), dict) else {}
     sync_job_id = str(payload.get("sync_job_id") or "").strip()
@@ -4099,16 +4143,6 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     all_accounts = _read("platform_accounts")
     if _migrate_platform_account_secrets(all_accounts):
         _write("platform_accounts", all_accounts)
-    candidates = [
-        row
-        for row in all_accounts
-        if (not requested_services or row.get("service") in requested_services)
-        and (not requested_account_id or str(row.get("id") or "") == requested_account_id)
-        and str(row.get("business_id") or "") == business_id
-        and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
-    ]
-    candidates.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
-    accounts_by_service: dict[str, dict[str, Any]] = {}
     def _delivery_account_score(row: dict[str, Any], service: str) -> tuple[int, int, int, int, int, str]:
         mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()
         upload_mode = mode in DELIVERY_UPLOAD_COLLECTION_MODES
@@ -4125,12 +4159,7 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             str(row.get("updated_at") or row.get("created_at") or ""),
         )
 
-    for service in requested_services:
-        service_rows = [row for row in candidates if str(row.get("service") or "") == service]
-        if requested_account_id and service_rows:
-            accounts_by_service[service] = service_rows[0]
-        elif service_rows:
-            accounts_by_service[service] = max(service_rows, key=lambda row: _delivery_account_score(row, service))
+    scopes = _delivery_sync_scopes(payload, requested_services, all_accounts)
     synced_at = _now()
     summary = []
     ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
@@ -4140,121 +4169,148 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     response_records: list[dict[str, Any]] = []
     browser_auth = _delivery_browser_auth_options(payload)
 
-    for service in requested_services:
-        account = accounts_by_service.get(service)
-        run_id = str(queued_run_ids.get(service) or uuid4())
-        queued_status = next((row for row in statuses if str(row.get("id") or "") == run_id), None)
-        status_record = {
-            "id": run_id,
-            "job_id": sync_job_id,
-            "service": service,
-            "business_id": business_id,
-            "branch": branch,
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
-            "status": "running",
-            "counts": {"sales": 0, "settlements": 0, "reviews": 0},
-            "error_code": "",
-            "started_at": synced_at,
-            "created_at": synced_at,
-            "updated_at": synced_at,
-        }
-        if queued_status:
-            queued_status.update(status_record)
-            status_record = queued_status
-        else:
-            statuses.insert(0, status_record)
-        _write_delivery_collection_statuses(statuses, status_record)
-        if not account:
-            result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
-        else:
-            collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
-            collection_account = dict(account)
-            if service == "baemin" and browser_auth["storage_state_path"]:
-                collection_account["storage_state_path"] = browser_auth["storage_state_path"]
-            can_use_stored_browser_session = service == "baemin" and bool(browser_auth["storage_state_path"])
-            bridge_result = (
-                _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
-                if service == "baemin"
-                else _collect_delivery_from_browser_bridge_session(
-                    collection_account,
-                    browser_auth,
-                    date_from.isoformat(),
-                    date_to.isoformat(),
+    for business_id, branch in scopes:
+        candidates = [
+            row
+            for row in all_accounts
+            if (not requested_services or row.get("service") in requested_services)
+            and (not requested_account_id or str(row.get("id") or "") == requested_account_id)
+            and str(row.get("business_id") or BUSINESS_BY_BRANCH.get(str(row.get("branch") or "")) or "") == business_id
+            and BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or "")) == branch
+        ]
+        candidates.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+        accounts_by_service: dict[str, dict[str, Any]] = {}
+        for requested_service in requested_services:
+            service_rows = [row for row in candidates if str(row.get("service") or "") == requested_service]
+            if requested_account_id and service_rows:
+                accounts_by_service[requested_service] = service_rows[0]
+            elif service_rows:
+                accounts_by_service[requested_service] = max(
+                    service_rows,
+                    key=lambda row: _delivery_account_score(row, requested_service),
                 )
-            )
-            if bridge_result is not None:
-                result = bridge_result
-            elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
-                label = _delivery_platform_label(service)
-                result = {
-                    "status": "upload_required",
-                    "error_code": "CSV_UPLOAD_REQUIRED",
-                    "records": {},
-                    "diagnostics": {"collection_mode": collection_mode},
-                    "message": f"{label} 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
-                }
-            elif not _has_secret_value(account, "password") and not can_use_stored_browser_session:
-                label = _delivery_platform_label(service)
-                result = {
-                    "status": "credential_required",
-                    "error_code": "CREDENTIAL_REQUIRED",
-                    "records": {},
-                    "message": f"{label} 계정 비밀번호가 등록되지 않았습니다.",
-                }
-            else:
-                secret = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
-                result = collect_account(collection_account, secret, date_from.isoformat(), date_to.isoformat())
-                if service == "baemin" and browser_auth["browser_session_id"]:
-                    result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]
-                if service == "baemin" and browser_auth["browser_bridge_mode"]:
-                    result.setdefault("diagnostics", {})["browser_bridge_mode"] = browser_auth["browser_bridge_mode"]
-            result = _normalize_delivery_collection_result(service, result)
 
-        counts = {"sales": 0, "settlements": 0, "reviews": 0}
-        for kind, ledger_name in ledger_names.items():
-            incoming = result.get("records", {}).get(kind) or []
-            by_id = {str(row.get("id") or ""): row for row in ledgers[ledger_name] if row.get("id")}
-            for record in incoming:
-                by_id[str(record["id"])] = record
-            ledgers[ledger_name] = list(by_id.values())
-            counts[kind] = len(incoming)
-            response_ledgers[kind].extend(incoming)
-            if kind in {"sales", "settlements"}:
-                response_records.extend(_delivery_entry_record(record) for record in incoming)
-        finished_at = _now()
-        status_record.update(
-            {
-                "status": result.get("status") or "failed",
-                "counts": counts,
-                "error_code": result.get("error_code") or "",
-                "diagnostics": result.get("diagnostics") or {},
-                "message": result.get("message") or "",
-                "finished_at": finished_at,
-                "updated_at": finished_at,
-            }
-        )
-        _write_delivery_collection_statuses(statuses, status_record)
-        if account:
-            account["last_sync_status"] = status_record["status"]
-            account["portal_status"] = status_record["status"]
-            account["portal_message"] = status_record["message"] or status_record["error_code"]
-            account["last_sync_at"] = finished_at
-            account["updated_at"] = finished_at
-        summary.append(
-            {
+        for service in requested_services:
+            account = accounts_by_service.get(service)
+            run_id = str(
+                queued_run_ids.get(_delivery_run_key(service, business_id, branch))
+                or (queued_run_ids.get(service) if len(scopes) == 1 else "")
+                or uuid4()
+            )
+            queued_status = next((row for row in statuses if str(row.get("id") or "") == run_id), None)
+            status_record = {
+                "id": run_id,
+                "job_id": sync_job_id,
                 "service": service,
-                "status": status_record["status"],
-                "portal_status": status_record["status"],
-                "error_code": status_record["error_code"],
-                "counts": counts,
-                "run_id": run_id,
-                "account_id": account.get("id") if account else "",
-                "collection_mode": str(account.get("collection_mode") or account.get("collectionMode") or "") if account else "",
-                "message": status_record["message"],
-                "portal_message": status_record["message"],
+                "business_id": business_id,
+                "branch": branch,
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "status": "running",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "error_code": "",
+                "started_at": synced_at,
+                "created_at": synced_at,
+                "updated_at": synced_at,
             }
-        )
+            if queued_status:
+                queued_status.update(status_record)
+                status_record = queued_status
+            else:
+                statuses.insert(0, status_record)
+            _write_delivery_collection_statuses(statuses, status_record)
+            if not account:
+                result = {"status": "credential_required", "error_code": "ACCOUNT_NOT_REGISTERED", "records": {}}
+            else:
+                collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
+                collection_account = dict(account)
+                if service == "baemin" and browser_auth["storage_state_path"]:
+                    collection_account["storage_state_path"] = browser_auth["storage_state_path"]
+                can_use_stored_browser_session = service == "baemin" and bool(browser_auth["storage_state_path"])
+                bridge_result = (
+                    _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
+                    if service == "baemin"
+                    else _collect_delivery_from_browser_bridge_session(
+                        collection_account,
+                        browser_auth,
+                        date_from.isoformat(),
+                        date_to.isoformat(),
+                    )
+                )
+                if bridge_result is not None:
+                    result = bridge_result
+                elif collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES and not can_use_stored_browser_session:
+                    label = _delivery_platform_label(service)
+                    result = {
+                        "status": "upload_required",
+                        "error_code": "CSV_UPLOAD_REQUIRED",
+                        "records": {},
+                        "diagnostics": {"collection_mode": collection_mode},
+                        "message": f"{label} 포털 CSV/엑셀 정산서 업로드가 필요한 계정입니다.",
+                    }
+                elif not _has_secret_value(account, "password") and not can_use_stored_browser_session:
+                    label = _delivery_platform_label(service)
+                    result = {
+                        "status": "credential_required",
+                        "error_code": "CREDENTIAL_REQUIRED",
+                        "records": {},
+                        "message": f"{label} 계정 비밀번호가 등록되지 않았습니다.",
+                    }
+                else:
+                    secret = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
+                    result = collect_account(collection_account, secret, date_from.isoformat(), date_to.isoformat())
+                    if service == "baemin" and browser_auth["browser_session_id"]:
+                        result.setdefault("diagnostics", {})["browser_session_id"] = browser_auth["browser_session_id"]
+                    if service == "baemin" and browser_auth["browser_bridge_mode"]:
+                        result.setdefault("diagnostics", {})["browser_bridge_mode"] = browser_auth["browser_bridge_mode"]
+                result = _normalize_delivery_collection_result(service, result)
+
+            counts = {"sales": 0, "settlements": 0, "reviews": 0}
+            for kind, ledger_name in ledger_names.items():
+                incoming = result.get("records", {}).get(kind) or []
+                by_id = {str(row.get("id") or ""): row for row in ledgers[ledger_name] if row.get("id")}
+                for record in incoming:
+                    by_id[str(record["id"])] = record
+                ledgers[ledger_name] = list(by_id.values())
+                counts[kind] = len(incoming)
+                response_ledgers[kind].extend(incoming)
+                if kind in {"sales", "settlements"}:
+                    response_records.extend(_delivery_entry_record(record) for record in incoming)
+            finished_at = _now()
+            status_record.update(
+                {
+                    "status": result.get("status") or "failed",
+                    "counts": counts,
+                    "error_code": result.get("error_code") or "",
+                    "diagnostics": result.get("diagnostics") or {},
+                    "message": result.get("message") or "",
+                    "finished_at": finished_at,
+                    "updated_at": finished_at,
+                }
+            )
+            _write_delivery_collection_statuses(statuses, status_record)
+            if account:
+                account["last_sync_status"] = status_record["status"]
+                account["portal_status"] = status_record["status"]
+                account["portal_message"] = status_record["message"] or status_record["error_code"]
+                account["last_sync_at"] = finished_at
+                account["updated_at"] = finished_at
+            summary.append(
+                {
+                    "service": service,
+                    "status": status_record["status"],
+                    "portal_status": status_record["status"],
+                    "error_code": status_record["error_code"],
+                    "counts": counts,
+                    "run_id": run_id,
+                    "account_id": account.get("id") if account else "",
+                    "collection_mode": str(account.get("collection_mode") or account.get("collectionMode") or "") if account else "",
+                    "business_id": business_id,
+                    "branch": branch,
+                    "message": status_record["message"],
+                    "portal_message": status_record["message"],
+                }
+            )
 
     for name, rows in ledgers.items():
         _write(name, rows)
@@ -4262,8 +4318,8 @@ def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     _write_delivery_collection_statuses(statuses)
     return {
         "synced_at": synced_at,
-        "business_id": business_id,
-        "branch": branch,
+        "business_id": scopes[0][0] if len(scopes) == 1 else "all",
+        "branch": scopes[0][1] if len(scopes) == 1 else "전체",
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "summary": summary,

@@ -37,6 +37,14 @@ def seed_approved_employee(name="가입 직원", email="member@example.com"):
     }])
 
 
+def disable_delivery_browser_auth(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+
+
 def valid_employment_contract(**overrides):
     payload = {
         "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",
@@ -332,9 +340,56 @@ def test_queue_delivery_sync_records_queued_status(tmp_path, monkeypatch):
     assert statuses[0]["branch"] == "중화점"
 
 
+def test_queue_delivery_sync_all_scope_records_registered_branch_services(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin-junghwa",
+                "service": "baemin",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "browser-automation",
+            },
+            {
+                "id": "acct-baemin-mia",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "collection_mode": "browser-automation",
+            },
+        ],
+    )
+
+    queued = service.queue_delivery_sync(
+        {
+            "services": ["baemin"],
+            "business_id": "all",
+            "branch": "전체",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-19",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    assert queued["business_id"] == "all"
+    assert queued["branch"] == "전체"
+    assert set(queued["queued_run_ids"]) == {
+        "biz-junghwa|중화점|baemin",
+        "biz-mia|열정국밥_미아점|baemin",
+    }
+    assert {(row["business_id"], row["branch"], row["service"]) for row in statuses} == {
+        ("biz-junghwa", "중화점", "baemin"),
+        ("biz-mia", "열정국밥_미아점", "baemin"),
+    }
+
+
 def test_sync_delivery_updates_queued_status_record(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_decrypt_secret", lambda value: "plain-secret")
+    disable_delivery_browser_auth(monkeypatch)
     from app.services import yeoljeong_delivery_collectors as collectors
 
     monkeypatch.setattr(
@@ -396,6 +451,7 @@ def test_sync_delivery_updates_queued_status_record(tmp_path, monkeypatch):
 
 def test_sync_delivery_uses_service_label_for_upload_required_message(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    disable_delivery_browser_auth(monkeypatch)
     service._write(
         "platform_accounts",
         [
@@ -429,6 +485,7 @@ def test_sync_delivery_uses_service_label_for_upload_required_message(tmp_path, 
 
 def test_sync_delivery_uses_service_label_for_credential_required_message(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    disable_delivery_browser_auth(monkeypatch)
     service._write(
         "platform_accounts",
         [
@@ -713,6 +770,7 @@ def test_delivery_ledger_requires_admin(tmp_path, monkeypatch):
 def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_decrypt_secret", lambda value: "decrypted-secret")
+    disable_delivery_browser_auth(monkeypatch)
     service._write(
         "platform_accounts",
         [
@@ -867,6 +925,7 @@ def test_sync_delivery_prefers_saved_browser_credentials_over_canonical_upload_a
 
 def test_sync_delivery_portal_csv_account_requests_upload_without_browser(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    disable_delivery_browser_auth(monkeypatch)
     service._write(
         "platform_accounts",
         [
@@ -1204,6 +1263,86 @@ def test_sync_delivery_uses_pc_agent_session_for_all_delivery_services(tmp_path,
     assert {row["diagnostics"]["auth_mode"] for row in service._read("delivery_collection_status")} == {
         "pc_agent_browser"
     }
+
+
+def test_sync_delivery_all_scope_collects_registered_accounts_across_branches(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "plain-secret")
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin-junghwa",
+                "service": "baemin",
+                "username": "owner-j",
+                "password_enc": "ciphertext",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            },
+            {
+                "id": "acct-baemin-mia",
+                "service": "baemin",
+                "username": "owner-m",
+                "password_enc": "ciphertext",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            },
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fake_collect(account, password, date_from, date_to):
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": f"{account['business_id']}-{account['service']}-sale",
+                        "source_id": "sale-1",
+                        "business_id": account["business_id"],
+                        "branch": account["branch"],
+                        "service": account["service"],
+                        "platform": account["service"],
+                        "record_type": "sales",
+                        "occurred_on": "2026-08-04",
+                        "gross_amount": 31000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+            },
+        }
+
+    monkeypatch.setattr(collectors, "collect_account", fake_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "all",
+            "branch": "전체",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["business_id"] == "all"
+    assert result["branch"] == "전체"
+    assert result["totals"]["sales"] == 2
+    assert {(item["business_id"], item["branch"], item["status"]) for item in result["summary"]} == {
+        ("biz-junghwa", "중화점", "succeeded"),
+        ("biz-mia", "열정국밥_미아점", "succeeded"),
+    }
+    assert len(service.list_sales({"email": "owner@example.com", "is_admin": True})) == 2
 
 
 def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):
