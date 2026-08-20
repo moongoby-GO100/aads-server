@@ -9,6 +9,12 @@ from app.models.pc_agent import CommandResult
 from app.services.pc_agent_manager import PCAgentManager
 
 
+@pytest.fixture(autouse=True)
+def _clear_default_pc_agent_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PC_AGENT_DEFAULT_AGENT_ID", raising=False)
+    monkeypatch.delenv("PC_AGENT_DEFAULT_HOSTNAME", raising=False)
+
+
 class _DummyWebSocket:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
@@ -410,6 +416,7 @@ async def test_browser_jobs_do_not_fallback_when_configured_default_agent_is_off
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PC_AGENT_DEFAULT_AGENT_ID", "ceo-pc")
+    monkeypatch.setenv("PC_AGENT_DEFAULT_HOSTNAME", "DESKTOP-TBKF5M3")
     manager = PCAgentManager()
     other_ws = _DummyWebSocket()
     manager.register_agent(

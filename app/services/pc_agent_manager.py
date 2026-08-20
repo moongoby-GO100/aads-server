@@ -948,8 +948,8 @@ class PCAgentManager:
             return None
 
         def _is_default(conn: _AgentConnection) -> bool:
-            if self._default_agent_id and conn.agent_id == self._default_agent_id:
-                return True
+            if self._default_agent_id:
+                return conn.agent_id == self._default_agent_id
             hostname = str(conn.info.hostname or "").strip().lower()
             return bool(self._default_agent_hostname and hostname == self._default_agent_hostname)
 

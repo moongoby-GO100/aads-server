@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-20 16:02 KST - Browser testing pinned to current CEO PC
+
+- Request: CEO instructed that browser testing must run only on the current CEO PC.
+- Finding:
+  - Live `aads-server` had `PC_AGENT_DEFAULT_AGENT_ID=69e1cfb7-146` / `DESKTOP-NPC6JAT`.
+  - Live `yeoljeong-finance-worker` had `YEOLJEONG_DELIVERY_PC_AGENT_ID=2e9379a1-fed`.
+  - Current CEO PC candidate verified through Browser Bridge is `aad74f71-e6b` / `DESKTOP-TBKF5M3`.
+  - After the first container refresh, standby `aads-server-green` still held the old default and needed separate recreation.
+- Changes:
+  - `docker-compose.yml` and `docker-compose.prod.yml`: default browser PC and Yeoljeong delivery PC Agent now point to `aad74f71-e6b` / `DESKTOP-TBKF5M3`.
+  - `app/services/pc_agent_manager.py`: when `PC_AGENT_DEFAULT_AGENT_ID` is configured, browser-class jobs now accept only that exact agent id; hostname matching is used only when no default id is configured.
+  - `tests/unit/test_pc_agent_routing_leases.py` and `tests/unit/test_yeoljeong_finance_isolation.py`: regression coverage added/updated for strict default PC routing and compose isolation defaults.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server -m pytest tests/unit/test_pc_agent_routing_leases.py tests/unit/test_yeoljeong_finance_isolation.py` passed: 16 passed.
+  - `aads-server`, `aads-server-green`, and `yeoljeong-finance-worker` runtime env values were checked and all point to `aad74f71-e6b` / `DESKTOP-TBKF5M3` where applicable.
+  - `http://127.0.0.1:8100/health` and `http://127.0.0.1:8102/health` returned ok after container recreation.
+- Remaining:
+  - Live browser E2E depends on the CEO PC Agent accepting commands. Earlier `pc_execute system_info` returned offline, while Browser Bridge CDP session creation succeeded.
+
 ## 2026-08-20 14:31 KST - PC Agent browser window reuse and close command defaults
 
 - Request: CEO reported that `https://aads.newtalk.kr/chat#476cae48-9bd5-467b-b2da-2f68606c180e` keeps opening new PC Agent browser windows and asked whether the close feature was reflected.
