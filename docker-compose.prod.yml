@@ -325,6 +325,7 @@ services:
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS=${YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS:-1800}
       - YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS=${YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS:-300}
+      - YEOLJEONG_AUTO_COLLECT_MAX_ATTEMPTS=${YEOLJEONG_AUTO_COLLECT_MAX_ATTEMPTS:-3}
       - YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS=${YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS:-60}
       - YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS=${YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS:-180}
       - YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-2e9379a1-fed}
@@ -341,7 +342,7 @@ services:
       - /bin/sh
       - -c
       - |
-        python scripts/yeoljeong_auto_collect.py --business-id all --branch 전체 --until-complete --repeat-after-complete --exit-zero-on-blocked --retry-seconds "$${YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS:-60}" --blocked-retry-seconds "$${YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS:-180}" --success-sleep-seconds "$${YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS:-1800}" --attempt-timeout-seconds "$${YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS:-300}"
+        python scripts/yeoljeong_auto_collect.py --business-id all --branch 전체 --until-complete --exit-zero-on-blocked --max-attempts "$${YEOLJEONG_AUTO_COLLECT_MAX_ATTEMPTS:-3}" --retry-seconds "$${YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS:-60}" --blocked-retry-seconds "$${YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS:-180}" --attempt-timeout-seconds "$${YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS:-300}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

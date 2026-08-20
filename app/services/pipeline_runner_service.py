@@ -1799,17 +1799,27 @@ async def get_pipeline_status(job_id: str) -> dict:
                 "SELECT * FROM pipeline_jobs WHERE job_id = $1", job_id
             )
             if row:
+                row_data = dict(row)
+                raw_logs = row_data.get("logs")
+                if isinstance(raw_logs, str):
+                    try:
+                        raw_logs = json.loads(raw_logs)
+                    except (TypeError, ValueError):
+                        raw_logs = []
                 return {
-                    "job_id": row["job_id"],
-                    "project": row["project"],
-                    "instruction": row["instruction"][:200],
-                    "phase": row["phase"],
-                    "cycle": row["cycle"],
-                    "status": row["status"],
-                    "logs": json.loads(row["logs"]) if row["logs"] else [],
-                    "git_diff": (row["git_diff"] or "")[:2000],
-                    "review_feedback": row["review_feedback"] or "",
-                    "created_at": row["created_at"].isoformat(),
+                    "job_id": row_data.get("job_id"),
+                    "project": row_data.get("project"),
+                    "instruction": (row_data.get("instruction") or "")[:200],
+                    "phase": row_data.get("phase"),
+                    "cycle": row_data.get("cycle"),
+                    "status": row_data.get("status"),
+                    "display_status": row_data.get("auth_recovery_state") or row_data.get("phase") or row_data.get("status"),
+                    "logs": raw_logs if isinstance(raw_logs, list) else (raw_logs or []),
+                    "git_diff": (row_data.get("git_diff") or "")[:2000],
+                    "review_feedback": row_data.get("review_feedback") or "",
+                    "auth_recovery_state": row_data.get("auth_recovery_state") or "",
+                    "auth_recovery_metadata": row_data.get("auth_recovery_metadata") or {},
+                    "created_at": row_data["created_at"].isoformat() if row_data.get("created_at") else None,
                 }
     except Exception as e:
         logger.error(f"get_pipeline_status_db_error: {e}")

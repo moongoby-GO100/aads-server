@@ -23,6 +23,15 @@ def test_print_action_uses_browser_print_dialog():
     assert 'els.printBtn.addEventListener("click", () => window.print())' in HTML
 
 
+def test_business_normalizer_keeps_custom_businesses_and_branches():
+    normalizer = HTML.split("function normalizeBusinessScope(next)", 1)[1].split("function normalizeMiaBusinessLinks(next)", 1)[0]
+
+    assert "next.businesses = next.businesses.filter" not in normalizer
+    assert "next.branches = next.branches.filter" not in normalizer
+    assert "const activeBusinessIds = new Set(next.businesses.map" in normalizer
+    assert "const activeBranchNames = new Set(next.branches.map" in normalizer
+
+
 def test_integrations_detail_buttons_have_operational_drawer_and_api_ctas():
     assert 'id="integrationDetailModal"' in HTML
     assert 'data-integration-detail="sales-channel-connect"' in HTML

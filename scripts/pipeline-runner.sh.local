@@ -486,6 +486,20 @@ deploy_git_preflight() {
 }
 
 # ── 에러 분류 ─────────────────────────────────────────────────────────
+persist_auth_recovery() {
+    local job_id="$1" state="$2" reason="$3" retry_count="$4"
+    local max_retries="${MAX_RETRIES:-2}" retry_after_seconds="300"
+    local state_sql reason_sql
+    state_sql=$(sql_escape "$state")
+    reason_sql=$(sql_escape "$reason")
+    if [[ "$(db_exec "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='pipeline_jobs' AND column_name='auth_recovery_state' LIMIT 1;" 2>/dev/null | tr -d '[:space:]')" == "1" ]]; then
+        db_update "UPDATE pipeline_jobs SET auth_recovery_state=${state_sql}, updated_at=NOW() WHERE job_id='${job_id}';"
+    fi
+    if [[ "$(db_exec "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='pipeline_jobs' AND column_name='auth_recovery_metadata' LIMIT 1;" 2>/dev/null | tr -d '[:space:]')" == "1" ]]; then
+        db_update "UPDATE pipeline_jobs SET auth_recovery_metadata=jsonb_build_object('reason',${reason_sql},'retry_count',${retry_count},'max_retries',${max_retries},'retry_after_seconds',${retry_after_seconds},'bounded',true), updated_at=NOW() WHERE job_id='${job_id}';"
+    fi
+}
+
 classify_error() {
     local exit_code="$1" stderr_file="$2" stdout_file="$3"
     local err_content=""
@@ -494,7 +508,15 @@ classify_error() {
     [[ -f "$stdout_file" ]] && out_tail=$(tail -100 "$stdout_file" 2>/dev/null)
     local combined="${err_content}${out_tail}"
 
-    if [[ $exit_code -eq 124 ]] || echo "$combined" | grep -qi "timed out\|operation timed out"; then
+    if echo "$combined" | grep -qi "invalid_refresh_token\|invalid refresh token\|refresh_token_reused"; then
+        echo "invalid_refresh_token"
+    elif echo "$combined" | grep -qi "login_required\|login required"; then
+        echo "login_required"
+    elif echo "$combined" | grep -qi "auth_expired\|authentication expired\|auth token expired\|token_expired"; then
+        echo "auth_expired"
+    elif echo "$combined" | grep -qi "pc[_ -]*agent.*\(offline\|unavailable\|disconnected\)\|browser[_ -]*bridge.*\(offline\|unavailable\|disconnected\)"; then
+        echo "auth_recovery_pending"
+    elif [[ $exit_code -eq 124 ]] || echo "$combined" | grep -qi "timed out\|operation timed out"; then
         echo "timeout"
     elif echo "$combined" | grep -qi "refresh_token_reused"; then
         echo "codex_refresh_token_reused"
@@ -1276,6 +1298,15 @@ ${safe_instruction}"
         error_type=$(classify_error "$exit_code" "$err_file" "$output_file")
         log "  FAIL job=$job_id exit=$exit_code type=$error_type attempts=$((attempt))"
 
+        case "$error_type" in
+            invalid_refresh_token|login_required|auth_expired)
+                persist_auth_recovery "$job_id" "awaiting_user_auth" "$error_type" "$attempt"
+                ;;
+            auth_recovery_pending)
+                persist_auth_recovery "$job_id" "auth_recovery_pending" "pc_agent_unavailable" "$attempt"
+                ;;
+        esac
+
         local err_content=""
         [[ -f "$err_file" ]] && err_content=$(tail -c 2000 "$err_file")
         local out_tail=""
@@ -1349,6 +1380,10 @@ ${_uncommitted_files}"
     else
         actual_changed_files=$(git diff --name-only HEAD 2>/dev/null) || true
     fi
+    local _untracked_files=""
+    _untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+    [[ -n "$_untracked_files" ]] && actual_changed_files="${actual_changed_files}
+${_untracked_files}"
     actual_changed_files=$(printf '%s\n' "$actual_changed_files" | sed '/^[[:space:]]*$/d' | sort -u)
     record_actual_changed_files "$job_id" "$actual_changed_files" "$worktree_dir" "$parallel_group"
 

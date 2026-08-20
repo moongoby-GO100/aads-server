@@ -28,6 +28,8 @@ _TASK_BOARD_STATUSES = {
     "deploy_failed",
     "review_failed",
     "auth_unavailable",
+    "auth_recovery_pending",
+    "awaiting_user_auth",
     "tool_timeout",
     "error",
 }
@@ -48,6 +50,20 @@ _TASK_BOARD_STATUS_SQL = (
     "ELSE 'error' "
     "END"
 )
+
+
+def _task_board_status_sql(auth_state_expr: str = "NULL::text") -> str:
+    """Prefer auth recovery display state while keeping pre-migration SQL valid."""
+    return _TASK_BOARD_STATUS_SQL.replace(
+        "CASE ",
+        (
+            "CASE "
+            f"WHEN {auth_state_expr} IN ('auth_recovery_pending', 'awaiting_user_auth') "
+            f"THEN {auth_state_expr} "
+        ),
+        1,
+    )
+
 _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
     "agent_role",
     "role",
@@ -2000,24 +2016,26 @@ async def list_admin_tasks(
     offset = (page - 1) * page_size
     pool = get_pool()
 
-    jobs_cte = f"""
-        WITH jobs AS (
-            SELECT
-                job_id,
-                project,
-                {_TASK_BOARD_STATUS_SQL} AS board_status,
-                phase,
-                substring(COALESCE(instruction, '') from 1 for 100) AS instruction,
-                model,
-                worker_model,
-                created_at,
-                updated_at,
-                error_detail
-            FROM pipeline_jobs
-        )
-    """
-
     async with pool.acquire() as conn:
+        has_auth_state = await _admin_column_exists(conn, "pipeline_jobs", "auth_recovery_state")
+        auth_state_expr = "auth_recovery_state" if has_auth_state else "NULL::text"
+        jobs_cte = f"""
+            WITH jobs AS (
+                SELECT
+                    job_id,
+                    project,
+                    {_task_board_status_sql(auth_state_expr)} AS board_status,
+                    phase,
+                    substring(COALESCE(instruction, '') from 1 for 100) AS instruction,
+                    model,
+                    worker_model,
+                    created_at,
+                    updated_at,
+                    error_detail,
+                    {auth_state_expr} AS auth_recovery_state
+                FROM pipeline_jobs
+            )
+        """
         total = await conn.fetchval(
             jobs_cte + "SELECT COUNT(*) FROM jobs WHERE ($1::text IS NULL OR board_status = $1)",
             normalized_status,
@@ -2035,7 +2053,8 @@ async def list_admin_tasks(
                 worker_model,
                 created_at,
                 updated_at,
-                error_detail
+                error_detail,
+                auth_recovery_state
             FROM jobs
             WHERE ($1::text IS NULL OR board_status = $1)
             ORDER BY created_at DESC NULLS LAST, updated_at DESC NULLS LAST
@@ -2059,6 +2078,7 @@ async def list_admin_tasks(
                 "created_at": _admin_iso(row["created_at"]),
                 "updated_at": _admin_iso(row["updated_at"]),
                 "error_detail": row["error_detail"] or "",
+                "auth_recovery_state": row["auth_recovery_state"] or "",
             }
             for row in rows
         ],
@@ -2074,10 +2094,12 @@ async def get_admin_task_stats():
 
     pool = get_pool()
     async with pool.acquire() as conn:
+        has_auth_state = await _admin_column_exists(conn, "pipeline_jobs", "auth_recovery_state")
+        auth_state_expr = "auth_recovery_state" if has_auth_state else "NULL::text"
         row = await conn.fetchrow(
             f"""
             WITH jobs AS (
-                SELECT {_TASK_BOARD_STATUS_SQL} AS board_status
+                SELECT {_task_board_status_sql(auth_state_expr)} AS board_status
                 FROM pipeline_jobs
             )
             SELECT
@@ -2092,6 +2114,8 @@ async def get_admin_task_stats():
                 COUNT(*) FILTER (WHERE board_status = 'deploy_failed') AS deploy_failed,
                 COUNT(*) FILTER (WHERE board_status = 'review_failed') AS review_failed,
                 COUNT(*) FILTER (WHERE board_status = 'auth_unavailable') AS auth_unavailable,
+                COUNT(*) FILTER (WHERE board_status = 'auth_recovery_pending') AS auth_recovery_pending,
+                COUNT(*) FILTER (WHERE board_status = 'awaiting_user_auth') AS awaiting_user_auth,
                 COUNT(*) FILTER (WHERE board_status = 'tool_timeout') AS tool_timeout,
                 COUNT(*) FILTER (WHERE board_status = 'error') AS error,
                 COUNT(*) AS total
@@ -2111,6 +2135,8 @@ async def get_admin_task_stats():
         "deploy_failed": row["deploy_failed"] or 0,
         "review_failed": row["review_failed"] or 0,
         "auth_unavailable": row["auth_unavailable"] or 0,
+        "auth_recovery_pending": row["auth_recovery_pending"] or 0,
+        "awaiting_user_auth": row["awaiting_user_auth"] or 0,
         "tool_timeout": row["tool_timeout"] or 0,
         "error": row["error"] or 0,
         "total": row["total"] or 0,
@@ -2125,6 +2151,10 @@ async def get_admin_task(job_id: str):
     pool = get_pool()
     async with pool.acquire() as conn:
         has_logs_column = await _admin_column_exists(conn, "pipeline_jobs", "logs")
+        has_auth_state = await _admin_column_exists(conn, "pipeline_jobs", "auth_recovery_state")
+        has_auth_metadata = await _admin_column_exists(conn, "pipeline_jobs", "auth_recovery_metadata")
+        auth_state_expr = "auth_recovery_state" if has_auth_state else "NULL::text"
+        auth_metadata_expr = "auth_recovery_metadata" if has_auth_metadata else "NULL::jsonb"
         row = await conn.fetchrow(
             f"""
             SELECT
@@ -2132,7 +2162,7 @@ async def get_admin_task(job_id: str):
                 project,
                 instruction,
                 status AS raw_status,
-                {_TASK_BOARD_STATUS_SQL} AS board_status,
+                {_task_board_status_sql(auth_state_expr)} AS board_status,
                 phase,
                 cycle,
                 max_cycles,
@@ -2145,6 +2175,8 @@ async def get_admin_task(job_id: str):
                 git_diff,
                 review_feedback,
                 error_detail,
+                {auth_state_expr} AS auth_recovery_state,
+                {auth_metadata_expr} AS auth_recovery_metadata,
                 started_at,
                 created_at,
                 updated_at
@@ -2188,6 +2220,8 @@ async def get_admin_task(job_id: str):
         "git_diff": row["git_diff"] or "",
         "review_feedback": row["review_feedback"] or "",
         "error_detail": row["error_detail"] or "",
+        "auth_recovery_state": row["auth_recovery_state"] or "",
+        "auth_recovery_metadata": row["auth_recovery_metadata"] or {},
         "started_at": _admin_iso(row["started_at"]),
         "created_at": _admin_iso(row["created_at"]),
         "updated_at": _admin_iso(row["updated_at"]),

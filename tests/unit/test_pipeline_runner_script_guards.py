@@ -117,5 +117,29 @@ def test_pipeline_runner_records_actual_changed_files_to_db():
     assert "record_actual_changed_files()" in script
     assert "actual_changed_files=" in script
     assert "git diff --name-only" in script
+    assert "git ls-files --others --exclude-standard" in script
     assert "actual_changed_files_recorded" in script
     assert "worktree_path" in script
+
+
+def test_pipeline_runner_classifies_auth_recovery_before_generic_errors():
+    script = _read_script("pipeline-runner.sh")
+    marker_block = script[script.index("classify_error()") : script.index("codex_auth_disabled_until()")]
+
+    assert marker_block.index("invalid_refresh_token") < marker_block.index('echo "timeout"')
+    assert marker_block.index("login_required") < marker_block.index('echo "auth_error"')
+    assert marker_block.index("auth_expired") < marker_block.index('echo "auth_error"')
+    assert "persist_auth_recovery()" in script
+    assert '"awaiting_user_auth"' in script
+    assert '"auth_recovery_pending"' in script
+
+
+def test_pipeline_runner_auth_recovery_metadata_is_bounded_and_schema_optional():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "information_schema.columns" in script
+    assert "auth_recovery_state" in script
+    assert "auth_recovery_metadata" in script
+    assert "'max_retries'" in script
+    assert "'retry_after_seconds'" in script
+    assert "'bounded',true" in script

@@ -130,6 +130,8 @@ _TERMINAL_BLOCKING_STATUSES = (
     "deploy_failed",
     "review_failed",
     "auth_unavailable",
+    "auth_recovery_pending",
+    "awaiting_user_auth",
     "tool_timeout",
     "dedup_blocked",
     "blocked_dependency",
@@ -142,6 +144,8 @@ _DISPLAY_STATUS_LABELS = {
     "deploy_failed": "배포 실패",
     "review_failed": "검수 실패",
     "auth_unavailable": "인증 필요",
+    "auth_recovery_pending": "인증 복구 대기",
+    "awaiting_user_auth": "사용자 인증 필요",
     "tool_timeout": "도구 타임아웃",
 }
 _DISPLAY_STATUS_GROUPS = {
@@ -152,6 +156,8 @@ _DISPLAY_STATUS_GROUPS = {
     "deploy_failed": "action_required",
     "review_failed": "action_required",
     "auth_unavailable": "action_required",
+    "auth_recovery_pending": "action_required",
+    "awaiting_user_auth": "action_required",
     "tool_timeout": "action_required",
 }
 _DEFAULT_LOCAL_PID_PROJECTS = {"AADS"}
@@ -187,6 +193,21 @@ def _record_get(row, key: str, default=None):
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
+
+
+async def _pipeline_column_exists(conn, column_name: str) -> bool:
+    return bool(await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'pipeline_jobs'
+              AND column_name = $1
+        )
+        """,
+        column_name,
+    ))
 
 
 def _normalize_target_file_path(path: str) -> str:
@@ -663,18 +684,23 @@ async def promote_next_queued(conn, project: str) -> str | None:
     return None
 
 
-def _runner_display_status(status: str, phase: str | None, error_detail: str | None) -> dict[str, object]:
+def _runner_display_status(
+    status: str,
+    phase: str | None,
+    error_detail: str | None,
+    auth_recovery_state: str | None = None,
+) -> dict[str, object]:
     """UI가 terminal-but-not-error 상태를 빨간 실패로만 표시하지 않도록 분류한다."""
     phase = phase or ""
     error_detail = error_detail or ""
-    candidates = (phase, status, error_detail.split(":", 1)[0])
+    candidates = (auth_recovery_state or "", phase, status, error_detail.split(":", 1)[0])
     for candidate in candidates:
         if candidate in _DISPLAY_STATUS_LABELS:
             return {
                 "display_status": candidate,
                 "status_label": _DISPLAY_STATUS_LABELS[candidate],
                 "status_group": _DISPLAY_STATUS_GROUPS[candidate],
-                "auto_retryable": candidate == "tool_timeout",
+                "auto_retryable": candidate in {"tool_timeout", "auth_recovery_pending"},
             }
     if status == "cancelled":
         return {"display_status": "cancelled", "status_label": "종결",
@@ -1012,12 +1038,18 @@ async def list_jobs(
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     async with pool.acquire() as conn:
+        has_auth_state = await _pipeline_column_exists(conn, "auth_recovery_state")
+        has_auth_metadata = await _pipeline_column_exists(conn, "auth_recovery_metadata")
+        auth_state_expr = "auth_recovery_state" if has_auth_state else "NULL::text"
+        auth_metadata_expr = "auth_recovery_metadata" if has_auth_metadata else "NULL::jsonb"
         rows = await conn.fetch(
             f"""
             SELECT job_id, project, instruction, status, phase, cycle,
                    error_detail, created_at, updated_at,
                    started_at, depends_on, chat_session_id, model, worker_model,
-                   actual_model, size, runner_pid
+                   actual_model, size, runner_pid,
+                   {auth_state_expr} AS auth_recovery_state,
+                   {auth_metadata_expr} AS auth_recovery_metadata
             FROM pipeline_jobs
             {where}
             ORDER BY created_at DESC
@@ -1045,7 +1077,14 @@ async def list_jobs(
                 "worker_model": _record_get(r, "worker_model") or "",
                 "actual_model": _record_get(r, "actual_model") or "",
                 "size": _record_get(r, "size") or "M",
-                **_runner_display_status(r["status"], r["phase"], _record_get(r, "error_detail")),
+                "auth_recovery_state": _record_get(r, "auth_recovery_state") or "",
+                "auth_recovery_metadata": _record_get(r, "auth_recovery_metadata") or {},
+                **_runner_display_status(
+                    r["status"],
+                    r["phase"],
+                    _record_get(r, "error_detail"),
+                    _record_get(r, "auth_recovery_state"),
+                ),
             }
             health_probe = await _runner_health_probe(conn, r)
             if health_probe:
@@ -1093,7 +1132,14 @@ async def get_job(
         "actual_model": _record_get(row, "actual_model") or "",
         "actual_changed_files": _record_get(row, "actual_changed_files") or [],
         "size": _record_get(row, "size") or "M",
-        **_runner_display_status(row["status"], row["phase"], _record_get(row, "error_detail")),
+        "auth_recovery_state": _record_get(row, "auth_recovery_state") or "",
+        "auth_recovery_metadata": _record_get(row, "auth_recovery_metadata") or {},
+        **_runner_display_status(
+            row["status"],
+            row["phase"],
+            _record_get(row, "error_detail"),
+            _record_get(row, "auth_recovery_state"),
+        ),
         "started_at": row["started_at"].isoformat() if _record_get(row, "started_at") else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,

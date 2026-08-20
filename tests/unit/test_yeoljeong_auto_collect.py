@@ -8,6 +8,11 @@ import scripts.yeoljeong_auto_collect as auto_collect
 @pytest.fixture(autouse=True)
 def isolate_platform_financial_accounts(monkeypatch):
     monkeypatch.setattr(auto_collect, "list_platform_accounts", lambda user, business_id=None: [])
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [],
+    )
 
 
 def test_payload_passes_force_recreate_sessions_flag():

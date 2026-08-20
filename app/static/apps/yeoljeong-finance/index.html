@@ -5206,16 +5206,16 @@
     const MIA_DELIVERY_SERVICES = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
 
     function normalizeBusinessScope(next) {
-      next.businesses = next.businesses.filter(item => CANONICAL_BUSINESS_IDS.has(item.id));
-      next.branches = next.branches.filter(item => CANONICAL_BRANCH_IDS.has(item.id));
+      const activeBusinessIds = new Set(next.businesses.map(item => item.id).filter(Boolean));
+      const activeBranchNames = new Set(next.branches.map(item => item.name).filter(Boolean));
       next.accounts.forEach(item => {
-        if (!CANONICAL_BUSINESS_IDS.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
-        if (item.branch && !CANONICAL_BRANCH_NAMES.has(item.branch)) item.branch = MIA_BRANCH_NAME;
+        if (!activeBusinessIds.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
+        if (item.branch && !activeBranchNames.has(item.branch)) item.branch = MIA_BRANCH_NAME;
       });
       next.integrations.forEach(item => {
-        if (!CANONICAL_BUSINESS_IDS.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
-        if (item.business_id && !CANONICAL_BUSINESS_IDS.has(item.business_id)) item.business_id = item.businessId;
-        if (item.branch && !CANONICAL_BRANCH_NAMES.has(item.branch)) item.branch = MIA_BRANCH_NAME;
+        if (!activeBusinessIds.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
+        if (item.business_id && !activeBusinessIds.has(item.business_id)) item.business_id = item.businessId;
+        if (item.branch && !activeBranchNames.has(item.branch)) item.branch = MIA_BRANCH_NAME;
       });
       return next;
     }

@@ -5156,3 +5156,6 @@ fro
 
 ## [2026-08-20 19:51:48 KST] [aads-server] app/api/pipeline_runner.py
 - Chat-Direct 수정: run_remote_command: nohup bash /root/aads/aads-server/scripts/deploy_retry_until_drained.sh > /tmp/d
+
+## [2026-08-21 08:21:14 KST] [aads-server] tests/unit/test_yeoljeong_finance_service.py
+- Chat-Direct 수정: run_remote_command: date '+%Y-%m-%d %H:%M:%S KST'

@@ -22592,3 +22592,43 @@ _EOD_SWE
 - Chat-Direct 수정: patch:         # P0: 실매매 mock 재접속 방지 — OPEN 포지션→        # P0: 실매매 중 mock 재접속 감지.
        
 - finalize: pending
+
+## [2026-08-21 08:33:13 KST] [GO100] backend/app/routers/go100/desk_status_router.py
+- Chat-Direct 수정: patch: _FRONTEND_SLOTS = (
+    ("blue", "go100-→_FRONTEND_SLOTS = (
+    ("blue", "go100-
+- finalize: pending
+
+## [2026-08-21 08:33:14 KST] [GO100] backend/app/routers/go100/desk_status_router.py
+- Chat-Direct 수정: run_remote_command: find frontend -path '*operations*' -maxdepth 8 -type f
+- finalize: pending
+
+## [2026-08-21 08:33:25 KST] [GO100] backend/app/routers/go100/desk_status_router.py
+- Chat-Direct 수정: patch:     if not active_ports:
+        fronten→    if not active_ports:
+        fronten
+- finalize: pending
+
+## [2026-08-21 08:33:46 KST] [GO100] frontend/src/go100/pages/DeskStatusPage.tsx
+- Chat-Direct 수정: patch:             <div className="flex items-c→            <div className="flex items-c
+- finalize: pending
+
+## [2026-08-21 08:34:00 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-21 07:55 KST - GO100 운영 데스크 상태→# 2026-08-21 08:32 KST - GO100 운영 데스크 최종
+- finalize: pending
+
+## [2026-08-21 08:35:32 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend run build
+- finalize: pending
+
+## [2026-08-21 08:36:01 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: npm --prefix frontend run build
+- finalize: pending
+
+## [2026-08-21 08:37:48 KST] [GO100] scripts/go100-frontend.service
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('''import os,psycopg2,json\nfrom dotenv import load_dotenv\nloa
+- finalize: pending
+
+## [2026-08-21 08:37:52 KST] [GO100] scripts/systemd/go100-frontend-green.service.template
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('''import os,psycopg2,json\nfrom dotenv import load_dotenv\nloa
+- finalize: pending

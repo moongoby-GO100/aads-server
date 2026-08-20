@@ -894,10 +894,21 @@ def _delete(name: str, row_id: str) -> None:
 def _merge_by_id(current_items: Any, default_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     current = {str(item.get("id")): item for item in current_items if isinstance(item, dict)} if isinstance(current_items, list) else {}
     merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for default_item in default_items:
         item = {**default_item, **current.get(default_item["id"], {})}
         item["id"] = default_item["id"]
         merged.append(item)
+        seen.add(default_item["id"])
+    if isinstance(current_items, list):
+        for current_item in current_items:
+            if not isinstance(current_item, dict):
+                continue
+            current_id = str(current_item.get("id") or "").strip()
+            if not current_id or current_id in seen:
+                continue
+            merged.append({**current_item, "id": current_id})
+            seen.add(current_id)
     return merged
 
 
@@ -906,26 +917,42 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
     canonical_names = {item["id"]: item["name"] for item in CANONICAL_BUSINESSES}
     for item in businesses:
         item["entityType"] = item.get("entityType") or "individual"
-        item["name"] = canonical_names[item["id"]]
+        if item["id"] in canonical_names:
+            item["name"] = canonical_names[item["id"]]
+        else:
+            item["name"] = str(item.get("name") or "").strip()
+        item["status"] = item.get("status") or "active"
 
     branches = _merge_by_id(settings.get("branches"), CANONICAL_BRANCHES)
     canonical_branch_names = {item["id"]: item["name"] for item in CANONICAL_BRANCHES}
     canonical_branch_businesses = {item["id"]: item["businessId"] for item in CANONICAL_BRANCHES}
+    all_business_ids = {str(item.get("id") or "") for item in businesses}
+    normalized_branches: list[dict[str, Any]] = []
     for item in branches:
-        item["name"] = canonical_branch_names[item["id"]]
-        item["businessId"] = canonical_branch_businesses[item["id"]]
+        if item["id"] in canonical_branch_names:
+            item["name"] = canonical_branch_names[item["id"]]
+            item["businessId"] = canonical_branch_businesses[item["id"]]
+        else:
+            item["name"] = str(item.get("name") or "").strip()
+            business_id = str(item.get("businessId") or item.get("business_id") or "").strip()
+            if not item["name"] or business_id not in all_business_ids:
+                continue
+            item["businessId"] = business_id
         item["status"] = item.get("status") or "active"
+        normalized_branches.append(item)
+    branches = normalized_branches
+    all_branch_names = {str(item.get("name") or "") for item in branches}
 
     def normalize_business_ref(item: dict[str, Any]) -> dict[str, Any]:
         next_item = {**item}
         business_id = str(next_item.get("businessId") or next_item.get("business_id") or "").strip()
-        if business_id not in CANONICAL_BUSINESS_IDS:
+        if business_id not in all_business_ids:
             business_id = MIA_BUSINESS_ID
         next_item["businessId"] = business_id
         if "business_id" in next_item:
             next_item["business_id"] = business_id
         branch = str(next_item.get("branch") or "").strip()
-        if branch and branch not in CANONICAL_BRANCH_NAMES:
+        if branch and branch not in all_branch_names:
             next_item["branch"] = MIA_BRANCH_NAME
         service = str(next_item.get("service") or "").strip()
         if service in CONNECTOR_LABELS:
@@ -3775,12 +3802,18 @@ def _write_secure_file_rows(name: str, rows: list[dict[str, Any]]) -> None:
 
 def _normalize_bank_scope(business_id: Any, branch_id: Any) -> tuple[str, str]:
     normalized_business = str(business_id or "").strip()
-    if normalized_business not in CANONICAL_BUSINESS_IDS:
+    ui_settings = _canonicalize_ui_settings((_read_json_object("settings").get("ui_settings") or {}))
+    business_ids = {str(item.get("id") or "") for item in ui_settings.get("businesses", []) if isinstance(item, dict)}
+    branch_businesses = {
+        str(item.get("id") or ""): str(item.get("businessId") or "")
+        for item in ui_settings.get("branches", [])
+        if isinstance(item, dict)
+    }
+    if normalized_business not in business_ids:
         raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
     normalized_branch = str(branch_id or "").strip()
     if normalized_branch:
-        branch = CANONICAL_BRANCH_BY_ID.get(normalized_branch)
-        if not branch or str(branch.get("businessId") or "") != normalized_business:
+        if branch_businesses.get(normalized_branch) != normalized_business:
             raise HTTPException(status_code=400, detail="사업자와 지점 연결이 일치하지 않습니다")
     return normalized_business, normalized_branch
 

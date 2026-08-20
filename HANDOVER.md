@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-21 08:30 KST - Pipeline Runner auth recovery P1 direct fix
+
+- Request: Make runner auth failures observable/recoverable through PC Agent/Browser Bridge flow and fix rejected runner follow-ups.
+- Changes:
+  - Added `migrations/128_pipeline_jobs_auth_recovery.sql` with optional `auth_recovery_state` and `auth_recovery_metadata`.
+  - Added auth recovery display states to Admin Task Board and Pipeline Runner list/detail APIs with column-exists guards, so APIs remain valid before migration.
+  - Added `persist_auth_recovery()` to both runner scripts. State and metadata columns are guarded independently; metadata stores only bounded classification/retry values.
+  - Classified `invalid_refresh_token`, `login_required`, `auth_expired`, and PC Agent/Browser Bridge unavailable markers before generic timeout/auth errors.
+  - Included untracked files via `git ls-files --others --exclude-standard` before `actual_changed_files` is recorded.
+  - Added focused script/API guard tests for auth recovery state handling and untracked file accounting.
+- Verification:
+  - `python3 -m py_compile app/api/admin.py app/api/pipeline_runner.py app/services/pipeline_runner_service.py` passed.
+  - `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` passed.
+  - `git diff --check` passed.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py` could not run because `/usr/bin/python3` has no `pytest` module.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py` passed: 16 passed.
+- Remaining:
+  - Not committed, pushed, deployed, restarted, or migrated yet.
+  - After commit/deploy/migration, run a read-only smoke job that creates an untracked file in a disposable path to verify DB `actual_changed_files` includes it.
+
 ## 2026-08-21 08:25 KST - Yeoljeong PC Agent active-route timeout guard
 
 - Trigger: CEO requested stopping the current auto-collect loop, fixing PC Agent browser command timeouts, reusing/closing browser sessions, preventing infinite browser windows, and then resuming data collection.
@@ -7679,3 +7699,23 @@
   - `git diff --check` succeeded.
 - Remaining:
   - Commit, push, and redeploy this final result-path cleanup change before final CEO report.
+
+## 2026-08-21 01:21 KST - Yeoljeong bank registration check and custom business fix
+
+- Request: Verify newly entered bank information, run collection test, and fix store assistant custom business registration failure.
+- Findings:
+  - `app/data/yeoljeong_finance/bank_accounts.json` contains 1 active browser-connector bank account for `biz-mia` / `branch-gangbuk-mia`, masked account ending `1031`, `auto_sync=true`.
+  - Bank collection test returned `ACTION_REQUIRED` / `BANK_BROWSER_SESSION_REQUIRED`: account registration is valid, but live bank portal collection needs a PC Agent browser session.
+  - PostgreSQL `yeoljeong_businesses` still has the 4 default businesses only. The custom business registration bug came from frontend filtering custom IDs and backend settings canonicalization dropping or overwriting custom business/branch rows.
+- Changes:
+  - Preserve custom businesses and valid custom branches in `_canonicalize_ui_settings()`.
+  - Validate bank account scope against current registered settings, not only the hard-coded canonical business/branch list.
+  - Keep custom businesses/branches in the static store assistant UI normalizer.
+  - Added regression tests for custom business/branch persistence, custom bank-account scope, and static UI normalization.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py -q` succeeded: 120 passed.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py app/static/apps/yeoljeong-finance/index.html tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py` succeeded.
+  - Direct bank collection call for the registered account returned 0 imported rows with `BANK_BROWSER_SESSION_REQUIRED`, so no bank transaction ledger was created.
+- Remaining:
+  - Not committed, pushed, or deployed in this step.
+  - Live bank portal E2E needs PC Agent/browser session connection from the admin screen.

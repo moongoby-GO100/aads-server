@@ -214,7 +214,7 @@ def test_save_settings_persists_ui_settings_without_overwriting_automation_confi
     assert "ignored" not in raw
 
 
-def test_save_settings_keeps_only_canonical_businesses(tmp_path, monkeypatch):
+def test_save_settings_preserves_custom_businesses_and_branches(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
 
     user = {"email": "owner@example.com", "is_admin": True}
@@ -225,18 +225,18 @@ def test_save_settings_keeps_only_canonical_businesses(tmp_path, monkeypatch):
                 {"id": "biz-corp", "name": "열정국밥 법인", "registrationNo": "222-22-22222"},
             ],
             "branches": [
-                {"id": "branch-common", "name": "공통", "businessId": "biz-corp"},
+                {"id": "branch-corp-common", "name": "법인 공통", "businessId": "biz-corp"},
             ],
-            "accounts": [{"id": "acct-corp", "businessId": "biz-corp", "branch": "공통"}],
+            "accounts": [{"id": "acct-corp", "businessId": "biz-corp", "branch": "법인 공통"}],
             "staff": [],
-            "integrations": [{"id": "int-corp", "service": "matepos", "businessId": "biz-corp", "branch": "공통"}],
+            "integrations": [{"id": "int-corp", "service": "matepos", "businessId": "biz-corp", "branch": "법인 공통"}],
         }
     }
 
     saved = service.save_settings(payload, user)
     settings = saved["settings"]
 
-    assert [item["name"] for item in settings["businesses"]] == [
+    assert [item["name"] for item in settings["businesses"][:4]] == [
         "열정국밥 중화점",
         "열정국밥 성신여대점",
         "언니냉면",
@@ -247,15 +247,19 @@ def test_save_settings_keeps_only_canonical_businesses(tmp_path, monkeypatch):
         "biz-sungshin",
         "biz-eonni-naengmyeon",
         "biz-mia",
+        "biz-corp",
     }
     assert {item["businessId"] for item in settings["branches"]} == {
         "biz-junghwa",
         "biz-sungshin",
         "biz-eonni-naengmyeon",
         "biz-mia",
+        "biz-corp",
     }
-    assert settings["accounts"][0]["businessId"] == "biz-mia"
-    assert settings["integrations"][0]["businessId"] == "biz-mia"
+    assert settings["accounts"][0]["businessId"] == "biz-corp"
+    assert settings["accounts"][0]["branch"] == "법인 공통"
+    assert settings["integrations"][0]["businessId"] == "biz-corp"
+    assert settings["integrations"][0]["branch"] == "법인 공통"
 
 
 def test_save_settings_requires_admin(tmp_path, monkeypatch):
@@ -3282,6 +3286,47 @@ def test_create_bank_account_rejects_cross_business_branch(tmp_path, monkeypatch
     with pytest.raises(Exception) as exc:
         _make_bank_account(monkeypatch, tmp_path, business_id="biz-junghwa", branch_id="branch-gangbuk-mia")
     assert getattr(exc.value, "status_code", None) == 400
+
+
+def test_create_bank_account_accepts_registered_custom_business_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service.save_settings(
+        {
+            "settings": {
+                "businesses": [
+                    {"id": "biz-new-corp", "name": "신규 법인", "registrationNo": "222-22-22222"},
+                ],
+                "branches": [
+                    {
+                        "id": "branch-new-corp",
+                        "name": "신규 지점",
+                        "businessId": "biz-new-corp",
+                        "status": "active",
+                    },
+                ],
+                "accounts": [],
+                "staff": [],
+                "integrations": [],
+            }
+        },
+        ADMIN_USER,
+    )
+
+    account = service.create_bank_account(
+        {
+            "business_id": "biz-new-corp",
+            "branch_id": "branch-new-corp",
+            "bank_name": "신한은행 기업",
+            "account_number": "110-222-333444",
+            "connection_type": "mock",
+            "status": "active",
+        },
+        ADMIN_USER,
+    )
+
+    assert account["business_id"] == "biz-new-corp"
+    assert account["branch_id"] == "branch-new-corp"
+    assert account["account_number_masked"].endswith("3444")
 
 
 def test_create_bank_account_requires_admin(tmp_path, monkeypatch):
