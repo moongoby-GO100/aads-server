@@ -184,6 +184,7 @@ class BankAccountCreatePayload(BaseModel):
     account_holder: str = ""
     account_alias: str = ""
     connection_type: str = "mock"
+    connector_type: str = ""
     status: str = "needs_auth"
     institution_code: str = ""
     memo: str = ""
@@ -201,6 +202,7 @@ class BankAccountUpdatePayload(BaseModel):
     account_holder: str | None = None
     account_alias: str | None = None
     connection_type: str | None = None
+    connector_type: str | None = None
     status: str | None = None
     institution_code: str | None = None
     memo: str | None = None
@@ -253,6 +255,8 @@ class BankAccountCollectPayload(BaseModel):
     date_to: str = ""
     source: str = "manual"
     transactions: list[BankTransactionEntry] = Field(default_factory=list)
+    browser_session_id: str = Field(default="", repr=False)
+    browser_work_key: str = ""
 
 
 @router.get("/session")

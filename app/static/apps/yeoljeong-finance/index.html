@@ -10127,21 +10127,24 @@
       const collection = payload.collection || {};
       const records = (payload.transactions || []).map(row => bankTransactionEntry(row, scope));
       if (records.length) state.entries.push(...records);
+      const isActionRequired = ["action_required", "connector_not_ready"].includes(collection.status);
+      const isNotConfigured = collection.connector_status === "NOT_CONFIGURED";
       settings().integrations
         .filter(item => bankLedgerServices.has(item.service))
         .filter(item => !collection.bank_account_id || item.bankAccountId === collection.bank_account_id)
         .forEach(item => {
           item.lastSyncAt = collection.last_collected_at || new Date().toISOString();
           item.lastSyncStatus = collection.status || "no_records";
-          item.portalStatus = collection.connector_status === "NOT_CONFIGURED" ? "needs_auth" : item.lastSyncStatus;
+          item.portalStatus = (isNotConfigured || isActionRequired) ? "needs_auth" : item.lastSyncStatus;
           item.portalMessage = collection.message || "";
+          if (isActionRequired) item.browserSessionRequired = true;
         });
       saveState();
       return {
         recordsCount: records.length,
         importedRows: Number(collection.imported_rows || 0),
         duplicateRows: Number(collection.duplicate_rows || 0),
-        blocked: collection.connector_status === "NOT_CONFIGURED" ? 1 : 0,
+        blocked: (isNotConfigured || isActionRequired) ? 1 : 0,
         messages: collection.message ? [collection.message] : []
       };
     }
@@ -10161,16 +10164,21 @@
       const month = selectedMonth();
       const results = [];
       for (const account of targetAccounts) {
+        const collectBody = {
+          business_id: scope.business_id,
+          branch_id: branchIdForName(scope.branch),
+          date_from: `${month}-01`,
+          date_to: new Date().toISOString().slice(0, 10),
+          source: account.connection_type || "manual",
+          transactions: []
+        };
+        if (account.connection_type === "browser" || account.connector_type === "bank-browser") {
+          collectBody.browser_work_key = account.browser_work_key || "";
+          collectBody.browser_session_id = account.browser_session_id || "";
+        }
         const payload = await financeApi(`/bank-accounts/${encodeURIComponent(account.id)}/collect`, {
           method: "POST",
-          body: JSON.stringify({
-            business_id: scope.business_id,
-            branch_id: branchIdForName(scope.branch),
-            date_from: `${month}-01`,
-            date_to: new Date().toISOString().slice(0, 10),
-            source: account.connection_type || "manual",
-            transactions: []
-          })
+          body: JSON.stringify(collectBody)
         });
         results.push(applyBankCollectionPayload(payload, scope));
       }

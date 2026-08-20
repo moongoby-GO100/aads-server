@@ -20,6 +20,51 @@ ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
 ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
 DEPLOY_START_EPOCH=$(date +%s)
 
+# ── 다운타임 자동 측정 (2026-08-20 Blue/Green 동시 다운 인시던트 재발 방지) ──
+# nginx를 통한 실제 사용자 경로를 1초 주기로 폴링해 실패 구간을 누적한다.
+# 해상도는 프로브 응답시간 + 1초(대략 ±4초). 게이트가 아니라 계측 용도다.
+DOWNTIME_FILE="${COMPOSE_DIR}/.deploy_downtime"
+DOWNTIME_PROBE_URL="${DOWNTIME_PROBE_URL:-http://127.0.0.1/api/v1/health}"
+DOWNTIME_PROBE_HOST="${DOWNTIME_PROBE_HOST:-aads.newtalk.kr}"
+DOWNTIME_MONITOR_PID=""
+
+start_downtime_monitor() {
+    echo 0 > "$DOWNTIME_FILE" 2>/dev/null || true
+    (
+        total=0
+        while true; do
+            t0=$(date +%s)
+            if curl -fsS -m 5 -o /dev/null -H "Host: ${DOWNTIME_PROBE_HOST}" "$DOWNTIME_PROBE_URL" 2>/dev/null; then
+                :
+            else
+                t1=$(date +%s)
+                total=$(( total + (t1 - t0) + 1 ))
+                echo "$total" > "$DOWNTIME_FILE" 2>/dev/null || true
+            fi
+            sleep 1
+        done
+    ) &
+    DOWNTIME_MONITOR_PID=$!
+}
+
+stop_downtime_monitor() {
+    if [[ -n "${DOWNTIME_MONITOR_PID:-}" ]]; then
+        kill "$DOWNTIME_MONITOR_PID" >/dev/null 2>&1 || true
+        DOWNTIME_MONITOR_PID=""
+    fi
+}
+
+get_downtime_seconds() {
+    local v="0"
+    if [[ -f "$DOWNTIME_FILE" ]]; then
+        v=$(tr -d '[:space:]' < "$DOWNTIME_FILE" 2>/dev/null || echo 0)
+    fi
+    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
+        v="0"
+    fi
+    echo "$v"
+}
+
 sql_escape() {
     printf "%s" "${1:-}" | sed "s/'/''/g"
 }
@@ -37,11 +82,16 @@ record_deploy() {
     local msg_sql
     local status_sql
     local err_sql
+    local downtime
 
     now_epoch=$(date +%s)
     duration=$((now_epoch - DEPLOY_START_EPOCH))
     if [[ "$status" == "started" ]]; then
         duration=0
+    fi
+    downtime=$(get_downtime_seconds)
+    if [[ "$status" == "started" ]]; then
+        downtime=0
     fi
     commit=$(git -C "$COMPOSE_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
     msg=$(git -C "$COMPOSE_DIR" log -1 --pretty=%s 2>/dev/null || echo "unknown")
@@ -52,7 +102,7 @@ record_deploy() {
     status_sql=$(sql_escape "$status")
     err_sql=$(sql_escape "$err")
 
-    docker exec aads-postgres psql -U aads -d aads -c "INSERT INTO deploy_history(deploy_type,project,trigger_by,git_commit,git_message,status,duration_s,error_msg,created_at) VALUES('$type_sql','AADS','deploy.sh','$commit_sql','$msg_sql','$status_sql',$duration,'$err_sql',NOW())" >/dev/null 2>&1 || \
+    docker exec aads-postgres psql -U aads -d aads -c "INSERT INTO deploy_history(deploy_type,project,trigger_by,git_commit,git_message,status,duration_s,error_msg,downtime_seconds,created_at) VALUES('$type_sql','AADS','deploy.sh','$commit_sql','$msg_sql','$status_sql',$duration,'$err_sql',$downtime,NOW())" >/dev/null 2>&1 || \
         echo "[deploy.sh] WARN: deploy_history insert failed (status=${status}, type=${deploy_type})"
 }
 
@@ -60,6 +110,7 @@ deploy_error_trap() {
     local exit_code="$?"
     local line_no="${1:-unknown}"
     local command="${2:-unknown}"
+    stop_downtime_monitor
     record_deploy "failed" "$MODE" "unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
 }
 
@@ -229,7 +280,7 @@ if [ -f "$LOCKFILE" ]; then
     fi
 fi
 echo $$ > "$LOCKFILE"
-trap "rm -f $LOCKFILE" EXIT
+trap "stop_downtime_monitor; rm -f $LOCKFILE" EXIT
 
 # nginx upstream is shared by backend and dashboard blue-green deploys.
 # Hold a common lock for the whole deployment to prevent concurrent rewrites.
@@ -574,6 +625,7 @@ echo "[deploy.sh] Phase 0.5: ✅ 코드 검증 통과"
 
 # ── Phase 1: 배포 실행 ──
 record_deploy "started" "$MODE" ""
+start_downtime_monitor
 case "$MODE" in
     reload)
         echo "[deploy.sh] Phase 1: stream-safe hot reload aads-api"
@@ -935,5 +987,6 @@ fi
 
 echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
+stop_downtime_monitor
 record_deploy "success" "$MODE" ""
 exit 0

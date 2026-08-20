@@ -3678,10 +3678,10 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
 
 BANK_ACCOUNTS_LEDGER = "bank_accounts"
 BANK_TRANSACTIONS_LEDGER = "bank_transactions"
-BANK_CONNECTION_TYPES = ("open_banking", "csv", "manual", "mock")
+BANK_CONNECTION_TYPES = ("open_banking", "csv", "manual", "mock", "browser")
 BANK_ACCOUNT_STATUSES = ("active", "paused", "error", "needs_auth")
 BANK_TRANSACTION_DIRECTIONS = ("in", "out")
-BANK_CONFIGURED_COLLECTION_TYPES = ("csv", "manual", "mock")
+BANK_CONFIGURED_COLLECTION_TYPES = ("csv", "manual", "mock", "browser")
 
 # 은행계좌 파일에 저장을 허용하는 필드 화이트리스트. 원본 계좌번호/비밀번호/인증정보는
 # 절대 포함하지 않는다(민감정보 제외 원칙).
@@ -3695,6 +3695,7 @@ _BANK_ACCOUNT_PUBLIC_FIELDS = (
     "account_holder",
     "account_alias",
     "connection_type",
+    "connector_type",
     "status",
     "institution_code",
     "auto_sync",
@@ -3870,6 +3871,12 @@ def _apply_bank_account_fields(
         )
     if creating or payload.get("auto_sync") is not None:
         record["auto_sync"] = bool(payload.get("auto_sync"))
+    if creating or payload.get("connector_type") is not None:
+        connector_type = str(payload.get("connector_type") or record.get("connector_type") or "").strip()
+        # 허용된 connector_type 값만 저장
+        if connector_type not in {"", "bank-browser", "manual", "csv", "mock"}:
+            connector_type = ""
+        record["connector_type"] = connector_type
     if payload.get("last_synced_at") is not None:
         record["last_synced_at"] = str(payload.get("last_synced_at") or "").strip()
     mask = _bank_account_number_masked(payload, record)
@@ -4244,6 +4251,7 @@ def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], 
 
     Real bank login/open-banking connectors intentionally return NOT_CONFIGURED until
     a certified provider or vetted browser connector is attached.
+    connection_type="browser" routes to the PC Agent / Browser Bridge connector.
     """
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="은행 자동수집 실행 권한이 없습니다")
@@ -4260,11 +4268,13 @@ def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], 
 
     date_from, date_to = _valid_range_bounds(payload.get("date_from"), payload.get("date_to"))
     connection_type = _bank_connection_type(account.get("connection_type"), default="mock")
+    branch_id = requested_branch_id or str(account.get("branch_id") or "")
+
     if str(account.get("status") or "") in {"paused", "error"}:
         return _bank_unconfigured_collect_result(
             account,
             business_id=business_id,
-            branch_id=requested_branch_id or str(account.get("branch_id") or ""),
+            branch_id=branch_id,
             date_from=date_from,
             date_to=date_to,
             status=str(account.get("status") or "paused"),
@@ -4274,10 +4284,22 @@ def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], 
         return _bank_unconfigured_collect_result(
             account,
             business_id=business_id,
-            branch_id=requested_branch_id or str(account.get("branch_id") or ""),
+            branch_id=branch_id,
             date_from=date_from,
             date_to=date_to,
             reason="오픈뱅킹/은행 실시간 조회 커넥터가 아직 연결되지 않았습니다. CSV/수동 대체 수집을 사용하십시오.",
+        )
+
+    # ── Browser connector path ───────────────────────────────────────────────
+    if connection_type == "browser":
+        return _collect_bank_via_browser(
+            account,
+            payload,
+            business_id=business_id,
+            branch_id=branch_id,
+            date_from=date_from,
+            date_to=date_to,
+            user=user,
         )
 
     entries = payload.get("transactions") or payload.get("rows") or []
@@ -4315,7 +4337,7 @@ def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], 
     result = record_bank_transactions(
         {
             "business_id": business_id,
-            "branch_id": requested_branch_id or str(account.get("branch_id") or ""),
+            "branch_id": branch_id,
             "bank_account_id": account_id,
             "source": str(payload.get("source") or connection_type),
             "transactions": annotated_entries,
@@ -4334,7 +4356,7 @@ def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], 
         "collection": {
             "bank_account_id": account_id,
             "business_id": business_id,
-            "branch_id": requested_branch_id or str(account.get("branch_id") or ""),
+            "branch_id": branch_id,
             "status": status,
             "connector_status": "CONFIGURED",
             "connection_type": connection_type,
@@ -4350,6 +4372,162 @@ def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], 
             "last_collected_at": str(account_after.get("last_synced_at") or ""),
             "date_from": date_from,
             "date_to": date_to,
+        },
+    }
+
+
+def _run_bank_browser_async(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+    raise RuntimeError("bank browser automation cannot run inside an active event loop")
+
+
+def _collect_bank_via_browser(
+    account: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    business_id: str,
+    branch_id: str,
+    date_from: str,
+    date_to: str,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    """Orchestrate a bank browser collection via PC Agent / Browser Bridge.
+
+    Security: never attempts headless login.  Credential fields from payload
+    are used only as routing keys (session_id / work_key) and are not stored.
+    """
+    from app.services.yeoljeong_bank_browser_connector import (
+        bank_browser_work_key,
+        collect_bank_via_browser_session_async,
+    )
+
+    account_id = str(account.get("id") or "")
+    browser_session_id = str(payload.get("browser_session_id") or "").strip()
+    browser_work_key_val = str(payload.get("browser_work_key") or "").strip()
+    if not browser_work_key_val:
+        browser_work_key_val = bank_browser_work_key(account_id, business_id, branch_id)
+
+    try:
+        browser_result = _run_bank_browser_async(
+            collect_bank_via_browser_session_async(
+                account,
+                browser_session_id=browser_session_id,
+                browser_work_key=browser_work_key_val,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        )
+    except RuntimeError as exc:
+        browser_result = {
+            "status": "failed",
+            "error_code": "BANK_BROWSER_EVENT_LOOP_ERROR",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {"browser_work_key": browser_work_key_val},
+            "message": f"은행 브라우저 수집은 이벤트 루프 외부에서만 실행됩니다: {exc!s:.200}",
+        }
+
+    br_status = str(browser_result.get("status") or "")
+    diagnostics = dict(browser_result.get("diagnostics") or {})
+
+    if br_status != "collected":
+        collection_status = (
+            br_status
+            if br_status in {"action_required", "connector_not_ready", "failed"}
+            else "failed"
+        )
+        connector_status = (
+            "ACTION_REQUIRED"
+            if collection_status in {"action_required", "connector_not_ready"}
+            else "FAILED"
+        )
+        return {
+            "collection": {
+                "bank_account_id": account_id,
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "status": collection_status,
+                "connector_status": connector_status,
+                "connection_type": "browser",
+                "message": str(browser_result.get("message") or ""),
+                "error_code": str(browser_result.get("error_code") or ""),
+                "diagnostics": diagnostics,
+                "collected_rows": 0,
+                "imported_rows": 0,
+                "duplicate_rows": 0,
+                "matched_count": 0,
+                "unmatched_count": 0,
+                "last_collected_at": str(account.get("last_synced_at") or ""),
+                "date_from": date_from,
+                "date_to": date_to,
+            },
+            "transactions": [],
+        }
+
+    raw_rows = browser_result.get("rows") or []
+    entries = [
+        {**row, "source": "bank-browser"}
+        for row in raw_rows
+        if isinstance(row, dict)
+    ]
+    scoped_entries = [
+        entry
+        for entry in entries
+        if _bank_within_range(entry.get("occurred_at"), date_from, date_to)
+    ]
+    annotated_entries, matched_count, unmatched_count = _annotate_bank_matches(scoped_entries)
+    import_result = record_bank_transactions(
+        {
+            "business_id": business_id,
+            "branch_id": branch_id,
+            "bank_account_id": account_id,
+            "source": "bank-browser",
+            "transactions": annotated_entries,
+        },
+        user,
+    )
+    imported_rows = int(import_result.get("import", {}).get("imported_rows") or 0)
+    duplicate_rows = int(import_result.get("import", {}).get("duplicate_rows") or 0)
+    account_after = _find_bank_account(_read_file_rows(BANK_ACCOUNTS_LEDGER), account_id) or account
+    imported_transactions = import_result.get("transactions") or []
+    total_in = sum(int(r.get("amount") or 0) for r in imported_transactions if r.get("direction") == "in")
+    total_out = sum(int(r.get("amount") or 0) for r in imported_transactions if r.get("direction") == "out")
+    final_status = "completed" if imported_rows else "no_records"
+
+    diagnostics["row_count"] = str(len(raw_rows))
+    return {
+        **import_result,
+        "collection": {
+            "bank_account_id": account_id,
+            "business_id": business_id,
+            "branch_id": branch_id,
+            "status": final_status,
+            "connector_status": "CONFIGURED",
+            "connection_type": "browser",
+            "message": (
+                "은행 브라우저 거래 수집이 완료되었습니다."
+                if imported_rows
+                else "신규 수집 거래가 없습니다."
+            ),
+            "collected_rows": len(scoped_entries),
+            "imported_rows": imported_rows,
+            "duplicate_rows": duplicate_rows,
+            "matched_count": matched_count,
+            "unmatched_count": unmatched_count,
+            "total_in": total_in,
+            "total_out": total_out,
+            "net_amount": total_in - total_out,
+            "last_collected_at": str(account_after.get("last_synced_at") or ""),
+            "date_from": date_from,
+            "date_to": date_to,
+            "browser_work_key": browser_work_key_val,
+            "diagnostics": diagnostics,
         },
     }
 
