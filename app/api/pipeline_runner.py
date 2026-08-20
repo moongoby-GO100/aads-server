@@ -498,6 +498,22 @@ def _estimate_size(instruction: str) -> str:
         return "L"
     return "M"
 
+
+_VALID_JOB_SIZES = {"XS", "S", "M", "L", "XL"}
+
+
+def _normalize_job_size(size: str | None) -> str:
+    value = (size or "M").strip().upper()
+    return value if value in _VALID_JOB_SIZES else "M"
+
+
+def _resolve_job_size(size: str | None, instruction: str, *, size_explicit: bool) -> str:
+    """Resolve runner size without downgrading the admin default M."""
+    if size_explicit:
+        return _normalize_job_size(size)
+    return _parse_size_from_instruction(instruction) or "M"
+
+
 class JobSubmitRequest(BaseModel):
     project: str = Field(..., description="프로젝트 코드")
     instruction: str = Field(..., max_length=50000, description="Claude Code에 전달할 지시")
@@ -848,16 +864,15 @@ async def submit_job(
                     req.worker_model,
                     req.worker_model_reason,
                 )
-                # AADS-211: worker_model 직접 지정 시 size 무시
+                size = _resolve_job_size(
+                    req.size,
+                    req.instruction,
+                    size_explicit="size" in req.model_fields_set,
+                )
+                # AADS-211: worker_model 직접 지정 시 model만 직접값 사용
                 if worker_model:
                     model = worker_model
-                    size = req.size  # worker_model 지정 시에도 size 초기화
                 else:
-                    # AADS-206B: size 명시 시 우선, 기본값이면 instruction 파���
-                    size = req.size
-                    if size == "M":
-                        parsed = _parse_size_from_instruction(req.instruction)
-                        size = parsed or _estimate_size(req.instruction)
                     model = await _get_model_for_size(conn, size)
                 # AADS-211: depends_on 유효성 검사
                 if req.depends_on:
@@ -1396,14 +1411,14 @@ async def submit_batch(
                         item.worker_model,
                         item.worker_model_reason,
                     )
+                    size = _resolve_job_size(
+                        item.size,
+                        item.instruction,
+                        size_explicit="size" in item.model_fields_set,
+                    )
                     if worker_model:
                         model = worker_model
-                        size = item.size
                     else:
-                        size = item.size
-                        if size == "M":
-                            parsed = _parse_size_from_instruction(item.instruction)
-                            size = parsed or _estimate_size(item.instruction)
                         model = await _get_model_for_size(conn, size)
 
                     instruction_hash = _compute_instruction_hash(req.project, item.instruction)

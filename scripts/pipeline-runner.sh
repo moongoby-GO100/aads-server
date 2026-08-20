@@ -1121,13 +1121,13 @@ ${safe_instruction}"
             fi
         fi
         # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
-        # 가용 모델: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-28 Codex catalog)
+        # 가용 모델: gpt-5.6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex
         # Pro 전용(gpt-5.4-pro, gpt-5.4-nano, gpt-5.3-codex-spark)은 ChatGPT Plus에서 미지원
         if [[ "$current_model" == codex:* ]]; then
             local codex_model_name="${current_model#codex:}"
             # 가용 모델 유효성 검증
             case "$codex_model_name" in
-                default|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
+                default|gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
                 *)
                     log "  CODEX_INVALID_MODEL job=$job_id model=$codex_model_name -> fallback to gpt-5.5"
                     codex_model_name="gpt-5.5"

@@ -102,6 +102,15 @@ def test_pipeline_runner_general_claim_uses_admin_model_column():
     assert "get_db_model_cycle \"$job_size\"" in script
 
 
+def test_pipeline_runner_allows_codex_56_cli_models_without_fallback():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "gpt-5.6-luna" in script
+    assert "gpt-5.6-sol" in script
+    assert "gpt-5.6-terra" in script
+    assert "default|gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5" in script
+
+
 def test_pipeline_runner_records_actual_changed_files_to_db():
     script = _read_script("pipeline-runner.sh")
 

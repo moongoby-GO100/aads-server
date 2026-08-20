@@ -62,6 +62,23 @@ def test_extract_target_files_normalizes_server_and_dashboard_paths():
     assert "server:deploy.sh" in files
 
 
+def test_resolve_job_size_preserves_explicit_admin_default_m():
+    from app.api.pipeline_runner import _resolve_job_size
+
+    assert _resolve_job_size(
+        "M",
+        "read-only smoke: do not modify files",
+        size_explicit=True,
+    ) == "M"
+
+
+def test_resolve_job_size_parses_instruction_only_when_size_omitted():
+    from app.api.pipeline_runner import _resolve_job_size
+
+    assert _resolve_job_size(None, "TASK\nSIZE: XL\n검증", size_explicit=False) == "XL"
+    assert _resolve_job_size(None, "짧은 read-only 확인", size_explicit=False) == "M"
+
+
 def test_deploy_lock_work_lock_limit_uses_runner_env(monkeypatch):
     from app.services import deploy_lock
 
