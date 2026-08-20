@@ -135,18 +135,27 @@ async def health_check(message: str, workspace_id: str) -> Dict[str, Any]:
         current_server = {
             "ok": True,
             "role": "AADS Backend+Dashboard (contabo116, current server)",
+            "canonical_id": "contabo116",
+            "host": "5.104.86.116",
             "db_ok": db_res.get("ok", False),
             "db_latency_ms": db_res.get("latency_ms", "?"),
             "disk_usage_pct": disk_res.get("usage_pct", "?"),
             "disk_used": disk_res.get("used", "?"),
             "disk_total": disk_res.get("total", "?"),
         }
+        legacy_server_68 = {
+            **current_server,
+            "legacy_alias": True,
+            "canonical_id": "contabo116",
+            "retired_host": "68.183.183.11",
+            "note": "Legacy server id 68 maps to contabo116; retired host 68.183.183.11 is not an active AADS dependency.",
+        }
 
         return {
             "status": quick.get("status", "UNKNOWN"),
             "checked_at": quick.get("checked_at", datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")),
             "server_contabo116": current_server,
-            "server_68": current_server,
+            "server_68": legacy_server_68,
             "server_contabo14": {"note": "GO100/KIS — SSH 체크 제외 (별도 모니터링)"},
             "server_211": {"note": "GO100/KIS — SSH 체크 제외 (별도 모니터링)"},
             "server_cafe24_114": {"note": "SF/NTV2/NAS — SSH 체크 제외 (별도 모니터링)"},

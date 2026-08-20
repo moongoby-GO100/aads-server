@@ -158,13 +158,20 @@ async def check_pipeline_status() -> Dict[str, Any]:
     )
     remote_211 = await _check_remote_211()
 
-    server_68 = {}
+    server_contabo116 = {}
     for i, proc_name in enumerate(processes):
         key = proc_name.replace(".", "_")
         if isinstance(local_results[i], Exception):
-            server_68[key] = {"running": False, "error": str(local_results[i])}
+            server_contabo116[key] = {"running": False, "error": str(local_results[i])}
         else:
-            server_68[key] = local_results[i]
+            server_contabo116[key] = local_results[i]
+    legacy_server_68 = {
+        **server_contabo116,
+        "legacy_alias": True,
+        "canonical_id": "contabo116",
+        "retired_host": "68.183.183.11",
+        "note": "Legacy server id 68 maps to contabo116; retired host 68.183.183.11 is not checked.",
+    }
 
     # overall 판정
     critical_procs = ["bridge_py", "auto_trigger"]
@@ -184,7 +191,8 @@ async def check_pipeline_status() -> Dict[str, Any]:
 
     return {
         "server_211": remote_211,
-        "server_68": server_68,
+        "server_contabo116": server_contabo116,
+        "server_68": legacy_server_68,
         "overall": overall,
     }
 

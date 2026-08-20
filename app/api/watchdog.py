@@ -43,6 +43,10 @@ def _error_hash(error_type: str, source: str, message: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _is_aads_current_server(server: str) -> bool:
+    return str(server).strip().lower() in {"68", "server68", "116", "contabo116"}
+
+
 # --- 에러 기록 (POST) ---
 @router.post("/watchdog/errors")
 async def report_error(
@@ -52,18 +56,18 @@ async def report_error(
     _rate: None = Depends(check_rate_limit),
 ):
     """에러 자동 기록. 동일 패턴이면 occurrence_count 증가."""
-    if req.error_type == "nginx_down" and str(req.server) == "68":
+    if req.error_type == "nginx_down" and _is_aads_current_server(req.server):
         async with memory_store.pool.acquire() as conn:
             nginx_state = await conn.fetchrow("""
                 SELECT last_status, consecutive_failures
                 FROM monitored_services
-                WHERE server='68' AND service_name='nginx'
+                WHERE server IN ('contabo116', '68') AND service_name='nginx'
                 LIMIT 1
             """)
             if nginx_state and nginx_state["last_status"] == "ok":
                 return {
                     "status": "ignored_false_positive",
-                    "reason": "server 68 nginx is currently healthy",
+                    "reason": "contabo116 nginx is currently healthy; legacy server id 68 is retired",
                     "last_status": nginx_state["last_status"],
                     "consecutive_failures": nginx_state["consecutive_failures"],
                 }

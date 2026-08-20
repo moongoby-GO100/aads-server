@@ -74,9 +74,13 @@ CIRCUIT_BREAKER_MAX_FAILURES = 1  # 1회 실패로 즉시 차단 (무한 루프 
 CIRCUIT_BREAKER_COOLDOWN_SEC = 1800  # 30분 쿨다운 (재시도 방지)
 
 
+def _is_aads_current_server(target_server: str) -> bool:
+    return str(target_server).strip().lower() in {"68", "server68", "116", "contabo116"}
+
+
 def _is_server68_nginx_request(title: str, description: str, command: str, target_server: str) -> bool:
     haystack = " ".join([title or "", description or "", command or ""]).lower()
-    return str(target_server) == "68" and (
+    return _is_aads_current_server(target_server) and (
         "nginx" in haystack or "systemctl restart nginx" in haystack
     )
 
