@@ -4056,6 +4056,111 @@ def record_bank_transactions(payload: dict[str, Any], user: dict[str, Any]) -> d
     }
 
 
+def _bank_transaction_from_csv_row(raw: dict[str, str], *, source: str) -> dict[str, Any]:
+    incoming = _amount(
+        _first_present(raw, "입금액", "입금", "입금금액", "맡기신금액", "받으신금액", "deposit", "credit")
+    )
+    outgoing = _amount(
+        _first_present(raw, "출금액", "출금", "출금금액", "찾으신금액", "지급금액", "withdrawal", "debit")
+    )
+    signed_amount = _amount(_first_present(raw, "거래금액", "금액", "amount"))
+    if incoming:
+        direction = "in"
+        amount = incoming
+    elif outgoing:
+        direction = "out"
+        amount = outgoing
+    elif signed_amount < 0:
+        direction = "out"
+        amount = abs(signed_amount)
+    else:
+        direction = _bank_direction(_first_present(raw, "입출금", "구분", "거래구분", "direction")) or "in"
+        amount = abs(signed_amount)
+    occurred_at = (
+        raw.get("거래일시")
+        or raw.get("일시")
+        or " ".join(
+            item
+            for item in (
+                raw.get("거래일자") or raw.get("거래일") or raw.get("일자") or raw.get("날짜") or "",
+                raw.get("거래시간") or raw.get("시간") or "",
+            )
+            if item
+        )
+    )
+    memo = (
+        raw.get("적요")
+        or raw.get("거래내용")
+        or raw.get("내용")
+        or raw.get("기재내용")
+        or raw.get("메모")
+        or raw.get("memo")
+        or ""
+    )
+    counterparty = (
+        raw.get("보낸분/받는분")
+        or raw.get("보낸분")
+        or raw.get("받는분")
+        or raw.get("거래처")
+        or raw.get("상대계좌예금주")
+        or raw.get("counterparty")
+        or ""
+    )
+    raw_fingerprint = json.dumps({"source": source, "row": raw}, ensure_ascii=False, sort_keys=True)
+    return {
+        "occurred_at": occurred_at,
+        "posted_at": raw.get("기산일") or raw.get("처리일") or "",
+        "direction": direction,
+        "amount": amount,
+        "balance": _first_present(raw, "잔액", "balance"),
+        "counterparty": counterparty,
+        "memo": memo,
+        "raw_memo": memo or " / ".join(value for value in raw.values() if value),
+        "category": raw.get("분류") or raw.get("카테고리") or "",
+        "source": source,
+        "source_hash": hashlib.sha256(raw_fingerprint.encode("utf-8")).hexdigest(),
+    }
+
+
+def import_bank_transaction_csv(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행거래 CSV 반영 권한이 없습니다")
+    csv_text = str(payload.get("csv_text") or "")
+    if not csv_text.strip():
+        raise HTTPException(status_code=400, detail="은행 거래 CSV 내용이 필요합니다")
+    filename = Path(str(payload.get("filename") or "bank-transactions.csv")).name
+    source = str(payload.get("source") or "csv").strip() or "csv"
+    decoded = _decode_csv(csv_text.encode("utf-8-sig"))
+    reader = csv.DictReader(decoded.splitlines(), delimiter=_csv_delimiter(decoded))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="은행 거래 CSV 헤더가 필요합니다")
+    transactions: list[dict[str, Any]] = []
+    for source_row in reader:
+        raw = {str(key or "").strip(): str(value or "").strip() for key, value in source_row.items()}
+        if not any(raw.values()):
+            continue
+        transactions.append(_bank_transaction_from_csv_row(raw, source=source))
+    result = record_bank_transactions(
+        {
+            "business_id": payload.get("business_id") or MIA_BUSINESS_ID,
+            "branch_id": payload.get("branch_id") or "",
+            "bank_account_id": payload.get("bank_account_id") or "",
+            "source": source,
+            "transactions": transactions,
+        },
+        user,
+    )
+    return {
+        **result,
+        "import": {
+            **result["import"],
+            "filename": filename,
+            "source": source,
+            "parsed_rows": len(transactions),
+        },
+    }
+
+
 def list_bank_transactions(
     user: dict[str, Any],
     *,

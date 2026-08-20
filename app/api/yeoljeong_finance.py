@@ -235,6 +235,16 @@ class BankTransactionImportPayload(BaseModel):
     transactions: list[BankTransactionEntry] = Field(default_factory=list)
 
 
+class BankTransactionCsvImportPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = "biz-mia"
+    branch_id: str = ""
+    bank_account_id: str
+    source: str = "csv"
+    filename: str = "bank-transactions.csv"
+    csv_text: str = ""
+
+
 @router.get("/session")
 async def get_session(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.session_for_user, current_user)
@@ -636,6 +646,14 @@ async def list_bank_transactions(
 @router.post("/bank-transactions")
 async def import_bank_transactions(payload: BankTransactionImportPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.record_bank_transactions, payload.model_dump(), current_user)
+
+
+@router.post("/bank-transactions/import")
+async def import_bank_transaction_csv(
+    payload: BankTransactionCsvImportPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await run_in_threadpool(svc.import_bank_transaction_csv, payload.model_dump(), current_user)
 
 
 @router.get("/bank-summary")

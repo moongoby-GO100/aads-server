@@ -9,12 +9,16 @@
   - The produced diff was recovered from `/tmp/aads-wt-runner-517f8a7a` and applied directly to the main worktree without touching unrelated dirty files.
 - Changes:
   - `app/services/yeoljeong_finance_service.py`: added file-based bank account and bank transaction ledgers, owner-only file writes, masked account-number handling, sensitive-key rejection, idempotent transaction import by `source_hash`, date/direction filters, and bank summary aggregation.
-  - `app/api/yeoljeong_finance.py`: added bank account create/list/update, bank transaction import/list, and bank summary endpoints under the existing Yeoljeong finance router.
-  - `tests/unit/test_yeoljeong_finance_service.py` and `tests/unit/test_yeoljeong_finance_api.py`: added targeted regression coverage for masking, permissions, validation, idempotency, filtering, summary totals, API flow, and sensitive payload rejection.
+  - `app/services/yeoljeong_finance_service.py`: added Korean bank CSV parsing into the dedicated bank ledger, with deposit/withdrawal header mapping and idempotent duplicate exclusion.
+  - `app/api/yeoljeong_finance.py`: added bank account create/list/update, bank transaction manual/import/list, and bank summary endpoints under the existing Yeoljeong finance router.
+  - `app/static/apps/yeoljeong-finance/index.html`: linked the store assistant UI to server bank accounts, bank summary, bank-account selection, and bank-ledger CSV import from the existing import modal.
+  - `tests/unit/test_yeoljeong_finance_service.py` and `tests/unit/test_yeoljeong_finance_api.py`: added targeted regression coverage for masking, permissions, validation, idempotency, filtering, summary totals, CSV import, API flow, and sensitive payload rejection.
   - `docs/handover-notes/2026-08-20_yeoljeong_bank_sync_phase1.md`: added detailed phase 1 handover and explicit out-of-scope items.
 - Verification:
   - `.venv-playwright/bin/python -m compileall app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` passed.
-  - `.venv-playwright/bin/python -m pytest` for 15 new bank service/API tests passed: 15 passed in 1.41s.
+  - `.venv-playwright/bin/python -m pytest` for 16 new bank service/API tests passed: 16 passed in 2.10s.
+  - `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` passed.
+  - Inline JS syntax check passed: `inline-script-ok 1`.
   - Full two-file pytest run was not used as the final signal because it pulled in older non-bank tests and ran long; the targeted new-bank suite was used as the acceptance check.
 - Deployment status:
   - No push, restart, or deploy was performed.

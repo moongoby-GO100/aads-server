@@ -572,6 +572,19 @@ def test_bank_account_and_ledger_http_flow(tmp_path, monkeypatch):
     assert body["totals"]["net"] == 60000
     assert body["totals"]["transaction_count"] == 2
 
+    csv_import = client.post(
+        "/yeoljeong-finance/bank-transactions/import",
+        json={
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_account_id": account["id"],
+            "csv_text": "거래일자,적요,입금액,출금액\n2026-08-04,카드정산,50000,\n",
+            "filename": "bank.csv",
+        },
+    )
+    assert csv_import.status_code == 200
+    assert csv_import.json()["import"]["imported_rows"] == 1
+
 
 def test_bank_account_rejects_extra_sensitive_field(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)

@@ -3231,3 +3231,44 @@ def test_bank_ledger_does_not_touch_generic_transactions(tmp_path, monkeypatch):
     )
     # The generic transactions ledger stays empty/unaffected.
     assert service.list_transactions() == []
+
+
+def test_import_bank_transaction_csv_maps_korean_bank_headers(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+    csv_text = "\n".join(
+        [
+            "거래일자,거래시간,적요,보낸분/받는분,입금액,출금액,잔액",
+            "2026-08-05,13:20,배민 정산,우아한형제들,120000,,550000",
+            "2026-08-06,09:10,식자재 결제,마켓봄,,45000,505000",
+        ]
+    )
+
+    first = service.import_bank_transaction_csv(
+        {
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_account_id": account["id"],
+            "csv_text": csv_text,
+            "filename": "shinhan.csv",
+        },
+        ADMIN_USER,
+    )
+    second = service.import_bank_transaction_csv(
+        {
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_account_id": account["id"],
+            "csv_text": csv_text,
+            "filename": "shinhan.csv",
+        },
+        ADMIN_USER,
+    )
+
+    assert first["import"]["parsed_rows"] == 2
+    assert first["import"]["imported_rows"] == 2
+    assert second["import"]["imported_rows"] == 0
+    assert second["import"]["duplicate_rows"] == 2
+    ledger = service.list_bank_transactions(ADMIN_USER, bank_account_id=account["id"])
+    assert {row["direction"] for row in ledger} == {"in", "out"}
+    assert sum(row["amount"] for row in ledger if row["direction"] == "in") == 120000
+    assert sum(row["amount"] for row in ledger if row["direction"] == "out") == 45000

@@ -42,18 +42,28 @@ platform_match(optional), settlement_match(optional), source, source_hash, impor
 - `PATCH /bank-accounts/{account_id}` — 상태/별칭/마스킹 등 부분 수정
 - `GET  /bank-transactions?business_id&bank_account_id&direction&date_from&date_to` — 조회
 - `POST /bank-transactions` — 수동/CSV/목업 거래 멱등 반영 (`bank_account_id` 필수)
+- `POST /bank-transactions/import` — 은행 CSV/엑셀 표 붙여넣기 전용 반영. 한국어 헤더
+  (`거래일자`, `거래시간`, `적요`, `입금액`, `출금액`, `잔액`)를 은행 원장 모델로 정규화.
 - `GET  /bank-summary?business_id&bank_account_id&date_from&date_to` — 입출금 집계 + 계좌별 상태 요약
 
 집계: `totals{total_in,total_out,net,transaction_count,account_count}`,
 `account_status_counts`, 계좌별 `{transaction_count,total_in,total_out,net,status,last_synced_at}`.
 사업자/지점 스코프는 `_normalize_bank_scope`로 CANONICAL 사업자·지점 정합성 검증.
 
+### 운영 화면 (`app/static/apps/yeoljeong-finance/index.html`)
+- 로그인 후 서버 은행계좌와 은행 요약을 불러와 `입금·계좌` 화면에 표시.
+- 연동관리에서 은행 서비스를 저장할 때 `bank_accounts` 원장에도 마스킹 계좌를 등록.
+- 데이터 가져오기 모달에 `은행 원장 계좌` 선택을 추가하고, 신한/IBK 은행 CSV 반영은
+  `/bank-transactions/import`로 전송해 전용 은행 원장에 저장.
+
 ## 검증
 - `python3 -m compileall app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` → OK
-- 신규 서비스 단위테스트 18건 + API 테스트 2건 전부 통과.
+- 신규 은행 서비스/API 테스트 16건 전부 통과.
   - `tests/unit/test_yeoljeong_finance_service.py` (은행 섹션)
   - `tests/unit/test_yeoljeong_finance_api.py::test_bank_account_and_ledger_http_flow`,
     `::test_bank_account_rejects_extra_sensitive_field`
+- `python3 -m html.parser app/static/apps/yeoljeong-finance/index.html` → OK
+- 인라인 JS 구문 검사 → `inline-script-ok 1`
 - 기존 finance 서비스 테스트(네트워크/PC Agent 미의존분) 63건 통과, 회귀 없음.
   ※ delivery/pc_agent/ddangyo 계열 테스트는 이 샌드박스에 `structlog`/실DB/실네트워크가 없어
     사전부터 실패/행업하는 환경 이슈이며, 은행 코드와 무관.
@@ -61,11 +71,10 @@ platform_match(optional), settlement_match(optional), source, source_hash, impor
 ## 이번 단계에서 **구현하지 않은** 범위 (다음 단계)
 - 외부 은행 **실연동**: 오픈뱅킹 API, 은행 포털 스크래핑/PC Agent 로그인, 실시간 잔액/거래 수집.
   현재는 수동/CSV/목업 입력만 원장에 반영한다.
-- 은행 CSV 파서(은행별 컬럼 매핑) — 현재는 정규화된 JSON 배열(`transactions`)만 수신.
-  향후 `import_file`류 CSV 파서를 은행 원장 전용으로 확장 필요.
+- 은행별 세부 CSV 변종 매핑(은행 전용 거래번호/수수료/메모 세부 컬럼)은 P1. 현재는 공통
+  한국어 거래내역 헤더 기준 CSV/엑셀 표 붙여넣기를 지원.
 - 배달 플랫폼/정산 자동 매칭(`platform_match`, `settlement_match`)은 필드만 두고 로직 미구현.
 - DB 영속화(현재 파일 전용). 다중 인스턴스/무중단 배포 시 DB 원장 승격 검토.
-- 프런트엔드(`app/static/apps/yeoljeong-finance`) 은행 탭 UI — 이번엔 API/서비스 계층만.
 
 ## 주의 (보안 절대 규칙)
 - 은행 실계정/비밀번호/OTP/공동인증서는 **저장 기능 자체를 만들지 않았다.** credential은

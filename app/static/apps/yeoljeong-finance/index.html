@@ -4382,6 +4382,11 @@
               <option value="other">기타 증빙</option>
             </select>
           </label>
+          <label>은행 원장 계좌
+            <select id="bankAccountSelect">
+              <option value="">등록 은행계좌 선택</option>
+            </select>
+          </label>
         </div>
         <div class="file-row">
           <label>매입처/거래처명
@@ -5142,6 +5147,8 @@
     let filePreviewObjectUrl = "";
     let filePreviewAbortController = null;
     let serverAccountsRefreshPromise = null;
+    let bankAccounts = [];
+    let bankSummary = null;
 
     persistInitialNormalizedSettings();
 
@@ -5582,6 +5589,10 @@
       return branchByName(branchName)?.businessId || "";
     }
 
+    function branchIdForName(branchName) {
+      return branchByName(branchName)?.id || "";
+    }
+
     function selectedSettingsBusinessId() {
       const cfg = settings();
       const saved = localStorage.getItem(SETTINGS_BUSINESS_KEY) || "";
@@ -5949,15 +5960,18 @@
 
       const bankIntegrations = (settings().integrations || []).filter(item => financialTransactionServices.has(item.service));
       if (els.accountSummaryRows) {
+        const bankTotals = bankSummary?.totals || {};
         els.accountSummaryRows.innerHTML = [
-          progressRow("등록 계좌", `${settings().accounts.length}개`, settings().accounts.length ? "good" : "warn", 100),
+          progressRow("등록 계좌", `${settings().accounts.length + bankAccounts.length}개`, (settings().accounts.length + bankAccounts.length) ? "good" : "warn", 100),
           progressRow("은행·카드 연동", `${bankIntegrations.length}개`, bankIntegrations.length ? "good" : "warn", 100),
+          progressRow("은행 원장 순입금", formatMoney(bankTotals.net || 0), bankTotals.transaction_count ? "good" : "warn", 80),
           progressRow("입금 대사", formatMoney(m.depositGap), Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? "warn" : "good", 60)
         ].join("");
       }
       if (els.accountRows) {
         const accountRows = [
           ...settings().accounts.map(item => ({ type: "계좌", scope: businessName(item.businessId), account: `${item.bank} ${item.accountNo}`, status: "기초등록" })),
+          ...bankAccounts.map(item => ({ type: "은행 원장", scope: `${businessName(item.business_id || "")} / ${settings().branches.find(branch => branch.id === item.branch_id)?.name || "공통"}`, account: [item.bank_name, item.account_alias, item.account_number_masked].filter(Boolean).join(" "), status: integrationStatusLabels[item.status]?.[0] || item.status || "미지정" })),
           ...bankIntegrations.map(item => ({ type: integrationLabels[item.service] || item.service, scope: `${businessName(item.businessId || item.business_id || "")} / ${item.branch || "공통"}`, account: item.accountNoMasked || item.merchantNo || item.institutionCode || "미등록", status: integrationStatusLabels[item.status]?.[0] || item.status || "미지정" }))
         ];
         els.accountRows.innerHTML = accountRows.length ? accountRows.map(item => `
@@ -8337,6 +8351,7 @@
       let syncNotice = "";
       let serverVaultWarning = "";
       let serverPersistenceWarning = "";
+      let bankAccountRecord = null;
       const previewIntegration = existingIntegration || previewIntegrationFromForm(form);
       const optimisticIntegrationId = existingIntegration?.id || previewIntegration?.id || "";
       if (!existingIntegration && previewIntegration) {
@@ -8402,6 +8417,30 @@
           }
           serverAccount = result.account;
           pendingAutoSync = result.sync || null;
+          if (financialTransactionServices.has(data.service) && (accountNoMasked || data.accountNo)) {
+            const branchId = branchIdForName(data.branch || "");
+            const bankPayload = {
+              business_id: data.businessId,
+              branch_id: branchId,
+              bank_code: data.institutionCode || "",
+              bank_name: integrationLabels[data.service] || catalog.label || data.service,
+              account_number: data.accountNo || "",
+              account_number_masked: accountNoMasked,
+              account_holder: data.authOwner || "",
+              account_alias: String(data.label || "").trim(),
+              connection_type: collectionMode === "bank-excel" ? "csv" : "mock",
+              status: "active",
+              institution_code: data.institutionCode || "",
+              memo,
+              auto_sync: true
+            };
+            const bankResult = await financeApi("/bank-accounts", {
+              method: "POST",
+              body: JSON.stringify(bankPayload)
+            });
+            bankAccountRecord = bankResult.bank_account || null;
+            await refreshBankAccounts({ silent: true });
+          }
         } catch (err) {
           if (existingIntegration?.serverAccountId && /찾지 못|404/.test(String(err.message || ""))) {
             try {
@@ -8452,6 +8491,7 @@
       const nextIntegration = {
         id: optimisticIntegrationId || uid(),
         serverAccountId: serverAccount?.id || existingIntegration?.serverAccountId || "",
+        bankAccountId: bankAccountRecord?.id || existingIntegration?.bankAccountId || "",
         service: data.service,
         label: String(data.label || "").trim(),
         category: catalog.category || "기타",
@@ -9811,6 +9851,44 @@
       showToast(`서버 계정 ${payload.accounts?.length || 0}건을 반영했습니다.`);
     }
 
+    function renderBankAccountSelect() {
+      if (!els.bankAccountSelect) return;
+      const scope = (() => {
+        try { return selectedAutomationScope(); } catch (err) { return null; }
+      })();
+      const branchId = scope ? branchIdForName(scope.branch) : "";
+      const scopedAccounts = bankAccounts.filter(item => {
+        if (scope?.business_id && item.business_id !== scope.business_id) return false;
+        if (branchId && item.branch_id && item.branch_id !== branchId) return false;
+        return true;
+      });
+      els.bankAccountSelect.innerHTML = [
+        `<option value="">등록 은행계좌 선택</option>`,
+        ...scopedAccounts.map(item => {
+          const label = [item.bank_name, item.account_alias, item.account_number_masked].filter(Boolean).join(" · ");
+          return `<option value="${escapeHtml(item.id)}">${escapeHtml(label || item.id)}</option>`;
+        })
+      ].join("");
+      if (scopedAccounts.length === 1) els.bankAccountSelect.value = scopedAccounts[0].id;
+    }
+
+    async function refreshBankAccounts({ silent = false } = {}) {
+      if (!canManageAutomation()) return;
+      const scope = selectedAutomationScope();
+      const branchId = branchIdForName(scope.branch);
+      const query = new URLSearchParams({ business_id: scope.business_id });
+      if (branchId) query.set("branch_id", branchId);
+      const [accountsPayload, summaryPayload] = await Promise.all([
+        financeApi(`/bank-accounts?${query.toString()}`),
+        financeApi(`/bank-summary?${query.toString()}`)
+      ]);
+      bankAccounts = accountsPayload.bank_accounts || [];
+      bankSummary = summaryPayload || null;
+      renderBankAccountSelect();
+      renderAll();
+      if (!silent) showToast(`은행계좌 ${bankAccounts.length}건을 불러왔습니다.`);
+    }
+
     function ensureServerAccountsForIntegrations() {
       if (!hasServerAuth()) return null;
       if (!serverAccountsRefreshPromise) {
@@ -10063,22 +10141,55 @@
         return;
       }
       const scope = selectedAutomationScope();
-      const payload = await financeApi("/transactions/import", {
-        method: "POST",
-        body: JSON.stringify({
-          service,
-          csv_text: csvText,
-          filename: els.fileInput.files[0]?.name || "transactions.csv",
-          ...scope
-        })
-      });
-      const records = (payload.transactions || payload.rows || []).map(entryFromRecord);
+      const bankAccountId = els.bankAccountSelect?.value || "";
+      const isBankLedgerService = ["shinhan_business", "ibk_business"].includes(service);
+      if (isBankLedgerService && !bankAccountId) {
+        renderBankAccountSelect();
+        showToast("은행 거래 CSV는 등록 은행계좌를 먼저 선택해야 원장에 반영됩니다.");
+        return;
+      }
+      const useBankLedger = isBankLedgerService && Boolean(bankAccountId);
+      const payload = useBankLedger
+        ? await financeApi("/bank-transactions/import", {
+            method: "POST",
+            body: JSON.stringify({
+              bank_account_id: bankAccountId,
+              business_id: scope.business_id,
+              branch_id: branchIdForName(scope.branch),
+              csv_text: csvText,
+              filename: els.fileInput.files[0]?.name || "bank-transactions.csv",
+              source: "csv"
+            })
+          })
+        : await financeApi("/transactions/import", {
+            method: "POST",
+            body: JSON.stringify({
+              service,
+              csv_text: csvText,
+              filename: els.fileInput.files[0]?.name || "transactions.csv",
+              ...scope
+            })
+          });
+      const records = useBankLedger
+        ? (payload.transactions || []).map(row => ({
+            id: row.id || uid(),
+            date: String(row.occurred_at || "").slice(0, 10),
+            branch: scope.branch,
+            type: row.direction === "out" ? "expense" : "bank",
+            vendor: row.counterparty || row.memo || "은행거래",
+            channel: "은행원장",
+            amount: Number(row.amount || 0),
+            status: "confirmed",
+            memo: row.memo || row.raw_memo || ""
+          }))
+        : (payload.transactions || payload.rows || []).map(entryFromRecord);
       if (records.length) {
         state.entries.push(...records);
         saveState();
       }
+      if (useBankLedger) await refreshBankAccounts({ silent: true });
       renderAll();
-      showToast(`은행/카드 거래 ${records.length}건 반영 / 중복 ${payload.import?.duplicate_rows || 0}건 제외`);
+      showToast(`${useBankLedger ? "은행 원장" : "은행/카드 거래"} ${records.length}건 반영 / 중복 ${payload.import?.duplicate_rows || 0}건 제외`);
     }
 
     async function importSettlementCsvToServer() {
@@ -10152,6 +10263,9 @@
         els.evidenceVendor.value = integrationLabels[selectedService] || "";
       }
       els.importModal.classList.remove("hidden");
+      if (financialTransactionServices.has(selectedService)) {
+        refreshBankAccounts({ silent: true }).catch(() => renderBankAccountSelect());
+      }
     }
 
     function mergeEvidenceTransaction(result, file) {
@@ -10238,9 +10352,16 @@
       }));
 
       els.quickAddBtn.addEventListener("click", () => setView("entries"));
-      els.csvBtn.addEventListener("click", () => els.importModal.classList.remove("hidden"));
-      els.importBtn.addEventListener("click", () => els.importModal.classList.remove("hidden"));
+      els.csvBtn.addEventListener("click", () => {
+        els.importModal.classList.remove("hidden");
+        refreshBankAccounts({ silent: true }).catch(() => renderBankAccountSelect());
+      });
+      els.importBtn.addEventListener("click", () => {
+        els.importModal.classList.remove("hidden");
+        refreshBankAccounts({ silent: true }).catch(() => renderBankAccountSelect());
+      });
       els.closeImportBtn.addEventListener("click", () => els.importModal.classList.add("hidden"));
+      els.evidenceService?.addEventListener("change", () => renderBankAccountSelect());
       els.evidenceService?.addEventListener("change", event => {
         if (els.evidenceKind) els.evidenceKind.value = evidenceKindForService(event.target.value);
         if (els.evidenceVendor && !els.evidenceVendor.value.trim()) els.evidenceVendor.value = integrationLabels[event.target.value] || "";
@@ -11239,7 +11360,10 @@
       if (rememberedRecipeRedirect && hasServerAuth() && followPostLoginRedirect()) return;
       refreshFinanceSessionInBackground();
       if (hasServerAuth()) loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
-      if (canManageAutomation()) refreshServerAccounts().catch(() => {});
+      if (canManageAutomation()) {
+        refreshServerAccounts().catch(() => {});
+        refreshBankAccounts({ silent: true }).catch(() => {});
+      }
       if (hasServerAuth()) loadDeliverySettlements().catch(() => {});
       if (canManageOnboarding()) loadEmployeeInvites().catch(() => {});
       if (hasServerAuth()) {
