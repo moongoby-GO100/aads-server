@@ -22507,3 +22507,37 @@ f='/root/kis-autotrade-v4/frontend/src/app/(protected)/go100/strate
 ## [2026-08-20 10:08:33 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
 - Chat-Direct 수정: patch:                     sell_generation = in→                    sell_generation = in
 - finalize: pending
+
+## [2026-08-20 10:53:37 KST] [GO100] backend/app/services/trading/v4_trade_bridge.py
+- Chat-Direct 수정: patch:                 # P5 분할매수: 1차 비율 적용 (DES→                # P5 분할매수: 1차 비율 적용 (DES
+- finalize: pending
+
+## [2026-08-20 10:57:28 KST] [GO100] backend/scripts/go100_update_card119_strategy_name_20260820.py
+- Chat-Direct 수정: write: backend/scripts/go100_update_card119_strategy_name_20260820.py
+- finalize: pending
+
+## [2026-08-20 10:58:36 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-20 10:45 KST — GO100-303 데이터 신→# 2026-08-20 10:58 KST — GO100-119 전략명 정
+- finalize: pending
+
+## [2026-08-20 11:01:25 KST] [GO100] tests/test_entry_rule_intraday_compat.py
+- Chat-Direct 수정: patch:         # _eval_rule_fn: 완화 min_amount =→        result = self.ev._eval_limit_up_
+- finalize: pending
+
+## [2026-08-20 11:02:26 KST] [GO100] tests/test_entry_rule_intraday_compat.py
+- Chat-Direct 수정: patch:         result = self.ev._eval_rule_fn(
+→        result = self.ev._eval_limit_up_
+- finalize: pending
+
+## [2026-08-20 11:03:16 KST] [GO100] tests/test_entry_rule_intraday_compat.py
+- Chat-Direct 수정: patch:         result = self.ev._eval_rule_fn(
+→        result = self.ev._eval_limit_up_
+- finalize: pending
+
+## [2026-08-20 13:48:22 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         s4_rows = s4_rows_r.fetchall()
+
+→        s4_rows = s4_rows_r.fetchall()
+
+
+- finalize: pending

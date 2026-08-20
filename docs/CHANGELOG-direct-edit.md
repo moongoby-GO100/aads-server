@@ -5103,3 +5103,32 @@ fro
 
 ## [2026-08-20 08:13:19 KST] [aads-server] scripts/pipeline-runner.sh
 - Chat-Direct 수정: patch:         deploy_lock_result=$(curl -sf -X→        deploy_lock_result=$(curl -sf -X
+
+## [2026-08-20 10:27:34 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch: git_ahead_behind_counts() {
+    local re→git_ahead_behind_counts() {
+    local re
+
+## [2026-08-20 10:27:55 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:     if [[ "${dirty:-999}" -ne 0 || "${be→    # origin/main 동기화 상태는 여전히 엄격 (behind
+
+## [2026-08-20 10:29:19 KST] [aads-server] scripts/_tmp_preflight_fn_test.sh
+- Chat-Direct 수정: write: scripts/_tmp_preflight_fn_test.sh
+
+## [2026-08-20 13:50:26 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert urls[:3] == [
+        "http:/→    assert urls[:3] == [
+        "http:/
+
+## [2026-08-20 13:50:32 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch: def test_active_api_route_urls_loopback_→def test_active_api_route_urls_named_con
+
+## [2026-08-20 13:50:34 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:         if req.full_url in {
+           →        if req.full_url in {
+           
+
+## [2026-08-20 13:50:46 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert calls == [
+        "http://12→    assert calls == [
+        "http://aa
