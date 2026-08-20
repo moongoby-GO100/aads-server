@@ -550,6 +550,7 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
     blocked_retry_seconds = max(retry_seconds, int(args.blocked_retry_seconds or retry_seconds))
     success_sleep_seconds = max(1, int(args.success_sleep_seconds or retry_seconds))
     attempt_timeout_seconds = max(0, int(args.attempt_timeout_seconds or 0))
+    retry_blocked = bool(getattr(args, "retry_blocked", False))
     attempt = 0
     force_recreate_next = _initial_force_recreate_portal_sessions(base_payload, user)
 
@@ -560,6 +561,15 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
             attempt_payload["force_recreate_portal_sessions"] = True
         summary = _run_sync_with_timeout(attempt_payload, user, attempt_timeout_seconds)
         state = _completion_state(summary)
+        can_retry_blocked_with_recreate = (
+            state["blocked"]
+            and _should_force_recreate_portal_sessions(state)
+            and not bool(attempt_payload.get("force_recreate_portal_sessions"))
+        )
+        will_stop_on_blocked = state["blocked"] and not retry_blocked and not can_retry_blocked_with_recreate
+        next_retry_seconds = 0 if state["complete"] or will_stop_on_blocked else (
+            blocked_retry_seconds if state["blocked"] else retry_seconds
+        )
         print(
             json.dumps(
                 {
@@ -569,7 +579,8 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
                         "force_recreate_portal_sessions": bool(
                             attempt_payload.get("force_recreate_portal_sessions")
                         ),
-                        "next_retry_seconds": 0 if state["complete"] else (blocked_retry_seconds if state["blocked"] else retry_seconds),
+                        "next_retry_seconds": next_retry_seconds,
+                        "stop_on_blocked": bool(will_stop_on_blocked),
                     },
                     **summary,
                 },
@@ -584,6 +595,8 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
             _sleep(success_sleep_seconds)
             attempt = 0
             continue
+        if will_stop_on_blocked:
+            return 0 if bool(getattr(args, "exit_zero_on_blocked", False)) else 2
         if max_attempts and attempt >= max_attempts:
             return 2 if state["blocked"] else 1
         force_recreate_next = bool(base_payload.get("force_recreate_portal_sessions")) or _should_force_recreate_portal_sessions(state)
@@ -613,6 +626,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
     parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")
     parser.add_argument("--repeat-after-complete", action="store_true", help="After a complete cycle, sleep and start the next collection cycle.")
+    parser.add_argument("--retry-blocked", action="store_true", help="Keep retrying manual action-required states such as captcha or portal blocking.")
+    parser.add_argument("--exit-zero-on-blocked", action="store_true", help="Exit 0 when a terminal manual action-required state is reached.")
     parser.add_argument("--max-attempts", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_MAX_ATTEMPTS", 0), help="0 means unlimited attempts.")
     parser.add_argument("--retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS", 60))
     parser.add_argument("--blocked-retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS", 180))

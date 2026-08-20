@@ -326,6 +326,7 @@ def test_until_complete_retries_until_imported_rows(monkeypatch):
         blocked_retry_seconds=19,
         success_sleep_seconds=1800,
         attempt_timeout_seconds=0,
+        retry_blocked=False,
         repeat_after_complete=False,
     )
 
@@ -501,6 +502,7 @@ def test_until_complete_force_recreates_on_first_attempt_from_existing_status(mo
         blocked_retry_seconds=19,
         success_sleep_seconds=1800,
         attempt_timeout_seconds=0,
+        retry_blocked=False,
         repeat_after_complete=False,
     )
 
@@ -508,7 +510,7 @@ def test_until_complete_force_recreates_on_first_attempt_from_existing_status(mo
     assert calls[0]["force_recreate_portal_sessions"] is True
 
 
-def test_until_complete_uses_blocked_retry_interval(monkeypatch):
+def test_until_complete_can_retry_blocked_when_requested(monkeypatch):
     sleeps = []
 
     monkeypatch.setattr(auto_collect, "_payload", lambda args: {"business_id": "all"})
@@ -535,11 +537,47 @@ def test_until_complete_uses_blocked_retry_interval(monkeypatch):
         blocked_retry_seconds=19,
         success_sleep_seconds=1800,
         attempt_timeout_seconds=0,
+        retry_blocked=True,
         repeat_after_complete=False,
     )
 
     assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 2
     assert sleeps == [19]
+
+
+def test_until_complete_stops_on_terminal_blocked_by_default(monkeypatch):
+    sleeps = []
+
+    monkeypatch.setattr(auto_collect, "_payload", lambda args: {"business_id": "all"})
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_sync",
+        lambda payload, user, *, queue_only=False: {
+            "summary": [
+                {
+                    "service": "coupangeats",
+                    "status": "action_required",
+                    "error_code": "PORTAL_BLOCKED",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
+
+    args = SimpleNamespace(
+        max_attempts=0,
+        retry_seconds=7,
+        blocked_retry_seconds=19,
+        success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
+        retry_blocked=False,
+        repeat_after_complete=False,
+    )
+
+    assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 2
+    assert sleeps == []
 
 
 def test_timeout_result_is_retryable():

@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-08-21 08:03 KST - Yeoljeong auto-collect blocked-state loop guard
+
+- Trigger: During the commit/push/deploy pass, a follow-up change was prepared to keep the Yeoljeong auto-collect worker from endlessly restarting on terminal manual-action states.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py`: `--until-complete` now stops on terminal blocked states by default, exposes `--retry-blocked` for explicit retry loops, and exposes `--exit-zero-on-blocked` for worker-safe terminal blocked exits.
+  - `docker-compose.prod.yml`: `yeoljeong-finance-worker` now uses `restart: on-failure` and passes `--exit-zero-on-blocked`.
+  - Updated isolation and auto-collect unit tests for the new blocked-state behavior.
+- Verification before commit:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_isolation.py -q` passed: 17 passed.
+  - `.venv-playwright/bin/python -m py_compile scripts/yeoljeong_auto_collect.py` passed.
+  - `git diff --check` passed.
+- Deployment status:
+  - Commit/push/deploy to be completed in the same session after this HANDOVER entry.
+
 ## 2026-08-21 07:49 KST - Yeoljeong PC Agent browser cleanup deploy follow-up
 
 - Trigger: CEO requested commit, push, and deployment completion for the bank/delivery auto-collection work.
