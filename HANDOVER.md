@@ -7638,3 +7638,14 @@
 - Remaining:
   - Re-run the mounted-container bank/delivery regression after this test expectation fix, then commit/push if green.
   - Browser E2E with actual bank credentials remains blocked until CEO enters bank connection settings and PC Agent/browser session is available.
+
+## 2026-08-21 07:51 KST - Yeoljeong browser session cleanup result-path fix
+
+- Request: Keep the bank/delivery automatic collection deployment reproducible and verified after PC Agent browser-session cleanup changes appeared during deployment.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` now also closes the portal browser session after normalized delivery sync result handling when `close_portal_browser_on_complete` is enabled.
+- Verification:
+  - `docker run --rm -e JWT_SECRET_KEY=test-jwt-secret-for-bank-deploy -v /root/aads/aads-server:/app -w /app aads-server-yeoljeong-finance python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_auto_collect.py -q` succeeded: 124 passed.
+  - `git diff --check` succeeded.
+- Remaining:
+  - Commit, push, and redeploy this final result-path cleanup change before final CEO report.

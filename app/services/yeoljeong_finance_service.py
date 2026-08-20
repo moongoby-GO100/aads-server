@@ -6559,6 +6559,16 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     if browser_auth.get("browser_bridge_error"):
                         result.setdefault("diagnostics", {})["browser_bridge_error"] = browser_auth["browser_bridge_error"]
                 result = _normalize_delivery_collection_result(service, result)
+                if (
+                    browser_auth.get("browser_session_id")
+                    and str(browser_auth.get("browser_close_on_complete") or "") == "1"
+                ):
+                    _run_delivery_browser_async(
+                        _close_delivery_browser_work_session_async(
+                            browser_auth,
+                            reason=f"delivery_sync_result_{service}",
+                        )
+                    )
 
             counts = _delivery_empty_counts()
             for kind, ledger_name in ledger_names.items():
