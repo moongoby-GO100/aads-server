@@ -111,8 +111,8 @@ services:
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - AADS_MEDIA_STATIC_DIR=/app/generated-media-static
-      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-69e1cfb7-146}
-      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-NPC6JAT}
+      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-aad74f71-e6b}
+      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-TBKF5M3}
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
@@ -195,8 +195,8 @@ services:
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - AADS_MEDIA_STATIC_DIR=/app/generated-media-static
-      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-69e1cfb7-146}
-      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-NPC6JAT}
+      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-aad74f71-e6b}
+      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-TBKF5M3}
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
       - aads_generated_media:/app/generated-media-static:rw
@@ -327,7 +327,7 @@ services:
       - YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS=${YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS:-300}
       - YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS=${YEOLJEONG_AUTO_COLLECT_RETRY_SECONDS:-60}
       - YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS=${YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS:-180}
-      - YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-2e9379a1-fed}
+      - YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-aad74f71-e6b}
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
       - /root/aads/aads-server/app/.vault.key:/app/app/.vault.key:ro
