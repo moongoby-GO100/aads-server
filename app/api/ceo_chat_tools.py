@@ -2719,6 +2719,14 @@ async def tool_run_remote_command(project: str, command: str) -> str:
         if re.search(r"docker\s+(stop|kill)\s+aads-(postgres|redis|socket-proxy|litellm)", command):
             logger.warning("deploy_blocked_container_stop", command=command[:120])
             return "[BLOCKED] 의존 컨테이너 직접 정지는 서비스 장애를 유발합니다."
+        # --force-recreate → 차단 (2026-08-20 인시던트: Blue/Green 동시 강제 재생성으로 26분 다운)
+        if re.search(r"--force-recreate", command, re.IGNORECASE):
+            logger.warning("deploy_blocked_force_recreate", command=command[:120])
+            return "[BLOCKED] deploy.sh bluegreen을 사용하세요. 직접 docker compose 호출은 차단됩니다."
+        # 서비스명 없는 bare `docker compose up -d` / `docker-compose up -d` → 차단 (전체 재기동 위험)
+        if re.search(r"docker[\s-]+compose\s+up\s+-d\s*$", command.strip(), re.IGNORECASE):
+            logger.warning("deploy_blocked_bare_compose_up", command=command[:120])
+            return "[BLOCKED] deploy.sh bluegreen을 사용하세요. 직접 docker compose 호출은 차단됩니다."
         # docker compose up/build/restart → deploy.sh 리다이렉트 (하이픈 형식도 포함)
         if re.search(r"docker[\s-]+compose\s+(up|build|restart)", command) and "aads" in command.lower():
             _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
@@ -2848,11 +2856,11 @@ async def tool_git_remote_commit(project: str, message: str) -> str:
         if staged_files:
             check_errors = []
             for sf in staged_files[:20]:  # 최대 20파일
-                # 구문 검사
+                # 구문 검사 (py_compile은 성공 시 아무 출력도 없으므로 echo로 성공 마커 추가)
                 syntax_result = await tool_run_remote_command(
-                    project, f"python3 -m py_compile {shlex.quote(sf)}"
+                    project, f"python3 -m py_compile {shlex.quote(sf)} && echo SYNTAX_OK"
                 )
-                if "OK" not in syntax_result:
+                if "SYNTAX_OK" not in syntax_result:
                     check_errors.append(f"구문오류: {sf}")
                     continue
                 # Docker 내부 import 검증 (app/ 하위만)
