@@ -22541,3 +22541,54 @@ f='/root/kis-autotrade-v4/frontend/src/app/(protected)/go100/strate
 
 
 - finalize: pending
+
+## [2026-08-20 18:43:10 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         # P0: DB에서 이미 CLOSED 확인된 positio→        # P0: DB에서 이미 CLOSED 확인된 positio
+- finalize: pending
+
+## [2026-08-20 18:43:35 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:     def _is_exit_monitoring_active(self)→    def _is_exit_monitoring_active(self)
+- finalize: pending
+
+## [2026-08-20 18:44:47 KST] [GO100] scripts/_patch_eod_sweep.py
+- Chat-Direct 수정: write: scripts/_patch_eod_sweep.py
+- finalize: pending
+
+## [2026-08-20 18:45:28 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 except asyncio.TimeoutEr→                except asyncio.TimeoutEr
+- finalize: pending
+
+## [2026-08-20 18:46:38 KST] [GO100] scripts/_patch_timeout_eod.py
+- Chat-Direct 수정: write: scripts/_patch_timeout_eod.py
+- finalize: pending
+
+## [2026-08-20 18:47:25 KST] [GO100] scripts/_patch_ws_mock_guard.py
+- Chat-Direct 수정: write: scripts/_patch_ws_mock_guard.py
+- finalize: pending
+
+## [2026-08-20 18:47:33 KST] [GO100] backend/app/services/data/kis_ws_collector.py
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && python3 scripts/_patch_ws_mock_guard.py
+- finalize: pending
+
+## [2026-08-20 18:48:59 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: _SELL_RETRY_COOLDOWN_SEC = 30.0
+→_SELL_RETRY_COOLDOWN_SEC = 30.0
+_EOD_SWE
+- finalize: pending
+
+## [2026-08-20 18:49:54 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         # P0: 틱 독립 EOD 강제청산 — 당일 sweep 완→        # P0: 틱 독립 EOD 강제청산 — 당일 sweep 완
+- finalize: pending
+
+## [2026-08-20 18:51:18 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:     async def _sweep_eod_positions(self)→    def _get_latest_price_for_exit(self,
+- finalize: pending
+
+## [2026-08-20 18:52:15 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 await self._log_health()→                await self._log_health()
+- finalize: pending
+
+## [2026-08-20 18:54:01 KST] [GO100] backend/app/services/data/kis_ws_collector.py
+- Chat-Direct 수정: patch:         # P0: 실매매 mock 재접속 방지 — OPEN 포지션→        # P0: 실매매 중 mock 재접속 감지.
+       
+- finalize: pending
