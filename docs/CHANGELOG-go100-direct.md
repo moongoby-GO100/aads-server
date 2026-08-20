@@ -22308,3 +22308,202 @@ def
 ## [2026-08-19 20:16:11 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: ## 2026-08-19 19:05 KST — 잔여 미커밋 항목 일괄 반→## 2026-08-19 20:15 KST — 데이터 신선도 P0 복구
 - finalize: pending
+
+## [2026-08-20 07:27:46 KST] [GO100] backend/scripts/go100_probe119_sizing_20260820.py
+- Chat-Direct 수정: write: backend/scripts/go100_probe119_sizing_20260820.py
+- finalize: pending
+
+## [2026-08-20 07:27:46 KST] [GO100] backend/scripts/go100_probe119_sizing_20260820.py
+- Chat-Direct 수정: run_remote_command: PGPASSWORD=KisAuto2026Secure psql -h localhost -U kis_admin -d kisautotrade -t -
+- finalize: pending
+
+## [2026-08-20 07:28:20 KST] [GO100] backend/scripts/go100_probe119_sizing_20260820.py
+- Chat-Direct 수정: write: backend/scripts/go100_probe119_sizing_20260820.py
+- finalize: pending
+
+## [2026-08-20 07:28:45 KST] [GO100] backend/scripts/go100_probe119_sizing_20260820.py
+- Chat-Direct 수정: write: backend/scripts/go100_probe119_sizing_20260820.py
+- finalize: pending
+
+## [2026-08-20 07:41:36 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 else:
+                  →                else:
+                  
+- finalize: pending
+
+## [2026-08-20 07:46:00 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: ## 2026-08-19 20:15 KST — 데이터 신선도 P0 복구 →## 2026-08-20 07:45 KST — #303 전일 이월 포지션
+- finalize: pending
+
+## [2026-08-20 08:28:45 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         elif rtype == "first_wave_exit":→        elif rtype == "first_wave_exit":
+- finalize: pending
+
+## [2026-08-20 08:28:49 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 "first_wave_exit": scalp→                "first_wave_exit": scalp
+- finalize: pending
+
+## [2026-08-20 08:29:06 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         exit_rules_raw = pos_info.pop("e→        exit_rules_raw = pos_info.pop("e
+- finalize: pending
+
+## [2026-08-20 08:29:14 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:     def _evaluate_first_wave_exit(
+     →    def _evaluate_first_wave_exit(
+     
+- finalize: pending
+
+## [2026-08-20 08:42:00 KST] [GO100] backend/app/services/scalping/universe_refresher.py
+- Chat-Direct 수정: patch:                       AND COALESCE(su.is→                      AND NOT (
+        
+- finalize: pending
+
+## [2026-08-20 09:10:41 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch: # Workbench endpoint — 6-stage trading o→# ── 전략 타입 감지 + 동적 컬럼 정의 ───────────────
+- finalize: pending
+
+## [2026-08-20 09:10:41 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: journalctl -u go100 --since "2026-08-20 09:00" --no-pager -n 80
+- finalize: pending
+
+## [2026-08-20 09:10:46 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch: def _stage2_score_rows(
+    rows: list[A→def _stage2_score_rows(
+    rows: list[A
+- finalize: pending
+
+## [2026-08-20 09:11:10 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         if momentum_pct is None:
+       →        if momentum_pct is None:
+       
+- finalize: pending
+
+## [2026-08-20 09:11:15 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         # Buy trigger / distance
+       →        # Buy trigger / distance
+       
+- finalize: pending
+
+## [2026-08-20 09:11:44 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         if momentum_pct is not None and →        if strategy_type == 'limitup_cha
+- finalize: pending
+
+## [2026-08-20 09:12:21 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:     date_clause, date_params = _date_fil→    date_clause, date_params = _date_fil
+- finalize: pending
+
+## [2026-08-20 09:12:27 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:             "rows": _stage2_score_rows(s→            "rows": _stage2_score_rows(s
+- finalize: pending
+
+## [2026-08-20 09:12:50 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         "stages": stages,→        "strategy_type": strategy_type,
+
+- finalize: pending
+
+## [2026-08-20 09:13:06 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         _min_change_pct = float(_card_sp→        _default_min_change = 20.0 if st
+- finalize: pending
+
+## [2026-08-20 09:13:33 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch: from __future__ import annotations
+
+impo→from __future__ import annotations
+
+impo
+- finalize: pending
+
+## [2026-08-20 09:13:33 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: run_remote_command: grep "2026-08-20" /root/kis-autotrade-v4/logs/go100_card119_buyability_loop.log 
+- finalize: pending
+
+## [2026-08-20 09:13:42 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         stages.append({
+            "sta→        stages.append({
+            "sta
+- finalize: pending
+
+## [2026-08-20 09:14:10 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:             "is_paper_filter_applied": i→            "is_paper_filter_applied": i
+- finalize: pending
+
+## [2026-08-20 09:14:14 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: patch:         stages.append({
+            "sta→        stages.append({
+            "sta
+- finalize: pending
+
+## [2026-08-20 09:15:11 KST] [GO100] frontend/src/go100/api/cardTradesApi.ts
+- Chat-Direct 수정: patch:   rows: WorkbenchStageRow[];
+  summary: →  rows: WorkbenchStageRow[];
+  summary: 
+- finalize: pending
+
+## [2026-08-20 09:15:27 KST] [GO100] frontend/src/go100/api/cardTradesApi.ts
+- Chat-Direct 수정: patch: export interface WorkbenchData {
+  check→export interface WorkbenchData {
+  check
+- finalize: pending
+
+## [2026-08-20 09:16:25 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/operations/page.tsx
+- Chat-Direct 수정: patch: function Stage1Table({ rows }: { rows: W→function Stage1Table({ rows, stageColumn
+- finalize: pending
+
+## [2026-08-20 09:16:42 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/operations/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+f='/root/kis-autotrade-v4/frontend/src/app/(protected)/go100/strate
+- finalize: pending
+
+## [2026-08-20 09:16:53 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/operations/page.tsx
+- Chat-Direct 수정: patch: function Stage1Table({ rows }: { rows: W→function Stage1Table({ rows, strategyTyp
+- finalize: pending
+
+## [2026-08-20 09:17:40 KST] [GO100] scripts/patch_stage1_cells.py
+- Chat-Direct 수정: write: scripts/patch_stage1_cells.py
+- finalize: pending
+
+## [2026-08-20 09:17:43 KST] [GO100] scripts/patch_stage1_cells.py
+- Chat-Direct 수정: run_remote_command: sleep 10 && systemctl show go100 --property=ActiveEnterTimestamp,MainPID,ActiveS
+- finalize: pending
+
+## [2026-08-20 09:23:35 KST] [GO100] scripts/patch_dynamic_columns.py
+- Chat-Direct 수정: write: scripts/patch_dynamic_columns.py
+- finalize: pending
+
+## [2026-08-20 09:23:42 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/operations/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && python3 scripts/patch_dynamic_columns.py
+- finalize: pending
+
+## [2026-08-20 09:24:16 KST] [GO100] frontend/src/app/(protected)/go100/strategies/[id]/operations/page.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4/frontend && npx next build 2>&1 | tail -20
+- finalize: pending
+
+## [2026-08-20 10:02:20 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch: def _parse_card_nxt_time_windows(entry_r→def _parse_card_nxt_time_windows(entry_r
+- finalize: pending
+
+## [2026-08-20 10:02:40 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         params = card.get("scalping_para→        params = card.get("scalping_para
+- finalize: pending
+
+## [2026-08-20 10:02:58 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         params = card.get("scalping_para→        params = card.get("scalping_para
+- finalize: pending
+
+## [2026-08-20 10:05:43 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch: _LIMITUP_INTRADAY_EXIT_TYPES = {
+    "ha→_LIMITUP_INTRADAY_EXIT_TYPES = {
+    "ha
+- finalize: pending
+
+## [2026-08-20 10:06:39 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                     exit_rules_for_posit→                    exit_rules_for_posit
+- finalize: pending
+
+## [2026-08-20 10:07:36 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch: _OPENING_LANE_BROAD_MIN_TRADE_VALUE = 2_→_OPENING_LANE_BROAD_MIN_TRADE_VALUE = 2_
+- finalize: pending
+
+## [2026-08-20 10:08:33 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                     sell_generation = in→                    sell_generation = in
+- finalize: pending

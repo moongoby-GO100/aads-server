@@ -5062,3 +5062,44 @@ fro
 
 ## [2026-08-19 20:29:08 KST] [aads-server] tests/unit/test_yeoljeong_finance_service.py
 - saved-password browser-automation 계정도 기본값에서는 서버 collector를 호출하지 않는 회귀 테스트 추가.
+
+## [2026-08-20 08:04:08 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/external/chat",  # 외부 서비스 임→    "/api/v1/external/chat",  # 외부 서비스 임
+
+## [2026-08-20 08:04:47 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:         self.status = "running"
+        →        self.status = "running"
+        
+
+## [2026-08-20 08:04:57 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:                 # ★ AADS 프론트엔드(dashboard→                # ★ AADS 프론트엔드(dashboard
+
+## [2026-08-20 08:05:03 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:             # ★ AADS 프론트엔드(dashboard) 배포→            # ★ AADS 프론트엔드(dashboard) 배포
+
+## [2026-08-20 08:05:11 KST] [aads-server] app/services/pipeline_runner_service.py
+- Chat-Direct 수정: patch:             await self._trigger_ai_react→            await self._trigger_ai_react
+
+## [2026-08-20 08:05:27 KST] [aads-server] app/api/pipeline_runner.py
+- Chat-Direct 수정: patch:         overlap = target_files & existin→        overlap = target_files & existin
+
+## [2026-08-20 08:05:52 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:     # Redis deploy lock 획득 (동시 배포 방지)
+  →    # Redis deploy lock 획득 (동시 배포 방지) — 
+
+## [2026-08-20 08:06:13 KST] [aads-server] app/services/deploy_lock.py
+- Chat-Direct 수정: patch: def shell_acquire_deploy_lock(project: s→def shell_acquire_deploy_lock(project: s
+
+## [2026-08-20 08:06:26 KST] [aads-server] app/api/ops.py
+- Chat-Direct 수정: patch: @router.post("/ops/locks/deploy/release"→@router.post("/ops/locks/deploy/release"
+
+## [2026-08-20 08:12:55 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch: _release_work_lock() {
+    local project→_release_work_lock() {
+    local project
+
+## [2026-08-20 08:13:09 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:     lock_result=$(curl -sf -X POST "${AA→    lock_result=$(curl -sf -X POST -H "X
+
+## [2026-08-20 08:13:19 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:         deploy_lock_result=$(curl -sf -X→        deploy_lock_result=$(curl -sf -X

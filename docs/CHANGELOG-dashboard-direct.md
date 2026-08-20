@@ -1139,3 +1139,9 @@ d='/roo
 
 ## [2026-08-19 17:02:08 KST] [aads-dashboard] public/manager/env_contabo116.json
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git commit -m "fix(chat): dedup 2차 가드 개선 — assistan
+
+## [2026-08-20 10:11:29 KST] [aads-dashboard] public/apps/ably-ad-analyzer/index.html
+- Chat-Direct 수정: run_remote_command: ls -la /root/aads/aads-server/app/services/deploy_lock.py
+
+## [2026-08-20 10:12:55 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: grep -n "dirty" /root/aads/aads-server/scripts/pipeline-runner.sh
