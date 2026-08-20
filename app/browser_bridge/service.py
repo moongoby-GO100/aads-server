@@ -199,6 +199,7 @@ class _LocalAgentPage:
                     if active_result is not None:
                         result = active_result
 
+            result = self._service._coerce_pc_agent_embedded_success(result)
             if result.get("status") == "success":
                 command_result = result.get("result") if isinstance(result, dict) else None
                 data = command_result.get("result") if isinstance(command_result, dict) else None
@@ -572,6 +573,7 @@ class BrowserBridgeService:
                 )
                 if active_routed is not None:
                     routed = active_routed
+        routed = self._coerce_pc_agent_embedded_success(routed)
         if routed.get("status") != "success":
             raise BrowserBridgeError(str(routed.get("message") or routed.get("error_code") or routed))
 
@@ -758,6 +760,30 @@ class BrowserBridgeService:
             combined_detail.setdefault("command_result", nested_detail)
         return error_code, message, combined_detail
 
+    @staticmethod
+    def _coerce_pc_agent_embedded_success(result: dict[str, Any] | None) -> dict[str, Any]:
+        """Accept late PC Agent successes wrapped by a route timeout response.
+
+        route-execute can hit its HTTP/lease timeout just before the PC Agent
+        posts the command result. In that case the wrapper status is error, but
+        the embedded command result is already a valid success payload.
+        """
+        detail = dict(result or {})
+        if str(detail.get("status") or "").lower() == "success":
+            return detail
+        command_result = detail.get("result") if isinstance(detail, dict) else None
+        if not isinstance(command_result, dict):
+            return detail
+        if str(command_result.get("status") or "").lower() != "success":
+            return detail
+        coerced = dict(detail)
+        coerced["status"] = "success"
+        coerced["error_code"] = ""
+        coerced["message"] = ""
+        coerced["late_success_from_error_code"] = str(detail.get("error_code") or "")
+        coerced["result"] = command_result
+        return coerced
+
     def _mark_local_agent_session_healthy(
         self,
         session: BrowserBridgeSession,
@@ -939,14 +965,14 @@ class BrowserBridgeService:
                                 error_code,
                             )
                             continue
-                        return detail
+                        return self._coerce_pc_agent_embedded_success(detail)
                     logger.warning("browser_bridge_active_pc_agent_fallback_http_bad_detail url=%s err=%s", url, exc)
                     continue
                 except (urllib.error.URLError, TimeoutError, OSError) as exc:
                     logger.warning("browser_bridge_active_pc_agent_fallback_failed url=%s err=%s", url, exc)
                     continue
                 try:
-                    return json.loads(raw)
+                    return self._coerce_pc_agent_embedded_success(json.loads(raw))
                 except json.JSONDecodeError as exc:
                     logger.warning("browser_bridge_active_pc_agent_fallback_bad_json url=%s err=%s", url, exc)
                     continue

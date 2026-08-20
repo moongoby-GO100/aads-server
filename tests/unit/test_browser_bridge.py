@@ -353,6 +353,25 @@ def test_active_api_ports_include_blue_green_fallbacks(monkeypatch) -> None:
     assert ports == ["8100", "8102"]
 
 
+def test_pc_agent_timeout_wrapper_with_embedded_success_is_accepted() -> None:
+    result = BrowserBridgeService._coerce_pc_agent_embedded_success(
+        {
+            "status": "error",
+            "error_code": "COMMAND_TIMEOUT",
+            "message": "command timeout",
+            "result": {
+                "status": "success",
+                "result": {"value": {"url": "https://store.coupangeats.com/merchant/login"}},
+            },
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["error_code"] == ""
+    assert result["late_success_from_error_code"] == "COMMAND_TIMEOUT"
+    assert result["result"]["result"]["value"]["url"].endswith("/merchant/login")
+
+
 @pytest.mark.asyncio
 async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) -> None:
     service = BrowserBridgeService()
