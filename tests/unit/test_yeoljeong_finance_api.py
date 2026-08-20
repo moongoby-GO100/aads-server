@@ -350,6 +350,9 @@ async def test_sync_delivery_background_returns_after_queueing(monkeypatch):
             "background": False,
             "sync_job_id": "delivery-sync-test",
             "queued_run_ids": {"baemin": "run-baemin", "yogiyo": "run-yogiyo"},
+            "captcha_value": "",
+            "captcha_values": {},
+            "force_recreate_portal_sessions": False,
         },
         {"email": "owner@example.com", "is_admin": True},
     )]

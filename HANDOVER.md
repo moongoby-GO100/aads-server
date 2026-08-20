@@ -7607,3 +7607,20 @@
 - Remaining:
   - Deploy/restart is still required for the running `yeoljeong-finance-worker` to execute the new ads code.
   - Live portal E2E is blocked until `oby-ceo / 2e9379a1-fed` is executable through the PC Agent route, not just listed as online.
+
+## 2026-08-21 07:40 KST - Yeoljeong bank/delivery deploy verification
+
+- Request: Commit, push, and deploy the store assistant bank connection / auto-collection changes, then report with verification.
+- Finding:
+  - `main` matched `origin/main` at `6eb15fee` before the verification fix; no bank feature diff was pending.
+  - Mounted-container regression initially showed 210 passed and 1 failed because `tests/unit/test_yeoljeong_finance_api.py::test_sync_delivery_background_returns_after_queueing` expected an older background payload shape.
+- Changes:
+  - Updated the background delivery sync unit test expectation to include current `SyncPayload` defaults: `captcha_value`, `captcha_values`, and `force_recreate_portal_sessions`.
+- Verification:
+  - `git diff --check` succeeded before this entry.
+  - `docker inspect yeoljeong-finance --format '{{.State.Health.Status}} {{.State.StartedAt}} {{.Config.Image}}'` reported `healthy` for image `aads-server-yeoljeong-finance`.
+  - `curl -sS -o /tmp/yeoljeong_health.out -w '%{http_code}' http://127.0.0.1:8110/health/live` returned `200`.
+  - Unauthenticated `GET /api/v1/yeoljeong-finance/bank-accounts` returned `401`, confirming auth protection on the deployed bank account API.
+- Remaining:
+  - Re-run the mounted-container bank/delivery regression after this test expectation fix, then commit/push if green.
+  - Browser E2E with actual bank credentials remains blocked until CEO enters bank connection settings and PC Agent/browser session is available.
