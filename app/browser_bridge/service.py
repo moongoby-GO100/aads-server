@@ -808,12 +808,12 @@ class BrowserBridgeService:
                 deduped_urls.append(url)
 
         def _post() -> dict[str, Any] | None:
-            body = json.dumps(payload).encode("utf-8")
             request_timeout_seconds = max(
                 10.0,
                 min(300.0, float(queue_wait_timeout_seconds) + float(command_timeout_seconds) + 5.0),
             )
             for url in deduped_urls:
+                body = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(
                     url,
                     data=body,
@@ -834,6 +834,34 @@ class BrowserBridgeService:
                     if isinstance(detail, dict):
                         error_code = str(detail.get("error_code") or "")
                         if error_code in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+                            fallback_agent_id = ""
+                            if not agent_id and error_code == "PC_AGENT_OFFLINE":
+                                fallback_agent_id = self._active_api_online_agent_id_for_route_url(
+                                    url,
+                                    required_capabilities,
+                                    request_timeout_seconds,
+                                )
+                            if fallback_agent_id:
+                                retry_payload = dict(payload)
+                                retry_payload["agent_id"] = fallback_agent_id
+                                retry_req = urllib.request.Request(
+                                    url,
+                                    data=json.dumps(retry_payload).encode("utf-8"),
+                                    headers={"Content-Type": "application/json"},
+                                    method="POST",
+                                )
+                                try:
+                                    with urllib.request.urlopen(retry_req, timeout=request_timeout_seconds) as resp:
+                                        retry_raw = resp.read().decode("utf-8")
+                                    return json.loads(retry_raw)
+                                except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as retry_exc:
+                                    logger.warning(
+                                        "browser_bridge_active_pc_agent_fallback_online_agent_retry_failed "
+                                        "url=%s agent_id=%s err=%s",
+                                        url,
+                                        fallback_agent_id,
+                                        retry_exc,
+                                    )
                             logger.warning(
                                 "browser_bridge_active_pc_agent_fallback_route_unavailable url=%s error_code=%s",
                                 url,
@@ -854,6 +882,46 @@ class BrowserBridgeService:
             return None
 
         return await asyncio.to_thread(_post)
+
+    @classmethod
+    def _active_api_online_agent_id_for_route_url(
+        cls,
+        route_url: str,
+        required_capabilities: list[str],
+        timeout_seconds: float,
+    ) -> str:
+        """Find an online browser-capable PC Agent from the active API status endpoint.
+
+        Sidecar services do not own the websocket registry. If the active AADS API
+        has an offline pinned default browser agent, route-execute can reject an
+        otherwise valid browser request. In that case, retry against an explicitly
+        online interactive browser agent exposed by the same API instance.
+        """
+        status_url = str(route_url).replace("/route-execute", "/status")
+        required = {str(cap or "").strip().lower() for cap in required_capabilities if str(cap or "").strip()}
+        try:
+            with urllib.request.urlopen(status_url, timeout=max(5.0, min(15.0, timeout_seconds))) as resp:
+                raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("browser_bridge_active_pc_agent_status_failed url=%s err=%s", status_url, exc)
+            return ""
+
+        agents = data.get("agents") if isinstance(data, dict) else []
+        if not isinstance(agents, list):
+            return ""
+        candidates: list[dict[str, Any]] = []
+        for item in agents:
+            if not isinstance(item, dict) or str(item.get("status") or "").lower() != "online":
+                continue
+            capabilities = {str(cap or "").strip().lower() for cap in (item.get("capabilities") or [])}
+            if required and not required.issubset(capabilities):
+                continue
+            agent_id = str(item.get("agent_id") or "").strip()
+            if agent_id:
+                candidates.append(item)
+        candidates.sort(key=lambda item: float(item.get("heartbeat_age_seconds") or 999999))
+        return str(candidates[0].get("agent_id") or "").strip() if candidates else ""
 
     @classmethod
     def _active_api_ports(cls) -> list[str]:
