@@ -433,7 +433,7 @@ async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_active_api_fallback_retries_online_agent_when_pinned_default_offline(monkeypatch) -> None:
+async def test_active_api_fallback_does_not_retry_online_agent_when_pinned_default_offline(monkeypatch) -> None:
     service = BrowserBridgeService()
     calls: list[tuple[str, str]] = []
 
@@ -500,6 +500,96 @@ async def test_active_api_fallback_retries_online_agent_when_pinned_default_offl
                             "status": "error",
                             "error_code": "PC_AGENT_OFFLINE",
                             "message": "default browser PC agent 'offline-default' is offline",
+                        }
+                    }
+                ).encode("utf-8")
+            ),
+        )
+
+    monkeypatch.setattr(service_module.urllib.request, "urlopen", fake_urlopen)
+
+    result = await service._execute_pc_agent_route_via_active_api(
+        command_type="browser_launch",
+        params={"url": "about:blank"},
+        agent_id="",
+        job_type="browser_bridge_launch",
+        required_capabilities=["interactive_browser"],
+    )
+
+    assert result is None
+    assert calls
+    assert all(method_or_agent == "" for _url, method_or_agent in calls)
+    assert all(not url.endswith("/status") for url, _method_or_agent in calls)
+
+
+@pytest.mark.asyncio
+async def test_active_api_fallback_retries_online_agent_for_generic_offline_route(monkeypatch) -> None:
+    service = BrowserBridgeService()
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_active_api_ports",
+        classmethod(lambda cls: ["8102"]),
+    )
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_docker_default_gateway_hosts",
+        staticmethod(lambda: []),
+    )
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_active_container_name",
+        staticmethod(lambda: ""),
+    )
+
+    class FakeResponse:
+        def __init__(self, body: dict[str, Any]):
+            self._body = json.dumps(body).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001, ARG001
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if url.endswith("/status"):
+            calls.append((url, "GET"))
+            return FakeResponse(
+                {
+                    "agents": [
+                        {
+                            "agent_id": "online-browser-agent",
+                            "status": "online",
+                            "heartbeat_age_seconds": 1.0,
+                            "capabilities": ["interactive_browser", "chrome_cdp"],
+                        }
+                    ]
+                }
+            )
+
+        body = json.loads(req.data.decode("utf-8"))
+        calls.append((url, str(body.get("agent_id") or "")))
+        if body.get("agent_id") == "online-browser-agent":
+            return FakeResponse({"status": "success", "lease": {"agent_id": "online-browser-agent"}})
+
+        raise urllib.error.HTTPError(
+            url,
+            503,
+            "Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "status": "error",
+                            "error_code": "PC_AGENT_OFFLINE",
+                            "message": "no online PC agent",
                         }
                     }
                 ).encode("utf-8")

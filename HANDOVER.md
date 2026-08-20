@@ -1,5 +1,46 @@
 # AADS HANDOVER
 
+## 2026-08-20 18:16 KST - Browser Bridge default PC fallback guard
+
+- Trigger: CEO requested verification that browser/PC Agent tests run only on `DESKTOP-TBKF5M3`, with no PC Agent session mixing, correct browser reuse, and delayed/completed browser cleanup.
+- Findings:
+  - `device_list(device_type=pc)` and live API checks showed only `DESKTOP-TNO85R8` online; requested default PC `aad74f71-e6b` / `DESKTOP-TBKF5M3` was not online.
+  - Direct `route-execute` on the active PC Agent API correctly returned `PC_AGENT_OFFLINE` for `default browser PC agent 'aad74f71-e6b' is offline`, so browser work did not silently execute on `DESKTOP-TNO85R8`.
+  - The Browser Bridge active-API fallback path could still retry a generic online browser-capable agent when it saw `PC_AGENT_OFFLINE`, which allowed MCP `browser_connect.ensure_work_session` to leave `browser_bridge_launch` leases on `DESKTOP-TNO85R8`.
+- Changes:
+  - `app/browser_bridge/service.py`: added `_pc_agent_offline_error_allows_online_retry()` and blocked online-agent retry when the active API error represents a configured default browser PC boundary.
+  - `tests/unit/test_browser_bridge.py`: changed the pinned-default-offline regression test to assert no `/status` lookup and no online-agent retry, while preserving a separate generic-offline fallback test.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py -q` passed: 45 passed.
+  - `python3 -m py_compile app/browser_bridge/service.py tests/unit/test_browser_bridge.py` passed.
+  - Stray local pytest processes that were creating browser launch leases were terminated by PID.
+  - Final recheck at 18:18 KST still showed a new running `browser_bridge_launch` lease on `DESKTOP-TNO85R8`; this was linked to separate active Runner `runner-8bc0045b`, not the local pytest process.
+- Deployment status:
+  - No commit, push, restart, or deploy was performed.
+  - Existing unrelated dirty files were preserved.
+
+## 2026-08-20 17:54 KST - Pipeline Runner terminal PID cleanup hotfix
+
+- Trigger: automatic alert reported `runner-0afd8872` changed to `cancelled`.
+- Finding:
+  - `runner-0afd8872` was a benign `no_changes` cancellation with `24/24 bank tests PASSED`.
+  - The parent chain root `runner-5032b6be` was already `error`, but its local `pipeline-runner.sh` wrapper and child `claude` process were still alive.
+  - `terminate_task(runner-5032b6be)` returned `already_finished`, so it did not clean the live PID.
+- Immediate operation:
+  - Terminated stale PIDs `3545773`, `3722338`, and wrapper `3544658`.
+  - Rechecked with `ps -fp`; all targeted PIDs were gone.
+  - Cleared stale `pipeline_jobs.runner_pid` for `runner-5032b6be` with `db_safe_write`: `UPDATE 1`, table count unchanged.
+  - `health_check(server=68)` returned `HEALTHY`, DB ok, pipeline stalled 0, running sessions 0.
+- Changes:
+  - `app/services/tool_executor.py`: `terminate_task` now checks `runner_pid` before returning `already_finished`; for local AADS runner PIDs it sends SIGTERM to the process tree, clears `runner_pid`, and reports `process_cleanup`.
+  - `tests/unit/test_tools_and_pipeline.py`: added regression coverage so terminal `error/cancelled` jobs do not skip stale PID cleanup.
+- Verification:
+  - `python3 -m py_compile app/services/tool_executor.py tests/unit/test_tools_and_pipeline.py` passed.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_tools_and_pipeline.py -k 'terminate_task' -q` passed: 1 passed, 55 deselected.
+- Deployment status:
+  - No commit, push, restart, or deploy was performed in this step.
+  - Existing unrelated dirty file preserved: `docs/CHANGELOG-direct-edit.md`.
+
 ## 2026-08-20 17:10 KST - Runner deploy preflight git-state recovery
 
 - Trigger: Pipeline Runner `runner-517f8a7a` failed with `deploy_preflight_git_state`; automatic alert reported `behind=0, ahead=4`.

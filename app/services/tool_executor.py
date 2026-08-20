@@ -61,6 +61,49 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
             return False
     return bool(value)
 
+
+def _local_pid_alive(pid: Any) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (PermissionError, ValueError, TypeError):
+        return False
+
+
+def _terminate_local_process_tree(pid: Any) -> Dict[str, Any]:
+    """Best-effort SIGTERM for a local runner wrapper and its children."""
+    try:
+        root_pid = int(pid)
+    except (ValueError, TypeError):
+        return {"pid": pid, "terminated": False, "reason": "invalid_pid"}
+
+    descendants: list[int] = []
+    queue = [root_pid]
+    while queue:
+        current = queue.pop(0)
+        children_path = f"/proc/{current}/task/{current}/children"
+        try:
+            with open(children_path, "r", encoding="utf-8") as f:
+                children = [int(x) for x in f.read().split() if x.strip()]
+        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+            children = []
+        descendants.extend(children)
+        queue.extend(children)
+
+    targets = list(dict.fromkeys(list(reversed(descendants)) + [root_pid]))
+    signaled: list[int] = []
+    for target in targets:
+        try:
+            os.kill(target, 15)
+            signaled.append(target)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            return {"pid": root_pid, "terminated": False, "reason": "permission_denied", "signaled": signaled}
+    return {"pid": root_pid, "terminated": bool(signaled), "signaled": signaled}
+
 # Pipeline Runner 등에서 현재 채팅 세션 ID를 도구에 전달하기 위한 컨텍스트 변수
 current_chat_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_chat_session_id", default=""
@@ -3312,14 +3355,26 @@ class ToolExecutor:
             async with pool.acquire() as conn:
                 # Pipeline Runner (pipeline_jobs)
                 row = await conn.fetchrow(
-                    "SELECT job_id, status, phase, project FROM pipeline_jobs WHERE job_id = $1",
+                    "SELECT job_id, status, phase, project, runner_pid FROM pipeline_jobs WHERE job_id = $1",
                     task_id,
                 )
                 if row:
-                    if row["status"] in ("done", "error", "rejected"):
-                        return {"task_id": task_id, "result": "already_finished", "status": row["status"]}
+                    pid_cleanup = None
+                    runner_pid = row["runner_pid"]
+                    if row["project"] == "AADS" and runner_pid and _local_pid_alive(runner_pid):
+                        pid_cleanup = _terminate_local_process_tree(runner_pid)
+                        await conn.execute(
+                            "UPDATE pipeline_jobs SET runner_pid=NULL, "
+                            "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
+                            task_id, f"\n[terminate_task] stale local runner_pid={runner_pid} cleanup={pid_cleanup}",
+                        )
+                    if row["status"] in ("done", "error", "rejected", "rejected_done", "cancelled"):
+                        result = {"task_id": task_id, "result": "already_finished", "status": row["status"]}
+                        if pid_cleanup is not None:
+                            result["process_cleanup"] = pid_cleanup
+                        return result
                     await conn.execute(
-                        "UPDATE pipeline_jobs SET status='error', phase='error', "
+                        "UPDATE pipeline_jobs SET status='error', phase='error', runner_pid=NULL, "
                         "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
                         task_id, f" | 강제종료: {reason}",
                     )
@@ -3327,7 +3382,10 @@ class ToolExecutor:
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
                     asyncio.create_task(emit_task_completed(task_id, "error"))
-                    return {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
+                    result = {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
+                    if pid_cleanup is not None:
+                        result["process_cleanup"] = pid_cleanup
+                    return result
 
                 # Pipeline B (directive_lifecycle) — id is INTEGER
                 try:

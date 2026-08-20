@@ -725,6 +725,21 @@ class BrowserBridgeService:
         session.mark_used()
         self.sessions.touch(session)
 
+    @staticmethod
+    def _pc_agent_offline_error_allows_online_retry(detail: dict[str, Any]) -> bool:
+        """Allow active-peer retry only for generic offline routing failures.
+
+        A configured default browser PC is a safety boundary. If the active API
+        reports that the default browser PC is offline, retrying another online
+        agent would open CEO/browser workflows on the wrong desktop.
+        """
+        message = str(detail.get("message") or "").strip().lower()
+        if "default browser pc agent" in message:
+            return False
+        if detail.get("default_agent_id") or detail.get("default_hostname"):
+            return False
+        return True
+
     async def _recover_local_agent_session(
         self,
         session: BrowserBridgeSession,
@@ -835,7 +850,11 @@ class BrowserBridgeService:
                         error_code = str(detail.get("error_code") or "")
                         if error_code in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
                             fallback_agent_id = ""
-                            if not agent_id and error_code == "PC_AGENT_OFFLINE":
+                            if (
+                                not agent_id
+                                and error_code == "PC_AGENT_OFFLINE"
+                                and self._pc_agent_offline_error_allows_online_retry(detail)
+                            ):
                                 fallback_agent_id = self._active_api_online_agent_id_for_route_url(
                                     url,
                                     required_capabilities,
