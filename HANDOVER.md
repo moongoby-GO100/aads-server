@@ -1,5 +1,29 @@
 # AADS HANDOVER
 
+## 2026-08-20 09:18 KST - Managed Browser session ownership and PC Agent cleanup
+
+- Request: Apply the recommended Managed Browser session binding fix immediately, and check the suspected PC memory issue caused by browser windows remaining open after PC Agent work completes.
+- Changes:
+  - `app/services/managed_browser.py`: changed managed browser profile identity from `work_key + full target_url` to `work_key + origin`, so the same service reuses a stable profile across paths.
+  - `app/api/browser_tasks.py` and dashboard `/browser-tasks`: browser tasks can now carry `session_id` from request body, query, or chat-session headers, and the dashboard form preserves `?session_id=...`.
+  - `app/services/browser_task_gateway.py`: terminal task states (`completed`, `failed`, `cancelled`) trigger best-effort browser cleanup unless result has `keep_browser_open=true` or `browser_cleanup=false`.
+  - `pc_agent/commands/browser_auto.py`: added `browser_close_session` to close CDP tabs, release guards/session registry, and terminate the launched Chrome PID when available.
+  - `app/services/pc_agent_manager.py`: browser route commands support optional `close_on_complete=true`; old agents fall back to `browser_health(cleanup=true)`.
+- Verification:
+  - `python3 -m py_compile ...` for changed backend/PC Agent/test files succeeded.
+  - `docker exec aads-server python -m pytest -q tests/unit/test_browser_task_policy.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_cdp_session_manager.py` passed: 36 passed.
+  - Dashboard `npx eslint src/app/browser-tasks/page.tsx` and `npx tsc --noEmit --pretty false` passed.
+  - Backend `deploy.sh bluegreen` succeeded; active backend moved to `:8102`; health, DB schema, chat table, and LLM checks passed.
+  - Dashboard `deploy.sh` succeeded; active dashboard slot is `blue`; `/browser-tasks?session_id=test-session` returns protected-route 307 to login.
+  - PC Agent status on active backend reports 1 online agent with `browser_close_session` in `command_types`.
+  - Smoke test `POST /api/v1/pc-agent/route-execute` with nonexistent `work_key` and `command_type=browser_close_session` returned success with `session_released=false`.
+- Commits/push:
+  - Server commit `abd8b382 feat(pc-agent): cleanup managed browser sessions` pushed to origin/main. Existing local commits `71ec1899` and `a0108717` were also pushed during the same `git push`.
+  - Dashboard commit `43886c3 feat(browser-tasks): attach chat session to tasks` pushed to dashboard main.
+- Remaining:
+  - No authenticated real browser-work E2E was run against an active user task; only safe nonexistent-work_key cleanup smoke was executed.
+  - Server worktree still has unrelated dirty docs `docs/CHANGELOG-direct-edit.md` and `docs/CHANGELOG-go100-direct.md`.
+
 ## 2026-08-20 07:43 KST - Agent Vault credential edit/delete production verification
 
 - Request: Continue interrupted Agent Vault edit/delete deployment and verify production state.
