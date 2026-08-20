@@ -1,0 +1,39 @@
+# AADS Crontab for Server5 (Contabo) — Phase0 Migration from Server68
+# Installed: 2026-05-11 by AADS PM/CTO
+# Updated: 2026-08-20 — container watchdog 등록 (Blue/Green 동시 다운 재발 방지)
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin
+
+# AADS 호스트 Watchdog — 5분마다 자동복구
+# DISABLED_20260605_TELEGRAM_SPAM */5 * * * * /root/aads/aads-server/watchdog-host.sh >> /var/log/aads-watchdog-host.log 2>&1
+
+# AADS 디스크 자동 정리 — 매일 04:00
+0 4 * * * /root/aads/scripts/disk_cleanup.sh >> /var/log/aads-disk-cleanup.log 2>&1
+
+# AADS 외부 ping 모니터 — 5분마다
+# DISABLED_20260605_TELEGRAM_SPAM */5 * * * * /root/aads/scripts/external_ping.sh >> /var/log/aads-external-ping.log 2>&1
+
+# 211서버 감시 — 5분마다
+# DISABLED_20260605_TELEGRAM_SPAM */5 * * * * /root/aads/scripts/watch_211.sh >> /var/log/aads-watch-211.log 2>&1
+
+# 114서버 감시 — 5분마다
+# DISABLED_20260605_TELEGRAM_SPAM */5 * * * * /root/aads/scripts/watch_114.sh >> /var/log/aads-watch-114.log 2>&1
+
+# AADS 코드 변경 문법검증 — 5분마다 (변경 없으면 스킵)
+*/5 * * * * /root/aads/aads-server/scripts/pre_deploy_validate.sh >> /var/log/aads-validate.log 2>&1
+
+# AADS Blue/Green 컨테이너 와치독 — 5분마다 데몬 생존 확인 후 재기동 (2026-08-20 인시던트 재발 방지)
+*/5 * * * * /root/aads/aads-server/scripts/container_watchdog_cron.sh >> /var/log/aads-container-watchdog-cron.log 2>&1
+
+# Claude 전서버 업데이트 — 매일 04:00
+0 4 * * * /root/aads/aads-server/scripts/update_claude_all_servers.sh >> /var/log/claude_update.log 2>&1
+
+# Docker 빌드캐시 주간 정리 (일요일 04:00)
+0 4 * * 0 docker system prune -f >> /var/log/docker_disk_cleanup.log 2>&1
+
+# Docker 디스크 사용량 월간 모니터 (매월 1일 05:00)
+0 5 1 * * docker system df >> /var/log/docker_disk_cleanup.log 2>&1
+
+
+# GO100 #119 상따 실매매 감시 — 2026-08-03 KST only; wrapper handles KST window.
+*/5 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 5m-check >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_5M
+5-59/10 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 10m-report --chat >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_10M
