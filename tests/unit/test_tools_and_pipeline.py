@@ -524,6 +524,17 @@ class TestRegressions:
         src = inspect.getsource(ToolExecutor._terminate_task)
         assert "_int_id" in src and "ValueError" in src
 
+    def test_terminate_task_cleans_terminal_runner_pid(self):
+        """error/cancelled 상태여도 살아있는 로컬 runner_pid를 정리."""
+        import inspect
+        from app.services.tool_executor import ToolExecutor
+
+        src = inspect.getsource(ToolExecutor._terminate_task)
+        assert "runner_pid" in src
+        assert "_local_pid_alive" in src
+        assert "_terminate_local_process_tree" in src
+        assert "\"cancelled\"" in src
+
     def test_streaming_status_checks_db_placeholder(self):
         """streaming-status가 DB placeholder도 확인."""
         import inspect
