@@ -707,6 +707,53 @@ async def test_ensure_pc_agent_cdp_falls_back_to_active_api_when_no_local_agent(
 
 
 @pytest.mark.asyncio
+async def test_ensure_pc_agent_cdp_sidecar_routes_active_api_first(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    async def fail_local_execute(**_kwargs):
+        raise AssertionError("sidecar worker should not wait on the local PC Agent manager")
+
+    active_calls: list[dict] = []
+
+    async def fake_active_execute(**kwargs):
+        active_calls.append(kwargs)
+        return {
+            "status": "success",
+            "lease": {"agent_id": "oby-ceo"},
+            "result": {
+                "result": {
+                    "port": 9666,
+                    "user_data_dir": "C:/AADS/chrome/yeoljeong",
+                    "websocket_debugger_url": "ws://127.0.0.1:9666/devtools/browser/test",
+                }
+            },
+        }
+
+    monkeypatch.setenv("AADS_SERVICE_ROLE", "yeoljeong-finance-worker")
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fail_local_execute)
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_active_execute)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        label="Yeoljeong Coupang",
+        url="https://store.coupangeats.com/",
+        work_key="yeoljeong-delivery-coupangeats-biz-mia-test",
+    )
+
+    assert active_calls
+    assert active_calls[0]["command_type"] == "browser_launch"
+    assert active_calls[0]["queue_wait_timeout_seconds"] == 60
+    assert active_calls[0]["command_timeout_seconds"] == 180
+    assert session.endpoint.metadata["agent_id"] == "oby-ceo"
+    assert session.endpoint.metadata["port"] == "9666"
+
+
+@pytest.mark.asyncio
 async def test_ensure_pc_agent_cdp_force_recreate_uses_fresh_isolation_profile(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
@@ -826,6 +873,55 @@ async def test_local_agent_commands_fallback_to_active_api(monkeypatch, tmp_path
     assert active_calls[0]["queue_wait_timeout_seconds"] == 60
     assert active_calls[0]["command_timeout_seconds"] == 180
     assert active_calls[0]["lease_ttl_seconds"] == 210
+
+
+@pytest.mark.asyncio
+async def test_local_agent_commands_sidecar_route_active_api_first(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="CEO PC Chrome",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "oby-ceo",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        activate=True,
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    async def fail_local_execute(**_kwargs):
+        raise AssertionError("sidecar worker should not wait on the local PC Agent manager")
+
+    active_calls: list[dict] = []
+
+    async def fake_active_execute(**kwargs):
+        active_calls.append(kwargs)
+        return {
+            "status": "success",
+            "lease": {"agent_id": "oby-ceo"},
+            "result": {"result": {"ok": True}},
+        }
+
+    monkeypatch.setenv("AADS_SERVICE_ROLE", "yeoljeong-finance-worker")
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fail_local_execute)
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_active_execute)
+
+    context, error = await service.acquire_playwright_context(session_id=session.session_id)
+
+    assert error is None
+    await context.pages[0].goto("https://store.coupangeats.com/")
+    assert active_calls[0]["command_type"] == "browser_navigate"
+    assert active_calls[0]["agent_id"] == "oby-ceo"
+    assert active_calls[0]["params"].get("work_key", "") == ""
+    assert active_calls[0]["queue_wait_timeout_seconds"] == 60
+    assert active_calls[0]["command_timeout_seconds"] == 180
 
 
 @pytest.mark.asyncio

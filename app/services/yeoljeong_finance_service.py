@@ -4939,33 +4939,50 @@ async def _close_delivery_browser_work_session_async(
                 "reason": reason,
                 "command_timeout_seconds": 10,
             }
-            close_result = await pc_agent_manager.execute_routed_command(
-                command_type="browser_close_session",
-                params=close_params,
-                agent_id=agent_id,
-                job_type=f"browser_bridge_cleanup_{session_id or close_work_key}",
-                required_capabilities=["interactive_browser"],
-                queue_if_busy=True,
-                wait_for_turn=True,
-                queue_wait_timeout_seconds=10,
-                lease_ttl_seconds=30,
-                command_timeout_seconds=10,
+            cleanup_job_type = f"browser_bridge_cleanup_{session_id or close_work_key}"
+            route_first = bool(
+                getattr(bridge, "_route_pc_agent_via_active_api_first", lambda: False)()
             )
-            if (
-                isinstance(close_result, dict)
-                and close_result.get("status") != "success"
-                and str(close_result.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
-            ):
-                await bridge._execute_pc_agent_route_via_active_api(
+            close_result: dict[str, Any] | None = None
+            if route_first:
+                close_result = await bridge._execute_pc_agent_route_via_active_api(
                     command_type="browser_close_session",
                     params=close_params,
                     agent_id=agent_id,
-                    job_type=f"browser_bridge_cleanup_{session_id or close_work_key}",
+                    job_type=cleanup_job_type,
                     required_capabilities=["interactive_browser"],
                     queue_wait_timeout_seconds=10,
                     lease_ttl_seconds=30,
                     command_timeout_seconds=10,
                 )
+            if not route_first or close_result is None:
+                close_result = await pc_agent_manager.execute_routed_command(
+                    command_type="browser_close_session",
+                    params=close_params,
+                    agent_id=agent_id,
+                    job_type=cleanup_job_type,
+                    required_capabilities=["interactive_browser"],
+                    queue_if_busy=True,
+                    wait_for_turn=True,
+                    queue_wait_timeout_seconds=10,
+                    lease_ttl_seconds=30,
+                    command_timeout_seconds=10,
+                )
+                if (
+                    isinstance(close_result, dict)
+                    and close_result.get("status") != "success"
+                    and str(close_result.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
+                ):
+                    await bridge._execute_pc_agent_route_via_active_api(
+                        command_type="browser_close_session",
+                        params=close_params,
+                        agent_id=agent_id,
+                        job_type=cleanup_job_type,
+                        required_capabilities=["interactive_browser"],
+                        queue_wait_timeout_seconds=10,
+                        lease_ttl_seconds=30,
+                        command_timeout_seconds=10,
+                    )
         if session_id:
             bridge.sessions.retire_session(
                 session_id,

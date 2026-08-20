@@ -1391,6 +1391,68 @@ def test_sync_delivery_closes_pc_agent_session_when_marked_complete(tmp_path, mo
     assert closed == [("bb-pc-agent", "delivery_sync_result_baemin")]
 
 
+@pytest.mark.asyncio
+async def test_close_delivery_browser_session_sidecar_routes_active_api_first(monkeypatch):
+    class FakeEndpoint:
+        metadata = {
+            "agent_id": "oby-ceo",
+            "work_key": "yeoljeong-delivery-coupangeats-biz-mia-test",
+        }
+
+    class FakeSession:
+        endpoint = FakeEndpoint()
+
+    class FakeSessions:
+        def __init__(self):
+            self.retired = []
+
+        def get(self, session_id):
+            return FakeSession() if session_id == "bb-worker" else None
+
+        def retire_session(self, session_id, **kwargs):
+            self.retired.append((session_id, kwargs))
+            return FakeSession()
+
+    class FakeBridge:
+        def __init__(self):
+            self.sessions = FakeSessions()
+            self.active_calls = []
+
+        def _route_pc_agent_via_active_api_first(self):
+            return True
+
+        async def _execute_pc_agent_route_via_active_api(self, **kwargs):
+            self.active_calls.append(kwargs)
+            return {"status": "success"}
+
+    fake_bridge = FakeBridge()
+
+    import app.browser_bridge.service as bridge_service
+    from app.services import pc_agent_manager as manager_module
+
+    async def fail_local_execute(**_kwargs):
+        raise AssertionError("sidecar cleanup should not wait on local PC Agent manager")
+
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fail_local_execute)
+
+    await service._close_delivery_browser_work_session_async(
+        {
+            "browser_close_on_complete": "1",
+            "browser_session_id": "bb-worker",
+            "browser_work_key": "yeoljeong-delivery-coupangeats-biz-mia-test",
+            "browser_agent_id": "oby-ceo",
+        },
+        reason="delivery_sync_result_coupangeats",
+    )
+
+    assert fake_bridge.active_calls
+    assert fake_bridge.active_calls[0]["command_type"] == "browser_close_session"
+    assert fake_bridge.active_calls[0]["agent_id"] == "oby-ceo"
+    assert fake_bridge.active_calls[0]["params"]["close_browser"] is True
+    assert fake_bridge.sessions.retired[0][0] == "bb-worker"
+
+
 def test_sync_delivery_uses_pc_agent_session_for_all_delivery_services(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     services = ["coupangeats", "yogiyo", "ddangyo"]

@@ -50,6 +50,9 @@ LOCAL_AGENT_JS_COMMANDS = {
     "browser_get_text",
     "browser_eval",
 }
+SIDECAR_SERVICE_ROLES = {
+    "yeoljeong-finance-worker",
+}
 
 
 def normalize_work_key(work_key: str) -> str:
@@ -138,19 +141,7 @@ class _LocalAgentPage:
                 merged.setdefault("evaluate_timeout_seconds", max(1.0, min(60.0, command_timeout_seconds - 0.5)))
 
             lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
-            result = await pc_agent_manager.execute_routed_command(
-                command_type=command_type,
-                params=merged,
-                agent_id=self._agent_id,
-                job_type=f"browser_bridge_{self._session.session_id}",
-                required_capabilities=["interactive_browser"],
-                queue_if_busy=True,
-                wait_for_turn=True,
-                queue_wait_timeout_seconds=queue_wait_timeout_seconds,
-                lease_ttl_seconds=lease_ttl_seconds,
-                command_timeout_seconds=command_timeout_seconds,
-            )
-            if result.get("status") != "success" and str(result.get("error_code") or "") == "PC_AGENT_OFFLINE":
+            if self._service._route_pc_agent_via_active_api_first():
                 active_result = await self._service._execute_pc_agent_route_via_active_api(
                     command_type=command_type,
                     params=merged,
@@ -161,8 +152,37 @@ class _LocalAgentPage:
                     lease_ttl_seconds=lease_ttl_seconds,
                     command_timeout_seconds=command_timeout_seconds,
                 )
-                if active_result is not None:
-                    result = active_result
+                result = active_result or {
+                    "status": "error",
+                    "error_code": "PC_AGENT_ROUTE_UNAVAILABLE",
+                    "message": "active AADS API PC Agent route unavailable",
+                }
+            else:
+                result = await pc_agent_manager.execute_routed_command(
+                    command_type=command_type,
+                    params=merged,
+                    agent_id=self._agent_id,
+                    job_type=f"browser_bridge_{self._session.session_id}",
+                    required_capabilities=["interactive_browser"],
+                    queue_if_busy=True,
+                    wait_for_turn=True,
+                    queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+                if result.get("status") != "success" and str(result.get("error_code") or "") == "PC_AGENT_OFFLINE":
+                    active_result = await self._service._execute_pc_agent_route_via_active_api(
+                        command_type=command_type,
+                        params=merged,
+                        agent_id=self._agent_id,
+                        job_type=f"browser_bridge_{self._session.session_id}",
+                        required_capabilities=["interactive_browser"],
+                        queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+                        lease_ttl_seconds=lease_ttl_seconds,
+                        command_timeout_seconds=command_timeout_seconds,
+                    )
+                    if active_result is not None:
+                        result = active_result
 
             if result.get("status") == "success":
                 command_result = result.get("result") if isinstance(result, dict) else None
@@ -498,28 +518,45 @@ class BrowserBridgeService:
                 f"{normalized_work_key[:90]}-{recreate_suffix}" if force_recreate and recreate_suffix else normalized_work_key
             )
 
-        routed = await pc_agent_manager.execute_routed_command(
-            command_type="browser_launch",
-            params=launch_params,
-            agent_id=agent_id,
-            job_type="browser_bridge_launch",
-            required_capabilities=["interactive_browser"],
-            queue_if_busy=True,
-            wait_for_turn=True,
-            queue_wait_timeout_seconds=120,
-            lease_ttl_seconds=240,
-            command_timeout_seconds=180,
-        )
-        if routed.get("status") != "success" and str(routed.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+        if self._route_pc_agent_via_active_api_first():
             active_routed = await self._execute_pc_agent_route_via_active_api(
                 command_type="browser_launch",
                 params=launch_params,
                 agent_id=agent_id,
                 job_type="browser_bridge_launch",
                 required_capabilities=["interactive_browser"],
+                queue_wait_timeout_seconds=60,
+                lease_ttl_seconds=210,
+                command_timeout_seconds=180,
             )
-            if active_routed is not None:
-                routed = active_routed
+            routed = active_routed or {
+                "status": "error",
+                "error_code": "PC_AGENT_ROUTE_UNAVAILABLE",
+                "message": "active AADS API PC Agent route unavailable",
+            }
+        else:
+            routed = await pc_agent_manager.execute_routed_command(
+                command_type="browser_launch",
+                params=launch_params,
+                agent_id=agent_id,
+                job_type="browser_bridge_launch",
+                required_capabilities=["interactive_browser"],
+                queue_if_busy=True,
+                wait_for_turn=True,
+                queue_wait_timeout_seconds=120,
+                lease_ttl_seconds=240,
+                command_timeout_seconds=180,
+            )
+            if routed.get("status") != "success" and str(routed.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+                active_routed = await self._execute_pc_agent_route_via_active_api(
+                    command_type="browser_launch",
+                    params=launch_params,
+                    agent_id=agent_id,
+                    job_type="browser_bridge_launch",
+                    required_capabilities=["interactive_browser"],
+                )
+                if active_routed is not None:
+                    routed = active_routed
         if routed.get("status") != "success":
             raise BrowserBridgeError(str(routed.get("message") or routed.get("error_code") or routed))
 
@@ -901,6 +938,16 @@ class BrowserBridgeService:
             return None
 
         return await asyncio.to_thread(_post)
+
+    @staticmethod
+    def _route_pc_agent_via_active_api_first() -> bool:
+        flag = str(os.getenv("AADS_PC_AGENT_ROUTE_ACTIVE_API_FIRST") or "").strip().lower()
+        if flag in {"1", "true", "yes", "on"}:
+            return True
+        if flag in {"0", "false", "no", "off"}:
+            return False
+        service_role = str(os.getenv("AADS_SERVICE_ROLE") or "").strip().lower()
+        return service_role in SIDECAR_SERVICE_ROLES
 
     @classmethod
     def _active_api_online_agent_id_for_route_url(

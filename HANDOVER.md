@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-21 08:25 KST - Yeoljeong PC Agent active-route timeout guard
+
+- Trigger: CEO requested stopping the current auto-collect loop, fixing PC Agent browser command timeouts, reusing/closing browser sessions, preventing infinite browser windows, and then resuming data collection.
+- Operations:
+  - Stopped the running `yeoljeong-finance-worker` container to terminate the repeat `scripts/yeoljeong_auto_collect.py --until-complete --repeat-after-complete` loop.
+- Changes:
+  - `app/browser_bridge/service.py`: sidecar workers such as `yeoljeong-finance-worker` now route PC Agent browser launch/navigation/eval commands to the active AADS API first instead of waiting on the sidecar-local PC Agent manager.
+  - `app/services/yeoljeong_finance_service.py`: delivery browser cleanup now also uses active-API-first routing in sidecar mode, then retires the work-key session so completed/error attempts do not leave reusable stale windows.
+  - `tests/unit/test_browser_bridge.py` and `tests/unit/test_yeoljeong_finance_service.py`: added coverage for sidecar active-route-first launch, browser command, and cleanup behavior.
+- Verification before commit:
+  - `python3 -m py_compile app/browser_bridge/service.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 144 passed.
+  - `git diff --check` passed.
+- Deployment status:
+  - Commit/push/deploy/restart to be completed in the same session after this HANDOVER entry.
+
 ## 2026-08-21 08:03 KST - Yeoljeong auto-collect blocked-state loop guard
 
 - Trigger: During the commit/push/deploy pass, a follow-up change was prepared to keep the Yeoljeong auto-collect worker from endlessly restarting on terminal manual-action states.
