@@ -506,9 +506,9 @@ class BrowserBridgeService:
             required_capabilities=["interactive_browser"],
             queue_if_busy=True,
             wait_for_turn=True,
-            queue_wait_timeout_seconds=60,
-            lease_ttl_seconds=120,
-            command_timeout_seconds=90,
+            queue_wait_timeout_seconds=120,
+            lease_ttl_seconds=240,
+            command_timeout_seconds=180,
         )
         if routed.get("status") != "success" and str(routed.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
             active_routed = await self._execute_pc_agent_route_via_active_api(
