@@ -135,7 +135,7 @@ class _LocalAgentPage:
             if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
                 merged["work_key"] = self._session.work_key
             if command_type in LOCAL_AGENT_JS_COMMANDS:
-                merged.setdefault("evaluate_timeout_seconds", max(1.0, min(20.0, command_timeout_seconds - 0.5)))
+                merged.setdefault("evaluate_timeout_seconds", max(1.0, min(60.0, command_timeout_seconds - 0.5)))
 
             lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
             result = await pc_agent_manager.execute_routed_command(

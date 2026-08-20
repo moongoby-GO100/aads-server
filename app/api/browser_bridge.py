@@ -240,7 +240,7 @@ async def route_execute_work_session(
                 effective_command_timeout_seconds = min(effective_command_timeout_seconds, param_timeout)
         params["command_timeout_seconds"] = effective_command_timeout_seconds
         if req.command_type.strip().lower() == "browser_eval" and "evaluate_timeout_seconds" not in params:
-            params["evaluate_timeout_seconds"] = max(1.0, min(20.0, effective_command_timeout_seconds - 0.5))
+            params["evaluate_timeout_seconds"] = max(1.0, min(60.0, effective_command_timeout_seconds - 0.5))
         params.setdefault("work_key", session.work_key or req.work_key)
         params.setdefault("browser_session_id", session.session_id)
         params.setdefault("session_id", session.session_id)
