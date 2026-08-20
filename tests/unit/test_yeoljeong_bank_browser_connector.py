@@ -302,7 +302,7 @@ def test_parse_with_diagnostics_no_tables():
 # ── Async browser collector tests ─────────────────────────────────────────────
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def test_collect_async_no_session_returns_action_required():
