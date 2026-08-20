@@ -7427,3 +7427,45 @@
   - Not pushed or deployed in this step.
   - Real bank/open-banking login is intentionally not performed. `open_banking` returns `NOT_CONFIGURED/needs_auth` until a certified provider or vetted connector is attached.
   - To collect real bank rows now, use the registered bank account plus CSV/manual upload path or provide a vetted bank connector configuration.
+
+## 2026-08-20 19:27 KST - PC Agent tray reconnect/settings/exit UX patch
+
+- Request: Immediately fix PC Agent tray issues reported from the CEO PC: no manual reconnect menu, settings opening raw `config.json`, and full-exit confirmation popup not responding.
+- Changes:
+  - `pc_agent/tray.py` adds a `재연결 시도` tray menu item and a safe settings window that masks `agent_token` instead of opening `config.json` directly.
+  - `pc_agent/launcher.py` wires tray reconnect requests into the launcher supervision loop, restarting only the worker agent without treating it as a full user exit.
+  - Full-exit confirmation is invoked from a dedicated worker thread so tray menu callbacks do not freeze the icon loop.
+  - `pc_agent/VERSION` bumped to `1.0.59`; `pc_agent/CHANGELOG` records the release note.
+  - `tests/unit/test_pc_agent_release_guards.py` adds guards for token masking, safe settings, and manual reconnect wiring.
+- Verification:
+  - `python3 -m py_compile pc_agent/tray.py pc_agent/launcher.py` succeeded.
+  - `docker exec aads-server python -m py_compile pc_agent/tray.py pc_agent/launcher.py` succeeded.
+  - Host pytest could not run because the host has no `pytest` module.
+  - `docker exec aads-server python -m pytest tests/unit/test_pc_agent_release_guards.py -q -k 'not release_publish_is_main_only'` succeeded: 5 passed, 1 deselected.
+  - Full `test_pc_agent_release_guards.py` in the container still fails on the pre-existing `.github/workflows/build-pc-agent.yml` fixture absence inside the runtime image, not on the new PC Agent logic.
+- Remaining:
+  - Commit selected PC Agent files, push/deploy if requested, then verify `/api/v1/kakao-bot/agent/version` reports `1.0.59` and trigger/observe CEO PC self-update.
+
+## 2026-08-20 19:29 KST - Runner Codex 5.6 admin model rollout P1
+
+- Request: Make runner jobs use CLI models `codex:gpt-5.6-luna`, `codex:gpt-5.6-sol`, and `codex:gpt-5.6-terra` from admin settings across all three runner servers.
+- Finding:
+  - `runner_model_config` already contained some 5.6 admin values, but `scripts/pipeline-runner.sh` still allowed only `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex` in the Shell Runner Codex branch.
+  - Because of that stale allowlist, `codex:gpt-5.6-*` jobs were normalized down to `codex:gpt-5.5` at execution time.
+- Changes:
+  - `scripts/pipeline-runner.sh` and `scripts/pipeline-runner.sh.local` now allow `gpt-5.6-luna`, `gpt-5.6-sol`, and `gpt-5.6-terra` without fallback.
+  - `migrations/126_runner_codex56_admin_defaults.sql` sets admin defaults to `M=luna`, `L=sol`, `XL=terra`, and `AI_REVIEW=terra` first.
+  - `tests/unit/test_pipeline_runner_script_guards.py` adds a guard so the 5.6 allowlist cannot silently regress.
+- Operations:
+  - Applied the DB migration directly to the running `aads-postgres` container.
+  - Copied the updated runner script to contabo14 `/root/scripts/pipeline-runner.sh` and cafe24_114 `/root/scripts/pipeline-runner.sh`.
+  - Restarted `aads-pipeline-runner.service` on contabo116, contabo14, and cafe24_114.
+- Verification:
+  - `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_pipeline_runner_script_guards.py -q` succeeded: 12 passed.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/pipeline_runner_service.py app/api/pipeline_runner.py` succeeded.
+  - DB check confirmed `runner_model_config`: `M=codex:gpt-5.6-luna`, `L=codex:gpt-5.6-sol`, `XL=codex:gpt-5.6-terra`, `AI_REVIEW=codex:gpt-5.6-terra` as first model.
+  - `grep -n gpt-5.6` confirmed the updated allowlist on all three runner script locations.
+  - `systemctl status aads-pipeline-runner.service` was active on contabo116, contabo14, and cafe24_114 after restart.
+- Remaining:
+  - New live runner smoke jobs were not submitted in this entry; submit one M/L/XL read-only job if end-to-end `actual_model` recording must be verified after the rollout.

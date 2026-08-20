@@ -824,6 +824,7 @@ def main() -> None:
 
     # 트레이를 별도 스레드에서 실행 (메인 스레드에서 프로세스 감시)
     stop_requested = threading.Event()
+    reconnect_requested = threading.Event()
     # mutable container로 전달하여 launcher가 proc을 교체해도 tray가 최신 인스턴스를 참조
     proc_ref = [proc]
     try:
@@ -837,9 +838,13 @@ def main() -> None:
             if p and p.poll() is None:
                 p.terminate()
 
+        def on_reconnect():
+            """트레이 수동 재연결 콜백."""
+            reconnect_requested.set()
+
         tray_thread = threading.Thread(
             target=create_tray,
-            args=(cfg, proc_ref, on_quit),
+            args=(cfg, proc_ref, on_quit, on_reconnect),
             daemon=True,
         )
         tray_thread.start()
@@ -857,6 +862,26 @@ def main() -> None:
     try:
         while True:
             proc_ref[0] = proc  # tray가 항상 최신 에이전트 인스턴스를 참조
+            if reconnect_requested.is_set() and not stop_requested.is_set():
+                reconnect_requested.clear()
+                logger.info("수동 재연결 요청 처리 — 에이전트 재시작")
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except Exception:
+                        pass
+                disconnected_since = None
+                _set_crash_count(0)
+                time.sleep(2)
+                try:
+                    proc = run_agent(cfg)
+                except SystemExit:
+                    logger.error("manual-reconnect run_agent() SystemExit — mutex 충돌, 재시도")
+                    proc = None
+                if proc is None:
+                    continue
+
             if proc is None:
                 logger.error("proc is None — 에이전트 복구 시도")
                 time.sleep(5)
