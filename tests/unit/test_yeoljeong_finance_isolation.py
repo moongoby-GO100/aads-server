@@ -28,6 +28,9 @@ def test_yeoljeong_compose_uses_dedicated_runtime_boundaries() -> None:
     assert "YEOLJEONG_FINANCE_DATABASE_URL=${YEOLJEONG_FINANCE_DATABASE_URL:-" in compose
     assert "YEOLJEONG_FINANCE_DATA_DIR=/app/yeoljeong-data" in compose
     assert "/root/aads/aads-server/app/data/yeoljeong_finance:/app/yeoljeong-data:rw" in compose
+    worker_compose = compose.split("  yeoljeong-finance-worker:", 1)[1].split("  aads-litellm:", 1)[0]
+    assert "/root/aads/aads-server/.active_port:/app/.active_port:ro" in worker_compose
+    assert "/root/aads/aads-server/.active_container:/app/.active_container:ro" in worker_compose
     assert "YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS" in compose
 
 

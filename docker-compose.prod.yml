@@ -334,6 +334,8 @@ services:
       - /root/aads/aads-server/migrations:/app/migrations:rw
       - /root/aads/aads-server/scripts:/app/scripts:rw
       - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
+      - /root/aads/aads-server/.active_port:/app/.active_port:ro
+      - /root/aads/aads-server/.active_container:/app/.active_container:ro
     command:
       - /bin/sh
       - -c
