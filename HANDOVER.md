@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-21 08:49 KST - Yeoljeong bank/custom business deploy completion
+
+- Request: After CEO entered bank information, verify bank collection, fix the store assistant custom business registration failure, then commit/push/deploy.
+- Result:
+  - Runtime code commit `957f7e37` was pushed to `origin/main` and deployed through blue-green to active slot `:8102`.
+  - `migrations/128_pipeline_jobs_auth_recovery.sql` was applied; `pipeline_jobs.auth_recovery_state` and `auth_recovery_metadata` exist.
+  - `yeoljeong-finance-worker` was force-recreated after deploy because it was previously `exited`; it is now running with the bounded auto-collect command.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_print_static.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py -q` succeeded: 178 passed.
+  - `git diff --check`, Python `py_compile`, and `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` all passed before commit.
+  - `bash /root/aads/aads-server/deploy.sh` completed blue-green deploy; health, DB schema, chat table, and LLM checks passed.
+  - `curl http://127.0.0.1:8110/health/live` returned 200 and `GET /api/v1/yeoljeong-finance/bank-accounts` returned 401 without Bearer auth.
+  - Deployed static store assistant page contains the custom-business preserving `activeBusinessIds` and `activeBranchNames` normalizer.
+- Bank collection status:
+  - `bank_accounts.json` has 1 active browser connector account for `biz-mia` / `branch-gangbuk-mia`, `auto_sync=true`.
+  - Direct collection returned `ACTION_REQUIRED` / `BANK_BROWSER_SESSION_REQUIRED`; no bank transaction rows were imported because a logged-in PC Agent/Browser Bridge bank session is still required.
+- Remaining:
+  - Live bank portal E2E and real transaction import require the CEO/admin to connect an authenticated bank browser session from the store assistant UI.
+
 ## 2026-08-21 08:30 KST - Pipeline Runner auth recovery P1 direct fix
 
 - Request: Make runner auth failures observable/recoverable through PC Agent/Browser Bridge flow and fix rejected runner follow-ups.
