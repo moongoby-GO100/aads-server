@@ -1,5 +1,80 @@
 # AADS HANDOVER
 
+## 2026-08-20 20:00 KST - Runner Codex 5.6 P1 rollout final verification
+
+- Request: Make `codex:gpt-5.6-luna`, `codex:gpt-5.6-sol`, and `codex:gpt-5.6-terra` usable by actual runner jobs, and make runner jobs follow admin model settings across all three runner servers.
+- Changes:
+  - `scripts/pipeline-runner.sh` and `scripts/pipeline-runner.sh.local` now allow `gpt-5.6-luna`, `gpt-5.6-sol`, and `gpt-5.6-terra` in the Codex CLI branch instead of normalizing them to `gpt-5.5`.
+  - `app/api/pipeline_runner.py` now preserves admin default `size=M`; omitted size no longer auto-downgrades short/read-only instructions to `S`.
+  - `tests/unit/test_pipeline_runner_script_guards.py` and `tests/unit/test_pipeline_runner_reliability.py` cover Codex 5.6 allowlist and size resolution behavior.
+  - Running DB `runner_model_config` was verified as `M=codex:gpt-5.6-luna`, `L=codex:gpt-5.6-sol`, `XL=codex:gpt-5.6-terra`, `AI_REVIEW=codex:gpt-5.6-terra`.
+- Operations:
+  - Copied updated runner script to contabo14 `/root/scripts/pipeline-runner.sh` and cafe24_114 `/root/scripts/pipeline-runner.sh`.
+  - Restarted `aads-pipeline-runner.service` on contabo116, contabo14, and cafe24_114.
+  - Restarted the AADS API container path sufficiently for the pipeline submit route to reload.
+- Verification:
+  - `bash -n scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` succeeded.
+  - `JWT_SECRET_KEY=test docker run --rm -e JWT_SECRET_KEY=test -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py -q` succeeded: 26 passed.
+  - 3 server file checks confirmed `default|gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5...` in each active runner script.
+  - 3 server service checks returned `active`.
+  - AADS smoke `runner-6b1939f0`: `size=M`, `model=codex:gpt-5.6-luna`, `actual_model=codex:gpt-5.6-luna`, `done`.
+  - GO100 smoke `runner-bc1f1703` and `runner-3ed9805e`: `size=L`, `model=codex:gpt-5.6-sol`, `actual_model=codex:gpt-5.6-sol`, `done`.
+  - SF smoke `runner-9acec651`: `size=XL`, `model=codex:gpt-5.6-terra`, attempted on cafe24_114, then fell back to `claude-opus-4-6`.
+  - Direct contabo14 CLI check succeeded: `codex exec -m gpt-5.6-sol` returned `OK`.
+- Remaining:
+  - cafe24_114/SF stores and attempts `codex:gpt-5.6-terra`, but Codex OAuth refresh is expired on that server: direct CLI returns `401 invalid_refresh_token/token_expired`. Runner therefore falls back to Claude until `codex login` is renewed on cafe24_114.
+  - Do not copy Codex auth files between servers; re-login on cafe24_114 is required.
+
+## 2026-08-20 20:00 KST - Yeoljeong delivery auto-collect pinned to oby-ceo
+
+- Trigger: CEO renamed the workstation to `oby-ceo` and requested the next step and auto-collection completion.
+- Findings:
+  - Live PC Agent API showed `oby-ceo` online as `2e9379a1-fed`.
+  - `docker-compose.yml`/`docker-compose.prod.yml` still pointed Browser Bridge defaults and the Yeoljeong worker default to the old `aad74f71-e6b` / `DESKTOP-TBKF5M3`.
+  - The worker initially created PC browser sessions, but the collector sometimes evaluated the first `about:blank` tab instead of the already-authenticated service tab, producing `PC_AGENT_WRONG_PORTAL_SESSION`.
+- Changes:
+  - Updated compose defaults to `PC_AGENT_DEFAULT_AGENT_ID=2e9379a1-fed`, `PC_AGENT_DEFAULT_HOSTNAME=oby-ceo`, and `YEOLJEONG_DELIVERY_PC_AGENT_ID=2e9379a1-fed`.
+  - `app/services/yeoljeong_finance_service.py`: Browser Bridge delivery collection now prefers an already-open tab whose URL matches the target delivery service before falling back to the first/new page.
+  - Updated related unit tests for the new default PC target and matching service-tab selection.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_finance_service.py::test_delivery_bridge_page_for_service_prefers_matching_service_tab tests/unit/test_yeoljeong_finance_service.py::test_delivery_browser_auth_for_account_creates_service_session_instead_of_reusing_active tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_uses_baemin_pc_agent_session_without_password tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_uses_pc_agent_session_for_all_delivery_services` passed: 4 passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_isolation.py` passed: 15 passed.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
+  - Recreated `yeoljeong-finance-worker`; worker env contains `YEOLJEONG_DELIVERY_PC_AGENT_ID=2e9379a1-fed`.
+  - Recreated active `aads-server`; `/api/v1/health` returned ok and runtime env contains `PC_AGENT_DEFAULT_AGENT_ID=2e9379a1-fed`, `PC_AGENT_DEFAULT_HOSTNAME=oby-ceo`.
+  - Auto-collect verification after 19:50 KST: Baemin succeeded for `중화점` with counts sales=1, settlements=1, reviews=273; Baemin succeeded for `성신여대점` with counts sales=1, settlements=1, reviews=280.
+- Remaining limitation:
+  - Full auto-collection is not complete for every portal. `쿠팡이츠` and `요기요` logged in but returned `PORTAL_TABLE_NOT_FOUND`; `땡겨요` requires numeric CAPTCHA (`DDANGYO_NUMERIC_CAPTCHA_REQUIRED`). Worker remains running and continues the next scopes.
+- Deployment status:
+  - Runtime containers `yeoljeong-finance-worker` and `aads-server` were recreated locally on contabo116 via Docker Compose.
+  - No git commit or push was performed in this step.
+
+## 2026-08-20 19:51 KST - Yeoljeong bank auto-collect worker routing and credential state
+
+- Trigger: CEO requested bank data auto-collection to be fixed, verified, and reported.
+- Findings:
+  - `device_list(device_type=pc)` showed CEO PC `oby-ceo` online with agent `2e9379a1-fed`.
+  - The live `yeoljeong-finance-worker` initially had stale `YEOLJEONG_DELIVERY_PC_AGENT_ID=aad74f71-e6b`, causing PC Agent routing failures in worker logs.
+  - Existing bank integrations were stored in legacy `platform_accounts` (`shinhan_business`/`ibk_business`, `auto_sync=true`), while the worker's new bank loop only inspected `bank_accounts`; `bank_accounts` was empty.
+  - No bank credentials were present in AADS Credential Vault. The three legacy bank integrations only had masked account/business-number fields and were missing encrypted login password, account number, account password, and business-registration-number fields required for real bank quick-service collection.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py`: auto-collect now includes both dedicated `bank_accounts` and legacy `platform_accounts` financial integrations, mapping connector/credential blockers into explicit bank collection error codes.
+  - `app/services/yeoljeong_finance_service.py`: bank quick-service accounts missing encrypted required values now surface as `credential_required` instead of stale `credential_registered`.
+  - `tests/unit/test_yeoljeong_auto_collect.py`: added coverage for legacy platform financial accounts in the worker loop.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added coverage for incomplete bank quick-service credential state.
+  - `docker-compose.prod.yml`: current dirty state pins Browser Bridge and Yeoljeong worker default PC Agent to `2e9379a1-fed` / `oby-ceo`; matching isolation test expectations are updated.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_isolation.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_bank_browser_connector.py -q` passed: 81 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'bank_quick_service or sync_financial_transactions_reports_connector_gap or list_accounts_marks_incomplete_bank_quick_service_as_credential_required' -q` passed: 4 passed, 107 deselected.
+  - `.venv-playwright/bin/python -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `yeoljeong-finance` and `yeoljeong-finance-worker` were recreated; API health returned HTTP 200 and both containers are running.
+  - Worker manual one-shot verification includes `bank_collections` from `platform_accounts`, `bank_totals.accounts=3`, and `error_code=MISSING_CREDENTIALS`.
+- Remaining limitation:
+  - Real bank transaction import is blocked until CEO registers the missing bank quick-service credentials or provides a logged-in bank browser session/CSV fallback. The system now reports this as a credential blocker instead of silently skipping the bank accounts.
+- Deployment status:
+  - Runtime containers were recreated locally on contabo116 via Docker Compose.
+  - No git commit or push was performed in this step.
+
 ## 2026-08-20 18:16 KST - Browser Bridge default PC fallback guard
 
 - Trigger: CEO requested verification that browser/PC Agent tests run only on `DESKTOP-TBKF5M3`, with no PC Agent session mixing, correct browser reuse, and delayed/completed browser cleanup.
@@ -7469,3 +7544,66 @@
   - `systemctl status aads-pipeline-runner.service` was active on contabo116, contabo14, and cafe24_114 after restart.
 - Remaining:
   - New live runner smoke jobs were not submitted in this entry; submit one M/L/XL read-only job if end-to-end `actual_model` recording must be verified after the rollout.
+
+## 2026-08-20 19:52 KST - Yeoljeong bank auto-collect worker wiring
+
+- Request: Make bank data collect automatically and verify it.
+- Finding:
+  - The long-running `scripts/yeoljeong_auto_collect.py` worker was already configured for delivery channels, but bank account collection was not part of the worker loop.
+  - Bank collection APIs and idempotent bank ledger ingestion already existed from the prior phase.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py` now runs delivery sync first, then active bank accounts with `auto_sync != false`.
+  - The worker also checks legacy `platform_accounts` financial services (`shinhan_business`, `ibk_business`, `card_pg`) so existing quick-service / upload-based accounts are surfaced in the same cycle.
+  - Completion state now counts `bank_collections`, treats imported bank rows as complete, and blocks on bank connector/auth-required statuses instead of reporting a false success.
+  - `tests/unit/test_yeoljeong_auto_collect.py` covers active bank-account collection, legacy platform financial account collection, and blocked bank completion state.
+- Verification:
+  - `.venv-playwright/bin/python -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_auto_collect.py -q` succeeded: 12 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py -q -k 'auto_sync_bank_accounts or legacy_platform_financial_accounts or bank_quick_service or delivery_bridge_page_for_service'` succeeded: 6 passed, 117 deselected.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_isolation.py -q` succeeded: 3 passed.
+- Remaining:
+  - Not committed, pushed, or deployed in this step.
+  - A broader `test_yeoljeong_finance_service.py test_yeoljeong_finance_isolation.py` run was interrupted with exit code 143 before a final result, so targeted verification is the completion basis.
+  - Real bank rows still require a configured browser/provider/CSV/mock source. Unconfigured bank quick-service accounts are reported as credential/connector required rather than silently skipped.
+
+## 2026-08-21 07:04 KST - Yeoljeong bank connection input save check
+
+- Request: Confirm whether the store assistant bank connection settings page is the correct place to enter business bank information, and whether submitted values persist.
+- Finding:
+  - The bank connection modal posts to `/api/v1/yeoljeong-finance/accounts` for platform credential metadata and `/api/v1/yeoljeong-finance/bank-accounts` for the bank ledger account.
+  - PostgreSQL has no dedicated bank account/transaction tables yet. Existing bank connector metadata is in `yeoljeong_platform_accounts.payload`; the bank ledger path uses secure JSON files `bank_accounts.json` / `bank_transactions.json`.
+  - A UI payload bug mapped quick-service bank accounts to `connection_type: "mock"`, which could prevent later browser collection classification.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html` now stores quick-service/open-banking bank accounts as `connection_type: "browser"` with `connector_type: "bank-browser"`, while bank Excel mode remains `csv`.
+- Verification:
+  - DB schema check found Yeoljeong tables and no bank-specific table; `yeoljeong_platform_accounts` contained 42 rows and 3 bank-service rows with masked account numbers.
+  - Dummy isolated service save confirmed platform and bank-account records persist with masked account numbers, no plaintext password/account password/account number in response or files, and `bank_accounts.json` mode `0600`.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py::test_create_bank_account_masks_and_never_stores_raw_number tests/unit/test_yeoljeong_finance_service.py::test_bank_accounts_file_has_owner_only_permissions tests/unit/test_yeoljeong_finance_service.py::test_upsert_bank_quick_service_requires_account_password_and_business_no tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_bank_account_browser_with_session_imports_rows tests/unit/test_yeoljeong_auto_collect.py::test_run_collectors_collects_auto_sync_bank_accounts -q` succeeded: 5 passed.
+  - `.venv-playwright/bin/python -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `node -e` extracted and parsed inline scripts from `app/static/apps/yeoljeong-finance/index.html`: scripts ok 2.
+  - `git diff --check` for the touched bank/input files succeeded.
+- Remaining:
+  - Not committed, pushed, or deployed in this step.
+  - Operating URL/API returned 401 without a Bearer token, confirming auth protection but preventing unauthenticated browser E2E.
+  - Screenshot capture for `https://fb.newtalk.kr/static/apps/yeoljeong-finance/index.html` timed out, so this entry relies on source/API/unit verification.
+
+## 2026-08-21 07:04 KST - Yeoljeong delivery ads auto-collection scope
+
+- Request: Confirm whether Coupang Eats/Yogiyo login success means all collectible delivery data, including sales, settlements, reviews, and ads, is implemented; complete missing auto-collection scope.
+- Finding:
+  - Delivery auto-collection already covered `sales`, `settlements`, and `reviews`.
+  - There was no `yeoljeong_delivery_ads` table, API endpoint, parser record type, or loop completion count for ads/promotions.
+  - `oby-ceo` was visible in PC Agent device listing, but direct `pc_execute system_info` still returned `PC_AGENT_OFFLINE`, so live browser E2E remains dependent on PC Agent route recovery.
+- Changes:
+  - Added `ads` as the fourth delivery record type across portal section discovery, parser normalization, service ledger mapping, API response payloads, and the retry loop completion counter.
+  - Added `/api/v1/yeoljeong-finance/ads` for admin ad ledger reads.
+  - Added non-destructive migration `migrations/127_yeoljeong_delivery_ads.sql`.
+  - Preserved server-headless fallback behavior for non-captcha password-based delivery collection when explicitly allowed.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py app/api/yeoljeong_finance.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded.
+  - Applied `migrations/127_yeoljeong_delivery_ads.sql` directly with `docker exec -i aads-postgres psql -U aads -d aads -f /dev/stdin`.
+  - DB check confirmed `yeoljeong_delivery_ads` exists; current row count is 0 before first deployed ads collection run.
+- Remaining:
+  - Deploy/restart is still required for the running `yeoljeong-finance-worker` to execute the new ads code.
+  - Live portal E2E is blocked until `oby-ceo / 2e9379a1-fed` is executable through the PC Agent route, not just listed as online.

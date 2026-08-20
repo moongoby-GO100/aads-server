@@ -125,8 +125,8 @@ services:
       - NTV2_DB_PASSWORD=${NTV2_DB_PASSWORD:-}
       - NTV2_DB_TYPE=${NTV2_DB_TYPE:-mysql}
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
-      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-aad74f71-e6b}
-      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-TBKF5M3}
+      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-2e9379a1-fed}
+      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-oby-ceo}
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영 (docker cp 불필요)
       - /root/aads/aads-server/app:/app/app:rw

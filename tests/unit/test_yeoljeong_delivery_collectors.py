@@ -30,6 +30,7 @@ class _FakeMatches:
 def test_four_delivery_portals_are_configured():
     assert set(collectors.PORTAL_CONFIG) == {"baemin", "coupangeats", "yogiyo", "ddangyo"}
     assert all(config["login_url"].startswith("https://") for config in collectors.PORTAL_CONFIG.values())
+    assert all("ads" in config["sections"] for config in collectors.PORTAL_CONFIG.values())
 
 
 def test_normalize_record_is_deterministic_and_scoped():
@@ -250,3 +251,19 @@ def test_parse_baemin_pc_copied_review_table():
     assert review["rating"] == 5
     assert review["review_text"] == "냉면이 맛있어요"
     assert review["reply_status"] == "미답변"
+
+
+def test_parse_baemin_pc_copied_ad_table():
+    copied = "일자\t캠페인명\t광고비\t노출수\t클릭수\t주문수\t광고매출\n2026-08-02\t우리가게클릭\t3,000원\t120\t8\t2\t21,000원\n"
+
+    result = collectors.parse_portal_export("baemin", "ads", copied, "biz-junghwa", "중화점")
+
+    assert result["status"] == "succeeded"
+    ad = result["records"]["ads"][0]
+    assert ad["record_type"] == "ads"
+    assert ad["campaign_name"] == "우리가게클릭"
+    assert ad["cost_amount"] == 3000
+    assert ad["impressions"] == 120
+    assert ad["clicks"] == 8
+    assert ad["orders"] == 2
+    assert ad["sales_amount"] == 21000

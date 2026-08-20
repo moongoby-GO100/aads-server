@@ -32,10 +32,10 @@ def test_yeoljeong_compose_uses_dedicated_runtime_boundaries() -> None:
     assert "/root/aads/aads-server/.active_port:/app/.active_port:ro" in worker_compose
     assert "/root/aads/aads-server/.active_container:/app/.active_container:ro" in worker_compose
     assert "YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-" in worker_compose
-    assert "YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-aad74f71-e6b}" in worker_compose
+    assert "YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-2e9379a1-fed}" in worker_compose
     assert "YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS" in compose
-    assert "PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-aad74f71-e6b}" in compose
-    assert "PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-TBKF5M3}" in compose
+    assert "PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-2e9379a1-fed}" in compose
+    assert "PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-oby-ceo}" in compose
 
 
 def test_delivery_public_collection_status_contract() -> None:

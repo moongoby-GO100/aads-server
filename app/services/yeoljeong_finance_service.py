@@ -143,8 +143,18 @@ DELIVERY_LEDGER_TABLES = (
     "yeoljeong_delivery_sales",
     "yeoljeong_delivery_settlements",
     "yeoljeong_delivery_reviews",
+    "yeoljeong_delivery_ads",
     "yeoljeong_delivery_collection_status",
 )
+DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
+
+
+def _delivery_empty_counts() -> dict[str, int]:
+    return {kind: 0 for kind in DELIVERY_RECORD_TYPES}
+
+
+def _delivery_empty_record_lists() -> dict[str, list[dict[str, Any]]]:
+    return {kind: [] for kind in DELIVERY_RECORD_TYPES}
 JSON_LEDGER_FILES = (
     "employee_join_requests",
     "onboarding_documents",
@@ -160,6 +170,7 @@ DB_LEDGER_TABLE_BY_NAME = {
     "delivery_sales": "yeoljeong_delivery_sales",
     "delivery_settlements": "yeoljeong_delivery_settlements",
     "delivery_reviews": "yeoljeong_delivery_reviews",
+    "delivery_ads": "yeoljeong_delivery_ads",
     "delivery_collection_status": "yeoljeong_delivery_collection_status",
 }
 GENERIC_DB_LEDGER_NAMES = {
@@ -167,6 +178,7 @@ GENERIC_DB_LEDGER_NAMES = {
     "delivery_sales",
     "delivery_settlements",
     "delivery_reviews",
+    "delivery_ads",
     "delivery_collection_status",
 }
 
@@ -1162,6 +1174,12 @@ def _public_platform_account_status(row: dict[str, Any]) -> str:
     if service in PLATFORM_LABELS and not _has_secret_value(row, "password") and not has_browser_state:
         return "credential_required"
     if service in PLATFORM_LABELS and collection_mode in DELIVERY_UPLOAD_COLLECTION_MODES:
+        return "upload_required"
+    if service in BANK_QUICK_SERVICE_CONFIG and collection_mode == "bank-quick-service":
+        for key in ("password", "account_no", "account_password", "business_registration_no"):
+            if not _has_secret_value(row, key):
+                return "credential_required"
+    if service in FINANCIAL_TRANSACTION_SERVICES and collection_mode in {"bank-excel", "card-pg-report", "statement-upload"}:
         return "upload_required"
     return status
 
@@ -3126,6 +3144,15 @@ def list_reviews(user: dict[str, Any], business_id: str | None = None) -> list[d
     return rows
 
 
+def list_ads(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="광고 원장 조회 권한이 없습니다")
+    rows = _read("delivery_ads")
+    if business_id:
+        rows = [row for row in rows if str(row.get("business_id") or "") == business_id]
+    return rows
+
+
 def list_collection_status(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="수집 상태 조회 권한이 없습니다")
@@ -3161,7 +3188,7 @@ def _normalize_stale_delivery_collection_statuses(rows: list[dict[str, Any]]) ->
         row["message"] = "백그라운드 수집 작업이 15분 이상 완료 갱신 없이 멈춰 상태를 정리했습니다. 다시 수집 실행이 필요합니다."
         row["finished_at"] = now_text
         row["updated_at"] = now_text
-        row.setdefault("counts", {"sales": 0, "settlements": 0, "reviews": 0})
+        row.setdefault("counts", _delivery_empty_counts())
         changed = True
     return changed
 
@@ -3292,7 +3319,7 @@ def _delivery_sync_busy_result(payload: dict[str, Any], user: dict[str, Any]) ->
                 "date_to": date_to.isoformat(),
                 "status": "action_required",
                 "raw_status": "busy",
-                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "counts": _delivery_empty_counts(),
                 "error_code": "COLLECTION_ALREADY_RUNNING",
                 "message": message,
                 "started_at": now_text,
@@ -3308,7 +3335,7 @@ def _delivery_sync_busy_result(payload: dict[str, Any], user: dict[str, Any]) ->
                     "status": "action_required",
                     "portal_status": "action_required",
                     "error_code": "COLLECTION_ALREADY_RUNNING",
-                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                    "counts": _delivery_empty_counts(),
                     "run_id": status_record["id"],
                     "account_id": "",
                     "business_id": business_id,
@@ -3327,7 +3354,7 @@ def _delivery_sync_busy_result(payload: dict[str, Any], user: dict[str, Any]) ->
         "branch": scopes[0][1] if len(scopes) == 1 else "전체",
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
-        "totals": {"sales": 0, "settlements": 0, "reviews": 0},
+        "totals": _delivery_empty_counts(),
         "summary": summary,
         "sales": [],
         "settlements": [],
@@ -3370,7 +3397,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
                     "date_from": date_from.isoformat(),
                     "date_to": date_to.isoformat(),
                     "status": "queued",
-                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                    "counts": _delivery_empty_counts(),
                     "error_code": "",
                     "message": message,
                     "queued_at": queued_at,
@@ -3385,7 +3412,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
                     "status": "queued",
                     "portal_status": "queued",
                     "error_code": "",
-                    "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                    "counts": _delivery_empty_counts(),
                     "run_id": run_id,
                     "job_id": job_id,
                     "account_id": str(payload.get("account_id") or payload.get("server_account_id") or ""),
@@ -3414,7 +3441,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
         "sales": [],
         "settlements": [],
         "reviews": [],
-        "totals": {"sales": 0, "settlements": 0, "reviews": 0},
+        "totals": _delivery_empty_counts(),
     }
 
 
@@ -4778,7 +4805,11 @@ def _delivery_browser_auth_for_account(
         _has_secret_value(account, "password")
         and not prefer_pc_agent
         and service != "ddangyo"
-        and collection_mode != "browser-automation"
+        and (
+            collection_mode != "browser-automation"
+            or payload.get("allow_server_headless_fallback")
+            or payload.get("allowServerHeadlessFallback")
+        )
     ):
         auth["browser_session_id"] = ""
         auth["browser_bridge_mode"] = ""
@@ -5041,11 +5072,24 @@ def _delivery_result_has_no_visible_source(result: dict[str, Any]) -> bool:
     if error_code not in {"AUTHENTICATED_NO_ROWS", "EMPTY_SOURCE", "NO_PARSEABLE_ROWS"}:
         return False
     diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
-    has_section_diagnostics = any(kind in diagnostics for kind in ("sales", "settlements", "reviews"))
-    section_values = [str(diagnostics.get(kind) or "").upper() for kind in ("sales", "settlements", "reviews")]
+    has_section_diagnostics = any(kind in diagnostics for kind in DELIVERY_RECORD_TYPES)
+    section_values = [str(diagnostics.get(kind) or "").upper() for kind in DELIVERY_RECORD_TYPES]
     if has_section_diagnostics and all(value in {"SECTION_NOT_FOUND", "NO_EXPORT_OR_TABLE", "NO_PARSEABLE_ROWS", ""} for value in section_values):
         return True
     return error_code in {"EMPTY_SOURCE", "NO_PARSEABLE_ROWS"} and str(diagnostics.get("auth_mode") or "") == "pc_agent_browser"
+
+
+async def _delivery_bridge_page_for_service(context: Any, service: str) -> Any:
+    pages = list(getattr(context, "pages", None) or [])
+    markers = _DELIVERY_SERVICE_URL_MARKERS.get(str(service or "").strip(), ())
+    for page in pages:
+        try:
+            url = str(await page.evaluate("window.location.href") or getattr(page, "url", "") or "").lower()
+        except Exception:
+            url = str(getattr(page, "url", "") or "").lower()
+        if markers and any(marker in url for marker in markers):
+            return page
+    return pages[0] if pages else await context.new_page()
 
 
 def _baemin_bridge_page_kind(text: str) -> str:
@@ -5080,7 +5124,7 @@ def _baemin_dashboard_records(text: str, business_id: str, branch: str) -> dict[
     today = datetime.now(KST).date()
     yesterday = today - timedelta(days=1)
     collected_at = _now()
-    records: dict[str, list[dict[str, Any]]] = {"sales": [], "settlements": [], "reviews": []}
+    records = _delivery_empty_record_lists()
 
     sales_match = re.search(r"어제\s*주문금액\s*([0-9,]+)\s*원.*?어제\s*주문수\s*([0-9,]+)\s*건", compact, re.S)
     if sales_match:
@@ -5719,7 +5763,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
         if not session:
             return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_NOT_FOUND", "records": {}}
         context = await bridge._context_for_session(session)
-        page = context.pages[0] if getattr(context, "pages", None) else await context.new_page()
+        page = await _delivery_bridge_page_for_service(context, service)
 
         if service == "baemin":
             home_url = "https://self.baemin.com/"
@@ -5868,7 +5912,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "message": f"PC Agent 브라우저가 {service_label} 로그인 화면입니다. 먼저 해당 포털 로그인이 필요합니다.",
             }
 
-        records: dict[str, list[dict[str, Any]]] = {"sales": [], "settlements": [], "reviews": []}
+        records = _delivery_empty_record_lists()
         diagnostics: dict[str, str] = {
             "auth_mode": "pc_agent_browser",
             "browser_session_id": session_id,
@@ -5954,7 +5998,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
         if not session:
             return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_NOT_FOUND", "records": {}}
         context = await bridge._context_for_session(session)
-        page = context.pages[0] if getattr(context, "pages", None) else await context.new_page()
+        page = await _delivery_bridge_page_for_service(context, "baemin")
         url = str(getattr(page, "url", "") or "")
         try:
             url = str(await page.evaluate("window.location.href") or url)
@@ -6111,7 +6155,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
             str(account.get("business_id") or ""),
             str(account.get("branch") or ""),
         )
-        records = {name: [] for name in ("sales", "settlements", "reviews")}
+        records = _delivery_empty_record_lists()
         records.update({name: rows for name, rows in dashboard_records.items() if rows})
         for name, rows in (parsed.get("records") or {}).items():
             if rows:
@@ -6268,10 +6312,10 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
     scopes = _delivery_sync_scopes(payload, requested_services, all_accounts)
     synced_at = _now()
     summary = []
-    ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
+    ledger_names = {kind: f"delivery_{kind}" for kind in DELIVERY_RECORD_TYPES}
     ledgers = {name: _read(name) for name in ledger_names.values()}
     statuses = _read("delivery_collection_status")
-    response_ledgers = {"sales": [], "settlements": [], "reviews": []}
+    response_ledgers = _delivery_empty_record_lists()
     response_records: list[dict[str, Any]] = []
 
     for business_id, branch in scopes:
@@ -6312,7 +6356,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 "date_from": date_from.isoformat(),
                 "date_to": date_to.isoformat(),
                 "status": "running",
-                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "counts": _delivery_empty_counts(),
                 "error_code": "",
                 "started_at": synced_at,
                 "created_at": synced_at,
@@ -6434,7 +6478,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                         result.setdefault("diagnostics", {})["browser_bridge_error"] = browser_auth["browser_bridge_error"]
                 result = _normalize_delivery_collection_result(service, result)
 
-            counts = {"sales": 0, "settlements": 0, "reviews": 0}
+            counts = _delivery_empty_counts()
             for kind, ledger_name in ledger_names.items():
                 incoming = result.get("records", {}).get(kind) or []
                 by_id = {str(row.get("id") or ""): row for row in ledgers[ledger_name] if row.get("id")}
@@ -6499,11 +6543,8 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
         "sales": response_ledgers["sales"],
         "settlements": response_ledgers["settlements"],
         "reviews": response_ledgers["reviews"],
-        "totals": {
-            "sales": sum(item["counts"]["sales"] for item in summary),
-            "settlements": sum(item["counts"]["settlements"] for item in summary),
-            "reviews": sum(item["counts"]["reviews"] for item in summary),
-        },
+        "ads": response_ledgers["ads"],
+        "totals": {kind: sum(item["counts"].get(kind, 0) for item in summary) for kind in DELIVERY_RECORD_TYPES},
     }
 
 
@@ -6516,13 +6557,13 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
     record_type = str(payload.get("record_type") or payload.get("recordType") or "").strip()
     if service not in PORTAL_CONFIG:
         raise HTTPException(status_code=400, detail="지원하지 않는 배달 플랫폼입니다")
-    if record_type not in {"sales", "settlements", "reviews"}:
-        raise HTTPException(status_code=400, detail="반영 구분은 sales, settlements, reviews 중 하나여야 합니다")
+    if record_type not in DELIVERY_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail="반영 구분은 sales, settlements, reviews, ads 중 하나여야 합니다")
 
     business_id, branch = _normalize_delivery_scope(payload.get("business_id"), payload.get("branch"))
     source_text = str(payload.get("source_text") or payload.get("sourceText") or "")
     parsed = parse_portal_export(service, record_type, source_text, business_id, branch)
-    ledger_names = {"sales": "delivery_sales", "settlements": "delivery_settlements", "reviews": "delivery_reviews"}
+    ledger_names = {kind: f"delivery_{kind}" for kind in DELIVERY_RECORD_TYPES}
     ledger_name = ledger_names[record_type]
     existing_rows = _read(ledger_name)
     by_id = {str(row.get("id") or ""): row for row in existing_rows if row.get("id")}
@@ -6543,7 +6584,7 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
         _write(ledger_name, list(by_id.values()))
 
     statuses = _read("delivery_collection_status")
-    counts = {"sales": 0, "settlements": 0, "reviews": 0}
+    counts = _delivery_empty_counts()
     counts[record_type] = len(imported)
     run_id = str(uuid4())
     statuses.insert(
@@ -6573,7 +6614,7 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
     )
     _write_delivery_collection_statuses(statuses, statuses[0] if statuses else None)
 
-    response_ledgers = {"sales": [], "settlements": [], "reviews": []}
+    response_ledgers = _delivery_empty_record_lists()
     response_ledgers[record_type] = imported
     records = [_delivery_entry_record(record) for record in imported if record_type in {"sales", "settlements"}]
     return {
@@ -6597,6 +6638,7 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
         "sales": response_ledgers["sales"],
         "settlements": response_ledgers["settlements"],
         "reviews": response_ledgers["reviews"],
+        "ads": response_ledgers["ads"],
         "totals": counts,
         "import": {"imported": len(imported), "duplicate_rows": duplicate_rows},
     }

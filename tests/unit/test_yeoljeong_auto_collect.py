@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
+import pytest
+
 import scripts.yeoljeong_auto_collect as auto_collect
+
+
+@pytest.fixture(autouse=True)
+def isolate_platform_financial_accounts(monkeypatch):
+    monkeypatch.setattr(auto_collect, "list_platform_accounts", lambda user, business_id=None: [])
 
 
 def test_payload_passes_force_recreate_sessions_flag():
@@ -103,6 +110,92 @@ def test_run_collectors_collects_auto_sync_bank_accounts(monkeypatch):
     assert result["bank_totals"]["accounts"] == 1
     assert result["bank_totals"]["imported_rows"] == 2
     assert result["bank_collections"][0]["status"] == "completed"
+
+
+def test_run_collectors_collects_legacy_platform_financial_accounts(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_sync",
+        lambda payload, user, *, queue_only=False: {
+            "synced_at": "2026-08-20T19:40:00+09:00",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-20",
+            "summary": [
+                {
+                    "service": "baemin",
+                    "status": "succeeded",
+                    "error_code": "",
+                    "counts": {"sales": 1, "settlements": 0, "reviews": 0},
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(auto_collect, "list_bank_accounts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        auto_collect,
+        "list_platform_accounts",
+        lambda user, business_id=None: [
+            {
+                "id": "legacy-bank-1",
+                "service": "ibk_business",
+                "business_id": business_id,
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+            }
+        ],
+    )
+
+    def fake_sync_financial_transactions(payload, user):
+        calls.append(payload)
+        return {
+            "synced_at": "2026-08-20T19:41:00+09:00",
+            "business_id": payload["business_id"],
+            "branch": payload["branch"],
+            "summary": [
+                {
+                    "service": "ibk_business",
+                    "status": "connector_not_configured",
+                    "message": "커넥터가 아직 연결되지 않았습니다.",
+                    "account_id": payload["account_id"],
+                    "collection_mode": "bank-quick-service",
+                    "imported_rows": 0,
+                }
+            ],
+            "transactions": [],
+            "totals": {"transactions": 0},
+        }
+
+    monkeypatch.setattr(auto_collect, "sync_financial_transactions", fake_sync_financial_transactions)
+
+    result = auto_collect._run_collectors(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-20",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert calls == [
+        {
+            "services": ["ibk_business"],
+            "account_id": "legacy-bank-1",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-20",
+        }
+    ]
+    assert result["bank_totals"]["accounts"] == 1
+    assert result["bank_collections"][0]["source_ledger"] == "platform_accounts"
+    assert result["bank_collections"][0]["error_code"] == "BANK_CONNECTOR_NOT_CONFIGURED"
 
 
 def test_completion_state_requires_success_or_imported_rows():

@@ -534,6 +534,11 @@ async def list_reviews(business_id: str | None = None, current_user: dict = Depe
     return {"reviews": await run_in_threadpool(svc.list_reviews, current_user, business_id)}
 
 
+@router.get("/ads")
+async def list_ads(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"ads": await run_in_threadpool(svc.list_ads, current_user, business_id)}
+
+
 @router.get("/collection-status")
 async def list_collection_status(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"statuses": await run_in_threadpool(svc.list_collection_status, current_user, business_id)}

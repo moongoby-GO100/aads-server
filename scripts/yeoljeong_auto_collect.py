@@ -17,12 +17,30 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.services.yeoljeong_finance_service import list_collection_status, queue_delivery_sync, sync_delivery  # noqa: E402
+from app.services.yeoljeong_finance_service import (  # noqa: E402
+    CANONICAL_BRANCHES,
+    FINANCIAL_TRANSACTION_SERVICES,
+    collect_bank_account_transactions,
+    list_bank_accounts,
+    list_accounts as list_platform_accounts,
+    list_collection_status,
+    queue_delivery_sync,
+    sync_delivery,
+    sync_financial_transactions,
+)
 
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_SERVICES = ("baemin", "coupangeats", "yogiyo", "ddangyo")
+DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
+
+
+def _empty_delivery_counts() -> dict[str, int]:
+    return {kind: 0 for kind in DELIVERY_RECORD_TYPES}
 BLOCKING_ERROR_CODES = {
+    "BANK_ACTION_REQUIRED",
+    "BANK_BROWSER_SESSION_REQUIRED",
+    "BANK_CONNECTOR_NOT_CONFIGURED",
     "CSV_UPLOAD_REQUIRED",
     "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
     "MISSING_CREDENTIALS",
@@ -33,6 +51,7 @@ BLOCKING_ERROR_CODES = {
 RETRYABLE_ERROR_CODES = {
     "ATTEMPT_TIMEOUT",
     "AUTHENTICATED_NO_ROWS",
+    "BANK_BROWSER_SESSION_NOT_FOUND",
     "BACKGROUND_SYNC_STALE",
     "COLLECTION_ALREADY_RUNNING",
     "EMPTY_SOURCE",
@@ -87,7 +106,7 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
         "branch": result.get("branch") or "",
         "date_from": result.get("date_from") or "",
         "date_to": result.get("date_to") or "",
-        "totals": result.get("totals") or {"sales": 0, "settlements": 0, "reviews": 0},
+        "totals": result.get("totals") or _empty_delivery_counts(),
         "summary": [
             {
                 "service": item.get("service") or "",
@@ -95,7 +114,7 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
                 "branch": item.get("branch") or "",
                 "status": item.get("status") or "",
                 "error_code": item.get("error_code") or "",
-                "counts": item.get("counts") or {"sales": 0, "settlements": 0, "reviews": 0},
+                "counts": item.get("counts") or _empty_delivery_counts(),
                 "run_id": item.get("run_id") or "",
                 "account_id": item.get("account_id") or "",
                 "message": item.get("message") or item.get("portal_message") or "",
@@ -103,6 +122,245 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
             for item in summary
         ],
     }
+
+
+def _branch_id_for_bank_scope(branch: str, business_id: str = "") -> str:
+    branch_text = str(branch or "").strip()
+    if not branch_text or branch_text in {"all", "*", "__all__", "전체"}:
+        return ""
+    for item in CANONICAL_BRANCHES:
+        if branch_text in {str(item.get("id") or ""), str(item.get("name") or "")}:
+            if business_id and str(item.get("businessId") or "") != business_id:
+                return ""
+            return str(item.get("id") or "")
+    return branch_text
+
+
+def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    business_id = str(payload.get("business_id") or "").strip()
+    branch = str(payload.get("branch") or "").strip()
+    all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"}
+    wanted_business = None if all_businesses else business_id or None
+    wanted_branch = "" if all_businesses else _branch_id_for_bank_scope(branch, business_id)
+    accounts = list_bank_accounts(
+        user,
+        wanted_business,
+        branch_id=wanted_branch or None,
+        status="active",
+    )
+    return [account for account in accounts if account.get("auto_sync") is not False]
+
+
+def _bank_collection_error_code(collection: dict[str, Any]) -> str:
+    error_code = str(collection.get("error_code") or "").strip().upper()
+    if error_code:
+        return error_code
+    connector_status = str(collection.get("connector_status") or "").strip().upper()
+    if connector_status == "NOT_CONFIGURED":
+        return "BANK_CONNECTOR_NOT_CONFIGURED"
+    if connector_status == "ACTION_REQUIRED":
+        return "BANK_ACTION_REQUIRED"
+    return ""
+
+
+def _financial_collection_error_code(item: dict[str, Any]) -> str:
+    error_code = str(item.get("error_code") or "").strip().upper()
+    if error_code:
+        return error_code
+    status = str(item.get("status") or "").strip().lower()
+    if status == "connector_not_configured":
+        return "BANK_CONNECTOR_NOT_CONFIGURED"
+    if status == "credential_required":
+        return "MISSING_CREDENTIALS"
+    if status == "upload_required":
+        return "CSV_UPLOAD_REQUIRED"
+    if status in {"action_required", "blocked"}:
+        return "BANK_ACTION_REQUIRED"
+    return ""
+
+
+def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    try:
+        accounts = _bank_accounts_for_payload(payload, user)
+    except Exception as exc:
+        return [
+            {
+                "service": "bank",
+                "status": "failed",
+                "error_code": "BANK_ACCOUNT_LIST_FAILED",
+                "message": f"은행계좌 목록 조회 실패: {str(exc)[:200]}",
+                "counts": {"transactions": 0},
+            }
+        ]
+
+    for account in accounts:
+        account_id = str(account.get("id") or "").strip()
+        if not account_id:
+            continue
+        collect_payload = {
+            "business_id": str(account.get("business_id") or payload.get("business_id") or ""),
+            "branch_id": str(account.get("branch_id") or ""),
+            "date_from": payload.get("date_from") or "",
+            "date_to": payload.get("date_to") or "",
+            "source": str(account.get("connection_type") or "manual"),
+            "transactions": [],
+        }
+        try:
+            result = collect_bank_account_transactions(account_id, collect_payload, user)
+            collection = dict(result.get("collection") or {})
+            imported_rows = int(collection.get("imported_rows") or 0)
+            duplicate_rows = int(collection.get("duplicate_rows") or 0)
+            collected_rows = int(collection.get("collected_rows") or imported_rows or 0)
+            results.append(
+                {
+                    "service": "bank",
+                    "bank_account_id": account_id,
+                    "business_id": collection.get("business_id") or collect_payload["business_id"],
+                    "branch_id": collection.get("branch_id") or collect_payload["branch_id"],
+                    "status": collection.get("status") or "",
+                    "connector_status": collection.get("connector_status") or "",
+                    "connection_type": collection.get("connection_type") or account.get("connection_type") or "",
+                    "error_code": _bank_collection_error_code(collection),
+                    "counts": {"transactions": imported_rows},
+                    "collected_rows": collected_rows,
+                    "imported_rows": imported_rows,
+                    "duplicate_rows": duplicate_rows,
+                    "message": collection.get("message") or "",
+                    "last_collected_at": collection.get("last_collected_at") or "",
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "service": "bank",
+                    "bank_account_id": account_id,
+                    "business_id": collect_payload["business_id"],
+                    "branch_id": collect_payload["branch_id"],
+                    "status": "failed",
+                    "connector_status": "FAILED",
+                    "connection_type": str(account.get("connection_type") or ""),
+                    "error_code": "BANK_COLLECT_FAILED",
+                    "counts": {"transactions": 0},
+                    "collected_rows": 0,
+                    "imported_rows": 0,
+                    "duplicate_rows": 0,
+                    "message": f"은행계좌 자동수집 실패: {str(exc)[:200]}",
+                    "last_collected_at": str(account.get("last_synced_at") or ""),
+                }
+            )
+    return results
+
+
+def _platform_financial_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    business_id = str(payload.get("business_id") or "").strip()
+    branch = str(payload.get("branch") or "").strip()
+    all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"}
+    rows = list_platform_accounts(user, None if all_businesses else business_id or None)
+    accounts: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        service = str(row.get("service") or "").strip()
+        if service not in FINANCIAL_TRANSACTION_SERVICES:
+            continue
+        if row.get("auto_sync") is False:
+            continue
+        if not all_businesses:
+            row_branch = str(row.get("branch") or "").strip()
+            if branch and row_branch and row_branch != branch:
+                continue
+        accounts.append(row)
+    return accounts
+
+
+def _collect_platform_financial_accounts(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        accounts = _platform_financial_accounts_for_payload(payload, user)
+    except Exception as exc:
+        return [
+            {
+                "service": "bank",
+                "source_ledger": "platform_accounts",
+                "status": "failed",
+                "error_code": "BANK_ACCOUNT_LIST_FAILED",
+                "message": f"기존 은행/카드 연동 목록 조회 실패: {str(exc)[:200]}",
+                "counts": {"transactions": 0},
+            }
+        ]
+
+    results: list[dict[str, Any]] = []
+    for account in accounts:
+        service = str(account.get("service") or "").strip()
+        account_id = str(account.get("id") or "").strip()
+        if not service or not account_id:
+            continue
+        sync_payload = {
+            "services": [service],
+            "account_id": account_id,
+            "business_id": account.get("business_id") or payload.get("business_id") or "",
+            "branch": account.get("branch") or payload.get("branch") or "",
+            "date_from": payload.get("date_from") or "",
+            "date_to": payload.get("date_to") or "",
+        }
+        try:
+            sync_result = sync_financial_transactions(sync_payload, user)
+            for item in sync_result.get("summary") if isinstance(sync_result.get("summary"), list) else []:
+                imported_rows = int(item.get("imported_rows") or 0)
+                status = str(item.get("status") or "")
+                results.append(
+                    {
+                        "service": service,
+                        "source_ledger": "platform_accounts",
+                        "bank_account_id": account_id,
+                        "business_id": sync_result.get("business_id") or sync_payload["business_id"],
+                        "branch": sync_result.get("branch") or sync_payload["branch"],
+                        "status": status,
+                        "connection_type": account.get("collection_mode") or "",
+                        "error_code": _financial_collection_error_code(item),
+                        "counts": {"transactions": imported_rows},
+                        "collected_rows": imported_rows,
+                        "imported_rows": imported_rows,
+                        "duplicate_rows": 0,
+                        "message": item.get("message") or "",
+                        "last_collected_at": sync_result.get("synced_at") or "",
+                    }
+                )
+        except Exception as exc:
+            results.append(
+                {
+                    "service": service,
+                    "source_ledger": "platform_accounts",
+                    "bank_account_id": account_id,
+                    "business_id": sync_payload["business_id"],
+                    "branch": sync_payload["branch"],
+                    "status": "failed",
+                    "connection_type": str(account.get("collection_mode") or ""),
+                    "error_code": "BANK_COLLECT_FAILED",
+                    "counts": {"transactions": 0},
+                    "collected_rows": 0,
+                    "imported_rows": 0,
+                    "duplicate_rows": 0,
+                    "message": f"기존 은행/카드 연동 자동수집 실패: {str(exc)[:200]}",
+                    "last_collected_at": str(account.get("last_synced_at") or ""),
+                }
+            )
+    return results
+
+
+def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool = False) -> dict[str, Any]:
+    summary = _summary(_run_sync(payload, user, queue_only=queue_only))
+    if queue_only:
+        return summary
+    bank_collections = _collect_bank_accounts(payload, user)
+    bank_collections.extend(_collect_platform_financial_accounts(payload, user))
+    if bank_collections:
+        summary["bank_collections"] = bank_collections
+        summary["bank_totals"] = {
+            "accounts": len(bank_collections),
+            "imported_rows": sum(int(item.get("imported_rows") or 0) for item in bank_collections),
+            "duplicate_rows": sum(int(item.get("duplicate_rows") or 0) for item in bank_collections),
+            "collected_rows": sum(int(item.get("collected_rows") or 0) for item in bank_collections),
+        }
+    return summary
 
 
 def _env_int(name: str, default: int) -> int:
@@ -114,12 +372,18 @@ def _env_int(name: str, default: int) -> int:
 
 def _count_total(item: dict[str, Any]) -> int:
     counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
-    return sum(int(counts.get(kind) or 0) for kind in ("sales", "settlements", "reviews"))
+    return sum(int(counts.get(kind) or 0) for kind in DELIVERY_RECORD_TYPES)
+
+
+def _bank_count_total(item: dict[str, Any]) -> int:
+    counts = item.get("counts") if isinstance(item.get("counts"), dict) else {}
+    return int(item.get("imported_rows") or counts.get("transactions") or 0)
 
 
 def _completion_state(summary: dict[str, Any]) -> dict[str, Any]:
     items = summary.get("summary") if isinstance(summary.get("summary"), list) else []
-    if not items:
+    bank_items = summary.get("bank_collections") if isinstance(summary.get("bank_collections"), list) else []
+    if not items and not bank_items:
         return {
             "complete": False,
             "blocked": False,
@@ -150,13 +414,30 @@ def _completion_state(summary: dict[str, Any]) -> dict[str, Any]:
         else:
             retryable_codes.add(status.upper() or "PENDING")
 
+    for item in bank_items:
+        status = str(item.get("status") or "").strip().lower()
+        error_code = str(item.get("error_code") or "").strip().upper()
+        count_total = _bank_count_total(item)
+        if status in {"completed", "no_records"} or count_total > 0:
+            completed += 1
+            continue
+        pending += 1
+        if error_code in BLOCKING_ERROR_CODES:
+            blocking_codes.add(error_code)
+        elif error_code in RETRYABLE_ERROR_CODES:
+            retryable_codes.add(error_code)
+        elif error_code:
+            retryable_codes.add(error_code)
+        else:
+            retryable_codes.add(status.upper() or "BANK_PENDING")
+
     return {
-        "complete": completed == len(items),
+        "complete": completed == len(items) + len(bank_items),
         "blocked": bool(blocking_codes) and pending > 0,
         "retryable": bool(retryable_codes) or pending > 0,
         "pending": pending,
         "completed": completed,
-        "total": len(items),
+        "total": len(items) + len(bank_items),
         "blocking_codes": sorted(blocking_codes),
         "retryable_codes": sorted(retryable_codes),
     }
@@ -223,7 +504,7 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
         "branch": payload.get("branch") or "",
         "date_from": payload.get("date_from") or "",
         "date_to": payload.get("date_to") or "",
-        "totals": {"sales": 0, "settlements": 0, "reviews": 0},
+        "totals": _empty_delivery_counts(),
         "summary": [
             {
                 "service": service,
@@ -231,7 +512,7 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
                 "branch": payload.get("branch") or "",
                 "status": "failed",
                 "error_code": "ATTEMPT_TIMEOUT",
-                "counts": {"sales": 0, "settlements": 0, "reviews": 0},
+                "counts": _empty_delivery_counts(),
                 "run_id": "",
                 "account_id": "",
                 "message": f"자동수집 단일 시도가 {timeout_seconds}초를 초과해 중단됐습니다. 루프가 다음 시도로 재개합니다.",
@@ -243,7 +524,7 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
 
 def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     if timeout_seconds <= 0:
-        return _run_sync(payload, user, queue_only=False)
+        return _run_collectors(payload, user, queue_only=False)
 
     previous_handler = signal.getsignal(signal.SIGALRM)
 
@@ -253,9 +534,9 @@ def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeou
     signal.signal(signal.SIGALRM, _handle_timeout)
     signal.alarm(timeout_seconds)
     try:
-        return _run_sync(payload, user, queue_only=False)
+        return _run_collectors(payload, user, queue_only=False)
     except _AttemptTimedOut:
-        return _timeout_result(payload, timeout_seconds)
+        return _summary(_timeout_result(payload, timeout_seconds))
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous_handler)
@@ -276,8 +557,7 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
         attempt_payload = dict(base_payload)
         if force_recreate_next:
             attempt_payload["force_recreate_portal_sessions"] = True
-        result = _run_sync_with_timeout(attempt_payload, user, attempt_timeout_seconds)
-        summary = _summary(result)
+        summary = _run_sync_with_timeout(attempt_payload, user, attempt_timeout_seconds)
         state = _completion_state(summary)
         print(
             json.dumps(
@@ -343,8 +623,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.until_complete:
         return _run_until_complete(args, user)
     payload = _payload(args)
-    result = _run_sync(payload, user, queue_only=args.queue_only)
-    print(json.dumps(_summary(result), ensure_ascii=False, indent=2))
+    result = _run_collectors(payload, user, queue_only=args.queue_only)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

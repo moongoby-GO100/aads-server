@@ -27,6 +27,7 @@ PORTAL_CONFIG: dict[str, dict[str, Any]] = {
             "sales": ("매출", "주문내역", "주문 관리"),
             "settlements": ("정산", "정산내역", "부가세 신고자료"),
             "reviews": ("리뷰", "리뷰 관리"),
+            "ads": ("광고", "광고관리", "우리가게클릭", "프로모션", "마케팅"),
         },
     },
     "coupangeats": {
@@ -36,6 +37,7 @@ PORTAL_CONFIG: dict[str, dict[str, Any]] = {
             "sales": ("매출", "주문내역", "주문 관리"),
             "settlements": ("정산", "정산 관리"),
             "reviews": ("리뷰", "리뷰 관리"),
+            "ads": ("광고", "광고관리", "프로모션", "마케팅"),
         },
     },
     "yogiyo": {
@@ -45,6 +47,7 @@ PORTAL_CONFIG: dict[str, dict[str, Any]] = {
             "sales": ("매출", "주문내역", "주문 관리"),
             "settlements": ("정산", "정산내역"),
             "reviews": ("리뷰", "리뷰 관리"),
+            "ads": ("광고", "광고관리", "프로모션", "마케팅"),
         },
     },
     "ddangyo": {
@@ -58,9 +61,12 @@ PORTAL_CONFIG: dict[str, dict[str, Any]] = {
             "sales": ("주문내역",),
             "settlements": ("정산내역",),
             "reviews": ("리뷰관리",),
+            "ads": ("광고관리", "광고", "프로모션"),
         },
     },
 }
+
+DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
 
 CHALLENGE_TERMS = (
     "captcha",
@@ -269,13 +275,26 @@ def normalize_record(
                 "settlement_status": _first(row, ("정산상태", "지급상태", "입금상태", "상태")),
             }
         )
-    else:
+    elif kind == "reviews":
         record.update(
             {
                 "review_id": _first(row, ("리뷰번호", "review id", "id")) or source_id,
                 "rating": _number(_first(row, ("평점", "별점", "rating"))),
                 "review_text": _first(row, ("리뷰내용", "리뷰", "내용", "후기"))[:4000],
                 "reply_status": _first(row, ("답글상태", "답변상태", "사장님 답글")),
+            }
+        )
+    else:
+        record.update(
+            {
+                "campaign_id": _first(row, ("광고번호", "캠페인번호", "ad id", "campaign id", "id")) or source_id,
+                "campaign_name": _first(row, ("캠페인명", "광고명", "상품명", "프로모션명", "campaign", "ad name")),
+                "ad_product": _first(row, ("광고상품", "광고유형", "상품유형", "유형", "product")),
+                "cost_amount": _number(_first(row, ("광고비", "비용", "소진금액", "사용금액", "cost", "spend"))),
+                "impressions": _number(_first(row, ("노출", "노출수", "impressions"))),
+                "clicks": _number(_first(row, ("클릭", "클릭수", "clicks"))),
+                "orders": _number(_first(row, ("주문", "주문수", "전환", "conversions", "orders"))),
+                "sales_amount": _number(_first(row, ("매출", "광고매출", "전환매출", "sales"))),
             }
         )
     return record
@@ -520,7 +539,7 @@ def parse_portal_export(
     normalized_kind = str(kind or "").strip()
     if normalized_service not in PORTAL_CONFIG:
         return {"status": "failed", "error_code": "UNSUPPORTED_PLATFORM", "records": {}, "diagnostics": {}}
-    if normalized_kind not in {"sales", "settlements", "reviews"}:
+    if normalized_kind not in DELIVERY_RECORD_TYPES:
         return {"status": "failed", "error_code": "UNSUPPORTED_RECORD_TYPE", "records": {}, "diagnostics": {}}
 
     raw = str(source_text or "")

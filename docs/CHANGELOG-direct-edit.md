@@ -5132,3 +5132,27 @@ fro
 - Chat-Direct 수정: patch:     assert calls == [
         "http://12→    assert calls == [
         "http://aa
+
+## [2026-08-20 19:37:57 KST] [aads-server] tests/unit/test_yeoljeong_auto_collect.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -m pytest tests/unit/test_chat_lightweight_regre
+
+## [2026-08-20 19:41:08 KST] [aads-server] tests/unit/test_pc_agent_release_guards.py
+- Chat-Direct 수정: write: tests/unit/test_pc_agent_release_guards.py
+
+## [2026-08-20 19:41:30 KST] [aads-server] tests/unit/test_pc_agent_release_guards.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_pc_agent_release_guards.py /root/aads
+
+## [2026-08-20 19:46:00 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: run_remote_command: sleep 90; git -C /root/aads/aads-server log --oneline -2
+
+## [2026-08-20 19:47:34 KST] [aads-server] tests/unit/test_pc_agent_release_guards.py
+- Chat-Direct 수정: write: tests/unit/test_pc_agent_release_guards.py
+
+## [2026-08-20 19:47:42 KST] [aads-server] tests/unit/test_pc_agent_release_guards.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_pc_agent_release_guards.py /root/aads
+
+## [2026-08-20 19:50:44 KST] [aads-server] scripts/deploy_retry_until_drained.sh
+- Chat-Direct 수정: write: scripts/deploy_retry_until_drained.sh
+
+## [2026-08-20 19:51:48 KST] [aads-server] app/api/pipeline_runner.py
+- Chat-Direct 수정: run_remote_command: nohup bash /root/aads/aads-server/scripts/deploy_retry_until_drained.sh > /tmp/d

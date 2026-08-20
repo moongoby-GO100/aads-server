@@ -8420,6 +8420,7 @@
           pendingAutoSync = result.sync || null;
           if (financialTransactionServices.has(data.service) && (accountNoMasked || data.accountNo)) {
             const branchId = branchIdForName(data.branch || "");
+            const bankConnectionType = collectionMode === "bank-excel" ? "csv" : "browser";
             const bankPayload = {
               business_id: data.businessId,
               branch_id: branchId,
@@ -8429,7 +8430,8 @@
               account_number_masked: accountNoMasked,
               account_holder: data.authOwner || "",
               account_alias: String(data.label || "").trim(),
-              connection_type: collectionMode === "bank-excel" ? "csv" : "mock",
+              connection_type: bankConnectionType,
+              connector_type: bankConnectionType === "browser" ? "bank-browser" : "csv",
               status: "active",
               institution_code: data.institutionCode || "",
               memo,

@@ -701,6 +701,34 @@ def test_upsert_bank_quick_service_requires_account_password_and_business_no(tmp
         raise AssertionError("quick service credentials should require account password and business no")
 
 
+def test_list_accounts_marks_incomplete_bank_quick_service_as_credential_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "legacy-bank",
+                "service": "ibk_business",
+                "label": "중화점 IBK 빠른조회",
+                "username": "quick-user",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "status": "credential_registered",
+                "auto_sync": True,
+                "account_no_masked": "********1234",
+                "business_registration_no_masked": "******4499",
+            }
+        ],
+    )
+
+    accounts = service.list_accounts({"email": "owner@example.com", "is_admin": True}, "biz-junghwa")
+
+    assert accounts[0]["status"] == "credential_required"
+    assert "로그인 비밀번호" in accounts[0]["credential_requirements"]
+    assert "계좌비밀번호" in accounts[0]["credential_requirements"]
+
+
 def test_upsert_account_updates_existing_id_and_preserves_bank_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
@@ -932,6 +960,18 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
                         "review_text": "맛있어요",
                     }
                 ],
+                "ads": [
+                    {
+                        "id": "ad-1",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "record_type": "ads",
+                        "occurred_on": "2026-07-04",
+                        "campaign_name": "우리가게클릭",
+                        "cost_amount": 3000,
+                    }
+                ],
             },
             "diagnostics": {"sales": "fixture"},
         }
@@ -952,15 +992,19 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
     assert first["totals"]["sales"] == 1
     assert first["totals"]["settlements"] == 1
     assert first["totals"]["reviews"] == 1
+    assert first["totals"]["ads"] == 1
     assert len(first["records"]) == 2
     assert len(first["sales"]) == 1
     assert len(first["settlements"]) == 1
     assert len(first["reviews"]) == 1
+    assert len(first["ads"]) == 1
     assert first["summary"][0]["portal_status"] == "succeeded"
     assert second["totals"]["sales"] == 1
+    assert second["totals"]["ads"] == 1
     assert len(service.list_sales(user, "biz-mia")) == 1
     assert len(service.list_settlements(user, "biz-mia")) == 1
     assert len(service.list_reviews(user, "biz-mia")) == 1
+    assert len(service.list_ads(user, "biz-mia")) == 1
     statuses = service.list_collection_status(user, "biz-mia")
     assert len(statuses) == 2
     assert all(row["status"] == "succeeded" for row in statuses)
@@ -1060,7 +1104,7 @@ def test_sync_delivery_portal_csv_account_requests_upload_without_browser(tmp_pa
 
     assert result["summary"][0]["status"] == "action_required"
     assert result["summary"][0]["error_code"] == "CSV_UPLOAD_REQUIRED"
-    assert result["totals"] == {"sales": 0, "settlements": 0, "reviews": 0}
+    assert result["totals"] == {"sales": 0, "settlements": 0, "reviews": 0, "ads": 0}
     assert service.list_collection_status({"email": "owner@example.com", "is_admin": True}, "biz-mia")[0]["message"]
 
 
@@ -1822,6 +1866,35 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
     assert "중화점" not in auth["browser_work_key"]
     assert auth["browser_target_url"].startswith("https://")
     assert fake_bridge.calls[0]["url"] == "about:blank"
+
+
+@pytest.mark.asyncio
+async def test_delivery_bridge_page_for_service_prefers_matching_service_tab():
+    class FakePage:
+        def __init__(self, url):
+            self.url = url
+
+        async def evaluate(self, script):
+            return self.url
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = [
+                FakePage("about:blank"),
+                FakePage("https://self.baemin.com/"),
+            ]
+            self.new_page_called = False
+
+        async def new_page(self):
+            self.new_page_called = True
+            return FakePage("about:blank")
+
+    context = FakeContext()
+
+    page = await service._delivery_bridge_page_for_service(context, "baemin")
+
+    assert page.url == "https://self.baemin.com/"
+    assert context.new_page_called is False
 
 
 def test_delivery_browser_auth_for_account_prefers_saved_password_headless(monkeypatch):
