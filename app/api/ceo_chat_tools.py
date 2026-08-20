@@ -1997,6 +1997,98 @@ _REMOTE_CMD_BLOCKED = re.compile(
     re.IGNORECASE,
 )
 
+_COMPOSE_OPTIONS_WITH_VALUE = frozenset({
+    "-f",
+    "--file",
+    "-p",
+    "--project-name",
+    "--profile",
+    "--project-directory",
+    "--env-file",
+    "--parallel",
+    "--ansi",
+    "--progress",
+})
+_COMPOSE_UP_OPTIONS_WITH_VALUE = frozenset({
+    "--scale",
+    "--timeout",
+    "--exit-code-from",
+    "--abort-on-container-exit",
+    "--abort-on-container-failure",
+    "--attach",
+    "--attach-dependencies",
+    "--menu",
+})
+_COMPOSE_SERVICELESS_UP_FLAGS = frozenset({
+    "-d",
+    "--detach",
+    "--build",
+    "--no-build",
+    "--no-deps",
+    "--pull",
+    "--force-recreate",
+    "--no-recreate",
+    "--remove-orphans",
+    "--renew-anon-volumes",
+    "-V",
+    "--wait",
+    "--quiet-pull",
+    "--always-recreate-deps",
+})
+
+
+def _docker_compose_arg_start(tokens: List[str]) -> int:
+    """Return the index after `docker compose`/`docker-compose`, or 0 if not compose."""
+    if len(tokens) >= 2 and tokens[0] == "docker" and tokens[1] == "compose":
+        return 2
+    if tokens and tokens[0] == "docker-compose":
+        return 1
+    return 0
+
+
+def _compose_subcommand_index(tokens: List[str], arg_start: int) -> int:
+    """Find docker compose subcommand after global options such as `-f file`."""
+    i = arg_start
+    while i < len(tokens):
+        token = tokens[i]
+        if token in _COMPOSE_OPTIONS_WITH_VALUE:
+            i += 2
+            continue
+        if any(token.startswith(f"{opt}=") for opt in _COMPOSE_OPTIONS_WITH_VALUE if opt.startswith("--")):
+            i += 1
+            continue
+        if token.startswith("-"):
+            i += 1
+            continue
+        return i
+    return -1
+
+
+def _compose_up_service_targets(tokens: List[str], subcommand_index: int) -> List[str]:
+    """Return service-like args after `up`, ignoring common `up` options."""
+    services: List[str] = []
+    i = subcommand_index + 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in _COMPOSE_UP_OPTIONS_WITH_VALUE:
+            i += 2
+            continue
+        if any(token.startswith(f"{opt}=") for opt in _COMPOSE_UP_OPTIONS_WITH_VALUE if opt.startswith("--")):
+            i += 1
+            continue
+        if token in _COMPOSE_SERVICELESS_UP_FLAGS or token.startswith("-"):
+            i += 1
+            continue
+        services.append(token)
+        i += 1
+    return services
+
+
+def _aads_compose_guard_command(tokens: List[str], arg_start: int) -> str:
+    """Route direct docker compose calls through the host guard script."""
+    guarded = ["/root/aads/aads-server/scripts/docker-compose-guard.sh", *tokens[arg_start:]]
+    return shlex.join(guarded)
+
 # ─── 보안 상수 ─────────────────────────────────────────────────────────────────
 # CEO 지시: 경로 제한 해제 — 민감 파일만 블랙리스트
 _FILE_BLACKLIST = ["/root/.ssh", "/root/.env", "/etc/shadow", "/etc/gshadow"]
@@ -2708,32 +2800,45 @@ async def tool_run_remote_command(project: str, command: str) -> str:
 
     # 보안 2.5, 3: docker exec 컨테이너 제한 + 파이프/세미콜론 차단 — CEO 지시로 전면 해제
 
-    # AADS 프로젝트: docker compose 명령 → deploy.sh 안전 리다이렉트
+    # AADS 프로젝트: docker compose 명령 → guard/deploy.sh 안전 경로로 강제
     if project == "AADS":
         _deploy_redirect = None
+        _compose_arg_start = _docker_compose_arg_start(cmd_tokens)
+        _compose_subcmd = ""
+        _compose_services: List[str] = []
+        if _compose_arg_start:
+            _subcmd_idx = _compose_subcommand_index(cmd_tokens, _compose_arg_start)
+            if _subcmd_idx >= 0:
+                _compose_subcmd = cmd_tokens[_subcmd_idx].lower()
+                if _compose_subcmd == "up":
+                    _compose_services = _compose_up_service_targets(cmd_tokens, _subcmd_idx)
         # docker compose down → 차단 (전체 컨테이너 삭제 위험)
-        if re.search(r"docker[\s-]+compose\s+down", command):
-            logger.warning("deploy_blocked_compose_down", command=command[:120])
+        if _compose_subcmd == "down":
+            logger.warning("deploy_blocked_compose_down command=%s", command[:120])
             return "[BLOCKED] docker compose down은 postgres 데이터 유실 위험. deploy.sh를 사용하세요."
         # docker stop <aads 컨테이너> → 차단
         if re.search(r"docker\s+(stop|kill)\s+aads-(postgres|redis|socket-proxy|litellm)", command):
-            logger.warning("deploy_blocked_container_stop", command=command[:120])
+            logger.warning("deploy_blocked_container_stop command=%s", command[:120])
             return "[BLOCKED] 의존 컨테이너 직접 정지는 서비스 장애를 유발합니다."
         # --force-recreate → 차단 (2026-08-20 인시던트: Blue/Green 동시 강제 재생성으로 26분 다운)
-        if re.search(r"--force-recreate", command, re.IGNORECASE):
-            logger.warning("deploy_blocked_force_recreate", command=command[:120])
+        if _compose_arg_start and any(t.lower() == "--force-recreate" for t in cmd_tokens):
+            logger.warning("deploy_blocked_force_recreate command=%s", command[:120])
             return "[BLOCKED] deploy.sh bluegreen을 사용하세요. 직접 docker compose 호출은 차단됩니다."
-        # 서비스명 없는 bare `docker compose up -d` / `docker-compose up -d` → 차단 (전체 재기동 위험)
-        if re.search(r"docker[\s-]+compose\s+up\s+-d\s*$", command.strip(), re.IGNORECASE):
-            logger.warning("deploy_blocked_bare_compose_up", command=command[:120])
+        # 서비스명 없는 bare `docker compose up` 계열 → 차단 (전체 재기동 위험)
+        if _compose_subcmd == "up" and not _compose_services:
+            logger.warning("deploy_blocked_bare_compose_up command=%s", command[:120])
             return "[BLOCKED] deploy.sh bluegreen을 사용하세요. 직접 docker compose 호출은 차단됩니다."
-        # docker compose up/build/restart → deploy.sh 리다이렉트 (하이픈 형식도 포함)
-        if re.search(r"docker[\s-]+compose\s+(up|build|restart)", command) and "aads" in command.lower():
+        # docker compose up/build/restart → deploy.sh 리다이렉트.
+        # `docker compose -f ... up -d --no-deps aads-server`처럼 옵션이 앞에 와도 잡는다.
+        if _compose_subcmd in {"up", "build", "restart"} and "aads" in command.lower():
             _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
+        elif _compose_arg_start:
+            # ps/logs/pull 등 조회성·비재시작 compose 명령도 직접 compose 대신 guard 래퍼를 경유한다.
+            command = _aads_compose_guard_command(cmd_tokens, _compose_arg_start)
         elif re.search(r"docker\s+restart\s+aads-server", command):
             _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
         if _deploy_redirect:
-            logger.warning("deploy_intercept", original=command[:120], redirect=_deploy_redirect)
+            logger.warning("deploy_intercept original=%s redirect=%s", command[:120], _deploy_redirect)
             command = _deploy_redirect
 
         workdir = get_workdir("AADS") or "/root"

@@ -20,6 +20,91 @@ ACTIVE_CONTAINER_FILE="${WORKDIR}/.active_container"
 ARGS=("$@")
 ARGS_STR="$*"
 
+option_takes_value() {
+  case "$1" in
+    -f|--file|-p|--project-name|--profile|--project-directory|--env-file|--parallel|--ansi|--progress)
+      return 0
+      ;;
+    --file=*|--project-name=*|--profile=*|--project-directory=*|--env-file=*|--parallel=*|--ansi=*|--progress=*)
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+up_option_takes_value() {
+  case "$1" in
+    --scale|--timeout|--exit-code-from|--abort-on-container-exit|--abort-on-container-failure|--attach|--attach-dependencies|--menu)
+      return 0
+      ;;
+    --scale=*|--timeout=*|--exit-code-from=*|--abort-on-container-exit=*|--abort-on-container-failure=*|--attach=*|--attach-dependencies=*|--menu=*)
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_service_optionless_up_flag() {
+  case "$1" in
+    -d|--detach|--build|--no-build|--no-deps|--pull|--force-recreate|--no-recreate|--remove-orphans|--renew-anon-volumes|-V|--wait|--quiet-pull|--always-recreate-deps)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+find_subcommand_index() {
+  local i=0
+  while [ "$i" -lt "${#ARGS[@]}" ]; do
+    local token="${ARGS[$i]}"
+    if option_takes_value "$token"; then
+      i=$((i + 2))
+      continue
+    fi
+    if [[ "$token" == --*=* ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    if [[ "$token" == -* ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    echo "$i"
+    return 0
+  done
+  echo "-1"
+}
+
+up_service_count() {
+  local sub_idx="$1"
+  local i=$((sub_idx + 1))
+  local count=0
+  while [ "$i" -lt "${#ARGS[@]}" ]; do
+    local token="${ARGS[$i]}"
+    if up_option_takes_value "$token"; then
+      i=$((i + 2))
+      continue
+    fi
+    if [[ "$token" == --*=* ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    if is_service_optionless_up_flag "$token" || [[ "$token" == -* ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    count=$((count + 1))
+    i=$((i + 1))
+  done
+  echo "$count"
+}
+
 if [ "${AADS_ALLOW_DIRECT_COMPOSE:-false}" = "true" ]; then
   echo "[WARN] AADS_ALLOW_DIRECT_COMPOSE=true — 가드를 우회하여 직접 실행합니다." >&2
   exec docker compose "${ARGS[@]}"
@@ -33,22 +118,29 @@ if [[ "$ARGS_STR" == *"--force-recreate"* ]]; then
   exit 1
 fi
 
-# 2) 서비스명 없는 bare `up -d` (전체 재기동) 차단
-#    마지막 두 인자가 정확히 "up" "-d" 이면 뒤에 서비스명이 없는 전체 up으로 간주
-_arg_count=${#ARGS[@]}
-if [ "$_arg_count" -ge 2 ]; then
-  _last_idx=$((_arg_count - 1))
-  _prev_idx=$((_arg_count - 2))
-  if [ "${ARGS[$_last_idx]}" = "-d" ] && [ "${ARGS[$_prev_idx]}" = "up" ]; then
-    echo "[BLOCKED] 서비스명 없는 'docker compose up -d' 전체 재기동은 차단됩니다." >&2
+SUBCOMMAND_INDEX="$(find_subcommand_index)"
+SUBCOMMAND=""
+if [ "$SUBCOMMAND_INDEX" -ge 0 ]; then
+  SUBCOMMAND="${ARGS[$SUBCOMMAND_INDEX]}"
+fi
+
+# 2) 서비스명 없는 bare `up` 또는 --no-deps 없는 `up` 차단
+if [ "$SUBCOMMAND" = "up" ]; then
+  SERVICE_COUNT="$(up_service_count "$SUBCOMMAND_INDEX")"
+  if [ "$SERVICE_COUNT" -eq 0 ]; then
+    echo "[BLOCKED] 서비스명 없는 'docker compose up' 전체 재기동은 차단됩니다." >&2
     echo "          postgres/litellm/aads-server가 동시 재생성되어 서비스 전체가 중단될 수 있습니다." >&2
     echo "          단일 서비스를 지정하거나(--no-deps <service>) 'deploy.sh bluegreen'을 사용하세요." >&2
     exit 1
   fi
-elif [ "$_arg_count" -eq 1 ] && [ "${ARGS[0]}" = "up" ]; then
-  # `docker compose up` (단독, -d도 서비스명도 없음)
-  echo "[BLOCKED] 서비스명 없는 'docker compose up' 전체 재기동은 차단됩니다." >&2
-  echo "          단일 서비스를 지정하거나 'deploy.sh bluegreen'을 사용하세요." >&2
+  if [[ "$ARGS_STR" != *"--no-deps"* ]]; then
+    echo "[BLOCKED] '--no-deps' 없는 'docker compose up <service>'는 의존 컨테이너 재생성 위험이 있어 차단됩니다." >&2
+    echo "          단일 서비스 직접 기동은 '--no-deps <service>'를 명시하거나 'deploy.sh bluegreen'을 사용하세요." >&2
+    exit 1
+  fi
+elif [ "$SUBCOMMAND" = "down" ]; then
+  echo "[BLOCKED] 'docker compose down'은 데이터/의존 컨테이너 중단 위험이 있어 차단됩니다." >&2
+  echo "          무중단 배포는 'deploy.sh bluegreen'을 사용하세요." >&2
   exit 1
 fi
 
@@ -59,6 +151,11 @@ if [ -f "$ACTIVE_CONTAINER_FILE" ]; then
     echo "[경고] 현재 ACTIVE 슬롯(${ACTIVE_CONTAINER})을 직접 대상으로 하는 명령입니다." >&2
     echo "        무중단 배포가 필요하면 'deploy.sh bluegreen' 사용을 권장합니다." >&2
   fi
+fi
+
+if [ "${AADS_COMPOSE_GUARD_DRY_RUN:-false}" = "true" ]; then
+  echo "[DRY-RUN] docker compose ${ARGS_STR}"
+  exit 0
 fi
 
 exec docker compose "${ARGS[@]}"

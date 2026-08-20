@@ -19,6 +19,7 @@ import os
 import sys
 import re
 import json
+import subprocess
 from uuid import uuid4
 
 # 프로젝트 루트
@@ -220,6 +221,94 @@ class TestRunRemoteCommandSecurity:
         result = await tool_run_remote_command("AADS", "rm -rf /")
         # 차단 또는 에러 반환
         assert "[ERROR]" in result or "차단" in result or "금지" in result
+
+    def test_compose_parser_detects_options_before_up(self):
+        from app.api.ceo_chat_tools import (
+            _compose_subcommand_index,
+            _compose_up_service_targets,
+            _docker_compose_arg_start,
+        )
+
+        tokens = [
+            "docker",
+            "compose",
+            "-f",
+            "/root/aads/aads-server/docker-compose.prod.yml",
+            "--profile",
+            "green",
+            "up",
+            "-d",
+            "--build",
+            "--no-deps",
+            "aads-server-green",
+        ]
+        arg_start = _docker_compose_arg_start(tokens)
+        sub_idx = _compose_subcommand_index(tokens, arg_start)
+
+        assert arg_start == 2
+        assert tokens[sub_idx] == "up"
+        assert _compose_up_service_targets(tokens, sub_idx) == ["aads-server-green"]
+
+    @pytest.mark.asyncio
+    async def test_aads_compose_up_with_file_and_no_service_blocked(self):
+        from app.api.ceo_chat_tools import tool_run_remote_command
+
+        result = await tool_run_remote_command(
+            "AADS",
+            "docker compose -f /root/aads/aads-server/docker-compose.prod.yml up -d",
+        )
+
+        assert "[BLOCKED]" in result
+        assert "deploy.sh bluegreen" in result
+
+    @pytest.mark.asyncio
+    async def test_aads_compose_force_recreate_blocked_with_file_option(self):
+        from app.api.ceo_chat_tools import tool_run_remote_command
+
+        result = await tool_run_remote_command(
+            "AADS",
+            "docker compose -f /root/aads/aads-server/docker-compose.prod.yml up -d --force-recreate aads-server",
+        )
+
+        assert "[BLOCKED]" in result
+        assert "직접 docker compose 호출은 차단" in result
+
+
+class TestDockerComposeGuardScript:
+    """docker-compose-guard.sh 자체 차단 규칙 테스트."""
+
+    def test_guard_blocks_file_option_bare_up(self):
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "scripts",
+            "docker-compose-guard.sh",
+        )
+        result = subprocess.run(
+            [script, "-f", "/root/aads/aads-server/docker-compose.prod.yml", "up", "-d"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 1
+        assert "서비스명 없는" in result.stderr
+
+    def test_guard_allows_no_deps_service_in_dry_run(self):
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "scripts",
+            "docker-compose-guard.sh",
+        )
+        result = subprocess.run(
+            [script, "-f", "/root/aads/aads-server/docker-compose.prod.yml", "up", "-d", "--no-deps", "aads-server-green"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "AADS_COMPOSE_GUARD_DRY_RUN": "true"},
+        )
+
+        assert result.returncode == 0
+        assert "[DRY-RUN]" in result.stdout
 
 
 # ═══════════════════════════════════════════════════════════════════
