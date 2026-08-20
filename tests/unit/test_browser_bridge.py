@@ -283,10 +283,12 @@ def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
 
     urls = BrowserBridgeService._active_api_route_urls("8102")
 
-    assert urls[:3] == [
+    assert urls[:5] == [
         "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
+        "http://aads-server:8080/api/v1/pc-agent/route-execute",
         "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
         "http://127.0.0.1:8102/api/v1/pc-agent/route-execute",
+        "http://host.docker.internal:8102/api/v1/pc-agent/route-execute",
     ]
     assert "http://host.docker.internal:8102/api/v1/pc-agent/route-execute" in urls
     assert "http://172.18.0.1:8102/api/v1/pc-agent/route-execute" in urls
@@ -294,9 +296,12 @@ def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
     assert "http://aads-server-green:8080/api/v1/pc-agent/route-execute" in urls
 
 
-def test_active_api_route_urls_loopback_8080_before_named_container_and_external_ports(monkeypatch) -> None:
-    """Without an active container, 127.0.0.1:8080 must be tried before
-    named-container DNS names and before external blue/green port candidates."""
+def test_active_api_route_urls_named_container_before_loopback_8080_and_external_ports(monkeypatch) -> None:
+    """Sidecar containers must try Docker service DNS before loopback.
+
+    In yeoljeong-finance-worker, 127.0.0.1:8080 points back to the worker
+    itself, not the AADS API container.
+    """
     monkeypatch.setattr(
         BrowserBridgeService,
         "_active_container_name",
@@ -314,8 +319,8 @@ def test_active_api_route_urls_loopback_8080_before_named_container_and_external
     named_idx = urls.index("http://aads-server:8080/api/v1/pc-agent/route-execute")
     external_idx = urls.index("http://127.0.0.1:8100/api/v1/pc-agent/route-execute")
 
-    assert urls[0] == "http://127.0.0.1:8080/api/v1/pc-agent/route-execute"
-    assert loopback_idx < named_idx
+    assert urls[0] == "http://aads-server:8080/api/v1/pc-agent/route-execute"
+    assert named_idx < loopback_idx
     assert loopback_idx < external_idx
 
 
@@ -418,9 +423,8 @@ async def test_active_api_fallback_surfaces_non_routing_http_error(monkeypatch) 
     )
 
     assert calls == [
-        "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
         "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
-        "http://127.0.0.1:8102/api/v1/pc-agent/route-execute",
+        "http://aads-server:8080/api/v1/pc-agent/route-execute",
     ]
     assert result is not None
     assert result["message"] == "파일을 찾을 수 없습니다"
