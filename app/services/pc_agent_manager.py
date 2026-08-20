@@ -1371,6 +1371,12 @@ class PCAgentManager:
                 error_code=mapped_error,
                 error_message=str((command_result.result or {}).get("error", "command failed")),
             )
+            completion_cleanup = await self._cleanup_browser_session_on_completion(
+                agent_id=selected_agent_id,
+                command_type=command_type,
+                params=request_params,
+                timeout_seconds=effective_command_timeout_seconds,
+            )
             refreshed = await self.get_lease(lease_id)
             return {
                 "status": "error",
@@ -1379,6 +1385,7 @@ class PCAgentManager:
                 "command_id": command_id,
                 "lease": refreshed or lease_for_return or lease_payload,
                 "result": command_result.model_dump(mode="json"),
+                "completion_cleanup": completion_cleanup,
             }
 
         completion_cleanup = await self._cleanup_browser_session_on_completion(

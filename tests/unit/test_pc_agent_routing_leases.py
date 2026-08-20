@@ -360,6 +360,60 @@ async def test_execute_routed_command_close_on_complete_triggers_session_cleanup
 
 
 @pytest.mark.asyncio
+async def test_execute_routed_command_error_close_on_complete_triggers_session_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    sent: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_send_command(_agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        sent.append((command_type, dict(params)))
+        return f"cmd-{len(sent)}"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        if command_id == "cmd-1":
+            return CommandResult(
+                command_id=command_id,
+                agent_id="ceo-pc",
+                status="error",
+                result={"error": "page crashed", "error_code": "BROWSER_COMMAND_FAILED"},
+            )
+        return CommandResult(
+            command_id=command_id,
+            agent_id="ceo-pc",
+            status="success",
+            result={"ok": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_eval",
+        params={
+            "expression": "document.title",
+            "work_key": "aads-ceo-browser",
+            "close_on_complete": True,
+        },
+        command_timeout_seconds=5.0,
+        lease_ttl_seconds=35,
+    )
+
+    assert result["status"] == "error"
+    assert len(sent) == 2
+    assert sent[0][0] == "browser_eval"
+    assert sent[1][0] == "browser_close_session"
+    assert sent[1][1]["work_key"] == "aads-ceo-browser"
+
+
+@pytest.mark.asyncio
 async def test_browser_jobs_prefer_configured_default_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

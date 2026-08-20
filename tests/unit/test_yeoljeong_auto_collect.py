@@ -29,6 +29,15 @@ def test_payload_passes_force_recreate_sessions_flag():
     assert payload["business_id"] == "biz-junghwa"
     assert payload["branch"] == "중화점"
     assert payload["force_recreate_portal_sessions"] is True
+    assert payload["close_portal_browser_on_complete"] is True
+
+
+def test_payload_can_keep_browser_open_for_manual_debugging():
+    args = auto_collect.build_parser().parse_args(["--keep-browser-open"])
+
+    payload = auto_collect._payload(args)
+
+    assert payload["close_portal_browser_on_complete"] is False
 
 
 def test_run_collectors_collects_auto_sync_bank_accounts(monkeypatch):

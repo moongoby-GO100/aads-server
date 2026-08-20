@@ -4849,6 +4849,10 @@ def _delivery_browser_auth_for_account(
         bridge_service = get_browser_bridge_service()
         session = None
         errors: list[str] = []
+        close_on_complete = bool(
+            payload.get("close_portal_browser_on_complete")
+            or payload.get("closePortalBrowserOnComplete")
+        )
         for attempt in range(3):
             try:
                 ensure_kwargs: dict[str, Any] = {
@@ -4879,6 +4883,7 @@ def _delivery_browser_auth_for_account(
             auth["browser_session_id"] = str(getattr(session, "session_id", "") or "")
             auth["browser_bridge_mode"] = "local_agent"
             auth["browser_work_key"] = work_key
+            auth["browser_close_on_complete"] = "1" if close_on_complete else ""
             if pc_agent_id:
                 auth["browser_agent_id"] = pc_agent_id
             if force_recreate_session:
@@ -4904,6 +4909,73 @@ def _run_delivery_browser_async(coro: Any) -> Any:
     if callable(close):
         close()
     raise RuntimeError("delivery browser automation cannot run inside an active event loop")
+
+
+async def _close_delivery_browser_work_session_async(
+    browser_auth: dict[str, Any],
+    *,
+    reason: str,
+) -> None:
+    if str(browser_auth.get("browser_close_on_complete") or "") != "1":
+        return
+    session_id = str(browser_auth.get("browser_session_id") or "").strip()
+    work_key = str(browser_auth.get("browser_work_key") or "").strip()
+    if not session_id and not work_key:
+        return
+    try:
+        from app.browser_bridge.service import get_browser_bridge_service
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        bridge = get_browser_bridge_service()
+        session = bridge.sessions.get(session_id) if session_id else None
+        metadata = dict(getattr(getattr(session, "endpoint", None), "metadata", None) or {})
+        agent_id = str(browser_auth.get("browser_agent_id") or metadata.get("agent_id") or "").strip()
+        close_work_key = work_key or str(metadata.get("work_key") or "").strip()
+        if agent_id and close_work_key:
+            close_params = {
+                "work_key": close_work_key,
+                "close_browser": True,
+                "close_tabs": True,
+                "reason": reason,
+                "command_timeout_seconds": 10,
+            }
+            close_result = await pc_agent_manager.execute_routed_command(
+                command_type="browser_close_session",
+                params=close_params,
+                agent_id=agent_id,
+                job_type=f"browser_bridge_cleanup_{session_id or close_work_key}",
+                required_capabilities=["interactive_browser"],
+                queue_if_busy=True,
+                wait_for_turn=True,
+                queue_wait_timeout_seconds=10,
+                lease_ttl_seconds=30,
+                command_timeout_seconds=10,
+            )
+            if (
+                isinstance(close_result, dict)
+                and close_result.get("status") != "success"
+                and str(close_result.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
+            ):
+                await bridge._execute_pc_agent_route_via_active_api(
+                    command_type="browser_close_session",
+                    params=close_params,
+                    agent_id=agent_id,
+                    job_type=f"browser_bridge_cleanup_{session_id or close_work_key}",
+                    required_capabilities=["interactive_browser"],
+                    queue_wait_timeout_seconds=10,
+                    lease_ttl_seconds=30,
+                    command_timeout_seconds=10,
+                )
+        if session_id:
+            bridge.sessions.retire_session(
+                session_id,
+                stale_reason=reason,
+                clear_work_key=True,
+                clear_active=False,
+                clear_lease=True,
+            )
+    except Exception:
+        return
 
 
 _DELIVERY_SERVICE_URL_MARKERS = {
@@ -5980,6 +6052,11 @@ async def _collect_delivery_from_browser_bridge_session_async(
             },
             "message": str(exc)[:300],
         }
+    finally:
+        await _close_delivery_browser_work_session_async(
+            browser_auth,
+            reason=f"delivery_collect_complete_{service or 'portal'}",
+        )
 
 
 async def _collect_baemin_from_browser_bridge_session_async(
@@ -6197,6 +6274,11 @@ async def _collect_baemin_from_browser_bridge_session_async(
             },
             "message": str(exc)[:300],
         }
+    finally:
+        await _close_delivery_browser_work_session_async(
+            browser_auth,
+            reason="delivery_collect_complete_baemin",
+        )
 
 
 def _collect_baemin_from_browser_bridge_session(

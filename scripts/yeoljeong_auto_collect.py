@@ -93,6 +93,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "browser_session_id": args.browser_session_id or "",
         "storage_state_path": args.storage_state_path or "",
         "force_recreate_portal_sessions": bool(args.force_recreate_sessions),
+        "close_portal_browser_on_complete": not bool(args.keep_browser_open),
     }
 
 
@@ -602,6 +603,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-recreate-sessions",
         action="store_true",
         help="Recreate each delivery portal work-key browser session before collecting.",
+    )
+    parser.add_argument(
+        "--keep-browser-open",
+        action="store_true",
+        help="Keep PC Agent portal browser sessions open after each collection attempt.",
     )
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")

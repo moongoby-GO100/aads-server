@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-08-21 07:49 KST - Yeoljeong PC Agent browser cleanup deploy follow-up
+
+- Trigger: CEO requested commit, push, and deployment completion for the bank/delivery auto-collection work.
+- Changes:
+  - `app/services/pc_agent_manager.py`: routed PC Agent commands now run `close_on_complete` browser cleanup even when the primary browser command returns an error.
+  - `app/services/yeoljeong_finance_service.py`: delivery Browser Bridge collections can mark portal work sessions for close-on-complete and retire the work session after collection attempts.
+  - `scripts/yeoljeong_auto_collect.py`: auto-collect payload now closes portal browser sessions by default, with `--keep-browser-open` retained for manual debugging.
+  - Added unit coverage for error-path browser cleanup and the auto-collect keep-open flag.
+- Verification before commit:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_routing_leases.py tests/unit/test_yeoljeong_auto_collect.py -q` passed: 27 passed.
+  - `.venv-playwright/bin/python -m py_compile app/services/pc_agent_manager.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
+- Deployment status:
+  - Commit/push/deploy to be completed in the same session after this HANDOVER entry.
+
 ## 2026-08-20 20:00 KST - Runner Codex 5.6 P1 rollout final verification
 
 - Request: Make `codex:gpt-5.6-luna`, `codex:gpt-5.6-sol`, and `codex:gpt-5.6-terra` usable by actual runner jobs, and make runner jobs follow admin model settings across all three runner servers.
