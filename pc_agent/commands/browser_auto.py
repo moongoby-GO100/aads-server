@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -1778,6 +1779,116 @@ async def browser_close_tab(params: Dict[str, Any]) -> Dict[str, Any]:
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
+
+
+def _terminate_browser_process(pid: int) -> dict[str, Any]:
+    if pid <= 0:
+        return {"attempted": False, "reason": "pid_missing"}
+    try:
+        if sys.platform == "win32":
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return {
+                "attempted": True,
+                "pid": pid,
+                "success": completed.returncode == 0,
+                "returncode": completed.returncode,
+            }
+        os.kill(pid, signal.SIGTERM)
+        return {"attempted": True, "pid": pid, "success": True, "signal": "SIGTERM"}
+    except ProcessLookupError:
+        return {"attempted": True, "pid": pid, "success": True, "already_exited": True}
+    except Exception as exc:
+        return {"attempted": True, "pid": pid, "success": False, "error": str(exc)}
+
+
+async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Close a managed browser session for one work_key and release CDP bookkeeping."""
+    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+    close_tabs = _as_bool(params.get("close_tabs", True), default=True)
+    close_browser = _as_bool(params.get("close_browser", True), default=True)
+    keep_last = _as_bool(params.get("keep_last", False), default=False)
+    reason = str(params.get("reason", "") or "")
+    session = CDPSessionManager.get_session(work_key)
+    if not session:
+        return {
+            "status": "success",
+            "data": {
+                "work_key": work_key,
+                "closed_tabs": 0,
+                "session_released": False,
+                "process": {"attempted": False, "reason": "session_not_found"},
+                "message": "CDP session already absent",
+            },
+        }
+
+    port = session.port
+    closed: list[dict[str, Any]] = []
+    remaining = 0
+    if close_tabs:
+        try:
+            targets = await _list_cdp_targets(port)
+            pages = [
+                t for t in targets
+                if str(t.get("type") or "").lower() == "page" and str(t.get("webSocketDebuggerUrl") or "")
+            ]
+            remaining = len(pages)
+            to_close = pages if not keep_last else pages[:-1]
+            if to_close:
+                browser_ws_url = await _get_browser_ws_url(port)
+                for tab in to_close:
+                    tid = str(tab.get("id") or tab.get("targetId") or "")
+                    if not tid:
+                        continue
+                    try:
+                        await _send_cdp(
+                            browser_ws_url,
+                            "Target.closeTarget",
+                            {"targetId": tid},
+                            timeout_seconds=5,
+                        )
+                        closed.append({
+                            "id": tid,
+                            "url": str(tab.get("url") or ""),
+                            "title": str(tab.get("title") or ""),
+                        })
+                    except Exception as exc:
+                        logger.warning("browser_close_session tab close failed work_key=%s target=%s err=%s", work_key, tid, exc)
+                remaining = max(0, len(pages) - len(closed))
+        except Exception as exc:
+            logger.warning("browser_close_session list/close tabs failed work_key=%s err=%s", work_key, exc)
+
+    process_result = {"attempted": False, "reason": "close_browser_false"}
+    if close_browser:
+        process_result = _terminate_browser_process(int(session.pid or 0))
+
+    CDPCommandGuardManager.force_release(CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port))
+    CDPSessionManager.release(work_key)
+    logger.info(
+        "browser_close_session work_key=%s port=%d tabs=%d close_browser=%s reason=%s",
+        work_key,
+        port,
+        len(closed),
+        close_browser,
+        reason,
+    )
+    return {
+        "status": "success",
+        "data": {
+            "work_key": work_key,
+            "port": port,
+            "closed_tabs": len(closed),
+            "closed_tab_details": closed,
+            "remaining": remaining,
+            "session_released": True,
+            "process": process_result,
+            "reason": reason,
+        },
+    }
 
 
 async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:

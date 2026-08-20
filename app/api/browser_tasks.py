@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
@@ -58,6 +58,15 @@ def _user_id(context: TenantContext) -> str:
     return str(context["membership"]["user_id"])
 
 
+def _session_id_from_request(request: Request) -> str | None:
+    for key in ("x-aads-chat-session-id", "x-chat-session-id"):
+        value = request.headers.get(key, "").strip()
+        if value:
+            return value
+    value = request.query_params.get("session_id", "").strip()
+    return value or None
+
+
 @router.get("")
 async def api_list_browser_tasks(
     status: str | None = None,
@@ -71,14 +80,16 @@ async def api_list_browser_tasks(
 @router.post("")
 async def api_create_browser_task(
     body: BrowserTaskCreate,
+    request: Request,
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
+    session_id = body.session_id or _session_id_from_request(request)
     task = await create_browser_task(
         tenant_id=_tenant_id(context),
         user_id=_user_id(context),
         work_key=body.work_key,
         target_url=body.target_url,
-        session_id=body.session_id,
+        session_id=session_id,
         current_step=body.current_step,
     )
     return {"status": "created", "task": task, "profile": profile_info(body.work_key, body.target_url)}

@@ -570,6 +570,77 @@ class PCAgentManager:
                 exc,
             )
 
+    async def _cleanup_browser_session_on_completion(
+        self,
+        *,
+        agent_id: str,
+        command_type: str,
+        params: Dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        normalized_command = str(command_type or "").strip().lower()
+        if not normalized_command.startswith("browser_") or normalized_command == "browser_close_session":
+            return {"status": "skipped", "reason": "not_browser_cleanup_target"}
+        if not bool((params or {}).get("close_on_complete", False)):
+            return {"status": "skipped", "reason": "close_on_complete_false"}
+        work_key = str((params or {}).get("work_key") or "").strip()
+        if not work_key:
+            return {"status": "skipped", "reason": "work_key_missing"}
+        cleanup_params: Dict[str, Any] = {
+            "work_key": work_key,
+            "close_browser": bool((params or {}).get("close_browser_on_complete", True)),
+            "close_tabs": bool((params or {}).get("close_tabs_on_complete", True)),
+            "reason": "route_execute_complete",
+            "command_timeout_seconds": max(1.0, min(10.0, float(timeout_seconds))),
+        }
+        try:
+            cleanup_command_id = await self.send_command(agent_id, "browser_close_session", cleanup_params)
+            cleanup_result = await self.get_result(
+                cleanup_command_id,
+                timeout=max(1.0, min(10.0, float(timeout_seconds))),
+            )
+            payload = cleanup_result.result if isinstance(cleanup_result.result, dict) else {}
+            logger.info(
+                "pc_agent_completion_cleanup_result agent_id=%s command_type=%s work_key=%s status=%s",
+                agent_id,
+                normalized_command,
+                work_key,
+                cleanup_result.status,
+            )
+            if cleanup_result.status == "error":
+                fallback_command_id = await self.send_command(agent_id, "browser_health", {
+                    "work_key": work_key,
+                    "cleanup": True,
+                    "reason": "route_execute_complete_fallback",
+                    "command_timeout_seconds": max(1.0, min(5.0, float(timeout_seconds))),
+                })
+                fallback_result = await self.get_result(
+                    fallback_command_id,
+                    timeout=max(1.0, min(5.0, float(timeout_seconds))),
+                )
+                fallback_payload = fallback_result.result if isinstance(fallback_result.result, dict) else {}
+                return {
+                    "status": "fallback",
+                    "command_id": cleanup_command_id,
+                    "result": payload,
+                    "fallback_command_id": fallback_command_id,
+                    "fallback_result": fallback_payload,
+                }
+            return {
+                "status": cleanup_result.status,
+                "command_id": cleanup_command_id,
+                "result": payload,
+            }
+        except Exception as exc:
+            logger.warning(
+                "pc_agent_completion_cleanup_failed agent_id=%s command_type=%s work_key=%s err=%s",
+                agent_id,
+                normalized_command,
+                work_key,
+                exc,
+            )
+            return {"status": "error", "message": str(exc)}
+
     def _track_command(self, agent_id: str, command_id: str) -> None:
         self._command_agents[command_id] = agent_id
         if agent_id not in self._agent_commands:
@@ -1243,6 +1314,12 @@ class PCAgentManager:
                 "result": command_result.model_dump(mode="json"),
             }
 
+        completion_cleanup = await self._cleanup_browser_session_on_completion(
+            agent_id=selected_agent_id,
+            command_type=command_type,
+            params=request_params,
+            timeout_seconds=effective_command_timeout_seconds,
+        )
         await self.release_lease(lease_id, status="completed")
         refreshed = await self.get_lease(lease_id)
         return {
@@ -1250,6 +1327,7 @@ class PCAgentManager:
             "command_id": command_id,
             "lease": refreshed or lease_for_return or lease_payload,
             "result": command_result.model_dump(mode="json"),
+            "completion_cleanup": completion_cleanup,
         }
 
     # ── Android device_command ───────────────────────────────────────

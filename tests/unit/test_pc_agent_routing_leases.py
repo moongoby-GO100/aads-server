@@ -303,3 +303,51 @@ async def test_execute_routed_command_timeout_triggers_browser_health_cleanup(
     assert sent[1][0] == "browser_health"
     assert sent[1][1]["work_key"] == "ntv2-vvic-scrape"
     assert sent[1][1]["cleanup"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_routed_command_close_on_complete_triggers_session_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    sent: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_send_command(_agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        sent.append((command_type, dict(params)))
+        return f"cmd-{len(sent)}"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        return CommandResult(
+            command_id=command_id,
+            agent_id="ceo-pc",
+            status="success",
+            result={"ok": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_eval",
+        params={
+            "expression": "document.title",
+            "work_key": "aads-ceo-browser",
+            "close_on_complete": True,
+        },
+        command_timeout_seconds=5.0,
+        lease_ttl_seconds=35,
+    )
+
+    assert result["status"] == "success"
+    assert len(sent) == 2
+    assert sent[0][0] == "browser_eval"
+    assert sent[1][0] == "browser_close_session"
+    assert sent[1][1]["work_key"] == "aads-ceo-browser"
+    assert sent[1][1]["close_browser"] is True

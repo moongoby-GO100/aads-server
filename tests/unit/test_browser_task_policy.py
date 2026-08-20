@@ -60,6 +60,15 @@ def test_managed_browser_profile_info_is_stable_and_isolated():
     assert first["isolated_profile"] is True
 
 
+def test_managed_browser_profile_is_origin_scoped():
+    first = profile_info("AADS CEO", "https://aads.newtalk.kr/chat")
+    second = profile_info("AADS CEO", "https://aads.newtalk.kr/agent-vault?work_key=aads")
+
+    assert first["origin"] == "https://aads.newtalk.kr"
+    assert first["profile_key"] == second["profile_key"]
+    assert first["profile_dir"] == second["profile_dir"]
+
+
 def test_migration_contains_no_destructive_table_ops():
     migration = Path("migrations/122_ohvis_managed_browser_agent_vault.sql").read_text()
     upper = migration.upper()

@@ -1,10 +1,11 @@
 """CDPSessionManager 단위 테스트 — PC Agent 멀티서비스 세션 격리."""
 import sys
 import os
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent", "commands"))
 
-from browser_auto import CDPSessionManager, _effective_port
+from browser_auto import CDPCommandGuardManager, CDPSessionManager, browser_close_session, _effective_port
 
 
 class TestCDPSessionManager:
@@ -81,3 +82,32 @@ class TestCDPSessionManager:
 
     def test_release_nonexistent(self):
         CDPSessionManager.release("nonexistent")
+
+
+@pytest.mark.asyncio
+async def test_browser_close_session_releases_session_and_guard(monkeypatch):
+    CDPSessionManager._sessions.clear()
+    CDPCommandGuardManager._guards.clear()
+    CDPSessionManager.register("aads-ceo-browser", 9444, "/tmp/aads", pid=1234)
+
+    async def fake_list_targets(_port):
+        return [{"id": "target-1", "type": "page", "webSocketDebuggerUrl": "ws://target", "url": "https://aads.newtalk.kr"}]
+
+    async def fake_browser_ws(_port):
+        return "ws://browser"
+
+    async def fake_send_cdp(_ws_url, _method, _params, timeout_seconds=5):
+        return {"result": True}
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+    monkeypatch.setattr("browser_auto._get_browser_ws_url", fake_browser_ws)
+    monkeypatch.setattr("browser_auto._send_cdp", fake_send_cdp)
+    monkeypatch.setattr("browser_auto._terminate_browser_process", lambda pid: {"attempted": True, "pid": pid, "success": True})
+
+    result = await browser_close_session({"work_key": "aads-ceo-browser", "close_browser": True})
+
+    assert result["status"] == "success"
+    assert result["data"]["closed_tabs"] == 1
+    assert result["data"]["session_released"] is True
+    assert result["data"]["process"]["pid"] == 1234
+    assert CDPSessionManager.get_session("aads-ceo-browser") is None

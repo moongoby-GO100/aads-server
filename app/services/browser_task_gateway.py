@@ -2,19 +2,28 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
+from app.services.managed_browser import normalize_work_key
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 PUSH_STATUSES = {"approval_required", "auth_required", "completed", "failed"}
+logger = logging.getLogger(__name__)
 
 
 def _tenant_uuid(tenant_id: str) -> uuid.UUID:
     return uuid.UUID(str(tenant_id))
+
+
+def _nullable_uuid(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    return uuid.UUID(str(value))
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -50,6 +59,7 @@ async def create_browser_task(
     session_id: str | None = None,
     current_step: str = "",
 ) -> dict[str, Any]:
+    normalized_work_key = normalize_work_key(work_key)
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -59,8 +69,8 @@ async def create_browser_task(
             """,
             _tenant_uuid(tenant_id),
             user_id,
-            uuid.UUID(session_id) if session_id else None,
-            work_key,
+            _nullable_uuid(session_id),
+            normalized_work_key,
             target_url,
             current_step,
         )
@@ -69,9 +79,86 @@ async def create_browser_task(
             tenant_id=tenant_id,
             task_id=str(row["id"]),
             event_type="created",
-            payload={"work_key": work_key, "target_url": target_url, "current_step": current_step},
+            payload={
+                "work_key": normalized_work_key,
+                "target_url": target_url,
+                "session_id": session_id or "",
+                "current_step": current_step,
+            },
         )
     return _task_to_dict(row)
+
+
+def _should_cleanup_browser_session(task: dict[str, Any]) -> bool:
+    if str(task.get("status") or "") not in TERMINAL_STATUSES:
+        return False
+    result = _json_dict(task.get("result"))
+    if result.get("keep_browser_open") is True:
+        return False
+    if result.get("browser_cleanup") is False:
+        return False
+    return True
+
+
+async def cleanup_browser_task_session(task: dict[str, Any]) -> dict[str, Any]:
+    if not _should_cleanup_browser_session(task):
+        return {"status": "skipped", "reason": "cleanup_not_required"}
+    work_key = str(task.get("work_key") or "").strip()
+    if not work_key:
+        return {"status": "skipped", "reason": "work_key_missing"}
+    try:
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        result = await pc_agent_manager.execute_routed_command(
+            command_type="browser_close_session",
+            params={
+                "work_key": work_key,
+                "close_browser": True,
+                "close_tabs": True,
+                "reason": f"browser_task_{task.get('status')}",
+                "command_timeout_seconds": 10,
+            },
+            job_type="managed_browser_cleanup",
+            required_capabilities=["interactive_browser"],
+            queue_if_busy=True,
+            wait_for_turn=True,
+            queue_wait_timeout_seconds=10,
+            lease_ttl_seconds=60,
+            command_timeout_seconds=10,
+        )
+        if result.get("status") == "error":
+            fallback = await pc_agent_manager.execute_routed_command(
+                command_type="browser_health",
+                params={
+                    "work_key": work_key,
+                    "cleanup": True,
+                    "reason": f"browser_task_{task.get('status')}_fallback",
+                    "command_timeout_seconds": 5,
+                },
+                job_type="managed_browser_cleanup",
+                required_capabilities=["interactive_browser"],
+                queue_if_busy=True,
+                wait_for_turn=True,
+                queue_wait_timeout_seconds=5,
+                lease_ttl_seconds=30,
+                command_timeout_seconds=5,
+            )
+            result = {"status": "fallback", "primary": result, "fallback": fallback}
+        logger.info(
+            "browser_task_cleanup_result task_id=%s work_key=%s status=%s",
+            task.get("id"),
+            work_key,
+            result.get("status"),
+        )
+        return result
+    except Exception as exc:
+        logger.warning(
+            "browser_task_cleanup_failed task_id=%s work_key=%s err=%s",
+            task.get("id"),
+            work_key,
+            exc,
+        )
+        return {"status": "error", "message": str(exc)}
 
 
 async def list_browser_tasks(*, tenant_id: str, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
@@ -146,6 +233,8 @@ async def update_browser_task_status(
     task = _task_to_dict(row)
     if status in PUSH_STATUSES:
         await notify_browser_task_status(task)
+    if status in TERMINAL_STATUSES:
+        await cleanup_browser_task_session(task)
     return task
 
 

@@ -120,6 +120,7 @@ _RAW_HANDLERS = {
     "browser_tabs": _handler(browser_auto, "browser_tabs"),
     "browser_health": _handler(browser_auto, "browser_health"),
     "browser_close_tab": _handler(browser_auto, "browser_close_tab"),
+    "browser_close_session": _handler(browser_auto, "browser_close_session"),
     "browser_launch": _handler(browser_auto, "browser_launch"),
     # P4: 파일 전송
     "file_upload": _handler(file_transfer, "file_upload"),
