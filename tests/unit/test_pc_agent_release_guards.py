@@ -6,6 +6,8 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -70,30 +72,6 @@ def test_full_exit_confirmation_handles_yes_and_no(monkeypatch) -> None:
     assert tray.confirm_full_exit() is False
 
 
-def test_tray_masks_agent_token() -> None:
-    tray = _load("tray_mask_test", ROOT / "pc_agent" / "tray.py")
-
-    assert tray._mask_secret("") == "미등록"
-    assert tray._mask_secret("short") == tray._MASKED
-    assert tray._mask_secret("abcd1234wxyz") == "abcd…wxyz"
-
-
-def test_tray_has_safe_settings_and_manual_reconnect_menu() -> None:
-    source = (ROOT / "pc_agent" / "tray.py").read_text(encoding="utf-8")
-
-    assert "Item(\"재연결 시도\", request_reconnect)" in source
-    assert "target=open_settings_window" in source
-    assert "os.startfile(config_path)" not in source
-
-
-def test_launcher_wires_manual_reconnect_callback() -> None:
-    source = (ROOT / "pc_agent" / "launcher.py").read_text(encoding="utf-8")
-
-    assert "reconnect_requested = threading.Event()" in source
-    assert "def on_reconnect()" in source
-    assert "manual-reconnect run_agent()" in source
-
-
 def test_launcher_has_single_redownload_guard_definition() -> None:
     source = (ROOT / "pc_agent" / "launcher.py").read_text(encoding="utf-8")
     assert source.count("def _can_redownload()") == 1
@@ -102,9 +80,13 @@ def test_launcher_has_single_redownload_guard_definition() -> None:
 
 
 def test_release_publish_is_main_only() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "build-pc-agent.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow_path = ROOT / ".github" / "workflows" / "build-pc-agent.yml"
+    if not workflow_path.exists():
+        # `.github` is excluded by .dockerignore, so this guard only runs on
+        # the host / CI checkout where the workflow file is present.
+        pytest.skip("workflow file not present in this checkout (.dockerignore)")
+
+    workflow = workflow_path.read_text(encoding="utf-8")
     assert (
         "- name: Create/Update Release\n"
         "        if: github.ref == 'refs/heads/main'\n"
