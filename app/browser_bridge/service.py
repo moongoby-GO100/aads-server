@@ -761,6 +761,7 @@ class BrowserBridgeService:
         )
 
     def work_session_status(self) -> dict[str, Any]:
+        self.sessions.prune_stale_sessions()
         active = self.active_session()
         return {
             "active_session": active.session_id if active else None,

@@ -219,6 +219,45 @@ def test_session_registry_retire_marks_stale_and_skips_work_key_lookup(tmp_path)
     assert loaded.endpoint.metadata["stale_reason"] == "STALE_TARGET"
 
 
+def test_session_registry_prunes_only_unleased_unprotected_stale_sessions(tmp_path) -> None:
+    registry = SessionRegistry(state_dir=tmp_path)
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=registry,
+        storage_states=StorageStateManager(tmp_path),
+    )
+    stale = service.register_trusted_session(
+        label="stale",
+        endpoint_kind="local_agent",
+        metadata={"stale": True, "agent_id": "ceo-pc"},
+    )
+    leased = service.register_trusted_session(
+        label="leased",
+        endpoint_kind="local_agent",
+        metadata={"stale": True, "agent_id": "ceo-pc"},
+    )
+    protected = service.register_trusted_session(
+        label="protected",
+        endpoint_kind="local_agent",
+        metadata={"stale": True, "agent_id": "ceo-pc"},
+        protected=True,
+    )
+    healthy = service.register_trusted_session(
+        label="healthy",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc"},
+        work_key="healthy-work",
+    )
+
+    registry.acquire_lease(owner="job-a", preferred_session_id=leased.session_id)
+
+    assert registry.prune_stale_sessions() == 1
+    assert registry.get(stale.session_id) is None
+    assert registry.get(leased.session_id) is not None
+    assert registry.get(protected.session_id) is not None
+    assert registry.get(healthy.session_id) is not None
+
+
 def test_pairing_manager_persists_unconsumed_pairings(tmp_path) -> None:
     first = PairingManager(default_ttl_seconds=60, state_dir=tmp_path)
     pairing = first.create_pairing(label="CEO Chrome", created_by="test")

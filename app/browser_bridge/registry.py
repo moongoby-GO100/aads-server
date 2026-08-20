@@ -431,11 +431,27 @@ class SessionRegistry:
                     continue
                 if session.lease_owner:
                     session.lease_owner = ""
-                    session.lease_expires_at = None
-                    released += 1
+                session.lease_expires_at = None
+                released += 1
             if released:
                 self._save_locked()
         return released
+
+    def prune_stale_sessions(self) -> int:
+        """Remove retired Browser Bridge sessions that cannot be reused safely."""
+        removed = 0
+        with self._lock:
+            for session_id, session in list(self._sessions.items()):
+                metadata = dict(session.endpoint.metadata or {})
+                if not metadata.get("stale"):
+                    continue
+                if session.lease_owner or session.protected:
+                    continue
+                self._sessions.pop(session_id, None)
+                removed += 1
+            if removed:
+                self._save_locked()
+        return removed
 
     def clear(self) -> None:
         with self._lock:
