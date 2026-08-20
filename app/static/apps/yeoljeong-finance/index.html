@@ -4629,6 +4629,7 @@
       }
     };
     const deliveryAutomationServices = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+    const bankLedgerServices = new Set(["shinhan_business", "ibk_business"]);
     const financialTransactionServices = new Set(["shinhan_business", "ibk_business", "card_pg"]);
     const serverVaultServices = new Set([
       "baemin",
@@ -10100,6 +10101,91 @@
       return { recordsCount: records.length, blocked, messages };
     }
 
+    function bankAccountMatchesScope(account, scope = {}) {
+      const scopeBusiness = String(scope.business_id || "").trim();
+      const scopeBranchId = branchIdForName(scope.branch || "");
+      if (scopeBusiness && account.business_id !== scopeBusiness) return false;
+      if (scopeBranchId && account.branch_id && account.branch_id !== scopeBranchId) return false;
+      return true;
+    }
+
+    function bankTransactionEntry(row, scope = {}) {
+      return {
+        id: row.id || uid(),
+        date: String(row.occurred_at || "").slice(0, 10),
+        branch: scope.branch || settings().branches.find(branch => branch.id === row.branch_id)?.name || selectedBranch(),
+        type: row.direction === "out" ? "expense" : "bank",
+        vendor: row.counterparty || row.memo || "은행거래",
+        channel: "은행원장 자동수집",
+        amount: Number(row.amount || 0),
+        status: row.settlement_match === "matched_existing_transaction" ? "confirmed" : "pending",
+        memo: row.memo || row.raw_memo || ""
+      };
+    }
+
+    function applyBankCollectionPayload(payload, scope = {}) {
+      const collection = payload.collection || {};
+      const records = (payload.transactions || []).map(row => bankTransactionEntry(row, scope));
+      if (records.length) state.entries.push(...records);
+      settings().integrations
+        .filter(item => bankLedgerServices.has(item.service))
+        .filter(item => !collection.bank_account_id || item.bankAccountId === collection.bank_account_id)
+        .forEach(item => {
+          item.lastSyncAt = collection.last_collected_at || new Date().toISOString();
+          item.lastSyncStatus = collection.status || "no_records";
+          item.portalStatus = collection.connector_status === "NOT_CONFIGURED" ? "needs_auth" : item.lastSyncStatus;
+          item.portalMessage = collection.message || "";
+        });
+      saveState();
+      return {
+        recordsCount: records.length,
+        importedRows: Number(collection.imported_rows || 0),
+        duplicateRows: Number(collection.duplicate_rows || 0),
+        blocked: collection.connector_status === "NOT_CONFIGURED" ? 1 : 0,
+        messages: collection.message ? [collection.message] : []
+      };
+    }
+
+    async function collectBankLedgerAccounts(services, scope) {
+      await refreshBankAccounts({ silent: true });
+      const selectedAccountId = els.bankAccountSelect?.value || "";
+      const targetAccounts = bankAccounts.filter(account => {
+        if (selectedAccountId && account.id !== selectedAccountId) return false;
+        if (!bankAccountMatchesScope(account, scope)) return false;
+        if (!services.some(service => bankLedgerServices.has(service))) return false;
+        return true;
+      });
+      if (!targetAccounts.length) {
+        return { recordsCount: 0, importedRows: 0, duplicateRows: 0, blocked: 1, messages: ["수집할 등록 은행계좌가 없습니다. 은행 계좌 연결 또는 CSV 대체 등록을 먼저 진행하십시오."] };
+      }
+      const month = selectedMonth();
+      const results = [];
+      for (const account of targetAccounts) {
+        const payload = await financeApi(`/bank-accounts/${encodeURIComponent(account.id)}/collect`, {
+          method: "POST",
+          body: JSON.stringify({
+            business_id: scope.business_id,
+            branch_id: branchIdForName(scope.branch),
+            date_from: `${month}-01`,
+            date_to: new Date().toISOString().slice(0, 10),
+            source: account.connection_type || "manual",
+            transactions: []
+          })
+        });
+        results.push(applyBankCollectionPayload(payload, scope));
+      }
+      await refreshBankAccounts({ silent: true });
+      renderAll();
+      return results.reduce((totals, item) => {
+        totals.recordsCount += item.recordsCount || 0;
+        totals.importedRows += item.importedRows || 0;
+        totals.duplicateRows += item.duplicateRows || 0;
+        totals.blocked += item.blocked || 0;
+        totals.messages.push(...(item.messages || []));
+        return totals;
+      }, { recordsCount: 0, importedRows: 0, duplicateRows: 0, blocked: 0, messages: [] });
+    }
+
     async function syncFinancialServices(services, scopeOverride = null) {
       if (!canManageAutomation()) {
         showToast("총괄 운영관리자 로그인 후 은행/카드 거래 연동을 실행할 수 있습니다.");
@@ -10111,21 +10197,41 @@
         return;
       }
       const scope = scopeOverride || selectedAutomationScope();
+      const bankServices = runnableServices.filter(service => bankLedgerServices.has(service));
+      const nonBankServices = runnableServices.filter(service => !bankLedgerServices.has(service));
       const month = selectedMonth();
-      const payload = await financeApi("/transactions/sync", {
-        method: "POST",
-        body: JSON.stringify({
-          services: runnableServices,
-          ...scope,
-          date_from: `${month}-01`,
-          date_to: new Date().toISOString().slice(0, 10)
-        })
-      });
-      const result = applyFinancialSyncPayload(payload);
+      const result = { recordsCount: 0, importedRows: 0, duplicateRows: 0, blocked: 0, messages: [] };
+      if (bankServices.length) {
+        const bankResult = await collectBankLedgerAccounts(bankServices, scope);
+        Object.assign(result, {
+          recordsCount: result.recordsCount + bankResult.recordsCount,
+          importedRows: result.importedRows + bankResult.importedRows,
+          duplicateRows: result.duplicateRows + bankResult.duplicateRows,
+          blocked: result.blocked + bankResult.blocked,
+          messages: [...result.messages, ...(bankResult.messages || [])]
+        });
+      }
+      if (nonBankServices.length) {
+        const payload = await financeApi("/transactions/sync", {
+          method: "POST",
+          body: JSON.stringify({
+            services: nonBankServices,
+            ...scope,
+            date_from: `${month}-01`,
+            date_to: new Date().toISOString().slice(0, 10)
+          })
+        });
+        const legacyResult = applyFinancialSyncPayload(payload);
+        Object.assign(result, {
+          recordsCount: result.recordsCount + legacyResult.recordsCount,
+          blocked: result.blocked + legacyResult.blocked,
+          messages: [...result.messages, ...(legacyResult.messages || [])]
+        });
+      }
       if (result.recordsCount) {
         showToast(`은행/카드 거래 ${result.recordsCount}건을 반영했습니다.`);
       } else {
-        showToast(`은행/카드 연동 확인 완료. 확인필요 ${result.blocked}건${result.messages.length ? " · " + result.messages.join(" / ") : ""}`);
+        showToast(`은행/카드 연동 확인 완료. 확인필요 ${result.blocked}건${result.messages.length ? " · " + result.messages.slice(0, 2).join(" / ") : ""}`);
       }
       return result;
     }

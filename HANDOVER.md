@@ -7364,3 +7364,25 @@
   - Live hydration check left Mia accounts unchanged because existing Agent Vault usernames did not match the Mia account usernames and no explicit Mia scope metadata was present.
 - Remaining:
   - Add branch-scoped Agent Vault metadata for Mia credentials or enter the passwords through Yeoljeong account settings, then rerun delivery collection.
+
+## 2026-08-20 17:31 KST - Yeoljeong bank auto-link collect completion
+
+- Request: Continue the next step immediately and complete Yeoljeong Store Assistant bank auto-link implementation.
+- Runner note:
+  - New runner chain `runner-5032b6be` -> `runner-d1bf93b8` -> `runner-1910f543` was submitted after the prior git-state block was cleared.
+  - `runner-5032b6be` reported `running` but had empty task logs and a dead local PID, so the chain was terminated to prevent file conflicts and the work was completed directly.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` adds `collect_bank_account_transactions`, branch-aware bank ledger filtering, safe connector status handling, idempotent collection import, and simple existing-transaction match annotation.
+  - `app/api/yeoljeong_finance.py` adds `POST /yeoljeong-finance/bank-accounts/{account_id}/collect` and propagates `branch_id` to bank transactions/summary queries.
+  - `app/static/apps/yeoljeong-finance/index.html` routes Shinhan/IBK bank ledger sync through the bank collect API before the legacy card/PG transaction sync path.
+  - `tests/unit/test_yeoljeong_finance_service.py` covers collect ingest, duplicate collection idempotency, branch summary, and unconfigured open-banking safety.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -k bank` succeeded: 21 passed, 88 deselected.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py` succeeded: 109 passed, 9 warnings.
+  - Host `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.
+  - Host pytest could not run because the host has no `pytest` module and `.venv/bin/python` is a broken symlink; Docker image validation was used against the mounted host worktree.
+- Remaining:
+  - Not pushed or deployed in this step.
+  - Real bank/open-banking login is intentionally not performed. `open_banking` returns `NOT_CONFIGURED/needs_auth` until a certified provider or vetted connector is attached.
+  - To collect real bank rows now, use the registered bank account plus CSV/manual upload path or provide a vetted bank connector configuration.

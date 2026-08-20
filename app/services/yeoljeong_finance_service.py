@@ -3681,6 +3681,7 @@ BANK_TRANSACTIONS_LEDGER = "bank_transactions"
 BANK_CONNECTION_TYPES = ("open_banking", "csv", "manual", "mock")
 BANK_ACCOUNT_STATUSES = ("active", "paused", "error", "needs_auth")
 BANK_TRANSACTION_DIRECTIONS = ("in", "out")
+BANK_CONFIGURED_COLLECTION_TYPES = ("csv", "manual", "mock")
 
 # 은행계좌 파일에 저장을 허용하는 필드 화이트리스트. 원본 계좌번호/비밀번호/인증정보는
 # 절대 포함하지 않는다(민감정보 제외 원칙).
@@ -3905,6 +3906,45 @@ def _find_bank_account(rows: list[dict[str, Any]], account_id: str) -> dict[str,
     return next((row for row in rows if str(row.get("id") or "") == target), None)
 
 
+def _bank_account_matches_scope(account: dict[str, Any], business_id: str, branch_id: str = "") -> bool:
+    if str(account.get("business_id") or "") != business_id:
+        return False
+    account_branch = str(account.get("branch_id") or "")
+    return not branch_id or not account_branch or account_branch == branch_id
+
+
+def _bank_unconfigured_collect_result(
+    account: dict[str, Any],
+    *,
+    business_id: str,
+    branch_id: str,
+    date_from: str,
+    date_to: str,
+    reason: str,
+    status: str = "needs_auth",
+) -> dict[str, Any]:
+    return {
+        "collection": {
+            "bank_account_id": str(account.get("id") or ""),
+            "business_id": business_id,
+            "branch_id": branch_id,
+            "status": status,
+            "connector_status": "NOT_CONFIGURED",
+            "connection_type": str(account.get("connection_type") or ""),
+            "message": reason,
+            "collected_rows": 0,
+            "imported_rows": 0,
+            "duplicate_rows": 0,
+            "matched_count": 0,
+            "unmatched_count": 0,
+            "last_collected_at": str(account.get("last_synced_at") or ""),
+            "date_from": date_from,
+            "date_to": date_to,
+        },
+        "transactions": [],
+    }
+
+
 def create_bank_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="은행계좌 등록 권한이 없습니다")
@@ -3941,6 +3981,44 @@ def update_bank_account(account_id: str, payload: dict[str, Any], user: dict[str
     rows = [sanitized if str(row.get("id") or "") == str(account_id) else row for row in rows]
     _write_secure_file_rows(BANK_ACCOUNTS_LEDGER, rows)
     return _sanitize_bank_account(sanitized)
+
+
+def _bank_transaction_matches_existing_transaction(bank_row: dict[str, Any], ledger_row: dict[str, Any]) -> bool:
+    bank_date = _bank_date_key(bank_row.get("occurred_at"))
+    ledger_date = _bank_date_key(ledger_row.get("date") or ledger_row.get("occurred_at"))
+    if bank_date and ledger_date and bank_date != ledger_date:
+        return False
+    bank_amount = int(bank_row.get("amount") or 0)
+    ledger_amount = int(abs(_amount(ledger_row.get("amount"))))
+    if bank_amount != ledger_amount:
+        return False
+    bank_text = " ".join(
+        str(bank_row.get(key) or "") for key in ("counterparty", "memo", "raw_memo", "category")
+    ).lower()
+    ledger_text = " ".join(
+        str(ledger_row.get(key) or "") for key in ("vendor", "memo", "channel", "category", "source")
+    ).lower()
+    if not bank_text or not ledger_text:
+        return True
+    tokens = [token for token in re.split(r"\s+", bank_text) if len(token) >= 2]
+    return any(token in ledger_text for token in tokens[:4])
+
+
+def _annotate_bank_matches(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, int]:
+    if not rows:
+        return rows, 0, 0
+    existing_transactions = _read_file_rows("transactions")
+    annotated: list[dict[str, Any]] = []
+    matched = 0
+    for row in rows:
+        record = dict(row)
+        if any(_bank_transaction_matches_existing_transaction(record, candidate) for candidate in existing_transactions):
+            record["settlement_match"] = record.get("settlement_match") or "matched_existing_transaction"
+            matched += 1
+        else:
+            record["settlement_match"] = record.get("settlement_match") or "unmatched"
+        annotated.append(record)
+    return annotated, matched, len(annotated) - matched
 
 
 def _bank_transaction_source_hash(record: dict[str, Any]) -> str:
@@ -4161,10 +4239,173 @@ def import_bank_transaction_csv(payload: dict[str, Any], user: dict[str, Any]) -
     }
 
 
+def collect_bank_account_transactions(account_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """Run the configured safe bank connector for one account.
+
+    Real bank login/open-banking connectors intentionally return NOT_CONFIGURED until
+    a certified provider or vetted browser connector is attached.
+    """
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행 자동수집 실행 권한이 없습니다")
+    accounts = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    account = _find_bank_account(accounts, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="수집할 은행계좌를 찾지 못했습니다")
+    business_id, requested_branch_id = _normalize_bank_scope(
+        payload.get("business_id") or account.get("business_id"),
+        payload.get("branch_id") or account.get("branch_id") or "",
+    )
+    if not _bank_account_matches_scope(account, business_id, requested_branch_id):
+        raise HTTPException(status_code=404, detail="사업자/지점 범위에 맞는 은행계좌를 찾지 못했습니다")
+
+    date_from, date_to = _valid_range_bounds(payload.get("date_from"), payload.get("date_to"))
+    connection_type = _bank_connection_type(account.get("connection_type"), default="mock")
+    if str(account.get("status") or "") in {"paused", "error"}:
+        return _bank_unconfigured_collect_result(
+            account,
+            business_id=business_id,
+            branch_id=requested_branch_id or str(account.get("branch_id") or ""),
+            date_from=date_from,
+            date_to=date_to,
+            status=str(account.get("status") or "paused"),
+            reason="계좌 상태가 active가 아니어서 자동수집을 실행하지 않았습니다.",
+        )
+    if connection_type not in BANK_CONFIGURED_COLLECTION_TYPES:
+        return _bank_unconfigured_collect_result(
+            account,
+            business_id=business_id,
+            branch_id=requested_branch_id or str(account.get("branch_id") or ""),
+            date_from=date_from,
+            date_to=date_to,
+            reason="오픈뱅킹/은행 실시간 조회 커넥터가 아직 연결되지 않았습니다. CSV/수동 대체 수집을 사용하십시오.",
+        )
+
+    entries = payload.get("transactions") or payload.get("rows") or []
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="transactions는 배열이어야 합니다")
+    # mock 커넥터: 페이로드에 거래 없으면 테스트용 결정적 데이터를 자동 생성.
+    if connection_type == "mock" and not entries:
+        effective_date = date_from or _bank_date_key(_now())
+        entries = [
+            {
+                "occurred_at": effective_date + " 10:00:00",
+                "direction": "in",
+                "amount": 1_000_000,
+                "counterparty": "mock-deposit",
+                "memo": "Mock 입금 테스트",
+                "raw_memo": "Mock 입금 테스트",
+                "source": "mock",
+            },
+            {
+                "occurred_at": effective_date + " 14:00:00",
+                "direction": "out",
+                "amount": 300_000,
+                "counterparty": "mock-withdrawal",
+                "memo": "Mock 출금 테스트",
+                "raw_memo": "Mock 출금 테스트",
+                "source": "mock",
+            },
+        ]
+    scoped_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict) and _bank_within_range(entry.get("occurred_at"), date_from, date_to)
+    ]
+    annotated_entries, matched_count, unmatched_count = _annotate_bank_matches(scoped_entries)
+    result = record_bank_transactions(
+        {
+            "business_id": business_id,
+            "branch_id": requested_branch_id or str(account.get("branch_id") or ""),
+            "bank_account_id": account_id,
+            "source": str(payload.get("source") or connection_type),
+            "transactions": annotated_entries,
+        },
+        user,
+    )
+    imported_rows = int(result.get("import", {}).get("imported_rows") or 0)
+    duplicate_rows = int(result.get("import", {}).get("duplicate_rows") or 0)
+    account_after = _find_bank_account(_read_file_rows(BANK_ACCOUNTS_LEDGER), account_id) or account
+    imported_transactions = result.get("transactions") or []
+    total_in = sum(int(row.get("amount") or 0) for row in imported_transactions if row.get("direction") == "in")
+    total_out = sum(int(row.get("amount") or 0) for row in imported_transactions if row.get("direction") == "out")
+    status = "completed" if imported_rows else "no_records"
+    return {
+        **result,
+        "collection": {
+            "bank_account_id": account_id,
+            "business_id": business_id,
+            "branch_id": requested_branch_id or str(account.get("branch_id") or ""),
+            "status": status,
+            "connector_status": "CONFIGURED",
+            "connection_type": connection_type,
+            "message": "은행 거래 수집이 완료되었습니다." if imported_rows else "신규 수집 거래가 없습니다.",
+            "collected_rows": len(scoped_entries),
+            "imported_rows": imported_rows,
+            "duplicate_rows": duplicate_rows,
+            "matched_count": matched_count,
+            "unmatched_count": unmatched_count,
+            "total_in": total_in,
+            "total_out": total_out,
+            "net_amount": total_in - total_out,
+            "last_collected_at": str(account_after.get("last_synced_at") or ""),
+            "date_from": date_from,
+            "date_to": date_to,
+        },
+    }
+
+
+def match_bank_to_settlements(
+    bank_transactions: list[dict[str, Any]],
+    settlements: list[dict[str, Any]],
+    *,
+    tolerance: int = 0,
+) -> dict[str, Any]:
+    """Match bank 'in' transactions to delivery settlement records by date + amount."""
+    matched: list[dict[str, Any]] = []
+    unmatched_bank: list[dict[str, Any]] = []
+    used_settlement_ids: set[str] = set()
+    for txn in bank_transactions:
+        txn_date = _bank_date_key(txn.get("occurred_at"))
+        txn_amount = int(txn.get("amount") or 0)
+        best: dict[str, Any] | None = None
+        for settlement in settlements:
+            sid = str(settlement.get("id") or "")
+            if sid in used_settlement_ids:
+                continue
+            s_date = _bank_date_key(
+                settlement.get("occurred_on") or settlement.get("settled_at") or ""
+            )
+            s_amount = int(
+                settlement.get("settlement_amount") or settlement.get("amount") or 0
+            )
+            if txn_date == s_date and abs(txn_amount - s_amount) <= tolerance:
+                best = settlement
+                break
+        if best:
+            used_settlement_ids.add(str(best.get("id") or ""))
+            matched.append(
+                {
+                    "bank_transaction_id": str(txn.get("id") or ""),
+                    "settlement_id": str(best.get("id") or ""),
+                    "amount": txn_amount,
+                    "matched_on": "date+amount",
+                }
+            )
+        else:
+            unmatched_bank.append(txn)
+    return {
+        "matched": matched,
+        "unmatched_bank_transactions": unmatched_bank,
+        "unmatched_settlement_count": len(settlements) - len(matched),
+        "match_count": len(matched),
+    }
+
+
 def list_bank_transactions(
     user: dict[str, Any],
     *,
     business_id: str | None = None,
+    branch_id: str | None = None,
     bank_account_id: str | None = None,
     direction: str | None = None,
     date_from: str | None = None,
@@ -4178,6 +4419,8 @@ def list_bank_transactions(
     result: list[dict[str, Any]] = []
     for row in rows:
         if business_id and str(row.get("business_id") or "") != business_id:
+            continue
+        if branch_id and str(row.get("branch_id") or "") not in {"", branch_id}:
             continue
         if bank_account_id and str(row.get("bank_account_id") or "") != bank_account_id:
             continue
@@ -4194,6 +4437,7 @@ def bank_summary(
     user: dict[str, Any],
     *,
     business_id: str | None = None,
+    branch_id: str | None = None,
     bank_account_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -4205,6 +4449,7 @@ def bank_summary(
     transactions = list_bank_transactions(
         user,
         business_id=business_id,
+        branch_id=branch_id,
         bank_account_id=bank_account_id,
         date_from=start or None,
         date_to=end or None,
@@ -4217,6 +4462,8 @@ def bank_summary(
     for account in accounts:
         acct_id = str(account.get("id") or "")
         if business_id and str(account.get("business_id") or "") != business_id:
+            continue
+        if branch_id and str(account.get("branch_id") or "") not in {"", branch_id}:
             continue
         if bank_account_id and acct_id != bank_account_id:
             continue
@@ -4273,6 +4520,7 @@ def bank_summary(
 
     return {
         "business_id": business_id or "",
+        "branch_id": branch_id or "",
         "date_from": start,
         "date_to": end,
         "totals": {

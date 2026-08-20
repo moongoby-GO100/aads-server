@@ -3219,6 +3219,77 @@ def test_bank_summary_aggregates_totals_and_account_status(tmp_path, monkeypatch
     assert paused["id"] in {item["bank_account_id"] for item in summary["accounts"]}
 
 
+def test_collect_bank_account_transactions_ingests_matches_and_is_idempotent(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    service._write_secure_file_rows(
+        "transactions",
+        [
+            {
+                "date": "2026-08-03",
+                "amount": 88000,
+                "vendor": "배민 정산",
+                "channel": "배달",
+                "memo": "입금 대사 대상",
+            }
+        ],
+    )
+
+    payload = {
+        "business_id": "biz-mia",
+        "branch_id": "branch-gangbuk-mia",
+        "date_from": "2026-08-01",
+        "date_to": "2026-08-31",
+        "source": "mock",
+        "transactions": [
+            {"occurred_at": "2026-08-03", "direction": "in", "amount": 88000, "counterparty": "배민 정산"},
+            {"occurred_at": "2026-08-04", "direction": "out", "amount": 17000, "counterparty": "도시가스"},
+        ],
+    }
+
+    first = service.collect_bank_account_transactions(account["id"], payload, ADMIN_USER)
+    second = service.collect_bank_account_transactions(account["id"], payload, ADMIN_USER)
+    summary = service.bank_summary(
+        ADMIN_USER,
+        business_id="biz-mia",
+        branch_id="branch-gangbuk-mia",
+        bank_account_id=account["id"],
+    )
+
+    assert first["collection"]["status"] == "completed"
+    assert first["collection"]["imported_rows"] == 2
+    assert first["collection"]["duplicate_rows"] == 0
+    assert first["collection"]["matched_count"] == 1
+    assert first["collection"]["unmatched_count"] == 1
+    assert first["collection"]["total_in"] == 88000
+    assert first["collection"]["total_out"] == 17000
+    assert second["collection"]["status"] == "no_records"
+    assert second["collection"]["imported_rows"] == 0
+    assert second["collection"]["duplicate_rows"] == 2
+    assert summary["totals"]["transaction_count"] == 2
+    assert summary["totals"]["net"] == 71000
+
+
+def test_collect_bank_account_transactions_reports_unconfigured_open_banking(tmp_path, monkeypatch):
+    account = _make_bank_account(
+        monkeypatch,
+        tmp_path,
+        connection_type="open_banking",
+        status="active",
+        account_alias="오픈뱅킹 예정계좌",
+    )
+
+    result = service.collect_bank_account_transactions(
+        account["id"],
+        {"business_id": "biz-mia", "branch_id": "branch-gangbuk-mia", "transactions": []},
+        ADMIN_USER,
+    )
+
+    assert result["collection"]["connector_status"] == "NOT_CONFIGURED"
+    assert result["collection"]["status"] == "needs_auth"
+    assert result["collection"]["imported_rows"] == 0
+    assert "오픈뱅킹" in result["collection"]["message"]
+
+
 def test_bank_ledger_does_not_touch_generic_transactions(tmp_path, monkeypatch):
     account = _make_bank_account(monkeypatch, tmp_path)
     service.record_bank_transactions(

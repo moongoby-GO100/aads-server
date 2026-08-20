@@ -245,6 +245,16 @@ class BankTransactionCsvImportPayload(BaseModel):
     csv_text: str = ""
 
 
+class BankAccountCollectPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = "biz-mia"
+    branch_id: str = ""
+    date_from: str = ""
+    date_to: str = ""
+    source: str = "manual"
+    transactions: list[BankTransactionEntry] = Field(default_factory=list)
+
+
 @router.get("/session")
 async def get_session(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.session_for_user, current_user)
@@ -620,9 +630,19 @@ async def update_bank_account(
     return {"bank_account": account}
 
 
+@router.post("/bank-accounts/{account_id}/collect")
+async def collect_bank_account_transactions(
+    account_id: str,
+    payload: BankAccountCollectPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await run_in_threadpool(svc.collect_bank_account_transactions, account_id, payload.model_dump(), current_user)
+
+
 @router.get("/bank-transactions")
 async def list_bank_transactions(
     business_id: str | None = None,
+    branch_id: str | None = None,
     bank_account_id: str | None = None,
     direction: str | None = None,
     date_from: str | None = None,
@@ -634,6 +654,7 @@ async def list_bank_transactions(
             svc.list_bank_transactions,
             current_user,
             business_id=business_id,
+            branch_id=branch_id,
             bank_account_id=bank_account_id,
             direction=direction,
             date_from=date_from,
@@ -659,6 +680,7 @@ async def import_bank_transaction_csv(
 @router.get("/bank-summary")
 async def get_bank_summary(
     business_id: str | None = None,
+    branch_id: str | None = None,
     bank_account_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -669,6 +691,7 @@ async def get_bank_summary(
             svc.bank_summary,
             current_user,
             business_id=business_id,
+            branch_id=branch_id,
             bank_account_id=bank_account_id,
             date_from=date_from,
             date_to=date_to,
