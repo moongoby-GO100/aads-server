@@ -24,6 +24,87 @@ def test_payload_passes_force_recreate_sessions_flag():
     assert payload["force_recreate_portal_sessions"] is True
 
 
+def test_run_collectors_collects_auto_sync_bank_accounts(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_sync",
+        lambda payload, user, *, queue_only=False: {
+            "synced_at": "2026-08-20T19:40:00+09:00",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-20",
+            "summary": [
+                {
+                    "service": "baemin",
+                    "status": "succeeded",
+                    "error_code": "",
+                    "counts": {"sales": 1, "settlements": 0, "reviews": 0},
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [
+            {
+                "id": "bank-1",
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "connection_type": "mock",
+                "auto_sync": True,
+            },
+            {
+                "id": "bank-2",
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "connection_type": "mock",
+                "auto_sync": False,
+            },
+        ],
+    )
+
+    def fake_collect(account_id, payload, user):
+        calls.append((account_id, payload))
+        return {
+            "collection": {
+                "bank_account_id": account_id,
+                "business_id": payload["business_id"],
+                "branch_id": payload["branch_id"],
+                "status": "completed",
+                "connector_status": "CONFIGURED",
+                "connection_type": "mock",
+                "collected_rows": 2,
+                "imported_rows": 2,
+                "duplicate_rows": 0,
+                "message": "은행 거래 수집이 완료되었습니다.",
+            },
+            "transactions": [],
+        }
+
+    monkeypatch.setattr(auto_collect, "collect_bank_account_transactions", fake_collect)
+
+    result = auto_collect._run_collectors(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-20",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert [call[0] for call in calls] == ["bank-1"]
+    assert calls[0][1]["branch_id"] == "branch-gangbuk-mia"
+    assert result["bank_totals"]["accounts"] == 1
+    assert result["bank_totals"]["imported_rows"] == 2
+    assert result["bank_collections"][0]["status"] == "completed"
+
+
 def test_completion_state_requires_success_or_imported_rows():
     summary = {
         "summary": [
@@ -47,6 +128,35 @@ def test_completion_state_requires_success_or_imported_rows():
     assert state["complete"] is False
     assert state["pending"] == 1
     assert state["retryable_codes"] == ["AUTHENTICATED_NO_ROWS"]
+
+
+def test_completion_state_blocks_on_bank_browser_session_required():
+    summary = {
+        "summary": [
+            {
+                "service": "baemin",
+                "status": "succeeded",
+                "error_code": "",
+                "counts": {"sales": 1, "settlements": 0, "reviews": 0},
+            }
+        ],
+        "bank_collections": [
+            {
+                "service": "bank",
+                "status": "action_required",
+                "error_code": "BANK_BROWSER_SESSION_REQUIRED",
+                "counts": {"transactions": 0},
+            }
+        ],
+    }
+
+    state = auto_collect._completion_state(summary)
+
+    assert state["complete"] is False
+    assert state["blocked"] is True
+    assert state["pending"] == 1
+    assert state["total"] == 2
+    assert state["blocking_codes"] == ["BANK_BROWSER_SESSION_REQUIRED"]
 
 
 def test_completion_state_treats_imported_rows_as_complete():
