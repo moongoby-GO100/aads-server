@@ -137,11 +137,11 @@ _release_work_lock() {
     local project="$1" job_id="$2" scope="${3:-}"
     local scope_param=""
     [[ -n "$scope" ]] && scope_param="&scope=${scope}"
-    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}${scope_param}" 2>/dev/null || true
+    curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/work/release?project=${project}&session_id=${job_id}${scope_param}" 2>/dev/null || true
 }
 _release_deploy_lock() {
     local project="$1" job_id="$2"
-    curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
+    curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
 }
 
 # DB 접속 방식
@@ -339,6 +339,34 @@ git_ahead_behind_counts() {
     git -C "$repo" rev-list --left-right --count "${base_ref}...HEAD" 2>/dev/null | awk '{print $2" "$1}'
 }
 
+# dirty 파일 경로 목록 (rename은 신규 경로 기준, 공백 경로 안전)
+git_dirty_paths() {
+    local repo="$1"
+    git -C "$repo" status --porcelain 2>/dev/null \
+        | cut -c4- \
+        | sed 's/^.* -> //' \
+        | tr -d '"' \
+        | sed '/^[[:space:]]*$/d' \
+        | sort -u
+}
+
+# 해당 job이 실제로 건드린 파일 목록 (actual_changed_files → git_diff 폴백)
+job_target_files() {
+    local job_id="$1"
+    [[ -z "$job_id" ]] && return 0
+    local files=""
+    files=$(db_exec "SELECT jsonb_array_elements_text(COALESCE(actual_changed_files,'[]'::jsonb)) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || files=""
+    files=$(printf '%s\n' "$files" | sed '/^[[:space:]]*$/d')
+    if [[ -z "$files" ]]; then
+        local diff_text=""
+        diff_text=$(db_exec "SELECT COALESCE(git_diff,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || diff_text=""
+        files=$(printf '%s\n' "$diff_text" \
+            | grep '^diff --git ' \
+            | sed 's|^diff --git a/||; s| b/.*$||')
+    fi
+    printf '%s\n' "$files" | sed '/^[[:space:]]*$/d' | sort -u
+}
+
 prepare_clean_job_worktree() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
 
@@ -406,10 +434,51 @@ deploy_git_preflight() {
     ahead="${counts%% *}"
     behind="${counts##* }"
 
-    if [[ "${dirty:-999}" -ne 0 || "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
+    # origin/main 동기화 상태는 여전히 엄격 (behind/ahead != 0 이면 차단)
+    if [[ "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
         _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
-            "배포 차단: main workdir은 clean/latest여야 함 (dirty=${dirty:-unknown}, behind=${behind:-unknown}, ahead=${ahead:-unknown})"
+            "배포 차단: main workdir은 origin/main과 동기화되어야 함 (behind=${behind:-unknown}, ahead=${ahead:-unknown})"
         return 1
+    fi
+
+    # dirty 파일은 '대상 파일 기준'으로 완화 판정 (AADS-PREFLIGHT-SCOPED-20260820)
+    if [[ "${dirty:-999}" -ne 0 ]]; then
+        local strict="${AADS_DEPLOY_PREFLIGHT_STRICT:-0}"
+        local dirty_paths target_files overlap dirty_csv overlap_csv
+        dirty_paths=$(git_dirty_paths "$main_workdir")
+        target_files=$(job_target_files "$job_id")
+        dirty_csv=$(printf '%s\n' "$dirty_paths" | head -20 | tr '\n' ',' | sed 's/,$//')
+
+        if [[ "$strict" == "1" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
+                "배포 차단(STRICT): main workdir dirty=${dirty} (${dirty_csv})"
+            return 1
+        fi
+        if [[ -z "${target_files//[[:space:]]/}" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
+                "배포 차단: 대상 파일 목록을 확인할 수 없어 dirty=${dirty} 완화 불가 (${dirty_csv})"
+            return 1
+        fi
+
+        overlap=$(comm -12 <(printf '%s\n' "$dirty_paths") <(printf '%s\n' "$target_files") 2>/dev/null)
+        if [[ -n "${overlap//[[:space:]]/}" ]]; then
+            overlap_csv=$(printf '%s\n' "$overlap" | head -20 | tr '\n' ',' | sed 's/,$//')
+            _fail_job "$job_id" "$session_id" "deploy_preflight_file_conflict" \
+                "배포 차단: 이 작업의 대상 파일이 미커밋 상태로 충돌 (${overlap_csv})"
+            return 1
+        fi
+
+        log "  DEPLOY_PREFLIGHT_RELAXED: dirty=${dirty} (대상 파일 무관) → 배포 진행"
+        db_update "UPDATE pipeline_jobs
+                   SET logs=COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                           'ts', NOW()::text,
+                           'event', 'deploy_preflight_relaxed',
+                           'dirty_count', ${dirty:-0},
+                           'unrelated_dirty_files', $(sql_escape "$dirty_csv")
+                       )),
+                       updated_at=NOW()
+                   WHERE job_id='${job_id}';" 2>/dev/null || true
+        return 0
     fi
 
     log "  DEPLOY_PREFLIGHT_OK: dirty=0 behind=0 ahead=0"
@@ -853,7 +922,7 @@ run_job() {
     local lock_result
     local work_lock_scope_param=""
     [[ -n "$parallel_group" ]] && work_lock_scope_param="&scope=${parallel_group}"
-    lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}" 2>/dev/null) || true
+    lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}" 2>/dev/null) || true
     if echo "$lock_result" | grep -q '"acquired":false'; then
         local holder
         holder=$(echo "$lock_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('holder','unknown'))" 2>/dev/null) || holder="unknown"
@@ -1052,13 +1121,13 @@ ${safe_instruction}"
             fi
         fi
         # Codex CLI Runner 분기 (codex: 접두사, ChatGPT Plus OAuth)
-        # 가용 모델: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex (2026-04-28 Codex catalog)
+        # 가용 모델: gpt-5.6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex
         # Pro 전용(gpt-5.4-pro, gpt-5.4-nano, gpt-5.3-codex-spark)은 ChatGPT Plus에서 미지원
         if [[ "$current_model" == codex:* ]]; then
             local codex_model_name="${current_model#codex:}"
             # 가용 모델 유효성 검증
             case "$codex_model_name" in
-                default|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
+                default|gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini|gpt-5.3-codex) ;;
                 *)
                     log "  CODEX_INVALID_MODEL job=$job_id model=$codex_model_name -> fallback to gpt-5.5"
                     codex_model_name="gpt-5.5"
@@ -1499,25 +1568,35 @@ deploy_job() {
     log "[deploy_job] start job_id=$job_id project=$project"
     log "▶ DEPLOY job=$job_id project=$project target=$target_repo workdir=$workdir"
 
-    # Redis deploy lock 획득 (동시 배포 방지)
+    # Redis deploy lock 획득 (동시 배포 방지) — 3회 재시도 + 점진적 대기
     local deploy_lock_result=""
-    deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
-    if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
-        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project — 다른 배포 진행 중, 30초 후 재시도"
-        sleep 30
-        deploy_lock_result=$(curl -sf -X POST "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
-        if echo "$deploy_lock_result" | grep -q '"acquired":false'; then
-            log "  DEPLOY_LOCK_FAIL job=$job_id — 배포 스킵"
-            db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
-                       error_detail='deploy_lock_fail',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 획득 실패 — 다른 배포가 장시간 점유',
-                       updated_at=NOW() WHERE job_id='${job_id}';"
-            post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 획득 실패 (다른 배포 진행 중): $job_id"
-            _release_deploy_lock "$project" "$job_id"
-            _notify_ai "$job_id"
-            promote_next_queued "$project"
-            return 1
+    local deploy_lock_acquired=false
+    for _dl_try in 1 2 3; do
+        deploy_lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/acquire?project=${project}&session_id=${job_id}" 2>/dev/null) || true
+        if echo "$deploy_lock_result" | grep -q '"acquired":true'; then
+            deploy_lock_acquired=true
+            break
+        elif echo "$deploy_lock_result" | grep -q '"acquired":false'; then
+            local _wait=$((30 * _dl_try))
+            log "  DEPLOY_LOCK_WAIT job=$job_id project=$project try=${_dl_try}/3 — 다른 배포 진행 중, ${_wait}초 후 재시도"
+            sleep $_wait
+        else
+            log "  DEPLOY_LOCK_API_OK job=$job_id try=${_dl_try} — API 응답 없음, 잠금 없이 진행"
+            deploy_lock_acquired=true
+            break
         fi
+    done
+    if [[ "$deploy_lock_acquired" != "true" ]]; then
+        log "  DEPLOY_LOCK_FAIL job=$job_id — 3회 재시도 후 배포 스킵"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
+                   error_detail='deploy_lock_fail',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 3회 획득 실패 — 다른 배포가 장시간 점유',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 3회 획득 실패 (다른 배포 진행 중): $job_id"
+        _release_deploy_lock "$project" "$job_id"
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        return 1
     fi
 
     post_to_chat "$session_id" "🚀 [Pipeline Runner] 배포 시작: $job_id"
