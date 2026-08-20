@@ -604,3 +604,69 @@ def test_timeout_result_is_retryable():
     assert state["complete"] is False
     assert state["blocked"] is False
     assert state["retryable_codes"] == ["ATTEMPT_TIMEOUT"]
+
+
+def test_run_sync_with_timeout_runs_child_process(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return auto_collect.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout='{"summary":[{"service":"baemin","status":"succeeded","error_code":"","counts":{"sales":1}}]}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(auto_collect.subprocess, "run", fake_run)
+
+    summary = auto_collect._run_sync_with_timeout(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-21",
+            "close_portal_browser_on_complete": True,
+        },
+        {"email": "system@aads.local", "is_admin": True},
+        3,
+    )
+
+    argv, kwargs = calls[0]
+    assert "--until-complete" not in argv
+    assert "--services" in argv
+    assert kwargs["timeout"] == 3
+    assert summary["summary"][0]["status"] == "succeeded"
+
+
+def test_run_sync_with_timeout_marks_attempt_timeout(monkeypatch):
+    marked = []
+
+    def fake_run(argv, **kwargs):
+        raise auto_collect.subprocess.TimeoutExpired(cmd=argv, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(auto_collect.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        auto_collect,
+        "_mark_timeout_statuses",
+        lambda payload, timeout_seconds, attempt_started_at: marked.append(
+            (payload, timeout_seconds, attempt_started_at)
+        ),
+    )
+
+    summary = auto_collect._run_sync_with_timeout(
+        {
+            "services": ["coupangeats"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-21",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+        3,
+    )
+
+    assert marked[0][1] == 3
+    assert summary["summary"][0]["status"] == "failed"
+    assert summary["summary"][0]["error_code"] == "ATTEMPT_TIMEOUT"

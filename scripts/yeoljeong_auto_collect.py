@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import signal
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -20,6 +20,8 @@ if str(ROOT) not in sys.path:
 from app.services.yeoljeong_finance_service import (  # noqa: E402
     CANONICAL_BRANCHES,
     FINANCIAL_TRANSACTION_SERVICES,
+    _read,
+    _write_delivery_collection_statuses,
     collect_bank_account_transactions,
     list_bank_accounts,
     list_accounts as list_platform_accounts,
@@ -68,10 +70,6 @@ SESSION_RECREATE_ERROR_CODES = {
     "PC_AGENT_SESSION_NOT_FOUND",
     "PC_AGENT_WRONG_PORTAL_SESSION",
 }
-
-
-class _AttemptTimedOut(TimeoutError):
-    pass
 
 
 def _split_csv(value: str) -> list[str]:
@@ -497,6 +495,92 @@ def _run_sync(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool
     return queue_delivery_sync(payload, user) if queue_only else sync_delivery(payload, user)
 
 
+def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
+    services = payload.get("services") if isinstance(payload.get("services"), list) else []
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--services",
+        ",".join(str(service) for service in services if str(service).strip()) or ",".join(DEFAULT_SERVICES),
+        "--business-id",
+        str(payload.get("business_id") or "all"),
+        "--branch",
+        str(payload.get("branch") or "전체"),
+    ]
+    for key, flag in (
+        ("date_from", "--date-from"),
+        ("date_to", "--date-to"),
+        ("browser_session_id", "--browser-session-id"),
+        ("storage_state_path", "--storage-state-path"),
+        ("sync_job_id", "--job-id"),
+    ):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            argv.extend([flag, value])
+    if payload.get("force_recreate_portal_sessions"):
+        argv.append("--force-recreate-sessions")
+    if payload.get("close_portal_browser_on_complete") is False:
+        argv.append("--keep-browser-open")
+    return argv
+
+
+def _parse_child_collect_stdout(stdout: str) -> dict[str, Any]:
+    text = str(stdout or "").strip()
+    if not text:
+        raise ValueError("child collector returned empty stdout")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        return json.loads(text[start : end + 1])
+
+
+def _mark_timeout_statuses(payload: dict[str, Any], timeout_seconds: int, attempt_started_at: str) -> None:
+    services = {
+        str(service or "").strip()
+        for service in (payload.get("services") if isinstance(payload.get("services"), list) else DEFAULT_SERVICES)
+        if str(service or "").strip()
+    }
+    business_id = str(payload.get("business_id") or "").strip()
+    branch = str(payload.get("branch") or "").strip()
+    all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"} or branch == "전체"
+    now_text = datetime.now(KST).isoformat(timespec="seconds")
+    try:
+        statuses = _read("delivery_collection_status")
+    except Exception:
+        return
+
+    changed_rows: list[dict[str, Any]] = []
+    for row in statuses if isinstance(statuses, list) else []:
+        if str(row.get("status") or "").strip() not in {"queued", "running"}:
+            continue
+        service = str(row.get("service") or "").strip()
+        if services and service not in services:
+            continue
+        if not all_businesses:
+            if business_id and str(row.get("business_id") or "").strip() != business_id:
+                continue
+            if branch and str(row.get("branch") or "").strip() != branch:
+                continue
+        started_at = str(row.get("started_at") or row.get("created_at") or row.get("updated_at") or "")
+        if started_at and started_at < attempt_started_at:
+            continue
+        row["status"] = "failed"
+        row["raw_status"] = "timeout"
+        row["error_code"] = "ATTEMPT_TIMEOUT"
+        row["message"] = f"자동수집 단일 시도가 {timeout_seconds}초를 초과해 중단됐습니다. 다음 시도에서 재개합니다."
+        row["finished_at"] = now_text
+        row["updated_at"] = now_text
+        row.setdefault("counts", _empty_delivery_counts())
+        changed_rows.append(row)
+
+    for row in changed_rows:
+        _write_delivery_collection_statuses(statuses, row)
+
+
 def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     services = _split_csv(str(payload.get("services") or ",".join(DEFAULT_SERVICES)))
     return {
@@ -527,20 +611,25 @@ def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeou
     if timeout_seconds <= 0:
         return _run_collectors(payload, user, queue_only=False)
 
-    previous_handler = signal.getsignal(signal.SIGALRM)
-
-    def _handle_timeout(signum: int, frame: Any) -> None:
-        raise _AttemptTimedOut()
-
-    signal.signal(signal.SIGALRM, _handle_timeout)
-    signal.alarm(timeout_seconds)
+    attempt_started_at = datetime.now(KST).isoformat(timespec="seconds")
     try:
-        return _run_collectors(payload, user, queue_only=False)
-    except _AttemptTimedOut:
+        completed = subprocess.run(
+            _child_collect_argv(payload),
+            cwd=str(ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        _mark_timeout_statuses(payload, timeout_seconds, attempt_started_at)
         return _summary(_timeout_result(payload, timeout_seconds))
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, previous_handler)
+
+    if completed.returncode != 0:
+        stderr_tail = (completed.stderr or "").strip()[-1000:]
+        raise RuntimeError(f"자동수집 자식 프로세스 실패: exit={completed.returncode} stderr={stderr_tail}")
+    return _summary(_parse_child_collect_stdout(completed.stdout))
 
 
 def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
