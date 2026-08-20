@@ -20,6 +20,7 @@ from anthropic import APIStatusError
 from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
+from app.core.project_config import normalize_project_label
 
 logger = logging.getLogger(__name__)
 
@@ -5909,8 +5910,8 @@ async def create_workspace(data: Dict[str, Any], tenant_id: Optional[str] = None
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO chat_workspaces (tenant_id, name, system_prompt, files, settings, color, icon)
-            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
+            INSERT INTO chat_workspaces (tenant_id, name, system_prompt, files, settings, color, icon, project_key)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
             RETURNING *
             """,
             tenant_uuid,
@@ -5920,6 +5921,8 @@ async def create_workspace(data: Dict[str, Any], tenant_id: Optional[str] = None
             json.dumps(data.get("settings", {})),
             data.get("color", "#6366F1"),
             data.get("icon", "💬"),
+            # [C안 2/4] 표시명 → 프로젝트 정규 키 자동 파생
+            data.get("project_key") or normalize_project_label(data["name"]),
         )
         return _row_to_dict(row)
 
@@ -5935,6 +5938,14 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: O
                 sets.append(f"{field} = ${idx}")
                 vals.append(data[field])
                 idx += 1
+        # [C안 2/4] 이름 변경 시 project_key 재파생 (명시값이 있으면 우선)
+        new_project_key = data.get("project_key")
+        if not new_project_key and data.get("name"):
+            new_project_key = normalize_project_label(data["name"])
+        if new_project_key:
+            sets.append(f"project_key = ${idx}")
+            vals.append(new_project_key)
+            idx += 1
         for jfield in ("files", "settings"):
             if jfield in data and data[jfield] is not None:
                 sets.append(f"{jfield} = ${idx}::jsonb")
