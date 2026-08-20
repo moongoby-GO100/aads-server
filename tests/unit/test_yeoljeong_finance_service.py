@@ -196,15 +196,25 @@ def test_save_settings_persists_ui_settings_without_overwriting_automation_confi
     loaded = service.get_settings(user)
 
     assert saved["settings"]["businesses"][0]["registrationNo"] == "123-45-67890"
-    assert [item["id"] for item in loaded["settings"]["businesses"]] == ["biz-junghwa", "biz-sungshin", "biz-mia"]
-    assert [item["businessId"] for item in loaded["settings"]["branches"]] == ["biz-junghwa", "biz-sungshin", "biz-mia"]
+    assert [item["id"] for item in loaded["settings"]["businesses"]] == [
+        "biz-junghwa",
+        "biz-sungshin",
+        "biz-eonni-naengmyeon",
+        "biz-mia",
+    ]
+    assert [item["businessId"] for item in loaded["settings"]["branches"]] == [
+        "biz-junghwa",
+        "biz-sungshin",
+        "biz-eonni-naengmyeon",
+        "biz-mia",
+    ]
     raw = settings_path.read_text(encoding="utf-8")
     assert "category_rules" in raw
     assert "biz-corp" not in raw
     assert "ignored" not in raw
 
 
-def test_save_settings_keeps_only_three_canonical_businesses(tmp_path, monkeypatch):
+def test_save_settings_keeps_only_canonical_businesses(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
 
     user = {"email": "owner@example.com", "is_admin": True}
@@ -229,10 +239,21 @@ def test_save_settings_keeps_only_three_canonical_businesses(tmp_path, monkeypat
     assert [item["name"] for item in settings["businesses"]] == [
         "열정국밥 중화점",
         "열정국밥 성신여대점",
+        "언니냉면",
         "열정국밥_미아점",
     ]
-    assert {item["id"] for item in settings["businesses"]} == {"biz-junghwa", "biz-sungshin", "biz-mia"}
-    assert {item["businessId"] for item in settings["branches"]} == {"biz-junghwa", "biz-sungshin", "biz-mia"}
+    assert {item["id"] for item in settings["businesses"]} == {
+        "biz-junghwa",
+        "biz-sungshin",
+        "biz-eonni-naengmyeon",
+        "biz-mia",
+    }
+    assert {item["businessId"] for item in settings["branches"]} == {
+        "biz-junghwa",
+        "biz-sungshin",
+        "biz-eonni-naengmyeon",
+        "biz-mia",
+    }
     assert settings["accounts"][0]["businessId"] == "biz-mia"
     assert settings["integrations"][0]["businessId"] == "biz-mia"
 

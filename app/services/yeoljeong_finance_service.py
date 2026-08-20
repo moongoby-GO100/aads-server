@@ -223,6 +223,17 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
         "memo": "개인사업자 2",
     },
     {
+        "id": "biz-eonni-naengmyeon",
+        "entityType": "individual",
+        "name": "언니냉면",
+        "registrationNo": "기초등록 필요",
+        "representative": "미등록",
+        "taxType": "일반과세",
+        "openedAt": "",
+        "address": "",
+        "memo": "계정표 기준 자동수집 사업자",
+    },
+    {
         "id": "biz-mia",
         "entityType": "individual",
         "name": "열정국밥_미아점",
@@ -238,6 +249,7 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
 CANONICAL_BRANCHES: list[dict[str, Any]] = [
     {"id": "branch-junghwa", "name": "중화점", "businessId": "biz-junghwa", "status": "active", "phone": "", "address": "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)"},
     {"id": "branch-sungshin", "name": "성신여대점", "businessId": "biz-sungshin", "status": "active", "phone": "", "address": ""},
+    {"id": "branch-eonni-naengmyeon", "name": "언니냉면", "businessId": "biz-eonni-naengmyeon", "status": "active", "phone": "", "address": ""},
     {"id": "branch-gangbuk-mia", "name": "열정국밥_미아점", "businessId": "biz-mia", "status": "active", "phone": "", "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)"},
 ]
 
