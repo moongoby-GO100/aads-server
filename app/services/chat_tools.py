@@ -132,19 +132,24 @@ async def health_check(message: str, workspace_id: str) -> Dict[str, Any]:
         pending_scan = _safe(pending_scan, {"count": 0})
         running_scan = _safe(running_scan, {"count": 0})
 
+        current_server = {
+            "ok": True,
+            "role": "AADS Backend+Dashboard (contabo116, current server)",
+            "db_ok": db_res.get("ok", False),
+            "db_latency_ms": db_res.get("latency_ms", "?"),
+            "disk_usage_pct": disk_res.get("usage_pct", "?"),
+            "disk_used": disk_res.get("used", "?"),
+            "disk_total": disk_res.get("total", "?"),
+        }
+
         return {
             "status": quick.get("status", "UNKNOWN"),
             "checked_at": quick.get("checked_at", datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")),
-            "server_68": {
-                "ok": True,
-                "role": "AADS Backend+Dashboard (현재 서버)",
-                "db_ok": db_res.get("ok", False),
-                "db_latency_ms": db_res.get("latency_ms", "?"),
-                "disk_usage_pct": disk_res.get("usage_pct", "?"),
-                "disk_used": disk_res.get("used", "?"),
-                "disk_total": disk_res.get("total", "?"),
-            },
-            "server_211": {"note": "Hub/bridge — SSH 체크 제외 (별도 모니터링)"},
+            "server_contabo116": current_server,
+            "server_68": current_server,
+            "server_contabo14": {"note": "GO100/KIS — SSH 체크 제외 (별도 모니터링)"},
+            "server_211": {"note": "GO100/KIS — SSH 체크 제외 (별도 모니터링)"},
+            "server_cafe24_114": {"note": "SF/NTV2/NAS — SSH 체크 제외 (별도 모니터링)"},
             "server_114": {"note": "SF/NTV2/NAS — SSH 체크 제외 (별도 모니터링)"},
             "directives": {
                 "pending": pending_scan.get("count", 0),

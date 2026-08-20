@@ -18,6 +18,52 @@ INTERVAL=2
 UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
 ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
+DEPLOY_START_EPOCH=$(date +%s)
+
+sql_escape() {
+    printf "%s" "${1:-}" | sed "s/'/''/g"
+}
+
+record_deploy() {
+    local status="${1:-started}"
+    local deploy_type="${2:-$MODE}"
+    local err="${3:-}"
+    local now_epoch
+    local duration
+    local commit
+    local msg
+    local type_sql
+    local commit_sql
+    local msg_sql
+    local status_sql
+    local err_sql
+
+    now_epoch=$(date +%s)
+    duration=$((now_epoch - DEPLOY_START_EPOCH))
+    if [[ "$status" == "started" ]]; then
+        duration=0
+    fi
+    commit=$(git -C "$COMPOSE_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    msg=$(git -C "$COMPOSE_DIR" log -1 --pretty=%s 2>/dev/null || echo "unknown")
+
+    type_sql=$(sql_escape "$deploy_type")
+    commit_sql=$(sql_escape "$commit")
+    msg_sql=$(sql_escape "$msg")
+    status_sql=$(sql_escape "$status")
+    err_sql=$(sql_escape "$err")
+
+    docker exec aads-postgres psql -U aads -d aads -c "INSERT INTO deploy_history(deploy_type,project,trigger_by,git_commit,git_message,status,duration_s,error_msg,created_at) VALUES('$type_sql','AADS','deploy.sh','$commit_sql','$msg_sql','$status_sql',$duration,'$err_sql',NOW())" >/dev/null 2>&1 || \
+        echo "[deploy.sh] WARN: deploy_history insert failed (status=${status}, type=${deploy_type})"
+}
+
+deploy_error_trap() {
+    local exit_code="$?"
+    local line_no="${1:-unknown}"
+    local command="${2:-unknown}"
+    record_deploy "failed" "$MODE" "unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
+}
+
+trap 'deploy_error_trap "$LINENO" "$BASH_COMMAND"' ERR
 
 get_active_port() {
     local port=""
@@ -114,11 +160,13 @@ verify_active_slot() {
         echo "[deploy.sh] ❌ nginx upstream active 라인이 ${nginx_active_count}개 (정상=1) — 배포 차단"
         echo "[deploy.sh]    수동 정합성 회복: grep 'server 127' $UPSTREAM_CONF"
         _verify_telegram_alert "verify_active_slot: multi-active 감지(count=${nginx_active_count})"
+        record_deploy "blocked" "slot_guard" "verify_active_slot: multi-active count=${nginx_active_count}"
         exit 1
     fi
     if [[ -z "$nginx_active" ]]; then
         echo "[deploy.sh] ❌ nginx upstream active port 파싱 실패 — 배포 차단"
         _verify_telegram_alert "verify_active_slot: active port 파싱 실패"
+        record_deploy "blocked" "slot_guard" "verify_active_slot: active port parse failed"
         exit 1
     fi
     if [[ "$nginx_active" != "$active_port" ]]; then
@@ -131,6 +179,7 @@ verify_active_slot() {
         echo "[deploy.sh]      2) 살아있는 쪽에 맞춰 nginx upstream 또는 .active_port 정정"
         echo "[deploy.sh]      3) nginx -s reload"
         _verify_telegram_alert "verify_active_slot: 슬롯 불일치 nginx=:${nginx_active} file=:${active_port}"
+        record_deploy "blocked" "slot_guard" "verify_active_slot: slot mismatch nginx=:${nginx_active} file=:${active_port}"
         exit 1
     fi
     local target_container=""
@@ -145,6 +194,7 @@ verify_active_slot() {
         echo "[deploy.sh]      1) docker start ${target_container}"
         echo "[deploy.sh]      2) 또는 살아있는 쪽으로 nginx upstream swap 후 reload"
         _verify_telegram_alert "verify_active_slot: ${target_container}(:${active_port}) 죽음"
+        record_deploy "blocked" "slot_guard" "verify_active_slot: ${target_container}(:${active_port}) not running"
         exit 1
     fi
     echo "[deploy.sh] ✅ ACTIVE 슬롯 일관성 확인: :${active_port} (${target_container})"
@@ -171,6 +221,7 @@ if [ -f "$LOCKFILE" ]; then
     LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
     if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
         echo "[deploy.sh] ❌ 배포 이미 진행 중 (PID=$LOCK_PID). 중복 호출 차단."
+        record_deploy "blocked" "$MODE" "deploy already running PID=${LOCK_PID}"
         exit 1
     else
         echo "[deploy.sh] ⚠️ stale lockfile 제거 (PID=$LOCK_PID 종료됨)"
@@ -186,6 +237,7 @@ NGINX_SWITCH_LOCK="/tmp/aads-nginx-upstream.lock"
 exec 8>"$NGINX_SWITCH_LOCK"
 if ! flock -w 300 8; then
     echo "[deploy.sh] ❌ nginx upstream 공통 락 획득 실패. 다른 배포가 진행 중입니다."
+    record_deploy "blocked" "$MODE" "nginx upstream lock acquisition failed"
     exit 1
 fi
 
@@ -484,6 +536,7 @@ SQL
 
 # ── Phase 0.5: 코드 검증 (구문 + import) — 실패 시 배포 차단 ──
 echo "[deploy.sh] Phase 0.5: Python syntax + import validation..."
+set +e
 VALIDATION_RESULT=$(docker exec "$ACTIVE_CONTAINER" python3 -c "
 import sys
 errors = []
@@ -507,16 +560,20 @@ if errors:
 else:
     print('PASS')
 " 2>&1)
+VALIDATION_EXIT=$?
+set -e
 
-if echo "$VALIDATION_RESULT" | head -1 | grep -q "FAIL"; then
+if [[ "$VALIDATION_EXIT" -ne 0 ]] || echo "$VALIDATION_RESULT" | head -1 | grep -q "FAIL"; then
     echo "[deploy.sh] ❌ Phase 0.5: 코드 검증 실패 — 배포 차단"
     echo "$VALIDATION_RESULT"
     notify "❌ 배포 차단: 코드 검증 실패\n${VALIDATION_RESULT}"
+    record_deploy "blocked" "$MODE" "Phase 0.5 validation failed: ${VALIDATION_RESULT:0:500}"
     exit 1
 fi
 echo "[deploy.sh] Phase 0.5: ✅ 코드 검증 통과"
 
 # ── Phase 1: 배포 실행 ──
+record_deploy "started" "$MODE" ""
 case "$MODE" in
     reload)
         echo "[deploy.sh] Phase 1: stream-safe hot reload aads-api"
@@ -534,6 +591,7 @@ case "$MODE" in
             if ! curl -sf "http://127.0.0.1:${PEER_PORT}/api/v1/health" >/dev/null 2>&1; then
                 echo "[deploy.sh] ❌ peer slot ${PEER_CONTAINER}:${PEER_PORT} health 실패 — 스트림 보호를 위해 배포 중단"
                 notify "❌ code 배포 중단: active stream ${ACTIVE_STREAMS}건, peer unhealthy"
+                record_deploy "failed" "$MODE" "peer slot ${PEER_CONTAINER}:${PEER_PORT} health failed before switch"
                 exit 1
             fi
             docker exec "$PEER_CONTAINER" touch /tmp/aads_deploy_restart 2>/dev/null || true
@@ -541,6 +599,7 @@ case "$MODE" in
             if ! wait_port_health "$PEER_PORT" 90; then
                 echo "[deploy.sh] ❌ peer slot 재시작 후 health 실패 — 전환 중단"
                 notify "❌ code 배포 실패: peer slot health 실패"
+                record_deploy "failed" "$MODE" "peer slot ${PEER_CONTAINER}:${PEER_PORT} health failed after restart"
                 exit 1
             fi
             switch_api_upstream "$PEER_PORT" "$ACTIVE_PORT" "$PEER_CONTAINER" "$ACTIVE_CONTAINER"
@@ -552,6 +611,7 @@ case "$MODE" in
         else
             echo "[deploy.sh] ❌ peer slot을 찾지 못해 active API 직접 재시작을 차단합니다"
             notify "❌ code 배포 중단: peer slot missing"
+            record_deploy "blocked" "$MODE" "peer slot missing"
             exit 1
             # PC Agent WebSocket 정상 종료
             ACTIVE_API_URL="http://localhost:${ACTIVE_PORT}"
@@ -618,6 +678,7 @@ case "$MODE" in
             echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 존재 — 재빌드 시 응답 끊김 위험으로 배포 중단"
             echo "[deploy.sh]    잠시 후 재시도하거나, 긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
             notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+            record_deploy "blocked" "$MODE" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
             exit 1
         elif [[ "$TARGET_STREAMS" != "0" ]]; then
             echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
@@ -649,6 +710,7 @@ case "$MODE" in
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: ${NEW_CONTAINER} 헬스체크 통과 못함"
+            record_deploy "failed" "$MODE" "${NEW_CONTAINER} health check failed"
             exit 1
         fi
 
@@ -685,6 +747,7 @@ case "$MODE" in
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: nginx 설정 오류"
+            record_deploy "failed" "$MODE" "nginx config test failed during upstream switch"
             exit 1
         fi
 
@@ -702,6 +765,7 @@ case "$MODE" in
             nginx_reload
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
+            record_deploy "failed" "$MODE" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"
             exit 1
         fi
 
@@ -720,6 +784,7 @@ case "$MODE" in
         ;;
     *)
         echo "[deploy.sh] ERROR: 알 수 없는 모드 '$MODE'. bluegreen|code|reload|build 사용"
+        record_deploy "blocked" "$MODE" "unknown mode: ${MODE}"
         exit 1
         ;;
 esac
@@ -745,6 +810,7 @@ if [[ "$HEALTH_OK" != "true" ]]; then
         echo "[deploy.sh] active API 직접 재시작은 SSE 끊김 원인이므로 생략"
     fi
     notify "❌ 배포 실패 + 롤백 시도 (mode=${MODE})"
+    record_deploy "failed" "$MODE" "Phase 2 health check failed: ${HEALTH_URL}"
     exit 1
 fi
 
@@ -807,6 +873,7 @@ else
         echo "[deploy.sh] active API 직접 재시작은 SSE 끊김 원인이므로 생략"
     fi
     notify "❌ 채팅 기능 테스트 실패 + 롤백 (mode=${MODE}): ${CHAT_TEST:0:200}"
+    record_deploy "failed" "$MODE" "Phase 4 chat table check failed: ${CHAT_TEST:0:500}"
     exit 1
 fi
 
@@ -868,4 +935,5 @@ fi
 
 echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
+record_deploy "success" "$MODE" ""
 exit 0
