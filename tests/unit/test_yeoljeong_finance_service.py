@@ -2762,6 +2762,109 @@ def test_platform_account_db_read_restores_secret_from_protected_file_only():
     assert "password_enc" not in db_rows[0]
 
 
+def test_hydrate_delivery_account_passwords_from_agent_vault_matches_origin_and_username(monkeypatch):
+    rows = [
+        {
+            "id": "acct-yogiyo-mia",
+            "service": "yogiyo",
+            "username": "mia-owner",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "portal_status": "action_required",
+        }
+    ]
+
+    monkeypatch.setattr(service, "_db_available", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "_run_db",
+        lambda coro: (
+            coro.close(),
+            [
+                {
+                    "id": "vault-yogiyo",
+                    "origin": "https://ceo.yogiyo.co.kr",
+                    "username_enc": "enc-mia-owner",
+                    "password_enc": "enc-vault-password",
+                }
+            ],
+        )[1],
+    )
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "mia-owner" if value == "enc-mia-owner" else "")
+
+    changed = service._hydrate_delivery_account_passwords_from_agent_vault(rows)
+
+    assert changed == 1
+    assert rows[0]["password_enc"] == "enc-vault-password"
+    assert rows[0]["password_source"] == "agent_vault"
+    assert rows[0]["agent_vault_credential_id"] == "vault-yogiyo"
+    assert rows[0]["portal_status"] == "credential_registered"
+
+
+def test_hydrate_delivery_account_passwords_from_agent_vault_requires_username_match(monkeypatch):
+    rows = [{"id": "acct-ddangyo-mia", "service": "ddangyo", "username": "mia-owner"}]
+
+    monkeypatch.setattr(service, "_db_available", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "_run_db",
+        lambda coro: (
+            coro.close(),
+            [
+                {
+                    "id": "vault-ddangyo",
+                    "origin": "https://boss.ddangyo.com",
+                    "username_enc": "enc-other-owner",
+                    "password_enc": "enc-vault-password",
+                }
+            ],
+        )[1],
+    )
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "other-owner" if value == "enc-other-owner" else "")
+
+    changed = service._hydrate_delivery_account_passwords_from_agent_vault(rows)
+
+    assert changed == 0
+    assert "password_enc" not in rows[0]
+
+
+def test_hydrate_delivery_account_passwords_from_agent_vault_uses_explicit_scope_metadata(monkeypatch):
+    rows = [
+        {
+            "id": "acct-ddangyo-mia",
+            "service": "ddangyo",
+            "username": "mia-owner",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+        }
+    ]
+
+    monkeypatch.setattr(service, "_db_available", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "_run_db",
+        lambda coro: (
+            coro.close(),
+            [
+                {
+                    "id": "vault-ddangyo-mia",
+                    "origin": "https://boss.ddangyo.com",
+                    "username_enc": "enc-other-owner",
+                    "password_enc": "enc-vault-password",
+                    "metadata": {"service": "ddangyo", "business_id": "biz-mia", "branch": "열정국밥_미아점"},
+                }
+            ],
+        )[1],
+    )
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "other-owner" if value == "enc-other-owner" else "")
+
+    changed = service._hydrate_delivery_account_passwords_from_agent_vault(rows)
+
+    assert changed == 1
+    assert rows[0]["password_enc"] == "enc-vault-password"
+    assert rows[0]["agent_vault_credential_id"] == "vault-ddangyo-mia"
+
+
 def test_onboarding_documents_include_missing_required_rows_for_approved_employee(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")

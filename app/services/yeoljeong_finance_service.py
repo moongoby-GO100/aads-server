@@ -22,6 +22,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
@@ -76,6 +77,16 @@ CONNECTOR_LABELS = {
 PLATFORM_LABELS = {
     key: CONNECTOR_LABELS[key]
     for key in ("baemin", "coupangeats", "yogiyo", "ddangyo")
+}
+DELIVERY_AGENT_VAULT_ORIGINS: dict[str, tuple[str, ...]] = {
+    "baemin": ("https://biz-member.baemin.com", "https://self.baemin.com"),
+    "coupangeats": (
+        "https://store.coupangeats.com",
+        "https://xauth.coupang.com",
+        "https://login.coupang.com",
+    ),
+    "yogiyo": ("https://ceo.yogiyo.co.kr",),
+    "ddangyo": ("https://boss.ddangyo.com",),
 }
 DELIVERY_UPLOAD_COLLECTION_MODES = {"portal-csv", "csv-upload", "statement-upload", "upload_queue", "manual"}
 DELIVERY_COLLECTION_STATUSES = {"queued", "running", "succeeded", "partial", "action_required", "failed"}
@@ -953,6 +964,123 @@ def _decrypt_secret(value: str) -> str:
         return decrypt_value(value)
     except Exception:
         return ""
+
+
+def _normalize_origin(value: Any) -> str:
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    if parsed.netloc:
+        return f"https://{parsed.netloc.lower()}"
+    return text.lower()
+
+
+def _delivery_service_for_vault_origin(origin: Any) -> str:
+    normalized = _normalize_origin(origin)
+    for service, origins in DELIVERY_AGENT_VAULT_ORIGINS.items():
+        if normalized in {_normalize_origin(item) for item in origins}:
+            return service
+    return ""
+
+
+async def _db_fetch_delivery_agent_vault_credentials() -> list[dict[str, Any]] | None:
+    import asyncpg
+
+    origins = sorted(
+        {_normalize_origin(origin) for service_origins in DELIVERY_AGENT_VAULT_ORIGINS.values() for origin in service_origins}
+    )
+    if not origins:
+        return []
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", "public.agent_vault_credentials")
+        if not ready:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT id, work_key, origin, label, username_enc, password_enc, metadata
+              FROM agent_vault_credentials
+             WHERE is_active = TRUE
+               AND origin = ANY($1::text[])
+             ORDER BY work_key, origin, label
+            """,
+            origins,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+def _hydrate_delivery_account_passwords_from_agent_vault(rows: list[dict[str, Any]]) -> int:
+    """Copy matching Agent Vault password ciphertexts into delivery accounts.
+
+    Platform accounts keep usernames in the Yeoljeong settings file, while
+    Agent Vault stores imported browser credentials by origin. Matching by
+    service origin and username lets automatic collection reuse already
+    approved Vault credentials without exposing plaintext passwords.
+    """
+    targets = [
+        row
+        for row in rows
+        if str(row.get("service") or "") in PLATFORM_LABELS
+        and str(row.get("username") or "").strip()
+        and not _has_secret_value(row, "password")
+    ]
+    if not targets or not _db_available():
+        return 0
+
+    vault_rows = _run_db(_db_fetch_delivery_agent_vault_credentials())
+    if not isinstance(vault_rows, list) or not vault_rows:
+        return 0
+
+    by_service_scope: dict[tuple[str, str, str], dict[str, Any]] = {}
+    by_service_username: dict[tuple[str, str], dict[str, Any]] = {}
+    for vault_row in vault_rows:
+        metadata = _jsonb_object(vault_row.get("metadata"))
+        service = str(metadata.get("service") or "").strip() or _delivery_service_for_vault_origin(vault_row.get("origin"))
+        encrypted_password = str(vault_row.get("password_enc") or "")
+        if not service or not encrypted_password:
+            continue
+        business_id = str(metadata.get("business_id") or metadata.get("businessId") or "").strip()
+        branch = BRANCH_ALIASES.get(
+            str(metadata.get("branch") or "").strip(),
+            str(metadata.get("branch") or "").strip(),
+        )
+        if business_id and branch:
+            by_service_scope.setdefault((service, business_id, branch), vault_row)
+        username = _decrypt_secret(str(vault_row.get("username_enc") or "")).strip()
+        if not username:
+            continue
+        key = (service, username.lower())
+        if key not in by_service_username:
+            by_service_username[key] = vault_row
+
+    if not by_service_scope and not by_service_username:
+        return 0
+
+    synced_at = _now()
+    changed = 0
+    for row in targets:
+        service = str(row.get("service") or "").strip()
+        username = str(row.get("username") or "").strip().lower()
+        business_id = str(row.get("business_id") or "").strip()
+        branch = BRANCH_ALIASES.get(str(row.get("branch") or "").strip(), str(row.get("branch") or "").strip())
+        vault_row = by_service_scope.get((service, business_id, branch)) or by_service_username.get((service, username))
+        if not vault_row:
+            continue
+        row["password_enc"] = str(vault_row.get("password_enc") or "")
+        row["password_source"] = "agent_vault"
+        row["agent_vault_credential_id"] = str(vault_row.get("id") or "")
+        row["agent_vault_origin"] = _normalize_origin(vault_row.get("origin"))
+        row["updated_at"] = synced_at
+        if str(row.get("portal_status") or "") in {"action_required", "credential_required"}:
+            row["portal_status"] = "credential_registered"
+            row["portal_message"] = "Agent Vault 자격증명과 매칭되어 자동수집 비밀번호를 반영했습니다."
+        changed += 1
+    return changed
 
 
 _ACCOUNT_SECRET_FIELD_MAP: dict[str, str] = {
@@ -2618,6 +2746,7 @@ def list_accounts(user: dict[str, Any], business_id: str | None = None) -> list[
         return []
     rows = _read("platform_accounts")
     changed = _migrate_platform_account_secrets(rows)
+    changed = bool(_hydrate_delivery_account_passwords_from_agent_vault(rows)) or changed
     now = _now()
     for row in rows:
         public_status = _public_platform_account_status(row)
@@ -5042,7 +5171,9 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
     sync_job_id = str(payload.get("sync_job_id") or "").strip()
 
     all_accounts = _read("platform_accounts")
-    if _migrate_platform_account_secrets(all_accounts):
+    accounts_changed = _migrate_platform_account_secrets(all_accounts)
+    accounts_changed = bool(_hydrate_delivery_account_passwords_from_agent_vault(all_accounts)) or accounts_changed
+    if accounts_changed:
         _write("platform_accounts", all_accounts)
     def _delivery_account_score(row: dict[str, Any], service: str) -> tuple[int, int, int, int, int, str]:
         mode = str(row.get("collection_mode") or row.get("collectionMode") or "").strip()

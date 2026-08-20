@@ -7208,3 +7208,21 @@
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py` succeeded against the live source tree: 8 passed.
 - Remaining:
   - Commit/push selected files, restart only `yeoljeong-finance-worker`, and inspect the next live loop output.
+
+## 2026-08-20 09:00 KST - Yeoljeong Agent Vault credential hydration
+
+- Request: Confirm where Mia branch delivery-platform passwords should be entered and whether OHVIS Agent Vault can be used for automatic collection.
+- Finding:
+  - Mia platform accounts had usernames but no local `password_enc`, so Yeoljeong auto-login could not use them.
+  - Agent Vault contained active delivery portal credentials for Baemin/Coupang/Yogiyo/Ddangyo origins, but the current Mia account usernames did not match those Vault usernames. No plaintext passwords were printed.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py` now checks Agent Vault before account listing and delivery sync.
+  - Matching is safe by default: delivery service origin + username must match.
+  - If a Vault credential explicitly declares `metadata.service`, `metadata.business_id`, and `metadata.branch`, that scoped metadata can hydrate the matching branch account even when username labels differ.
+  - The copied value is encrypted `password_enc`; plaintext passwords are not written to logs or API responses.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m py_compile app/services/yeoljeong_finance_service.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -q -k 'agent_vault or platform_account_db_read_restores_secret'` succeeded: 4 passed, 88 deselected.
+  - Live hydration check left Mia accounts unchanged because existing Agent Vault usernames did not match the Mia account usernames and no explicit Mia scope metadata was present.
+- Remaining:
+  - Add branch-scoped Agent Vault metadata for Mia credentials or enter the passwords through Yeoljeong account settings, then rerun delivery collection.
