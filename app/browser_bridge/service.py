@@ -53,6 +53,11 @@ LOCAL_AGENT_JS_COMMANDS = {
 SIDECAR_SERVICE_ROLES = {
     "yeoljeong-finance-worker",
 }
+SIDECAR_QUEUE_WAIT_SECONDS = 10
+SIDECAR_COMMAND_TIMEOUT_SECONDS = 45
+SIDECAR_NAVIGATION_TIMEOUT_SECONDS = 75
+SIDECAR_LAUNCH_TIMEOUT_SECONDS = 60
+SIDECAR_SNAPSHOT_TIMEOUT_SECONDS = 30
 
 
 def normalize_work_key(work_key: str) -> str:
@@ -140,8 +145,18 @@ class _LocalAgentPage:
             if command_type in LOCAL_AGENT_JS_COMMANDS:
                 merged.setdefault("evaluate_timeout_seconds", max(1.0, min(60.0, command_timeout_seconds - 0.5)))
 
+            route_active_first = self._service._route_pc_agent_via_active_api_first()
+            if route_active_first:
+                queue_wait_timeout_seconds = min(
+                    float(queue_wait_timeout_seconds),
+                    self._service._sidecar_queue_wait_timeout_seconds(),
+                )
+                command_timeout_seconds = min(
+                    float(command_timeout_seconds),
+                    self._service._sidecar_command_timeout_seconds(command_type),
+                )
             lease_ttl_seconds = int(command_timeout_seconds + LOCAL_AGENT_LEASE_BUFFER_SECONDS)
-            if self._service._route_pc_agent_via_active_api_first():
+            if route_active_first:
                 active_result = await self._service._execute_pc_agent_route_via_active_api(
                     command_type=command_type,
                     params=merged,
@@ -525,9 +540,9 @@ class BrowserBridgeService:
                 agent_id=agent_id,
                 job_type="browser_bridge_launch",
                 required_capabilities=["interactive_browser"],
-                queue_wait_timeout_seconds=60,
-                lease_ttl_seconds=210,
-                command_timeout_seconds=180,
+                queue_wait_timeout_seconds=self._sidecar_queue_wait_timeout_seconds(),
+                lease_ttl_seconds=int(self._sidecar_command_timeout_seconds("browser_launch") + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                command_timeout_seconds=self._sidecar_command_timeout_seconds("browser_launch"),
             )
             routed = active_routed or {
                 "status": "error",
@@ -948,6 +963,32 @@ class BrowserBridgeService:
             return False
         service_role = str(os.getenv("AADS_SERVICE_ROLE") or "").strip().lower()
         return service_role in SIDECAR_SERVICE_ROLES
+
+    @staticmethod
+    def _sidecar_queue_wait_timeout_seconds() -> float:
+        try:
+            return max(1.0, float(os.getenv("AADS_PC_AGENT_SIDECAR_QUEUE_WAIT_SECONDS", SIDECAR_QUEUE_WAIT_SECONDS)))
+        except ValueError:
+            return float(SIDECAR_QUEUE_WAIT_SECONDS)
+
+    @staticmethod
+    def _sidecar_command_timeout_seconds(command_type: str) -> float:
+        env_map = {
+            "browser_launch": ("AADS_PC_AGENT_SIDECAR_LAUNCH_TIMEOUT_SECONDS", SIDECAR_LAUNCH_TIMEOUT_SECONDS),
+            "browser_navigate": ("AADS_PC_AGENT_SIDECAR_NAVIGATION_TIMEOUT_SECONDS", SIDECAR_NAVIGATION_TIMEOUT_SECONDS),
+            "browser_download": ("AADS_PC_AGENT_SIDECAR_NAVIGATION_TIMEOUT_SECONDS", SIDECAR_NAVIGATION_TIMEOUT_SECONDS),
+        }
+        if command_type in LOCAL_AGENT_JS_COMMANDS or command_type in {"browser_screenshot", "browser_tabs"}:
+            env_name, default = "AADS_PC_AGENT_SIDECAR_SNAPSHOT_TIMEOUT_SECONDS", SIDECAR_SNAPSHOT_TIMEOUT_SECONDS
+        else:
+            env_name, default = env_map.get(
+                command_type,
+                ("AADS_PC_AGENT_SIDECAR_COMMAND_TIMEOUT_SECONDS", SIDECAR_COMMAND_TIMEOUT_SECONDS),
+            )
+        try:
+            return max(1.0, float(os.getenv(env_name, default)))
+        except ValueError:
+            return float(default)
 
     @classmethod
     def _active_api_online_agent_id_for_route_url(

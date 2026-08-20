@@ -747,8 +747,8 @@ async def test_ensure_pc_agent_cdp_sidecar_routes_active_api_first(monkeypatch, 
 
     assert active_calls
     assert active_calls[0]["command_type"] == "browser_launch"
-    assert active_calls[0]["queue_wait_timeout_seconds"] == 60
-    assert active_calls[0]["command_timeout_seconds"] == 180
+    assert active_calls[0]["queue_wait_timeout_seconds"] == 10
+    assert active_calls[0]["command_timeout_seconds"] == 60
     assert session.endpoint.metadata["agent_id"] == "oby-ceo"
     assert session.endpoint.metadata["port"] == "9666"
 
@@ -920,8 +920,8 @@ async def test_local_agent_commands_sidecar_route_active_api_first(monkeypatch, 
     assert active_calls[0]["command_type"] == "browser_navigate"
     assert active_calls[0]["agent_id"] == "oby-ceo"
     assert active_calls[0]["params"].get("work_key", "") == ""
-    assert active_calls[0]["queue_wait_timeout_seconds"] == 60
-    assert active_calls[0]["command_timeout_seconds"] == 180
+    assert active_calls[0]["queue_wait_timeout_seconds"] == 10
+    assert active_calls[0]["command_timeout_seconds"] == 75
 
 
 @pytest.mark.asyncio
