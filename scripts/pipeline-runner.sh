@@ -339,6 +339,34 @@ git_ahead_behind_counts() {
     git -C "$repo" rev-list --left-right --count "${base_ref}...HEAD" 2>/dev/null | awk '{print $2" "$1}'
 }
 
+# dirty 파일 경로 목록 (rename은 신규 경로 기준, 공백 경로 안전)
+git_dirty_paths() {
+    local repo="$1"
+    git -C "$repo" status --porcelain 2>/dev/null \
+        | cut -c4- \
+        | sed 's/^.* -> //' \
+        | tr -d '"' \
+        | sed '/^[[:space:]]*$/d' \
+        | sort -u
+}
+
+# 해당 job이 실제로 건드린 파일 목록 (actual_changed_files → git_diff 폴백)
+job_target_files() {
+    local job_id="$1"
+    [[ -z "$job_id" ]] && return 0
+    local files=""
+    files=$(db_exec "SELECT jsonb_array_elements_text(COALESCE(actual_changed_files,'[]'::jsonb)) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || files=""
+    files=$(printf '%s\n' "$files" | sed '/^[[:space:]]*$/d')
+    if [[ -z "$files" ]]; then
+        local diff_text=""
+        diff_text=$(db_exec "SELECT COALESCE(git_diff,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || diff_text=""
+        files=$(printf '%s\n' "$diff_text" \
+            | grep '^diff --git ' \
+            | sed 's|^diff --git a/||; s| b/.*$||')
+    fi
+    printf '%s\n' "$files" | sed '/^[[:space:]]*$/d' | sort -u
+}
+
 prepare_clean_job_worktree() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
 
@@ -406,10 +434,51 @@ deploy_git_preflight() {
     ahead="${counts%% *}"
     behind="${counts##* }"
 
-    if [[ "${dirty:-999}" -ne 0 || "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
+    # origin/main 동기화 상태는 여전히 엄격 (behind/ahead != 0 이면 차단)
+    if [[ "${behind:-999}" -ne 0 || "${ahead:-999}" -ne 0 ]]; then
         _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
-            "배포 차단: main workdir은 clean/latest여야 함 (dirty=${dirty:-unknown}, behind=${behind:-unknown}, ahead=${ahead:-unknown})"
+            "배포 차단: main workdir은 origin/main과 동기화되어야 함 (behind=${behind:-unknown}, ahead=${ahead:-unknown})"
         return 1
+    fi
+
+    # dirty 파일은 '대상 파일 기준'으로 완화 판정 (AADS-PREFLIGHT-SCOPED-20260820)
+    if [[ "${dirty:-999}" -ne 0 ]]; then
+        local strict="${AADS_DEPLOY_PREFLIGHT_STRICT:-0}"
+        local dirty_paths target_files overlap dirty_csv overlap_csv
+        dirty_paths=$(git_dirty_paths "$main_workdir")
+        target_files=$(job_target_files "$job_id")
+        dirty_csv=$(printf '%s\n' "$dirty_paths" | head -20 | tr '\n' ',' | sed 's/,$//')
+
+        if [[ "$strict" == "1" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
+                "배포 차단(STRICT): main workdir dirty=${dirty} (${dirty_csv})"
+            return 1
+        fi
+        if [[ -z "${target_files//[[:space:]]/}" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_preflight_git_state" \
+                "배포 차단: 대상 파일 목록을 확인할 수 없어 dirty=${dirty} 완화 불가 (${dirty_csv})"
+            return 1
+        fi
+
+        overlap=$(comm -12 <(printf '%s\n' "$dirty_paths") <(printf '%s\n' "$target_files") 2>/dev/null)
+        if [[ -n "${overlap//[[:space:]]/}" ]]; then
+            overlap_csv=$(printf '%s\n' "$overlap" | head -20 | tr '\n' ',' | sed 's/,$//')
+            _fail_job "$job_id" "$session_id" "deploy_preflight_file_conflict" \
+                "배포 차단: 이 작업의 대상 파일이 미커밋 상태로 충돌 (${overlap_csv})"
+            return 1
+        fi
+
+        log "  DEPLOY_PREFLIGHT_RELAXED: dirty=${dirty} (대상 파일 무관) → 배포 진행"
+        db_update "UPDATE pipeline_jobs
+                   SET logs=COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                           'ts', NOW()::text,
+                           'event', 'deploy_preflight_relaxed',
+                           'dirty_count', ${dirty:-0},
+                           'unrelated_dirty_files', $(sql_escape "$dirty_csv")
+                       )),
+                       updated_at=NOW()
+                   WHERE job_id='${job_id}';" 2>/dev/null || true
+        return 0
     fi
 
     log "  DEPLOY_PREFLIGHT_OK: dirty=0 behind=0 ahead=0"
