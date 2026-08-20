@@ -3758,18 +3758,28 @@ def _delivery_browser_auth_for_account(
         )
         work_key = _delivery_browser_work_key(service, business_id, branch)
         auth["browser_target_url"] = url
+        pc_agent_id = str(
+            payload.get("pc_agent_id")
+            or payload.get("pcAgentId")
+            or account.get("pc_agent_id")
+            or os.getenv("YEOLJEONG_DELIVERY_PC_AGENT_ID", "")
+            or ""
+        ).strip()
         bridge_service = get_browser_bridge_service()
         session = None
         errors: list[str] = []
         for attempt in range(3):
             try:
+                ensure_kwargs: dict[str, Any] = {
+                    "work_key": work_key,
+                    "label": f"열정국밥 {branch} {label} 자동수집",
+                    "url": url if force_recreate_session else "about:blank",
+                    "force_recreate": force_recreate_session or attempt > 0,
+                }
+                if pc_agent_id:
+                    ensure_kwargs["agent_id"] = pc_agent_id
                 session = _run_delivery_browser_async(
-                    bridge_service.ensure_work_session(
-                        work_key=work_key,
-                        label=f"열정국밥 {branch} {label} 자동수집",
-                        url=url if force_recreate_session else "about:blank",
-                        force_recreate=force_recreate_session or attempt > 0,
-                    )
+                    bridge_service.ensure_work_session(**ensure_kwargs)
                 )
                 if force_recreate_session:
                     auth["browser_bridge_recovered"] = "force_recreate_requested"
@@ -3788,6 +3798,8 @@ def _delivery_browser_auth_for_account(
             auth["browser_session_id"] = str(getattr(session, "session_id", "") or "")
             auth["browser_bridge_mode"] = "local_agent"
             auth["browser_work_key"] = work_key
+            if pc_agent_id:
+                auth["browser_agent_id"] = pc_agent_id
             if force_recreate_session:
                 auth["browser_session_recreated"] = "1"
     except Exception as exc:

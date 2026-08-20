@@ -31,6 +31,7 @@ def test_yeoljeong_compose_uses_dedicated_runtime_boundaries() -> None:
     worker_compose = compose.split("  yeoljeong-finance-worker:", 1)[1].split("  aads-litellm:", 1)[0]
     assert "/root/aads/aads-server/.active_port:/app/.active_port:ro" in worker_compose
     assert "/root/aads/aads-server/.active_container:/app/.active_container:ro" in worker_compose
+    assert "YEOLJEONG_DELIVERY_PC_AGENT_ID=${YEOLJEONG_DELIVERY_PC_AGENT_ID:-" in worker_compose
     assert "YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS" in compose
 
 

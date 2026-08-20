@@ -1484,6 +1484,42 @@ def test_delivery_browser_auth_for_account_ensures_service_work_session(monkeypa
     assert fake_bridge.calls[0]["url"] == "about:blank"
 
 
+def test_delivery_browser_auth_for_account_passes_configured_pc_agent(monkeypatch):
+    class FakeSession:
+        session_id = "bb-pinned-coupang"
+
+    class FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        async def ensure_work_session(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeSession()
+
+    fake_bridge = FakeBridge()
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setenv("YEOLJEONG_DELIVERY_PC_AGENT_ID", "agent-good")
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+
+    auth = service._delivery_browser_auth_for_account(
+        {"prefer_pc_agent": True},
+        {"service": "coupangeats", "business_id": "biz-junghwa", "branch": "중화점"},
+        "coupangeats",
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert auth["browser_session_id"] == "bb-pinned-coupang"
+    assert auth["browser_agent_id"] == "agent-good"
+    assert fake_bridge.calls[0]["agent_id"] == "agent-good"
+
+
 def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypatch):
     class FakeSession:
         session_id = "bb-recreated-coupang"
