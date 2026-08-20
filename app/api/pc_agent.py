@@ -26,6 +26,7 @@ PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
 _PEER_FALLBACK_HEADER = "x-aads-pc-agent-peer-fallback"
 _PEER_RETRYABLE_ERROR_CODES = {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
+_DEFAULT_BROWSER_WORK_KEY = os.environ.get("PC_AGENT_DEFAULT_BROWSER_WORK_KEY", "aads-ceo-browser").strip() or "aads-ceo-browser"
 
 # hot-reload 시 기존 WebSocket 연결 상태 보존
 _prev_mod = _sys_reload.modules.get(__name__)
@@ -507,6 +508,20 @@ def _peer_fallback_allowed(request: Request) -> bool:
     return request.headers.get(_PEER_FALLBACK_HEADER, "") != "1"
 
 
+def _normalize_browser_command_params(command_type: str, params: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(params or {})
+    normalized_command = str(command_type or "").strip().lower()
+    if not normalized_command.startswith("browser_"):
+        return normalized
+    normalized.setdefault("work_key", _DEFAULT_BROWSER_WORK_KEY)
+    if normalized_command == "browser_launch":
+        normalized.setdefault("new_window", False)
+    if normalized_command == "browser_close_session":
+        normalized.setdefault("close_browser", True)
+        normalized.setdefault("close_tabs", True)
+    return normalized
+
+
 async def _request_peer_fallback_json(
     *,
     request: Request,
@@ -633,9 +648,10 @@ async def execute_command(req: CommandRequest):
     if agent is None:
         raise HTTPException(status_code=404, detail=f"에이전트 '{req.agent_id}'가 연결되어 있지 않습니다.")
 
+    params = _normalize_browser_command_params(req.command_type, req.params)
     try:
         command_id = await pc_agent_manager.send_command(
-            req.agent_id, req.command_type, req.params
+            req.agent_id, req.command_type, params
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -646,7 +662,7 @@ async def execute_command(req: CommandRequest):
 @router.post("/pc-agent/route-execute")
 async def route_execute_command(req: RoutedCommandRequest, request: Request):
     """Capability 기반 라우팅 + lease/queue 제어로 명령 실행."""
-    params = dict(req.params or {})
+    params = _normalize_browser_command_params(req.command_type, req.params)
     effective_command_timeout_seconds = float(req.command_timeout_seconds)
     raw_param_timeout = (
         params.get("command_timeout_seconds")

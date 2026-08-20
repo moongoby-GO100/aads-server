@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-20 14:31 KST - PC Agent browser window reuse and close command defaults
+
+- Request: CEO reported that `https://aads.newtalk.kr/chat#476cae48-9bd5-467b-b2da-2f68606c180e` keeps opening new PC Agent browser windows and asked whether the close feature was reflected.
+- Finding:
+  - `browser_close_session` exists in the PC Agent and `route-execute` can clean up when `close_on_complete=true`.
+  - The chat natural-language browser command builder returned browser commands without a `work_key`.
+  - The direct `/api/v1/pc-agent/execute` endpoint forwarded browser params as-is, so UI/direct calls could launch Chrome without the stable `aads-ceo-browser` session key.
+- Changes:
+  - `app/services/pc_agent_command_builder.py`: all browser natural-language commands now default to `work_key=aads-ceo-browser`; `browser_launch` defaults `new_window=false`; "브라우저/크롬 닫아/종료" maps to `browser_close_session`.
+  - `app/api/pc_agent.py`: direct `/pc-agent/execute` and routed `/pc-agent/route-execute` normalize browser params with the same default `work_key`; launch defaults `new_window=false`; close defaults `close_browser=true`, `close_tabs=true`.
+  - `tests/test_pc_agent_command_builder.py` and `tests/unit/test_pc_agent_api_disconnects.py`: regression tests added for default work key, launch reuse defaults, close command mapping, and direct API param normalization.
+- Verification:
+  - Host `python3 -m py_compile app/api/pc_agent.py app/services/pc_agent_command_builder.py` passed.
+  - Container `docker exec aads-server python -m pytest tests/test_pc_agent_command_builder.py tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_routing_leases.py -q` passed: 50 passed.
+- Remaining:
+  - This entry records code/test completion. Deploy/reload and a live PC Agent E2E close smoke should be run before declaring production reflected.
+
 ## 2026-08-20 10:14 KST - CEO default PC Agent browser routing pin
 
 - Request: Complete the previous PC Agent confirmation/action report, avoid ending at an intermediate status, and apply the remaining recommended action.

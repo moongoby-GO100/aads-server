@@ -101,6 +101,23 @@ _BROWSER_TABS_PATTERNS = [
     r"탭\s*목록", r"열린\s*탭", r"browser\s*tabs",
 ]
 
+_BROWSER_CLOSE_PATTERNS = [
+    r"브라우저\s*닫", r"크롬\s*닫", r"브라우저\s*종료", r"크롬\s*종료",
+    r"창\s*닫", r"browser\s*close", r"close\s*browser",
+]
+
+DEFAULT_BROWSER_WORK_KEY = "aads-ceo-browser"
+
+
+def _browser_defaults(command: Dict[str, Any]) -> Dict[str, Any]:
+    command.setdefault("work_key", DEFAULT_BROWSER_WORK_KEY)
+    if command.get("type") == "browser_launch":
+        command.setdefault("new_window", False)
+    if command.get("type") == "browser_close_session":
+        command.setdefault("close_browser", True)
+        command.setdefault("close_tabs", True)
+    return command
+
 
 def build_command(message: str) -> Optional[Dict[str, Any]]:
     """
@@ -142,76 +159,80 @@ def build_command(message: str) -> Optional[Dict[str, Any]]:
 
     # 8. 브라우저 스크린샷 (일반 스크린샷 앞에 위치하지 않도록 별도 분기)
     if _match_any(msg_lower, _BROWSER_SCREENSHOT_PATTERNS):
-        return {"type": "browser_screenshot"}
+        return _browser_defaults({"type": "browser_screenshot"})
 
-    # 9. 브라우저 실행
+    # 9. 브라우저 종료
+    if _match_any(msg_lower, _BROWSER_CLOSE_PATTERNS):
+        return _browser_defaults({"type": "browser_close_session"})
+
+    # 10. 브라우저 실행
     if _match_any(msg_lower, _BROWSER_LAUNCH_PATTERNS):
-        return {"type": "browser_launch"}
+        return _browser_defaults({"type": "browser_launch"})
 
-    # 10. 브라우저 내비게이션
+    # 11. 브라우저 내비게이션
     if _match_any(msg_lower, _BROWSER_NAVIGATE_PATTERNS):
         url = _extract_url(msg)
-        return {"type": "browser_navigate", "url": url or ""}
+        return _browser_defaults({"type": "browser_navigate", "url": url or ""})
 
-    # 11. 브라우저 클릭
+    # 12. 브라우저 클릭
     if _match_any(msg_lower, _BROWSER_CLICK_PATTERNS):
         selector = _extract_quoted(msg)
-        return {"type": "browser_click", "selector": selector or ""}
+        return _browser_defaults({"type": "browser_click", "selector": selector or ""})
 
-    # 12. 브라우저 텍스트 입력
+    # 13. 브라우저 텍스트 입력
     if _match_any(msg_lower, _BROWSER_FILL_PATTERNS):
         selector = _extract_quoted(msg, index=0)
         value = _extract_quoted(msg, index=1)
-        return {"type": "browser_fill", "selector": selector or "", "value": value or ""}
+        return _browser_defaults({"type": "browser_fill", "selector": selector or "", "value": value or ""})
 
-    # 13. 브라우저 키 입력
+    # 14. 브라우저 키 입력
     if _match_any(msg_lower, _BROWSER_PRESS_KEY_PATTERNS):
-        return {"type": "browser_press_key", "key": _extract_key(msg) or "", "selector": _extract_selector(msg)}
+        return _browser_defaults({"type": "browser_press_key", "key": _extract_key(msg) or "", "selector": _extract_selector(msg)})
 
-    # 14. 브라우저 select 옵션 선택
+    # 15. 브라우저 select 옵션 선택
     if _match_any(msg_lower, _BROWSER_SELECT_PATTERNS):
-        return {
+        return _browser_defaults({
             "type": "browser_select_option",
             "selector": _extract_quoted(msg, index=0) or "",
             "value": _extract_quoted(msg, index=1) or "",
-        }
+        })
 
-    # 15. 브라우저 체크박스/라디오 상태 설정
+    # 16. 브라우저 체크박스/라디오 상태 설정
     if _match_any(msg_lower, _BROWSER_CHECK_PATTERNS):
-        return {"type": "browser_check", "selector": _extract_selector(msg), "checked": _extract_checked(msg)}
+        return _browser_defaults({"type": "browser_check", "selector": _extract_selector(msg), "checked": _extract_checked(msg)})
 
-    # 16. 브라우저 파일 업로드
+    # 17. 브라우저 파일 업로드
     if _match_any(msg_lower, _BROWSER_UPLOAD_PATTERNS):
         paths = _extract_paths(msg)
-        return {
+        return _browser_defaults({
             "type": "browser_file_upload",
             "selector": _extract_selector(msg, default="input[type=file]"),
             "file_paths": paths,
-        }
+        })
 
-    # 17. 브라우저 다운로드
+    # 18. 브라우저 다운로드
     if _match_any(msg_lower, _BROWSER_DOWNLOAD_PATTERNS):
-        return {
+        return _browser_defaults({
             "type": "browser_download",
             "selector": _extract_selector(msg),
             "download_dir": _extract_path(msg) or "",
-        }
+        })
 
-    # 18. 브라우저 텍스트 추출
+    # 19. 브라우저 텍스트 추출
     if _match_any(msg_lower, _BROWSER_TEXT_PATTERNS):
         selector = _extract_quoted(msg)
-        return {"type": "browser_get_text", "selector": selector or "body"}
+        return _browser_defaults({"type": "browser_get_text", "selector": selector or "body"})
 
-    # 19. 브라우저 JS 실행
+    # 20. 브라우저 JS 실행
     if _match_any(msg_lower, _BROWSER_EVAL_PATTERNS):
         script = _extract_quoted(msg)
-        return {"type": "browser_eval", "script": script or ""}
+        return _browser_defaults({"type": "browser_eval", "script": script or ""})
 
-    # 20. 브라우저 탭 목록
+    # 21. 브라우저 탭 목록
     if _match_any(msg_lower, _BROWSER_TABS_PATTERNS):
-        return {"type": "browser_tabs"}
+        return _browser_defaults({"type": "browser_tabs"})
 
-    # 21. 셸 명령 (프로그램 실행 등)
+    # 22. 셸 명령 (프로그램 실행 등)
     shell_cmd = _parse_shell_command(msg_lower, msg)
     if shell_cmd:
         return shell_cmd
@@ -239,49 +260,51 @@ def build_command_for_intent(intent: str, message: str) -> Optional[Dict[str, An
     if intent == "pc_browser":
         msg_lower = message.lower()
         if _match_any(msg_lower, _BROWSER_SCREENSHOT_PATTERNS):
-            return {"type": "browser_screenshot"}
+            return _browser_defaults({"type": "browser_screenshot"})
+        if _match_any(msg_lower, _BROWSER_CLOSE_PATTERNS):
+            return _browser_defaults({"type": "browser_close_session"})
         if _match_any(msg_lower, _BROWSER_LAUNCH_PATTERNS):
-            return {"type": "browser_launch"}
+            return _browser_defaults({"type": "browser_launch"})
         if _match_any(msg_lower, _BROWSER_NAVIGATE_PATTERNS):
             url = _extract_url(message)
-            return {"type": "browser_navigate", "url": url or ""}
+            return _browser_defaults({"type": "browser_navigate", "url": url or ""})
         if _match_any(msg_lower, _BROWSER_CLICK_PATTERNS):
             selector = _extract_quoted(message)
-            return {"type": "browser_click", "selector": selector or ""}
+            return _browser_defaults({"type": "browser_click", "selector": selector or ""})
         if _match_any(msg_lower, _BROWSER_FILL_PATTERNS):
             selector = _extract_quoted(message, index=0)
             value = _extract_quoted(message, index=1)
-            return {"type": "browser_fill", "selector": selector or "", "value": value or ""}
+            return _browser_defaults({"type": "browser_fill", "selector": selector or "", "value": value or ""})
         if _match_any(msg_lower, _BROWSER_PRESS_KEY_PATTERNS):
-            return {"type": "browser_press_key", "key": _extract_key(message) or "", "selector": _extract_selector(message)}
+            return _browser_defaults({"type": "browser_press_key", "key": _extract_key(message) or "", "selector": _extract_selector(message)})
         if _match_any(msg_lower, _BROWSER_SELECT_PATTERNS):
-            return {
+            return _browser_defaults({
                 "type": "browser_select_option",
                 "selector": _extract_quoted(message, index=0) or "",
                 "value": _extract_quoted(message, index=1) or "",
-            }
+            })
         if _match_any(msg_lower, _BROWSER_CHECK_PATTERNS):
-            return {"type": "browser_check", "selector": _extract_selector(message), "checked": _extract_checked(message)}
+            return _browser_defaults({"type": "browser_check", "selector": _extract_selector(message), "checked": _extract_checked(message)})
         if _match_any(msg_lower, _BROWSER_UPLOAD_PATTERNS):
-            return {
+            return _browser_defaults({
                 "type": "browser_file_upload",
                 "selector": _extract_selector(message, default="input[type=file]"),
                 "file_paths": _extract_paths(message),
-            }
+            })
         if _match_any(msg_lower, _BROWSER_DOWNLOAD_PATTERNS):
-            return {
+            return _browser_defaults({
                 "type": "browser_download",
                 "selector": _extract_selector(message),
                 "download_dir": _extract_path(message) or "",
-            }
+            })
         if _match_any(msg_lower, _BROWSER_TEXT_PATTERNS):
             selector = _extract_quoted(message)
-            return {"type": "browser_get_text", "selector": selector or "body"}
+            return _browser_defaults({"type": "browser_get_text", "selector": selector or "body"})
         if _match_any(msg_lower, _BROWSER_EVAL_PATTERNS):
             script = _extract_quoted(message)
-            return {"type": "browser_eval", "script": script or ""}
+            return _browser_defaults({"type": "browser_eval", "script": script or ""})
         if _match_any(msg_lower, _BROWSER_TABS_PATTERNS):
-            return {"type": "browser_tabs"}
+            return _browser_defaults({"type": "browser_tabs"})
         return build_command(message)
     if intent == "pc_control":
         # 일반 PC 제어 — 셸 명령 파싱 시도, 실패 시 자연어 그대로 전달

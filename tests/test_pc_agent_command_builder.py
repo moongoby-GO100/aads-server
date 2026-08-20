@@ -90,6 +90,22 @@ class TestBuildCommand:
         assert result is not None
         assert result["type"] == "browser_file_upload"
         assert result["selector"] == "input[name=images]"
+        assert result["work_key"] == "aads-ceo-browser"
+
+    def test_browser_launch_uses_stable_default_work_key(self) -> None:
+        result = build_command("브라우저 열어")
+        assert result is not None
+        assert result["type"] == "browser_launch"
+        assert result["work_key"] == "aads-ceo-browser"
+        assert result["new_window"] is False
+
+    def test_browser_close_command(self) -> None:
+        result = build_command_for_intent("pc_browser", "브라우저 닫아")
+        assert result is not None
+        assert result["type"] == "browser_close_session"
+        assert result["work_key"] == "aads-ceo-browser"
+        assert result["close_browser"] is True
+        assert result["close_tabs"] is True
 
     def test_browser_press_key(self) -> None:
         result = build_command("브라우저에서 'input[name=q]' 엔터 눌러")

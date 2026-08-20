@@ -241,3 +241,28 @@ async def test_route_execute_uses_peer_fallback_on_local_offline(
     assert result["status"] == "success"
     assert result["command_id"] == "peer-cmd-1"
     assert result["backend_source"] == "peer"
+
+
+@pytest.mark.asyncio
+async def test_execute_browser_command_adds_default_work_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "get_agent", lambda _agent_id: object())
+
+    async def fake_send_command(agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        captured["agent_id"] = agent_id
+        captured["command_type"] = command_type
+        captured["params"] = params
+        return "cmd-browser-1"
+
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "send_command", fake_send_command)
+
+    request = pc_agent.CommandRequest(agent_id="ceo-pc", command_type="browser_launch", params={})
+    result = await pc_agent.execute_command(request)
+
+    assert result == {"command_id": "cmd-browser-1", "status": "pending"}
+    assert captured["agent_id"] == "ceo-pc"
+    assert captured["command_type"] == "browser_launch"
+    assert captured["params"] == {"work_key": "aads-ceo-browser", "new_window": False}
