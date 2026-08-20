@@ -9,16 +9,16 @@
   - `biz-mia / 열정국밥_미아점`: baemin, coupangeats, yogiyo, ddangyo, matepos, marketbom.
 - Operational changes:
   - Upserted 16 records through `yeoljeong_finance_service.upsert_account()`, which stores secrets only as `password_enc` in the protected platform account ledger and excludes password fields from PostgreSQL payloads.
-  - Upserted 16 matching `agent_vault_credentials` rows with `metadata.source=ceo-attached-account-sheet` and service/business/branch metadata for autofill matching.
+  - Upserted 16 matching `agent_vault_credentials` rows with `metadata.source=ceo-attachment-2026-08-20` and service/business/branch metadata for autofill matching.
   - Added missing DB settings rows for `biz-eonni-naengmyeon` and `branch-eonni-naengmyeon` so the account scope exists in the business/branch settings tables.
 - Verification:
   - Protected ledger check: 16 target rows matched, 16 had `password_enc`, and plaintext `password` rows were 0.
   - DB payload check: `SELECT COUNT(*) FROM yeoljeong_platform_accounts WHERE payload ? 'password'` returned 0.
-  - Agent Vault check: 16 active rows matched `metadata.source=ceo-attached-account-sheet`.
+  - Agent Vault check: 16 active rows matched `metadata.source=ceo-attachment-2026-08-20`. A previous interrupted attempt also left 16 active rows with `metadata.source=ceo-attached-account-sheet`; those were not disabled because credential deletion/disable requires separate approval.
   - Public account API/service check selected 16 target accounts and found 0 `password`/`password_enc` leaks in public rows.
 - Notes:
   - MatePOS passwords for 성신여대점 and 미아점 were stored exactly as shown in the attachment, including trailing `**`; if those characters were only visual masking, those two portal logins will need re-confirmation.
-  - Code changes are required for `biz-eonni-naengmyeon` to remain a first-class automatic collection scope; commit/push/restart are tracked separately in the final response.
+  - Scope code for `biz-eonni-naengmyeon` was committed and pushed as `8a41757c`; `yeoljeong-finance` and `yeoljeong-finance-worker` were restarted so the running services load the new canonical scope.
 
 ## 2026-08-20 09:18 KST - Managed Browser session ownership and PC Agent cleanup
 
