@@ -172,6 +172,69 @@ class TransactionCsvImportPayload(BaseModel):
     source_account_id: str = ""
 
 
+class BankAccountCreatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str
+    branch_id: str = ""
+    bank_code: str = ""
+    bank_name: str = ""
+    # 원본 계좌번호는 저장하지 않는다. 마스킹 처리 후 폐기한다.
+    account_number: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    account_number_masked: str = ""
+    account_holder: str = ""
+    account_alias: str = ""
+    connection_type: str = "mock"
+    status: str = "needs_auth"
+    institution_code: str = ""
+    memo: str = ""
+    auto_sync: bool = False
+    last_synced_at: str = ""
+
+
+class BankAccountUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    branch_id: str | None = None
+    bank_code: str | None = None
+    bank_name: str | None = None
+    account_number: str | None = Field(default=None, repr=False, json_schema_extra={"writeOnly": True})
+    account_number_masked: str | None = None
+    account_holder: str | None = None
+    account_alias: str | None = None
+    connection_type: str | None = None
+    status: str | None = None
+    institution_code: str | None = None
+    memo: str | None = None
+    auto_sync: bool | None = None
+    last_synced_at: str | None = None
+
+
+class BankTransactionEntry(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str = ""
+    occurred_at: str
+    posted_at: str = ""
+    direction: str
+    amount: float | int | str = 0
+    balance: float | int | str | None = None
+    counterparty: str = ""
+    memo: str = ""
+    raw_memo: str = ""
+    category: str = ""
+    platform_match: str = ""
+    settlement_match: str = ""
+    source: str = ""
+    source_hash: str = ""
+
+
+class BankTransactionImportPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    business_id: str = "biz-mia"
+    branch_id: str = ""
+    bank_account_id: str
+    source: str = "manual"
+    transactions: list[BankTransactionEntry] = Field(default_factory=list)
+
+
 @router.get("/session")
 async def get_session(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.session_for_user, current_user)
@@ -512,3 +575,84 @@ async def import_settlements(payload: CsvImportPayload, current_user: dict = Dep
 @router.post("/delivery/import")
 async def import_delivery_portal(payload: DeliveryPortalImportPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.import_delivery_portal_text, payload.model_dump(), current_user)
+
+
+@router.get("/bank-accounts")
+async def list_bank_accounts(
+    business_id: str | None = None,
+    branch_id: str | None = None,
+    status: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    accounts = await run_in_threadpool(
+        partial(svc.list_bank_accounts, current_user, business_id, branch_id=branch_id, status=status)
+    )
+    return {"bank_accounts": accounts}
+
+
+@router.post("/bank-accounts")
+async def create_bank_account(payload: BankAccountCreatePayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"bank_account": await run_in_threadpool(svc.create_bank_account, payload.model_dump(), current_user)}
+
+
+@router.patch("/bank-accounts/{account_id}")
+async def update_bank_account(
+    account_id: str,
+    payload: BankAccountUpdatePayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    account = await run_in_threadpool(
+        svc.update_bank_account,
+        account_id,
+        payload.model_dump(exclude_unset=True),
+        current_user,
+    )
+    return {"bank_account": account}
+
+
+@router.get("/bank-transactions")
+async def list_bank_transactions(
+    business_id: str | None = None,
+    bank_account_id: str | None = None,
+    direction: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    transactions = await run_in_threadpool(
+        partial(
+            svc.list_bank_transactions,
+            current_user,
+            business_id=business_id,
+            bank_account_id=bank_account_id,
+            direction=direction,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
+    return {"bank_transactions": transactions}
+
+
+@router.post("/bank-transactions")
+async def import_bank_transactions(payload: BankTransactionImportPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.record_bank_transactions, payload.model_dump(), current_user)
+
+
+@router.get("/bank-summary")
+async def get_bank_summary(
+    business_id: str | None = None,
+    bank_account_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await run_in_threadpool(
+        partial(
+            svc.bank_summary,
+            current_user,
+            business_id=business_id,
+            bank_account_id=bank_account_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )

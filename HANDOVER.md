@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-20 16:41 KST - Yeoljeong bank sync phase 1 core API
+
+- Request: CEO approved immediate implementation of the FOOD/Yeoljeong store assistant bank auto-linking foundation.
+- Runner recovery:
+  - Runner `runner-517f8a7a` produced phase 1 code but failed at approval with `deploy_preflight_git_state` because main was already `ahead=4` from prior local commits.
+  - Dependent runners `runner-1187ea69`, `runner-9ed0e576`, `runner-d90c2cfd`, and duplicate `runner-e8f38447` were cancelled/blocked by the failed parent.
+  - The produced diff was recovered from `/tmp/aads-wt-runner-517f8a7a` and applied directly to the main worktree without touching unrelated dirty files.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: added file-based bank account and bank transaction ledgers, owner-only file writes, masked account-number handling, sensitive-key rejection, idempotent transaction import by `source_hash`, date/direction filters, and bank summary aggregation.
+  - `app/api/yeoljeong_finance.py`: added bank account create/list/update, bank transaction import/list, and bank summary endpoints under the existing Yeoljeong finance router.
+  - `tests/unit/test_yeoljeong_finance_service.py` and `tests/unit/test_yeoljeong_finance_api.py`: added targeted regression coverage for masking, permissions, validation, idempotency, filtering, summary totals, API flow, and sensitive payload rejection.
+  - `docs/handover-notes/2026-08-20_yeoljeong_bank_sync_phase1.md`: added detailed phase 1 handover and explicit out-of-scope items.
+- Verification:
+  - `.venv-playwright/bin/python -m compileall app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` passed.
+  - `.venv-playwright/bin/python -m pytest` for 15 new bank service/API tests passed: 15 passed in 1.41s.
+  - Full two-file pytest run was not used as the final signal because it pulled in older non-bank tests and ran long; the targeted new-bank suite was used as the acceptance check.
+- Deployment status:
+  - No push, restart, or deploy was performed.
+  - Local `.venv-playwright` was prepared with project dev dependencies for verification only.
+  - Existing unrelated dirty files remain: `docs/CHANGELOG-go100-direct.md` and `app/data/yeoljeong_finance/.delivery_sync.lock.stale-20260820-1438`.
+
 ## 2026-08-20 16:02 KST - Browser testing pinned to current CEO PC
 
 - Request: CEO instructed that browser testing must run only on the current CEO PC.

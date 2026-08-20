@@ -3025,3 +3025,209 @@ async def test_registered_employee_upload_keeps_join_request_business_scope():
     assert saved["employee_request_id"] == "join-j"
     assert saved["business_id"] == "biz-junghwa"
     assert saved["branch"] == "중화점"
+
+
+# ---------------------------------------------------------------------------
+# 은행자동연동 1단계 (bank accounts / bank ledger)
+# ---------------------------------------------------------------------------
+
+ADMIN_USER = {"email": "owner@example.com", "is_admin": True}
+STAFF_USER = {"email": "staff@example.com", "is_admin": False}
+
+
+def _make_bank_account(monkeypatch, tmp_path, **overrides):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    payload = {
+        "business_id": "biz-mia",
+        "branch_id": "branch-gangbuk-mia",
+        "bank_code": "088",
+        "bank_name": "신한은행",
+        "account_number": "110-123-456789",
+        "account_holder": "최미미",
+        "account_alias": "미아점 주계좌",
+        "connection_type": "mock",
+        "status": "active",
+    }
+    payload.update(overrides)
+    return service.create_bank_account(payload, ADMIN_USER)
+
+
+def test_create_bank_account_masks_and_never_stores_raw_number(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+
+    assert account["business_id"] == "biz-mia"
+    assert account["branch_id"] == "branch-gangbuk-mia"
+    assert account["account_number_masked"].endswith("6789")
+    assert "account_number" not in account
+    assert account["status"] == "active"
+    assert account["connection_type"] == "mock"
+
+    raw_rows = service._read_file_rows("bank_accounts")
+    assert "account_number" not in raw_rows[0]
+    assert "account_number_masked" in raw_rows[0]
+    # No forbidden/sensitive keys ever hit the file.
+    for forbidden in service._BANK_ACCOUNT_FORBIDDEN_FIELDS:
+        assert forbidden not in raw_rows[0]
+
+
+def test_bank_accounts_file_has_owner_only_permissions(tmp_path, monkeypatch):
+    _make_bank_account(monkeypatch, tmp_path)
+    mode = (tmp_path / "bank_accounts.json").stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_create_bank_account_rejects_invalid_connection_type(tmp_path, monkeypatch):
+    with pytest.raises(Exception) as exc:
+        _make_bank_account(monkeypatch, tmp_path, connection_type="scraping")
+    assert getattr(exc.value, "status_code", None) == 400
+
+
+def test_create_bank_account_rejects_cross_business_branch(tmp_path, monkeypatch):
+    with pytest.raises(Exception) as exc:
+        _make_bank_account(monkeypatch, tmp_path, business_id="biz-junghwa", branch_id="branch-gangbuk-mia")
+    assert getattr(exc.value, "status_code", None) == 400
+
+
+def test_create_bank_account_requires_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    with pytest.raises(Exception) as exc:
+        service.create_bank_account({"business_id": "biz-mia"}, STAFF_USER)
+    assert getattr(exc.value, "status_code", None) == 403
+
+
+def test_update_bank_account_changes_status_and_remasks(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    updated = service.update_bank_account(
+        account["id"],
+        {"status": "paused", "account_alias": "미아점 보조계좌", "account_number": "111-222-333444"},
+        ADMIN_USER,
+    )
+    assert updated["status"] == "paused"
+    assert updated["account_alias"] == "미아점 보조계좌"
+    assert updated["account_number_masked"].endswith("3444")
+    assert "account_number" not in service._read_file_rows("bank_accounts")[0]
+
+
+def test_update_bank_account_missing_returns_404(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    with pytest.raises(Exception) as exc:
+        service.update_bank_account("no-such", {"status": "active"}, ADMIN_USER)
+    assert getattr(exc.value, "status_code", None) == 404
+
+
+def test_record_bank_transactions_is_idempotent_by_source_hash(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    payload = {
+        "business_id": "biz-mia",
+        "bank_account_id": account["id"],
+        "transactions": [
+            {"occurred_at": "2026-08-01", "direction": "in", "amount": "55,000", "counterparty": "배민 정산"},
+            {"occurred_at": "2026-08-02", "direction": "out", "amount": 12000, "counterparty": "가스요금"},
+        ],
+    }
+
+    first = service.record_bank_transactions(payload, ADMIN_USER)
+    second = service.record_bank_transactions(payload, ADMIN_USER)
+
+    assert first["import"]["imported_rows"] == 2
+    assert first["import"]["duplicate_rows"] == 0
+    assert second["import"]["imported_rows"] == 0
+    assert second["import"]["duplicate_rows"] == 2
+    ledger = service._read_file_rows("bank_transactions")
+    assert len(ledger) == 2
+    assert all(row.get("source_hash") for row in ledger)
+    # last_synced_at gets stamped on the account after ingest.
+    assert service._read_file_rows("bank_accounts")[0]["last_synced_at"]
+
+
+def test_record_bank_transactions_rejects_unknown_account(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    with pytest.raises(Exception) as exc:
+        service.record_bank_transactions(
+            {"business_id": "biz-mia", "bank_account_id": "ghost", "transactions": []},
+            ADMIN_USER,
+        )
+    assert getattr(exc.value, "status_code", None) == 404
+
+
+def test_record_bank_transactions_rejects_bad_direction(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    with pytest.raises(Exception) as exc:
+        service.record_bank_transactions(
+            {
+                "business_id": "biz-mia",
+                "bank_account_id": account["id"],
+                "transactions": [{"occurred_at": "2026-08-01", "direction": "sideways", "amount": 1000}],
+            },
+            ADMIN_USER,
+        )
+    assert getattr(exc.value, "status_code", None) == 400
+
+
+def test_list_bank_transactions_filters_by_direction_and_date(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    service.record_bank_transactions(
+        {
+            "business_id": "biz-mia",
+            "bank_account_id": account["id"],
+            "transactions": [
+                {"occurred_at": "2026-08-01", "direction": "in", "amount": 55000, "counterparty": "A"},
+                {"occurred_at": "2026-08-10", "direction": "out", "amount": 12000, "counterparty": "B"},
+                {"occurred_at": "2026-09-01", "direction": "in", "amount": 30000, "counterparty": "C"},
+            ],
+        },
+        ADMIN_USER,
+    )
+
+    incoming = service.list_bank_transactions(ADMIN_USER, direction="in")
+    assert {row["counterparty"] for row in incoming} == {"A", "C"}
+
+    windowed = service.list_bank_transactions(ADMIN_USER, date_from="2026-08-01", date_to="2026-08-31")
+    assert {row["counterparty"] for row in windowed} == {"A", "B"}
+    # newest first
+    assert windowed[0]["occurred_at"].startswith("2026-08-10")
+
+
+def test_bank_summary_aggregates_totals_and_account_status(tmp_path, monkeypatch):
+    active = _make_bank_account(monkeypatch, tmp_path)
+    paused = _make_bank_account(
+        monkeypatch, tmp_path, account_alias="미아점 보조", account_number="222-333-444555", status="paused"
+    )
+    service.record_bank_transactions(
+        {
+            "business_id": "biz-mia",
+            "bank_account_id": active["id"],
+            "transactions": [
+                {"occurred_at": "2026-08-01", "direction": "in", "amount": 100000, "counterparty": "정산"},
+                {"occurred_at": "2026-08-02", "direction": "out", "amount": 40000, "counterparty": "식자재"},
+            ],
+        },
+        ADMIN_USER,
+    )
+
+    summary = service.bank_summary(ADMIN_USER, business_id="biz-mia")
+
+    assert summary["totals"]["total_in"] == 100000
+    assert summary["totals"]["total_out"] == 40000
+    assert summary["totals"]["net"] == 60000
+    assert summary["totals"]["transaction_count"] == 2
+    assert summary["totals"]["account_count"] == 2
+    assert summary["account_status_counts"].get("active") == 1
+    assert summary["account_status_counts"].get("paused") == 1
+    active_bucket = next(item for item in summary["accounts"] if item["bank_account_id"] == active["id"])
+    assert active_bucket["net"] == 60000
+    assert paused["id"] in {item["bank_account_id"] for item in summary["accounts"]}
+
+
+def test_bank_ledger_does_not_touch_generic_transactions(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    service.record_bank_transactions(
+        {
+            "business_id": "biz-mia",
+            "bank_account_id": account["id"],
+            "transactions": [{"occurred_at": "2026-08-01", "direction": "in", "amount": 1000, "counterparty": "X"}],
+        },
+        ADMIN_USER,
+    )
+    # The generic transactions ledger stays empty/unaffected.
+    assert service.list_transactions() == []

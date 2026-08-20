@@ -505,3 +505,87 @@ def test_pdf_preview_does_not_sandbox_chrome_pdf_viewer():
 
     assert 'frame.setAttribute("sandbox", "")' not in pdf_branch
     assert 'frame.setAttribute("sandbox", "")' in text_branch
+
+
+def test_bank_account_and_ledger_http_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
+    monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
+    admin = {"email": "owner@example.com", "is_admin": True}
+
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[api.get_current_user] = lambda: admin
+    client = TestClient(app)
+
+    created = client.post(
+        "/yeoljeong-finance/bank-accounts",
+        json={
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_code": "088",
+            "bank_name": "신한은행",
+            "account_number": "110-987-654321",
+            "account_holder": "최미미",
+            "account_alias": "미아점 주계좌",
+            "connection_type": "mock",
+            "status": "active",
+        },
+    )
+    assert created.status_code == 200
+    account = created.json()["bank_account"]
+    assert account["account_number_masked"].endswith("4321")
+    assert "account_number" not in account
+
+    listed = client.get("/yeoljeong-finance/bank-accounts", params={"business_id": "biz-mia"})
+    assert listed.status_code == 200
+    assert len(listed.json()["bank_accounts"]) == 1
+
+    patched = client.patch(
+        f"/yeoljeong-finance/bank-accounts/{account['id']}",
+        json={"status": "paused"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["bank_account"]["status"] == "paused"
+
+    imported = client.post(
+        "/yeoljeong-finance/bank-transactions",
+        json={
+            "business_id": "biz-mia",
+            "bank_account_id": account["id"],
+            "transactions": [
+                {"occurred_at": "2026-08-01", "direction": "in", "amount": 90000, "counterparty": "정산"},
+                {"occurred_at": "2026-08-03", "direction": "out", "amount": 30000, "counterparty": "식자재"},
+            ],
+        },
+    )
+    assert imported.status_code == 200
+    assert imported.json()["import"]["imported_rows"] == 2
+
+    txns = client.get("/yeoljeong-finance/bank-transactions", params={"direction": "in"})
+    assert txns.status_code == 200
+    assert len(txns.json()["bank_transactions"]) == 1
+
+    summary = client.get("/yeoljeong-finance/bank-summary", params={"business_id": "biz-mia"})
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["totals"]["net"] == 60000
+    assert body["totals"]["transaction_count"] == 2
+
+
+def test_bank_account_rejects_extra_sensitive_field(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
+    admin = {"email": "owner@example.com", "is_admin": True}
+
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[api.get_current_user] = lambda: admin
+    client = TestClient(app)
+
+    resp = client.post(
+        "/yeoljeong-finance/bank-accounts",
+        json={"business_id": "biz-mia", "password": "should-not-be-allowed"},
+    )
+    # extra="forbid" blocks credential-shaped fields at the schema boundary.
+    assert resp.status_code == 422

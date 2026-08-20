@@ -3666,6 +3666,525 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
     }
 
 
+# ---------------------------------------------------------------------------
+# 매장비서 은행자동연동 1단계 (AADS/FOOD)
+#
+# 기존 platform_accounts / transactions 원장을 건드리지 않고, 사업자별 은행계좌
+# 등록과 은행거래 원장을 별도 파일 저장소로 분리한다. 계좌번호/비밀번호/OTP/인증서
+# 같은 민감정보는 절대 평문 저장하지 않으며, 마스킹·추상 상태 정보만 유지한다.
+# 외부 은행 실연동(오픈뱅킹/스크래핑)은 이 단계에서 구현하지 않고, 수동/CSV/목업
+# 입력만 원장에 멱등 반영한다.
+# ---------------------------------------------------------------------------
+
+BANK_ACCOUNTS_LEDGER = "bank_accounts"
+BANK_TRANSACTIONS_LEDGER = "bank_transactions"
+BANK_CONNECTION_TYPES = ("open_banking", "csv", "manual", "mock")
+BANK_ACCOUNT_STATUSES = ("active", "paused", "error", "needs_auth")
+BANK_TRANSACTION_DIRECTIONS = ("in", "out")
+
+# 은행계좌 파일에 저장을 허용하는 필드 화이트리스트. 원본 계좌번호/비밀번호/인증정보는
+# 절대 포함하지 않는다(민감정보 제외 원칙).
+_BANK_ACCOUNT_PUBLIC_FIELDS = (
+    "id",
+    "business_id",
+    "branch_id",
+    "bank_code",
+    "bank_name",
+    "account_number_masked",
+    "account_holder",
+    "account_alias",
+    "connection_type",
+    "status",
+    "institution_code",
+    "auto_sync",
+    "memo",
+    "last_synced_at",
+    "created_at",
+    "updated_at",
+)
+# 어떤 경로로 들어와도 은행계좌 저장소에 남기면 안 되는 민감 키.
+_BANK_ACCOUNT_FORBIDDEN_FIELDS = frozenset(
+    {
+        "account_number",
+        "account_no",
+        "account_number_raw",
+        "password",
+        "account_password",
+        "login_password",
+        "pin",
+        "otp",
+        "certificate",
+        "certificate_password",
+        "secret",
+        "client_secret",
+        "api_key",
+        "credential",
+        "credentials",
+        "access_token",
+        "refresh_token",
+    }
+)
+
+CANONICAL_BRANCH_BY_ID: dict[str, dict[str, Any]] = {item["id"]: item for item in CANONICAL_BRANCHES}
+
+
+def _write_secure_file_rows(name: str, rows: list[dict[str, Any]]) -> None:
+    """Persist a ledger file with 0600 permissions (owner read/write only)."""
+    path = _path(name)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _normalize_bank_scope(business_id: Any, branch_id: Any) -> tuple[str, str]:
+    normalized_business = str(business_id or "").strip()
+    if normalized_business not in CANONICAL_BUSINESS_IDS:
+        raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+    normalized_branch = str(branch_id or "").strip()
+    if normalized_branch:
+        branch = CANONICAL_BRANCH_BY_ID.get(normalized_branch)
+        if not branch or str(branch.get("businessId") or "") != normalized_business:
+            raise HTTPException(status_code=400, detail="사업자와 지점 연결이 일치하지 않습니다")
+    return normalized_business, normalized_branch
+
+
+def _bank_connection_type(value: Any, *, default: str = "mock") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    if text not in BANK_CONNECTION_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"연동 방식은 {', '.join(BANK_CONNECTION_TYPES)} 중 하나여야 합니다",
+        )
+    return text
+
+
+def _bank_account_status(value: Any, *, default: str = "needs_auth") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    if text not in BANK_ACCOUNT_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"계좌 상태는 {', '.join(BANK_ACCOUNT_STATUSES)} 중 하나여야 합니다",
+        )
+    return text
+
+
+def _bank_direction(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"in", "income", "deposit", "credit", "입금", "입금액", "받으신금액", "맡기신금액"}:
+        return "in"
+    if text in {"out", "expense", "withdrawal", "debit", "출금", "출금액", "찾으신금액", "지급금액"}:
+        return "out"
+    return ""
+
+
+def _bank_date_key(value: Any) -> str:
+    """Return the YYYY-MM-DD prefix used for range comparisons."""
+    normalized = _transaction_date(value)
+    return normalized[:10] if normalized else ""
+
+
+def _bank_within_range(occurred_at: Any, date_from: str, date_to: str) -> bool:
+    key = _bank_date_key(occurred_at)
+    if not key:
+        # Keep undated rows visible unless an explicit range is requested.
+        return not (date_from or date_to)
+    if date_from and key < date_from:
+        return False
+    if date_to and key > date_to:
+        return False
+    return True
+
+
+def _valid_range_bounds(date_from: Any, date_to: Any) -> tuple[str, str]:
+    def _check(label: str, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return date.fromisoformat(text).isoformat()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{label}은 YYYY-MM-DD 형식이어야 합니다") from exc
+
+    start = _check("조회 시작일", date_from)
+    end = _check("조회 종료일", date_to)
+    if start and end and start > end:
+        raise HTTPException(status_code=400, detail="조회 시작일은 종료일보다 이후일 수 없습니다")
+    return start, end
+
+
+def _sanitize_bank_account(record: dict[str, Any]) -> dict[str, Any]:
+    """Keep only whitelisted, non-sensitive fields for persistence and output."""
+    return {key: record[key] for key in _BANK_ACCOUNT_PUBLIC_FIELDS if key in record}
+
+
+def _bank_account_number_masked(payload: dict[str, Any], existing: dict[str, Any] | None) -> str:
+    provided_mask = str(payload.get("account_number_masked") or "").strip()
+    if provided_mask:
+        return provided_mask
+    raw = str(payload.get("account_number") or "").strip()
+    if raw:
+        return _masked_digits(raw)
+    return str((existing or {}).get("account_number_masked") or "").strip()
+
+
+def _apply_bank_account_fields(
+    record: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    creating: bool,
+) -> dict[str, Any]:
+    if creating or payload.get("bank_code") is not None:
+        record["bank_code"] = str(payload.get("bank_code") or record.get("bank_code") or "").strip()
+    if creating or payload.get("bank_name") is not None:
+        record["bank_name"] = str(payload.get("bank_name") or record.get("bank_name") or "").strip()
+    if creating or payload.get("account_holder") is not None:
+        record["account_holder"] = str(payload.get("account_holder") or record.get("account_holder") or "").strip()
+    if creating or payload.get("account_alias") is not None:
+        record["account_alias"] = str(payload.get("account_alias") or record.get("account_alias") or "").strip()
+    if creating or payload.get("institution_code") is not None:
+        record["institution_code"] = str(payload.get("institution_code") or record.get("institution_code") or "").strip()
+    if creating or payload.get("memo") is not None:
+        record["memo"] = str(payload.get("memo") or record.get("memo") or "").strip()
+    if creating or payload.get("connection_type") is not None:
+        record["connection_type"] = _bank_connection_type(
+            payload.get("connection_type"),
+            default=str(record.get("connection_type") or "mock"),
+        )
+    if creating or payload.get("status") is not None:
+        record["status"] = _bank_account_status(
+            payload.get("status"),
+            default=str(record.get("status") or "needs_auth"),
+        )
+    if creating or payload.get("auto_sync") is not None:
+        record["auto_sync"] = bool(payload.get("auto_sync"))
+    if payload.get("last_synced_at") is not None:
+        record["last_synced_at"] = str(payload.get("last_synced_at") or "").strip()
+    mask = _bank_account_number_masked(payload, record)
+    if creating or mask:
+        record["account_number_masked"] = mask
+    return record
+
+
+def list_bank_accounts(
+    user: dict[str, Any],
+    business_id: str | None = None,
+    *,
+    branch_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행계좌 조회 권한이 없습니다")
+    rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if business_id and str(row.get("business_id") or "") != business_id:
+            continue
+        if branch_id and str(row.get("branch_id") or "") != branch_id:
+            continue
+        if status and str(row.get("status") or "") != status:
+            continue
+        result.append(_sanitize_bank_account(row))
+    result.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return result
+
+
+def _find_bank_account(rows: list[dict[str, Any]], account_id: str) -> dict[str, Any] | None:
+    target = str(account_id or "").strip()
+    return next((row for row in rows if str(row.get("id") or "") == target), None)
+
+
+def create_bank_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행계좌 등록 권한이 없습니다")
+    business_id, branch_id = _normalize_bank_scope(payload.get("business_id"), payload.get("branch_id"))
+    rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    now = _now()
+    record: dict[str, Any] = {
+        "id": str(uuid4()),
+        "business_id": business_id,
+        "branch_id": branch_id,
+        "created_at": now,
+        "updated_at": now,
+    }
+    _apply_bank_account_fields(record, payload, creating=True)
+    record = _sanitize_bank_account(record)
+    rows.insert(0, record)
+    _write_secure_file_rows(BANK_ACCOUNTS_LEDGER, rows)
+    return _sanitize_bank_account(record)
+
+
+def update_bank_account(account_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행계좌 수정 권한이 없습니다")
+    rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    record = _find_bank_account(rows, account_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="수정할 은행계좌를 찾지 못했습니다")
+    if payload.get("branch_id") is not None:
+        _normalize_bank_scope(record.get("business_id"), payload.get("branch_id"))
+        record["branch_id"] = str(payload.get("branch_id") or "").strip()
+    _apply_bank_account_fields(record, payload, creating=False)
+    record["updated_at"] = _now()
+    sanitized = _sanitize_bank_account(record)
+    rows = [sanitized if str(row.get("id") or "") == str(account_id) else row for row in rows]
+    _write_secure_file_rows(BANK_ACCOUNTS_LEDGER, rows)
+    return _sanitize_bank_account(sanitized)
+
+
+def _bank_transaction_source_hash(record: dict[str, Any]) -> str:
+    fingerprint = json.dumps(
+        {
+            "business_id": record.get("business_id") or "",
+            "bank_account_id": record.get("bank_account_id") or "",
+            "occurred_at": record.get("occurred_at") or "",
+            "direction": record.get("direction") or "",
+            "amount": record.get("amount") or 0,
+            "counterparty": record.get("counterparty") or "",
+            "raw_memo": record.get("raw_memo") or record.get("memo") or "",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+
+
+def _normalize_bank_transaction(
+    entry: dict[str, Any],
+    *,
+    business_id: str,
+    branch_id: str,
+    bank_account_id: str,
+    source: str,
+    now: str,
+) -> dict[str, Any]:
+    direction = _bank_direction(entry.get("direction"))
+    if direction not in BANK_TRANSACTION_DIRECTIONS:
+        raise HTTPException(status_code=400, detail="거래 방향(direction)은 in 또는 out 이어야 합니다")
+    occurred_at = _transaction_date(entry.get("occurred_at"))
+    if not occurred_at:
+        raise HTTPException(status_code=400, detail="거래 발생일시(occurred_at)가 필요합니다")
+    balance_value = entry.get("balance")
+    record = {
+        "id": str(entry.get("id") or uuid4()),
+        "business_id": business_id,
+        "branch_id": branch_id,
+        "bank_account_id": bank_account_id,
+        "occurred_at": occurred_at,
+        "posted_at": _transaction_date(entry.get("posted_at")) if entry.get("posted_at") else "",
+        "direction": direction,
+        "amount": abs(_amount(entry.get("amount"))),
+        "balance": _amount(balance_value) if balance_value not in (None, "") else None,
+        "counterparty": str(entry.get("counterparty") or "").strip(),
+        "memo": str(entry.get("memo") or "").strip(),
+        "raw_memo": str(entry.get("raw_memo") or entry.get("memo") or "").strip(),
+        "category": str(entry.get("category") or "").strip()
+        or _transaction_category(" ".join(str(entry.get(k) or "") for k in ("counterparty", "memo", "raw_memo"))),
+        "platform_match": str(entry.get("platform_match") or "").strip(),
+        "settlement_match": str(entry.get("settlement_match") or "").strip(),
+        "source": str(entry.get("source") or source or "manual").strip(),
+        "imported_at": now,
+    }
+    provided_hash = str(entry.get("source_hash") or "").strip()
+    record["source_hash"] = provided_hash or _bank_transaction_source_hash(record)
+    return record
+
+
+def record_bank_transactions(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """Idempotently append bank ledger rows (manual/CSV/mock). Dedup by source_hash."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행거래 원장 기록 권한이 없습니다")
+    business_id, branch_id = _normalize_bank_scope(payload.get("business_id"), payload.get("branch_id"))
+    bank_account_id = str(payload.get("bank_account_id") or "").strip()
+    if not bank_account_id:
+        raise HTTPException(status_code=400, detail="bank_account_id가 필요합니다")
+    accounts = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    account = _find_bank_account(accounts, bank_account_id)
+    if account is None or str(account.get("business_id") or "") != business_id:
+        raise HTTPException(status_code=404, detail="등록된 은행계좌를 찾지 못했습니다")
+    entries = payload.get("transactions") or payload.get("rows") or []
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="transactions는 배열이어야 합니다")
+    existing = _read_file_rows(BANK_TRANSACTIONS_LEDGER)
+    existing_hashes = {str(row.get("source_hash") or "") for row in existing}
+    now = _now()
+    imported: list[dict[str, Any]] = []
+    duplicate_rows = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        record = _normalize_bank_transaction(
+            entry,
+            business_id=business_id,
+            branch_id=branch_id or str(account.get("branch_id") or ""),
+            bank_account_id=bank_account_id,
+            source=str(payload.get("source") or "manual"),
+            now=now,
+        )
+        if record["source_hash"] in existing_hashes:
+            duplicate_rows += 1
+            continue
+        existing_hashes.add(record["source_hash"])
+        imported.append(record)
+    if imported:
+        _write_secure_file_rows(BANK_TRANSACTIONS_LEDGER, imported + existing)
+        for row in accounts:
+            if str(row.get("id") or "") == bank_account_id:
+                row["last_synced_at"] = now
+                row["updated_at"] = now
+                break
+        _write_secure_file_rows(BANK_ACCOUNTS_LEDGER, accounts)
+    return {
+        "import": {
+            "bank_account_id": bank_account_id,
+            "business_id": business_id,
+            "imported_rows": len(imported),
+            "duplicate_rows": duplicate_rows,
+        },
+        "transactions": imported,
+    }
+
+
+def list_bank_transactions(
+    user: dict[str, Any],
+    *,
+    business_id: str | None = None,
+    bank_account_id: str | None = None,
+    direction: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict[str, Any]]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행거래 원장 조회 권한이 없습니다")
+    start, end = _valid_range_bounds(date_from, date_to)
+    wanted_direction = _bank_direction(direction) if direction else ""
+    rows = _read_file_rows(BANK_TRANSACTIONS_LEDGER)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if business_id and str(row.get("business_id") or "") != business_id:
+            continue
+        if bank_account_id and str(row.get("bank_account_id") or "") != bank_account_id:
+            continue
+        if wanted_direction and str(row.get("direction") or "") != wanted_direction:
+            continue
+        if not _bank_within_range(row.get("occurred_at"), start, end):
+            continue
+        result.append(row)
+    result.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
+    return result
+
+
+def bank_summary(
+    user: dict[str, Any],
+    *,
+    business_id: str | None = None,
+    bank_account_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행 요약 조회 권한이 없습니다")
+    start, end = _valid_range_bounds(date_from, date_to)
+    accounts = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    transactions = list_bank_transactions(
+        user,
+        business_id=business_id,
+        bank_account_id=bank_account_id,
+        date_from=start or None,
+        date_to=end or None,
+    )
+
+    total_in = sum(int(row.get("amount") or 0) for row in transactions if row.get("direction") == "in")
+    total_out = sum(int(row.get("amount") or 0) for row in transactions if row.get("direction") == "out")
+
+    per_account: dict[str, dict[str, Any]] = {}
+    for account in accounts:
+        acct_id = str(account.get("id") or "")
+        if business_id and str(account.get("business_id") or "") != business_id:
+            continue
+        if bank_account_id and acct_id != bank_account_id:
+            continue
+        per_account[acct_id] = {
+            "bank_account_id": acct_id,
+            "business_id": str(account.get("business_id") or ""),
+            "branch_id": str(account.get("branch_id") or ""),
+            "account_alias": str(account.get("account_alias") or ""),
+            "bank_name": str(account.get("bank_name") or ""),
+            "account_number_masked": str(account.get("account_number_masked") or ""),
+            "connection_type": str(account.get("connection_type") or ""),
+            "status": str(account.get("status") or ""),
+            "last_synced_at": str(account.get("last_synced_at") or ""),
+            "transaction_count": 0,
+            "total_in": 0,
+            "total_out": 0,
+            "net": 0,
+        }
+
+    for row in transactions:
+        acct_id = str(row.get("bank_account_id") or "")
+        bucket = per_account.get(acct_id)
+        if bucket is None:
+            # Ledger rows whose account was removed still count toward totals.
+            bucket = per_account.setdefault(
+                acct_id,
+                {
+                    "bank_account_id": acct_id,
+                    "business_id": str(row.get("business_id") or ""),
+                    "branch_id": str(row.get("branch_id") or ""),
+                    "account_alias": "",
+                    "bank_name": "",
+                    "account_number_masked": "",
+                    "connection_type": "",
+                    "status": "unknown",
+                    "last_synced_at": "",
+                    "transaction_count": 0,
+                    "total_in": 0,
+                    "total_out": 0,
+                    "net": 0,
+                },
+            )
+        amount = int(row.get("amount") or 0)
+        bucket["transaction_count"] += 1
+        if row.get("direction") == "in":
+            bucket["total_in"] += amount
+        else:
+            bucket["total_out"] += amount
+        bucket["net"] = bucket["total_in"] - bucket["total_out"]
+
+    status_counts: dict[str, int] = {}
+    for bucket in per_account.values():
+        status_counts[bucket["status"]] = status_counts.get(bucket["status"], 0) + 1
+
+    return {
+        "business_id": business_id or "",
+        "date_from": start,
+        "date_to": end,
+        "totals": {
+            "total_in": total_in,
+            "total_out": total_out,
+            "net": total_in - total_out,
+            "transaction_count": len(transactions),
+            "account_count": len(per_account),
+        },
+        "account_status_counts": status_counts,
+        "accounts": sorted(
+            per_account.values(),
+            key=lambda item: (str(item.get("account_alias") or ""), str(item.get("bank_account_id") or "")),
+        ),
+    }
+
+
 def _delivery_browser_auth_options(payload: dict[str, Any]) -> dict[str, str]:
     storage_state_path = str(payload.get("storage_state_path") or "").strip()
     browser_session_id = str(payload.get("browser_session_id") or "").strip()
