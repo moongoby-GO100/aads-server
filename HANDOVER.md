@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-20 17:10 KST - Runner deploy preflight git-state recovery
+
+- Trigger: Pipeline Runner `runner-517f8a7a` failed with `deploy_preflight_git_state`; automatic alert reported `behind=0, ahead=4`.
+- Current measurement:
+  - `git status --short --branch` returned `main...origin/main [ahead 6]` plus dirty `docs/CHANGELOG-go100-direct.md` and untracked `app/data/yeoljeong_finance/.delivery_sync.lock.stale-20260820-1438`.
+  - `check_task_status(scope=current_session)` showed `runner-517f8a7a` in `error`; dependent runners `runner-1187ea69`, `runner-9ed0e576`, `runner-d90c2cfd`, and duplicate `runner-e8f38447` cancelled/blocked by dependency.
+  - `read_task_logs(runner-517f8a7a)` returned 0 rows, so the alert payload and runner state table are the available failure records.
+- Root cause:
+  - AADS deploy preflight requires the main workdir to be exactly `dirty=0, behind=0, ahead=0` against `origin/main`.
+  - The runner-created/recovered commits were left local-only, so approval/deploy could not proceed even though the code changes were committed.
+- Recovery plan:
+  - Preserve unrelated dirty artifacts in a named stash instead of deleting or reverting them.
+  - Commit this recovery note.
+  - Fast-forward push committed AADS changes to `origin/main`.
+  - Recheck `git status`, ahead/behind counts, and AADS health before declaring the preflight blocker cleared.
+
 ## 2026-08-20 16:41 KST - Yeoljeong bank sync phase 1 core API
 
 - Request: CEO approved immediate implementation of the FOOD/Yeoljeong store assistant bank auto-linking foundation.
