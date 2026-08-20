@@ -188,6 +188,117 @@ def test_parse_date_normalisation():
     assert rows[1]["occurred_at"] == "2026-08-02"
 
 
+# ── 중첩 테이블·span 포함 파싱 정확도 테스트 (실제 포털 레이아웃 대응) ──────────
+
+_NESTED_TABLE_HTML = """
+<html><body>
+<div>
+  <table class="layout-wrapper">
+    <tr><td>
+      <!-- 실제 은행 포털에서 레이아웃 용도로 outer table 감싸는 패턴 -->
+      <table class="tx-table">
+        <thead>
+          <tr>
+            <th><span>거래일자</span></th>
+            <th><span>적요</span></th>
+            <th><span>입금금액</span></th>
+            <th><span>출금금액</span></th>
+            <th><span>잔액</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span>2026-08-15</span></td>
+            <td><span>카드매출</span></td>
+            <td><span>350,000</span></td>
+            <td></td>
+            <td><span>1,350,000</span></td>
+          </tr>
+          <tr>
+            <td>2026-08-16</td>
+            <td>임대료</td>
+            <td></td>
+            <td>200,000</td>
+            <td>1,150,000</td>
+          </tr>
+        </tbody>
+      </table>
+    </td></tr>
+  </table>
+</div>
+</body></html>
+"""
+
+_SPAN_HEADER_HTML = """
+<table>
+  <tr>
+    <th><span class="col">거래일자</span></th>
+    <th><span class="col">보낸분/받는분</span></th>
+    <th><span class="col">입금</span></th>
+    <th><span class="col">출금</span></th>
+  </tr>
+  <tr>
+    <td><span>2026-08-20</span></td>
+    <td><span>우아한형제들</span></td>
+    <td><span>88,000</span></td>
+    <td></td>
+  </tr>
+</table>
+"""
+
+_NO_DATE_COL_HTML = """
+<table>
+  <tr><th>상품명</th><th>수량</th><th>단가</th></tr>
+  <tr><td>볶음밥</td><td>10</td><td>8000</td></tr>
+</table>
+"""
+
+
+def test_parse_nested_table_skips_outer_layout_table():
+    """외부 레이아웃 테이블이 중첩되어 있어도 내부 거래 테이블을 파싱해야 한다."""
+    rows = connector.parse_bank_portal_html(_NESTED_TABLE_HTML)
+    # 외부 layout table이 inner table 파싱을 방해해서는 안 됨
+    assert len(rows) == 2
+    assert rows[0]["direction"] == "in"
+    assert rows[0]["amount"] == 350000
+    assert rows[0]["occurred_at"] == "2026-08-15"
+    assert rows[1]["direction"] == "out"
+    assert rows[1]["amount"] == 200000
+
+
+def test_parse_span_wrapped_cells_and_headers():
+    """th/td 안에 span 태그로 감싼 헤더/값도 정상 파싱돼야 한다."""
+    rows = connector.parse_bank_portal_html(_SPAN_HEADER_HTML)
+    assert len(rows) == 1
+    assert rows[0]["amount"] == 88000
+    assert rows[0]["direction"] == "in"
+    assert rows[0]["counterparty"] == "우아한형제들"
+
+
+def test_parse_with_diagnostics_returns_table_count():
+    """진단 정보에 테이블 수가 정확히 포함돼야 한다."""
+    rows, diag = connector.parse_bank_portal_html_with_diagnostics(_SHINHAN_SAMPLE_HTML)
+    assert len(rows) == 2
+    assert diag["table_count"] == 1
+    assert diag["parse_failure"] is False
+
+
+def test_parse_with_diagnostics_on_unrecognised_table():
+    """날짜 컬럼이 없는 테이블 → parse_failure=True, 빈 rows."""
+    rows, diag = connector.parse_bank_portal_html_with_diagnostics(_NO_DATE_COL_HTML)
+    assert rows == []
+    assert diag["table_count"] == 1
+    assert diag["parse_failure"] is True
+
+
+def test_parse_with_diagnostics_no_tables():
+    """테이블이 전혀 없는 HTML → table_count=0, parse_failure=False."""
+    rows, diag = connector.parse_bank_portal_html_with_diagnostics("<html><body><p>로딩중</p></body></html>")
+    assert rows == []
+    assert diag["table_count"] == 0
+    assert diag["parse_failure"] is False
+
+
 # ── Async browser collector tests ─────────────────────────────────────────────
 
 def _run(coro):

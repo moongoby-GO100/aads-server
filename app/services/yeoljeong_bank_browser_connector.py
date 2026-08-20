@@ -35,45 +35,69 @@ def bank_browser_work_key(account_id: str, business_id: str, branch_id: str) -> 
 # ── HTML table parser ────────────────────────────────────────────────────────
 
 class _TableParser(HTMLParser):
-    """Extract all <table> cell values from raw HTML (stdlib only)."""
+    """Extract all <table> cell values from raw HTML (stdlib only).
+
+    Nested-table safe: each <table> push saves/resets cell state so that
+    an outer <td> wrapping an inner <table> does not inflate _cell_depth
+    and block data collection inside the inner table.
+    Every completed table (any depth) with at least one row is collected.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.tables: list[list[list[str]]] = []
-        self._in_table = False
-        self._current_table: list[list[str]] = []
-        self._current_row: list[str] = []
-        self._in_cell = False
+        # Stack of in-progress table rows, one frame per nesting level.
+        self._table_stack: list[list[list[str]]] = []
+        # Stack of in-progress current rows, parallel to _table_stack.
+        self._row_stack: list[list[str]] = []
+        # Cell-state stack: saved (cell_depth, cell_buf) on <table> entry.
+        self._cell_state_stack: list[tuple[int, list[str]]] = []
+        self._cell_depth: int = 0
         self._cell_buf: list[str] = []
+
+    @property
+    def _in_table(self) -> bool:
+        return bool(self._table_stack)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "table":
-            self._in_table = True
-            self._current_table = []
-        elif tag == "tr" and self._in_table:
-            self._current_row = []
-        elif tag in {"td", "th"} and self._in_table:
-            self._in_cell = True
+            # Save outer cell state so a <td> wrapping this table is not corrupted.
+            self._cell_state_stack.append((self._cell_depth, self._cell_buf))
+            self._cell_depth = 0
             self._cell_buf = []
+            self._table_stack.append([])
+            self._row_stack.append([])
+        elif tag == "tr" and self._in_table:
+            self._row_stack[-1] = []
+        elif tag in {"td", "th"} and self._in_table:
+            self._cell_depth += 1
+            if self._cell_depth == 1:
+                self._cell_buf = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "table":
-            if self._current_table:
-                self.tables.append(self._current_table)
-            self._in_table = False
-            self._current_table = []
+            if self._table_stack:
+                finished = self._table_stack.pop()
+                self._row_stack.pop()
+                if finished:
+                    self.tables.append(finished)
+            # Restore outer cell state regardless of whether stack had a frame.
+            if self._cell_state_stack:
+                self._cell_depth, self._cell_buf = self._cell_state_stack.pop()
         elif tag == "tr" and self._in_table:
-            if self._current_row:
-                self._current_table.append(self._current_row)
-            self._current_row = []
+            row = self._row_stack[-1]
+            if row:
+                self._table_stack[-1].append(list(row))
+            self._row_stack[-1] = []
         elif tag in {"td", "th"} and self._in_table:
-            text = html.unescape(" ".join(self._cell_buf)).strip()
-            self._current_row.append(text)
-            self._in_cell = False
-            self._cell_buf = []
+            if self._cell_depth == 1:
+                text = html.unescape(" ".join(self._cell_buf)).strip()
+                self._row_stack[-1].append(text)
+                self._cell_buf = []
+            self._cell_depth = max(0, self._cell_depth - 1)
 
     def handle_data(self, data: str) -> None:
-        if self._in_cell:
+        if self._cell_depth == 1:
             self._cell_buf.append(data)
 
 
@@ -199,12 +223,33 @@ def parse_bank_portal_html(raw_html: str) -> list[dict[str, Any]]:
     Returns an empty list when no recognisable transaction table is found.
     Raw HTML is not stored anywhere by this function.
     """
+    rows, _ = parse_bank_portal_html_with_diagnostics(raw_html)
+    return rows
+
+
+def parse_bank_portal_html_with_diagnostics(
+    raw_html: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Like parse_bank_portal_html but also returns a diagnostics dict.
+
+    Diagnostics (safe — no personal data):
+        table_count     how many <table> elements were found
+        headers_found   list of header rows (up to 3 tables) for debugging
+        parse_failure   True when tables exist but none had a date column
+    """
     tables = _extract_tables(raw_html)
+    diag: dict[str, Any] = {
+        "table_count": len(tables),
+        "headers_found": [t[0] if t else [] for t in tables[:3]],
+        "parse_failure": False,
+    }
     for table in tables:
         rows = _parse_table_with_header(table)
         if rows:
-            return rows
-    return []
+            return rows, diag
+    if tables:
+        diag["parse_failure"] = True
+    return [], diag
 
 
 # ── Async browser collector ──────────────────────────────────────────────────
@@ -328,20 +373,35 @@ async def collect_bank_via_browser_session_async(
 
         safe_diagnostics["current_url"] = current_url
 
-        rows = parse_bank_portal_html(html_content)
+        rows, parse_diag = parse_bank_portal_html_with_diagnostics(html_content)
         if rows and (date_from or date_to):
             rows = [r for r in rows if _row_in_date_range(r, date_from, date_to)]
+
+        safe_diagnostics["parser_table_count"] = parse_diag["table_count"]
+        safe_diagnostics["parser_failure"] = parse_diag["parse_failure"]
+
+        if rows:
+            msg = f"{bank_name or '은행'} 포털에서 {len(rows)}건 수집했습니다."
+        elif parse_diag["parse_failure"]:
+            msg = (
+                f"{bank_name or '은행'} 포털 테이블을 인식하지 못했습니다 "
+                f"(테이블 {parse_diag['table_count']}개 발견, 날짜 컬럼 없음). "
+                "CSV 업로드로 대체 수집하거나 포털 레이아웃 변경을 확인하십시오."
+            )
+        elif parse_diag["table_count"] == 0:
+            msg = (
+                f"{bank_name or '은행'} 포털 페이지에서 테이블을 찾지 못했습니다. "
+                "페이지가 완전히 로드되지 않았거나 로그인이 필요할 수 있습니다."
+            )
+        else:
+            msg = f"{bank_name or '은행'} 포털에 해당 기간 거래 내역이 없습니다."
 
         return {
             "status": "collected",
             "rows": rows,
             "row_count": len(rows),
             "diagnostics": safe_diagnostics,
-            "message": (
-                f"{bank_name or '은행'} 포털에서 {len(rows)}건 수집했습니다."
-                if rows
-                else f"{bank_name or '은행'} 포털에 거래 내역이 없거나 인식하지 못했습니다."
-            ),
+            "message": msg,
         }
 
     except Exception as exc:
