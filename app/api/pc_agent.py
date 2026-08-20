@@ -1011,6 +1011,10 @@ async def pc_agent_diagnostics():
         "online_agents": pc_agent_manager.list_agent_statuses(),
         "latest_launcher_status": launcher_rows,
         "latest_connection_events": connection_rows,
+        "default_browser_agent": {
+            "agent_id": os.getenv("PC_AGENT_DEFAULT_AGENT_ID", "").strip(),
+            "hostname": os.getenv("PC_AGENT_DEFAULT_HOSTNAME", "").strip(),
+        },
     }
 
 

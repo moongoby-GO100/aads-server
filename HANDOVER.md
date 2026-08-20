@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-20 10:14 KST - CEO default PC Agent browser routing pin
+
+- Request: Complete the previous PC Agent confirmation/action report, avoid ending at an intermediate status, and apply the remaining recommended action.
+- Finding:
+  - Current MCP status at 2026-08-20 03:12 KST reported 0 connected PC Agents, but recent DB network records identify `DESKTOP-NPC6JAT` as `agent_id=69e1cfb7-146`, IP `192.168.30.25`, MAC `E0-D5-5E-55-3C-3A`.
+  - Recent connection history also includes `DESKTOP-TBKF5M3` and `abc`, so implicit routing could send browser work to the wrong desktop if the default PC is not pinned.
+- Changes:
+  - `app/services/pc_agent_manager.py`: browser-class jobs now prefer the configured default PC Agent and do not silently fall back to another PC when that default browser PC is offline.
+  - `app/api/pc_agent.py`: diagnostics now expose the configured default browser agent id/hostname.
+  - `docker-compose.yml` and `docker-compose.prod.yml`: default browser PC set to `PC_AGENT_DEFAULT_AGENT_ID=69e1cfb7-146` and `PC_AGENT_DEFAULT_HOSTNAME=DESKTOP-NPC6JAT` unless overridden by `.env`.
+  - `tests/unit/test_pc_agent_routing_leases.py`: added regression tests for default PC routing and no-fallback behavior.
+- Verification:
+  - `python3 -m py_compile app/services/pc_agent_manager.py app/api/pc_agent.py` passed on the host.
+  - `docker exec aads-server python -m pytest tests/unit/test_pc_agent_routing_leases.py tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_manager_connection_guard.py` passed: 18 passed.
+- Remaining:
+  - Real PC command E2E cannot run while no PC Agent is online. When `DESKTOP-NPC6JAT` reconnects, verify `/api/v1/pc-agent/diagnostics` and a safe `browser_close_session` smoke command.
+
 ## 2026-08-20 09:29 KST - FOOD platform account credential registration
 
 - Request: Reflect all IDs/passwords from CEO attached account tables for the listed FOOD businesses without exposing plaintext secrets in chat.

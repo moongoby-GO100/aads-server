@@ -351,3 +351,80 @@ async def test_execute_routed_command_close_on_complete_triggers_session_cleanup
     assert sent[1][0] == "browser_close_session"
     assert sent[1][1]["work_key"] == "aads-ceo-browser"
     assert sent[1][1]["close_browser"] is True
+
+
+@pytest.mark.asyncio
+async def test_browser_jobs_prefer_configured_default_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PC_AGENT_DEFAULT_AGENT_ID", "ceo-pc")
+    monkeypatch.setenv("PC_AGENT_DEFAULT_HOSTNAME", "DESKTOP-NPC6JAT")
+    manager = PCAgentManager()
+    ceo_ws = _DummyWebSocket()
+    other_ws = _DummyWebSocket()
+    manager.register_agent(
+        "other-pc",
+        other_ws,  # type: ignore[arg-type]
+        {"hostname": "DESKTOP-TBKF5M3", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+    manager.register_agent(
+        "ceo-pc",
+        ceo_ws,  # type: ignore[arg-type]
+        {"hostname": "DESKTOP-NPC6JAT", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    observed: dict[str, object] = {}
+
+    async def fake_send_command(agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        observed["agent_id"] = agent_id
+        observed["command_type"] = command_type
+        observed["params"] = dict(params)
+        return "cmd-1"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        return CommandResult(
+            command_id=command_id,
+            agent_id="ceo-pc",
+            status="success",
+            result={"ok": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_eval",
+        params={"expression": "document.title"},
+        job_type="managed_browser",
+        required_capabilities=["interactive_browser"],
+        command_timeout_seconds=5.0,
+        lease_ttl_seconds=35,
+    )
+
+    assert result["status"] == "success"
+    assert observed["agent_id"] == "ceo-pc"
+
+
+@pytest.mark.asyncio
+async def test_browser_jobs_do_not_fallback_when_configured_default_agent_is_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PC_AGENT_DEFAULT_AGENT_ID", "ceo-pc")
+    manager = PCAgentManager()
+    other_ws = _DummyWebSocket()
+    manager.register_agent(
+        "other-pc",
+        other_ws,  # type: ignore[arg-type]
+        {"hostname": "DESKTOP-TBKF5M3", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    result = await manager.acquire_lease(
+        job_type="managed_browser",
+        command_type="browser_eval",
+        required_capabilities=["interactive_browser"],
+        ttl_seconds=35,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "PC_AGENT_OFFLINE"
+    assert result["message"] == "default browser PC agent 'ceo-pc' is offline"

@@ -111,6 +111,8 @@ services:
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - AADS_MEDIA_STATIC_DIR=/app/generated-media-static
+      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-69e1cfb7-146}
+      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-NPC6JAT}
     volumes:
       # ★ 소스 볼륨 마운트: 호스트 수정 → 컨테이너 즉시 반영
       - /root/aads/aads-server/app:/app/app:rw
@@ -193,6 +195,8 @@ services:
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
       - AADS_BROWSER_BRIDGE_STATE_DIR=/app/browser-bridge-state
       - AADS_MEDIA_STATIC_DIR=/app/generated-media-static
+      - PC_AGENT_DEFAULT_AGENT_ID=${PC_AGENT_DEFAULT_AGENT_ID:-69e1cfb7-146}
+      - PC_AGENT_DEFAULT_HOSTNAME=${PC_AGENT_DEFAULT_HOSTNAME:-DESKTOP-NPC6JAT}
     volumes:
       - /root/aads/aads-server/app:/app/app:rw
       - aads_generated_media:/app/generated-media-static:rw

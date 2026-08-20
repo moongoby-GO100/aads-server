@@ -160,6 +160,8 @@ class PCAgentManager:
         self._lease_events: Dict[str, asyncio.Event] = {}
         self._lease_queues: Dict[tuple[str, str], Deque[str]] = {}
         self._running_leases: Dict[tuple[str, str], set[str]] = {}
+        self._default_agent_id = os.getenv("PC_AGENT_DEFAULT_AGENT_ID", "").strip()
+        self._default_agent_hostname = os.getenv("PC_AGENT_DEFAULT_HOSTNAME", "").strip().lower()
 
     # ── 에이전트 등록/해제 ──────────────────────────────────────────
 
@@ -890,6 +892,14 @@ class PCAgentManager:
                 "message": "no online PC agent",
             }
 
+        default_selected = self._select_default_agent_locked(
+            online_agents=online_agents,
+            required_capabilities=required_capabilities,
+            job_type=job_type,
+        )
+        if default_selected is not None:
+            return default_selected
+
         capable: list[_AgentConnection] = []
         for conn in online_agents:
             caps = {cap.lower() for cap in conn.info.capabilities}
@@ -911,6 +921,63 @@ class PCAgentManager:
 
         chosen = min(capable, key=_score)
         return {"agent_id": chosen.agent_id}
+
+    def _select_default_agent_locked(
+        self,
+        *,
+        online_agents: list[_AgentConnection],
+        required_capabilities: set[str],
+        job_type: str,
+    ) -> dict[str, Any] | None:
+        """Pin browser-class work to the configured CEO workstation.
+
+        If a default workstation is configured, browser jobs must not silently fall
+        back to another online PC. That prevents Agent Vault/autofill work from
+        opening on the wrong desktop session.
+        """
+        if not (self._default_agent_id or self._default_agent_hostname):
+            return None
+        normalized_job = self._normalize_job_type(job_type)
+        browser_job = (
+            normalized_job.startswith("browser")
+            or normalized_job.startswith("managed_browser")
+            or normalized_job in _VVIC_JOB_TYPES
+            or bool({"interactive_browser", "chrome_cdp"} & required_capabilities)
+        )
+        if not browser_job:
+            return None
+
+        def _is_default(conn: _AgentConnection) -> bool:
+            if self._default_agent_id and conn.agent_id == self._default_agent_id:
+                return True
+            hostname = str(conn.info.hostname or "").strip().lower()
+            return bool(self._default_agent_hostname and hostname == self._default_agent_hostname)
+
+        default_conn = next((conn for conn in online_agents if _is_default(conn)), None)
+        if default_conn is None:
+            configured = self._default_agent_id or self._default_agent_hostname
+            return {
+                "error_code": _ERROR_PC_AGENT_OFFLINE,
+                "message": f"default browser PC agent '{configured}' is offline",
+                "default_agent_id": self._default_agent_id,
+                "default_hostname": self._default_agent_hostname,
+            }
+
+        caps = {cap.lower() for cap in default_conn.info.capabilities}
+        missing = sorted(required_capabilities - caps)
+        if missing:
+            return {
+                "error_code": _ERROR_NO_CAPABLE_AGENT,
+                "message": f"default browser PC agent '{default_conn.agent_id}' missing capabilities: {', '.join(missing)}",
+                "missing_capabilities": missing,
+                "default_agent_id": self._default_agent_id,
+                "default_hostname": self._default_agent_hostname,
+            }
+        return {
+            "agent_id": default_conn.agent_id,
+            "default_route": True,
+            "default_hostname": self._default_agent_hostname,
+        }
 
     def _map_error_code_from_result(self, result: CommandResult) -> str:
         payload = result.result if isinstance(result.result, dict) else {}
