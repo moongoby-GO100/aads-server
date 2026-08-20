@@ -1330,6 +1330,67 @@ def test_sync_delivery_uses_baemin_pc_agent_session_without_password(tmp_path, m
     assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
 
 
+def test_sync_delivery_closes_pc_agent_session_when_marked_complete(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-pc-agent",
+            "browser_bridge_mode": "local_agent",
+            "browser_close_on_complete": "1",
+        },
+    )
+
+    closed: list[tuple[str, str]] = []
+
+    async def fake_close(browser_auth, *, reason):
+        closed.append((browser_auth["browser_session_id"], reason))
+
+    def fake_run(coro):
+        return service.asyncio.run(coro)
+
+    def fake_bridge_collect(account, browser_auth):
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {"sales": [], "settlements": [], "reviews": []},
+            "diagnostics": {"auth_mode": "pc_agent_browser"},
+        }
+
+    monkeypatch.setattr(service, "_close_delivery_browser_work_session_async", fake_close)
+    monkeypatch.setattr(service, "_run_delivery_browser_async", fake_run)
+    monkeypatch.setattr(service, "_collect_baemin_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "succeeded"
+    assert closed == [("bb-pc-agent", "delivery_sync_result_baemin")]
+
+
 def test_sync_delivery_uses_pc_agent_session_for_all_delivery_services(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     services = ["coupangeats", "yogiyo", "ddangyo"]

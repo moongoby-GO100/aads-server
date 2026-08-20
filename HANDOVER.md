@@ -5,11 +5,11 @@
 - Trigger: CEO requested commit, push, and deployment completion for the bank/delivery auto-collection work.
 - Changes:
   - `app/services/pc_agent_manager.py`: routed PC Agent commands now run `close_on_complete` browser cleanup even when the primary browser command returns an error.
-  - `app/services/yeoljeong_finance_service.py`: delivery Browser Bridge collections can mark portal work sessions for close-on-complete and retire the work session after collection attempts.
+  - `app/services/yeoljeong_finance_service.py`: delivery Browser Bridge collections can mark portal work sessions for close-on-complete and retire the work session after collection attempts, including the synchronous delivery sync result path.
   - `scripts/yeoljeong_auto_collect.py`: auto-collect payload now closes portal browser sessions by default, with `--keep-browser-open` retained for manual debugging.
-  - Added unit coverage for error-path browser cleanup and the auto-collect keep-open flag.
+  - Added unit coverage for error-path browser cleanup, delivery sync close-on-complete, and the auto-collect keep-open flag.
 - Verification before commit:
-  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_routing_leases.py tests/unit/test_yeoljeong_auto_collect.py -q` passed: 27 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_routing_leases.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_closes_pc_agent_session_when_marked_complete -q` passed: 28 passed.
   - `.venv-playwright/bin/python -m py_compile app/services/pc_agent_manager.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
 - Deployment status:
   - Commit/push/deploy to be completed in the same session after this HANDOVER entry.
