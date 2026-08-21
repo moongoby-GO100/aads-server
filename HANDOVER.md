@@ -30,6 +30,7 @@
   - Multi-channel attempts now split each delivery service into its own child process so one blocked portal cannot prevent the remaining portals from running.
   - `--until-complete` now skips bank/financial auxiliary collection by default so the delivery worker does not block after a portal succeeds.
   - Timeout handling now marks matching queued/running delivery status rows as `failed` / `ATTEMPT_TIMEOUT` immediately so the dashboard does not wait for the 15-minute stale sweeper.
+  - If a child times out after writing a terminal DB status, the parent loop now reconstructs the attempt summary from the latest DB status instead of reporting every service as timeout.
   - Timeout summaries now normalize payload service lists before rendering retryable service rows.
   - Added child-process stdout parsing and retryable timeout unit coverage.
 - Verification before commit:

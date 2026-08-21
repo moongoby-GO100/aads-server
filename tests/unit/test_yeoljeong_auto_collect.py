@@ -699,6 +699,7 @@ def test_run_sync_with_timeout_marks_attempt_timeout(monkeypatch):
             (payload, timeout_seconds, attempt_started_at)
         ),
     )
+    monkeypatch.setattr(auto_collect, "_latest_status_summary", lambda payload: {"summary": []})
 
     summary = auto_collect._run_sync_with_timeout(
         {
@@ -716,3 +717,40 @@ def test_run_sync_with_timeout_marks_attempt_timeout(monkeypatch):
     assert summary["summary"][0]["service"] == "coupangeats"
     assert summary["summary"][0]["status"] == "failed"
     assert summary["summary"][0]["error_code"] == "ATTEMPT_TIMEOUT"
+
+
+def test_run_sync_with_timeout_uses_latest_status_after_child_timeout(monkeypatch):
+    def fake_run(argv, **kwargs):
+        raise auto_collect.subprocess.TimeoutExpired(cmd=argv, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(auto_collect.subprocess, "run", fake_run)
+    monkeypatch.setattr(auto_collect, "_mark_timeout_statuses", lambda payload, timeout_seconds, attempt_started_at: None)
+    monkeypatch.setattr(
+        auto_collect,
+        "_latest_status_summary",
+        lambda payload: {
+            "summary": [
+                {
+                    "service": "baemin",
+                    "status": "succeeded",
+                    "error_code": "",
+                    "counts": {"sales": 1, "settlements": 1, "reviews": 266, "ads": 0},
+                }
+            ],
+            "totals": {"sales": 1, "settlements": 1, "reviews": 266, "ads": 0},
+        },
+    )
+
+    summary = auto_collect._run_sync_with_timeout(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-21",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+        3,
+    )
+
+    assert summary["summary"][0]["status"] == "succeeded"

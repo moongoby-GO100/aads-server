@@ -597,6 +597,65 @@ def _mark_timeout_statuses(payload: dict[str, Any], timeout_seconds: int, attemp
         _write_delivery_collection_statuses(statuses, row)
 
 
+def _latest_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    services = set(_payload_services(payload))
+    business_id = str(payload.get("business_id") or "").strip()
+    branch = str(payload.get("branch") or "").strip()
+    all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"} or branch == "전체"
+    try:
+        statuses = _read("delivery_collection_status")
+    except Exception:
+        statuses = []
+
+    latest: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in statuses if isinstance(statuses, list) else []:
+        service = str(row.get("service") or "").strip()
+        if services and service not in services:
+            continue
+        row_business_id = str(row.get("business_id") or "").strip()
+        row_branch = str(row.get("branch") or "").strip()
+        if not all_businesses:
+            if business_id and row_business_id != business_id:
+                continue
+            if branch and row_branch != branch:
+                continue
+        key = (service, row_business_id, row_branch)
+        if key not in latest or str(row.get("updated_at") or "") > str(latest[key].get("updated_at") or ""):
+            latest[key] = row
+
+    items = []
+    totals = _empty_delivery_counts()
+    for row in latest.values():
+        counts = row.get("counts") if isinstance(row.get("counts"), dict) else _empty_delivery_counts()
+        for kind in DELIVERY_RECORD_TYPES:
+            totals[kind] += int(counts.get(kind) or 0)
+        items.append(
+            {
+                "service": row.get("service") or "",
+                "business_id": row.get("business_id") or "",
+                "branch": row.get("branch") or "",
+                "status": row.get("status") or "",
+                "error_code": row.get("error_code") or "",
+                "counts": counts,
+                "run_id": row.get("id") or "",
+                "account_id": row.get("account_id") or "",
+                "message": row.get("message") or "",
+            }
+        )
+
+    return {
+        "queued": False,
+        "job_id": str(payload.get("sync_job_id") or ""),
+        "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
+        "business_id": payload.get("business_id") or "",
+        "branch": payload.get("branch") or "",
+        "date_from": payload.get("date_from") or "",
+        "date_to": payload.get("date_to") or "",
+        "totals": totals,
+        "summary": items,
+    }
+
+
 def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     services = _payload_services(payload)
     return {
@@ -637,6 +696,9 @@ def _run_child_collect_with_timeout(payload: dict[str, Any], timeout_seconds: in
         )
     except subprocess.TimeoutExpired:
         _mark_timeout_statuses(payload, timeout_seconds, attempt_started_at)
+        status_summary = _latest_status_summary(payload)
+        if status_summary["summary"]:
+            return status_summary
         return _summary(_timeout_result(payload, timeout_seconds))
 
     if completed.returncode != 0:
