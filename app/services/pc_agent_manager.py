@@ -540,21 +540,50 @@ class PCAgentManager:
         work_key = str((params or {}).get("work_key") or "").strip()
         if not work_key:
             return
+        close_params: Dict[str, Any] = {
+            "work_key": work_key,
+            "close_browser": bool((params or {}).get("close_browser_on_timeout", True)),
+            "close_tabs": bool((params or {}).get("close_tabs_on_timeout", True)),
+            "reason": "route_execute_timeout",
+            "command_timeout_seconds": max(1.0, min(10.0, float(timeout_seconds))),
+        }
         cleanup_params: Dict[str, Any] = {
             "work_key": work_key,
             "cleanup": True,
+            "reason": "route_execute_timeout_fallback",
+            "command_timeout_seconds": max(1.0, min(5.0, float(timeout_seconds))),
         }
+        if "port" in (params or {}):
+            close_params["port"] = params.get("port")
         if "port" in (params or {}):
             cleanup_params["port"] = params.get("port")
         try:
+            close_command_id = await self.send_command(agent_id, "browser_close_session", close_params)
+            close_result = await self.get_result(
+                close_command_id,
+                timeout=max(1.0, min(10.0, float(timeout_seconds))),
+            )
+            close_payload = close_result.result if isinstance(close_result.result, dict) else {}
+            logger.info(
+                "pc_agent_timeout_close_result agent_id=%s command_type=%s work_key=%s status=%s error_code=%s session_released=%s guard_released=%s",
+                agent_id,
+                normalized_command,
+                work_key,
+                close_result.status,
+                close_payload.get("error_code"),
+                close_payload.get("session_released"),
+                close_payload.get("guard_released"),
+            )
+            if close_result.status != "error":
+                return
             cleanup_command_id = await self.send_command(agent_id, "browser_health", cleanup_params)
             cleanup_result = await self.get_result(
                 cleanup_command_id,
-                timeout=max(1.0, min(3.0, float(timeout_seconds))),
+                timeout=max(1.0, min(5.0, float(timeout_seconds))),
             )
             cleanup_payload = cleanup_result.result if isinstance(cleanup_result.result, dict) else {}
             logger.info(
-                "pc_agent_timeout_cleanup_result agent_id=%s command_type=%s work_key=%s status=%s error_code=%s session_released=%s guard_released=%s",
+                "pc_agent_timeout_cleanup_fallback_result agent_id=%s command_type=%s work_key=%s status=%s error_code=%s session_released=%s guard_released=%s",
                 agent_id,
                 normalized_command,
                 work_key,
