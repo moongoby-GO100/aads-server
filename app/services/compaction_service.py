@@ -11,6 +11,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.core.anthropic_client import call_llm_messages_with_fallback
+from app.core.project_config import normalize_project_label
 
 logger = logging.getLogger(__name__)
 
@@ -405,9 +406,7 @@ async def _sync_to_observations(db_conn, session_id: str, summary: str) -> None:
                 uuid.UUID(session_id) if isinstance(session_id, str) else session_id,
             )
             if ws_row and ws_row["workspace_name"]:
-                project = ws_row["workspace_name"].upper().strip()
-                if project not in ("AADS", "CEO", "KIS", "GO100", "SF", "NTV2", "NAS"):
-                    project = None
+                project = normalize_project_label(ws_row["workspace_name"])
         except Exception:
             pass
 

@@ -154,14 +154,9 @@ async def _upsert_task_result(value: Dict[str, Any], category: str) -> Dict[str,
     elif "211" in str(value.get("server", "")):
         source = "REMOTE_211"
 
-    # 프로젝트 정규화
-    project = str(value.get("project") or "AADS").strip()
-    _pmap = {
-        "kis": "KIS", "go100": "GO100", "shortflow": "ShortFlow",
-        "sf": "ShortFlow", "newtalk": "NewTalk", "ntv2": "NewTalk",
-        "nas": "NAS", "aads": "AADS", "sales": "SALES",
-    }
-    project = _pmap.get(project.lower(), project) if project else "AADS"
+    # 프로젝트 정규화 (display-only 프로젝트도 DB 라벨로 허용)
+    from app.core.project_config import normalize_project_label
+    project = normalize_project_label(value.get("project") or "AADS") or "AADS"
 
     # T-107: task_id를 접두사 형식으로 정규화 (AADS-095, KIS-168 등)
     task_id = _normalize_task_id_for_db(task_id, project)

@@ -326,6 +326,25 @@ def test_collect_async_no_session_returns_action_required():
     assert "PC Agent" in result["message"]
 
 
+def test_collect_async_infers_portal_from_bank_name_when_codes_missing():
+    account = {"id": "acct-1", "bank_name": "신한은행 기업", "bank_code": "", "institution_code": ""}
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        mock_bridge.return_value.sessions.find_by_work_key.return_value = None
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-browser-abc123",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["diagnostics"]["institution_code"] == "shinhan_business"
+
+
 def test_collect_async_explicit_session_not_found_returns_connector_not_ready():
     account = {"id": "acct-1", "bank_name": "IBK기업은행", "bank_code": "003", "institution_code": "ibk_business"}
 

@@ -27,6 +27,13 @@ PROJECT_MAP: Dict[str, Dict[str, Any]] = {
     "AADS":  {"server": "host.docker.internal", "server_name": "contabo116", "workdir": "/root/aads/aads-server", "lang": "python", "display_name": "AADS 자율개발시스템", "aliases": ["AADS", "aads"]},
 }
 
+# DB/화면에서만 식별 가능한 프로젝트. SSH 서버·workdir을 부여하지 않는다.
+# 이 목록에 들어간 값은 프로젝트 라벨로는 유효하지만 실행 대상은 아니다.
+DISPLAY_ONLY_PROJECTS = frozenset({
+    "FOOD", "NAS", "CEO", "WORK", "LAW", "DESIGN", "KAKAOBOT", "COM",
+    "TEST", "QA", "PLAY", "DKSEON", "KNW001", "VIBE", "HARNESS",
+})
+
 ALL_PROJECTS = list(PROJECT_MAP.keys())
 
 # 외부 프로젝트만 (SSH 접근 대상)
@@ -42,6 +49,8 @@ def _build_project_alias_index() -> Dict[str, str]:
         display_name = config.get("display_name")
         if display_name:
             index[str(display_name).lower()] = project
+    for project in DISPLAY_ONLY_PROJECTS:
+        index[project.lower()] = project
     return index
 
 
@@ -60,7 +69,8 @@ def _extract_bracket_token(value: str) -> str | None:
 
 def get_display_name(project: str) -> str:
     """정규 키 → 표시명. 미등록이면 입력값 그대로 반환."""
-    return PROJECT_MAP.get(project, {}).get("display_name", project)
+    resolved = resolve_project(project) or project
+    return PROJECT_MAP.get(resolved, {}).get("display_name", resolved)
 
 
 def resolve_project(value: str | None) -> str | None:
@@ -82,7 +92,7 @@ def resolve_project(value: str | None) -> str | None:
         return None
 
     upper = normalized.upper()
-    if upper in PROJECT_MAP:
+    if upper in PROJECT_MAP or upper in DISPLAY_ONLY_PROJECTS:
         return upper
 
     resolved = _PROJECT_ALIAS_INDEX.get(normalized.lower())
@@ -94,6 +104,12 @@ def resolve_project(value: str | None) -> str | None:
         return resolve_project(bracket_token)
 
     return None
+
+
+def is_executable_project(value: str | None) -> bool:
+    """프로젝트가 실제 서버/작업 디렉터리를 가진 실행 대상인지 반환한다."""
+    resolved = resolve_project(value)
+    return bool(resolved and resolved in PROJECT_MAP)
 
 
 def normalize_project_label(value: str | None) -> str | None:

@@ -9,6 +9,7 @@ import re
 from typing import Optional
 
 import structlog
+from app.core.project_config import normalize_project_label
 
 logger = structlog.get_logger(__name__)
 
@@ -172,7 +173,7 @@ async def auto_resolve_contradictions(
                 """INSERT INTO memory_facts (id, project, category, subject, detail, confidence, tags)
                    VALUES ($1, $2, 'ceo_instruction', $3, $4, 0.9, ARRAY['auto_resolved', 'directive'])""",
                 new_fact_id,
-                (project or "").upper()[:20] or None,
+                normalize_project_label(project),
                 f"CEO 지시: {user_message[:80]}",
                 user_message[:500],
             )

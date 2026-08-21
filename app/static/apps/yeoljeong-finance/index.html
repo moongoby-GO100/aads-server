@@ -4630,6 +4630,10 @@
     };
     const deliveryAutomationServices = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
     const bankLedgerServices = new Set(["shinhan_business", "ibk_business"]);
+    const bankServiceCodes = {
+      shinhan_business: "088",
+      ibk_business: "003"
+    };
     const financialTransactionServices = new Set(["shinhan_business", "ibk_business", "card_pg"]);
     const serverVaultServices = new Set([
       "baemin",
@@ -8421,10 +8425,11 @@
           if (financialTransactionServices.has(data.service) && (accountNoMasked || data.accountNo)) {
             const branchId = branchIdForName(data.branch || "");
             const bankConnectionType = collectionMode === "bank-excel" ? "csv" : "browser";
+            const bankInstitutionCode = data.institutionCode || data.service;
             const bankPayload = {
               business_id: data.businessId,
               branch_id: branchId,
-              bank_code: data.institutionCode || "",
+              bank_code: bankServiceCodes[data.service] || data.institutionCode || "",
               bank_name: integrationLabels[data.service] || catalog.label || data.service,
               account_number: data.accountNo || "",
               account_number_masked: accountNoMasked,
@@ -8433,7 +8438,7 @@
               connection_type: bankConnectionType,
               connector_type: bankConnectionType === "browser" ? "bank-browser" : "csv",
               status: "active",
-              institution_code: data.institutionCode || "",
+              institution_code: bankInstitutionCode,
               memo,
               auto_sync: true
             };
@@ -9875,9 +9880,9 @@
       if (scopedAccounts.length === 1) els.bankAccountSelect.value = scopedAccounts[0].id;
     }
 
-    async function refreshBankAccounts({ silent = false } = {}) {
+    async function refreshBankAccounts({ silent = false, scopeOverride = null } = {}) {
       if (!canManageAutomation()) return;
-      const scope = selectedAutomationScope();
+      const scope = scopeOverride || selectedAutomationScope();
       const branchId = branchIdForName(scope.branch);
       const query = new URLSearchParams({ business_id: scope.business_id });
       if (branchId) query.set("branch_id", branchId);
@@ -10111,6 +10116,30 @@
       return true;
     }
 
+    function bankAccountService(account = {}) {
+      const institutionCode = String(account.institution_code || "").trim();
+      if (bankLedgerServices.has(institutionCode)) return institutionCode;
+      const bankCode = String(account.bank_code || "").trim();
+      const byCode = Object.entries(bankServiceCodes).find(([, code]) => code === bankCode);
+      if (byCode) return byCode[0];
+      const name = String(account.bank_name || "").toLowerCase();
+      if (name.includes("신한")) return "shinhan_business";
+      if (name.includes("ibk") || name.includes("기업")) return "ibk_business";
+      return "";
+    }
+
+    function integrationMatchesBankCollection(item, collection = {}, scope = {}) {
+      if (!bankLedgerServices.has(item.service)) return false;
+      if (collection.bank_account_id && item.bankAccountId === collection.bank_account_id) return true;
+      const matchingAccount = bankAccounts.find(account => {
+        if (collection.bank_account_id && account.id !== collection.bank_account_id) return false;
+        if (bankAccountService(account) && bankAccountService(account) !== item.service) return false;
+        if (!bankAccountMatchesScope(account, scope)) return false;
+        return true;
+      });
+      return Boolean(matchingAccount);
+    }
+
     function bankTransactionEntry(row, scope = {}) {
       return {
         id: row.id || uid(),
@@ -10132,9 +10161,9 @@
       const isActionRequired = ["action_required", "connector_not_ready"].includes(collection.status);
       const isNotConfigured = collection.connector_status === "NOT_CONFIGURED";
       settings().integrations
-        .filter(item => bankLedgerServices.has(item.service))
-        .filter(item => !collection.bank_account_id || item.bankAccountId === collection.bank_account_id)
+        .filter(item => integrationMatchesBankCollection(item, collection, scope))
         .forEach(item => {
+          if (collection.bank_account_id) item.bankAccountId = item.bankAccountId || collection.bank_account_id;
           item.lastSyncAt = collection.last_collected_at || new Date().toISOString();
           item.lastSyncStatus = collection.status || "no_records";
           item.portalStatus = (isNotConfigured || isActionRequired) ? "needs_auth" : item.lastSyncStatus;
@@ -10152,11 +10181,13 @@
     }
 
     async function collectBankLedgerAccounts(services, scope) {
-      await refreshBankAccounts({ silent: true });
-      const selectedAccountId = els.bankAccountSelect?.value || "";
+      await refreshBankAccounts({ silent: true, scopeOverride: scope });
+      const selectedAccountId = scope.account_id ? "" : (els.bankAccountSelect?.value || "");
       const targetAccounts = bankAccounts.filter(account => {
         if (selectedAccountId && account.id !== selectedAccountId) return false;
         if (!bankAccountMatchesScope(account, scope)) return false;
+        const accountService = bankAccountService(account);
+        if (accountService && !services.includes(accountService)) return false;
         if (!services.some(service => bankLedgerServices.has(service))) return false;
         return true;
       });
@@ -10172,6 +10203,7 @@
           date_from: `${month}-01`,
           date_to: new Date().toISOString().slice(0, 10),
           source: account.connection_type || "manual",
+          connector: bankAccountService(account),
           transactions: []
         };
         if (account.connection_type === "browser" || account.connector_type === "bank-browser") {

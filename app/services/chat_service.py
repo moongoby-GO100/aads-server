@@ -20,7 +20,7 @@ from anthropic import APIStatusError
 from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
-from app.core.project_config import normalize_project_label
+from app.core.project_config import normalize_project_label, resolve_project
 
 logger = logging.getLogger(__name__)
 
@@ -5798,30 +5798,24 @@ _CUSTOMER_ROLE = "GeneralAssistant"
 
 def _workspace_project_key(workspace_name: str) -> str:
     """Extract the project key used by role_profiles.project_scope."""
-    name = (workspace_name or "").upper()
-    match = re.search(r"\[([A-Z0-9]+)\]", name)
-    if match:
-        key = match.group(1)
-    elif "GO100" in name:
-        key = "GO100"
-    elif "NTV2" in name or re.search(r"\bNT\b", name):
-        key = "NTV2"
-    elif "AADS" in name:
-        key = "AADS"
-    elif "KIS" in name:
-        key = "KIS"
-    elif "SF" in name:
-        key = "SF"
-    elif "NAS" in name:
-        key = "NAS"
-    elif "CEO" in name:
-        key = "CEO"
-    else:
-        key = name.strip()
-    _KNOWN_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO"}
-    if key not in _KNOWN_PROJECTS:
-        key = "CEO"
-    return key or "CEO"
+    name = (workspace_name or "").strip()
+    upper_name = name.upper()
+    resolved = resolve_project(name)
+    if resolved:
+        return resolved
+    # 기존 workspace 명명 규칙은 '[KEY] 표시명'뿐 아니라
+    # 'GO100 작업공간'처럼 이름 중간의 토큰도 허용했다.
+    bracket = re.search(r"\[([A-Z0-9]+)\]", upper_name)
+    candidates = [bracket.group(1)] if bracket else []
+    candidates.extend(("GO100", "NTV2", "AADS", "KIS", "SF", "NAS", "CEO", "SHORTFLOW", "NEWTALK"))
+    candidates.extend(("FOOD", "WORK", "LAW", "DESIGN", "KAKAOBOT", "COM", "TEST", "QA", "PLAY", "DKSEON", "KNW001", "VIBE", "HARNESS"))
+    for candidate in candidates:
+        if re.search(rf"(?<![A-Z0-9]){re.escape(candidate)}(?![A-Z0-9])", upper_name):
+            return resolve_project(candidate) or {"SHORTFLOW": "SF", "NEWTALK": "NTV2"}.get(candidate, candidate)
+    # NT는 기존 workspace 명명 규칙의 하위 호환 별칭이다.
+    if re.search(r"\bNT\b", upper_name):
+        return "NTV2"
+    return "CEO"
 
 
 async def list_workspace_roles(workspace_id: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -10877,12 +10871,7 @@ async def update_message(message_id: str, new_content: str, tenant_id: Optional[
                 )
                 proj_name = proj_row["name"] if proj_row else None
                 # 프로젝트 정규화
-                _proj = None
-                if proj_name:
-                    for _pk in ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO"):
-                        if _pk in proj_name.upper():
-                            _proj = _pk
-                            break
+                _proj = normalize_project_label(proj_name)
 
                 diff_summary = f"원본: {original_content[:150]} → 수정: {new_content[:150]}"
                 await conn.execute(

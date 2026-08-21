@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from app.core.project_config import normalize_project_label
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -57,7 +58,7 @@ async def store_visual_memory(
         logger.warning("store_visual_memory: analysis_text 비어있어 저장 스킵")
         return False
 
-    _project = project.upper().strip() if project else None
+    _project = normalize_project_label(project)
     _key = _make_image_key(image_url)
 
     try:

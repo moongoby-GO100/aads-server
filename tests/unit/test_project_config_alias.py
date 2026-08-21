@@ -6,8 +6,10 @@ import pytest
 
 from app.core.project_config import (
     ALL_PROJECTS,
+    DISPLAY_ONLY_PROJECTS,
     PROJECT_MAP,
     get_display_name,
+    is_executable_project,
     normalize_project_label,
     resolve_project,
 )
@@ -67,9 +69,19 @@ class TestResolveProject:
         for key, cfg in PROJECT_MAP.items():
             assert resolve_project(cfg["display_name"]) == key
 
-    @pytest.mark.parametrize("value", [None, "", "   ", "UNKNOWN", "[FOOD] 열정국밥", "[]"])
+    @pytest.mark.parametrize("value", [None, "", "   ", "UNKNOWN", "[]"])
     def test_unresolvable_returns_none(self, value):
         assert resolve_project(value) is None
+
+    @pytest.mark.parametrize("value,expected", [
+        ("FOOD", "FOOD"), ("food", "FOOD"), ("[NAS] 운영", "NAS"),
+        ("KNW001", "KNW001"), ("[vibe] 작업", "VIBE"),
+    ])
+    def test_display_only_resolution(self, value, expected):
+        assert resolve_project(value) == expected
+
+    def test_display_only_registry_has_no_server_mapping(self):
+        assert DISPLAY_ONLY_PROJECTS.isdisjoint(PROJECT_MAP)
 
     def test_idempotent(self):
         for key in ALL_PROJECTS:
@@ -88,6 +100,11 @@ class TestNormalizeProjectLabel:
     def test_unknown_plain_returns_stripped_original(self):
         assert normalize_project_label("  MYPROJ  ") == "MYPROJ"
 
+    def test_normalization_is_idempotent(self):
+        for value in ("kis", "[FOOD] 열정국밥", "ShortFlow", "  MYPROJ  "):
+            normalized = normalize_project_label(value)
+            assert normalize_project_label(normalized) == normalized
+
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_empty_returns_none(self, value):
         assert normalize_project_label(value) is None
@@ -100,3 +117,7 @@ class TestGetDisplayName:
 
     def test_unknown_key_passthrough(self):
         assert get_display_name("FOOD") == "FOOD"
+
+    @pytest.mark.parametrize("value,expected", [("kis", True), ("GO100", True), ("FOOD", False), ("unknown", False)])
+    def test_executable_project(self, value, expected):
+        assert is_executable_project(value) is expected

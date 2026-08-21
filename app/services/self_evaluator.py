@@ -15,6 +15,7 @@ import uuid
 from typing import Any, Optional
 
 import structlog
+from app.core.project_config import normalize_project_label
 
 logger = structlog.get_logger(__name__)
 
@@ -24,18 +25,8 @@ _HAIKU_MODEL = os.getenv("SELF_EVAL_MODEL", "qwen-turbo")
 _SELF_REFINE_FAIL_THRESHOLD = 0.5
 _SELF_REFINE_SUCCESS_THRESHOLD = 0.65
 
-_PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
-
-
 def _normalize_project(raw: str | None) -> str | None:
-    """'[KIS] 자동매매' → 'KIS', '[AADS] 프로젝트 매니저' → 'AADS' 등."""
-    if not raw:
-        return None
-    upper = raw.upper()
-    for key in _PROJECT_KEYS:
-        if key in upper:
-            return key
-    return upper[:20] if raw else None
+    return normalize_project_label(raw)
 
 
 _EVAL_PROMPT = """다음 AI 응답의 품질을 평가하세요.

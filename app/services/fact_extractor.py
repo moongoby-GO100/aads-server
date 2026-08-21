@@ -14,22 +14,13 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 import structlog
+from app.core.project_config import normalize_project_label
 
 logger = structlog.get_logger(__name__)
 
-# 워크스페이스명 → 프로젝트 코드 정규화
-_PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO")
-
-
 def _normalize_project(raw: str | None) -> str | None:
-    """'[KIS] 자동매매' → 'KIS', '[AADS] 프로젝트 매니저' → 'AADS' 등."""
-    if not raw:
-        return None
-    upper = raw.upper()
-    for key in _PROJECT_KEYS:
-        if key in upper:
-            return key
-    return raw.upper()[:20] if raw else None
+    """DB 저장용 프로젝트 라벨을 중앙 규칙으로 정규화한다."""
+    return normalize_project_label(raw)
 
 _HAIKU_MODEL = os.getenv("FACT_EXTRACTOR_MODEL", "qwen-turbo")
 _MAX_FACTS_PER_TURN = int(os.getenv("FACT_EXTRACTOR_MAX_FACTS", "5"))

@@ -3736,6 +3736,15 @@ BANK_CONNECTION_TYPES = ("open_banking", "csv", "manual", "mock", "browser")
 BANK_ACCOUNT_STATUSES = ("active", "paused", "error", "needs_auth")
 BANK_TRANSACTION_DIRECTIONS = ("in", "out")
 BANK_CONFIGURED_COLLECTION_TYPES = ("csv", "manual", "mock", "browser")
+BANK_SERVICE_CODE_ALIASES: dict[str, tuple[str, str]] = {
+    "shinhan_business": ("088", "신한은행"),
+    "ibk_business": ("003", "IBK기업은행"),
+}
+BANK_SERVICE_NAME_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("shinhan_business", "신한"),
+    ("ibk_business", "ibk"),
+    ("ibk_business", "기업"),
+)
 
 # 은행계좌 파일에 저장을 허용하는 필드 화이트리스트. 원본 계좌번호/비밀번호/인증정보는
 # 절대 포함하지 않는다(민감정보 제외 원칙).
@@ -3901,14 +3910,39 @@ def _bank_account_number_masked(payload: dict[str, Any], existing: dict[str, Any
     return str((existing or {}).get("account_number_masked") or "").strip()
 
 
+def _infer_bank_service_code(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        lowered = text.lower()
+        if lowered in BANK_SERVICE_CODE_ALIASES:
+            return lowered
+        for service_code, keyword in BANK_SERVICE_NAME_KEYWORDS:
+            if keyword in lowered or keyword in text:
+                return service_code
+    return ""
+
+
+def _bank_numeric_code_for_service(service_code: str) -> str:
+    return BANK_SERVICE_CODE_ALIASES.get(service_code, ("", ""))[0]
+
+
 def _apply_bank_account_fields(
     record: dict[str, Any],
     payload: dict[str, Any],
     *,
     creating: bool,
 ) -> dict[str, Any]:
+    inferred_service = _infer_bank_service_code(
+        payload.get("institution_code"),
+        payload.get("bank_code"),
+        payload.get("bank_name"),
+        record.get("institution_code"),
+        record.get("bank_code"),
+        record.get("bank_name"),
+    )
     if creating or payload.get("bank_code") is not None:
-        record["bank_code"] = str(payload.get("bank_code") or record.get("bank_code") or "").strip()
+        bank_code = str(payload.get("bank_code") or record.get("bank_code") or "").strip()
+        record["bank_code"] = bank_code or _bank_numeric_code_for_service(inferred_service)
     if creating or payload.get("bank_name") is not None:
         record["bank_name"] = str(payload.get("bank_name") or record.get("bank_name") or "").strip()
     if creating or payload.get("account_holder") is not None:
@@ -3916,7 +3950,10 @@ def _apply_bank_account_fields(
     if creating or payload.get("account_alias") is not None:
         record["account_alias"] = str(payload.get("account_alias") or record.get("account_alias") or "").strip()
     if creating or payload.get("institution_code") is not None:
-        record["institution_code"] = str(payload.get("institution_code") or record.get("institution_code") or "").strip()
+        record["institution_code"] = (
+            str(payload.get("institution_code") or record.get("institution_code") or "").strip()
+            or inferred_service
+        )
     if creating or payload.get("memo") is not None:
         record["memo"] = str(payload.get("memo") or record.get("memo") or "").strip()
     if creating or payload.get("connection_type") is not None:

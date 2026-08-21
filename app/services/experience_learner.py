@@ -11,6 +11,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Optional
+from app.core.project_config import normalize_project_label
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ JSON으로 반환:
                 """INSERT INTO memory_facts
                    (project, category, subject, detail, confidence, tags)
                    VALUES ($1, $2, $3, $4, $5, $6)""",
-                job["project"],
+                normalize_project_label(job["project"]),
                 category,
                 f"{experience.task_type}: {experience.pattern[:100]}",
                 content,
@@ -132,7 +133,7 @@ JSON으로 반환:
                     """SELECT id FROM memory_facts
                        WHERE project = $1 AND category = $2
                        ORDER BY created_at DESC LIMIT 1""",
-                    job["project"], category,
+                    normalize_project_label(job["project"]), category,
                 )
                 if fact_id:
                     import asyncio
@@ -308,7 +309,7 @@ async def process_completed_jobs(pool) -> dict:
                         job['job_id'],                   # key
                         summary,                         # value
                         0.8,                             # confidence
-                        job['project'],                  # project
+                        normalize_project_label(job['project']),  # project
                     )
 
                     result["processed"] += 1

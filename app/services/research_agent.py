@@ -16,6 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
+from app.core.project_config import normalize_project_label
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +243,7 @@ async def run_daily_research(pool) -> dict:
                     """INSERT INTO ai_observations
                        (project, category, content, confidence, tags)
                        VALUES ($1, $2, $3, 0.7, ARRAY['research_agent', $4])""",
-                    f.project,
+                    normalize_project_label(f.project),
                     "research_finding",
                     json.dumps({
                         "title": f.title,

@@ -3329,6 +3329,28 @@ def test_create_bank_account_accepts_registered_custom_business_scope(tmp_path, 
     assert account["account_number_masked"].endswith("3444")
 
 
+def test_create_browser_bank_account_infers_shinhan_codes_for_ui_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    account = service.create_bank_account(
+        {
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_name": "신한은행 기업",
+            "account_number": "1102223331031",
+            "connection_type": "browser",
+            "connector_type": "bank-browser",
+            "status": "active",
+            "auto_sync": True,
+        },
+        ADMIN_USER,
+    )
+
+    assert account["institution_code"] == "shinhan_business"
+    assert account["bank_code"] == "088"
+    assert account["account_number_masked"].endswith("1031")
+
+
 def test_create_bank_account_requires_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     with pytest.raises(Exception) as exc:

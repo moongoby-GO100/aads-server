@@ -22632,3 +22632,136 @@ _EOD_SWE
 ## [2026-08-21 08:37:52 KST] [GO100] scripts/systemd/go100-frontend-green.service.template
 - Chat-Direct 수정: run_remote_command: python3 -c "exec('''import os,psycopg2,json\nfrom dotenv import load_dotenv\nloa
 - finalize: pending
+
+## [2026-08-21 08:51:57 KST] [GO100] frontend/src/go100/components/Go100Sidebar.tsx
+- Chat-Direct 수정: patch:   Gauge,
+  Flame,
+  type LucideIcon,
+} f→  Gauge,
+  Flame,
+  Monitor,
+  type Luci
+- finalize: pending
+
+## [2026-08-21 08:52:01 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: patch:   LayoutDashboard, Zap, TrendingUp, File→  LayoutDashboard, Zap, TrendingUp, File
+- finalize: pending
+
+## [2026-08-21 08:52:02 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: run_remote_command: grep -R "nxt" backend/app/services/go100/live_trading
+- finalize: pending
+
+## [2026-08-21 08:52:23 KST] [GO100] frontend/src/go100/components/Go100Sidebar.tsx
+- Chat-Direct 수정: patch:       { href: "/dashboard", label: "홈 대시→      { href: "/dashboard", label: "홈 대시
+- finalize: pending
+
+## [2026-08-21 08:52:27 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: patch:   { id: 'pg-dashboard',  icon: LayoutDas→  { id: 'pg-dashboard',  icon: LayoutDas
+- finalize: pending
+
+## [2026-08-21 08:53:07 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-21 08:46 KST - GO100 #303 NXT →# 2026-08-21 08:52 KST - GO100 운영 데스크 메뉴
+- finalize: pending
+
+## [2026-08-21 08:53:09 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('''import os,psycopg2,json\nfrom dotenv import load_dotenv\nloa
+- finalize: pending
+
+## [2026-08-21 08:54:47 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: patch:           className="nav-item nav-page-l→          className={`nav-item nav-page-
+- finalize: pending
+
+## [2026-08-21 08:54:48 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "def _card_allows_nxt_session\|buy_exchange = \"NXT\"\|nxt_not_eligible\
+- finalize: pending
+
+## [2026-08-21 08:54:50 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: patch:           <Icon style={{ width: 18, heig→          <Icon style={{ width: 18, heig
+- finalize: pending
+
+## [2026-08-21 08:54:57 KST] [GO100] frontend/src/go100/components/command-center/NavBar.tsx
+- Chat-Direct 수정: run_remote_command: grep -R browser_work_key /root/kis-autotrade-v4
+- finalize: pending
+
+## [2026-08-21 08:54:58 KST] [GO100] frontend/src/go100/components/command-center/nav-bar.css
+- Chat-Direct 수정: patch: .nav-page-link:hover {
+  background: rgb→.nav-page-link:hover {
+  background: rgb
+- finalize: pending
+
+## [2026-08-21 08:55:23 KST] [GO100] frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: grep -n "nav-ops-label" frontend/src/go100/components/command-center/nav-bar.css
+- finalize: pending
+
+## [2026-08-21 09:24:29 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('from pathlib import Path\np=Path(\"HANDOVER.md\")\ntext=p.read
+- finalize: pending
+
+## [2026-08-21 09:29:17 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('from pathlib import Path\np=Path(\"HANDOVER.md\")\ntext=p.read
+- finalize: pending
+
+## [2026-08-21 10:08:35 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # [P2] 테마등급/뉴스점수 — _load_univers→        # [P2] 테마등급/뉴스점수 — _load_univers
+- finalize: pending
+
+## [2026-08-21 10:08:49 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                     if self._priority_bu→                    if self._priority_bu
+- finalize: pending
+
+## [2026-08-21 10:11:47 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # 1분봉 MA 데이터 (ma_pullback 진입 조건용→        # 1분봉 MA 데이터 (ma_pullback 진입 조건용
+- finalize: pending
+
+## [2026-08-21 10:12:00 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:     def _tick_metrics(self, stock_code: →    def _tick_metrics(self, stock_code:
+- finalize: pending
+
+## [2026-08-21 10:12:09 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:             "price": price,
+            →            "price": price,
+- finalize: pending
+
+## [2026-08-21 10:12:36 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:     def _evaluate_ma_pullback(self, stoc→    def _evaluate_ma_pullback(self, stoc
+- finalize: pending
+
+## [2026-08-21 10:12:53 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         price = metrics["price"]
+       →        price = metrics["price"]
+- finalize: pending
+
+## [2026-08-21 10:12:54 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         if strength > 0 and strength < s→        if strength <= 0:
+            me
+- finalize: pending
+
+## [2026-08-21 10:13:28 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         price = tick[2]
+        volume =→        price = tick[2]
+        signed_v
+- finalize: pending
+
+## [2026-08-21 10:14:11 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # 조건 1: 체결강도 체크 (기본 120 이상 = 매수세→        # 조건 1: 체결강도 체크 (기본 120 이상 = 매수세
+- finalize: pending
+
+## [2026-08-21 10:14:49 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         recent_volumes = [float(t[3] or →        recent_volumes = [abs(float(t[3]
+- finalize: pending
+
+## [2026-08-21 10:15:21 KST] [GO100] backend/app/services/go100/live_trading/live_engine.py
+- Chat-Direct 수정: patch:                         # 브로커 주문가능현금 선조회→                        # [GO100-P0 2026
+- finalize: pending
+
+## [2026-08-21 10:15:43 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         recent_volumes = [t[3] for t in →        recent_volumes = [abs(float(t[3]
+- finalize: pending
+
+## [2026-08-21 10:16:28 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         # [GO100-127 2026-08-18] Kiwoom →        # [GO100-P0 2026-08-21] Kiwoom/K
+- finalize: pending
+
+## [2026-08-21 10:17:41 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-21 09:24 KST - GO100 #303 NXT →# 2026-08-21 10:15 KST - GO100 #303 수익성 
+- finalize: pending

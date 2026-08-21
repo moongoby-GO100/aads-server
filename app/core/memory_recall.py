@@ -72,8 +72,9 @@ def _sanitize_key(key: str) -> str:
 
 
 def _normalize_project(project: Optional[str]) -> Optional[str]:
-    """#23: project 값 항상 대문자로 정규화."""
-    return project.upper().strip() if project else None
+    """프로젝트 저장/조회 키를 중앙 설정의 정규 키로 정규화."""
+    from app.core.project_config import normalize_project_label
+    return normalize_project_label(project)
 
 
 def _truncate(text: str, char_limit: int) -> str:

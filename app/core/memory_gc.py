@@ -15,6 +15,7 @@ import os
 import uuid
 
 import structlog
+from app.core.project_config import normalize_project_label
 
 logger = structlog.get_logger(__name__)
 
@@ -331,7 +332,7 @@ async def _generate_project_snapshots(conn) -> int:
         )
 
         for p_row in projects:
-            project = p_row["project"]
+            project = normalize_project_label(p_row["project"])
             # 프로젝트의 최근 사실 가져오기
             recent = await conn.fetch(
                 """
@@ -464,7 +465,7 @@ async def sleep_time_consolidation(pool) -> dict:
 
         # ── C1: 프로젝트별 인사이트 생성 (별도 커넥션으로 LLM 호출) ──
         for idx, p_row in enumerate(projects):
-            project = p_row["project"]
+            project = normalize_project_label(p_row["project"])
             try:
                 async with pool.acquire() as conn_insight:
                     insights_count = await _generate_project_insights(conn_insight, project)

@@ -257,7 +257,22 @@ def parse_bank_portal_html_with_diagnostics(
 BANK_PORTAL_URLS: dict[str, str] = {
     "shinhan_business": "https://bank.shinhan.com/rib/easy/index.jsp",
     "ibk_business": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+    "088": "https://bank.shinhan.com/rib/easy/index.jsp",
+    "003": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
 }
+
+
+def _infer_bank_service_code(bank_code: str, bank_name: str, institution_code: str) -> str:
+    for value in (institution_code, bank_code):
+        normalized = str(value or "").strip().lower()
+        if normalized in BANK_PORTAL_URLS:
+            return normalized
+    normalized_name = str(bank_name or "").strip().lower()
+    if "신한" in normalized_name:
+        return "shinhan_business"
+    if "ibk" in normalized_name or "기업" in normalized_name:
+        return "ibk_business"
+    return ""
 
 
 async def collect_bank_via_browser_session_async(
@@ -287,13 +302,20 @@ async def collect_bank_via_browser_session_async(
     account_id = str(account.get("id") or "").strip()
     institution_code = str(account.get("institution_code") or "").strip()
 
+    inferred_service_code = _infer_bank_service_code(bank_code, bank_name, institution_code)
     if not portal_url:
-        portal_url = BANK_PORTAL_URLS.get(institution_code) or BANK_PORTAL_URLS.get(bank_code) or ""
+        portal_url = (
+            BANK_PORTAL_URLS.get(institution_code)
+            or BANK_PORTAL_URLS.get(bank_code)
+            or BANK_PORTAL_URLS.get(inferred_service_code)
+            or ""
+        )
 
     safe_diagnostics: dict[str, str] = {
         "auth_mode": "pc_agent_browser",
         "connector": "bank_browser",
         "bank_code": bank_code,
+        "institution_code": institution_code or inferred_service_code,
         "bank_account_id": account_id,
         "browser_work_key": browser_work_key,
     }
