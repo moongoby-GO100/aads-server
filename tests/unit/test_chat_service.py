@@ -103,6 +103,15 @@ def test_normalize_pipeline_runner_intent_keeps_runner_notifications_hidden():
     assert chat_service._normalize_final_assistant_intent("pipeline_runner", content) == "pipeline_runner"
 
 
+def test_normalize_pipeline_runner_intent_keeps_long_report_with_runner_id_visible():
+    content = (
+        "원인 분석 결과입니다. 실제 응답 버블은 DB에 저장됐지만 숨김 처리됐습니다. "
+        "관련 작업 runner-12345678 상태와 Pipeline Runner 로그를 근거로 조치했습니다."
+    )
+
+    assert chat_service._normalize_final_assistant_intent("pipeline_runner", content) == "execute"
+
+
 def test_fast_response_mode_skips_completion_contract():
     assert chat_service._should_enforce_completion_contract("fast") is False
     assert chat_service._should_enforce_completion_contract("quality") is True

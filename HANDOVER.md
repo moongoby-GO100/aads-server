@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-08-21 09:05 KST - Chat response bubble hidden false-positive fix
+
+- Trigger: CEO reported that the assistant response bubble disappeared in `45249276-83a1-42ca-b58d-d5f1737a388b` and the issue was recurring across sessions.
+- Root cause:
+  - The latest missing assistant message was saved with `intent='pipeline_runner'`, `model_used='gpt-5.6-sol'`, length 12,198, and `is_hidden=true`.
+  - `_looks_like_runner_notification()` treated any body mention of `runner-` / Pipeline Runner as a runner notification, so long CEO-facing reports routed through the autonomous runner path could remain `pipeline_runner`.
+  - The DB `set_chat_message_is_hidden()` trigger hid all `pipeline_runner` rows, including real model-generated reports.
+- Changes:
+  - `app/services/chat_service.py`: narrowed runner-notification detection to runner headers and short notification markers only.
+  - `migrations/129_chat_hidden_pipeline_runner_report_fix.sql`: updated `is_hidden` trigger so long model-generated `pipeline_runner` reports remain visible, while true runner/system notifications stay hidden.
+  - `tests/unit/test_chat_service.py`: added coverage for long reports that mention `runner-...` and Pipeline Runner in the body.
+- Runtime DB action:
+  - Applied migration 129 directly to `aads-postgres`.
+  - Backfilled 6 false-positive `pipeline_runner` assistant reports to `is_hidden=false`.
+- Verification:
+  - Hidden long model-generated `pipeline_runner` reports after fix: 0.
+  - Specific missing message `2109872b-3acc-4f95-aa37-ae9a8e855ae8`: `is_hidden=false`.
+  - `docker exec aads-server python -m pytest tests/unit/test_chat_service.py -q` passed: 60 passed, 1 warning.
+  - `python3 -m py_compile app/services/chat_service.py` passed on host; `docker exec aads-server python -m py_compile /app/app/services/chat_service.py` passed in container.
+- Remaining:
+  - Code changes are not deployed yet because the repo still has an unrelated dirty `docs/CHANGELOG-go100-direct.md`. Runtime recurrence is already blocked by the applied DB trigger.
+
 ## 2026-08-21 08:53 KST - Yeoljeong auto-collect hard attempt timeout
 
 - Trigger: The single-run `yeoljeong-finance-worker` still stayed in `running` for Coupang Eats after the browser command timeout caps, so the attempt-level timeout needed a hard kill boundary.

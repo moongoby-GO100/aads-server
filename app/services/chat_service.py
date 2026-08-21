@@ -196,19 +196,35 @@ _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", N
 
 
 def _looks_like_runner_notification(content: str) -> bool:
-    text = str(content or "")
-    runner_markers = (
+    text = str(content or "").strip()
+    if not text:
+        return False
+
+    # Only hide actual runner system notifications. CEO-facing final reports often
+    # mention runner ids or Pipeline Runner in the body and must remain visible.
+    head = text[:240]
+    runner_headers = (
         "[Pipeline Runner]",
         "[Runner]",
-        "pipeline_runner_approve",
-        "runner-",
-        "[Claude Code 작업 완료]",
+        "**[Pipeline Runner",
+        "**[CEO 승인 요청]",
+        "**[Claude Code 작업 완료]",
         "[CEO 승인 요청]",
+        "[Claude Code 작업 완료]",
+    )
+    if any(marker in head for marker in runner_headers):
+        return True
+
+    short_runner_markers = (
+        "pipeline_runner_approve",
         "검수 요청",
         "검수 실패",
         "재작업 완료",
     )
-    return any(marker in text for marker in runner_markers)
+    if len(text) <= 800 and any(marker in text for marker in short_runner_markers):
+        return True
+
+    return False
 
 
 def _normalize_final_assistant_intent(intent: Optional[str], content: str) -> Optional[str]:
