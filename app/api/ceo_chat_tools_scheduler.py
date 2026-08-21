@@ -11,6 +11,7 @@ CEO 채팅에서 예약 작업을 추가/삭제/조회.
 from __future__ import annotations
 
 import copy
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,40 @@ def set_scheduler(sched):
 
 def get_scheduler():
     return _scheduler
+
+
+def _execute_scheduled_job_sync(job_id: str, action_type: str, action_config: Dict[str, Any]):
+    asyncio.run(_execute_scheduled_job(job_id, action_type, action_config))
+
+
+def _ensure_scheduler():
+    """Return an active scheduler, creating a tool-local fallback if needed."""
+    global _scheduler
+    if _scheduler:
+        return _scheduler
+
+    try:
+        from app.main import app
+
+        scheduler = getattr(getattr(app, "state", None), "scheduler", None)
+        if scheduler:
+            _scheduler = scheduler
+            return _scheduler
+    except Exception:
+        pass
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        scheduler = BackgroundScheduler(timezone="Asia/Seoul")
+        setattr(scheduler, "_aads_tool_local_scheduler", True)
+        scheduler.start()
+        _scheduler = scheduler
+        logger.warning("schedule_task_lazy_scheduler_started")
+        return _scheduler
+    except Exception as exc:
+        logger.warning("schedule_task_lazy_scheduler_failed: %s", exc)
+        return None
 
 
 async def _execute_scheduled_job(job_id: str, action_type: str, action_config: Dict[str, Any]):
@@ -166,7 +201,8 @@ async def schedule_task(
         report_to_session: False면 세션 자동보고 비활성화
         trigger_session_reaction: 세션 자동보고 후 해당 세션 AI 후속 반응 트리거
     """
-    if not _scheduler:
+    scheduler = _ensure_scheduler()
+    if not scheduler:
         return {"error": "스케줄러가 초기화되지 않았습니다"}
 
     if not name or not name.strip():
@@ -201,11 +237,16 @@ async def schedule_task(
     effective_action_config["trigger_session_reaction"] = effective_trigger_session_reaction
 
     # 기존 작업 중복 체크
-    existing = _scheduler.get_job(job_id)
+    existing = scheduler.get_job(job_id)
     if existing:
         return {"error": f"이름 '{name}'의 작업이 이미 존재합니다. 삭제 후 다시 등록하세요."}
 
     try:
+        job_func = (
+            _execute_scheduled_job_sync
+            if getattr(scheduler, "_aads_tool_local_scheduler", False)
+            else _execute_scheduled_job
+        )
         if schedule_type == "cron":
             from apscheduler.triggers.cron import CronTrigger
             # KST → UTC 변환 (KST = UTC+9)
@@ -214,8 +255,8 @@ async def schedule_task(
             day_of_week = schedule_config.get("day_of_week", "mon-fri")
             hour_utc = (hour_kst - 9) % 24
 
-            _scheduler.add_job(
-                _execute_scheduled_job,
+            scheduler.add_job(
+                job_func,
                 CronTrigger(
                     hour=hour_utc, minute=minute,
                     day_of_week=day_of_week, timezone="UTC"
@@ -231,8 +272,8 @@ async def schedule_task(
             if not minutes and not hours:
                 return {"error": "interval에는 minutes 또는 hours가 필요합니다"}
 
-            _scheduler.add_job(
-                _execute_scheduled_job,
+            scheduler.add_job(
+                job_func,
                 "interval",
                 minutes=minutes if minutes else hours * 60,
                 args=[job_id, action_type, effective_action_config],
@@ -244,8 +285,8 @@ async def schedule_task(
             delay = schedule_config.get("delay_minutes", 1)
             run_time = datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(minutes=delay)
 
-            _scheduler.add_job(
-                _execute_scheduled_job,
+            scheduler.add_job(
+                job_func,
                 "date",
                 run_date=run_time,
                 args=[job_id, action_type, effective_action_config],
@@ -272,34 +313,27 @@ async def schedule_task(
 
 async def unschedule_task(name: str) -> Dict[str, Any]:
     """예약 작업 삭제."""
-    if not _scheduler:
+    scheduler = _ensure_scheduler()
+    if not scheduler:
         return {"error": "스케줄러가 초기화되지 않았습니다"}
 
     job_id = f"user_{name.strip().replace(' ', '_')}"
-    job = _scheduler.get_job(job_id)
+    job = scheduler.get_job(job_id)
     if not job:
         return {"error": f"작업 '{name}' (id={job_id})을 찾을 수 없습니다"}
 
-    _scheduler.remove_job(job_id)
+    scheduler.remove_job(job_id)
     logger.info(f"unschedule_task: removed | job={job_id}")
     return {"status": "removed", "job_id": job_id, "name": name}
 
 
 async def list_scheduled_tasks() -> Dict[str, Any]:
     """등록된 예약 작업 목록 조회."""
-    global _scheduler
-    if not _scheduler:
-        # fallback: main.py의 app state에서 scheduler 가져오기 시도
-        try:
-            from app.main import app
-            if hasattr(app, 'state') and hasattr(app.state, 'scheduler'):
-                _scheduler = app.state.scheduler
-        except Exception:
-            pass
-    if not _scheduler:
+    scheduler = _ensure_scheduler()
+    if not scheduler:
         return {"error": "스케줄러가 초기화되지 않았습니다. 서버 재시작 후 다시 시도하세요."}
 
-    jobs = _scheduler.get_jobs()
+    jobs = scheduler.get_jobs()
     result = []
     for job in jobs:
         next_run = job.next_run_time
