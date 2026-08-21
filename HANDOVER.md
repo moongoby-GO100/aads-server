@@ -7897,3 +7897,25 @@
 - Added the account/channel/data-type completion matrix endpoint and architecture policy document.
 - Verification: targeted `py_compile`, focused challenge tests, and `git diff --check` should be rerun after this recovery merge. Real portal CAPTCHA/OTP and PC Agent resume behavior remain unverified in this workspace.
 - Commit/push/deploy were not performed in the failed Runner step.
+
+## 2026-08-21 18:24 KST - Chat contextual follow-up intent hardening
+
+- Request: Apply the recommended fix for cases where short follow-up commands such as "즉시 권장조치 진행해" lost the previous assistant context and were routed as casual chat.
+- Findings:
+  - `reply_to_id` quote injection already existed, but short follow-up commands without `reply_to_id` still depended on the classifier and could be cached/routed as `casual`.
+  - Prompt provenance recorded history counts, but did not record whether a context-follow-up override was applied.
+- Changes:
+  - Added deterministic `_contextual_followup_override()` in `app/services/intent_router.py`.
+  - Short action follow-ups after an actionable assistant report (`P0/P1`, 권장 조치, 코드, 패치, 배포, 테스트, 검증, etc.) now route to `code_modify` before Redis cache or LLM classification.
+  - Short status follow-ups after report/status assistant context route to `status_check`.
+  - `app/services/chat_service.py` now records `reply_to_id`, current user message id, recent raw history ids, and `contextual_followup_override` in prompt provenance `context_policy`.
+  - Added unit coverage for action/status contextual follow-up overrides.
+- Verification:
+  - `docker exec aads-server pytest -q tests/unit/test_intent_context_followups.py tests/unit/test_chat_service.py::test_actionable_quoted_instruction_is_promoted_from_missed_reply_complaint tests/unit/test_chat_service.py::test_strip_internal_continuation_context_extracts_instruction_from_reply_quote_wrapper` succeeded: 6 passed, 1 warning.
+  - `python3 -m py_compile app/services/intent_router.py app/services/chat_service.py` succeeded.
+  - `docker exec aads-server python -m py_compile app/services/intent_router.py app/services/chat_service.py` succeeded.
+  - `git diff --check -- app/services/intent_router.py app/services/chat_service.py tests/unit/test_intent_context_followups.py` succeeded.
+  - Host pytest failed because host Python lacks `structlog`/`fastapi`; container pytest is the valid app-env verification.
+- Remaining:
+  - Commit/push/deploy were not performed in this step.
+  - Existing dirty docs (`docs/CHANGELOG-*.md`) were preserved and not touched.

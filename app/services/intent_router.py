@@ -244,6 +244,19 @@ COMMAND_OVERRIDE_RULES: dict[str, tuple[str, ...]] = {
 
 COMMAND_SUFFIX_RULES = ("하라", "해라", "해봐", "해줘", "하고", "해서", "하라고")
 INTENT_META_RULES = ("인텐트", "인턴트", "intent", "라우팅", "오분류", "분류")
+CONTEXT_FOLLOWUP_ACTION_MARKERS = (
+    "진행", "진행해", "계속", "이어서", "조치", "조치해", "구현", "구현해",
+    "반영", "반영해", "적용", "적용해", "수정", "수정해", "처리", "처리해",
+    "해줘", "하라", "해라", "권장조치", "권장 조치", "다음 단계",
+)
+ACTIONABLE_ASSISTANT_CONTEXT_MARKERS = (
+    "권장 조치", "권장조치", "다음 단계", "p0", "p1", "p2", "수정 파일",
+    "코드", "패치", "구현", "반영", "배포", "커밋", "테스트", "검증",
+    "조치안", "개선안", "러너", "pipeline", "todo", "직접 조치",
+)
+STATUS_ASSISTANT_CONTEXT_MARKERS = (
+    "원인", "근거", "상태", "현황", "로그", "db", "조회", "확인", "보고",
+)
 
 _DEFAULT_INTENT = IntentResult(
     intent="casual",
@@ -469,6 +482,15 @@ async def classify(
     실패 시 키워드 기반 폴백.
     Redis 캐싱: 메시지 앞 100자 SHA256 해시 키(앞 16자), TTL 60초.
     """
+    contextual_override = _contextual_followup_override(message, recent_messages)
+    if contextual_override:
+        logger.info(
+            "intent_contextual_followup_override: %s for '%s'",
+            contextual_override,
+            message[:40],
+        )
+        return _make_result(contextual_override)
+
     # ─── Redis 인텐트 캐시 조회 ──────────────────────────────────────────────
     _cache_key = _build_intent_cache_key(message, workspace, recent_messages)
     try:
@@ -587,6 +609,35 @@ def _is_context_dependent_message(message: str) -> bool:
             "pc에이전트", "pc 에이전트", "내 pc", "pc연결", "pc 연결",
         )
     )
+
+
+def _contextual_followup_override(
+    message: str,
+    recent_messages: list | None = None,
+) -> str | None:
+    """짧은 후속 실행 지시가 casual로 빠지지 않도록 이전 assistant 문맥으로 보정."""
+    msg = (message or "").lower().replace(" ", "").strip()
+    if not msg or not recent_messages or not _is_context_dependent_message(message):
+        return None
+    if not any(marker.replace(" ", "") in msg for marker in CONTEXT_FOLLOWUP_ACTION_MARKERS):
+        return None
+
+    previous_assistant = ""
+    for item in reversed(recent_messages):
+        if item.get("role") == "user" and (item.get("content") or "").strip() == (message or "").strip():
+            continue
+        if item.get("role") == "assistant":
+            previous_assistant = str(item.get("content") or "").lower()
+            break
+    if not previous_assistant:
+        return None
+
+    compact_assistant = previous_assistant.replace(" ", "")
+    if any(marker.replace(" ", "") in compact_assistant for marker in ACTIONABLE_ASSISTANT_CONTEXT_MARKERS):
+        return "code_modify"
+    if any(marker.replace(" ", "") in compact_assistant for marker in STATUS_ASSISTANT_CONTEXT_MARKERS):
+        return "status_check"
+    return None
 
 
 def _build_intent_cache_key(

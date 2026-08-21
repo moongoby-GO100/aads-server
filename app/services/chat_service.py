@@ -8839,7 +8839,7 @@ async def send_message_stream(
 
         # ── 인텐트 분류 + 시맨틱 캐시 + 모순 감지 병렬 실행 ──
         import asyncio as _asyncio_parallel
-        from app.services.intent_router import classify as _classify_fn, get_model_for_override
+        from app.services.intent_router import classify as _classify_fn, get_model_for_override, _contextual_followup_override
         from app.services.contradiction_detector import detect_contradictions as _detect_contradictions
         from app.services.semantic_cache import SemanticCache as _SemanticCache
 
@@ -8868,6 +8868,8 @@ async def send_message_stream(
             except Exception as _cd_err:
                 logger.debug(f"contradiction_detection_skipped: {_cd_err}")
                 return ""
+
+        _contextual_followup_intent = _contextual_followup_override(content, messages)
 
         # 인텐트 분류 + 시맨틱 캐시 + 모순 감지 동시 실행
         _semantic_cache_hit, _contradiction_warning, intent_result = await _asyncio_parallel.gather(
@@ -9600,6 +9602,12 @@ async def send_message_stream(
                 "conversation_history_limit": 200,
                 "cli_resume_policy": "inject compact recent turns, not latest-user-only",
                 "response_mode": response_mode,
+                "reply_to_id": reply_to_id or None,
+                "current_user_message_id": str(_saved_user_message_id) if _saved_user_message_id else None,
+                "latest_raw_history_ids": [
+                    str(m.get("id")) for m in raw_messages[-8:] if m.get("id")
+                ],
+                "contextual_followup_override": _contextual_followup_intent,
             }
             logger.info(
                 f"[PROMPT_COMPILER] compiled assets={len(_prov.get('applied_assets') or [])} "
