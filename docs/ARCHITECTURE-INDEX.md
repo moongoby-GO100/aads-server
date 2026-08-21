@@ -24,7 +24,7 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 | CEO 절대 지시 | `aads-docs/CEO-DIRECTIVES.md` (GitHub raw) | 현행 | 2026-04-21 |
 | 프로젝트 규칙 | `CLAUDE.md` (repo 루트) | 현행 | 상시 |
 | 작업 인수인계 원장 | `docs/HANDOVER.md` (287줄) | 현행 | 2026-08-20 |
-| 아키텍처 지도 | `docs/knowledge/CTO-SYSTEM-MAP.md` | 부분현행 | 2026-05-03 |
+| 아키텍처 지도 | `docs/knowledge/CTO-SYSTEM-MAP.md` | 현행 | 2026-08-21 |
 | 3단계 온보딩 인덱스 | `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md` | 부분현행 | 2026-07-15 |
 
 ## 2. 인프라 · 배포
@@ -94,11 +94,19 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 
 | 문서 | 경로 | 등급 | 갱신일 |
 |------|------|------|--------|
-| 러너 아키텍처 | `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md` | 부분현행 | 2026-07-15 |
+| 러너 아키텍처 | `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md` | 현행 | 2026-08-21 |
 | 러너 API 레퍼런스 | `docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md` | 부분현행 | 2026-07-15 |
 | 러너 감사·개선 | `docs/reports/20260506_RUNNER_AUDIT_REMEDIATION.md` | 이력 | 2026-05-06 |
 
-> 2026-07-31 이후 추가된 `parallel_group` 스코프 락, `actual_changed_files`, deploy preflight 완화는 러너 아키텍처 문서에 미반영이다. 근거는 `docs/HANDOVER.md` 2026-07-31 / 2026-08-20 항목.
+> 2026-08-21 보강으로 `parallel_group` 스코프 락, clean worktree, `actual_changed_files`, deploy preflight 대상 파일 완화, `orphaned_dependency` 리스크가 러너 아키텍처 문서에 반영됐다.
+
+## 5-1. 프로젝트 별칭 레이어
+
+| 문서 | 경로 | 등급 | 갱신일 |
+|------|------|------|--------|
+| 프로젝트 별칭 레이어 | `docs/knowledge/PROJECT-ALIAS-LAYER.md` | 현행 | 2026-08-21 |
+
+> 프로젝트 실행 키/표시명/별칭/display-only 라벨 판정은 `app/core/project_config.py`와 위 문서를 기준으로 한다.
 
 ## 6. OHVIS · 자율 루프 (기획 계열)
 
@@ -135,9 +143,6 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 
 | 우선순위 | 공백 | 영향 |
 |---------|------|------|
-| P0 | `CTO-SYSTEM-MAP.md` 수치 노후(코드 3배 증가 미반영) | 신규 러너가 잘못된 규모 전제로 설계 |
-| P1 | 프로젝트 별칭 레이어(`project_config.resolve_project`) 문서 없음 | 프로젝트 라벨 정규화 규칙이 코드에만 존재 |
-| P1 | 러너 동시성(`parallel_group`/worktree/락) 문서 미반영 | 동시 배포 정책이 HANDOVER 산문에만 존재 |
 | P2 | `aads-docs` repo 아키텍처 문서 3월 고착 | 외부 참조 시 구조 오해 |
 
 ## 폐기·정리 대상

@@ -1,9 +1,53 @@
 # Pipeline Runner 아키텍처 문서
 
 **버전**: v2.0  
-**최종 수정일**: 2026-04-15  
+**최종 수정일**: 2026-08-21
 **작성자**: AADS AI (소스코드 실측 기반)  
 **관련 소스**: `app/api/pipeline_runner.py`, `app/services/pipeline_runner_service.py`, `app/services/code_reviewer.py`, `scripts/pipeline-runner.sh`, `app/services/model_selector.py`
+
+---
+
+## 2026-08-21 운영 보강 요약
+
+> 이 절은 2026-08-21 기준 `scripts/pipeline-runner.sh`와 `app/api/pipeline_runner.py` 실측 보강이다. 기존 본문보다 이 절이 우선한다.
+
+| 영역 | 현행 동작 | 출처 |
+|---|---|---|
+| clean worktree | 로컬 Git 프로젝트는 항상 `/tmp/aads-wt-{job_id}`를 `origin/main`에서 detached worktree로 생성해 실행한다. main workdir fallback은 금지된다. | `scripts/pipeline-runner.sh:prepare_clean_job_worktree()` |
+| worktree 실패 | worktree 생성 실패는 `worktree_create_failed`, 생성 후 dirty는 `worktree_not_clean`, 공간 부족은 `worktree_disk_low`로 기록한다. | `scripts/pipeline-runner.sh` |
+| parallel_group | batch 제출은 미지정 시 `batch-{uuid}`를 자동 부여하고, 같은 그룹은 작업 락 scope를 분리해 병렬 실행을 허용한다. | `app/api/pipeline_runner.py`, `scripts/pipeline-runner.sh` |
+| 작업 락 | Redis work lock은 `project` 단위이며 `parallel_group`이 있으면 `scope={parallel_group}`을 붙인다. | `scripts/pipeline-runner.sh:run_job()` |
+| 배포 락 | 배포 단계는 `/tmp/pipeline-deploy-{project}.lock`에 `flock -w 300`을 걸어 프로젝트별 직렬화한다. | `scripts/pipeline-runner.sh` |
+| deploy preflight | 배포 전 `origin/main`과 ahead/behind가 0이어야 한다. dirty 파일은 대상 파일 기준으로 완화하지만, 대상 파일과 겹치면 차단한다. | `scripts/pipeline-runner.sh:deploy_git_preflight()` |
+| 엄격 모드 | `AADS_DEPLOY_PREFLIGHT_STRICT=1`이면 dirty 완화 없이 main workdir dirty 상태를 차단한다. | `scripts/pipeline-runner.sh` |
+| 의존 차단 | 부모가 `done`이 아니면 자식은 실행되지 않으며, 부모 실패 시 `orphaned_dependency`로 `cancelled` 처리된다. | `app/api/pipeline_runner.py` |
+| 실제 변경 파일 | `actual_changed_files`는 커밋 diff, uncommitted diff, untracked 파일을 합쳐 기록한다. | `scripts/pipeline-runner.sh` |
+| read-only 함정 | 문서 생성 지시라도 러너가 read-only로 판단하고 diff가 비면 `done` 처리될 수 있다. 이 경우 `actual_changed_files=[]`면 main 반영 완료로 보지 않는다. | `scripts/pipeline-runner.sh`, 2026-08-21 러너 사례 |
+
+### 배포 preflight 판정표
+
+| 조건 | 판정 | error_detail |
+|---|---|---|
+| `origin/main` fetch 실패 | 차단 | `deploy_fetch_failed` |
+| `origin/main` ref 없음 | 차단 | `deploy_origin_missing` |
+| `ahead != 0` 또는 `behind != 0` | 차단 | `deploy_preflight_git_state` |
+| strict 모드 + dirty 존재 | 차단 | `deploy_preflight_git_state` |
+| dirty 존재 + 대상 파일 목록 없음 | 차단 | `deploy_preflight_git_state` |
+| dirty 파일과 job 대상 파일 겹침 | 차단 | `deploy_preflight_file_conflict` |
+| dirty 파일이 job 대상과 겹치지 않음 | 허용 | 완화 통과 |
+
+### depends_on 운영 리스크
+
+배치 작업을 일렬 의존성으로 묶으면 첫 작업의 preflight 실패가 하위 작업 전체를 `orphaned_dependency`로 취소시킨다. 같은 파일을 만지는 작업만 `depends_on`으로 묶고, 서로 다른 문서·모듈은 `parallel_group`만 공유하는 편이 낫다.
+
+### 완료 판정 기준
+
+| 항목 | 완료 기준 |
+|---|---|
+| 코드/문서 변경 | `actual_changed_files`가 비어 있지 않고, 해당 파일이 main 또는 origin/main에서 확인된다. |
+| read-only 작업 | 결과 출력만 필요한 작업이면 `actual_changed_files=[]`도 정상이다. 파일 생성/수정 요청이면 미완료다. |
+| 배포 작업 | `status=done`, `review_feedback`의 배포 완료 문구, health/API 검증이 모두 필요하다. |
+| 승인 대기 | `awaiting_approval` 0건이어도 `display_status`가 오래된 화면 캐시일 수 있으므로 `pipeline_runner_status` 재조회가 기준이다. |
 
 ---
 
