@@ -775,6 +775,49 @@ def test_run_sync_with_timeout_splits_multi_service_attempts(monkeypatch):
     assert [item["service"] for item in summary["summary"]] == ["baemin", "coupangeats"]
 
 
+def test_run_sync_with_timeout_applies_total_deadline_to_multi_service(monkeypatch):
+    calls = []
+    times = iter([100.0, 100.0, 103.1])
+
+    def fake_monotonic():
+        return next(times)
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        service = argv[argv.index("--services") + 1]
+        return auto_collect.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=(
+                '{"summary":[{"service":"'
+                + service
+                + '","status":"succeeded","error_code":"","counts":{"sales":1}}]}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(auto_collect.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(auto_collect.subprocess, "run", fake_run)
+    monkeypatch.setattr(auto_collect, "_mark_timeout_statuses", lambda *args, **kwargs: None)
+
+    summary = auto_collect._run_sync_with_timeout(
+        {
+            "services": ["baemin", "coupangeats"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-21",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+        3,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["timeout"] == 3
+    assert [item["service"] for item in summary["summary"]] == ["baemin", "coupangeats"]
+    assert summary["summary"][1]["error_code"] == "ATTEMPT_TIMEOUT"
+
+
 def test_run_sync_with_timeout_marks_attempt_timeout(monkeypatch):
     marked = []
 

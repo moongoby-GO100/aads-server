@@ -769,11 +769,24 @@ def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeou
         return _run_child_collect_with_timeout(payload, timeout_seconds)
 
     summaries: list[dict[str, Any]] = []
+    deadline = time.monotonic() + timeout_seconds
     for service in services:
+        remaining_seconds = int(deadline - time.monotonic())
+        if remaining_seconds <= 0:
+            service_payload = dict(payload)
+            service_payload["services"] = [service]
+            service_payload["skip_financial_accounts"] = True
+            _mark_timeout_statuses(
+                service_payload,
+                timeout_seconds,
+                datetime.now(KST).isoformat(timespec="seconds"),
+            )
+            summaries.append(_summary(_timeout_result(service_payload, timeout_seconds)))
+            continue
         service_payload = dict(payload)
         service_payload["services"] = [service]
         service_payload["skip_financial_accounts"] = True
-        summaries.append(_run_child_collect_with_timeout(service_payload, timeout_seconds))
+        summaries.append(_run_child_collect_with_timeout(service_payload, remaining_seconds))
     return _merge_attempt_summaries(payload, summaries)
 
 
