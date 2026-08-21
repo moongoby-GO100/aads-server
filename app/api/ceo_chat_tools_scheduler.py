@@ -6,10 +6,11 @@ CEO 채팅에서 예약 작업을 추가/삭제/조회.
 - APScheduler (main.py에서 기동) 인스턴스를 공유
 - 작업 유형: cron(반복), interval(주기), once(1회)
 - 실행 내용: run_remote_command 기반 원격 명령 또는 URL 헬스체크
-- 결과는 Telegram으로 알림
+- 결과는 Telegram 및 연결된 채팅 세션으로 알림
 """
 from __future__ import annotations
 
+import copy
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -33,8 +34,22 @@ def get_scheduler():
 
 async def _execute_scheduled_job(job_id: str, action_type: str, action_config: Dict[str, Any]):
     """예약 작업 실행 핸들러."""
+    report_session_id = ""
+    report_enabled = True
+    action_config = dict(action_config or {})
+    callback_meta = {
+        "job_id": job_id,
+        "action_type": action_type,
+        "schedule_callback": True,
+    }
     try:
         result = ""
+        report_session_id = str(
+            action_config.pop("report_session_id", "")
+            or action_config.pop("session_report_session_id", "")
+            or action_config.pop("chat_session_id", "")
+        ).strip()
+        report_enabled = bool(action_config.pop("report_to_session", True))
 
         if action_type == "remote_command":
             from app.api.ceo_chat_tools import tool_run_remote_command
@@ -61,6 +76,23 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
                 r = await client.get(url)
                 result = f"URL {url} → {r.status_code} ({len(r.content)} bytes)"
 
+        if report_enabled and report_session_id:
+            try:
+                from app.services.session_reporter import post_session_report
+
+                await post_session_report(
+                    session_id=report_session_id,
+                    title=f"예약 작업 완료: {job_id}",
+                    body=str(result)[:4000],
+                    status="done",
+                    source="schedule_task",
+                    project=str(action_config.get("project") or "AADS"),
+                    metadata=callback_meta,
+                    intent="auto_report",
+                )
+            except Exception as report_err:
+                logger.warning("scheduler_session_report_failed: job=%s err=%s", job_id, report_err)
+
         # 텔레그램 알림
         try:
             from app.services.telegram_bot import get_telegram_bot
@@ -75,6 +107,22 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
 
     except Exception as e:
         logger.error(f"scheduled_job_failed: job={job_id} error={e}")
+        if report_enabled and report_session_id:
+            try:
+                from app.services.session_reporter import post_session_report
+
+                await post_session_report(
+                    session_id=report_session_id,
+                    title=f"예약 작업 실패: {job_id}",
+                    body=str(e)[:4000],
+                    status="error",
+                    source="schedule_task",
+                    project=str(action_config.get("project") or "AADS"),
+                    metadata=callback_meta,
+                    intent="auto_report",
+                )
+            except Exception as report_err:
+                logger.warning("scheduler_session_report_error_failed: job=%s err=%s", job_id, report_err)
         # 실패도 알림
         try:
             from app.services.telegram_bot import get_telegram_bot
@@ -91,6 +139,8 @@ async def schedule_task(
     action_type: str,
     action_config: Dict[str, Any],
     schedule_config: Optional[Dict[str, Any]] = None,
+    report_session_id: str = "",
+    report_to_session: bool = True,
 ) -> Dict[str, Any]:
     """
     예약 작업 등록.
@@ -104,6 +154,8 @@ async def schedule_task(
             - cron: {hour, minute, day_of_week} (KST 기준)
             - interval: {minutes} 또는 {hours}
             - once: {delay_minutes} (지금부터 N분 후 1회)
+        report_session_id: 실행 결과를 자동 보고할 chat_sessions.id
+        report_to_session: False면 세션 자동보고 비활성화
     """
     if not _scheduler:
         return {"error": "스케줄러가 초기화되지 않았습니다"}
@@ -122,6 +174,10 @@ async def schedule_task(
 
     job_id = f"user_{name.strip().replace(' ', '_')}"
     schedule_config = schedule_config or {}
+    effective_action_config = copy.deepcopy(action_config or {})
+    if report_session_id:
+        effective_action_config["report_session_id"] = report_session_id
+    effective_action_config["report_to_session"] = bool(report_to_session)
 
     # 기존 작업 중복 체크
     existing = _scheduler.get_job(job_id)
@@ -143,7 +199,7 @@ async def schedule_task(
                     hour=hour_utc, minute=minute,
                     day_of_week=day_of_week, timezone="UTC"
                 ),
-                args=[job_id, action_type, action_config],
+                args=[job_id, action_type, effective_action_config],
                 id=job_id,
             )
             desc = f"cron: {day_of_week} {hour_kst:02d}:{minute:02d} KST"
@@ -158,7 +214,7 @@ async def schedule_task(
                 _execute_scheduled_job,
                 "interval",
                 minutes=minutes if minutes else hours * 60,
-                args=[job_id, action_type, action_config],
+                args=[job_id, action_type, effective_action_config],
                 id=job_id,
             )
             desc = f"interval: {'매 ' + str(minutes) + '분' if minutes else '매 ' + str(hours) + '시간'}"
@@ -171,7 +227,7 @@ async def schedule_task(
                 _execute_scheduled_job,
                 "date",
                 run_date=run_time,
-                args=[job_id, action_type, action_config],
+                args=[job_id, action_type, effective_action_config],
                 id=job_id,
             )
             desc = f"once: {run_time.strftime('%Y-%m-%d %H:%M KST')}"
@@ -183,7 +239,9 @@ async def schedule_task(
             "name": name,
             "schedule": desc,
             "action_type": action_type,
-            "action_config": action_config,
+            "action_config": effective_action_config,
+            "report_session_id": report_session_id,
+            "report_to_session": bool(report_to_session and report_session_id),
         }
 
     except Exception as e:

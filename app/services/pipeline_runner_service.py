@@ -296,30 +296,30 @@ class PipelineCJob:
             logger.warning(f"pipeline_c | job={self.job_id} | _post_to_chat 건너뜀: chat_session_id 없음 (content={content[:80]}...)")
             return
         try:
-            from app.core.db_pool import get_pool
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        INSERT INTO chat_messages
-                            (session_id, role, content, model_used, intent, cost,
-                             tokens_in, tokens_out, attachments, sources, tools_called)
-                        VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
-                        """,
-                        self.chat_session_id,
-                        role,
-                        content,
-                        _REVIEW_MODEL if role == "assistant" else None,
-                        "pipeline_c",
-                        Decimal("0"),
-                        0, 0,
-                    )
-                    await conn.execute(
-                        "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1::uuid",
-                        self.chat_session_id,
-                    )
-            logger.debug(f"pipeline_c_chat_posted job={self.job_id} role={role} len={len(content)}")
+            if role != "assistant":
+                logger.warning("pipeline_c_chat_post_skipped_non_assistant job=%s role=%s", self.job_id, role)
+                return
+            from app.services.session_reporter import post_session_report
+
+            result = await post_session_report(
+                session_id=self.chat_session_id,
+                title=f"Pipeline Runner: {self.job_id}",
+                body=content,
+                status="running" if self.status in {"running", "queued"} else self.status,
+                source="pipeline_runner",
+                project=self.project,
+                metadata={"job_id": self.job_id, "phase": self.phase, "cycle": self.cycle},
+                model_used=_REVIEW_MODEL,
+                intent="pipeline_c",
+            )
+            if result.posted:
+                logger.debug(f"pipeline_c_chat_posted job={self.job_id} role={role} len={len(content)}")
+            else:
+                logger.warning(
+                    "pipeline_c_chat_post_skipped job=%s reason=%s",
+                    self.job_id,
+                    result.skipped_reason,
+                )
         except Exception as e:
             logger.warning(f"pipeline_c_chat_post_error job={self.job_id}: {e}")
 

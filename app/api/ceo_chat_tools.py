@@ -1574,6 +1574,14 @@ TOOL_DEFINITIONS: List[Dict] = [
                         "once: {delay_minutes} (N분 후 1회)"
                     ),
                 },
+                "report_to_session": {
+                    "type": "boolean",
+                    "description": "실행 결과를 현재 채팅 세션에 자동 보고할지 여부. 기본 true.",
+                },
+                "report_session_id": {
+                    "type": "string",
+                    "description": "자동 보고 대상 세션 ID. 생략하면 현재 채팅 세션에 묶습니다.",
+                },
             },
             "required": ["name", "schedule_type", "action_type", "action_config"],
         },
@@ -5477,12 +5485,16 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
     # ── 스케줄러 도구 ─────────────────────────────────────────────────────
     elif name == "schedule_task":
         from app.api.ceo_chat_tools_scheduler import schedule_task
+        _schedule_type = params.get("schedule_type") or params.get("schedule") or "once"
+        _report_session_id = str(params.get("report_session_id") or chat_session_id or "").strip()
         result = await schedule_task(
             name=params.get("name", ""),
-            schedule=params.get("schedule", ""),
-            action_type=params.get("action_type", "tool_call"),
+            schedule_type=_schedule_type,
+            action_type=params.get("action_type", "health_check"),
             action_config=params.get("action_config", {}),
-            description=params.get("description", ""),
+            schedule_config=params.get("schedule_config", {}),
+            report_session_id=_report_session_id,
+            report_to_session=bool(params.get("report_to_session", True)),
         )
         return json.dumps(result, ensure_ascii=False, default=str)
     elif name == "unschedule_task":

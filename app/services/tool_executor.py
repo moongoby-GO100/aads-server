@@ -4349,6 +4349,8 @@ class ToolExecutor:
                 action_type=inp.get("action_type", ""),
                 action_config=inp.get("action_config", {}),
                 schedule_config=inp.get("schedule_config"),
+                report_session_id=str(inp.get("report_session_id") or inp.get("chat_session_id") or "").strip(),
+                report_to_session=bool(inp.get("report_to_session", True)),
             )
         except Exception as e:
             return {"error": str(e)}

@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-22 07:00 KST - Session auto-report callback module
+
+- Trigger: CEO asked whether scheduled/job results can automatically report back into the originating chat session and be reusable across projects/sessions.
+- Changes:
+  - Added `app/services/session_reporter.py` as a reusable durable chat-session reporting module.
+  - `schedule_task` now binds the current `chat_session_id` by default and posts scheduled job success/failure results into the same chat session, while preserving Telegram notification.
+  - `app/services/tool_executor.py` now forwards `report_session_id`/`report_to_session` for scheduled jobs invoked through the generic tool executor path.
+  - `pipeline_runner_service.PipelineCJob._post_to_chat()` now uses the shared session reporter instead of duplicating raw `chat_messages` insert logic.
+  - Added `tests/unit/test_session_reporter.py` for report content sanitization, message insert/session count update, missing-session skip, and scheduler session binding.
+- Verification:
+  - `python3 -m py_compile app/services/session_reporter.py app/api/ceo_chat_tools_scheduler.py app/api/ceo_chat_tools.py app/services/pipeline_runner_service.py app/services/tool_executor.py tests/unit/test_session_reporter.py` passed.
+  - `pytest -q tests/unit/test_session_reporter.py` passed: 4 passed, 1 existing config warning.
+  - Scoped `git diff --check` for touched code files passed.
+- Not done:
+  - No commit, push, deploy, or service restart in this step.
+  - Full `git diff --check` is still blocked by pre-existing trailing whitespace in dirty `docs/CHANGELOG-go100-direct.md`; that file was not modified by this task.
+
 ## 2026-08-21 18:41 KST - Chat contextual follow-up intent routing deployed, status follow-up guard
 
 - Trigger: CEO asked whether the contextual follow-up fix was in production and requested commit, push, and deploy completion.
