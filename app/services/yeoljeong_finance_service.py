@@ -5098,6 +5098,7 @@ _DELIVERY_LOGIN_SELECTORS = {
     },
     "coupangeats": {
         "username": (
+            "#loginId",
             "input[autocomplete='username']",
             "input[name*='email' i]",
             "input[name*='id' i]",
@@ -5108,6 +5109,7 @@ _DELIVERY_LOGIN_SELECTORS = {
             "input[type='text']",
         ),
         "password": (
+            "#password",
             "input[autocomplete='current-password']",
             "input[name*='password' i]",
             "input[name*='pw' i]",
@@ -5670,6 +5672,45 @@ async def _delivery_bridge_click_login(page: Any, service: str = "") -> bool:
             return True
         except Exception:
             continue
+    try:
+        return bool(
+            await page.evaluate(
+                r"""
+                () => {
+                  const visible = element => {
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.visibility !== 'hidden'
+                      && style.display !== 'none'
+                      && rect.width > 0
+                      && rect.height > 0;
+                  };
+                  const buttons = [
+                    ...document.querySelectorAll('button,input[type="submit"],input[type="button"],a,[role="button"]')
+                  ];
+                  const target = buttons.find(element => {
+                    if (!visible(element) || element.disabled) return false;
+                    const text = String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
+                    return element.type === 'submit'
+                      || text.includes('로그인')
+                      || text.includes('login')
+                      || text.includes('sign in');
+                  });
+                  if (target) {
+                    target.click();
+                    return true;
+                  }
+                  const password = [...document.querySelectorAll('input[type="password"]')].find(visible);
+                  if (!password) return false;
+                  password.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', code: 'Enter'}));
+                  password.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter', code: 'Enter'}));
+                  return true;
+                }
+                """
+            )
+        )
+    except Exception:
+        return False
     return False
 
 

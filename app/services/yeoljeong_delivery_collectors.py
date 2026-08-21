@@ -112,6 +112,7 @@ LOGIN_SELECTOR_CONFIG: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "coupangeats": {
         "username": (
+            "#loginId",
             "input[autocomplete='username']",
             "input[name*='email' i]",
             "input[name*='id' i]",
@@ -122,6 +123,7 @@ LOGIN_SELECTOR_CONFIG: dict[str, dict[str, tuple[str, ...]]] = {
             "input[type='text']",
         ),
         "password": (
+            "#password",
             "input[autocomplete='current-password']",
             "input[name*='password' i]",
             "input[name*='pw' i]",
