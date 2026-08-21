@@ -2575,10 +2575,8 @@ async def resume_interrupted(
             )
             _rc = (_cap_row["retry_count"] if _cap_row else 0) or 0
             _err = (_cap_row["error_message"] if _cap_row else "") or ""
-            # Manual resume is an explicit user action. Keep it capped, but align
-            # the pre-check with the UPDATE below so retry_count=5 can still be
-            # recovered instead of being rejected before the 8-attempt ceiling.
-            if _rc >= 8:
+            _resume_cap_boundary = _rc == 5 and _err == "execution_resume_attempt_limit_exceeded"
+            if _rc > 5 or (_rc >= 5 and not _resume_cap_boundary):
                 return {"resumed": False, "message": f"재시도 한도 초과 (retry_count={_rc}). 새 메시지를 보내주세요."}
             await conn2.execute(
                 """

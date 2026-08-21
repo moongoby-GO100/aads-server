@@ -5169,6 +5169,3 @@ fro
 
 ## [2026-08-21 10:19:44 KST] [aads-server] app/services/tool_executor.py
 - Chat-Direct 수정: patch:         if target_device is None and nor→        if target_device is None and nor
-
-## [2026-08-21 11:01:54 KST] [aads-server] docs/ARCHITECTURE-INDEX.md
-- Chat-Direct 수정: write: docs/ARCHITECTURE-INDEX.md
