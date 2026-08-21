@@ -81,13 +81,14 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 
 | 문서 | 경로 | 등급 | 갱신일 |
 |------|------|------|--------|
+| 5-Layer 프롬프트 거버넌스 정본 | `docs/knowledge/5-LAYER-PROMPT-GOVERNANCE.md` | 현행 | 2026-08-21 |
 | 시스템 프롬프트 아키텍처 | `docs/SYSTEM_PROMPT_ARCHITECTURE.md` | 노후 | 2026-03-31 |
 | 프롬프트 최적화 리포트 | `docs/SYSTEM_PROMPT_OPTIMIZATION_REPORT.md` | 이력 | 2026-03-31 |
 | 메모리 진화 아키텍처 | `docs/MEMORY_EVOLUTION_ARCHITECTURE.md` | 노후 | 2026-03-29 |
 | 세션 거버넌스 v2 (최종/부록) | `reports/20260423_session_governance_architecture_v2_final.md`, `..._v2_1_addendum.md` | 부분현행 | 2026-04-23 |
 | AADS 전용 지식 | `docs/knowledge/AADS-KNOWLEDGE.md` | 노후 | 2026-04-24 |
 
-> 현재 운영 중인 5-Layer 프롬프트(L1~L5 + `prompt_assets` + `compiled_prompt_provenance`) 구조는 위 문서 어디에도 정본 기술서가 없다. **문서 공백 P0**.
+> 현재 운영 중인 5-Layer 프롬프트(L1~L5 + `prompt_assets` + `compiled_prompt_provenance`) 구조는 위 정본 기술서를 기준으로 판정한다.
 
 ## 5. Pipeline Runner
 
@@ -134,7 +135,6 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 
 | 우선순위 | 공백 | 영향 |
 |---------|------|------|
-| P0 | 5-Layer 프롬프트 거버넌스 정본 기술서 없음 | L3 누락·provenance 판정 시 매번 코드/DB 역추적 |
 | P0 | `CTO-SYSTEM-MAP.md` 수치 노후(코드 3배 증가 미반영) | 신규 러너가 잘못된 규모 전제로 설계 |
 | P1 | 프로젝트 별칭 레이어(`project_config.resolve_project`) 문서 없음 | 프로젝트 라벨 정규화 규칙이 코드에만 존재 |
 | P1 | 러너 동시성(`parallel_group`/worktree/락) 문서 미반영 | 동시 배포 정책이 HANDOVER 산문에만 존재 |

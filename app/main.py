@@ -1241,29 +1241,36 @@ async def lifespan(app: FastAPI):
         return True, "default"
 
     def _selfheal_execution_resume_owner_marker() -> None:
-        """Write the resume owner marker at startup only when it is missing."""
+        """Sync the resume owner marker at startup from the active container file."""
         owner_flag_file = os.getenv("AADS_RESUME_OWNER_FILE", "/tmp/aads_execution_resume_owner")
         active_container_file = os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container")
         expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
-        marker_written = False
+        marker_synced = False
 
         try:
-            if not os.path.exists(owner_flag_file):
-                is_owner = True
-                source = "default"
-                if expected_container:
-                    try:
-                        with open(active_container_file, "r", encoding="utf-8") as fh:
-                            active_container = fh.read().strip()
-                        if active_container:
-                            is_owner = active_container == expected_container
-                            source = "active_file"
-                    except Exception:
-                        source = "default"
+            is_owner = True
+            source = "default"
+            if expected_container:
+                try:
+                    with open(active_container_file, "r", encoding="utf-8") as fh:
+                        active_container = fh.read().strip()
+                    if active_container:
+                        is_owner = active_container == expected_container
+                        source = "active_file"
+                except Exception:
+                    source = "default"
 
+            desired_marker = "true" if is_owner else "false"
+            current_marker = ""
+            try:
+                with open(owner_flag_file, "r", encoding="utf-8") as fh:
+                    current_marker = fh.read().strip().lower()
+            except Exception:
+                current_marker = ""
+            if current_marker != desired_marker:
                 with open(owner_flag_file, "w", encoding="utf-8") as fh:
-                    fh.write("true" if is_owner else "false")
-                marker_written = True
+                    fh.write(desired_marker)
+                marker_synced = True
 
             owner, source = _resolve_execution_resume_owner()
             logger.info(
@@ -1271,7 +1278,7 @@ async def lifespan(app: FastAPI):
                 owner=owner,
                 source=source,
                 container=expected_container or "(unset)",
-                marker_written=marker_written,
+                marker_synced=marker_synced,
             )
         except Exception as exc:
             logger.warning(f"execution_resume_owner_selfheal_failed: {exc}")

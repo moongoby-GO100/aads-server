@@ -22769,3 +22769,204 @@ _EOD_SWE
 ## [2026-08-21 10:18:52 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: - 체결 데이터 보강: signed tick volume과 절대 거래량을→- 체결 데이터 보강: signed tick volume과 절대 거래량을
 - finalize: pending
+
+## [2026-08-21 10:50:39 KST] [GO100] tests/go100/test_scalping_monitor.py
+- Chat-Direct 수정: patch: class TestScalpingPositionScope:
+    def→class TestScalpingPositionScope:
+    def
+- finalize: pending
+
+## [2026-08-21 10:50:52 KST] [GO100] tests/go100/test_scalping_monitor.py
+- Chat-Direct 수정: run_remote_command: sudo -u postgres psql -d kisautotrade -c "SELECT count(DISTINCT stock_code) FROM
+- finalize: pending
+
+## [2026-08-21 10:51:01 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: run_remote_command: sudo -u postgres psql -d kisautotrade -c "SELECT minute_dt FROM go100_kiwoom_min
+- finalize: pending
+
+## [2026-08-21 10:52:10 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: run_remote_command: sudo -u postgres psql -d kisautotrade -c "SELECT n_distinct FROM pg_stats WHERE
+- finalize: pending
+
+## [2026-08-21 11:15:09 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:         and must not place any buy order→        and must not place any buy order
+- finalize: pending
+
+## [2026-08-21 11:15:18 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:              patch.dict(os.environ, {"GO→             patch.dict(os.environ, {"GO
+- finalize: pending
+
+## [2026-08-21 11:16:18 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:         with patch.object(see_mod, "psyc→        with patch.object(see_mod, "psyc
+- finalize: pending
+
+## [2026-08-21 11:17:15 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:              patch("backend.app.services→             patch("backend.app.services
+- finalize: pending
+
+## [2026-08-21 11:23:07 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-21 10:48 KST - GO100 #303 1분봉 →# 2026-08-21 11:20 KST - GO100 #303 1분봉
+- finalize: pending
+
+## [2026-08-21 11:28:59 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:         and must not place any buy order→        and must not place any buy order
+- finalize: pending
+
+## [2026-08-21 11:29:00 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:              patch.dict(os.environ, {"GO→             patch.dict(os.environ, {"GO
+- finalize: pending
+
+## [2026-08-21 11:29:01 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:         with patch.object(see_mod, "psyc→        with patch.object(see_mod, "psyc
+- finalize: pending
+
+## [2026-08-21 11:29:02 KST] [GO100] tests/go100/test_card303_kiwoom_canary_gate_p0.py
+- Chat-Direct 수정: patch:              patch("backend.app.services→             patch("backend.app.services
+- finalize: pending
+
+## [2026-08-21 11:29:59 KST] [GO100] docs/plans/GO100-MA-WAVE-ENGINE-PLAN-20260821.md
+- Chat-Direct 수정: write: docs/plans/GO100-MA-WAVE-ENGINE-PLAN-20260821.md
+- finalize: pending
+
+## [2026-08-21 11:30:03 KST] [GO100] docs/plans/GO100-MA-WAVE-ENGINE-PLAN-20260821.md
+- Chat-Direct 수정: run_remote_command: python3 -c "import psycopg2, backend.app.services.go100.live_trading.scalping_en
+- finalize: pending
+
+## [2026-08-21 11:31:31 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-21 10:48 KST - GO100 #303 1분봉 →# 2026-08-21 11:20 KST - GO100 #303 1분봉
+- finalize: pending
+
+## [2026-08-21 11:41:25 KST] [GO100] backend/app/services/go100/data/realtime_data_gap_filler.py
+- Chat-Direct 수정: write: backend/app/services/go100/data/realtime_data_gap_filler.py
+- finalize: pending
+
+## [2026-08-21 11:41:27 KST] [GO100] scripts/cron/go100_data_gap_filler.sh
+- Chat-Direct 수정: write: scripts/cron/go100_data_gap_filler.sh
+- finalize: pending
+
+## [2026-08-21 11:41:39 KST] [GO100] backend/tests/go100/test_data_gap_filler.py
+- Chat-Direct 수정: write: backend/tests/go100/test_data_gap_filler.py
+- finalize: pending
+
+## [2026-08-21 11:41:45 KST] [GO100] backend/tests/go100/__init__.py
+- Chat-Direct 수정: write: backend/tests/go100/__init__.py
+- finalize: pending
+
+## [2026-08-21 11:42:01 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: write: backend/app/services/go100/analysis/ma_wave_engine.py
+- finalize: pending
+
+## [2026-08-21 11:42:02 KST] [GO100] scripts/cron/crontab.go100.txt
+- Chat-Direct 수정: write: scripts/cron/crontab.go100.txt
+- finalize: pending
+
+## [2026-08-21 11:42:03 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('''import os, psycopg2\nfrom pathlib import Path\nfor line in P
+- finalize: pending
+
+## [2026-08-21 11:42:04 KST] [GO100] scripts/cron/crontab.go100.txt
+- Chat-Direct 수정: run_remote_command: python3 -c "exec('''import os, psycopg2\nfrom pathlib import Path\nfor line in P
+- finalize: pending
+
+## [2026-08-21 11:42:06 KST] [GO100] backend/app/services/go100/analysis/__init__.py
+- Chat-Direct 수정: write: backend/app/services/go100/analysis/__init__.py
+- finalize: pending
+
+## [2026-08-21 11:42:58 KST] [GO100] backend/tests/go100/test_ma_wave_engine.py
+- Chat-Direct 수정: write: backend/tests/go100/test_ma_wave_engine.py
+- finalize: pending
+
+## [2026-08-21 11:42:59 KST] [GO100] backend/tests/go100/test_ma_wave_engine.py
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && python3 -m pytest backend/tests/go100/test_data_gap
+- finalize: pending
+
+## [2026-08-21 11:44:06 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: patch: # app/services/strategy/indicator_engine→# app/services/strategy/indicator_engine
+- finalize: pending
+
+## [2026-08-21 11:44:11 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: patch:         # 현재값은 indicator_engine.ma()로 재계→        # 현재값은 indicator_engine.ma()로 재계
+- finalize: pending
+
+## [2026-08-21 11:44:30 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: patch:         # ---------- [3단계] 파동 구조 식별 ----→        # ---------- [3단계] 파동 구조 식별 ----
+- finalize: pending
+
+## [2026-08-21 11:44:49 KST] [GO100] backend/tests/go100/_debug_wave.py
+- Chat-Direct 수정: write: backend/tests/go100/_debug_wave.py
+- finalize: pending
+
+## [2026-08-21 11:46:09 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: patch:         volume_declining = n >= 3 and vo→        volume_declining = n >= 3 and vo
+- finalize: pending
+
+## [2026-08-21 11:46:14 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: patch:         elif (
+            arrangement =→        elif (
+            arrangement =
+- finalize: pending
+
+## [2026-08-21 11:46:19 KST] [GO100] backend/app/services/go100/analysis/ma_wave_engine.py
+- Chat-Direct 수정: patch:             "avg_volume_20": avg_volume_→            "avg_volume_20": avg_volume_
+- finalize: pending
+
+## [2026-08-21 11:46:24 KST] [GO100] backend/tests/go100/test_ma_wave_engine.py
+- Chat-Direct 수정: patch:         volumes = (
+            [1000.0]→        volumes = (
+            [1000.0]
+- finalize: pending
+
+## [2026-08-21 11:46:29 KST] [GO100] backend/tests/go100/test_ma_wave_engine.py
+- Chat-Direct 수정: patch:         volumes = [1000.0] * 40 + [1200.→        volumes = [1000.0] * 40 + [1200.
+- finalize: pending
+
+## [2026-08-21 11:48:15 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch: from backend.app.services.go100.monitori→from backend.app.services.go100.monitori
+- finalize: pending
+
+## [2026-08-21 11:48:27 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:     def _evaluate_1min_wave_pullback(
+  →    def _evaluate_ma_wave_entry(self, st
+- finalize: pending
+
+## [2026-08-21 11:49:24 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:                 if int(card.get("card_id→                if int(card.get("card_id
+- finalize: pending
+
+## [2026-08-21 11:49:54 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: from backend.app.core.strategy_config im→from backend.app.core.strategy_config im
+- finalize: pending
+
+## [2026-08-21 11:50:19 KST] [GO100] backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: patch:         wave_str = ""
+        if metrics→        wave_str = ""
+        if metrics
+- finalize: pending
+
+## [2026-08-21 11:50:48 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         elif rtype == "first_wave_exit":→        elif rtype == "first_wave_exit":
+- finalize: pending
+
+## [2026-08-21 11:51:44 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                 "first_wave_exit": scalp→                "first_wave_exit": scalp
+- finalize: pending
+
+## [2026-08-21 11:52:38 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:             pos_info.setdefault("first_w→            pos_info.setdefault("first_w
+- finalize: pending
+
+## [2026-08-21 11:53:34 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch: TICK_HISTORY_SIZE = 30  # 적응형 매도 판단용 틱 히→TICK_HISTORY_SIZE = 30  # 적응형 매도 판단용 틱 히
+- finalize: pending
+
+## [2026-08-21 11:54:23 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         self._closed_position_ids: set[i→        self._closed_position_ids: set[i
+- finalize: pending
+
+## [2026-08-21 11:55:25 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:         return f"FIRST_WAVE_EXIT(peak={t→        return f"FIRST_WAVE_EXIT(peak={t
+- finalize: pending
+
+## [2026-08-21 11:56:22 KST] [GO100] backend/app/services/go100/live_trading/scalping_monitor.py
+- Chat-Direct 수정: patch:                     # 3-B) 1파 매도 (마하세븐: →                    # 3-B) 1파 매도 (마하세븐:
+- finalize: pending
