@@ -1,5 +1,5 @@
 # AADS Blue-Green 무중단 배포 기술 명세서
-_최종 갱신: 2026-04-09_
+_최종 갱신: 2026-08-21_
 
 ---
 
@@ -8,7 +8,7 @@ _최종 갱신: 2026-04-09_
 - **목적**: 서비스 중단 없는 배포 — 이미지 재빌드가 필요한 경우에도 사용자 요청을 끊지 않는다.
 - **대상**: aads-server (FastAPI 0.115, 포트 8100/8102)
 - **도메인**: aads.newtalk.kr
-- **운영 서버**: 68.183.183.11 (서버 68)
+- **운영 서버**: 5.104.86.116 (`contabo116`)
 
 ---
 
@@ -22,8 +22,8 @@ _최종 갱신: 2026-04-09_
    ├── /api/v1/conversations → [Conversations :8101]  (독립 서버 — 전환 대상 아님)
    ├── /api/v1/memory        → [Memory :18085]         (독립 서버 — 전환 대상 아님)
    ├── /api/v1/              → upstream aads_api        (전환 대상 ★)
-   │                            ├── Blue  :8100  ◀─ active
-   │                            └── Green :8102  ◀─ backup
+   │                            ├── Blue  :8100  ◀─ active 또는 standby
+   │                            └── Green :8102  ◀─ active 또는 standby
    ├── /api/v1/pc-agent/ws/  → upstream aads_api_pc_agent_ws (전환 대상 ★)
    ├── /api/                 → [Legacy API :8001]       (독립 — 전환 대상 아님)
    └── /                     → [Next.js Dashboard :3100] (독립 — 전환 대상 아님)
@@ -38,14 +38,14 @@ _최종 갱신: 2026-04-09_
 # /etc/nginx/conf.d/aads-upstream.conf
 upstream aads_api {
     zone aads_api 64k;
-    server 127.0.0.1:8100 max_fails=3 fail_timeout=30s;          # ← active
-    server 127.0.0.1:8102 max_fails=3 fail_timeout=30s backup;   # ← standby
+    server 127.0.0.1:8100 max_fails=1 fail_timeout=10s;          # ← active 예시
+    server 127.0.0.1:8102 max_fails=1 fail_timeout=10s backup;   # ← standby 예시
     keepalive 32;
     least_conn;
 }
 ```
 
-**전환 시**: `backup` 키워드를 스왑한 후 `systemctl reload nginx`.
+**전환 시**: `backup` 키워드를 스왑하고 `nginx -t`를 통과한 뒤 Nginx 컨테이너를 reload한다. 슬롯명만으로 active를 추정하지 않고 upstream과 `.active_port`를 함께 확인한다.
 
 ---
 
@@ -55,13 +55,13 @@ upstream aads_api {
 |---|---|---|
 | 컨테이너 이름 | `aads-server` | `aads-server-green` |
 | 포트 바인딩 | `8100→8080` | `8102→8080` |
-| `restart` 정책 | `always` | `"no"` |
+| `restart` 정책 | `always` | `unless-stopped` |
 | Docker Compose profile | (기본 — 항상 포함) | `green` |
 | 메모리 한도 (`deploy.resources.limits.memory`) | `2G` | `2G` |
 | 코드 볼륨 | `app:/app/app:rw` (공유) | `app:/app/app:rw` (동일 볼륨) |
-| 역할 | 상시 활성 인스턴스 | 배포 시 임시 스테이징, 완료 후 종료 |
+| 역할 | active 또는 warm standby | active 또는 warm standby |
 
-**`restart: "no"` 의미**: Docker 데몬 재시작(서버 재부팅) 시 Green은 자동 기동되지 않는다. Blue만 항상 자동 복구된다.
+두 슬롯은 배포 후에도 healthy한 warm standby를 유지한다. 현재 active는 컨테이너 이름이 아니라 Nginx upstream의 비-`backup` 라인으로 판정한다.
 
 ---
 
@@ -69,9 +69,9 @@ upstream aads_api {
 
 | 모드 | 중단 시간 | 용도 | 명령어 |
 |---|---|---|---|
-| `code` | 수초~수십초 | Python 코드만 수정 (볼륨 마운트 즉시 반영 후 프로세스 재시작) | `deploy.sh code` |
-| `reload` | ~10초 | 긴급 프로세스 재시작 | `deploy.sh reload` |
-| `build` | 1~3분 | Dockerfile/패키지 변경, 이미지 재빌드 (서비스 일시 중단) | `deploy.sh build` |
+| `code` | 기본적으로 bluegreen으로 전환 | 레거시 호환 모드 | `deploy.sh code` |
+| `reload` | 기본적으로 bluegreen으로 전환 | 레거시 호환 모드 | `deploy.sh reload` |
+| `build` | 기본적으로 bluegreen으로 전환 | 레거시 호환 모드 | `deploy.sh build` |
 | `bluegreen` | **0초** | 이미지 재빌드 + 무중단 — upstream 전환으로 완전 자동화 | `deploy.sh bluegreen` |
 
 ---
@@ -115,12 +115,12 @@ UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
 
 # Green에서 backup 제거 (활성화)
-sed -i 's/server 127.0.0.1:8102 max_fails=3 fail_timeout=30s backup;/server 127.0.0.1:8102 max_fails=3 fail_timeout=30s;/g' "$UPSTREAM_CONF"
+sed -i 's/server 127.0.0.1:8102 max_fails=1 fail_timeout=10s backup;/server 127.0.0.1:8102 max_fails=1 fail_timeout=10s;/g' "$UPSTREAM_CONF"
 # Blue에 backup 추가 (대기)
-sed -i 's/server 127.0.0.1:8100 max_fails=3 fail_timeout=30s;/server 127.0.0.1:8100 max_fails=3 fail_timeout=30s backup;/g' "$UPSTREAM_CONF"
+sed -i 's/server 127.0.0.1:8100 max_fails=1 fail_timeout=10s;/server 127.0.0.1:8100 max_fails=1 fail_timeout=10s backup;/g' "$UPSTREAM_CONF"
 
-nginx -t                     # 설정 검증
-systemctl reload nginx       # 무중단 리로드
+docker exec aads-nginx nginx -t          # 설정 검증
+docker exec aads-nginx nginx -s reload   # 무중단 리로드
 ```
 
 `nginx -t` 실패 시: `cp pre_deploy` 복원 후 `exit 1`.
@@ -130,13 +130,12 @@ systemctl reload nginx       # 무중단 리로드
 - 2초 대기 후 새 포트 헬스체크
 - 실패 시: upstream 복원 (`cp pre_deploy`) + nginx reload + 새 컨테이너 stop
 
-### Phase 1-⑤: 이전 인스턴스 지연 종료 (SSE drain)
+### Phase 1-⑤: 이전 인스턴스 drain 및 warm standby 동기화
 
-```bash
-# 2분 후 이전 컨테이너 종료 (SSE 연결 완료 대기)
-(sleep 120; docker stop --time 30 "$OLD_CONTAINER") &
-disown
-```
+- 전환 직후 이전 슬롯을 종료하지 않는다.
+- 최소 grace wait와 `/api/v1/ops/active-streams` drain 확인 후 standby를 현재 release로 동기화한다.
+- 백그라운드 작업은 `.deploy_generation`, `.active_port`, `.active_container`를 재검증한다.
+- 세대가 바뀌었거나 대상 슬롯이 다시 active가 됐으면 재시작·재빌드를 수행하지 않고 종료한다.
 
 ### Phase 2~6: 후속 검증
 
@@ -177,6 +176,12 @@ disown
 | 8 | Graceful Shutdown | `docker stop --time 30` — SIGTERM 후 30초 대기 |
 | 9 | 텔레그램 알림 | 배포 성공/실패 모두 CEO에게 즉시 알림 |
 | 10 | DB 스키마 검증 | Phase 3에서 누락 컬럼 자동 감지 + 생성 시도 |
+| 11 | 호스트 API watchdog | 15초 주기, 2회 연속 liveness 실패 시 healthy standby로 전환 |
+| 12 | Supervisor 자식 상태 확인 | 컨테이너 running만 보지 않고 `aads-api RUNNING`을 확인 |
+| 13 | 배포 세대 보호 | 이전 drain/sync 작업이 새 active 슬롯을 변경하지 못하도록 차단 |
+| 14 | self-control 차단 | 애플리케이션 내부 Supervisor/Docker/Nginx 직접 중지 차단 |
+| 15 | 제어 감사 | `/var/log/aads-control-audit.jsonl`에 전환·복구·배포 제어 기록 |
+| 16 | 안전 조회 retry | health와 `auth/me`만 standby retry, SSE/WebSocket은 단일 슬롯 고정 |
 
 ---
 
@@ -186,10 +191,10 @@ disown
 
 | 변경 사항 | 권장 모드 | 이유 |
 |---|---|---|
-| Python 코드만 수정 (볼륨 마운트 반영) | `code` 또는 `reload` | 이미지 재빌드 불필요, 빠름 |
-| `requirements.txt` / `Dockerfile` 변경 | `build` 또는 `bluegreen` | 이미지 재빌드 필수 |
+| Python 코드만 수정 (볼륨 마운트 반영) | `scripts/reload-api.sh` 또는 `bluegreen` | stream-safe hot-reload 우선 |
+| `requirements.txt` / `Dockerfile` 변경 | `bluegreen` | 이미지 재빌드 필수 |
 | 서비스 중단 불가 상황 (피크 타임 등) | `bluegreen` | 0초 다운타임 |
-| 긴급 핫픽스 (빠른 반영 우선) | `reload` | ~10초, 가장 빠름 |
+| 긴급 핫픽스 (빠른 반영 우선) | `scripts/reload-api.sh` | API 기반 hot-reload, 연결 보존 |
 
 ### 배포 체크리스트
 
@@ -202,23 +207,22 @@ disown
 
 ### 수동 전환
 
-```bash
-# Blue↔Green 수동 전환 (양쪽 모두 실행 중일 때)
-bash /root/aads/aads-server/scripts/bluegreen_switch.sh
-```
+임의 `sed`, 컨테이너명 기준 stop, `supervisorctl restart`를 사용하지 않는다. 양쪽 liveness를 확인한 뒤 표준 `deploy.sh bluegreen` 또는 감사 기능이 포함된 호스트 watchdog만 사용한다.
 
 ### 수동 롤백
 
 ```bash
 # 1. upstream을 Blue(8100)로 강제 복원
 cp /etc/nginx/conf.d/aads-upstream.conf.pre_deploy /etc/nginx/conf.d/aads-upstream.conf
-nginx -t && systemctl reload nginx
+docker exec aads-nginx nginx -t && docker exec aads-nginx nginx -s reload
 
-# 2. Green 정리
-docker stop aads-server-green && docker rm aads-server-green
+# 2. active/standby 상태 확인 — 컨테이너명만 보고 종료하지 않는다
+grep 'server 127.0.0.1:810' /etc/nginx/conf.d/aads-upstream.conf
+cat /root/aads/aads-server/.active_port
 
-# 3. Blue 상태 확인
+# 3. 양쪽 상태 확인
 docker exec aads-server supervisorctl status
+docker exec aads-server-green supervisorctl status
 curl -s http://127.0.0.1:8100/api/v1/health | python3 -m json.tool
 ```
 
@@ -230,7 +234,9 @@ curl -s http://127.0.0.1:8100/api/v1/health | python3 -m json.tool
 | 헬스체크 90초 실패 | 컨테이너 기동 지연 또는 크래시 | `docker logs aads-server-green --tail 100` |
 | `nginx -t` 실패 | upstream conf 문법 오류 | 자동 롤백됨; upstream conf 수동 검토 |
 | 전환 후 502 | 신규 인스턴스 크래시 | 자동 롤백됨; `docker logs` 확인 |
-| 배포 락 충돌 | 이전 배포 비정상 종료로 락 잔존 | `rm /tmp/aads-deploy.lock` 후 재시도 |
+| 배포 락 충돌 | 실행 중 배포 또는 stale lock 의심 | lock PID와 실제 프로세스를 확인하고 표준 배포 절차로 정합성 복구. 무조건 삭제 금지 |
+| 컨테이너 running이나 API 502 | Supervisor 자식 `STOPPED` | host watchdog 상태·감사 로그 확인. 직접 restart 금지 |
+| active slot liveness 연속 실패 | API 자식 중단 또는 슬롯 hang | watchdog이 healthy standby로 자동 전환하는지 확인 |
 
 ---
 
@@ -256,6 +262,10 @@ curl -s http://127.0.0.1:8100/api/v1/health | python3 -m json.tool
 | nginx 설정 (소스) | `/root/aads/aads-server/nginx-aads.conf` |
 | Docker Compose (서버) | `/root/aads/aads-server/docker-compose.prod.yml` |
 | 활성 포트 상태 | `/root/aads/aads-server/.active_port` |
+| 호스트 watchdog | `/root/aads/aads-server/scripts/aads_api_watchdog.sh` |
+| watchdog timer | `/etc/systemd/system/aads-api-watchdog.timer` |
+| 제어 감사 로그 | `/var/log/aads-control-audit.jsonl` |
+| 2026-08-21 사고 보고서 | `docs/reports/INCIDENT-20260821-AADS-LOGIN-API-502.md` |
 
 ---
 
@@ -265,3 +275,4 @@ curl -s http://127.0.0.1:8100/api/v1/health | python3 -m json.tool
 |---|---|
 | 2026-03-28 | 초기 문서 작성. 실제 파일 검증 기반. Swing-back 섹션 포함. |
 | 2026-04-09 | **아키텍처 전환**: aads.conf 직접 포트 sed → aads-upstream.conf backup 키워드 조작. Swing-back 제거. Green restart 정책 `"no"` 적용. 스크립트 3종 통합 수정. |
+| 2026-08-21 | 로그인/API 502 장애 후 host watchdog, safe-route retry, self-control 차단, 제어 감사, 배포 세대 보호, warm standby 운영 반영. 상세: `docs/reports/INCIDENT-20260821-AADS-LOGIN-API-502.md`. |
