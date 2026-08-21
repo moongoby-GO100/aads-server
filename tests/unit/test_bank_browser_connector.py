@@ -185,7 +185,7 @@ class TestCollectWithoutSession:
             )
 
         assert result["status"] == "action_required"
-        assert result["error_code"] == "BANK_BROWSER_SESSION_REQUIRED"
+        assert result["error_code"] == "PC_AGENT_LOGIN_REQUIRED"
         assert result["rows"] == []
 
     def test_session_not_found_in_registry_returns_connector_not_ready(self):

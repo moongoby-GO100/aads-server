@@ -1651,7 +1651,40 @@ async def lifespan(app: FastAPI):
             except Exception as _e:
                 logger.warning(f"execution_resume_scanner_error: {_e}")
 
+    async def _run_execution_resume_reclaim_once():
+        """APScheduler-backed safety net for retrying executions.
+
+        The standalone resume scanner is intentionally lightweight, but it is
+        not visible in the scheduler health logs. Registering the same reclaim
+        pass with APScheduler prevents retrying turns from being stranded if the
+        standalone task exits or was created before the active-slot marker was
+        corrected.
+        """
+        _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "60"))
+        try:
+            await _resume_pending_executions_once(
+                max_rows=5,
+                min_stale_seconds=_periodic_stale_seconds,
+            )
+        except Exception as _e:
+            logger.warning(f"execution_resume_reclaim_job_error: {_e}")
+
     _selfheal_execution_resume_owner_marker()
+    if scheduler is not None:
+        try:
+            scheduler.add_job(
+                _run_execution_resume_reclaim_once,
+                "interval",
+                seconds=30,
+                id="execution_resume_reclaim",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("execution_resume_reclaim_scheduler_registered")
+        except Exception as _e:
+            logger.warning(f"execution_resume_reclaim_scheduler_register_failed: {_e}")
+    _startup_asyncio.create_task(_run_execution_resume_reclaim_once())
     _startup_asyncio.create_task(_resume_pending_executions_startup())
     _startup_asyncio.create_task(_periodic_execution_resume_scanner())
 
