@@ -257,6 +257,10 @@ ACTIONABLE_ASSISTANT_CONTEXT_MARKERS = (
 STATUS_ASSISTANT_CONTEXT_MARKERS = (
     "원인", "근거", "상태", "현황", "로그", "db", "조회", "확인", "보고",
 )
+STATUS_FOLLOWUP_ACTION_MARKERS = (
+    "확인", "확인해", "보고", "보고해", "상태", "현황", "조회", "점검",
+    "파악", "왜", "원인",
+)
 
 _DEFAULT_INTENT = IntentResult(
     intent="casual",
@@ -633,6 +637,10 @@ def _contextual_followup_override(
         return None
 
     compact_assistant = previous_assistant.replace(" ", "")
+    if any(marker.replace(" ", "") in msg for marker in STATUS_FOLLOWUP_ACTION_MARKERS) and any(
+        marker.replace(" ", "") in compact_assistant for marker in STATUS_ASSISTANT_CONTEXT_MARKERS
+    ):
+        return "status_check"
     if any(marker.replace(" ", "") in compact_assistant for marker in ACTIONABLE_ASSISTANT_CONTEXT_MARKERS):
         return "code_modify"
     if any(marker.replace(" ", "") in compact_assistant for marker in STATUS_ASSISTANT_CONTEXT_MARKERS):

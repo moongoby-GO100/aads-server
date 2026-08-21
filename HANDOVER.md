@@ -1,5 +1,18 @@
 # AADS HANDOVER
 
+## 2026-08-21 18:41 KST - Chat contextual follow-up intent routing deployed, status follow-up guard
+
+- Trigger: CEO asked whether the contextual follow-up fix was in production and requested commit, push, and deploy completion.
+- Changes:
+  - `app/services/intent_router.py`: short contextual follow-up override now keeps status/report follow-ups such as `계속 확인해` on `status_check` instead of over-routing them to `code_modify`.
+  - Preserved the earlier contextual follow-up routing fix in `1f3252a8`, which routes short execution commands such as `즉시 권장조치 진행해` using the previous assistant context.
+- Verification:
+  - Host `python3 -m py_compile app/services/chat_service.py app/services/intent_router.py` passed.
+  - Container `docker exec aads-server python3 -m py_compile /app/app/services/chat_service.py /app/app/services/intent_router.py` passed before deploy.
+  - Initial post-deploy regression found one over-routing failure; this entry records the guard fix before the follow-up commit/deploy.
+- Remaining:
+  - GO100/Yeoljeong dirty files observed after deploy are unrelated to this chat routing change and were left uncommitted pending separate validation.
+
 ## 2026-08-21 14:11 KST - Runner dependency recovery, project label normalization, bank login fallback
 
 - Trigger: CEO said to continue after the interrupted FOOD/AADS follow-up. Pipeline Runner chain was blocked by `runner-ab6a68b9` rejection; dependent jobs `runner-09b57d37` and `runner-25aba21b` were cancelled by dependency failure.
