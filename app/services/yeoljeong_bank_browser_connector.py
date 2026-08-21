@@ -283,11 +283,18 @@ async def collect_bank_via_browser_session_async(
     date_from: str,
     date_to: str,
     portal_url: str = "",
+    auto_open_browser: bool = False,
+    browser_agent_id: str = "",
+    browser_preferred_port: int | None = None,
+    force_recreate_browser: bool = False,
 ) -> dict[str, Any]:
     """Fetch transaction rows from a bank quick-service portal via PC Agent.
 
     Never initiates a headless credential login.  When no live browser
-    session is available, returns status="action_required" immediately.
+    session is available, returns status="action_required" unless
+    auto_open_browser=True, in which case it opens the bank corporate page in
+    a dedicated PC Agent Browser Bridge work session and waits for operator
+    action / existing browser-auth state.
 
     Return schema:
         status      "collected" | "action_required" | "connector_not_ready" | "failed"
@@ -321,6 +328,7 @@ async def collect_bank_via_browser_session_async(
     }
 
     session_id_to_use = browser_session_id.strip() if browser_session_id else ""
+    auto_opened_session = False
 
     if not session_id_to_use and browser_work_key:
         try:
@@ -332,6 +340,26 @@ async def collect_bank_via_browser_session_async(
                 session_id_to_use = existing.session_id
         except Exception:
             pass
+
+    if not session_id_to_use and auto_open_browser and browser_work_key:
+        try:
+            from app.browser_bridge.service import get_browser_bridge_service
+
+            bridge = get_browser_bridge_service()
+            session = await bridge.ensure_work_session(
+                work_key=browser_work_key,
+                label=f"{bank_name or '은행'} 기업페이지",
+                agent_id=str(browser_agent_id or ""),
+                url=portal_url or "about:blank",
+                preferred_port=browser_preferred_port,
+                force_recreate=bool(force_recreate_browser),
+            )
+            session_id_to_use = str(getattr(session, "session_id", "") or "")
+            auto_opened_session = bool(session_id_to_use)
+            safe_diagnostics["auto_open_browser"] = "1"
+        except Exception as exc:
+            safe_diagnostics["auto_open_browser"] = "failed"
+            safe_diagnostics["auto_open_error"] = str(exc)[:200]
 
     if not session_id_to_use:
         return {
@@ -348,6 +376,8 @@ async def collect_bank_via_browser_session_async(
         }
 
     safe_diagnostics["browser_session_id"] = session_id_to_use
+    if auto_opened_session:
+        safe_diagnostics["auto_opened_session"] = "1"
 
     try:
         from app.browser_bridge.service import get_browser_bridge_service
@@ -417,6 +447,19 @@ async def collect_bank_via_browser_session_async(
             )
         else:
             msg = f"{bank_name or '은행'} 포털에 해당 기간 거래 내역이 없습니다."
+
+        if not rows and auto_opened_session and parse_diag["table_count"] == 0:
+            return {
+                "status": "action_required",
+                "error_code": "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
+                "rows": [],
+                "row_count": 0,
+                "diagnostics": safe_diagnostics,
+                "message": (
+                    f"{bank_name or '은행'} 기업페이지를 PC Agent 브라우저로 열었습니다. "
+                    "간편/빠른조회 승인 또는 거래내역 화면 이동 후 다시 수집하십시오."
+                ),
+            }
 
         return {
             "status": "collected",

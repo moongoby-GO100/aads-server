@@ -257,6 +257,10 @@ class BankAccountCollectPayload(BaseModel):
     transactions: list[BankTransactionEntry] = Field(default_factory=list)
     browser_session_id: str = Field(default="", repr=False)
     browser_work_key: str = ""
+    auto_open_browser: bool = False
+    browser_agent_id: str = ""
+    browser_preferred_port: int | None = None
+    force_recreate_browser: bool = False
 
 
 @router.get("/session")

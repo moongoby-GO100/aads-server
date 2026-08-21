@@ -4509,6 +4509,11 @@ def _collect_bank_via_browser(
     browser_work_key_val = str(payload.get("browser_work_key") or "").strip()
     if not browser_work_key_val:
         browser_work_key_val = bank_browser_work_key(account_id, business_id, branch_id)
+    browser_preferred_port_raw = payload.get("browser_preferred_port")
+    try:
+        browser_preferred_port = int(browser_preferred_port_raw) if browser_preferred_port_raw else None
+    except (TypeError, ValueError):
+        browser_preferred_port = None
 
     try:
         browser_result = _run_bank_browser_async(
@@ -4518,6 +4523,10 @@ def _collect_bank_via_browser(
                 browser_work_key=browser_work_key_val,
                 date_from=date_from,
                 date_to=date_to,
+                auto_open_browser=bool(payload.get("auto_open_browser")),
+                browser_agent_id=str(payload.get("browser_agent_id") or ""),
+                browser_preferred_port=browser_preferred_port,
+                force_recreate_browser=bool(payload.get("force_recreate_browser")),
             )
         )
     except RuntimeError as exc:

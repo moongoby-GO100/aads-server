@@ -1,192 +1,165 @@
 # CTO-SYSTEM-MAP: AADS 시스템 전체 아키텍처 지도
-_생성: 2026-03-30 | 갱신: 2026-05-03 | Phase 2 운영 — LLM DB화(AADS-188/189/190), AADS Runner 동시 실행 6건 반영_
 
-> 신규 러너/에이전트 시작점: `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md`
-> 이 문서는 전체 아키텍처 맵이고, 위 인덱스가 읽기 순서를 고정한다.
+_최종 갱신: 2026-08-21 (실측)_
 
-## 인프라 (서버68, Docker Compose)
+> 수치와 운영 상태는 별도 표기가 없는 한 2026-08-21 실행 환경에서 조회했다. 출처 태그: `[SRC:CODE]` 저장소 코드 정적 조회, `[SRC:DOCKER]` `docker ps`, `[SRC:DB]` PostgreSQL SELECT, `[SRC:DOC]` 관련 설계 문서.
 
-| 컨테이너 | 이미지 | 포트 | 역할 |
-|----------|--------|------|------|
-| aads-server | 자체빌드 | 8100→8080 | FastAPI 백엔드 (메모리 2G) |
-| aads-server-green | 동일 | 8102→8080 | Blue-Green 무중단 배포 (profile) |
-| aads-postgres | pgvector/pg15 | 5433→5432 | PostgreSQL + pgvector |
-| aads-redis | redis:7-alpine | 내부 6379 | 캐시 128MB + AOF 영속화 |
-| aads-litellm | LiteLLM proxy | 4000 | LLM 프록시 26모델 |
-| aads-dashboard | Next.js 16 | 3100 | CEO 대시보드 20페이지 |
-| aads-socket-proxy | docker-socket-proxy | 내부 2375 | 보안 Docker 소켓 |
-| aads-searxng | SearXNG | 8888→8080 | 무료 메타검색 |
+## 1. 시스템 경계와 실행 흐름
 
-소스 볼륨 마운트: `/root/aads/aads-server/app:/app/app:rw` — 코드 수정 시 재빌드 불필요.
-배포: `docker-compose.prod.yml` — AADS Blue-Green은 `deploy.sh bluegreen`.
-
-## LLM 라우팅 체계
-
-```
-메시지 → intent_router.py(Gemini Flash-Lite, 65인텐트)
-  → model_selector.py
-    ├─ 키 조회 → model_registry.py → DB llm_api_keys(Fernet 암호화) → 복호화/provider 키 반환, DB 장애 시 .env 폴백
-    ├─ model_registry.sync_model_registry() → llm_models.is_active + linked_key_name 자동 갱신
-    ├─ execution_backend 라우팅:
-    │   anthropic → claude_cli_relay (OAuth)
-    │   gemini    → litellm_proxy
-    │   openai/groq/deepseek/openrouter/qwen/kimi/minimax → openai_compatible_direct
-    │   codex     → codex_cli
-    └─ 폴백: 활성 모델 없으면 하드코딩 경로
+```text
+CEO / Dashboard → FastAPI (app/main.py)
+  → /api/v1/* API·채팅·운영·관리·Runner
+  → services (채팅·도구·모델·Runner·품질·메모리)
+  → core (DB pool·인증·프롬프트·프로젝트 정규화)
+  → PostgreSQL + pgvector / Redis
+  → LiteLLM 프록시(코드 설정) → 외부 LLM
 ```
 
-인증 중앙: `app/core/auth_provider.py` — DB priority 기반 OAuth 교대, `rotate_oauth_primary_fallback()`.
-키 저장: DB `llm_api_keys` (Fernet 암호화, `.env` 폴백)로 중앙 관리.
-모델 레지스트리: `app/services/model_registry.py` — provider 템플릿 기반, `sync_model_registry()` 자동 갱신.
-배경 작업: `app/core/anthropic_client.py` — `call_llm_with_fallback()` (Claude → Gemini).
+## 2. 인프라: 실측 컨테이너와 포트
 
-LiteLLM 모델 (litellm-config.yaml):
-- Gemini: 2.5-flash/pro, 3.0-pro/flash, 3.1-pro/flash-lite, gemma-3-27b
-- DeepSeek: chat, reasoner
-- Groq: llama-70b/8b, llama4-scout, qwen3-32b
-- OpenRouter: grok-4-fast, deepseek-v3, mistral-small, nemotron-free, minimax-m2
-- Claude: sonnet-4-6, opus-4-7 (LiteLLM 경유)
+| 컨테이너 | 이미지 | 호스트 포트 | 상태/역할 |
+|---|---|---:|---|
+| `aads-server` | `aads-server-aads-server` | `127.0.0.1:8100→8080` | healthy, FastAPI blue |
+| `aads-server-green` | `aads-server-aads-server-green` | `127.0.0.1:8102→8080` | healthy, FastAPI green |
+| `yeoljeong-finance` | `aads-server-yeoljeong-finance` | `127.0.0.1:8110→8080` | healthy, 금융 부속 API |
+| `aads-dashboard` | `aads-server-aads-dashboard` | `127.0.0.1:3100→3100` | healthy, Next.js |
+| `aads-dashboard-green` | `aads-server-aads-dashboard-green` | `127.0.0.1:3101→3101` | healthy, standby |
+| `aads-postgres` | `pgvector/pgvector:pg15` | `0.0.0.0:5433→5432` | healthy, PostgreSQL/pgvector |
+| `aads-redis` | `redis:7-alpine` | 내부 `6379` | healthy, 캐시/락/스트림 |
+| `aads-searxng` | `searxng/searxng:latest` | `0.0.0.0:8888→8080` | healthy, 메타검색 |
+| `aads-socket-proxy` | `tecnativa/docker-socket-proxy:latest` | 내부 `2375` | Docker API 제한 프록시 |
+| `aads-nginx` | `nginx:alpine` | 호스트 공개 진입점 | reverse proxy |
+| `antigravity-test` | `d764629ce0dd` | 없음 | 테스트 컨테이너 |
 
-## 채팅 시스템 (핵심)
+`aads-litellm`은 현재 `docker ps` 실측 목록에 없었다. 애플리케이션과 Compose에는 `aads-litellm:4000` 프록시 설정이 남아 있으므로, LLM 프록시의 설정 존재와 현재 컨테이너 실행을 구분한다. `[SRC:DOCKER] [SRC:CODE:docker-compose.prod.yml, app/services/model_selector.py]`
 
-| 파일 | 줄 수 | 역할 |
-|------|------|------|
-| `app/routers/chat.py` | 1,157 | v2 라우터 — Workspace/Session/Message/Artifact/Branch CRUD |
-| `app/services/chat_service.py` | 4,146 | 비즈니스 로직 — SSE 스트리밍, heartbeat 3s, Background completion |
-| `app/services/context_builder.py` | 552 | 3계층 Context Engineering (Layer1 정적/Layer2 동적/Layer3 히스토리) |
-| `app/core/prompts/system_prompt_v2.py` | — | Layer1 시스템 프롬프트 원문 |
-| `app/services/workspace_preloader.py` | 194 | Layer2.5 — 프로젝트별 facts + 에러패턴 + CEO 관심사 자동 주입 |
+Blue-Green은 API `8100/8102`, Dashboard `3100/3101` 두 슬롯을 유지하고 nginx upstream을 전환하는 구조다. 배포 진입점은 `deploy.sh bluegreen`이다. `[SRC:DOCKER] [SRC:CODE:deploy.sh, docker-compose.prod.yml]`
 
-DB: chat_messages 11,503건 (2026-03-30 기준).
+## 3. API 라우터 실측
 
-## 코드 수정 파이프라인
+- `app/api/`: Python 파일 68개(백업 `.bak`, 검증 `.verify` 제외), `APIRouter` 정의 파일 65개. `[SRC:CODE:find, rg]`
+- `app/routers/`: Python 파일 3개(`__init__.py`, `agent_vault.py`, `chat.py`), `APIRouter` 정의 2개. `[SRC:CODE:find, rg]`
+- `app/main.py`: `include_router` 활성 등록 64개. 주석 처리된 legacy CEO chat 등록 1개까지 텍스트상 65개다. `[SRC:CODE:app/main.py:1991-2055]`
 
-### Pipeline Runner (활성 — 현재 사용 중)
+등록 prefix는 다음과 같다.
 
+| 등록 prefix | 등록 범위 |
+|---|---|
+| `/api/v1` | health, projects, chat/stream, auth/context, memory, ops, admin, governance, QA, Runner, LLM, 파일/문서 외 다수 |
+| `/api/v1/documents` | documents |
+| `/api/v1/image` | image |
+| `/api/v1/fact-check` | fact-check |
+| `/api/v1/agenda` | agenda |
+| `/api/v1/review` | code review router의 내부 prefix와 결합 |
+| `/api/v1/braming` | braming router 자체 prefix |
+| `/api/v1/local` | local media router 자체 prefix |
+| `/pc-ollama` | PC Ollama bridge |
+
+세부 라우터 내부 prefix(`/voice`, `/external/chat`, `/browser-bridge`, `/kakao-bot`, `/llm-keys`, `/llm-models`, `/agent-vault`, `/browser-tasks` 등)는 `/api/v1` 등록 prefix와 결합된다. `[SRC:CODE:app/main.py, app/api/*.py, app/routers/*.py]`
+
+## 4. 코드 모듈 실측
+
+| 영역 | Python 파일 수 | 핵심 모듈 |
+|---|---:|---|
+| `app/services/` | 135 | `chat_service.py`, `pipeline_runner_service.py`, `model_selector.py`, `tool_registry.py`, `prompt_compiler.py`, `agent_orchestrator.py`, `unified_healer.py` |
+| `app/core/` | 21 | `anthropic_client.py`, `auth_provider.py`, `db_pool.py`, `project_config.py`, `memory_recall.py`, `memory_gc.py`, `feature_flags.py` |
+| `app/routers/` | 3 | `chat.py`, `agent_vault.py` |
+
+채팅 핵심 경로는 `app/routers/chat.py`/`app/services/chat_service.py` → `context_builder.py` → `PromptCompiler` → 모델 라우터다. 도구 호출은 `tool_registry.py`와 `tool_executor.py`가 담당한다. `[SRC:CODE:find, app/services, app/core, app/routers]`
+
+## 5. 인증과 LLM 라우팅
+
+인증 호출의 중앙 경로는 `app/core/anthropic_client.py`의 `call_llm_with_fallback()`이다. 계정 선택은 `app/core/auth_provider.py`에서 OAuth 인증 토큰 1순위, 설정된 fallback 2순위, 이후 Gemini LiteLLM fallback 순서로 관리한다. 외부 Gemini/DeepSeek 등은 LiteLLM 프록시 경로를 사용하도록 모델 라우팅이 구성되어 있다. `[SRC:CODE:app/core/anthropic_client.py, app/core/auth_provider.py, app/services/model_selector.py]`
+
+```text
+요청 → intent_router / model_selector → OAuth 계정 선택
+     → Claude 중앙 fallback 또는 LiteLLM proxy
+     → response validator / critic / 비용 기록
 ```
-CEO 채팅 → pipeline_runner_submit(project, instruction)
-  → DB INSERT (pipeline_jobs)
-  → pipeline-runner.sh (호스트 systemd, 5초 폴링)
-  → Claude Code CLI 실행 (6단계 모델+계정 폴백)
-  → AI Reviewer (Sonnet 검수)
-  → awaiting_approval → CEO approve
-  → git push → 프로젝트별 배포 → done
+
+## 6. Pipeline Runner와 Blue-Green 배포
+
+```text
+pipeline_runner_submit → pipeline_jobs INSERT
+  → claim/dedup/dependency/work-lock → Claude Code 작업 실행
+  → code_reviewer 검수 → awaiting_approval → CEO approve
+  → 프로젝트별 promote/deploy → AADS: deploy.sh bluegreen
 ```
 
-| 항목 | 상세 |
-|------|------|
-| API | `app/api/pipeline_runner.py` — `/api/v1/pipeline/jobs` |
-| 실행기 | `scripts/pipeline-runner.sh` (호스트 systemd 독립 프로세스) |
-| 6단계 폴백 | Sonnet(Naver)→Sonnet(Gmail)→Opus(Naver)→Opus(Gmail)→Haiku(Naver)→Haiku(Gmail) |
-| 프로젝트별 배포 | AADS→`deploy.sh bluegreen`, KIS→`systemctl restart kis-v41-api`, GO100→`systemctl restart go100`, SF→docker restart |
-| **상세 문서** | `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`, `docs/pipeline-runner/PIPELINE-RUNNER-API-REFERENCE.md` |
-| 서버 재시작 영향 | 없음 (호스트 프로세스) |
-| 중복 방지 | DB UNIQUE(project+status='running') |
-| AADS 동시 실행 상한 | `MAX_CONCURRENT_PER_PROJECT=6`, 글로벌 `MAX_CONCURRENT_GLOBAL=10` |
+- API: `app/api/pipeline_runner.py` (`/api/v1/pipeline/jobs`, 상태·승인·batch·lock status). `[SRC:CODE]`
+- 오케스트레이터: `app/services/pipeline_runner_service.py`; DB job, 의존성 cascade, 중복 방지, 동시성 lock, 결과 수거를 담당한다. `[SRC:CODE]`
+- AADS 배포는 blue/green 슬롯 전환과 standby 동기화를 포함한다. 승인 전에는 배포하지 않는 `awaiting_approval` 경계가 핵심이다. `[SRC:CODE:app/services/pipeline_runner_service.py, deploy.sh]`
+- DB 실측 `pipeline_jobs`: 572행, `deploy_history`: 51행. `[SRC:DB:SELECT count(*)]`
 
-### Pipeline C (레거시 — 보존, 미사용)
+## 7. 프롬프트 거버넌스
 
-`app/services/pipeline_c.py` (2,130줄) — 코드 보존 상태. 현재 실행 경로에서 사용하지 않음.
-Pipeline Runner가 완전 대체. 향후 참조/롤백 용도로 유지.
+`PromptCompiler`가 대화의 base prompt 뒤에 활성 `prompt_assets`를 L1 Global → L2 Project → L3 Role → L4 Intent → L5 Model 순서로 조립하고, `compiled_prompt_provenance`에 적용 결과와 hash/문자 수를 기록한다. `[SRC:CODE:app/services/prompt_compiler.py, docs/knowledge/5-LAYER-PROMPT-GOVERNANCE.md]`
 
-## 도구 시스템
+| 테이블 | 행 수 |
+|---|---:|
+| `prompt_assets` | 137 |
+| `compiled_prompt_provenance` | 13,778 |
+| `role_profiles` | 28 |
+| `session_blueprints` | 1 |
+| `llm_models` | 498 |
+| `llm_api_keys` | 13 |
 
-`app/services/tool_registry.py` (2,202줄) — 87개 도구, Anthropic Tool Use API 포맷.
-`app/api/ceo_chat_tools.py` (3,247줄) — 실행 엔진 (read_file, query_db, browser 6종, 원격 DB, 검색 등).
-`app/api/ceo_chat_tools_db.py` (501줄) — 프로젝트별 원격 DB (KIS=PostgreSQL, SF/NTV2=MySQL+SSH터널).
+`prompt_assets`의 scope/priority/enabled 조건과 provenance를 함께 확인해야 실제 적용 여부를 판단할 수 있다. `[SRC:DB:SELECT count(*), 5-LAYER-PROMPT-GOVERNANCE.md]`
 
-Tier 분류: 상시로드(~25), 온디맨드(~62). defer_loading 메타데이터로 관리. ToolExecutor dispatch: 82개.
+## 8. 프로젝트 별칭 레이어
 
-## 메모리/진화 시스템
+`app/core/project_config.py`가 프로젝트 정규 키, 표시명, 별칭을 단일 맵으로 관리한다. `resolve_project()`는 대소문자 무시 완전일치·표시명·`[PROJECT] 표시명`을 정규 키로 변환하고, `normalize_project_label()`은 DB 저장 라벨을 정규화한다. `[SRC:CODE:app/core/project_config.py]`
 
-| 모듈 | 역할 |
-|------|------|
-| `app/core/memory_recall.py` (921줄) | 7섹션 자동 주입 (session_notes/preferences/tool_strategy/directives/discoveries/learned/correction) |
-| `app/core/memory_gc.py` (758줄) | GC(confidence 감쇠) + 중복 병합 + Sleep-Time Agent(인사이트 생성) |
-| `app/services/self_evaluator.py` (769줄) | Haiku로 응답 품질 평가 → Reflexion 자동 루프 |
-| `app/services/workspace_preloader.py` (194줄) | 에러패턴 경고 + 최근 facts + CEO 관심사 예측 |
-| `app/services/fact_extractor.py` | 대화에서 사실 자동 추출 → memory_facts |
-| `app/services/ceo_pattern_tracker.py` | CEO 행동 패턴 학습 → 관심사 예측 |
+| 정규 키 | 주요 별칭/표시명 | 서버 |
+|---|---|---|
+| AADS | `aads`, AADS 자율개발시스템 | contabo116 |
+| KIS | `kis`, 자동매매, kis-autotrade | contabo14 |
+| GO100 | `go100`, 백억이, 백억이투자분석 | contabo14 (KIS workdir 공유) |
+| SF | `sf`, ShortFlow, 숏폼 | cafe24_114 |
+| NTV2 | `ntv2`, NewTalk, newtalk-v2 | cafe24_114 |
 
-DB 테이블: ai_observations(328건+), ai_meta_memory, memory_facts, session_notes, experience_memory.
-카테고리: discovery(133), ceo_preference(74), ceo_correction(35), project_pattern(36), tool_strategy(21).
+실행 대상이 아닌 표시 전용 프로젝트(FOOD, NAS, CEO, WORK 등)는 별도 집합으로 구분한다. `[SRC:CODE:app/core/project_config.py]`
 
-## 자율 운영 (APScheduler, 17개 잡)
+## 9. PostgreSQL 주요 테이블 및 행 규모
 
-| 주기 | 잡 | 역할 |
-|------|---|------|
-| 30초 | healing_cycle | 서비스 헬스체크 + 자동복구 (unified_healer.py, 777줄) |
-| 2분 | alert_eval | 규칙 기반 알림 평가 |
-| 5분 | auto_fix_dispatcher | error_log → 자동 수정 작업 제출 |
-| 2시간 | background_compaction | 미압축 세션 자동 압축 |
-| 3시간 | learning_health_check | 대화 vs 학습 비율 체크 |
-| 매일 09:00 | daily_summary | CEO 텔레그램 일일요약 |
-| 매일 12:00 | memory_gc | ai_observations 가비지 컬렉션 |
-| 매일 13:00 | memory_consolidation | 중복 병합, 참조 강화 |
-| 매일 14:00 | sleep_time_agent | 인사이트 생성 + 프롬프트 최적화 |
-| 매일 15:00~16:30 | quality chain | stats→regression→feedback→research→experience |
-| 매주 월 | weekly_briefing + quality | CEO 주간 브리핑 + 품질 분석 |
+아래는 `pg_stat_user_tables.n_live_tup` 전체 목록과 주요 테이블 `SELECT count(*)`를 함께 확인한 결과다. 주요 표의 행 수는 같은 시점의 정확한 `count(*)` 기준이다.
 
-## DB 스키마 (72개 테이블, 주요 도메인)
+| 도메인 | 테이블 | 행 수 |
+|---|---|---:|
+| 채팅 | `chat_messages` | 48,125 |
+| 채팅 | `chat_sessions` | 198 |
+| 채팅 | `chat_workspaces` | 57 |
+| 채팅 | `chat_artifacts` | 25,686 |
+| 채팅 | `chat_turn_executions` | 10,535 |
+| 메모리 | `memory_facts` | 61,074 |
+| 메모리 | `ai_observations` | 515 |
+| 메모리 | `ai_meta_memory` | 959 |
+| Runner | `pipeline_jobs` | 572 |
+| Runner | `task_logs` | 185 |
+| 운영 | `error_log` | 1,583 |
+| 운영 | `deploy_history` | 51 |
+| LLM | `llm_models` | 498 |
+| LLM | `llm_api_keys` | 13 |
+| 프롬프트 | `prompt_assets` | 137 |
+| 프롬프트 | `compiled_prompt_provenance` | 13,778 |
+| 품질 | `code_reviews` | 10,195 |
+| 품질 | `response_critiques` | 3,373 |
+| 미디어 | `media_generation_jobs` | 190,601 |
 
-- **채팅**: chat_workspaces, chat_sessions, chat_messages, chat_artifacts, chat_files, chat_drive_files
-- **메모리**: ai_observations, ai_meta_memory, memory_facts, session_notes, experience_memory
-- **파이프라인**: pipeline_jobs, task_logs, commit_log, approval_queue
-- **LLM 관리**: llm_api_keys, llm_models, llm_key_audit_logs, runner_model_config, chat_model_preferences, bg_llm_usage_log
-- **프로젝트**: projects, project_tasks, project_plans, project_artifacts, project_memory
-- **모니터링**: error_log, alert_history, system_metrics, monitored_services, circuit_breaker_state
-- **CEO**: ceo_chat_messages/sessions, ceo_decision_log, ceo_facts, ceo_interaction_patterns, ceo_agenda
-- **지시서**: directive_lifecycle
-- **품질**: response_critiques, debate_logs/sessions, design_reviews, code_reviews
-- **비용**: cost_tracking, task_cost_log
-- **카카오봇**: kakao_msgbot_config/logs, kakaobot_contacts/scheduled/templates/anniversaries, kakao_pc_agent_tokens
-- **LiteLLM**: LiteLLM_CronJob, LiteLLM_ManagedFileTable
+전체 사용자 테이블은 156개로 확인되었다. 대표 도메인에는 채팅·메모리·Runner·LLM·프롬프트·품질·비용·카카오봇·agent vault·열정국밥/금융 데이터가 포함된다. `[SRC:DB:pg_stat_user_tables, SELECT count(*)]`
 
-마이그레이션: 011~055 (45개 SQL, `migrations/` 디렉토리).
+## 10. 운영 확인 포인트
 
-## 추가 시스템
-
-| 시스템 | 파일 | 역할 |
-|--------|------|------|
-| PC 에이전트 | `app/api/pc_agent.py` (240줄) + `app/services/pc_agent_manager.py` | WebSocket, agent_id 기반 16개 명령 (AADS-195) |
-| Agent SDK | `app/services/agent_sdk_service.py` (380줄) | Claude Agent SDK 통합, bridge fallback |
-| 카카오봇 | `app/api/kakao_bot.py` + `app/services/kakaobot_ai.py` | 카카오톡 자동응답 + AI |
-| MCP | `app/mcp/client.py` + `app/core/mcp_server.py` | MCP 클라이언트/서버 |
-| LangGraph | `app/graph/builder.py`, `state.py`, `routing.py` | 에이전트 실행 체인 |
-| 에이전트 16개 | `app/agents/` | pm, supervisor, developer, qa, architect, devops, researcher, strategist, planner, judge 등 |
-
-## 대시보드 (aads-dashboard, Next.js 16)
-
-20개 페이지: /chat(핵심), /ops, /managers, /agenda, /kakaobot, /memory, /reports, /projects, /project-status, /decisions, /tasks, /conversations, /server-status, /settings, /lessons, /flow, /channels, /genspark, /login, /signup.
-
-CEO Chat 구성: ChatInput.tsx, ChatSidebar.tsx, ChatArtifactPanel.tsx, MarkdownRenderer.tsx, api.ts, types.ts.
-
-## 코드 규모 요약
-
-| 영역 | 파일 수 | 핵심 대형 파일 |
-|------|---------|--------------|
-| app/api/ | 73개 | ceo_chat_tools.py(3247), ceo_chat_tools_db.py(501) |
-| app/services/ | 96개 | chat_service.py(4146), pipeline_c.py(2130, 레거시), model_selector.py(2126), tool_registry.py(2202) |
-| app/core/ | 18개 | memory_recall.py(921), memory_gc.py(758) |
-| app/agents/ | 16개 | — |
-| app/models/ | 12개 | chat.py(대형) |
-| app/graph/ | 3개 | — |
-| app/routers/ | 1개 | chat.py(1157) |
-| migrations/ | 45개 | 011~055 |
-
-## 운영 참조
-
-- 서버 재시작: `docker exec aads-server supervisorctl restart aads-api` (R-DOCKER: docker compose up 전체 금지)
-- 헬스체크: `curl -s https://aads.newtalk.kr/api/v1/health`
-- 배포: `docker compose -f docker-compose.prod.yml up -d --build aads-server`
-- 테스트: `docker exec aads-server python3 -m pytest tests/ -v`
-- 긴급: GitHub PAT 2026-05-27 만료(~33일), 서버114 디스크 79%
+- API health/ops: `/api/v1/health`, `/api/v1/ops/health-check`.
+- 활성 작업/충돌: `pipeline_jobs` 상태, dependency, work-lock, `chat_workspace_change_ledger`.
+- LLM 장애: 인증 토큰 계정 상태, LiteLLM proxy 실행 여부, `llm_models` 활성 설정.
+- 프롬프트 변경: `prompt_assets` scope/enabled/priority → 실제 `compiled_prompt_provenance`.
+- 배포: active/standby 컨테이너 health와 nginx upstream 전환 상태.
 
 ## 관련 문서
 
-- AADS-3STEP-SYSTEM-INDEX: `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md` — 신규 러너 3단계 읽기 순서
-- HANDOVER.md: `/root/aads/aads-docs/HANDOVER.md` (v14.0, 67KB) — 메인 인수인계서
-- CEO-DIRECTIVES: `/root/aads/aads-docs/CEO-DIRECTIVES.md` (35KB) — CEO 규칙 전체
-- AADS-KNOWLEDGE: `docs/knowledge/AADS-KNOWLEDGE.md` — 파이프라인/교차검증/함정
-- BLUEGREEN_DEPLOY_SPEC: `docs/BLUEGREEN_DEPLOY_SPEC.md` (12KB) — 무중단 배포 상세
-- MEMORY_EVOLUTION: `docs/MEMORY_EVOLUTION_ARCHITECTURE.md` (24KB) — AI 진화 시스템 설계
+- `docs/knowledge/AADS-3STEP-SYSTEM-INDEX.md` — 신규 러너 읽기 순서
+- `docs/knowledge/5-LAYER-PROMPT-GOVERNANCE.md` — 프롬프트 거버넌스 상세
+- `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md` — Runner 상세
+- `docs/BLUEGREEN_DEPLOY_SPEC.md` — Blue-Green 배포 상세
+- `docs/HANDOVER.md` — 운영 인수인계 기록

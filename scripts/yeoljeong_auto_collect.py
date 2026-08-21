@@ -41,6 +41,7 @@ def _empty_delivery_counts() -> dict[str, int]:
     return {kind: 0 for kind in DELIVERY_RECORD_TYPES}
 BLOCKING_ERROR_CODES = {
     "BANK_ACTION_REQUIRED",
+    "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
     "BANK_BROWSER_SESSION_REQUIRED",
     "BANK_CONNECTOR_NOT_CONFIGURED",
     "CSV_UPLOAD_REQUIRED",
@@ -92,6 +93,9 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "storage_state_path": args.storage_state_path or "",
         "force_recreate_portal_sessions": bool(args.force_recreate_sessions),
         "close_portal_browser_on_complete": not bool(args.keep_browser_open),
+        "auto_open_bank_browser": not bool(getattr(args, "no_auto_open_bank_browser", False)),
+        "browser_agent_id": str(getattr(args, "browser_agent_id", "") or ""),
+        "browser_preferred_port": getattr(args, "browser_preferred_port", None),
         "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False))
         or bool(getattr(args, "until_complete", False)),
     }
@@ -211,6 +215,14 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
             "date_to": payload.get("date_to") or "",
             "source": str(account.get("connection_type") or "manual"),
             "transactions": [],
+            "browser_session_id": str(payload.get("bank_browser_session_id") or payload.get("browser_session_id") or ""),
+            "auto_open_browser": bool(payload.get("auto_open_bank_browser", True)),
+            "browser_agent_id": str(payload.get("browser_agent_id") or ""),
+            "browser_preferred_port": payload.get("browser_preferred_port") or None,
+            "force_recreate_browser": bool(
+                payload.get("force_recreate_bank_browser")
+                or payload.get("force_recreate_portal_sessions")
+            ),
         }
         try:
             result = collect_bank_account_transactions(account_id, collect_payload, user)
@@ -539,6 +551,12 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.append("--force-recreate-sessions")
     if payload.get("close_portal_browser_on_complete") is False:
         argv.append("--keep-browser-open")
+    if payload.get("auto_open_bank_browser") is False:
+        argv.append("--no-auto-open-bank-browser")
+    if payload.get("browser_agent_id"):
+        argv.extend(["--browser-agent-id", str(payload.get("browser_agent_id") or "")])
+    if payload.get("browser_preferred_port"):
+        argv.extend(["--browser-preferred-port", str(payload.get("browser_preferred_port") or "")])
     if payload.get("skip_financial_accounts"):
         argv.append("--skip-financial-accounts")
     return argv
@@ -827,6 +845,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date-from", default="", help="YYYY-MM-DD. Default: first day of current month.")
     parser.add_argument("--date-to", default="", help="YYYY-MM-DD. Default: today.")
     parser.add_argument("--browser-session-id", default="", help="Optional PC Agent browser session id.")
+    parser.add_argument("--browser-agent-id", default="", help="Optional PC Agent id for bank browser auto-open.")
+    parser.add_argument("--browser-preferred-port", type=int, default=None, help="Optional preferred CDP port for bank browser auto-open.")
     parser.add_argument("--storage-state-path", default="", help="Optional Playwright storage state path.")
     parser.add_argument(
         "--force-recreate-sessions",
@@ -837,6 +857,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-browser-open",
         action="store_true",
         help="Keep PC Agent portal browser sessions open after each collection attempt.",
+    )
+    parser.add_argument(
+        "--no-auto-open-bank-browser",
+        action="store_true",
+        help="Disable automatic PC Agent bank corporate-page browser opening.",
     )
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")

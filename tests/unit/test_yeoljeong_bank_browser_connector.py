@@ -326,6 +326,46 @@ def test_collect_async_no_session_returns_action_required():
     assert "PC Agent" in result["message"]
 
 
+def test_collect_async_auto_opens_bank_work_session_when_enabled():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=["https://bank.shinhan.com/rib/easy/index.jsp", "<html><body>로그인 필요</body></html>"])
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+
+    mock_session = MagicMock()
+    mock_session.session_id = "auto-session-001"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.find_by_work_key.return_value = None
+        bridge_inst.ensure_work_session = AsyncMock(return_value=mock_session)
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-browser-auto",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
+    assert result["diagnostics"]["browser_session_id"] == "auto-session-001"
+    assert result["diagnostics"]["auto_opened_session"] == "1"
+    bridge_inst.ensure_work_session.assert_awaited_once()
+    mock_page.goto.assert_awaited_once()
+
+
 def test_collect_async_infers_portal_from_bank_name_when_codes_missing():
     account = {"id": "acct-1", "bank_name": "신한은행 기업", "bank_code": "", "institution_code": ""}
 
