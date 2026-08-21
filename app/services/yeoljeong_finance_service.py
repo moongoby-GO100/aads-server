@@ -6101,9 +6101,15 @@ async def _collect_delivery_from_browser_bridge_session_async(
                     if captcha_value:
                         diagnostics["captcha_mode"] = "ai_vision_auto_solve"
                 captcha_accepted = False
+                _cred_username = str(account.get("username") or "").strip()
+                _cred_password = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
                 for _captcha_attempt in range(3):
                     if not captcha_value:
                         break
+                    if _cred_username and _cred_password:
+                        _login_sels = _delivery_login_selectors(service)
+                        await _baemin_bridge_fill_first(page, _login_sels["username"], _cred_username)
+                        await _baemin_bridge_fill_first(page, _login_sels["password"], _cred_password)
                     if not await _delivery_bridge_fill_ddangyo_numeric_captcha(page, captcha_value):
                         diagnostics["captcha_input"] = "input_failed"
                         break
