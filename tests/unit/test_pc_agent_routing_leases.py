@@ -338,8 +338,8 @@ async def test_execute_routed_command_timeout_triggers_browser_close_session(
     assert sent[0][0] == "browser_eval"
     assert sent[1][0] == "browser_close_session"
     assert sent[1][1]["work_key"] == "ntv2-vvic-scrape"
-    assert sent[1][1]["close_browser"] is True
-    assert sent[1][1]["close_tabs"] is True
+    assert sent[1][1]["close_browser"] is False
+    assert sent[1][1]["close_tabs"] is False
 
 
 @pytest.mark.asyncio
@@ -499,7 +499,7 @@ async def test_execute_routed_command_close_on_complete_triggers_session_cleanup
     assert sent[0][0] == "browser_eval"
     assert sent[1][0] == "browser_close_session"
     assert sent[1][1]["work_key"] == "aads-ceo-browser"
-    assert sent[1][1]["close_browser"] is True
+    assert sent[1][1]["close_browser"] is False
 
 
 @pytest.mark.asyncio

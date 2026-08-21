@@ -294,3 +294,9 @@
 - 확인: `browser_launch`는 work_key 재사용과 `new_window=false`가 이미 반영되어 있었지만, `browser_close_session`은 등록된 세션의 프로필 루트가 PC Agent 관리형인지 검증하지 않았다.
 - 조치: `pc_agent/commands/browser_auto.py`에서 `%LOCALAPPDATA%/KakaoBot/cdp-profile` 하위 관리형 프로필만 탭/프로세스 종료를 허용하고, 일반 사용자 프로필 또는 출처 불명 세션은 `UNMANAGED_BROWSER_PROFILE`로 거부하도록 변경했다.
 - 검증: `python3 -m py_compile pc_agent/commands/browser_auto.py tests/unit/test_cdp_session_manager.py` 성공. 현재 소스를 마운트한 컨테이너에서 `pytest tests/unit/test_cdp_session_manager.py tests/unit/test_pc_agent_routing_leases.py tests/test_pc_agent_command_builder.py -q` 69 passed.
+
+## 2026-08-21 13:40 KST - PC Agent 자동 cleanup 서버 측 브라우저 보호 보강
+- 확인: 운영 PC Agent 배포 파일은 `1.0.61`로 갱신됐지만, CEO PC 실행 프로세스는 구형 EXE가 남아 있어 `browser_close_session` 내부 가드가 즉시 메모리에 로드됐다고 단정할 수 없었다.
+- 조치: `app/services/pc_agent_manager.py`에서 브라우저 명령 타임아웃/완료 후 자동 cleanup의 기본값을 `close_browser=false`, `close_tabs=false`로 변경했다. 명시 파라미터가 없는 자동 정리는 세션 해제만 요청하고 창/탭 종료를 지시하지 않는다.
+- PC 조치: CEO PC 설치 폴더의 Agent ZIP 동기화를 수동 실행해 `VERSION=1.0.61` 및 `commands/browser_auto.py`의 `UNMANAGED_BROWSER_PROFILE` 가드 존재를 확인했다. 일반 Chrome 또는 관리형 Chrome 프로세스는 종료하지 않았다.
+- 검증: `python3 -m py_compile app/services/pc_agent_manager.py` 성공. 현재 소스를 마운트한 컨테이너에서 `pytest tests/unit/test_pc_agent_routing_leases.py -q` 17 passed.

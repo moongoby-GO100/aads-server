@@ -576,8 +576,8 @@ class PCAgentManager:
             return
         close_params: Dict[str, Any] = {
             "work_key": work_key,
-            "close_browser": bool((params or {}).get("close_browser_on_timeout", True)),
-            "close_tabs": bool((params or {}).get("close_tabs_on_timeout", True)),
+            "close_browser": bool((params or {}).get("close_browser_on_timeout", False)),
+            "close_tabs": bool((params or {}).get("close_tabs_on_timeout", False)),
             "reason": "route_execute_timeout",
             "command_timeout_seconds": max(1.0, min(10.0, float(timeout_seconds))),
         }
@@ -653,8 +653,8 @@ class PCAgentManager:
             return {"status": "skipped", "reason": "work_key_missing"}
         cleanup_params: Dict[str, Any] = {
             "work_key": work_key,
-            "close_browser": bool((params or {}).get("close_browser_on_complete", True)),
-            "close_tabs": bool((params or {}).get("close_tabs_on_complete", True)),
+            "close_browser": bool((params or {}).get("close_browser_on_complete", False)),
+            "close_tabs": bool((params or {}).get("close_tabs_on_complete", False)),
             "reason": "route_execute_complete",
             "command_timeout_seconds": max(1.0, min(10.0, float(timeout_seconds))),
         }
