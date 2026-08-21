@@ -194,6 +194,62 @@ async def _fetch_pc_agent_statuses_from_api() -> list[dict[str, Any]]:
             if isinstance(agents, list) and agents:
                 return [item for item in agents if isinstance(item, dict)]
     return []
+
+
+_PC_ROUTE_FALLBACK_ERROR_CODES = frozenset({"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"})
+
+
+async def _route_pc_command_via_api(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Forward a routed PC-Agent command to the API process.
+
+    MCP bridge workers own a separate (empty) ``pc_agent_manager`` instance, so a
+    locally-routed command fails with PC_AGENT_OFFLINE even while the Uvicorn
+    process holds healthy WebSocket sessions.  ``/pc-agent/route-execute``
+    already implements blue/green peer fallback, so use it as the cross-process
+    execution path — mirroring ``_fetch_pc_agent_statuses_from_api``.
+    """
+    configured = str(os.getenv("AADS_API_URL", "") or "").rstrip("/")
+    candidates: list[str] = []
+    for base in (
+        configured,
+        f"{_AADS_API_BASE.rstrip('/')}/api/v1",
+        "http://127.0.0.1:8100/api/v1",
+        "http://127.0.0.1:8102/api/v1",
+    ):
+        if not base:
+            continue
+        normalized = base if base.endswith("/api/v1") else f"{base}/api/v1"
+        url = f"{normalized}/pc-agent/route-execute"
+        if url not in candidates:
+            candidates.append(url)
+
+    try:
+        request_timeout = float(payload.get("command_timeout_seconds") or 120.0) + 15.0
+    except (TypeError, ValueError):
+        request_timeout = 135.0
+
+    async with httpx.AsyncClient(timeout=request_timeout) as client:
+        for url in candidates:
+            try:
+                response = await client.post(url, json=payload)
+            except httpx.HTTPError:
+                continue
+            try:
+                data = response.json()
+            except ValueError:
+                continue
+            if response.status_code >= 400:
+                detail = data.get("detail") if isinstance(data, dict) else None
+                if isinstance(detail, dict):
+                    if str(detail.get("error_code") or "") in _PC_ROUTE_FALLBACK_ERROR_CODES:
+                        continue
+                    return detail
+                continue
+            if isinstance(data, dict):
+                return data
+    return None
+
+
 _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
@@ -3707,18 +3763,28 @@ class ToolExecutor:
         if not isinstance(params, dict):
             return {"error": "params는 object여야 합니다."}
 
-        routed = await pc_agent_manager.execute_routed_command(
-            command_type=command_type,
-            params=params,
-            agent_id=agent_id,
-            job_type=str(inp.get("job_type", "general") or "general"),
-            required_capabilities=inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
-            queue_if_busy=_as_bool(inp.get("queue_if_busy", True), default=True),
-            wait_for_turn=_as_bool(inp.get("wait_for_turn", True), default=True),
-            queue_wait_timeout_seconds=float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
-            lease_ttl_seconds=int(inp.get("lease_ttl_seconds", 180) or 180),
-            command_timeout_seconds=float(inp.get("timeout", inp.get("command_timeout_seconds", 120.0)) or 120.0),
-        )
+        route_kwargs = {
+            "command_type": command_type,
+            "params": params,
+            "agent_id": agent_id,
+            "job_type": str(inp.get("job_type", "general") or "general"),
+            "required_capabilities": inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
+            "queue_if_busy": _as_bool(inp.get("queue_if_busy", True), default=True),
+            "wait_for_turn": _as_bool(inp.get("wait_for_turn", True), default=True),
+            "queue_wait_timeout_seconds": float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
+            "lease_ttl_seconds": int(inp.get("lease_ttl_seconds", 180) or 180),
+            "command_timeout_seconds": float(inp.get("timeout", inp.get("command_timeout_seconds", 120.0)) or 120.0),
+        }
+        routed = await pc_agent_manager.execute_routed_command(**route_kwargs)
+        if (
+            isinstance(routed, dict)
+            and routed.get("status") == "error"
+            and str(routed.get("error_code") or "") in _PC_ROUTE_FALLBACK_ERROR_CODES
+            and pc_agent_manager.online_agents_count() == 0
+        ):
+            forwarded = await _route_pc_command_via_api(route_kwargs)
+            if forwarded is not None:
+                return forwarded
         return routed
 
     async def _pc_list_agents(self, inp: Dict[str, Any]) -> Any:
@@ -3774,18 +3840,28 @@ class ToolExecutor:
             return {"error": "params는 object여야 합니다."}
 
         if target_device is None and normalized_command_type in pc_command_types:
-            pc_result = await pc_agent_manager.execute_routed_command(
-                command_type=command_type,
-                params=params,
-                agent_id=agent_id,
-                job_type=str(inp.get("job_type", "general") or "general"),
-                required_capabilities=inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
-                queue_if_busy=_as_bool(inp.get("queue_if_busy", True), default=True),
-                wait_for_turn=_as_bool(inp.get("wait_for_turn", True), default=True),
-                queue_wait_timeout_seconds=float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
-                lease_ttl_seconds=int(inp.get("lease_ttl_seconds", 180) or 180),
-                command_timeout_seconds=float(inp.get("command_timeout_seconds", timeout) or timeout),
-            )
+            route_kwargs = {
+                "command_type": command_type,
+                "params": params,
+                "agent_id": agent_id,
+                "job_type": str(inp.get("job_type", "general") or "general"),
+                "required_capabilities": inp.get("required_capabilities") if isinstance(inp.get("required_capabilities"), list) else [],
+                "queue_if_busy": _as_bool(inp.get("queue_if_busy", True), default=True),
+                "wait_for_turn": _as_bool(inp.get("wait_for_turn", True), default=True),
+                "queue_wait_timeout_seconds": float(inp.get("queue_wait_timeout_seconds", 120.0) or 120.0),
+                "lease_ttl_seconds": int(inp.get("lease_ttl_seconds", 180) or 180),
+                "command_timeout_seconds": float(inp.get("command_timeout_seconds", timeout) or timeout),
+            }
+            pc_result = await pc_agent_manager.execute_routed_command(**route_kwargs)
+            if (
+                isinstance(pc_result, dict)
+                and pc_result.get("status") == "error"
+                and str(pc_result.get("error_code") or "") in _PC_ROUTE_FALLBACK_ERROR_CODES
+                and pc_agent_manager.online_agents_count() == 0
+            ):
+                forwarded = await _route_pc_command_via_api(route_kwargs)
+                if forwarded is not None:
+                    return forwarded
             if pc_result.get("status") != "error" or pc_agent_manager.online_agents_count() > 0 or agent_id:
                 return pc_result
 
