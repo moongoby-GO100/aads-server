@@ -7796,3 +7796,24 @@
   - `docker exec aads-server python -m pytest tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_pc_agent_api_disconnects.py tests/test_pc_agent_command_builder.py -q` succeeded: 88 passed.
 - Remaining:
   - Commit, push, blue-green deploy, and operational PC Agent smoke verification are still required after this entry.
+
+## 2026-08-21 10:05 KST - Chat assistant bubble hidden false-positive recovery
+
+- Request: Fix the recurring issue where completed assistant replies were stored but did not appear as chat bubbles across sessions, especially after interruption/recovery paths.
+- Findings:
+  - Real assistant replies tagged as `runner_response`, `interrupted_partial`, `_archived_partial`, or long `pipeline_runner` could be hidden by the DB trigger or excluded by broad history filters.
+  - The affected session `45249276-83a1-42ca-b58d-d5f1737a388b` now has its latest assistant reply visible (`is_hidden=false`).
+- Changes:
+  - Added `migrations/130_chat_hidden_recoverable_replies.sql` to keep long real assistant replies visible while preserving short runner/system notices as hidden.
+  - Relaxed the chat history visible-message filter so live/recovery fetches can include hidden streaming placeholders and long recoverable assistant text.
+  - Restricted runner marker filtering to the beginning of a message body so quoted runner strings inside real CEO reports do not hide the whole bubble.
+  - Added unit coverage for the visible-message filter and runner marker head-only filtering.
+- Verification:
+  - `docker exec -i aads-postgres psql -U aads -d aads < migrations/130_chat_hidden_recoverable_replies.sql` succeeded; backfill updates were 0 because the DB already matched the new function.
+  - DB check confirmed hidden long recoverable replies are 0 of 3,937 rows for `runner_response`, `interrupted_partial`, `_archived_partial`, and `pipeline_runner`.
+  - `docker exec aads-server pytest tests/unit/test_chat_service.py -q` succeeded: 60 passed, 1 warning.
+  - `python3 -m py_compile app/services/chat_service.py` and `docker exec aads-server python -m py_compile /app/app/services/chat_service.py` succeeded.
+  - `curl -fsS http://127.0.0.1:8100/health` returned status `ok`.
+- Remaining:
+  - Commit, push, and blue-green deploy are required after this entry.
+  - Browser E2E remains pending; API/DB/container verification covered this fix.

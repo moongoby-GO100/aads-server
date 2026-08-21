@@ -259,6 +259,30 @@ def test_actionable_quoted_instruction_does_not_promote_plain_quotes():
     assert chat_service._promote_actionable_quoted_instruction(content) == content
 
 
+def test_visible_message_filter_allows_hidden_streaming_placeholder_when_requested():
+    active_filter = chat_service._visible_message_filter(is_active=True, include_streaming=True)
+    inactive_filter = chat_service._visible_message_filter(is_active=False, include_streaming=True)
+
+    assert "(is_hidden = FALSE OR intent = 'streaming_placeholder')" in active_filter
+    assert "(is_hidden = FALSE OR intent = 'streaming_placeholder')" in inactive_filter
+    assert "intent IN ('runner_response', 'interrupted_partial', '_archived_partial')" in active_filter
+    assert "length(COALESCE(content, '')) > 200" in active_filter
+    assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" not in active_filter
+
+
+def test_visible_message_filter_hides_streaming_placeholder_by_default_for_active_session():
+    default_filter = chat_service._visible_message_filter(is_active=True, include_streaming=False)
+
+    assert "AND is_hidden = FALSE" in default_filter
+    assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" in default_filter
+
+
+def test_auto_message_exclude_filter_only_checks_runner_markers_near_head():
+    assert "intent IS DISTINCT FROM 'pipeline_runner'" not in chat_service._AUTO_MESSAGE_EXCLUDE_FILTER
+    assert "left(ltrim(COALESCE(content, '')), 240) LIKE '%[Pipeline Runner]%'" in chat_service._AUTO_MESSAGE_EXCLUDE_FILTER
+    assert "content LIKE '%[Pipeline Runner]%'" not in chat_service._AUTO_MESSAGE_EXCLUDE_FILTER
+
+
 @pytest.mark.asyncio
 async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
     session_id = str(uuid.uuid4())

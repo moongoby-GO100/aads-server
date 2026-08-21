@@ -6234,20 +6234,36 @@ async def _session_has_running_execution(conn: asyncpg.Connection, session_id: u
 
 _AUTO_MESSAGE_EXCLUDE_FILTER = (
     " AND intent IS DISTINCT FROM 'pipeline_c'"
-    " AND intent IS DISTINCT FROM 'pipeline_runner'"
     " AND intent IS DISTINCT FROM 'runner_notification'"
     " AND intent IS DISTINCT FROM 'ai_review_warning'"
     " AND intent IS DISTINCT FROM 'system_trigger'"
     " AND intent IS DISTINCT FROM 'auto_reaction'"
-    # [AADS-MSG-VANISH-P0] 숨김 메시지를 LIMIT 적용 전에 제외 — 더 광범위한 패턴으로 통합
-    " AND NOT (role = 'assistant' AND content LIKE '%[Pipeline Runner]%')"
-    " AND NOT (role = 'assistant' AND content LIKE '%[Runner]%')"
+    # Runner notices normally start with these markers. Long CEO reports may
+    # quote the same strings later in the body and must remain visible.
+    " AND NOT (role = 'assistant' AND left(ltrim(COALESCE(content, '')), 240) LIKE '%[Pipeline Runner]%')"
+    " AND NOT (role = 'assistant' AND left(ltrim(COALESCE(content, '')), 240) LIKE '%[Runner]%')"
     " AND NOT (role = 'user' AND content LIKE '[시스템]%')"
 )
 
 
 def _visible_message_filter(is_active: bool, include_streaming: bool) -> str:
-    hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate' AND is_hidden = FALSE"
+    hidden_filter = "AND intent IS DISTINCT FROM '_deleted_duplicate'"
+    if include_streaming:
+        # streaming_placeholder rows are intentionally is_hidden=true for normal
+        # history, but live/recovery fetches explicitly request them. Interrupted
+        # rows can also be hidden before repair; include substantial assistant
+        # text so repair/promotion code can normalize it instead of dropping the
+        # bubble from the UI.
+        hidden_filter += (
+            " AND (is_hidden = FALSE"
+            " OR intent = 'streaming_placeholder'"
+            " OR (role = 'assistant'"
+            "     AND intent IN ('runner_response', 'interrupted_partial', '_archived_partial')"
+            "     AND length(COALESCE(content, '')) > 200)"
+            ")"
+        )
+    else:
+        hidden_filter += " AND is_hidden = FALSE"
     if is_active and not include_streaming:
         # 활성 스트리밍 중에는 SSE 버블과 DB placeholder 중복 렌더링을 막는다.
         hidden_filter += " AND intent IS DISTINCT FROM 'streaming_placeholder'"
