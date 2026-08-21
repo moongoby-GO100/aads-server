@@ -210,7 +210,7 @@ if slot_healthy "$active_port" "$active_container"; then
             printf '%s\n' "$active_container" > "$ACTIVE_CONTAINER_FILE"
         fi
     fi
-    log "OK active=${active_container}:${active_port} standby=$(slot_detail "$peer_port" "$peer_container")"
+    log "OK active=${active_container}:${active_port}"
     exit 0
 fi
 
@@ -220,7 +220,10 @@ if deploy_in_progress; then
     exit 0
 fi
 
-fail_count="$(tr -cd '0-9' < "$FAIL_FILE" 2>/dev/null || true)"
+fail_count="0"
+if [[ -f "$FAIL_FILE" ]]; then
+    fail_count="$(tr -cd '0-9' < "$FAIL_FILE" 2>/dev/null || true)"
+fi
 fail_count="${fail_count:-0}"
 fail_count=$((fail_count + 1))
 printf '%s\n' "$fail_count" > "$FAIL_FILE"

@@ -90,3 +90,4 @@ tmp/
 tmp_ntv2_hotfix/
 exports/
 .deploy_downtime
+.deploy_generation
