@@ -1241,28 +1241,36 @@ async def lifespan(app: FastAPI):
         return True, "default"
 
     def _selfheal_execution_resume_owner_marker() -> None:
-        """Write the resume owner marker at startup only when it is missing."""
+        """Keep the resume owner marker aligned with the active API slot."""
         owner_flag_file = os.getenv("AADS_RESUME_OWNER_FILE", "/tmp/aads_execution_resume_owner")
         active_container_file = os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container")
         expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
         marker_written = False
 
         try:
-            if not os.path.exists(owner_flag_file):
-                is_owner = True
-                source = "default"
-                if expected_container:
-                    try:
-                        with open(active_container_file, "r", encoding="utf-8") as fh:
-                            active_container = fh.read().strip()
-                        if active_container:
-                            is_owner = active_container == expected_container
-                            source = "active_file"
-                    except Exception:
-                        source = "default"
+            is_owner = True
+            source = "default"
+            if expected_container:
+                try:
+                    with open(active_container_file, "r", encoding="utf-8") as fh:
+                        active_container = fh.read().strip()
+                    if active_container:
+                        is_owner = active_container == expected_container
+                        source = "active_file"
+                except Exception:
+                    source = "default"
 
+            expected_marker = "true" if is_owner else "false"
+            current_marker = None
+            try:
+                with open(owner_flag_file, "r", encoding="utf-8") as fh:
+                    current_marker = fh.read().strip().lower()
+            except Exception:
+                current_marker = None
+
+            if current_marker != expected_marker:
                 with open(owner_flag_file, "w", encoding="utf-8") as fh:
-                    fh.write("true" if is_owner else "false")
+                    fh.write(expected_marker)
                 marker_written = True
 
             owner, source = _resolve_execution_resume_owner()
