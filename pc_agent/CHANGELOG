@@ -1,3 +1,4 @@
+v1.0.61: 브라우저 세션 종료 시 PC Agent 관리형 프로필만 닫도록 보호해 사용자 일반 Chrome 오인 종료 방지
 v1.0.60: 브라우저 작업 세션 work_key 재사용 기본화 및 직접 browser_launch 새 창 생성 방지
 v1.0.59: 트레이 수동 재연결 메뉴, 마스킹 설정 UI, 완전 종료 확인창 비동기 처리 추가
 v1.0.58: Genspark UI 자동화용 CDP WebSocket handshake 타임아웃 완화 및 재시도 보강
