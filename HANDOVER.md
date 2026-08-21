@@ -6,6 +6,7 @@
 - Changes:
   - `scripts/yeoljeong_auto_collect.py`: `--until-complete` attempts with `--attempt-timeout-seconds` now run the actual collector in a child Python process and use `subprocess.run(timeout=...)` instead of in-process `signal.alarm()`.
   - Timeout handling now marks matching queued/running delivery status rows as `failed` / `ATTEMPT_TIMEOUT` immediately so the dashboard does not wait for the 15-minute stale sweeper.
+  - Timeout summaries now normalize payload service lists before rendering retryable service rows.
   - Added child-process stdout parsing and retryable timeout unit coverage.
 - Verification before commit:
   - `python3 -m py_compile scripts/yeoljeong_auto_collect.py` passed.

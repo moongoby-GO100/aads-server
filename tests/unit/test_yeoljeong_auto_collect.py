@@ -668,5 +668,6 @@ def test_run_sync_with_timeout_marks_attempt_timeout(monkeypatch):
     )
 
     assert marked[0][1] == 3
+    assert summary["summary"][0]["service"] == "coupangeats"
     assert summary["summary"][0]["status"] == "failed"
     assert summary["summary"][0]["error_code"] == "ATTEMPT_TIMEOUT"

@@ -495,13 +495,22 @@ def _run_sync(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool
     return queue_delivery_sync(payload, user) if queue_only else sync_delivery(payload, user)
 
 
+def _payload_services(payload: dict[str, Any]) -> list[str]:
+    services = payload.get("services")
+    if isinstance(services, list):
+        return [str(service).strip() for service in services if str(service).strip()]
+    if isinstance(services, str):
+        return _split_csv(services)
+    return list(DEFAULT_SERVICES)
+
+
 def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
-    services = payload.get("services") if isinstance(payload.get("services"), list) else []
+    services = _payload_services(payload)
     argv = [
         sys.executable,
         str(Path(__file__).resolve()),
         "--services",
-        ",".join(str(service) for service in services if str(service).strip()) or ",".join(DEFAULT_SERVICES),
+        ",".join(services) or ",".join(DEFAULT_SERVICES),
         "--business-id",
         str(payload.get("business_id") or "all"),
         "--branch",
@@ -539,11 +548,7 @@ def _parse_child_collect_stdout(stdout: str) -> dict[str, Any]:
 
 
 def _mark_timeout_statuses(payload: dict[str, Any], timeout_seconds: int, attempt_started_at: str) -> None:
-    services = {
-        str(service or "").strip()
-        for service in (payload.get("services") if isinstance(payload.get("services"), list) else DEFAULT_SERVICES)
-        if str(service or "").strip()
-    }
+    services = set(_payload_services(payload))
     business_id = str(payload.get("business_id") or "").strip()
     branch = str(payload.get("branch") or "").strip()
     all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"} or branch == "전체"
@@ -582,7 +587,7 @@ def _mark_timeout_statuses(payload: dict[str, Any], timeout_seconds: int, attemp
 
 
 def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
-    services = _split_csv(str(payload.get("services") or ",".join(DEFAULT_SERVICES)))
+    services = _payload_services(payload)
     return {
         "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
         "business_id": payload.get("business_id") or "",
