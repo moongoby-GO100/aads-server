@@ -5169,3 +5169,30 @@ fro
 
 ## [2026-08-21 10:19:44 KST] [aads-server] app/services/tool_executor.py
 - Chat-Direct 수정: patch:         if target_device is None and nor→        if target_device is None and nor
+
+## [2026-08-21 17:13:23 KST] [aads-server] app/services/captcha_vision_solver.py
+- Chat-Direct 수정: write: app/services/captcha_vision_solver.py
+
+## [2026-08-21 17:14:00 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch: from app.services.auth_challenge_orchest→from app.services.auth_challenge_orchest
+
+## [2026-08-21 17:14:12 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:             captcha_value = str(account.→            captcha_value = str(account.
+
+## [2026-08-21 17:34:13 KST] [aads-server] app/services/captcha_vision_solver.py
+- Chat-Direct 수정: write: app/services/captcha_vision_solver.py
+
+## [2026-08-21 17:45:12 KST] [aads-server] app/services/captcha_vision_solver.py
+- Chat-Direct 수정: write: app/services/captcha_vision_solver.py
+
+## [2026-08-21 17:46:40 KST] [aads-server] app/services/captcha_vision_solver.py
+- Chat-Direct 수정: patch: async def _call_anthropic_vision(image_b→async def _call_anthropic_vision(image_b
+
+## [2026-08-21 17:47:23 KST] [aads-server] app/services/captcha_vision_solver.py
+- Chat-Direct 수정: patch:     models = ["claude-sonnet-5", "claude→    models = ["claude-sonnet-5", "claude
+
+## [2026-08-21 17:47:43 KST] [aads-server] app/services/captcha_vision_solver.py
+- Chat-Direct 수정: patch: async def _call_anthropic_vision(image_b→async def _call_anthropic_vision(image_b
+
+## [2026-08-21 17:49:53 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                 captcha_accepted = False→                captcha_accepted = False

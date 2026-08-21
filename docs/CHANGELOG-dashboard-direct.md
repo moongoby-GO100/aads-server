@@ -1145,3 +1145,10 @@ d='/roo
 
 ## [2026-08-20 10:12:55 KST] [aads-dashboard] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: grep -n "dirty" /root/aads/aads-server/scripts/pipeline-runner.sh
+
+## [2026-08-21 18:08:31 KST] [aads-dashboard] src/app/docs/page.tsx
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import os
+try:
+    os.kill(50983, 0)
+    pr
