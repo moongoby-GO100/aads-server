@@ -8,6 +8,12 @@
 
 set -uo pipefail
 
+# Superseded by the health-aware, audited systemd watchdog. Keep this legacy
+# cron entry as a harmless compatibility no-op once the timer is active.
+if systemctl is-active --quiet aads-api-watchdog.timer 2>/dev/null; then
+  exit 0
+fi
+
 WORKDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="${WORKDIR}/scripts/container_watchdog.sh"
 LOG_DIR="${WORKDIR}/logs"

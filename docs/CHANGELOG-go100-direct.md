@@ -22765,3 +22765,7 @@ _EOD_SWE
 ## [2026-08-21 10:17:41 KST] [GO100] HANDOVER.md
 - Chat-Direct 수정: patch: # 2026-08-21 09:24 KST - GO100 #303 NXT →# 2026-08-21 10:15 KST - GO100 #303 수익성 
 - finalize: pending
+
+## [2026-08-21 10:18:52 KST] [GO100] HANDOVER.md
+- Chat-Direct 수정: patch: - 체결 데이터 보강: signed tick volume과 절대 거래량을→- 체결 데이터 보강: signed tick volume과 절대 거래량을
+- finalize: pending

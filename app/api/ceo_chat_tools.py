@@ -1997,6 +1997,60 @@ _REMOTE_CMD_BLOCKED = re.compile(
     re.IGNORECASE,
 )
 
+# The application must not control its own API/Supervisor lifecycle. Recovery
+# and slot changes are owned by the audited host watchdog and deploy.sh.
+_AADS_SELF_CONTROL_PATTERNS: Tuple[Tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\bsupervisorctl\b[^\n;|&]{0,240}\bshutdown\b", re.IGNORECASE),
+        "Supervisor shutdown",
+    ),
+    (
+        re.compile(
+            r"\bsupervisorctl\b[^\n;|&]{0,240}\b(start|stop|restart|signal)\b"
+            r"[^\n;|&]{0,160}\b(aads-api|all)\b",
+            re.IGNORECASE,
+        ),
+        "aads-api Supervisor lifecycle control",
+    ),
+    (
+        re.compile(
+            r"\bdocker\s+(?:container\s+)?(?:stop|kill|rm)\b[^\n;|&]{0,200}"
+            r"\baads-server(?:-green)?\b",
+            re.IGNORECASE,
+        ),
+        "AADS API container stop/kill/remove",
+    ),
+    (
+        re.compile(
+            r"\bdocker\s+exec\b[^\n;|&]{0,200}\baads-server(?:-green)?\b"
+            r"[^\n;|&]{0,200}\b(?:pkill|killall)\b",
+            re.IGNORECASE,
+        ),
+        "AADS API child process kill through docker exec",
+    ),
+    (
+        re.compile(r"\bnginx\s+-s\s+(?:stop|quit)\b", re.IGNORECASE),
+        "nginx stop/quit",
+    ),
+    (
+        re.compile(r"\bsystemctl\s+(?:stop|restart)\s+nginx\b", re.IGNORECASE),
+        "nginx service stop/restart",
+    ),
+)
+
+_AADS_CONTROL_SURFACE = re.compile(
+    r"\b(supervisorctl|docker\s+(?:exec|start|stop|restart|kill|rm)|"
+    r"nginx\s+-s|systemctl\s+(?:start|stop|restart|reload))\b",
+    re.IGNORECASE,
+)
+
+
+def _aads_self_control_block_reason(command: str) -> str:
+    for pattern, reason in _AADS_SELF_CONTROL_PATTERNS:
+        if pattern.search(command or ""):
+            return reason
+    return ""
+
 _COMPOSE_OPTIONS_WITH_VALUE = frozenset({
     "-f",
     "--file",
@@ -2798,6 +2852,23 @@ async def tool_run_remote_command(project: str, command: str) -> str:
     except ValueError:
         return "[ERROR] 명령어 파싱 실패"
 
+    if project == "AADS":
+        self_control_reason = _aads_self_control_block_reason(command)
+        if self_control_reason:
+            logger.warning(
+                "aads_control_audit actor=ceo_chat action=blocked reason=%s",
+                self_control_reason,
+            )
+            return (
+                f"[BLOCKED] {self_control_reason} 차단. "
+                "API 제어는 deploy.sh 또는 호스트 watchdog을 사용하세요."
+            )
+        if _AADS_CONTROL_SURFACE.search(command):
+            logger.warning(
+                "aads_control_audit actor=ceo_chat action=requested command_prefix=%s",
+                " ".join(cmd_tokens[:4])[:120],
+            )
+
     # 보안 2.5, 3: docker exec 컨테이너 제한 + 파이프/세미콜론 차단 — CEO 지시로 전면 해제
 
     # AADS 프로젝트: docker compose 명령 → guard/deploy.sh 안전 경로로 강제
@@ -2838,7 +2909,10 @@ async def tool_run_remote_command(project: str, command: str) -> str:
         elif re.search(r"docker\s+restart\s+aads-server", command):
             _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
         if _deploy_redirect:
-            logger.warning("deploy_intercept original=%s redirect=%s", command[:120], _deploy_redirect)
+            logger.warning(
+                "aads_control_audit actor=ceo_chat action=redirected target=deploy.sh original_prefix=%s",
+                " ".join(cmd_tokens[:4])[:120],
+            )
             command = _deploy_redirect
 
         workdir = get_workdir("AADS") or "/root"

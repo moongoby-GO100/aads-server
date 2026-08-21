@@ -309,6 +309,14 @@ _DEPLOY_SAFE_FORBIDDEN_PATTERNS = (
     "docker compose up -d",
     "docker-compose up -d",
     "supervisorctl restart aads-api",
+    "supervisorctl stop aads-api",
+    "supervisorctl start aads-api",
+    "supervisorctl signal",
+    "supervisorctl shutdown",
+    "docker stop aads-server",
+    "docker kill aads-server",
+    "nginx -s stop",
+    "nginx -s quit",
     "--force",
 )
 
@@ -2193,8 +2201,8 @@ class ToolExecutor:
         if mode == "restart-single":
             if not service:
                 return {"error": "restart-single 모드에서는 service 필수"}
-            if service == "aads-server":
-                return {"error": "aads-server는 reload 또는 bluegreen 모드를 사용하세요"}
+            if service in {"aads-server", "aads-server-green"}:
+                return {"error": "AADS API 슬롯은 reload 또는 bluegreen 모드를 사용하세요"}
             if any(ch.isspace() for ch in service) or any(ch in ";|&`$()<>\\\n\r\t" for ch in service):
                 return {"error": "service 값에 허용되지 않는 문자가 포함되어 있습니다"}
 

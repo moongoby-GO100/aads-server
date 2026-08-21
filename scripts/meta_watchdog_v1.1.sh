@@ -93,55 +93,25 @@ check_and_recover "auto_trigger_114" \
     "ssh -o ConnectTimeout=5 -p 7916 root@114.207.244.86 'pgrep -f auto_trigger.sh > /dev/null'" \
     "ssh -o ConnectTimeout=5 -p 7916 root@114.207.244.86 'nohup /root/.genspark/auto_trigger.sh >> /var/log/auto_trigger.log 2>&1 &'"
 
-# 6. health-check API (v1.1: 인증에러 제외, graceful reload, 쿨다운 600초)
-HC_LOCKFILE="/tmp/meta_watchdog_hc_restart.lock"
-HC_COOLDOWN=600
-
+# 6. health-check API — recovery ownership belongs to the host watchdog.
+# Never signal/restart the API from this meta-watchdog.
+ACTIVE_PORT=$(tr -d '[:space:]' < /root/aads/aads-server/.active_port 2>/dev/null || echo 8100)
+case "$ACTIVE_PORT" in 8100|8102) ;; *) ACTIVE_PORT=8100 ;; esac
 HC_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    "http://localhost:8100/api/v1/health")
+    "http://localhost:${ACTIVE_PORT}/api/v1/health")
 
 if [ "$HC_CODE" != "200" ]; then
-    # v1.1: 401/403/422 인증/권한 에러는 재시작으로 해결 불가 — 스킵
-    if [ "$HC_CODE" = "401" ] || [ "$HC_CODE" = "403" ] || [ "$HC_CODE" = "422" ]; then
-        log_msg "INFO: health-check HTTP $HC_CODE (auth/validation error) — restart skipped, not a crash"
-        send_alert "healthcheck_auth" "⚠️ health-check HTTP $HC_CODE (인증/권한 에러). 재시작 불필요 — 설정 확인 필요."
+    log_msg "WARNING: active health HTTP $HC_CODE on :$ACTIVE_PORT — audited host watchdog check requested"
+    /root/aads/aads-server/scripts/aads_api_watchdog.sh || true
+    ACTIVE_PORT=$(tr -d '[:space:]' < /root/aads/aads-server/.active_port 2>/dev/null || echo 8100)
+    case "$ACTIVE_PORT" in 8100|8102) ;; *) ACTIVE_PORT=8100 ;; esac
+    HC_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+        "http://localhost:${ACTIVE_PORT}/api/v1/health")
+    if [ "$HC_CODE" != "200" ]; then
+        send_alert "healthcheck_api" "active API health 실패(HTTP $HC_CODE). host watchdog 감사 로그 확인 필요."
     else
-        HC_SKIP=0
-        if [ -f "$HC_LOCKFILE" ]; then
-            LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$HC_LOCKFILE" 2>/dev/null || echo 0) ))
-            if [ "$LOCK_AGE" -lt "$HC_COOLDOWN" ]; then
-                log_msg "INFO: health-check HTTP $HC_CODE but cooldown active (${LOCK_AGE}s/${HC_COOLDOWN}s) — skip restart"
-                HC_SKIP=1
-            else
-                rm -f "$HC_LOCKFILE"
-            fi
-        fi
-
-        if [ "$HC_SKIP" -eq 0 ]; then
-            log_msg "WARNING: health-check API HTTP $HC_CODE — 15초 후 재확인"
-            sleep 15
-            HC_CODE_RETRY=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-                "http://localhost:8100/api/v1/health")
-            if [ "$HC_CODE_RETRY" != "200" ]; then
-                log_msg "CRITICAL: health-check API 연속 실패 (${HC_CODE} → ${HC_CODE_RETRY}). graceful reload 시도"
-                touch "$HC_LOCKFILE"
-                # v1.1: deploy.sh code 대신 docker exec graceful reload (SSE 스트림 보호)
-                docker exec aads-server supervisorctl signal HUP aads-api 2>/dev/null
-                sleep 15
-                HC_CODE2=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-                    "http://localhost:8100/api/v1/health")
-                if [ "$HC_CODE2" != "200" ]; then
-                    send_alert "healthcheck_api" "health-check API graceful reload 실패 (HTTP $HC_CODE2). Docker 확인 필요."
-                    log_msg "CRITICAL: graceful reload 후에도 실패. 수동 조치 필요."
-                else
-                    reset_alert "healthcheck_api"
-                    log_msg "OK: health-check API recovered via graceful reload"
-                fi
-            else
-                reset_alert "healthcheck_api"
-                log_msg "OK: health-check API 일시적 실패 후 자동 복구 (${HC_CODE} → ${HC_CODE_RETRY})"
-            fi
-        fi
+        reset_alert "healthcheck_api"
+        log_msg "OK: active API recovered by host watchdog"
     fi
 fi
 

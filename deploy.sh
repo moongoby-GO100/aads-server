@@ -19,6 +19,9 @@ UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
 ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
 DEPLOY_START_EPOCH=$(date +%s)
+DEPLOY_GENERATION_FILE="${COMPOSE_DIR}/.deploy_generation"
+CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
+mkdir -p "${COMPOSE_DIR}/logs"
 
 # ── 다운타임 자동 측정 (2026-08-20 Blue/Green 동시 다운 인시던트 재발 방지) ──
 # nginx를 통한 실제 사용자 경로를 1초 주기로 폴링해 실패 구간을 누적한다.
@@ -67,6 +70,21 @@ get_downtime_seconds() {
 
 sql_escape() {
     printf "%s" "${1:-}" | sed "s/'/''/g"
+}
+
+audit_control() {
+    local action="${1:-unknown}"
+    local target="${2:-unknown}"
+    local result="${3:-unknown}"
+    local detail="${4:-}"
+    action="${action//\"/\\\"}"
+    target="${target//\"/\\\"}"
+    result="${result//\"/\\\"}"
+    detail="${detail//\"/\\\"}"
+    detail="${detail//$'\n'/ }"
+    printf '{"ts":"%s","actor":"deploy.sh","generation":"%s","action":"%s","target":"%s","result":"%s","detail":"%s"}\n' \
+        "$(date --iso-8601=seconds)" "${DEPLOY_GENERATION:-not-assigned}" "$action" "$target" "$result" "$detail" \
+        >> "$CONTROL_AUDIT_LOG" 2>/dev/null || true
 }
 
 record_deploy() {
@@ -292,6 +310,12 @@ if ! flock -w 300 8; then
     exit 1
 fi
 
+# Every background drain/sync job is bound to this generation. A newer deploy
+# invalidates older jobs before they can mutate a slot that has become active.
+DEPLOY_GENERATION="${DEPLOY_START_EPOCH}-$$-$(git -C "$COMPOSE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+printf '%s\n' "$DEPLOY_GENERATION" > "$DEPLOY_GENERATION_FILE"
+audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mode=$MODE"
+
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {
     local msg="$1"
@@ -371,27 +395,58 @@ switch_api_upstream() {
 
     cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_code_switch"
     sed -i -E \
-        -e "s/server 127\.0\.0\.1:${new_port} [^;]*;/server 127.0.0.1:${new_port} max_fails=0;/g" \
-        -e "s/server 127\.0\.0\.1:${old_port} [^;]*;/server 127.0.0.1:${old_port} max_fails=3 fail_timeout=30s backup;/g" \
+        -e "s/server 127\.0\.0\.1:${new_port} [^;]*;/server 127.0.0.1:${new_port} max_fails=1 fail_timeout=10s;/g" \
+        -e "s/server 127\.0\.0\.1:${old_port} [^;]*;/server 127.0.0.1:${old_port} max_fails=1 fail_timeout=10s backup;/g" \
         "$UPSTREAM_CONF"
     if ! nginx_config_test >/dev/null 2>&1; then
         cp "${UPSTREAM_CONF}.pre_code_switch" "$UPSTREAM_CONF"
+        audit_control "nginx-switch" "${old_port}->${new_port}" "failed" "configuration test failed"
         echo "[deploy.sh] ❌ nginx 설정 오류 — upstream 전환 취소"
         return 1
     fi
 
+    if ! nginx_reload; then
+        cp "${UPSTREAM_CONF}.pre_code_switch" "$UPSTREAM_CONF"
+        nginx_config_test >/dev/null 2>&1 && nginx_reload >/dev/null 2>&1 || true
+        audit_control "nginx-switch" "${old_port}->${new_port}" "failed" "reload failed; configuration rolled back"
+        return 1
+    fi
     echo "$new_port" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
     echo "$new_container" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-    nginx_reload
+    audit_control "nginx-switch" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "code mode slot switch"
+}
+
+standby_ownership_valid() {
+    local old_container="$1"
+    local old_port="$2"
+    local expected_generation="$3"
+    local current_generation current_port current_container
+    current_generation="$(tr -d '[:space:]' < "$DEPLOY_GENERATION_FILE" 2>/dev/null || true)"
+    current_port="$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE" 2>/dev/null || true)"
+    current_container="$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)"
+    [[ "$current_generation" == "$expected_generation" ]] || return 1
+    [[ "$current_port" != "$old_port" ]] || return 1
+    [[ "$current_container" != "$old_container" ]] || return 1
+    [[ "$(container_for_port "$old_port")" == "$old_container" ]] || return 1
 }
 
 restart_old_slot_after_drain() {
     local old_container="$1"
     local old_port="$2"
+    local expected_generation="$3"
 
     (
+        exec 9>"/tmp/aads-standby-sync.lock"
+        flock -w 30 9 || {
+            audit_control "standby-restart" "${old_container}:${old_port}" "skipped" "standby lock busy"
+            return 0
+        }
+        if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
+            audit_control "standby-restart" "${old_container}:${old_port}" "skipped" "stale generation or slot became active"
+            return 0
+        fi
         local drain_max=600
         local elapsed=0
         local active="0"
@@ -408,16 +463,22 @@ restart_old_slot_after_drain() {
             echo "[deploy.sh] old slot ${old_container}:${old_port} still has active streams=${active}; skip restart to preserve SSE"
             return 0
         fi
+        if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
+            audit_control "standby-restart" "${old_container}:${old_port}" "skipped" "ownership changed after drain"
+            return 0
+        fi
         docker exec "$old_container" touch /tmp/aads_deploy_restart 2>/dev/null || true
         docker exec "$old_container" supervisorctl restart aads-api >/dev/null 2>&1 || true
         docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-    ) &
+        audit_control "standby-restart" "${old_container}:${old_port}" "success" "drained standby restarted"
+    ) >> "${COMPOSE_DIR}/logs/standby-sync.log" 2>&1 &
     disown
 }
 
 sync_standby_slot_after_drain() {
     local old_container="$1"
     local old_port="$2"
+    local expected_generation="$3"
 
     (
         # Do not rebuild the previous active slot immediately after switching.
@@ -427,6 +488,16 @@ sync_standby_slot_after_drain() {
         if [[ "$min_wait" != "0" ]]; then
             echo "[deploy.sh] standby sync grace wait ${old_container}:${old_port} ${min_wait}s"
             sleep "$min_wait"
+        fi
+
+        exec 9>"/tmp/aads-standby-sync.lock"
+        flock -w 30 9 || {
+            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "standby lock busy"
+            return 0
+        }
+        if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
+            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "stale generation or slot became active"
+            return 0
         fi
 
         local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
@@ -448,6 +519,11 @@ sync_standby_slot_after_drain() {
             return 0
         fi
 
+        if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
+            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "ownership changed after drain"
+            return 0
+        fi
+
         echo "[deploy.sh] standby sync PC Agent reconnect trigger on drained old slot :${old_port}"
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
@@ -463,10 +539,12 @@ sync_standby_slot_after_drain() {
         if wait_port_health "$old_port" 90; then
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             echo "[deploy.sh] standby sync complete: ${old_container}:${old_port}"
+            audit_control "standby-sync" "${old_container}:${old_port}" "success" "rebuilt and healthy"
         else
             echo "[deploy.sh] standby sync WARN: ${old_container}:${old_port} health failed after rebuild"
+            audit_control "standby-sync" "${old_container}:${old_port}" "failed" "health failed after rebuild"
         fi
-    ) &
+    ) >> "${COMPOSE_DIR}/logs/standby-sync.log" 2>&1 &
     disown
 }
 
@@ -655,7 +733,7 @@ case "$MODE" in
                 exit 1
             fi
             switch_api_upstream "$PEER_PORT" "$ACTIVE_PORT" "$PEER_CONTAINER" "$ACTIVE_CONTAINER"
-            restart_old_slot_after_drain "$ACTIVE_CONTAINER" "$ACTIVE_PORT"
+            restart_old_slot_after_drain "$ACTIVE_CONTAINER" "$ACTIVE_PORT" "$DEPLOY_GENERATION"
             ACTIVE_PORT="$PEER_PORT"
             ACTIVE_CONTAINER="$PEER_CONTAINER"
             HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
@@ -791,8 +869,8 @@ case "$MODE" in
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
         # 새 포트에서 backup 제거, 기존 포트에 backup 추가
         sed -i -E \
-            -e "s/server 127\.0\.0\.1:${NEW_PORT} [^;]*;/server 127.0.0.1:${NEW_PORT} max_fails=0;/g" \
-            -e "s/server 127\.0\.0\.1:${CURRENT_PORT} [^;]*;/server 127.0.0.1:${CURRENT_PORT} max_fails=3 fail_timeout=30s backup;/g" \
+            -e "s/server 127\.0\.0\.1:${NEW_PORT} [^;]*;/server 127.0.0.1:${NEW_PORT} max_fails=1 fail_timeout=10s;/g" \
+            -e "s/server 127\.0\.0\.1:${CURRENT_PORT} [^;]*;/server 127.0.0.1:${CURRENT_PORT} max_fails=1 fail_timeout=10s backup;/g" \
             "$UPSTREAM_CONF"
         if ! nginx_config_test; then
             echo "[deploy.sh] ❌ nginx 설정 오류 — 롤백"
@@ -804,13 +882,22 @@ case "$MODE" in
         fi
 
         echo "[deploy.sh] [5/6] nginx reload — existing streams remain on the old worker/slot"
-        nginx_reload
+        if ! nginx_reload; then
+            cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
+            nginx_config_test >/dev/null 2>&1 && nginx_reload >/dev/null 2>&1 || true
+            audit_control "nginx-switch" "${CURRENT_PORT}->${NEW_PORT}" "failed" "reload failed; configuration rolled back"
+            notify "❌ Blue-Green 실패: nginx reload 오류 — 복원 완료"
+            record_deploy "failed" "$MODE" "nginx reload failed during upstream switch"
+            exit 1
+        fi
         echo "[deploy.sh]   nginx upstream 전환 완료"
 
         # ④ 전환 후 검증
         sleep 2
-        if curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1; then
+        if curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1 \
+            && curl -sf -H "Host: ${DOWNTIME_PROBE_HOST}" "http://127.0.0.1/api/v1/health" >/dev/null 2>&1; then
             echo "[deploy.sh] ④ ✅ 전환 검증 성공"
+            audit_control "nginx-switch" "${OLD_CONTAINER}:${OLD_PORT}->${NEW_CONTAINER}:${NEW_PORT}" "success" "direct and nginx-routed health verified"
         else
             echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
@@ -827,7 +914,7 @@ case "$MODE" in
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-        sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT"
+        sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green active 전환 완료: :${NEW_PORT} 활성"

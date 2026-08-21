@@ -20,11 +20,11 @@ from typing import Any, Dict
 # workdir: 프로젝트 루트 디렉터리
 # lang: 주 프로그래밍 언어
 PROJECT_MAP: Dict[str, Dict[str, Any]] = {
+    "AADS":  {"server": "host.docker.internal", "server_name": "contabo116", "workdir": "/root/aads/aads-server", "lang": "python", "display_name": "AADS 자율개발시스템", "aliases": ["AADS", "aads"]},
     "KIS":   {"server": "5.104.86.14", "server_name": "contabo14", "workdir": "/root/kis-autotrade-v4", "lang": "python", "display_name": "KIS 자동매매", "aliases": ["KIS", "kis", "자동매매", "kis-autotrade"]},
     "GO100": {"server": "5.104.86.14", "server_name": "contabo14", "workdir": "/root/kis-autotrade-v4", "lang": "python", "display_name": "백억이 투자분석", "aliases": ["GO100", "go100", "백억이", "백억이투자분석"]},
     "SF":    {"server": "114.207.244.86", "server_name": "cafe24_114", "port": "7916", "workdir": "/",                     "lang": "python", "display_name": "ShortFlow 숏폼자동화", "aliases": ["SF", "sf", "ShortFlow", "shortflow", "숏폼"]},
     "NTV2":  {"server": "114.207.244.86", "server_name": "cafe24_114", "port": "7916", "workdir": "/srv/newtalk-v2", "lang": "php", "workdir_v2": "/srv/newtalk-v2", "display_name": "NewTalk V2", "aliases": ["NTV2", "ntv2", "NewTalk", "newtalk", "NEWTALK", "newtalk-v2"]},
-    "AADS":  {"server": "host.docker.internal", "server_name": "contabo116", "workdir": "/root/aads/aads-server", "lang": "python", "display_name": "AADS 자율개발시스템", "aliases": ["AADS", "aads"]},
 }
 
 # DB/화면에서만 식별 가능한 프로젝트. SSH 서버·workdir을 부여하지 않는다.
@@ -35,6 +35,10 @@ DISPLAY_ONLY_PROJECTS = frozenset({
 })
 
 ALL_PROJECTS = list(PROJECT_MAP.keys())
+
+# 도구 스키마용 프로젝트 enum의 단일 소스.
+SSH_PROJECT_ENUM = ALL_PROJECTS
+SEARCH_PROJECT_ENUM = ALL_PROJECTS + ["NAS"]
 
 # 외부 프로젝트만 (SSH 접근 대상)
 REMOTE_PROJECTS = [k for k, v in PROJECT_MAP.items() if v["server"] not in ("localhost", "host.docker.internal")]

@@ -5159,3 +5159,13 @@ fro
 
 ## [2026-08-21 08:21:14 KST] [aads-server] tests/unit/test_yeoljeong_finance_service.py
 - Chat-Direct 수정: run_remote_command: date '+%Y-%m-%d %H:%M:%S KST'
+
+## [2026-08-21 10:19:23 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:             agents = payload.get("agents→            agents = payload.get("agents
+
+## [2026-08-21 10:19:34 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:         routed = await pc_agent_manager.→        route_kwargs = {
+            "co
+
+## [2026-08-21 10:19:44 KST] [aads-server] app/services/tool_executor.py
+- Chat-Direct 수정: patch:         if target_device is None and nor→        if target_device is None and nor

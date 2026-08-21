@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from app.core.project_config import SEARCH_PROJECT_ENUM, SSH_PROJECT_ENUM
+
 # ─── AADS-186D: defer_loading 분류 ───────────────────────────────────────────
 # false (상시 로드): AI가 매 요청마다 반드시 알아야 하는 핵심 도구
 # true  (온디맨드):  특정 작업 시에만 필요한 도구
@@ -427,7 +429,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project_key": {
                     "type": "string",
                     "description": "프로젝트 키. 기본 AADS.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                     "default": "AADS",
                 },
                 "screen_id": {
@@ -560,7 +562,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명. KIS(주식자동매매), GO100, SF, NTV2 중 하나.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "query": {
                     "type": "string",
@@ -609,7 +611,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "data 없을 때 자동 조회할 프로젝트 (KIS/GO100/SF/NTV2)",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "query": {
                     "type": "string",
@@ -700,7 +702,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명 (서버 자동 매핑).",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "file_path": {
                     "type": "string",
@@ -733,7 +735,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명. AADS, KIS, GO100, SF, NTV2 중 하나.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "path": {
                     "type": "string",
@@ -778,7 +780,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "file_path": {
                     "type": "string",
@@ -813,7 +815,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "file_path": {
                     "type": "string",
@@ -848,7 +850,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명 (서버+workdir 자동 매핑)",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "command": {
                     "type": "string",
@@ -1015,7 +1017,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "project": {"type": "string", "enum": SSH_PROJECT_ENUM},
                 "files": {"type": "string", "description": "스테이징할 파일 (기본: '.')", "default": "."},
             },
             "required": ["project"],
@@ -1028,7 +1030,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "project": {"type": "string", "enum": SSH_PROJECT_ENUM},
                 "message": {"type": "string", "description": "커밋 메시지"},
             },
             "required": ["project", "message"],
@@ -1041,7 +1043,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "project": {"type": "string", "enum": SSH_PROJECT_ENUM},
                 "branch": {"type": "string", "description": "브랜치명 (빈 값이면 현재 브랜치)", "default": ""},
             },
             "required": ["project"],
@@ -1054,7 +1056,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "project": {"type": "string", "enum": SSH_PROJECT_ENUM},
             },
             "required": ["project"],
         },
@@ -1066,7 +1068,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"]},
+                "project": {"type": "string", "enum": SSH_PROJECT_ENUM},
                 "branch_name": {"type": "string", "description": "새 브랜치명 (영문/숫자/._-/ 허용)"},
             },
             "required": ["project", "branch_name"],
@@ -1229,7 +1231,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "점검할 프로젝트명. KIS, GO100, SF, NTV2 중 하나.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "checks": {
                     "type": "array",
@@ -1604,7 +1606,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명. AADS, KIS, GO100, SF, NTV2, NAS 중 하나.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"],
+                    "enum": SEARCH_PROJECT_ENUM,
                 },
                 "entry_point": {
                     "type": "string",
@@ -1636,7 +1638,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트명. AADS, KIS, GO100, SF, NTV2, NAS 중 하나.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"],
+                    "enum": SEARCH_PROJECT_ENUM,
                 },
                 "days": {
                     "type": "integer",
@@ -1665,6 +1667,11 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "query": {
                     "type": "string",
                     "description": "검색어 (파일명, 함수명, 클래스명, 키워드)",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "검색 대상 프로젝트 필터 (생략 시 전체)",
+                    "enum": SEARCH_PROJECT_ENUM,
                 },
             },
             "required": ["query"],
@@ -2223,7 +2230,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "프로젝트 필터 (AADS/KIS/GO100/SF/NTV2/NAS). 생략 시 전체 검색.",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"],
+                    "enum": SEARCH_PROJECT_ENUM,
                 },
                 "top_k": {
                     "type": "integer",
@@ -2250,7 +2257,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                    "enum": SSH_PROJECT_ENUM,
                 },
                 "instruction": {
                     "type": "string",
@@ -2909,7 +2916,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "description": "프로젝트 코드", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"]},
+                "project": {"type": "string", "description": "프로젝트 코드", "enum": SEARCH_PROJECT_ENUM},
                 "title": {"type": "string", "description": "아젠다 제목 (200자 이하)"},
                 "summary": {"type": "string", "description": "핵심 논점 + 옵션 + 미결정 사항 (마크다운)"},
                 "priority": {"type": "string", "description": "우선순위", "enum": ["P0", "P1", "P2", "P3"], "default": "P2"},
@@ -2933,7 +2940,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "project": {"type": "string", "description": "프로젝트 필터 (없으면 전체)", "enum": ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS"]},
+                "project": {"type": "string", "description": "프로젝트 필터 (없으면 전체)", "enum": SEARCH_PROJECT_ENUM},
                 "status": {"type": "string", "description": "상태 필터", "enum": ["논의중", "보류", "결정", "진행중", "완료"]},
                 "priority": {"type": "string", "description": "우선순위 필터", "enum": ["P0", "P1", "P2", "P3"]},
             },
