@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
+from app.services.captcha_vision_solver import solve_captcha_with_vision
 
 KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("YEOLJEONG_FINANCE_DATA_DIR", "app/data/yeoljeong_finance"))
@@ -6092,8 +6093,20 @@ async def _collect_delivery_from_browser_bridge_session_async(
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
             captcha_value = str(account.get("captcha_value") or "")
-            if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED" and captcha_value:
-                if await _delivery_bridge_fill_ddangyo_numeric_captcha(page, captcha_value):
+            if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
+                if not captcha_value:
+                    captcha_value = await solve_captcha_with_vision(
+                        page, screenshot_path=challenge_screenshot,
+                    )
+                    if captcha_value:
+                        diagnostics["captcha_mode"] = "ai_vision_auto_solve"
+                captcha_accepted = False
+                for _captcha_attempt in range(3):
+                    if not captcha_value:
+                        break
+                    if not await _delivery_bridge_fill_ddangyo_numeric_captcha(page, captcha_value):
+                        diagnostics["captcha_input"] = "input_failed"
+                        break
                     try:
                         url = str(await page.evaluate("window.location.href") or url)
                         text = str(await page.evaluate("document.body ? document.body.innerText : ''") or "")
@@ -6101,22 +6114,13 @@ async def _collect_delivery_from_browser_bridge_session_async(
                     except Exception:
                         pass
                     login_state = _delivery_bridge_login_state(url, text)
-                    diagnostics.update(
-                        {
-                            "captcha_mode": "operator_confirmed_input",
-                            "captcha_input": "submitted",
-                            "url": url,
-                        }
-                    )
+                    diagnostics.update({"captcha_input": "submitted", "url": url})
+                    if not diagnostics.get("captcha_mode"):
+                        diagnostics["captcha_mode"] = "operator_confirmed_input"
                     if login_state == "challenge":
-                        diagnostics["captcha_input"] = "rejected_or_still_required"
-                        return {
-                            "status": "portal_action_required",
-                            "error_code": "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
-                            "records": {},
-                            "diagnostics": diagnostics,
-                            "message": "땡겨요 숫자 캡챠를 입력했지만 포털이 다시 캡챠 확인을 요구했습니다. 새 스크린샷 숫자로 재입력이 필요합니다.",
-                        }
+                        diagnostics["captcha_input"] = f"rejected_attempt_{_captcha_attempt + 1}"
+                        captcha_value = await solve_captcha_with_vision(page)
+                        continue
                     if login_state != "authenticated":
                         diagnostics["captcha_input"] = f"submitted_{login_state}"
                         return {
@@ -6126,11 +6130,11 @@ async def _collect_delivery_from_browser_bridge_session_async(
                             "diagnostics": diagnostics,
                             "message": _delivery_challenge_message(service, service_label),
                         }
-                    else:
-                        diagnostics["captcha_input"] = "accepted"
-                        auth_diagnostics.update({key: str(value) for key, value in diagnostics.items()})
-                else:
-                    diagnostics["captcha_input"] = "input_failed"
+                    diagnostics["captcha_input"] = "accepted"
+                    auth_diagnostics.update({key: str(value) for key, value in diagnostics.items()})
+                    captcha_accepted = True
+                    break
+                if not captcha_accepted:
                     return {
                         "status": "portal_action_required",
                         "error_code": challenge_code,
