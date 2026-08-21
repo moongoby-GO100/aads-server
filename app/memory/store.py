@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from app.config import Settings
+from app.core.project_config import normalize_project_label
 
 logger = logging.getLogger(__name__)
 settings = Settings()
@@ -91,6 +92,7 @@ class AADSMemoryStore:
 
     # === L2: Project Memory ===
     async def store_project_memory(self, project_id: str, memory_type: str, content: Dict, embedding: List[float] = None):
+        project_id = normalize_project_label(project_id)
         async with self.pool.acquire() as conn:
             if embedding:
                 await conn.execute("""

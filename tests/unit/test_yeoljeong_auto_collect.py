@@ -887,3 +887,67 @@ def test_run_sync_with_timeout_uses_latest_status_after_child_timeout(monkeypatc
     )
 
     assert summary["summary"][0]["status"] == "succeeded"
+
+
+def test_main_applies_timeout_to_direct_cli_run(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_sync_with_timeout(payload, user, timeout_seconds):
+        calls.append((payload, user, timeout_seconds))
+        return {
+            "summary": [
+                {
+                    "service": "coupangeats",
+                    "status": "failed",
+                    "error_code": "ATTEMPT_TIMEOUT",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0, "ads": 0},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(auto_collect, "_run_sync_with_timeout", fake_run_sync_with_timeout)
+    monkeypatch.setattr(auto_collect, "_run_collectors", lambda *args, **kwargs: pytest.fail("unexpected direct run"))
+
+    exit_code = auto_collect.main(
+        [
+            "--services",
+            "coupangeats",
+            "--business-id",
+            "biz-mia",
+            "--branch",
+            "열정국밥_미아점",
+            "--attempt-timeout-seconds",
+            "7",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls[0][0]["services"] == ["coupangeats"]
+    assert calls[0][2] == 7
+    assert "ATTEMPT_TIMEOUT" in capsys.readouterr().out
+
+
+def test_main_child_no_timeout_runs_collectors_without_recursing(monkeypatch):
+    calls = []
+
+    def fake_run_collectors(payload, user, *, queue_only=False):
+        calls.append((payload, user, queue_only))
+        return {
+            "summary": [
+                {
+                    "service": "baemin",
+                    "status": "succeeded",
+                    "error_code": "",
+                    "counts": {"sales": 1, "settlements": 0, "reviews": 0, "ads": 0},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(auto_collect, "_run_collectors", fake_run_collectors)
+    monkeypatch.setattr(auto_collect, "_run_sync_with_timeout", lambda *args, **kwargs: pytest.fail("unexpected recursion"))
+
+    exit_code = auto_collect.main(["--services", "baemin", "--child-no-timeout"])
+
+    assert exit_code == 0
+    assert calls[0][0]["services"] == ["baemin"]
+    assert calls[0][2] is False

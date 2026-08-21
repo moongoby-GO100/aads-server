@@ -19,6 +19,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 import asyncpg
 from app.core.claude_md_merger import build_merged_claude_md, get_merged_claude_md_sha256
+from app.core.project_config import normalize_project_label
 from app.services.server_registry import get_server_config, get_server_host, resolve_server_id
 
 logger = structlog.get_logger()
@@ -461,7 +462,7 @@ async def upsert_lifecycle(req: LifecycleUpdate):
         except Exception:
             pass
 
-
+    project = normalize_project_label(req.project)
     try:
         conn = await _get_conn()
         try:
@@ -485,7 +486,7 @@ async def upsert_lifecycle(req: LifecycleUpdate):
                     executor     = COALESCE(EXCLUDED.executor, directive_lifecycle.executor),
                     file_path    = COALESCE(EXCLUDED.file_path, directive_lifecycle.file_path),
                     error_detail = COALESCE(EXCLUDED.error_detail, directive_lifecycle.error_detail)
-            """, req.task_id, req.project, req.title, req.server,
+            """, req.task_id, project, req.title, req.server,
                 req.priority, req.executor, req.file_path, req.status,
                 q_at, s_at, c_at, req.error_detail)
         finally:
@@ -508,7 +509,7 @@ async def list_lifecycle(
     idx = 1
     if project:
         conditions.append(f"dl.project = ${idx}")
-        params.append(project)
+        params.append(normalize_project_label(project))
         idx += 1
     if status:
         conditions.append(f"dl.status = ${idx}")
@@ -564,6 +565,7 @@ async def get_lifecycle(task_id: str):
 @router.post("/ops/cost")
 async def record_cost(req: CostRecord):
     """비용 기록."""
+    project = normalize_project_label(req.project)
     try:
         conn = await _get_conn()
         try:
@@ -571,7 +573,7 @@ async def record_cost(req: CostRecord):
                 INSERT INTO cost_tracking (task_id, project, model, input_tokens,
                     output_tokens, cost_usd, llm_calls, tenant_id)
                 VALUES ($1,$2,$3,$4,$5,$6,$7, COALESCE($8::uuid, public.aads_internal_tenant_id()))
-            """, req.task_id, req.project, req.model, req.input_tokens,
+            """, req.task_id, project, req.model, req.input_tokens,
                 req.output_tokens, req.cost_usd, req.llm_calls, req.tenant_id)
         finally:
             await conn.close()
@@ -591,7 +593,7 @@ async def cost_summary(
     idx = 2
     if project:
         conditions.append(f"project = ${idx}")
-        params.append(project)
+        params.append(normalize_project_label(project))
         idx += 1
     where = "WHERE " + " AND ".join(conditions)
     try:
@@ -1353,6 +1355,7 @@ async def sync_project_docs(request: Request):
 
         # 1) DB 저장 (system_memory, category=project_docs)
         for project, docs in project_docs.items():
+            project = normalize_project_label(project)
             await conn.execute("""
                 INSERT INTO system_memory (category, key, value, updated_by, created_at, updated_at)
                 VALUES ('project_docs', $1, $2::jsonb, 'dashboard', NOW(), NOW())
@@ -1432,6 +1435,7 @@ async def sync_trigger_messages(request: Request):
         now = datetime.now(KST).isoformat()
 
         for project, msg in trigger_messages.items():
+            project = normalize_project_label(project)
             await conn.execute("""
                 INSERT INTO system_memory (category, key, value, updated_by, created_at, updated_at)
                 VALUES ('trigger_messages', $1, $2::jsonb, 'dashboard', NOW(), NOW())

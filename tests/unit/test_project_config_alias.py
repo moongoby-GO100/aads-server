@@ -2,6 +2,8 @@
 
 resolve_project() / normalize_project_label() / get_display_name() 계약 검증.
 """
+from pathlib import Path
+
 import pytest
 
 from app.core.project_config import (
@@ -13,6 +15,10 @@ from app.core.project_config import (
     normalize_project_label,
     resolve_project,
 )
+
+
+def _repo_source(relative_path: str) -> str:
+    return (Path(__file__).parents[2] / relative_path).read_text(encoding="utf-8")
 
 
 class TestProjectMapSchema:
@@ -96,6 +102,7 @@ class TestNormalizeProjectLabel:
     def test_unknown_bracket_returns_upper_token(self):
         assert normalize_project_label("[FOOD] 열정국밥") == "FOOD"
         assert normalize_project_label("[food] 열정국밥") == "FOOD"
+        assert normalize_project_label("[NAS] 운영") == "NAS"
 
     def test_unknown_plain_returns_stripped_original(self):
         assert normalize_project_label("  MYPROJ  ") == "MYPROJ"
@@ -108,6 +115,37 @@ class TestNormalizeProjectLabel:
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_empty_returns_none(self, value):
         assert normalize_project_label(value) is None
+
+
+class TestProjectLabelWritePathNormalization:
+    @pytest.mark.parametrize("relative_path,expected_snippets", [
+        (
+            "app/api/ops.py",
+            [
+                "from app.core.project_config import normalize_project_label",
+                "project = normalize_project_label(req.project)",
+                "params.append(normalize_project_label(project))",
+            ],
+        ),
+        (
+            "app/services/chat_service.py",
+            [
+                "normalize_project_label(data.get(\"project_key\") or data[\"name\"])",
+                "new_project_key = normalize_project_label(data.get(\"project_key\"))",
+            ],
+        ),
+        (
+            "app/services/db_recorder.py",
+            [
+                "from app.core.project_config import normalize_project_label",
+                "project_label = normalize_project_label(str(project_id))",
+            ],
+        ),
+    ])
+    def test_key_write_paths_apply_normalization(self, relative_path, expected_snippets):
+        source = _repo_source(relative_path)
+        for snippet in expected_snippets:
+            assert snippet in source
 
 
 class TestGetDisplayName:

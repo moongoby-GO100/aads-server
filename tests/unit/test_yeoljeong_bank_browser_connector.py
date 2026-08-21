@@ -305,6 +305,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_password_manager_fallback_only_focuses_login_field():
+    page = AsyncMock()
+    page.evaluate = AsyncMock(return_value=True)
+
+    assert _run(connector._trigger_password_manager_fallback(page)) is True
+    script = page.evaluate.await_args.args[0]
+    assert ".focus()" in script
+    assert ".click()" not in script
+    assert "value" not in script
+    assert "submit" not in script.lower()
+
+
 def test_collect_async_no_session_returns_action_required():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
@@ -318,10 +330,10 @@ def test_collect_async_no_session_returns_action_required():
                 date_from="2026-08-01",
                 date_to="2026-08-31",
             )
-        )
+    )
 
     assert result["status"] == "action_required"
-    assert result["error_code"] == "BANK_BROWSER_SESSION_REQUIRED"
+    assert result["error_code"] == "PC_AGENT_LOGIN_REQUIRED"
     assert result["rows"] == []
     assert "PC Agent" in result["message"]
 

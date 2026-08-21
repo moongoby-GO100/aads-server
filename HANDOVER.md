@@ -1,5 +1,48 @@
 # AADS HANDOVER
 
+## 2026-08-21 14:11 KST - Runner dependency recovery, project label normalization, bank login fallback
+
+- Trigger: CEO said to continue after the interrupted FOOD/AADS follow-up. Pipeline Runner chain was blocked by `runner-ab6a68b9` rejection; dependent jobs `runner-09b57d37` and `runner-25aba21b` were cancelled by dependency failure.
+- Runner cleanup:
+  - Confirmed `runner-ab6a68b9` was `rejected_done` because test changes were untracked and `actual_changed_files` did not match the report.
+  - Removed duplicate/stale follow-up runners created during recovery (`runner-870fa75d`, `runner-1e455f5c`, `runner-cb36f684`, `runner-01a68404`, `runner-218e2e90`) after their useful diffs were inspected or superseded.
+  - Final active/queued Runner status after cleanup: none.
+- Changes:
+  - Normalized project label write/read filter paths using `normalize_project_label()` in ops, memory monitor, knowledge graph, memory store, CKP, artifact recorder, and chat workspace project_key paths.
+  - Added regression coverage to `tests/unit/test_project_config_alias.py` for FOOD/NAS labels and key write path normalization.
+  - Added bank browser focus-only password-manager fallback in `app/services/yeoljeong_bank_browser_connector.py`; it does not read values, submit forms, or bypass OTP/CAPTCHA.
+  - Preserved earlier direct timeout routing changes in `scripts/yeoljeong_auto_collect.py` and tests.
+- Verification:
+  - `python3 -m pytest tests/unit/test_project_config_alias.py -v` passed: 50 passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_project_config_alias.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py -v` passed: 102 passed.
+  - `docker exec aads-server python -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_delivery_collectors.py app/api/memory_monitor.py app/api/ops.py app/core/knowledge_graph.py app/memory/store.py app/services/chat_service.py app/services/ckp_manager.py app/services/db_recorder.py` passed.
+  - `git diff --check` passed.
+- Not done:
+  - No push/deploy/restart.
+  - Browser E2E against bank/delivery portals was not completed because it still requires an authenticated connected PC Agent session for real portal interaction.
+
+## 2026-08-21 14:08 KST - Yeoljeong direct auto-collect timeout path fix
+
+- Trigger: CEO asked to continue the interrupted Yeoljeong FOOD collection follow-up. A direct Coupang Eats single-run verification showed `--attempt-timeout-seconds 45` did not bound normal CLI execution unless `--until-complete` was used.
+- Finding:
+  - Latest JSON status before the fix: Baemin `succeeded` at 13:45 KST for `biz-mia` / `열정국밥_미아점`; Coupang Eats and Yogiyo were `ATTEMPT_TIMEOUT`; Ddangyo was `BACKGROUND_SYNC_STALE`.
+  - `pc_list_agents` returned no connected PC Agent, so authenticated CEO-PC portal E2E could not be completed.
+  - Host Python lacked app dependencies (`structlog`), so runtime verification was performed inside the `yeoljeong-finance` container.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py`: normal direct CLI runs now use `_run_sync_with_timeout()` when `--attempt-timeout-seconds` is positive.
+  - Added hidden `--child-no-timeout` so timeout child processes run the collector directly and do not recursively spawn more children.
+  - `tests/unit/test_yeoljeong_auto_collect.py`: added coverage for direct CLI timeout routing and child no-timeout routing.
+- Runtime cleanup:
+  - Terminated the direct Coupang Eats verification process started during this session.
+  - Marked the verification-created running row as `failed` / `ATTEMPT_TIMEOUT` with a 45-second timeout message.
+- Verification:
+  - `docker exec yeoljeong-finance pytest tests/unit/test_yeoljeong_auto_collect.py -q` passed: 22 passed.
+  - No `yeoljeong_auto_collect` / delivery collector process remained after cleanup.
+  - DB counts after cleanup: sales 590, settlements 773, reviews 1,825, status 1,866.
+- Remaining:
+  - Commit/push/deploy were not performed in this step.
+  - Real Coupang Eats/Yogiyo/Ddangyo portal completion still requires a connected/authenticated PC Agent session.
+
 ## 2026-08-21 09:05 KST - Chat response bubble hidden false-positive fix
 
 - Trigger: CEO reported that the assistant response bubble disappeared in `45249276-83a1-42ca-b58d-d5f1737a388b` and the issue was recurring across sessions.

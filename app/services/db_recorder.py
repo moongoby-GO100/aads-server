@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import structlog
+from app.core.project_config import normalize_project_label
 
 logger = structlog.get_logger()
 
@@ -29,6 +30,7 @@ async def record_artifact(
         logger.warning("record_artifact_no_db_url", artifact_type=artifact_type)
         return None
 
+    project_label = normalize_project_label(str(project_id))
     try:
         import asyncpg
         conn = await asyncpg.connect(db_url, timeout=5)
@@ -41,7 +43,7 @@ async def record_artifact(
                 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
                 RETURNING id
                 """,
-                str(project_id),
+                project_label,
                 artifact_type,
                 artifact_name,
                 json.dumps(content, ensure_ascii=False),
@@ -52,7 +54,7 @@ async def record_artifact(
             artifact_id = row["id"] if row else None
             logger.info(
                 "artifact_recorded",
-                project_id=str(project_id),
+                project_id=project_label,
                 artifact_type=artifact_type,
                 artifact_id=artifact_id,
             )
@@ -133,7 +135,7 @@ async def record_ideation_artifacts(project_id: str, ideation_result: dict) -> l
 
     logger.info(
         "ideation_artifacts_recorded",
-        project_id=str(project_id),
+        project_id=normalize_project_label(str(project_id)),
         count=len(saved_ids),
     )
     return saved_ids

@@ -18,6 +18,7 @@ from app.models.ckp import (
     CKPSearchResult,
     FileAnalysis,
 )
+from app.core.project_config import normalize_project_label
 from app.services.ast_analyzer import ASTAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -327,7 +328,7 @@ class CKPManager:
                     ORDER BY created_at DESC
                     LIMIT 5
                     """,
-                    project,
+                    normalize_project_label(project),
                 )
                 if rows:
                     lesson_txt = "\n## 최근 교훈\n"
@@ -638,6 +639,7 @@ curl -s https://aads.newtalk.kr/api/v1/ops/health-check | python3 -m json.tool
         """ckp_index 테이블에 스캔 결과 UPSERT."""
         if not self.db:
             return
+        project = normalize_project_label(project)
         try:
             now = datetime.now(timezone.utc)
             for fname, ftype in CKP_FILE_TYPES.items():

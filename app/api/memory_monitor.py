@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.db_pool import get_pool
+from app.core.project_config import normalize_project_label
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -165,7 +166,7 @@ async def get_memory_entries(
 
     if project:
         obs_conditions.append(f"project = ${obs_idx}")
-        obs_params.append(project)
+        obs_params.append(normalize_project_label(project))
         obs_idx += 1
         # ai_meta_memory에는 project 컬럼이 없을 수 있으므로 observations만 필터
 
@@ -292,7 +293,7 @@ async def delete_memory_entry(source: str, entry_id: int):
             row.get("key"),
             str(row.get("value", "")),
             float(row["confidence"]) if row.get("confidence") is not None else None,
-            row.get("project"),
+            normalize_project_label(row.get("project")),
             row.get("created_at"),
         )
 

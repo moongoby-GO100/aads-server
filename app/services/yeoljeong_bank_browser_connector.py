@@ -32,6 +32,37 @@ def bank_browser_work_key(account_id: str, business_id: str, branch_id: str) -> 
     return f"yeoljeong-bank-browser-{digest}"
 
 
+async def _trigger_password_manager_fallback(page: Any) -> bool:
+    """Focus a login field so the browser password manager can assist.
+
+    This does not read field values, submit forms, or bypass OTP/CAPTCHA.
+    It only dispatches focus/input events in the connected PC Agent session.
+    """
+    try:
+        return bool(await page.evaluate(
+            """
+            () => {
+              const selectors = [
+                "input[autocomplete='username']",
+                "input[autocomplete='current-password']",
+                "input[type='password']",
+                "input[name*='user' i]",
+                "input[name*='id' i]"
+              ];
+              const input = selectors
+                .map((selector) => document.querySelector(selector))
+                .find((candidate) => candidate && !candidate.disabled && candidate.offsetParent !== null);
+              if (!input) return false;
+              input.focus();
+              input.dispatchEvent(new Event('input', {bubbles: true}));
+              return true;
+            }
+            """
+        ))
+    except Exception:
+        return False
+
+
 # ── HTML table parser ────────────────────────────────────────────────────────
 
 class _TableParser(HTMLParser):
@@ -357,20 +388,20 @@ async def collect_bank_via_browser_session_async(
             session_id_to_use = str(getattr(session, "session_id", "") or "")
             auto_opened_session = bool(session_id_to_use)
             safe_diagnostics["auto_open_browser"] = "1"
-        except Exception as exc:
+        except Exception:
             safe_diagnostics["auto_open_browser"] = "failed"
-            safe_diagnostics["auto_open_error"] = str(exc)[:200]
+            safe_diagnostics["auto_open_error"] = "PC_AGENT_UNAVAILABLE"
 
     if not session_id_to_use:
         return {
             "status": "action_required",
-            "error_code": "BANK_BROWSER_SESSION_REQUIRED",
+            "error_code": "PC_AGENT_LOGIN_REQUIRED",
             "rows": [],
             "row_count": 0,
             "diagnostics": safe_diagnostics,
             "message": (
                 f"{bank_name or '은행'} 브라우저 수집을 위해 PC Agent 세션이 필요합니다. "
-                "관리자 화면에서 은행 웹 수집 세션을 연결하거나 "
+                "PC Agent를 연결하고 관리자 화면에서 은행 웹 수집 세션을 열거나 "
                 "CSV 업로드로 대체 수집하십시오."
             ),
         }
@@ -432,6 +463,13 @@ async def collect_bank_via_browser_session_async(
         safe_diagnostics["parser_table_count"] = parse_diag["table_count"]
         safe_diagnostics["parser_failure"] = parse_diag["parse_failure"]
 
+        login_fallback_triggered = False
+        if not rows and parse_diag["table_count"] == 0:
+            login_fallback_triggered = await _trigger_password_manager_fallback(page)
+            safe_diagnostics["password_manager_fallback"] = (
+                "triggered" if login_fallback_triggered else "unavailable"
+            )
+
         if rows:
             msg = f"{bank_name or '은행'} 포털에서 {len(rows)}건 수집했습니다."
         elif parse_diag["parse_failure"]:
@@ -448,16 +486,24 @@ async def collect_bank_via_browser_session_async(
         else:
             msg = f"{bank_name or '은행'} 포털에 해당 기간 거래 내역이 없습니다."
 
-        if not rows and auto_open_browser and (parse_diag["table_count"] == 0 or parse_diag["parse_failure"]):
+        if not rows and (
+            login_fallback_triggered
+            or (auto_open_browser and (parse_diag["table_count"] == 0 or parse_diag["parse_failure"]))
+        ):
             return {
                 "status": "action_required",
-                "error_code": "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
+                "error_code": (
+                    "PC_AGENT_LOGIN_REQUIRED"
+                    if login_fallback_triggered
+                    else "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
+                ),
                 "rows": [],
                 "row_count": 0,
                 "diagnostics": safe_diagnostics,
                 "message": (
                     f"{bank_name or '은행'} 기업페이지를 PC Agent 브라우저로 준비했습니다. "
-                    "간편/빠른조회 승인 또는 거래내역 화면 이동 후 다시 수집하십시오."
+                    "브라우저 비밀번호 관리자에서 저장된 로그인을 선택하십시오. "
+                    "OTP/CAPTCHA/본인인증이 표시되면 직접 완료하고 거래내역 화면에서 다시 수집하십시오."
                 ),
             }
 

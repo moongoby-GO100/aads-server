@@ -16,6 +16,8 @@ import asyncio
 import structlog
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.project_config import normalize_project_label
+
 logger = structlog.get_logger(__name__)
 
 
@@ -143,6 +145,7 @@ async def upsert_entity(
     description: str = "",
 ) -> Optional[int]:
     """엔티티 UPSERT → id 반환."""
+    project = normalize_project_label(project)
     try:
         row = await conn.fetchrow(
             """
@@ -173,6 +176,7 @@ async def upsert_relation(
     project: Optional[str] = None,
 ) -> Optional[int]:
     """관계 UPSERT → id 반환."""
+    project = normalize_project_label(project)
     try:
         fact_ids = [uuid.UUID(fact_id)] if fact_id else []
         row = await conn.fetchrow(
@@ -259,7 +263,7 @@ async def query_graph_context(
                     ORDER BY e.mention_count DESC, rel_count DESC
                     LIMIT $2
                     """,
-                    project, top_k,
+                    normalize_project_label(project), top_k,
                 )
             else:
                 hub_entities = await conn.fetch(
@@ -352,7 +356,7 @@ async def search_entities_by_text(
                     ORDER BY embedding <=> $1::vector
                     LIMIT $3
                     """,
-                    query_vec, project, top_k,
+                    query_vec, normalize_project_label(project), top_k,
                 )
             else:
                 rows = await conn.fetch(

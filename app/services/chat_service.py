@@ -5932,7 +5932,7 @@ async def create_workspace(data: Dict[str, Any], tenant_id: Optional[str] = None
             data.get("color", "#6366F1"),
             data.get("icon", "💬"),
             # [C안 2/4] 표시명 → 프로젝트 정규 키 자동 파생
-            data.get("project_key") or normalize_project_label(data["name"]),
+            normalize_project_label(data.get("project_key") or data["name"]),
         )
         return _row_to_dict(row)
 
@@ -5949,7 +5949,7 @@ async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: O
                 vals.append(data[field])
                 idx += 1
         # [C안 2/4] 이름 변경 시 project_key 재파생 (명시값이 있으면 우선)
-        new_project_key = data.get("project_key")
+        new_project_key = normalize_project_label(data.get("project_key"))
         if not new_project_key and data.get("name"):
             new_project_key = normalize_project_label(data["name"])
         if new_project_key:

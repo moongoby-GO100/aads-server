@@ -559,6 +559,7 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.extend(["--browser-preferred-port", str(payload.get("browser_preferred_port") or "")])
     if payload.get("skip_financial_accounts"):
         argv.append("--skip-financial-accounts")
+    argv.append("--child-no-timeout")
     return argv
 
 
@@ -888,6 +889,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--blocked-retry-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_BLOCKED_RETRY_SECONDS", 180))
     parser.add_argument("--success-sleep-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_INTERVAL_SECONDS", 1800))
     parser.add_argument("--attempt-timeout-seconds", type=int, default=_env_int("YEOLJEONG_AUTO_COLLECT_TIMEOUT_SECONDS", 1200))
+    parser.add_argument("--child-no-timeout", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -899,7 +901,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.until_complete:
         return _run_until_complete(args, user)
     payload = _payload(args)
-    result = _run_collectors(payload, user, queue_only=args.queue_only)
+    if args.queue_only or args.child_no_timeout or args.attempt_timeout_seconds <= 0:
+        result = _run_collectors(payload, user, queue_only=args.queue_only)
+    else:
+        result = _run_sync_with_timeout(payload, user, int(args.attempt_timeout_seconds))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
