@@ -7817,3 +7817,31 @@
 - Remaining:
   - Commit, push, and blue-green deploy are required after this entry.
   - Browser E2E remains pending; API/DB/container verification covered this fix.
+
+## 2026-08-21 12:23 KST - Yeoljeong bank corporate browser auto-open follow-up
+
+- Request: Proceed with the next Yeoljeong collection work and automate bank corporate-page browser connection.
+- Findings:
+  - CEO PC Agent `oby-ceo` was online with `chrome_cdp` and `interactive_browser` capabilities.
+  - Active bank browser account ledger had one auto-sync target: `biz-mia / branch-gangbuk-mia / 신한은행 기업 / connection_type=browser / status=active`; account number and other sensitive values were not logged.
+  - Bank browser connector/service/API auto-open logic was already present in the HEAD baseline; remaining gap was CLI help/test coverage around bank auto-open controls and manual-action blocking.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py` now returns `BANK_BROWSER_OPERATOR_ACTION_REQUIRED` for auto-open mode when the page has no parseable transaction table, including reused work-key sessions that show login/menu tables.
+  - `scripts/yeoljeong_auto_collect.py` help text now reflects that `--force-recreate-sessions` also recreates bank work-key browser sessions.
+  - Added regression tests that bank auto collection forwards `browser_session_id`, `auto_open_browser`, `browser_agent_id`, `browser_preferred_port`, and `force_recreate_browser`.
+  - Added regression tests that `BANK_BROWSER_OPERATOR_ACTION_REQUIRED` is treated as a blocking/manual-action state.
+  - Added service-level regression coverage that bank collect forwards auto-open controls to the browser connector, plus reused-session login/menu-table regression coverage.
+- Operational action:
+  - Opened the actual ledger-derived Shinhan work session on `oby-ceo`: `work_key=yeoljeong-bank-browser-25b8c525d84799c2`, `session_id=bb-2dfa6f8bdb5f`, `port=52281`.
+  - Browser snapshot for that work key showed the Shinhan 간편조회서비스 page with 계좌조회/login controls.
+  - A placeholder session `bb-e0c26f3a2d6c` was accidentally created with `work_key=yeoljeong-bank-browser-37fc64aa4a6f4366`; it is not referenced by the collection code and should be ignored or retired later.
+- Verification:
+  - `.venv-playwright/bin/python -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py` succeeded: 53 passed.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py HANDOVER.md` succeeded.
+  - `curl -fsS http://127.0.0.1:8100/health` returned status `ok`.
+  - Direct real-account service call returned `status=action_required`, `connector_status=ACTION_REQUIRED`, `error_code=BANK_BROWSER_OPERATOR_ACTION_REQUIRED`, `imported_rows=0`, `browser_session_id=bb-48fefbeca010`, `parser_table_count=1`, `parser_failure=True`.
+  - Global `pytest` failed before collection because the system Python lacks `fastapi`/`structlog`; default `.venv/bin/python` is a broken symlink to missing `/usr/local/bin/python3.11`.
+- Remaining:
+  - Not committed, pushed, or deployed in this step.
+  - Actual bank transaction import still requires operator action inside the opened bank page if the bank quick-service screen requires certificate/login/OTP or manual approval.

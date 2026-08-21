@@ -448,7 +448,7 @@ async def collect_bank_via_browser_session_async(
         else:
             msg = f"{bank_name or '은행'} 포털에 해당 기간 거래 내역이 없습니다."
 
-        if not rows and auto_opened_session and parse_diag["table_count"] == 0:
+        if not rows and auto_open_browser and (parse_diag["table_count"] == 0 or parse_diag["parse_failure"]):
             return {
                 "status": "action_required",
                 "error_code": "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
@@ -456,7 +456,7 @@ async def collect_bank_via_browser_session_async(
                 "row_count": 0,
                 "diagnostics": safe_diagnostics,
                 "message": (
-                    f"{bank_name or '은행'} 기업페이지를 PC Agent 브라우저로 열었습니다. "
+                    f"{bank_name or '은행'} 기업페이지를 PC Agent 브라우저로 준비했습니다. "
                     "간편/빠른조회 승인 또는 거래내역 화면 이동 후 다시 수집하십시오."
                 ),
             }

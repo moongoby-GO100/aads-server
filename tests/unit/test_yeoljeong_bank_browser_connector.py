@@ -366,6 +366,49 @@ def test_collect_async_auto_opens_bank_work_session_when_enabled():
     mock_page.goto.assert_awaited_once()
 
 
+def test_collect_async_auto_open_reused_login_page_requires_operator_action():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(
+        side_effect=[
+            "https://bank.shinhan.com/rib/easy/index.jsp",
+            "<table><tr><th>회원구분</th><th>이용가능범위</th></tr><tr><td>인증서</td><td>계좌조회</td></tr></table>",
+        ]
+    )
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+
+    mock_session = MagicMock()
+    mock_session.session_id = "reused-session-001"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.find_by_work_key.return_value = mock_session
+        bridge_inst._session_reusable.return_value = True
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-browser-reused",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
+    assert result["diagnostics"]["browser_session_id"] == "reused-session-001"
+    bridge_inst.ensure_work_session.assert_not_called()
+
+
 def test_collect_async_infers_portal_from_bank_name_when_codes_missing():
     account = {"id": "acct-1", "bank_name": "신한은행 기업", "bank_code": "", "institution_code": ""}
 
@@ -650,6 +693,47 @@ def test_collect_bank_account_browser_work_key_in_collection_diagnostics(tmp_pat
     assert collection["status"] == "action_required"
     # browser_work_key should appear in the collection block
     assert "browser_work_key" in str(collection)
+
+
+def test_collect_bank_account_browser_forwards_auto_open_controls(tmp_path, monkeypatch):
+    account = _make_browser_bank_account(monkeypatch, tmp_path)
+    captured = {}
+
+    async def fake_collect(account_arg, **kwargs):
+        captured["account"] = account_arg
+        captured["kwargs"] = kwargs
+        return {
+            "status": "action_required",
+            "error_code": "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {"browser_work_key": kwargs["browser_work_key"]},
+            "message": "기업페이지 승인 필요",
+        }
+
+    monkeypatch.setattr(service, "_run_bank_browser_async", lambda coro: asyncio.run(coro))
+
+    with patch("app.services.yeoljeong_bank_browser_connector.collect_bank_via_browser_session_async", fake_collect):
+        result = service.collect_bank_account_transactions(
+            account["id"],
+            {
+                "business_id": "biz-mia",
+                "branch_id": "branch-gangbuk-mia",
+                "auto_open_browser": True,
+                "browser_agent_id": "oby-ceo",
+                "browser_preferred_port": "9333",
+                "force_recreate_browser": True,
+            },
+            ADMIN_USER,
+        )
+
+    kwargs = captured["kwargs"]
+    assert captured["account"]["id"] == account["id"]
+    assert kwargs["auto_open_browser"] is True
+    assert kwargs["browser_agent_id"] == "oby-ceo"
+    assert kwargs["browser_preferred_port"] == 9333
+    assert kwargs["force_recreate_browser"] is True
+    assert result["collection"]["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
 
 
 def test_collect_bank_account_browser_connector_status_on_failure(tmp_path, monkeypatch):

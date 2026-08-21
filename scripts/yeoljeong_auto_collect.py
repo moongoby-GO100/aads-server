@@ -851,7 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force-recreate-sessions",
         action="store_true",
-        help="Recreate each delivery portal work-key browser session before collecting.",
+        help="Recreate each delivery portal and bank work-key browser session before collecting.",
     )
     parser.add_argument(
         "--keep-browser-open",
