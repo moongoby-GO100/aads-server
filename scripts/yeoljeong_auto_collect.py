@@ -92,7 +92,8 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "storage_state_path": args.storage_state_path or "",
         "force_recreate_portal_sessions": bool(args.force_recreate_sessions),
         "close_portal_browser_on_complete": not bool(args.keep_browser_open),
-        "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False)),
+        "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False))
+        or bool(getattr(args, "until_complete", False)),
     }
 
 
@@ -688,11 +689,10 @@ def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeou
         return _run_child_collect_with_timeout(payload, timeout_seconds)
 
     summaries: list[dict[str, Any]] = []
-    for index, service in enumerate(services):
+    for service in services:
         service_payload = dict(payload)
         service_payload["services"] = [service]
-        if index > 0:
-            service_payload["skip_financial_accounts"] = True
+        service_payload["skip_financial_accounts"] = True
         summaries.append(_run_child_collect_with_timeout(service_payload, timeout_seconds))
     return _merge_attempt_summaries(payload, summaries)
 

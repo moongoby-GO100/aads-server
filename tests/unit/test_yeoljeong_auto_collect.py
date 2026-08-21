@@ -45,6 +45,14 @@ def test_payload_can_keep_browser_open_for_manual_debugging():
     assert payload["close_portal_browser_on_complete"] is False
 
 
+def test_until_complete_payload_skips_financial_accounts_by_default():
+    args = auto_collect.build_parser().parse_args(["--until-complete"])
+
+    payload = auto_collect._payload(args)
+
+    assert payload["skip_financial_accounts"] is True
+
+
 def test_run_collectors_collects_auto_sync_bank_accounts(monkeypatch):
     calls = []
 
@@ -672,7 +680,7 @@ def test_run_sync_with_timeout_splits_multi_service_attempts(monkeypatch):
     )
 
     assert [argv[argv.index("--services") + 1] for argv in calls] == ["baemin", "coupangeats"]
-    assert "--skip-financial-accounts" not in calls[0]
+    assert "--skip-financial-accounts" in calls[0]
     assert "--skip-financial-accounts" in calls[1]
     assert [item["service"] for item in summary["summary"]] == ["baemin", "coupangeats"]
 
