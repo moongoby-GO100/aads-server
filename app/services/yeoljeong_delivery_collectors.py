@@ -870,6 +870,7 @@ def collect_account(
     if not password and not storage_state:
         return {"status": "credential_required", "error_code": "CREDENTIAL_REQUIRED", "records": {}}
     temp_dir = Path(tempfile.mkdtemp(prefix=f"yf-{service}-"))
+    browser: Any | None = None
     try:
         from playwright.sync_api import sync_playwright
 
@@ -932,6 +933,7 @@ def collect_account(
                 ]
                 diagnostics[kind] = source
             browser.close()
+            browser = None
             total = sum(len(rows) for rows in collected.values())
             return {
                 "status": "succeeded" if total else "partial",
@@ -943,4 +945,9 @@ def collect_account(
         error_name = type(exc).__name__.upper()
         return {"status": "failed", "error_code": f"COLLECTOR_{error_name}", "records": {}}
     finally:
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
         shutil.rmtree(temp_dir, ignore_errors=True)

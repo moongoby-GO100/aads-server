@@ -188,6 +188,36 @@ async def test_execute_routed_command_maps_timeout_to_command_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_late_pc_agent_result_does_not_revive_timed_out_command() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    command_id = await manager.send_command(
+        "ceo-pc",
+        "browser_eval",
+        {"expression": "document.title"},
+    )
+
+    timed_out = await manager.get_result(command_id, timeout=0.01)
+    assert timed_out.status == "timeout"
+
+    manager.receive_result(command_id, {"status": "success", "data": {"title": "late"}})
+    stored = await manager.get_result(command_id, timeout=0.01)
+
+    assert stored.status == "timeout"
+    assert stored.result == {
+        "late_result": True,
+        "late_status": "success",
+        "late_data": {"title": "late"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_pending_command_is_failed_immediately_when_agent_disconnects() -> None:
     manager = PCAgentManager()
     ws = _DummyWebSocket()

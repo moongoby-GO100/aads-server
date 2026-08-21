@@ -148,6 +148,10 @@ class PCAgentManager:
         self._pending_commands: Dict[str, asyncio.Event] = {}
         self._results: Dict[str, CommandResult] = {}
         self._command_agents: Dict[str, str] = {}
+        self._timed_out_commands: Dict[str, float] = {}
+        self._late_result_grace_seconds = max(
+            5.0, float(os.getenv("PC_AGENT_LATE_RESULT_GRACE_SECONDS", "30") or "30")
+        )
         self._agent_commands: Dict[str, Set[str]] = {}
         self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}  # agent_id → 대시보드 WS
         self._heartbeat_timeout_seconds = int(os.getenv("PC_AGENT_HEARTBEAT_TIMEOUT_SECONDS", "90") or "90")
@@ -223,6 +227,7 @@ class PCAgentManager:
         self, agent_id: str, command_type: str, params: Dict[str, Any]
     ) -> str:
         """에이전트에 명령 전송, command_id 반환."""
+        self._prune_timed_out_commands()
         conn = self._agents.get(agent_id)
         if conn is None:
             raise ValueError(f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
@@ -275,6 +280,9 @@ class PCAgentManager:
                 result.completed_at = datetime.utcnow()
             self._pending_commands.pop(command_id, None)
             self._untrack_command(command_id, result.agent_id if result else "")
+            self._timed_out_commands[command_id] = (
+                asyncio.get_running_loop().time() + self._late_result_grace_seconds
+            )
             logger.warning("pc_agent_command_timeout command_id=%s", command_id)
             if result:
                 return result
@@ -289,9 +297,21 @@ class PCAgentManager:
 
     def receive_result(self, command_id: str, result: Dict[str, Any]) -> None:
         """에이전트로부터 결과 수신."""
+        self._prune_timed_out_commands()
         stored = self._results.get(command_id)
         if stored is None:
             logger.warning("pc_agent_unknown_result command_id=%s", command_id)
+            return
+
+        if command_id in self._timed_out_commands or stored.status == "timeout":
+            stored.result = {
+                "late_result": True,
+                "late_status": result.get("status", "success"),
+                "late_data": result.get("data"),
+            }
+            stored.completed_at = datetime.utcnow()
+            self._timed_out_commands.pop(command_id, None)
+            logger.warning("pc_agent_late_result_received command_id=%s status=%s", command_id, result.get("status"))
             return
 
         stored.status = result.get("status", "success")
@@ -303,6 +323,20 @@ class PCAgentManager:
         if event:
             event.set()
         logger.info("pc_agent_result_received command_id=%s status=%s", command_id, stored.status)
+
+    def _prune_timed_out_commands(self) -> None:
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            return
+        expired = [
+            command_id
+            for command_id, deadline in self._timed_out_commands.items()
+            if deadline <= now
+        ]
+        for command_id in expired:
+            self._timed_out_commands.pop(command_id, None)
+            self._results.pop(command_id, None)
 
     def update_heartbeat(self, agent_id: str) -> None:
         """에이전트 하트비트 갱신."""
