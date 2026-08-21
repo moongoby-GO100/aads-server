@@ -5423,11 +5423,12 @@ def _delivery_captcha_value_for_account(
     business_id: str,
     branch: str,
 ) -> str:
+    if service != "ddangyo" or payload.get("operator_approved") is not True:
+        return ""
     values = payload.get("captcha_values") if isinstance(payload.get("captcha_values"), dict) else {}
     run_key = _delivery_run_key(service, business_id, branch)
     candidates = (
-        account.get("captcha_value"),
-        account.get("captcha"),
+        payload.get("approved_input"),
         payload.get("captcha_value"),
         payload.get("captcha"),
         values.get(run_key),
@@ -5682,42 +5683,41 @@ async def _delivery_bridge_click_login(page: Any, service: str = "") -> bool:
         except Exception:
             continue
     try:
-        return bool(
-            await page.evaluate(
-                r"""
-                () => {
-                  const visible = element => {
-                    const style = window.getComputedStyle(element);
-                    const rect = element.getBoundingClientRect();
-                    return style.visibility !== 'hidden'
-                      && style.display !== 'none'
-                      && rect.width > 0
-                      && rect.height > 0;
-                  };
-                  const buttons = [
-                    ...document.querySelectorAll('button,input[type="submit"],input[type="button"],a,[role="button"]')
-                  ];
-                  const target = buttons.find(element => {
-                    if (!visible(element) || element.disabled) return false;
-                    const text = String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
-                    return element.type === 'submit'
-                      || text.includes('로그인')
-                      || text.includes('login')
-                      || text.includes('sign in');
-                  });
-                  if (target) {
-                    target.click();
-                    return true;
-                  }
-                  const password = [...document.querySelectorAll('input[type="password"]')].find(visible);
-                  if (!password) return false;
-                  password.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', code: 'Enter'}));
-                  password.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter', code: 'Enter'}));
-                  return true;
-                }
-                """
-            )
+        result = await page.evaluate(
+            r"""
+            () => {
+              const visible = element => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0;
+              };
+              const buttons = [
+                ...document.querySelectorAll('button,input[type="submit"],input[type="button"],a,[role="button"]')
+              ];
+              const target = buttons.find(element => {
+                if (!visible(element) || element.disabled) return false;
+                const text = String(element.innerText || element.textContent || element.value || '').trim().toLowerCase();
+                return element.type === 'submit'
+                  || text.includes('로그인')
+                  || text.includes('login')
+                  || text.includes('sign in');
+              });
+              if (target) {
+                target.click();
+                return true;
+              }
+              const password = [...document.querySelectorAll('input[type="password"]')].find(visible);
+              if (!password) return false;
+              password.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              password.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true, key: 'Enter', code: 'Enter'}));
+              return true;
+            }
+            """
         )
+        return result is True
     except Exception:
         return False
     return False

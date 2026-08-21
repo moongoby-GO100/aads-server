@@ -96,6 +96,8 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "auto_open_bank_browser": not bool(getattr(args, "no_auto_open_bank_browser", False)),
         "browser_agent_id": str(getattr(args, "browser_agent_id", "") or ""),
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
+        "operator_approved": bool(getattr(args, "operator_approved", False)),
+        "approved_input": str(getattr(args, "approved_input", "") or ""),
         "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False))
         or bool(getattr(args, "until_complete", False)),
     }
@@ -878,6 +880,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable automatic PC Agent bank corporate-page browser opening.",
     )
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
+    parser.add_argument("--operator-approved", action="store_true", help="Allow one operator-approved challenge input for the current run.")
+    parser.add_argument("--approved-input", default="", help="Write-only operator-approved challenge input for the current run.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
     parser.add_argument("--skip-financial-accounts", action="store_true", help="Skip bank and financial account collection.")
     parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")

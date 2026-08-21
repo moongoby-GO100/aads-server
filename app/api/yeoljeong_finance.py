@@ -124,6 +124,8 @@ class SyncPayload(BaseModel):
     queued_run_ids: dict[str, str] = Field(default_factory=dict)
     captcha_value: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     captcha_values: dict[str, str] = Field(default_factory=dict, repr=False, json_schema_extra={"writeOnly": True})
+    operator_approved: bool = False
+    approved_input: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     force_recreate_portal_sessions: bool = False
 
 

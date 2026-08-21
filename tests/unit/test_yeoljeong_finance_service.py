@@ -2413,6 +2413,7 @@ def test_sync_delivery_passes_ddangyo_captcha_value_to_pc_agent_collector(tmp_pa
             "services": ["ddangyo"],
             "business_id": "biz-junghwa",
             "branch": "중화점",
+            "operator_approved": True,
             "captcha_value": "12 34",
         },
         {"email": "owner@example.com", "is_admin": True},
@@ -2420,6 +2421,62 @@ def test_sync_delivery_passes_ddangyo_captcha_value_to_pc_agent_collector(tmp_pa
 
     assert result["summary"][0]["status"] == "succeeded"
     assert service._read("delivery_collection_status")[0]["diagnostics"]["captcha_input"] == "accepted"
+
+
+def test_sync_delivery_requires_operator_approval_before_ddangyo_captcha_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "plain-secret")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-ddangyo-junghwa",
+                "service": "ddangyo",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_for_account",
+        lambda payload, account, service_name, business_id, branch: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-ddangyo",
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+
+    def fake_bridge_collect(account, browser_auth, date_from, date_to):
+        assert "captcha_value" not in account
+        return {
+            "status": "portal_action_required",
+            "error_code": "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+            "records": {},
+        }
+
+    monkeypatch.setattr(service, "_collect_delivery_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["ddangyo"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "captcha_value": "1234",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED"
 
 
 @pytest.mark.asyncio

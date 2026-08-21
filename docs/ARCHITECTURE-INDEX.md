@@ -119,6 +119,17 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 | OHVIS 브라우저 에이전트 아키텍처 | `docs/plans/20260819_OHVIS_ASIDE_BROWSER_AGENT_ARCHITECTURE.md` | 현행 | 2026-08-19 |
 | Agent Vault 계정등록 UI 계획 | `docs/plans/20260820_OHVIS_AGENT_VAULT_ACCOUNT_REGISTRATION_UI_PLAN.md` | 현행 | 2026-08-20 |
 
+## 6-1. FOOD · 판매채널 자동수집
+
+| 문서 | 경로 | 등급 | 갱신일 |
+|------|------|------|--------|
+| 은행데이터 자동수집 기획서 | `docs/plans/20260821_YEOLJEONG_BANK_AUTO_COLLECTION_PLAN.md` | 현행 | 2026-08-21 |
+| PC Agent 판매채널 자동수집 기획 및 아키텍처 | `docs/plans/20260821_SALES_CHANNEL_PC_AGENT_COLLECTION_ARCHITECTURE.md` | 현행 | 2026-08-21 |
+| 재사용 실행 스킬 | `.claude/skills/sales-channel-collector/SKILL.md` | 현행 | 2026-08-21 |
+| FOOD 브라우저 P0 WRAP | `docs/AADS-WRAP-FOOD-BROWSER-P0_20260820.md` | 현행 | 2026-08-20 |
+
+> 판매채널/은행 자동수집은 `yeoljeong_finance_service.py` orchestration, `yeoljeong_delivery_collectors.py` portal adapter, `yeoljeong_bank_browser_connector.py` 은행 커넥터, `scripts/yeoljeong_auto_collect.py` 운영 CLI를 정본 구현으로 본다.
+
 ## 7. 장애 · WRAP (최근)
 
 | 문서 | 경로 | 갱신일 |
