@@ -640,6 +640,43 @@ def test_run_sync_with_timeout_runs_child_process(monkeypatch):
     assert summary["summary"][0]["status"] == "succeeded"
 
 
+def test_run_sync_with_timeout_splits_multi_service_attempts(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        service = argv[argv.index("--services") + 1]
+        return auto_collect.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=(
+                '{"summary":[{"service":"'
+                + service
+                + '","status":"succeeded","error_code":"","counts":{"sales":1}}]}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(auto_collect.subprocess, "run", fake_run)
+
+    summary = auto_collect._run_sync_with_timeout(
+        {
+            "services": ["baemin", "coupangeats"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-21",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+        3,
+    )
+
+    assert [argv[argv.index("--services") + 1] for argv in calls] == ["baemin", "coupangeats"]
+    assert "--skip-financial-accounts" not in calls[0]
+    assert "--skip-financial-accounts" in calls[1]
+    assert [item["service"] for item in summary["summary"]] == ["baemin", "coupangeats"]
+
+
 def test_run_sync_with_timeout_marks_attempt_timeout(monkeypatch):
     marked = []
 

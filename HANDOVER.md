@@ -27,6 +27,7 @@
 - Trigger: The single-run `yeoljeong-finance-worker` still stayed in `running` for Coupang Eats after the browser command timeout caps, so the attempt-level timeout needed a hard kill boundary.
 - Changes:
   - `scripts/yeoljeong_auto_collect.py`: `--until-complete` attempts with `--attempt-timeout-seconds` now run the actual collector in a child Python process and use `subprocess.run(timeout=...)` instead of in-process `signal.alarm()`.
+  - Multi-channel attempts now split each delivery service into its own child process so one blocked portal cannot prevent the remaining portals from running.
   - Timeout handling now marks matching queued/running delivery status rows as `failed` / `ATTEMPT_TIMEOUT` immediately so the dashboard does not wait for the 15-minute stale sweeper.
   - Timeout summaries now normalize payload service lists before rendering retryable service rows.
   - Added child-process stdout parsing and retryable timeout unit coverage.

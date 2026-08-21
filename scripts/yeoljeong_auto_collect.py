@@ -92,12 +92,13 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "storage_state_path": args.storage_state_path or "",
         "force_recreate_portal_sessions": bool(args.force_recreate_sessions),
         "close_portal_browser_on_complete": not bool(args.keep_browser_open),
+        "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False)),
     }
 
 
 def _summary(result: dict[str, Any]) -> dict[str, Any]:
     summary = result.get("summary") if isinstance(result.get("summary"), list) else []
-    return {
+    normalized = {
         "queued": bool(result.get("queued")),
         "job_id": result.get("job_id") or result.get("sync_job_id") or "",
         "synced_at": result.get("synced_at") or result.get("queued_at") or "",
@@ -121,6 +122,11 @@ def _summary(result: dict[str, Any]) -> dict[str, Any]:
             for item in summary
         ],
     }
+    if isinstance(result.get("bank_collections"), list):
+        normalized["bank_collections"] = result["bank_collections"]
+    if isinstance(result.get("bank_totals"), dict):
+        normalized["bank_totals"] = result["bank_totals"]
+    return normalized
 
 
 def _branch_id_for_bank_scope(branch: str, business_id: str = "") -> str:
@@ -349,6 +355,8 @@ def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only
     summary = _summary(_run_sync(payload, user, queue_only=queue_only))
     if queue_only:
         return summary
+    if payload.get("skip_financial_accounts"):
+        return summary
     bank_collections = _collect_bank_accounts(payload, user)
     bank_collections.extend(_collect_platform_financial_accounts(payload, user))
     if bank_collections:
@@ -530,6 +538,8 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.append("--force-recreate-sessions")
     if payload.get("close_portal_browser_on_complete") is False:
         argv.append("--keep-browser-open")
+    if payload.get("skip_financial_accounts"):
+        argv.append("--skip-financial-accounts")
     return argv
 
 
@@ -612,10 +622,7 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
     }
 
 
-def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
-    if timeout_seconds <= 0:
-        return _run_collectors(payload, user, queue_only=False)
-
+def _run_child_collect_with_timeout(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     attempt_started_at = datetime.now(KST).isoformat(timespec="seconds")
     try:
         completed = subprocess.run(
@@ -635,6 +642,59 @@ def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeou
         stderr_tail = (completed.stderr or "").strip()[-1000:]
         raise RuntimeError(f"자동수집 자식 프로세스 실패: exit={completed.returncode} stderr={stderr_tail}")
     return _summary(_parse_child_collect_stdout(completed.stdout))
+
+
+def _merge_attempt_summaries(payload: dict[str, Any], summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = _empty_delivery_counts()
+    merged_summary: list[dict[str, Any]] = []
+    bank_collections: list[dict[str, Any]] = []
+    for item in summaries:
+        item_totals = item.get("totals") if isinstance(item.get("totals"), dict) else {}
+        for kind in DELIVERY_RECORD_TYPES:
+            totals[kind] += int(item_totals.get(kind) or 0)
+        if isinstance(item.get("summary"), list):
+            merged_summary.extend(item["summary"])
+        if isinstance(item.get("bank_collections"), list):
+            bank_collections.extend(item["bank_collections"])
+
+    result: dict[str, Any] = {
+        "queued": False,
+        "job_id": str(payload.get("sync_job_id") or ""),
+        "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
+        "business_id": payload.get("business_id") or "",
+        "branch": payload.get("branch") or "",
+        "date_from": payload.get("date_from") or "",
+        "date_to": payload.get("date_to") or "",
+        "totals": totals,
+        "summary": merged_summary,
+    }
+    if bank_collections:
+        result["bank_collections"] = bank_collections
+        result["bank_totals"] = {
+            "accounts": len(bank_collections),
+            "imported_rows": sum(int(item.get("imported_rows") or 0) for item in bank_collections),
+            "duplicate_rows": sum(int(item.get("duplicate_rows") or 0) for item in bank_collections),
+            "collected_rows": sum(int(item.get("collected_rows") or 0) for item in bank_collections),
+        }
+    return result
+
+
+def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    if timeout_seconds <= 0:
+        return _run_collectors(payload, user, queue_only=False)
+
+    services = _payload_services(payload)
+    if len(services) <= 1:
+        return _run_child_collect_with_timeout(payload, timeout_seconds)
+
+    summaries: list[dict[str, Any]] = []
+    for index, service in enumerate(services):
+        service_payload = dict(payload)
+        service_payload["services"] = [service]
+        if index > 0:
+            service_payload["skip_financial_accounts"] = True
+        summaries.append(_run_child_collect_with_timeout(service_payload, timeout_seconds))
+    return _merge_attempt_summaries(payload, summaries)
 
 
 def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
@@ -718,6 +778,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
+    parser.add_argument("--skip-financial-accounts", action="store_true", help="Skip bank and financial account collection.")
     parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")
     parser.add_argument("--repeat-after-complete", action="store_true", help="After a complete cycle, sleep and start the next collection cycle.")
     parser.add_argument("--retry-blocked", action="store_true", help="Keep retrying manual action-required states such as captcha or portal blocking.")
