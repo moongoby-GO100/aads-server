@@ -676,6 +676,7 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
     assert session.endpoint.metadata["cdp_url"] == "pc-agent://ceo-pc/cdp/9333"
     assert captured_kwargs["params"]["work_key"] == "ntv2-china-sourcing-admin"
     assert captured_kwargs["params"]["isolation_id"] == "ntv2-china-sourcing-admin"
+    assert captured_kwargs["params"]["new_window"] is False
     assert session.work_key == "ntv2-china-sourcing-admin"
 
 
@@ -720,6 +721,7 @@ async def test_ensure_pc_agent_cdp_falls_back_to_active_api_when_no_local_agent(
     assert active_calls
     assert active_calls[0]["command_type"] == "browser_launch"
     assert active_calls[0]["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert active_calls[0]["params"]["new_window"] is False
     assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
     assert session.endpoint.metadata["agent_id"] == "ceo-pc"
     assert session.endpoint.metadata["port"] == "9444"
@@ -766,6 +768,7 @@ async def test_ensure_pc_agent_cdp_sidecar_routes_active_api_first(monkeypatch, 
 
     assert active_calls
     assert active_calls[0]["command_type"] == "browser_launch"
+    assert active_calls[0]["params"]["new_window"] is False
     assert active_calls[0]["queue_wait_timeout_seconds"] == 10
     assert active_calls[0]["command_timeout_seconds"] == 60
     assert session.endpoint.metadata["agent_id"] == "oby-ceo"

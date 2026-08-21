@@ -1920,7 +1920,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     profile_dir = _resolve_profile_dir(params)
     ports = _candidate_ports(params)
     preferred = _coerce_port(params.get("preferred_port", params.get("port", CDP_PORT)), CDP_PORT)
-    new_window = _as_bool(params.get("new_window", True), default=True)
+    new_window = _as_bool(params.get("new_window", False), default=False)
     ready_timeout = float(params.get("ready_timeout_seconds", 15.0) or 15.0)
 
     try:

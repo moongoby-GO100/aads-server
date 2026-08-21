@@ -312,6 +312,54 @@ async def test_execute_routed_command_timeout_triggers_browser_health_cleanup(
 
 
 @pytest.mark.asyncio
+async def test_vvic_browser_launch_reuses_work_key_profile_without_new_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["vvic", "chrome_cdp", "interactive_browser"]},
+    )
+
+    observed: dict[str, object] = {}
+
+    async def fake_send_command(_agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        observed["command_type"] = command_type
+        observed["params"] = dict(params)
+        return "cmd-1"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        return CommandResult(
+            command_id=command_id,
+            agent_id="ceo-pc",
+            status="success",
+            result={"port": 9222, "ok": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_launch",
+        params={"work_key": "ntv2-vvic-scrape"},
+        job_type="vvic_cdp",
+        required_capabilities=["vvic", "chrome_cdp", "interactive_browser"],
+        command_timeout_seconds=5.0,
+        lease_ttl_seconds=35,
+    )
+
+    assert result["status"] == "success"
+    assert observed["command_type"] == "browser_launch"
+    sent_params = observed["params"]
+    assert isinstance(sent_params, dict)
+    assert sent_params["work_key"] == "ntv2-vvic-scrape"
+    assert sent_params["isolation_id"] == "ntv2-vvic-scrape"
+    assert sent_params["new_window"] is False
+
+
+@pytest.mark.asyncio
 async def test_execute_routed_command_close_on_complete_triggers_session_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

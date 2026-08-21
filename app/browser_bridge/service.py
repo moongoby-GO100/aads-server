@@ -517,7 +517,7 @@ class BrowserBridgeService:
             "url": url or "about:blank",
             "dynamic_port": True,
             "isolated_profile": isolated_profile,
-            "new_window": True,
+            "new_window": False,
         }
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)

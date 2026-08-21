@@ -1004,13 +1004,14 @@ class PCAgentManager:
 
     def _prepare_vvic_browser_launch_params(self, params: Dict[str, Any], lease_id: str) -> Dict[str, Any]:
         merged = dict(params or {})
+        work_key = str(merged.get("work_key") or "").strip()
         merged.setdefault("isolated_profile", True)
-        merged.setdefault("isolation_id", lease_id)
+        merged.setdefault("isolation_id", work_key or lease_id)
         merged.setdefault("dynamic_port", True)
         merged.setdefault("preferred_port", 9222)
         merged.setdefault("port_candidates", [9222, 9333, 9444, 9555, 9666, 9777])
         merged.setdefault("require_cdp_ready", True)
-        merged.setdefault("new_window", True)
+        merged.setdefault("new_window", False)
         return merged
 
     async def acquire_lease(

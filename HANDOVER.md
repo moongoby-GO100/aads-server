@@ -7752,3 +7752,22 @@
 - Remaining:
   - Not committed, pushed, or deployed in this step.
   - Live bank portal E2E needs PC Agent/browser session connection from the admin screen.
+
+## 2026-08-21 09:02 KST - PC Agent browser window reuse hardening
+
+- Request: Stop other project workflows from creating unlimited PC Agent Chrome windows, apply the improvement, deploy to operations, and report after verification.
+- Findings:
+  - AADS chat command normalization already defaulted `browser_launch` to `new_window=false`, but Browser Bridge still sent `new_window=true` directly.
+  - PC Agent's internal `browser_launch` default was also `new_window=true`, so any project bypassing AADS chat normalization could still open a fresh Chrome window.
+  - VVIC/portal lease launch parameters used the lease id as the default isolation id, creating fresh profiles per attempt instead of reusing the stable `work_key` profile.
+- Changes:
+  - Browser Bridge `ensure_pc_agent_cdp_session()` now launches managed browser sessions with `new_window=false`.
+  - PC Agent `browser_launch` now defaults to `new_window=false` even for direct/legacy callers.
+  - VVIC/portal browser launch preparation now reuses the stable `work_key` as `isolation_id` and keeps `new_window=false`.
+  - Added regression coverage for Browser Bridge launch params and VVIC lease launch params.
+- Verification:
+  - `python3 -m py_compile app/browser_bridge/service.py app/services/pc_agent_manager.py app/api/pc_agent.py pc_agent/commands/browser_auto.py` succeeded.
+  - Host pytest was not usable because the host Python lacked FastAPI/Pydantic/Structlog dependencies.
+  - `docker exec aads-server python -m pytest tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_pc_agent_api_disconnects.py tests/test_pc_agent_command_builder.py -q` succeeded: 88 passed.
+- Remaining:
+  - Commit, push, blue-green deploy, and operational PC Agent smoke verification are still required after this entry.
