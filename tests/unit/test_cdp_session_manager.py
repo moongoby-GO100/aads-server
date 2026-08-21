@@ -5,7 +5,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent", "commands"))
 
-from browser_auto import CDPCommandGuardManager, CDPSessionManager, browser_close_session, _effective_port
+from browser_auto import (
+    CDPCommandGuardManager,
+    CDPSessionManager,
+    browser_close_session,
+    _default_profile_root,
+    _effective_port,
+)
 
 
 class TestCDPSessionManager:
@@ -88,7 +94,7 @@ class TestCDPSessionManager:
 async def test_browser_close_session_releases_session_and_guard(monkeypatch):
     CDPSessionManager._sessions.clear()
     CDPCommandGuardManager._guards.clear()
-    CDPSessionManager.register("aads-ceo-browser", 9444, "/tmp/aads", pid=1234)
+    CDPSessionManager.register("aads-ceo-browser", 9444, os.path.join(_default_profile_root(), "isolated-aads-ceo-browser"), pid=1234)
 
     async def fake_list_targets(_port):
         return [{"id": "target-1", "type": "page", "webSocketDebuggerUrl": "ws://target", "url": "https://aads.newtalk.kr"}]
@@ -110,4 +116,24 @@ async def test_browser_close_session_releases_session_and_guard(monkeypatch):
     assert result["data"]["closed_tabs"] == 1
     assert result["data"]["session_released"] is True
     assert result["data"]["process"]["pid"] == 1234
+    assert CDPSessionManager.get_session("aads-ceo-browser") is None
+
+
+@pytest.mark.asyncio
+async def test_browser_close_session_refuses_unmanaged_user_profile(monkeypatch):
+    CDPSessionManager._sessions.clear()
+    CDPCommandGuardManager._guards.clear()
+    CDPSessionManager.register("aads-ceo-browser", 9444, "/tmp/user-chrome-profile", pid=1234)
+
+    async def fail_list_targets(_port):
+        raise AssertionError("unmanaged profile tabs must not be touched")
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fail_list_targets)
+    monkeypatch.setattr("browser_auto._terminate_browser_process", lambda pid: {"attempted": True, "pid": pid, "success": True})
+
+    result = await browser_close_session({"work_key": "aads-ceo-browser", "close_browser": True})
+
+    assert result["status"] == "error"
+    assert result["data"]["error_code"] == "UNMANAGED_BROWSER_PROFILE"
+    assert result["data"]["process"]["attempted"] is False
     assert CDPSessionManager.get_session("aads-ceo-browser") is None

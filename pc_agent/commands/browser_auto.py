@@ -338,6 +338,19 @@ def _resolve_profile_dir(params: Dict[str, Any]) -> str:
     return os.path.join(root, f"isolated-{isolation_id}")
 
 
+def _is_managed_profile_dir(profile_dir: str) -> bool:
+    """Return true only for Chrome profiles created under the PC Agent profile root."""
+    value = str(profile_dir or "").strip()
+    if not value:
+        return False
+    try:
+        root = os.path.abspath(os.path.normpath(_default_profile_root()))
+        path = os.path.abspath(os.path.normpath(os.path.expandvars(os.path.expanduser(value))))
+        return path == root or path.startswith(root + os.sep)
+    except Exception:
+        return False
+
+
 def _candidate_ports(params: Dict[str, Any]) -> list[int]:
     preferred = _coerce_port(params.get("preferred_port", params.get("port", CDP_PORT)), CDP_PORT)
     candidates: list[int] = [preferred]
@@ -1812,6 +1825,7 @@ async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
     close_tabs = _as_bool(params.get("close_tabs", True), default=True)
     close_browser = _as_bool(params.get("close_browser", True), default=True)
     keep_last = _as_bool(params.get("keep_last", False), default=False)
+    allow_unmanaged_profile_close = _as_bool(params.get("allow_unmanaged_profile_close", False), default=False)
     reason = str(params.get("reason", "") or "")
     session = CDPSessionManager.get_session(work_key)
     if not session:
@@ -1827,6 +1841,31 @@ async def browser_close_session(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     port = session.port
+    managed_profile = _is_managed_profile_dir(session.profile_dir)
+    if not managed_profile and not allow_unmanaged_profile_close:
+        CDPCommandGuardManager.force_release(CDPCommandGuardManager._guard_key({"work_key": work_key}, port=port))
+        CDPSessionManager.release(work_key)
+        logger.warning(
+            "browser_close_session refused unmanaged profile work_key=%s port=%d profile=%s reason=%s",
+            work_key,
+            port,
+            session.profile_dir,
+            reason,
+        )
+        return {
+            "status": "error",
+            "data": {
+                "error_code": "UNMANAGED_BROWSER_PROFILE",
+                "message": "Refused to close a browser session outside the PC Agent managed profile root",
+                "work_key": work_key,
+                "port": port,
+                "profile_dir": session.profile_dir,
+                "session_released": True,
+                "process": {"attempted": False, "reason": "unmanaged_profile"},
+                "reason": reason,
+            },
+        }
+
     closed: list[dict[str, Any]] = []
     remaining = 0
     if close_tabs:

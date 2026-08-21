@@ -288,3 +288,9 @@
 - 실측 결과: PC Agent 배민 세션 로그인 후 중화점 배민 수집 성공, 응답 기준 매출 1건/정산 1건/리뷰 288건 수집. 원장 병합 후 중화점 배민 원장에는 매출 3건, 정산 1건, 리뷰 167건이 존재한다.
 - 남은 이슈: 쿠팡이츠는 포털 보안 차단, 땡겨요는 추가 인증 요구, 요기요는 인증 후 조회기간 내 0건 상태다. 각 포털별 PC 로그인 세션 또는 인증 처리가 필요하다.
 - 검증: `pytest tests/unit/test_yeoljeong_finance_service.py::test_baemin_dashboard_records_extracts_home_summary tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_uses_baemin_pc_agent_session_without_password tests/unit/test_yeoljeong_delivery_collectors.py::test_normalize_record_tolerates_none_header_key -q` 컨테이너 기준 3 passed.
+
+## 2026-08-21 13:02 KST - PC Agent 관리형 브라우저 종료 안전 가드
+- 요청: 프로젝트 자동화 브라우저 정리 시 CEO가 직접 사용하는 일반 Chrome 창은 닫지 않도록 보강.
+- 확인: `browser_launch`는 work_key 재사용과 `new_window=false`가 이미 반영되어 있었지만, `browser_close_session`은 등록된 세션의 프로필 루트가 PC Agent 관리형인지 검증하지 않았다.
+- 조치: `pc_agent/commands/browser_auto.py`에서 `%LOCALAPPDATA%/KakaoBot/cdp-profile` 하위 관리형 프로필만 탭/프로세스 종료를 허용하고, 일반 사용자 프로필 또는 출처 불명 세션은 `UNMANAGED_BROWSER_PROFILE`로 거부하도록 변경했다.
+- 검증: `python3 -m py_compile pc_agent/commands/browser_auto.py tests/unit/test_cdp_session_manager.py` 성공. 현재 소스를 마운트한 컨테이너에서 `pytest tests/unit/test_cdp_session_manager.py tests/unit/test_pc_agent_routing_leases.py tests/test_pc_agent_command_builder.py -q` 69 passed.
