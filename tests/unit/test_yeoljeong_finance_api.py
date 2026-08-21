@@ -352,6 +352,8 @@ async def test_sync_delivery_background_returns_after_queueing(monkeypatch):
             "queued_run_ids": {"baemin": "run-baemin", "yogiyo": "run-yogiyo"},
             "captcha_value": "",
             "captcha_values": {},
+            "operator_approved": False,
+            "approved_input": "",
             "force_recreate_portal_sessions": False,
         },
         {"email": "owner@example.com", "is_admin": True},

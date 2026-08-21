@@ -7919,3 +7919,41 @@
 - Remaining:
   - Commit/push/deploy were not performed in this step.
   - Existing dirty docs (`docs/CHANGELOG-*.md`) were preserved and not touched.
+
+## 2026-08-21 18:39 KST - Yeoljeong delivery CAPTCHA operator-input policy
+
+- Request: Complete the remaining commit, push, and production deployment state after chat-context deployment recovery.
+- Findings:
+  - `origin/main` already contained the chat contextual follow-up fix and docs sync commits.
+  - Three additional local changes remained in the worktree: delivery CAPTCHA handling, its unit fixture, and the GO100 direct changelog.
+- Changes:
+  - Delivery collection no longer calls the vision CAPTCHA solver for `DDANGYO_NUMERIC_CAPTCHA_REQUIRED`.
+  - Missing CAPTCHA input now returns `portal_action_required` with `captcha_input=operator_input_required`, so the same PC Agent session can resume only after approved operator input.
+  - Unit fixture now includes explicit `operator_approved` and `approved_input` fields.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py` succeeded.
+  - `git diff --check` succeeded.
+  - `docker run --rm --env-file .env -v /root/aads/aads-server:/app -w /app aads-server-aads-server:latest python -m pytest tests/unit/test_yeoljeong_finance_api.py -q` succeeded: 22 passed.
+- Remaining:
+  - Commit, push, and blue-green deploy are being performed immediately after this entry.
+
+## 2026-08-21 18:40 KST - Yeoljeong Ddangyo CAPTCHA policy correction
+
+- Request context: Continue the Ddangyo login/CAPTCHA test after the portal reached the numeric CAPTCHA screen.
+- Findings:
+  - Latest `delivery_collection_status.json` entries showed Ddangyo reached CAPTCHA but did not collect rows: `DDANGYO_NUMERIC_CAPTCHA_REQUIRED` with `captcha_mode=ai_vision_auto_solve`, `captcha_input=rejected_attempt_3`, then `ATTEMPT_TIMEOUT` at 18:21 KST.
+  - The active API container was `aads-server-green` on port 8102; `yeoljeong-finance` was healthy on port 8110.
+- Changes:
+  - Removed the automatic `solve_captcha_with_vision()` execution path from `app/services/yeoljeong_finance_service.py`.
+  - Ddangyo CAPTCHA now returns `portal_action_required` with `captcha_input=operator_input_required` unless a transient operator-approved input is present.
+  - Rejected CAPTCHA attempts no longer re-call the vision solver; only approved operator input can be retried in the same PC Agent session.
+  - Updated the finance API unit expectation to include `operator_approved` and `approved_input` in background sync payloads.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server/app:/app/app:rw -v /root/aads/aads-server/tests:/app/tests:ro -w /app --entrypoint python aads-server-aads-server-green -m pytest /app/tests/unit/test_yeoljeong_finance_service.py -k 'ddangyo or captcha' -q` succeeded: 4 passed, 112 deselected.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -v /root/aads/aads-server/app:/app/app:rw -v /root/aads/aads-server/tests:/app/tests:ro -w /app --entrypoint python aads-server-aads-server-green -m pytest /app/tests/unit/test_yeoljeong_finance_api.py /app/tests/unit/test_yeoljeong_finance_api_contract.py -q` succeeded: 25 passed.
+  - `docker run --rm -v /root/aads/aads-server/app:/app/app:rw -v /root/aads/aads-server/tests:/app/tests:ro -w /app --entrypoint python aads-server-aads-server-green -m pytest /app/tests/unit/test_yeoljeong_delivery_collectors.py -q` succeeded: 14 passed.
+  - `git diff --check` succeeded.
+- Remaining:
+  - Real Ddangyo data collection remains blocked at CAPTCHA/operator action. No rows were collected in the latest run.
+  - This step was committed locally only after preserving unrelated dirty `docs/CHANGELOG-go100-direct.md`; no push or deploy was performed.

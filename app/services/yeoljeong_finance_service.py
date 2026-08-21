@@ -27,7 +27,6 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
-from app.services.captcha_vision_solver import solve_captcha_with_vision
 
 KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("YEOLJEONG_FINANCE_DATA_DIR", "app/data/yeoljeong_finance"))
@@ -6095,11 +6094,14 @@ async def _collect_delivery_from_browser_bridge_session_async(
             captcha_value = str(account.get("captcha_value") or "")
             if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
                 if not captcha_value:
-                    captcha_value = await solve_captcha_with_vision(
-                        page, screenshot_path=challenge_screenshot,
-                    )
-                    if captcha_value:
-                        diagnostics["captcha_mode"] = "ai_vision_auto_solve"
+                    diagnostics["captcha_input"] = "operator_input_required"
+                    return {
+                        "status": "portal_action_required",
+                        "error_code": challenge_code,
+                        "message": "땡겨요 숫자 캡챠 입력이 필요합니다. 승인된 입력값을 같은 PC Agent 세션에 전달하면 수집을 재개합니다.",
+                        "records": {},
+                        "diagnostics": diagnostics,
+                    }
                 captcha_accepted = False
                 _cred_username = str(account.get("username") or "").strip()
                 _cred_password = _decrypt_secret(str(account.get("password_enc") or "")) if _has_secret_value(account, "password") else ""
@@ -6125,7 +6127,6 @@ async def _collect_delivery_from_browser_bridge_session_async(
                         diagnostics["captcha_mode"] = "operator_confirmed_input"
                     if login_state == "challenge":
                         diagnostics["captcha_input"] = f"rejected_attempt_{_captcha_attempt + 1}"
-                        captcha_value = await solve_captcha_with_vision(page)
                         continue
                     if login_state != "authenticated":
                         diagnostics["captcha_input"] = f"submitted_{login_state}"
