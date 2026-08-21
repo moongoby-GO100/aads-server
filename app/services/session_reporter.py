@@ -40,6 +40,7 @@ class SessionReportResult:
     session_id: str
     message_id: Optional[str] = None
     skipped_reason: str = ""
+    reaction_triggered: bool = False
 
 
 def normalize_session_id(value: Any) -> str:
@@ -129,6 +130,9 @@ async def post_session_report(
     model_used: Optional[str] = None,
     intent: str = "auto_report",
     idempotency_key: Optional[str] = None,
+    trigger_reaction: bool = False,
+    reaction_prompt: Optional[str] = None,
+    ohvis_task_id: Optional[str] = None,
     conn: Optional[asyncpg.Connection] = None,
 ) -> SessionReportResult:
     """Persist an assistant report message into a chat session.
@@ -199,8 +203,41 @@ async def post_session_report(
                 sid,
             )
         message_id = str(row["id"]) if row and row.get("id") else None
-        logger.info("session_report_posted session=%s source=%s title=%s", sid[:8], source, title[:80])
-        return SessionReportResult(posted=True, session_id=sid, message_id=message_id)
+        reaction_triggered = False
+        if trigger_reaction:
+            try:
+                from app.services.chat_service import trigger_ai_reaction
+
+                prompt = reaction_prompt or (
+                    "[시스템] 세션 자동보고가 도착했습니다. "
+                    "보고 내용을 확인하고, 필요한 후속 조치가 있으면 이 세션에서 이어서 진행한 뒤 CEO에게 보고하세요.\n\n"
+                    f"보고 제목: {title}\n"
+                    f"보고 출처: {source}\n"
+                    f"보고 상태: {status}\n\n"
+                    f"{content}"
+                )
+                await trigger_ai_reaction(sid, prompt, ohvis_task_id=ohvis_task_id)
+                reaction_triggered = True
+            except Exception as reaction_err:
+                logger.warning(
+                    "session_report_reaction_failed session=%s source=%s error=%s",
+                    sid[:8],
+                    source,
+                    reaction_err,
+                )
+        logger.info(
+            "session_report_posted session=%s source=%s title=%s reaction=%s",
+            sid[:8],
+            source,
+            title[:80],
+            reaction_triggered,
+        )
+        return SessionReportResult(
+            posted=True,
+            session_id=sid,
+            message_id=message_id,
+            reaction_triggered=reaction_triggered,
+        )
 
     try:
         if conn is not None:

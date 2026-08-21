@@ -5,6 +5,7 @@ import importlib.util
 import logging
 from pathlib import Path
 import sys
+from types import ModuleType
 from types import SimpleNamespace
 import uuid
 
@@ -114,6 +115,40 @@ def test_post_session_report_inserts_assistant_message_and_updates_session():
     assert any("UPDATE chat_sessions" in query for query, _ in conn.queries)
 
 
+def test_post_session_report_can_trigger_ai_reaction(monkeypatch):
+    post_session_report = _load_session_reporter().post_session_report
+
+    calls: list[tuple[str, str, object]] = []
+    fake_chat_service = ModuleType("app.services.chat_service")
+
+    async def fake_trigger_ai_reaction(session_id, message, ohvis_task_id=None):
+        calls.append((session_id, message, ohvis_task_id))
+
+    fake_chat_service.trigger_ai_reaction = fake_trigger_ai_reaction
+    monkeypatch.setitem(sys.modules, "app.services.chat_service", fake_chat_service)
+
+    session_id = str(uuid.uuid4())
+    conn = _FakeConn()
+
+    result = asyncio.run(
+        post_session_report(
+            session_id=session_id,
+            title="예약 테스트",
+            body="결과값",
+            source="schedule_task",
+            conn=conn,
+            trigger_reaction=True,
+        )
+    )
+
+    assert result.posted is True
+    assert result.reaction_triggered is True
+    assert calls
+    assert calls[0][0] == session_id
+    assert "세션 자동보고가 도착했습니다" in calls[0][1]
+    assert "결과값" in calls[0][1]
+
+
 def test_post_session_report_skips_missing_session():
     post_session_report = _load_session_reporter().post_session_report
 
@@ -154,3 +189,4 @@ def test_schedule_task_binds_report_session_id():
     args = fake_scheduler.jobs[0]["args"]
     assert args[2]["report_session_id"] == session_id
     assert args[2]["report_to_session"] is True
+    assert args[2]["trigger_session_reaction"] is True

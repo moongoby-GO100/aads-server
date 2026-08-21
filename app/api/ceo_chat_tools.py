@@ -1582,6 +1582,10 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "자동 보고 대상 세션 ID. 생략하면 현재 채팅 세션에 묶습니다.",
                 },
+                "trigger_session_reaction": {
+                    "type": "boolean",
+                    "description": "자동 보고 후 해당 채팅 세션의 AI 후속 반응을 트리거할지 여부. 기본 true.",
+                },
             },
             "required": ["name", "schedule_type", "action_type", "action_config"],
         },
@@ -5495,6 +5499,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             schedule_config=params.get("schedule_config", {}),
             report_session_id=_report_session_id,
             report_to_session=bool(params.get("report_to_session", True)),
+            trigger_session_reaction=bool(params.get("trigger_session_reaction", True)),
         )
         return json.dumps(result, ensure_ascii=False, default=str)
     elif name == "unschedule_task":

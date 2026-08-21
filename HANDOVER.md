@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-22 07:21 KST - Session auto-report AI reaction trigger
+
+- Trigger: CEO clarified that a session receiving an automatic report must react in the same chat session, not only persist the report bubble.
+- Changes:
+  - `app/services/session_reporter.py`: added optional `trigger_reaction` support to call the existing `chat_service.trigger_ai_reaction()` after a durable session report is posted. The default remains disabled to avoid runner progress-message loops.
+  - `app/api/ceo_chat_tools_scheduler.py`: scheduled job callbacks now carry `trigger_session_reaction` and default it on when a report session is bound, so `schedule_task` success/failure reports can trigger same-session AI follow-up.
+  - `app/services/tool_executor.py`, `app/api/ceo_chat_tools.py`, and `app/services/tool_registry.py`: exposed and forwarded the `trigger_session_reaction` option through tool schemas and execution paths.
+  - `tests/unit/test_session_reporter.py`: added coverage for post-report AI reaction triggering and scheduler flag propagation.
+- Verification:
+  - `python3 -m py_compile app/services/session_reporter.py app/api/ceo_chat_tools_scheduler.py app/services/tool_executor.py app/api/ceo_chat_tools.py app/services/tool_registry.py` passed.
+  - `pytest -q tests/unit/test_session_reporter.py` passed: 5 passed, 1 existing config warning.
+  - Scoped `git diff --check` for touched callback files passed.
+- Not done:
+  - No push, deploy, or service restart in this step unless separately approved.
+  - Existing unrelated dirty file `docs/CHANGELOG-go100-direct.md` was not modified.
+
 ## 2026-08-22 07:00 KST - Session auto-report callback module
 
 - Trigger: CEO asked whether scheduled/job results can automatically report back into the originating chat session and be reusable across projects/sessions.

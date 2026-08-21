@@ -36,6 +36,7 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
     """예약 작업 실행 핸들러."""
     report_session_id = ""
     report_enabled = True
+    trigger_session_reaction = False
     action_config = dict(action_config or {})
     callback_meta = {
         "job_id": job_id,
@@ -50,6 +51,10 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
             or action_config.pop("chat_session_id", "")
         ).strip()
         report_enabled = bool(action_config.pop("report_to_session", True))
+        trigger_session_reaction = bool(
+            action_config.pop("trigger_session_reaction", False)
+            or action_config.pop("react_to_session_report", False)
+        )
 
         if action_type == "remote_command":
             from app.api.ceo_chat_tools import tool_run_remote_command
@@ -89,6 +94,7 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
                     project=str(action_config.get("project") or "AADS"),
                     metadata=callback_meta,
                     intent="auto_report",
+                    trigger_reaction=trigger_session_reaction,
                 )
             except Exception as report_err:
                 logger.warning("scheduler_session_report_failed: job=%s err=%s", job_id, report_err)
@@ -120,6 +126,7 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
                     project=str(action_config.get("project") or "AADS"),
                     metadata=callback_meta,
                     intent="auto_report",
+                    trigger_reaction=trigger_session_reaction,
                 )
             except Exception as report_err:
                 logger.warning("scheduler_session_report_error_failed: job=%s err=%s", job_id, report_err)
@@ -141,6 +148,7 @@ async def schedule_task(
     schedule_config: Optional[Dict[str, Any]] = None,
     report_session_id: str = "",
     report_to_session: bool = True,
+    trigger_session_reaction: bool = True,
 ) -> Dict[str, Any]:
     """
     예약 작업 등록.
@@ -156,6 +164,7 @@ async def schedule_task(
             - once: {delay_minutes} (지금부터 N분 후 1회)
         report_session_id: 실행 결과를 자동 보고할 chat_sessions.id
         report_to_session: False면 세션 자동보고 비활성화
+        trigger_session_reaction: 세션 자동보고 후 해당 세션 AI 후속 반응 트리거
     """
     if not _scheduler:
         return {"error": "스케줄러가 초기화되지 않았습니다"}
@@ -178,6 +187,7 @@ async def schedule_task(
     if report_session_id:
         effective_action_config["report_session_id"] = report_session_id
     effective_action_config["report_to_session"] = bool(report_to_session)
+    effective_action_config["trigger_session_reaction"] = bool(report_to_session and report_session_id and trigger_session_reaction)
 
     # 기존 작업 중복 체크
     existing = _scheduler.get_job(job_id)
@@ -242,6 +252,7 @@ async def schedule_task(
             "action_config": effective_action_config,
             "report_session_id": report_session_id,
             "report_to_session": bool(report_to_session and report_session_id),
+            "trigger_session_reaction": bool(report_to_session and report_session_id and trigger_session_reaction),
         }
 
     except Exception as e:

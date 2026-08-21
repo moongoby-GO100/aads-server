@@ -637,7 +637,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── AADS-190: 스케줄러 도구 ────────────────────────────────────────────
     "schedule_task": {
         "name": "schedule_task",
-        "description": "예약 작업을 등록합니다. 매일/매주/주기적 서버 점검, DB 조회, URL 체크 등을 예약. 결과는 텔레그램으로 알림.",
+        "description": "예약 작업을 등록합니다. 매일/매주/주기적 서버 점검, DB 조회, URL 체크 등을 예약. 결과는 텔레그램과 연결된 채팅 세션으로 보고하고, 필요 시 해당 세션의 AI 후속 반응을 트리거합니다.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -659,6 +659,18 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "schedule_config": {
                     "type": "object",
                     "description": "스케줄 설정. cron: {hour, minute, day_of_week}, interval: {minutes 또는 hours}, once: {delay_minutes}",
+                },
+                "report_to_session": {
+                    "type": "boolean",
+                    "description": "실행 결과를 연결된 채팅 세션에 자동 보고할지 여부. 기본 true.",
+                },
+                "report_session_id": {
+                    "type": "string",
+                    "description": "자동 보고 대상 세션 ID. 생략하면 현재 채팅 세션에 묶습니다.",
+                },
+                "trigger_session_reaction": {
+                    "type": "boolean",
+                    "description": "자동 보고 후 해당 세션 AI 후속 반응을 트리거할지 여부. 기본 true.",
                 },
             },
             "required": ["name", "schedule_type", "action_type", "action_config"],
