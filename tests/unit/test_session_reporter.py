@@ -190,3 +190,33 @@ def test_schedule_task_binds_report_session_id():
     assert args[2]["report_session_id"] == session_id
     assert args[2]["report_to_session"] is True
     assert args[2]["trigger_session_reaction"] is True
+
+
+def test_schedule_task_enables_reaction_for_action_config_session_id():
+    from app.api import ceo_chat_tools_scheduler as scheduler_mod
+
+    fake_scheduler = _FakeScheduler()
+    scheduler_mod.set_scheduler(fake_scheduler)
+    session_id = str(uuid.uuid4())
+
+    result = asyncio.run(
+        scheduler_mod.schedule_task(
+            name="unit embedded session once",
+            schedule_type="once",
+            action_type="url_check",
+            action_config={
+                "url": "https://example.test/health",
+                "chat_session_id": session_id,
+            },
+            schedule_config={"delay_minutes": 1},
+        )
+    )
+
+    assert result["status"] == "registered"
+    assert result["report_session_id"] == session_id
+    assert result["report_to_session"] is True
+    assert result["trigger_session_reaction"] is True
+    args = fake_scheduler.jobs[0]["args"]
+    assert args[2]["report_session_id"] == session_id
+    assert args[2]["report_to_session"] is True
+    assert args[2]["trigger_session_reaction"] is True

@@ -5196,3 +5196,6 @@ fro
 
 ## [2026-08-21 17:49:53 KST] [aads-server] app/services/yeoljeong_finance_service.py
 - Chat-Direct 수정: patch:                 captcha_accepted = False→                captcha_accepted = False
+
+## [2026-08-22 07:29:40 KST] [aads-server] tests/unit/test_session_reporter.py
+- Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w '%{http_code} %{size_download}\n' http://localhost:8080/

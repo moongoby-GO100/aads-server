@@ -184,10 +184,21 @@ async def schedule_task(
     job_id = f"user_{name.strip().replace(' ', '_')}"
     schedule_config = schedule_config or {}
     effective_action_config = copy.deepcopy(action_config or {})
-    if report_session_id:
-        effective_action_config["report_session_id"] = report_session_id
-    effective_action_config["report_to_session"] = bool(report_to_session)
-    effective_action_config["trigger_session_reaction"] = bool(report_to_session and report_session_id and trigger_session_reaction)
+    effective_report_session_id = str(
+        report_session_id
+        or effective_action_config.get("report_session_id")
+        or effective_action_config.get("session_report_session_id")
+        or effective_action_config.get("chat_session_id")
+        or ""
+    ).strip()
+    if effective_report_session_id:
+        effective_action_config["report_session_id"] = effective_report_session_id
+    effective_report_to_session = bool(report_to_session and effective_report_session_id)
+    effective_trigger_session_reaction = bool(
+        effective_report_to_session and trigger_session_reaction
+    )
+    effective_action_config["report_to_session"] = effective_report_to_session
+    effective_action_config["trigger_session_reaction"] = effective_trigger_session_reaction
 
     # 기존 작업 중복 체크
     existing = _scheduler.get_job(job_id)
@@ -250,9 +261,9 @@ async def schedule_task(
             "schedule": desc,
             "action_type": action_type,
             "action_config": effective_action_config,
-            "report_session_id": report_session_id,
-            "report_to_session": bool(report_to_session and report_session_id),
-            "trigger_session_reaction": bool(report_to_session and report_session_id and trigger_session_reaction),
+            "report_session_id": effective_report_session_id,
+            "report_to_session": effective_report_to_session,
+            "trigger_session_reaction": effective_trigger_session_reaction,
         }
 
     except Exception as e:
