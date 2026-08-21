@@ -550,6 +550,11 @@ async def list_collection_status(business_id: str | None = None, current_user: d
     return {"statuses": await run_in_threadpool(svc.list_collection_status, current_user, business_id)}
 
 
+@router.get("/completion-matrix")
+async def completion_matrix(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"matrix": await run_in_threadpool(svc.delivery_completion_matrix, current_user, business_id)}
+
+
 @router.get("/automation")
 async def get_automation_status(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.automation_status, current_user)

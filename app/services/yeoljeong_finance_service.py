@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
+from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
 
 KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("YEOLJEONG_FINANCE_DATA_DIR", "app/data/yeoljeong_finance"))
@@ -34,6 +35,8 @@ EVIDENCE_UPLOAD_DIR = DATA_DIR / "uploads" / "evidence"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 256 * 1024
 DELIVERY_SYNC_STALE_AFTER = timedelta(minutes=15)
+DELIVERY_CHALLENGE_TIMEOUT = timedelta(minutes=20)
+DELIVERY_CHALLENGE_MAX_ATTEMPTS = 3
 CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
 
 DOCUMENT_TYPES: list[dict[str, str]] = [
@@ -3180,6 +3183,59 @@ def list_ads(user: dict[str, Any], business_id: str | None = None) -> list[dict[
     return rows
 
 
+def delivery_completion_matrix(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    """Return completion per account/channel/ledger type."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="판매채널 완료 매트릭스 조회 권한이 없습니다")
+    accounts = _read("platform_accounts")
+    if business_id:
+        accounts = [row for row in accounts if str(row.get("business_id") or "") == business_id]
+    ledgers = {kind: _read(f"delivery_{kind}") for kind in DELIVERY_RECORD_TYPES}
+    statuses = _read("delivery_collection_status")
+    latest: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in sorted(statuses, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True):
+        key = (
+            str(row.get("service") or ""),
+            str(row.get("business_id") or ""),
+            str(row.get("branch") or ""),
+        )
+        latest.setdefault(key, row)
+    matrix: list[dict[str, Any]] = []
+    for account in accounts:
+        service = str(account.get("service") or "")
+        scope = (service, str(account.get("business_id") or ""), str(account.get("branch") or ""))
+        status_row = latest.get(scope) or {}
+        kinds: dict[str, str] = {}
+        for kind, rows in ledgers.items():
+            has_rows = any(
+                str(row.get("service") or "") == service
+                and str(row.get("business_id") or "") == scope[1]
+                and str(row.get("branch") or "") == scope[2]
+                for row in rows
+            )
+            if has_rows:
+                kinds[kind] = "complete"
+            elif str(status_row.get("status") or "") == "action_required":
+                kinds[kind] = "action_required"
+            else:
+                kinds[kind] = "incomplete"
+        matrix.append(
+            {
+                "account_id": str(account.get("id") or ""),
+                "service": service,
+                "business_id": scope[1],
+                "branch": scope[2],
+                "status": "complete"
+                if all(value == "complete" for value in kinds.values())
+                else ("action_required" if "action_required" in kinds.values() else "incomplete"),
+                "kinds": kinds,
+                "last_collection_status": str(status_row.get("status") or "not_started"),
+                "run_id": str(status_row.get("id") or ""),
+            }
+        )
+    return matrix
+
+
 def list_collection_status(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="수집 상태 조회 권한이 없습니다")
@@ -4928,10 +4984,10 @@ def _delivery_browser_auth_for_account(
         bridge_service = get_browser_bridge_service()
         session = None
         errors: list[str] = []
-        close_on_complete = bool(
-            payload.get("close_portal_browser_on_complete")
-            or payload.get("closePortalBrowserOnComplete")
-        )
+        close_flag = payload.get("close_portal_browser_on_complete")
+        if close_flag is None:
+            close_flag = payload.get("closePortalBrowserOnComplete")
+        close_on_complete = True if close_flag is None else bool(close_flag)
         for attempt in range(3):
             try:
                 ensure_kwargs: dict[str, Any] = {
@@ -5380,31 +5436,14 @@ def _baemin_bridge_login_state(url: str, text: str) -> str:
 
 
 def _delivery_bridge_login_state(url: str, text: str) -> str:
-    lowered_url = str(url or "").lower()
-    lowered_text = str(text or "").lower()
-    if any(term in lowered_text for term in ("보안 위배 접근 제한", "올바르지 않은 요청", "access denied", "forbidden")):
+    decision = classify_portal_state(url, text)
+    if decision.state == "portal_error":
         return "blocked"
-    if any(
-        term in lowered_text
-        for term in (
-            "captcha",
-            "캡차",
-            "보안문자",
-            "자동입력방지",
-            "숫자를 입력",
-            "2차 인증",
-            "추가 인증",
-            "본인인증",
-            "휴대폰 인증",
-            "기기 인증",
-            "인증번호",
-            "약관 동의",
-        )
-    ):
+    if decision.state in {"captcha_required", "otp_required"}:
         return "challenge"
-    if "login" in lowered_url or any(term in text for term in ("로그인", "회원가입", "아이디", "비밀번호")):
+    if decision.state == "login_required":
         return "login"
-    return "authenticated"
+    return "authenticated" if decision.state == "collectable_page" else "challenge"
 
 
 def _delivery_bridge_challenge_code(service: str, text: str) -> str:
@@ -5428,7 +5467,7 @@ def _delivery_captcha_value_for_account(
     values = payload.get("captcha_values") if isinstance(payload.get("captcha_values"), dict) else {}
     run_key = _delivery_run_key(service, business_id, branch)
     candidates = (
-        payload.get("approved_input"),
+        approved_operator_input(payload),
         payload.get("captcha_value"),
         payload.get("captcha"),
         values.get(run_key),
@@ -6721,13 +6760,32 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             finished_at = _now()
             public_status = _delivery_public_collection_status(result.get("status"))
             public_error_code = _delivery_public_error_code(public_status, result.get("error_code"))
+            result_diagnostics = dict(result.get("diagnostics") or {})
+            browser_session_id = str(browser_auth.get("browser_session_id") or "").strip()
+            browser_work_key = str(browser_auth.get("browser_work_key") or "").strip()
+            if browser_session_id:
+                result_diagnostics["browser_session_id"] = browser_session_id
+            if browser_work_key:
+                result_diagnostics["browser_work_key"] = browser_work_key
+            if browser_session_id or browser_work_key:
+                result_diagnostics["resume_token"] = make_resume_token(browser_work_key, browser_session_id, run_id)
+            previous_attempts = int(status_record.get("attempt_count") or 0)
+            attempt_count = previous_attempts + 1
+            if public_status == "action_required" and attempt_count >= DELIVERY_CHALLENGE_MAX_ATTEMPTS:
+                public_status = "failed"
+                public_error_code = "CHALLENGE_MAX_ATTEMPTS_EXCEEDED"
+                result_diagnostics["challenge_terminal"] = "max_attempts"
             status_record.update(
                 {
                     "status": public_status,
                     "raw_status": result.get("status") or "",
                     "counts": counts,
                     "error_code": public_error_code,
-                    "diagnostics": result.get("diagnostics") or {},
+                    "diagnostics": result_diagnostics,
+                    "attempt_count": attempt_count,
+                    "max_attempts": DELIVERY_CHALLENGE_MAX_ATTEMPTS,
+                    "challenge_timeout_seconds": int(DELIVERY_CHALLENGE_TIMEOUT.total_seconds()),
+                    "resume_token": result_diagnostics.get("resume_token") or status_record.get("resume_token") or "",
                     "message": result.get("message") or "",
                     "finished_at": finished_at,
                     "updated_at": finished_at,

@@ -2562,6 +2562,7 @@ async def test_ddangyo_pc_agent_enters_confirmed_numeric_captcha(tmp_path, monke
             "username": "owner",
             "password_enc": "encrypted",
             "captcha_value": "9876",
+            "operator_approved": True,
             "business_id": "biz-junghwa",
             "branch": "중화점",
         },

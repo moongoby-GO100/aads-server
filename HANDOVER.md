@@ -7888,3 +7888,12 @@
 - Remaining:
   - Not committed, pushed, or deployed in this step.
   - Actual bank transaction import still requires operator action inside the opened bank page if the bank quick-service screen requires certificate/login/OTP or manual approval.
+
+## 2026-08-21 - AADS-FOOD-CHALLENGE-ORCHESTRATOR-P0 recovery
+
+- Recovered `runner-389df2d9` after `deploy_preflight_file_conflict` on `app/services/yeoljeong_finance_service.py` by merging its safe challenge orchestration output into the main worktree without reverting existing CEO-session edits.
+- Added deterministic `AuthChallengeOrchestrator` classification with an allowlisted optional-provider boundary for CAPTCHA/OTP/login/portal-error states. No solving, OCR, OTP retrieval, stealth bypass, or external solver was added.
+- Delivery collection now records a non-secret same-session resume reference, attempt/timeout policy, and terminal challenge state. Challenge input is accepted only as transient operator-approved input.
+- Added the account/channel/data-type completion matrix endpoint and architecture policy document.
+- Verification: targeted `py_compile`, focused challenge tests, and `git diff --check` should be rerun after this recovery merge. Real portal CAPTCHA/OTP and PC Agent resume behavior remain unverified in this workspace.
+- Commit/push/deploy were not performed in the failed Runner step.
