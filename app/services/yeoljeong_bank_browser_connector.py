@@ -196,6 +196,24 @@ async def _safe_selector_candidates(page: Any) -> list[dict[str, str]]:
     return result
 
 
+def _selector_candidates_include_bank_login(candidates: list[dict[str, str]]) -> bool:
+    has_account = False
+    has_secret = False
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        haystack = " ".join(
+            str(item.get(key) or "").lower()
+            for key in ("id", "name", "label")
+        )
+        field_type = str(item.get("type") or "").lower()
+        if any(token in haystack for token in ("account", "계좌", "acct")):
+            has_account = True
+        if field_type == "password" or any(token in haystack for token in ("password", "비밀번호", "secret")):
+            has_secret = True
+    return has_account and has_secret
+
+
 async def _try_open_transaction_view(page: Any, clicked_keys: list[str] | None = None) -> dict[str, str]:
     """Click a safe transaction-list navigation candidate, if visible.
 
@@ -370,12 +388,20 @@ async def _try_fill_bank_login(
               filled.accountNo = setValue(first([
                 "input[name*='account' i]",
                 "input[id*='account' i]",
+                "input[name*='계좌']",
+                "input[id*='계좌']",
+                "input[name*='계좌번호']",
+                "input[id*='계좌번호']",
                 "input[title*='계좌']",
                 "input[placeholder*='계좌']"
               ]), creds.accountNo);
               filled.accountPassword = setValue(first([
                 "input[name*='account' i][type='password']",
                 "input[id*='account' i][type='password']",
+                "input[name*='계좌'][type='password']",
+                "input[id*='계좌'][type='password']",
+                "input[name*='계좌비밀번호']",
+                "input[id*='계좌비밀번호']",
                 "input[title*='계좌비밀번호']",
                 "input[placeholder*='계좌비밀번호']"
               ]) || passwords[1], creds.accountPassword);
@@ -973,11 +999,6 @@ async def collect_bank_via_browser_session_async(
         safe_diagnostics["screen_reason_code"] = screen_state.get("reason_code", "")
         safe_diagnostics["screen_suggested_action"] = screen_state.get("suggested_action", "no_action")
         safe_diagnostics["screen_requires_operator"] = "1" if screen_state.get("requires_operator") else "0"
-        selector_candidates = await _safe_selector_candidates(page)
-        if selector_candidates:
-            safe_diagnostics["selector_candidates"] = selector_candidates
-
-        auto_navigation_triggered = False
         auth_states = {
             "captcha_required",
             "otp_required",
@@ -986,6 +1007,20 @@ async def collect_bank_via_browser_session_async(
             "login_required",
             "portal_error",
         }
+        selector_candidates = await _safe_selector_candidates(page)
+        if selector_candidates:
+            safe_diagnostics["selector_candidates"] = selector_candidates
+            if (
+                not rows
+                and safe_diagnostics.get("screen_state") not in auth_states
+                and _selector_candidates_include_bank_login(selector_candidates)
+            ):
+                safe_diagnostics["screen_state"] = "login_required"
+                safe_diagnostics["screen_reason_code"] = "BANK_LOGIN_INPUTS_VISIBLE"
+                safe_diagnostics["screen_suggested_action"] = "fill_saved_login"
+                safe_diagnostics["screen_requires_operator"] = "0"
+
+        auto_navigation_triggered = False
         if not rows and safe_diagnostics.get("screen_state") not in auth_states:
             clicked_navigation_keys: list[str] = []
             navigation_labels: list[str] = []

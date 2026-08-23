@@ -910,6 +910,61 @@ def test_collect_async_diagnostics_has_no_credentials():
     assert "사업자" not in diag_str
 
 
+def test_collect_async_treats_bank_account_inputs_as_login_required():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210101000001"
+        if "querySelectorAll('table')" in expr:
+            return [[["구분", "내용"], ["계좌조회", "간편조회서비스"]]]
+        if "document.body.innerText" in expr:
+            return "간편조회서비스 계좌번호 계좌비밀번호"
+        if "querySelectorAll('input,button,select,a')" in expr:
+            return [
+                {"tag": "input", "type": "text", "id": "ibx_계좌번호"},
+                {"tag": "input", "type": "password", "id": "계좌비밀번호", "label": "숫자 4자리"},
+            ]
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge, patch.object(
+        connector,
+        "_try_fill_bank_login",
+        new_callable=AsyncMock,
+    ) as mock_fill:
+        mock_fill.return_value = {"attempted": "1", "account_no": "1", "account_secret": "1", "submitted": "0"}
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="live-session-abc",
+                browser_work_key="yeoljeong-bank-browser-aaa",
+                date_from="",
+                date_to="",
+                account_no="saved-account",
+                account_password="saved-secret",
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["diagnostics"]["screen_state"] == "login_required"
+    assert result["diagnostics"]["screen_reason_code"] == "BANK_LOGIN_INPUTS_VISIBLE"
+    assert mock_fill.await_count == 1
+    assert result["diagnostics"]["bank_login_auto_fill"]["attempted"] == "1"
+
+
 def test_collect_async_date_filter_applied():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
