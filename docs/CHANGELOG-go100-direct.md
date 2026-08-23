@@ -24687,3 +24687,13 @@ arti
 ## [2026-08-24 07:26:42 KST] [GO100] scripts/go100/limitup_119_locked_multiclass.py
 - Chat-Direct 수정: write: scripts/go100/limitup_119_locked_multiclass.py
 - finalize: pending
+
+## [2026-08-24 07:27:39 KST] [GO100] .gitignore
+- Chat-Direct 수정: patch: artifacts/go100/limitup_119_shadow/
+arti→artifacts/go100/limitup_119_shadow/
+arti
+- finalize: pending
+
+## [2026-08-24 07:27:42 KST] [GO100] scripts/go100/limitup_119_locked_multiclass.py
+- Chat-Direct 수정: patch: LABEL_ORDER = ["locked_hold", "unlocked_→LABEL_ORDER = ["locked_hold", "unlocked_
+- finalize: pending

@@ -5249,3 +5249,6 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-24 07:17:30 KST] [aads-server] app/services/yeoljeong_finance_service.py
 - Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,
+
+## [2026-08-24 07:27:09 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,
