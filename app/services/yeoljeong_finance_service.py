@@ -6197,6 +6197,21 @@ async def _collect_delivery_from_browser_bridge_session_async(
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
             captcha_value = str(account.get("captcha_value") or "")
+            if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED" and not captcha_value:
+                try:
+                    from app.services.captcha_vision_solver import solve_captcha_with_vision
+
+                    captcha_value = await solve_captcha_with_vision(
+                        page,
+                        screenshot_path=str(challenge_screenshot or ""),
+                    )
+                    if captcha_value:
+                        diagnostics["captcha_mode"] = "vision_auto_solved"
+                        diagnostics["captcha_source"] = "vision_model"
+                    else:
+                        diagnostics["captcha_vision"] = "no_digits"
+                except Exception as _captcha_vision_exc:
+                    diagnostics["captcha_vision_error"] = str(_captcha_vision_exc)[:150]
             if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
                 if not captcha_value:
                     diagnostics["captcha_input"] = "operator_input_required"
@@ -6232,6 +6247,14 @@ async def _collect_delivery_from_browser_bridge_session_async(
                         diagnostics["captcha_mode"] = "operator_confirmed_input"
                     if login_state == "challenge":
                         diagnostics["captcha_input"] = f"rejected_attempt_{_captcha_attempt + 1}"
+                        try:
+                            from app.services.captcha_vision_solver import solve_captcha_with_vision
+
+                            captcha_value = await solve_captcha_with_vision(page, max_retries=1)
+                            diagnostics["captcha_source"] = "vision_model_retry"
+                        except Exception as _captcha_retry_exc:
+                            diagnostics["captcha_vision_error"] = str(_captcha_retry_exc)[:150]
+                            captcha_value = ""
                         continue
                     if login_state != "authenticated":
                         diagnostics["captcha_input"] = f"submitted_{login_state}"
