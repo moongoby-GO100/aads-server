@@ -36,6 +36,8 @@ class WorkspaceUpdate(BaseModel):
 class WorkspaceOut(BaseModel):
     id: uuid.UUID
     name: str
+    project_key: Optional[str] = None
+    display_name: Optional[str] = None
     system_prompt: Optional[str]
     files: List[Any]
     settings: Dict[str, Any]

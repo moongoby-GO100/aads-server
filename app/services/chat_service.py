@@ -20,7 +20,7 @@ from anthropic import APIStatusError
 from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
-from app.core.project_config import normalize_project_label, resolve_project
+from app.core.project_config import normalize_project_label, resolve_project, get_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -5912,7 +5912,13 @@ async def list_workspaces(tenant_id: Optional[str] = None) -> List[Dict[str, Any
             "SELECT * FROM chat_workspaces WHERE tenant_id = $1 ORDER BY created_at",
             tenant_uuid,
         )
-        return [_row_to_dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = _row_to_dict(r)
+            pk = d.get("project_key") or ""
+            d["display_name"] = get_display_name(pk) if pk else d.get("name", "")
+            result.append(d)
+        return result
 
 
 async def create_workspace(data: Dict[str, Any], tenant_id: Optional[str] = None) -> Dict[str, Any]:
