@@ -34,6 +34,7 @@ def test_payload_passes_force_recreate_sessions_flag():
     assert payload["business_id"] == "biz-junghwa"
     assert payload["branch"] == "중화점"
     assert payload["force_recreate_portal_sessions"] is True
+    assert payload["force_recreate_bank_browser"] is False
     assert payload["close_portal_browser_on_complete"] is True
 
 
@@ -43,6 +44,18 @@ def test_payload_can_keep_browser_open_for_manual_debugging():
     payload = auto_collect._payload(args)
 
     assert payload["close_portal_browser_on_complete"] is False
+
+
+def test_payload_can_force_recreate_only_bank_browser():
+    args = auto_collect.build_parser().parse_args(["--force-recreate-bank-browser"])
+
+    payload = auto_collect._payload(args)
+    argv = auto_collect._child_collect_argv(payload)
+
+    assert payload["force_recreate_portal_sessions"] is False
+    assert payload["force_recreate_bank_browser"] is True
+    assert "--force-recreate-bank-browser" in argv
+    assert "--force-recreate-sessions" not in argv
 
 
 def test_until_complete_payload_collects_financial_accounts_by_default():
@@ -202,6 +215,55 @@ def test_bank_account_collection_passes_browser_auto_open_controls(monkeypatch):
     assert collect_payload["browser_preferred_port"] == 9333
     assert collect_payload["force_recreate_browser"] is False
     assert result[0]["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
+
+
+def test_bank_account_collection_passes_bank_specific_force_recreate(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [
+            {
+                "id": "bank-browser-1",
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "connection_type": "browser",
+                "auto_sync": True,
+            }
+        ],
+    )
+
+    def fake_collect(account_id, payload, user):
+        calls.append((account_id, payload))
+        return {
+            "collection": {
+                "bank_account_id": account_id,
+                "business_id": payload["business_id"],
+                "branch_id": payload["branch_id"],
+                "status": "action_required",
+                "connector_status": "ACTION_REQUIRED",
+                "connection_type": "browser",
+                "error_code": "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
+                "collected_rows": 0,
+                "imported_rows": 0,
+                "duplicate_rows": 0,
+            },
+            "transactions": [],
+        }
+
+    monkeypatch.setattr(auto_collect, "collect_bank_account_transactions", fake_collect)
+
+    auto_collect._collect_bank_accounts(
+        {
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "force_recreate_bank_browser": True,
+        },
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert calls[0][1]["force_recreate_browser"] is True
 
 
 def test_run_collectors_collects_legacy_platform_financial_accounts(monkeypatch):

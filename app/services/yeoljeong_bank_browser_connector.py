@@ -49,6 +49,15 @@ def bank_browser_work_key(account_id: str, business_id: str, branch_id: str) -> 
     return f"yeoljeong-bank-browser-{digest}"
 
 
+def _diagnostic_screen_state(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "state": str(diagnostics.get("screen_state") or "unknown"),
+        "reason_code": str(diagnostics.get("screen_reason_code") or ""),
+        "suggested_action": str(diagnostics.get("screen_suggested_action") or "no_action"),
+        "requires_operator": str(diagnostics.get("screen_requires_operator") or "") == "1",
+    }
+
+
 async def _trigger_password_manager_fallback(page: Any) -> bool:
     """Focus a login field so the browser password manager can assist.
 
@@ -905,6 +914,7 @@ async def collect_bank_via_browser_session_async(
             safe_diagnostics["initial_url"] = initial_url
         if matched_existing_page:
             safe_diagnostics["browser_tab_reused"] = "1"
+        safe_diagnostics["browser_session_reuse_policy"] = "work_key_domain_first"
 
         if portal_url:
             if _portal_url_reusable(initial_url, portal_url):
@@ -1020,6 +1030,8 @@ async def collect_bank_via_browser_session_async(
                     elif parse_diag.get("parse_failure"):
                         safe_diagnostics["screen_state"] = "parse_failed"
                         safe_diagnostics["screen_reason_code"] = "PARSE_FAILED_AFTER_NAVIGATION"
+                        safe_diagnostics["screen_suggested_action"] = "retry_with_same_session"
+                        safe_diagnostics["screen_requires_operator"] = "0"
                 except Exception:
                     safe_diagnostics["transaction_view_navigation"] = "failed"
                     break
@@ -1027,6 +1039,7 @@ async def collect_bank_via_browser_session_async(
         login_fallback_triggered = False
         challenge_focus_triggered = False
         login_auto_fill_result: dict[str, str] = {"attempted": "0"}
+        screen_state = _diagnostic_screen_state(safe_diagnostics)
         if not rows and screen_state.get("state") == "login_required":
             login_auto_fill_result = await _try_fill_bank_login(
                 page,
@@ -1070,6 +1083,7 @@ async def collect_bank_via_browser_session_async(
             except Exception:
                 safe_diagnostics["login_recheck_attempted"] = "failed"
 
+        screen_state = _diagnostic_screen_state(safe_diagnostics)
         if not rows and screen_state.get("suggested_action") == "focus_password_manager":
             login_fallback_triggered = await _trigger_password_manager_fallback(page)
             safe_diagnostics["password_manager_fallback"] = (

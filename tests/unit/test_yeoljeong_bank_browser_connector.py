@@ -758,6 +758,65 @@ def test_collect_async_login_required_uses_saved_credentials_without_leaking():
     assert "4321" not in str(result["diagnostics"])
 
 
+def test_collect_async_login_recheck_uses_latest_challenge_state():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    logged_in = {"value": False}
+    focus_calls = []
+    password_manager_calls = []
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "OTP 인증번호 입력" if logged_in["value"] else "login 아이디 비밀번호"
+        if "setValue" in expr and args:
+            logged_in["value"] = True
+            return {"username": True, "password": True, "submitted": True}
+        if "byState" in expr and args:
+            focus_calls.append(args[0])
+            return True
+        if "autocomplete='username'" in expr:
+            password_manager_calls.append(True)
+            return True
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-login-otp"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-login-otp",
+                browser_work_key="yeoljeong-bank-browser-login-otp",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                login_username="bank-user",
+                login_password="bank-pass",
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert result["diagnostics"]["screen_state"] == "otp_required"
+    assert result["diagnostics"]["auth_challenge_focus"] == "triggered"
+    assert focus_calls == ["otp_required"]
+    assert password_manager_calls == []
+
+
 def test_collect_async_session_success_returns_parsed_rows():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 

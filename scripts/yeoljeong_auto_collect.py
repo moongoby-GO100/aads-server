@@ -100,6 +100,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "auto_open_bank_browser": not bool(getattr(args, "no_auto_open_bank_browser", False)),
         "browser_agent_id": str(getattr(args, "browser_agent_id", "") or ""),
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
+        "force_recreate_bank_browser": bool(getattr(args, "force_recreate_bank_browser", False)),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
         "approved_input": str(getattr(args, "approved_input", "") or ""),
         "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False)),
@@ -564,6 +565,8 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.append("--keep-browser-open")
     if payload.get("auto_open_bank_browser") is False:
         argv.append("--no-auto-open-bank-browser")
+    if payload.get("force_recreate_bank_browser"):
+        argv.append("--force-recreate-bank-browser")
     if payload.get("browser_agent_id"):
         argv.extend(["--browser-agent-id", str(payload.get("browser_agent_id") or "")])
     if payload.get("browser_preferred_port"):
@@ -888,6 +891,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-auto-open-bank-browser",
         action="store_true",
         help="Disable automatic PC Agent bank corporate-page browser opening.",
+    )
+    parser.add_argument(
+        "--force-recreate-bank-browser",
+        action="store_true",
+        help="Recreate only the bank Browser Bridge work-key session. Default is to reuse the existing bank browser.",
     )
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--operator-approved", action="store_true", help="Allow one operator-approved challenge input for the current run.")
