@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -186,9 +187,12 @@ STORAGE_STATE_ACCOUNT_KEYS = (
 )
 STORAGE_STATE_ENV_KEYS = (
     "YEOLJEONG_BAEMIN_STORAGE_STATE",
+    "YEOLJEONG_DDANGYO_STORAGE_STATE",
     "BAEMIN_STORAGE_STATE_PATH",
     "AADS_BROWSER_BRIDGE_STORAGE_STATE",
 )
+_SESSION_STATE_DIR = Path(os.environ.get("YEOLJEONG_SESSION_STATE_DIR", ".browser_bridge_state/delivery_sessions"))
+_SESSION_MAX_AGE_HOURS = int(os.environ.get("YEOLJEONG_SESSION_MAX_AGE_HOURS", "72"))
 
 
 def _clean(value: Any) -> str:
@@ -722,6 +726,25 @@ def _portal_home_url(account: dict[str, Any], config: dict[str, Any]) -> str:
     return _login_url(account, config)
 
 
+def _auto_session_state_path(service: str, account: dict[str, Any]) -> str:
+    username = str(account.get("username") or account.get("user_id") or "").strip()
+    if not username:
+        return ""
+    digest = hashlib.sha256(f"{service}:{username}".encode()).hexdigest()[:12]
+    return str(_SESSION_STATE_DIR / f"{service}_{digest}.json")
+
+
+def _save_session_state(context: Any, service: str, account: dict[str, Any]) -> None:
+    path = _auto_session_state_path(service, account)
+    if not path:
+        return
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        context.storage_state(path=path)
+    except Exception:
+        pass
+
+
 def _storage_state_path(account: dict[str, Any]) -> str:
     for key in STORAGE_STATE_ACCOUNT_KEYS:
         value = str(account.get(key) or "").strip()
@@ -731,6 +754,12 @@ def _storage_state_path(account: dict[str, Any]) -> str:
         value = str(os.environ.get(key) or "").strip()
         if value and Path(value).expanduser().is_file():
             return str(Path(value).expanduser())
+    service = str(account.get("service") or "").strip()
+    auto_path = _auto_session_state_path(service, account)
+    if auto_path and Path(auto_path).is_file():
+        age_hours = (time.time() - Path(auto_path).stat().st_mtime) / 3600
+        if age_hours <= _SESSION_MAX_AGE_HOURS:
+            return auto_path
     return ""
 
 
@@ -922,6 +951,7 @@ def collect_account(
                 browser.close()
                 return {"status": state, "error_code": error_code, "records": {}, "diagnostics": {"auth_mode": auth_mode}}
             _dismiss_optional_prompts(page, config)
+            _save_session_state(context, service, account)
 
             collected: dict[str, list[dict[str, Any]]] = {}
             diagnostics: dict[str, str] = {"auth_mode": auth_mode}
@@ -932,6 +962,7 @@ def collect_account(
                     for row in rows
                 ]
                 diagnostics[kind] = source
+            _save_session_state(context, service, account)
             browser.close()
             browser = None
             total = sum(len(rows) for rows in collected.values())
