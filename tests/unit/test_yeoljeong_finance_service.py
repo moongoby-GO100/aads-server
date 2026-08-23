@@ -1652,7 +1652,7 @@ def test_delivery_browser_auth_for_account_ensures_service_work_session(monkeypa
     assert auth["browser_work_key"].startswith("yeoljeong-delivery-coupangeats-biz-junghwa-")
     assert "중화점" not in auth["browser_work_key"]
     assert auth["browser_target_url"].startswith("https://")
-    assert fake_bridge.calls[0]["url"] == "about:blank"
+    assert fake_bridge.calls[0]["url"] == auth["browser_target_url"]
 
 
 def test_delivery_browser_auth_for_account_passes_configured_pc_agent(monkeypatch):
@@ -1733,8 +1733,8 @@ def test_delivery_browser_auth_for_account_recreates_stale_work_session(monkeypa
     assert auth["browser_bridge_recovered"] == "force_recreate_attempt_2"
     assert fake_bridge.calls[0]["force_recreate"] is False
     assert fake_bridge.calls[1]["force_recreate"] is True
-    assert fake_bridge.calls[0]["url"] == "about:blank"
-    assert fake_bridge.calls[1]["url"] == "about:blank"
+    assert fake_bridge.calls[0]["url"] == auth["browser_target_url"]
+    assert fake_bridge.calls[1]["url"] == auth["browser_target_url"]
 
 
 def test_delivery_browser_auth_for_account_force_recreates_portal_work_session(monkeypatch):
@@ -1992,7 +1992,7 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
     assert auth["browser_work_key"].startswith("yeoljeong-delivery-baemin-biz-junghwa-")
     assert "중화점" not in auth["browser_work_key"]
     assert auth["browser_target_url"].startswith("https://")
-    assert fake_bridge.calls[0]["url"] == "about:blank"
+    assert fake_bridge.calls[0]["url"] == auth["browser_target_url"]
 
 
 @pytest.mark.asyncio
@@ -2108,7 +2108,7 @@ def test_delivery_browser_auth_for_browser_automation_account_prefers_pc_agent(m
     assert auth["browser_session_id"] == "bb-work-coupangeats"
     assert auth["browser_bridge_mode"] == "local_agent"
     assert auth["browser_work_key"].startswith("yeoljeong-delivery-coupangeats-biz-junghwa-")
-    assert fake_bridge.calls[0]["url"] == "about:blank"
+    assert fake_bridge.calls[0]["url"] == auth["browser_target_url"]
 
 
 def test_sync_delivery_blocks_concurrent_runs_without_touching_collectors(tmp_path, monkeypatch):
