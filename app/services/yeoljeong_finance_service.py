@@ -6286,16 +6286,26 @@ async def _collect_delivery_from_browser_bridge_session_async(
                     "message": _delivery_challenge_message(service, service_label),
                 }
         if login_state == "login":
+            login_diagnostics: dict[str, str] = {
+                "auth_mode": "pc_agent_browser",
+                "browser_session_id": session_id,
+                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
+                "url": url,
+            }
+            login_screenshot = await _capture_delivery_challenge_screenshot(
+                page,
+                service=service,
+                business_id=str(account.get("business_id") or ""),
+                branch=str(account.get("branch") or ""),
+                session_id=session_id,
+            )
+            if login_screenshot:
+                login_diagnostics["login_failure_screenshot_path"] = login_screenshot
             return {
                 "status": "credential_required",
                 "error_code": "PC_AGENT_LOGIN_REQUIRED",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-                    "url": url,
-                },
+                "diagnostics": login_diagnostics,
                 "message": f"PC Agent 브라우저가 {service_label} 로그인 화면입니다. 먼저 해당 포털 로그인이 필요합니다.",
             }
 
