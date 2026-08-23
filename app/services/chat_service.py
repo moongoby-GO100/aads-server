@@ -5916,7 +5916,11 @@ async def list_workspaces(tenant_id: Optional[str] = None) -> List[Dict[str, Any
         for r in rows:
             d = _row_to_dict(r)
             pk = d.get("project_key") or ""
-            d["display_name"] = get_display_name(pk) if pk else d.get("name", "")
+            if pk:
+                dn = get_display_name(pk)
+                d["display_name"] = dn if dn != pk else None
+            else:
+                d["display_name"] = None
             result.append(d)
         return result
 
