@@ -41,11 +41,14 @@ def _empty_delivery_counts() -> dict[str, int]:
     return {kind: 0 for kind in DELIVERY_RECORD_TYPES}
 BLOCKING_ERROR_CODES = {
     "BANK_ACTION_REQUIRED",
+    "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
     "BANK_BROWSER_OPERATOR_ACTION_REQUIRED",
     "BANK_BROWSER_SESSION_REQUIRED",
+    "BANK_CERTIFICATE_PASSWORD_REQUIRED",
     "BANK_CONNECTOR_NOT_CONFIGURED",
     "CSV_UPLOAD_REQUIRED",
     "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+    "BANK_ACCOUNT_PASSWORD_REQUIRED",
     "MISSING_CREDENTIALS",
     "PC_AGENT_SESSION_REQUIRED",
     "PORTAL_AUTH_CHALLENGE",
@@ -60,6 +63,7 @@ RETRYABLE_ERROR_CODES = {
     "EMPTY_SOURCE",
     "LOGIN_FORM_NOT_FOUND",
     "NO_PARSEABLE_ROWS",
+    "PARSE_FAILED",
     "PC_AGENT_COLLECTOR_TIMEOUTERROR",
     "PC_AGENT_SESSION_NOT_FOUND",
     "PC_AGENT_WRONG_PORTAL_SESSION",
@@ -98,8 +102,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
         "approved_input": str(getattr(args, "approved_input", "") or ""),
-        "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False))
-        or bool(getattr(args, "until_complete", False)),
+        "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False)),
     }
 
 
@@ -221,10 +224,7 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
             "auto_open_browser": bool(payload.get("auto_open_bank_browser", True)),
             "browser_agent_id": str(payload.get("browser_agent_id") or ""),
             "browser_preferred_port": payload.get("browser_preferred_port") or None,
-            "force_recreate_browser": bool(
-                payload.get("force_recreate_bank_browser")
-                or payload.get("force_recreate_portal_sessions")
-            ),
+            "force_recreate_browser": bool(payload.get("force_recreate_bank_browser")),
         }
         try:
             result = collect_bank_account_transactions(account_id, collect_payload, user)
@@ -247,6 +247,7 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
                     "imported_rows": imported_rows,
                     "duplicate_rows": duplicate_rows,
                     "message": collection.get("message") or "",
+                    "diagnostics": collection.get("diagnostics") or {},
                     "last_collected_at": collection.get("last_collected_at") or "",
                 }
             )
@@ -366,10 +367,11 @@ def _collect_platform_financial_accounts(payload: dict[str, Any], user: dict[str
     return results
 
 
-def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool = False) -> dict[str, Any]:
-    summary = _summary(_run_sync(payload, user, queue_only=queue_only))
-    if queue_only:
-        return summary
+def _attach_financial_collections(
+    summary: dict[str, Any],
+    payload: dict[str, Any],
+    user: dict[str, Any],
+) -> dict[str, Any]:
     if payload.get("skip_financial_accounts"):
         return summary
     bank_collections = _collect_bank_accounts(payload, user)
@@ -383,6 +385,13 @@ def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only
             "collected_rows": sum(int(item.get("collected_rows") or 0) for item in bank_collections),
         }
     return summary
+
+
+def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool = False) -> dict[str, Any]:
+    summary = _summary(_run_sync(payload, user, queue_only=queue_only))
+    if queue_only:
+        return summary
+    return _attach_financial_collections(summary, payload, user)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -790,7 +799,8 @@ def _run_sync_with_timeout(payload: dict[str, Any], user: dict[str, Any], timeou
         service_payload["services"] = [service]
         service_payload["skip_financial_accounts"] = True
         summaries.append(_run_child_collect_with_timeout(service_payload, remaining_seconds))
-    return _merge_attempt_summaries(payload, summaries)
+    merged = _merge_attempt_summaries(payload, summaries)
+    return _attach_financial_collections(merged, payload, user)
 
 
 def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:

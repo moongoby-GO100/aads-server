@@ -4540,6 +4540,81 @@ def _run_bank_browser_async(coro: Any) -> Any:
     raise RuntimeError("bank browser automation cannot run inside an active event loop")
 
 
+async def _with_bank_browser_timeout(coro_factory: Any, timeout_seconds: float) -> Any:
+    return await asyncio.wait_for(coro_factory(), timeout=max(1.0, float(timeout_seconds or 1.0)))
+
+
+def _bank_service_code_for_account(account: dict[str, Any]) -> str:
+    institution_code = str(account.get("institution_code") or "").strip()
+    if institution_code in BANK_QUICK_SERVICE_CONFIG:
+        return institution_code
+    bank_code = str(account.get("bank_code") or "").strip()
+    bank_name = str(account.get("bank_name") or "").strip()
+    if bank_code == "088" or "신한" in bank_name:
+        return "shinhan_business"
+    if bank_code == "003" or "기업" in bank_name or "IBK" in bank_name.upper():
+        return "ibk_business"
+    return ""
+
+
+def _branch_names_for_bank_match(branch_id: str) -> set[str]:
+    branch_text = str(branch_id or "").strip()
+    names = {branch_text} if branch_text else set()
+    for item in CANONICAL_BRANCHES:
+        if str(item.get("id") or "") == branch_text:
+            names.add(str(item.get("name") or ""))
+            names.add(str(item.get("label") or ""))
+    return {name for name in names if name}
+
+
+def _bank_quick_credentials_for_account(
+    account: dict[str, Any],
+    *,
+    business_id: str,
+    branch_id: str,
+) -> dict[str, str]:
+    """Return decrypted read-only bank quick-service credentials for browser fill.
+
+    Values are used only inside PC Agent browser automation and must not be
+    copied into diagnostics, logs, or API responses.
+    """
+    service_code = _bank_service_code_for_account(account)
+    if not service_code:
+        return {}
+    branch_names = _branch_names_for_bank_match(branch_id or str(account.get("branch_id") or ""))
+    rows = _read("platform_accounts")
+    candidates: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if str(row.get("service") or "").strip() != service_code:
+            continue
+        if str(row.get("collection_mode") or "").strip() != "bank-quick-service":
+            continue
+        if business_id and str(row.get("business_id") or "").strip() != business_id:
+            continue
+        row_branch = str(row.get("branch") or "").strip()
+        if branch_names and row_branch and row_branch not in branch_names:
+            continue
+        candidates.append(row)
+    if not candidates:
+        return {}
+    selected = candidates[0]
+    credentials: dict[str, str] = {
+        "login_username": str(selected.get("username") or "").strip(),
+        "portal_url": str(selected.get("login_url") or BANK_QUICK_SERVICE_CONFIG.get(service_code, {}).get("login_url") or "").strip(),
+    }
+    for plaintext_field, encrypted_field in (
+        ("login_password", "password_enc"),
+        ("account_no", "account_no_enc"),
+        ("account_password", "account_password_enc"),
+        ("business_registration_no", "business_registration_no_enc"),
+        ("certificate_password", "certificate_password_enc"),
+    ):
+        encrypted = str(selected.get(encrypted_field) or "")
+        if encrypted:
+            credentials[plaintext_field] = _decrypt_secret(encrypted)
+    return credentials
+
+
 def _collect_bank_via_browser(
     account: dict[str, Any],
     payload: dict[str, Any],
@@ -4565,6 +4640,11 @@ def _collect_bank_via_browser(
     browser_work_key_val = str(payload.get("browser_work_key") or "").strip()
     if not browser_work_key_val:
         browser_work_key_val = bank_browser_work_key(account_id, business_id, branch_id)
+    bank_credentials = _bank_quick_credentials_for_account(
+        account,
+        business_id=business_id,
+        branch_id=branch_id,
+    )
     browser_preferred_port_raw = payload.get("browser_preferred_port")
     try:
         browser_preferred_port = int(browser_preferred_port_raw) if browser_preferred_port_raw else None
@@ -4572,17 +4652,30 @@ def _collect_bank_via_browser(
         browser_preferred_port = None
 
     try:
-        browser_result = _run_bank_browser_async(
-            collect_bank_via_browser_session_async(
+        timeout_seconds = float(payload.get("browser_timeout_seconds") or 120)
+        def _make_browser_coro() -> Any:
+            return collect_bank_via_browser_session_async(
                 account,
                 browser_session_id=browser_session_id,
                 browser_work_key=browser_work_key_val,
                 date_from=date_from,
                 date_to=date_to,
+                portal_url=str(payload.get("portal_url") or bank_credentials.get("portal_url") or ""),
                 auto_open_browser=bool(payload.get("auto_open_browser")),
                 browser_agent_id=str(payload.get("browser_agent_id") or ""),
                 browser_preferred_port=browser_preferred_port,
                 force_recreate_browser=bool(payload.get("force_recreate_browser")),
+                login_username=str(bank_credentials.get("login_username") or ""),
+                login_password=str(bank_credentials.get("login_password") or ""),
+                account_no=str(bank_credentials.get("account_no") or ""),
+                account_password=str(bank_credentials.get("account_password") or ""),
+                business_registration_no=str(bank_credentials.get("business_registration_no") or ""),
+            )
+
+        browser_result = _run_bank_browser_async(
+            _with_bank_browser_timeout(
+                _make_browser_coro,
+                timeout_seconds,
             )
         )
     except RuntimeError as exc:
@@ -4593,6 +4686,18 @@ def _collect_bank_via_browser(
             "row_count": 0,
             "diagnostics": {"browser_work_key": browser_work_key_val},
             "message": f"은행 브라우저 수집은 이벤트 루프 외부에서만 실행됩니다: {exc!s:.200}",
+        }
+    except TimeoutError:
+        browser_result = {
+            "status": "failed",
+            "error_code": "BANK_BROWSER_PC_AGENT_TIMEOUT",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {
+                "browser_work_key": browser_work_key_val,
+                "browser_timeout_seconds": str(int(timeout_seconds)),
+            },
+            "message": f"은행 브라우저 수집이 {int(timeout_seconds)}초 안에 완료되지 않았습니다.",
         }
 
     br_status = str(browser_result.get("status") or "")

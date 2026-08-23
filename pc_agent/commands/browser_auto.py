@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 CDP_HOST = "localhost"
 CDP_PORT = 9222
 CDP_CONNECT_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_CONNECT_TIMEOUT_SECONDS", "12") or "12")
-CDP_COMMAND_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_TIMEOUT_SECONDS", "15") or "15")
-CDP_EVALUATE_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_EVALUATE_TIMEOUT_SECONDS", "12") or "12")
+CDP_COMMAND_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_TIMEOUT_SECONDS", "45") or "45")
+CDP_EVALUATE_TIMEOUT_SECONDS = float(os.getenv("AADS_CDP_EVALUATE_TIMEOUT_SECONDS", "45") or "45")
 CDP_RECOVERY_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_RECOVERY_RETRY_LIMIT", "2") or "2"))
 CDP_WS_CONNECT_RETRY_LIMIT = max(0, int(os.getenv("AADS_CDP_WS_CONNECT_RETRY_LIMIT", "2") or "2"))
 CDP_COMMAND_GUARD_WAIT_SECONDS = float(os.getenv("AADS_CDP_COMMAND_GUARD_WAIT_SECONDS", "4.0") or "4.0")
@@ -1151,7 +1151,7 @@ async def browser_click(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"x": x, "y": y, "clicked": true}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
@@ -1194,7 +1194,7 @@ async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"filled": true, "selector": {json.dumps(selector)}}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
@@ -1226,7 +1226,7 @@ async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
 
     port = _effective_port(params)
     try:
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         target_info: dict[str, Any] | None = None
         if selector:
             focus_js = f"""
@@ -1297,7 +1297,7 @@ async def browser_select_option(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"selected": matched, "selector": {json.dumps(selector)}}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
@@ -1341,7 +1341,7 @@ async def browser_check(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"selector": {json.dumps(selector)}, "checked": Boolean(el.checked)}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
@@ -1506,7 +1506,7 @@ async def browser_get_text(params: Dict[str, Any]) -> Dict[str, Any]:
         else:
             js = "JSON.stringify({text: document.body.innerText})"
 
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=30.0)
+        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
@@ -1564,7 +1564,7 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
             params,
             param_name="evaluate_timeout_seconds",
             default=CDP_EVALUATE_TIMEOUT_SECONDS,
-            maximum=30.0,
+            maximum=90.0,
         )
         timeout_seconds = min(timeout_seconds, max(1.0, command_budget_seconds - 0.5))
         await_promise = _as_bool(params.get("await_promise", False), default=False)

@@ -1152,3 +1152,29 @@ import os
 try:
     os.kill(50983, 0)
     pr
+
+## [2026-08-23 09:10:01 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/Sidebar.tsx
+- Chat-Direct 수정: patch: interface Workspace {
+  id: string;
+  na→interface Workspace {
+  id: string;
+  na
+
+## [2026-08-23 09:10:03 KST] [aads-dashboard] /root/aads/aads-dashboard/src/components/chat/Sidebar.tsx
+- Chat-Direct 수정: patch:           <SidebarHubCard
+            ke→          <SidebarHubCard
+            ke
+
+## [2026-08-23 09:10:16 KST] [aads-dashboard] src/components/chat/Sidebar.tsx
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+path = '/root/aads/aads-dashboard/src/components/chat/Sid
+
+## [2026-08-23 09:24:31 KST] [aads-dashboard] src/app/chat/types.ts
+- Chat-Direct 수정: run_remote_command: sed -i 's/  project_key?: string | null;/  project_key?: string | null;\n  displ
+
+## [2026-08-23 09:24:35 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i "s/const activeWsName = activeWsObj?.name || \"워크스페이스\";/const activeWsNa
+
+## [2026-08-23 09:24:38 KST] [aads-dashboard] src/app/chat/ChatSidebar.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/<span style={{ flex: 1 }}>{ws.name}<\/span>/<span style={{ flex: 1 }}>

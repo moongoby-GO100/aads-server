@@ -342,7 +342,16 @@ def test_collect_async_auto_opens_bank_work_session_when_enabled():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
     mock_page = AsyncMock()
-    mock_page.evaluate = AsyncMock(side_effect=["https://bank.shinhan.com/rib/easy/index.jsp", "<html><body>로그인 필요</body></html>"])
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "로그인 필요"
+        return []
+
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
     mock_page.goto = AsyncMock()
     mock_page.wait_for_load_state = AsyncMock()
 
@@ -375,19 +384,23 @@ def test_collect_async_auto_opens_bank_work_session_when_enabled():
     assert result["diagnostics"]["browser_session_id"] == "auto-session-001"
     assert result["diagnostics"]["auto_opened_session"] == "1"
     bridge_inst.ensure_work_session.assert_awaited_once()
-    mock_page.goto.assert_awaited_once()
+    mock_page.goto.assert_not_called()
 
 
 def test_collect_async_auto_open_reused_login_page_requires_operator_action():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
     mock_page = AsyncMock()
-    mock_page.evaluate = AsyncMock(
-        side_effect=[
-            "https://bank.shinhan.com/rib/easy/index.jsp",
-            "<table><tr><th>회원구분</th><th>이용가능범위</th></tr><tr><td>인증서</td><td>계좌조회</td></tr></table>",
-        ]
-    )
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            return [[["회원구분", "이용가능범위"], ["인증서", "계좌조회"]]]
+        if "document.body.innerText" in expr:
+            return "회원구분 이용가능범위"
+        return []
+
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
     mock_page.goto = AsyncMock()
     mock_page.wait_for_load_state = AsyncMock()
 
@@ -419,6 +432,37 @@ def test_collect_async_auto_open_reused_login_page_requires_operator_action():
     assert result["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
     assert result["diagnostics"]["browser_session_id"] == "reused-session-001"
     bridge_inst.ensure_work_session.assert_not_called()
+    mock_page.goto.assert_not_called()
+
+
+def test_collect_async_auto_open_preserves_route_error_diagnostics():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    class RouteError(RuntimeError):
+        error_code = "COMMAND_TIMEOUT"
+        detail = {"status": "error", "error_code": "COMMAND_TIMEOUT", "message": "browser launch timed out"}
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.find_by_work_key.return_value = None
+        bridge_inst.ensure_work_session = AsyncMock(side_effect=RouteError("browser launch timed out"))
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-browser-timeout",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "PC_AGENT_LOGIN_REQUIRED"
+    assert result["diagnostics"]["auto_open_browser"] == "failed"
+    assert result["diagnostics"]["auto_open_error"] == "COMMAND_TIMEOUT"
+    assert result["diagnostics"]["auto_open_error_detail"]["error_code"] == "COMMAND_TIMEOUT"
 
 
 def test_collect_async_infers_portal_from_bank_name_when_codes_missing():
@@ -460,11 +504,276 @@ def test_collect_async_explicit_session_not_found_returns_connector_not_ready():
     assert result["rows"] == []
 
 
+def test_collect_async_no_records_is_collected_empty():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return "<html><body>조회된 거래내역이 없습니다.</body></html>"
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-no-records"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-no-records",
+                browser_work_key="yeoljeong-bank-browser-no-records",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 0
+    assert result["diagnostics"]["screen_state"] == "no_records"
+
+
+def test_collect_async_auth_challenge_focuses_and_returns_safe_diagnostics():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return ""
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return "<html><body>OTP 인증번호를 입력하세요<input name='otpCode'></body></html>"
+        if args and args[0] == "otp_required":
+            return True
+        return [{"tag": "input", "type": "text", "name": "otpCode", "label": "인증번호"}]
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-otp"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-otp",
+                browser_work_key="yeoljeong-bank-browser-otp",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert result["diagnostics"]["screen_state"] == "otp_required"
+    assert result["diagnostics"]["auth_challenge_focus"] == "triggered"
+    assert "selector_candidates" in result["diagnostics"]
+    assert "110-123" not in str(result["diagnostics"])
+
+
+def test_collect_async_parse_failed_clicks_transaction_view_and_reparses():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    html_pages = [
+        "<html><body><table><tr><th>메뉴</th></tr><tr><td>빠른조회</td></tr></table><button>거래내역조회</button></body></html>",
+        """
+        <html><body>
+          <table>
+            <tr><th>거래일자</th><th>적요</th><th>입금금액</th><th>출금금액</th><th>거래후잔액</th></tr>
+            <tr><td>2026.08.24</td><td>카드정산</td><td>120,000</td><td></td><td>500,000</td></tr>
+          </table>
+        </body></html>
+        """,
+    ]
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return ""
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return html_pages.pop(0)
+        if "scoreFor" in expr:
+            return {"clicked": True, "label": "거래내역조회"}
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-nav"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-nav",
+                browser_work_key="yeoljeong-bank-browser-nav",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 1
+    assert result["diagnostics"]["transaction_view_navigation"] == "triggered"
+    assert result["diagnostics"]["screen_state"] == "transaction_table"
+
+
+def test_collect_async_reuses_existing_bank_tab_without_goto():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#already-open"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "조회된 거래내역이 없습니다."
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-reuse"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-reuse",
+                browser_work_key="yeoljeong-bank-browser-reuse",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                portal_url="https://bank.shinhan.com/rib/easy/index.jsp",
+            )
+        )
+
+    mock_page.goto.assert_not_called()
+    assert result["status"] == "collected"
+    assert result["diagnostics"]["browser_tab_reused"] == "1"
+    assert result["diagnostics"]["portal_navigation"] == "skipped_reusable_tab"
+
+
+def test_collect_async_login_required_uses_saved_credentials_without_leaking():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    logged_in = {"value": False}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            if logged_in["value"]:
+                return [
+                    [
+                        ["거래일자", "적요", "입금금액", "출금금액", "거래후잔액"],
+                        ["2026.08.24", "카드정산", "120,000", "", "500,000"],
+                    ]
+                ]
+            return []
+        if "document.body.innerText" in expr:
+            return "거래일자 입금금액" if logged_in["value"] else "login 아이디 비밀번호"
+        if "setValue" in expr and args:
+            creds = args[0]
+            assert creds["username"] == "bank-user"
+            assert creds["password"] == "bank-pass"
+            assert creds["accountPassword"] == "4321"
+            logged_in["value"] = True
+            return {"username": True, "password": True, "accountPassword": True, "submitted": True}
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-login"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-login",
+                browser_work_key="yeoljeong-bank-browser-login",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_password="4321",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 1
+    assert result["diagnostics"]["bank_login_auto_fill"]["submitted"] == "1"
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+
+
 def test_collect_async_session_success_returns_parsed_rows():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return ""
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return _SHINHAN_SAMPLE_HTML
+        return []
+
     mock_page = AsyncMock()
-    mock_page.evaluate = AsyncMock(side_effect=["https://bank.shinhan.com/", _SHINHAN_SAMPLE_HTML])
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
     mock_page.goto = AsyncMock()
     mock_page.wait_for_load_state = AsyncMock()
 
@@ -499,8 +808,19 @@ def test_collect_async_session_success_returns_parsed_rows():
 def test_collect_async_diagnostics_has_no_credentials():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return ""
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return _SHINHAN_SAMPLE_HTML
+        return []
+
     mock_page = AsyncMock()
-    mock_page.evaluate = AsyncMock(side_effect=["https://bank.shinhan.com/", _SHINHAN_SAMPLE_HTML])
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
     mock_page.goto = AsyncMock()
     mock_page.wait_for_load_state = AsyncMock()
 
@@ -534,8 +854,19 @@ def test_collect_async_diagnostics_has_no_credentials():
 def test_collect_async_date_filter_applied():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return ""
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return _SHINHAN_SAMPLE_HTML
+        return []
+
     mock_page = AsyncMock()
-    mock_page.evaluate = AsyncMock(side_effect=["https://bank.shinhan.com/", _SHINHAN_SAMPLE_HTML])
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
     mock_page.goto = AsyncMock()
     mock_page.wait_for_load_state = AsyncMock()
 
@@ -746,6 +1077,60 @@ def test_collect_bank_account_browser_forwards_auto_open_controls(tmp_path, monk
     assert kwargs["browser_preferred_port"] == 9333
     assert kwargs["force_recreate_browser"] is True
     assert result["collection"]["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
+
+
+def test_collect_bank_account_browser_forwards_saved_bank_quick_credentials(tmp_path, monkeypatch):
+    account = _make_browser_bank_account(monkeypatch, tmp_path)
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: str(value).replace("encrypted:", "", 1))
+    service.upsert_account(
+        {
+            "service": "shinhan_business",
+            "username": "bank-user",
+            "password": "bank-pass",
+            "account_no": "110123456789",
+            "account_password": "4321",
+            "business_registration_no": "1234567890",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "collection_mode": "bank-quick-service",
+            "login_url": "https://bank.shinhan.com/rib/easy/index.jsp",
+        },
+        ADMIN_USER,
+    )
+    captured = {}
+
+    async def fake_collect(account_arg, **kwargs):
+        captured["kwargs"] = kwargs
+        return {
+            "status": "action_required",
+            "error_code": "PC_AGENT_LOGIN_REQUIRED",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {"browser_work_key": kwargs["browser_work_key"]},
+            "message": "로그인 필요",
+        }
+
+    monkeypatch.setattr(service, "_run_bank_browser_async", lambda coro: asyncio.run(coro))
+
+    with patch("app.services.yeoljeong_bank_browser_connector.collect_bank_via_browser_session_async", fake_collect):
+        service.collect_bank_account_transactions(
+            account["id"],
+            {
+                "business_id": "biz-mia",
+                "branch_id": "branch-gangbuk-mia",
+                "auto_open_browser": True,
+            },
+            ADMIN_USER,
+        )
+
+    kwargs = captured["kwargs"]
+    assert kwargs["login_username"] == "bank-user"
+    assert kwargs["login_password"] == "bank-pass"
+    assert kwargs["account_no"] == "110123456789"
+    assert kwargs["account_password"] == "4321"
+    assert kwargs["business_registration_no"] == "1234567890"
+    assert kwargs["portal_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
 
 
 def test_collect_bank_account_browser_connector_status_on_failure(tmp_path, monkeypatch):

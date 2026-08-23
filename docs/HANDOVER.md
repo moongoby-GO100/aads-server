@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-08-21
+최종 업데이트: 2026-08-24
+
+## 2026-08-24
+- AADS-FOOD-BANK-AUTO-COLLECT-P0P1-IMPLEMENT-20260824: 06:04 KST 기준 CEO 지시(`앞으로 진행사항 P0,P1 즉시 직접 구현`)에 따라 은행 자동수집 기획서의 P0/P1 중 코드화 가능한 항목을 직접 반영했다. `app/services/auth_challenge_orchestrator.py`는 은행 화면 상태를 `login_required`, `otp_required`, `captcha_required`, `identity_check_required`, `certificate_password_required`, `transaction_table`, `no_records`, `parse_failed` 등으로 확장하고 소형 모델/provider 출력의 state/action/confidence allowlist 검증을 추가했다. `app/services/yeoljeong_bank_browser_connector.py`는 원본 HTML/민감값 저장 없이 안전 텍스트 요약으로 화면 상태를 분류하고, 비밀번호관리자 focus, OTP/CAPTCHA/인증서/본인인증 입력칸 focus, 1회 recheck, selector 후보 diagnostics를 collection diagnostics에 남기도록 보강했다. `scripts/yeoljeong_auto_collect.py`는 `BANK_BROWSER_AUTH_CHALLENGE_DETECTED`, 계좌/인증서 비밀번호 필요 상태를 blocking으로 분리하고 은행 diagnostics를 자동수집 결과에 보존한다. 검증: 일회성 `aads-server-aads-server` 컨테이너에서 `python -m pytest tests/unit/test_auth_challenge_orchestrator.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py` 62 passed, 추가 `python -m pytest tests/unit/test_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py -k 'bank or Bank'` 62 passed/92 deselected, `python3 -m py_compile app/services/auth_challenge_orchestrator.py app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py` 통과, 대상 파일 `git diff --check` 통과. 커밋/푸시/배포는 아직 수행하지 않았다.
 
 ## 2026-08-21
 - AADS-CHAT-RESUME-RECLAIM-FOLLOWUP-20260821: 18:11:15 KST 기준 중단 응답 복구 후속을 이어서 점검했다. 현재 작업트리에는 `app/main.py`, `tests/unit/test_bank_browser_connector.py`, `docs/CHANGELOG-dashboard-direct.md`, `docs/CHANGELOG-direct-edit.md`, `docs/CHANGELOG-go100-direct.md` 변경이 남아 있다. `app/main.py`는 `execution_resume_reclaim` APScheduler job을 등록해 standalone resume scanner가 실패하거나 누락될 때도 `_resume_pending_executions_once()`를 30초 간격으로 재호출하도록 보강된 상태다. `tests/unit/test_bank_browser_connector.py`는 은행 브라우저 세션 미지정 시 실제 커넥터가 반환하는 `PC_AGENT_LOGIN_REQUIRED` 계약에 맞춰 기대값을 정정했다. 검증: `python3 -m py_compile app/main.py app/services/yeoljeong_bank_browser_connector.py` 통과, `pytest tests/unit/test_bank_browser_connector.py -q` 38 passed, 현재 소스 read-only 마운트 일회성 컨테이너에서 `python -m py_compile app/main.py app/services/yeoljeong_bank_browser_connector.py` 통과, `python -m pytest tests/unit/test_chat_service.py -q -k "auto_resume or retrying or missing_done or owner"` 1 passed/63 deselected, `python -m pytest tests/unit/test_bank_browser_connector.py -q` 38 passed, `git diff --check` 통과. 기존 실행 중 컨테이너 `/app`는 현재 작업트리의 테스트 파일을 반영하지 않아 직접 검증 기준에서 제외했다. 커밋/푸시/배포는 아직 수행하지 않았다.
@@ -317,3 +320,28 @@
 - 조치: `docs/ARCHITECTURE-INDEX.md`에 FOOD 판매채널 자동수집 섹션을 추가해 정본 문서와 스킬 진입점을 등록했다.
 - 추가 조치: 전체 finance service 테스트 중 드러난 기존 땡겨요 CAPTCHA 경로의 fallback 클릭 판정을 보정했다. `page.evaluate()` fallback은 브라우저 boolean `true`일 때만 클릭 성공으로 인정해 문자열 반환 mock 또는 비표준 adapter 응답을 오인하지 않는다.
 - 검증: `git diff --check` 성공. 현재 저장소 전체를 `aads-server-aads-server` 이미지에 `/work`로 마운트한 일회성 컨테이너에서 `python3 -m py_compile app/services/yeoljeong_delivery_collectors.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py app/services/yeoljeong_bank_browser_connector.py` 성공, `pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py -q` 129 passed, `pytest tests/unit/test_bank_browser_connector.py -q` 38 passed. 스킬 형식 검증 `quick_validate.py .claude/skills/sales-channel-collector`는 `Skill is valid!`로 통과.
+
+## 2026-08-24 07:12 KST - 열정국밥 은행 브라우저 자동수집 P0/P1 보강
+- 요청: 은행 데이터 수집 자동화 구현 상태 확인 후 가능한 자동화를 모두 반영하고 즉시 데이터 수집 실행.
+- 조치: `--until-complete` 자동수집에서 은행 계좌가 누락되지 않도록 수정했고, 은행 브라우저 커넥터에 포털 상태 분류, OTP/CAPTCHA/인증서/본인확인 감지, 안전한 input focus, 거래내역/입출금/조회 버튼 자동 탐색, 거래 테이블 재파싱, no-records 정상 완료 처리를 추가했다.
+- 조치: PC Agent Browser Bridge의 sidecar timeout을 은행 포털용으로 완화하고, Playwright식 `goto/evaluate(timeout=...)` 인자를 실제 command timeout에 반영했다. 동일 work_key의 반복 복구 루프를 제한하고 브라우저 전체 수집 deadline 초과 시 `BANK_BROWSER_PC_AGENT_TIMEOUT`을 반환하도록 했다.
+- 운영 실측: `/app/yeoljeong-data` 기준 신한은행 기업 브라우저 계좌 1개가 `active/auto_sync`로 등록되어 있으나, `oby-ceo`와 `DESKTOP-ICU55HK` PC Agent 모두 신한은행 페이지 browser launch/evaluate 단계에서 timeout이 발생했다. `2026-08-01`~`2026-08-24` 즉시 수집 결과는 `BANK_BROWSER_PC_AGENT_TIMEOUT`, imported_rows=0, 거래 원장 `bank_transactions` count=0.
+- 검증: `python3 -m py_compile app/browser_bridge/service.py app/services/auth_challenge_orchestrator.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` 성공. 현재 소스를 `aads-server-aads-server` 이미지에 마운트해 `pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_auth_challenge_orchestrator.py -q` 실행, 66 passed.
+- 남은 이슈: 실거래 적재는 은행 포털 세션이 PC Agent에서 안정적으로 열리고 인증/조회 화면까지 도달해야 가능하다. 현재는 자동화 코드가 아니라 PC Agent 브라우저 route timeout이 차단 원인이다.
+
+## 2026-08-24 07:21 KST - 은행 브라우저 세션 재사용 및 간편조회 로그인 연결 보강
+- 요청: 판매채널 PC Agent 자동수집과 은행 수집의 관계를 확인하고, 은행 자동수집이 브라우저를 반복 새창으로 여는 문제와 은행 간편조회 이용자ID 로그인 처리 여부를 즉시 조치.
+- 확인: 판매채널과 은행은 같은 PC Agent/Browser Bridge 기반이지만 work_key를 분리한다. 문제는 판매채널용 `force_recreate_portal_sessions`가 은행 수집 payload의 `force_recreate_browser`로 전파되어 은행 세션까지 강제 재생성될 수 있던 점이다.
+- 조치: `scripts/yeoljeong_auto_collect.py`에서 판매채널 세션 재생성 옵션을 은행 브라우저에 전파하지 않도록 분리했다. 은행 세션 강제 재생성은 명시적 `force_recreate_bank_browser`에만 반응한다.
+- 조치: `app/services/yeoljeong_bank_browser_connector.py`에서 기존 은행 탭 URL이 같은 은행 도메인이면 `goto()`를 생략하고 기존 탭을 재사용하도록 했다. 여러 탭이 있으면 같은 은행 포털 탭을 우선 선택한다.
+- 조치: `app/services/yeoljeong_finance_service.py`에서 `bank_accounts` 계좌 원장과 `platform_accounts` 은행 간편조회 연동설정 원장을 사업자/지점/은행코드로 매칭해 저장된 이용자ID, 로그인 비밀값, 계좌번호, 계좌 비밀값, 사업자번호를 커넥터에 전달하도록 연결했다.
+- 조치: 커넥터는 로그인 화면 감지 시 저장 자격으로 ID/비밀값/계좌정보를 브라우저 DOM에 자동 입력하고 조회/로그인 버튼을 누른 뒤 거래 테이블을 재확인한다. diagnostics에는 값과 `password` 필드명을 남기지 않고 `secret` 존재 여부만 기록한다.
+- 실수집 재시도: 로컬 프로세스에서 신한은행 계좌 1개에 대해 `2026-08-01`~`2026-08-24` 수집을 호출했으나 active AADS API route DNS/localhost 연결 실패 후 `BANK_BROWSER_PC_AGENT_TIMEOUT`, imported_rows=0으로 종료됐다. 이는 이번 로컬 실행 환경의 PC Agent 라우팅 문제이며, 코드 회귀 테스트는 통과했다.
+- 검증: `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py -q` 66 passed. `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` 성공. 대상 파일 `git diff --check` 성공.
+- 남은 이슈: 변경분은 아직 커밋/푸시/배포되지 않았다. 운영 컨테이너와 CEO PC Agent에 반영하려면 선별 커밋, 배포, PC Agent 업데이트/재시작 후 같은 은행 work_key로 재수집해야 한다.
+
+## 2026-08-24 07:26 KST - 최종 완료보고 보정 전 회귀 검증
+- 보정: 판매채널 브라우저 세션 생성 URL 계약이 은행 작업 중 바뀌어 기존 테스트 4건이 실패했다. 판매채널은 기존처럼 세션 재생성 때만 실제 URL을 넘기고 평시에는 `about:blank`를 쓰도록 되돌렸다. 은행 브라우저 탭 재사용/로그인 자동입력/은행 강제재생성 분리 변경은 유지했다.
+- 검증: `.venv-playwright/bin/python -m pytest tests/unit/test_auth_challenge_orchestrator.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_bank_browser_connector.py -q` 107 passed.
+- 검증: `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py -q` 138 passed.
+- 검증: `.venv-playwright/bin/python -m py_compile app/browser_bridge/service.py app/services/auth_challenge_orchestrator.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py` 성공. `git diff --check` 성공.

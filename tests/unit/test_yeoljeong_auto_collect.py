@@ -45,8 +45,16 @@ def test_payload_can_keep_browser_open_for_manual_debugging():
     assert payload["close_portal_browser_on_complete"] is False
 
 
-def test_until_complete_payload_skips_financial_accounts_by_default():
+def test_until_complete_payload_collects_financial_accounts_by_default():
     args = auto_collect.build_parser().parse_args(["--until-complete"])
+
+    payload = auto_collect._payload(args)
+
+    assert payload["skip_financial_accounts"] is False
+
+
+def test_skip_financial_accounts_still_disables_bank_collection():
+    args = auto_collect.build_parser().parse_args(["--until-complete", "--skip-financial-accounts"])
 
     payload = auto_collect._payload(args)
 
@@ -192,7 +200,7 @@ def test_bank_account_collection_passes_browser_auto_open_controls(monkeypatch):
     assert collect_payload["auto_open_browser"] is True
     assert collect_payload["browser_agent_id"] == "oby-ceo"
     assert collect_payload["browser_preferred_port"] == 9333
-    assert collect_payload["force_recreate_browser"] is True
+    assert collect_payload["force_recreate_browser"] is False
     assert result[0]["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
 
 
@@ -773,6 +781,76 @@ def test_run_sync_with_timeout_splits_multi_service_attempts(monkeypatch):
     assert "--skip-financial-accounts" in calls[0]
     assert "--skip-financial-accounts" in calls[1]
     assert [item["service"] for item in summary["summary"]] == ["baemin", "coupangeats"]
+
+
+def test_run_sync_with_timeout_multi_service_collects_bank_once(monkeypatch):
+    child_calls = []
+    bank_calls = []
+
+    def fake_run(argv, **kwargs):
+        child_calls.append(argv)
+        service = argv[argv.index("--services") + 1]
+        return auto_collect.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=(
+                '{"summary":[{"service":"'
+                + service
+                + '","status":"succeeded","error_code":"","counts":{"sales":1}}]}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(auto_collect.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [
+            {
+                "id": "bank-1",
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "connection_type": "mock",
+                "auto_sync": True,
+            }
+        ],
+    )
+
+    def fake_collect(account_id, payload, user):
+        bank_calls.append((account_id, payload))
+        return {
+            "collection": {
+                "bank_account_id": account_id,
+                "business_id": payload["business_id"],
+                "branch_id": payload["branch_id"],
+                "status": "completed",
+                "connector_status": "CONFIGURED",
+                "connection_type": "mock",
+                "collected_rows": 1,
+                "imported_rows": 1,
+                "duplicate_rows": 0,
+            },
+            "transactions": [],
+        }
+
+    monkeypatch.setattr(auto_collect, "collect_bank_account_transactions", fake_collect)
+
+    summary = auto_collect._run_sync_with_timeout(
+        {
+            "services": ["baemin", "ddangyo"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-24",
+        },
+        {"email": "system@aads.local", "is_admin": True},
+        120,
+    )
+
+    assert len(child_calls) == 2
+    assert [call[0] for call in bank_calls] == ["bank-1"]
+    assert summary["bank_totals"]["accounts"] == 1
+    assert summary["bank_totals"]["imported_rows"] == 1
 
 
 def test_run_sync_with_timeout_applies_total_deadline_to_multi_service(monkeypatch):

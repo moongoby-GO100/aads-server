@@ -5199,3 +5199,53 @@ fro
 
 ## [2026-08-22 07:29:40 KST] [aads-server] tests/unit/test_session_reporter.py
 - Chat-Direct 수정: run_remote_command: curl -s -o /dev/null -w '%{http_code} %{size_download}\n' http://localhost:8080/
+
+## [2026-08-23 09:09:34 KST] [aads-server] app/models/chat.py
+- Chat-Direct 수정: patch: class WorkspaceOut(BaseModel):
+    id: u→class WorkspaceOut(BaseModel):
+    id: u
+
+## [2026-08-23 09:09:38 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: async def list_workspaces(tenant_id: Opt→async def list_workspaces(tenant_id: Opt
+
+## [2026-08-23 09:09:53 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: from app.core.project_config import norm→from app.core.project_config import norm
+
+## [2026-08-23 09:53:14 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         result = []
+        for r in row→        result = []
+        for r in row
+
+## [2026-08-24 06:53:39 KST] [aads-server] app/services/yeoljeong_delivery_collectors.py
+- Chat-Direct 수정: patch: import csv
+import hashlib
+import os
+impo→import csv
+import hashlib
+import os
+impo
+
+## [2026-08-24 06:53:49 KST] [aads-server] app/services/yeoljeong_delivery_collectors.py
+- Chat-Direct 수정: patch: STORAGE_STATE_ENV_KEYS = (
+    "YEOLJEON→STORAGE_STATE_ENV_KEYS = (
+    "YEOLJEON
+
+## [2026-08-24 06:54:00 KST] [aads-server] app/services/yeoljeong_delivery_collectors.py
+- Chat-Direct 수정: patch: def _storage_state_path(account: dict[st→def _auto_session_state_path(service: st
+
+## [2026-08-24 06:54:25 KST] [aads-server] app/services/yeoljeong_delivery_collectors.py
+- Chat-Direct 수정: patch:             _dismiss_optional_prompts(pa→            _dismiss_optional_prompts(pa
+
+## [2026-08-24 06:54:32 KST] [aads-server] app/services/yeoljeong_delivery_collectors.py
+- Chat-Direct 수정: patch:                 diagnostics[kind] = sour→                diagnostics[kind] = sour
+
+## [2026-08-24 07:03:35 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,
+
+## [2026-08-24 07:07:59 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "
+import json
+from app.services.yeoljeong_fin
+
+## [2026-08-24 07:17:30 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,

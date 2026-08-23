@@ -53,11 +53,11 @@ LOCAL_AGENT_JS_COMMANDS = {
 SIDECAR_SERVICE_ROLES = {
     "yeoljeong-finance-worker",
 }
-SIDECAR_QUEUE_WAIT_SECONDS = 10
-SIDECAR_COMMAND_TIMEOUT_SECONDS = 45
-SIDECAR_NAVIGATION_TIMEOUT_SECONDS = 75
-SIDECAR_LAUNCH_TIMEOUT_SECONDS = 60
-SIDECAR_SNAPSHOT_TIMEOUT_SECONDS = 30
+SIDECAR_QUEUE_WAIT_SECONDS = 20
+SIDECAR_COMMAND_TIMEOUT_SECONDS = 90
+SIDECAR_NAVIGATION_TIMEOUT_SECONDS = 150
+SIDECAR_LAUNCH_TIMEOUT_SECONDS = 120
+SIDECAR_SNAPSHOT_TIMEOUT_SECONDS = 90
 
 
 def normalize_work_key(work_key: str) -> str:
@@ -110,6 +110,7 @@ class _LocalAgentPage:
     def __init__(self, session: BrowserBridgeSession, service: "BrowserBridgeService"):
         self._session = session
         self._service = service
+        self._recovered_error_codes: set[str] = set()
         self._sync_from_session(session)
 
     def _sync_from_session(self, session: BrowserBridgeSession | None = None) -> None:
@@ -234,7 +235,9 @@ class _LocalAgentPage:
                 not recovery_attempted
                 and self._session.work_key
                 and error_code in LOCAL_AGENT_RECOVERABLE_ERROR_CODES
+                and error_code not in self._recovered_error_codes
             ):
+                self._recovered_error_codes.add(error_code)
                 recovered = await self._service._recover_local_agent_session(
                     self._session,
                     reason=error_code,
@@ -248,11 +251,25 @@ class _LocalAgentPage:
                     continue
             raise BrowserBridgeError(error_message, error_code=error_code, detail=error_detail)
 
-    async def goto(self, url: str, **_: Any) -> None:
+    @staticmethod
+    def _playwright_timeout_seconds(value: Any, default_seconds: float) -> float:
+        try:
+            timeout_ms = float(value)
+        except (TypeError, ValueError):
+            return default_seconds
+        if timeout_ms <= 0:
+            return default_seconds
+        return max(1.0, min(default_seconds, timeout_ms / 1000.0))
+
+    async def goto(self, url: str, **kwargs: Any) -> None:
+        command_timeout_seconds = self._playwright_timeout_seconds(
+            kwargs.get("timeout"),
+            LOCAL_AGENT_NAVIGATION_TIMEOUT_SECONDS,
+        )
         await self._run_browser_command(
             "browser_navigate",
             {"url": url},
-            command_timeout_seconds=LOCAL_AGENT_NAVIGATION_TIMEOUT_SECONDS,
+            command_timeout_seconds=command_timeout_seconds,
         )
         # Try to capture the actual URL after potential server-side redirects
         # (e.g., AADS URL → /login). Without this, page.url always returns the
@@ -298,8 +315,18 @@ class _LocalAgentPage:
         r")"
     )
 
-    async def evaluate(self, expression: str, arg: Any = None) -> Any:
+    async def evaluate(self, expression: str, arg: Any = None, **kwargs: Any) -> Any:
         expr = expression.strip()
+        command_timeout_seconds = self._playwright_timeout_seconds(
+            kwargs.get("timeout"),
+            LOCAL_AGENT_SNAPSHOT_TIMEOUT_SECONDS,
+        )
+        if kwargs.get("timeout") is None and expr in {
+            "window.location.href",
+            "document.body ? document.body.innerHTML : ''",
+            "document.title",
+        }:
+            command_timeout_seconds = min(command_timeout_seconds, 30.0)
         if arg is not None:
             # Keep sensitive arguments beyond the PC Agent's 200-character log preview.
             redacted_prefix = "/* browser-bridge argument redacted */" + (" " * 220)
@@ -311,7 +338,7 @@ class _LocalAgentPage:
         data = await self._run_browser_command(
             "browser_eval",
             {"expression": expr},
-            command_timeout_seconds=LOCAL_AGENT_SNAPSHOT_TIMEOUT_SECONDS,
+            command_timeout_seconds=command_timeout_seconds,
         )
         value = data.get("value")
         if isinstance(value, str):
@@ -575,7 +602,12 @@ class BrowserBridgeService:
                     routed = active_routed
         routed = self._coerce_pc_agent_embedded_success(routed)
         if routed.get("status") != "success":
-            raise BrowserBridgeError(str(routed.get("message") or routed.get("error_code") or routed))
+            error_code, error_message, error_detail = self._extract_pc_agent_route_error(routed)
+            raise BrowserBridgeError(
+                error_message,
+                error_code=error_code,
+                detail=error_detail,
+            )
 
         lease = routed.get("lease") or {}
         selected_agent_id = str(lease.get("agent_id") or agent_id or "")
