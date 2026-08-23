@@ -5098,7 +5098,7 @@ def _delivery_browser_auth_for_account(
                 ensure_kwargs: dict[str, Any] = {
                     "work_key": work_key,
                     "label": f"열정국밥 {branch} {label} 자동수집",
-                    "url": url if force_recreate_session else "about:blank",
+                    "url": url,
                     "force_recreate": force_recreate_session or attempt > 0,
                 }
                 if pc_agent_id:
