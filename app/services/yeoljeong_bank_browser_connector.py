@@ -408,6 +408,10 @@ async def _try_fill_bank_login(
               filled.businessNo = setValue(first([
                 "input[name*='business' i]",
                 "input[id*='business' i]",
+                "input[name*='사업자']",
+                "input[id*='사업자']",
+                "input[name*='사업자번호']",
+                "input[id*='사업자번호']",
                 "input[title*='사업자']",
                 "input[placeholder*='사업자']"
               ]), creds.businessRegistrationNo);
