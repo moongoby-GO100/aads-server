@@ -471,6 +471,36 @@ class PCAgentManager:
         now = self._now()
         return sum(1 for conn in self._agents.values() if self._is_online_locked(conn.agent_id, now))
 
+    async def wait_for_agent_online(
+        self, agent_id: str = "", timeout: float = 120.0, poll_interval: float = 2.0,
+    ) -> dict[str, Any]:
+        """에이전트가 온라인이 될 때까지 대기. 수집 루프의 재연결 대기에 사용."""
+        deadline = asyncio.get_running_loop().time() + max(timeout, 1.0)
+        waited_start = asyncio.get_running_loop().time()
+        while True:
+            if agent_id:
+                if self._is_online_locked(agent_id):
+                    waited = asyncio.get_running_loop().time() - waited_start
+                    logger.info("pc_agent_wait_online_success agent_id=%s waited=%.1fs", agent_id, waited)
+                    return {"status": "online", "agent_id": agent_id, "waited_seconds": round(waited, 1)}
+            else:
+                for conn in self._agents.values():
+                    if self._is_online_locked(conn.agent_id):
+                        waited = asyncio.get_running_loop().time() - waited_start
+                        logger.info("pc_agent_wait_online_success agent_id=%s waited=%.1fs", conn.agent_id, waited)
+                        return {"status": "online", "agent_id": conn.agent_id, "waited_seconds": round(waited, 1)}
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                waited = asyncio.get_running_loop().time() - waited_start
+                logger.warning("pc_agent_wait_online_timeout agent_id=%s waited=%.1fs", agent_id or "*", waited)
+                return {
+                    "status": "timeout",
+                    "error_code": "PC_AGENT_OFFLINE",
+                    "message": f"agent not online after {timeout:.0f}s wait",
+                    "waited_seconds": round(waited, 1),
+                }
+            await asyncio.sleep(min(poll_interval, remaining))
+
     # ── Routing / Lease / Queue ───────────────────────────────────────
 
     def _now(self) -> datetime:
@@ -1326,6 +1356,7 @@ class PCAgentManager:
         queue_wait_timeout_seconds: float = 120.0,
         lease_ttl_seconds: int = 180,
         command_timeout_seconds: float = 120.0,
+        wait_for_agent_seconds: float = 0,
     ) -> dict[str, Any]:
         request_params: Dict[str, Any] = dict(params or {})
         effective_command_timeout_seconds = self._effective_command_timeout_seconds(
@@ -1341,7 +1372,34 @@ class PCAgentManager:
             ttl_seconds=lease_ttl_seconds,
         )
         if lease_response.get("status") == "error":
-            return lease_response
+            error_code = str(lease_response.get("error_code", ""))
+            if error_code == _ERROR_PC_AGENT_OFFLINE and wait_for_agent_seconds > 0:
+                logger.info(
+                    "pc_agent_offline_waiting command=%s agent_id=%s wait=%.0fs",
+                    command_type, agent_id, wait_for_agent_seconds,
+                )
+                wait_result = await self.wait_for_agent_online(
+                    agent_id=agent_id, timeout=wait_for_agent_seconds,
+                )
+                if wait_result.get("status") == "online":
+                    reconnected_agent_id = wait_result.get("agent_id", agent_id)
+                    lease_response = await self.acquire_lease(
+                        job_type=job_type,
+                        command_type=command_type,
+                        preferred_agent_id=reconnected_agent_id,
+                        required_capabilities=required_capabilities,
+                        ttl_seconds=lease_ttl_seconds,
+                    )
+                    if lease_response.get("status") == "error":
+                        lease_response["waited_for_agent"] = True
+                        lease_response["waited_seconds"] = wait_result.get("waited_seconds", 0)
+                        return lease_response
+                else:
+                    lease_response["waited_for_agent"] = True
+                    lease_response["waited_seconds"] = wait_result.get("waited_seconds", 0)
+                    return lease_response
+            else:
+                return lease_response
 
         lease_payload = lease_response.get("lease", {})
         lease_id = str(lease_payload.get("lease_id", "") or "")

@@ -142,6 +142,131 @@ def _schedule_reload_disconnect_flush() -> None:
 _schedule_reload_disconnect_flush()
 
 
+def _classify_disconnect_cause(
+    *,
+    close_code: int | None,
+    close_reason: str | None,
+    uptime_seconds: float,
+    exc_type: str,
+) -> dict[str, Any]:
+    """끊김 원인을 분류하여 구조화된 진단 정보를 반환한다."""
+    code = close_code or 0
+    reason = str(close_reason or "").lower()
+    cause = "unknown"
+    severity = "warning"
+    auto_recoverable = True
+
+    if code == 1012 or "server_restart" in reason or "fast_reconnect" in reason:
+        cause = "server_restart"
+        severity = "info"
+    elif code == 4010 or "replaced_by_new" in reason:
+        cause = "duplicate_instance"
+        severity = "info"
+    elif code == 4001 or "unauthorized" in reason:
+        cause = "auth_failure"
+        severity = "critical"
+        auto_recoverable = False
+    elif "sleep_wake" in reason:
+        cause = "pc_sleep_wake"
+        severity = "info"
+    elif "heartbeat_timeout" in reason or exc_type == "TimeoutError":
+        if uptime_seconds < 60:
+            cause = "network_unstable"
+            severity = "warning"
+        else:
+            cause = "heartbeat_timeout"
+            severity = "warning"
+    elif code in (1000, 1001, 1005):
+        cause = "normal_close"
+        severity = "info"
+    elif code in (1006,):
+        cause = "abnormal_close"
+        severity = "warning"
+    elif "hot_reload" in reason:
+        cause = "hot_reload"
+        severity = "info"
+    elif exc_type in ("ConnectionResetError", "BrokenPipeError"):
+        cause = "network_error"
+        severity = "warning"
+
+    return {
+        "cause": cause,
+        "severity": severity,
+        "auto_recoverable": auto_recoverable,
+        "close_code": code,
+        "close_reason": close_reason,
+        "uptime_seconds": round(uptime_seconds, 1),
+        "exc_type": exc_type,
+    }
+
+
+async def _notify_chat_session_disconnect(
+    *,
+    agent_id: str,
+    classification: dict[str, Any],
+    metadata: dict[str, Any],
+) -> None:
+    """PC Agent 끊김을 AI가 인지할 수 있도록 ai_observations에 기록한다.
+    workspace_preload가 이 레코드를 자동으로 채팅 세션에 주입한다."""
+    cause = classification.get("cause", "unknown")
+    severity = classification.get("severity", "warning")
+    auto_recoverable = classification.get("auto_recoverable", True)
+    uptime = classification.get("uptime_seconds", 0)
+
+    observation = (
+        f"PC Agent '{agent_id}' 연결 끊김 — "
+        f"원인: {cause}, 심각도: {severity}, "
+        f"자동복구 가능: {'예' if auto_recoverable else '아니오'}, "
+        f"연결 유지 시간: {uptime:.0f}초. "
+    )
+    if not auto_recoverable:
+        observation += "⚠️ 수동 조치 필요: 인증 실패 또는 설정 오류 확인 필요."
+    elif cause == "heartbeat_timeout":
+        observation += "CEO PC 네트워크 상태 또는 절전 모드 확인 권장."
+    elif cause == "network_error":
+        observation += "네트워크 불안정. PC Agent 트레이 아이콘 재연결 확인 권장."
+
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO ai_observations (project, category, observation, metadata, created_at)
+                VALUES ($1, $2, $3, $4::jsonb, NOW())
+                ON CONFLICT DO NOTHING
+                """,
+                "FOOD",
+                "pc_agent_disconnect_alert",
+                observation,
+                json.dumps({
+                    "agent_id": agent_id,
+                    "cause": cause,
+                    "severity": severity,
+                    "auto_recoverable": auto_recoverable,
+                    "classification": classification,
+                    "uptime_seconds": uptime,
+                }),
+            )
+        logger.info("pc_agent_disconnect_chat_notified agent_id=%s cause=%s", agent_id, cause)
+    except Exception as exc:
+        logger.warning("pc_agent_disconnect_chat_notify_failed: %s", exc)
+
+    if severity == "critical":
+        try:
+            from app.services.telegram_bot import get_telegram_bot
+            bot = get_telegram_bot()
+            if bot:
+                await bot.send_message(
+                    f"🚨 PC Agent 치명적 끊김\n"
+                    f"Agent: {agent_id}\n"
+                    f"원인: {cause}\n"
+                    f"자동복구 불가 — 수동 조치 필요"
+                )
+        except Exception:
+            pass
+
+
 async def _verify_token_db(token: str) -> bool:
     """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블)."""
     try:
@@ -210,6 +335,22 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
     disconnect_reason = ""
     disconnect_metadata: dict[str, Any] = {}
 
+    def _categorize_disconnect(close_code: int | None, exc_type: str) -> str:
+        """끊김 원인을 카테고리로 분류 — 진단/통계용."""
+        if close_code == 1012:
+            return "server_restart"
+        if close_code == 4010:
+            return "replaced_by_new_instance"
+        if close_code in (1000, 1001):
+            return "normal_close"
+        if close_code in (1005, 1006):
+            return "abnormal_close"
+        if close_code == 1011:
+            return "server_error"
+        if exc_type == "TimeoutError" or close_code is None:
+            return "heartbeat_timeout"
+        return "unknown"
+
     def _build_disconnect_metadata(
         *,
         close_code: int | None,
@@ -222,6 +363,7 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             "close_code": close_code,
             "close_reason": close_reason,
             "exc_type": exc_type,
+            "disconnect_category": _categorize_disconnect(close_code, exc_type),
         }
         if extra:
             metadata.update(extra)
@@ -235,12 +377,25 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         if disconnect_recorded:
             return
         disconnect_recorded = True
+        classification = _classify_disconnect_cause(
+            close_code=disconnect_metadata.get("close_code"),
+            close_reason=disconnect_metadata.get("close_reason"),
+            uptime_seconds=disconnect_metadata.get("uptime_seconds", 0),
+            exc_type=disconnect_metadata.get("exc_type", ""),
+        )
+        disconnect_metadata["classification"] = classification
         await _record_agent_event(
             agent_id,
             "disconnected",
             reason=disconnect_reason,
             metadata=disconnect_metadata,
         )
+        if classification["severity"] in ("warning", "critical"):
+            asyncio.ensure_future(_notify_chat_session_disconnect(
+                agent_id=agent_id,
+                classification=classification,
+                metadata=disconnect_metadata,
+            ))
 
     async def _close_socket(code: int, reason: str) -> None:
         try:
@@ -691,6 +846,9 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
         queue_wait_timeout_seconds=req.queue_wait_timeout_seconds,
         lease_ttl_seconds=req.lease_ttl_seconds,
         command_timeout_seconds=effective_command_timeout_seconds,
+        wait_for_agent_seconds=req.wait_for_agent_seconds,
+        retry_on_offline=req.retry_on_offline,
+        retry_on_offline_timeout=req.retry_on_offline_timeout,
     )
     if result.get("status") == "error" and str(result.get("error_code") or "") in _PEER_RETRYABLE_ERROR_CODES:
         peer_result = await _request_peer_fallback_json(
@@ -916,6 +1074,45 @@ async def _offline_monitor_loop() -> None:
                                     )
                             except Exception as e:
                                 logger.warning("pc_agent_offline_alert_fail: %s", e)
+
+                            # P0-3: 채팅 세션 AI에게 PC Agent 끊김 알림 — ai_observations에 기록
+                            try:
+                                async with pool.acquire() as conn:
+                                    last_event = await conn.fetchrow(
+                                        """SELECT agent_id, reason, metadata::text as meta
+                                        FROM pc_agent_connection_events
+                                        WHERE event = 'disconnected'
+                                        ORDER BY id DESC LIMIT 1"""
+                                    )
+                                    disconnect_detail = ""
+                                    if last_event:
+                                        disconnect_detail = (
+                                            f"agent_id={last_event['agent_id']}, "
+                                            f"reason={last_event['reason']}, "
+                                            f"meta={last_event['meta'][:200]}"
+                                        )
+                                    await conn.execute(
+                                        """INSERT INTO ai_observations
+                                        (project, category, observation, confidence, metadata)
+                                        VALUES ($1, $2, $3, $4, $5::jsonb)
+                                        ON CONFLICT DO NOTHING""",
+                                        "FOOD",
+                                        "pc_agent_alert",
+                                        f"⚠️ PC Agent {int(elapsed)}초 이상 오프라인. 원인: {disconnect_detail}. "
+                                        f"조치 필요: CEO PC 트레이 아이콘 확인, 네트워크 상태 확인, "
+                                        f"launcher 재시작 필요 여부 판단. 수집 작업 중단 상태.",
+                                        0.95,
+                                        json.dumps({
+                                            "alert_type": "pc_agent_offline",
+                                            "offline_seconds": int(elapsed),
+                                            "disconnect_detail": disconnect_detail,
+                                            "action_required": True,
+                                            "auto_generated": True,
+                                        }),
+                                    )
+                                logger.info("pc_agent_offline_chat_alert_sent elapsed=%ds", int(elapsed))
+                            except Exception as alert_err:
+                                logger.warning("pc_agent_offline_chat_alert_failed: %s", alert_err)
             else:
                 if _OFFLINE_ALERT_SENT:
                     _OFFLINE_ALERT_SENT = False
@@ -924,6 +1121,18 @@ async def _offline_monitor_loop() -> None:
                         bot = get_telegram_bot()
                         if bot:
                             await bot.send_message("✅ PC Agent 재연결됨")
+                    except Exception:
+                        pass
+                    try:
+                        from app.core.db_pool import get_pool
+                        pool2 = get_pool()
+                        async with pool2.acquire() as conn:
+                            await conn.execute(
+                                """UPDATE ai_observations
+                                SET confidence = 0, metadata = metadata || '{"resolved": true}'::jsonb
+                                WHERE project = 'FOOD' AND category = 'pc_agent_alert'
+                                AND confidence > 0"""
+                            )
                     except Exception:
                         pass
         except Exception as e:
@@ -1032,6 +1241,56 @@ async def pc_agent_diagnostics():
             "hostname": os.getenv("PC_AGENT_DEFAULT_HOSTNAME", "").strip(),
         },
     }
+
+
+@router.get("/pc-agent/disconnect-stats")
+async def pc_agent_disconnect_stats():
+    """최근 24시간 끊김 원인별 통계 — AI 진단용."""
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    metadata->>'classification' as classification_raw,
+                    reason,
+                    created_at AT TIME ZONE 'Asia/Seoul' as kst,
+                    metadata::text as meta
+                FROM pc_agent_connection_events
+                WHERE event = 'disconnected'
+                  AND created_at > NOW() - INTERVAL '24 hours'
+                ORDER BY created_at DESC
+                LIMIT 50
+                """
+            )
+        events = []
+        cause_counts: dict[str, int] = {}
+        for row in rows:
+            classification = {}
+            try:
+                raw = row["classification_raw"]
+                if raw:
+                    classification = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                pass
+            cause = classification.get("cause", "unknown") if classification else "legacy_no_classification"
+            cause_counts[cause] = cause_counts.get(cause, 0) + 1
+            events.append({
+                "reason": row["reason"],
+                "cause": cause,
+                "severity": classification.get("severity", "unknown"),
+                "kst": row["kst"].isoformat() if row["kst"] else None,
+            })
+        return {
+            "period": "24h",
+            "total_disconnects": len(events),
+            "cause_distribution": cause_counts,
+            "events": events[:20],
+        }
+    except Exception as exc:
+        logger.warning("pc_agent_disconnect_stats_failed: %s", exc)
+        return {"error": str(exc), "events": []}
 
 
 # ── Client log ingestion (v1.0.46) ─────────────────────────────────────

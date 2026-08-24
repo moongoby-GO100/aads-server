@@ -40,6 +40,9 @@ class RoutedCommandRequest(BaseModel):
     queue_wait_timeout_seconds: float = Field(default=120.0, ge=1.0, le=900.0)
     lease_ttl_seconds: int = Field(default=180, ge=30, le=1800)
     command_timeout_seconds: float = Field(default=120.0, ge=1.0, le=900.0)
+    retry_on_offline: bool = False
+    retry_on_offline_timeout: float = Field(default=120.0, ge=5.0, le=600.0)
+    wait_for_agent_seconds: float = Field(default=0, ge=0, le=300)
 
     @field_validator("command_type")
     @classmethod
