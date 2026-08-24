@@ -769,10 +769,52 @@ async def test_ensure_pc_agent_cdp_sidecar_routes_active_api_first(monkeypatch, 
     assert active_calls
     assert active_calls[0]["command_type"] == "browser_launch"
     assert active_calls[0]["params"]["new_window"] is False
-    assert active_calls[0]["queue_wait_timeout_seconds"] == 10
-    assert active_calls[0]["command_timeout_seconds"] == 60
+    assert active_calls[0]["queue_wait_timeout_seconds"] == service_module.SIDECAR_QUEUE_WAIT_SECONDS
+    assert active_calls[0]["command_timeout_seconds"] == service_module.SIDECAR_LAUNCH_TIMEOUT_SECONDS
     assert session.endpoint.metadata["agent_id"] == "oby-ceo"
     assert session.endpoint.metadata["port"] == "9666"
+
+
+@pytest.mark.asyncio
+async def test_ensure_pc_agent_cdp_force_recreate_keeps_profile_by_default(monkeypatch, tmp_path) -> None:
+    """force_recreate 시에도 기본값은 Chrome 프로필(isolation_id) 유지 — 로그인 쿠키 보존."""
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    captured_kwargs = {}
+
+    async def fake_execute_routed_command(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "status": "success",
+            "lease": {"agent_id": "ceo-pc"},
+            "result": {
+                "result": {
+                    "port": 9555,
+                    "user_data_dir": "C:/AADS/chrome/yeoljeong",
+                    "websocket_debugger_url": "ws://127.0.0.1:9555/devtools/browser/test",
+                }
+            },
+        }
+
+    monkeypatch.delenv("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", raising=False)
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        label="Yeoljeong Baemin",
+        url="https://self.baemin.com/",
+        work_key="yeoljeong-delivery-baemin-biz-junghwa-test",
+        force_recreate=True,
+    )
+
+    assert session.work_key == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["isolation_id"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
 
 
 @pytest.mark.asyncio
@@ -801,6 +843,7 @@ async def test_ensure_pc_agent_cdp_force_recreate_uses_fresh_isolation_profile(m
             },
         }
 
+    monkeypatch.setenv("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", "0")
     monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
 
     session = await service.ensure_pc_agent_cdp_session(
@@ -942,8 +985,8 @@ async def test_local_agent_commands_sidecar_route_active_api_first(monkeypatch, 
     assert active_calls[0]["command_type"] == "browser_navigate"
     assert active_calls[0]["agent_id"] == "oby-ceo"
     assert active_calls[0]["params"].get("work_key", "") == ""
-    assert active_calls[0]["queue_wait_timeout_seconds"] == 10
-    assert active_calls[0]["command_timeout_seconds"] == 75
+    assert active_calls[0]["queue_wait_timeout_seconds"] == service_module.SIDECAR_QUEUE_WAIT_SECONDS
+    assert active_calls[0]["command_timeout_seconds"] == service_module.SIDECAR_NAVIGATION_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
