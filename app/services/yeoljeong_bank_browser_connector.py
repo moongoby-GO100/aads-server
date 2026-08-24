@@ -1054,6 +1054,15 @@ async def collect_bank_via_browser_session_async(
                         safe_diagnostics["screen_suggested_action"] = "parse_table"
                         safe_diagnostics["screen_requires_operator"] = "0"
                         break
+                    rechecked_selectors = await _safe_selector_candidates(page)
+                    if rechecked_selectors:
+                        safe_diagnostics["selector_candidates"] = rechecked_selectors
+                        if _selector_candidates_include_bank_login(rechecked_selectors):
+                            safe_diagnostics["screen_state"] = "login_required"
+                            safe_diagnostics["screen_reason_code"] = "BANK_LOGIN_INPUTS_VISIBLE_AFTER_NAVIGATION"
+                            safe_diagnostics["screen_suggested_action"] = "fill_saved_login"
+                            safe_diagnostics["screen_requires_operator"] = "0"
+                            break
                     rechecked_decision = classify_portal_state(current_url, state_text)
                     if rechecked_decision.state in auth_states:
                         rechecked_state = rechecked_decision.as_dict()
