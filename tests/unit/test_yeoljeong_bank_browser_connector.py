@@ -283,6 +283,43 @@ def test_parse_with_diagnostics_returns_table_count():
     assert diag["parse_failure"] is False
 
 
+def test_parse_shinhan_sortable_header_without_rows_is_not_failure():
+    """신한 WebSquare 정렬 헤더만 있고 거래행이 없으면 0건으로 판정한다."""
+    html_content = """
+    <table>
+      <tr>
+        <th>거래일자오름차순 정렬</th><th>시간</th><th>거래일시오름차순 정렬</th>
+        <th>적요오름차순 정렬</th><th>출금(원)오름차순 정렬</th>
+        <th>입금(원)오름차순 정렬</th><th>내용오름차순 정렬</th><th>잔액(원)오름차순 정렬</th>
+      </tr>
+    </table>
+    """
+    rows, diag = connector.parse_bank_portal_html_with_diagnostics(html_content)
+    assert rows == []
+    assert diag["table_count"] == 1
+    assert diag["transaction_header_found"] is True
+    assert diag["parse_failure"] is False
+
+
+def test_parse_shinhan_sortable_header_rows():
+    """신한 WebSquare 정렬 문구가 붙은 헤더의 실제 거래행을 파싱한다."""
+    html_content = """
+    <table>
+      <tr>
+        <th>거래일자오름차순 정렬</th><th>시간</th><th>적요오름차순 정렬</th>
+        <th>출금(원)오름차순 정렬</th><th>입금(원)오름차순 정렬</th><th>잔액(원)오름차순 정렬</th>
+      </tr>
+      <tr><td>2026.08.24</td><td>09:15:00</td><td>배달정산</td><td></td><td>123,000</td><td>1,000,000</td></tr>
+    </table>
+    """
+    rows, diag = connector.parse_bank_portal_html_with_diagnostics(html_content)
+    assert diag["parse_failure"] is False
+    assert len(rows) == 1
+    assert rows[0]["occurred_at"] == "2026-08-24 09:15:00"
+    assert rows[0]["direction"] == "in"
+    assert rows[0]["amount"] == 123000
+
+
 def test_parse_with_diagnostics_on_unrecognised_table():
     """날짜 컬럼이 없는 테이블 → parse_failure=True, 빈 rows."""
     rows, diag = connector.parse_bank_portal_html_with_diagnostics(_NO_DATE_COL_HTML)

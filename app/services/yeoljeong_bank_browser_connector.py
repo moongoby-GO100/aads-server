@@ -815,8 +815,32 @@ _BALANCE_HEADERS = {"잔액", "잔고", "거래후잔액", "balance"}
 _TIME_HEADERS = {"거래시간", "시간", "time"}
 
 
+def _normalize_header_cell(cell: str) -> str:
+    normalized = str(cell or "").strip().lower()
+    normalized = re.sub(r"(오름차순|내림차순)?\s*정렬", "", normalized)
+    normalized = re.sub(r"\([^)]*\)", "", normalized)
+    normalized = re.sub(r"[^0-9a-z가-힣/]+", "", normalized)
+    return normalized
+
+
 def _match_header(cell: str, synonym_set: set[str]) -> bool:
-    return cell.strip().lower() in {s.lower() for s in synonym_set}
+    normalized = _normalize_header_cell(cell)
+    synonyms = {_normalize_header_cell(s) for s in synonym_set}
+    if normalized in synonyms:
+        return True
+    return any(token and token in normalized for token in synonyms)
+
+
+def _table_has_transaction_header(rows: list[list[str]]) -> bool:
+    if not rows:
+        return False
+    header = rows[0]
+    has_date = any(_match_header(cell, _DATE_HEADERS) for cell in header)
+    has_amount = any(
+        _match_header(cell, _DEPOSIT_HEADERS) or _match_header(cell, _WITHDRAWAL_HEADERS)
+        for cell in header
+    )
+    return has_date and has_amount
 
 
 def _parse_table_with_header(rows: list[list[str]]) -> list[dict[str, Any]]:
@@ -910,12 +934,15 @@ def _parse_tables_with_diagnostics(tables: list[list[list[str]]]) -> tuple[list[
         "table_count": len(safe_tables),
         "headers_found": [t[0] if t else [] for t in safe_tables[:3]],
         "parse_failure": False,
+        "transaction_header_found": False,
     }
     for table in safe_tables:
+        if _table_has_transaction_header(table):
+            diag["transaction_header_found"] = True
         rows = _parse_table_with_header(table)
         if rows:
             return rows, diag
-    if safe_tables:
+    if safe_tables and not diag["transaction_header_found"]:
         diag["parse_failure"] = True
     return [], diag
 
@@ -1208,6 +1235,7 @@ async def collect_bank_via_browser_session_async(
 
         safe_diagnostics["parser_table_count"] = parse_diag["table_count"]
         safe_diagnostics["parser_failure"] = parse_diag["parse_failure"]
+        safe_diagnostics["parser_transaction_header_found"] = parse_diag.get("transaction_header_found", False)
         if parse_diag.get("headers_found"):
             safe_diagnostics["parser_headers_found"] = [
                 [str(cell)[:40] for cell in header[:8]]
@@ -1280,6 +1308,7 @@ async def collect_bank_via_browser_session_async(
                     safe_diagnostics["current_url"] = current_url
                     safe_diagnostics["parser_table_count"] = parse_diag["table_count"]
                     safe_diagnostics["parser_failure"] = parse_diag["parse_failure"]
+                    safe_diagnostics["parser_transaction_header_found"] = parse_diag.get("transaction_header_found", False)
                     if rows:
                         safe_diagnostics["screen_state"] = "transaction_table"
                         safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_NAVIGATION"
@@ -1350,6 +1379,7 @@ async def collect_bank_via_browser_session_async(
                     parse_diag = rechecked_diag
                     safe_diagnostics["parser_table_count"] = rechecked_diag["table_count"]
                     safe_diagnostics["parser_failure"] = rechecked_diag["parse_failure"]
+                    safe_diagnostics["parser_transaction_header_found"] = rechecked_diag.get("transaction_header_found", False)
                     safe_diagnostics["screen_state"] = "transaction_table"
                     safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_SHINHAN_QUERY"
                     safe_diagnostics["screen_suggested_action"] = "parse_table"
@@ -1396,6 +1426,7 @@ async def collect_bank_via_browser_session_async(
                     parse_diag = rechecked_diag
                     safe_diagnostics["parser_table_count"] = rechecked_diag["table_count"]
                     safe_diagnostics["parser_failure"] = rechecked_diag["parse_failure"]
+                    safe_diagnostics["parser_transaction_header_found"] = rechecked_diag.get("transaction_header_found", False)
                     safe_diagnostics["screen_state"] = "transaction_table"
                     safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_LOGIN"
                 else:
@@ -1447,6 +1478,7 @@ async def collect_bank_via_browser_session_async(
                     parse_diag = rechecked_diag
                     safe_diagnostics["parser_table_count"] = rechecked_diag["table_count"]
                     safe_diagnostics["parser_failure"] = rechecked_diag["parse_failure"]
+                    safe_diagnostics["parser_transaction_header_found"] = rechecked_diag.get("transaction_header_found", False)
                     safe_diagnostics["screen_state"] = "transaction_table"
                     safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_RECHECK"
             except Exception:

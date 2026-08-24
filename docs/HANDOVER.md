@@ -366,3 +366,10 @@
 - 운영 재검증: 배포된 `aads-server:8100`에서 신한 기업 브라우저 계좌 1개를 `2026-08-01`~`2026-08-24` 범위로 수집 재시도했다. 이전 `BANK_BROWSER_PC_AGENT_TIMEOUT`은 재현되지 않았고, 신한 기업 페이지 `https://bizbank.shinhan.com/main.html`까지 도달했다.
 - 현재 결과: 수집 상태는 `BANK_BROWSER_OPERATOR_ACTION_REQUIRED`, `imported_rows=0`, `collected_rows=0`. 같은 browser work_key `yeoljeong-bank-browser-25b8c525d84799c2`, session `bb-343beb2ff19d`에서 OTP/CAPTCHA/본인인증 등 운영자 입력 후 재수집 필요.
 - 남은 이슈: 거래 원장 `bank_transactions` 적재는 아직 완료되지 않았다. PC Agent는 페이지 도달까지 정상화됐으나 은행의 추가 인증 단계가 자동화 차단점이다.
+
+## 2026-08-24 17:34 KST - FOOD 신한 WebSquare 거래 테이블 파서 보정 배포
+
+- 요청: 신한은행 브라우저 수집 보강 변경을 커밋/푸시/배포까지 완료.
+- 조치: `app/services/yeoljeong_bank_browser_connector.py`에서 신한 WebSquare 헤더의 `오름차순 정렬` 문구와 `(원)` 단위를 정규화하도록 보정했다. 거래 헤더만 있고 거래행이 없는 화면은 파서 실패가 아니라 거래 0건으로 판정하도록 `transaction_header_found` 진단값을 추가했다.
+- 검증: `.venv-playwright/bin/python -m py_compile app/services/yeoljeong_bank_browser_connector.py` 성공, `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` 46 passed, `git diff --check -- app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py` 성공.
+- 배포: 이 항목 작성 후 별도 커밋으로 푸시하고 AADS blue-green 배포 및 health/API 검증을 수행한다.
