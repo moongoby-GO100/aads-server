@@ -206,8 +206,7 @@ async def _notify_chat_session_disconnect(
     classification: dict[str, Any],
     metadata: dict[str, Any],
 ) -> None:
-    """PC Agent 끊김을 AI가 인지할 수 있도록 ai_observations에 기록한다.
-    workspace_preload가 이 레코드를 자동으로 채팅 세션에 주입한다."""
+    """PC Agent 끊김을 원장에 남기고 최근 FOOD/AADS 채팅 세션에 직접 보고한다."""
     cause = classification.get("cause", "unknown")
     severity = classification.get("severity", "warning")
     auto_recoverable = classification.get("auto_recoverable", True)
@@ -252,6 +251,54 @@ async def _notify_chat_session_disconnect(
     except Exception as exc:
         logger.warning("pc_agent_disconnect_chat_notify_failed: %s", exc)
 
+    try:
+        session_id = await _latest_pc_agent_alert_session_id()
+        if session_id:
+            from app.services.session_reporter import post_session_report
+
+            title = f"PC Agent 연결 끊김 자동 알림: {agent_id}"
+            body = (
+                f"{observation}\n\n"
+                "확인할 항목:\n"
+                "- `/api/v1/pc-agent/diagnostics`로 최신 launcher/connection 상태 확인\n"
+                "- `/api/v1/pc-agent/disconnect-stats`로 최근 24시간 원인 분포 확인\n"
+                "- FOOD 자동수집 실행 중이면 중단 지점과 stale lock 여부 확인\n"
+                "- 재연결 후 동일 작업을 재개할 수 있으면 세션 재사용으로 재시도"
+            )
+            reaction_prompt = (
+                "[시스템] PC Agent 연결 끊김 자동 알림입니다. "
+                "이 채팅 세션에서 diagnostics/disconnect-stats/수집 상태를 확인하고, "
+                "가능한 조치를 실행한 뒤 CEO에게 원인과 조치 결과를 보고하세요.\n\n"
+                f"agent_id={agent_id}\n"
+                f"classification={json.dumps(classification, ensure_ascii=False)}\n"
+                f"metadata={json.dumps(metadata, ensure_ascii=False)[:1200]}"
+            )
+            await post_session_report(
+                session_id=session_id,
+                title=title,
+                body=body,
+                status="warning" if severity != "critical" else "error",
+                source="pc_agent_disconnect_monitor",
+                project="FOOD",
+                metadata={
+                    "agent_id": agent_id,
+                    "classification": classification,
+                    "disconnect_metadata": metadata,
+                    "auto_generated": True,
+                },
+                intent="pc_agent_alert",
+                idempotency_key=(
+                    f"pc-agent-disconnect-{agent_id}-{cause}-"
+                    f"{metadata.get('close_code')}-{metadata.get('uptime_seconds')}"
+                ),
+                trigger_reaction=True,
+                reaction_prompt=reaction_prompt,
+            )
+        else:
+            logger.info("pc_agent_disconnect_session_report_skipped no_target_session agent_id=%s", agent_id)
+    except Exception as exc:
+        logger.warning("pc_agent_disconnect_session_report_failed: %s", exc)
+
     if severity == "critical":
         try:
             from app.services.telegram_bot import get_telegram_bot
@@ -265,6 +312,36 @@ async def _notify_chat_session_disconnect(
                 )
         except Exception:
             pass
+
+
+async def _latest_pc_agent_alert_session_id() -> str:
+    """Return the most relevant chat session for FOOD PC Agent alerts."""
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.id::text AS session_id
+                FROM chat_sessions s
+                JOIN chat_workspaces w ON w.id = s.workspace_id
+                WHERE COALESCE(w.project_key, '') IN ('FOOD', 'AADS', 'CEO')
+                ORDER BY
+                    CASE COALESCE(w.project_key, '')
+                        WHEN 'FOOD' THEN 0
+                        WHEN 'AADS' THEN 1
+                        WHEN 'CEO' THEN 2
+                        ELSE 3
+                    END,
+                    s.updated_at DESC
+                LIMIT 1
+                """
+            )
+            return str(row["session_id"]) if row else ""
+    except Exception as exc:
+        logger.warning("pc_agent_alert_session_lookup_failed: %s", exc)
+        return ""
 
 
 async def _verify_token_db(token: str) -> bool:

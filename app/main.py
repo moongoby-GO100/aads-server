@@ -973,6 +973,51 @@ async def lifespan(app: FastAPI):
             max_instances=1, coalesce=True,
         )
 
+        # P0-2: 배달 자동수집 데몬 — 07:00/12:00/18:00 KST (PC Agent 온라인 시)
+        async def _run_delivery_auto_collect():
+            try:
+                from app.services.pc_agent_manager import pc_agent_manager
+                from app.services import yeoljeong_finance_service as yjf_svc
+                import asyncio
+
+                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=180)
+                if wait_result["status"] != "online":
+                    logger.info("delivery_auto_collect_skip: pc_agent_offline")
+                    return
+
+                system_user = {"user_id": "system-daemon", "role": "admin", "name": "자동수집데몬"}
+                payload = {
+                    "services": ["baemin", "coupangeats", "yogiyo", "ddangyo"],
+                    "business_id": "all",
+                    "branch": "전체",
+                    "all_businesses": True,
+                    "background": False,
+                    "prefer_pc_agent": True,
+                    "require_pc_agent": True,
+                    "pc_agent_id": str(wait_result.get("agent_id") or ""),
+                    "force_recreate_portal_sessions": False,
+                    "close_portal_browser_on_complete": True,
+                    "skip_financial_accounts": True,
+                }
+                result = await asyncio.to_thread(yjf_svc.sync_delivery, payload, system_user)
+                summary = result.get("summary") if isinstance(result, dict) else []
+                logger.info(
+                    "delivery_auto_collect_done agent_id=%s summary_count=%d result_keys=%s",
+                    wait_result.get("agent_id"),
+                    len(summary) if isinstance(summary, list) else 0,
+                    list((result or {}).keys()) if isinstance(result, dict) else [],
+                )
+            except Exception as e:
+                logger.warning(f"delivery_auto_collect_error: {e}")
+        scheduler.add_job(
+            _run_delivery_auto_collect,
+            CronTrigger(hour="7,12,18", minute=0, timezone="Asia/Seoul"),
+            id="delivery_auto_collect",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         scheduler.start()
         app.state.scheduler = scheduler  # fallback: MCP 도구 경로에서 참조 가능
         await healer_init()

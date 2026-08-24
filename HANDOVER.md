@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-24 16:50 KST - PC Agent reconnect wait, same-session alert, delivery daemon hardening
+
+- Trigger: CEO requested direct implementation of P0-1/P0-2/P0-3/P1 for PC Agent disconnect recovery, same-chat AI alerting, disconnect cause logging, and stable long-running delivery auto-collection.
+- Changes:
+  - `app/api/pc_agent.py`: disconnect alerts now keep the existing `ai_observations` record and also post a durable report to the latest FOOD/AADS/CEO chat session through `session_reporter.post_session_report()`, with `trigger_reaction=True` so that the receiving chat AI can inspect diagnostics and act.
+  - `app/main.py`: delivery auto-collection scheduler now waits up to 180 seconds for any PC Agent to reconnect, runs all 4 delivery services across all canonical businesses/branches, requires PC Agent routing, closes portal sessions on completion, and skips bank/financial side work in this delivery daemon.
+  - `tests/unit/test_pc_agent_api_disconnects.py`: added coverage that disconnect notification posts a same-session report and triggers AI follow-up.
+- Verification:
+  - `docker exec aads-server python -m py_compile app/api/pc_agent.py app/services/pc_agent_manager.py app/main.py scripts/yeoljeong_auto_collect.py tests/unit/test_pc_agent_api_disconnects.py` passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_yeoljeong_auto_collect.py -q` passed: 51 passed.
+  - `git diff --check -- app/api/pc_agent.py app/main.py tests/unit/test_pc_agent_api_disconnects.py` passed.
+- Not done:
+  - No deploy or service restart in this step.
+  - Full `git diff --check` remains blocked by pre-existing trailing whitespace in unrelated dirty changelog files.
+  - Existing unrelated dirty files and untracked GO100 scratch files were not modified.
+
 ## 2026-08-22 07:21 KST - Session auto-report AI reaction trigger
 
 - Trigger: CEO clarified that a session receiving an automatic report must react in the same chat session, not only persist the report bubble.

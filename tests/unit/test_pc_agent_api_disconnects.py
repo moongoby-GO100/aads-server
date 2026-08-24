@@ -9,6 +9,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from app.api import pc_agent
+from app.services import session_reporter
 
 
 class _DummyTask:
@@ -176,6 +177,52 @@ async def test_ws_pc_agent_records_disconnect_when_server_ping_fails(monkeypatch
     assert disconnected_calls[0].kwargs["reason"] == "server_ping_failed"
     assert disconnected_calls[0].kwargs["metadata"]["reason_source"] == "server_ping"
     assert ws.close_calls[-1] == (1011, "server_ping_failed")
+
+
+@pytest.mark.asyncio
+async def test_disconnect_notification_posts_same_session_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post_report = AsyncMock(
+        return_value=session_reporter.SessionReportResult(
+            posted=True,
+            session_id="11111111-1111-4111-8111-111111111111",
+            message_id="22222222-2222-4222-8222-222222222222",
+            reaction_triggered=True,
+        )
+    )
+    monkeypatch.setattr(
+        pc_agent,
+        "_latest_pc_agent_alert_session_id",
+        AsyncMock(return_value="11111111-1111-4111-8111-111111111111"),
+    )
+    monkeypatch.setattr(session_reporter, "post_session_report", post_report)
+
+    await pc_agent._notify_chat_session_disconnect(
+        agent_id="ceo-pc",
+        classification={
+            "cause": "heartbeat_timeout",
+            "severity": "warning",
+            "auto_recoverable": True,
+            "uptime_seconds": 125.0,
+            "close_code": 1011,
+            "close_reason": "heartbeat_timeout",
+            "exc_type": "TimeoutError",
+        },
+        metadata={
+            "close_code": 1011,
+            "close_reason": "heartbeat_timeout",
+            "uptime_seconds": 125.0,
+        },
+    )
+
+    assert post_report.await_count == 1
+    kwargs = post_report.await_args.kwargs
+    assert kwargs["session_id"] == "11111111-1111-4111-8111-111111111111"
+    assert kwargs["source"] == "pc_agent_disconnect_monitor"
+    assert kwargs["project"] == "FOOD"
+    assert kwargs["trigger_reaction"] is True
+    assert "diagnostics/disconnect-stats" in kwargs["reaction_prompt"]
 
 
 @pytest.mark.asyncio
