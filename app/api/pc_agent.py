@@ -232,18 +232,18 @@ async def _notify_chat_session_disconnect(
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO ai_observations (project, category, observation, metadata, created_at)
+                INSERT INTO ai_observations (project, category, key, value, created_at)
                 VALUES ($1, $2, $3, $4::jsonb, NOW())
-                ON CONFLICT DO NOTHING
                 """,
                 "FOOD",
                 "pc_agent_disconnect_alert",
-                observation,
+                f"disconnect_{agent_id}_{cause}",
                 json.dumps({
                     "agent_id": agent_id,
                     "cause": cause,
                     "severity": severity,
                     "auto_recoverable": auto_recoverable,
+                    "observation": observation,
                     "classification": classification,
                     "uptime_seconds": uptime,
                 }),
@@ -847,8 +847,6 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
         lease_ttl_seconds=req.lease_ttl_seconds,
         command_timeout_seconds=effective_command_timeout_seconds,
         wait_for_agent_seconds=req.wait_for_agent_seconds,
-        retry_on_offline=req.retry_on_offline,
-        retry_on_offline_timeout=req.retry_on_offline_timeout,
     )
     if result.get("status") == "error" and str(result.get("error_code") or "") in _PEER_RETRYABLE_ERROR_CODES:
         peer_result = await _request_peer_fallback_json(
