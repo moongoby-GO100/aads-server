@@ -158,6 +158,17 @@ def test_integration_lists_have_category_status_and_search_filters():
     assert "isIntegrationSyncActive(item) ? \"처리중...\" : \"수집 실행\"" in HTML
     assert ">수집 실행</button>`" not in HTML
     assert "integrationMatchesSyncSummary" in HTML
+
+
+def test_bank_browser_collection_auto_opens_pc_agent_session():
+    bank_collect_block = HTML.split("async function collectBankLedgerAccounts", 1)[1].split(
+        "const payload = await financeApi",
+        1,
+    )[0]
+
+    assert 'collectBody.browser_work_key = account.browser_work_key || "";' in bank_collect_block
+    assert 'collectBody.browser_session_id = account.browser_session_id || "";' in bank_collect_block
+    assert "collectBody.auto_open_browser = true;" in bank_collect_block
     assert "summaryCounts" in HTML
     assert "counts.sales" in HTML
     assert "counts.settlements" in HTML
