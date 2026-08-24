@@ -24893,3 +24893,67 @@ arti
 ## [2026-08-24 09:03:29 KST] [GO100] backend/app/routers/go100/card_trades_router.py
 - Chat-Direct 수정: run_remote_command: python3 -m py_compile scripts/go100/limitup_119_commonality_report.py
 - finalize: pending
+
+## [2026-08-24 09:04:26 KST] [GO100] artifacts/go100/limitup_119_commonality/20260824T000425Z/report.json
+- Chat-Direct 수정: run_remote_command: python3 scripts/go100/limitup_119_commonality_report.py --days 552
+- finalize: pending
+
+## [2026-08-24 09:04:26 KST] [GO100] artifacts/go100/limitup_119_commonality/20260824T000425Z/report.md
+- Chat-Direct 수정: run_remote_command: python3 scripts/go100/limitup_119_commonality_report.py --days 552
+- finalize: pending
+
+## [2026-08-24 09:04:27 KST] [GO100] artifacts/go100/limitup_119_commonality/latest.json
+- Chat-Direct 수정: run_remote_command: python3 scripts/go100/limitup_119_commonality_report.py --days 552
+- finalize: pending
+
+## [2026-08-24 09:04:27 KST] [GO100] artifacts/go100/limitup_119_commonality/latest.md
+- Chat-Direct 수정: run_remote_command: python3 scripts/go100/limitup_119_commonality_report.py --days 552
+- finalize: pending
+
+## [2026-08-24 09:04:29 KST] [GO100] docs/plans/GO100-119-LIMITUP-TRUE-REASON-FEATURES-20260824.md
+- Chat-Direct 수정: write: docs/plans/GO100-119-LIMITUP-TRUE-REASON-FEATURES-20260824.md
+- finalize: pending
+
+## [2026-08-24 09:04:48 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-24 07:30 KST - GO100-119-LOCKE→# 2026-08-24 09:05 KST - GO100-119-LIMIT
+- finalize: pending
+
+## [2026-08-24 09:05:08 KST] [GO100] artifacts/go100/limitup_119_commonality/20260824T000425Z/report.json
+- Chat-Direct 수정: run_remote_command: env NEXT_DIST_DIR=.next.blue.staging npm --prefix frontend run build
+- finalize: pending
+
+## [2026-08-24 09:05:08 KST] [GO100] artifacts/go100/limitup_119_commonality/20260824T000425Z/report.md
+- Chat-Direct 수정: run_remote_command: env NEXT_DIST_DIR=.next.blue.staging npm --prefix frontend run build
+- finalize: pending
+
+## [2026-08-24 09:05:09 KST] [GO100] artifacts/go100/limitup_119_commonality/latest.json
+- Chat-Direct 수정: run_remote_command: env NEXT_DIST_DIR=.next.blue.staging npm --prefix frontend run build
+- finalize: pending
+
+## [2026-08-24 09:05:10 KST] [GO100] artifacts/go100/limitup_119_commonality/latest.md
+- Chat-Direct 수정: run_remote_command: env NEXT_DIST_DIR=.next.blue.staging npm --prefix frontend run build
+- finalize: pending
+
+## [2026-08-24 09:05:18 KST] [GO100] .gitignore
+- Chat-Direct 수정: patch: artifacts/go100/limitup_119_locked/
+→artifacts/go100/limitup_119_locked/
+arti
+- finalize: pending
+
+## [2026-08-24 09:05:30 KST] [GO100] .gitignore
+- Chat-Direct 수정: patch: artifacts/go100/limitup_119_locked/
+arti→artifacts/go100/limitup_119_locked/
+arti
+- finalize: pending
+
+## [2026-08-24 09:06:45 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: - 실측 산출물: `artifacts/go100/limitup_119_c→- 실측 산출물: `artifacts/go100/limitup_119_c
+- finalize: pending
+
+## [2026-08-24 09:08:03 KST] [GO100] docs/plans/GO100-119-LIMITUP-TRUE-REASON-FEATURES-20260824.md
+- Chat-Direct 수정: patch: - 반영 기간: `2025-02-18 ~ 2026-08-21` 기준 CL→- 반영 기간: `2025-02-18 ~ 2026-08-24` 기준 CL
+- finalize: pending
+
+## [2026-08-24 09:10:21 KST] [GO100] scripts/go100/sql/go100_limitup_reason_features_shadow.sql
+- Chat-Direct 수정: write: scripts/go100/sql/go100_limitup_reason_features_shadow.sql
+- finalize: pending

@@ -5322,3 +5322,32 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-24 09:03:46 KST] [aads-server] tests/unit/test_browser_bridge.py
 - Chat-Direct 수정: patch:     assert active_calls[0]["command_time→    assert active_calls[0]["command_time
+
+## [2026-08-24 09:06:09 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_browser_bridge.py /root/aads/aads-ser
+
+## [2026-08-24 09:09:07 KST] [aads-server] app/services/yeoljeong_bank_browser_connector.py
+- Chat-Direct 수정: run_remote_command: grep -n "force_recreate" app/services/yeoljeong_finance_service.py
+
+## [2026-08-24 09:09:14 KST] [aads-server] app/browser_bridge/service.py
+- Chat-Direct 수정: patch:         recreate_suffix = ""
+        bas→        recreate_suffix = ""
+        bas
+
+## [2026-08-24 09:09:30 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch: async def test_ensure_pc_agent_cdp_force→async def test_ensure_pc_agent_cdp_force
+
+## [2026-08-24 09:09:30 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     monkeypatch.setattr(manager_module.p→    monkeypatch.setenv("AADS_BROWSER_PRO
+
+## [2026-08-24 09:09:55 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["params"]["ne→    assert active_calls[0]["params"]["ne
+
+## [2026-08-24 09:09:56 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["params"].get→    assert active_calls[0]["params"].get
+
+## [2026-08-24 09:10:10 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["command_time→    assert active_calls[0]["command_time
+
+## [2026-08-24 09:10:11 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["command_time→    assert active_calls[0]["command_time
