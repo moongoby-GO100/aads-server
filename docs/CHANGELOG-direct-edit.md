@@ -5252,3 +5252,73 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-24 07:27:09 KST] [aads-server] app/services/yeoljeong_finance_service.py
 - Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,
+
+## [2026-08-24 07:31:14 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,
+
+## [2026-08-24 07:38:43 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                     "url": url if force_→                    "url": url,
+
+## [2026-08-24 07:49:46 KST] [aads-server] app/static/captcha-ddangyo-latest.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server cp /app/app/data/yeoljeong_finance/delivery_auth_challen
+
+## [2026-08-24 07:49:47 KST] [aads-server] app/static/captcha-ddangyo-latest.png
+- Chat-Direct 수정: run_remote_command: docker logs aads-server-green --since 2m 2>&1 | grep -i -e "delivery" -e "browse
+
+## [2026-08-24 07:51:13 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "def \|MODEL\|model" /app/app/services/captcha_v
+
+## [2026-08-24 07:51:38 KST] [aads-server] tests/unit/test_yeoljeong_finance_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server grep -n "\"url\": url" /app/app/services/yeoljeong_finan
+
+## [2026-08-24 07:52:02 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:             captcha_value = str(account.→            captcha_value = str(account.
+
+## [2026-08-24 07:52:06 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 -c "import json,datetime;d=json.load(open('/app/
+
+## [2026-08-24 07:52:09 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:                     if login_state == "c→                    if login_state == "c
+
+## [2026-08-24 07:52:46 KST] [aads-server] scripts/verify_captcha_vision.py
+- Chat-Direct 수정: write: scripts/verify_captcha_vision.py
+
+## [2026-08-24 07:52:49 KST] [aads-server] scripts/verify_captcha_vision.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server ps -ef
+
+## [2026-08-24 07:54:45 KST] [aads-server] scripts/trigger_delivery_sync.py
+- Chat-Direct 수정: write: scripts/trigger_delivery_sync.py
+
+## [2026-08-24 07:56:20 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: patch:         if login_state == "login":
+     →        if login_state == "login":
+     
+
+## [2026-08-24 07:56:21 KST] [aads-server] app/services/yeoljeong_finance_service.py
+- Chat-Direct 수정: run_remote_command: ps aux | grep -E "yeoljeong|playwright|chromium" | grep -v grep
+
+## [2026-08-24 08:00:16 KST] [aads-server] tmp/delivery_sync_payload.json
+- Chat-Direct 수정: write: tmp/delivery_sync_payload.json
+
+## [2026-08-24 09:01:37 KST] [aads-server] app/browser_bridge/service.py
+- Chat-Direct 수정: patch:         recreate_suffix = ""
+        bas→        recreate_suffix = ""
+        bas
+
+## [2026-08-24 09:02:24 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch: async def test_ensure_pc_agent_cdp_force→async def test_ensure_pc_agent_cdp_force
+
+## [2026-08-24 09:02:31 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     monkeypatch.setattr(manager_module.p→    monkeypatch.setenv("AADS_BROWSER_PRO
+
+## [2026-08-24 09:03:20 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["params"]["ne→    assert active_calls[0]["params"]["ne
+
+## [2026-08-24 09:03:24 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["params"].get→    assert active_calls[0]["params"].get
+
+## [2026-08-24 09:03:46 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["command_time→    assert active_calls[0]["command_time
+
+## [2026-08-24 09:03:46 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: patch:     assert active_calls[0]["command_time→    assert active_calls[0]["command_time

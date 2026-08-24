@@ -345,3 +345,23 @@
 - 검증: `.venv-playwright/bin/python -m pytest tests/unit/test_auth_challenge_orchestrator.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_bank_browser_connector.py -q` 107 passed.
 - 검증: `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py -q` 138 passed.
 - 검증: `.venv-playwright/bin/python -m py_compile app/browser_bridge/service.py app/services/auth_challenge_orchestrator.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py` 성공. `git diff --check` 성공.
+
+# 2026-08-24 — GO100-WAVE-CHART-OVERLAY-DIRECT
+
+- 작업: GO100 차트에서 `go100_wave_decisions` 기반 파동 판단을 일봉 차트 W1~W5 마커로 표시하도록 직접 구현했다.
+- 변경 파일: `backend/app/routers/v4_chart.py`, `frontend/src/lib/api/chart.ts`, `frontend/src/components/market/StockChart.tsx`, `frontend/src/go100/components/chart/StockChartWorkspace.tsx`, `docs/HANDOVER.md`.
+- 조치: `/api/v4/chart/strategy-signals/{stock_code}`가 `strategy=ma_wave` 요청 시 파동 판단을 하루 1개 최신 마커로 반환하게 했고, 프론트 차트는 파동 번호/phase/action을 W마커 색상·위치로 변환한다. 일봉 차트에만 표시해 분봉 시간축 NaN 마커를 방지했다.
+- 검증: `python3 -m py_compile backend/app/routers/v4_chart.py` 성공, `npm --prefix frontend run lint` 성공, `./node_modules/.bin/tsc --noEmit` 성공, `git diff --check` 성공, `curl http://127.0.0.1:8002/health` 200 확인, `curl http://127.0.0.1:3001/go100/chart?code=005930` 보호 라우트 로그인 리다이렉트 확인.
+- 빌드: `npm run build`는 컴파일/타입확인/정적 페이지 85개 생성까지 통과했으나 마지막 `Collecting build traces` 단계에서 exit 143으로 종료되어 전체 빌드 완료 판정은 보류한다. 기존 React hook warning 8건은 변경 범위 밖이다.
+- 배포/커밋: 서비스 재시작, 커밋, 푸시는 수행하지 않았다. 기존 dirty 파일(`wave_lgbm.pkl`, `LimitupTrackerPage.tsx`, `WaveTrainingPage.tsx`, `artifacts/` 등)은 보존했다.
+- 영향 분리: GO100 차트 API/프론트 표시만 변경했다. KIS 주문·매매 로직과 DB 스키마는 변경하지 않았다.
+
+## 2026-08-24 08:41 KST - FOOD 은행 브라우저 수집 보강 푸시/배포
+
+- 요청: 은행 브라우저 수집 보강 커밋을 다음 단계로 진행.
+- 조치: `main`의 ahead 3커밋(`be782858`, `83b5a55a`, `c2873512`)을 `origin/main`에 푸시했다. 핵심 은행 커밋은 `c2873512 fix(food): stabilize bank browser collection reuse`.
+- 배포: `bash /root/aads/aads-server/deploy.sh`로 AADS blue-green 배포를 실행했다. 첫 시도는 backup target `8100`의 active-stream 보호로 중단됐고, 이후 target 슬롯 재빌드가 진행되어 active 포트가 `8102`에서 `8100`으로 전환됐다.
+- 검증: `curl http://127.0.0.1/api/v1/health -H 'Host: aads.newtalk.kr'` 및 `curl http://127.0.0.1:8100/api/v1/health` 모두 `status=ok`, `graph_ready=true`.
+- 운영 재검증: 배포된 `aads-server:8100`에서 신한 기업 브라우저 계좌 1개를 `2026-08-01`~`2026-08-24` 범위로 수집 재시도했다. 이전 `BANK_BROWSER_PC_AGENT_TIMEOUT`은 재현되지 않았고, 신한 기업 페이지 `https://bizbank.shinhan.com/main.html`까지 도달했다.
+- 현재 결과: 수집 상태는 `BANK_BROWSER_OPERATOR_ACTION_REQUIRED`, `imported_rows=0`, `collected_rows=0`. 같은 browser work_key `yeoljeong-bank-browser-25b8c525d84799c2`, session `bb-343beb2ff19d`에서 OTP/CAPTCHA/본인인증 등 운영자 입력 후 재수집 필요.
+- 남은 이슈: 거래 원장 `bank_transactions` 적재는 아직 완료되지 않았다. PC Agent는 페이지 도달까지 정상화됐으나 은행의 추가 인증 단계가 자동화 차단점이다.

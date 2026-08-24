@@ -24697,3 +24697,199 @@ arti
 ## [2026-08-24 07:27:42 KST] [GO100] scripts/go100/limitup_119_locked_multiclass.py
 - Chat-Direct 수정: patch: LABEL_ORDER = ["locked_hold", "unlocked_→LABEL_ORDER = ["locked_hold", "unlocked_
 - finalize: pending
+
+## [2026-08-24 07:30:07 KST] [GO100] scripts/go100/limitup_119_locked_multiclass.py
+- Chat-Direct 수정: run_remote_command: python3 -c "from pathlib import Path; p=Path('scripts/go100/limitup_119_locked_m
+- finalize: pending
+
+## [2026-08-24 07:30:08 KST] [GO100] scripts/go100/limitup_119_locked_multiclass.py
+- Chat-Direct 수정: run_remote_command: python3 scripts/go100/limitup_119_locked_multiclass.py --days 365 --output-dir a
+- finalize: pending
+
+## [2026-08-24 07:31:04 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: patch: # 2026-08-24 07:17 KST - GO100-DATA-COLL→# 2026-08-24 07:30 KST - GO100-119-LOCKE
+- finalize: pending
+
+## [2026-08-24 07:35:55 KST] [GO100] scripts/cron/sync_fundamentals_canonical.sh
+- Chat-Direct 수정: write: scripts/cron/sync_fundamentals_canonical.sh
+- finalize: pending
+
+## [2026-08-24 07:36:06 KST] [GO100] scripts/cron/sync_fundamentals_canonical.sh
+- Chat-Direct 수정: run_remote_command: python3 -c "import os,json; from pathlib import Path; from dotenv import load_do
+- finalize: pending
+
+## [2026-08-24 07:36:06 KST] [GO100] scripts/cron/daily_collection_summary_telegram.sh
+- Chat-Direct 수정: write: scripts/cron/daily_collection_summary_telegram.sh
+- finalize: pending
+
+## [2026-08-24 07:36:39 KST] [GO100] docs/go100_data_collection_sla.md
+- Chat-Direct 수정: write: docs/go100_data_collection_sla.md
+- finalize: pending
+
+## [2026-08-24 07:37:02 KST] [GO100] scripts/go100/lib_collect.sh
+- Chat-Direct 수정: patch: # ── today_kst_dash: 오늘 날짜 (YYYY-MM-DD K→# ── today_kst_dash: 오늘 날짜 (YYYY-MM-DD K
+- finalize: pending
+
+## [2026-08-24 07:37:28 KST] [GO100] scripts/cron/data_integrity_auto_check.sh
+- Chat-Direct 수정: patch:     # 6. tick 데이터 당일 존재 확인 (장중에만)→    # 6. Kiwoom shadow ↔ ohlcv_daily 교차검
+- finalize: pending
+
+## [2026-08-24 07:37:46 KST] [GO100] scripts/go100/data_collection_manager.py
+- Chat-Direct 수정: patch: def main() -> int:
+    parser = argparse→def prune_stale(dry_run: bool = True, ma
+- finalize: pending
+
+## [2026-08-24 07:38:05 KST] [GO100] scripts/cron/crontab.go100.txt
+- Chat-Direct 수정: patch: # === 야간 배치 ===
+30 20 * * 1-5 /usr/bin/f→# === 장마감 후 재무 동기화/요약 (18:00~20:30 분산) =
+- finalize: pending
+
+## [2026-08-24 07:38:25 KST] [GO100] scripts/go100/data_collection_manager.py
+- Chat-Direct 수정: patch:     "DATA_COLLECTION_STATUS_AUDIT": "dat→    "DATA_COLLECTION_STATUS_AUDIT": "dat
+- finalize: pending
+
+## [2026-08-24 07:40:14 KST] [GO100] artifacts/go100/data_collection_status/latest.json
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-24 07:40:15 KST] [GO100] artifacts/go100/data_collection_status/latest.md
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-24 07:40:15 KST] [GO100] backend/app/services/go100/analysis/models/wave_lgbm.pkl
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-24 07:40:18 KST] [GO100] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-24 07:40:25 KST] [GO100] frontend/src/go100/pages/LimitupTrackerPage.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-24 07:40:31 KST] [GO100] frontend/src/go100/pages/WaveTrainingPage.tsx
+- Chat-Direct 수정: run_remote_command: cd /root/kis-autotrade-v4 && git stash pop
+- finalize: pending
+
+## [2026-08-24 07:41:12 KST] [GO100] backend/app/routers/v4_chart.py
+- Chat-Direct 수정: patch: @router.get("/strategy-signals/{stock_co→@router.get("/strategy-signals/{stock_co
+- finalize: pending
+
+## [2026-08-24 07:41:23 KST] [GO100] frontend/src/lib/api/chart.ts
+- Chat-Direct 수정: patch: export interface ChartStrategySignal {
+ →export interface ChartStrategySignal {
+ 
+- finalize: pending
+
+## [2026-08-24 07:41:24 KST] [GO100] frontend/src/lib/api/chart.ts
+- Chat-Direct 수정: run_remote_command: find . -maxdepth 4 -type f -name '*learn*'
+- finalize: pending
+
+## [2026-08-24 07:41:44 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch: function getSignalDirection(type: string→function getSignalDirection(type: string
+- finalize: pending
+
+## [2026-08-24 07:42:02 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch:     signals.forEach((signal) => {
+      →    signals.forEach((signal) => {
+      
+- finalize: pending
+
+## [2026-08-24 07:42:13 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:         const [nextTrades, nextSignals] →        const [nextTrades, nextSignals] 
+- finalize: pending
+
+## [2026-08-24 07:42:15 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: run_remote_command: grep -R "go100_wave_decisions" backend scripts frontend docs
+- finalize: pending
+
+## [2026-08-24 07:42:25 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:   const chartDiagnostics = [
+    { label→  const visibleSignals = timeFormat === 
+- finalize: pending
+
+## [2026-08-24 07:42:31 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:               signals={signals}
+→              signals={visibleSignals}
+
+- finalize: pending
+
+## [2026-08-24 07:43:01 KST] [GO100] frontend/src/lib/api/chart.ts
+- Chat-Direct 수정: patch: export interface ChartStrategySignal {
+ →export interface ChartStrategySignal {
+ 
+- finalize: pending
+
+## [2026-08-24 07:43:14 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch: type ChartMarkerRecord = AutoMarker & {
+→type ChartMarkerRecord = AutoMarker & {
+
+- finalize: pending
+
+## [2026-08-24 07:43:36 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch: function getSignalDirection(type: string→function getSignalDirection(type: string
+- finalize: pending
+
+## [2026-08-24 07:44:11 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch: function getWaveMarker(signal: ChartStra→function formatSignalPercent(value: numb
+- finalize: pending
+
+## [2026-08-24 07:44:32 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch:         text: priceText ? `${label} ${pr→        text: priceText ? `${label} ${pr
+- finalize: pending
+
+## [2026-08-24 07:44:50 KST] [GO100] frontend/src/components/market/StockChart.tsx
+- Chat-Direct 수정: patch:         {hoveredMarker && (
+          <d→        {hoveredMarker && (
+          <d
+- finalize: pending
+
+## [2026-08-24 07:45:04 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:   const enabledLayerCount = preferences.→  const enabledLayerCount = preferences.
+- finalize: pending
+
+## [2026-08-24 07:45:18 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:     { label: "가격 데이터", value: loading ? →    { label: "가격 데이터", value: loading ? 
+- finalize: pending
+
+## [2026-08-24 07:45:34 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:     { label: "파동 마커", value: signals.len→    { label: "파동 판단", value: waveSignalC
+- finalize: pending
+
+## [2026-08-24 07:45:47 KST] [GO100] frontend/src/go100/components/chart/StockChartWorkspace.tsx
+- Chat-Direct 수정: patch:               showMarkerControls={false}→              showMarkerControls={true}
+
+- finalize: pending
+
+## [2026-08-24 08:26:35 KST] [GO100] backend/app/services/go100/data/realtime_data_gap_filler.py
+- Chat-Direct 수정: run_remote_command: python3 scripts/go100/limitup_119_dataset.py --days 552 --summary-only
+- finalize: pending
+
+## [2026-08-24 08:26:56 KST] [GO100] artifacts/go100-ai-training-deploy-verify.png
+- Chat-Direct 수정: run_remote_command: systemctl is-active go100
+- finalize: pending
+
+## [2026-08-24 08:29:33 KST] [GO100] artifacts/go100-ai-training-deploy-verify.png
+- Chat-Direct 수정: run_remote_command: python3 -c "import psycopg2, os; c=psycopg2.connect(host='localhost',dbname='kis
+- finalize: pending
+
+## [2026-08-24 08:29:34 KST] [GO100] artifacts/go100/data_collection_status/latest.json
+- Chat-Direct 수정: run_remote_command: python3 -c "import psycopg2, os; c=psycopg2.connect(host='localhost',dbname='kis
+- finalize: pending
+
+## [2026-08-24 08:29:34 KST] [GO100] artifacts/go100/data_collection_status/latest.md
+- Chat-Direct 수정: run_remote_command: python3 -c "import psycopg2, os; c=psycopg2.connect(host='localhost',dbname='kis
+- finalize: pending
+
+## [2026-08-24 09:02:12 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: scripts/deploy_frontend_only.sh
+- finalize: pending
+
+## [2026-08-24 09:03:20 KST] [GO100] scripts/go100/limitup_119_commonality_report.py
+- Chat-Direct 수정: write: scripts/go100/limitup_119_commonality_report.py
+- finalize: pending
+
+## [2026-08-24 09:03:29 KST] [GO100] backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: python3 -m py_compile scripts/go100/limitup_119_commonality_report.py
+- finalize: pending

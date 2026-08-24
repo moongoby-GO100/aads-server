@@ -550,8 +550,13 @@ class BrowserBridgeService:
             launch_params["preferred_port"] = int(preferred_port)
         recreate_suffix = ""
         base_isolation_id = isolation_id or normalized_work_key
+        # AADS-FOOD: force_recreate 시에도 PC Agent Chrome 프로필(isolation_id)은 유지한다.
+        # 프로필이 바뀌면 포털 로그인 쿠키가 사라져 PC_AGENT_LOGIN_REQUIRED가 반복된다.
+        keep_profile_on_recreate = str(
+            os.environ.get("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", "1")
+        ).strip().lower() not in {"0", "false", "no", "off"}
         if base_isolation_id:
-            if force_recreate:
+            if force_recreate and not keep_profile_on_recreate:
                 recreate_suffix = new_session_id().replace("bb-", "", 1)[:12]
                 launch_params["isolation_id"] = f"{base_isolation_id[:90]}-{recreate_suffix}"
             else:
