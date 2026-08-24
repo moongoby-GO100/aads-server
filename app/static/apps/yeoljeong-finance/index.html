@@ -2191,6 +2191,47 @@
       gap: 12px;
     }
 
+    .business-page-grid {
+      display: grid;
+      grid-template-columns: minmax(420px, .9fr) minmax(0, 1.35fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .business-page-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .business-page-guide {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .business-page-guide article {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+      padding: 11px;
+      display: grid;
+      gap: 6px;
+      min-height: 92px;
+    }
+
+    .business-page-guide b {
+      font-size: 12px;
+      color: #24323a;
+    }
+
+    .business-page-guide span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
     .business-summary-grid {
       display: grid;
       grid-template-columns: repeat(6, minmax(108px, 1fr));
@@ -2273,11 +2314,13 @@
     @media (max-width: 1120px) {
       .kpis { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
       .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts,
-      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid, .integration-form-support, .detail-grid { grid-template-columns: 1fr; }
+      .integration-service-grid, .integration-requirement-grid, .integration-detail-grid, .integration-form-support, .detail-grid,
+      .business-page-grid { grid-template-columns: 1fr; }
       .integration-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .integration-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .business-workspace { grid-template-columns: 1fr; }
       .business-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .business-page-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .auth-intro { padding-right: 0; }
       .auth-card { max-width: 560px; }
     }
@@ -3920,16 +3963,167 @@
       </section>
 
       <section id="businessView" class="hidden">
-        <div class="grid content-grid">
+        <div class="grid" style="gap:14px">
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">사업자·지점</h2><button type="button" data-view="settings">기초등록 열기</button></div>
-            <div class="panel-body"><div id="businessSummaryRows" class="progress-list"></div></div>
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">사업자정보 등록·수정</h2>
+                <p class="muted" style="margin:4px 0 0">사업자등록번호, 상호, 대표자, 과세유형, 지점, 정산계좌, 연동 설정의 기준값을 이 화면에서 바로 관리합니다.</p>
+              </div>
+              <div class="business-page-actions">
+                <button type="button" id="newBusinessPageBtn" class="primary">신규 사업자</button>
+                <button type="button" id="newBranchPageBtn">신규 지점</button>
+                <button type="button" data-view="integrations">연동관리</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="businessSummaryRows" class="progress-list"></div>
+              <div id="businessPageSummaryCards" class="business-summary-grid"></div>
+            </div>
           </section>
+
+          <div class="business-page-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">사업자 신규등록/수정</h2>
+                <span id="businessPageEditBadge" class="badge info">신규 등록</span>
+              </div>
+              <div class="panel-body">
+                <form id="businessPageForm" class="form-grid">
+                  <label>구분
+                    <select name="entityType">
+                      <option value="individual">개인사업자</option>
+                      <option value="corporation">법인사업자</option>
+                    </select>
+                  </label>
+                  <label>상호
+                    <input name="name" placeholder="예: 열정국밥 중화점" required>
+                  </label>
+                  <label>사업자등록번호
+                    <input name="registrationNo" placeholder="000-00-00000" inputmode="numeric" required>
+                  </label>
+                  <label>대표자
+                    <input name="representative" placeholder="대표자명" required>
+                  </label>
+                  <label>과세유형
+                    <select name="taxType">
+                      <option>일반과세</option>
+                      <option>간이과세</option>
+                      <option>면세</option>
+                    </select>
+                  </label>
+                  <label>개업일
+                    <input name="openedAt" type="date">
+                  </label>
+                  <label class="span-2">사업장 주소
+                    <input name="address" placeholder="사업자등록증 기준 주소">
+                  </label>
+                  <label class="span-2">사업자등록증 파일
+                    <input name="registrationDocument" type="file" accept=".pdf,image/*">
+                    <span class="field-note">업로드 파일은 OCR/원본대조 대상입니다. 현재 화면에서는 파일명과 보완 메모를 등록 기록에 남깁니다.</span>
+                  </label>
+                  <label class="span-2">메모
+                    <textarea name="memo" placeholder="세무대리인, 신고 특이사항, 법인/개인 구분, 서류 보완사항"></textarea>
+                  </label>
+                  <div class="span-2 business-page-actions">
+                    <button type="button" id="clearBusinessPageBtn">신규 입력</button>
+                    <button type="submit" class="primary">사업자 저장</button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">사업자 상세현황</h2>
+                <span id="businessPageSelectedBadge" class="badge info">선택 사업자</span>
+              </div>
+              <div class="panel-body">
+                <div id="businessPageSelectedDetail" class="settings-note">사업자를 선택하거나 목록에서 수정 버튼을 누르면 상세 현황이 표시됩니다.</div>
+                <div class="business-page-guide">
+                  <article><b>1. 사업자 저장</b><span>등록번호·대표자·과세유형을 기준값으로 저장</span></article>
+                  <article><b>2. 지점 연결</b><span>운영 지점과 전화·주소를 사업자에 매핑</span></article>
+                  <article><b>3. 계좌/연동</b><span>정산계좌, 배달앱, 은행, 홈택스 연결</span></article>
+                  <article><b>4. 운영 반영</b><span>매출·급여·세무·계약서 기본값에 즉시 반영</span></article>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2 class="panel-title">지점 신규등록/수정</h2>
+                <span id="branchPageEditBadge" class="badge info">신규 등록</span>
+              </div>
+              <div class="panel-body">
+                <form id="branchPageForm" class="form-grid">
+                  <label>지점명
+                    <input name="name" placeholder="예: 중화점" required>
+                  </label>
+                  <label>소속 사업자
+                    <select name="businessId" required></select>
+                  </label>
+                  <label>운영상태
+                    <select name="status">
+                      <option value="active">운영중</option>
+                      <option value="paused">보류</option>
+                      <option value="closed">폐점</option>
+                    </select>
+                  </label>
+                  <label>사업장 전화
+                    <input name="phone" placeholder="02-0000-0000">
+                  </label>
+                  <label class="span-2">주소
+                    <input name="address" placeholder="지점 주소">
+                  </label>
+                  <div class="span-2 business-page-actions">
+                    <button type="button" id="clearBranchPageBtn">신규 입력</button>
+                    <button type="submit" class="primary">지점 저장</button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head"><h2 class="panel-title">등록 후 필요한 설정</h2></div>
+              <div class="panel-body">
+                <div class="master-list">
+                  <article class="master-card">
+                    <header><h3>정산계좌 등록</h3><button type="button" data-view="settings">계좌 등록</button></header>
+                    <div class="meta-grid"><span>은행 입금대사와 급여 지급예약의 기준 계좌를 연결합니다.</span></div>
+                  </article>
+                  <article class="master-card">
+                    <header><h3>판매사이트·은행·홈택스 연동</h3><button type="button" data-view="integrations">연동 설정</button></header>
+                    <div class="meta-grid"><span>배민, 쿠팡이츠, 요기요, 땡겨요, 은행, 홈택스, 매입처 연동을 사업자·지점별로 연결합니다.</span></div>
+                  </article>
+                  <article class="master-card">
+                    <header><h3>직원/계약서 기본값</h3><button type="button" data-view="employees">직원관리</button></header>
+                    <div class="meta-grid"><span>선택 사업자 기준으로 입사서류, 계약서, 급여 명세서 사업주 정보가 채워집니다.</span></div>
+                  </article>
+                </div>
+              </div>
+            </section>
+          </div>
+
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">사업자/지점 목록</h2></div>
+            <div class="panel-head">
+              <h2 class="panel-title">사업자 목록</h2>
+              <span id="businessPageListBadge" class="badge info">0개</span>
+            </div>
             <div class="panel-body">
               <div class="table-wrap">
-                <table><thead><tr><th>구분</th><th>명칭</th><th>사업자</th><th>상태</th></tr></thead><tbody id="businessRows"></tbody></table>
+                <table><thead><tr><th>상호</th><th>등록번호</th><th>대표자/과세</th><th>지점</th><th>연동</th><th>상태</th><th>관리</th></tr></thead><tbody id="businessRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">지점 목록</h2>
+              <span id="branchPageListBadge" class="badge info">0개</span>
+            </div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>지점</th><th>소속 사업자</th><th>전화</th><th>주소</th><th>상태</th><th>관리</th></tr></thead><tbody id="businessBranchRows"></tbody></table>
               </div>
             </div>
           </section>
@@ -5612,6 +5806,7 @@
       localStorage.setItem(SETTINGS_BUSINESS_KEY, businessId);
       if (els.accountForm?.businessId) els.accountForm.businessId.value = businessId;
       if (els.branchForm?.businessId) els.branchForm.businessId.value = businessId;
+      if (els.branchPageForm?.businessId) els.branchPageForm.businessId.value = businessId;
       if (els.integrationForm?.businessId) els.integrationForm.businessId.value = businessId;
     }
 
@@ -7539,6 +7734,204 @@
       els.salesChannelReadinessRows.innerHTML = rows.length ? rows.join("") : tableEmpty(6, "선택한 서비스·사업자 조건에 맞는 판매채널 준비 항목이 없습니다.");
     }
 
+    function businessCompleteness(item) {
+      const required = [item.name, item.registrationNo, item.representative, item.taxType, item.address];
+      const complete = required.filter(value => String(value || "").trim()).length;
+      return Math.round((complete / required.length) * 100);
+    }
+
+    function businessPageSyncBadges() {
+      if (els.businessPageEditBadge) {
+        const editing = els.businessPageForm?.dataset.editId;
+        els.businessPageEditBadge.textContent = editing ? "수정 모드" : "신규 등록";
+        els.businessPageEditBadge.className = `badge ${editing ? "warn" : "info"}`;
+      }
+      if (els.branchPageEditBadge) {
+        const editing = els.branchPageForm?.dataset.editId;
+        els.branchPageEditBadge.textContent = editing ? "수정 모드" : "신규 등록";
+        els.branchPageEditBadge.className = `badge ${editing ? "warn" : "info"}`;
+      }
+    }
+
+    function clearBusinessPageForm() {
+      if (!els.businessPageForm) return;
+      delete els.businessPageForm.dataset.editId;
+      els.businessPageForm.reset();
+      businessPageSyncBadges();
+      els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    function clearBranchPageForm() {
+      if (!els.branchPageForm) return;
+      delete els.branchPageForm.dataset.editId;
+      els.branchPageForm.reset();
+      if (els.branchPageForm.businessId) els.branchPageForm.businessId.value = selectedSettingsBusinessId();
+      businessPageSyncBadges();
+      els.branchPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    function fillBusinessPageForm(item) {
+      if (!els.businessPageForm || !item) return;
+      els.businessPageForm.dataset.editId = item.id;
+      els.businessPageForm.entityType.value = item.entityType || "individual";
+      els.businessPageForm.name.value = item.name || "";
+      els.businessPageForm.registrationNo.value = item.registrationNo || "";
+      els.businessPageForm.representative.value = item.representative || "";
+      els.businessPageForm.taxType.value = item.taxType || "일반과세";
+      els.businessPageForm.openedAt.value = item.openedAt || "";
+      els.businessPageForm.address.value = item.address || "";
+      els.businessPageForm.memo.value = item.memo || "";
+      setSelectedSettingsBusinessId(item.id);
+      businessPageSyncBadges();
+      els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    function fillBranchPageForm(item) {
+      if (!els.branchPageForm || !item) return;
+      els.branchPageForm.dataset.editId = item.id;
+      els.branchPageForm.name.value = item.name || "";
+      els.branchPageForm.businessId.value = item.businessId || selectedSettingsBusinessId();
+      els.branchPageForm.status.value = item.status || "active";
+      els.branchPageForm.phone.value = item.phone || "";
+      els.branchPageForm.address.value = item.address || "";
+      setSelectedSettingsBusinessId(item.businessId || selectedSettingsBusinessId());
+      businessPageSyncBadges();
+      els.branchPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    function saveBusinessFromPage(form) {
+      const data = Object.fromEntries(new FormData(form).entries());
+      const editId = form.dataset.editId || "";
+      const target = editId ? settings().businesses.find(item => item.id === editId) : null;
+      const uploadedFile = form.registrationDocument?.files?.[0];
+      const uploadMemo = uploadedFile ? `사업자등록증 파일: ${uploadedFile.name}` : "";
+      const memo = [String(data.memo || "").trim(), uploadMemo].filter(Boolean).join("\n");
+      const next = {
+        id: editId || uid(),
+        entityType: data.entityType,
+        name: String(data.name || "").trim(),
+        registrationNo: String(data.registrationNo || "").trim(),
+        representative: String(data.representative || "").trim(),
+        taxType: data.taxType,
+        openedAt: data.openedAt || "",
+        address: String(data.address || "").trim(),
+        memo
+      };
+      if (target) Object.assign(target, next);
+      else settings().businesses.push(next);
+      setSelectedSettingsBusinessId(next.id);
+      delete form.dataset.editId;
+      saveState();
+      syncSettingsToServer();
+      form.reset();
+      initSelects();
+      renderAll();
+      showToast(target ? "사업자 정보를 수정했습니다." : "신규 사업자를 등록했습니다.");
+    }
+
+    function saveBranchFromPage(form) {
+      const data = Object.fromEntries(new FormData(form).entries());
+      const editId = form.dataset.editId || "";
+      const target = editId ? settings().branches.find(item => item.id === editId) : null;
+      const beforeName = target?.name || "";
+      const next = {
+        id: editId || uid(),
+        name: String(data.name || "").trim(),
+        businessId: data.businessId,
+        status: data.status,
+        phone: String(data.phone || "").trim(),
+        address: String(data.address || "").trim()
+      };
+      if (target) Object.assign(target, next);
+      else settings().branches.push(next);
+      setSelectedSettingsBusinessId(next.businessId);
+      if (target && beforeName && beforeName !== next.name) {
+        settings().staff.forEach(item => { if (item.branch === beforeName) item.branch = next.name; });
+        state.entries.forEach(item => { if (item.branch === beforeName) item.branch = next.name; });
+        state.shifts.forEach(item => { if (item.branch === beforeName) item.branch = next.name; });
+        state.contracts.forEach(item => { if (item.branch === beforeName) item.branch = next.name; });
+      }
+      delete form.dataset.editId;
+      saveState();
+      syncSettingsToServer();
+      form.reset();
+      initSelects();
+      renderAll();
+      showToast(target ? "지점 정보를 수정했습니다." : "신규 지점을 등록했습니다.");
+    }
+
+    function renderBusinessPage() {
+      const cfg = settings();
+      const selectedBusinessId = selectedSettingsBusinessId();
+      const selectedBusiness = cfg.businesses.find(item => item.id === selectedBusinessId) || cfg.businesses[0] || null;
+      const selectedBranches = cfg.branches.filter(item => item.businessId === selectedBusinessId);
+      const selectedAccounts = cfg.accounts.filter(item => item.businessId === selectedBusinessId);
+      const selectedIntegrations = cfg.integrations.filter(item => integrationBusinessId(item) === selectedBusinessId);
+      const incompleteBusinesses = cfg.businesses.filter(item => businessCompleteness(item) < 100);
+      if (els.businessPageSummaryCards) {
+        const cards = [
+          ["사업자", `${cfg.businesses.length}개`, "등록된 운영 주체"],
+          ["지점", `${cfg.branches.length}개`, "사업자별 운영 매장"],
+          ["미완성", `${incompleteBusinesses.length}개`, "번호·대표자·주소 보완 필요"],
+          ["선택 지점", `${selectedBranches.length}개`, "현재 사업자 기준"],
+          ["정산계좌", `${selectedAccounts.length}개`, "입금대사 기준"],
+          ["연동", `${selectedIntegrations.length}개`, "판매·은행·세무 연결"]
+        ];
+        els.businessPageSummaryCards.innerHTML = cards.map(([label, value, hint]) => `
+          <article class="business-summary-card">
+            <b>${escapeHtml(label)}</b>
+            <strong>${escapeHtml(value)}</strong>
+            <span class="muted">${escapeHtml(hint)}</span>
+          </article>
+        `).join("");
+      }
+      if (els.businessPageSelectedBadge) {
+        els.businessPageSelectedBadge.textContent = selectedBusiness ? selectedBusiness.name : "사업자 없음";
+        els.businessPageSelectedBadge.className = `badge ${selectedBusiness ? "good" : "warn"}`;
+      }
+      if (els.businessPageSelectedDetail) {
+        els.businessPageSelectedDetail.innerHTML = selectedBusiness ? `
+          <b>${escapeHtml(selectedBusiness.name)}</b><br>
+          등록번호 ${escapeHtml(selectedBusiness.registrationNo || "미등록")} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
+          주소 ${escapeHtml(selectedBusiness.address || "미등록")}<br>
+          연결 지점 ${selectedBranches.length}개 · 정산계좌 ${selectedAccounts.length}개 · 연동 ${selectedIntegrations.length}개
+        ` : "사업자를 신규 등록하십시오.";
+      }
+      if (els.businessPageListBadge) els.businessPageListBadge.textContent = `${cfg.businesses.length}개`;
+      if (els.branchPageListBadge) els.branchPageListBadge.textContent = `${cfg.branches.length}개`;
+      if (els.businessRows) {
+        els.businessRows.innerHTML = cfg.businesses.length ? cfg.businesses.map(item => {
+          const branches = cfg.branches.filter(branch => branch.businessId === item.id);
+          const integrations = cfg.integrations.filter(row => integrationBusinessId(row) === item.id);
+          const complete = businessCompleteness(item);
+          const statusClass = complete === 100 ? "good" : "warn";
+          return `
+            <tr>
+              <td><strong>${escapeHtml(item.name || "상호 미입력")}</strong><br><span class="muted">${escapeHtml(entityTypeLabels[item.entityType] || item.entityType || "사업자")}</span></td>
+              <td>${escapeHtml(item.registrationNo || "미등록")}</td>
+              <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
+              <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
+              <td>${integrations.length}개</td>
+              <td>${badgeHtml(complete === 100 ? "완료" : `보완 ${complete}%`, statusClass)}</td>
+              <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-edit-business-page="${escapeHtml(item.id)}">수정</button><button type="button" data-new-branch-for-business="${escapeHtml(item.id)}">지점추가</button><button type="button" class="danger" data-delete-business="${escapeHtml(item.id)}">삭제</button></div></td>
+            </tr>`;
+        }).join("") : tableEmpty(7, "사업자를 신규 등록하십시오.");
+      }
+      if (els.businessBranchRows) {
+        els.businessBranchRows.innerHTML = cfg.branches.length ? cfg.branches.map(item => `
+          <tr>
+            <td><strong>${escapeHtml(item.name || "지점명 미입력")}</strong></td>
+            <td>${escapeHtml(businessName(item.businessId))}</td>
+            <td>${escapeHtml(item.phone || "미등록")}</td>
+            <td>${escapeHtml(item.address || "미등록")}</td>
+            <td>${badgeHtml(branchStatusLabels[item.status] || item.status || "운영중", item.status === "active" ? "good" : "warn")}</td>
+            <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-edit-branch-page="${escapeHtml(item.id)}">수정</button><button type="button" class="danger" data-delete-branch="${escapeHtml(item.id)}">삭제</button></div></td>
+          </tr>
+        `).join("") : tableEmpty(6, "지점을 신규 등록하십시오.");
+      }
+      businessPageSyncBadges();
+    }
+
     function renderSettings() {
       const cfg = settings();
       const selectedBusinessId = selectedSettingsBusinessId();
@@ -8627,6 +9020,7 @@
       renderPayroll();
       renderClosing();
       renderOperationalPages();
+      renderBusinessPage();
     }
 
     function setView(view) {
@@ -11009,6 +11403,16 @@
         showToast(target ? "지점 기초정보를 수정했습니다." : "지점 기초정보를 저장했습니다.");
       });
 
+      els.businessPageForm?.addEventListener("submit", event => {
+        event.preventDefault();
+        saveBusinessFromPage(els.businessPageForm);
+      });
+
+      els.branchPageForm?.addEventListener("submit", event => {
+        event.preventDefault();
+        saveBranchFromPage(els.branchPageForm);
+      });
+
       els.accountForm.addEventListener("submit", event => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(els.accountForm).entries());
@@ -11107,6 +11511,10 @@
         initSelects();
         if (els.branchForm.businessId) els.branchForm.businessId.value = selectedSettingsBusinessId();
       });
+      els.newBusinessPageBtn?.addEventListener("click", () => clearBusinessPageForm());
+      els.newBranchPageBtn?.addEventListener("click", () => clearBranchPageForm());
+      els.clearBusinessPageBtn?.addEventListener("click", () => clearBusinessPageForm());
+      els.clearBranchPageBtn?.addEventListener("click", () => clearBranchPageForm());
       els.clearIntegrationBtn.addEventListener("click", () => {
         els.integrationForm.reset();
         if (els.integrationForm.businessId) els.integrationForm.businessId.value = selectedSettingsBusinessId();
@@ -11176,6 +11584,9 @@
         const shiftId = event.target.dataset.deleteShift;
         const businessId = event.target.dataset.deleteBusiness;
         const branchId = event.target.dataset.deleteBranch;
+        const editBusinessPageId = event.target.dataset.editBusinessPage;
+        const editBranchPageId = event.target.dataset.editBranchPage;
+        const newBranchForBusinessId = event.target.dataset.newBranchForBusiness;
         const editBusinessId = event.target.dataset.editBusiness;
         const editBranchId = event.target.dataset.editBranch;
         const accountId = event.target.dataset.deleteAccount;
@@ -11214,6 +11625,27 @@
           closeIntegrationDetailModal();
           openIntegrationPreset(integrationPreset);
         }
+        if (editBusinessPageId) {
+          const item = settings().businesses.find(row => row.id === editBusinessPageId);
+          if (item) {
+            fillBusinessPageForm(item);
+            showToast("사업자 수정 페이지로 불러왔습니다.");
+          }
+        }
+        if (editBranchPageId) {
+          const item = settings().branches.find(row => row.id === editBranchPageId);
+          if (item) {
+            fillBranchPageForm(item);
+            showToast("지점 수정 페이지로 불러왔습니다.");
+          }
+        }
+        if (newBranchForBusinessId) {
+          clearBranchPageForm();
+          if (els.branchPageForm?.businessId) els.branchPageForm.businessId.value = newBranchForBusinessId;
+          setSelectedSettingsBusinessId(newBranchForBusinessId);
+          businessPageSyncBadges();
+          showToast("선택 사업자 기준으로 지점 신규등록을 시작합니다.");
+        }
         if (editBusinessId) {
           const item = settings().businesses.find(row => row.id === editBusinessId);
           if (item) {
@@ -11227,6 +11659,7 @@
             els.businessForm.address.value = item.address || "";
             els.businessForm.memo.value = item.memo || "";
             els.businessForm.scrollIntoView({ behavior: "smooth", block: "center" });
+            fillBusinessPageForm(item);
             showToast("사업자 정보를 수정 모드로 불러왔습니다.");
           }
         }
@@ -11240,6 +11673,7 @@
             els.branchForm.phone.value = item.phone || "";
             els.branchForm.address.value = item.address || "";
             els.branchForm.scrollIntoView({ behavior: "smooth", block: "center" });
+            fillBranchPageForm(item);
             showToast("지점 정보를 수정 모드로 불러왔습니다.");
           }
         }
