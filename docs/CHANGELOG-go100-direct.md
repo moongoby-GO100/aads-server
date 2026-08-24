@@ -24957,3 +24957,48 @@ arti
 ## [2026-08-24 09:10:21 KST] [GO100] scripts/go100/sql/go100_limitup_reason_features_shadow.sql
 - Chat-Direct 수정: write: scripts/go100/sql/go100_limitup_reason_features_shadow.sql
 - finalize: pending
+
+## [2026-08-24 09:11:21 KST] [GO100] scripts/go100/backfill_limitup_reason_features.py
+- Chat-Direct 수정: write: scripts/go100/backfill_limitup_reason_features.py
+- finalize: pending
+
+## [2026-08-24 09:12:01 KST] [GO100] scripts/go100/backfill_limitup_reason_features.py
+- Chat-Direct 수정: patch:     rows = []
+    for e in events:
+     →    defaults = {
+        "kospi_return_1
+- finalize: pending
+
+## [2026-08-24 09:14:33 KST] [GO100] scripts/go100/_run_intraday_backfill.sh
+- Chat-Direct 수정: write: scripts/go100/_run_intraday_backfill.sh
+- finalize: pending
+
+## [2026-08-24 09:15:40 KST] [GO100] docs/plans/GO100-119-LIMITUP-TRUE-REASON-FEATURES-20260824.md
+- Chat-Direct 수정: patch: ## 구현 단계
+
+1. P0 공통 파생 테이블 추가: `go100_lim→## 구현 단계 (2026-08-24 구현 현황)
+
+| 단계 | 내용 |
+- finalize: pending
+
+## [2026-08-24 09:16:03 KST] [GO100] docs/plans/GO100-119-LIMITUP-TRUE-REASON-FEATURES-20260824.md
+- Chat-Direct 수정: patch: | 4-C | P0 백필: 시간대별 체결강도 | 🔄 실행 중 — 18개월→| 4-C | P0 백필: 시간대별 체결강도 | ✅ 완료 — 3,344/
+- finalize: pending
+
+## [2026-08-24 09:16:28 KST] [GO100] scripts/go100/limitup_119_commonality_report.py
+- Chat-Direct 수정: patch: def _load_rows(days: int) -> tuple[list[→SHADOW_TABLE = "go100_limitup_reason_fea
+- finalize: pending
+
+## [2026-08-24 09:16:47 KST] [GO100] scripts/go100/limitup_119_commonality_report.py
+- Chat-Direct 수정: patch:     "market",
+    "timing_source",
+    "→    "market",
+    "timing_source",
+    "
+- finalize: pending
+
+## [2026-08-24 09:16:51 KST] [GO100] scripts/go100/limitup_119_commonality_report.py
+- Chat-Direct 수정: patch:         "category_profiles": {
+         →        "category_profiles": {
+         
+- finalize: pending

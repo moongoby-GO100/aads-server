@@ -5351,3 +5351,6 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-24 09:10:11 KST] [aads-server] tests/unit/test_browser_bridge.py
 - Chat-Direct 수정: patch:     assert active_calls[0]["command_time→    assert active_calls[0]["command_time
+
+## [2026-08-24 09:11:20 KST] [aads-server] tests/unit/test_browser_bridge.py
+- Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_browser_bridge.py /root/aads/aads-ser
