@@ -3666,6 +3666,7 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
     by_id = {str(row.get("id") or ""): row for row in transactions if row.get("id")}
     summary: list[dict[str, Any]] = []
     imported_rows: list[dict[str, Any]] = []
+    response_rows: list[dict[str, Any]] = []
 
     for service in requested_services:
         account = accounts_by_service.get(service)
@@ -3711,16 +3712,69 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
                     if quick_missing
                     else "API 키, 인증서 비밀번호 또는 로그인 비밀번호를 설정에서 등록해야 합니다."
                 )
+                summary.append(
+                    {
+                        "service": service,
+                        "status": status,
+                        "message": message,
+                        "account_id": account.get("id") or "",
+                        "collection_mode": collection_mode,
+                        "imported_rows": 0,
+                    }
+                )
+                _mark_platform_account_sync_state(account, status=status, message=message, synced_at=synced_at)
+                continue
+            if collection_mode == "bank-quick-service":
+                branch_id = _branch_id_for_financial_scope(business_id, branch)
+                bank_account = _bank_account_for_financial_service(
+                    service,
+                    business_id=business_id,
+                    branch_id=branch_id,
+                )
+                if bank_account:
+                    collect_result = _collect_bank_via_browser(
+                        bank_account,
+                        {
+                            "business_id": business_id,
+                            "branch_id": branch_id,
+                            "date_from": date_from.isoformat(),
+                            "date_to": date_to.isoformat(),
+                            "auto_open_browser": True,
+                        },
+                        business_id=business_id,
+                        branch_id=branch_id,
+                        date_from=date_from.isoformat(),
+                        date_to=date_to.isoformat(),
+                        user=user,
+                    )
+                    collection = collect_result.get("collection") or {}
+                    collected_transactions = [
+                        row for row in (collect_result.get("transactions") or []) if isinstance(row, dict)
+                    ]
+                    response_rows.extend(collected_transactions)
+                    status = str(collection.get("status") or "failed")
+                    message = str(collection.get("message") or "")
+                    imported_count = int(collection.get("imported_rows") or 0)
+                    summary.append(
+                        {
+                            "service": service,
+                            "status": status,
+                            "message": message,
+                            "account_id": account.get("id") or "",
+                            "bank_account_id": bank_account.get("id") or "",
+                            "collection_mode": collection_mode,
+                            "imported_rows": imported_count,
+                            "duplicate_rows": int(collection.get("duplicate_rows") or 0),
+                            "error_code": str(collection.get("error_code") or ""),
+                        }
+                    )
+                    _mark_platform_account_sync_state(account, status=status, message=message, synced_at=synced_at)
+                    continue
+                status = "connector_not_configured"
+                message = "은행계좌 원장에 연결된 브라우저 수집 계좌가 없습니다. 은행 계좌 연결을 먼저 저장하십시오."
             else:
                 status = "connector_not_configured"
-                bank_config = BANK_QUICK_SERVICE_CONFIG.get(service)
-                if collection_mode == "bank-quick-service" and bank_config:
-                    message = (
-                        f"{bank_config['label']} 자격증명은 Vault에 준비됐지만 실시간 조회 Playwright 커넥터가 아직 연결되지 않았습니다. "
-                        "은행 엑셀/CSV 다운로드 파일 또는 엑셀 복사표로 대체 반영할 수 있습니다."
-                    )
-                else:
-                    message = "자격증명은 저장됐지만 해당 기관 실조회 커넥터가 아직 연결되지 않았습니다. 파일 업로드로 대체 수집할 수 있습니다."
+                message = "자격증명은 저장됐지만 해당 기관 실조회 커넥터가 아직 연결되지 않았습니다. 파일 업로드로 대체 수집할 수 있습니다."
             summary.append(
                 {
                     "service": service,
@@ -3748,6 +3802,7 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
             record["id"] = str(record.get("id") or hashlib.sha256(json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest())
             by_id[record["id"]] = record
             imported_rows.append(record)
+            response_rows.append(record)
             count += 1
         summary.append(
             {
@@ -3771,8 +3826,8 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
         "summary": summary,
-        "transactions": imported_rows,
-        "totals": {"transactions": len(imported_rows)},
+        "transactions": response_rows,
+        "totals": {"transactions": len(response_rows)},
     }
 
 
@@ -4567,6 +4622,58 @@ def _branch_names_for_bank_match(branch_id: str) -> set[str]:
     return {name for name in names if name}
 
 
+def _branch_id_for_financial_scope(business_id: str, branch: str) -> str:
+    business_key = str(business_id or "").strip()
+    branch_text = BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip())
+    if not business_key or not branch_text:
+        return ""
+    settings_data = _read_json_object("settings")
+    ui_settings = settings_data.get("ui_settings") if isinstance(settings_data.get("ui_settings"), dict) else {}
+    settings = _canonicalize_ui_settings(ui_settings)
+    branches = settings.get("branches") if isinstance(settings.get("branches"), list) else []
+    for item in [*branches, *CANONICAL_BRANCHES]:
+        if not isinstance(item, dict):
+            continue
+        item_business = str(item.get("businessId") or item.get("business_id") or "").strip()
+        item_id = str(item.get("id") or "").strip()
+        item_name = BRANCH_ALIASES.get(str(item.get("name") or "").strip(), str(item.get("name") or "").strip())
+        if item_business == business_key and branch_text in {item_id, item_name}:
+            return item_id
+    return ""
+
+
+def _bank_account_for_financial_service(
+    service_code: str,
+    *,
+    business_id: str,
+    branch_id: str,
+) -> dict[str, Any] | None:
+    rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    candidates: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if str(row.get("business_id") or "").strip() != business_id:
+            continue
+        row_branch_id = str(row.get("branch_id") or "").strip()
+        if branch_id and row_branch_id and row_branch_id != branch_id:
+            continue
+        if str(row.get("status") or "active").strip() not in {"active", ""}:
+            continue
+        if _bank_service_code_for_account(row) != service_code:
+            continue
+        candidates.append(row)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda row: (
+            str(row.get("connection_type") or "") == "browser",
+            bool(row.get("auto_sync")),
+            str(row.get("updated_at") or row.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
 def _bank_quick_credentials_for_account(
     account: dict[str, Any],
     *,
@@ -4613,6 +4720,29 @@ def _bank_quick_credentials_for_account(
         if encrypted:
             credentials[plaintext_field] = _decrypt_secret(encrypted)
     return credentials
+
+
+def _business_entity_type_for_bank_scope(business_id: str) -> str:
+    business_key = str(business_id or "").strip()
+    if not business_key:
+        return ""
+    settings_data = _read_json_object("settings")
+    ui_settings = settings_data.get("ui_settings") if isinstance(settings_data.get("ui_settings"), dict) else {}
+    settings = _canonicalize_ui_settings(ui_settings)
+    businesses = settings.get("businesses") if isinstance(settings.get("businesses"), list) else []
+    for item in [*businesses, *CANONICAL_BUSINESSES]:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip() != business_key:
+            continue
+        return str(
+            item.get("entityType")
+            or item.get("entity_type")
+            or item.get("business_type")
+            or item.get("businessType")
+            or ""
+        ).strip()
+    return ""
 
 
 def _collect_bank_via_browser(
@@ -4670,6 +4800,7 @@ def _collect_bank_via_browser(
                 account_no=str(bank_credentials.get("account_no") or ""),
                 account_password=str(bank_credentials.get("account_password") or ""),
                 business_registration_no=str(bank_credentials.get("business_registration_no") or ""),
+                business_entity_type=_business_entity_type_for_bank_scope(business_id),
             )
 
         browser_result = _run_bank_browser_async(

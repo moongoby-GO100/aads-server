@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-08-24 17:09 KST - Shinhan bank corporate/personal quick-query flow
+
+- Trigger: CEO clarified Shinhan bank collection must split corporate accounts through the corporate quick-query page and individual business accounts through simple-query ID/PW login, account selection, account password, and date-range query. Mia branch credentials were updated by CEO.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: added Shinhan service detection, `corporate_quick` vs `individual_simple` flow selection, safe DOM automation for account/date/query preparation, recheck after query submission, and redacted diagnostics only.
+  - `app/services/yeoljeong_finance_service.py`: now resolves `entityType` from UI settings/canonical businesses and forwards it to the bank browser connector. `biz-mia` resolves to `individual`.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added coverage for individual Shinhan login/account/date flow, corporate quick-flow diagnostics, and service-layer `business_entity_type` forwarding.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py` passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py` passed: 44 passed.
+- Not done:
+  - No commit, push, deploy, restart, or real Shinhan E2E run in this step.
+  - Real bank-page selectors can still require operator intervention if Shinhan changes WebSquare labels, OTP/CAPTCHA appears, or the registered quick-query account is not visible in the PC Agent session.
+
 ## 2026-08-24 16:50 KST - PC Agent reconnect wait, same-session alert, delivery daemon hardening
 
 - Trigger: CEO requested direct implementation of P0-1/P0-2/P0-3/P1 for PC Agent disconnect recovery, same-chat AI alerting, disconnect cause logging, and stable long-running delivery auto-collection.

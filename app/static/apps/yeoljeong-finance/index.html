@@ -10209,6 +10209,7 @@
         if (account.connection_type === "browser" || account.connector_type === "bank-browser") {
           collectBody.browser_work_key = account.browser_work_key || "";
           collectBody.browser_session_id = account.browser_session_id || "";
+          collectBody.auto_open_browser = true;
         }
         const payload = await financeApi(`/bank-accounts/${encodeURIComponent(account.id)}/collect`, {
           method: "POST",

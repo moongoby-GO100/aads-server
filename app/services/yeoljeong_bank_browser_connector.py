@@ -307,6 +307,229 @@ def _portal_url_reusable(current_url: str, portal_url: str) -> bool:
     return _registrable_host(current_host) == _registrable_host(portal_host)
 
 
+def _is_shinhan_service(bank_code: str, bank_name: str, institution_code: str, portal_url: str) -> bool:
+    haystack = " ".join(
+        str(value or "").strip().lower()
+        for value in (bank_code, bank_name, institution_code, portal_url)
+    )
+    return "신한" in haystack or "shinhan" in haystack or str(bank_code or "").strip() == "088"
+
+
+def _shinhan_query_flow_mode(business_entity_type: str, account: dict[str, Any]) -> str:
+    """Return Shinhan browser flow mode without exposing business identifiers."""
+    values = [
+        business_entity_type,
+        account.get("business_entity_type"),
+        account.get("entityType"),
+        account.get("entity_type"),
+        account.get("business_type"),
+        account.get("businessType"),
+    ]
+    normalized = " ".join(str(value or "").strip().lower() for value in values)
+    if any(token in normalized for token in ("corporation", "corporate", "법인")):
+        return "corporate_quick"
+    return "individual_simple"
+
+
+async def _try_prepare_shinhan_query_flow(
+    page: Any,
+    *,
+    flow_mode: str,
+    username: str,
+    password: str,
+    account_no: str,
+    account_password: str,
+    business_registration_no: str,
+    date_from: str,
+    date_to: str,
+) -> dict[str, str]:
+    """Prepare Shinhan query screens for corporate quick/personal simple flows.
+
+    Secrets are sent only to the browser DOM. The returned diagnostics contain
+    flags and counts only, never plaintext IDs, passwords, account numbers, or
+    business registration numbers.
+    """
+    if flow_mode not in {"corporate_quick", "individual_simple"}:
+        return {"attempted": "0", "mode": "unsupported"}
+    if not any([username, password, account_no, account_password, business_registration_no, date_from, date_to]):
+        return {"attempted": "0", "mode": flow_mode}
+    try:
+        raw = await page.evaluate(
+            """
+            (input) => {
+              // shinhanQueryFlow
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const digits = (value) => String(value || '').replace(/\\D+/g, '');
+              const textOf = (el) => String(
+                el?.innerText ||
+                el?.value ||
+                el?.getAttribute?.('title') ||
+                el?.getAttribute?.('aria-label') ||
+                el?.getAttribute?.('placeholder') ||
+                ''
+              ).replace(/\\s+/g, ' ').trim();
+              const fieldText = (el) => String([
+                el?.id,
+                el?.getAttribute?.('name'),
+                el?.getAttribute?.('title'),
+                el?.getAttribute?.('aria-label'),
+                el?.getAttribute?.('placeholder'),
+                el?.closest?.('label')?.innerText,
+                el?.parentElement?.innerText
+              ].filter(Boolean).join(' ')).replace(/\\s+/g, ' ').trim();
+              const setValue = (el, value) => {
+                if (!visible(el) || !value) return false;
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, value);
+                else el.value = value;
+                el.focus();
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+              };
+              const scoreButton = (label, mode) => {
+                const value = String(label || '').toLowerCase();
+                if (!value) return 0;
+                const deny = ['이체', '송금', '납부', '삭제', '해지', '출금'];
+                if (deny.some((word) => value.includes(word))) return 0;
+                if (mode === 'corporate_quick') {
+                  if (value.includes('법인빠른조회') || value.includes('법인 빠른조회')) return 120;
+                  if (value.includes('빠른조회') && value.includes('계좌')) return 100;
+                  if (value.includes('간편서비스') && value.includes('계좌')) return 70;
+                } else {
+                  if (value.includes('간편조회서비스') && value.includes('계좌')) return 120;
+                  if (value.includes('간편조회') && value.includes('계좌')) return 100;
+                  if (value.includes('계좌조회')) return 80;
+                  if (value.includes('로그인')) return 60;
+                }
+                if (value.includes('조회') || value.includes('검색') || value.includes('확인')) return 45;
+                return 0;
+              };
+              const clickBest = (mode) => {
+                const candidates = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]'))
+                  .filter(visible)
+                  .map((el, index) => ({el, index, label: textOf(el)}))
+                  .map((item) => ({...item, score: scoreButton(item.label, mode)}))
+                  .filter((item) => item.score > 0)
+                  .sort((a, b) => b.score - a.score);
+                const item = candidates[0];
+                if (!item) return '';
+                item.el.focus();
+                item.el.click();
+                return item.label.slice(0, 40);
+              };
+              const inputs = () => Array.from(document.querySelectorAll('input,textarea')).filter(visible);
+              const firstInput = (patterns, type = '') => inputs().find((el) => {
+                if (type && String(el.type || '').toLowerCase() !== type) return false;
+                const text = fieldText(el);
+                return patterns.some((pattern) => pattern.test(text));
+              }) || null;
+              const fillByPattern = (patterns, value, type = '') => setValue(firstInput(patterns, type), value);
+              const selectAccount = () => {
+                const target = digits(input.accountNo);
+                const suffix = target.slice(-4);
+                if (!target) return false;
+                for (const select of Array.from(document.querySelectorAll('select')).filter(visible)) {
+                  const options = Array.from(select.options || []);
+                  const match = options.find((option) => {
+                    const optionDigits = digits(option.textContent || option.value);
+                    return optionDigits && (optionDigits === target || optionDigits.endsWith(suffix));
+                  });
+                  if (match) {
+                    select.value = match.value;
+                    select.dispatchEvent(new Event('change', {bubbles: true}));
+                    return true;
+                  }
+                }
+                const choice = Array.from(document.querySelectorAll('input[type=radio],input[type=checkbox]'))
+                  .filter(visible)
+                  .find((el) => {
+                    const rowText = String(el.closest('tr,li,div,label')?.innerText || '');
+                    const rowDigits = digits(rowText);
+                    return rowDigits && (rowDigits === target || rowDigits.endsWith(suffix));
+                  });
+                if (choice) {
+                  choice.click();
+                  return true;
+                }
+                return false;
+              };
+              const result = {
+                attempted: '1',
+                mode: input.mode,
+                navigation_clicked: clickBest(input.mode) ? '1' : '0',
+                username: '0',
+                login_secret: '0',
+                account_no: '0',
+                account_selected: '0',
+                account_secret: '0',
+                business_registration_no: '0',
+                date_from: '0',
+                date_to: '0',
+                query_submitted: '0'
+              };
+              if (input.mode === 'individual_simple') {
+                result.username = fillByPattern([
+                  /아이디|user|login.*id|cust.*id|member.*id/i
+                ], input.username) ? '1' : '0';
+                result.login_secret = fillByPattern([
+                  /비밀번호|password|passwd|login.*pw/i
+                ], input.password, 'password') ? '1' : '0';
+              }
+              result.account_no = fillByPattern([
+                /계좌번호|account|acct/i
+              ], input.accountNo) ? '1' : '0';
+              result.account_selected = selectAccount() ? '1' : '0';
+              result.account_secret = fillByPattern([
+                /계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw/i
+              ], input.accountPassword, 'password') ? '1' : '0';
+              result.business_registration_no = fillByPattern([
+                /사업자|사업자등록|business|bizno|registration/i
+              ], input.businessRegistrationNo) ? '1' : '0';
+              result.date_from = fillByPattern([
+                /시작일|조회시작|조회기간.*시작|from|start|fr[_-]?dt|from[_-]?date/i
+              ], input.dateFrom) ? '1' : '0';
+              result.date_to = fillByPattern([
+                /종료일|조회종료|조회기간.*종료|to|end|to[_-]?dt|to[_-]?date/i
+              ], input.dateTo) ? '1' : '0';
+              const submittedLabel = clickBest(input.mode);
+              result.query_submitted = submittedLabel ? '1' : '0';
+              return result;
+            }
+            """,
+            {
+                "mode": flow_mode,
+                "username": username,
+                "password": password,
+                "accountNo": account_no,
+                "accountPassword": account_password,
+                "businessRegistrationNo": business_registration_no,
+                "dateFrom": date_from,
+                "dateTo": date_to,
+            },
+        )
+    except Exception:
+        return {"attempted": "failed", "mode": flow_mode}
+    if not isinstance(raw, dict):
+        return {"attempted": "failed", "mode": flow_mode}
+    result: dict[str, str] = {"mode": flow_mode}
+    for key in (
+        "attempted",
+        "navigation_clicked",
+        "username",
+        "login_secret",
+        "account_no",
+        "account_selected",
+        "account_secret",
+        "business_registration_no",
+        "date_from",
+        "date_to",
+        "query_submitted",
+    ):
+        result[key] = "1" if str(raw.get(key) or "") == "1" else "0"
+    return result
+
+
 async def _visible_page_url(page: Any) -> str:
     try:
         return str(await page.evaluate("window.location.href") or "")
@@ -816,6 +1039,7 @@ async def collect_bank_via_browser_session_async(
     account_no: str = "",
     account_password: str = "",
     business_registration_no: str = "",
+    business_entity_type: str = "",
 ) -> dict[str, Any]:
     """Fetch transaction rows from a bank quick-service portal via PC Agent.
 
@@ -860,6 +1084,10 @@ async def collect_bank_via_browser_session_async(
         "saved_account_secret": "1" if str(account_password or "").strip() else "0",
         "saved_business_registration_no": "1" if str(business_registration_no or "").strip() else "0",
     }
+    shinhan_service = _is_shinhan_service(bank_code, bank_name, institution_code, portal_url)
+    shinhan_flow_mode = _shinhan_query_flow_mode(business_entity_type, account) if shinhan_service else ""
+    if shinhan_flow_mode:
+        safe_diagnostics["shinhan_query_flow_mode"] = shinhan_flow_mode
 
     session_id_to_use = browser_session_id.strip() if browser_session_id else ""
     auto_opened_session = False
@@ -1087,6 +1315,55 @@ async def collect_bank_via_browser_session_async(
         login_fallback_triggered = False
         challenge_focus_triggered = False
         login_auto_fill_result: dict[str, str] = {"attempted": "0"}
+        shinhan_flow_result: dict[str, str] = {"attempted": "0"}
+        if not rows and shinhan_flow_mode:
+            shinhan_flow_result = await _try_prepare_shinhan_query_flow(
+                page,
+                flow_mode=shinhan_flow_mode,
+                username=str(login_username or ""),
+                password=str(login_password or ""),
+                account_no=str(account_no or ""),
+                account_password=str(account_password or ""),
+                business_registration_no=str(business_registration_no or ""),
+                date_from=str(date_from or ""),
+                date_to=str(date_to or ""),
+            )
+            safe_diagnostics["shinhan_query_flow"] = shinhan_flow_result
+        if not rows and shinhan_flow_result.get("query_submitted") == "1":
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            try:
+                rechecked_url, rechecked_rows, rechecked_diag, rechecked_text = await _read_bank_portal_snapshot(page)
+                rechecked_url = rechecked_url or current_url
+                if rechecked_rows and (date_from or date_to):
+                    rechecked_rows = [
+                        r for r in rechecked_rows if _row_in_date_range(r, date_from, date_to)
+                    ]
+                safe_diagnostics["shinhan_query_recheck_attempted"] = "1"
+                safe_diagnostics["shinhan_query_recheck_table_count"] = rechecked_diag["table_count"]
+                if rechecked_url != current_url:
+                    safe_diagnostics["shinhan_query_recheck_url_changed"] = "1"
+                if rechecked_rows:
+                    rows = rechecked_rows
+                    parse_diag = rechecked_diag
+                    safe_diagnostics["parser_table_count"] = rechecked_diag["table_count"]
+                    safe_diagnostics["parser_failure"] = rechecked_diag["parse_failure"]
+                    safe_diagnostics["screen_state"] = "transaction_table"
+                    safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_SHINHAN_QUERY"
+                    safe_diagnostics["screen_suggested_action"] = "parse_table"
+                    safe_diagnostics["screen_requires_operator"] = "0"
+                else:
+                    rechecked_decision = classify_portal_state(rechecked_url, rechecked_text)
+                    rechecked_state = rechecked_decision.as_dict()
+                    safe_diagnostics["screen_state"] = rechecked_state.get("state", "unknown")
+                    safe_diagnostics["screen_reason_code"] = rechecked_state.get("reason_code", "")
+                    safe_diagnostics["screen_suggested_action"] = rechecked_state.get("suggested_action", "no_action")
+                    safe_diagnostics["screen_requires_operator"] = "1" if rechecked_state.get("requires_operator") else "0"
+            except Exception:
+                safe_diagnostics["shinhan_query_recheck_attempted"] = "failed"
+
         screen_state = _diagnostic_screen_state(safe_diagnostics)
         if not rows and screen_state.get("state") == "login_required":
             login_auto_fill_result = await _try_fill_bank_login(
