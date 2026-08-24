@@ -5354,3 +5354,64 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-24 09:11:20 KST] [aads-server] tests/unit/test_browser_bridge.py
 - Chat-Direct 수정: run_remote_command: docker cp aads-server:/app/tests/unit/test_browser_bridge.py /root/aads/aads-ser
+
+## [2026-08-24 13:50:37 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch:     def online_agents_count(self) -> int→    def online_agents_count(self) -> int
+
+## [2026-08-24 13:50:39 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch:         queue_wait_timeout_seconds: floa→        queue_wait_timeout_seconds: floa
+
+## [2026-08-24 13:50:43 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch:         if lease_response.get("status") →        if lease_response.get("status") 
+
+## [2026-08-24 13:50:45 KST] [aads-server] app/models/pc_agent.py
+- Chat-Direct 수정: patch:     command_timeout_seconds: float = Fie→    command_timeout_seconds: float = Fie
+
+## [2026-08-24 13:50:46 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:         lease_ttl_seconds=req.lease_ttl_→        lease_ttl_seconds=req.lease_ttl_
+
+## [2026-08-24 13:51:36 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:     def _build_disconnect_metadata(
+    →    def _categorize_disconnect(close_cod
+
+## [2026-08-24 13:51:43 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:                             try:
+       →                            try:
+       
+
+## [2026-08-24 13:51:46 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:                 if _OFFLINE_ALERT_SENT:
+→                if _OFFLINE_ALERT_SENT:
+
+
+## [2026-08-24 13:53:05 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:         command_timeout_seconds=effectiv→        command_timeout_seconds=effectiv
+
+## [2026-08-24 13:53:06 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:     async def _record_disconnect_once(re→    async def _record_disconnect_once(re
+
+## [2026-08-24 13:53:14 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:         "default_browser_agent": {
+     →        "default_browser_agent": {
+     
+
+## [2026-08-24 13:54:46 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:         command_timeout_seconds=effectiv→        command_timeout_seconds=effectiv
+
+## [2026-08-24 13:54:47 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:                 INSERT INTO ai_observati→                INSERT INTO ai_observati
+
+## [2026-08-24 13:54:50 KST] [aads-server] app/models/pc_agent.py
+- Chat-Direct 수정: patch:     command_timeout_seconds: float = Fie→    command_timeout_seconds: float = Fie
+
+## [2026-08-24 13:56:54 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:     try:
+        from app.core.db_pool i→    try:
+        from app.core.db_pool i
+
+## [2026-08-24 13:57:52 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:         scheduler.start()
+        app.st→        # P0-2: 배달 자동수집 데몬 — 07:00/12:00
+
+## [2026-08-24 17:06:16 KST] [aads-server] app/services/yeoljeong_bank_browser_connector.py
+- Chat-Direct 수정: run_remote_command: ls -la 'checks-' 'data_quality-' 'data_quality_status' 'fixed_wave_peak' 'ma_sta
