@@ -22,6 +22,20 @@ class _DummyRequest:
         self.headers = headers or {}
 
 
+def test_peer_fallback_urls_skip_local_container_and_use_peer_dns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AADS_CONTAINER_NAME", "aads-server")
+    monkeypatch.setattr(pc_agent, "_active_api_ports", lambda: ["8100", "8102"])
+    monkeypatch.setattr(pc_agent, "_active_container_name", lambda: "aads-server")
+
+    urls = pc_agent._peer_fallback_urls("/api/v1/pc-agent/route-execute")
+
+    assert urls[0] == "http://aads-server-green:8080/api/v1/pc-agent/route-execute"
+    assert "http://aads-server:8080/api/v1/pc-agent/route-execute" not in urls
+    assert all("127.0.0.1" not in url for url in urls)
+
+
 class _TimeoutWebSocket:
     def __init__(self) -> None:
         self.close_calls: list[tuple[int, str]] = []

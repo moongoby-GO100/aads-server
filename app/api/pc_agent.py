@@ -718,22 +718,32 @@ def _active_container_name() -> str:
     return ""
 
 
+def _container_name_for_api_port(port: str) -> str:
+    if port == "8100":
+        return "aads-server"
+    if port == "8102":
+        return "aads-server-green"
+    return ""
+
+
 def _peer_fallback_urls(path: str) -> list[str]:
     urls: list[str] = []
     active_container = _active_container_name()
+    local_container = str(os.getenv("AADS_CONTAINER_NAME", "") or "").strip()
+
+    def add_url(url: str) -> None:
+        if url and url not in urls:
+            urls.append(url)
+
     for active_port in _active_api_ports():
-        urls.append(f"http://127.0.0.1:{active_port}{path}")
-        if active_port == "8100":
-            urls.append(f"http://aads-server:8080{path}")
-        elif active_port == "8102":
-            urls.append(f"http://aads-server-green:8080{path}")
-        if active_container:
-            urls.append(f"http://{active_container}:8080{path}")
-    deduped: list[str] = []
-    for url in urls:
-        if url not in deduped:
-            deduped.append(url)
-    return deduped
+        container_name = _container_name_for_api_port(active_port)
+        if container_name and container_name != local_container:
+            add_url(f"http://{container_name}:8080{path}")
+        if not local_container:
+            add_url(f"http://127.0.0.1:{active_port}{path}")
+        if active_container and active_container != local_container:
+            add_url(f"http://{active_container}:8080{path}")
+    return urls
 
 
 def _peer_fallback_allowed(request: Request) -> bool:
