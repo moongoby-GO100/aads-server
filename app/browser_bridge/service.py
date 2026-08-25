@@ -321,6 +321,10 @@ class _LocalAgentPage:
             kwargs.get("timeout"),
             LOCAL_AGENT_SNAPSHOT_TIMEOUT_SECONDS,
         )
+        queue_wait_timeout_seconds = min(
+            LOCAL_AGENT_QUEUE_WAIT_SECONDS,
+            max(1.0, min(5.0, command_timeout_seconds / 3.0)),
+        )
         if kwargs.get("timeout") is None and expr in {
             "window.location.href",
             "document.body ? document.body.innerHTML : ''",
@@ -339,6 +343,7 @@ class _LocalAgentPage:
             "browser_eval",
             {"expression": expr},
             command_timeout_seconds=command_timeout_seconds,
+            queue_wait_timeout_seconds=queue_wait_timeout_seconds,
         )
         value = data.get("value")
         if isinstance(value, str):
@@ -534,6 +539,8 @@ class BrowserBridgeService:
         work_key: str = "",
         protected: bool = False,
         force_recreate: bool = False,
+        queue_wait_timeout_seconds: float | None = None,
+        command_timeout_seconds: float | None = None,
     ) -> BrowserBridgeSession:
         """Launch or reuse Chrome through PC Agent and register a local-agent bridge session."""
         from app.services.pc_agent_manager import pc_agent_manager
@@ -567,15 +574,25 @@ class BrowserBridgeService:
             )
 
         if self._route_pc_agent_via_active_api_first():
+            active_queue_wait = (
+                float(queue_wait_timeout_seconds)
+                if queue_wait_timeout_seconds is not None
+                else self._sidecar_queue_wait_timeout_seconds()
+            )
+            active_command_timeout = (
+                float(command_timeout_seconds)
+                if command_timeout_seconds is not None
+                else self._sidecar_command_timeout_seconds("browser_launch")
+            )
             active_routed = await self._execute_pc_agent_route_via_active_api(
                 command_type="browser_launch",
                 params=launch_params,
                 agent_id=agent_id,
                 job_type="browser_bridge_launch",
                 required_capabilities=["interactive_browser"],
-                queue_wait_timeout_seconds=self._sidecar_queue_wait_timeout_seconds(),
-                lease_ttl_seconds=int(self._sidecar_command_timeout_seconds("browser_launch") + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
-                command_timeout_seconds=self._sidecar_command_timeout_seconds("browser_launch"),
+                queue_wait_timeout_seconds=active_queue_wait,
+                lease_ttl_seconds=int(active_command_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                command_timeout_seconds=active_command_timeout,
             )
             routed = active_routed or {
                 "status": "error",
@@ -583,6 +600,8 @@ class BrowserBridgeService:
                 "message": "active AADS API PC Agent route unavailable",
             }
         else:
+            direct_queue_wait = float(queue_wait_timeout_seconds) if queue_wait_timeout_seconds is not None else 120
+            direct_command_timeout = float(command_timeout_seconds) if command_timeout_seconds is not None else 180
             routed = await pc_agent_manager.execute_routed_command(
                 command_type="browser_launch",
                 params=launch_params,
@@ -591,9 +610,9 @@ class BrowserBridgeService:
                 required_capabilities=["interactive_browser"],
                 queue_if_busy=True,
                 wait_for_turn=True,
-                queue_wait_timeout_seconds=120,
-                lease_ttl_seconds=240,
-                command_timeout_seconds=180,
+                queue_wait_timeout_seconds=direct_queue_wait,
+                lease_ttl_seconds=int(direct_command_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                command_timeout_seconds=direct_command_timeout,
             )
             if routed.get("status") != "success" and str(routed.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
                 active_routed = await self._execute_pc_agent_route_via_active_api(
@@ -606,6 +625,47 @@ class BrowserBridgeService:
                 if active_routed is not None:
                     routed = active_routed
         routed = self._coerce_pc_agent_embedded_success(routed)
+        if routed.get("status") != "success":
+            launch_error_code, _launch_error_message, _launch_error_detail = self._extract_pc_agent_route_error(routed)
+            if launch_error_code in {"CDP_NOT_READY", "COMMAND_TIMEOUT"}:
+                health_timeout = max(10.0, min(30.0, float(command_timeout_seconds or 30.0)))
+                health_params: dict[str, Any] = {
+                    "work_key": normalized_work_key or launch_params.get("work_key") or "",
+                    "command_timeout_seconds": health_timeout,
+                }
+                if preferred_port:
+                    health_params["preferred_port"] = int(preferred_port)
+                if self._route_pc_agent_via_active_api_first():
+                    health_routed = await self._execute_pc_agent_route_via_active_api(
+                        command_type="browser_health",
+                        params=health_params,
+                        agent_id=agent_id,
+                        job_type="browser_bridge_health_fallback",
+                        required_capabilities=["interactive_browser"],
+                        queue_wait_timeout_seconds=min(10.0, float(queue_wait_timeout_seconds or 10.0)),
+                        lease_ttl_seconds=int(health_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                        command_timeout_seconds=health_timeout,
+                    )
+                    if health_routed is not None:
+                        health_routed = self._coerce_pc_agent_embedded_success(health_routed)
+                        if health_routed.get("status") == "success":
+                            routed = health_routed
+                else:
+                    health_routed = await pc_agent_manager.execute_routed_command(
+                        command_type="browser_health",
+                        params=health_params,
+                        agent_id=agent_id,
+                        job_type="browser_bridge_health_fallback",
+                        required_capabilities=["interactive_browser"],
+                        queue_if_busy=True,
+                        wait_for_turn=True,
+                        queue_wait_timeout_seconds=min(10.0, float(queue_wait_timeout_seconds or 10.0)),
+                        lease_ttl_seconds=int(health_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                        command_timeout_seconds=health_timeout,
+                    )
+                    health_routed = self._coerce_pc_agent_embedded_success(health_routed)
+                    if health_routed.get("status") == "success":
+                        routed = health_routed
         if routed.get("status") != "success":
             error_code, error_message, error_detail = self._extract_pc_agent_route_error(routed)
             raise BrowserBridgeError(
@@ -683,6 +743,8 @@ class BrowserBridgeService:
         url: str = "about:blank",
         preferred_port: int | None = None,
         force_recreate: bool = False,
+        queue_wait_timeout_seconds: float | None = None,
+        command_timeout_seconds: float | None = None,
     ) -> BrowserBridgeSession:
         """Return the dedicated Browser Bridge session for a business workflow.
 
@@ -730,6 +792,8 @@ class BrowserBridgeService:
             work_key=normalized_work_key,
             protected=is_protected,
             force_recreate=force_recreate,
+            queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+            command_timeout_seconds=command_timeout_seconds,
         )
         session.mark_used()
         self.sessions.touch(session)
@@ -1106,6 +1170,9 @@ class BrowserBridgeService:
     def _active_api_route_urls(cls, active_port: str) -> list[str]:
         urls: list[str] = []
         active_container = cls._active_container_name()
+        running_in_container = os.path.exists("/.dockerenv")
+        if not running_in_container:
+            urls.append(f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute")
         if active_container:
             urls.append(f"http://{active_container}:8080/api/v1/pc-agent/route-execute")
         # In sidecar containers such as yeoljeong-finance-worker, loopback points
@@ -1228,6 +1295,52 @@ class BrowserBridgeService:
             except Exception as exc:
                 return None, f"[브라우저 도구 사용 불가] {exc}"
 
+    @staticmethod
+    def _resolve_playwright_browsers_path() -> str | None:
+        """설치된 Playwright 브라우저 번들 경로를 탐색해 환경변수로 고정한다.
+
+        Playwright는 업그레이드마다 chromium 빌드번호가 바뀌므로 디렉터리명을
+        하드코딩하면 안 된다(과거 chromium-1208 하드코딩 → 1234 설치 시 미탐지).
+        또한 HOME이 /root가 아닌 워커(예: 채팅 세션 서브프로세스)에서는 기본
+        탐색 경로($HOME/.cache/ms-playwright)가 비어 있어 실행 파일을 못 찾는다.
+        """
+        existing = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+        if existing and os.path.isdir(existing):
+            return existing
+
+        candidates = [
+            "/root/.cache/ms-playwright",
+            os.path.join(os.path.expanduser("~"), ".cache", "ms-playwright"),
+            "/ms-playwright",
+            "/root/.cache",
+        ]
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if not os.path.isdir(candidate):
+                continue
+            try:
+                entries = os.listdir(candidate)
+            except OSError:
+                continue
+            for entry in entries:
+                if not entry.startswith(("chromium-", "chromium_headless_shell-")):
+                    continue
+                if os.path.isdir(os.path.join(candidate, entry)):
+                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = candidate
+                    logger.info(
+                        "playwright_browsers_path_resolved path=%s bundle=%s",
+                        candidate,
+                        entry,
+                    )
+                    return candidate
+        logger.warning(
+            "playwright_browsers_path_not_found candidates=%s", candidates
+        )
+        return None
+
     async def _ensure_playwright(self) -> Any:
         try:
             from playwright.async_api import async_playwright
@@ -1235,18 +1348,14 @@ class BrowserBridgeService:
             raise BrowserBridgeError("playwright 패키지가 설치되지 않았습니다") from exc
 
         if self._pw_handle is None:
+            # 반드시 드라이버 기동 전에 설정해야 한다. Node 드라이버 프로세스가
+            # spawn 시점에 PLAYWRIGHT_BROWSERS_PATH를 상속받기 때문이다.
+            self._resolve_playwright_browsers_path()
             self._pw_handle = await async_playwright().start()
         return self._pw_handle
 
     async def _headless_fallback_context(self) -> Any:
         pw = await self._ensure_playwright()
-        if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-            for candidate in ("/root/.cache/ms-playwright", "/root/.cache"):
-                if os.path.isdir(os.path.join(candidate, "chromium-1208")) or os.path.isdir(
-                    os.path.join(candidate, "chromium_headless_shell-1208")
-                ):
-                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = candidate
-                    break
 
         need_init = (
             self._headless_context is None
