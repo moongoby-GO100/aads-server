@@ -261,6 +261,38 @@ async def test_pc_agent_status_uses_peer_fallback_when_local_backend_is_offline(
 
 
 @pytest.mark.asyncio
+async def test_pc_agent_health_uses_peer_fallback_when_local_backend_is_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent, "_ensure_offline_monitor", Mock())
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "list_agents", Mock(return_value=[]))
+    monkeypatch.setattr(
+        pc_agent,
+        "_request_peer_fallback_json",
+        AsyncMock(
+            return_value={
+                "connected": 1,
+                "agents": [
+                    {
+                        "agent_id": "peer-pc",
+                        "hostname": "active-host",
+                        "last_heartbeat": "2026-08-25T08:25:37Z",
+                    }
+                ],
+                "backend_source": "peer",
+            }
+        ),
+    )
+
+    result = await pc_agent.pc_agent_health(_DummyRequest())
+
+    assert result["connected"] == 1
+    assert result["backend_source"] == "peer"
+    assert result["agents"][0]["agent_id"] == "peer-pc"
+
+
+@pytest.mark.asyncio
 async def test_route_execute_uses_peer_fallback_on_local_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

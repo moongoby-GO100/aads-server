@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-08-25 17:26 KST - FOOD bank browser reconnect recovery deploy
+
+- Trigger: CEO asked whether bank auto-collection reconnects after browser/session disconnects and requested immediate action.
+- Changes:
+  - `app/api/pc_agent.py`: PC Agent health/offline monitor now uses peer backend fallback when the local active slot has no connected agents, preventing false offline state during blue/green slot transitions.
+  - `app/services/yeoljeong_bank_browser_connector.py`: bank browser collection now treats CDP/session disconnect, closed page/target, command timeout, and stale target errors as recoverable once; it recreates the same `browser_work_key` session and resumes collection without losing redacted diagnostics.
+  - `scripts/yeoljeong_auto_collect.py`: until-complete mode now classifies bank browser page/session/timeout errors as retryable and sets `force_recreate_bank_browser` on the next attempt, independently from delivery portal session recreation.
+  - `tests/unit/test_pc_agent_api_disconnects.py`, `tests/unit/test_yeoljeong_bank_browser_connector.py`, `tests/unit/test_yeoljeong_auto_collect.py`: added regression coverage for peer health fallback, CDP disconnect recovery, and bank-only forced browser recreation retry.
+- Verification:
+  - `docker exec aads-server python -m pytest -q tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py` passed: 90 passed, 7 warnings.
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py` passed.
+- Deployment:
+  - Selective commit/deploy requested by CEO at 17:26 KST. Unrelated working-tree changes were intentionally left uncommitted.
+
 ## 2026-08-25 14:31 KST - FOOD Baemin auto-collect operations applied
 
 - Request: Ensure Baemin data can be collected automatically.

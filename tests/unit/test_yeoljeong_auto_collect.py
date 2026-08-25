@@ -568,7 +568,7 @@ def test_until_complete_force_recreates_after_wrong_portal_session(monkeypatch):
         },
     ]
 
-    def fake_run_sync(payload, user, *, queue_only=False):
+    def fake_run_sync_with_timeout(payload, user, timeout):
         calls.append(dict(payload))
         return results.pop(0)
 
@@ -580,7 +580,7 @@ def test_until_complete_force_recreates_after_wrong_portal_session(monkeypatch):
             "force_recreate_portal_sessions": False,
         },
     )
-    monkeypatch.setattr(auto_collect, "_run_sync", fake_run_sync)
+    monkeypatch.setattr(auto_collect, "_run_sync_with_timeout", fake_run_sync_with_timeout)
     monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
 
@@ -625,7 +625,7 @@ def test_until_complete_force_recreates_after_pc_agent_session_required(monkeypa
         },
     ]
 
-    def fake_run_sync(payload, user, *, queue_only=False):
+    def fake_run_sync_with_timeout(payload, user, timeout):
         calls.append(dict(payload))
         return results.pop(0)
 
@@ -637,7 +637,7 @@ def test_until_complete_force_recreates_after_pc_agent_session_required(monkeypa
             "force_recreate_portal_sessions": False,
         },
     )
-    monkeypatch.setattr(auto_collect, "_run_sync", fake_run_sync)
+    monkeypatch.setattr(auto_collect, "_run_sync_with_timeout", fake_run_sync_with_timeout)
     monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
 
@@ -654,6 +654,66 @@ def test_until_complete_force_recreates_after_pc_agent_session_required(monkeypa
     assert calls[0]["force_recreate_portal_sessions"] is False
     assert calls[1]["force_recreate_portal_sessions"] is True
     assert sleeps == [19]
+
+
+def test_until_complete_force_recreates_bank_browser_after_cdp_not_ready(monkeypatch):
+    calls = []
+    sleeps = []
+    results = [
+        {
+            "bank_collections": [
+                {
+                    "service": "bank",
+                    "status": "failed",
+                    "error_code": "CDP_NOT_READY",
+                    "counts": {"transactions": 0},
+                }
+            ]
+        },
+        {
+            "bank_collections": [
+                {
+                    "service": "bank",
+                    "status": "completed",
+                    "error_code": "",
+                    "counts": {"transactions": 1},
+                }
+            ]
+        },
+    ]
+
+    def fake_run_sync_with_timeout(payload, user, timeout):
+        calls.append(dict(payload))
+        return results.pop(0)
+
+    monkeypatch.setattr(
+        auto_collect,
+        "_payload",
+        lambda args: {
+            "business_id": "all",
+            "force_recreate_portal_sessions": False,
+            "force_recreate_bank_browser": False,
+        },
+    )
+    monkeypatch.setattr(auto_collect, "_run_sync_with_timeout", fake_run_sync_with_timeout)
+    monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
+
+    args = SimpleNamespace(
+        max_attempts=3,
+        retry_seconds=7,
+        blocked_retry_seconds=19,
+        success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
+        retry_blocked=False,
+        repeat_after_complete=False,
+    )
+
+    assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 0
+    assert calls[0]["force_recreate_bank_browser"] is False
+    assert calls[1]["force_recreate_bank_browser"] is True
+    assert calls[1]["force_recreate_portal_sessions"] is False
+    assert sleeps == [7]
 
 
 def test_until_complete_force_recreates_on_first_attempt_from_existing_status(monkeypatch):

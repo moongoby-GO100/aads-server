@@ -57,9 +57,13 @@ BLOCKING_ERROR_CODES = {
 RETRYABLE_ERROR_CODES = {
     "ATTEMPT_TIMEOUT",
     "AUTHENTICATED_NO_ROWS",
+    "BANK_BROWSER_PAGE_ERROR",
+    "BANK_BROWSER_PC_AGENT_TIMEOUT",
     "BANK_BROWSER_SESSION_NOT_FOUND",
     "BACKGROUND_SYNC_STALE",
     "COLLECTION_ALREADY_RUNNING",
+    "CDP_NOT_READY",
+    "COMMAND_TIMEOUT",
     "EMPTY_SOURCE",
     "LOGIN_FORM_NOT_FOUND",
     "NO_PARSEABLE_ROWS",
@@ -68,12 +72,25 @@ RETRYABLE_ERROR_CODES = {
     "PC_AGENT_SESSION_NOT_FOUND",
     "PC_AGENT_WRONG_PORTAL_SESSION",
     "PORTAL_TABLE_NOT_FOUND",
+    "RUNTIME_EVALUATE_TIMEOUT",
+    "STALE_TARGET",
 }
 SESSION_RECREATE_ERROR_CODES = {
     "PC_AGENT_COLLECTOR_TIMEOUTERROR",
     "PC_AGENT_SESSION_REQUIRED",
     "PC_AGENT_SESSION_NOT_FOUND",
     "PC_AGENT_WRONG_PORTAL_SESSION",
+}
+BANK_SESSION_RECREATE_ERROR_CODES = {
+    "BANK_BROWSER_PAGE_ERROR",
+    "BANK_BROWSER_PC_AGENT_TIMEOUT",
+    "BANK_BROWSER_SESSION_NOT_FOUND",
+    "CDP_NOT_READY",
+    "COMMAND_TIMEOUT",
+    "PC_AGENT_SESSION_REQUIRED",
+    "PC_AGENT_SESSION_NOT_FOUND",
+    "RUNTIME_EVALUATE_TIMEOUT",
+    "STALE_TARGET",
 }
 
 
@@ -487,6 +504,15 @@ def _should_force_recreate_portal_sessions(state: dict[str, Any]) -> bool:
     return bool(codes & SESSION_RECREATE_ERROR_CODES)
 
 
+def _should_force_recreate_bank_browser(state: dict[str, Any]) -> bool:
+    codes = {
+        str(code or "").strip().upper()
+        for key in ("retryable_codes", "blocking_codes")
+        for code in (state.get(key) if isinstance(state.get(key), list) else [])
+    }
+    return bool(codes & BANK_SESSION_RECREATE_ERROR_CODES)
+
+
 def _initial_force_recreate_portal_sessions(payload: dict[str, Any], user: dict[str, Any]) -> bool:
     if payload.get("force_recreate_portal_sessions"):
         return True
@@ -826,19 +852,30 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
     attempt_timeout_seconds = max(0, int(args.attempt_timeout_seconds or 0))
     retry_blocked = bool(getattr(args, "retry_blocked", False))
     attempt = 0
-    force_recreate_next = _initial_force_recreate_portal_sessions(base_payload, user)
+    force_recreate_portal_next = _initial_force_recreate_portal_sessions(base_payload, user)
+    force_recreate_bank_next = bool(base_payload.get("force_recreate_bank_browser"))
 
     while True:
         attempt += 1
         attempt_payload = dict(base_payload)
-        if force_recreate_next:
+        if force_recreate_portal_next:
             attempt_payload["force_recreate_portal_sessions"] = True
+        if force_recreate_bank_next:
+            attempt_payload["force_recreate_bank_browser"] = True
         summary = _run_sync_with_timeout(attempt_payload, user, attempt_timeout_seconds)
         state = _completion_state(summary)
         can_retry_blocked_with_recreate = (
             state["blocked"]
-            and _should_force_recreate_portal_sessions(state)
-            and not bool(attempt_payload.get("force_recreate_portal_sessions"))
+            and (
+                (
+                    _should_force_recreate_portal_sessions(state)
+                    and not bool(attempt_payload.get("force_recreate_portal_sessions"))
+                )
+                or (
+                    _should_force_recreate_bank_browser(state)
+                    and not bool(attempt_payload.get("force_recreate_bank_browser"))
+                )
+            )
         )
         will_stop_on_blocked = state["blocked"] and not retry_blocked and not can_retry_blocked_with_recreate
         next_retry_seconds = 0 if state["complete"] or will_stop_on_blocked else (
@@ -852,6 +889,9 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
                         "state": state,
                         "force_recreate_portal_sessions": bool(
                             attempt_payload.get("force_recreate_portal_sessions")
+                        ),
+                        "force_recreate_bank_browser": bool(
+                            attempt_payload.get("force_recreate_bank_browser")
                         ),
                         "next_retry_seconds": next_retry_seconds,
                         "stop_on_blocked": bool(will_stop_on_blocked),
@@ -873,7 +913,14 @@ def _run_until_complete(args: argparse.Namespace, user: dict[str, Any]) -> int:
             return 0 if bool(getattr(args, "exit_zero_on_blocked", False)) else 2
         if max_attempts and attempt >= max_attempts:
             return 2 if state["blocked"] else 1
-        force_recreate_next = bool(base_payload.get("force_recreate_portal_sessions")) or _should_force_recreate_portal_sessions(state)
+        force_recreate_portal_next = (
+            bool(base_payload.get("force_recreate_portal_sessions"))
+            or _should_force_recreate_portal_sessions(state)
+        )
+        force_recreate_bank_next = (
+            bool(base_payload.get("force_recreate_bank_browser"))
+            or _should_force_recreate_bank_browser(state)
+        )
         _sleep(blocked_retry_seconds if state["blocked"] else retry_seconds)
 
 

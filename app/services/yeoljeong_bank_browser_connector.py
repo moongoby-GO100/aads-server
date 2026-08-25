@@ -687,6 +687,15 @@ async def _try_prepare_shinhan_query_flow(
               const hasLoginInput = (patterns, type = '') => !!firstLoginInput(patterns, type);
               const bodyText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
               const hasLoginNotice = () => /이용 가능한 서비스가 제한|단순 계좌 조회/i.test(bodyText());
+              const isRedirectLoginPage = () => {
+                try {
+                  const currentMenu = String(window.shbComm?.menu?.getCurrentMenuCode?.() || window.shbComm?.menu?.currentMenuCode || '');
+                  const redirectUrl = String(window.shbComm?.menu?.redirectUrl || '');
+                  return currentMenu === '210000000000' && !!redirectUrl;
+                } catch (_) {
+                  return false;
+                }
+              };
               const hasLoginFields = () => {
                 const text = bodyText();
                 const loginPanelText = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text);
@@ -695,7 +704,7 @@ async def _try_prepare_shinhan_query_flow(
                 ]) && hasInput([
                   /비밀번호|password|passwd|login.*pw/i
                 ], 'password');
-                if (!loginPanelText && !visibleFields) return false;
+                if (!loginPanelText && !visibleFields && !isRedirectLoginPage()) return false;
                 return hasLoginInput([
                   /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
                 ]) && hasLoginInput([
@@ -834,7 +843,19 @@ async def _try_prepare_shinhan_query_flow(
                   result.navigation_clicked = result.account_page_navigation;
                   try {
                     if (String(window.location.href || '').includes('/rib/easy/index.jsp')) {
-                      window.location.hash = '210101000001';
+                      try {
+                        if (window.shbComm?.menu) {
+                          window.shbComm.menu.redirectUrl = '210101000000';
+                        }
+                      } catch (_) {}
+                      try {
+                        if (window.shbComm && typeof window.shbComm.goPage === 'function') {
+                          window.setTimeout(() => {
+                            try { window.shbComm.goPage('210101000000'); } catch (_) {}
+                          }, 30);
+                        }
+                      } catch (_) {}
+                      window.location.hash = '210101000000';
                       window.dispatchEvent(new HashChangeEvent('hashchange'));
                       result.account_page_navigation = '1';
                       result.navigation_clicked = '1';
@@ -939,8 +960,18 @@ async def _try_shinhan_individual_login_step(
               const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
               const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib');
               const loginPasswordEl = byId('비밀번호') || byId('비밀번호_cib');
+              const isRedirectLoginPage = (() => {
+                try {
+                  const currentMenu = String(window.shbComm?.menu?.getCurrentMenuCode?.() || window.shbComm?.menu?.currentMenuCode || '');
+                  const redirectUrl = String(window.shbComm?.menu?.redirectUrl || '');
+                  return currentMenu === '210000000000' && !!redirectUrl;
+                } catch (_) {
+                  return false;
+                }
+              })();
               const hasLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text)
-                || (visible(loginIdEl) && visible(loginPasswordEl));
+                || (visible(loginIdEl) && visible(loginPasswordEl))
+                || isRedirectLoginPage;
               const componentById = (id) => {
                 if (!id) return null;
                 const candidates = [
@@ -1010,21 +1041,25 @@ async def _try_shinhan_individual_login_step(
                 if (!inputEl || !tkObj || !window.tk || typeof window.tk.getKeyByIndex !== 'function' || typeof window.tk.getEncData !== 'function') {
                   return false;
                 }
-                try {
-                  if (typeof window.tk.onKeyboard === 'function') window.tk.onKeyboard(inputEl);
-                  if (!tkObj.allocate && typeof tkObj.allocation === 'function') tkObj.allocation();
-                } catch (_) {}
-                for (let i = 0; i < 20 && !tkObj.allocate; i += 1) {
-                  await sleep(100);
-                }
-                if (!tkObj.allocate) return false;
-                const seq = transKeySeq(value);
-                if (!seq.length) return false;
-                try {
-                  if (tkObj.hidden) tkObj.hidden.value = '';
-                  if (tkObj.hmac) tkObj.hmac.value = '';
-                  inputEl.value = '';
-                  let shiftOn = false;
+	                try {
+	                  if (typeof window.tk.onKeyboard === 'function') window.tk.onKeyboard(inputEl);
+	                  if (!tkObj.allocate && typeof tkObj.allocation === 'function') tkObj.allocation();
+	                } catch (_) {}
+	                for (let i = 0; i < 20 && !tkObj.allocate; i += 1) {
+	                  await sleep(100);
+	                }
+	                const seq = transKeySeq(value);
+	                if (!seq.length) return false;
+	                try {
+	                  tkObj.inputObj = inputEl;
+	                  window.tk.now = tkObj;
+	                  try {
+	                    if (typeof window.tk.setHiddenField === 'function') window.tk.setHiddenField(inputEl);
+	                  } catch (_) {}
+	                  if (tkObj.hidden) tkObj.hidden.value = '';
+	                  if (tkObj.hmac) tkObj.hmac.value = '';
+	                  inputEl.value = '';
+	                  let shiftOn = false;
                   for (const code of seq) {
                     if (code === 55 || code === 56) {
                       shiftOn = true;
@@ -1036,18 +1071,27 @@ async def _try_shinhan_individual_login_step(
                     const point = key?.xpoints && key?.ypoints ? [key.xpoints[0], key.ypoints[0]] : null;
                     if (!point) return false;
                     const encrypted = window.tk.getEncData(point[0], point[1]);
-                    if (!encrypted) return false;
-                    if (tkObj.hidden) tkObj.hidden.value += '$' + encrypted;
-                    inputEl.value += '*';
-                    tkObj.keyTypeIndex = originalType;
-                    shiftOn = false;
-                  }
-                  inputEl.dispatchEvent(new Event('input', {bubbles: true}));
-                  inputEl.dispatchEvent(new Event('change', {bubbles: true}));
-                  return true;
-                } catch (_) {
-                  return false;
-                }
+	                    if (!encrypted) return false;
+	                    if (tkObj.hidden) tkObj.hidden.value += '$' + encrypted;
+	                    inputEl.value += '*';
+	                    tkObj.keyTypeIndex = originalType;
+	                    shiftOn = false;
+	                  }
+	                  try {
+	                    if (typeof window.tk.inputFillEncData === 'function') {
+	                      const filled = window.tk.inputFillEncData(inputEl);
+	                      if (filled && tkObj.hidden && filled.hidden) tkObj.hidden.value = filled.hidden;
+	                      if (filled && tkObj.hmac && filled.hmac) tkObj.hmac.value = String(filled.hmac);
+	                    } else if (typeof window.tk.fillEncData === 'function') {
+	                      window.tk.fillEncData();
+	                    }
+	                  } catch (_) {}
+	                  inputEl.dispatchEvent(new Event('input', {bubbles: true}));
+	                  inputEl.dispatchEvent(new Event('change', {bubbles: true}));
+	                  return !!(tkObj.hidden && String(tkObj.hidden.value || '').length > 0);
+	                } catch (_) {
+	                  return false;
+	                }
               };
               const clickLogin = () => {
                 try {
@@ -1163,6 +1207,46 @@ def _bank_session_recovery_plan(error_code: str = "") -> str:
     if code in {"PC_AGENT_UNAVAILABLE", "PC_AGENT_REQUIRED", "PC_AGENT_LOGIN_REQUIRED"}:
         return "connect_pc_agent_then_retry_same_work_key"
     return "retry_same_work_key_before_new_session"
+
+
+_BANK_SESSION_RECOVERABLE_ERROR_CODES = {
+    "BANK_BROWSER_SESSION_NOT_FOUND",
+    "CDP_NOT_READY",
+    "COMMAND_TIMEOUT",
+    "PC_AGENT_SESSION_NOT_FOUND",
+    "RUNTIME_EVALUATE_TIMEOUT",
+    "STALE_TARGET",
+}
+
+
+def _bank_session_error_code(exc: Exception) -> str:
+    code = str(getattr(exc, "error_code", "") or "").strip().upper()
+    if code:
+        return code
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        code = str(detail.get("error_code") or "").strip().upper()
+        if code:
+            return code
+    return ""
+
+
+def _is_bank_session_recoverable_error(exc: Exception) -> bool:
+    code = _bank_session_error_code(exc)
+    if code in _BANK_SESSION_RECOVERABLE_ERROR_CODES:
+        return True
+    message = str(exc or "").lower()
+    return any(
+        token in message
+        for token in (
+            "cdp_not_ready",
+            "target closed",
+            "session closed",
+            "connection closed",
+            "browser has been closed",
+            "page closed",
+        )
+    )
 
 
 async def _try_fill_bank_login(
@@ -1698,6 +1782,7 @@ async def collect_bank_via_browser_session_async(
     business_registration_no: str = "",
     business_entity_type: str = "",
     browser_timeout_seconds: float = 120,
+    _recovery_attempted: bool = False,
 ) -> dict[str, Any]:
     """Fetch transaction rows from a bank quick-service portal via PC Agent.
 
@@ -1953,6 +2038,40 @@ async def collect_bank_via_browser_session_async(
             try:
                 current_url, rows, parse_diag, state_text = await _read_bank_portal_snapshot(page)
             except Exception as exc:
+                if (
+                    auto_open_browser
+                    and browser_work_key
+                    and not _recovery_attempted
+                    and _is_bank_session_recoverable_error(exc)
+                ):
+                    recovery_code = _bank_session_error_code(exc) or "BANK_BROWSER_PAGE_ERROR"
+                    recovered = await collect_bank_via_browser_session_async(
+                        account,
+                        browser_session_id="",
+                        browser_work_key=browser_work_key,
+                        date_from=date_from,
+                        date_to=date_to,
+                        portal_url=portal_url,
+                        auto_open_browser=True,
+                        browser_agent_id=browser_agent_id,
+                        browser_preferred_port=browser_preferred_port,
+                        force_recreate_browser=True,
+                        login_username=login_username,
+                        login_password=login_password,
+                        account_no=account_no,
+                        account_password=account_password,
+                        business_registration_no=business_registration_no,
+                        business_entity_type=business_entity_type,
+                        browser_timeout_seconds=browser_timeout_seconds,
+                        _recovery_attempted=True,
+                    )
+                    recovered_diag = recovered.setdefault("diagnostics", {})
+                    if isinstance(recovered_diag, dict):
+                        recovered_diag.setdefault("previous_browser_session_id", session_id_to_use)
+                        recovered_diag["session_recovery"] = "recreated_after_page_error"
+                        recovered_diag["session_recovery_error"] = recovery_code
+                        recovered_diag["session_recovery_plan"] = _bank_session_recovery_plan(recovery_code)
+                    return recovered
                 return {
                     "status": "failed",
                     "error_code": "BANK_BROWSER_PAGE_ERROR",
@@ -2372,6 +2491,40 @@ async def collect_bank_via_browser_session_async(
         exc_detail = _safe_error_detail(getattr(exc, "detail", None))
         if exc_detail:
             safe_diagnostics["pc_agent_error_detail"] = exc_detail
+        if (
+            auto_open_browser
+            and browser_work_key
+            and not _recovery_attempted
+            and _is_bank_session_recoverable_error(exc)
+        ):
+            recovery_code = _bank_session_error_code(exc) or exc_error_code or "BANK_BROWSER_SESSION_ERROR"
+            recovered = await collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key=browser_work_key,
+                date_from=date_from,
+                date_to=date_to,
+                portal_url=portal_url,
+                auto_open_browser=True,
+                browser_agent_id=browser_agent_id,
+                browser_preferred_port=browser_preferred_port,
+                force_recreate_browser=True,
+                login_username=login_username,
+                login_password=login_password,
+                account_no=account_no,
+                account_password=account_password,
+                business_registration_no=business_registration_no,
+                business_entity_type=business_entity_type,
+                browser_timeout_seconds=browser_timeout_seconds,
+                _recovery_attempted=True,
+            )
+            recovered_diag = recovered.setdefault("diagnostics", {})
+            if isinstance(recovered_diag, dict):
+                recovered_diag.setdefault("previous_browser_session_id", session_id_to_use)
+                recovered_diag["session_recovery"] = "recreated_after_runtime_error"
+                recovered_diag["session_recovery_error"] = recovery_code
+                recovered_diag["session_recovery_plan"] = _bank_session_recovery_plan(recovery_code)
+            return recovered
         error_code = (
             "BANK_BROWSER_PC_AGENT_TIMEOUT"
             if exc_error_code in {"COMMAND_TIMEOUT", "RUNTIME_EVALUATE_TIMEOUT"}

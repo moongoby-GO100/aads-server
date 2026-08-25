@@ -1376,6 +1376,60 @@ def test_collect_async_missing_explicit_session_recovers_same_work_key():
     assert bridge_inst.ensure_work_session.await_args.kwargs["work_key"] == "yeoljeong-bank-shinhan-individual-abc123"
 
 
+def test_collect_async_recovers_after_cdp_disconnect_during_context_open():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    class CDPError(RuntimeError):
+        error_code = "CDP_NOT_READY"
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "조회된 거래내역이 없습니다."
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    stale_session = MagicMock()
+    stale_session.session_id = "stale-session"
+    recovered_session = MagicMock()
+    recovered_session.session_id = "recovered-session-cdp"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.side_effect = [stale_session, recovered_session]
+        bridge_inst.sessions.find_by_work_key.return_value = None
+        bridge_inst.ensure_work_session = AsyncMock(return_value=recovered_session)
+        bridge_inst._context_for_session = AsyncMock(side_effect=[CDPError("cdp disconnected"), mock_context])
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="stale-session",
+                browser_work_key="yeoljeong-bank-browser-cdp",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["diagnostics"]["browser_session_id"] == "recovered-session-cdp"
+    assert result["diagnostics"]["previous_browser_session_id"] == "stale-session"
+    assert result["diagnostics"]["session_recovery"] == "recreated_after_runtime_error"
+    assert result["diagnostics"]["session_recovery_error"] == "CDP_NOT_READY"
+    bridge_inst.ensure_work_session.assert_awaited_once()
+    assert bridge_inst.ensure_work_session.await_args.kwargs["force_recreate"] is True
+
+
 def test_collect_async_diagnostics_has_no_credentials():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 

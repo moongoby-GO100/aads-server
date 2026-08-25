@@ -817,6 +817,8 @@ async def _request_peer_fallback_json(
                     continue
                 if path.endswith("/agents") and not parsed.get("agents"):
                     continue
+                if path.endswith("/health") and int(parsed.get("connected", 0) or 0) <= 0:
+                    continue
             else:
                 if parsed.get("status") == "error" and str(parsed.get("error_code") or "") in _PEER_RETRYABLE_ERROR_CODES:
                     continue
@@ -825,6 +827,37 @@ async def _request_peer_fallback_json(
         return None
 
     return await asyncio.to_thread(_send)
+
+
+async def _peer_online_agents_snapshot() -> dict[str, Any] | None:
+    """Return peer PC Agent status for monitor paths that do not have a Request."""
+    urls = _peer_fallback_urls("/api/v1/pc-agent/agents")
+    if not urls:
+        return None
+
+    def _lookup() -> dict[str, Any] | None:
+        for url in urls:
+            req = urllib.request.Request(url, headers={_PEER_FALLBACK_HEADER: "1"}, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    parsed = json.loads(resp.read().decode("utf-8"))
+            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+                logger.warning("pc_agent_peer_monitor_lookup_failed url=%s err=%s", url, exc)
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            agents = parsed.get("agents")
+            online_agents = [
+                agent for agent in agents if isinstance(agent, dict) and agent.get("status") == "online"
+            ] if isinstance(agents, list) else []
+            if online_agents:
+                parsed["agents"] = online_agents
+                parsed["online_count"] = len(online_agents)
+                parsed.setdefault("backend_source", "peer")
+                return parsed
+        return None
+
+    return await asyncio.to_thread(_lookup)
 
 @router.get("/pc-agent/status")
 async def pc_agent_status(request: Request):
@@ -1085,11 +1118,19 @@ async def stream_stop(agent_id: str):
 
 
 @router.get("/pc-agent/health")
-async def pc_agent_health():
+async def pc_agent_health(request: Request):
     """PC Agent 서브시스템 상태."""
     await _flush_pending_reload_disconnects()
     _ensure_offline_monitor()
     agents = pc_agent_manager.list_agents()
+    if not agents:
+        peer_payload = await _request_peer_fallback_json(
+            request=request,
+            method="GET",
+            path="/api/v1/pc-agent/health",
+        )
+        if peer_payload is not None:
+            return peer_payload
     return {
         "connected": len(agents),
         "agents": [
@@ -1117,6 +1158,17 @@ async def _offline_monitor_loop() -> None:
         try:
             agents = pc_agent_manager.list_agents()
             if not agents:
+                peer_payload = await _peer_online_agents_snapshot()
+                if peer_payload is not None:
+                    if _OFFLINE_ALERT_SENT:
+                        _OFFLINE_ALERT_SENT = False
+                    logger.debug(
+                        "pc_agent_offline_monitor_peer_online count=%s source=%s",
+                        peer_payload.get("online_count"),
+                        peer_payload.get("backend_source"),
+                    )
+                    await asyncio.sleep(30)
+                    continue
                 if not _OFFLINE_ALERT_SENT:
                     from app.core.db_pool import get_pool
                     pool = get_pool()
