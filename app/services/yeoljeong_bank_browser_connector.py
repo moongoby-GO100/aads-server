@@ -687,11 +687,21 @@ async def _try_prepare_shinhan_query_flow(
               const hasLoginInput = (patterns, type = '') => !!firstLoginInput(patterns, type);
               const bodyText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
               const hasLoginNotice = () => /이용 가능한 서비스가 제한|단순 계좌 조회/i.test(bodyText());
-              const hasLoginFields = () => hasLoginInput([
-                /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
-              ]) && hasLoginInput([
-                /비밀번호|password|passwd|login.*pw/i
-              ], 'password');
+              const hasLoginFields = () => {
+                const text = bodyText();
+                const loginPanelText = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text);
+                const visibleFields = hasInput([
+                  /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
+                ]) && hasInput([
+                  /비밀번호|password|passwd|login.*pw/i
+                ], 'password');
+                if (!loginPanelText && !visibleFields) return false;
+                return hasLoginInput([
+                  /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
+                ]) && hasLoginInput([
+                  /비밀번호|password|passwd|login.*pw/i
+                ], 'password');
+              };
               const hasAccountQueryFields = () => (
                 hasInput([/계좌번호|account|acct/i]) ||
                 hasInput([/계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw/i], 'password') ||
@@ -927,7 +937,10 @@ async def _try_shinhan_individual_login_step(
               const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
               const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
               const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
-              const hasLoginPanel = text.includes('이용자ID 로그인') || text.includes('아이디 찾기') || !!byId('ibx_loginId');
+              const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib');
+              const loginPasswordEl = byId('비밀번호') || byId('비밀번호_cib');
+              const hasLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text)
+                || (visible(loginIdEl) && visible(loginPasswordEl));
               const componentById = (id) => {
                 if (!id) return null;
                 const candidates = [
