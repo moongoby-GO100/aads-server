@@ -70,6 +70,23 @@ def is_web_push_configured() -> bool:
     return bool(vapid_public_key() and vapid_private_key())
 
 
+def _clean_notification_part(value: Any, fallback: str = "", max_len: int = 80) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    safe = text or fallback
+    return safe[: max(1, max_len)]
+
+
+def _project_from_workspace_name(workspace_name: str) -> str:
+    text = _clean_notification_part(workspace_name, "", 80)
+    if text.startswith("[") and "]" in text:
+        return _clean_notification_part(text.split("]", 1)[0].lstrip("["), "AADS", 24).upper()
+    upper = text.upper()
+    for candidate in ("GO100", "NTV2", "AADS", "KIS", "SF", "NAS", "CEO"):
+        if candidate in upper:
+            return candidate
+    return "AADS"
+
+
 async def ensure_push_schema(conn: Optional[asyncpg.Connection] = None) -> None:
     global _schema_ready
     if _schema_ready:
@@ -279,9 +296,12 @@ async def notify_chat_response_complete(
         async with get_pool().acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id::text, tenant_id::text, user_id, title
-                  FROM chat_sessions
-                 WHERE id = $1
+                SELECT s.id::text, s.tenant_id::text, s.user_id, s.title,
+                       w.name AS workspace_name,
+                       COALESCE(w.project_key, '') AS workspace_project_key
+                  FROM chat_sessions s
+             LEFT JOIN chat_workspaces w ON w.id = s.workspace_id
+                 WHERE s.id = $1
                 """,
                 sid,
             )
@@ -290,10 +310,20 @@ async def notify_chat_response_complete(
         uid = str(row["user_id"] or fallback_user_id or "").strip()
         if not uid:
             return {"sent": 0, "failed": 0, "skipped": "session_user_missing"}
-        title = str(row["title"] or "오비스").strip()
+        session_title = _clean_notification_part(row["title"], "새 대화", 80)
+        workspace_name = _clean_notification_part(row["workspace_name"], "", 80)
+        project = _clean_notification_part(
+            row["workspace_project_key"],
+            _project_from_workspace_name(workspace_name),
+            24,
+        ).upper()
+        notification_title = f"{project} · {session_title}"
         payload = {
-            "title": "오비스",
-            "body": f"{title}: {body}"[:240],
+            "title": notification_title[:120],
+            "body": body[:240],
+            "project": project,
+            "workspace_name": workspace_name,
+            "session_title": session_title,
             "url": f"/chat#{sid}",
             "tag": f"chat-complete-{session_id}",
             "actions": [{"action": "open-chat", "title": "확인"}],
@@ -301,6 +331,9 @@ async def notify_chat_response_complete(
                 "session_id": session_id,
                 "message_id": assistant_message_id,
                 "event": "chat_response_complete",
+                "project": project,
+                "workspace_name": workspace_name,
+                "session_title": session_title,
                 "url": f"/chat#{sid}",
             },
         }
