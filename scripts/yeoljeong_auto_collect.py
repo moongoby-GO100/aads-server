@@ -120,10 +120,12 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "auto_open_bank_browser": not bool(getattr(args, "no_auto_open_bank_browser", False)),
         "browser_agent_id": str(getattr(args, "browser_agent_id", "") or ""),
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
+        "bank_browser_timeout_seconds": int(getattr(args, "bank_browser_timeout_seconds", 90) or 90),
         "force_recreate_bank_browser": bool(getattr(args, "force_recreate_bank_browser", False)),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
         "approved_input": str(getattr(args, "approved_input", "") or ""),
         "skip_financial_accounts": bool(getattr(args, "skip_financial_accounts", False)),
+        "bank_only": bool(getattr(args, "bank_only", False)),
     }
 
 
@@ -245,6 +247,7 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
             "auto_open_browser": bool(payload.get("auto_open_bank_browser", True)),
             "browser_agent_id": str(payload.get("browser_agent_id") or ""),
             "browser_preferred_port": payload.get("browser_preferred_port") or None,
+            "browser_timeout_seconds": int(payload.get("bank_browser_timeout_seconds") or 90),
             "force_recreate_browser": bool(payload.get("force_recreate_bank_browser")),
         }
         try:
@@ -409,6 +412,19 @@ def _attach_financial_collections(
 
 
 def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool = False) -> dict[str, Any]:
+    if payload.get("bank_only"):
+        base = {
+            "queued": False,
+            "job_id": str(payload.get("sync_job_id") or ""),
+            "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
+            "business_id": payload.get("business_id") or "",
+            "branch": payload.get("branch") or "",
+            "date_from": payload.get("date_from") or "",
+            "date_to": payload.get("date_to") or "",
+            "totals": _empty_delivery_counts(),
+            "summary": [],
+        }
+        return _attach_financial_collections(base, payload, user)
     summary = _summary(_run_sync(payload, user, queue_only=queue_only))
     if queue_only:
         return summary
@@ -589,12 +605,13 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         value = str(payload.get(key) or "").strip()
         if value:
             argv.extend([flag, value])
-    for key, flag in (
-        ("max_orders", "--max-orders"),
-        ("max_reviews", "--max-reviews"),
+    for key, flag, default in (
+        ("max_orders", "--max-orders", 300),
+        ("max_reviews", "--max-reviews", 300),
+        ("bank_browser_timeout_seconds", "--bank-browser-timeout-seconds", 90),
     ):
         value = int(payload.get(key) or 0)
-        if value and value != 300:
+        if value and value != default:
             argv.extend([flag, str(value)])
     if payload.get("force_recreate_portal_sessions"):
         argv.append("--force-recreate-sessions")
@@ -610,6 +627,8 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.extend(["--browser-preferred-port", str(payload.get("browser_preferred_port") or "")])
     if payload.get("skip_financial_accounts"):
         argv.append("--skip-financial-accounts")
+    if payload.get("bank_only"):
+        argv.append("--bank-only")
     argv.append("--child-no-timeout")
     return argv
 
@@ -937,6 +956,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--browser-session-id", default="", help="Optional PC Agent browser session id.")
     parser.add_argument("--browser-agent-id", default="", help="Optional PC Agent id for bank browser auto-open.")
     parser.add_argument("--browser-preferred-port", type=int, default=None, help="Optional preferred CDP port for bank browser auto-open.")
+    parser.add_argument("--bank-browser-timeout-seconds", type=int, default=_env_int("YEOLJEONG_BANK_BROWSER_TIMEOUT_SECONDS", 90), help="Bank browser automation timeout per account.")
     parser.add_argument("--storage-state-path", default="", help="Optional Playwright storage state path.")
     parser.add_argument(
         "--force-recreate-sessions",
@@ -963,6 +983,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approved-input", default="", help="Write-only operator-approved challenge input for the current run.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
     parser.add_argument("--skip-financial-accounts", action="store_true", help="Skip bank and financial account collection.")
+    parser.add_argument("--bank-only", action="store_true", help="Run only bank account collection without delivery portal collection.")
     parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")
     parser.add_argument("--repeat-after-complete", action="store_true", help="After a complete cycle, sleep and start the next collection cycle.")
     parser.add_argument("--retry-blocked", action="store_true", help="Keep retrying manual action-required states such as captcha or portal blocking.")

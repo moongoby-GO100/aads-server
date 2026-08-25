@@ -1148,6 +1148,108 @@ async def lifespan(app: FastAPI):
                 )
             except Exception as e:
                 logger.warning(f"delivery_auto_collect_error: {e}")
+
+        async def _run_bank_auto_collect(
+            reason: str = "scheduled_bank",
+            force_recreate_bank_browser: bool = False,
+        ):
+            try:
+                from app.services.pc_agent_manager import pc_agent_manager
+                import asyncio
+                import json
+                import subprocess
+                import sys
+                from pathlib import Path
+
+                today = datetime.now(KST).date().isoformat()
+                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=45)
+                if wait_result["status"] != "online":
+                    wait_result = await _delivery_auto_collect_peer_agent()
+                if wait_result["status"] != "online":
+                    logger.info(
+                        "bank_auto_collect_skip: pc_agent_offline reason=%s error_code=%s",
+                        reason,
+                        wait_result.get("error_code") or "",
+                    )
+                    return
+
+                root_dir = Path(__file__).resolve().parents[1]
+                browser_timeout_seconds = _env_int("YEOLJEONG_BANK_BROWSER_TIMEOUT_SECONDS", 60)
+                process_timeout_seconds = _env_int("YEOLJEONG_BANK_AUTO_COLLECT_TIMEOUT_SECONDS", 180)
+                cmd = [
+                    sys.executable,
+                    str(root_dir / "scripts" / "yeoljeong_auto_collect.py"),
+                    "--bank-only",
+                    "--business-id",
+                    "all",
+                    "--branch",
+                    "전체",
+                    "--date-from",
+                    today,
+                    "--date-to",
+                    today,
+                    "--browser-agent-id",
+                    str(wait_result.get("agent_id") or ""),
+                    "--bank-browser-timeout-seconds",
+                    str(browser_timeout_seconds),
+                    "--attempt-timeout-seconds",
+                    "0",
+                    "--job-id",
+                    f"bank-auto-{reason}-{today}",
+                ]
+                if force_recreate_bank_browser:
+                    cmd.append("--force-recreate-bank-browser")
+
+                try:
+                    completed = await asyncio.to_thread(
+                        subprocess.run,
+                        cmd,
+                        cwd=str(root_dir),
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=process_timeout_seconds,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "bank_auto_collect_timeout reason=%s agent_id=%s timeout_seconds=%d browser_timeout_seconds=%d",
+                        reason,
+                        wait_result.get("agent_id"),
+                        process_timeout_seconds,
+                        browser_timeout_seconds,
+                    )
+                    return
+
+                output = str(completed.stdout or "").strip()
+                parsed: dict | None = None
+                if output:
+                    try:
+                        parsed = json.loads(output)
+                    except json.JSONDecodeError:
+                        parsed = None
+                collections = parsed.get("bank_collections") if isinstance(parsed, dict) else []
+                collections = collections if isinstance(collections, list) else []
+                logger.info(
+                    "bank_auto_collect_done reason=%s agent_id=%s exit=%d imported_rows=%d duplicate_rows=%d statuses=%s stderr=%s",
+                    reason,
+                    wait_result.get("agent_id"),
+                    completed.returncode,
+                    sum(int(item.get("imported_rows") or 0) for item in collections),
+                    sum(int(item.get("duplicate_rows") or 0) for item in collections),
+                    [
+                        {
+                            "bank_account_id": item.get("bank_account_id") or "",
+                            "status": item.get("status") or "",
+                            "error_code": item.get("error_code") or "",
+                        }
+                        for item in collections
+                    ],
+                    str(completed.stderr or "").strip()[-500:],
+                )
+            except Exception as e:
+                logger.warning(f"bank_auto_collect_error: {e}")
+
         scheduler.add_job(
             _run_delivery_auto_collect,
             CronTrigger(hour="7,12,18", minute=0, timezone="Asia/Seoul"),
@@ -1171,6 +1273,18 @@ async def lifespan(app: FastAPI):
             minutes=10,
             id="delivery_auto_collect_pc_agent_catchup",
             kwargs={"reason": "pc_agent_catchup", "services": ["baemin"], "mode": "full_backfill"},
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _run_bank_auto_collect,
+            CronTrigger(
+                hour=os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_HOURS", "8-23"),
+                minute=os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_MINUTE", "10"),
+                timezone="Asia/Seoul",
+            ),
+            id="bank_auto_collect",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

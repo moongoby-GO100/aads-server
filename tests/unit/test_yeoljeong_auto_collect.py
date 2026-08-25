@@ -100,6 +100,73 @@ def test_until_complete_payload_collects_financial_accounts_by_default():
     assert payload["skip_financial_accounts"] is False
 
 
+def test_bank_only_skips_delivery_and_collects_bank_accounts(monkeypatch):
+    calls = []
+
+    def fail_delivery_sync(payload, user, *, queue_only=False):
+        raise AssertionError("bank-only collection must not call delivery sync")
+
+    monkeypatch.setattr(auto_collect, "_run_sync", fail_delivery_sync)
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [
+            {
+                "id": "bank-browser-1",
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "connection_type": "browser",
+                "auto_sync": True,
+            }
+        ],
+    )
+
+    def fake_collect(account_id, payload, user):
+        calls.append((account_id, payload))
+        return {
+            "collection": {
+                "bank_account_id": account_id,
+                "business_id": payload["business_id"],
+                "branch_id": payload["branch_id"],
+                "status": "completed",
+                "connector_status": "CONFIGURED",
+                "connection_type": "browser",
+                "collected_rows": 1,
+                "imported_rows": 1,
+                "duplicate_rows": 0,
+                "message": "은행 거래 수집이 완료되었습니다.",
+            },
+            "transactions": [],
+        }
+
+    monkeypatch.setattr(auto_collect, "collect_bank_account_transactions", fake_collect)
+
+    args = auto_collect.build_parser().parse_args(
+        [
+            "--bank-only",
+            "--services",
+            "baemin",
+            "--business-id",
+            "biz-mia",
+            "--branch",
+            "열정국밥_미아점",
+            "--date-from",
+            "2026-08-26",
+            "--date-to",
+            "2026-08-26",
+        ]
+    )
+    payload = auto_collect._payload(args)
+    argv = auto_collect._child_collect_argv(payload)
+    result = auto_collect._run_collectors(payload, {"email": "system@aads.local", "is_admin": True})
+
+    assert payload["bank_only"] is True
+    assert "--bank-only" in argv
+    assert [call[0] for call in calls] == ["bank-browser-1"]
+    assert result["summary"] == []
+    assert result["bank_totals"]["imported_rows"] == 1
+
+
 def test_skip_financial_accounts_still_disables_bank_collection():
     args = auto_collect.build_parser().parse_args(["--until-complete", "--skip-financial-accounts"])
 
