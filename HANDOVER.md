@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-25 18:02 KST - Chat notification project/session context
+
+- Trigger: CEO asked to include which project and which conversation in AADS notifications.
+- Changes:
+  - `aads-dashboard/public/sw.js`: service worker web-push notifications now compose the title from project/workspace/session metadata when present.
+  - `aads-dashboard/src/app/chat/page.tsx`: local completion/stop notifications now pass active workspace, project key, and session title.
+  - `aads-dashboard/src/services/pushNotifications.ts`: notification options now carry project/session context and use session-scoped tags.
+  - `app/services/push_notifications.py`: server-side web-push payloads now join `chat_sessions` with `chat_workspaces`, derive project/workspace/session labels, and send `project`, `workspace_name`, and `session_title` in the payload.
+- Verification:
+  - `python3 -m py_compile app/services/push_notifications.py` passed.
+  - `node --check public/sw.js` passed in `aads-dashboard`.
+  - `npx eslint public/sw.js src/app/chat/page.tsx src/services/pushNotifications.ts` passed with 0 errors and 20 pre-existing warnings in `src/app/chat/page.tsx`.
+  - `bash deploy.sh bluegreen` passed: active API switched `8100 -> 8102`, DB schema check passed, chat table check passed, LLM service check passed.
+  - `curl -fsS -m 10 https://aads.newtalk.kr/api/v1/health` returned `status=ok`; `https://aads.newtalk.kr/login` returned HTTP 200.
+- Deployment:
+  - Backend active slot: `aads-server-green` on `127.0.0.1:8102`.
+  - Dashboard active slot: `aads-dashboard-green` on `127.0.0.1:3101`.
+  - Code commits: `aads-server` `d6ba35ee`, `aads-dashboard` `b1143eb`.
+- Notes:
+  - Unrelated dirty files were left uncommitted: `docs/CHANGELOG-go100-direct.md` in `aads-server`; `HANDOVER.md`, `src/lib/documentLinks.ts`, `src/lib/documentLinks.selftest.ts` in `aads-dashboard`.
+
 ## 2026-08-25 17:26 KST - FOOD bank browser reconnect recovery deploy
 
 - Trigger: CEO asked whether bank auto-collection reconnects after browser/session disconnects and requested immediate action.
