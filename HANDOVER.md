@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-25 14:31 KST - FOOD Baemin auto-collect operations applied
+
+- Request: Ensure Baemin data can be collected automatically.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: added `_settle_stale_delivery_collection_statuses()` and call it at the start of `sync_delivery()` so stale `queued/running` rows are marked `BACKGROUND_SYNC_STALE` before the next collection run.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added regression coverage that a stale running Baemin status is settled before a new successful sync.
+- Operations:
+  - Hot reloaded `app.api.yeoljeong_finance` and `app.services.yeoljeong_finance_service`: success=2, tasks_lost=0.
+  - Verified live DB state: Baemin full_backfill started at 2026-08-25 14:18:48 KST; Junghwa completed at 14:25:49 KST with sales 1, settlements 1, reviews 20, ads 1; Sungshin was still running at 14:31 KST.
+  - A temporary external fallback schedule was tested at 14:30 KST and correctly hit `COLLECTION_ALREADY_RUNNING`; all four fallback user schedules were then removed to avoid duplicate busy rows. Native `app/main.py` APScheduler jobs remain the intended path.
+- Verification:
+  - `.venv-playwright/bin/python -m py_compile app/services/yeoljeong_finance_service.py app/main.py app/api/yeoljeong_finance.py scripts/trigger_delivery_sync.py scripts/yeoljeong_auto_collect.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_finance_service.py -k 'stale or full_backfill or sync_delivery_settles' tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_api.py -k 'full_backfill or auto_collect or scheduler_contract'` passed: 35 passed, 140 deselected.
+- Not done:
+  - No commit, push, `deploy.sh`, or container restart in this step because the worktree already contains multiple unrelated FOOD/bank/docs dirty changes.
+
 ## 2026-08-24 17:09 KST - Shinhan bank corporate/personal quick-query flow
 
 - Trigger: CEO clarified Shinhan bank collection must split corporate accounts through the corporate quick-query page and individual business accounts through simple-query ID/PW login, account selection, account password, and date-range query. Mia branch credentials were updated by CEO.
@@ -8033,3 +8049,16 @@
 - Remaining:
   - Real Ddangyo data collection remains blocked at CAPTCHA/operator action. No rows were collected in the latest run.
   - This step was committed locally only after preserving unrelated dirty `docs/CHANGELOG-go100-direct.md`; no push or deploy was performed.
+
+## 2026-08-25 13:39 KST - FOOD Baemin auto-collect full_backfill contract
+
+- Request: Complete Baemin data auto-collection quickly.
+- Changes:
+  - Added the full Baemin backfill runtime options to `app/api/yeoljeong_finance.py::SyncPayload` so `/api/v1/yeoljeong-finance/sync` preserves `mode=full_backfill`, `all_businesses`, `max_orders`, `max_reviews`, and checkpoint payloads.
+  - Added `--mode full_backfill`, `--max-orders`, and `--max-reviews` support to `scripts/yeoljeong_auto_collect.py`, including child-process retry/timeout execution.
+  - Added regression coverage for API option preservation, CLI child argv preservation, and service-layer full_backfill context delivery into the Baemin PC Agent collector.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_baemin_order_history_collector.py tests/unit/test_baemin_review_collector.py tests/unit/test_baemin_ads_collector.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_auto_collect.py` succeeded: 181 passed.
+- Remaining:
+  - Real Baemin PC Agent E2E backfill was not run in this step.
+  - No commit, push, or deployment was performed because this worktree already contains unrelated FOOD/bank/docs dirty changes.

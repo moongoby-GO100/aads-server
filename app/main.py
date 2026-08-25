@@ -3,6 +3,7 @@ AADS FastAPI 서버.
 lifespan으로 그래프 컴파일 + checkpointer + MCP 초기화.
 """
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import os
 
 import structlog
@@ -74,6 +75,86 @@ logger = structlog.get_logger()
 
 # 전역 그래프 (lifespan에서 초기화)
 app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "memory_store": None}
+KST = timezone(timedelta(hours=9))
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _delivery_auto_collect_payload(
+    agent_id: str = "",
+    *,
+    services: list[str] | None = None,
+    mode: str = "",
+    reason: str = "scheduled",
+) -> dict:
+    selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
+    today = datetime.now(KST).date()
+    payload = {
+        "services": selected_services,
+        "business_id": "all",
+        "branch": "전체",
+        "all_businesses": True,
+        "background": False,
+        "prefer_pc_agent": True,
+        "require_pc_agent": True,
+        "pc_agent_id": str(agent_id or ""),
+        "force_recreate_portal_sessions": False,
+        "close_portal_browser_on_complete": True,
+        "skip_financial_accounts": True,
+        "sync_job_id": f"delivery-auto-{reason}-{today.isoformat()}",
+    }
+    if mode:
+        payload["mode"] = mode
+    if mode == "full_backfill" and "baemin" in selected_services:
+        payload.update(
+            {
+                "date_from": os.getenv("YEOLJEONG_BAEMIN_BACKFILL_FROM", "2024-01-01"),
+                "date_to": today.isoformat(),
+                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 300),
+                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 300),
+            }
+        )
+    return payload
+
+
+def _delivery_auto_collect_count_total(row: dict) -> int:
+    counts = row.get("counts") if isinstance(row.get("counts"), dict) else {}
+    return sum(int(counts.get(kind) or 0) for kind in ("sales", "settlements", "reviews", "ads"))
+
+
+def _delivery_auto_collect_baemin_catchup_due(
+    statuses: list[dict],
+    *,
+    expected_scope_count: int = 4,
+) -> bool:
+    latest: dict[tuple[str, str], dict] = {}
+    for row in statuses if isinstance(statuses, list) else []:
+        if str(row.get("service") or "") != "baemin":
+            continue
+        key = (str(row.get("business_id") or ""), str(row.get("branch") or ""))
+        current = latest.get(key)
+        if current is None or str(row.get("updated_at") or row.get("created_at") or "") > str(
+            current.get("updated_at") or current.get("created_at") or ""
+        ):
+            latest[key] = row
+    if len(latest) < expected_scope_count:
+        return True
+    for row in latest.values():
+        status = str(row.get("status") or "").strip()
+        if status in {"queued", "running"}:
+            return False
+        if status in {"failed", "action_required"}:
+            return True
+        if str(row.get("error_code") or "").strip():
+            return True
+        if _delivery_auto_collect_count_total(row) <= 0:
+            return True
+    return False
 
 
 @asynccontextmanager
@@ -973,36 +1054,48 @@ async def lifespan(app: FastAPI):
             max_instances=1, coalesce=True,
         )
 
-        # P0-2: 배달 자동수집 데몬 — 07:00/12:00/18:00 KST (PC Agent 온라인 시)
-        async def _run_delivery_auto_collect():
+        # P0-2: 배달 자동수집 데몬 — 정시 수집 + 배민 full_backfill catch-up (PC Agent 온라인 시)
+        async def _run_delivery_auto_collect(
+            reason: str = "scheduled_delivery",
+            services: list[str] | None = None,
+            mode: str = "",
+        ):
             try:
                 from app.services.pc_agent_manager import pc_agent_manager
                 from app.services import yeoljeong_finance_service as yjf_svc
                 import asyncio
 
-                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=180)
+                system_user = {"user_id": "system-daemon", "role": "admin", "name": "자동수집데몬"}
+                selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
+                if reason == "pc_agent_catchup" and mode == "full_backfill":
+                    statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    if not _delivery_auto_collect_baemin_catchup_due(statuses):
+                        logger.info("delivery_auto_collect_catchup_skip: baemin_recent_or_running")
+                        return
+
+                wait_timeout = 45 if reason == "pc_agent_catchup" else 180
+                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=wait_timeout)
                 if wait_result["status"] != "online":
-                    logger.info("delivery_auto_collect_skip: pc_agent_offline")
+                    logger.info(
+                        "delivery_auto_collect_skip: pc_agent_offline reason=%s mode=%s services=%s",
+                        reason,
+                        mode,
+                        selected_services,
+                    )
                     return
 
-                system_user = {"user_id": "system-daemon", "role": "admin", "name": "자동수집데몬"}
-                payload = {
-                    "services": ["baemin", "coupangeats", "yogiyo", "ddangyo"],
-                    "business_id": "all",
-                    "branch": "전체",
-                    "all_businesses": True,
-                    "background": False,
-                    "prefer_pc_agent": True,
-                    "require_pc_agent": True,
-                    "pc_agent_id": str(wait_result.get("agent_id") or ""),
-                    "force_recreate_portal_sessions": False,
-                    "close_portal_browser_on_complete": True,
-                    "skip_financial_accounts": True,
-                }
+                payload = _delivery_auto_collect_payload(
+                    str(wait_result.get("agent_id") or ""),
+                    services=selected_services,
+                    mode=mode,
+                    reason=reason,
+                )
                 result = await asyncio.to_thread(yjf_svc.sync_delivery, payload, system_user)
                 summary = result.get("summary") if isinstance(result, dict) else []
                 logger.info(
-                    "delivery_auto_collect_done agent_id=%s summary_count=%d result_keys=%s",
+                    "delivery_auto_collect_done reason=%s mode=%s agent_id=%s summary_count=%d result_keys=%s",
+                    reason,
+                    mode,
                     wait_result.get("agent_id"),
                     len(summary) if isinstance(summary, list) else 0,
                     list((result or {}).keys()) if isinstance(result, dict) else [],
@@ -1013,6 +1106,25 @@ async def lifespan(app: FastAPI):
             _run_delivery_auto_collect,
             CronTrigger(hour="7,12,18", minute=0, timezone="Asia/Seoul"),
             id="delivery_auto_collect",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _run_delivery_auto_collect,
+            CronTrigger(hour="2,14,22", minute=30, timezone="Asia/Seoul"),
+            id="delivery_auto_collect_baemin_full_backfill",
+            kwargs={"reason": "baemin_full_backfill", "services": ["baemin"], "mode": "full_backfill"},
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _run_delivery_auto_collect,
+            "interval",
+            minutes=10,
+            id="delivery_auto_collect_pc_agent_catchup",
+            kwargs={"reason": "pc_agent_catchup", "services": ["baemin"], "mode": "full_backfill"},
             replace_existing=True,
             max_instances=1,
             coalesce=True,
