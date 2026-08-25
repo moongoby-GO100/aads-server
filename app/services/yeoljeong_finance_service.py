@@ -264,7 +264,6 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
 CANONICAL_BRANCHES: list[dict[str, Any]] = [
     {"id": "branch-junghwa", "name": "중화점", "businessId": "biz-junghwa", "status": "active", "phone": "", "address": "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)"},
     {"id": "branch-sungshin", "name": "성신여대점", "businessId": "biz-sungshin", "status": "active", "phone": "", "address": ""},
-    {"id": "branch-eonni-naengmyeon", "name": "언니냉면", "businessId": "biz-eonni-naengmyeon", "status": "active", "phone": "", "address": ""},
     {"id": "branch-gangbuk-mia", "name": "열정국밥_미아점", "businessId": "biz-mia", "status": "active", "phone": "", "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)"},
 ]
 
@@ -277,7 +276,10 @@ BRANCH_ALIASES = {
     "강북미아점": MIA_BRANCH_NAME,
     "미아점": MIA_BRANCH_NAME,
 }
-BUSINESS_BY_BRANCH = {item["name"]: item["businessId"] for item in CANONICAL_BRANCHES}
+BUSINESS_BY_BRANCH = {
+    **{item["name"]: item["businessId"] for item in CANONICAL_BRANCHES},
+    "성신여대역점": "biz-eonni-naengmyeon",
+}
 
 
 def _now() -> str:
@@ -3019,6 +3021,32 @@ async def save_settings_persisted(payload: dict[str, Any], user: dict[str, Any])
                         sort_order,
                         updated_by,
                     )
+                business_ids = [str(item["id"]) for item in settings["businesses"]]
+                branch_ids = [str(item["id"]) for item in settings["branches"]]
+                await conn.execute(
+                    """
+                    UPDATE yeoljeong_branches
+                       SET deleted_at = NOW(),
+                           updated_at = NOW(),
+                           updated_by = $2
+                     WHERE deleted_at IS NULL
+                       AND NOT (id = ANY($1::text[]))
+                    """,
+                    branch_ids,
+                    updated_by,
+                )
+                await conn.execute(
+                    """
+                    UPDATE yeoljeong_businesses
+                       SET deleted_at = NOW(),
+                           updated_at = NOW(),
+                           updated_by = $2
+                     WHERE deleted_at IS NULL
+                       AND NOT (id = ANY($1::text[]))
+                    """,
+                    business_ids,
+                    updated_by,
+                )
                 extra = {
                     "accounts": settings["accounts"],
                     "staff": settings["staff"],
@@ -3276,6 +3304,16 @@ def _normalize_stale_delivery_collection_statuses(rows: list[dict[str, Any]]) ->
     return changed
 
 
+def _settle_stale_delivery_collection_statuses() -> None:
+    statuses = _read("delivery_collection_status")
+    if not _normalize_stale_delivery_collection_statuses(statuses):
+        return
+    _write_delivery_collection_statuses(statuses)
+    for row in statuses:
+        if str(row.get("error_code") or "") == "BACKGROUND_SYNC_STALE":
+            _run_db(_db_upsert_ledger("delivery_collection_status", row))
+
+
 def _delivery_sync_window(payload: dict[str, Any]) -> tuple[date, date]:
     today = datetime.now(KST).date()
     default_from = today.replace(day=1).isoformat()
@@ -3286,7 +3324,8 @@ def _delivery_sync_window(payload: dict[str, Any]) -> tuple[date, date]:
         date_to = date.fromisoformat(date_to_text)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="수집 기간은 YYYY-MM-DD 형식이어야 합니다") from exc
-    if date_from > date_to or (date_to - date_from).days > 62:
+    full_backfill = _delivery_full_backfill_requested(payload)
+    if date_from > date_to or (not full_backfill and (date_to - date_from).days > 62):
         raise HTTPException(status_code=400, detail="수집 기간은 시작일 이후 최대 63일입니다")
     return date_from, date_to
 
@@ -3313,12 +3352,43 @@ def _delivery_all_scope_requested(payload: dict[str, Any]) -> bool:
     return bool(payload.get("all_businesses")) or business in markers or branch in markers
 
 
+def _delivery_full_backfill_requested(payload: dict[str, Any]) -> bool:
+    return str(payload.get("mode") or payload.get("collection_mode") or "").strip().lower() == "full_backfill"
+
+
+def _delivery_backfill_status_payload(payload: dict[str, Any], result: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _delivery_full_backfill_requested(payload):
+        return {}
+    diagnostics = result.get("diagnostics") if isinstance(result, dict) and isinstance(result.get("diagnostics"), dict) else {}
+    return {
+        "mode": "full_backfill",
+        "checkpoint": diagnostics.get("checkpoint") or diagnostics.get("checkpoint_out") or {},
+        "metrics": {
+            "orders_seen": diagnostics.get("order_history_orders_seen") or diagnostics.get("orders_seen") or 0,
+            "orders_saved": diagnostics.get("order_history_orders_saved") or diagnostics.get("orders_saved") or 0,
+            "reviews_saved": diagnostics.get("review_backfill_reviews_saved") or 0,
+            "ads_saved": diagnostics.get("ads_backfill_ads_saved") or 0,
+            "detail_failed": diagnostics.get("order_history_detail_failed") or diagnostics.get("detail_failed") or 0,
+            "settlement_pending": diagnostics.get("order_history_settlement_pending") or diagnostics.get("settlement_pending") or 0,
+        },
+        "limits": {
+            "concurrency": 1,
+            "store_sequence": True,
+            "order_detail_jitter_seconds": [1.0, 1.8],
+            "page_jitter_seconds": [2.0, 4.0],
+            "max_orders": int(payload.get("max_orders") or payload.get("maxOrders") or 300),
+            "max_reviews": int(payload.get("max_reviews") or payload.get("maxReviews") or 300),
+            "max_runtime_seconds": 12 * 60,
+        },
+    }
+
+
 def _delivery_sync_scopes(
     payload: dict[str, Any],
     requested_services: list[str],
     all_accounts: list[dict[str, Any]],
 ) -> list[tuple[str, str]]:
-    if not _delivery_all_scope_requested(payload):
+    if not _delivery_all_scope_requested(payload) and not _delivery_full_backfill_requested(payload):
         return [
             _normalize_delivery_scope(
                 str(payload.get("business_id") or MIA_BUSINESS_ID),
@@ -3342,6 +3412,8 @@ def _delivery_sync_scopes(
         if scope not in seen:
             seen.add(scope)
             account_scopes.append(scope)
+    if _delivery_full_backfill_requested(payload):
+        return account_scopes or canonical_scopes
     return account_scopes or canonical_scopes
 
 
@@ -3403,6 +3475,7 @@ def _delivery_sync_busy_result(payload: dict[str, Any], user: dict[str, Any]) ->
                 "status": "action_required",
                 "raw_status": "busy",
                 "counts": _delivery_empty_counts(),
+                "payload": _delivery_backfill_status_payload(payload),
                 "error_code": "COLLECTION_ALREADY_RUNNING",
                 "message": message,
                 "started_at": now_text,
@@ -3481,6 +3554,7 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
                     "date_to": date_to.isoformat(),
                     "status": "queued",
                     "counts": _delivery_empty_counts(),
+                    "payload": _delivery_backfill_status_payload(payload),
                     "error_code": "",
                     "message": message,
                     "queued_at": queued_at,
@@ -4763,13 +4837,19 @@ def _collect_bank_via_browser(
     from app.services.yeoljeong_bank_browser_connector import (
         bank_browser_work_key,
         collect_bank_via_browser_session_async,
+        shinhan_individual_browser_work_key,
     )
 
     account_id = str(account.get("id") or "")
     browser_session_id = str(payload.get("browser_session_id") or "").strip()
     browser_work_key_val = str(payload.get("browser_work_key") or "").strip()
+    business_entity_type = _business_entity_type_for_bank_scope(business_id)
+    service_code = _bank_service_code_for_account(account)
     if not browser_work_key_val:
-        browser_work_key_val = bank_browser_work_key(account_id, business_id, branch_id)
+        if service_code == "shinhan_business" and business_entity_type not in {"corporation", "corporate", "법인"}:
+            browser_work_key_val = shinhan_individual_browser_work_key(business_id, branch_id)
+        else:
+            browser_work_key_val = bank_browser_work_key(account_id, business_id, branch_id)
     bank_credentials = _bank_quick_credentials_for_account(
         account,
         business_id=business_id,
@@ -4800,7 +4880,8 @@ def _collect_bank_via_browser(
                 account_no=str(bank_credentials.get("account_no") or ""),
                 account_password=str(bank_credentials.get("account_password") or ""),
                 business_registration_no=str(bank_credentials.get("business_registration_no") or ""),
-                business_entity_type=_business_entity_type_for_bank_scope(business_id),
+                business_entity_type=business_entity_type,
+                browser_timeout_seconds=timeout_seconds,
             )
 
         browser_result = _run_bank_browser_async(
@@ -4827,6 +4908,7 @@ def _collect_bank_via_browser(
             "diagnostics": {
                 "browser_work_key": browser_work_key_val,
                 "browser_timeout_seconds": str(int(timeout_seconds)),
+                "session_recovery_plan": "connect_pc_agent_then_retry_same_work_key",
             },
             "message": f"은행 브라우저 수집이 {int(timeout_seconds)}초 안에 완료되지 않았습니다.",
         }
@@ -6518,12 +6600,16 @@ async def _collect_delivery_from_browser_bridge_session_async(
 async def _collect_baemin_from_browser_bridge_session_async(
     account: dict[str, Any],
     browser_auth: dict[str, str],
+    backfill: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     session_id = str(browser_auth.get("browser_session_id") or "").strip()
     if not session_id:
         return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_REQUIRED", "records": {}}
     try:
         from app.browser_bridge.service import get_browser_bridge_service
+        from app.services.baemin_order_history_collector import BackfillLimits, collect_baemin_order_history
+        from app.services.baemin_review_collector import collect_reviews
+        from app.services.baemin_ads_collector import collect_ads
         from app.services.yeoljeong_delivery_collectors import parse_portal_export
 
         bridge = get_browser_bridge_service()
@@ -6674,6 +6760,26 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 },
                 "message": "배민 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 직접 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
+        full_backfill = bool(backfill and backfill.get("mode") == "full_backfill")
+        max_orders = min(300, max(1, int((backfill or {}).get("max_orders") or account.get("_max_orders") or 300)))
+        history_result = await collect_baemin_order_history(
+            page,
+            account,
+            str(account.get("_date_from") or ""),
+            str(account.get("_date_to") or ""),
+            {
+                "max_orders": max_orders,
+                "checkpoint": (backfill or {}).get("checkpoint") or {},
+                "limits": BackfillLimits(max_records=max_orders, max_runtime_seconds=12 * 60),
+            },
+        )
+        history_records = history_result.get("records") if isinstance(history_result, dict) else {}
+        history_total = sum(
+            len(rows)
+            for rows in (history_records or {}).values()
+            if isinstance(rows, list)
+        )
+
         source = html or text
         dashboard_records = _baemin_dashboard_records(
             text,
@@ -6689,9 +6795,36 @@ async def _collect_baemin_from_browser_bridge_session_async(
             str(account.get("branch") or ""),
         )
         records = _delivery_empty_record_lists()
-        records.update({name: rows for name, rows in dashboard_records.items() if rows})
+        if history_total:
+            for name, rows in (history_records or {}).items():
+                if rows:
+                    records[name] = list(rows)
+        review_result: dict[str, Any] = {}
+        ads_result: dict[str, Any] = {}
+        if full_backfill:
+            max_reviews = min(300, max(1, int((backfill or {}).get("max_reviews") or 300)))
+            review_result = await collect_reviews(
+                page,
+                business_id=str(account.get("business_id") or ""),
+                branch=str(account.get("branch") or ""),
+                max_records=max_reviews,
+            )
+            ads_result = await collect_ads(
+                page,
+                business_id=str(account.get("business_id") or ""),
+                branch=str(account.get("branch") or ""),
+            )
+            for name, rows in (review_result.get("records") or {}).items():
+                if rows:
+                    records[name] = list(rows)
+            for name, rows in (ads_result.get("records") or {}).items():
+                if rows:
+                    records[name] = list(rows)
+        for name, rows in dashboard_records.items():
+            if rows and not records.get(name):
+                records[name] = rows
         for name, rows in (parsed.get("records") or {}).items():
-            if rows:
+            if rows and not records.get(name):
                 records[name] = rows
         total_records = sum(len(rows) for rows in records.values())
         status = "succeeded" if total_records else str(parsed.get("status") or "partial")
@@ -6705,6 +6838,25 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
                 "parsed_page_kind": kind,
+                "order_history_status": str((history_result or {}).get("status") or ""),
+                "order_history_error_code": str((history_result or {}).get("error_code") or ""),
+                "order_history_orders_seen": str(
+                    ((history_result or {}).get("diagnostics") or {}).get("orders_seen") or 0
+                ),
+                "order_history_orders_saved": str(
+                    ((history_result or {}).get("diagnostics") or {}).get("orders_saved") or 0
+                ),
+                "order_history_detail_failed": str(
+                    ((history_result or {}).get("diagnostics") or {}).get("detail_failed") or 0
+                ),
+                "order_history_settlement_pending": str(
+                    ((history_result or {}).get("diagnostics") or {}).get("settlement_pending") or 0
+                ),
+                "checkpoint": ((history_result or {}).get("diagnostics") or {}).get("checkpoint_out") or {},
+                "review_backfill_status": str((review_result or {}).get("status") or ""),
+                "review_backfill_reviews_saved": len(((review_result or {}).get("records") or {}).get("reviews") or []),
+                "ads_backfill_status": str((ads_result or {}).get("status") or ""),
+                "ads_backfill_ads_saved": len(((ads_result or {}).get("records") or {}).get("ads") or []),
                 "dashboard_sales": str(len(dashboard_records["sales"])),
                 "dashboard_settlements": str(len(dashboard_records["settlements"])),
                 "dashboard_reviews": str(len(dashboard_records["reviews"])),
@@ -6740,12 +6892,13 @@ async def _collect_baemin_from_browser_bridge_session_async(
 def _collect_baemin_from_browser_bridge_session(
     account: dict[str, Any],
     browser_auth: dict[str, str],
+    backfill: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if str(browser_auth.get("browser_bridge_mode") or "") != "local_agent":
         return None
     if not str(browser_auth.get("browser_session_id") or "").strip():
         return None
-    return _run_async(_collect_baemin_from_browser_bridge_session_async(account, browser_auth))
+    return _run_async(_collect_baemin_from_browser_bridge_session_async(account, browser_auth, backfill))
 
 
 def _collect_delivery_from_browser_bridge_session(
@@ -6808,6 +6961,7 @@ def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) 
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
+    _settle_stale_delivery_collection_statuses()
     lock_fd = _try_acquire_delivery_sync_lock()
     if lock_fd is None:
         return _delivery_sync_busy_result(payload, user)
@@ -6895,6 +7049,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 "date_to": date_to.isoformat(),
                 "status": "running",
                 "counts": _delivery_empty_counts(),
+                "payload": _delivery_backfill_status_payload(payload),
                 "error_code": "",
                 "started_at": synced_at,
                 "created_at": synced_at,
@@ -6911,6 +7066,11 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             else:
                 collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
                 collection_account = dict(account)
+                collection_account["_date_from"] = date_from.isoformat()
+                collection_account["_date_to"] = date_to.isoformat()
+                collection_account["_max_orders"] = int(payload.get("max_orders") or payload.get("maxOrders") or 300)
+                collection_account["_max_reviews"] = int(payload.get("max_reviews") or payload.get("maxReviews") or 300)
+                collection_account["_mode"] = str(payload.get("mode") or "")
                 captcha_value = _delivery_captcha_value_for_account(payload, collection_account, service, business_id, branch)
                 if captcha_value:
                     collection_account["captcha_value"] = captcha_value
@@ -6920,8 +7080,24 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 can_use_browser_auth = bool(browser_auth["storage_state_path"] or browser_auth["browser_session_id"])
                 bridge_result = None
                 if can_use_browser_auth:
+                    backfill_context = (
+                        {
+                            "mode": "full_backfill",
+                            "date_from": date_from.isoformat(),
+                            "date_to": date_to.isoformat(),
+                            "max_orders": int(payload.get("max_orders") or payload.get("maxOrders") or 300),
+                            "max_reviews": int(payload.get("max_reviews") or payload.get("maxReviews") or 300),
+                            "checkpoint": payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {},
+                        }
+                        if service == "baemin" and _delivery_full_backfill_requested(payload)
+                        else None
+                    )
                     bridge_result = (
-                        _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
+                        (
+                            _collect_baemin_from_browser_bridge_session(collection_account, browser_auth, backfill_context)
+                            if backfill_context
+                            else _collect_baemin_from_browser_bridge_session(collection_account, browser_auth)
+                        )
                         if service == "baemin"
                         else _collect_delivery_from_browser_bridge_session(
                             collection_account,
@@ -7060,6 +7236,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     "status": public_status,
                     "raw_status": result.get("status") or "",
                     "counts": counts,
+                    "payload": _delivery_backfill_status_payload(payload, result),
                     "error_code": public_error_code,
                     "diagnostics": result_diagnostics,
                     "attempt_count": attempt_count,

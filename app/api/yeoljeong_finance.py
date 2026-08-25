@@ -113,11 +113,20 @@ class AccountUpsertPayload(BaseModel):
 class SyncPayload(BaseModel):
     services: list[str] = Field(default_factory=list)
     account_id: str = ""
+    server_account_id: str = ""
     business_id: str = "biz-mia"
     branch: str = "열정국밥_미아점"
     date_from: str = ""
     date_to: str = ""
+    all_businesses: bool = False
+    mode: str = ""
+    collection_mode: str = ""
+    max_orders: int = Field(default=300, ge=1, le=300)
+    max_reviews: int = Field(default=300, ge=1, le=300)
+    checkpoint: dict[str, Any] = Field(default_factory=dict)
     browser_session_id: str = ""
+    browser_agent_id: str = ""
+    browser_preferred_port: int | None = None
     storage_state_path: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     background: bool = False
     sync_job_id: str = ""
@@ -127,6 +136,15 @@ class SyncPayload(BaseModel):
     operator_approved: bool = False
     approved_input: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     force_recreate_portal_sessions: bool = False
+    force_recreate_bank_browser: bool = False
+    force_recreate_browser: bool = False
+    close_portal_browser_on_complete: bool = True
+    keep_browser_open: bool = False
+    require_pc_agent: bool = False
+    allow_server_headless_fallback: bool = False
+    allowServerHeadlessFallback: bool = False
+    auto_open_bank_browser: bool = True
+    skip_financial_accounts: bool = False
 
 
 def _run_delivery_sync_background(payload: dict[str, Any], current_user: dict[str, Any]) -> None:
@@ -263,6 +281,7 @@ class BankAccountCollectPayload(BaseModel):
     browser_agent_id: str = ""
     browser_preferred_port: int | None = None
     force_recreate_browser: bool = False
+    browser_timeout_seconds: float = Field(default=120, ge=5, le=300)
 
 
 @router.get("/session")

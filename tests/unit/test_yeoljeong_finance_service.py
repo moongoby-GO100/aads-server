@@ -39,11 +39,20 @@ def seed_approved_employee(name="가입 직원", email="member@example.com"):
 
 
 def disable_delivery_browser_auth(monkeypatch):
+    def disabled_browser_auth(payload, account, service_name, business_id, branch):
+        return {
+            "storage_state_path": "",
+            "browser_session_id": "",
+            "browser_bridge_mode": "",
+            "browser_auth_strategy": "disabled_for_unit_test",
+        }
+
     monkeypatch.setattr(
         service,
         "_delivery_browser_auth_options",
         lambda payload: {"storage_state_path": "", "browser_session_id": "", "browser_bridge_mode": ""},
     )
+    monkeypatch.setattr(service, "_delivery_browser_auth_for_account", disabled_browser_auth)
 
 
 def test_delivery_public_error_code_keeps_pc_agent_session_required():
@@ -205,7 +214,6 @@ def test_save_settings_persists_ui_settings_without_overwriting_automation_confi
     assert [item["businessId"] for item in loaded["settings"]["branches"]] == [
         "biz-junghwa",
         "biz-sungshin",
-        "biz-eonni-naengmyeon",
         "biz-mia",
     ]
     raw = settings_path.read_text(encoding="utf-8")
@@ -252,7 +260,6 @@ def test_save_settings_preserves_custom_businesses_and_branches(tmp_path, monkey
     assert {item["businessId"] for item in settings["branches"]} == {
         "biz-junghwa",
         "biz-sungshin",
-        "biz-eonni-naengmyeon",
         "biz-mia",
         "biz-corp",
     }
@@ -1014,6 +1021,140 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
     assert all(row["status"] == "succeeded" for row in statuses)
 
 
+def test_delivery_full_backfill_scope_and_window_contract():
+    payload = {
+        "services": ["baemin"],
+        "mode": "full_backfill",
+        "business_id": "biz-mia",
+        "branch": "열정국밥_미아점",
+        "date_from": "2026-01-01",
+        "date_to": "2026-08-25",
+    }
+
+    date_from, date_to = service._delivery_sync_window(payload)
+    scopes = service._delivery_sync_scopes(
+        payload,
+        ["baemin"],
+        [
+            {"service": "baemin", "business_id": "biz-junghwa", "branch": "중화점"},
+            {"service": "baemin", "business_id": "biz-sungshin", "branch": "성신여대점"},
+            {"service": "baemin", "business_id": "biz-eonni-naengmyeon", "branch": "성신여대역점"},
+            {"service": "baemin", "business_id": "biz-mia", "branch": "열정국밥_미아점"},
+        ],
+    )
+
+    assert date_from.isoformat() == "2026-01-01"
+    assert date_to.isoformat() == "2026-08-25"
+    assert len(scopes) == 4
+    assert ("biz-eonni-naengmyeon", "언니냉면") not in scopes
+    assert ("biz-eonni-naengmyeon", "성신여대역점") in scopes
+
+
+def test_delivery_full_backfill_status_payload_contract():
+    payload = {"mode": "full_backfill", "max_orders": 200, "max_reviews": 150}
+    result = {
+        "diagnostics": {
+            "checkpoint": {"orders": {"last_order_no": "T2FP00000XZV"}},
+            "order_history_orders_saved": "12",
+            "review_backfill_reviews_saved": 3,
+            "ads_backfill_ads_saved": 2,
+        }
+    }
+
+    status_payload = service._delivery_backfill_status_payload(payload, result)
+
+    assert status_payload["mode"] == "full_backfill"
+    assert status_payload["checkpoint"]["orders"]["last_order_no"] == "T2FP00000XZV"
+    assert status_payload["metrics"]["orders_saved"] == "12"
+    assert status_payload["metrics"]["reviews_saved"] == 3
+    assert status_payload["metrics"]["ads_saved"] == 2
+    assert status_payload["limits"]["concurrency"] == 1
+    assert status_payload["limits"]["max_orders"] == 200
+    assert status_payload["limits"]["max_reviews"] == 150
+
+
+def test_sync_delivery_settles_stale_running_status_before_new_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    disable_delivery_browser_auth(monkeypatch)
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: "decrypted-secret")
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "password_enc": "ciphertext",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "collection_mode": "browser-automation",
+            }
+        ],
+    )
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "stale-run",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "status": "running",
+                "started_at": "2026-01-01T00:00:00+09:00",
+                "created_at": "2026-01-01T00:00:00+09:00",
+                "updated_at": "2026-01-01T00:00:00+09:00",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0, "ads": 0},
+            }
+        ],
+    )
+
+    from app.services import yeoljeong_delivery_collectors as collectors
+
+    def fake_collect(account, secret, date_from, date_to):
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "sale-new",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "platform": "baemin",
+                        "record_type": "sales",
+                        "occurred_on": "2026-08-25",
+                        "gross_amount": 10000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+                "ads": [],
+            },
+        }
+
+    monkeypatch.setattr(collectors, "collect_account", fake_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-25",
+            "allow_server_headless_fallback": True,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    stale = next(row for row in statuses if row["id"] == "stale-run")
+    assert result["summary"][0]["status"] == "succeeded"
+    assert stale["status"] == "failed"
+    assert stale["raw_status"] == "stale"
+    assert stale["error_code"] == "BACKGROUND_SYNC_STALE"
+
+
 def test_sync_delivery_prefers_saved_browser_credentials_over_canonical_upload_account(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     disable_delivery_browser_auth(monkeypatch)
@@ -1332,6 +1473,97 @@ def test_sync_delivery_uses_baemin_pc_agent_session_without_password(tmp_path, m
     assert result["summary"][0]["status"] == "succeeded"
     assert result["summary"][0]["counts"]["sales"] == 1
     assert service._read("delivery_collection_status")[0]["diagnostics"]["auth_mode"] == "pc_agent_browser"
+
+
+def test_sync_delivery_passes_full_backfill_context_to_baemin_pc_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": str(payload.get("browser_session_id") or ""),
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+    captured = {}
+
+    def fake_bridge_collect(account, browser_auth, backfill=None):
+        captured["account"] = account
+        captured["browser_auth"] = browser_auth
+        captured["backfill"] = backfill
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "baemin-full-sale-1",
+                        "source_id": "T2FP00000XZV",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "platform": "baemin",
+                        "record_type": "sales",
+                        "occurred_on": "2026-08-24",
+                        "gross_amount": 28000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+                "ads": [],
+            },
+            "diagnostics": {
+                "auth_mode": "pc_agent_browser",
+                "order_history_orders_saved": 1,
+                "checkpoint": {"last_order_no": "T2FP00000XZV"},
+            },
+        }
+
+    monkeypatch.setattr(service, "_collect_baemin_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "mode": "full_backfill",
+            "date_from": "2026-01-01",
+            "date_to": "2026-08-25",
+            "max_orders": 200,
+            "max_reviews": 150,
+            "checkpoint": {"last_order_no": "previous-order"},
+            "browser_session_id": "bb-pc-agent",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "succeeded"
+    assert captured["backfill"] == {
+        "mode": "full_backfill",
+        "date_from": "2026-01-01",
+        "date_to": "2026-08-25",
+        "max_orders": 200,
+        "max_reviews": 150,
+        "checkpoint": {"last_order_no": "previous-order"},
+    }
+    status = service._read("delivery_collection_status")[0]
+    assert status["payload"]["mode"] == "full_backfill"
+    assert status["payload"]["metrics"]["orders_saved"] == 1
+    assert status["payload"]["checkpoint"] == {"last_order_no": "T2FP00000XZV"}
 
 
 def test_sync_delivery_closes_pc_agent_session_when_marked_complete(tmp_path, monkeypatch):

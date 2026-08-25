@@ -186,7 +186,10 @@ class _LocalAgentPage:
                     lease_ttl_seconds=lease_ttl_seconds,
                     command_timeout_seconds=command_timeout_seconds,
                 )
-                if result.get("status") != "success" and str(result.get("error_code") or "") == "PC_AGENT_OFFLINE":
+                if result.get("status") != "success" and (
+                    str(result.get("error_code") or "") == "PC_AGENT_OFFLINE"
+                    or os.path.exists("/.dockerenv")
+                ):
                     active_result = await self._service._execute_pc_agent_route_via_active_api(
                         command_type=command_type,
                         params=merged,
@@ -339,9 +342,12 @@ class _LocalAgentPage:
         # Playwright page.evaluate() semantics.
         elif self._FUNC_EXPR_RE.match(expr):
             expr = f"({expr})()"
+        browser_params: dict[str, Any] = {"expression": expr}
+        if kwargs.get("await_promise"):
+            browser_params["await_promise"] = True
         data = await self._run_browser_command(
             "browser_eval",
-            {"expression": expr},
+            browser_params,
             command_timeout_seconds=command_timeout_seconds,
             queue_wait_timeout_seconds=queue_wait_timeout_seconds,
         )
@@ -426,6 +432,7 @@ class BrowserBridgeService:
         self._headless_context: Any = None
         self._session_contexts: dict[str, Any] = {}
         self._session_browsers: dict[str, Any] = {}
+        self._active_api_route_url_cache: str = ""
 
     def create_pairing(
         self,
@@ -555,23 +562,13 @@ class BrowserBridgeService:
         }
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
-        recreate_suffix = ""
         base_isolation_id = isolation_id or normalized_work_key
-        # AADS-FOOD: force_recreate 시에도 PC Agent Chrome 프로필(isolation_id)은 유지한다.
-        # 프로필이 바뀌면 포털 로그인 쿠키가 사라져 PC_AGENT_LOGIN_REQUIRED가 반복된다.
-        keep_profile_on_recreate = str(
-            os.environ.get("AADS_BROWSER_PROFILE_STABLE_ON_RECREATE", "1")
-        ).strip().lower() not in {"0", "false", "no", "off"}
         if base_isolation_id:
-            if force_recreate and not keep_profile_on_recreate:
-                recreate_suffix = new_session_id().replace("bb-", "", 1)[:12]
-                launch_params["isolation_id"] = f"{base_isolation_id[:90]}-{recreate_suffix}"
-            else:
-                launch_params["isolation_id"] = base_isolation_id
+            # Workflow sessions use one stable Chrome profile. Changing the
+            # profile on recreate loses bank portal login/cookie state.
+            launch_params["isolation_id"] = base_isolation_id
         if normalized_work_key:
-            launch_params["work_key"] = (
-                f"{normalized_work_key[:90]}-{recreate_suffix}" if force_recreate and recreate_suffix else normalized_work_key
-            )
+            launch_params["work_key"] = normalized_work_key
 
         if self._route_pc_agent_via_active_api_first():
             active_queue_wait = (
@@ -635,22 +632,21 @@ class BrowserBridgeService:
                 }
                 if preferred_port:
                     health_params["preferred_port"] = int(preferred_port)
-                if self._route_pc_agent_via_active_api_first():
-                    health_routed = await self._execute_pc_agent_route_via_active_api(
-                        command_type="browser_health",
-                        params=health_params,
-                        agent_id=agent_id,
-                        job_type="browser_bridge_health_fallback",
-                        required_capabilities=["interactive_browser"],
-                        queue_wait_timeout_seconds=min(10.0, float(queue_wait_timeout_seconds or 10.0)),
-                        lease_ttl_seconds=int(health_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
-                        command_timeout_seconds=health_timeout,
-                    )
-                    if health_routed is not None:
-                        health_routed = self._coerce_pc_agent_embedded_success(health_routed)
-                        if health_routed.get("status") == "success":
-                            routed = health_routed
-                else:
+                health_routed = await self._execute_pc_agent_route_via_active_api(
+                    command_type="browser_health",
+                    params=health_params,
+                    agent_id=agent_id,
+                    job_type="browser_bridge_health_fallback",
+                    required_capabilities=["interactive_browser"],
+                    queue_wait_timeout_seconds=min(10.0, float(queue_wait_timeout_seconds or 10.0)),
+                    lease_ttl_seconds=int(health_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                    command_timeout_seconds=health_timeout,
+                )
+                if health_routed is not None:
+                    health_routed = self._coerce_pc_agent_embedded_success(health_routed)
+                    if health_routed.get("status") == "success":
+                        routed = health_routed
+                if routed.get("status") != "success" and not self._route_pc_agent_via_active_api_first():
                     health_routed = await pc_agent_manager.execute_routed_command(
                         command_type="browser_health",
                         params=health_params,
@@ -666,6 +662,40 @@ class BrowserBridgeService:
                     health_routed = self._coerce_pc_agent_embedded_success(health_routed)
                     if health_routed.get("status") == "success":
                         routed = health_routed
+                if routed.get("status") != "success":
+                    tabs_params: dict[str, Any] = {
+                        "work_key": normalized_work_key or launch_params.get("work_key") or "",
+                        "command_timeout_seconds": health_timeout,
+                    }
+                    if preferred_port:
+                        tabs_params["preferred_port"] = int(preferred_port)
+                        tabs_params["port"] = int(preferred_port)
+                    tabs_routed = await self._execute_pc_agent_route_via_active_api(
+                        command_type="browser_tabs",
+                        params=tabs_params,
+                        agent_id=agent_id,
+                        job_type="browser_bridge_tabs_fallback",
+                        required_capabilities=["interactive_browser"],
+                        queue_wait_timeout_seconds=min(10.0, float(queue_wait_timeout_seconds or 10.0)),
+                        lease_ttl_seconds=int(health_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                        command_timeout_seconds=health_timeout,
+                    )
+                    tabs_routed = self._coerce_pc_agent_embedded_success(tabs_routed)
+                    tabs_result = tabs_routed.get("result") if isinstance(tabs_routed, dict) else None
+                    tabs_data = tabs_result.get("result") if isinstance(tabs_result, dict) else None
+                    tabs = tabs_data.get("tabs") if isinstance(tabs_data, dict) else None
+                    if tabs_routed.get("status") == "success" and isinstance(tabs, list):
+                        routed = {
+                            "status": "success",
+                            "lease": tabs_routed.get("lease") or {"agent_id": agent_id},
+                            "result": {
+                                "result": {
+                                    "port": int(preferred_port or tabs_data.get("port") or 9222),
+                                    "work_key": normalized_work_key or launch_params.get("work_key") or "",
+                                    "tabs_fallback": True,
+                                }
+                            },
+                        }
         if routed.get("status") != "success":
             error_code, error_message, error_detail = self._extract_pc_agent_route_error(routed)
             raise BrowserBridgeError(
@@ -1000,6 +1030,9 @@ class BrowserBridgeService:
         for url in urls:
             if url not in deduped_urls:
                 deduped_urls.append(url)
+        cached_url = str(getattr(self, "_active_api_route_url_cache", "") or "")
+        if cached_url in deduped_urls:
+            deduped_urls = [cached_url, *[url for url in deduped_urls if url != cached_url]]
 
         def _post() -> dict[str, Any] | None:
             request_timeout_seconds = max(
@@ -1051,6 +1084,7 @@ class BrowserBridgeService:
                                 try:
                                     with urllib.request.urlopen(retry_req, timeout=request_timeout_seconds) as resp:
                                         retry_raw = resp.read().decode("utf-8")
+                                    self._active_api_route_url_cache = url
                                     return json.loads(retry_raw)
                                 except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as retry_exc:
                                     logger.warning(
@@ -1073,7 +1107,9 @@ class BrowserBridgeService:
                     logger.warning("browser_bridge_active_pc_agent_fallback_failed url=%s err=%s", url, exc)
                     continue
                 try:
-                    return self._coerce_pc_agent_embedded_success(json.loads(raw))
+                    parsed = self._coerce_pc_agent_embedded_success(json.loads(raw))
+                    self._active_api_route_url_cache = url
+                    return parsed
                 except json.JSONDecodeError as exc:
                     logger.warning("browser_bridge_active_pc_agent_fallback_bad_json url=%s err=%s", url, exc)
                     continue
@@ -1170,9 +1206,6 @@ class BrowserBridgeService:
     def _active_api_route_urls(cls, active_port: str) -> list[str]:
         urls: list[str] = []
         active_container = cls._active_container_name()
-        running_in_container = os.path.exists("/.dockerenv")
-        if not running_in_container:
-            urls.append(f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute")
         if active_container:
             urls.append(f"http://{active_container}:8080/api/v1/pc-agent/route-execute")
         # In sidecar containers such as yeoljeong-finance-worker, loopback points

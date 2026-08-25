@@ -860,7 +860,7 @@ async def test_ensure_pc_agent_cdp_force_recreate_keeps_profile_by_default(monke
 
 
 @pytest.mark.asyncio
-async def test_ensure_pc_agent_cdp_force_recreate_uses_fresh_isolation_profile(monkeypatch, tmp_path) -> None:
+async def test_ensure_pc_agent_cdp_force_recreate_keeps_stable_isolation_profile(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(
         pairings=PairingManager(default_ttl_seconds=60),
         sessions=SessionRegistry(state_dir=tmp_path),
@@ -897,10 +897,8 @@ async def test_ensure_pc_agent_cdp_force_recreate_uses_fresh_isolation_profile(m
     )
 
     assert session.work_key == "yeoljeong-delivery-baemin-biz-junghwa-test"
-    assert captured_kwargs["params"]["work_key"].startswith("yeoljeong-delivery-baemin-biz-junghwa-test-")
-    assert captured_kwargs["params"]["work_key"] != "yeoljeong-delivery-baemin-biz-junghwa-test"
-    assert captured_kwargs["params"]["isolation_id"].startswith("yeoljeong-delivery-baemin-biz-junghwa-test-")
-    assert captured_kwargs["params"]["isolation_id"] != "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
+    assert captured_kwargs["params"]["isolation_id"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
 
 
 @pytest.mark.asyncio
@@ -1282,3 +1280,118 @@ async def test_work_key_session_recreates_stale_disconnected_context(monkeypatch
     assert recreated.work_key == "ntv2-china-sourcing-admin"
     assert service.sessions.get(stale.session_id).work_key == ""
     assert service.active_session().session_id == stale.session_id
+
+
+@pytest.mark.asyncio
+async def test_pc_agent_cdp_session_falls_back_to_browser_health_on_cdp_not_ready(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(service, "_route_pc_agent_via_active_api_first", lambda: True)
+
+    async def fake_route(**kwargs):
+        command_type = kwargs["command_type"]
+        calls.append(command_type)
+        if command_type == "browser_launch":
+            return {
+                "status": "error",
+                "error_code": "CDP_NOT_READY",
+                "message": "CDP endpoint 준비 실패",
+            }
+        if command_type == "browser_health":
+            return {
+                "status": "success",
+                "lease": {"agent_id": "ceo-pc"},
+                "result": {
+                    "result": {
+                        "port": 9222,
+                        "work_key": "yeoljeong-bank-shinhan-individual-test",
+                        "cdp_version": "Chrome/151",
+                    }
+                },
+            }
+        raise AssertionError(command_type)
+
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_route)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        agent_id="ceo-pc",
+        label="신한 간편조회",
+        url="https://bank.shinhan.com/rib/easy/index.jsp",
+        work_key="yeoljeong-bank-shinhan-individual-test",
+        command_timeout_seconds=90,
+    )
+
+    assert calls == ["browser_launch", "browser_health"]
+    assert session.work_key == "yeoljeong-bank-shinhan-individual-test"
+    assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
+    assert session.endpoint.metadata["agent_id"] == "ceo-pc"
+    assert session.endpoint.metadata["port"] == "9222"
+
+
+@pytest.mark.asyncio
+async def test_pc_agent_cdp_session_falls_back_to_browser_tabs_when_health_fails(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(service, "_route_pc_agent_via_active_api_first", lambda: True)
+
+    async def fake_route(**kwargs):
+        command_type = kwargs["command_type"]
+        calls.append(command_type)
+        if command_type == "browser_launch":
+            return {
+                "status": "error",
+                "error_code": "CDP_NOT_READY",
+                "message": "CDP endpoint 준비 실패",
+            }
+        if command_type == "browser_health":
+            return {
+                "status": "error",
+                "error_code": "CDP_NOT_READY",
+                "message": "/json/version 응답 없음",
+            }
+        if command_type == "browser_tabs":
+            return {
+                "status": "success",
+                "lease": {"agent_id": "ceo-pc"},
+                "result": {
+                    "result": {
+                        "tabs": [
+                            {
+                                "id": "tab-1",
+                                "title": "간편조회서비스",
+                                "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                                "type": "page",
+                            }
+                        ],
+                        "count": 1,
+                    }
+                },
+            }
+        raise AssertionError(command_type)
+
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_route)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        agent_id="ceo-pc",
+        label="신한 간편조회",
+        url="https://bank.shinhan.com/rib/easy/index.jsp",
+        work_key="yeoljeong-bank-shinhan-individual-test",
+        preferred_port=9222,
+        command_timeout_seconds=90,
+    )
+
+    assert calls == ["browser_launch", "browser_health", "browser_tabs"]
+    assert session.work_key == "yeoljeong-bank-shinhan-individual-test"
+    assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
+    assert session.endpoint.metadata["agent_id"] == "ceo-pc"
+    assert session.endpoint.metadata["port"] == "9222"

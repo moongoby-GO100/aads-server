@@ -92,6 +92,9 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "date_from": date_from,
         "date_to": date_to,
         "all_businesses": args.business_id in {"all", "*", "__all__", "전체"},
+        "mode": str(getattr(args, "mode", "") or ""),
+        "max_orders": int(getattr(args, "max_orders", 300) or 300),
+        "max_reviews": int(getattr(args, "max_reviews", 300) or 300),
         "sync_job_id": args.job_id or "",
         "browser_session_id": args.browser_session_id or "",
         "storage_state_path": args.storage_state_path or "",
@@ -552,6 +555,7 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
     for key, flag in (
         ("date_from", "--date-from"),
         ("date_to", "--date-to"),
+        ("mode", "--mode"),
         ("browser_session_id", "--browser-session-id"),
         ("storage_state_path", "--storage-state-path"),
         ("sync_job_id", "--job-id"),
@@ -559,6 +563,13 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         value = str(payload.get(key) or "").strip()
         if value:
             argv.extend([flag, value])
+    for key, flag in (
+        ("max_orders", "--max-orders"),
+        ("max_reviews", "--max-reviews"),
+    ):
+        value = int(payload.get(key) or 0)
+        if value and value != 300:
+            argv.extend([flag, str(value)])
     if payload.get("force_recreate_portal_sessions"):
         argv.append("--force-recreate-sessions")
     if payload.get("close_portal_browser_on_complete") is False:
@@ -873,6 +884,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--branch", default="전체", help="Branch name, or 전체 with --business-id all.")
     parser.add_argument("--date-from", default="", help="YYYY-MM-DD. Default: first day of current month.")
     parser.add_argument("--date-to", default="", help="YYYY-MM-DD. Default: today.")
+    parser.add_argument("--mode", default="", choices=("", "full_backfill"), help="Collection mode. full_backfill enables Baemin order-history/review/ad backfill.")
+    parser.add_argument("--max-orders", type=int, default=300, help="Baemin full_backfill order cap per branch, 1-300.")
+    parser.add_argument("--max-reviews", type=int, default=300, help="Baemin full_backfill review cap per branch, 1-300.")
     parser.add_argument("--browser-session-id", default="", help="Optional PC Agent browser session id.")
     parser.add_argument("--browser-agent-id", default="", help="Optional PC Agent id for bank browser auto-open.")
     parser.add_argument("--browser-preferred-port", type=int, default=None, help="Optional preferred CDP port for bank browser auto-open.")

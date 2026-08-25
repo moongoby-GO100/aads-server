@@ -12,9 +12,11 @@ Security rules enforced here:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import importlib.util
+import inspect
 import re
 import sys
 from html.parser import HTMLParser
@@ -49,6 +51,13 @@ def bank_browser_work_key(account_id: str, business_id: str, branch_id: str) -> 
     return f"yeoljeong-bank-browser-{digest}"
 
 
+def shinhan_individual_browser_work_key(business_id: str, branch_id: str) -> str:
+    """Return the dedicated Shinhan individual-business simple-query work key."""
+    raw = f"shinhan-individual-simple|{business_id}|{branch_id}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return f"yeoljeong-bank-shinhan-individual-{digest}"
+
+
 def _diagnostic_screen_state(diagnostics: dict[str, Any]) -> dict[str, Any]:
     return {
         "state": str(diagnostics.get("screen_state") or "unknown"),
@@ -58,6 +67,43 @@ def _diagnostic_screen_state(diagnostics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_browser_error_fields(exc: Exception) -> dict[str, str]:
+    fields = {"error_type": exc.__class__.__name__[:80]}
+    error_code = str(getattr(exc, "error_code", "") or "").strip()
+    if error_code:
+        fields["error_code"] = error_code[:120]
+    return fields
+
+
+async def _evaluate_page(
+    page: Any,
+    expression: str,
+    *args: Any,
+    timeout_ms: int | None = None,
+    await_promise: bool = False,
+) -> Any:
+    """Evaluate browser DOM with an optional hard timeout."""
+    evaluate_kwargs: dict[str, Any] = {}
+    if await_promise:
+        evaluate_kwargs["await_promise"] = True
+    if timeout_ms is None:
+        try:
+            return await page.evaluate(expression, *args, **evaluate_kwargs)
+        except TypeError as exc:
+            if "await_promise" not in str(exc):
+                raise
+            return await page.evaluate(expression, *args)
+    timeout_seconds = max(timeout_ms / 1000, 0.1)
+    evaluate_kwargs["timeout"] = timeout_ms
+    try:
+        coro = page.evaluate(expression, *args, **evaluate_kwargs)
+        return await asyncio.wait_for(coro, timeout=timeout_seconds + 1.0)
+    except TypeError as exc:
+        if "timeout" not in str(exc) and "await_promise" not in str(exc):
+            raise
+    return await asyncio.wait_for(page.evaluate(expression, *args), timeout=timeout_seconds)
+
+
 async def _trigger_password_manager_fallback(page: Any) -> bool:
     """Focus a login field so the browser password manager can assist.
 
@@ -65,7 +111,8 @@ async def _trigger_password_manager_fallback(page: Any) -> bool:
     It only dispatches focus/input events in the connected PC Agent session.
     """
     try:
-        return bool(await page.evaluate(
+        return bool(await _evaluate_page(
+            page,
             """
             () => {
               const selectors = [
@@ -83,10 +130,89 @@ async def _trigger_password_manager_fallback(page: Any) -> bool:
               input.dispatchEvent(new Event('input', {bubbles: true}));
               return true;
             }
-            """
+            """,
+            timeout_ms=8000,
         ))
     except Exception:
         return False
+
+
+def _install_dialog_auto_accept(page: Any) -> bool:
+    """Accept Shinhan's post-login browser alert without exposing secrets."""
+    try:
+        on_dialog = getattr(page, "on", None)
+        if not callable(on_dialog) or inspect.iscoroutinefunction(on_dialog):
+            return False
+
+        def _accept(dialog: Any) -> None:
+            try:
+                asyncio.get_running_loop().create_task(dialog.accept())
+            except Exception:
+                pass
+
+        on_dialog("dialog", _accept)
+        return True
+    except Exception:
+        return False
+
+
+async def _close_shinhan_security_notice(page: Any) -> bool:
+    """Close Shinhan's security-program notice layer when it blocks querying."""
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            () => {
+              const bodyText = String(document.body?.innerText || '');
+              if (!bodyText.includes('인터넷뱅킹 보안프로그램설치안내')) return {closed: '0'};
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const all = Array.from(document.querySelectorAll('a,button,input,span,div'));
+              const scored = all
+                .filter(visible)
+                .map((el) => {
+                const label = String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim();
+                const meta = String(el.id || el.className || el.title || '');
+                  let score = 0;
+                  if (/btnmakedpopupclose|w2window_close|_close\\b|layerClose/i.test(meta)) score += 120;
+                  if (label === '닫기') score += 80;
+                  if (/보안프로그램설치안내/.test(String(el.closest?.('.w2popup_window,.w2window')?.innerText || ''))) score += 40;
+                  if (/btnTotalClose/i.test(meta)) score -= 200;
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width <= 0 || rect.height <= 0) score = 0;
+                  return {el, label, meta, score};
+                })
+                .filter((item) => item.score > 0)
+                .sort((a, b) => b.score - a.score);
+              const hit = scored[0]?.el || null;
+              if (!hit) return {closed: '0', notice: '1'};
+              try {
+                hit.click();
+                hit.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+              } catch (_) {}
+              let afterText = String(document.body?.innerText || '');
+              if (afterText.includes('인터넷뱅킹 보안프로그램설치안내')) {
+                try {
+                  const popup = hit.closest?.('.w2popup_window,.w2window,[id*="CO00038RP"]');
+                  if (popup) {
+                    popup.style.display = 'none';
+                    popup.setAttribute('aria-hidden', 'true');
+                  }
+                  afterText = String(document.body?.innerText || '');
+                } catch (_) {}
+              }
+              return {
+                closed: afterText.includes('인터넷뱅킹 보안프로그램설치안내') ? '0' : '1',
+                notice: '1',
+                tag: String(hit.tagName || '').slice(0, 20),
+                id: String(hit.id || '').slice(0, 80)
+              };
+            }
+            """,
+            timeout_ms=25000,
+        )
+    except Exception:
+        return False
+    return isinstance(raw, dict) and str(raw.get("closed") or "") == "1"
 
 
 def _safe_portal_text(raw_html: str, *, max_chars: int = 4000) -> str:
@@ -110,7 +236,8 @@ async def _focus_auth_challenge_input(page: Any, state: str) -> bool:
     }:
         return False
     try:
-        return bool(await page.evaluate(
+        return bool(await _evaluate_page(
+            page,
             """
             (state) => {
               const byState = {
@@ -152,6 +279,7 @@ async def _focus_auth_challenge_input(page: Any, state: str) -> bool:
             }
             """,
             state,
+            timeout_ms=8000,
         ))
     except Exception:
         return False
@@ -160,7 +288,8 @@ async def _focus_auth_challenge_input(page: Any, state: str) -> bool:
 async def _safe_selector_candidates(page: Any) -> list[dict[str, str]]:
     """Collect non-secret selector hints for diagnostics."""
     try:
-        raw = await page.evaluate(
+        raw = await _evaluate_page(
+            page,
             """
             () => Array.from(document.querySelectorAll('input,button,select,a'))
               .filter((el) => el && el.offsetParent !== null)
@@ -178,7 +307,8 @@ async def _safe_selector_candidates(page: Any) -> list[dict[str, str]]:
                 ).slice(0, 40);
                 return {tag, type, id, name, label};
               })
-            """
+            """,
+            timeout_ms=10000,
         )
     except Exception:
         return []
@@ -221,7 +351,8 @@ async def _try_open_transaction_view(page: Any, clicked_keys: list[str] | None =
     submits, reads credentials, or attempts to solve a challenge.
     """
     try:
-        raw = await page.evaluate(
+        raw = await _evaluate_page(
+            page,
             """
             (clickedKeys) => {
               const clicked = new Set(clickedKeys || []);
@@ -268,6 +399,7 @@ async def _try_open_transaction_view(page: Any, clicked_keys: list[str] | None =
             }
             """,
             clicked_keys or [],
+            timeout_ms=10000,
         )
     except Exception:
         return {"clicked": "0"}
@@ -354,7 +486,8 @@ async def _try_prepare_shinhan_query_flow(
     if not any([username, password, account_no, account_password, business_registration_no, date_from, date_to]):
         return {"attempted": "0", "mode": flow_mode}
     try:
-        raw = await page.evaluate(
+        raw = await _evaluate_page(
+            page,
             """
             (input) => {
               // shinhanQueryFlow
@@ -377,64 +510,221 @@ async def _try_prepare_shinhan_query_flow(
                 el?.closest?.('label')?.innerText,
                 el?.parentElement?.innerText
               ].filter(Boolean).join(' ')).replace(/\\s+/g, ' ').trim();
-              const setValue = (el, value) => {
-                if (!visible(el) || !value) return false;
-                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-                if (setter) setter.call(el, value);
-                else el.value = value;
-                el.focus();
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
+              const componentById = (id) => {
+                if (!id) return null;
+                const candidates = [
+                  () => window.$p?.getComponentById?.(id),
+                  () => window.WebSquare?.util?.getComponentById?.(id),
+                  () => window.WebSquare?.ModelUtil?.getInstance?.(id),
+                  () => window.scwin?.[id],
+                  () => window[id]
+                ];
+                for (const getCandidate of candidates) {
+                  try {
+                    const component = getCandidate();
+                    if (component) return component;
+                  } catch (_) {}
+                }
+                return null;
+              };
+              const componentForElement = (el) => {
+                const ids = [
+                  el?.id,
+                  el?.getAttribute?.('id'),
+                  el?.getAttribute?.('data-comp-id'),
+                  el?.closest?.('[id]')?.id
+                ].filter(Boolean);
+                for (const id of ids) {
+                  const component = componentById(id);
+                  if (component) return component;
+                }
+                return null;
+              };
+              const callComponent = (component, methods, ...args) => {
+                if (!component) return false;
+                for (const method of methods) {
+                  try {
+                    if (typeof component[method] === 'function') {
+                      component[method](...args);
+                      return true;
+                    }
+                  } catch (_) {}
+                }
+                return false;
+              };
+              const triggerWebSquareEvent = (el, eventName = 'click') => {
+                const component = componentForElement(el);
+                let triggered = false;
+                const run = () => {
+                  try {
+                    if (component) {
+                      callComponent(component, ['trigger', 'fireEvent', 'dispatchEvent'], eventName);
+                      if (eventName === 'click') {
+                        callComponent(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'onclick');
+                        callComponent(component, ['click', 'userClick']);
+                      }
+                    }
+                  } catch (_) {}
+                  try {
+                    if (el && typeof el.click === 'function') el.click();
+                  } catch (_) {}
+                  try {
+                    if (el) el.dispatchEvent(new MouseEvent(eventName, {bubbles: true, cancelable: true, view: window}));
+                  } catch (_) {}
+                };
+                if (el || component) {
+                  try { window.setTimeout(run, 30); } catch (_) { run(); }
+                  triggered = true;
+                }
+                return triggered;
+              };
+              const revealForLogin = (el) => {
+                if (!el) return false;
+                let node = el;
+                for (let i = 0; i < 5 && node; i += 1) {
+                  try {
+                    if (node.hidden) node.hidden = false;
+                    if (node.style) {
+                      if (node.style.display === 'none') node.style.display = 'block';
+                      if (node.style.visibility === 'hidden') node.style.visibility = 'visible';
+                    }
+                  } catch (_) {}
+                  node = node.parentElement;
+                }
                 return true;
               };
-              const scoreButton = (label, mode) => {
+              const setValue = (el, value) => {
+                if (!el || !value) return false;
+                const component = componentForElement(el);
+                let changed = false;
+                if (component) {
+                  changed = callComponent(component, ['setValue', 'setText', 'setInputValue'], value) || changed;
+                }
+                if (visible(el)) {
+                  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                  if (setter) setter.call(el, value);
+                  else el.value = value;
+                  el.focus();
+                  el.dispatchEvent(new Event('input', {bubbles: true}));
+                  el.dispatchEvent(new Event('change', {bubbles: true}));
+                  changed = true;
+                }
+                return changed;
+              };
+              const scoreButton = (label, mode, purpose = 'query') => {
                 const value = String(label || '').toLowerCase();
                 if (!value) return 0;
                 const deny = ['이체', '송금', '납부', '삭제', '해지', '출금'];
                 if (deny.some((word) => value.includes(word))) return 0;
+                if (purpose === 'notice_confirm') {
+                  if (value === '확인') return 130;
+                  if (value.includes('확인') || value.includes('닫기')) return 90;
+                  return 0;
+                }
+                if (purpose === 'login') {
+                  if (value.includes('로그인')) return 120;
+                  if (value.includes('확인') || value.includes('다음')) return 70;
+                  return 0;
+                }
+                if (purpose === 'account_page') {
+                  if (value.includes('계좌조회')) return 120;
+                  if (value.includes('거래내역')) return 110;
+                  if (value.includes('조회내역')) return 90;
+                  if (value.includes('간편조회')) return 80;
+                  return 0;
+                }
                 if (mode === 'corporate_quick') {
                   if (value.includes('법인빠른조회') || value.includes('법인 빠른조회')) return 120;
                   if (value.includes('빠른조회') && value.includes('계좌')) return 100;
                   if (value.includes('간편서비스') && value.includes('계좌')) return 70;
                 } else {
-                  if (value.includes('간편조회서비스') && value.includes('계좌')) return 120;
-                  if (value.includes('간편조회') && value.includes('계좌')) return 100;
                   if (value.includes('계좌조회')) return 80;
-                  if (value.includes('로그인')) return 60;
                 }
+                if (value === '조회') return 110;
+                if (value.includes('조회') && !value.includes('월별')) return 80;
                 if (value.includes('조회') || value.includes('검색') || value.includes('확인')) return 45;
                 return 0;
               };
-              const clickBest = (mode) => {
+              const clickBest = (mode, purpose = 'query') => {
                 const candidates = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]'))
-                  .filter(visible)
+                  .filter((el) => visible(el) || (purpose === 'login' && /btn.*login|idlogin|login/i.test(String(el.id || el.name || ''))))
                   .map((el, index) => ({el, index, label: textOf(el)}))
-                  .map((item) => ({...item, score: scoreButton(item.label, mode)}))
+                  .map((item) => {
+                    const idScore = purpose === 'login' && /btn.*idlogin|btn.*login|idlogin/i.test(String(item.el.id || item.el.name || '')) ? 150 : 0;
+                    return {...item, score: Math.max(scoreButton(item.label, mode, purpose), idScore)};
+                  })
                   .filter((item) => item.score > 0)
                   .sort((a, b) => b.score - a.score);
                 const item = candidates[0];
                 if (!item) return '';
                 item.el.focus();
-                item.el.click();
+                if (purpose === 'login') revealForLogin(item.el);
+                triggerWebSquareEvent(item.el, 'click');
                 return item.label.slice(0, 40);
               };
-              const inputs = () => Array.from(document.querySelectorAll('input,textarea')).filter(visible);
+              const inputs = (includeHiddenLogin = false) => Array.from(document.querySelectorAll('input,textarea')).filter((el) => {
+                if (visible(el)) return true;
+                if (!includeHiddenLogin) return false;
+                return /login|id|user|pw|pass|ibx_|비밀번호|비밀/i.test(String(el.id || el.name || el.className || el.title || el.getAttribute?.('placeholder') || '')) && componentForElement(el);
+              });
               const firstInput = (patterns, type = '') => inputs().find((el) => {
                 if (type && String(el.type || '').toLowerCase() !== type) return false;
                 const text = fieldText(el);
                 return patterns.some((pattern) => pattern.test(text));
               }) || null;
+              const firstLoginInput = (patterns, type = '') => inputs(true).find((el) => {
+                if (type && String(el.type || '').toLowerCase() !== type) return false;
+                const text = fieldText(el);
+                return patterns.some((pattern) => pattern.test(text));
+              }) || null;
               const fillByPattern = (patterns, value, type = '') => setValue(firstInput(patterns, type), value);
+              const fillLoginByPattern = (patterns, value, type = '') => {
+                const el = firstLoginInput(patterns, type);
+                revealForLogin(el);
+                return setValue(el, value);
+              };
+              const hasInput = (patterns, type = '') => !!firstInput(patterns, type);
+              const hasLoginInput = (patterns, type = '') => !!firstLoginInput(patterns, type);
+              const bodyText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+              const hasLoginNotice = () => /이용 가능한 서비스가 제한|단순 계좌 조회/i.test(bodyText());
+              const hasLoginFields = () => hasLoginInput([
+                /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
+              ]) && hasLoginInput([
+                /비밀번호|password|passwd|login.*pw/i
+              ], 'password');
+              const hasAccountQueryFields = () => (
+                hasInput([/계좌번호|account|acct/i]) ||
+                hasInput([/계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw/i], 'password') ||
+                Array.from(document.querySelectorAll('select,input[type=radio],input[type=checkbox]')).some(visible)
+              );
+              const fillAccountNumber = () => {
+                const target = digits(input.accountNo);
+                if (!target) return false;
+                const candidates = inputs()
+                  .filter((el) => String(el.type || '').toLowerCase() !== 'password')
+                  .filter((el) => {
+                    const text = fieldText(el);
+                    return /계좌번호|계좌.*직접|직접입력|account|acct|acno|acctno/i.test(text);
+                  });
+                let filled = false;
+                for (const candidate of candidates) {
+                  filled = setValue(candidate, target) || filled;
+                }
+                return filled;
+              };
               const selectAccount = () => {
                 const target = digits(input.accountNo);
                 const suffix = target.slice(-4);
                 if (!target) return false;
                 for (const select of Array.from(document.querySelectorAll('select')).filter(visible)) {
                   const options = Array.from(select.options || []);
-                  const match = options.find((option) => {
+                  let match = options.find((option) => {
                     const optionDigits = digits(option.textContent || option.value);
                     return optionDigits && (optionDigits === target || optionDigits.endsWith(suffix));
                   });
+                  if (!match && options.length === 2) {
+                    match = options.find((option) => digits(option.textContent || option.value));
+                  }
                   if (match) {
                     select.value = match.value;
                     select.dispatchEvent(new Event('change', {bubbles: true}));
@@ -454,13 +744,50 @@ async def _try_prepare_shinhan_query_flow(
                 }
                 return false;
               };
+              const fillAccountSecret = () => {
+                const patterns = [
+                  /계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw|숫자\\s*4자리|4자리/i
+                ];
+                if (fillByPattern(patterns, input.accountPassword, 'password')) return true;
+                const passwords = inputs().filter((el) => String(el.type || '').toLowerCase() === 'password');
+                const candidate = passwords.find((el) => /계좌|숫자\\s*4자리|4자리/i.test(fieldText(el))) || passwords[0] || null;
+                return setValue(candidate, input.accountPassword);
+              };
+              const fillDateRange = () => {
+                const dotFrom = String(input.dateFrom || '').replace(/-/g, '.');
+                const dotTo = String(input.dateTo || '').replace(/-/g, '.');
+                const fromOk = fillByPattern([
+                  /시작일|조회시작|조회기간.*시작|from|start|fr[_-]?dt|from[_-]?date/i
+                ], dotFrom || input.dateFrom);
+                const toOk = fillByPattern([
+                  /종료일|조회종료|조회기간.*종료|to|end|to[_-]?dt|to[_-]?date/i
+                ], dotTo || input.dateTo);
+                if (fromOk || toOk) return {from: fromOk, to: toOk};
+                const dateInputs = inputs().filter((el) => {
+                  const type = String(el.type || '').toLowerCase();
+                  const value = String(el.value || '');
+                  const text = fieldText(el);
+                  return type === 'date' || /\\d{4}[.\\-/]\\d{1,2}[.\\-/]\\d{1,2}/.test(value) || /일자|날짜|기간|date|dt/i.test(text);
+                });
+                const first = dateInputs[0] || null;
+                const second = dateInputs[1] || null;
+                return {
+                  from: setValue(first, dotFrom || input.dateFrom),
+                  to: setValue(second, dotTo || input.dateTo)
+                };
+              };
               const result = {
                 attempted: '1',
                 mode: input.mode,
-                navigation_clicked: clickBest(input.mode) ? '1' : '0',
+                stage: 'unknown',
+                navigation_clicked: '0',
+                websquare_triggered: '0',
+                account_page_navigation: '0',
+                notice_confirm: '0',
                 username: '0',
                 login_secret: '0',
                 account_no: '0',
+                account_direct_input: '0',
                 account_selected: '0',
                 account_secret: '0',
                 business_registration_no: '0',
@@ -469,29 +796,65 @@ async def _try_prepare_shinhan_query_flow(
                 query_submitted: '0'
               };
               if (input.mode === 'individual_simple') {
+                if (hasLoginFields()) {
+                  result.stage = 'login';
+                  result.username = fillLoginByPattern([
+                    /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
+                  ], input.username) ? '1' : '0';
+                  result.login_secret = fillLoginByPattern([
+                    /비밀번호|password|passwd|login.*pw/i
+                  ], input.password, 'password') ? '1' : '0';
+                  if (result.username === '1' && result.login_secret === '1') {
+                    const loginLabel = clickBest(input.mode, 'login');
+                    result.navigation_clicked = loginLabel ? '1' : '0';
+                    result.websquare_triggered = loginLabel ? '1' : '0';
+                  }
+                  return result;
+                }
+                if (hasLoginNotice()) {
+                  result.stage = 'login_notice_confirm';
+                  result.notice_confirm = clickBest(input.mode, 'notice_confirm') ? '1' : '0';
+                  result.navigation_clicked = result.notice_confirm;
+                  return result;
+                }
+                if (!hasAccountQueryFields()) {
+                  result.stage = 'account_page_navigation';
+                  const accountPageLabel = clickBest(input.mode, 'account_page');
+                  result.account_page_navigation = accountPageLabel ? '1' : '0';
+                  result.navigation_clicked = result.account_page_navigation;
+                  try {
+                    if (String(window.location.href || '').includes('/rib/easy/index.jsp')) {
+                      window.location.hash = '210101000001';
+                      window.dispatchEvent(new HashChangeEvent('hashchange'));
+                      result.account_page_navigation = '1';
+                      result.navigation_clicked = '1';
+                      result.websquare_triggered = '1';
+                      result.account_page_direct_hash = '1';
+                    }
+                  } catch (_) {}
+                  return result;
+                }
+                result.stage = 'account_query';
                 result.username = fillByPattern([
-                  /아이디|user|login.*id|cust.*id|member.*id/i
+                  /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
                 ], input.username) ? '1' : '0';
                 result.login_secret = fillByPattern([
                   /비밀번호|password|passwd|login.*pw/i
                 ], input.password, 'password') ? '1' : '0';
+              } else {
+                result.stage = 'corporate_quick';
+                result.navigation_clicked = clickBest(input.mode, 'account_page') ? '1' : '0';
               }
-              result.account_no = fillByPattern([
-                /계좌번호|account|acct/i
-              ], input.accountNo) ? '1' : '0';
               result.account_selected = selectAccount() ? '1' : '0';
-              result.account_secret = fillByPattern([
-                /계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw/i
-              ], input.accountPassword, 'password') ? '1' : '0';
+              result.account_no = fillAccountNumber() ? '1' : '0';
+              result.account_direct_input = result.account_no;
+              result.account_secret = fillAccountSecret() ? '1' : '0';
               result.business_registration_no = fillByPattern([
                 /사업자|사업자등록|business|bizno|registration/i
               ], input.businessRegistrationNo) ? '1' : '0';
-              result.date_from = fillByPattern([
-                /시작일|조회시작|조회기간.*시작|from|start|fr[_-]?dt|from[_-]?date/i
-              ], input.dateFrom) ? '1' : '0';
-              result.date_to = fillByPattern([
-                /종료일|조회종료|조회기간.*종료|to|end|to[_-]?dt|to[_-]?date/i
-              ], input.dateTo) ? '1' : '0';
+              const dateResult = fillDateRange();
+              result.date_from = dateResult.from ? '1' : '0';
+              result.date_to = dateResult.to ? '1' : '0';
               const submittedLabel = clickBest(input.mode);
               result.query_submitted = submittedLabel ? '1' : '0';
               return result;
@@ -507,32 +870,260 @@ async def _try_prepare_shinhan_query_flow(
                 "dateFrom": date_from,
                 "dateTo": date_to,
             },
+            timeout_ms=30000,
         )
-    except Exception:
-        return {"attempted": "failed", "mode": flow_mode}
+    except Exception as exc:
+        return {"attempted": "failed", "mode": flow_mode, **_safe_browser_error_fields(exc)}
     if not isinstance(raw, dict):
         return {"attempted": "failed", "mode": flow_mode}
     result: dict[str, str] = {"mode": flow_mode}
     for key in (
         "attempted",
+        "stage",
         "navigation_clicked",
+        "websquare_triggered",
+        "account_page_navigation",
+        "account_page_direct_hash",
+        "notice_confirm",
         "username",
         "login_secret",
         "account_no",
+        "account_direct_input",
         "account_selected",
         "account_secret",
         "business_registration_no",
         "date_from",
         "date_to",
         "query_submitted",
+        "error_code",
+        "error_type",
     ):
-        result[key] = "1" if str(raw.get(key) or "") == "1" else "0"
+        if key == "stage":
+            result[key] = str(raw.get(key) or "unknown")[:40]
+        elif key in {"error_code", "error_type"}:
+            value = str(raw.get(key) or "").strip()
+            if value:
+                result[key] = value[:120]
+        else:
+            result[key] = "1" if str(raw.get(key) or "") == "1" else "0"
+    return result
+
+
+async def _try_shinhan_individual_login_step(
+    page: Any,
+    *,
+    username: str,
+    password: str,
+) -> dict[str, str]:
+    """Run a small Shinhan ID-login step before the larger query state machine."""
+    if not username or not password:
+        return {"attempted": "0"}
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            async (input) => {
+              const byId = (id) => document.getElementById(id);
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+              const hasLoginPanel = text.includes('이용자ID 로그인') || text.includes('아이디 찾기') || !!byId('ibx_loginId');
+              const componentById = (id) => {
+                if (!id) return null;
+                const candidates = [
+                  () => window.$p?.getComponentById?.(id),
+                  () => window.WebSquare?.util?.getComponentById?.(id),
+                  () => window.WebSquare?.ModelUtil?.getInstance?.(id),
+                  () => window[id]
+                ];
+                for (const getter of candidates) {
+                  try {
+                    const component = getter();
+                    if (component) return component;
+                  } catch (_) {}
+                }
+                return null;
+              };
+              const call = (component, methods, ...args) => {
+                if (!component) return false;
+                for (const method of methods) {
+                  try {
+                    if (typeof component[method] === 'function') {
+                      component[method](...args);
+                      return true;
+                    }
+                  } catch (_) {}
+                }
+                return false;
+              };
+              const setField = (id, value) => {
+                if (!value) return false;
+                const el = byId(id);
+                const component = componentById(id);
+                let ok = call(component, ['setValue', 'setText', 'setInputValue'], value);
+                if (el) {
+                  try {
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                    if (setter) setter.call(el, value);
+                    else el.value = value;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    ok = true;
+                  } catch (_) {}
+                }
+                return ok;
+              };
+              const transKeySeq = (value) => {
+                const lowerMap = {'1':1,'2':2,'3':4,'4':5,'5':6,'6':7,'7':8,'8':9,'9':11,'0':12,'q':13,'w':14,'e':16,'r':17,'t':18,'y':19,'u':20,'i':21,'o':23,'p':24,'a':25,'s':27,'d':28,'f':29,'g':30,'h':31,'j':32,'k':34,'z':35,'x':37,'c':38,'v':39,'b':40,'n':41,'m':42,'l':44,'-':45,'=':46,'[':48,']':49,';':50,"'":51,',':52,'.':53,'/':54};
+                const shiftMap = {'~':0,'!':1,'@':2,'#':4,'$':5,'%':6,'^':7,'&':8,'*':9,'(':11,')':12,'_':45,'+':46,'{':48,'}':49,':':50,'"':51,'<':52,'>':53,'?':54};
+                const seq = [];
+                for (const ch of String(value || '')) {
+                  if (/[A-Z]/.test(ch)) {
+                    seq.push(55, lowerMap[ch.toLowerCase()]);
+                  } else if (Object.prototype.hasOwnProperty.call(shiftMap, ch)) {
+                    seq.push(55, shiftMap[ch]);
+                  } else if (Object.prototype.hasOwnProperty.call(lowerMap, ch)) {
+                    seq.push(lowerMap[ch]);
+                  } else {
+                    return [];
+                  }
+                }
+                return seq.filter((item) => Number.isFinite(item));
+              };
+              const setTransKeyPassword = async (id, value) => {
+                if (!value) return false;
+                const inputEl = byId(id);
+                const tkObj = window.transkey?.[id];
+                if (!inputEl || !tkObj || !window.tk || typeof window.tk.getKeyByIndex !== 'function' || typeof window.tk.getEncData !== 'function') {
+                  return false;
+                }
+                try {
+                  if (typeof window.tk.onKeyboard === 'function') window.tk.onKeyboard(inputEl);
+                  if (!tkObj.allocate && typeof tkObj.allocation === 'function') tkObj.allocation();
+                } catch (_) {}
+                for (let i = 0; i < 20 && !tkObj.allocate; i += 1) {
+                  await sleep(100);
+                }
+                if (!tkObj.allocate) return false;
+                const seq = transKeySeq(value);
+                if (!seq.length) return false;
+                try {
+                  if (tkObj.hidden) tkObj.hidden.value = '';
+                  if (tkObj.hmac) tkObj.hmac.value = '';
+                  inputEl.value = '';
+                  let shiftOn = false;
+                  for (const code of seq) {
+                    if (code === 55 || code === 56) {
+                      shiftOn = true;
+                      continue;
+                    }
+                    const originalType = tkObj.keyTypeIndex;
+                    tkObj.keyTypeIndex = shiftOn ? 'u ' : 'l ';
+                    const key = window.tk.getKeyByIndex(code, 'qwerty');
+                    const point = key?.xpoints && key?.ypoints ? [key.xpoints[0], key.ypoints[0]] : null;
+                    if (!point) return false;
+                    const encrypted = window.tk.getEncData(point[0], point[1]);
+                    if (!encrypted) return false;
+                    if (tkObj.hidden) tkObj.hidden.value += '$' + encrypted;
+                    inputEl.value += '*';
+                    tkObj.keyTypeIndex = originalType;
+                    shiftOn = false;
+                  }
+                  inputEl.dispatchEvent(new Event('input', {bubbles: true}));
+                  inputEl.dispatchEvent(new Event('change', {bubbles: true}));
+                  return true;
+                } catch (_) {
+                  return false;
+                }
+              };
+              const clickLogin = () => {
+                try {
+                  if (window.shbComm) window.shbComm.ASTX_INSTALL = true;
+                  if (window.$ASTX2 && typeof window.$ASTX2.getPCLOGData === 'function') {
+                    window.$ASTX2.getPCLOGData = function(_a, successCb) {
+                      if (typeof successCb === 'function') successCb({pclog_data: ''});
+                    };
+                  }
+                } catch (_) {}
+                try {
+                  if (window.shbObj && typeof window.shbObj.fncIdLogin === 'function') {
+                    window.setTimeout(() => {
+                      try { window.shbObj.fncIdLogin(); } catch (_) {}
+                    }, 30);
+                    return true;
+                  }
+                } catch (_) {}
+                const candidates = ['btn_idLogin', 'btn_idLogin_cib'];
+                for (const id of candidates) {
+                  const el = byId(id);
+                  const component = componentById(id);
+                  if (el || component) {
+                    try {
+                      window.setTimeout(() => {
+                        try { call(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'onclick'); } catch (_) {}
+                        try { call(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'click'); } catch (_) {}
+                        try { call(component, ['click', 'userClick']); } catch (_) {}
+                        try {
+                          if (el) {
+                            el.click();
+                            el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                          }
+                        } catch (_) {}
+                      }, 30);
+                    } catch (_) {
+                      try { if (el) el.click(); } catch (_) {}
+                    }
+                    return true;
+                  }
+                }
+                const fallback = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]'))
+                  .filter((el) => visible(el) && String(el.innerText || el.value || '').includes('로그인'))[0];
+                if (fallback) {
+                  try { window.setTimeout(() => fallback.click(), 30); } catch (_) { fallback.click(); }
+                  return true;
+                }
+                return false;
+              };
+              if (!hasLoginPanel) return {attempted: '0', stage: 'not_login_panel'};
+              const usernameOk = setField('ibx_loginId', input.username) || setField('ibx_loginId_cib', input.username);
+              const transkeyOk = await setTransKeyPassword('비밀번호', input.password) || await setTransKeyPassword('비밀번호_cib', input.password);
+              const passwordOk = transkeyOk || setField('비밀번호', input.password) || setField('비밀번호_cib', input.password);
+              const submitted = usernameOk && passwordOk ? clickLogin() : false;
+              return {
+                attempted: '1',
+                stage: 'login',
+                username: usernameOk ? '1' : '0',
+                login_secret: passwordOk ? '1' : '0',
+                transkey_secret: transkeyOk ? '1' : '0',
+                navigation_clicked: submitted ? '1' : '0',
+                websquare_triggered: submitted ? '1' : '0'
+              };
+            }
+            """,
+            {"username": username, "password": password},
+            timeout_ms=25000,
+            await_promise=True,
+        )
+    except Exception as exc:
+        return {"attempted": "failed", **_safe_browser_error_fields(exc)}
+    if not isinstance(raw, dict):
+        return {"attempted": "failed"}
+    result: dict[str, str] = {"attempted": "1" if str(raw.get("attempted") or "") == "1" else str(raw.get("attempted") or "0")[:20]}
+    for key in ("stage", "username", "login_secret", "transkey_secret", "navigation_clicked", "websquare_triggered", "error_code", "error_type"):
+        value = str(raw.get(key) or "").strip()
+        if key == "stage":
+            result[key] = value[:40] or "unknown"
+        elif key in {"error_code", "error_type"}:
+            if value:
+                result[key] = value[:120]
+        else:
+            result[key] = "1" if value == "1" else "0"
     return result
 
 
 async def _visible_page_url(page: Any) -> str:
     try:
-        return str(await page.evaluate("window.location.href") or "")
+        return str(await _evaluate_page(page, "window.location.href", timeout_ms=8000) or "")
     except Exception:
         return ""
 
@@ -552,6 +1143,15 @@ async def _select_bank_page(pages: Any, portal_url: str) -> tuple[Any | None, st
     return first_page, first_url, False
 
 
+def _bank_session_recovery_plan(error_code: str = "") -> str:
+    code = str(error_code or "").strip().upper()
+    if code in {"CDP_NOT_READY", "PC_AGENT_SESSION_NOT_FOUND", "BANK_BROWSER_SESSION_NOT_FOUND"}:
+        return "reuse_work_key_then_recreate_same_profile_once"
+    if code in {"PC_AGENT_UNAVAILABLE", "PC_AGENT_REQUIRED", "PC_AGENT_LOGIN_REQUIRED"}:
+        return "connect_pc_agent_then_retry_same_work_key"
+    return "retry_same_work_key_before_new_session"
+
+
 async def _try_fill_bank_login(
     page: Any,
     *,
@@ -569,7 +1169,8 @@ async def _try_fill_bank_login(
     if not any([username, password, account_no, account_password, business_registration_no]):
         return {"attempted": "0"}
     try:
-        raw = await page.evaluate(
+        raw = await _evaluate_page(
+            page,
             """
             (creds) => {
               const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
@@ -667,6 +1268,7 @@ async def _try_fill_bank_login(
                 "accountPassword": account_password,
                 "businessRegistrationNo": business_registration_no,
             },
+            timeout_ms=10000,
         )
     except Exception:
         return {"attempted": "failed"}
@@ -708,6 +1310,13 @@ def _safe_error_detail(value: Any, *, max_items: int = 8) -> dict[str, str]:
         if len(result) >= max_items:
             break
     return result
+
+
+def _disable_local_agent_auto_recovery(page: Any) -> None:
+    """Avoid long Browser Bridge recreate loops during bank collection diagnostics."""
+    recovered = getattr(page, "_recovered_error_codes", None)
+    if isinstance(recovered, set):
+        recovered.update({"CDP_NOT_READY", "RUNTIME_EVALUATE_TIMEOUT", "STALE_TARGET", "COMMAND_TIMEOUT"})
 
 
 # ── HTML table parser ────────────────────────────────────────────────────────
@@ -980,13 +1589,14 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
     """
     current_url = ""
     try:
-        current_url = str(await page.evaluate("window.location.href") or "")
+        current_url = str(await _evaluate_page(page, "window.location.href", timeout_ms=8000) or "")
     except Exception:
         current_url = ""
 
     tables: list[list[list[str]]] = []
     try:
-        raw_tables = await page.evaluate(
+        raw_tables = await _evaluate_page(
+            page,
             """
             () => Array.from(document.querySelectorAll('table'))
               .slice(0, 20)
@@ -998,7 +1608,8 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
                     .replace(/\\s+/g, ' ')
                     .trim()
                     .slice(0, 200))))
-            """
+            """,
+            timeout_ms=12000,
         )
         if isinstance(raw_tables, list):
             tables = raw_tables
@@ -1008,8 +1619,10 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
     rows, parse_diag = _parse_tables_with_diagnostics(tables)
     state_text = ""
     try:
-        raw_text = await page.evaluate(
-            "document.body ? String(document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000) : ''"
+        raw_text = await _evaluate_page(
+            page,
+            "document.body ? String(document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 4000) : ''",
+            timeout_ms=8000,
         )
         if isinstance(raw_text, str):
             state_text = _safe_portal_text(raw_text)
@@ -1018,7 +1631,11 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
 
     if not tables and not state_text:
         try:
-            html_content = str(await page.evaluate("document.body ? document.body.innerHTML : ''") or "")
+            html_content = str(await _evaluate_page(
+                page,
+                "document.body ? document.body.innerHTML : ''",
+                timeout_ms=12000,
+            ) or "")
             rows, parse_diag = parse_bank_portal_html_with_diagnostics(html_content)
             state_text = _safe_portal_text(html_content)
         except Exception:
@@ -1067,6 +1684,7 @@ async def collect_bank_via_browser_session_async(
     account_password: str = "",
     business_registration_no: str = "",
     business_entity_type: str = "",
+    browser_timeout_seconds: float = 120,
 ) -> dict[str, Any]:
     """Fetch transaction rows from a bank quick-service portal via PC Agent.
 
@@ -1113,11 +1731,19 @@ async def collect_bank_via_browser_session_async(
     }
     shinhan_service = _is_shinhan_service(bank_code, bank_name, institution_code, portal_url)
     shinhan_flow_mode = _shinhan_query_flow_mode(business_entity_type, account) if shinhan_service else ""
+    if shinhan_flow_mode == "individual_simple":
+        portal_url = BANK_PORTAL_URLS["shinhan_business"]
+        safe_diagnostics["portal_url_policy"] = "shinhan_individual_simple_override"
     if shinhan_flow_mode:
         safe_diagnostics["shinhan_query_flow_mode"] = shinhan_flow_mode
 
     session_id_to_use = browser_session_id.strip() if browser_session_id else ""
     auto_opened_session = False
+    try:
+        launch_timeout_seconds = max(15.0, min(90.0, float(browser_timeout_seconds) / 2.0))
+    except (TypeError, ValueError):
+        launch_timeout_seconds = 60.0
+    launch_queue_wait_seconds = max(5.0, min(20.0, launch_timeout_seconds / 3.0))
 
     if not session_id_to_use and browser_work_key:
         try:
@@ -1135,13 +1761,20 @@ async def collect_bank_via_browser_session_async(
             from app.browser_bridge.service import get_browser_bridge_service
 
             bridge = get_browser_bridge_service()
+            session_label = (
+                f"{bank_name or '신한은행'} 간편조회"
+                if shinhan_flow_mode == "individual_simple"
+                else f"{bank_name or '은행'} 기업페이지"
+            )
             session = await bridge.ensure_work_session(
                 work_key=browser_work_key,
-                label=f"{bank_name or '은행'} 기업페이지",
+                label=session_label,
                 agent_id=str(browser_agent_id or ""),
                 url=portal_url or "about:blank",
                 preferred_port=browser_preferred_port,
                 force_recreate=bool(force_recreate_browser),
+                queue_wait_timeout_seconds=launch_queue_wait_seconds,
+                command_timeout_seconds=launch_timeout_seconds,
             )
             session_id_to_use = str(getattr(session, "session_id", "") or "")
             auto_opened_session = bool(session_id_to_use)
@@ -1151,9 +1784,41 @@ async def collect_bank_via_browser_session_async(
             exc_error_code = str(getattr(exc, "error_code", "") or "").strip()
             safe_diagnostics["auto_open_error"] = exc_error_code or "PC_AGENT_UNAVAILABLE"
             safe_diagnostics["auto_open_error_message"] = str(exc)[:240]
+            safe_diagnostics["session_recovery_plan"] = _bank_session_recovery_plan(
+                exc_error_code or "PC_AGENT_UNAVAILABLE"
+            )
             exc_detail = _safe_error_detail(getattr(exc, "detail", None))
             if exc_detail:
                 safe_diagnostics["auto_open_error_detail"] = exc_detail
+            if (
+                not force_recreate_browser
+                and (exc_error_code or "").upper() in {"CDP_NOT_READY", "COMMAND_TIMEOUT"}
+            ):
+                try:
+                    session = await bridge.ensure_work_session(
+                        work_key=browser_work_key,
+                        label=session_label,
+                        agent_id=str(browser_agent_id or ""),
+                        url=portal_url or "about:blank",
+                        preferred_port=browser_preferred_port,
+                        force_recreate=True,
+                        queue_wait_timeout_seconds=launch_queue_wait_seconds,
+                        command_timeout_seconds=launch_timeout_seconds,
+                    )
+                    session_id_to_use = str(getattr(session, "session_id", "") or "")
+                    auto_opened_session = bool(session_id_to_use)
+                    if session_id_to_use:
+                        safe_diagnostics["browser_session_id"] = session_id_to_use
+                        safe_diagnostics["auto_open_browser"] = "1"
+                        safe_diagnostics["session_recovery"] = "recreated_same_work_key"
+                        safe_diagnostics["session_recovery_error"] = exc_error_code
+                except Exception as retry_exc:
+                    retry_error_code = str(getattr(retry_exc, "error_code", "") or "").strip()
+                    safe_diagnostics["session_recovery"] = "failed"
+                    safe_diagnostics["session_recovery_error"] = retry_error_code or "PC_AGENT_UNAVAILABLE"
+                    retry_detail = _safe_error_detail(getattr(retry_exc, "detail", None))
+                    if retry_detail:
+                        safe_diagnostics["session_recovery_error_detail"] = retry_detail
 
     if not session_id_to_use:
         return {
@@ -1164,7 +1829,7 @@ async def collect_bank_via_browser_session_async(
             "diagnostics": safe_diagnostics,
             "message": (
                 f"{bank_name or '은행'} 브라우저 수집을 위해 PC Agent 세션이 필요합니다. "
-                "PC Agent를 연결하고 관리자 화면에서 은행 웹 수집 세션을 열거나 "
+                "PC Agent 연결 후 같은 은행 전용 세션으로 재시도하고, 그래도 실패하면 "
                 "CSV 업로드로 대체 수집하십시오."
             ),
         }
@@ -1179,15 +1844,54 @@ async def collect_bank_via_browser_session_async(
         bridge = get_browser_bridge_service()
         session = bridge.sessions.get(session_id_to_use)
         if not session:
-            return {
-                "status": "connector_not_ready",
-                "error_code": "BANK_BROWSER_SESSION_NOT_FOUND",
-                "rows": [],
-                "row_count": 0,
-                "diagnostics": safe_diagnostics,
-                "message": "등록된 브라우저 세션을 찾지 못했습니다. 세션이 만료되었을 수 있습니다.",
-            }
-
+            if auto_open_browser and browser_work_key:
+                try:
+                    session_label = (
+                        f"{bank_name or '신한은행'} 간편조회"
+                        if shinhan_flow_mode == "individual_simple"
+                        else f"{bank_name or '은행'} 기업페이지"
+                    )
+                    session = await bridge.ensure_work_session(
+                        work_key=browser_work_key,
+                        label=session_label,
+                        agent_id=str(browser_agent_id or ""),
+                        url=portal_url or "about:blank",
+                        preferred_port=browser_preferred_port,
+                        force_recreate=True,
+                        queue_wait_timeout_seconds=launch_queue_wait_seconds,
+                        command_timeout_seconds=launch_timeout_seconds,
+                    )
+                    session_id_to_use = str(getattr(session, "session_id", "") or "")
+                    if session_id_to_use:
+                        safe_diagnostics["browser_session_id"] = session_id_to_use
+                        safe_diagnostics["session_recovery"] = "recreated_from_missing_session"
+                        safe_diagnostics["session_recovery_plan"] = _bank_session_recovery_plan(
+                            "BANK_BROWSER_SESSION_NOT_FOUND"
+                        )
+                except Exception as exc:
+                    safe_diagnostics["session_recovery"] = "failed"
+                    exc_error_code = str(getattr(exc, "error_code", "") or "").strip()
+                    safe_diagnostics["session_recovery_error"] = exc_error_code or "PC_AGENT_UNAVAILABLE"
+                    safe_diagnostics["session_recovery_plan"] = _bank_session_recovery_plan(
+                        exc_error_code or "PC_AGENT_UNAVAILABLE"
+                    )
+                    exc_detail = _safe_error_detail(getattr(exc, "detail", None))
+                    if exc_detail:
+                        safe_diagnostics["session_recovery_error_detail"] = exc_detail
+            if session:
+                safe_diagnostics["browser_session_id"] = session_id_to_use
+            else:
+                safe_diagnostics["session_recovery_plan"] = _bank_session_recovery_plan(
+                    "BANK_BROWSER_SESSION_NOT_FOUND"
+                )
+                return {
+                    "status": "connector_not_ready",
+                    "error_code": "BANK_BROWSER_SESSION_NOT_FOUND",
+                    "rows": [],
+                    "row_count": 0,
+                    "diagnostics": safe_diagnostics,
+                    "message": "등록된 브라우저 세션을 찾지 못했습니다. 같은 은행 전용 세션 재확보도 실패했습니다.",
+                }
         context = await bridge._context_for_session(session)
         pages = getattr(context, "pages", None)
         page, initial_url, matched_existing_page = await _select_bank_page(pages, portal_url)
@@ -1200,6 +1904,7 @@ async def collect_bank_via_browser_session_async(
         if matched_existing_page:
             safe_diagnostics["browser_tab_reused"] = "1"
         safe_diagnostics["browser_session_reuse_policy"] = "work_key_domain_first"
+        _disable_local_agent_auto_recovery(page)
 
         if portal_url:
             if _portal_url_reusable(initial_url, portal_url):
@@ -1216,17 +1921,33 @@ async def collect_bank_via_browser_session_async(
                     pass
 
         current_url = ""
-        try:
-            current_url, rows, parse_diag, state_text = await _read_bank_portal_snapshot(page)
-        except Exception as exc:
-            return {
-                "status": "failed",
-                "error_code": "BANK_BROWSER_PAGE_ERROR",
-                "rows": [],
-                "row_count": 0,
-                "diagnostics": {**safe_diagnostics, "current_url": current_url},
-                "message": f"브라우저 페이지에서 내용을 가져오지 못했습니다: {str(exc)[:200]}",
-            }
+        rows: list[dict[str, Any]] = []
+        parse_diag: dict[str, Any] = {
+            "table_count": 0,
+            "headers_found": [],
+            "parse_failure": False,
+            "transaction_header_found": False,
+        }
+        state_text = ""
+        skip_initial_snapshot = shinhan_flow_mode == "individual_simple" and all(
+            str(value or "").strip()
+            for value in (login_username, login_password, account_no, account_password)
+        )
+        if skip_initial_snapshot:
+            current_url = await _visible_page_url(page)
+            safe_diagnostics["initial_snapshot"] = "skipped_before_shinhan_state_machine"
+        else:
+            try:
+                current_url, rows, parse_diag, state_text = await _read_bank_portal_snapshot(page)
+            except Exception as exc:
+                return {
+                    "status": "failed",
+                    "error_code": "BANK_BROWSER_PAGE_ERROR",
+                    "rows": [],
+                    "row_count": 0,
+                    "diagnostics": {**safe_diagnostics, "current_url": current_url},
+                    "message": f"브라우저 페이지에서 내용을 가져오지 못했습니다: {str(exc)[:200]}",
+                }
 
         safe_diagnostics["current_url"] = current_url
 
@@ -1281,7 +2002,11 @@ async def collect_bank_via_browser_session_async(
                 safe_diagnostics["screen_requires_operator"] = "0"
 
         auto_navigation_triggered = False
-        if not rows and safe_diagnostics.get("screen_state") not in auth_states:
+        if (
+            not rows
+            and not skip_initial_snapshot
+            and safe_diagnostics.get("screen_state") not in auth_states
+        ):
             clicked_navigation_keys: list[str] = []
             navigation_labels: list[str] = []
             for _attempt in range(3):
@@ -1346,53 +2071,123 @@ async def collect_bank_via_browser_session_async(
         login_auto_fill_result: dict[str, str] = {"attempted": "0"}
         shinhan_flow_result: dict[str, str] = {"attempted": "0"}
         if not rows and shinhan_flow_mode:
-            shinhan_flow_result = await _try_prepare_shinhan_query_flow(
-                page,
-                flow_mode=shinhan_flow_mode,
-                username=str(login_username or ""),
-                password=str(login_password or ""),
-                account_no=str(account_no or ""),
-                account_password=str(account_password or ""),
-                business_registration_no=str(business_registration_no or ""),
-                date_from=str(date_from or ""),
-                date_to=str(date_to or ""),
-            )
-            safe_diagnostics["shinhan_query_flow"] = shinhan_flow_result
-        if not rows and shinhan_flow_result.get("query_submitted") == "1":
-            try:
-                await page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                pass
-            try:
-                rechecked_url, rechecked_rows, rechecked_diag, rechecked_text = await _read_bank_portal_snapshot(page)
-                rechecked_url = rechecked_url or current_url
-                if rechecked_rows and (date_from or date_to):
-                    rechecked_rows = [
-                        r for r in rechecked_rows if _row_in_date_range(r, date_from, date_to)
-                    ]
-                safe_diagnostics["shinhan_query_recheck_attempted"] = "1"
-                safe_diagnostics["shinhan_query_recheck_table_count"] = rechecked_diag["table_count"]
-                if rechecked_url != current_url:
-                    safe_diagnostics["shinhan_query_recheck_url_changed"] = "1"
-                if rechecked_rows:
-                    rows = rechecked_rows
+            shinhan_steps: list[dict[str, str]] = []
+            aggregate_flow: dict[str, str] = {"attempted": "0", "mode": shinhan_flow_mode}
+            if shinhan_flow_mode == "individual_simple":
+                safe_diagnostics["shinhan_dialog_auto_accept"] = (
+                    "installed" if _install_dialog_auto_accept(page) else "unavailable"
+                )
+            for attempt_index in range(4):
+                if shinhan_flow_mode == "individual_simple":
+                    notice_closed = await _close_shinhan_security_notice(page)
+                    if notice_closed:
+                        safe_diagnostics["shinhan_security_notice_closed"] = "1"
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=2000)
+                        except Exception:
+                            pass
+                if shinhan_flow_mode == "individual_simple" and attempt_index == 0:
+                    step_result = await _try_shinhan_individual_login_step(
+                        page,
+                        username=str(login_username or ""),
+                        password=str(login_password or ""),
+                    )
+                    if step_result.get("attempted") != "1":
+                        step_result = await _try_prepare_shinhan_query_flow(
+                            page,
+                            flow_mode=shinhan_flow_mode,
+                            username=str(login_username or ""),
+                            password=str(login_password or ""),
+                            account_no=str(account_no or ""),
+                            account_password=str(account_password or ""),
+                            business_registration_no=str(business_registration_no or ""),
+                            date_from=str(date_from or ""),
+                            date_to=str(date_to or ""),
+                        )
+                else:
+                    step_result = await _try_prepare_shinhan_query_flow(
+                        page,
+                        flow_mode=shinhan_flow_mode,
+                        username=str(login_username or ""),
+                        password=str(login_password or ""),
+                        account_no=str(account_no or ""),
+                        account_password=str(account_password or ""),
+                        business_registration_no=str(business_registration_no or ""),
+                        date_from=str(date_from or ""),
+                        date_to=str(date_to or ""),
+                    )
+                step_result["attempt_index"] = str(attempt_index + 1)
+                shinhan_steps.append(step_result)
+                for key, value in step_result.items():
+                    if key in {"mode", "stage"}:
+                        aggregate_flow[key] = value
+                    elif str(value) == "1":
+                        aggregate_flow[key] = "1"
+                    elif key not in aggregate_flow:
+                        aggregate_flow[key] = str(value)
+                actionable = any(
+                    step_result.get(key) == "1"
+                    for key in (
+                        "navigation_clicked",
+                        "websquare_triggered",
+                        "account_page_navigation",
+                        "notice_confirm",
+                        "username",
+                        "login_secret",
+                        "account_no",
+                        "account_direct_input",
+                        "account_selected",
+                        "account_secret",
+                        "business_registration_no",
+                        "date_from",
+                        "date_to",
+                        "query_submitted",
+                    )
+                )
+                if step_result.get("attempted") != "1" or not actionable:
+                    break
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+                try:
+                    rechecked_url, rechecked_rows, rechecked_diag, rechecked_text = await _read_bank_portal_snapshot(page)
+                    rechecked_url = rechecked_url or current_url
+                    if rechecked_rows and (date_from or date_to):
+                        rechecked_rows = [
+                            r for r in rechecked_rows if _row_in_date_range(r, date_from, date_to)
+                        ]
+                    safe_diagnostics["shinhan_query_recheck_attempted"] = "1"
+                    safe_diagnostics["shinhan_query_recheck_table_count"] = rechecked_diag["table_count"]
+                    if rechecked_url != current_url:
+                        safe_diagnostics["shinhan_query_recheck_url_changed"] = "1"
+                    current_url = rechecked_url
                     parse_diag = rechecked_diag
+                    safe_diagnostics["current_url"] = current_url
                     safe_diagnostics["parser_table_count"] = rechecked_diag["table_count"]
                     safe_diagnostics["parser_failure"] = rechecked_diag["parse_failure"]
                     safe_diagnostics["parser_transaction_header_found"] = rechecked_diag.get("transaction_header_found", False)
-                    safe_diagnostics["screen_state"] = "transaction_table"
-                    safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_SHINHAN_QUERY"
-                    safe_diagnostics["screen_suggested_action"] = "parse_table"
-                    safe_diagnostics["screen_requires_operator"] = "0"
-                else:
+                    if rechecked_rows:
+                        rows = rechecked_rows
+                        safe_diagnostics["screen_state"] = "transaction_table"
+                        safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_SHINHAN_QUERY"
+                        safe_diagnostics["screen_suggested_action"] = "parse_table"
+                        safe_diagnostics["screen_requires_operator"] = "0"
+                        break
                     rechecked_decision = classify_portal_state(rechecked_url, rechecked_text)
                     rechecked_state = rechecked_decision.as_dict()
                     safe_diagnostics["screen_state"] = rechecked_state.get("state", "unknown")
                     safe_diagnostics["screen_reason_code"] = rechecked_state.get("reason_code", "")
                     safe_diagnostics["screen_suggested_action"] = rechecked_state.get("suggested_action", "no_action")
                     safe_diagnostics["screen_requires_operator"] = "1" if rechecked_state.get("requires_operator") else "0"
-            except Exception:
-                safe_diagnostics["shinhan_query_recheck_attempted"] = "failed"
+                    if step_result.get("query_submitted") == "1" or rechecked_decision.state in auth_states:
+                        break
+                except Exception:
+                    safe_diagnostics["shinhan_query_recheck_attempted"] = "failed"
+                    break
+            shinhan_flow_result = aggregate_flow
+            safe_diagnostics["shinhan_query_flow"] = shinhan_flow_result
+            safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
 
         screen_state = _diagnostic_screen_state(safe_diagnostics)
         if not rows and screen_state.get("state") == "login_required":
@@ -1567,6 +2362,7 @@ async def collect_bank_via_browser_session_async(
         error_code = (
             "BANK_BROWSER_PC_AGENT_TIMEOUT"
             if exc_error_code in {"COMMAND_TIMEOUT", "RUNTIME_EVALUATE_TIMEOUT"}
+            or isinstance(exc, TimeoutError)
             else "BANK_BROWSER_UNEXPECTED_ERROR"
         )
         return {

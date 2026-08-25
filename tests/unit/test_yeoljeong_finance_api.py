@@ -337,27 +337,51 @@ async def test_sync_delivery_background_returns_after_queueing(monkeypatch):
 
     assert result == sync_result
     assert background_tasks.tasks == []
-    assert background_payloads == [(
-        {
-            "services": ["baemin", "yogiyo"],
-            "account_id": "",
-            "business_id": "biz-junghwa",
-            "branch": "중화점",
-            "date_from": "",
-            "date_to": "",
-            "browser_session_id": "",
-            "storage_state_path": "",
-            "background": False,
-            "sync_job_id": "delivery-sync-test",
-            "queued_run_ids": {"baemin": "run-baemin", "yogiyo": "run-yogiyo"},
-            "captcha_value": "",
-            "captcha_values": {},
-            "operator_approved": False,
-            "approved_input": "",
-            "force_recreate_portal_sessions": False,
-        },
+    assert len(background_payloads) == 1
+    background_payload, background_user = background_payloads[0]
+    assert background_user == {"email": "owner@example.com", "is_admin": True}
+    assert background_payload["services"] == ["baemin", "yogiyo"]
+    assert background_payload["business_id"] == "biz-junghwa"
+    assert background_payload["branch"] == "중화점"
+    assert background_payload["background"] is False
+    assert background_payload["sync_job_id"] == "delivery-sync-test"
+    assert background_payload["queued_run_ids"] == {"baemin": "run-baemin", "yogiyo": "run-yogiyo"}
+
+
+@pytest.mark.asyncio
+async def test_sync_delivery_preserves_baemin_full_backfill_options(monkeypatch):
+    captured = {}
+
+    def fake_sync_delivery(payload, current_user):
+        captured.update(payload)
+        return {"summary": []}
+
+    monkeypatch.setattr(api.svc, "sync_delivery", fake_sync_delivery)
+
+    payload = api.SyncPayload(
+        services=["baemin"],
+        business_id="all",
+        branch="전체",
+        all_businesses=True,
+        mode="full_backfill",
+        date_from="2026-01-01",
+        date_to="2026-08-25",
+        max_orders=200,
+        max_reviews=150,
+        checkpoint={"last_order_no": "T2FP00000XZV"},
+    )
+    result = await api.sync_delivery(
+        payload,
+        BackgroundTasks(),
         {"email": "owner@example.com", "is_admin": True},
-    )]
+    )
+
+    assert result == {"summary": []}
+    assert captured["all_businesses"] is True
+    assert captured["mode"] == "full_backfill"
+    assert captured["max_orders"] == 200
+    assert captured["max_reviews"] == 150
+    assert captured["checkpoint"] == {"last_order_no": "T2FP00000XZV"}
 
 
 def test_contract_editor_uses_safe_classification_and_locks_signed_records():
@@ -412,16 +436,16 @@ def test_employee_signup_collects_contract_autofill_profile():
     assert 'employerPhone: business.phone || ""' in html
 
 
-def test_employee_auth_gate_prioritizes_self_signup_over_invites():
+def test_employee_auth_gate_prioritizes_login_but_keeps_employee_signup_available():
     html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
     html = html_path.read_text(encoding="utf-8")
     gate = html.split('<section id="authGate"', 1)[1].split('<section id="appFilters"', 1)[0]
 
-    assert '<h2 id="authGateTitle" class="panel-title">직원 회원가입</h2>' in gate
-    assert '<button id="authModeSignup" class="active"' in gate
-    assert '<form id="gateSignupForm" class="panel-body">' in gate
+    assert '<h2 id="authGateTitle" class="panel-title">운영관리 로그인</h2>' in gate
+    assert '<form id="gateLoginForm" class="panel-body">' in gate
+    assert '<form id="gateSignupForm" class="panel-body hidden">' in gate
     assert '<form id="gateInviteAcceptForm" class="panel-body hidden">' in gate
-    assert "초대 링크는 보조 수단이며 기본 입사 흐름은 직원 직접 회원가입" in gate
+    assert '<button id="openSignupFromGateBtn" type="button">직원 회원가입</button>' in gate
     assert "회원가입 후 입사서류 등록" in gate
 
     signup_function = html.split("async function signupToServer(formData)", 1)[1].split(
@@ -432,6 +456,21 @@ def test_employee_auth_gate_prioritizes_self_signup_over_invites():
     assert "joinRequest = await submitEmployeeSignupJoinRequest" in signup_function
     assert 'setView("onboarding")' in signup_function
     assert "직원 회원가입과 가입요청이 완료됐습니다. 입사서류를 등록하십시오." in signup_function
+
+
+def test_member_permission_levels_are_visible_in_audit_view():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    audit = html.split('<section id="auditView"', 1)[1].split('<section id="loginModal"', 1)[0]
+
+    assert "회원 권한 구분 (5단계)" in audit
+    assert 'data-level="owner"' in audit
+    assert 'data-level="admin"' in audit
+    assert 'data-level="employee"' in audit
+    assert 'data-level="employee_pending"' in audit
+    assert 'data-level="employee_rejected"' in audit
+    assert "currentMemberLevelNote" in audit
+    assert "document.querySelectorAll(\".member-level\")" in html
 
 
 def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():

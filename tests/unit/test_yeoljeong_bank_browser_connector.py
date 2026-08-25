@@ -88,6 +88,18 @@ def test_bank_browser_work_key_no_korean_chars():
         assert char not in key
 
 
+def test_shinhan_individual_browser_work_key_is_scope_stable_and_opaque():
+    key1 = connector.shinhan_individual_browser_work_key("biz-mia", "branch-gangbuk-mia")
+    key2 = connector.shinhan_individual_browser_work_key("biz-mia", "branch-gangbuk-mia")
+    key3 = connector.shinhan_individual_browser_work_key("biz-mia", "branch-other")
+
+    assert key1 == key2
+    assert key1 != key3
+    assert key1.startswith("yeoljeong-bank-shinhan-individual-")
+    assert "biz-mia" not in key1
+    assert "branch" not in key1
+
+
 # ── HTML parser tests ─────────────────────────────────────────────────────────
 
 _SHINHAN_SAMPLE_HTML = """
@@ -877,6 +889,293 @@ def test_collect_async_shinhan_individual_flow_selects_account_and_date_range():
     assert "110123456789" not in str(result["diagnostics"])
 
 
+def test_collect_async_shinhan_individual_flow_runs_state_machine_steps():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    step = {"value": "login"}
+    stages: list[str] = []
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            if step["value"] == "done":
+                return [
+                    [
+                        ["거래일자", "적요", "입금금액", "출금금액", "거래후잔액"],
+                        ["2026.08.24", "카드정산", "120,000", "", "500,000"],
+                    ]
+                ]
+            return []
+        if "document.body.innerText" in expr:
+            return {
+                "login": "간편조회서비스 이용자ID 로그인 아이디 비밀번호",
+                "account_page": "계좌조회 메뉴",
+                "query": "계좌선택 계좌비밀번호 조회기간",
+                "done": "거래일자 입금금액",
+            }[step["value"]]
+        if "shinhanQueryFlow" in expr and args:
+            if step["value"] == "login":
+                step["value"] = "account_page"
+                stages.append("login")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "login",
+                    "navigation_clicked": "1",
+                    "username": "1",
+                    "login_secret": "1",
+                }
+            if step["value"] == "account_page":
+                step["value"] = "query"
+                stages.append("account_page_navigation")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "account_page_navigation",
+                    "navigation_clicked": "1",
+                    "account_page_navigation": "1",
+                }
+            if step["value"] == "query":
+                step["value"] = "done"
+                stages.append("account_query")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "account_query",
+                    "account_selected": "1",
+                    "account_secret": "1",
+                    "date_from": "1",
+                    "date_to": "1",
+                    "query_submitted": "1",
+                }
+            return {"attempted": "0", "mode": "individual_simple", "stage": "done"}
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-shinhan-state-machine"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-shinhan-state-machine",
+                browser_work_key="yeoljeong-bank-browser-shinhan-state-machine",
+                date_from="2026-08-24",
+                date_to="2026-08-24",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_entity_type="individual",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 1
+    assert stages == ["login", "account_page_navigation", "account_query"]
+    flow = result["diagnostics"]["shinhan_query_flow"]
+    assert flow["username"] == "1"
+    assert flow["account_page_navigation"] == "1"
+    assert flow["account_selected"] == "1"
+    assert flow["query_submitted"] == "1"
+    assert [item["stage"] for item in result["diagnostics"]["shinhan_query_flow_steps"]] == stages
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+    assert "110123456789" not in str(result["diagnostics"])
+
+
+def test_collect_async_shinhan_individual_flow_confirms_notice_before_account_query():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    step = {"value": "login"}
+    stages: list[str] = []
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+        if "querySelectorAll('table')" in expr:
+            if step["value"] == "done":
+                return [
+                    [
+                        ["거래일자", "시간", "적요", "출금(원)", "입금(원)", "내용", "잔액(원)"],
+                        ["2026-08-24", "10:17:12", "FB자금", "0", "33,906", "741346195BC", "3,261,428"],
+                    ]
+                ]
+            return []
+        if "document.body.innerText" in expr:
+            return {
+                "login": "간편조회서비스 이용자ID 로그인 아이디 비밀번호",
+                "notice": "ID로그인 시에는 이용 가능한 서비스가 제한되오니 업무에 참고 부탁드립니다. 확인",
+                "account_page": "간편조회서비스 계좌조회",
+                "query": "조회 계좌번호 직접입력 조회 계좌비밀번호 숫자 4자리 조회기간",
+                "done": "거래일자 입금(원) 출금(원)",
+            }[step["value"]]
+        if "shinhanQueryFlow" in expr and args:
+            if step["value"] == "login":
+                step["value"] = "notice"
+                stages.append("login")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "login",
+                    "navigation_clicked": "1",
+                    "username": "1",
+                    "login_secret": "1",
+                }
+            if step["value"] == "notice":
+                step["value"] = "account_page"
+                stages.append("login_notice_confirm")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "login_notice_confirm",
+                    "navigation_clicked": "1",
+                    "notice_confirm": "1",
+                }
+            if step["value"] == "account_page":
+                step["value"] = "query"
+                stages.append("account_page_navigation")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "account_page_navigation",
+                    "navigation_clicked": "1",
+                    "account_page_navigation": "1",
+                }
+            if step["value"] == "query":
+                step["value"] = "done"
+                stages.append("account_query")
+                return {
+                    "attempted": "1",
+                    "mode": "individual_simple",
+                    "stage": "account_query",
+                    "account_no": "1",
+                    "account_direct_input": "1",
+                    "account_selected": "1",
+                    "account_secret": "1",
+                    "date_from": "1",
+                    "date_to": "1",
+                    "query_submitted": "1",
+                }
+            return {"attempted": "0", "mode": "individual_simple", "stage": "done"}
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.on = MagicMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-shinhan-notice"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-shinhan-notice",
+                browser_work_key="yeoljeong-bank-shinhan-individual-notice",
+                date_from="2026-08-24",
+                date_to="2026-08-24",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110298730240",
+                account_password="4321",
+                business_entity_type="individual",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 1
+    assert result["rows"][0]["amount"] == 33906
+    assert stages == ["login", "login_notice_confirm", "account_page_navigation", "account_query"]
+    flow = result["diagnostics"]["shinhan_query_flow"]
+    assert flow["notice_confirm"] == "1"
+    assert flow["account_direct_input"] == "1"
+    assert flow["query_submitted"] == "1"
+    assert result["diagnostics"]["shinhan_dialog_auto_accept"] == "installed"
+    mock_page.on.assert_called()
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+    assert "110298730240" not in str(result["diagnostics"])
+
+
+def test_prepare_shinhan_individual_flow_uses_websquare_component_login_trigger():
+    page = AsyncMock()
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "componentById" in expr
+        assert "triggerWebSquareEvent" in expr
+        assert "websquare_triggered" in expr
+        payload = args[0]
+        assert payload["mode"] == "individual_simple"
+        assert payload["username"] == "bank-user"
+        assert payload["password"] == "bank-pass"
+        return {
+            "attempted": "1",
+            "mode": "individual_simple",
+            "stage": "login",
+            "navigation_clicked": "1",
+            "websquare_triggered": "1",
+            "username": "1",
+            "login_secret": "1",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_prepare_shinhan_query_flow(
+            page,
+            flow_mode="individual_simple",
+            username="bank-user",
+            password="bank-pass",
+            account_no="110123456789",
+            account_password="4321",
+            business_registration_no="1234567890",
+            date_from="2026-08-24",
+            date_to="2026-08-24",
+        )
+    )
+
+    assert result["stage"] == "login"
+    assert result["username"] == "1"
+    assert result["login_secret"] == "1"
+    assert result["navigation_clicked"] == "1"
+    assert result["websquare_triggered"] == "1"
+    assert "bank-pass" not in str(result)
+    assert "4321" not in str(result)
+    assert "110123456789" not in str(result)
+
+
+def test_close_shinhan_security_notice_prefers_visible_popup_close():
+    page = AsyncMock()
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "btnTotalClose" in expr
+        return {"closed": "1", "notice": "1", "tag": "A", "id": "CO00038RP_1_btnmakedpopupclose"}
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    assert _run(connector._close_shinhan_security_notice(page)) is True
+    page.evaluate.assert_awaited_once()
+
+
 def test_prepare_shinhan_corporate_quick_flow_returns_safe_diagnostics():
     page = AsyncMock()
 
@@ -1027,6 +1326,54 @@ def test_collect_async_session_success_returns_parsed_rows():
     assert result["row_count"] == 2
     assert result["diagnostics"]["auth_mode"] == "pc_agent_browser"
     assert result["diagnostics"]["browser_session_id"] == "live-session-abc"
+
+
+def test_collect_async_missing_explicit_session_recovers_same_work_key():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "조회된 거래내역이 없습니다."
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "recovered-session-001"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.side_effect = [None]
+        bridge_inst.ensure_work_session = AsyncMock(return_value=mock_session)
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="stale-session",
+                browser_work_key="yeoljeong-bank-shinhan-individual-abc123",
+                date_from="2026-08-24",
+                date_to="2026-08-24",
+                auto_open_browser=True,
+                portal_url="https://bank.shinhan.com/rib/easy/index.jsp",
+                business_entity_type="individual",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["diagnostics"]["browser_session_id"] == "recovered-session-001"
+    assert result["diagnostics"]["session_recovery"] == "recreated_from_missing_session"
+    bridge_inst.ensure_work_session.assert_awaited_once()
+    assert bridge_inst.ensure_work_session.await_args.kwargs["work_key"] == "yeoljeong-bank-shinhan-individual-abc123"
 
 
 def test_collect_async_diagnostics_has_no_credentials():
@@ -1411,6 +1758,8 @@ def test_collect_bank_account_browser_forwards_saved_bank_quick_credentials(tmp_
     assert kwargs["business_registration_no"] == "1234567890"
     assert kwargs["business_entity_type"] == "individual"
     assert kwargs["portal_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+    assert kwargs["browser_work_key"].startswith("yeoljeong-bank-shinhan-individual-")
+    assert account["id"] not in kwargs["browser_work_key"]
 
 
 def test_collect_bank_account_browser_connector_status_on_failure(tmp_path, monkeypatch):

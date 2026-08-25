@@ -38,6 +38,40 @@ def test_payload_passes_force_recreate_sessions_flag():
     assert payload["close_portal_browser_on_complete"] is True
 
 
+def test_payload_and_child_argv_preserve_baemin_full_backfill_options():
+    args = auto_collect.build_parser().parse_args(
+        [
+            "--services",
+            "baemin",
+            "--business-id",
+            "all",
+            "--branch",
+            "전체",
+            "--mode",
+            "full_backfill",
+            "--date-from",
+            "2026-01-01",
+            "--date-to",
+            "2026-08-25",
+            "--max-orders",
+            "200",
+            "--max-reviews",
+            "150",
+        ]
+    )
+
+    payload = auto_collect._payload(args)
+    argv = auto_collect._child_collect_argv(payload)
+
+    assert payload["all_businesses"] is True
+    assert payload["mode"] == "full_backfill"
+    assert payload["max_orders"] == 200
+    assert payload["max_reviews"] == 150
+    assert argv[argv.index("--mode") + 1] == "full_backfill"
+    assert argv[argv.index("--max-orders") + 1] == "200"
+    assert argv[argv.index("--max-reviews") + 1] == "150"
+
+
 def test_payload_can_keep_browser_open_for_manual_debugging():
     args = auto_collect.build_parser().parse_args(["--keep-browser-open"])
 
