@@ -6,6 +6,7 @@ def test_main_registers_baemin_full_backfill_auto_collect_jobs():
 
     assert "delivery_auto_collect_baemin_full_backfill" in source
     assert "delivery_auto_collect_pc_agent_catchup" in source
+    assert "delivery_auto_collect_peer_agent" in source
     assert '"services": ["baemin"]' in source
     assert '"mode": "full_backfill"' in source
 
