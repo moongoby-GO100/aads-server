@@ -8159,3 +8159,25 @@
 - Remaining:
   - The fix is not loaded into running AADS processes until an approved reload/deploy.
   - Commit, push, deploy/restart were not performed.
+
+## 2026-08-26 14:55 KST - FOOD Coupang Eats catch-up portal session isolation
+
+- Request: Continue Baemin queued backfill after ending stuck jobs and proceed with Coupang Eats auto-collection.
+- Operations:
+  - Committed and pushed `f1fe841b` for isolated child delivery catch-up execution and Coupang Eats 15-minute catch-up scheduler.
+  - Reloaded AADS API via `deploy_safe(mode=reload)`, then restarted `aads-server` when the uvicorn-held `.delivery_sync.lock` remained.
+  - Verified `aads-server` returned healthy after restart and PC Agents reconnected.
+  - Triggered Baemin one-day full_backfill job `delivery-sync-8f6c8ca71c23`; it was queued but blocked by a concurrent Coupang Eats catch-up run.
+  - Confirmed Coupang Eats scheduler actually started job `delivery-auto-coupangeats_catchup-2026-08-26`.
+- Findings:
+  - Coupang Eats first branch hit `PC_AGENT_WRONG_PORTAL_SESSION`, which showed the catch-up daemon reused a wrong portal browser session.
+- Changes:
+  - `app/main.py`: catch-up/full_backfill delivery daemon payloads now force portal session recreation.
+  - `app/main.py`: daemon child command now passes `--force-recreate-sessions` to `scripts/yeoljeong_auto_collect.py`.
+  - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added contract coverage for forced portal-session recreation.
+- Verification:
+  - `python3 -m py_compile app/main.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_auto_collect.py -q` succeeded: 36 passed.
+- Remaining:
+  - The force-recreate patch must be committed, pushed, and reloaded after the current Coupang Eats process exits or is timed out.
+  - Baemin queued jobs remain pending while Coupang Eats holds the shared delivery lock.

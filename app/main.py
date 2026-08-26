@@ -153,6 +153,7 @@ def _delivery_auto_collect_payload(
 ) -> dict:
     selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
     today = datetime.now(KST).date()
+    force_recreate_portal_sessions = reason in {"pc_agent_catchup", "coupangeats_catchup"} or mode == "full_backfill"
     payload = {
         "services": selected_services,
         "business_id": "all",
@@ -162,7 +163,7 @@ def _delivery_auto_collect_payload(
         "prefer_pc_agent": True,
         "require_pc_agent": True,
         "pc_agent_id": str(agent_id or ""),
-        "force_recreate_portal_sessions": False,
+        "force_recreate_portal_sessions": force_recreate_portal_sessions,
         "close_portal_browser_on_complete": True,
         "skip_financial_accounts": True,
         "sync_job_id": f"delivery-auto-{reason}-{today.isoformat()}",
@@ -1267,6 +1268,8 @@ async def lifespan(app: FastAPI):
                 ]
                 if mode:
                     cmd.extend(["--mode", mode])
+                if payload.get("force_recreate_portal_sessions"):
+                    cmd.append("--force-recreate-sessions")
                 if payload.get("max_orders"):
                     cmd.extend(["--max-orders", str(payload.get("max_orders"))])
                 if payload.get("max_reviews"):

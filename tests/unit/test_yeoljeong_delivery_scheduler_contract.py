@@ -28,6 +28,7 @@ def test_delivery_auto_collect_daemon_runs_child_with_timeout():
     assert "delivery_auto_collect_timeout" in source
     assert "--attempt-timeout-seconds" in source
     assert "--browser-agent-id" in source
+    assert "--force-recreate-sessions" in source
 
 
 def test_main_registers_coupangeats_catchup_auto_collect_job():
