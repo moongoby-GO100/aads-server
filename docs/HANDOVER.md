@@ -533,6 +533,6 @@
 
 - 요청: `runner-6c71a443` 승인 후 신한은행 은행수집 PC Agent 전용화와 CDP 재개 보강을 배포하고 검증.
 - 조치: 러너 승인 후 `aads-server-green`이 active upstream으로 전환됐으나, 운영 회귀 테스트에서 배민 공유 work_key/보안차단/orphan tab cleanup 로직이 퇴행한 것을 확인했다. 은행 전용 lock 및 신한 resume 보강은 유지하고 `yeoljeong_finance_service.py`의 배민 보호 로직을 복구했다.
-- 검증: 운영 이미지 의존성 + 현재 소스 bind mount 기준 `python -m pytest tests/unit/test_yeoljeong_finance_service.py -q` 131 passed, `python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` 90 passed. 대상 파일 `py_compile`과 `git diff --check` 통과.
+- 검증: 운영 이미지 의존성 + 현재 소스 bind mount 기준 `python -m pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_auto_collect.py -q` 42 passed, `python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` 187 passed. 대상 파일 `py_compile`과 `git diff --check` 통과.
 - 운영 상태: active port는 `8102`, active container는 `aads-server-green`, `/health`는 `status=ok`, `graph_ready=true`. PC Agent는 blue API `8100`에 2대 온라인이고 green local agent 목록은 아직 0건이라 은행 수집은 peer fallback 또는 명시 agent id로 실행해야 한다.
 - 남은 이슈: 최근 1개월 신한 실수집 `imported_rows > 0` 검증은 배포 보정 커밋/재배포 후 다시 실행해야 한다. 기존 무관 dirty 변경과 원장 이벤트 파일은 커밋 대상에서 제외한다.
