@@ -1,7 +1,7 @@
 import base64
 import os
 import importlib.util
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -1164,6 +1164,109 @@ def test_queue_full_backfill_creates_store_day_windows(tmp_path, monkeypatch):
     assert {row["date_to"] for row in statuses} == {"2026-08-25"}
     assert all(row["payload"]["limits"]["max_orders"] == 80 for row in statuses)
     assert all(row["payload"]["window"]["window_days"] == 1 for row in statuses)
+
+
+def test_retry_full_backfill_clamps_legacy_wide_failed_window(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [{"service": "baemin", "business_id": "biz-mia", "branch": "열정국밥_미아점"}],
+    )
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "wide-timeout",
+                "job_id": "delivery-auto-pc-agent-catchup",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "date_from": "2024-01-01",
+                "date_to": "2026-08-26",
+                "status": "failed",
+                "error_code": "ATTEMPT_TIMEOUT",
+                "payload": {
+                    "mode": "full_backfill",
+                    "window": {"date_from": "2024-01-01", "date_to": "2026-08-26", "window_days": 1},
+                    "retry": {"attempt_count": 0, "max_attempts": 3},
+                    "checkpoint": {},
+                },
+            }
+        ],
+    )
+
+    queued = service.queue_delivery_sync(
+        {
+            "services": ["baemin"],
+            "mode": "full_backfill",
+            "business_id": "all",
+            "branch": "전체",
+            "date_from": "2024-01-01",
+            "date_to": "2026-08-26",
+            "window_days": 1,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    retry = next(row for row in service._read("delivery_collection_status") if row["status"] == "queued")
+    assert queued["queued"] is True
+    assert retry["date_from"] == "2026-08-26"
+    assert retry["date_to"] == "2026-08-26"
+    assert retry["payload"]["window"]["date_from"] == "2026-08-26"
+    assert retry["payload"]["retry"]["attempt_count"] == 0
+
+
+def test_ensure_full_backfill_retry_clamps_legacy_wide_failed_window(monkeypatch):
+    upserts = []
+
+    def fake_run_db(coro):
+        try:
+            frame = getattr(coro, "cr_frame", None)
+            locals_ = dict(getattr(frame, "f_locals", {}) or {})
+            record = locals_.get("record") or {}
+            upserts.append(record)
+            return None
+        finally:
+            close = getattr(coro, "close", None)
+            if close:
+                close()
+
+    monkeypatch.setattr(service, "_run_db", fake_run_db)
+    statuses = [
+        {
+            "id": "wide-timeout",
+            "job_id": "delivery-auto-pc-agent-catchup",
+            "service": "baemin",
+            "business_id": "biz-mia",
+            "branch": "열정국밥_미아점",
+            "date_from": "2024-01-01",
+            "date_to": "2026-08-26",
+            "status": "failed",
+            "error_code": "ATTEMPT_TIMEOUT",
+            "payload": {
+                "mode": "full_backfill",
+                "window": {"date_from": "2024-01-01", "date_to": "2026-08-26", "window_days": 1},
+                "retry": {"attempt_count": 0, "max_attempts": 3},
+                "checkpoint": {},
+            },
+        }
+    ]
+
+    service._delivery_ensure_baemin_backfill_queue(
+        statuses,
+        {"mode": "full_backfill", "window_days": 1, "max_orders": 80, "max_reviews": 80},
+        [("biz-mia", "열정국밥_미아점")],
+        date.fromisoformat("2024-01-01"),
+        date.fromisoformat("2026-08-26"),
+        "delivery-auto-pc-agent-catchup",
+    )
+
+    retry = next(row for row in statuses if row["status"] == "queued")
+    assert upserts
+    assert retry["date_from"] == "2026-08-26"
+    assert retry["date_to"] == "2026-08-26"
+    assert retry["payload"]["retry"]["retry_of"] == "wide-timeout"
+    assert retry["payload"]["retry"]["attempt_count"] == 1
 
 
 def test_sync_full_backfill_claims_one_queued_window_and_enqueues_next_day(tmp_path, monkeypatch):

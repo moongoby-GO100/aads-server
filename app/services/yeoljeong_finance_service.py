@@ -3457,6 +3457,20 @@ def _delivery_stale_after_for_status(row: dict[str, Any]) -> timedelta:
     return DELIVERY_BACKFILL_STALE_AFTER if _delivery_backfill_status_is_full(row) else DELIVERY_SYNC_STALE_AFTER
 
 
+def _delivery_clamp_backfill_retry_window(
+    run_from: date,
+    run_to: date,
+    *,
+    full_from: date,
+    window_days: int,
+) -> tuple[date, date]:
+    if run_to < full_from:
+        return run_from, run_to
+    if (run_to - run_from).days + 1 <= window_days:
+        return run_from, run_to
+    return max(full_from, run_to - timedelta(days=window_days - 1)), run_to
+
+
 def _delivery_enqueue_baemin_backfill_status(
     statuses: list[dict[str, Any]],
     payload: dict[str, Any],
@@ -3547,6 +3561,12 @@ def _delivery_ensure_baemin_backfill_queue(
             if latest_error not in retryable_error_codes or latest_attempt >= DELIVERY_BACKFILL_MAX_ATTEMPTS:
                 continue
             run_from, run_to = latest_from, latest_to
+            run_from, run_to = _delivery_clamp_backfill_retry_window(
+                run_from,
+                run_to,
+                full_from=full_from,
+                window_days=window_days,
+            )
             checkpoint = latest_payload.get("checkpoint") if isinstance(latest_payload.get("checkpoint"), dict) else None
             retry_of = str(latest.get("id") or "")
             latest_attempt += 1
