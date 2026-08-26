@@ -9,13 +9,18 @@
   - Stopped the live Baemin auto-collection parent/child processes for `delivery-auto-pc_agent_catchup-2026-08-27` with SIGTERM after confirming the block risk.
   - Sent `browser_close_session` cleanup for the four managed Baemin delivery work keys; all returned `session_not_found`, meaning no managed delivery session remained.
   - Attempted Baemin-only tab close through `browser_close_tab`, but PC Agent CDP returned `CDP_NOT_READY`; general Chrome process was not force-killed to avoid closing the CEO's non-managed browser state.
+  - After scheduler catch-up respawned the Baemin collector, terminated the new `yeoljeong_auto_collect.py` processes and narrowed the remaining DB running row `216a06dd-6a1e-4c6e-be42-7a890bde26dc` to `action_required/BAEMIN_SECURITY_BLOCKED`.
+  - Confirmed the root cause of a second respawn: cooldown was only applied to `full_backfill`, so regular `scheduled_delivery` still retried Baemin. Stopped the spawned scheduled PIDs and narrowed row `ba136ff3-ced8-4e94-9b22-2aed5dbb24bf` to `action_required/BAEMIN_SECURITY_BLOCKED`.
+  - Windows window control found the visible Baemin Chrome window, but Alt+F4 did not close it. The tab is not attached to a managed CDP session.
 - Fix:
   - `app/main.py`: reduced the default Baemin security-block cooldown from 360 minutes to `DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45`. Environment override `YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES` still takes precedence.
+  - `app/main.py`: applies Baemin security-block cooldown to every scheduled/catch-up run, not just `full_backfill`. When a multi-service run is due, Baemin is removed while other services continue.
   - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added regression coverage for the 45-minute default cooldown.
 - Verification:
   - `python3 -m py_compile app/main.py` passed.
   - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py` passed: 7 passed.
   - DB check for Baemin `payload->>'status'='running'` returned 0 rows after process termination.
+  - A later scheduler respawn was stopped and DB status was corrected with a single-row update.
 - Deployment:
   - Committed as `e6a9a5d9 fix(food): shorten baemin security cooldown`, pushed to `origin/main`, and deployed with `deploy_safe(mode=reload)`.
   - Hot reload reloaded 89 modules and post-health returned OK at 2026-08-27 06:59 KST.

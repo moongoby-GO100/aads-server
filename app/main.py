@@ -1248,7 +1248,7 @@ async def lifespan(app: FastAPI):
                     "name": "자동수집데몬",
                 }
                 selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
-                if "baemin" in selected_services and mode == "full_backfill":
+                if "baemin" in selected_services:
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if _delivery_auto_collect_security_block_cooldown_active(statuses):
                         logger.info(
@@ -1256,7 +1256,9 @@ async def lifespan(app: FastAPI):
                             reason,
                             mode,
                         )
-                        return
+                        selected_services = [service for service in selected_services if service != "baemin"]
+                        if not selected_services:
+                            return
                 if reason == "pc_agent_catchup" and mode == "full_backfill":
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if not _delivery_auto_collect_baemin_catchup_due(statuses):
