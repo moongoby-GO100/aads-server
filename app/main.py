@@ -76,6 +76,7 @@ logger = structlog.get_logger()
 # 전역 그래프 (lifespan에서 초기화)
 app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "memory_store": None}
 KST = timezone(timedelta(hours=9))
+DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45
 
 
 def _is_active_api_container_for_background_jobs() -> bool:
@@ -130,6 +131,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = str(os.getenv(name) or "").strip().lower()
+    if not value:
+        return default
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _delivery_auto_collect_payload(
     agent_id: str = "",
     *,
@@ -139,7 +151,10 @@ def _delivery_auto_collect_payload(
 ) -> dict:
     selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
     today = datetime.now(KST).date()
+    baemin_only = set(selected_services) == {"baemin"}
     force_recreate_portal_sessions = reason in {"pc_agent_catchup", "coupangeats_catchup"} or mode == "full_backfill"
+    if baemin_only:
+        force_recreate_portal_sessions = _env_bool("YEOLJEONG_BAEMIN_FORCE_RECREATE_SESSIONS", False)
     payload = {
         "services": selected_services,
         "business_id": "all",
@@ -161,8 +176,8 @@ def _delivery_auto_collect_payload(
             {
                 "date_from": os.getenv("YEOLJEONG_BAEMIN_BACKFILL_FROM", "2024-01-01"),
                 "date_to": today.isoformat(),
-                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 80),
-                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 80),
+                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 20),
+                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 20),
                 "window_days": _env_int("YEOLJEONG_BAEMIN_BACKFILL_WINDOW_DAYS", 1),
                 "max_backfill_runs": _env_int("YEOLJEONG_BAEMIN_BACKFILL_BATCH_LIMIT", 1),
             }
@@ -191,6 +206,8 @@ def _delivery_auto_collect_service_catchup_due(
             current.get("updated_at") or current.get("created_at") or ""
         ):
             latest[key] = row
+    if service == "baemin" and _delivery_auto_collect_security_block_cooldown_active(list(latest.values())):
+        return False
     if len(latest) < expected_scope_count:
         return True
     for row in latest.values():
@@ -204,6 +221,41 @@ def _delivery_auto_collect_service_catchup_due(
         if str(row.get("error_code") or "").strip():
             return True
         if _delivery_auto_collect_count_total(row) <= 0:
+            return True
+    return False
+
+
+def _delivery_auto_collect_row_time(row: dict) -> datetime | None:
+    for key in ("updated_at", "finished_at", "started_at", "created_at"):
+        value = str(row.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=KST)
+        return parsed.astimezone(KST)
+    return None
+
+
+def _delivery_auto_collect_security_block_cooldown_active(statuses: list[dict]) -> bool:
+    cooldown_minutes = _env_int(
+        "YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES",
+        DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES,
+    )
+    if cooldown_minutes <= 0:
+        return False
+    cutoff = datetime.now(KST) - timedelta(minutes=cooldown_minutes)
+    for row in statuses if isinstance(statuses, list) else []:
+        if str(row.get("service") or "") != "baemin":
+            continue
+        error_code = str(row.get("error_code") or "").strip().upper()
+        if error_code not in {"PORTAL_BLOCKED", "BAEMIN_SECURITY_BLOCKED"}:
+            continue
+        row_time = _delivery_auto_collect_row_time(row)
+        if row_time and row_time >= cutoff:
             return True
     return False
 
@@ -1130,12 +1182,20 @@ async def lifespan(app: FastAPI):
         )
 
         # P0-2: 배달 자동수집 데몬 — 정시 수집 + 배민 full_backfill catch-up (PC Agent 온라인 시)
-        async def _delivery_auto_collect_peer_agent() -> dict:
+        def _delivery_auto_collect_excluded_agent_ids() -> set[str]:
+            return {
+                item.strip()
+                for item in os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS", "").split(",")
+                if item.strip()
+            }
+
+        async def _delivery_auto_collect_peer_agent(excluded_agent_ids: set[str] | None = None) -> dict:
             import asyncio
             import json
             import urllib.error
             import urllib.request
 
+            excluded_agent_ids = excluded_agent_ids or set()
             peer_bases = [
                 base.strip().rstrip("/")
                 for base in os.getenv(
@@ -1164,7 +1224,7 @@ async def lifespan(app: FastAPI):
                         if str(agent.get("status") or "") != "online":
                             continue
                         agent_id = str(agent.get("agent_id") or "").strip()
-                        if agent_id:
+                        if agent_id and agent_id not in excluded_agent_ids:
                             return {
                                 "status": "online",
                                 "agent_id": agent_id,
@@ -1211,6 +1271,17 @@ async def lifespan(app: FastAPI):
                         "status": "deferred",
                         "diagnostics": {"delivery_deferred_due_to_bank_lock": "1"},
                     }
+                if "baemin" in selected_services:
+                    statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    if _delivery_auto_collect_security_block_cooldown_active(statuses):
+                        logger.info(
+                            "delivery_auto_collect_skip: baemin_security_block_cooldown reason=%s mode=%s",
+                            reason,
+                            mode,
+                        )
+                        selected_services = [service for service in selected_services if service != "baemin"]
+                        if not selected_services:
+                            return
                 if reason == "pc_agent_catchup" and mode == "full_backfill":
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if not _delivery_auto_collect_baemin_catchup_due(statuses):
@@ -1223,9 +1294,30 @@ async def lifespan(app: FastAPI):
                         return
 
                 wait_timeout = 45 if reason in {"pc_agent_catchup", "coupangeats_catchup"} else 180
-                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=wait_timeout)
-                if wait_result["status"] != "online":
-                    wait_result = await _delivery_auto_collect_peer_agent()
+                preferred_agent_id = os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "").strip()
+                excluded_agent_ids = _delivery_auto_collect_excluded_agent_ids()
+                if preferred_agent_id and preferred_agent_id in excluded_agent_ids:
+                    logger.warning(
+                        "delivery_auto_collect_skip: preferred_agent_excluded reason=%s agent_id=%s",
+                        reason,
+                        preferred_agent_id,
+                    )
+                    return
+
+                wait_result = await pc_agent_manager.wait_for_agent_online(
+                    agent_id=preferred_agent_id,
+                    timeout=wait_timeout,
+                )
+                if wait_result["status"] == "online" and wait_result.get("agent_id") in excluded_agent_ids:
+                    wait_result = {"status": "excluded", "error_code": "PC_AGENT_EXCLUDED"}
+                if wait_result["status"] != "online" and not preferred_agent_id:
+                    for agent in pc_agent_manager.list_agent_statuses():
+                        agent_id = str(agent.get("agent_id") or "").strip()
+                        if str(agent.get("status") or "") == "online" and agent_id and agent_id not in excluded_agent_ids:
+                            wait_result = {"status": "online", "agent_id": agent_id, "source": "local_agent_list"}
+                            break
+                if wait_result["status"] != "online" and not preferred_agent_id:
+                    wait_result = await _delivery_auto_collect_peer_agent(excluded_agent_ids)
                 if wait_result["status"] != "online":
                     logger.info(
                         "delivery_auto_collect_skip: pc_agent_offline reason=%s mode=%s services=%s",

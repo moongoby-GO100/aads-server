@@ -31,6 +31,17 @@ def test_delivery_auto_collect_daemon_runs_child_with_timeout():
     assert "--force-recreate-sessions" in source
 
 
+def test_delivery_auto_collect_daemon_honors_dedicated_pc_agent_env():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID" in source
+    assert "YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS" in source
+    assert "preferred_agent_id = os.getenv" in source
+    assert "agent_id=preferred_agent_id" in source
+    assert "delivery_auto_collect_skip: preferred_agent_excluded" in source
+    assert "PC_AGENT_EXCLUDED" in source
+
+
 def test_main_registers_coupangeats_catchup_auto_collect_job():
     source = Path("app/main.py").read_text(encoding="utf-8")
 

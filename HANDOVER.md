@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-27 08:25 KST - FOOD delivery auto-collection PC Agent pin
+
+- Request: Ensure Baemin block guards are reflected, run Coupang Eats/Yogiyo collection on a non-CEO PC, and close Baemin tabs on the CEO PC.
+- Operations:
+  - Verified current live PC Agent list only shows `7f99c528-24d` (`DESKTOP-ICU55HK`) online after the CEO PC Baemin cleanup.
+  - Verified Baemin catch-up is running with `--browser-agent-id 7f99c528-24d`.
+  - Verified recent delivery ledger rows include Yogiyo success plus Coupang Eats login-required/timeout/running states.
+- Changes:
+  - `app/main.py`: delivery auto-collection now honors `YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID` as the dedicated agent and skips agents listed in `YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS`.
+  - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added regression coverage for the dedicated/excluded PC Agent contract.
+- Verification:
+  - `python3 -m py_compile app/main.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded: 8 passed.
+- Remaining:
+  - Commit, push, deploy/reload, and post-deploy env verification are required for this specific pinning patch.
+
 ## 2026-08-27 06:58 KST - FOOD Baemin security block cooldown and cleanup
 
 - Trigger: CEO reported Baemin abnormal-activity block screen and requested immediate action after asking whether the PC browser had really been closed.
