@@ -76,6 +76,7 @@ logger = structlog.get_logger()
 # 전역 그래프 (lifespan에서 초기화)
 app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "memory_store": None}
 KST = timezone(timedelta(hours=9))
+DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45
 
 
 def _is_active_api_container_for_background_jobs() -> bool:
@@ -240,7 +241,10 @@ def _delivery_auto_collect_row_time(row: dict) -> datetime | None:
 
 
 def _delivery_auto_collect_security_block_cooldown_active(statuses: list[dict]) -> bool:
-    cooldown_minutes = _env_int("YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES", 360)
+    cooldown_minutes = _env_int(
+        "YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES",
+        DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES,
+    )
     if cooldown_minutes <= 0:
         return False
     cutoff = datetime.now(KST) - timedelta(minutes=cooldown_minutes)

@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-27 06:58 KST - FOOD Baemin security block cooldown and cleanup
+
+- Trigger: CEO reported Baemin abnormal-activity block screen and requested immediate action after asking whether the PC browser had really been closed.
+- Operational action:
+  - Confirmed AADS health was `HEALTHY` at 2026-08-27 06:54 KST.
+  - Confirmed PC Agent `oby-ceo` was online and a general Chrome tab was open at `https://self.baemin.com/marketing`.
+  - Stopped the live Baemin auto-collection parent/child processes for `delivery-auto-pc_agent_catchup-2026-08-27` with SIGTERM after confirming the block risk.
+  - Sent `browser_close_session` cleanup for the four managed Baemin delivery work keys; all returned `session_not_found`, meaning no managed delivery session remained.
+  - Attempted Baemin-only tab close through `browser_close_tab`, but PC Agent CDP returned `CDP_NOT_READY`; general Chrome process was not force-killed to avoid closing the CEO's non-managed browser state.
+- Fix:
+  - `app/main.py`: reduced the default Baemin security-block cooldown from 360 minutes to `DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45`. Environment override `YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES` still takes precedence.
+  - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added regression coverage for the 45-minute default cooldown.
+- Verification:
+  - `python3 -m py_compile app/main.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py` passed: 7 passed.
+  - DB check for Baemin `payload->>'status'='running'` returned 0 rows after process termination.
+- Pending:
+  - Commit/push/deploy still required for the cooldown code change to affect the running service.
+  - If the CEO wants the visible unmanaged Chrome tab forcibly closed, use PC Agent process/window control explicitly because CDP close timed out.
+
 ## 2026-08-26 15:30 KST - FOOD delivery lock release and incremental DB upsert fix
 
 - Trigger: CEO requested the next step after the interrupted Baemin/Coupang catch-up operation.

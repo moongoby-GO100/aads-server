@@ -44,6 +44,7 @@ def test_main_registers_coupangeats_catchup_auto_collect_job():
 def test_baemin_full_backfill_payload_contract_is_resource_limited():
     source = Path("app/main.py").read_text(encoding="utf-8")
 
+    assert "DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_FROM" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS" in source
