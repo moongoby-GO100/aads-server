@@ -3323,14 +3323,16 @@ def _snapshot_to_text(node: Dict, depth: int = 0) -> str:
     return line + ("\n" + child_lines if child_lines else "")
 
 
-async def _ensure_aads_auth(page: Any) -> None:
+async def _ensure_aads_auth(page: Any, tenant_id: str = "") -> None:
     """AADS 대시보드 인증 토큰 자동 주입 — vault 우선, 서버 토큰 폴백."""
     # 1순위: Credential Vault에서 AADS 자격증명으로 API 로그인 → 토큰 주입
     try:
+        if not tenant_id:
+            raise ValueError("tenant_id_required")
         from app.core.credential_vault import list_credentials, get_credential, _api_token_inject
-        creds = await list_credentials(project="AADS", include_secrets=False)
+        creds = await list_credentials(project="AADS", include_secrets=False, tenant_id=tenant_id)
         if creds:
-            full_cred = await get_credential(creds[0]["id"], include_secrets=True)
+            full_cred = await get_credential(creds[0]["id"], include_secrets=True, tenant_id=tenant_id)
             if full_cred:
                 ok = await _api_token_inject(page, full_cred, {
                     "api_url": "https://aads.newtalk.kr/api/v1/auth/login",
@@ -3356,10 +3358,10 @@ async def _ensure_aads_auth(page: Any) -> None:
         logger.warning("_ensure_aads_auth server token failed: %s", e)
 
 
-async def _do_aads_login(page: Any) -> None:
+async def _do_aads_login(page: Any, tenant_id: str = "") -> None:
     """AADS 대시보드 로그인 — API 토큰 주입 우선, 폼 fill 폴백."""
     # 1순위: 토큰 직접 주입 (React 폼 fill 문제 우회)
-    await _ensure_aads_auth(page)
+    await _ensure_aads_auth(page, tenant_id=tenant_id)
 
     # 토큰 주입 성공 여부 확인
     try:
@@ -3411,23 +3413,93 @@ async def _apply_aads_e2e_url(page: Any, e2e_url: str) -> str:
     return target_url
 
 
-async def _pre_inject_vault_token(page: Any, url: str) -> bool:
+async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_work_key: str = "") -> bool:
+    """Use Agent Vault password-manager credentials for a visible login form."""
+    if not tenant_id:
+        return False
+    try:
+        from app.services.agent_vault_service import get_agent_credential_for_url
+
+        cred = await get_agent_credential_for_url(
+            tenant_id=tenant_id,
+            url=url,
+            work_key=browser_work_key or None,
+            user_id="browser-e2e",
+        )
+        if not cred:
+            return False
+
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if parsed.netloc == "aads.newtalk.kr":
+            from app.core.credential_vault import _api_token_inject
+
+            ok = await _api_token_inject(
+                page,
+                {
+                    "id": cred["id"],
+                    "tenant_id": tenant_id,
+                    "login_url": f"{origin}/login",
+                    "username": cred["username"],
+                    "password": cred["password"],
+                },
+                {
+                    "api_url": f"{origin}/api/v1/auth/login",
+                    "storage_key": "aads_token",
+                    "redirect_url": url,
+                },
+            )
+            if ok:
+                logger.info("agent_vault_aads_token_inject_success origin=%s", origin)
+                return True
+
+        email_input = page.locator(
+            "input[type='email'], input[name='email'], input[name='username'], "
+            "input[name='login'], input#email, input#username, input#login, input[type='text']"
+        ).first
+        await email_input.clear(timeout=5000)
+        await email_input.fill(str(cred["username"]), timeout=5000)
+        pw_input = page.locator("input[type='password']").first
+        await pw_input.fill(str(cred["password"]), timeout=5000)
+        login_btn = page.locator(
+            "button[type='submit'], input[type='submit'], button:has-text('로그인'), "
+            "button:has-text('Login'), button:has-text('Sign in'), a:has-text('로그인')"
+        ).first
+        await login_btn.click(timeout=5000)
+        await page.wait_for_timeout(3000)
+        logger.info("agent_vault_form_login_submitted origin=%s work_key=%s", origin, browser_work_key)
+        return True
+    except Exception as exc:
+        logger.warning("agent_vault_login_failed: %s", exc)
+        return False
+
+
+async def _pre_inject_vault_token(
+    page: Any,
+    url: str,
+    tenant_id: str = "",
+    browser_work_key: str = "",
+) -> bool:
     """대상 URL의 도메인에 매칭되는 vault 자격증명으로 사전 토큰 주입.
 
     React/Next.js 앱은 URL 리다이렉트 없이 클라이언트에서 로그인 폼을 렌더링하므로,
     페이지 이동 전에 토큰을 주입해야 인증된 화면이 즉시 렌더링된다.
     """
+    if await _agent_vault_login(page, url, tenant_id=tenant_id, browser_work_key=browser_work_key):
+        return True
     try:
+        if not tenant_id:
+            raise ValueError("tenant_id_required")
         from app.core.credential_vault import list_credentials, get_credential, _api_token_inject
         target_netloc = urlparse(url).netloc
-        creds = await list_credentials(include_secrets=False)
+        creds = await list_credentials(include_secrets=False, tenant_id=tenant_id)
         for c in creds:
             c_login_url = c.get("login_url", "") or ""
             if not c_login_url:
                 continue
             c_netloc = urlparse(c_login_url).netloc
             if c_netloc and c_netloc == target_netloc:
-                full_cred = await get_credential(c["id"], include_secrets=True)
+                full_cred = await get_credential(c["id"], include_secrets=True, tenant_id=tenant_id)
                 if not full_cred:
                     continue
                 steps = full_cred.get("login_steps", [])
@@ -3456,6 +3528,7 @@ async def tool_browser_navigate(
     url: str,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    tenant_id: str = "",
 ) -> str:
     """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
     blocked = _browser_domain_ok(url)
@@ -3485,7 +3558,12 @@ async def tool_browser_navigate(
                 }""")
                 logger.info("e2e_login_form_detected=%s url=%s", _has_login_form, url)
                 if _has_login_form:
-                    injected = await _pre_inject_vault_token(page, url)
+                    injected = await _pre_inject_vault_token(
+                        page,
+                        url,
+                        tenant_id=tenant_id,
+                        browser_work_key=browser_work_key,
+                    )
                     logger.info("e2e_pre_inject_result=%s url=%s", injected, url)
                     if injected:
                         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
@@ -3495,7 +3573,7 @@ async def tool_browser_navigate(
         # 서버 리다이렉트 기반 자동 로그인 (URL이 /login으로 변경된 경우)
         if dedicated_session and "/login" in page.url and "/login" not in url and "newtalk.kr" in url:
             try:
-                await _do_aads_login(page)
+                await _do_aads_login(page, tenant_id=tenant_id)
                 await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
             except Exception as login_err:
                 logger.warning(f"browser auto-login failed: {login_err}")
@@ -3506,7 +3584,19 @@ async def tool_browser_navigate(
         if dedicated_session and any(p in _cur for p in _login_patterns) and not any(p in url for p in _login_patterns):
             try:
                 from app.core.credential_vault import list_credentials, get_credential, execute_login_steps
-                creds = await list_credentials(include_secrets=False)
+                injected = await _pre_inject_vault_token(
+                    page,
+                    url,
+                    tenant_id=tenant_id,
+                    browser_work_key=browser_work_key,
+                )
+                if injected:
+                    await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+                    title = await page.title()
+                    return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
+                if not tenant_id:
+                    raise ValueError("tenant_id_required")
+                creds = await list_credentials(include_secrets=False, tenant_id=tenant_id)
                 matched = None
                 for c in creds:
                     c_login_url = c.get("login_url", "") or ""
@@ -3514,7 +3604,7 @@ async def tool_browser_navigate(
                         matched = c
                         break
                 if matched:
-                    full_cred = await get_credential(matched["id"], include_secrets=True)
+                    full_cred = await get_credential(matched["id"], include_secrets=True, tenant_id=tenant_id)
                     if full_cred:
                         await execute_login_steps(page, full_cred)
                         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
@@ -3748,6 +3838,7 @@ async def tool_capture_screenshot(
     full_page: bool = False,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    tenant_id: str = "",
 ) -> str:
     """URL 스크린샷을 캡처하여 이미지 URL 반환 (채팅에 인라인 표시용)."""
     if not url:
@@ -3761,7 +3852,38 @@ async def tool_capture_screenshot(
     try:
         page = await ctx.new_page()
         try:
-            await page.goto(url, wait_until="networkidle", timeout=30_000)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            except Exception as nav_err:
+                logger.warning("capture_screenshot initial goto failed: %s", nav_err)
+                await page.goto(url, wait_until="load", timeout=15_000)
+
+            if tenant_id and browser_work_key and "newtalk.kr" in url:
+                current_url = str(getattr(page, "url", "") or url)
+                login_markers = ("/login", "/signin", "/auth")
+                try:
+                    has_login_form = await page.evaluate("""() => {
+                        const password = document.querySelector("input[type='password']");
+                        const buttonText = Array.from(document.querySelectorAll("button,input[type='submit'],a"))
+                          .map((el) => (el.textContent || el.value || "").trim())
+                          .join(" ");
+                        return Boolean(password) || /로그인|Login|Sign in/i.test(buttonText);
+                    }""")
+                except Exception:
+                    has_login_form = any(marker in current_url for marker in login_markers)
+                if has_login_form or any(marker in current_url for marker in login_markers):
+                    if await _pre_inject_vault_token(
+                        page,
+                        url,
+                        tenant_id=tenant_id,
+                        browser_work_key=browser_work_key,
+                    ):
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
             await asyncio.sleep(1)  # 렌더링 대기
             data = await page.screenshot(full_page=full_page, timeout=_BROWSER_TIMEOUT_MS)
         finally:
@@ -5061,6 +5183,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("url", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            tenant_id=str(params.get("tenant_id") or ""),
         )
     elif name == "browser_snapshot":
         return await tool_browser_snapshot(
@@ -5463,6 +5586,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("full_page", False),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            tenant_id=str(params.get("tenant_id") or ""),
         )
     # ── 프로젝트 DB 도구 ─────────────────────────────────────────────────
     elif name == "query_project_database":

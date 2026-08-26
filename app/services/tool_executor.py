@@ -528,6 +528,8 @@ class ToolExecutor:
                 tool_input.get("tenant_id", ""),
                 tool_input.get("session_id", ""),
             )
+            if tenant_id and not str(tool_input.get("tenant_id") or "").strip():
+                tool_input["tenant_id"] = tenant_id
             if tenant_id:
                 from app.services.tenant_usage_limits import TenantUsageLimitExceeded, check_tenant_usage_limit
 
@@ -3405,6 +3407,7 @@ class ToolExecutor:
             full_page,
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
@@ -4667,6 +4670,7 @@ class ToolExecutor:
             url,
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _browser_snapshot(self, inp: Dict[str, Any]) -> Any:

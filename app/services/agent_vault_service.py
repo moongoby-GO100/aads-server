@@ -90,6 +90,66 @@ async def list_agent_credentials(*, tenant_id: str, work_key: str | None = None,
     return [_row_to_credential(row) for row in rows]
 
 
+async def get_agent_credential_for_url(
+    *,
+    tenant_id: str,
+    url: str,
+    work_key: str | None = None,
+    user_id: str = "browser-e2e",
+) -> dict[str, Any] | None:
+    """Return the best active Agent Vault credential for a browser URL.
+
+    This is server-side only. It lets E2E/browser tools use the password
+    manager without exposing plaintext in tool output or browser history.
+    """
+    origin_norm = normalize_origin(url)
+    async with get_pool().acquire() as conn:
+        if work_key:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                  FROM agent_vault_credentials
+                 WHERE tenant_id = $1
+                   AND origin = $2
+                   AND is_active = TRUE
+                 ORDER BY CASE WHEN work_key = $3 THEN 0 ELSE 1 END,
+                          label
+                 LIMIT 1
+                """,
+                _tenant_uuid(tenant_id),
+                origin_norm,
+                work_key,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                SELECT *
+                  FROM agent_vault_credentials
+                 WHERE tenant_id = $1
+                   AND origin = $2
+                   AND is_active = TRUE
+                 ORDER BY label
+                 LIMIT 1
+                """,
+                _tenant_uuid(tenant_id),
+                origin_norm,
+            )
+        if not row:
+            return None
+        await write_access_log(
+            conn=conn,
+            tenant_id=tenant_id,
+            credential_id=str(row["id"]),
+            work_key=str(row["work_key"] or work_key or ""),
+            origin=origin_norm,
+            action="credential_e2e_resolve",
+            status="success",
+            user_id=user_id,
+            details={"source": "browser_tool", "url_origin": origin_norm},
+        )
+    return _row_to_credential(row, include_secret=True)
+
+
 async def upsert_agent_credential(
     *,
     tenant_id: str,
