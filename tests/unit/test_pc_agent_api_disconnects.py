@@ -337,6 +337,30 @@ async def test_route_execute_uses_peer_fallback_on_local_offline(
 
 
 @pytest.mark.asyncio
+async def test_route_execute_browser_eval_allows_long_bank_evaluation_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_execute_routed_command(**kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "command_id": "cmd-browser-eval"}
+
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    request = pc_agent.RoutedCommandRequest(
+        command_type="browser_eval",
+        params={"expression": "document.body.innerText"},
+        command_timeout_seconds=90,
+    )
+    result = await pc_agent.route_execute_command(request, _DummyRequest())
+
+    assert result["status"] == "success"
+    assert captured["command_timeout_seconds"] == 90
+    assert captured["params"]["evaluate_timeout_seconds"] == 60.0
+
+
+@pytest.mark.asyncio
 async def test_execute_browser_command_adds_default_work_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

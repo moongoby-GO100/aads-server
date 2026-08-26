@@ -78,6 +78,65 @@ app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "me
 KST = timezone(timedelta(hours=9))
 
 
+def _is_active_api_container_for_background_jobs() -> bool:
+    """Return true only for the published API slot when blue/green is active."""
+    override = os.getenv("AADS_BACKGROUND_JOBS_FORCE_OWNER", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+
+    expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
+    active_container_file = os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container")
+    if expected_container:
+        try:
+            with open(active_container_file, "r", encoding="utf-8") as handle:
+                active_container = handle.read().strip()
+            if active_container:
+                return active_container == expected_container
+        except OSError:
+            pass
+
+    expected_port = os.getenv("AADS_PUBLIC_PORT", "").strip()
+    active_port_file = os.getenv("AADS_ACTIVE_PORT_FILE", "/app/.active_port")
+    if expected_port:
+        try:
+            with open(active_port_file, "r", encoding="utf-8") as handle:
+                active_port = handle.read().strip()
+            if active_port:
+                return active_port == expected_port
+        except OSError:
+            pass
+
+    return True
+
+
+def _try_acquire_process_lock(lock_path: str) -> int | None:
+    import fcntl
+
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode("utf-8"))
+    return fd
+
+
+def _release_process_lock(fd: int | None) -> None:
+    if fd is None:
+        return
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(str(os.getenv(name) or "").strip() or default)
@@ -1113,7 +1172,13 @@ async def lifespan(app: FastAPI):
                 from app.services import yeoljeong_finance_service as yjf_svc
                 import asyncio
 
-                system_user = {"user_id": "system-daemon", "role": "admin", "name": "자동수집데몬"}
+                system_user = {
+                    "user_id": "system-daemon",
+                    "user_role": "system",
+                    "role": "system",
+                    "is_internal_admin": True,
+                    "name": "자동수집데몬",
+                }
                 selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
                 if reason == "pc_agent_catchup" and mode == "full_backfill":
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
@@ -1157,6 +1222,7 @@ async def lifespan(app: FastAPI):
             reason: str = "scheduled_bank",
             force_recreate_bank_browser: bool = False,
         ):
+            lock_fd: int | None = None
             try:
                 from app.services.pc_agent_manager import pc_agent_manager
                 import asyncio
@@ -1164,6 +1230,25 @@ async def lifespan(app: FastAPI):
                 import subprocess
                 import sys
                 from pathlib import Path
+
+                if not _is_active_api_container_for_background_jobs():
+                    logger.info(
+                        "bank_auto_collect_skip: inactive_api_container reason=%s container=%s port=%s",
+                        reason,
+                        os.getenv("AADS_CONTAINER_NAME", ""),
+                        os.getenv("AADS_PUBLIC_PORT", ""),
+                    )
+                    return
+
+                root_dir = Path(__file__).resolve().parents[1]
+                lock_path = os.getenv(
+                    "YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH",
+                    str(root_dir / "app" / "data" / "yeoljeong_finance" / ".bank_auto_collect.lock"),
+                )
+                lock_fd = _try_acquire_process_lock(lock_path)
+                if lock_fd is None:
+                    logger.info("bank_auto_collect_skip: already_running reason=%s lock_path=%s", reason, lock_path)
+                    return
 
                 today = datetime.now(KST).date().isoformat()
                 wait_result = await pc_agent_manager.wait_for_agent_online(timeout=45)
@@ -1177,7 +1262,6 @@ async def lifespan(app: FastAPI):
                     )
                     return
 
-                root_dir = Path(__file__).resolve().parents[1]
                 browser_timeout_seconds = _env_int("YEOLJEONG_BANK_BROWSER_TIMEOUT_SECONDS", 60)
                 process_timeout_seconds = _env_int("YEOLJEONG_BANK_AUTO_COLLECT_TIMEOUT_SECONDS", 180)
                 cmd = [
@@ -1253,6 +1337,8 @@ async def lifespan(app: FastAPI):
                 )
             except Exception as e:
                 logger.warning(f"bank_auto_collect_error: {e}")
+            finally:
+                _release_process_lock(lock_fd)
 
         scheduler.add_job(
             _run_delivery_auto_collect,

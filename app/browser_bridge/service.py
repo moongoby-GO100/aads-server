@@ -342,7 +342,10 @@ class _LocalAgentPage:
         # Playwright page.evaluate() semantics.
         elif self._FUNC_EXPR_RE.match(expr):
             expr = f"({expr})()"
-        browser_params: dict[str, Any] = {"expression": expr}
+        browser_params: dict[str, Any] = {
+            "expression": expr,
+            "timeout_ms": int(max(1.0, command_timeout_seconds) * 1000),
+        }
         if kwargs.get("await_promise"):
             browser_params["await_promise"] = True
         data = await self._run_browser_command(
@@ -1205,6 +1208,11 @@ class BrowserBridgeService:
     @classmethod
     def _active_api_route_urls(cls, active_port: str) -> list[str]:
         urls: list[str] = []
+        if not cls._running_in_docker():
+            urls.append(f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute")
+            urls.append("http://127.0.0.1:8080/api/v1/pc-agent/route-execute")
+            return cls._dedupe_urls(urls)
+
         active_container = cls._active_container_name()
         if active_container:
             urls.append(f"http://{active_container}:8080/api/v1/pc-agent/route-execute")
@@ -1220,11 +1228,30 @@ class BrowserBridgeService:
         urls.append(f"http://127.0.0.1:{active_port}/api/v1/pc-agent/route-execute")
         docker_hosts = ["host.docker.internal", *cls._docker_default_gateway_hosts(), "172.17.0.1"]
         urls.extend(f"http://{host}:{active_port}/api/v1/pc-agent/route-execute" for host in docker_hosts)
+        return cls._dedupe_urls(urls)
+
+    @staticmethod
+    def _dedupe_urls(urls: list[str]) -> list[str]:
         deduped: list[str] = []
         for url in urls:
             if url not in deduped:
                 deduped.append(url)
         return deduped
+
+    @staticmethod
+    def _running_in_docker() -> bool:
+        if os.path.exists("/.dockerenv"):
+            return True
+        cgroup_paths = ("/proc/1/cgroup", "/proc/self/cgroup")
+        for path in cgroup_paths:
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    content = handle.read()
+            except OSError:
+                continue
+            if any(marker in content for marker in ("docker", "kubepods", "containerd")):
+                return True
+        return False
 
     @staticmethod
     def _docker_default_gateway_hosts() -> list[str]:

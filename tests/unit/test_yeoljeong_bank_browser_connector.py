@@ -100,6 +100,24 @@ def test_shinhan_individual_browser_work_key_is_scope_stable_and_opaque():
     assert "branch" not in key1
 
 
+def test_bank_eval_timeout_expands_short_pc_agent_timeouts(monkeypatch):
+    monkeypatch.delenv("YEOLJEONG_BANK_BROWSER_EVAL_TIMEOUT_MULTIPLIER", raising=False)
+    monkeypatch.delenv("YEOLJEONG_BANK_BROWSER_MIN_EVAL_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("YEOLJEONG_BANK_BROWSER_MAX_EVAL_TIMEOUT_MS", raising=False)
+
+    assert connector._bank_eval_timeout_ms(8000) == 30000
+    assert connector._bank_eval_timeout_ms(25000) == 62500
+
+
+def test_bank_eval_timeout_respects_env_caps(monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_BANK_BROWSER_EVAL_TIMEOUT_MULTIPLIER", "4")
+    monkeypatch.setenv("YEOLJEONG_BANK_BROWSER_MIN_EVAL_TIMEOUT_MS", "20000")
+    monkeypatch.setenv("YEOLJEONG_BANK_BROWSER_MAX_EVAL_TIMEOUT_MS", "45000")
+
+    assert connector._bank_eval_timeout_ms(8000) == 32000
+    assert connector._bank_eval_timeout_ms(30000) == 45000
+
+
 # ── HTML parser tests ─────────────────────────────────────────────────────────
 
 _SHINHAN_SAMPLE_HTML = """

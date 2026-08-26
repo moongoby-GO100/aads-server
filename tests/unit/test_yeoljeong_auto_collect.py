@@ -167,6 +167,32 @@ def test_bank_only_skips_delivery_and_collects_bank_accounts(monkeypatch):
     assert result["bank_totals"]["imported_rows"] == 1
 
 
+def test_bank_scope_accepts_mia_branch_alias(monkeypatch):
+    calls = []
+
+    def fake_list_bank_accounts(user, business_id=None, *, branch_id=None, status=None):
+        calls.append({"business_id": business_id, "branch_id": branch_id, "status": status})
+        return [
+            {
+                "id": "bank-mia",
+                "business_id": business_id,
+                "branch_id": branch_id,
+                "connection_type": "browser",
+                "auto_sync": True,
+            }
+        ]
+
+    monkeypatch.setattr(auto_collect, "list_bank_accounts", fake_list_bank_accounts)
+
+    accounts = auto_collect._bank_accounts_for_payload(
+        {"business_id": "biz-mia", "branch": "미아점"},
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert [account["id"] for account in accounts] == ["bank-mia"]
+    assert calls == [{"business_id": "biz-mia", "branch_id": "branch-gangbuk-mia", "status": "active"}]
+
+
 def test_skip_financial_accounts_still_disables_bank_collection():
     args = auto_collect.build_parser().parse_args(["--until-complete", "--skip-financial-accounts"])
 

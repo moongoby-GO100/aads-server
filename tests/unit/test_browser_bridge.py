@@ -276,6 +276,7 @@ def test_pairing_manager_persists_unconsumed_pairings(tmp_path) -> None:
 
 def test_active_api_route_urls_include_active_container(monkeypatch) -> None:
     monkeypatch.setenv("AADS_ACTIVE_CONTAINER", "aads-server-green")
+    monkeypatch.setattr(BrowserBridgeService, "_running_in_docker", staticmethod(lambda: True))
     monkeypatch.setattr(
         BrowserBridgeService,
         "_docker_default_gateway_hosts",
@@ -308,6 +309,7 @@ def test_active_api_route_urls_named_container_before_loopback_8080_and_external
         "_active_container_name",
         staticmethod(lambda: ""),
     )
+    monkeypatch.setattr(BrowserBridgeService, "_running_in_docker", staticmethod(lambda: True))
     monkeypatch.setattr(
         BrowserBridgeService,
         "_docker_default_gateway_hosts",
@@ -323,6 +325,22 @@ def test_active_api_route_urls_named_container_before_loopback_8080_and_external
     assert urls[0] == "http://aads-server:8080/api/v1/pc-agent/route-execute"
     assert named_idx < loopback_idx
     assert loopback_idx < external_idx
+
+
+def test_active_api_route_urls_use_loopback_only_on_host(monkeypatch) -> None:
+    monkeypatch.setattr(BrowserBridgeService, "_running_in_docker", staticmethod(lambda: False))
+    monkeypatch.setattr(
+        BrowserBridgeService,
+        "_docker_default_gateway_hosts",
+        staticmethod(lambda: ["172.18.0.1"]),
+    )
+
+    urls = BrowserBridgeService._active_api_route_urls("8102")
+
+    assert urls == [
+        "http://127.0.0.1:8102/api/v1/pc-agent/route-execute",
+        "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
+    ]
 
 
 def test_docker_default_gateway_hosts_reads_proc_route(monkeypatch, tmp_path) -> None:
@@ -1051,13 +1069,14 @@ async def test_local_agent_page_tracks_redirect_and_invokes_function_expressions
 
     from app.services import pc_agent_manager as manager_module
 
-    expressions: list[str] = []
+    eval_params: list[dict[str, object]] = []
 
     async def fake_execute_routed_command(**kwargs):
         if kwargs["command_type"] == "browser_navigate":
             return {"status": "success", "result": {"result": {"ok": True}}}
-        expression = kwargs["params"]["expression"]
-        expressions.append(expression)
+        params = dict(kwargs["params"])
+        eval_params.append(params)
+        expression = params["expression"]
         value = "https://aads.newtalk.kr/login" if expression == "window.location.href" else "called"
         return {"status": "success", "result": {"result": {"value": value}}}
 
@@ -1071,9 +1090,10 @@ async def test_local_agent_page_tracks_redirect_and_invokes_function_expressions
     assert page.url == "https://aads.newtalk.kr/login"
     assert session.endpoint.metadata["last_url"] == "https://aads.newtalk.kr/login"
 
-    result = await page.evaluate("() => 'called'")
+    result = await page.evaluate("() => 'called'", timeout=30000)
     assert result == "called"
-    assert expressions[-1] == "(() => 'called')()"
+    assert eval_params[-1]["expression"] == "(() => 'called')()"
+    assert eval_params[-1]["timeout_ms"] == 30000
 
 
 @pytest.mark.asyncio

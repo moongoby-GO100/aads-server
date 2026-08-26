@@ -17,6 +17,7 @@ import hashlib
 import html
 import importlib.util
 import inspect
+import os
 import re
 import sys
 from html.parser import HTMLParser
@@ -75,6 +76,29 @@ def _safe_browser_error_fields(exc: Exception) -> dict[str, str]:
     return fields
 
 
+def _bank_eval_timeout_ms(timeout_ms: int | None) -> int | None:
+    if timeout_ms is None:
+        return None
+    try:
+        base_timeout = int(timeout_ms)
+    except (TypeError, ValueError):
+        return timeout_ms
+    try:
+        multiplier = float(os.getenv("YEOLJEONG_BANK_BROWSER_EVAL_TIMEOUT_MULTIPLIER", "2.5") or "2.5")
+    except ValueError:
+        multiplier = 2.5
+    try:
+        min_timeout = int(os.getenv("YEOLJEONG_BANK_BROWSER_MIN_EVAL_TIMEOUT_MS", "30000") or "30000")
+    except ValueError:
+        min_timeout = 30000
+    try:
+        max_timeout = int(os.getenv("YEOLJEONG_BANK_BROWSER_MAX_EVAL_TIMEOUT_MS", "90000") or "90000")
+    except ValueError:
+        max_timeout = 90000
+    expanded = max(base_timeout, min_timeout, int(base_timeout * max(multiplier, 1.0)))
+    return max(1000, min(max_timeout, expanded))
+
+
 async def _evaluate_page(
     page: Any,
     expression: str,
@@ -93,8 +117,9 @@ async def _evaluate_page(
             if "await_promise" not in str(exc):
                 raise
             return await page.evaluate(expression, *args)
-    timeout_seconds = max(timeout_ms / 1000, 0.1)
-    evaluate_kwargs["timeout"] = timeout_ms
+    effective_timeout_ms = _bank_eval_timeout_ms(timeout_ms)
+    timeout_seconds = max((effective_timeout_ms or timeout_ms) / 1000, 0.1)
+    evaluate_kwargs["timeout"] = effective_timeout_ms or timeout_ms
     try:
         coro = page.evaluate(expression, *args, **evaluate_kwargs)
         return await asyncio.wait_for(coro, timeout=timeout_seconds + 1.0)

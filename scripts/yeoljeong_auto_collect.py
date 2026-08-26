@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.services.yeoljeong_finance_service import (  # noqa: E402
+    BRANCH_ALIASES,
     CANONICAL_BRANCHES,
     FINANCIAL_TRANSACTION_SERVICES,
     _read,
@@ -166,6 +167,7 @@ def _branch_id_for_bank_scope(branch: str, business_id: str = "") -> str:
     branch_text = str(branch or "").strip()
     if not branch_text or branch_text in {"all", "*", "__all__", "전체"}:
         return ""
+    branch_text = str(BRANCH_ALIASES.get(branch_text, branch_text) or "").strip()
     for item in CANONICAL_BRANCHES:
         if branch_text in {str(item.get("id") or ""), str(item.get("name") or "")}:
             if business_id and str(item.get("businessId") or "") != business_id:
