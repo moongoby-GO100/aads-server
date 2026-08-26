@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-26 15:30 KST - FOOD delivery lock release and incremental DB upsert fix
+
+- Trigger: CEO requested the next step after the interrupted Baemin/Coupang catch-up operation.
+- Operational result:
+  - CoupangEats retry job `delivery-sync-1a36a88398a3` no longer reused the wrong Baemin session. Three stores finished as `PC_AGENT_LOGIN_REQUIRED`; one stuck run was cleared by restarting only `aads-server`.
+  - Stale runtime locks `.delivery_sync.lock` and `.bank_auto_collect.lock` were removed after confirming no host child collector process was alive.
+  - Baemin retry job `delivery-sync-dc759c78022b` started successfully. `biz-eonni-naengmyeon/성신여대역점` completed for 2026-08-25 with `sales=14`, `reviews=288`, `settlements=14`, `ads=0`.
+- Fix:
+  - `app/services/yeoljeong_finance_service.py`: after delivery sync, file ledgers are still written fully, but DB upserts for `delivery_sales`, `delivery_reviews`, `delivery_settlements`, and `delivery_ads` are now limited to records collected in the current run. This prevents the delivery lock from being held while all historical ledger rows are re-upserted.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added regression coverage that an existing historical sales row is not re-upserted during a new sync.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/work -w /work aads-server-aads-server pytest tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_upserts_only_incoming_delivery_records tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_closes_pc_agent_session_when_marked_complete` passed: 2 passed.
+  - `docker exec aads-server python3 -m py_compile app/services/yeoljeong_finance_service.py` passed.
+  - `curl http://localhost:8100/health/live` returned HTTP 200 after the single-container restart.
+- Pending:
+  - Remaining Baemin queued stores for 2026-08-25: 중화점, 열정국밥_미아점, 성신여대점.
+  - CoupangEats requires portal login in the PC Agent browser sessions before data collection can continue.
+  - The fix still needs commit/push and a final `aads-server` restart/reload before the remaining queue is resumed.
+
 ## 2026-08-26 11:51 KST - FOOD auto-collection deploy and Shinhan verification
 
 - Trigger: CEO asked to continue after the interrupted deployment and finish the FOOD collection verification.

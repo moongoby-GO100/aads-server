@@ -1821,6 +1821,98 @@ def test_sync_delivery_closes_pc_agent_session_when_marked_complete(tmp_path, mo
     assert closed == [("bb-pc-agent", "delivery_sync_result_baemin")]
 
 
+def test_sync_delivery_upserts_only_incoming_delivery_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write_file_rows(
+        "delivery_sales",
+        [
+            {
+                "id": "old-sale",
+                "service": "baemin",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "occurred_on": "2026-08-24",
+            }
+        ],
+    )
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-pc-agent",
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+
+    upserts: list[tuple[str, str]] = []
+
+    def fake_run_db(coro):
+        try:
+            frame = getattr(coro, "cr_frame", None)
+            locals_ = dict(getattr(frame, "f_locals", {}) or {})
+            if getattr(getattr(coro, "cr_code", None), "co_name", "") == "_db_upsert_ledger":
+                record = locals_.get("record") or {}
+                upserts.append((str(locals_.get("name") or ""), str(record.get("id") or "")))
+            return None
+        finally:
+            close = getattr(coro, "close", None)
+            if close:
+                close()
+
+    def fake_bridge_collect(account, browser_auth):
+        return {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "new-sale",
+                        "service": "baemin",
+                        "business_id": "biz-junghwa",
+                        "branch": "중화점",
+                        "occurred_on": "2026-08-25",
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+                "ads": [],
+            },
+            "diagnostics": {"auth_mode": "pc_agent_browser"},
+        }
+
+    monkeypatch.setattr(service, "_run_db", fake_run_db)
+    monkeypatch.setattr(service, "_collect_baemin_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-25",
+            "date_to": "2026-08-25",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "succeeded"
+    assert ("delivery_sales", "new-sale") in upserts
+    assert ("delivery_sales", "old-sale") not in upserts
+
+
 @pytest.mark.asyncio
 async def test_close_delivery_browser_session_sidecar_routes_active_api_first(monkeypatch):
     class FakeEndpoint:

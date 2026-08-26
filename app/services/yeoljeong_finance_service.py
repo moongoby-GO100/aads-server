@@ -7650,8 +7650,11 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 }
             )
 
-    for name, rows in ledgers.items():
-        _write(name, rows)
+    for kind, ledger_name in ledger_names.items():
+        _write_file_rows(ledger_name, ledgers[ledger_name])
+        if ledger_name in DB_LEDGER_TABLE_BY_NAME:
+            for record in response_ledgers[kind]:
+                _run_db(_db_upsert_ledger(ledger_name, record))
     _write("platform_accounts", all_accounts)
     _write_delivery_collection_statuses(statuses)
     return {

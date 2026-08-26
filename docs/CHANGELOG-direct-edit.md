@@ -1,5 +1,9 @@
 # AADS Chat-Direct Edit Changelog (aads-server)
 
+## [2026-08-26 15:30 KST] [aads-server] FOOD delivery sync lock/upsert fix
+- Chat-Direct 수정: `app/services/yeoljeong_finance_service.py` delivery sync 종료 시 전체 delivery ledger DB 재-upsert 대신 현재 run incoming record만 upsert하도록 변경.
+- 검증: bind-mounted runtime image pytest 2건 통과, `docker exec aads-server python3 -m py_compile app/services/yeoljeong_finance_service.py` 통과.
+
 ## [2026-04-29 09:35:04 KST] [aads-server] app/services/chat_service.py
 - Chat-Direct 수정: patch:                    OR ($1 = 'NTV2' AND '→                   OR ($1 = 'NTV2' AND '
 
@@ -5422,3 +5426,183 @@ from app.services.yeoljeong_fin
 ## [2026-08-26 14:20:27 KST] [aads-server] app/main.py
 - Chat-Direct 수정: 쿠팡이츠 자동수집 catch-up 스케줄(`delivery_auto_collect_coupangeats_catchup`) 추가 및 배달 catch-up due gate 서비스별 일반화.
 - 운영 조치: 중화점 배민 stuck row `fe9a5969-d7e9-4622-acfb-d77b0b429d0e`를 `BACKGROUND_SYNC_STALE`로 정리했으나, `.delivery_sync.lock`은 uvicorn PID가 보유 중이라 큐 처리는 reload/restart 필요.
+
+## [2026-08-26 14:50:01 KST] [aads-server] scripts/tmp_extract_law_pdf.py
+- Chat-Direct 수정: write: scripts/tmp_extract_law_pdf.py
+
+## [2026-08-26 14:55:01 KST] [aads-server] tests/unit/test_yeoljeong_delivery_scheduler_contract.py
+- Chat-Direct 수정: run_remote_command: docker cp /root/aads/uploads/chat/files/efccec7c-0788-4564-a2cf-265c63d075f0/fff
+
+## [2026-08-26 14:57:12 KST] [aads-server] scripts/extract_law_docs_20260826.py
+- Chat-Direct 수정: write: scripts/extract_law_docs_20260826.py
+
+## [2026-08-26 14:57:22 KST] [aads-server] docs/law_extract/changgo.txt
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/extract_law_docs_20260826.py
+
+## [2026-08-26 14:57:22 KST] [aads-server] docs/law_extract/deungibu.txt
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/extract_law_docs_20260826.py
+
+## [2026-08-26 14:57:23 KST] [aads-server] docs/law_extract/jeonggwan.txt
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/extract_law_docs_20260826.py
+
+## [2026-08-26 14:57:23 KST] [aads-server] docs/law_extract/jujumyeongbu.txt
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/extract_law_docs_20260826.py
+
+## [2026-08-26 14:57:53 KST] [aads-server] scripts/render_law_pdf_20260826.py
+- Chat-Direct 수정: write: scripts/render_law_pdf_20260826.py
+
+## [2026-08-26 14:58:00 KST] [aads-server] docs/law_extract/img/deungibu_p01.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/render_law_pdf_20260826.py
+
+## [2026-08-26 14:58:01 KST] [aads-server] docs/law_extract/img/deungibu_p02.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/render_law_pdf_20260826.py
+
+## [2026-08-26 14:58:01 KST] [aads-server] docs/law_extract/img/deungibu_p03.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/render_law_pdf_20260826.py
+
+## [2026-08-26 14:58:24 KST] [aads-server] scripts/ocr_law_docs_20260826.py
+- Chat-Direct 수정: write: scripts/ocr_law_docs_20260826.py
+
+## [2026-08-26 14:58:36 KST] [aads-server] docs/law_extract/img/saeobja.jpg
+- Chat-Direct 수정: run_remote_command: docker exec aads-server-green python /app/scripts/ocr_law_docs_20260826.py
+
+## [2026-08-26 15:16:04 KST] [aads-server] scripts/extract_sickblack_docs.py
+- Chat-Direct 수정: write: scripts/extract_sickblack_docs.py
+
+## [2026-08-26 15:16:31 KST] [aads-server] scripts/extract_sickblack_docs.py
+- Chat-Direct 수정: write: scripts/extract_sickblack_docs.py
+
+## [2026-08-26 15:16:58 KST] [aads-server] scripts/extract_sickblack_docs.py
+- Chat-Direct 수정: patch: BASE = "/root/aads/uploads/chat/files/ef→BASE = "/tmp/sickblack"
+
+## [2026-08-26 15:17:42 KST] [aads-server] scripts/scan_sickblack_jeonggwan.py
+- Chat-Direct 수정: write: scripts/scan_sickblack_jeonggwan.py
+
+## [2026-08-26 15:20:14 KST] [aads-server] scripts/ocr_sickblack_diag.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_diag.py
+
+## [2026-08-26 15:22:22 KST] [aads-server] scripts/ocr_sickblack_extract.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_extract.py
+
+## [2026-08-26 15:26:28 KST] [aads-server] scripts/ocr_sickblack_render.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_render.py
+
+## [2026-08-26 15:26:38 KST] [aads-server] scripts/sickblack_render/corp_p1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_render.py
+
+## [2026-08-26 15:26:38 KST] [aads-server] scripts/sickblack_render/corp_p2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_render.py
+
+## [2026-08-26 15:26:39 KST] [aads-server] scripts/sickblack_render/corp_p3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_render.py
+
+## [2026-08-26 15:26:39 KST] [aads-server] scripts/sickblack_render/lease_p1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_render.py
+
+## [2026-08-26 15:27:52 KST] [aads-server] scripts/sickblack_render/corp_prompt.txt
+- Chat-Direct 수정: write: scripts/sickblack_render/corp_prompt.txt
+
+## [2026-08-26 15:27:56 KST] [aads-server] scripts/sickblack_render/lease_prompt.txt
+- Chat-Direct 수정: write: scripts/sickblack_render/lease_prompt.txt
+
+## [2026-08-26 15:29:14 KST] [aads-server] scripts/ocr_sickblack_crop.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:26 KST] [aads-server] scripts/sickblack_render/crops/corp_p1_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:26 KST] [aads-server] scripts/sickblack_render/crops/corp_p1_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:26 KST] [aads-server] scripts/sickblack_render/crops/corp_p2_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:27 KST] [aads-server] scripts/sickblack_render/crops/corp_p2_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:27 KST] [aads-server] scripts/sickblack_render/crops/corp_p3_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:27 KST] [aads-server] scripts/sickblack_render/crops/corp_p3_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:28 KST] [aads-server] scripts/sickblack_render/crops/lease_p1_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:28 KST] [aads-server] scripts/sickblack_render/crops/lease_p1_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:29:28 KST] [aads-server] scripts/sickblack_render/crops/lease_p1_row3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_crop.py
+
+## [2026-08-26 15:30:15 KST] [aads-server] scripts/ocr_sickblack_imgmeta.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_imgmeta.py
+
+## [2026-08-26 15:30:34 KST] [aads-server] scripts/ocr_sickblack_rawextract.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_rawextract.py
+
+## [2026-08-26 15:30:45 KST] [aads-server] scripts/sickblack_render/raw/corp_p1_raw.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawextract.py
+
+## [2026-08-26 15:30:45 KST] [aads-server] scripts/sickblack_render/raw/corp_p2_raw.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawextract.py
+
+## [2026-08-26 15:30:46 KST] [aads-server] scripts/sickblack_render/raw/corp_p3_raw.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawextract.py
+
+## [2026-08-26 15:30:46 KST] [aads-server] scripts/sickblack_render/raw/lease_p1_raw.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawextract.py
+
+## [2026-08-26 15:30:55 KST] [aads-server] scripts/ocr_sickblack_rawcrop.py
+- Chat-Direct 수정: write: scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:07 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p1_raw_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:08 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p1_raw_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:08 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p1_raw_row3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:08 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p1_raw_row4.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:09 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p2_raw_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:09 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p2_raw_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:10 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p2_raw_row3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:10 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p2_raw_row4.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:10 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p3_raw_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:11 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p3_raw_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:11 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p3_raw_row3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:11 KST] [aads-server] scripts/sickblack_render/raw/crops/corp_p3_raw_row4.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:12 KST] [aads-server] scripts/sickblack_render/raw/crops/lease_p1_raw_row1.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:12 KST] [aads-server] scripts/sickblack_render/raw/crops/lease_p1_raw_row2.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:13 KST] [aads-server] scripts/sickblack_render/raw/crops/lease_p1_raw_row3.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:31:13 KST] [aads-server] scripts/sickblack_render/raw/crops/lease_p1_raw_row4.png
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/ocr_sickblack_rawcrop.py
+
+## [2026-08-26 15:32:03 KST] [aads-server] scripts/sickblack_render/lease_transcribe_prompt.txt
+- Chat-Direct 수정: write: scripts/sickblack_render/lease_transcribe_prompt.txt
