@@ -528,3 +528,11 @@
 - 검증: 호스트 `python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` 성공. 운영 컨테이너 `python -m py_compile app/services/yeoljeong_finance_service.py scripts/trigger_delivery_sync.py scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_auto_collect.py` 성공. 운영 컨테이너에서 `_delivery_sync_scopes()` 직접 실행 결과 명시 성신여대점은 `[('biz-sungshin', '성신여대점')]`, 전체 scope는 4개 매장을 반환했다.
 - 검증 제한: 컨테이너 pytest는 `tests/`가 bind mount가 아니라 이미지 내부 구버전 테스트를 실행해 1개 실패했다. host pytest는 `fastapi/structlog` 미설치로 collection 실패했다. 따라서 실제 수정 테스트는 py_compile과 컨테이너 함수 계약 검증으로 대체했다.
 - 배포/커밋: 이 항목은 커밋/푸시/배포 진행 대상으로 남긴다. 기존 무관 dirty 변경 `docs/CHANGELOG-direct-edit.md`, `docs/CHANGELOG-go100-direct.md`, `scripts/yeoljeong_auto_collect.py`, `tests/unit/test_yeoljeong_auto_collect.py`, `.bank_auto_collect.lock`은 보존한다.
+
+## 2026-08-27 08:25 KST - FOOD 은행 PC Agent 전용 lock 배포 보정
+
+- 요청: `runner-6c71a443` 승인 후 신한은행 은행수집 PC Agent 전용화와 CDP 재개 보강을 배포하고 검증.
+- 조치: 러너 승인 후 `aads-server-green`이 active upstream으로 전환됐으나, 운영 회귀 테스트에서 배민 공유 work_key/보안차단/orphan tab cleanup 로직이 퇴행한 것을 확인했다. 은행 전용 lock 및 신한 resume 보강은 유지하고 `yeoljeong_finance_service.py`의 배민 보호 로직을 복구했다.
+- 검증: 운영 이미지 의존성 + 현재 소스 bind mount 기준 `python -m pytest tests/unit/test_yeoljeong_finance_service.py -q` 131 passed, `python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` 90 passed. 대상 파일 `py_compile`과 `git diff --check` 통과.
+- 운영 상태: active port는 `8102`, active container는 `aads-server-green`, `/health`는 `status=ok`, `graph_ready=true`. PC Agent는 blue API `8100`에 2대 온라인이고 green local agent 목록은 아직 0건이라 은행 수집은 peer fallback 또는 명시 agent id로 실행해야 한다.
+- 남은 이슈: 최근 1개월 신한 실수집 `imported_rows > 0` 검증은 배포 보정 커밋/재배포 후 다시 실행해야 한다. 기존 무관 dirty 변경과 원장 이벤트 파일은 커밋 대상에서 제외한다.
