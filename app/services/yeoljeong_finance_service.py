@@ -1297,6 +1297,8 @@ def _delivery_public_error_code(status: str, error_code: Any) -> str:
         return "PC_AGENT_SESSION_REQUIRED"
     if upper in {"ACCOUNT_NOT_REGISTERED", "CREDENTIAL_REQUIRED", "CREDENTIALS_MISSING"}:
         return "MISSING_CREDENTIALS"
+    if upper == "BAEMIN_SECURITY_BLOCKED":
+        return "BAEMIN_SECURITY_BLOCKED"
     if upper.endswith("_SECURITY_BLOCKED") or upper in {"SECURITY_BLOCKED", "PORTAL_BLOCKED"}:
         return "PORTAL_BLOCKED"
     if upper == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
@@ -5619,6 +5621,7 @@ def _delivery_browser_auth_for_account(
             or "about:blank"
         )
         work_key = _delivery_browser_work_key(service, business_id, branch)
+        auth["browser_service"] = service
         auth["browser_target_url"] = url
         pc_agent_id = str(
             payload.get("pc_agent_id")
@@ -5669,6 +5672,23 @@ def _delivery_browser_auth_for_account(
                 auth["browser_agent_id"] = pc_agent_id
             if force_recreate_session:
                 auth["browser_session_recreated"] = "1"
+            if service == "baemin":
+                auth["browser_session_policy"] = "shared_reuse"
+            _append_delivery_browser_session_event(
+                "session_ensured",
+                {
+                    "service": service,
+                    "business_id": business_id,
+                    "branch": branch,
+                    "session_id": auth["browser_session_id"],
+                    "work_key": work_key,
+                    "agent_id": pc_agent_id,
+                    "close_on_complete": auth["browser_close_on_complete"],
+                    "recovered": auth.get("browser_bridge_recovered") or "",
+                    "recreated": auth.get("browser_session_recreated") or "",
+                    "session_policy": auth.get("browser_session_policy") or "",
+                },
+            )
     except Exception as exc:
         auth["browser_bridge_error"] = str(exc)[:300]
     return auth
@@ -5676,9 +5696,30 @@ def _delivery_browser_auth_for_account(
 
 def _delivery_browser_work_key(service: str, business_id: str, branch: str) -> str:
     normalized_service = re.sub(r"[^a-z0-9._:-]+", "-", str(service or "").strip().lower()).strip("-")
+    if normalized_service == "baemin":
+        shared_key = os.getenv("YEOLJEONG_BAEMIN_BROWSER_WORK_KEY", "yeoljeong-delivery-baemin-shared")
+        return re.sub(r"[^a-z0-9._:-]+", "-", shared_key.strip().lower()).strip("-") or "yeoljeong-delivery-baemin-shared"
     normalized_business = re.sub(r"[^a-z0-9._:-]+", "-", str(business_id or "").strip().lower()).strip("-")
     branch_hash = hashlib.sha256(str(branch or "").encode("utf-8")).hexdigest()[:10]
     return f"yeoljeong-delivery-{normalized_service or 'portal'}-{normalized_business or 'business'}-{branch_hash}"
+
+
+def _append_delivery_browser_session_event(event: str, payload: dict[str, Any]) -> None:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        record = {
+            "event": event,
+            "recorded_at": _now(),
+            **{
+                key: value
+                for key, value in payload.items()
+                if value not in (None, "")
+            },
+        }
+        with (DATA_DIR / "delivery_browser_session_events.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        return
 
 
 def _run_delivery_browser_async(coro: Any) -> Any:
@@ -5712,6 +5753,7 @@ async def _close_delivery_browser_work_session_async(
         metadata = dict(getattr(getattr(session, "endpoint", None), "metadata", None) or {})
         agent_id = str(browser_auth.get("browser_agent_id") or metadata.get("agent_id") or "").strip()
         close_work_key = work_key or str(metadata.get("work_key") or "").strip()
+        browser_service = str(browser_auth.get("browser_service") or "").strip()
         if agent_id and close_work_key:
             close_params = {
                 "work_key": close_work_key,
@@ -5764,6 +5806,74 @@ async def _close_delivery_browser_work_session_async(
                         lease_ttl_seconds=30,
                         command_timeout_seconds=10,
                     )
+            close_payload: dict[str, Any] = {}
+            if isinstance(close_result, dict):
+                raw_command_result = close_result.get("result") if isinstance(close_result.get("result"), dict) else {}
+                raw_payload = raw_command_result.get("result") if isinstance(raw_command_result, dict) else None
+                if isinstance(raw_payload, dict):
+                    close_payload = raw_payload
+            close_process = close_payload.get("process") if isinstance(close_payload, dict) else {}
+            close_process = close_process if isinstance(close_process, dict) else {}
+            if (
+                browser_service == "baemin"
+                and close_payload.get("session_released") is False
+                and str(close_process.get("reason") or "") == "session_not_found"
+            ):
+                orphan_params = {
+                    "url_pattern": "self.baemin.com",
+                    "keep_last": False,
+                    "command_timeout_seconds": 15,
+                }
+                orphan_job_type = f"browser_bridge_orphan_cleanup_{session_id or close_work_key}"
+                orphan_result: dict[str, Any] | None = None
+                if route_first:
+                    orphan_result = await bridge._execute_pc_agent_route_via_active_api(
+                        command_type="browser_close_tab",
+                        params=orphan_params,
+                        agent_id=agent_id,
+                        job_type=orphan_job_type,
+                        required_capabilities=["interactive_browser"],
+                        queue_wait_timeout_seconds=10,
+                        lease_ttl_seconds=30,
+                        command_timeout_seconds=15,
+                    )
+                if not route_first or orphan_result is None:
+                    orphan_result = await pc_agent_manager.execute_routed_command(
+                        command_type="browser_close_tab",
+                        params=orphan_params,
+                        agent_id=agent_id,
+                        job_type=orphan_job_type,
+                        required_capabilities=["interactive_browser"],
+                        queue_if_busy=True,
+                        wait_for_turn=True,
+                        queue_wait_timeout_seconds=10,
+                        lease_ttl_seconds=30,
+                        command_timeout_seconds=15,
+                    )
+                _append_delivery_browser_session_event(
+                    "orphan_tabs_close_requested",
+                    {
+                        "reason": reason,
+                        "agent_id": agent_id,
+                        "session_id": session_id,
+                        "work_key": close_work_key,
+                        "status": orphan_result.get("status") if isinstance(orphan_result, dict) else "",
+                        "error_code": orphan_result.get("error_code") if isinstance(orphan_result, dict) else "",
+                        "message": orphan_result.get("message") if isinstance(orphan_result, dict) else "",
+                    },
+                )
+            _append_delivery_browser_session_event(
+                "close_requested",
+                {
+                    "reason": reason,
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "work_key": close_work_key,
+                    "status": close_result.get("status") if isinstance(close_result, dict) else "",
+                    "error_code": close_result.get("error_code") if isinstance(close_result, dict) else "",
+                    "message": close_result.get("message") if isinstance(close_result, dict) else "",
+                },
+            )
         if session_id:
             bridge.sessions.retire_session(
                 session_id,
@@ -5772,7 +5882,16 @@ async def _close_delivery_browser_work_session_async(
                 clear_active=False,
                 clear_lease=True,
             )
-    except Exception:
+    except Exception as exc:
+        _append_delivery_browser_session_event(
+            "close_failed",
+            {
+                "reason": reason,
+                "session_id": session_id,
+                "work_key": work_key,
+                "error": str(exc)[:300],
+            },
+        )
         return
 
 
@@ -7363,8 +7482,11 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             scopes = list(selected_backfill_statuses)
     response_ledgers = _delivery_empty_record_lists()
     response_records: list[dict[str, Any]] = []
+    stop_after_security_block = False
 
     for business_id, branch in scopes:
+        if stop_after_security_block:
+            break
         candidates = [
             row
             for row in all_accounts
@@ -7604,6 +7726,22 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 result_diagnostics["browser_work_key"] = browser_work_key
             if browser_session_id or browser_work_key:
                 result_diagnostics["resume_token"] = make_resume_token(browser_work_key, browser_session_id, run_id)
+                _append_delivery_browser_session_event(
+                    "collection_result",
+                    {
+                        "service": service,
+                        "business_id": business_id,
+                        "branch": branch,
+                        "run_id": run_id,
+                        "session_id": browser_session_id,
+                        "work_key": browser_work_key,
+                        "status": public_status,
+                        "raw_status": result.get("status") or "",
+                        "error_code": public_error_code,
+                        "message": result.get("message") or "",
+                        "counts": counts,
+                    },
+                )
             previous_attempts = int(status_record.get("attempt_count") or 0)
             attempt_count = previous_attempts + 1
             if public_status == "action_required" and attempt_count >= DELIVERY_CHALLENGE_MAX_ATTEMPTS:
@@ -7681,6 +7819,9 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     "portal_message": status_record["message"],
                 }
             )
+            if service == "baemin" and public_error_code == "BAEMIN_SECURITY_BLOCKED":
+                stop_after_security_block = True
+                break
 
     for kind, ledger_name in ledger_names.items():
         _write_file_rows(ledger_name, ledgers[ledger_name])

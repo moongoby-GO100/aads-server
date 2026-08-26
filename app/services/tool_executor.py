@@ -3802,12 +3802,24 @@ class ToolExecutor:
         """연결된 PC Agent 목록 조회."""
         from app.services.pc_agent_manager import pc_agent_manager
 
-        agents = pc_agent_manager.list_agents()
-        if not agents:
-            return {"agents": [], "message": "연결된 PC Agent가 없습니다."}
+        statuses = pc_agent_manager.list_agent_statuses()
+        backend_source = "local"
+        if not statuses:
+            statuses = await _fetch_pc_agent_statuses_from_api()
+            backend_source = "api_fallback" if statuses else "local"
+        if not statuses:
+            return {
+                "agents": [],
+                "count": 0,
+                "online_count": 0,
+                "backend_source": backend_source,
+                "message": "연결된 PC Agent가 없습니다.",
+            }
         return {
-            "agents": [a.model_dump(mode="json") for a in agents],
-            "count": len(agents),
+            "agents": statuses,
+            "count": len(statuses),
+            "online_count": sum(1 for item in statuses if str(item.get("status") or "") == "online"),
+            "backend_source": backend_source,
         }
 
     async def _device_execute(self, inp: Dict[str, Any]) -> Any:

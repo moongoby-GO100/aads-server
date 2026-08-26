@@ -145,6 +145,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = str(os.getenv(name) or "").strip().lower()
+    if not value:
+        return default
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _delivery_auto_collect_payload(
     agent_id: str = "",
     *,
@@ -154,7 +165,10 @@ def _delivery_auto_collect_payload(
 ) -> dict:
     selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
     today = datetime.now(KST).date()
+    baemin_only = set(selected_services) == {"baemin"}
     force_recreate_portal_sessions = reason in {"pc_agent_catchup", "coupangeats_catchup"} or mode == "full_backfill"
+    if baemin_only:
+        force_recreate_portal_sessions = _env_bool("YEOLJEONG_BAEMIN_FORCE_RECREATE_SESSIONS", False)
     payload = {
         "services": selected_services,
         "business_id": "all",

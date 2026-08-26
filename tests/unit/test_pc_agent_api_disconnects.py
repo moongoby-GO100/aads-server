@@ -138,6 +138,28 @@ async def test_flush_pending_reload_disconnects_records_stale_connections(monkey
 
 
 @pytest.mark.asyncio
+async def test_list_agents_returns_peer_snapshot_when_local_registry_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "list_agent_statuses", Mock(return_value=[]))
+    monkeypatch.setattr(
+        pc_agent,
+        "_request_peer_fallback_json",
+        AsyncMock(
+            return_value={
+                "agents": [{"agent_id": "oby-ceo", "status": "online"}],
+                "online_count": 1,
+                "backend_source": "peer",
+            }
+        ),
+    )
+
+    result = await pc_agent.list_agents(_DummyRequest())
+
+    assert result["agents"][0]["agent_id"] == "oby-ceo"
+    assert result["online_count"] == 1
+    assert result["backend_source"] == "peer"
+
+
+@pytest.mark.asyncio
 async def test_ws_pc_agent_records_heartbeat_timeout_and_closes_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_record = AsyncMock()
     ws = _TimeoutWebSocket()

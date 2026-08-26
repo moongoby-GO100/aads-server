@@ -8250,3 +8250,24 @@
 - Remaining:
   - Commit/push/deploy still required for running schedulers to load the cooldown code.
   - Baemin should remain paused until the PC browser clears the current Baemin security block through normal login/verification.
+
+## 2026-08-27 07:44 KST - FOOD PC Agent list parity and delivery tab cleanup
+
+- Request: Directly implement the action plan for PC Agent list/route mismatch and delivery auto-collection stability; run tests and E2E verification.
+- Findings:
+  - `pc_list_agents` in `ToolExecutor` read only the local in-process manager, while `pc_execute` could fallback to the active API route. This made chat tools report `agents: []` even when routed PC commands succeeded.
+  - Baemin automatic backfill defaulted to forced session recreation, which can create repeated Baemin tabs across the four stores.
+  - Live E2E tab check found multiple Baemin Self Service targets under the delivery automation Chrome session.
+- Changes:
+  - `app/services/tool_executor.py`: `pc_list_agents` now falls back to the live API agent snapshot when the local MCP/worker registry is empty.
+  - `app/main.py`: Baemin-only auto-collection now reuses the shared portal session by default; forced recreation is only enabled with `YEOLJEONG_BAEMIN_FORCE_RECREATE_SESSIONS`.
+  - `app/services/yeoljeong_finance_service.py`: Baemin uses one shared work key, preserves `BAEMIN_SECURITY_BLOCKED`, records session/result/cleanup events, and closes orphan `self.baemin.com` tabs if the work-key session metadata is missing.
+  - Added regression tests for PC Agent fallback listing, peer list fallback, Baemin shared work-key/session event logging, Baemin security-block result logging, and orphan-tab cleanup.
+- Verification:
+  - `python3 -m py_compile app/main.py app/services/tool_executor.py app/services/yeoljeong_finance_service.py app/api/pc_agent.py app/services/pc_agent_manager.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_pc_agent_tool_exposure.py tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 182 passed.
+  - Live API E2E: `/api/v1/pc-agent/agents` returned 2 online agents; `/api/v1/pc-agent/route-execute` with `browser_tabs` succeeded.
+  - Live cleanup E2E: closed stale `self.baemin.com` page targets via `browser_close_tab keep_last=false`; final close response reported `remaining=0`.
+- Remaining:
+  - Commit/push/reload are required for the running scheduler process to load the new Baemin no-force-recreate default and orphan cleanup fallback.
+  - Existing unrelated dirty files were preserved.

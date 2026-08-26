@@ -80,6 +80,27 @@ def test_register_agent_status_exposes_shell_alias_command_types() -> None:
     assert status["last_seen"]
 
 
+def test_list_agent_statuses_exposes_route_ready_agent_shape() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "oby-ceo",
+        ws,  # type: ignore[arg-type]
+        {
+            "hostname": "ceo",
+            "capabilities": ["chrome_cdp", "interactive_browser"],
+            "command_types": ["browser_launch", "browser_tabs", "browser_close_session"],
+        },
+    )
+
+    statuses = manager.list_agent_statuses()
+
+    assert statuses[0]["agent_id"] == "oby-ceo"
+    assert statuses[0]["status"] == "online"
+    assert {"chrome_cdp", "interactive_browser"} <= set(statuses[0]["capabilities"])
+    assert {"browser_launch", "browser_tabs", "browser_close_session"} <= set(statuses[0]["command_types"])
+
+
 @pytest.mark.asyncio
 async def test_send_command_normalizes_powershell_alias() -> None:
     manager = PCAgentManager()

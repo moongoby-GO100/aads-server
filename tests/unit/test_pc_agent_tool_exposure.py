@@ -162,6 +162,38 @@ async def test_device_list_uses_api_fallback_outside_uvicorn(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_pc_list_agents_uses_api_fallback_outside_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
+    executor = ToolExecutor()
+    monkeypatch.setattr(
+        "app.services.pc_agent_manager.pc_agent_manager.list_agent_statuses",
+        lambda: [],
+    )
+
+    async def fake_fetch_statuses() -> list[dict[str, object]]:
+        return [
+            {
+                "agent_id": "oby-ceo",
+                "hostname": "ceo-desktop",
+                "capabilities": ["interactive_browser"],
+                "command_types": ["browser_launch", "browser_tabs"],
+                "status": "online",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.services.tool_executor._fetch_pc_agent_statuses_from_api",
+        fake_fetch_statuses,
+    )
+
+    result = await executor._pc_list_agents({})
+
+    assert result["count"] == 1
+    assert result["online_count"] == 1
+    assert result["backend_source"] == "api_fallback"
+    assert result["agents"][0]["agent_id"] == "oby-ceo"
+
+
+@pytest.mark.asyncio
 async def test_browser_connect_forwards_tenant_id(monkeypatch: pytest.MonkeyPatch) -> None:
     received: dict[str, object] = {}
 

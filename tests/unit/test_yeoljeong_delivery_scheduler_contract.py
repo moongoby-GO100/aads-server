@@ -56,6 +56,7 @@ def test_baemin_full_backfill_payload_contract_is_resource_limited():
     assert '"skip_financial_accounts": True' in source
     assert '"require_pc_agent": True' in source
     assert "YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES" in source
+    assert "YEOLJEONG_BAEMIN_FORCE_RECREATE_SESSIONS" in source
     assert "delivery_auto_collect_skip: baemin_security_block_cooldown" in source
     assert '"max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 20)' in source
 

@@ -2620,10 +2620,12 @@ def test_delivery_browser_auth_for_account_creates_service_session_instead_of_re
 
     assert auth["browser_session_id"] == "bb-work-baemin"
     assert auth["ambient_browser_session_id"] == "bb-active-ddangyo"
-    assert auth["browser_work_key"].startswith("yeoljeong-delivery-baemin-biz-junghwa-")
+    assert auth["browser_work_key"] == "yeoljeong-delivery-baemin-shared"
+    assert auth["browser_session_policy"] == "shared_reuse"
     assert "중화점" not in auth["browser_work_key"]
     assert auth["browser_target_url"].startswith("https://")
     assert fake_bridge.calls[0]["url"] == auth["browser_target_url"]
+    assert fake_bridge.calls[0]["work_key"] == "yeoljeong-delivery-baemin-shared"
 
 
 @pytest.mark.asyncio
@@ -2740,6 +2742,169 @@ def test_delivery_browser_auth_for_browser_automation_account_prefers_pc_agent(m
     assert auth["browser_bridge_mode"] == "local_agent"
     assert auth["browser_work_key"].startswith("yeoljeong-delivery-coupangeats-biz-junghwa-")
     assert fake_bridge.calls[0]["url"] == auth["browser_target_url"]
+
+
+def test_baemin_browser_auth_records_shared_session_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    class FakeSession:
+        session_id = "bb-baemin"
+
+    class FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        async def ensure_work_session(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeSession()
+
+    fake_bridge = FakeBridge()
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": "",
+            "browser_bridge_mode": "",
+            "browser_session_id_explicit": "",
+        },
+    )
+    import app.browser_bridge.service as bridge_service
+
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: fake_bridge)
+
+    auth = service._delivery_browser_auth_for_account(
+        {"prefer_pc_agent": True},
+        {"collection_mode": "browser-automation", "portal_home_url": "https://self.baemin.com/"},
+        "baemin",
+        "biz-junghwa",
+        "중화점",
+    )
+
+    assert auth["browser_session_id"] == "bb-baemin"
+    assert auth["browser_work_key"] == "yeoljeong-delivery-baemin-shared"
+    assert auth["browser_session_policy"] == "shared_reuse"
+    assert fake_bridge.calls[0]["work_key"] == "yeoljeong-delivery-baemin-shared"
+    event_log = tmp_path / "delivery_browser_session_events.jsonl"
+    assert "session_ensured" in event_log.read_text(encoding="utf-8")
+
+
+def test_delivery_browser_session_result_event_records_security_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin-junghwa",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_for_account",
+        lambda *args, **kwargs: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-baemin",
+            "browser_bridge_mode": "local_agent",
+            "browser_work_key": "yeoljeong-delivery-baemin-shared",
+            "browser_close_on_complete": "",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_collect_baemin_from_browser_bridge_session",
+        lambda *args, **kwargs: {
+            "status": "portal_action_required",
+            "error_code": "BAEMIN_SECURITY_BLOCKED",
+            "records": {"sales": [], "settlements": [], "reviews": [], "ads": []},
+            "message": "배민 이용 제한",
+        },
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-01",
+            "require_pc_agent": True,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["error_code"] == "BAEMIN_SECURITY_BLOCKED"
+    lines = (tmp_path / "delivery_browser_session_events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"event": "collection_result"' in line and "BAEMIN_SECURITY_BLOCKED" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_close_baemin_browser_session_cleans_orphan_tabs_when_session_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    class FakeSessions:
+        def get(self, session_id):
+            return None
+
+        def retire_session(self, *args, **kwargs):
+            raise AssertionError("missing session should not be retired")
+
+    class FakeBridge:
+        sessions = FakeSessions()
+
+        def _route_pc_agent_via_active_api_first(self):
+            return False
+
+    routed_calls = []
+
+    async def fake_execute_routed_command(**kwargs):
+        routed_calls.append(kwargs)
+        if kwargs["command_type"] == "browser_close_session":
+            return {
+                "status": "success",
+                "result": {
+                    "result": {
+                        "session_released": False,
+                        "process": {"reason": "session_not_found"},
+                    }
+                },
+            }
+        return {"status": "success", "result": {"result": {"closed": 3}}}
+
+    import app.browser_bridge.service as bridge_service
+    import app.services.pc_agent_manager as pc_agent_manager_module
+
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: FakeBridge())
+    monkeypatch.setattr(
+        pc_agent_manager_module.pc_agent_manager,
+        "execute_routed_command",
+        fake_execute_routed_command,
+    )
+
+    await service._close_delivery_browser_work_session_async(
+        {
+            "browser_service": "baemin",
+            "browser_agent_id": "oby-ceo",
+            "browser_session_id": "bb-missing",
+            "browser_work_key": "yeoljeong-delivery-baemin-shared",
+            "browser_close_on_complete": "1",
+        },
+        reason="delivery_sync_result_baemin",
+    )
+
+    assert [call["command_type"] for call in routed_calls] == [
+        "browser_close_session",
+        "browser_close_tab",
+    ]
+    assert routed_calls[1]["params"]["url_pattern"] == "self.baemin.com"
+    assert routed_calls[1]["params"]["keep_last"] is False
+    events = (tmp_path / "delivery_browser_session_events.jsonl").read_text(encoding="utf-8")
+    assert "orphan_tabs_close_requested" in events
 
 
 def test_sync_delivery_blocks_concurrent_runs_without_touching_collectors(tmp_path, monkeypatch):
