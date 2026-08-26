@@ -606,8 +606,12 @@ class PCAgentManager:
             return
         close_params: Dict[str, Any] = {
             "work_key": work_key,
-            "close_browser": bool((params or {}).get("close_browser_on_timeout", False)),
-            "close_tabs": bool((params or {}).get("close_tabs_on_timeout", False)),
+            "close_browser": bool(
+                (params or {}).get("close_browser_on_timeout", normalized_command == "browser_launch")
+            ),
+            "close_tabs": bool(
+                (params or {}).get("close_tabs_on_timeout", normalized_command == "browser_launch")
+            ),
             "reason": "route_execute_timeout",
             "command_timeout_seconds": max(1.0, min(10.0, float(timeout_seconds))),
         }
@@ -638,7 +642,7 @@ class PCAgentManager:
                 close_payload.get("session_released"),
                 close_payload.get("guard_released"),
             )
-            if close_result.status != "error":
+            if close_result.status != "error" and close_payload.get("session_released") is not False:
                 return
             cleanup_command_id = await self.send_command(agent_id, "browser_health", cleanup_params)
             cleanup_result = await self.get_result(

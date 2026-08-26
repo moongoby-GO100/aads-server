@@ -407,6 +407,123 @@ async def test_execute_routed_command_timeout_falls_back_to_browser_health_clean
 
 
 @pytest.mark.asyncio
+async def test_execute_routed_command_timeout_falls_back_when_close_does_not_release_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    sent: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_send_command(_agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        sent.append((command_type, dict(params)))
+        return f"cmd-{len(sent)}"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        if command_id == "cmd-1":
+            return CommandResult(
+                command_id=command_id,
+                agent_id="ceo-pc",
+                status="timeout",
+                result=None,
+            )
+        if command_id == "cmd-2":
+            return CommandResult(
+                command_id=command_id,
+                agent_id="ceo-pc",
+                status="success",
+                result={"session_released": False, "guard_released": None},
+            )
+        return CommandResult(
+            command_id=command_id,
+            agent_id="ceo-pc",
+            status="success",
+            result={"session_released": True, "guard_released": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_eval",
+        params={
+            "expression": "document.title",
+            "work_key": "yeoljeong-bank-shinhan-individual-test",
+        },
+        command_timeout_seconds=5.0,
+        lease_ttl_seconds=35,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "COMMAND_TIMEOUT"
+    assert [item[0] for item in sent] == [
+        "browser_eval",
+        "browser_close_session",
+        "browser_health",
+    ]
+    assert sent[2][1]["cleanup"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_routed_command_browser_launch_timeout_closes_browser_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "ceo-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "ceo", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    sent: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_send_command(_agent_id: str, command_type: str, params: dict[str, object]) -> str:
+        sent.append((command_type, dict(params)))
+        return f"cmd-{len(sent)}"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        if command_id == "cmd-1":
+            return CommandResult(
+                command_id=command_id,
+                agent_id="ceo-pc",
+                status="timeout",
+                result=None,
+            )
+        return CommandResult(
+            command_id=command_id,
+            agent_id="ceo-pc",
+            status="success",
+            result={"session_released": True, "guard_released": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_launch",
+        params={
+            "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+            "work_key": "yeoljeong-bank-shinhan-individual-test",
+        },
+        command_timeout_seconds=5.0,
+        lease_ttl_seconds=35,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "COMMAND_TIMEOUT"
+    assert len(sent) == 2
+    assert sent[1][0] == "browser_close_session"
+    assert sent[1][1]["close_browser"] is True
+    assert sent[1][1]["close_tabs"] is True
+
+
+@pytest.mark.asyncio
 async def test_vvic_browser_launch_reuses_work_key_profile_without_new_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
