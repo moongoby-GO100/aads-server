@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-26 11:51 KST - FOOD auto-collection deploy and Shinhan verification
+
+- Trigger: CEO asked to continue after the interrupted deployment and finish the FOOD collection verification.
+- Changes deployed:
+  - `bf145ff5` (`fix(food): keep delivery and bank auto collection running`) was confirmed on `origin/main` and active API slot `aads-server` (`127.0.0.1:8100`).
+  - Delivery scheduler internal user now includes `user_role=system` and `is_internal_admin=True`, fixing the scheduler-side `403: 수집 상태 조회 권한이 없습니다` regression.
+  - Browser/PC Agent timeout handling and bank/delivery auto-collection recovery tests were included in the same commit.
+- Verification:
+  - Active containers: `aads-server` and `aads-server-green` both healthy.
+  - `curl http://127.0.0.1:8100/health`, `curl http://127.0.0.1:8102/health`, and `curl http://127.0.0.1:8100/api/v1/health` returned `status=ok`.
+  - Runtime-image test run passed: `140 passed, 7 warnings` for `test_browser_bridge.py`, `test_pc_agent_api_disconnects.py`, `test_yeoljeong_auto_collect.py`, `test_yeoljeong_bank_browser_connector.py`, and `test_yeoljeong_delivery_scheduler_contract.py`.
+  - Recent active-slot logs and `delivery_collection_status.json` showed no new delivery permission 403 after the deploy; Baemin statuses were queued/running instead.
+- Shinhan real collection result:
+  - Existing Shinhan simple-query session on PC Agent `7f99c528-24d` / port `9224` reached `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`.
+  - ID and password fields were populated (`loginIdLen=9`, `pwLen=10`), so server-side auto-input reached the Shinhan page.
+  - After clicking the Shinhan login button, the bank page returned: `입력하신 비밀번호가 정확하지 않습니다`, `비밀번호가 일치하지 않습니다`, `비밀번호 5회 오류입니다`.
+  - `bank_transactions.json` was not created; imported rows remain 0. Further login attempts were stopped to avoid account lock escalation.
+- Notes:
+  - Active slot has no direct PC Agent WebSocket; two agents are still attached to the green slot. Peer fallback is working, but this should be cleaned up in a future deployment/agent reconnect pass.
+  - Unrelated dirty file intentionally left untouched: `docs/CHANGELOG-go100-direct.md`.
+
 ## 2026-08-25 18:02 KST - Chat notification project/session context
 
 - Trigger: CEO asked to include which project and which conversation in AADS notifications.
