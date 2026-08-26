@@ -8200,3 +8200,26 @@
 - Remaining:
   - The force-recreate patch must be committed, pushed, and reloaded after the current Coupang Eats process exits or is timed out.
   - Baemin queued jobs remain pending while Coupang Eats holds the shared delivery lock.
+
+## 2026-08-27 06:36 KST - FOOD Baemin abnormal-activity block guard
+
+- Request: Diagnose the Baemin Self Service "잠시 이용이 제한돼요 / 비정상 동작이 감지" screen and prevent further automated collection from aggravating it.
+- Findings:
+  - The attached `self.baemin.com/orders/history` screen is a Baemin abnormal-activity/security block.
+  - A Baemin full-backfill process from `delivery-auto-pc_agent_catchup-2026-08-27` was still running with `--force-recreate-sessions --max-orders 80 --max-reviews 80`.
+  - Historical delivery status rows already contained Baemin `PORTAL_BLOCKED` / `BAEMIN_SECURITY_BLOCKED`, but the CLI loop did not treat the raw Baemin code as terminal blocking.
+- Operations:
+  - Terminated only the active Baemin `yeoljeong_auto_collect.py --services baemin` parent/child processes to stop repeated portal touches.
+  - Marked run `7341854b-39bb-44d6-a245-0902208672d8` as `action_required` with `PORTAL_BLOCKED` so the scheduler can cool down instead of seeing it as still running.
+- Changes:
+  - `app/main.py`: added Baemin security-block cooldown gate for full-backfill scheduled/catch-up jobs and lowered default auto backfill caps to 20 orders/reviews per run.
+  - `app/services/yeoljeong_delivery_collectors.py` and `app/services/yeoljeong_finance_service.py`: recognize the current Baemin abnormal-activity copy as a security block.
+  - `scripts/yeoljeong_auto_collect.py`: treats raw `BAEMIN_SECURITY_BLOCKED` as terminal blocking instead of retryable.
+  - `app/services/baemin_order_history_collector.py`: increased default page/order-detail jitter for slower collection.
+  - Regression tests added for block detection, terminal loop stop, and scheduler cooldown contract.
+- Verification:
+  - `python3 -m py_compile app/main.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_delivery_collectors.py app/services/baemin_order_history_collector.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_baemin_order_history_collector.py tests/unit/test_baemin_review_collector.py tests/unit/test_baemin_ads_collector.py` succeeded: 195 passed.
+- Remaining:
+  - Commit/push/deploy still required for running schedulers to load the cooldown code.
+  - Baemin should remain paused until the PC browser clears the current Baemin security block through normal login/verification.

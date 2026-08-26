@@ -90,6 +90,10 @@ SEARCH_TERMS = ("조회", "검색", "적용")
 SECURITY_BLOCK_TERMS = (
     "보안 위배 접근 제한",
     "올바르지 않은 요청",
+    "잠시 이용이 제한",
+    "비정상 동작",
+    "비정상적인 동작",
+    "잠시 후 다시 시도",
     "access denied",
     "forbidden",
 )

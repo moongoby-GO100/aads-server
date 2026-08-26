@@ -3385,19 +3385,19 @@ def _delivery_backfill_batch_limit(payload: dict[str, Any]) -> int:
 
 
 def _delivery_backfill_max_orders(payload: dict[str, Any]) -> int:
-    raw = payload.get("max_orders") or payload.get("maxOrders") or 80
+    raw = payload.get("max_orders") or payload.get("maxOrders") or 20
     try:
         return max(1, min(300, int(raw)))
     except (TypeError, ValueError):
-        return 80
+        return 20
 
 
 def _delivery_backfill_max_reviews(payload: dict[str, Any]) -> int:
-    raw = payload.get("max_reviews") or payload.get("maxReviews") or 80
+    raw = payload.get("max_reviews") or payload.get("maxReviews") or 20
     try:
         return max(1, min(300, int(raw)))
     except (TypeError, ValueError):
-        return 80
+        return 20
 
 
 def _delivery_backfill_row_payload(
@@ -6072,7 +6072,19 @@ def _baemin_dashboard_records(text: str, business_id: str, branch: str) -> dict[
 def _baemin_bridge_login_state(url: str, text: str) -> str:
     lowered_url = str(url or "").lower()
     lowered_text = str(text or "").lower()
-    if any(term in lowered_text for term in ("보안 위배 접근 제한", "올바르지 않은 요청", "access denied", "forbidden")):
+    if any(
+        term in lowered_text
+        for term in (
+            "보안 위배 접근 제한",
+            "올바르지 않은 요청",
+            "잠시 이용이 제한",
+            "비정상 동작",
+            "비정상적인 동작",
+            "잠시 후 다시 시도",
+            "access denied",
+            "forbidden",
+        )
+    ):
         return "blocked"
     if any(term in lowered_text for term in ("captcha", "캡차", "보안문자", "2차 인증", "추가 인증", "본인인증", "휴대폰 인증", "기기 인증", "인증번호")):
         return "challenge"

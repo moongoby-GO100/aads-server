@@ -208,6 +208,21 @@ def test_security_block_result_detects_baemin_block_page():
     assert "records" in result
 
 
+def test_security_block_result_detects_baemin_abnormal_activity_page():
+    class FakeBody:
+        def inner_text(self, timeout):
+            return "잠시 이용이 제한돼요 비정상 동작이 감지되어 잠시 이용이 제한돼요 잠시 후 다시 시도해 주세요."
+
+    class FakePage:
+        def locator(self, selector):
+            return FakeBody()
+
+    result = collectors._security_block_result(FakePage(), None)
+
+    assert result["status"] == "portal_action_required"
+    assert result["error_code"] == "BAEMIN_SECURITY_BLOCKED"
+
+
 def test_parse_baemin_pc_html_table_settlements():
     html = """
     <html><body>

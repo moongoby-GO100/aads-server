@@ -27,8 +27,8 @@ class BackfillLimits:
         self,
         max_records: int = 300,
         max_runtime_seconds: int = 12 * 60,
-        order_detail_jitter: tuple[float, float] = (1.0, 1.8),
-        page_jitter: tuple[float, float] = (2.0, 4.0),
+        order_detail_jitter: tuple[float, float] = (2.5, 6.0),
+        page_jitter: tuple[float, float] = (8.0, 18.0),
     ) -> None:
         self.max_records = max_records
         self.max_runtime_seconds = max_runtime_seconds

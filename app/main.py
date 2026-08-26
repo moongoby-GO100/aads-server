@@ -175,8 +175,8 @@ def _delivery_auto_collect_payload(
             {
                 "date_from": os.getenv("YEOLJEONG_BAEMIN_BACKFILL_FROM", "2024-01-01"),
                 "date_to": today.isoformat(),
-                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 80),
-                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 80),
+                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 20),
+                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 20),
                 "window_days": _env_int("YEOLJEONG_BAEMIN_BACKFILL_WINDOW_DAYS", 1),
                 "max_backfill_runs": _env_int("YEOLJEONG_BAEMIN_BACKFILL_BATCH_LIMIT", 1),
             }
@@ -205,6 +205,8 @@ def _delivery_auto_collect_service_catchup_due(
             current.get("updated_at") or current.get("created_at") or ""
         ):
             latest[key] = row
+    if service == "baemin" and _delivery_auto_collect_security_block_cooldown_active(list(latest.values())):
+        return False
     if len(latest) < expected_scope_count:
         return True
     for row in latest.values():
@@ -218,6 +220,38 @@ def _delivery_auto_collect_service_catchup_due(
         if str(row.get("error_code") or "").strip():
             return True
         if _delivery_auto_collect_count_total(row) <= 0:
+            return True
+    return False
+
+
+def _delivery_auto_collect_row_time(row: dict) -> datetime | None:
+    for key in ("updated_at", "finished_at", "started_at", "created_at"):
+        value = str(row.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=KST)
+        return parsed.astimezone(KST)
+    return None
+
+
+def _delivery_auto_collect_security_block_cooldown_active(statuses: list[dict]) -> bool:
+    cooldown_minutes = _env_int("YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES", 360)
+    if cooldown_minutes <= 0:
+        return False
+    cutoff = datetime.now(KST) - timedelta(minutes=cooldown_minutes)
+    for row in statuses if isinstance(statuses, list) else []:
+        if str(row.get("service") or "") != "baemin":
+            continue
+        error_code = str(row.get("error_code") or "").strip().upper()
+        if error_code not in {"PORTAL_BLOCKED", "BAEMIN_SECURITY_BLOCKED"}:
+            continue
+        row_time = _delivery_auto_collect_row_time(row)
+        if row_time and row_time >= cutoff:
             return True
     return False
 
@@ -1210,6 +1244,15 @@ async def lifespan(app: FastAPI):
                     "name": "자동수집데몬",
                 }
                 selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
+                if "baemin" in selected_services and mode == "full_backfill":
+                    statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    if _delivery_auto_collect_security_block_cooldown_active(statuses):
+                        logger.info(
+                            "delivery_auto_collect_skip: baemin_security_block_cooldown reason=%s mode=%s",
+                            reason,
+                            mode,
+                        )
+                        return
                 if reason == "pc_agent_catchup" and mode == "full_backfill":
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if not _delivery_auto_collect_baemin_catchup_due(statuses):

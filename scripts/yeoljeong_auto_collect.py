@@ -48,6 +48,8 @@ BLOCKING_ERROR_CODES = {
     "BANK_CERTIFICATE_PASSWORD_REQUIRED",
     "BANK_CONNECTOR_NOT_CONFIGURED",
     "CSV_UPLOAD_REQUIRED",
+    "BAEMIN_SECURITY_BLOCKED",
+    "COUPANGEATS_SECURITY_BLOCKED",
     "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
     "BANK_ACCOUNT_PASSWORD_REQUIRED",
     "MISSING_CREDENTIALS",
@@ -961,8 +963,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date-from", default="", help="YYYY-MM-DD. Default: first day of current month.")
     parser.add_argument("--date-to", default="", help="YYYY-MM-DD. Default: today.")
     parser.add_argument("--mode", default="", choices=("", "full_backfill"), help="Collection mode. full_backfill enables Baemin order-history/review/ad backfill.")
-    parser.add_argument("--max-orders", type=int, default=300, help="Baemin full_backfill order cap per branch, 1-300.")
-    parser.add_argument("--max-reviews", type=int, default=300, help="Baemin full_backfill review cap per branch, 1-300.")
+    parser.add_argument("--max-orders", type=int, default=_env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 20), help="Baemin full_backfill order cap per branch, 1-300.")
+    parser.add_argument("--max-reviews", type=int, default=_env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 20), help="Baemin full_backfill review cap per branch, 1-300.")
     parser.add_argument("--browser-session-id", default="", help="Optional PC Agent browser session id.")
     parser.add_argument("--browser-agent-id", default="", help="Optional PC Agent id for bank browser auto-open.")
     parser.add_argument("--browser-preferred-port", type=int, default=None, help="Optional preferred CDP port for bank browser auto-open.")

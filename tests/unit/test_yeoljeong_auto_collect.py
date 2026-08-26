@@ -958,6 +958,41 @@ def test_until_complete_stops_on_terminal_blocked_by_default(monkeypatch):
     assert sleeps == []
 
 
+def test_until_complete_stops_on_raw_baemin_security_blocked(monkeypatch):
+    sleeps = []
+
+    monkeypatch.setattr(auto_collect, "_payload", lambda args: {"business_id": "all"})
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_sync",
+        lambda payload, user, *, queue_only=False: {
+            "summary": [
+                {
+                    "service": "baemin",
+                    "status": "action_required",
+                    "error_code": "BAEMIN_SECURITY_BLOCKED",
+                    "counts": {"sales": 0, "settlements": 0, "reviews": 0, "ads": 0},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(auto_collect, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(auto_collect, "_initial_force_recreate_portal_sessions", lambda payload, user: False)
+
+    args = SimpleNamespace(
+        max_attempts=0,
+        retry_seconds=7,
+        blocked_retry_seconds=19,
+        success_sleep_seconds=1800,
+        attempt_timeout_seconds=0,
+        retry_blocked=False,
+        repeat_after_complete=False,
+    )
+
+    assert auto_collect._run_until_complete(args, {"email": "system@aads.local", "is_admin": True}) == 2
+    assert sleeps == []
+
+
 def test_timeout_result_is_retryable():
     summary = auto_collect._summary(
         auto_collect._timeout_result(

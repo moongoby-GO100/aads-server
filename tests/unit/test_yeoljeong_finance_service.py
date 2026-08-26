@@ -1269,6 +1269,16 @@ def test_ensure_full_backfill_retry_clamps_legacy_wide_failed_window(monkeypatch
     assert retry["payload"]["retry"]["attempt_count"] == 1
 
 
+def test_baemin_bridge_login_state_detects_abnormal_activity_block():
+    assert (
+        service._baemin_bridge_login_state(
+            "https://self.baemin.com/orders/history",
+            "잠시 이용이 제한돼요 비정상 동작이 감지되어 잠시 이용이 제한돼요 잠시 후 다시 시도해 주세요.",
+        )
+        == "blocked"
+    )
+
+
 def test_sync_full_backfill_claims_one_queued_window_and_enqueues_next_day(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     service._write(
