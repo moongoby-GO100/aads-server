@@ -3683,7 +3683,7 @@ def _delivery_sync_scopes(
     requested_services: list[str],
     all_accounts: list[dict[str, Any]],
 ) -> list[tuple[str, str]]:
-    if not _delivery_all_scope_requested(payload) and not _delivery_full_backfill_requested(payload):
+    if not _delivery_all_scope_requested(payload):
         return [
             _normalize_delivery_scope(
                 str(payload.get("business_id") or MIA_BUSINESS_ID),

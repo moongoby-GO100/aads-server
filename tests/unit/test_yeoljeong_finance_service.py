@@ -1045,6 +1045,30 @@ def test_delivery_full_backfill_scope_and_window_contract():
 
     assert date_from.isoformat() == "2026-01-01"
     assert date_to.isoformat() == "2026-08-25"
+    assert scopes == [("biz-mia", "열정국밥_미아점")]
+
+
+def test_delivery_full_backfill_all_scope_and_window_contract():
+    payload = {
+        "services": ["baemin"],
+        "mode": "full_backfill",
+        "business_id": "all",
+        "branch": "전체",
+        "date_from": "2026-01-01",
+        "date_to": "2026-08-25",
+    }
+
+    scopes = service._delivery_sync_scopes(
+        payload,
+        ["baemin"],
+        [
+            {"service": "baemin", "business_id": "biz-junghwa", "branch": "중화점"},
+            {"service": "baemin", "business_id": "biz-sungshin", "branch": "성신여대점"},
+            {"service": "baemin", "business_id": "biz-eonni-naengmyeon", "branch": "성신여대역점"},
+            {"service": "baemin", "business_id": "biz-mia", "branch": "열정국밥_미아점"},
+        ],
+    )
+
     assert len(scopes) == 4
     assert ("biz-eonni-naengmyeon", "언니냉면") not in scopes
     assert ("biz-eonni-naengmyeon", "성신여대역점") in scopes

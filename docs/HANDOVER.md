@@ -514,3 +514,12 @@
 - 검증: `python3 -m py_compile app/services/yeoljeong_finance_service.py app/services/baemin_order_history_collector.py app/services/baemin_ads_collector.py app/api/yeoljeong_finance.py app/main.py scripts/trigger_delivery_sync.py` 성공. `pytest -q tests/unit/test_baemin_ads_collector.py tests/unit/test_baemin_order_history_collector.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` 결과 11 passed. 운영 컨테이너 의존성 기준 `/tmp/aads-check` 복사본에서 `python3 -m pytest -q ...` 결과 22 passed, 112 deselected. `git diff --check` 대상 파일 통과.
 - 남은 이슈: 실제 배민 PC Agent 로그인 세션을 사용하는 운영 E2E 백필 실행은 아직 수행하지 않았다. 배포/재시작도 수행하지 않아 운영 프로세스에는 미반영 상태다.
 - 배포/커밋: 이번 변경은 아직 커밋, 푸시, 배포하지 않았다. 기존 무관 dirty 변경 `docs/CHANGELOG-go100-direct.md`는 보존했다.
+
+## 2026-08-26 13:53 KST - FOOD 배민 단일 매장 백필 재시도 scope 보정
+
+- 요청: `delivery-sync-c0f9b8a45532` 추적 후 timeout이면 해당 매장만 `max_orders`를 더 작게 쪼개 재시도하는 다음 단계를 완료.
+- 확인: DB `yeoljeong_delivery_collection_status`에서 `delivery-sync-c0f9b8a45532`는 성신여대점 2026-08-26 window가 succeeded였고, continuation인 성신여대점 2026-08-25 window가 `BACKGROUND_SYNC_STALE` failed로 정리됐다. 이후 `delivery-sync-3eae1d8c36d9` 재시도는 `--business-id biz-sungshin --branch 성신여대점` 의도였으나 서비스 내부 `full_backfill` scope 확장으로 4개 매장 queue/action_required row를 만들었다.
+- 조치: `yeoljeong_finance_service.py`의 `_delivery_sync_scopes()`가 full_backfill이어도 `all/전체`가 아닌 명시 사업자·지점은 단일 scope만 반환하도록 수정했다. `tests/unit/test_yeoljeong_finance_service.py`에는 명시 매장 full_backfill은 단일 scope, `all/전체` full_backfill은 4개 매장 scope를 반환하는 계약을 분리했다.
+- 검증: 호스트 `python3 -m py_compile app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` 성공. 운영 컨테이너 `python -m py_compile app/services/yeoljeong_finance_service.py scripts/trigger_delivery_sync.py scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_auto_collect.py` 성공. 운영 컨테이너에서 `_delivery_sync_scopes()` 직접 실행 결과 명시 성신여대점은 `[('biz-sungshin', '성신여대점')]`, 전체 scope는 4개 매장을 반환했다.
+- 검증 제한: 컨테이너 pytest는 `tests/`가 bind mount가 아니라 이미지 내부 구버전 테스트를 실행해 1개 실패했다. host pytest는 `fastapi/structlog` 미설치로 collection 실패했다. 따라서 실제 수정 테스트는 py_compile과 컨테이너 함수 계약 검증으로 대체했다.
+- 배포/커밋: 이 항목은 커밋/푸시/배포 진행 대상으로 남긴다. 기존 무관 dirty 변경 `docs/CHANGELOG-direct-edit.md`, `docs/CHANGELOG-go100-direct.md`, `scripts/yeoljeong_auto_collect.py`, `tests/unit/test_yeoljeong_auto_collect.py`, `.bank_auto_collect.lock`은 보존한다.
