@@ -1196,7 +1196,10 @@ async def lifespan(app: FastAPI):
         )
 
         # P0-2: 배달 자동수집 데몬 — 정시 수집 + 배민 full_backfill catch-up (PC Agent 온라인 시)
-        async def _delivery_auto_collect_peer_agent() -> dict:
+        async def _delivery_auto_collect_peer_agent(
+            preferred_agent_id: str = "",
+            excluded_agent_ids: set[str] | None = None,
+        ) -> dict:
             import asyncio
             import json
             import urllib.error
@@ -1226,16 +1229,29 @@ async def lifespan(app: FastAPI):
                         logger.warning("delivery_auto_collect_peer_agent_lookup_failed url=%s err=%s", url, exc)
                         continue
                     agents = payload.get("agents") if isinstance(payload, dict) else []
+                    fallback_agent_id = ""
+                    excluded = excluded_agent_ids or set()
                     for agent in agents if isinstance(agents, list) else []:
                         if str(agent.get("status") or "") != "online":
                             continue
                         agent_id = str(agent.get("agent_id") or "").strip()
+                        if not agent_id or agent_id in excluded:
+                            continue
+                        if preferred_agent_id and agent_id != preferred_agent_id:
+                            fallback_agent_id = fallback_agent_id or agent_id
+                            continue
                         if agent_id:
                             return {
                                 "status": "online",
                                 "agent_id": agent_id,
                                 "source": payload.get("backend_source") or url,
                             }
+                    if fallback_agent_id and not preferred_agent_id:
+                        return {
+                            "status": "online",
+                            "agent_id": fallback_agent_id,
+                            "source": payload.get("backend_source") or url,
+                        }
                 return {"status": "offline", "error_code": "PC_AGENT_OFFLINE"}
 
             return await asyncio.to_thread(_lookup)
@@ -1284,10 +1300,30 @@ async def lifespan(app: FastAPI):
                         logger.info("delivery_auto_collect_catchup_skip: coupangeats_recent_or_running")
                         return
 
+                preferred_delivery_agent_id = os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "").strip()
+                excluded_delivery_agent_ids = {
+                    item.strip()
+                    for item in os.getenv(
+                        "YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS",
+                        "",
+                    ).split(",")
+                    if item.strip()
+                }
                 wait_timeout = 45 if reason in {"pc_agent_catchup", "coupangeats_catchup"} else 180
-                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=wait_timeout)
+                wait_result = await pc_agent_manager.wait_for_agent_online(
+                    agent_id=preferred_delivery_agent_id,
+                    timeout=wait_timeout,
+                )
                 if wait_result["status"] != "online":
-                    wait_result = await _delivery_auto_collect_peer_agent()
+                    wait_result = await _delivery_auto_collect_peer_agent(
+                        preferred_agent_id=preferred_delivery_agent_id,
+                        excluded_agent_ids=excluded_delivery_agent_ids,
+                    )
+                if (
+                    wait_result.get("status") == "online"
+                    and str(wait_result.get("agent_id") or "") in excluded_delivery_agent_ids
+                ):
+                    wait_result = {"status": "offline", "error_code": "PC_AGENT_EXCLUDED"}
                 if wait_result["status"] != "online":
                     logger.info(
                         "delivery_auto_collect_skip: pc_agent_offline reason=%s mode=%s services=%s",
