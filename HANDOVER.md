@@ -16,8 +16,10 @@
   - `python3 -m py_compile app/main.py` passed.
   - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py` passed: 7 passed.
   - DB check for Baemin `payload->>'status'='running'` returned 0 rows after process termination.
+- Deployment:
+  - Committed as `e6a9a5d9 fix(food): shorten baemin security cooldown`, pushed to `origin/main`, and deployed with `deploy_safe(mode=reload)`.
+  - Hot reload reloaded 89 modules and post-health returned OK at 2026-08-27 06:59 KST.
 - Pending:
-  - Commit/push/deploy still required for the cooldown code change to affect the running service.
   - If the CEO wants the visible unmanaged Chrome tab forcibly closed, use PC Agent process/window control explicitly because CDP close timed out.
 
 ## 2026-08-26 15:30 KST - FOOD delivery lock release and incremental DB upsert fix
