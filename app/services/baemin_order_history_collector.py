@@ -105,6 +105,32 @@ def _occurred_on(ordered_at: str) -> str:
     return ordered_at[:10] if ordered_at else ""
 
 
+def _checkpoint_order_no(checkpoint: dict[str, Any]) -> str:
+    orders = checkpoint.get("orders") if isinstance(checkpoint.get("orders"), dict) else {}
+    return _clean(checkpoint.get("last_order_no") or orders.get("last_order_no"))
+
+
+def _apply_order_checkpoint(records: dict[str, list[dict[str, Any]]], checkpoint: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    last_order_no = _checkpoint_order_no(checkpoint)
+    if not last_order_no:
+        return records
+    sales = records.get("sales") or []
+    index = next((idx for idx, row in enumerate(sales) if _clean(row.get("order_no")) == last_order_no), -1)
+    if index < 0:
+        return records
+    allowed_order_nos = {
+        _clean(row.get("order_no"))
+        for row in sales[index + 1 :]
+        if _clean(row.get("order_no"))
+    }
+    filtered = dict(records)
+    filtered["sales"] = sales[index + 1 :]
+    filtered["settlements"] = [
+        row for row in records.get("settlements", []) if _clean(row.get("order_no")) in allowed_order_nos
+    ]
+    return filtered
+
+
 def _stable_id(*parts: Any) -> str:
     return hashlib.sha256("|".join(_clean(part) for part in parts).encode("utf-8")).hexdigest()
 
@@ -115,7 +141,7 @@ def _segment_by_order_no(text: str) -> list[str]:
         return []
     segments: list[str] = []
     for index, match in enumerate(matches):
-        start = max(0, match.start() - 120)
+        start = 0 if index == 0 else matches[index - 1].end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         segments.append(text[start:end])
     return segments
@@ -460,7 +486,7 @@ async def collect_baemin_order_history(
         str(account.get("business_id") or ""),
         str(account.get("branch") or ""),
     )
-    records = parsed.get("records") or {}
+    records = _apply_order_checkpoint(parsed.get("records") or {}, checkpoint)
     diagnostics = dict(parsed.get("diagnostics") or {})
     diagnostics.update(
         {
@@ -476,6 +502,7 @@ async def collect_baemin_order_history(
                 "last_order_no": (records.get("sales") or [{}])[-1].get("order_no", "") if records.get("sales") else "",
                 "orders_seen": len(records.get("sales") or []),
             },
+            "checkpoint_applied": bool(_checkpoint_order_no(checkpoint)),
         }
     )
     total = sum(len(rows) for rows in records.values() if isinstance(rows, list))

@@ -8,6 +8,12 @@ from typing import Any
 
 
 BAEMIN_ADS_URL = "https://self.baemin.com/advertisements"
+BAEMIN_ADS_URLS = (
+    BAEMIN_ADS_URL,
+    "https://self.baemin.com/advertisements/campaigns",
+    "https://self.baemin.com/ads",
+    "https://self.baemin.com/marketing",
+)
 SCHEMA_VERSION = "baemin_ads.v1"
 
 
@@ -56,8 +62,14 @@ def _first(pattern: str, text: str) -> str:
 
 
 def _segments(text: str) -> list[str]:
-    parts = re.split(r"\n\s*\n|(?=캠페인\s*[:：]?)", str(text or ""))
-    return [part for part in parts if "캠페인" in part or "광고" in part or "ROAS" in part.upper()]
+    parts = re.split(
+        r"(?m)\n\s*\n|(?=^\s*캠페인\s*[:：]?)|(?=^\s*광고명\s*[:：]?)|(?=^\s*우리가게클릭)|(?=^\s*오픈리스트)|(?=^\s*울트라콜)",
+        str(text or ""),
+    )
+    segments = [part for part in parts if "캠페인" in part or "광고" in part or "ROAS" in part.upper()]
+    if not segments and any(term in str(text or "") for term in ("소진금액", "노출수", "클릭수", "주문수", "ROAS")):
+        return [str(text or "")]
+    return segments
 
 
 def parse_baemin_ads_text(
@@ -70,7 +82,13 @@ def parse_baemin_ads_text(
     collected_at = collected_at or datetime.now().astimezone().isoformat(timespec="seconds")
     records: list[dict[str, Any]] = []
     for index, segment in enumerate(_segments(source_text), start=1):
-        campaign = _first(r"캠페인\s*[:：]?\s*([^\n]+)", segment) or _first(r"광고명\s*[:：]?\s*([^\n]+)", segment)
+        campaign = (
+            _first(r"캠페인\s*[:：]?\s*([^\n]+)", segment)
+            or _first(r"광고명\s*[:：]?\s*([^\n]+)", segment)
+            or _first(r"(우리가게클릭|오픈리스트|울트라콜|배민1\s*광고)", segment)
+        )
+        if not campaign and not any(term in segment for term in ("소진금액", "노출수", "클릭수", "주문수", "ROAS")):
+            continue
         if not campaign:
             campaign = f"baemin-ad-{index}"
         spend = _money_after(segment, ("소진금액", "광고비", "비용", "spend"))
@@ -129,21 +147,39 @@ async def _body_text(page: Any) -> str:
 
 
 async def collect_ads(page: Any, *, business_id: str, branch: str) -> dict[str, Any]:
-    try:
-        await page.goto(BAEMIN_ADS_URL, wait_until="domcontentloaded", timeout=45000)
+    attempted: list[str] = []
+    last_text = ""
+    parsed: dict[str, Any] = {"records": {"sales": [], "settlements": [], "reviews": [], "ads": []}, "diagnostics": {}}
+    ads: list[dict[str, Any]] = []
+    for url in BAEMIN_ADS_URLS:
+        attempted.append(url)
         try:
-            await page.wait_for_load_state("networkidle", timeout=8000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                pass
         except Exception:
             pass
-    except Exception:
-        pass
-    parsed = parse_baemin_ads_text(await _body_text(page), business_id, branch)
+        last_text = await _body_text(page)
+        parsed = parse_baemin_ads_text(last_text, business_id, branch)
+        records = parsed.get("records") or {}
+        ads = records.get("ads") or []
+        if ads:
+            break
     records = parsed.get("records") or {}
-    ads = records.get("ads") or []
+    diagnostics = dict(parsed.get("diagnostics") or {})
+    diagnostics.update(
+        {
+            "ads_pages_attempted": attempted,
+            "source_url": attempted[-1] if attempted else BAEMIN_ADS_URL,
+            "text_length": len(last_text or ""),
+        }
+    )
     return {
         "status": "succeeded" if ads else "partial",
         "error_code": "" if ads else "BAEMIN_ADS_NO_ROWS",
         "records": records,
-        "diagnostics": parsed.get("diagnostics") or {},
+        "diagnostics": diagnostics,
         "message": "" if ads else "배민 광고 페이지에서 광고 데이터를 찾지 못했습니다.",
     }

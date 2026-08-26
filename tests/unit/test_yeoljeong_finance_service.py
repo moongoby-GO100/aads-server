@@ -1073,6 +1073,176 @@ def test_delivery_full_backfill_status_payload_contract():
     assert status_payload["limits"]["max_reviews"] == 150
 
 
+def test_full_backfill_stale_threshold_is_separate_from_incremental(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    old = (datetime.now(service.KST) - timedelta(minutes=30)).isoformat(timespec="seconds")
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "backfill-still-valid",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "status": "running",
+                "started_at": old,
+                "payload": {"mode": "full_backfill"},
+            },
+            {
+                "id": "incremental-stale",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "status": "running",
+                "started_at": old,
+                "payload": {},
+            },
+        ],
+    )
+
+    statuses = service.list_collection_status({"email": "owner@example.com", "is_admin": True})
+
+    by_id = {row["id"]: row for row in statuses}
+    assert by_id["backfill-still-valid"]["status"] == "running"
+    assert by_id["incremental-stale"]["status"] == "failed"
+    assert by_id["incremental-stale"]["error_code"] == "BACKGROUND_SYNC_STALE"
+
+
+def test_queue_full_backfill_creates_store_day_windows(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {"service": "baemin", "business_id": "biz-mia", "branch": "열정국밥_미아점"},
+            {"service": "baemin", "business_id": "biz-junghwa", "branch": "중화점"},
+        ],
+    )
+
+    queued = service.queue_delivery_sync(
+        {
+            "services": ["baemin"],
+            "mode": "full_backfill",
+            "business_id": "all",
+            "branch": "전체",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-25",
+            "max_orders": 80,
+            "max_reviews": 80,
+            "window_days": 1,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    assert queued["queued"] is True
+    assert len(statuses) == 2
+    assert {row["date_from"] for row in statuses} == {"2026-08-25"}
+    assert {row["date_to"] for row in statuses} == {"2026-08-25"}
+    assert all(row["payload"]["limits"]["max_orders"] == 80 for row in statuses)
+    assert all(row["payload"]["window"]["window_days"] == 1 for row in statuses)
+
+
+def test_sync_full_backfill_claims_one_queued_window_and_enqueues_next_day(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "queued-day",
+                "job_id": "delivery-sync-test",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "date_from": "2026-08-25",
+                "date_to": "2026-08-25",
+                "status": "queued",
+                "payload": {
+                    "mode": "full_backfill",
+                    "window": {"date_from": "2026-08-25", "date_to": "2026-08-25"},
+                    "checkpoint": {},
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_options",
+        lambda payload: {
+            "storage_state_path": "",
+            "browser_session_id": str(payload.get("browser_session_id") or ""),
+            "browser_bridge_mode": "local_agent",
+        },
+    )
+    captured = {}
+
+    def fake_bridge_collect(account, browser_auth, backfill=None):
+        captured["backfill"] = backfill
+        return {
+            "status": "succeeded",
+            "records": {
+                "sales": [
+                    {
+                        "id": "sale-1",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "platform": "baemin",
+                        "record_type": "sales",
+                        "occurred_on": "2026-08-25",
+                        "gross_amount": 10000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+                "ads": [{"id": "ad-1", "business_id": "biz-mia", "branch": "열정국밥_미아점", "service": "baemin", "record_type": "ads"}],
+            },
+            "diagnostics": {"order_history_orders_saved": 1, "ads_backfill_ads_saved": 1},
+        }
+
+    monkeypatch.setattr(service, "_collect_baemin_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "mode": "full_backfill",
+            "business_id": "all",
+            "branch": "전체",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-25",
+            "max_orders": 80,
+            "max_reviews": 80,
+            "window_days": 1,
+            "max_backfill_runs": 1,
+            "browser_session_id": "bb-pc-agent",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    queued_next = next(row for row in statuses if row["status"] == "queued")
+    done = next(row for row in statuses if row["id"] == "queued-day")
+    assert captured["backfill"]["date_from"] == "2026-08-25"
+    assert captured["backfill"]["date_to"] == "2026-08-25"
+    assert result["totals"]["ads"] == 1
+    assert done["status"] == "succeeded"
+    assert done["payload"]["continuation_run_id"] == queued_next["id"]
+    assert queued_next["date_from"] == "2026-08-24"
+    assert queued_next["date_to"] == "2026-08-24"
+
+
 def test_sync_delivery_settles_stale_running_status_before_new_run(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     disable_delivery_browser_auth(monkeypatch)
@@ -1554,13 +1724,13 @@ def test_sync_delivery_passes_full_backfill_context_to_baemin_pc_agent(tmp_path,
     assert result["summary"][0]["status"] == "succeeded"
     assert captured["backfill"] == {
         "mode": "full_backfill",
-        "date_from": "2026-01-01",
+        "date_from": "2026-08-25",
         "date_to": "2026-08-25",
         "max_orders": 200,
         "max_reviews": 150,
         "checkpoint": {"last_order_no": "previous-order"},
     }
-    status = service._read("delivery_collection_status")[0]
+    status = next(row for row in service._read("delivery_collection_status") if row["status"] == "succeeded")
     assert status["payload"]["mode"] == "full_backfill"
     assert status["payload"]["metrics"]["orders_saved"] == 1
     assert status["payload"]["checkpoint"] == {"last_order_no": "T2FP00000XZV"}

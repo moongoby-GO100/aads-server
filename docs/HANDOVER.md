@@ -504,3 +504,13 @@
 - 검증: `.venv-playwright/bin/python -m pytest -q tests/unit/test_baemin_order_history_collector.py tests/unit/test_baemin_review_collector.py tests/unit/test_baemin_ads_collector.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_auto_collect.py` 결과 181 passed.
 - 남은 이슈: 실제 배민 PC Agent 로그인 세션에서 운영 E2E 백필은 아직 실행하지 않았다. 배민 추가 인증/보안 차단 시 `portal_action_required`가 정상 반환되어 CEO PC에서 인증 후 재시도해야 한다.
 - 배포/커밋: 커밋, 푸시, 배포 없음. 기존 FOOD/은행/문서 dirty 변경과 같은 파일에 섞여 있어 별도 커밋은 수행하지 않았다.
+
+## 2026-08-26 10:29 KST - FOOD 배민 백필 stale/timeout 분리 및 자동 재시도 큐 보강
+
+- 요청: 배민 4개 매장 전체 백필이 stale/timeout으로 멈추지 않도록 기준을 백필용으로 분리하고, 매장별·일자별·최대 주문 수 단위로 쪼개 재시도 큐가 계속 이어지게 보강. 광고 수집기는 별도 저장 경로가 0건이라 우선 보강.
+- 조치: `yeoljeong_finance_service.py`에 `DELIVERY_BACKFILL_STALE_AFTER` 기본 60분, `DELIVERY_BACKFILL_MAX_ATTEMPTS` 기본 3회를 추가해 일반 수집 15분 stale 기준과 분리했다. full_backfill은 `window_days=1`, `max_backfill_runs=1`, `max_orders/max_reviews` 제한 단위로 `delivery_collection_status`에 queued row를 만들고, 완료 후 다음 날짜 또는 timeout/stale 재시도 row를 자동 생성한다.
+- 조치: `main.py`의 배민 full_backfill 스케줄 기본값을 `max_orders=80`, `max_reviews=80`, `window_days=1`, `max_backfill_runs=1`로 낮췄다. `delivery_auto_collect_pc_agent_catchup`은 queued 백필이 있으면 실행하고 running일 때만 중복 실행을 막도록 수정했다.
+- 조치: `baemin_order_history_collector.py`는 checkpoint `last_order_no` 이후 주문만 저장하도록 보강하고, 주문번호 segment가 이전 주문번호를 중복 포함하지 않도록 경계를 수정했다. `baemin_ads_collector.py`는 광고 URL 후보를 순차 시도하고 우리가게클릭/오픈리스트/울트라콜 상품명 기반 파싱과 diagnostics를 추가했다. `scripts/trigger_delivery_sync.py`는 `--window-days`, `--max-backfill-runs` 옵션을 받는다.
+- 검증: `python3 -m py_compile app/services/yeoljeong_finance_service.py app/services/baemin_order_history_collector.py app/services/baemin_ads_collector.py app/api/yeoljeong_finance.py app/main.py scripts/trigger_delivery_sync.py` 성공. `pytest -q tests/unit/test_baemin_ads_collector.py tests/unit/test_baemin_order_history_collector.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` 결과 11 passed. 운영 컨테이너 의존성 기준 `/tmp/aads-check` 복사본에서 `python3 -m pytest -q ...` 결과 22 passed, 112 deselected. `git diff --check` 대상 파일 통과.
+- 남은 이슈: 실제 배민 PC Agent 로그인 세션을 사용하는 운영 E2E 백필 실행은 아직 수행하지 않았다. 배포/재시작도 수행하지 않아 운영 프로세스에는 미반영 상태다.
+- 배포/커밋: 이번 변경은 아직 커밋, 푸시, 배포하지 않았다. 기존 무관 dirty 변경 `docs/CHANGELOG-go100-direct.md`는 보존했다.

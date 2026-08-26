@@ -115,8 +115,10 @@ def _delivery_auto_collect_payload(
             {
                 "date_from": os.getenv("YEOLJEONG_BAEMIN_BACKFILL_FROM", "2024-01-01"),
                 "date_to": today.isoformat(),
-                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 300),
-                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 300),
+                "max_orders": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS", 80),
+                "max_reviews": _env_int("YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS", 80),
+                "window_days": _env_int("YEOLJEONG_BAEMIN_BACKFILL_WINDOW_DAYS", 1),
+                "max_backfill_runs": _env_int("YEOLJEONG_BAEMIN_BACKFILL_BATCH_LIMIT", 1),
             }
         )
     return payload
@@ -146,8 +148,10 @@ def _delivery_auto_collect_baemin_catchup_due(
         return True
     for row in latest.values():
         status = str(row.get("status") or "").strip()
-        if status in {"queued", "running"}:
+        if status == "running":
             return False
+        if status == "queued":
+            return True
         if status in {"failed", "action_required"}:
             return True
         if str(row.get("error_code") or "").strip():

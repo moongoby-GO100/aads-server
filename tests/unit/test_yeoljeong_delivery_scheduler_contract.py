@@ -17,5 +17,9 @@ def test_baemin_full_backfill_payload_contract_is_resource_limited():
     assert "YEOLJEONG_BAEMIN_BACKFILL_FROM" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS" in source
+    assert "YEOLJEONG_BAEMIN_BACKFILL_WINDOW_DAYS" in source
+    assert "YEOLJEONG_BAEMIN_BACKFILL_BATCH_LIMIT" in source
+    assert '"window_days": _env_int("YEOLJEONG_BAEMIN_BACKFILL_WINDOW_DAYS", 1)' in source
+    assert '"max_backfill_runs": _env_int("YEOLJEONG_BAEMIN_BACKFILL_BATCH_LIMIT", 1)' in source
     assert '"skip_financial_accounts": True' in source
     assert '"require_pc_agent": True' in source

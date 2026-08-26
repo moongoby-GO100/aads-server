@@ -214,3 +214,47 @@ def test_collect_baemin_order_history_returns_checkpoint_for_non_t_order_number(
     assert result["status"] == "succeeded"
     assert result["diagnostics"]["checkpoint_out"]["last_order_no"] == "B2FQ001QU5"
     assert result["records"]["sales"][0]["order_no"] == "B2FQ001QU5"
+
+
+def test_collect_baemin_order_history_applies_checkpoint_order_no():
+    class FakePage:
+        def __init__(self):
+            self.url = ""
+            self.rows = [
+                "배달완료\nT2FP00000AAA\n2026. 08. 25. (화) 오전 05:59:09\n주문금액 24,000원",
+                "배달완료\nT2FP00000BBB\n2026. 08. 25. (화) 오전 05:40:09\n주문금액 18,000원",
+                "배달완료\nT2FP00000CCC\n2026. 08. 25. (화) 오전 05:20:09\n주문금액 12,000원",
+            ]
+
+        async def goto(self, url, **kwargs):
+            self.url = url
+
+        async def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+        async def evaluate(self, expression, arg=None):
+            if arg and "dateFrom" in arg:
+                return False
+            if "orderNoPattern" in expression:
+                return self.rows
+            if "innerText" in expression:
+                return "\n\n".join(self.rows)
+            if "return clicked" in expression:
+                return 0
+            return 0
+
+    result = asyncio.run(
+        collect_baemin_order_history(
+            FakePage(),
+            {"business_id": "biz-mia", "branch": "열정국밥_미아점"},
+            "2026-08-25",
+            "2026-08-25",
+            {
+                "checkpoint": {"last_order_no": "T2FP00000AAA"},
+                "limits": BackfillLimits(max_records=3, max_runtime_seconds=1, order_detail_jitter=(0, 0), page_jitter=(0, 0)),
+            },
+        )
+    )
+
+    assert [row["order_no"] for row in result["records"]["sales"]] == ["T2FP00000BBB", "T2FP00000CCC"]
+    assert result["diagnostics"]["checkpoint_applied"] is True

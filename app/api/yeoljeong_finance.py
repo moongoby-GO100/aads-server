@@ -123,6 +123,8 @@ class SyncPayload(BaseModel):
     collection_mode: str = ""
     max_orders: int = Field(default=300, ge=1, le=300)
     max_reviews: int = Field(default=300, ge=1, le=300)
+    window_days: int = Field(default=1, ge=1, le=7)
+    max_backfill_runs: int = Field(default=1, ge=1, le=4)
     checkpoint: dict[str, Any] = Field(default_factory=dict)
     browser_session_id: str = ""
     browser_agent_id: str = ""

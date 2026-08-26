@@ -48,3 +48,26 @@ def test_parse_baemin_ads_idempotent_id():
     second = collector.parse_baemin_ads_text(text, "biz-mia", "열정국밥_미아점")
 
     assert first["records"]["ads"][0]["id"] == second["records"]["ads"][0]["id"]
+
+
+def test_parse_baemin_ads_product_name_without_campaign_label():
+    text = """
+    우리가게클릭
+    상태 운영중
+    기간: 2026.08.25
+    소진금액 12,300원
+    노출수 1,200
+    클릭수 54
+    주문수 7
+    ROAS 430.0%
+    """
+
+    result = collector.parse_baemin_ads_text(text, "biz-mia", "열정국밥_미아점")
+    ad = result["records"]["ads"][0]
+
+    assert ad["campaign_name"] == "우리가게클릭"
+    assert ad["spend"] == 12300
+    assert ad["impressions"] == 1200
+    assert ad["clicks"] == 54
+    assert ad["orders"] == 7
+    assert ad["roas"] == 430.0

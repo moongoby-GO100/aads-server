@@ -35,6 +35,10 @@ EVIDENCE_UPLOAD_DIR = DATA_DIR / "uploads" / "evidence"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 256 * 1024
 DELIVERY_SYNC_STALE_AFTER = timedelta(minutes=15)
+DELIVERY_BACKFILL_STALE_AFTER = timedelta(
+    minutes=max(20, int(os.getenv("YEOLJEONG_DELIVERY_BACKFILL_STALE_MINUTES", "60")))
+)
+DELIVERY_BACKFILL_MAX_ATTEMPTS = max(1, int(os.getenv("YEOLJEONG_DELIVERY_BACKFILL_MAX_ATTEMPTS", "3")))
 DELIVERY_CHALLENGE_TIMEOUT = timedelta(minutes=20)
 DELIVERY_CHALLENGE_MAX_ATTEMPTS = 3
 CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
@@ -3291,12 +3295,16 @@ def _normalize_stale_delivery_collection_statuses(rows: list[dict[str, Any]]) ->
             or _pg_ts(row.get("updated_at"))
             or _pg_ts(row.get("created_at"))
         )
-        if not started_at or now_dt - started_at < DELIVERY_SYNC_STALE_AFTER:
+        stale_after = _delivery_stale_after_for_status(row)
+        if not started_at or now_dt - started_at < stale_after:
             continue
         row["status"] = "failed"
         row["raw_status"] = "stale"
         row["error_code"] = "BACKGROUND_SYNC_STALE"
-        row["message"] = "백그라운드 수집 작업이 15분 이상 완료 갱신 없이 멈춰 상태를 정리했습니다. 다시 수집 실행이 필요합니다."
+        row["message"] = (
+            f"백그라운드 수집 작업이 {int(stale_after.total_seconds() // 60)}분 이상 "
+            "완료 갱신 없이 멈춰 상태를 정리했습니다. 다시 수집 실행이 필요합니다."
+        )
         row["finished_at"] = now_text
         row["updated_at"] = now_text
         row.setdefault("counts", _delivery_empty_counts())
@@ -3356,12 +3364,299 @@ def _delivery_full_backfill_requested(payload: dict[str, Any]) -> bool:
     return str(payload.get("mode") or payload.get("collection_mode") or "").strip().lower() == "full_backfill"
 
 
+def _delivery_backfill_window_days(payload: dict[str, Any]) -> int:
+    raw = payload.get("window_days") or payload.get("backfill_window_days") or os.getenv(
+        "YEOLJEONG_BAEMIN_BACKFILL_WINDOW_DAYS", "1"
+    )
+    try:
+        return max(1, min(7, int(raw)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _delivery_backfill_batch_limit(payload: dict[str, Any]) -> int:
+    raw = payload.get("max_backfill_runs") or payload.get("backfill_batch_limit") or os.getenv(
+        "YEOLJEONG_BAEMIN_BACKFILL_BATCH_LIMIT", "1"
+    )
+    try:
+        return max(1, min(4, int(raw)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _delivery_backfill_max_orders(payload: dict[str, Any]) -> int:
+    raw = payload.get("max_orders") or payload.get("maxOrders") or 80
+    try:
+        return max(1, min(300, int(raw)))
+    except (TypeError, ValueError):
+        return 80
+
+
+def _delivery_backfill_max_reviews(payload: dict[str, Any]) -> int:
+    raw = payload.get("max_reviews") or payload.get("maxReviews") or 80
+    try:
+        return max(1, min(300, int(raw)))
+    except (TypeError, ValueError):
+        return 80
+
+
+def _delivery_backfill_row_payload(
+    payload: dict[str, Any],
+    *,
+    date_from: date,
+    date_to: date,
+    checkpoint: dict[str, Any] | None = None,
+    retry_of: str = "",
+    attempt_count: int = 0,
+) -> dict[str, Any]:
+    return {
+        "mode": "full_backfill",
+        "window": {
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "window_days": _delivery_backfill_window_days(payload),
+        },
+        "checkpoint": checkpoint or {},
+        "limits": {
+            "concurrency": 1,
+            "store_sequence": True,
+            "max_orders": _delivery_backfill_max_orders(payload),
+            "max_reviews": _delivery_backfill_max_reviews(payload),
+            "max_runtime_seconds": int(DELIVERY_BACKFILL_STALE_AFTER.total_seconds()),
+        },
+        "retry": {
+            "retry_of": retry_of,
+            "attempt_count": attempt_count,
+            "max_attempts": DELIVERY_BACKFILL_MAX_ATTEMPTS,
+        },
+    }
+
+
+def _delivery_backfill_status_is_full(row: dict[str, Any]) -> bool:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    return str(row.get("service") or "") == "baemin" and str(payload.get("mode") or "") == "full_backfill"
+
+
+def _delivery_backfill_status_order_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("date_to") or ""),
+        str(row.get("queued_at") or row.get("created_at") or row.get("updated_at") or ""),
+    )
+
+
+def _delivery_backfill_window_from_status(row: dict[str, Any], fallback_from: date, fallback_to: date) -> tuple[date, date]:
+    try:
+        run_from = date.fromisoformat(str(row.get("date_from") or ""))
+        run_to = date.fromisoformat(str(row.get("date_to") or ""))
+        return run_from, run_to
+    except ValueError:
+        return fallback_from, fallback_to
+
+
+def _delivery_stale_after_for_status(row: dict[str, Any]) -> timedelta:
+    return DELIVERY_BACKFILL_STALE_AFTER if _delivery_backfill_status_is_full(row) else DELIVERY_SYNC_STALE_AFTER
+
+
+def _delivery_enqueue_baemin_backfill_status(
+    statuses: list[dict[str, Any]],
+    payload: dict[str, Any],
+    *,
+    job_id: str,
+    business_id: str,
+    branch: str,
+    date_from: date,
+    date_to: date,
+    checkpoint: dict[str, Any] | None = None,
+    retry_of: str = "",
+    attempt_count: int = 0,
+) -> dict[str, Any]:
+    queued_at = _now()
+    existing = [
+        row
+        for row in statuses
+        if _delivery_backfill_status_is_full(row)
+        and str(row.get("status") or "") == "queued"
+        and str(row.get("business_id") or "") == business_id
+        and str(row.get("branch") or "") == branch
+        and str(row.get("date_from") or "") == date_from.isoformat()
+        and str(row.get("date_to") or "") == date_to.isoformat()
+    ]
+    if existing:
+        return existing[0]
+    status_record = {
+        "id": str(uuid4()),
+        "job_id": job_id,
+        "service": "baemin",
+        "business_id": business_id,
+        "branch": branch,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "status": "queued",
+        "counts": _delivery_empty_counts(),
+        "payload": _delivery_backfill_row_payload(
+            payload,
+            date_from=date_from,
+            date_to=date_to,
+            checkpoint=checkpoint,
+            retry_of=retry_of,
+            attempt_count=attempt_count,
+        ),
+        "error_code": "",
+        "message": f"{branch} 배민 백필 대기 중입니다. window={date_from.isoformat()}~{date_to.isoformat()}",
+        "queued_at": queued_at,
+        "created_at": queued_at,
+        "updated_at": queued_at,
+    }
+    statuses.insert(0, status_record)
+    _run_db(_db_upsert_ledger("delivery_collection_status", status_record))
+    return status_record
+
+
+def _delivery_ensure_baemin_backfill_queue(
+    statuses: list[dict[str, Any]],
+    payload: dict[str, Any],
+    scopes: list[tuple[str, str]],
+    full_from: date,
+    full_to: date,
+    job_id: str,
+) -> None:
+    if not _delivery_full_backfill_requested(payload):
+        return
+    window_days = _delivery_backfill_window_days(payload)
+    retryable_error_codes = {"BACKGROUND_SYNC_STALE", "ATTEMPT_TIMEOUT", "PC_AGENT_CDP_TIMEOUT"}
+    for business_id, branch in scopes:
+        scope_rows = [
+            row
+            for row in statuses
+            if _delivery_backfill_status_is_full(row)
+            and str(row.get("business_id") or "") == business_id
+            and str(row.get("branch") or "") == branch
+        ]
+        if any(str(row.get("status") or "") in {"queued", "running"} for row in scope_rows):
+            continue
+        latest = max(scope_rows, key=_delivery_backfill_status_order_key) if scope_rows else {}
+        latest_status = str(latest.get("status") or "")
+        latest_error = str(latest.get("error_code") or "")
+        latest_payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
+        latest_retry = latest_payload.get("retry") if isinstance(latest_payload.get("retry"), dict) else {}
+        latest_attempt = int(latest.get("attempt_count") or latest_retry.get("attempt_count") or 0)
+        latest_from, latest_to = _delivery_backfill_window_from_status(latest, full_from, full_to) if latest else (full_to, full_to)
+        retry_of = ""
+        checkpoint = payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else None
+        if latest_status in {"failed", "action_required"}:
+            if latest_error not in retryable_error_codes or latest_attempt >= DELIVERY_BACKFILL_MAX_ATTEMPTS:
+                continue
+            run_from, run_to = latest_from, latest_to
+            checkpoint = latest_payload.get("checkpoint") if isinstance(latest_payload.get("checkpoint"), dict) else None
+            retry_of = str(latest.get("id") or "")
+            latest_attempt += 1
+        elif latest_status in {"succeeded", "partial"}:
+            run_to = latest_from - timedelta(days=1)
+            if run_to < full_from:
+                continue
+            run_from = max(full_from, run_to - timedelta(days=window_days - 1))
+            checkpoint = {}
+            latest_attempt = 0
+        else:
+            run_to = full_to
+            run_from = max(full_from, run_to - timedelta(days=window_days - 1))
+            latest_attempt = 0
+        _delivery_enqueue_baemin_backfill_status(
+            statuses,
+            payload,
+            job_id=job_id,
+            business_id=business_id,
+            branch=branch,
+            date_from=run_from,
+            date_to=run_to,
+            checkpoint=checkpoint,
+            retry_of=retry_of,
+            attempt_count=latest_attempt,
+        )
+
+
+def _delivery_select_baemin_backfill_statuses(
+    statuses: list[dict[str, Any]],
+    payload: dict[str, Any],
+    scopes: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    scope_set = set(scopes)
+    queued = [
+        row
+        for row in statuses
+        if _delivery_backfill_status_is_full(row)
+        and str(row.get("status") or "") == "queued"
+        and (str(row.get("business_id") or ""), str(row.get("branch") or "")) in scope_set
+    ]
+    queued.sort(key=_delivery_backfill_status_order_key, reverse=True)
+    return queued[: _delivery_backfill_batch_limit(payload)]
+
+
+def _delivery_enqueue_baemin_backfill_continuation(
+    statuses: list[dict[str, Any]],
+    payload: dict[str, Any],
+    *,
+    current: dict[str, Any],
+    result: dict[str, Any],
+    public_status: str,
+    public_error_code: str,
+    attempt_count: int,
+) -> dict[str, Any] | None:
+    if not _delivery_backfill_status_is_full(current):
+        return None
+    full_from, _full_to = _delivery_sync_window(payload)
+    run_from, run_to = _delivery_backfill_window_from_status(current, full_from, _full_to)
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    checkpoint = diagnostics.get("checkpoint") or diagnostics.get("checkpoint_out") or {}
+    max_orders = _delivery_backfill_max_orders(payload)
+    orders_saved = int(diagnostics.get("order_history_orders_saved") or diagnostics.get("orders_saved") or 0)
+    retryable_error_codes = {"BACKGROUND_SYNC_STALE", "ATTEMPT_TIMEOUT", "PC_AGENT_CDP_TIMEOUT"}
+    if public_error_code in retryable_error_codes and attempt_count < DELIVERY_BACKFILL_MAX_ATTEMPTS:
+        return _delivery_enqueue_baemin_backfill_status(
+            statuses,
+            payload,
+            job_id=str(current.get("job_id") or payload.get("sync_job_id") or ""),
+            business_id=str(current.get("business_id") or ""),
+            branch=str(current.get("branch") or ""),
+            date_from=run_from,
+            date_to=run_to,
+            checkpoint=checkpoint,
+            retry_of=str(current.get("id") or ""),
+            attempt_count=attempt_count,
+        )
+    if public_status in {"action_required", "failed"}:
+        return None
+    if orders_saved >= max_orders and checkpoint:
+        next_from, next_to = run_from, run_to
+    else:
+        next_to = run_from - timedelta(days=1)
+        if next_to < full_from:
+            return None
+        next_from = max(full_from, next_to - timedelta(days=_delivery_backfill_window_days(payload) - 1))
+        checkpoint = {}
+    return _delivery_enqueue_baemin_backfill_status(
+        statuses,
+        payload,
+        job_id=str(current.get("job_id") or payload.get("sync_job_id") or ""),
+        business_id=str(current.get("business_id") or ""),
+        branch=str(current.get("branch") or ""),
+        date_from=next_from,
+        date_to=next_to,
+        checkpoint=checkpoint,
+    )
+
+
 def _delivery_backfill_status_payload(payload: dict[str, Any], result: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _delivery_full_backfill_requested(payload):
         return {}
     diagnostics = result.get("diagnostics") if isinstance(result, dict) and isinstance(result.get("diagnostics"), dict) else {}
     return {
         "mode": "full_backfill",
+        "window": {
+            "date_from": str(payload.get("date_from") or ""),
+            "date_to": str(payload.get("date_to") or ""),
+            "window_days": _delivery_backfill_window_days(payload),
+        },
         "checkpoint": diagnostics.get("checkpoint") or diagnostics.get("checkpoint_out") or {},
         "metrics": {
             "orders_seen": diagnostics.get("order_history_orders_seen") or diagnostics.get("orders_seen") or 0,
@@ -3376,9 +3671,9 @@ def _delivery_backfill_status_payload(payload: dict[str, Any], result: dict[str,
             "store_sequence": True,
             "order_detail_jitter_seconds": [1.0, 1.8],
             "page_jitter_seconds": [2.0, 4.0],
-            "max_orders": int(payload.get("max_orders") or payload.get("maxOrders") or 300),
-            "max_reviews": int(payload.get("max_reviews") or payload.get("maxReviews") or 300),
-            "max_runtime_seconds": 12 * 60,
+            "max_orders": _delivery_backfill_max_orders(payload),
+            "max_reviews": _delivery_backfill_max_reviews(payload),
+            "max_runtime_seconds": int(DELIVERY_BACKFILL_STALE_AFTER.total_seconds()),
         },
     }
 
@@ -3541,7 +3836,20 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             queued_run_ids[run_key] = run_id
             if len(scopes) == 1:
                 queued_run_ids[service] = run_id
-            message = f"{branch} {_delivery_platform_label(service)} 백그라운드 수집 대기 중입니다."
+            run_date_from, run_date_to = date_from, date_to
+            status_payload = _delivery_backfill_status_payload(payload)
+            if service == "baemin" and _delivery_full_backfill_requested(payload):
+                run_date_to = date_to
+                run_date_from = max(date_from, run_date_to - timedelta(days=_delivery_backfill_window_days(payload) - 1))
+                status_payload = _delivery_backfill_row_payload(
+                    payload,
+                    date_from=run_date_from,
+                    date_to=run_date_to,
+                )
+            message = (
+                f"{branch} {_delivery_platform_label(service)} 백그라운드 수집 대기 중입니다."
+                f" window={run_date_from.isoformat()}~{run_date_to.isoformat()}"
+            )
             statuses.insert(
                 0,
                 status_record := {
@@ -3550,11 +3858,11 @@ def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
                     "service": service,
                     "business_id": business_id,
                     "branch": branch,
-                    "date_from": date_from.isoformat(),
-                    "date_to": date_to.isoformat(),
+                    "date_from": run_date_from.isoformat(),
+                    "date_to": run_date_to.isoformat(),
                     "status": "queued",
                     "counts": _delivery_empty_counts(),
-                    "payload": _delivery_backfill_status_payload(payload),
+                    "payload": status_payload,
                     "error_code": "",
                     "message": message,
                     "queued_at": queued_at,
@@ -7007,6 +7315,20 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
     ledger_names = {kind: f"delivery_{kind}" for kind in DELIVERY_RECORD_TYPES}
     ledgers = {name: _read(name) for name in ledger_names.values()}
     statuses = _read("delivery_collection_status")
+    full_baemin_backfill = _delivery_full_backfill_requested(payload) and requested_services == ["baemin"]
+    selected_backfill_statuses: dict[tuple[str, str], dict[str, Any]] = {}
+    if full_baemin_backfill:
+        effective_job_id = sync_job_id or f"delivery-backfill-{uuid4().hex[:12]}"
+        if not sync_job_id:
+            sync_job_id = effective_job_id
+        _delivery_ensure_baemin_backfill_queue(statuses, payload, scopes, date_from, date_to, effective_job_id)
+        queued_statuses = _delivery_select_baemin_backfill_statuses(statuses, payload, scopes)
+        selected_backfill_statuses = {
+            (str(row.get("business_id") or ""), str(row.get("branch") or "")): row
+            for row in queued_statuses
+        }
+        if selected_backfill_statuses:
+            scopes = list(selected_backfill_statuses)
     response_ledgers = _delivery_empty_record_lists()
     response_records: list[dict[str, Any]] = []
 
@@ -7033,9 +7355,18 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
 
         for service in requested_services:
             account = accounts_by_service.get(service)
+            selected_backfill_status = selected_backfill_statuses.get((business_id, branch))
+            run_date_from, run_date_to = date_from, date_to
+            if selected_backfill_status:
+                run_date_from, run_date_to = _delivery_backfill_window_from_status(
+                    selected_backfill_status,
+                    date_from,
+                    date_to,
+                )
             run_id = str(
                 queued_run_ids.get(_delivery_run_key(service, business_id, branch))
                 or (queued_run_ids.get(service) if len(scopes) == 1 else "")
+                or (selected_backfill_status.get("id") if selected_backfill_status else "")
                 or uuid4()
             )
             queued_status = next((row for row in statuses if str(row.get("id") or "") == run_id), None)
@@ -7045,11 +7376,23 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 "service": service,
                 "business_id": business_id,
                 "branch": branch,
-                "date_from": date_from.isoformat(),
-                "date_to": date_to.isoformat(),
+                "date_from": run_date_from.isoformat(),
+                "date_to": run_date_to.isoformat(),
                 "status": "running",
                 "counts": _delivery_empty_counts(),
-                "payload": _delivery_backfill_status_payload(payload),
+                "payload": _delivery_backfill_row_payload(
+                    payload,
+                    date_from=run_date_from,
+                    date_to=run_date_to,
+                    checkpoint=(
+                        (selected_backfill_status.get("payload") or {}).get("checkpoint")
+                        if selected_backfill_status and isinstance(selected_backfill_status.get("payload"), dict)
+                        else None
+                    ),
+                    attempt_count=int((selected_backfill_status or {}).get("attempt_count") or 0),
+                )
+                if full_baemin_backfill
+                else _delivery_backfill_status_payload(payload),
                 "error_code": "",
                 "started_at": synced_at,
                 "created_at": synced_at,
@@ -7066,10 +7409,10 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             else:
                 collection_mode = str(account.get("collection_mode") or account.get("collectionMode") or "").strip()
                 collection_account = dict(account)
-                collection_account["_date_from"] = date_from.isoformat()
-                collection_account["_date_to"] = date_to.isoformat()
-                collection_account["_max_orders"] = int(payload.get("max_orders") or payload.get("maxOrders") or 300)
-                collection_account["_max_reviews"] = int(payload.get("max_reviews") or payload.get("maxReviews") or 300)
+                collection_account["_date_from"] = run_date_from.isoformat()
+                collection_account["_date_to"] = run_date_to.isoformat()
+                collection_account["_max_orders"] = _delivery_backfill_max_orders(payload)
+                collection_account["_max_reviews"] = _delivery_backfill_max_reviews(payload)
                 collection_account["_mode"] = str(payload.get("mode") or "")
                 captcha_value = _delivery_captcha_value_for_account(payload, collection_account, service, business_id, branch)
                 if captcha_value:
@@ -7083,11 +7426,15 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     backfill_context = (
                         {
                             "mode": "full_backfill",
-                            "date_from": date_from.isoformat(),
-                            "date_to": date_to.isoformat(),
-                            "max_orders": int(payload.get("max_orders") or payload.get("maxOrders") or 300),
-                            "max_reviews": int(payload.get("max_reviews") or payload.get("maxReviews") or 300),
-                            "checkpoint": payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {},
+                            "date_from": run_date_from.isoformat(),
+                            "date_to": run_date_to.isoformat(),
+                            "max_orders": _delivery_backfill_max_orders(payload),
+                            "max_reviews": _delivery_backfill_max_reviews(payload),
+                            "checkpoint": (
+                                (selected_backfill_status.get("payload") or {}).get("checkpoint")
+                                if selected_backfill_status and isinstance(selected_backfill_status.get("payload"), dict)
+                                else (payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else {})
+                            ),
                         }
                         if service == "baemin" and _delivery_full_backfill_requested(payload)
                         else None
@@ -7231,12 +7578,43 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 public_status = "failed"
                 public_error_code = "CHALLENGE_MAX_ATTEMPTS_EXCEEDED"
                 result_diagnostics["challenge_terminal"] = "max_attempts"
+            continuation = _delivery_enqueue_baemin_backfill_continuation(
+                statuses,
+                {
+                    **payload,
+                    "date_from": date_from.isoformat(),
+                    "date_to": date_to.isoformat(),
+                },
+                current={
+                    **status_record,
+                    "date_from": run_date_from.isoformat(),
+                    "date_to": run_date_to.isoformat(),
+                },
+                result={**result, "diagnostics": result_diagnostics},
+                public_status=public_status,
+                public_error_code=public_error_code,
+                attempt_count=attempt_count,
+            )
             status_record.update(
                 {
                     "status": public_status,
                     "raw_status": result.get("status") or "",
                     "counts": counts,
-                    "payload": _delivery_backfill_status_payload(payload, result),
+                    "payload": (
+                        {
+                            **_delivery_backfill_status_payload(
+                                {
+                                    **payload,
+                                    "date_from": run_date_from.isoformat(),
+                                    "date_to": run_date_to.isoformat(),
+                                },
+                                result,
+                            ),
+                            "continuation_run_id": continuation.get("id") if continuation else "",
+                        }
+                        if full_baemin_backfill
+                        else _delivery_backfill_status_payload(payload, result)
+                    ),
                     "error_code": public_error_code,
                     "diagnostics": result_diagnostics,
                     "attempt_count": attempt_count,

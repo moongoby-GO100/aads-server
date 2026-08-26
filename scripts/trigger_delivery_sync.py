@@ -26,6 +26,8 @@ def _args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--to", dest="date_to", default="")
     parser.add_argument("--max-orders", type=int, default=300)
     parser.add_argument("--max-reviews", type=int, default=300)
+    parser.add_argument("--window-days", type=int, default=1)
+    parser.add_argument("--max-backfill-runs", type=int, default=1)
     parser.add_argument("--business-id", default="")
     parser.add_argument("--branch", default="")
     return parser.parse_args(argv)
@@ -67,6 +69,10 @@ def main() -> int:
         body["max_orders"] = parsed.max_orders
     if parsed.max_reviews:
         body["max_reviews"] = parsed.max_reviews
+    if parsed.window_days:
+        body["window_days"] = parsed.window_days
+    if parsed.max_backfill_runs:
+        body["max_backfill_runs"] = parsed.max_backfill_runs
     if str(branch).strip().lower() in {"all", "*", "__all__", "전체"}:
         body["all_businesses"] = True
     req = urllib.request.Request(
