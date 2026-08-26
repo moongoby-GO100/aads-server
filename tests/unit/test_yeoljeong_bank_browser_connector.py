@@ -1140,6 +1140,7 @@ def test_prepare_shinhan_individual_flow_uses_websquare_component_login_trigger(
     async def evaluate(expr, *args, **kwargs):
         assert "componentById" in expr
         assert "triggerWebSquareEvent" in expr
+        assert "sameOriginDocuments" in expr
         assert "websquare_triggered" in expr
         payload = args[0]
         assert payload["mode"] == "individual_simple"
@@ -1176,6 +1177,57 @@ def test_prepare_shinhan_individual_flow_uses_websquare_component_login_trigger(
     assert result["login_secret"] == "1"
     assert result["navigation_clicked"] == "1"
     assert result["websquare_triggered"] == "1"
+    assert "bank-pass" not in str(result)
+    assert "4321" not in str(result)
+    assert "110123456789" not in str(result)
+
+
+def test_prepare_shinhan_individual_flow_reports_login_success_and_transkey_account_secret():
+    page = AsyncMock()
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "sameOriginDocuments" in expr
+        assert "setTransKeyPassword" in expr
+        assert "login_success" in expr
+        payload = args[0]
+        assert payload["accountPassword"] == "4321"
+        return {
+            "attempted": "1",
+            "mode": "individual_simple",
+            "stage": "account_query",
+            "login_success": "1",
+            "account_page_direct_hash": "1",
+            "account_selected": "1",
+            "account_resolved": "1",
+            "account_secret": "1",
+            "date_from": "1",
+            "date_to": "1",
+            "query_submitted": "1",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_prepare_shinhan_query_flow(
+            page,
+            flow_mode="individual_simple",
+            username="bank-user",
+            password="bank-pass",
+            account_no="110123456789",
+            account_password="4321",
+            business_registration_no="1234567890",
+            date_from="2026-08-24",
+            date_to="2026-08-24",
+        )
+    )
+
+    assert result["stage"] == "account_query"
+    assert result["login_success"] == "1"
+    assert result["account_page_direct_hash"] == "1"
+    assert result["account_selected"] == "1"
+    assert result["account_resolved"] == "1"
+    assert result["account_secret"] == "1"
+    assert result["query_submitted"] == "1"
     assert "bank-pass" not in str(result)
     assert "4321" not in str(result)
     assert "110123456789" not in str(result)

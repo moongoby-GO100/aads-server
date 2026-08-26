@@ -526,6 +526,29 @@ async def _try_prepare_shinhan_query_flow(
                 el?.getAttribute?.('placeholder') ||
                 ''
               ).replace(/\\s+/g, ' ').trim();
+              const sameOriginDocuments = () => {
+                const docs = [document];
+                for (const frame of Array.from(document.querySelectorAll('iframe,frame'))) {
+                  try {
+                    if (frame.contentDocument) docs.push(frame.contentDocument);
+                  } catch (_) {}
+                }
+                return docs;
+              };
+              const allElements = (selector) => {
+                const result = [];
+                for (const doc of sameOriginDocuments()) {
+                  try {
+                    result.push(...Array.from(doc.querySelectorAll(selector)));
+                  } catch (_) {}
+                }
+                return result;
+              };
+              const bodyText = () => sameOriginDocuments()
+                .map((doc) => String(doc.body?.innerText || ''))
+                .join(' ')
+                .replace(/\\s+/g, ' ')
+                .trim();
               const fieldText = (el) => String([
                 el?.id,
                 el?.getAttribute?.('name'),
@@ -671,7 +694,7 @@ async def _try_prepare_shinhan_query_flow(
                 return 0;
               };
               const clickBest = (mode, purpose = 'query') => {
-                const candidates = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]'))
+                const candidates = allElements('a,button,input[type=button],input[type=submit]')
                   .filter((el) => visible(el) || (purpose === 'login' && /btn.*login|idlogin|login/i.test(String(el.id || el.name || ''))))
                   .map((el, index) => ({el, index, label: textOf(el)}))
                   .map((item) => {
@@ -687,7 +710,7 @@ async def _try_prepare_shinhan_query_flow(
                 triggerWebSquareEvent(item.el, 'click');
                 return item.label.slice(0, 40);
               };
-              const inputs = (includeHiddenLogin = false) => Array.from(document.querySelectorAll('input,textarea')).filter((el) => {
+              const inputs = (includeHiddenLogin = false) => allElements('input,textarea').filter((el) => {
                 if (visible(el)) return true;
                 if (!includeHiddenLogin) return false;
                 return /login|id|user|pw|pass|ibx_|비밀번호|비밀/i.test(String(el.id || el.name || el.className || el.title || el.getAttribute?.('placeholder') || '')) && componentForElement(el);
@@ -710,7 +733,6 @@ async def _try_prepare_shinhan_query_flow(
               };
               const hasInput = (patterns, type = '') => !!firstInput(patterns, type);
               const hasLoginInput = (patterns, type = '') => !!firstLoginInput(patterns, type);
-              const bodyText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
               const hasLoginNotice = () => /이용 가능한 서비스가 제한|단순 계좌 조회/i.test(bodyText());
               const isRedirectLoginPage = () => {
                 try {
@@ -739,7 +761,7 @@ async def _try_prepare_shinhan_query_flow(
               const hasAccountQueryFields = () => (
                 hasInput([/계좌번호|account|acct/i]) ||
                 hasInput([/계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw/i], 'password') ||
-                Array.from(document.querySelectorAll('select,input[type=radio],input[type=checkbox]')).some(visible)
+                allElements('select,input[type=radio],input[type=checkbox]').some(visible)
               );
               const fillAccountNumber = () => {
                 const target = digits(input.accountNo);
@@ -760,7 +782,7 @@ async def _try_prepare_shinhan_query_flow(
                 const target = digits(input.accountNo);
                 const suffix = target.slice(-4);
                 if (!target) return false;
-                for (const select of Array.from(document.querySelectorAll('select')).filter(visible)) {
+                for (const select of allElements('select').filter(visible)) {
                   const options = Array.from(select.options || []);
                   let match = options.find((option) => {
                     const optionDigits = digits(option.textContent || option.value);
@@ -775,7 +797,7 @@ async def _try_prepare_shinhan_query_flow(
                     return true;
                   }
                 }
-                const choice = Array.from(document.querySelectorAll('input[type=radio],input[type=checkbox]'))
+                const choice = allElements('input[type=radio],input[type=checkbox]')
                   .filter(visible)
                   .find((el) => {
                     const rowText = String(el.closest('tr,li,div,label')?.innerText || '');
@@ -788,13 +810,79 @@ async def _try_prepare_shinhan_query_flow(
                 }
                 return false;
               };
+              const transKeySeq = (value) => {
+                const lowerMap = {'1':1,'2':2,'3':4,'4':5,'5':6,'6':7,'7':8,'8':9,'9':11,'0':12,'q':13,'w':14,'e':16,'r':17,'t':18,'y':19,'u':20,'i':21,'o':23,'p':24,'a':25,'s':27,'d':28,'f':29,'g':30,'h':31,'j':32,'k':34,'z':35,'x':37,'c':38,'v':39,'b':40,'n':41,'m':42,'l':44,'-':45,'=':46,'[':48,']':49,';':50,"'":51,',':52,'.':53,'/':54};
+                const shiftMap = {'~':0,'!':1,'@':2,'#':4,'$':5,'%':6,'^':7,'&':8,'*':9,'(':11,')':12,'_':45,'+':46,'{':48,'}':49,':':50,'"':51,'<':52,'>':53,'?':54};
+                const seq = [];
+                for (const ch of String(value || '')) {
+                  if (/[A-Z]/.test(ch)) seq.push(55, lowerMap[ch.toLowerCase()]);
+                  else if (Object.prototype.hasOwnProperty.call(shiftMap, ch)) seq.push(55, shiftMap[ch]);
+                  else if (Object.prototype.hasOwnProperty.call(lowerMap, ch)) seq.push(lowerMap[ch]);
+                  else return [];
+                }
+                return seq.filter((item) => Number.isFinite(item));
+              };
+              const setTransKeyPassword = (el, value) => {
+                if (!el || !value) return false;
+                const ownerWindow = el.ownerDocument?.defaultView || window;
+                const tkRoot = ownerWindow.tk || window.tk;
+                const transkeyRoot = ownerWindow.transkey || window.transkey;
+                const tkObj = transkeyRoot?.[el.id] || transkeyRoot?.[el.name];
+                if (!tkRoot || !tkObj || typeof tkRoot.getKeyByIndex !== 'function' || typeof tkRoot.getEncData !== 'function') {
+                  return false;
+                }
+                const seq = transKeySeq(value);
+                if (!seq.length) return false;
+                try {
+                  if (typeof tkRoot.onKeyboard === 'function') tkRoot.onKeyboard(el);
+                  if (!tkObj.allocate && typeof tkObj.allocation === 'function') tkObj.allocation();
+                  tkObj.inputObj = el;
+                  tkRoot.now = tkObj;
+                  try {
+                    if (typeof tkRoot.setHiddenField === 'function') tkRoot.setHiddenField(el);
+                  } catch (_) {}
+                  if (tkObj.hidden) tkObj.hidden.value = '';
+                  if (tkObj.hmac) tkObj.hmac.value = '';
+                  el.value = '';
+                  let shiftOn = false;
+                  for (const code of seq) {
+                    if (code === 55 || code === 56) {
+                      shiftOn = true;
+                      continue;
+                    }
+                    const originalType = tkObj.keyTypeIndex;
+                    tkObj.keyTypeIndex = shiftOn ? 'u ' : 'l ';
+                    const key = tkRoot.getKeyByIndex(code, 'qwerty');
+                    const point = key?.xpoints && key?.ypoints ? [key.xpoints[0], key.ypoints[0]] : null;
+                    if (!point) return false;
+                    const encrypted = tkRoot.getEncData(point[0], point[1]);
+                    if (!encrypted) return false;
+                    if (tkObj.hidden) tkObj.hidden.value += '$' + encrypted;
+                    el.value += '*';
+                    tkObj.keyTypeIndex = originalType;
+                    shiftOn = false;
+                  }
+                  try {
+                    if (typeof tkRoot.inputFillEncData === 'function') tkRoot.inputFillEncData(el);
+                    else if (typeof tkRoot.fillEncData === 'function') tkRoot.fillEncData();
+                  } catch (_) {}
+                  el.dispatchEvent(new Event('input', {bubbles: true}));
+                  el.dispatchEvent(new Event('change', {bubbles: true}));
+                  return !!(tkObj.hidden && String(tkObj.hidden.value || '').length > 0);
+                } catch (_) {
+                  return false;
+                }
+              };
               const fillAccountSecret = () => {
                 const patterns = [
                   /계좌.*비밀번호|계좌.*암호|account.*password|account.*pw|acct.*pw|숫자\\s*4자리|4자리/i
                 ];
+                const target = firstInput(patterns, 'password');
+                if (setTransKeyPassword(target, input.accountPassword)) return true;
                 if (fillByPattern(patterns, input.accountPassword, 'password')) return true;
                 const passwords = inputs().filter((el) => String(el.type || '').toLowerCase() === 'password');
                 const candidate = passwords.find((el) => /계좌|숫자\\s*4자리|4자리/i.test(fieldText(el))) || passwords[0] || null;
+                if (setTransKeyPassword(candidate, input.accountPassword)) return true;
                 return setValue(candidate, input.accountPassword);
               };
               const fillDateRange = () => {
@@ -827,12 +915,15 @@ async def _try_prepare_shinhan_query_flow(
                 navigation_clicked: '0',
                 websquare_triggered: '0',
                 account_page_navigation: '0',
+                account_page_direct_hash: '0',
                 notice_confirm: '0',
+                login_success: '0',
                 username: '0',
                 login_secret: '0',
                 account_no: '0',
                 account_direct_input: '0',
                 account_selected: '0',
+                account_resolved: '0',
                 account_secret: '0',
                 business_registration_no: '0',
                 date_from: '0',
@@ -857,12 +948,14 @@ async def _try_prepare_shinhan_query_flow(
                 }
                 if (hasLoginNotice()) {
                   result.stage = 'login_notice_confirm';
+                  result.login_success = '1';
                   result.notice_confirm = clickBest(input.mode, 'notice_confirm') ? '1' : '0';
                   result.navigation_clicked = result.notice_confirm;
                   return result;
                 }
                 if (!hasAccountQueryFields()) {
                   result.stage = 'account_page_navigation';
+                  result.login_success = '1';
                   const accountPageLabel = clickBest(input.mode, 'account_page');
                   result.account_page_navigation = accountPageLabel ? '1' : '0';
                   result.navigation_clicked = result.account_page_navigation;
@@ -882,6 +975,9 @@ async def _try_prepare_shinhan_query_flow(
                       } catch (_) {}
                       window.location.hash = '210101000000';
                       window.dispatchEvent(new HashChangeEvent('hashchange'));
+                      window.setTimeout(() => {
+                        try { window.location.hash = '210101000000'; } catch (_) {}
+                      }, 120);
                       result.account_page_navigation = '1';
                       result.navigation_clicked = '1';
                       result.websquare_triggered = '1';
@@ -891,6 +987,7 @@ async def _try_prepare_shinhan_query_flow(
                   return result;
                 }
                 result.stage = 'account_query';
+                result.login_success = '1';
                 result.username = fillByPattern([
                   /아이디|이용자.?id|user|login.*id|cust.*id|member.*id/i
                 ], input.username) ? '1' : '0';
@@ -904,6 +1001,7 @@ async def _try_prepare_shinhan_query_flow(
               result.account_selected = selectAccount() ? '1' : '0';
               result.account_no = fillAccountNumber() ? '1' : '0';
               result.account_direct_input = result.account_no;
+              result.account_resolved = (result.account_selected === '1' || result.account_no === '1') ? '1' : '0';
               result.account_secret = fillAccountSecret() ? '1' : '0';
               result.business_registration_no = fillByPattern([
                 /사업자|사업자등록|business|bizno|registration/i
@@ -941,11 +1039,13 @@ async def _try_prepare_shinhan_query_flow(
         "account_page_navigation",
         "account_page_direct_hash",
         "notice_confirm",
+        "login_success",
         "username",
         "login_secret",
         "account_no",
         "account_direct_input",
         "account_selected",
+        "account_resolved",
         "account_secret",
         "business_registration_no",
         "date_from",
@@ -2287,13 +2387,16 @@ async def collect_bank_via_browser_session_async(
                     for key in (
                         "navigation_clicked",
                         "websquare_triggered",
+                        "login_success",
                         "account_page_navigation",
+                        "account_page_direct_hash",
                         "notice_confirm",
                         "username",
                         "login_secret",
                         "account_no",
                         "account_direct_input",
                         "account_selected",
+                        "account_resolved",
                         "account_secret",
                         "business_registration_no",
                         "date_from",
