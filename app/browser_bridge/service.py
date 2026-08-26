@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import timedelta
 from typing import Any, Optional
@@ -788,7 +789,7 @@ class BrowserBridgeService:
         normalized_work_key = normalize_work_key(work_key)
         is_protected = normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label)
         existing = None if force_recreate else self.sessions.find_by_work_key(normalized_work_key)
-        if existing and self._session_reusable(existing):
+        if existing and self._session_reusable(existing) and self._work_session_url_usable(existing, url):
             existing.mark_used()
             if is_protected and not existing.protected:
                 existing.protected = True
@@ -837,6 +838,23 @@ class BrowserBridgeService:
             is_protected,
         )
         return session
+
+    @staticmethod
+    def _work_session_url_usable(session: BrowserBridgeSession, requested_url: str) -> bool:
+        requested = str(requested_url or "").strip()
+        if not requested or requested == "about:blank":
+            return True
+        metadata = dict(session.endpoint.metadata or {})
+        last_url = str(metadata.get("last_url") or "").strip()
+        if not last_url or last_url == "about:blank":
+            return False
+        requested_parts = urllib.parse.urlparse(requested)
+        last_parts = urllib.parse.urlparse(last_url)
+        if requested_parts.scheme in {"http", "https"} and requested_parts.netloc:
+            if last_parts.scheme not in {"http", "https"} or not last_parts.netloc:
+                return False
+            return requested_parts.netloc.lower() == last_parts.netloc.lower()
+        return True
 
     def _session_reusable(self, session: BrowserBridgeSession) -> bool:
         if session.is_expired:

@@ -120,7 +120,11 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "close_portal_browser_on_complete": not bool(args.keep_browser_open),
         "auto_open_bank_browser": not bool(getattr(args, "no_auto_open_bank_browser", False)),
         "browser_agent_id": str(getattr(args, "browser_agent_id", "") or ""),
+        "pc_agent_id": str(getattr(args, "browser_agent_id", "") or ""),
+        "prefer_pc_agent": True,
+        "require_pc_agent": True,
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
+        "bank_browser_work_key": str(getattr(args, "bank_browser_work_key", "") or ""),
         "bank_browser_timeout_seconds": int(getattr(args, "bank_browser_timeout_seconds", 90) or 90),
         "force_recreate_bank_browser": bool(getattr(args, "force_recreate_bank_browser", False)),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
@@ -249,6 +253,7 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
             "auto_open_browser": bool(payload.get("auto_open_bank_browser", True)),
             "browser_agent_id": str(payload.get("browser_agent_id") or ""),
             "browser_preferred_port": payload.get("browser_preferred_port") or None,
+            "browser_work_key": str(payload.get("bank_browser_work_key") or payload.get("browser_work_key") or ""),
             "browser_timeout_seconds": int(payload.get("bank_browser_timeout_seconds") or 90),
             "force_recreate_browser": bool(payload.get("force_recreate_bank_browser")),
         }
@@ -623,10 +628,13 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.append("--no-auto-open-bank-browser")
     if payload.get("force_recreate_bank_browser"):
         argv.append("--force-recreate-bank-browser")
-    if payload.get("browser_agent_id"):
-        argv.extend(["--browser-agent-id", str(payload.get("browser_agent_id") or "")])
+    portal_agent_id = str(payload.get("browser_agent_id") or payload.get("pc_agent_id") or "").strip()
+    if portal_agent_id:
+        argv.extend(["--browser-agent-id", portal_agent_id])
     if payload.get("browser_preferred_port"):
         argv.extend(["--browser-preferred-port", str(payload.get("browser_preferred_port") or "")])
+    if payload.get("bank_browser_work_key"):
+        argv.extend(["--bank-browser-work-key", str(payload.get("bank_browser_work_key") or "")])
     if payload.get("skip_financial_accounts"):
         argv.append("--skip-financial-accounts")
     if payload.get("bank_only"):
@@ -980,6 +988,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Recreate only the bank Browser Bridge work-key session. Default is to reuse the existing bank browser.",
     )
+    parser.add_argument("--bank-browser-work-key", default="", help="Override the bank Browser Bridge work key for recovery runs.")
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--operator-approved", action="store_true", help="Allow one operator-approved challenge input for the current run.")
     parser.add_argument("--approved-input", default="", help="Write-only operator-approved challenge input for the current run.")

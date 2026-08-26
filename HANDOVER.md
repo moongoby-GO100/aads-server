@@ -8118,3 +8118,44 @@
 - Remaining:
   - Real Baemin PC Agent E2E backfill was not run in this step.
   - No commit, push, or deployment was performed because this worktree already contains unrelated FOOD/bank/docs dirty changes.
+
+## 2026-08-26 14:20 KST - FOOD delivery queue unblock attempt and Coupang Eats catch-up scheduler
+
+- Request: End the Junghwa running delivery backfill job, continue remaining queued Baemin backfills, and proceed with Coupang Eats auto-collection implementation.
+- Operations:
+  - DB `yeoljeong_delivery_collection_status` showed one Junghwa Baemin full_backfill row still `running` and multiple Baemin rows `queued` for 2026-08-25.
+  - Marked stuck row `fe9a5969-d7e9-4622-acfb-d77b0b429d0e` as `failed/BACKGROUND_SYNC_STALE` with `db_safe_write` (`UPDATE 1`).
+  - Triggered Baemin full_backfill queue/job `delivery-sync-78ebdee03a79`, then ran `scripts/yeoljeong_auto_collect.py` directly for one batch.
+- Findings:
+  - Direct batch was blocked by `COLLECTION_ALREADY_RUNNING`.
+  - `.delivery_sync.lock` is held by host PID `861829`, the `aads-server` uvicorn process, so the remaining queue cannot proceed until the server worker releases the lock or the service is restarted/reloaded.
+- Changes:
+  - `app/main.py`: generalized delivery catch-up due gate by service and added `delivery_auto_collect_coupangeats_catchup` interval job every 15 minutes.
+  - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added a contract test for the Coupang Eats catch-up scheduler.
+- Verification:
+  - `pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py -q` succeeded: 5 passed.
+  - `docker exec aads-server pytest /app/tests/unit/test_yeoljeong_delivery_scheduler_contract.py -q` succeeded against container image tests: 4 passed.
+  - Full local `test_yeoljeong_auto_collect.py` collection failed because host Python lacks `structlog`.
+- Remaining:
+  - Queue processing remains blocked by the uvicorn-held `.delivery_sync.lock`; service reload/restart is required to release it.
+  - Commit, push, deploy/restart were not performed.
+  - Existing dirty files were preserved.
+
+## 2026-08-26 14:25 KST - FOOD Shinhan bank Browser Bridge recovery hardening
+
+- Request: Continue the interrupted Shinhan bank-only real collection recovery.
+- Findings:
+  - Shinhan URL responded with HTTP 200 from host and both online PC Agents.
+  - Bank-only retries against agents `7f99c528-24d` and `2e9379a1-fed` ended with `BANK_BROWSER_PC_AGENT_TIMEOUT`; `imported_rows` remained 0 and no `bank_transactions.json` was created.
+  - Browser Bridge work sessions could retain stale metadata work keys or reuse `about:blank`/wrong-host sessions, explaining repeated KIS/about:blank tab attachment.
+- Changes:
+  - `app/browser_bridge/registry.py`: work-key unbind/find now considers endpoint metadata and clears metadata work-key/protected flags when retiring.
+  - `app/browser_bridge/service.py`: work-session reuse now rejects `about:blank` and wrong-host sessions when a real URL is requested.
+  - `scripts/yeoljeong_auto_collect.py`: bank-only recovery can pass an explicit `--bank-browser-work-key`.
+  - `tests/unit/test_browser_bridge.py` and `tests/unit/test_yeoljeong_auto_collect.py`: added regression coverage for stale work-key/session reuse and bank work-key propagation.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server-green -m py_compile app/browser_bridge/registry.py app/browser_bridge/service.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server-aads-server-green -m pytest tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` succeeded: 130 passed.
+- Remaining:
+  - The fix is not loaded into running AADS processes until an approved reload/deploy.
+  - Commit, push, deploy/restart were not performed.

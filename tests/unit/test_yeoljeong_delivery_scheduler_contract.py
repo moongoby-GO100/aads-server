@@ -11,6 +11,35 @@ def test_main_registers_baemin_full_backfill_auto_collect_jobs():
     assert '"mode": "full_backfill"' in source
 
 
+def test_main_registers_coupangeats_auto_collect_catchup_job():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "delivery_auto_collect_coupangeats_catchup" in source
+    assert "_delivery_auto_collect_coupangeats_catchup_due" in source
+    assert '"reason": "coupangeats_catchup"' in source
+    assert '"services": ["coupangeats"]' in source
+
+
+def test_delivery_auto_collect_daemon_runs_child_with_timeout():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "scripts\" / \"yeoljeong_auto_collect.py" in source
+    assert "YEOLJEONG_DELIVERY_AUTO_COLLECT_TIMEOUT_SECONDS" in source
+    assert "delivery_auto_collect_timeout" in source
+    assert "--attempt-timeout-seconds" in source
+    assert "--browser-agent-id" in source
+
+
+def test_main_registers_coupangeats_catchup_auto_collect_job():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "delivery_auto_collect_coupangeats_catchup" in source
+    assert '"reason": "coupangeats_catchup"' in source
+    assert '"services": ["coupangeats"]' in source
+    assert 'service="coupangeats"' in source
+    assert "delivery_auto_collect_catchup_skip: coupangeats_recent_or_running" in source
+
+
 def test_baemin_full_backfill_payload_contract_is_resource_limited():
     source = Path("app/main.py").read_text(encoding="utf-8")
 

@@ -188,14 +188,15 @@ def _delivery_auto_collect_count_total(row: dict) -> int:
     return sum(int(counts.get(kind) or 0) for kind in ("sales", "settlements", "reviews", "ads"))
 
 
-def _delivery_auto_collect_baemin_catchup_due(
+def _delivery_auto_collect_service_catchup_due(
     statuses: list[dict],
     *,
+    service: str,
     expected_scope_count: int = 4,
 ) -> bool:
     latest: dict[tuple[str, str], dict] = {}
     for row in statuses if isinstance(statuses, list) else []:
-        if str(row.get("service") or "") != "baemin":
+        if str(row.get("service") or "") != service:
             continue
         key = (str(row.get("business_id") or ""), str(row.get("branch") or ""))
         current = latest.get(key)
@@ -218,6 +219,30 @@ def _delivery_auto_collect_baemin_catchup_due(
         if _delivery_auto_collect_count_total(row) <= 0:
             return True
     return False
+
+
+def _delivery_auto_collect_baemin_catchup_due(
+    statuses: list[dict],
+    *,
+    expected_scope_count: int = 4,
+) -> bool:
+    return _delivery_auto_collect_service_catchup_due(
+        statuses,
+        service="baemin",
+        expected_scope_count=expected_scope_count,
+    )
+
+
+def _delivery_auto_collect_coupangeats_catchup_due(
+    statuses: list[dict],
+    *,
+    expected_scope_count: int = 4,
+) -> bool:
+    return _delivery_auto_collect_service_catchup_due(
+        statuses,
+        service="coupangeats",
+        expected_scope_count=expected_scope_count,
+    )
 
 
 @asynccontextmanager
@@ -1171,6 +1196,10 @@ async def lifespan(app: FastAPI):
                 from app.services.pc_agent_manager import pc_agent_manager
                 from app.services import yeoljeong_finance_service as yjf_svc
                 import asyncio
+                import json
+                import subprocess
+                import sys
+                from pathlib import Path
 
                 system_user = {
                     "user_id": "system-daemon",
@@ -1185,8 +1214,13 @@ async def lifespan(app: FastAPI):
                     if not _delivery_auto_collect_baemin_catchup_due(statuses):
                         logger.info("delivery_auto_collect_catchup_skip: baemin_recent_or_running")
                         return
+                if reason == "coupangeats_catchup":
+                    statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    if not _delivery_auto_collect_coupangeats_catchup_due(statuses):
+                        logger.info("delivery_auto_collect_catchup_skip: coupangeats_recent_or_running")
+                        return
 
-                wait_timeout = 45 if reason == "pc_agent_catchup" else 180
+                wait_timeout = 45 if reason in {"pc_agent_catchup", "coupangeats_catchup"} else 180
                 wait_result = await pc_agent_manager.wait_for_agent_online(timeout=wait_timeout)
                 if wait_result["status"] != "online":
                     wait_result = await _delivery_auto_collect_peer_agent()
@@ -1205,15 +1239,75 @@ async def lifespan(app: FastAPI):
                     mode=mode,
                     reason=reason,
                 )
-                result = await asyncio.to_thread(yjf_svc.sync_delivery, payload, system_user)
+                root_dir = Path(__file__).resolve().parents[1]
+                timeout_seconds = _env_int(
+                    "YEOLJEONG_DELIVERY_AUTO_COLLECT_TIMEOUT_SECONDS",
+                    1200 if mode == "full_backfill" else 600,
+                )
+                cmd = [
+                    sys.executable,
+                    str(root_dir / "scripts" / "yeoljeong_auto_collect.py"),
+                    "--services",
+                    ",".join(selected_services),
+                    "--business-id",
+                    "all",
+                    "--branch",
+                    "전체",
+                    "--date-from",
+                    str(payload.get("date_from") or ""),
+                    "--date-to",
+                    str(payload.get("date_to") or ""),
+                    "--browser-agent-id",
+                    str(wait_result.get("agent_id") or ""),
+                    "--job-id",
+                    str(payload.get("sync_job_id") or ""),
+                    "--skip-financial-accounts",
+                    "--attempt-timeout-seconds",
+                    str(timeout_seconds),
+                ]
+                if mode:
+                    cmd.extend(["--mode", mode])
+                if payload.get("max_orders"):
+                    cmd.extend(["--max-orders", str(payload.get("max_orders"))])
+                if payload.get("max_reviews"):
+                    cmd.extend(["--max-reviews", str(payload.get("max_reviews"))])
+
+                try:
+                    completed = await asyncio.to_thread(
+                        subprocess.run,
+                        cmd,
+                        cwd=str(root_dir),
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=timeout_seconds + 60,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "delivery_auto_collect_timeout reason=%s mode=%s services=%s agent_id=%s timeout_seconds=%d",
+                        reason,
+                        mode,
+                        selected_services,
+                        wait_result.get("agent_id"),
+                        timeout_seconds,
+                    )
+                    return
+                output = str(completed.stdout or "").strip()
+                try:
+                    result = json.loads(output) if output else {}
+                except json.JSONDecodeError:
+                    result = {"summary": [], "parse_error": "invalid_child_stdout"}
                 summary = result.get("summary") if isinstance(result, dict) else []
                 logger.info(
-                    "delivery_auto_collect_done reason=%s mode=%s agent_id=%s summary_count=%d result_keys=%s",
+                    "delivery_auto_collect_done reason=%s mode=%s agent_id=%s exit=%d summary_count=%d result_keys=%s stderr=%s",
                     reason,
                     mode,
                     wait_result.get("agent_id"),
+                    completed.returncode,
                     len(summary) if isinstance(summary, list) else 0,
                     list((result or {}).keys()) if isinstance(result, dict) else [],
+                    str(completed.stderr or "").strip()[-500:],
                 )
             except Exception as e:
                 logger.warning(f"delivery_auto_collect_error: {e}")
@@ -1363,6 +1457,16 @@ async def lifespan(app: FastAPI):
             minutes=10,
             id="delivery_auto_collect_pc_agent_catchup",
             kwargs={"reason": "pc_agent_catchup", "services": ["baemin"], "mode": "full_backfill"},
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _run_delivery_auto_collect,
+            "interval",
+            minutes=15,
+            id="delivery_auto_collect_coupangeats_catchup",
+            kwargs={"reason": "coupangeats_catchup", "services": ["coupangeats"]},
             replace_existing=True,
             max_instances=1,
             coalesce=True,

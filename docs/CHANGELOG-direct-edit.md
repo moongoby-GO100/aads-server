@@ -5415,3 +5415,10 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-24 17:06:16 KST] [aads-server] app/services/yeoljeong_bank_browser_connector.py
 - Chat-Direct 수정: run_remote_command: ls -la 'checks-' 'data_quality-' 'data_quality_status' 'fixed_wave_peak' 'ma_sta
+
+## [2026-08-26 13:52:01 KST] [aads-server] scripts/yeoljeong_auto_collect.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-server python3 /app/scripts/trigger_delivery_sync.py --service
+
+## [2026-08-26 14:20:27 KST] [aads-server] app/main.py
+- Chat-Direct 수정: 쿠팡이츠 자동수집 catch-up 스케줄(`delivery_auto_collect_coupangeats_catchup`) 추가 및 배달 catch-up due gate 서비스별 일반화.
+- 운영 조치: 중화점 배민 stuck row `fe9a5969-d7e9-4622-acfb-d77b0b429d0e`를 `BACKGROUND_SYNC_STALE`로 정리했으나, `.delivery_sync.lock`은 uvicorn PID가 보유 중이라 큐 처리는 reload/restart 필요.

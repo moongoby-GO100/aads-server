@@ -38,6 +38,19 @@ def test_payload_passes_force_recreate_sessions_flag():
     assert payload["close_portal_browser_on_complete"] is True
 
 
+def test_payload_maps_browser_agent_to_delivery_pc_agent():
+    args = auto_collect.build_parser().parse_args(["--browser-agent-id", "agent-food"])
+
+    payload = auto_collect._payload(args)
+    argv = auto_collect._child_collect_argv(payload)
+
+    assert payload["browser_agent_id"] == "agent-food"
+    assert payload["pc_agent_id"] == "agent-food"
+    assert payload["prefer_pc_agent"] is True
+    assert payload["require_pc_agent"] is True
+    assert argv[argv.index("--browser-agent-id") + 1] == "agent-food"
+
+
 def test_payload_and_child_argv_preserve_baemin_full_backfill_options():
     args = auto_collect.build_parser().parse_args(
         [
@@ -154,6 +167,8 @@ def test_bank_only_skips_delivery_and_collects_bank_accounts(monkeypatch):
             "2026-08-26",
             "--date-to",
             "2026-08-26",
+            "--bank-browser-work-key",
+            "yeoljeong-bank-shinhan-individual-recovery",
         ]
     )
     payload = auto_collect._payload(args)
@@ -162,7 +177,10 @@ def test_bank_only_skips_delivery_and_collects_bank_accounts(monkeypatch):
 
     assert payload["bank_only"] is True
     assert "--bank-only" in argv
+    assert "--bank-browser-work-key" in argv
+    assert argv[argv.index("--bank-browser-work-key") + 1] == "yeoljeong-bank-shinhan-individual-recovery"
     assert [call[0] for call in calls] == ["bank-browser-1"]
+    assert calls[0][1]["browser_work_key"] == "yeoljeong-bank-shinhan-individual-recovery"
     assert result["summary"] == []
     assert result["bank_totals"]["imported_rows"] == 1
 

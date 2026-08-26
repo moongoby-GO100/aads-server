@@ -1302,6 +1302,155 @@ async def test_work_key_session_recreates_stale_disconnected_context(monkeypatch
     assert service.active_session().session_id == stale.session_id
 
 
+def test_work_key_rebind_clears_metadata_and_latest_session_wins(tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    work_key = "yeoljeong-bank-shinhan-individual-test"
+    old = service.register_trusted_session(
+        label="Old Shinhan browser",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        work_key=work_key,
+        protected=False,
+        activate=False,
+    )
+
+    newer = service.register_trusted_session(
+        label="New Shinhan browser",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "32888",
+            "endpoint_kind": "local_agent",
+            "last_url": "https://bank.shinhan.com/rib/easy/index.jsp",
+        },
+        work_key=work_key,
+        protected=False,
+        activate=False,
+    )
+
+    released = service.sessions.get(old.session_id)
+    found = service.sessions.find_by_work_key(work_key)
+
+    assert released is not None
+    assert released.work_key == ""
+    assert "work_key" not in dict(released.endpoint.metadata or {})
+    assert "protected" not in dict(released.endpoint.metadata or {})
+    assert found is not None
+    assert found.session_id == newer.session_id
+
+
+@pytest.mark.asyncio
+async def test_work_key_session_recreates_about_blank_when_url_requested(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    work_key = "yeoljeong-bank-shinhan-individual-test"
+    stale = service.register_trusted_session(
+        label="Shinhan blank browser",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "about:blank",
+        },
+        work_key=work_key,
+        activate=False,
+    )
+    created: list[dict] = []
+
+    async def fake_ensure_pc_agent_cdp_session(**kwargs):
+        created.append(kwargs)
+        return service.register_trusted_session(
+            label=kwargs["label"],
+            endpoint_kind="local_agent",
+            metadata={
+                "agent_id": "ceo-pc",
+                "port": "32888",
+                "endpoint_kind": "local_agent",
+                "last_url": kwargs["url"],
+            },
+            work_key=kwargs["work_key"],
+            protected=kwargs["protected"],
+            activate=kwargs["activate"],
+        )
+
+    monkeypatch.setattr(service, "ensure_pc_agent_cdp_session", fake_ensure_pc_agent_cdp_session)
+
+    recreated = await service.ensure_work_session(
+        work_key=work_key,
+        url="https://bank.shinhan.com/rib/easy/index.jsp",
+        preferred_port=32888,
+    )
+    retired = service.sessions.get(stale.session_id)
+
+    assert recreated.session_id != stale.session_id
+    assert recreated.work_key == work_key
+    assert created[0]["preferred_port"] == 32888
+    assert retired is not None
+    assert retired.work_key == ""
+    assert retired.endpoint.metadata["stale"] is True
+    assert "work_key" not in dict(retired.endpoint.metadata or {})
+
+
+@pytest.mark.asyncio
+async def test_work_key_session_recreates_other_host_when_url_requested(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    work_key = "yeoljeong-bank-shinhan-individual-test"
+    wrong_host = service.register_trusted_session(
+        label="KIS browser",
+        endpoint_kind="local_agent",
+        metadata={
+            "agent_id": "ceo-pc",
+            "port": "9222",
+            "endpoint_kind": "local_agent",
+            "last_url": "https://kis.newtalk.kr/",
+        },
+        work_key=work_key,
+        activate=False,
+    )
+
+    async def fake_ensure_pc_agent_cdp_session(**kwargs):
+        return service.register_trusted_session(
+            label=kwargs["label"],
+            endpoint_kind="local_agent",
+            metadata={
+                "agent_id": "ceo-pc",
+                "port": "32888",
+                "endpoint_kind": "local_agent",
+                "last_url": kwargs["url"],
+            },
+            work_key=kwargs["work_key"],
+            protected=kwargs["protected"],
+            activate=kwargs["activate"],
+        )
+
+    monkeypatch.setattr(service, "ensure_pc_agent_cdp_session", fake_ensure_pc_agent_cdp_session)
+
+    recreated = await service.ensure_work_session(
+        work_key=work_key,
+        url="https://bank.shinhan.com/rib/easy/index.jsp",
+    )
+
+    assert recreated.session_id != wrong_host.session_id
+    assert service.sessions.get(wrong_host.session_id).work_key == ""
+
+
 @pytest.mark.asyncio
 async def test_pc_agent_cdp_session_falls_back_to_browser_health_on_cdp_not_ready(monkeypatch, tmp_path) -> None:
     service = BrowserBridgeService(

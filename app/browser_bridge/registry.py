@@ -264,8 +264,13 @@ class SessionRegistry:
         for existing in self._sessions.values():
             if existing.session_id == except_session_id:
                 continue
-            if existing.work_key == work_key:
+            metadata = dict(existing.endpoint.metadata or {})
+            if existing.work_key == work_key or str(metadata.get("work_key") or "") == work_key:
                 existing.work_key = ""
+                if metadata.get("work_key") == work_key:
+                    metadata.pop("work_key", None)
+                    metadata.pop("protected", None)
+                    existing.endpoint.metadata = metadata
                 released += 1
         return released
 
@@ -327,12 +332,16 @@ class SessionRegistry:
             return None
         with self._lock:
             sessions = list(self._sessions.values())
-        for session in sessions:
+        def _session_sort_key(session: BrowserBridgeSession) -> datetime:
+            return session.last_used_at or session.registered_at
+
+        for session in sorted(sessions, key=_session_sort_key, reverse=True):
             if session.is_expired:
                 continue
             if self._is_stale_session(session):
                 continue
-            if session.work_key == work_key:
+            metadata = dict(session.endpoint.metadata or {})
+            if session.work_key == work_key or str(metadata.get("work_key") or "") == work_key:
                 return session
         return None
 
@@ -381,6 +390,9 @@ class SessionRegistry:
                 session.lease_owner = ""
                 session.lease_expires_at = None
             metadata = dict(session.endpoint.metadata or {})
+            if clear_work_key:
+                metadata.pop("work_key", None)
+                metadata.pop("protected", None)
             metadata["stale"] = True
             if stale_reason:
                 metadata["stale_reason"] = stale_reason
