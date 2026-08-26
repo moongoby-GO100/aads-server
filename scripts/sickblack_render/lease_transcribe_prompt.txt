@@ -1,0 +1,19 @@
+아래 4개의 이미지는 임대차계약서 한 페이지를 위에서 아래로 4등분(약간 겹치게)한 조각입니다. Read 도구로 각각 순서대로 자세히 확인하십시오:
+/root/aads/aads-server/scripts/sickblack_render/raw/crops/lease_p1_raw_row1.png
+/root/aads/aads-server/scripts/sickblack_render/raw/crops/lease_p1_raw_row2.png
+/root/aads/aads-server/scripts/sickblack_render/raw/crops/lease_p1_raw_row3.png
+/root/aads/aads-server/scripts/sickblack_render/raw/crops/lease_p1_raw_row4.png
+
+각 조각에서 보이는 한글/숫자 텍스트를 있는 그대로(오타 없이, 임의로 고치거나 추측하지 말고) 최대한 옮겨 적으십시오.
+글자가 흐릿하거나 확신이 없으면 절대 지어내지 말고 [불확실: 후보1/후보2] 또는 [판독불가] 로 표시하십시오.
+숫자(금액, 날짜, 면적)는 특히 신중하게 확인하고, 확신이 없으면 반드시 [판독불가]로 표시하십시오.
+
+출력 형식:
+## row1
+(옮겨적은 텍스트)
+## row2
+(옮겨적은 텍스트)
+## row3
+(옮겨적은 텍스트)
+## row4
+(옮겨적은 텍스트)

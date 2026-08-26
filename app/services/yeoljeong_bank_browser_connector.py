@@ -1344,6 +1344,12 @@ _BANK_SESSION_RECOVERABLE_ERROR_CODES = {
 }
 
 
+class _ShinhanResumeSignal(RuntimeError):
+    def __init__(self, error_code: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
 def _bank_session_error_code(exc: Exception) -> str:
     code = str(getattr(exc, "error_code", "") or "").strip().upper()
     if code:
@@ -1951,6 +1957,7 @@ async def collect_bank_via_browser_session_async(
         "saved_account_no": "1" if str(account_no or "").strip() else "0",
         "saved_account_secret": "1" if str(account_password or "").strip() else "0",
         "saved_business_registration_no": "1" if str(business_registration_no or "").strip() else "0",
+        "bank_exclusive_lock_acquired": "1" if os.getenv("YEOLJEONG_BANK_LOCK_HELD") == "1" else "0",
     }
     shinhan_service = _is_shinhan_service(bank_code, bank_name, institution_code, portal_url)
     shinhan_flow_mode = _shinhan_query_flow_mode(business_entity_type, account) if shinhan_service else ""
@@ -2002,6 +2009,8 @@ async def collect_bank_via_browser_session_async(
             session_id_to_use = str(getattr(session, "session_id", "") or "")
             auto_opened_session = bool(session_id_to_use)
             safe_diagnostics["auto_open_browser"] = "1"
+            safe_diagnostics["cdp_preflight_session_id"] = session_id_to_use
+            safe_diagnostics["cdp_preflight"] = "ready"
         except Exception as exc:
             safe_diagnostics["auto_open_browser"] = "failed"
             exc_error_code = str(getattr(exc, "error_code", "") or "").strip()
@@ -2058,6 +2067,8 @@ async def collect_bank_via_browser_session_async(
         }
 
     safe_diagnostics["browser_session_id"] = session_id_to_use
+    safe_diagnostics.setdefault("cdp_preflight_session_id", session_id_to_use)
+    safe_diagnostics.setdefault("cdp_preflight", "ready")
     if auto_opened_session:
         safe_diagnostics["auto_opened_session"] = "1"
 
@@ -2343,13 +2354,26 @@ async def collect_bank_via_browser_session_async(
                             await page.wait_for_load_state("networkidle", timeout=2000)
                         except Exception:
                             pass
-                if shinhan_flow_mode == "individual_simple" and attempt_index == 0:
-                    step_result = await _try_shinhan_individual_login_step(
-                        page,
-                        username=str(login_username or ""),
-                        password=str(login_password or ""),
-                    )
-                    if step_result.get("attempted") != "1":
+                try:
+                    if shinhan_flow_mode == "individual_simple" and attempt_index == 0:
+                        step_result = await _try_shinhan_individual_login_step(
+                            page,
+                            username=str(login_username or ""),
+                            password=str(login_password or ""),
+                        )
+                        if step_result.get("attempted") != "1":
+                            step_result = await _try_prepare_shinhan_query_flow(
+                                page,
+                                flow_mode=shinhan_flow_mode,
+                                username=str(login_username or ""),
+                                password=str(login_password or ""),
+                                account_no=str(account_no or ""),
+                                account_password=str(account_password or ""),
+                                business_registration_no=str(business_registration_no or ""),
+                                date_from=str(date_from or ""),
+                                date_to=str(date_to or ""),
+                            )
+                    else:
                         step_result = await _try_prepare_shinhan_query_flow(
                             page,
                             flow_mode=shinhan_flow_mode,
@@ -2361,18 +2385,49 @@ async def collect_bank_via_browser_session_async(
                             date_from=str(date_from or ""),
                             date_to=str(date_to or ""),
                         )
-                else:
-                    step_result = await _try_prepare_shinhan_query_flow(
-                        page,
-                        flow_mode=shinhan_flow_mode,
-                        username=str(login_username or ""),
-                        password=str(login_password or ""),
-                        account_no=str(account_no or ""),
-                        account_password=str(account_password or ""),
-                        business_registration_no=str(business_registration_no or ""),
-                        date_from=str(date_from or ""),
-                        date_to=str(date_to or ""),
-                    )
+                    returned_error = str(step_result.get("error_code") or "").upper()
+                    if returned_error in _BANK_SESSION_RECOVERABLE_ERROR_CODES:
+                        raise _ShinhanResumeSignal(returned_error)
+                except Exception as exc:
+                    if (
+                        shinhan_flow_mode == "individual_simple"
+                        and _is_bank_session_recoverable_error(exc)
+                        and attempt_index < 3
+                        and browser_work_key
+                    ):
+                        safe_diagnostics["resume_stage"] = "account_selection"
+                        safe_diagnostics["resume_attempted"] = "1"
+                        recovery_code = _bank_session_error_code(exc) or "CDP_NOT_READY"
+                        try:
+                            session = await bridge.ensure_work_session(
+                                work_key=browser_work_key,
+                                label=f"{bank_name or '신한은행'} 간편조회",
+                                agent_id=str(browser_agent_id or ""),
+                                url=portal_url or BANK_PORTAL_URLS["shinhan_business"],
+                                preferred_port=browser_preferred_port,
+                                force_recreate=False,
+                                queue_wait_timeout_seconds=launch_queue_wait_seconds,
+                                command_timeout_seconds=launch_timeout_seconds,
+                            )
+                            session_id_to_use = str(getattr(session, "session_id", "") or session_id_to_use)
+                            context = await bridge._context_for_session(session)
+                            pages = getattr(context, "pages", None)
+                            page, _resume_url, _ = await _select_bank_page(pages, portal_url)
+                            if page is None:
+                                page = await context.new_page()
+                            _disable_local_agent_auto_recovery(page)
+                            safe_diagnostics["browser_session_id"] = session_id_to_use
+                            safe_diagnostics["cdp_preflight_session_id"] = session_id_to_use
+                            safe_diagnostics["session_recovery"] = "reacquired_same_work_key"
+                            safe_diagnostics["session_recovery_error"] = recovery_code
+                            continue
+                        except Exception as resume_exc:
+                            safe_diagnostics["resume_error"] = _bank_session_error_code(resume_exc) or "CDP_NOT_READY"
+                    step_result = {
+                        "attempted": "failed",
+                        "stage": "account_selection",
+                        **_safe_browser_error_fields(exc),
+                    }
                 step_result["attempt_index"] = str(attempt_index + 1)
                 shinhan_steps.append(step_result)
                 for key, value in step_result.items():

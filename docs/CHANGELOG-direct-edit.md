@@ -5606,3 +5606,63 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-26 15:32:03 KST] [aads-server] scripts/sickblack_render/lease_transcribe_prompt.txt
 - Chat-Direct 수정: write: scripts/sickblack_render/lease_transcribe_prompt.txt
+
+## [2026-08-26 15:43:11 KST] [aads-server] legal/sickblack-hq-move/01_임시주주총회의사록.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/01_임시주주총회의사록.md
+
+## [2026-08-26 15:43:25 KST] [aads-server] legal/sickblack-hq-move/02_대표이사결정서.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/02_대표이사결정서.md
+
+## [2026-08-26 15:43:42 KST] [aads-server] legal/sickblack-hq-move/03_정관개정본_제3조.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/03_정관개정본_제3조.md
+
+## [2026-08-26 15:44:07 KST] [aads-server] legal/sickblack-hq-move/04_본점이전등기신청서_관할외.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/04_본점이전등기신청서_관할외.md
+
+## [2026-08-26 15:44:50 KST] [aads-server] legal/sickblack-hq-move/05_직접방문접수_절차체크리스트.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/05_직접방문접수_절차체크리스트.md
+
+## [2026-08-26 15:46:34 KST] [aads-server] legal/sickblack-hq-move/01_임시주주총회의사록.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/01_임시주주총회의사록.md
+
+## [2026-08-26 15:46:35 KST] [aads-server] legal/sickblack-hq-move/02_대표이사결정서.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/02_대표이사결정서.md
+
+## [2026-08-26 15:46:35 KST] [aads-server] legal/sickblack-hq-move/03_정관개정본_제3조.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/03_정관개정본_제3조.md
+
+## [2026-08-26 15:46:35 KST] [aads-server] legal/sickblack-hq-move/04_본점이전등기신청서_관할외.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/04_본점이전등기신청서_관할외.md
+
+## [2026-08-26 15:46:36 KST] [aads-server] legal/sickblack-hq-move/05_직접방문접수_절차체크리스트.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/05_직접방문접수_절차체크리스트.md
+
+## [2026-08-26 15:51:31 KST] [aads-server] /root/aads/aads-server/scripts/claude-relay-runtime.conf
+- Chat-Direct 수정: patch: Environment=CLAUDE_RELAY_MAX_CONCURRENT=→Environment=CLAUDE_RELAY_MAX_CONCURRENT=
+
+## [2026-08-26 15:53:46 KST] [aads-server] legal/sickblack-hq-move/01_임시주주총회의사록.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/01_임시주주총회의사록.md
+
+## [2026-08-26 15:53:59 KST] [aads-server] legal/sickblack-hq-move/02_대표이사결정서.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/02_대표이사결정서.md
+
+## [2026-08-26 15:54:11 KST] [aads-server] legal/sickblack-hq-move/03_정관개정본_제3조.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/03_정관개정본_제3조.md
+
+## [2026-08-26 15:54:13 KST] [aads-server] HANDOVER.go100.tmp
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -t -c "SELECT branch, payload->>'
+
+## [2026-08-26 15:55:00 KST] [aads-server] legal/sickblack-hq-move/06_이번주_실행일정표.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/06_이번주_실행일정표.md
+
+## [2026-08-26 15:55:47 KST] [aads-server] legal/sickblack-hq-move/01_임시주주총회의사록.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/01_임시주주총회의사록.md
+
+## [2026-08-26 15:55:47 KST] [aads-server] legal/sickblack-hq-move/02_대표이사결정서.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/02_대표이사결정서.md
+
+## [2026-08-26 15:55:48 KST] [aads-server] legal/sickblack-hq-move/03_정관개정본_제3조.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/03_정관개정본_제3조.md
+
+## [2026-08-26 15:55:48 KST] [aads-server] legal/sickblack-hq-move/06_이번주_실행일정표.md
+- Chat-Direct 수정: write: legal/sickblack-hq-move/06_이번주_실행일정표.md
