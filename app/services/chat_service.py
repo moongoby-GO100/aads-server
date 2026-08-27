@@ -42,6 +42,7 @@ _INTERRUPT_REASON_CATEGORIES = {
     "superseded": ("superseded", "newer"),
     "auto_recovery": ("recovery_auto_retry", "auto-settled"),
     "process_interrupt": ("resume_claimed_by", "CancelledError"),
+    "final_save_missing": ("final_save_missing",),
 }
 
 # P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
@@ -1439,6 +1440,7 @@ async def _get_or_create_turn_execution(
         """
         UPDATE chat_turn_executions
         SET status = 'interrupted',
+            interrupt_category = 'superseded',
             completed_at = COALESCE(completed_at, NOW()),
             updated_at = NOW(),
             error_message = COALESCE(error_message, 'superseded by newer execution')
@@ -2164,7 +2166,7 @@ async def cleanup_overlong_running_executions(
     _already_interrupted = {row["execution_id"] for row in rows}
 
     # P1: stale retrying 정리 — resume task 실패 후 retrying 상태로 300초+ 잔류하는 실행을 자동 정리
-    _retrying_timeout = max(timeout // 2, 300)
+    _retrying_timeout = min(max(timeout // 4, 120), 300)
     retrying_rows = await conn.fetch(
         """
         SELECT te.id::text AS execution_id,
@@ -2244,6 +2246,40 @@ async def cleanup_stale_streaming_placeholders(
             SELECT count(*) FROM hidden
             """
         )
+
+        # P0: 실행이 이미 종료(completed/interrupted)인데 placeholder가 남은 고아 즉시 정리
+        _orphan_terminal_rows = await conn.fetch(
+            """
+            SELECT m.id, m.session_id::text AS session_id,
+                   m.execution_id::text AS execution_id, m.content
+            FROM chat_messages m
+            JOIN chat_turn_executions te ON te.id = m.execution_id
+            WHERE m.intent = 'streaming_placeholder'
+              AND te.status IN ('completed', 'interrupted')
+            """
+        )
+        _orphan_terminal_cleaned = 0
+        for _orow in _orphan_terminal_rows:
+            _osid = _orow["session_id"]
+            if _osid in live_sessions:
+                continue
+            _oeid = uuid.UUID(str(_orow["execution_id"]))
+            _has_final = await conn.fetchval(
+                "SELECT 1 FROM chat_messages WHERE execution_id = $1 AND role = 'assistant' AND intent IS DISTINCT FROM 'streaming_placeholder' LIMIT 1",
+                _oeid,
+            )
+            if _has_final:
+                await conn.execute("DELETE FROM chat_messages WHERE id = $1", _orow["id"])
+            else:
+                _oc = _format_stale_placeholder_content(_orow["content"] or "")
+                await conn.execute(
+                    "UPDATE chat_messages SET content = $2, intent = 'interrupted_partial', model_used = 'interrupted', edited_at = NOW() WHERE id = $1",
+                    _orow["id"], _oc,
+                )
+            _orphan_terminal_cleaned += 1
+        if _orphan_terminal_cleaned:
+            logger.info("orphan_terminal_placeholder_cleanup cleaned=%s", _orphan_terminal_cleaned)
+
         rows = await conn.fetch(
             """
             SELECT m.id,
@@ -2362,6 +2398,7 @@ async def cleanup_stale_streaming_placeholders(
                             ELSE COALESCE(assistant_message_id, $2)
                         END,
                         status = 'interrupted',
+                        interrupt_category = 'watchdog_timeout',
                         error_message = COALESCE(error_message, $3),
                         completed_at = COALESCE(completed_at, NOW()),
                         updated_at = NOW()
@@ -2417,6 +2454,7 @@ async def cleanup_stale_streaming_placeholders(
         "skipped_active": skipped_active,
         "timeout_sec": timeout,
         "stale_empty_hidden": int(stale_empty_hidden or 0),
+        "orphan_terminal_cleaned": _orphan_terminal_cleaned,
     }
 
 
@@ -3831,6 +3869,7 @@ async def _delete_streaming_placeholder(
                                 """
                                 UPDATE chat_turn_executions
                                 SET status = 'interrupted',
+                                    interrupt_category = 'final_save_missing',
                                     error_message = COALESCE(NULLIF(error_message, ''), 'final_save_missing_placeholder_preserved'),
                                     completed_at = COALESCE(completed_at, NOW()),
                                     updated_at = NOW(),
@@ -3853,6 +3892,7 @@ async def _delete_streaming_placeholder(
                             """
                             UPDATE chat_turn_executions
                             SET status = 'interrupted',
+                                interrupt_category = 'final_save_missing',
                                 error_message = COALESCE(NULLIF(error_message, ''), 'final_save_missing_empty_placeholder'),
                                 completed_at = COALESCE(completed_at, NOW()),
                                 updated_at = NOW(),
@@ -4739,7 +4779,7 @@ async def with_background_completion(
                 _pool = get_pool()
                 async with _pool.acquire() as _conn:
                     await _conn.execute(
-                        "UPDATE chat_turn_executions SET status = 'interrupted', completed_at = NOW() WHERE id = $1 AND status = 'running'",
+                        "UPDATE chat_turn_executions SET status = 'interrupted', interrupt_category = 'superseded', completed_at = NOW() WHERE id = $1 AND status = 'running'",
                         uuid.UUID(str(_old_state["execution_id"])),
                     )
             except Exception:
@@ -5153,6 +5193,7 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
                             """
                             UPDATE chat_turn_executions
                             SET status = 'interrupted',
+                                interrupt_category = 'user_action',
                                 assistant_message_id = COALESCE(assistant_message_id, $2),
                                 actual_model = COALESCE(actual_model, 'stopped'),
                                 error_message = 'stopped by user',
@@ -5611,7 +5652,7 @@ async def _resume_single_stream(
                     )
 
                 retry_delays = [10, 20, 40, 60, 120]
-                relay_retry_used = False
+                _relay_503_count = 0
                 last_error: Optional[BaseException] = None
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
                 cost_usd = Decimal("0")
@@ -5673,13 +5714,14 @@ async def _resume_single_stream(
                             token in stream_error_text
                             for token in ("codex_relay_busy", "relay_semaphore_timeout")
                         )
-                        if is_relay_503 and not relay_retry_used:
-                            relay_retry_used = True
+                        if is_relay_503 and _relay_503_count < 3:
+                            _relay_503_count += 1
+                            _relay_delay = 5 * _relay_503_count
                             logger.warning(
-                                "resume_relay_503_retry session=%s delay=5s error=%s",
-                                session_id[:8], stream_error,
+                                "resume_relay_503_retry session=%s attempt=%s/3 delay=%ss error=%s",
+                                session_id[:8], _relay_503_count, _relay_delay, stream_error,
                             )
-                            await _heartbeat_asyncio.sleep(5)
+                            await _heartbeat_asyncio.sleep(_relay_delay)
                             continue
                         if attempt >= len(retry_delays) or not _is_resume_retryable(stream_error):
                             raise
