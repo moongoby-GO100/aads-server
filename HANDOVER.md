@@ -15,7 +15,10 @@
   - `docker exec aads-server-green python -m pytest tests/unit/test_chat_service.py -k "incomplete_progress_tail or final_report_tail" -q` succeeded: 2 passed.
   - DB recheck confirmed execution `de25186e-0b6a-4223-b223-8953d1ca035a` now has `status='interrupted'` and assistant message `intent='interrupted_partial'`.
 - Deployment:
-  - Pending at note time: commit, push, blue/green deploy, and post-deploy health verification.
+  - Committed as `c3e37afa fix(chat): block incomplete operational tails` and pushed to `origin/main`.
+  - Blue/green deploy completed at 2026-08-27 09:59 KST; active slot is `aads-server` on port `8100`.
+  - Deploy verification passed: health check OK, DB schema check OK, chat table access OK, LLM service OK. Frontend QA was skipped because no dashboard files changed.
+  - Nginx reload completed with existing streams left on the old worker/slot during graceful drain.
 
 ## 2026-08-27 08:25 KST - FOOD delivery auto-collection PC Agent pin
 
