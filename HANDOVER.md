@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-27 09:55 KST - Chat completion misclassification guard
+
+- Trigger: CEO reported that session `45249276-83a1-42ca-b58d-d5f1737a388b` showed a response as completed even though the assistant text was still an in-progress check.
+- Cause:
+  - Execution `de25186e-0b6a-4223-b223-8953d1ca035a` ended with "같은 API를 직접 호출하겠습니다." but was marked `completed`.
+  - `_looks_like_incomplete_progress_tail()` did not include operational follow-up verbs such as `호출`, `대조`, `우회`, and `찾`.
+- Changes:
+  - `app/services/chat_service.py`: expanded incomplete-progress tail detection to catch additional operational follow-up verbs.
+  - `tests/unit/test_chat_service.py`: added regression cases for "직접 호출하겠습니다" and "대조한 뒤 보고하겠습니다".
+  - DB repair: the single affected execution `de25186e-0b6a-4223-b223-8953d1ca035a` was changed from `completed` to `interrupted`, and its assistant message was changed to `interrupted_partial`.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` succeeded.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_chat_service.py -k "incomplete_progress_tail or final_report_tail" -q` succeeded: 2 passed.
+  - DB recheck confirmed execution `de25186e-0b6a-4223-b223-8953d1ca035a` now has `status='interrupted'` and assistant message `intent='interrupted_partial'`.
+- Deployment:
+  - Pending at note time: commit, push, blue/green deploy, and post-deploy health verification.
+
 ## 2026-08-27 08:25 KST - FOOD delivery auto-collection PC Agent pin
 
 - Request: Ensure Baemin block guards are reflected, run Coupang Eats/Yogiyo collection on a non-CEO PC, and close Baemin tabs on the CEO PC.

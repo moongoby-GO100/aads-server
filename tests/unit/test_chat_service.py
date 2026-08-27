@@ -771,6 +771,12 @@ def test_incomplete_progress_tail_is_not_completion_candidate():
     assert chat_service._looks_like_incomplete_progress_tail(
         "핵심 파일을 즉시 읽고 수정합니다. MCP 도구를 로드합니다."
     )
+    assert chat_service._looks_like_incomplete_progress_tail(
+        "프론트 페이지가 어느 API를 호출하는지 확인한 뒤 같은 API를 직접 호출하겠습니다."
+    )
+    assert chat_service._looks_like_incomplete_progress_tail(
+        "운영 라우터와 DB 후보를 대조한 뒤 결과를 보고하겠습니다."
+    )
 
 
 def test_producer_interruption_reason_preserves_missing_done_subreason():
