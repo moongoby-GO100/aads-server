@@ -326,7 +326,7 @@ def _platform_financial_accounts_for_payload(payload: dict[str, Any], user: dict
     return accounts
 
 
-def _collect_platform_financial_accounts(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+def _collect_platform_financial_accounts_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         accounts = _platform_financial_accounts_for_payload(payload, user)
     except Exception as exc:
@@ -400,6 +400,37 @@ def _collect_platform_financial_accounts(payload: dict[str, Any], user: dict[str
     return results
 
 
+def _collect_platform_financial_accounts(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect platform bank accounts while reserving the PC Agent globally."""
+    if payload.get("_bank_lock_held"):
+        return _collect_platform_financial_accounts_unlocked(payload, user)
+    from app.services.bank_collection_lock import (
+        default_bank_lock_path,
+        release_bank_lock,
+        try_acquire_bank_lock,
+    )
+
+    lock_fd = try_acquire_bank_lock(
+        os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", default_bank_lock_path())
+    )
+    if lock_fd is None:
+        return [{
+            "service": "bank",
+            "source_ledger": "platform_accounts",
+            "status": "deferred",
+            "error_code": "BANK_COLLECTION_DEFERRED_DUE_TO_ACTIVE_BANK_LOCK",
+            "counts": {"transactions": 0},
+            "collected_rows": 0,
+            "imported_rows": 0,
+            "duplicate_rows": 0,
+            "message": "다른 은행 수집이 전용 PC Agent를 사용 중이어서 재시도하도록 보류했습니다.",
+        }]
+    try:
+        return _collect_platform_financial_accounts_unlocked(payload, user)
+    finally:
+        release_bank_lock(lock_fd)
+
+
 def _attach_financial_collections(
     summary: dict[str, Any],
     payload: dict[str, Any],
@@ -422,6 +453,11 @@ def _attach_financial_collections(
 
 def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only: bool = False) -> dict[str, Any]:
     if payload.get("bank_only"):
+        from app.services.bank_collection_lock import (
+            default_bank_lock_path,
+            release_bank_lock,
+            try_acquire_bank_lock,
+        )
         base = {
             "queued": False,
             "job_id": str(payload.get("sync_job_id") or ""),
@@ -433,7 +469,27 @@ def _run_collectors(payload: dict[str, Any], user: dict[str, Any], *, queue_only
             "totals": _empty_delivery_counts(),
             "summary": [],
         }
-        return _attach_financial_collections(base, payload, user)
+        lock_fd = try_acquire_bank_lock(
+            os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", default_bank_lock_path())
+        )
+        if lock_fd is None:
+            base["bank_collections"] = [{
+                "service": "bank",
+                "source_ledger": "platform_accounts",
+                "status": "deferred",
+                "error_code": "BANK_COLLECTION_DEFERRED_DUE_TO_ACTIVE_BANK_LOCK",
+                "counts": {"transactions": 0},
+                "imported_rows": 0,
+                "collected_rows": 0,
+                "duplicate_rows": 0,
+                "message": "은행 전용 PC Agent가 이미 사용 중이어서 재시도하도록 보류했습니다.",
+            }]
+            return base
+        try:
+            locked_payload = {**payload, "_bank_lock_held": True}
+            return _attach_financial_collections(base, locked_payload, user)
+        finally:
+            release_bank_lock(lock_fd)
     summary = _summary(_run_sync(payload, user, queue_only=queue_only))
     if queue_only:
         return summary

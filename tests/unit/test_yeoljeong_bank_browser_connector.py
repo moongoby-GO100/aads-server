@@ -30,6 +30,36 @@ _SERVICE_SPEC.loader.exec_module(service)
 ADMIN_USER = {"email": "owner@example.com", "is_admin": True}
 
 
+class _ChallengePage:
+    def __init__(self, url: str, text: str = ""):
+        self.url = url
+        self.text = text
+        self.frames = []
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        return self.text
+
+
+@pytest.mark.asyncio
+async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
+    page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
+    page.frames = [type("Frame", (), {"url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html"})()]
+
+    result = await connector._detect_shinhan_auth_challenge(page, [page])
+
+    assert result == {
+        "screen_state": "certificate_password_required",
+        "screen_reason_code": "SHINHAN_FINCERT_IFRAME_DETECTED",
+        "screen_suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+        "suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+        "screen_requires_operator": "1",
+        "last_observed_stage": "financial certificate iframe",
+    }
+    assert "password" not in result
+
+
 @pytest.fixture(autouse=True)
 def isolate_storage(tmp_path, monkeypatch):
     def disable_db(coroutine):

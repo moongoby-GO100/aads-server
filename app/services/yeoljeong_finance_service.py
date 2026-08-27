@@ -5334,6 +5334,7 @@ def _collect_bank_via_browser(
             "diagnostics": {
                 "browser_work_key": browser_work_key_val,
                 "browser_timeout_seconds": str(int(timeout_seconds)),
+                "last_observed_stage": "login page",
                 "session_recovery_plan": "connect_pc_agent_then_retry_same_work_key",
             },
             "message": f"은행 브라우저 수집이 {int(timeout_seconds)}초 안에 완료되지 않았습니다.",
@@ -6176,7 +6177,7 @@ async def _delivery_bridge_page_for_service(context: Any, service: str) -> Any:
             url = str(getattr(page, "url", "") or "").lower()
         if markers and any(marker in url for marker in markers):
             return page
-    return await context.new_page()
+    return pages[0] if pages else await context.new_page()
 
 
 def _baemin_bridge_page_kind(text: str) -> str:

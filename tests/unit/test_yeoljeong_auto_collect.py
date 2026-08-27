@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 import scripts.yeoljeong_auto_collect as auto_collect
+from app.services.bank_collection_lock import release_bank_lock, try_acquire_bank_lock
 
 
 @pytest.fixture(autouse=True)
@@ -1331,3 +1332,21 @@ def test_main_child_no_timeout_runs_collectors_without_recursing(monkeypatch):
     assert exit_code == 0
     assert calls[0][0]["services"] == ["baemin"]
     assert calls[0][2] is False
+
+
+def test_bank_only_defers_when_bank_pc_agent_lock_is_held(tmp_path, monkeypatch):
+    lock_path = tmp_path / "bank.lock"
+    monkeypatch.setenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", str(lock_path))
+    holder = try_acquire_bank_lock(lock_path)
+    assert holder is not None
+    try:
+        result = auto_collect._run_collectors(
+            {"bank_only": True, "business_id": "biz-mia", "branch": "branch-gangbuk-mia"},
+            {"is_admin": True},
+        )
+    finally:
+        release_bank_lock(holder)
+
+    item = result["bank_collections"][0]
+    assert item["status"] == "deferred"
+    assert item["error_code"] == "BANK_COLLECTION_DEFERRED_DUE_TO_ACTIVE_BANK_LOCK"

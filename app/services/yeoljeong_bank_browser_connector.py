@@ -1599,6 +1599,72 @@ async def _visible_page_url(page: Any) -> str:
         return ""
 
 
+async def _detect_shinhan_auth_challenge(page: Any, pages: Any = None) -> dict[str, str]:
+    """Detect certificate/identity UI from URLs, frames, and bounded page text.
+
+    Shinhan opens YESKEY in a cross-origin iframe or a separate popup, so the
+    main document's text alone is not sufficient.  Only URLs and redacted
+    labels are inspected; certificate passwords and other secrets are never
+    read or returned.
+    """
+    urls: list[str] = []
+    for candidate in [page, *(list(pages or []))]:
+        url = await _visible_page_url(candidate)
+        if url:
+            urls.append(url.lower())
+        for frame in list(getattr(candidate, "frames", []) or []):
+            frame_url = str(getattr(frame, "url", "") or "").lower()
+            if frame_url:
+                urls.append(frame_url)
+    url_text = " ".join(urls)
+    if "4user.yeskey.or.kr/fincert" in url_text or "fincert" in url_text:
+        return {
+            "screen_state": "certificate_password_required",
+            "screen_reason_code": "SHINHAN_FINCERT_IFRAME_DETECTED",
+            "screen_suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+            "suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+            "screen_requires_operator": "1",
+            "last_observed_stage": "financial certificate iframe",
+        }
+    if "bank.shinhan.com" in url_text and any(token in url_text for token in ("permission", "popup", "cert")):
+        return {
+            "screen_state": "identity_check_required",
+            "screen_reason_code": "SHINHAN_PERMISSION_POPUP_DETECTED",
+            "screen_suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+            "suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+            "screen_requires_operator": "1",
+            "last_observed_stage": "permission popup",
+        }
+    for candidate in [page, *(list(pages or []))]:
+        try:
+            text = _safe_portal_text(str(await _evaluate_page(
+                candidate,
+                "document.body ? String(document.body.innerText || '').slice(0, 2000) : ''",
+                timeout_ms=1500,
+            ) or "")).lower()
+        except Exception:
+            continue
+        if re.search(r"금융인증서|인증서\s*(비밀번호|암호)|인증서\s*선택", text):
+            return {
+                "screen_state": "certificate_password_required",
+                "screen_reason_code": "SHINHAN_FINANCIAL_CERTIFICATE_PROMPT",
+                "screen_suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+                "suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+                "screen_requires_operator": "1",
+                "last_observed_stage": "financial certificate iframe",
+            }
+        if re.search(r"본인인증|추가\s*인증|권한을 허용|접근 권한", text):
+            return {
+                "screen_state": "identity_check_required",
+                "screen_reason_code": "SHINHAN_IDENTITY_CHECK_PROMPT",
+                "screen_suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+                "suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+                "screen_requires_operator": "1",
+                "last_observed_stage": "identity check",
+            }
+    return {}
+
+
 async def _select_bank_page(pages: Any, portal_url: str) -> tuple[Any | None, str, bool]:
     page_list = list(pages or [])
     if not page_list:
@@ -2763,6 +2829,22 @@ async def collect_bank_via_browser_session_async(
                 }
 
         safe_diagnostics["current_url"] = current_url
+        safe_diagnostics["last_observed_stage"] = "login page"
+
+        # YESKEY may be visible only as a cross-origin iframe or popup. Check
+        # it before any login/query automation so an operator challenge never
+        # consumes the full PC Agent timeout.
+        auth_challenge = await _detect_shinhan_auth_challenge(page, pages)
+        if auth_challenge:
+            safe_diagnostics.update(auth_challenge)
+            return {
+                "status": "action_required",
+                "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+                "rows": [],
+                "row_count": 0,
+                "diagnostics": safe_diagnostics,
+                "message": "신한 금융인증/권한 확인이 필요합니다. 인증을 완료한 뒤 같은 work key로 재시도하십시오.",
+            }
 
         if rows and (date_from or date_to):
             rows = [r for r in rows if _row_in_date_range(r, date_from, date_to)]
@@ -2975,6 +3057,18 @@ async def collect_bank_via_browser_session_async(
                     }
                 step_result["attempt_index"] = str(attempt_index + 1)
                 shinhan_steps.append(step_result)
+                auth_challenge = await _detect_shinhan_auth_challenge(page, getattr(context, "pages", None))
+                if auth_challenge:
+                    safe_diagnostics.update(auth_challenge)
+                    safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
+                    return {
+                        "status": "action_required",
+                        "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+                        "rows": [],
+                        "row_count": 0,
+                        "diagnostics": safe_diagnostics,
+                        "message": "신한 금융인증/권한 확인이 필요합니다. 인증을 완료한 뒤 같은 work key로 재시도하십시오.",
+                    }
                 for key, value in step_result.items():
                     if key in {"mode", "stage"}:
                         aggregate_flow[key] = value
