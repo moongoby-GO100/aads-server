@@ -56,7 +56,7 @@ ASK_PATTERNS = (
     "vision captcha",
 )
 
-SECRET_KEYS = re.compile(r"(password|passwd|secret|token|api[_-]?key|otp|mfa|2fa|authorization)", re.I)
+SECRET_KEYS = re.compile(r"(password|passwd|secret|token|api[_-]?key|otp|captcha|mfa|2fa|authorization)", re.I)
 
 
 @dataclass(frozen=True)

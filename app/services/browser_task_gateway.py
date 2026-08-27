@@ -139,6 +139,74 @@ def _scope_allows_action(
     return True, "approved_scope_match"
 
 
+def _iso(value: Any) -> str:
+    if not value:
+        return ""
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value)
+
+
+def _permission_decision_audit_payload(
+    row: Any,
+    *,
+    request_id: str,
+    decision: str,
+    decided_by: str,
+    reason: str,
+    approval_scope: dict[str, Any] | None,
+    max_executions: int | None,
+    approval_token_issued: bool,
+) -> dict[str, Any]:
+    item = dict(row)
+    scope = approval_scope or _json_dict(item.get("approval_scope"))
+    return {
+        "request_id": request_id,
+        "decision": decision,
+        "reason": reason,
+        "decided_by": decided_by,
+        "decided_at": _iso(item.get("decided_at")),
+        "work_key": item.get("work_key") or "",
+        "origin": item.get("origin") or "",
+        "action_type": item.get("action_type") or "",
+        "action_summary": item.get("action_summary") or "",
+        "approval_scope": mask_sensitive_value(scope),
+        "max_executions": max_executions if max_executions is not None else item.get("max_executions"),
+        "approval_token_issued": approval_token_issued,
+    }
+
+
+def _approval_token_audit_payload(
+    row: Any,
+    *,
+    action_type: str,
+    origin: str,
+    selector: str = "",
+    reason: str,
+    status: str,
+    used_executions: int | None = None,
+) -> dict[str, Any]:
+    item = dict(row)
+    payload = {
+        "status": status,
+        "request_id": str(item.get("request_id") or ""),
+        "approved_by": item.get("created_by") or "",
+        "approved_at": _iso(item.get("created_at")),
+        "work_key": item.get("work_key") or "",
+        "approved_origin": item.get("origin") or "",
+        "actual_origin": origin,
+        "action_type": action_type,
+        "action_summary": item.get("action_summary") or "",
+        "selector": selector,
+        "approval_scope": mask_sensitive_value(_json_dict(item.get("approval_scope"))),
+        "max_executions": item.get("max_executions"),
+        "used_executions": used_executions if used_executions is not None else item.get("used_executions"),
+        "expires_at": _iso(item.get("expires_at")),
+        "reason": reason,
+    }
+    return mask_sensitive_value(payload)
+
+
 def _task_to_dict(row: Any) -> dict[str, Any]:
     item = dict(row)
     for key in ("id", "tenant_id", "session_id", "approval_request_id"):
@@ -501,13 +569,16 @@ async def decide_permission(
                 tenant_id=tenant_id,
                 task_id=str(task_row["id"]),
                 event_type=f"permission:{normalized}",
-                payload={
-                    "request_id": request_id,
-                    "reason": reason,
-                    "approval_scope": approval_scope or {},
-                    "max_executions": max_executions,
-                    "approval_token_issued": bool(approval_token_hash),
-                },
+                payload=_permission_decision_audit_payload(
+                    row,
+                    request_id=request_id,
+                    decision=normalized,
+                    decided_by=decided_by,
+                    reason=reason,
+                    approval_scope=approval_scope,
+                    max_executions=max_executions,
+                    approval_token_issued=bool(approval_token_hash),
+                ),
             )
     result = _permission_to_dict(row)
     if approval_token:
@@ -558,7 +629,14 @@ async def consume_approval_token(
                 tenant_id=tenant_id,
                 task_id=task_id,
                 event_type="approval_token:denied",
-                payload={"action_type": action_type, "origin": origin, "reason": "execution_limit_exceeded"},
+                payload=_approval_token_audit_payload(
+                    row,
+                    action_type=action_type,
+                    origin=origin,
+                    selector=selector,
+                    reason="execution_limit_exceeded",
+                    status="denied",
+                ),
             )
             return {"status": "denied", "reason": "execution_limit_exceeded"}
         allowed, reason = _scope_allows_action(
@@ -574,7 +652,14 @@ async def consume_approval_token(
                 tenant_id=tenant_id,
                 task_id=task_id,
                 event_type="approval_token:denied",
-                payload={"action_type": action_type, "origin": origin, "selector": selector, "reason": reason},
+                payload=_approval_token_audit_payload(
+                    row,
+                    action_type=action_type,
+                    origin=origin,
+                    selector=selector,
+                    reason=reason,
+                    status="denied",
+                ),
             )
             return {"status": "denied", "reason": reason}
         updated = await conn.fetchrow(
@@ -592,7 +677,15 @@ async def consume_approval_token(
             tenant_id=tenant_id,
             task_id=task_id,
             event_type="approval_token:consumed",
-            payload={"action_type": action_type, "origin": origin, "selector": selector, "reason": reason},
+            payload=_approval_token_audit_payload(
+                row,
+                action_type=action_type,
+                origin=origin,
+                selector=selector,
+                reason=reason,
+                status="approved",
+                used_executions=int(updated["used_executions"]),
+            ),
         )
     return {
         "status": "approved",
