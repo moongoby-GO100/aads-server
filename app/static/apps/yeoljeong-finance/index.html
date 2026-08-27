@@ -2459,48 +2459,29 @@
               <span>중화점, 성신여대점, 미아점 통합 운영관리</span>
             </div>
           </div>
-          <span class="auth-kicker">열정국밥 운영관리 웹앱</span>
-          <h2>직원은 먼저 회원가입하고, 관리자는 승인부터 계약까지 이어서 처리합니다</h2>
-          <p>직원 가입요청, 입사서류, 근로계약, 판매사이트 정산, 은행 입금, 매입처 증빙을 사업자와 지점 기준으로 분리해 월마감에 바로 쓸 수 있게 정리합니다.</p>
-          <div class="auth-summary" aria-label="운영 범위 요약">
+          <span class="auth-kicker">FB 매장비서</span>
+          <h2>매장 운영 로그인</h2>
+          <p>관리자는 운영 화면으로, 직원은 승인 상태에 맞는 직원 화면으로 들어갑니다.</p>
+          <div class="auth-summary compact" aria-label="권한 구분 요약">
             <div>
-              <strong>판매사이트</strong>
-              <span>배민, 쿠팡이츠, 요기요, 땡겨요 계정과 정산 자료를 분리 보관</span>
+              <strong>관리자</strong>
+              <span>사업자, 연동, 직원 승인, 계약, 급여 관리</span>
             </div>
             <div>
-              <strong>입금 대사</strong>
-              <span>은행 입금내역과 배달앱 정산 금액을 월별로 비교</span>
+              <strong>직원</strong>
+              <span>회원가입 후 기본정보와 입사서류 등록</span>
             </div>
-            <div>
-              <strong>직원 회원가입</strong>
-              <span>초대 대기 없이 직접 가입요청 후 입사서류 업로드</span>
-            </div>
-            <div>
-              <strong>권한 분리</strong>
-              <span>총괄 운영관리자, 운영관리자, 직원 화면을 역할별로 구분</span>
-            </div>
-          </div>
-          <div class="auth-flow-steps" aria-label="직원 가입 흐름">
-            <span>1. 직원 회원가입</span>
-            <span>2. 가입요청 자동 생성</span>
-            <span>3. 입사서류 업로드</span>
-            <span>4. 관리자 승인 후 계약</span>
-          </div>
-          <div class="auth-checklist" aria-label="로그인 후 관리 범위">
-            <span>서버 저장, 자동 수집, 직원 서류 검수는 로그인 세션에서만 실행</span>
-            <span>사업자/지점/계정 정보를 분리해 월마감 기준 데이터 오염 방지</span>
-            <span>초대 링크는 보조 수단이며 기본 입사 흐름은 직원 직접 회원가입</span>
           </div>
         </div>
         <section class="auth-card">
           <div class="panel-head">
-            <h2 id="authGateTitle" class="panel-title">직원 회원가입</h2>
+            <h2 id="authGateTitle" class="panel-title">운영관리 로그인</h2>
           </div>
           <div class="auth-mode-tabs" role="tablist" aria-label="인증 방식">
-            <button id="authModeSignup" class="active" type="button" role="tab" aria-selected="true">회원가입</button>
-            <button id="authModeLogin" type="button" role="tab" aria-selected="false">로그인</button>
+            <button id="authModeLogin" class="active" type="button" role="tab" aria-selected="true">로그인</button>
+            <button id="authModeSignup" type="button" role="tab" aria-selected="false">직원 회원가입</button>
           </div>
-          <form id="gateLoginForm" class="panel-body hidden">
+          <form id="gateLoginForm" class="panel-body">
             <label>이메일
               <input name="email" type="email" autocomplete="username" required>
             </label>
@@ -2508,37 +2489,24 @@
               <input name="password" type="password" autocomplete="current-password" required>
             </label>
             <button class="primary" type="submit">로그인</button>
-            <button id="openSignupFromGateBtn" type="button">직원 회원가입 먼저 하기</button>
+            <button id="openSignupFromGateBtn" type="button">직원 회원가입</button>
             <p class="auth-help">관리자는 로그인 후 자동화, 설정, 직원 서류 검수와 계약 작성을 사용할 수 있습니다.</p>
           </form>
-          <form id="gateSignupForm" class="panel-body">
-            <label>이름
-              <input name="name" type="text" autocomplete="name" required>
-            </label>
+          <form id="gateSignupForm" class="panel-body hidden">
+            <input name="name" type="hidden">
             <label>이메일
               <input name="email" type="email" autocomplete="email" required>
             </label>
-            <label>가입 구분
-              <select name="accountType">
-                <option value="employee">직원</option>
-                <option value="manager">운영관리자</option>
-              </select>
-            </label>
+            <input name="accountType" type="hidden" value="employee">
             <label>희망 지점
               <select name="branch"></select>
             </label>
             <label>연락처
               <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
             </label>
-            <label>생년월일
-              <input name="birthDate" type="date" autocomplete="bday">
-            </label>
-            <label>주소
-              <input name="address" autocomplete="street-address" placeholder="근로계약서에 표시할 주소">
-            </label>
-            <label>국적
-              <input name="nationality" value="대한민국" autocomplete="country-name">
-            </label>
+            <input name="birthDate" type="hidden">
+            <input name="address" type="hidden">
+            <input name="nationality" type="hidden" value="대한민국">
             <input name="organizationName" type="hidden" value="열정국밥 운영관리">
             <label>비밀번호
               <input name="password" type="password" autocomplete="new-password" minlength="8" required>
@@ -2548,7 +2516,7 @@
             </label>
             <button class="primary" type="submit">회원가입 후 입사서류 등록</button>
             <button id="openLoginFromGateBtn" type="button">로그인으로 전환</button>
-            <p class="auth-help">직원은 가입과 동시에 가입요청이 생성되고 입사서류 화면으로 이동합니다. 관리 권한은 총괄 운영관리자가 승인합니다.</p>
+            <p class="auth-help">가입 후 로그인 상태에서 기본정보와 입사서류를 따로 등록합니다.</p>
           </form>
           <form id="gateInviteAcceptForm" class="panel-body hidden">
             <label>초대 토큰
@@ -2589,7 +2557,8 @@
           <button class="tab" data-view="sales">매출·정산</button>
           <button class="tab" data-view="accounts">입금·계좌</button>
           <div class="side-label">운영</div>
-          <button class="tab" data-view="employees">직원·급여</button>
+          <button class="tab" data-view="employees">직원관리</button>
+          <button class="tab" data-view="payroll">급여관리</button>
           <button class="tab" data-view="inventory">재고·발주</button>
           <button class="tab" data-view="tax">세무·회계</button>
           <button class="tab" data-view="approvals">통합 승인함</button>
@@ -2602,7 +2571,7 @@
           <button class="tab" data-view="business">사업자·지점</button>
           <button class="tab" data-view="integrations">연동 관리</button>
           <button class="tab" data-view="margins">원가·마진</button>
-          <button class="tab" data-view="audit">권한·감사로그</button>
+          <button class="tab" data-view="audit">회원·권한관리</button>
           <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
         </nav>
         <div class="app-sidebar-foot">권한, 자동수집, 문서 보관은 로그인 세션 기준으로 제한됩니다.</div>
@@ -2624,7 +2593,9 @@
               <button class="tab" data-view="approvals">승인함</button>
               <button class="tab" data-view="contracts">계약서</button>
               <button class="tab" data-view="onboarding">입사서류</button>
+              <button class="tab" data-view="payroll">급여관리</button>
               <button class="tab" data-view="integrations">연동관리</button>
+              <button class="tab" data-view="audit">회원권한</button>
             </nav>
             <button id="csvBtn" class="primary">CSV 추가</button>
           </div>
@@ -2826,6 +2797,26 @@
 
       <section id="taxView" class="hidden">
         <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">전문 세무관리</h2>
+                <p class="muted" style="margin:4px 0 0">홈택스·계산서·급여자료를 부가세, 원천세, 증빙 누락, 신고서 미리보기 기준으로 나눠 검토합니다.</p>
+              </div>
+              <div class="business-page-actions">
+                <button type="button" data-integration-detail="tax-connect">홈택스 연동</button>
+                <button type="button" data-open-import="tax_invoice_upload" class="primary">세무증빙 등록</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="ops-status-grid" aria-label="전문 세무관리 바로가기">
+                <div class="ops-card"><small>부가세</small><strong>매출·매입 세액 대장</strong><span>배달앱 매출, 카드/PG, 홈택스 매입세금계산서를 과세/면세/불공제 기준으로 대조합니다.</span></div>
+                <div class="ops-card"><small>원천세</small><strong>급여·3.3% 신고자료</strong><span>급여내역서, 프리랜서 원천징수, 지급명세서 제출 대상을 분리합니다.</span></div>
+                <div class="ops-card"><small>증빙</small><strong>누락·불일치 검토</strong><span>은행 출금, 매입처 주문, 영수증/OCR, 세금계산서 누락을 한 표에서 확인합니다.</span></div>
+                <div class="ops-card"><small>신고</small><strong>A4 신고서·납부서 미리보기</strong><span>대표 검토 후 세무대리인 승인함으로 넘길 항목을 정리합니다.</span></div>
+              </div>
+            </div>
+          </section>
           <section class="panel">
             <div class="panel-head"><h2 class="panel-title">세무·회계 체크</h2><button type="button" data-view="documents">증빙 보관</button></div>
             <div class="panel-body"><div id="taxSummaryRows" class="progress-list"></div></div>
@@ -2835,6 +2826,14 @@
             <div class="panel-body">
               <div class="table-wrap">
                 <table><thead><tr><th>서비스</th><th>수집방식</th><th>상태</th><th>확인값</th></tr></thead><tbody id="taxRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+          <section class="panel span-2">
+            <div class="panel-head"><h2 class="panel-title">세무 상세 대장</h2><span id="taxLedgerBadge" class="badge info">검토 기준</span></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>업무</th><th>원장/자료</th><th>검토 기준</th><th>다음 처리</th></tr></thead><tbody id="taxLedgerRows"></tbody></table>
               </div>
             </div>
           </section>
@@ -4328,6 +4327,17 @@
               </div>
             </div>
           </section>
+          <section class="panel">
+            <div class="panel-head">
+              <div><h2 class="panel-title">중복 연동 점검</h2><p class="muted">사업자·지점·서비스가 같은 연동은 정상값이 많은 1건만 유지 대상으로 표시합니다.</p></div>
+              <span id="integrationDuplicateBadge" class="badge info">0건</span>
+            </div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>사업자·지점</th><th>서비스</th><th>중복</th><th>유지 추천</th><th>정리 기준</th></tr></thead><tbody id="integrationDuplicateRows"></tbody></table>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
 
@@ -4344,8 +4354,21 @@
 
       <section id="auditView" class="hidden">
         <div class="grid content-grid">
+          <section class="panel span-2">
+            <div class="panel-head"><h2 class="panel-title">회원 권한 구분 (5단계)</h2><span id="memberRoleBadge" class="badge info">5상태</span></div>
+            <div class="panel-body">
+              <div id="currentMemberLevelNote" class="settings-note" style="margin-bottom:12px">로그인하면 현재 계정의 권한 단계가 표시됩니다.</div>
+              <div class="ops-status-grid" id="memberRoleCards" aria-label="회원 권한 단계">
+                <div class="ops-card member-level" data-level="owner"><small>owner</small><strong>총괄 관리자</strong><span>전체 사업자, 연동, 직원 승인, 계약, 급여, 세무 승인</span></div>
+                <div class="ops-card member-level" data-level="admin"><small>admin</small><strong>운영 관리자</strong><span>지점 운영, 직원 검수, 수집 실행, 월마감 보조</span></div>
+                <div class="ops-card member-level" data-level="employee"><small>employee</small><strong>직원</strong><span>본인 근태, 입사서류, 계약서, 급여내역서 확인</span></div>
+                <div class="ops-card member-level" data-level="employee_pending"><small>employee_pending</small><strong>가입 대기</strong><span>본인 기본정보와 입사서류 등록, 승인 대기 확인</span></div>
+                <div class="ops-card member-level" data-level="employee_rejected"><small>employee_rejected</small><strong>반려</strong><span>반려 사유 확인, 재신청 또는 관리자 문의</span></div>
+              </div>
+            </div>
+          </section>
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">권한·감사로그</h2></div>
+            <div class="panel-head"><h2 class="panel-title">현재 권한 상태</h2></div>
             <div class="panel-body"><div id="auditSummaryRows" class="progress-list"></div></div>
           </section>
           <section class="panel">
@@ -4353,6 +4376,14 @@
             <div class="panel-body">
               <div class="table-wrap">
                 <table><thead><tr><th>시각</th><th>구분</th><th>대상</th><th>상태</th></tr></thead><tbody id="auditRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+          <section class="panel span-2">
+            <div class="panel-head"><h2 class="panel-title">권한 단계 상세</h2></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>단계</th><th>대상</th><th>허용 범위</th><th>진입 화면</th></tr></thead><tbody id="memberRoleRows"></tbody></table>
               </div>
             </div>
           </section>
@@ -4397,33 +4428,20 @@
       </div>
       <div class="panel-body grid">
         <form id="signupForm" class="grid">
-          <label>이름
-            <input name="name" autocomplete="name" placeholder="운영자명" required>
-          </label>
+          <input name="name" type="hidden">
           <label>이메일
             <input name="email" type="email" autocomplete="username" placeholder="user@fb.newtalk.kr" required>
           </label>
-          <label>가입 구분
-            <select name="accountType">
-              <option value="employee">직원</option>
-              <option value="manager">운영관리자</option>
-            </select>
-          </label>
+          <input name="accountType" type="hidden" value="employee">
           <label>희망 지점
             <select name="branch"></select>
           </label>
           <label>연락처
             <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
           </label>
-          <label>생년월일
-            <input name="birthDate" type="date" autocomplete="bday">
-          </label>
-          <label>주소
-            <input name="address" autocomplete="street-address" placeholder="근로계약서에 표시할 주소">
-          </label>
-          <label>국적
-            <input name="nationality" value="대한민국" autocomplete="country-name">
-          </label>
+          <input name="birthDate" type="hidden">
+          <input name="address" type="hidden">
+          <input name="nationality" type="hidden" value="대한민국">
           <input name="organizationName" type="hidden" value="열정국밥 운영관리">
           <label>비밀번호
             <input name="password" type="password" autocomplete="new-password" minlength="8" required>
@@ -4434,7 +4452,7 @@
           <button class="primary" type="submit">회원가입 후 입사서류 등록</button>
         </form>
         <div class="settings-note">
-          직원은 가입 즉시 가입요청이 생성되고 입사서류 등록으로 이동합니다. 운영관리자는 총괄 운영관리자 승인 후 설정과 자동화 기능을 사용할 수 있습니다.
+          직원은 가입 즉시 가입요청이 생성되고, 로그인 후 기본정보와 입사서류를 따로 등록합니다.
         </div>
       </div>
     </section>
@@ -5771,8 +5789,12 @@
       return state.settings;
     }
 
+    function isActiveBranch(item) {
+      return String(item?.status || "active").toLowerCase() === "active";
+    }
+
     function activeBranches() {
-      return settings().branches.filter(item => item.status !== "closed");
+      return settings().branches.filter(isActiveBranch);
     }
 
     function businessName(id) {
@@ -5812,7 +5834,7 @@
 
     function selectedBusinessBranches(cfg = settings()) {
       const businessId = selectedSettingsBusinessId();
-      return cfg.branches.filter(item => item.businessId === businessId);
+      return cfg.branches.filter(item => item.businessId === businessId && isActiveBranch(item));
     }
 
     function selectedBusinessBranchNames(cfg = settings()) {
@@ -6208,6 +6230,19 @@
           <tr><td>${escapeHtml(integrationLabels[item.service] || item.service)}</td><td>${escapeHtml(collectionModeLabel(item.collectionMode))}</td><td>${escapeHtml(integrationStatusLabels[item.status]?.[0] || item.status || "미지정")}</td><td>${escapeHtml(item.requiredProof || integrationCatalog[item.service]?.requiredProof || "-")}</td></tr>
         `).join("") : tableEmpty(4, "홈택스·세무 증빙 연동을 등록하십시오.");
       }
+      if (els.taxLedgerBadge) {
+        els.taxLedgerBadge.textContent = `증빙 ${documentRows.length}건`;
+        els.taxLedgerBadge.className = `badge ${documentRows.length ? "good" : "warn"}`;
+      }
+      if (els.taxLedgerRows) {
+        const taxLedgerRows = [
+          ["부가세 매출대장", "배달앱 매출, 카드/PG, 현금영수증", `매출 ${formatMoney(m.sales)} / 입금차이 ${formatMoney(m.depositGap)}`, "월마감 전 과세·면세·수수료 대조"],
+          ["부가세 매입대장", "홈택스 매입세금계산서, 매입처 거래명세서, 영수증 OCR", `매입 ${formatMoney(m.marketbom)} / 식재료율 ${foodRate.toFixed(1)}%`, "불공제·누락 증빙 확인 후 세무대리인 공유"],
+          ["원천세/지급명세서", "급여내역서, 3.3% 프리랜서 정산, 4대보험 공제", `급여내역서 ${visiblePayrollStatements().length}건`, "신고대상 직원·프리랜서 분리"],
+          ["신고서·납부서 미리보기", "부가세, 원천세, 종합/법인세 보조자료", `세무 연동 ${taxIntegrations.length}개`, "A4 미리보기 확인 후 대표 승인"]
+        ];
+        els.taxLedgerRows.innerHTML = taxLedgerRows.map(row => `<tr><td>${escapeHtml(row[0])}</td><td>${escapeHtml(row[1])}</td><td>${escapeHtml(row[2])}</td><td>${escapeHtml(row[3])}</td></tr>`).join("");
+      }
 
       const approvalRows = [];
       employeeJoinRequests.filter(item => String(item.status || "").toLowerCase() === "pending").forEach(item => approvalRows.push(["가입요청", item.name || item.employee_name || item.email || "-", "승인대기", "employees"]));
@@ -6238,12 +6273,12 @@
         els.alertCenterRows.innerHTML = alertRows.length ? alertRows.map(item => progressRow(item[0], item[1], item[2], 70)).join("") : progressRow("정상", "즉시 처리 알림 없음", "good", 100);
       }
 
-      const branchRows = settings().branches.map(item => ["지점", item.name, businessName(item.businessId), branchStatusLabels[item.status] || item.status || "운영중"]);
+      const branchRows = activeBranches().map(item => ["지점", item.name, businessName(item.businessId), branchStatusLabels[item.status] || item.status || "운영중"]);
       const businessRows = settings().businesses.map(item => ["사업자", item.name, item.registrationNo || "미등록", item.representative || "대표자 미등록"]);
       if (els.businessSummaryRows) {
         els.businessSummaryRows.innerHTML = [
           progressRow("사업자", `${settings().businesses.length}개`, "info", 100),
-          progressRow("지점", `${settings().branches.length}개`, "info", 100),
+          progressRow("운영 지점", `${activeBranches().length}개`, "info", 100),
           progressRow("미완성 사업자", `${settings().businesses.filter(item => !item.registrationNo || !item.representative).length}개`, settings().businesses.some(item => !item.registrationNo || !item.representative) ? "warn" : "good", 60)
         ].join("");
       }
@@ -6306,6 +6341,56 @@
           </tr>`;
         }).join("") : tableEmpty(8, "검색 조건에 맞는 연동 계정이 없습니다.");
       }
+      if (els.integrationDuplicateRows) {
+        const credentialScore = item => {
+          const fields = [
+            item.username,
+            item.passwordMasked || item.password,
+            item.accountNoMasked || item.accountNo,
+            item.businessRegistrationNoMasked || item.businessRegistrationNo,
+            item.loginUrl,
+            item.apiKey || item.clientId,
+            item.vaultService,
+            item.lastSyncAt
+          ];
+          const status = String(item.status || item.lastSyncStatus || item.portalStatus || "").toLowerCase();
+          return fields.filter(value => String(value || "").trim() && !/필요|미등록/.test(String(value))).length
+            + (["vault-ready", "credential_registered", "completed", "no_records", "ready"].includes(status) ? 3 : 0)
+            + (status === "manual" ? 1 : 0);
+        };
+        const groups = new Map();
+        (settings().integrations || []).forEach(item => {
+          const key = `${integrationBusinessId(item)}|${String(item.branch || "").trim()}|${String(item.service || "").trim()}`;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(item);
+        });
+        const duplicates = Array.from(groups.values())
+          .filter(items => items.length > 1)
+          .map(items => {
+            const sorted = items.slice().sort((a, b) => {
+              const scoreGap = credentialScore(b) - credentialScore(a);
+              if (scoreGap) return scoreGap;
+              return String(b.lastSyncAt || b.updatedAt || "").localeCompare(String(a.lastSyncAt || a.updatedAt || ""));
+            });
+            return { keep: sorted[0], items: sorted };
+          });
+        if (els.integrationDuplicateBadge) {
+          const duplicateCount = duplicates.reduce((sum, group) => sum + group.items.length - 1, 0);
+          els.integrationDuplicateBadge.textContent = duplicateCount ? `정리후보 ${duplicateCount}건` : "중복 없음";
+          els.integrationDuplicateBadge.className = `badge ${duplicateCount ? "warn" : "good"}`;
+        }
+        els.integrationDuplicateRows.innerHTML = duplicates.length ? duplicates.map(group => {
+          const keep = group.keep;
+          const cleanupCount = group.items.length - 1;
+          return `<tr>
+            <td>${escapeHtml(integrationScopeLabel(keep))}</td>
+            <td>${escapeHtml(integrationLabels[keep.service] || keep.service || "-")}</td>
+            <td>${group.items.length}건</td>
+            <td><strong>${escapeHtml(keep.label || keep.id || "유지 대상")}</strong><br><span class="muted">완성도 ${credentialScore(keep)}점 · ${escapeHtml(keep.lastSyncAt || "최근 동기화 없음")}</span></td>
+            <td>정상값 많은 1건 유지, 나머지 ${cleanupCount}건은 비활성/정리 후보</td>
+          </tr>`;
+        }).join("") : tableEmpty(5, "같은 사업자·지점·서비스 기준 중복 연동이 없습니다.");
+      }
       if (els.integrationIssueRows) {
         const issueRows = (settings().integrations || []).filter(item => ["blocked", "credential_required", "connector_not_configured", "credentials_missing", "portal_action_required", "upload_required"].includes(String(item.status || item.lastSyncStatus || item.portalStatus || "").toLowerCase()));
         els.integrationIssueRows.innerHTML = issueRows.length ? issueRows.slice(0, 8).map(item => {
@@ -6338,6 +6423,51 @@
           progressRow("자동화 관리", permissions.can_manage_automation ? "허용" : "제한", permissions.can_manage_automation ? "good" : "warn", 70),
           progressRow("설정 동기화", state.meta?.updatedAt || "로컬 상태", "info", 60)
         ].join("");
+      }
+      if (els.memberRoleCards || els.memberRoleRows || els.memberRoleBadge) {
+        const permissions = authPermissions();
+        const currentRole = String(permissions.role || "guest").toLowerCase();
+        const roleStages = [
+          { role: "owner", label: "총괄 관리자", target: "대표/최종 관리자", scope: "전체 사업자, 연동, 직원 승인, 계약, 급여, 세무 승인", entry: "통합 홈" },
+          { role: "admin", label: "운영 관리자", target: "점장/운영 담당", scope: "지점 운영, 직원 검수, 수집 실행, 월마감 보조", entry: "통합 홈" },
+          { role: "employee", label: "직원", target: "승인 완료 직원", scope: "본인 근태, 입사서류, 계약서, 급여내역서 확인", entry: "직원 화면" },
+          { role: "employee_pending", label: "가입 대기", target: "회원가입 완료/관리자 승인 전", scope: "본인 기본정보와 입사서류 등록, 승인 대기 확인", entry: "입사서류" },
+          { role: "employee_rejected", label: "반려", target: "가입요청 반려 직원", scope: "반려 사유 확인, 재신청 또는 관리자 문의", entry: "가입요청" }
+        ];
+        const activeRole = roleStages.some(item => item.role === currentRole) ? currentRole : "guest";
+        if (els.memberRoleBadge) {
+          const activeLabel = roleStages.find(item => item.role === activeRole)?.label || "미로그인";
+          els.memberRoleBadge.textContent = `${roleStages.length}상태 · ${activeLabel}`;
+          els.memberRoleBadge.className = `badge ${hasServerAuth() ? "good" : "warn"}`;
+        }
+        if (els.currentMemberLevelNote) {
+          const activeStage = roleStages.find(item => item.role === activeRole);
+          els.currentMemberLevelNote.textContent = activeStage
+            ? `현재 계정은 ${activeStage.label} 단계입니다. ${activeStage.scope}`
+            : "로그인하면 현재 계정의 권한 단계가 표시됩니다.";
+        }
+        if (els.memberRoleCards) {
+          els.memberRoleCards.innerHTML = roleStages.map(item => `
+            <div class="ops-card member-level ${item.role === activeRole ? "active" : ""}" data-level="${escapeHtml(item.role)}">
+              <small>${escapeHtml(item.role)}</small>
+              <strong>${escapeHtml(item.label)}</strong>
+              <span>${escapeHtml(item.scope)}</span>
+            </div>
+          `).join("");
+          document.querySelectorAll(".member-level").forEach(card => {
+            card.classList.toggle("active", card.dataset.level === activeRole);
+          });
+        }
+        if (els.memberRoleRows) {
+          els.memberRoleRows.innerHTML = roleStages.map(item => `
+            <tr>
+              <td>${badgeHtml(item.label, item.role === activeRole ? "good" : "info")}</td>
+              <td>${escapeHtml(item.target)}</td>
+              <td>${escapeHtml(item.scope)}</td>
+              <td>${escapeHtml(item.entry)}</td>
+            </tr>
+          `).join("");
+        }
       }
       if (els.auditRows) {
         const rows = [
@@ -7864,14 +7994,15 @@
       const cfg = settings();
       const selectedBusinessId = selectedSettingsBusinessId();
       const selectedBusiness = cfg.businesses.find(item => item.id === selectedBusinessId) || cfg.businesses[0] || null;
-      const selectedBranches = cfg.branches.filter(item => item.businessId === selectedBusinessId);
+      const activeBranchRows = cfg.branches.filter(isActiveBranch);
+      const selectedBranches = activeBranchRows.filter(item => item.businessId === selectedBusinessId);
       const selectedAccounts = cfg.accounts.filter(item => item.businessId === selectedBusinessId);
       const selectedIntegrations = cfg.integrations.filter(item => integrationBusinessId(item) === selectedBusinessId);
       const incompleteBusinesses = cfg.businesses.filter(item => businessCompleteness(item) < 100);
       if (els.businessPageSummaryCards) {
         const cards = [
           ["사업자", `${cfg.businesses.length}개`, "등록된 운영 주체"],
-          ["지점", `${cfg.branches.length}개`, "사업자별 운영 매장"],
+          ["운영 지점", `${activeBranchRows.length}개`, "사업자별 active 매장"],
           ["미완성", `${incompleteBusinesses.length}개`, "번호·대표자·주소 보완 필요"],
           ["선택 지점", `${selectedBranches.length}개`, "현재 사업자 기준"],
           ["정산계좌", `${selectedAccounts.length}개`, "입금대사 기준"],
@@ -7898,10 +8029,10 @@
         ` : "사업자를 신규 등록하십시오.";
       }
       if (els.businessPageListBadge) els.businessPageListBadge.textContent = `${cfg.businesses.length}개`;
-      if (els.branchPageListBadge) els.branchPageListBadge.textContent = `${cfg.branches.length}개`;
+      if (els.branchPageListBadge) els.branchPageListBadge.textContent = `${activeBranchRows.length}개`;
       if (els.businessRows) {
         els.businessRows.innerHTML = cfg.businesses.length ? cfg.businesses.map(item => {
-          const branches = cfg.branches.filter(branch => branch.businessId === item.id);
+          const branches = activeBranchRows.filter(branch => branch.businessId === item.id);
           const integrations = cfg.integrations.filter(row => integrationBusinessId(row) === item.id);
           const complete = businessCompleteness(item);
           const statusClass = complete === 100 ? "good" : "warn";
@@ -7918,7 +8049,7 @@
         }).join("") : tableEmpty(7, "사업자를 신규 등록하십시오.");
       }
       if (els.businessBranchRows) {
-        els.businessBranchRows.innerHTML = cfg.branches.length ? cfg.branches.map(item => `
+        els.businessBranchRows.innerHTML = activeBranchRows.length ? activeBranchRows.map(item => `
           <tr>
             <td><strong>${escapeHtml(item.name || "지점명 미입력")}</strong></td>
             <td>${escapeHtml(businessName(item.businessId))}</td>
@@ -7937,7 +8068,7 @@
       const selectedBusinessId = selectedSettingsBusinessId();
       const selectedBusiness = cfg.businesses.find(item => item.id === selectedBusinessId) || cfg.businesses[0] || null;
       const filteredBusinesses = selectedBusiness ? [selectedBusiness] : cfg.businesses;
-      const filteredBranches = cfg.branches.filter(item => item.businessId === selectedBusinessId);
+      const filteredBranches = cfg.branches.filter(item => item.businessId === selectedBusinessId && isActiveBranch(item));
       const filteredBranchNames = new Set(filteredBranches.map(item => item.name));
       const filteredAccounts = cfg.accounts.filter(item => item.businessId === selectedBusinessId);
       const filteredStaff = cfg.staff.filter(item => filteredBranchNames.has(item.branch));
@@ -9762,7 +9893,7 @@
       if (!hasServerAuth()) {
         els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
         window.setTimeout(() => {
-          els.gateSignupForm?.querySelector("input[name='name']")?.focus();
+          els.gateSignupForm?.querySelector("input[name='email']")?.focus();
         }, 80);
       }
     }
@@ -9997,8 +10128,8 @@
     }
 
     async function signupToServer(formData) {
-      const name = String(formData.name || "").trim();
       const email = String(formData.email || "").trim();
+      const name = String(formData.name || "").trim() || email.split("@")[0] || "직원";
       const organizationName = String(formData.organizationName || "").trim();
       const password = String(formData.password || "");
       const passwordConfirm = String(formData.passwordConfirm || "");
@@ -10048,10 +10179,10 @@
 	      els.signupModal.classList.add("hidden");
 	      els.signupForm.reset();
 	      els.signupForm.organizationName.value = "열정국밥 운영관리";
-	      els.signupForm.nationality.value = "대한민국";
-	      els.gateSignupForm.reset();
-	      els.gateSignupForm.organizationName.value = "열정국밥 운영관리";
-	      els.gateSignupForm.nationality.value = "대한민국";
+      if (els.signupForm.nationality) els.signupForm.nationality.value = "대한민국";
+      els.gateSignupForm.reset();
+      els.gateSignupForm.organizationName.value = "열정국밥 운영관리";
+      if (els.gateSignupForm.nationality) els.gateSignupForm.nationality.value = "대한민국";
 	      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
 	      if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       loadOnboardingDocumentTypes().catch(() => {});
@@ -10994,7 +11125,7 @@
       });
       els.authModeSignup?.addEventListener("click", () => {
         setAuthMode("signup");
-        els.gateSignupForm?.querySelector("input[name='name']")?.focus();
+        els.gateSignupForm?.querySelector("input[name='email']")?.focus();
       });
       els.authModeInvite?.addEventListener("click", () => {
         setAuthMode("invite");
@@ -11049,7 +11180,7 @@
         focusEmployeeSignupGate();
         if (!hasServerAuth()) {
           els.authGate?.scrollIntoView({ behavior: "smooth", block: "start" });
-          els.gateSignupForm?.querySelector("input[name='name']")?.focus();
+          els.gateSignupForm?.querySelector("input[name='email']")?.focus();
         } else {
           showToast("이미 로그인되어 있습니다. 직원 가입요청 목록을 확인하십시오.");
         }
