@@ -4372,6 +4372,53 @@
             <div class="panel-body"><div id="auditSummaryRows" class="progress-list"></div></div>
           </section>
           <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">회원가입 현황</h2><span id="memberSignupStatusBadge" class="badge warn">조회 필요</span></div>
+            <div class="panel-body">
+              <div class="ops-status-grid" id="memberSignupStatusCards" aria-label="회원가입 처리 현황"></div>
+              <div class="table-wrap" style="margin-top:12px">
+                <table><thead><tr><th>신청일</th><th>직원</th><th>지점</th><th>상태</th><th></th></tr></thead><tbody id="memberSignupRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2 class="panel-title">권한부여</h2><span id="memberPermissionBadge" class="badge info">초대 기반</span></div>
+            <div class="panel-body grid">
+              <form id="memberPermissionInviteForm" class="form-grid">
+                <label>직원 전화번호
+                  <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000" required>
+                </label>
+                <label>직원 이름
+                  <input name="name" placeholder="입사자 이름">
+                </label>
+                <label>근무 지점
+                  <select name="branch"></select>
+                </label>
+                <label>부여 권한
+                  <select name="role">
+                    <option value="member">운영 입력자</option>
+                    <option value="viewer">조회 전용</option>
+                    <option value="admin">운영관리자</option>
+                  </select>
+                </label>
+                <label>유효시간
+                  <input name="expiresInHours" type="number" min="1" max="168" value="72">
+                </label>
+                <div style="align-self:end">
+                  <button id="createMemberPermissionInviteBtn" class="primary" type="submit">권한 초대 생성</button>
+                </div>
+              </form>
+              <div id="memberPermissionInviteResult" class="settings-note">
+                신규 직원은 회원가입 승인으로 직원 권한을 부여하고, 운영자 권한은 초대 생성 시 권한을 지정해 부여합니다.
+              </div>
+              <div class="table-wrap">
+                <table><thead><tr><th>대상</th><th>권한</th><th>근거</th><th>다음 조치</th></tr></thead><tbody id="memberPermissionGrantRows"></tbody></table>
+              </div>
+              <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
+                <button id="refreshMemberAccessBtn" type="button">회원·권한 새로고침</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
             <div class="panel-head"><h2 class="panel-title">최근 운영 흔적</h2></div>
             <div class="panel-body">
               <div class="table-wrap">
@@ -4384,6 +4431,14 @@
             <div class="panel-body">
               <div class="table-wrap">
                 <table><thead><tr><th>단계</th><th>대상</th><th>허용 범위</th><th>진입 화면</th></tr></thead><tbody id="memberRoleRows"></tbody></table>
+              </div>
+            </div>
+          </section>
+          <section class="panel span-2">
+            <div class="panel-head"><h2 class="panel-title">권한 변경 이력</h2><span id="memberPermissionHistoryBadge" class="badge info">최근 항목</span></div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table><thead><tr><th>시각</th><th>구분</th><th>대상</th><th>처리</th><th>메모</th></tr></thead><tbody id="memberPermissionHistoryRows"></tbody></table>
               </div>
             </div>
           </section>
@@ -6468,6 +6523,131 @@
             </tr>
           `).join("");
         }
+      }
+      if (els.memberSignupStatusCards || els.memberSignupRows || els.memberPermissionGrantRows || els.memberPermissionHistoryRows) {
+        const canManage = canManageOnboarding();
+        const pendingRequests = employeeJoinRequests.filter(item => String(item.status || "pending").toLowerCase() === "pending");
+        const approvedRequests = employeeJoinRequests.filter(item => String(item.status || "").toLowerCase() === "approved");
+        const rejectedRequests = employeeJoinRequests.filter(item => String(item.status || "").toLowerCase() === "rejected");
+        const openInvites = employeeInvites.filter(item => !["accepted", "expired", "revoked"].includes(String(item.status || "pending").toLowerCase()));
+        if (els.memberSignupStatusBadge) {
+          els.memberSignupStatusBadge.textContent = !hasServerAuth() ? "로그인 필요" : `승인대기 ${pendingRequests.length}건`;
+          els.memberSignupStatusBadge.className = `badge ${pendingRequests.length ? "warn" : (hasServerAuth() ? "good" : "warn")}`;
+        }
+        if (els.memberPermissionBadge) {
+          els.memberPermissionBadge.textContent = canManage ? `부여 가능 · 대기초대 ${openInvites.length}건` : "관리자 권한 필요";
+          els.memberPermissionBadge.className = `badge ${canManage ? "good" : "warn"}`;
+        }
+        if (els.memberSignupStatusCards) {
+          els.memberSignupStatusCards.innerHTML = [
+            ["승인 대기", `${pendingRequests.length}건`, "관리자 검토 필요"],
+            ["승인 완료", `${approvedRequests.length}건`, "직원 화면 접근 가능"],
+            ["반려", `${rejectedRequests.length}건`, "사유 확인 후 재신청"],
+            ["권한 초대", `${openInvites.length}건`, "운영자/조회 권한 부여 대기"]
+          ].map(([title, value, hint]) => `
+            <div class="ops-card">
+              <small>${escapeHtml(title)}</small>
+              <strong>${escapeHtml(value)}</strong>
+              <span>${escapeHtml(hint)}</span>
+            </div>
+          `).join("");
+        }
+        if (els.memberSignupRows) {
+          if (!hasServerAuth()) {
+            els.memberSignupRows.innerHTML = tableEmpty(5, "로그인 후 회원가입 현황을 확인할 수 있습니다.");
+          } else if (!employeeJoinRequests.length) {
+            els.memberSignupRows.innerHTML = tableEmpty(5, "아직 직원 회원가입 요청이 없습니다.");
+          } else {
+            els.memberSignupRows.innerHTML = employeeJoinRequests.map(request => {
+              const status = String(request.status || "pending").toLowerCase();
+              const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : "warn");
+              const canReview = canManage && status === "pending";
+              return `
+                <tr>
+                  <td>${escapeHtml(String(request.requested_at || request.updated_at || "-").slice(0, 10))}</td>
+                  <td>${escapeHtml(request.name || request.employee_name || "-")}<br><span class="muted">${escapeHtml(request.email_masked || request.employee_email_masked || request.email || request.employee_email || "")}</span></td>
+                  <td>${escapeHtml(request.branch || "-")}</td>
+                  <td>${badgeHtml(status, statusClass)}</td>
+                  <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
+                    ${canReview ? `<button data-review-join="${escapeHtml(request.id)}" data-review-action="approved">승인</button><button class="danger" data-review-join="${escapeHtml(request.id)}" data-review-action="rejected">반려</button>` : `<span class="muted">${escapeHtml(request.review_memo || request.memo || "")}</span>`}
+                  </td>
+                </tr>`;
+            }).join("");
+          }
+        }
+        if (els.memberPermissionGrantRows) {
+          if (!hasServerAuth()) {
+            els.memberPermissionGrantRows.innerHTML = tableEmpty(4, "로그인 후 권한부여 대상을 확인할 수 있습니다.");
+          } else {
+            const grants = [
+              ...pendingRequests.map(item => ({
+                target: `${item.name || item.employee_name || "-"} · ${item.branch || "지점 미지정"}`,
+                role: "직원 승인 대기",
+                basis: item.email_masked || item.email || item.employee_email || "직원 회원가입",
+                action: canManage ? "승인 또는 반려 처리" : "관리자 권한 필요",
+                klass: "warn"
+              })),
+              ...approvedRequests.slice(0, 6).map(item => ({
+                target: `${item.name || item.employee_name || "-"} · ${item.branch || "지점 미지정"}`,
+                role: "직원",
+                basis: "가입요청 승인 완료",
+                action: "본인 서류/계약/급여 화면 접근",
+                klass: "good"
+              })),
+              ...openInvites.slice(0, 6).map(item => ({
+                target: `${item.name || item.phone_masked || item.phone || "-"} · ${item.branch || "지점 미지정"}`,
+                role: roleLabel(item.role || "member"),
+                basis: "권한 초대 생성",
+                action: "초대 수락 대기",
+                klass: "info"
+              }))
+            ];
+            els.memberPermissionGrantRows.innerHTML = grants.length ? grants.map(item => `
+              <tr>
+                <td>${escapeHtml(item.target)}</td>
+                <td>${badgeHtml(item.role, item.klass)}</td>
+                <td>${escapeHtml(item.basis)}</td>
+                <td>${escapeHtml(item.action)}</td>
+              </tr>
+            `).join("") : tableEmpty(4, "권한부여 대기 또는 승인 직원이 없습니다.");
+          }
+        }
+        if (els.memberPermissionHistoryRows) {
+          const historyRows = [
+            ...employeeJoinRequests.map(item => ({
+              at: item.reviewed_at || item.updated_at || item.requested_at || "-",
+              type: "가입요청",
+              target: `${item.name || item.employee_name || "-"} · ${item.branch || "지점 미지정"}`,
+              status: item.status || "pending",
+              memo: item.review_memo || item.memo || ""
+            })),
+            ...employeeInvites.map(item => ({
+              at: item.accepted_at || item.updated_at || item.created_at || "-",
+              type: "권한초대",
+              target: `${item.name || item.phone_masked || item.phone || "-"} · ${item.branch || "지점 미지정"}`,
+              status: `${roleLabel(item.role || "member")} / ${item.status || "pending"}`,
+              memo: item.memo || ""
+            }))
+          ].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 12);
+          if (els.memberPermissionHistoryBadge) {
+            els.memberPermissionHistoryBadge.textContent = `${historyRows.length}건`;
+            els.memberPermissionHistoryBadge.className = `badge ${historyRows.length ? "info" : "warn"}`;
+          }
+          els.memberPermissionHistoryRows.innerHTML = historyRows.length ? historyRows.map(item => `
+            <tr>
+              <td>${escapeHtml(String(item.at).slice(0, 16))}</td>
+              <td>${escapeHtml(item.type)}</td>
+              <td>${escapeHtml(item.target)}</td>
+              <td>${escapeHtml(item.status)}</td>
+              <td>${escapeHtml(item.memo)}</td>
+            </tr>
+          `).join("") : tableEmpty(5, "아직 권한 처리 이력이 없습니다.");
+        }
+        [els.createMemberPermissionInviteBtn, els.refreshMemberAccessBtn].forEach(button => {
+          if (!button) return;
+          button.disabled = !hasServerAuth() || !canManage;
+          button.title = canManage ? "" : "총괄 운영관리자 또는 운영관리자 권한 필요";
+        });
       }
       if (els.auditRows) {
         const rows = [
@@ -9164,6 +9344,9 @@
       if (currentView === "employees" && canManageOnboarding()) loadEmployeeInvites().catch(err => showToast(`초대 조회 실패: ${err.message}`));
       if (currentView === "employees" && hasServerAuth()) loadEmployeeJoinRequests().catch(err => showToast(`가입요청 조회 실패: ${err.message}`));
       if (currentView === "employees" && hasServerAuth()) loadOnboardingDocuments().catch(err => showToast(`서류 조회 실패: ${err.message}`));
+      if (currentView === "audit" && canManageOnboarding()) loadEmployeeInvites().catch(err => showToast(`초대 조회 실패: ${err.message}`));
+      if (currentView === "audit" && hasServerAuth()) loadEmployeeJoinRequests().catch(err => showToast(`가입요청 조회 실패: ${err.message}`));
+      if (currentView === "audit" && hasServerAuth()) loadOnboardingDocuments().catch(err => showToast(`서류 조회 실패: ${err.message}`));
       if (currentView === "onboarding" && hasServerAuth()) loadOnboardingDocuments().catch(err => showToast(`서류 조회 실패: ${err.message}`));
       if (currentView === "contracts" && hasServerAuth()) loadEmployeeContracts().catch(err => showToast(`계약서 조회 실패: ${err.message}`));
       if ((currentView === "contracts" || currentView === "payroll") && canManageOnboarding()) loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
@@ -9600,6 +9783,7 @@
       const payload = await financeApi("/employees/invites");
       employeeInvites = payload.invites || [];
       renderEmployees();
+      renderOperationalPages();
     }
 
     async function loadEmployeeJoinRequests() {
@@ -9611,6 +9795,7 @@
       const payload = await financeApi("/employees/join-requests");
       employeeJoinRequests = payload.requests || [];
       renderEmployees();
+      renderOperationalPages();
     }
 
     async function loadEmployeeContracts() {
@@ -9634,6 +9819,7 @@
       const payload = await financeApi(`/employees/approved${businessId ? `?business_id=${encodeURIComponent(businessId)}` : ""}`);
       approvedEmployees = payload.employees || [];
       refreshApprovedEmployeeSelects();
+      renderOperationalPages();
     }
 
     async function loadPayrollStatements() {
@@ -9789,8 +9975,9 @@
       const invite = payload.invite || {};
       const token = invite.token || "";
       const link = token ? inviteAcceptUrl(token) : "";
-      if (els.employeeInviteResult) {
-        els.employeeInviteResult.innerHTML = link
+      const resultTarget = form.id === "memberPermissionInviteForm" ? els.memberPermissionInviteResult : els.employeeInviteResult;
+      if (resultTarget) {
+        resultTarget.innerHTML = link
           ? renderInviteShareBox(invite, link)
           : "초대가 생성됐지만 토큰이 응답에 없습니다. 대기 초대 목록을 확인하십시오.";
       }
@@ -9803,6 +9990,7 @@
       form.expiresInHours.value = "72";
       initSelects();
       await loadEmployeeInvites();
+      renderOperationalPages();
     }
 
     async function acceptEmployeeInvite(form) {
@@ -11156,7 +11344,19 @@
         event.preventDefault();
         createEmployeeInvite(els.employeeInviteForm).catch(err => showToast(`초대 생성 실패: ${err.message}`));
       });
+      els.memberPermissionInviteForm?.addEventListener("submit", event => {
+        event.preventDefault();
+        createEmployeeInvite(els.memberPermissionInviteForm).catch(err => showToast(`권한 초대 생성 실패: ${err.message}`));
+      });
       els.refreshEmployeeInvitesBtn?.addEventListener("click", () => loadEmployeeInvites().catch(err => showToast(`초대 조회 실패: ${err.message}`)));
+      els.refreshMemberAccessBtn?.addEventListener("click", () => {
+        Promise.all([
+          canManageOnboarding() ? loadEmployeeInvites() : Promise.resolve(),
+          hasServerAuth() ? loadEmployeeJoinRequests() : Promise.resolve(),
+          hasServerAuth() ? loadOnboardingDocuments() : Promise.resolve()
+        ]).then(() => showToast("회원가입 현황과 권한부여 대상을 새로고침했습니다."))
+          .catch(err => showToast(`회원·권한 새로고침 실패: ${err.message}`));
+      });
       els.employeeJoinRequestForm?.addEventListener("submit", event => {
         event.preventDefault();
         submitEmployeeJoinRequest(els.employeeJoinRequestForm).catch(err => showToast(`가입요청 실패: ${err.message}`));
