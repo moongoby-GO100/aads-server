@@ -37,3 +37,21 @@ def test_chat_model_dropdown_groups_registry_backed_options():
     assert "buildSelectableModelOption" in source
     assert "compareSelectableModels" in source
     assert "{selectableModels.map((m) => (" in source
+
+
+def test_last_assistant_stays_open_until_user_collapses_it():
+    source = CHAT_PAGE.read_text()
+
+    assert "contentCollapseTouched" in source
+    assert "!contentCollapseTouched" in source
+    assert "setContentCollapseTouched(true)" in source
+    assert "msg.content.length <= LAST_ASSISTANT_AUTO_OPEN_LIMIT" not in source
+
+
+def test_completion_alert_is_deduped_by_execution_token():
+    source = CHAT_PAGE.read_text()
+
+    assert "completionAlertKeysRef" in source
+    assert "completion_token" in source
+    assert "completionAlertKey(aiMsgId, sessionId, executionId, completionToken)" in source
+    assert "showCompletionToastOnce(_lastAi979?.id, sid, ss.execution_id || currentExecutionIdRef.current, ss.completion_token)" in source

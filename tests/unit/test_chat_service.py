@@ -14,6 +14,14 @@ from app.routers import chat as chat_router
 from app.core import interrupt_queue
 
 
+def test_stale_placeholder_defaults_match_chat_recovery_contract(monkeypatch):
+    monkeypatch.delenv("STALE_PLACEHOLDER_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("STALE_CLEANUP_INTERVAL_SEC", raising=False)
+
+    assert chat_service.get_stale_placeholder_timeout_sec() == 90
+    assert chat_service.get_stale_cleanup_interval_sec() == 30
+
+
 class _AcquireCtx:
     def __init__(self, conn):
         self._conn = conn
@@ -263,8 +271,10 @@ def test_visible_message_filter_allows_hidden_streaming_placeholder_when_request
     active_filter = chat_service._visible_message_filter(is_active=True, include_streaming=True)
     inactive_filter = chat_service._visible_message_filter(is_active=False, include_streaming=True)
 
-    assert "(is_hidden = FALSE OR intent = 'streaming_placeholder')" in active_filter
-    assert "(is_hidden = FALSE OR intent = 'streaming_placeholder')" in inactive_filter
+    assert "is_hidden = FALSE" in active_filter
+    assert "OR intent = 'streaming_placeholder'" in active_filter
+    assert "is_hidden = FALSE" in inactive_filter
+    assert "OR intent = 'streaming_placeholder'" in inactive_filter
     assert "intent IN ('runner_response', 'interrupted_partial', '_archived_partial')" in active_filter
     assert "length(COALESCE(content, '')) > 200" in active_filter
     assert "AND intent IS DISTINCT FROM 'streaming_placeholder'" not in active_filter

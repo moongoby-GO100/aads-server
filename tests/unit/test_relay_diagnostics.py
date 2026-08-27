@@ -77,6 +77,16 @@ def test_codex_home_uses_ops_sandbox_defaults(tmp_path, monkeypatch) -> None:
     assert 'sandbox_mode = "danger-full-access"' in config_text
 
 
+def test_relay_reservation_keeps_minimum_slots_for_other_providers(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_RELAY_MIN_AVAILABLE_BY_RELAY", raising=False)
+    relay = _load_claude_relay_module()
+
+    relay._ACTIVE_LEASES.update({"claude": 0, "codex": 6, "antigravity": 0})
+
+    assert relay._reserved_slots_needed_for_others("codex") == 2
+    assert relay._reserved_slots_needed_for_others("claude") == 1
+
+
 def test_model_selector_resolves_codex_project_from_workspace_settings() -> None:
     assert _normalize_model_selector_codex_project(
         "[GO100] 백억이",

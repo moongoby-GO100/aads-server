@@ -1178,3 +1178,9 @@ path = '/root/aads/aads-dashboard/src/components/chat/Sid
 
 ## [2026-08-23 09:24:38 KST] [aads-dashboard] src/app/chat/ChatSidebar.tsx
 - Chat-Direct 수정: run_remote_command: sed -i 's/<span style={{ flex: 1 }}>{ws.name}<\/span>/<span style={{ flex: 1 }}>
+
+## [2026-08-27 08:48:45 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -n '4140,4200p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-08-27 08:54:12 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
+- Chat-Direct 수정: patch:     const lastAssistantId = capped.slice→    const lastAssistantId = capped.slice

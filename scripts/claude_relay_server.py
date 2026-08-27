@@ -81,6 +81,7 @@ _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python
 
 # AADS-191: 세마포어 leak 진단/방지용 활성 lease 카운터
 _ACTIVE_LEASES = {"claude": 0, "codex": 0, "antigravity": 0}
+_RELAY_MIN_AVAILABLE_DEFAULT = {"claude": 1, "antigravity": 1}
 _STDERR_READ_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_STDERR_READ_TIMEOUT_SEC", "3"))
 
 # AADS-191B: lease registry — 세션별 슬롯 점유 현황 추적 (운영 가시성)
@@ -91,6 +92,43 @@ def _next_lease_id():
     global _LEASE_ID_COUNTER
     _LEASE_ID_COUNTER += 1
     return _LEASE_ID_COUNTER
+
+
+def _parse_min_available_by_relay():
+    raw = os.getenv("CLAUDE_RELAY_MIN_AVAILABLE_BY_RELAY", "").strip()
+    if not raw:
+        return dict(_RELAY_MIN_AVAILABLE_DEFAULT)
+    parsed = {}
+    for item in raw.split(","):
+        if not item.strip() or "=" not in item:
+            continue
+        name, value = item.split("=", 1)
+        name = name.strip().lower()
+        try:
+            parsed[name] = max(0, int(value.strip()))
+        except ValueError:
+            logger.warning("invalid_min_available_by_relay item=%s", item)
+    return parsed or dict(_RELAY_MIN_AVAILABLE_DEFAULT)
+
+
+_RELAY_MIN_AVAILABLE_BY_RELAY = _parse_min_available_by_relay()
+
+
+def _semaphore_available():
+    try:
+        return int(getattr(_semaphore, "_value", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _reserved_slots_needed_for_others(relay_name):
+    needed = 0
+    for reserved_relay, minimum in _RELAY_MIN_AVAILABLE_BY_RELAY.items():
+        if reserved_relay == relay_name:
+            continue
+        active = int(_ACTIVE_LEASES.get(reserved_relay, 0) or 0)
+        needed += max(0, int(minimum) - active)
+    return needed
 
 # AADS-191B: hard timeout — 90분 초과 시 강제 종료 (정상 작업의 99% 차지하는 30분 이하 영향 없음)
 # 데이터 근거: 7일간 2834건 중 30분 이하 98.87%, 60분+ 4건 전부 interrupted(비정상)
@@ -150,30 +188,40 @@ class _SemaphoreLease:
             entry["cli_model"] = model
 
     async def __aenter__(self):
-        # AADS-191: wait_for + Semaphore.acquire race condition 방지.
-        # acquire() task를 직접 만들어 cancel 시점에 slot leak이 없도록 처리.
-        acquire_task = asyncio.ensure_future(self._semaphore.acquire())
-        try:
-            await asyncio.wait_for(asyncio.shield(acquire_task), timeout=self._timeout_sec)
-        except asyncio.TimeoutError:
-            # wait_for가 timeout 시 acquire_task는 shield로 살아있음.
-            # 이미 acquire 성공 직후일 수 있으므로 callback에서 release 보장.
-            def _release_if_acquired(task):
-                if not task.cancelled() and task.exception() is None:
-                    try:
-                        self._semaphore.release()
-                    except Exception:
-                        pass
-            acquire_task.add_done_callback(_release_if_acquired)
-            acquire_task.cancel()
-            logger.error(
-                "%s_relay_busy: session=%s acquire_timeout=%.1fs active_leases=%s",
-                self._relay_name,
-                _short_session(self._session_id),
-                self._timeout_sec,
-                dict(_ACTIVE_LEASES),
-            )
-            raise
+        deadline = time.monotonic() + self._timeout_sec
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error(
+                    "%s_relay_busy: session=%s acquire_timeout=%.1fs active_leases=%s reserved_for_others=%s",
+                    self._relay_name,
+                    _short_session(self._session_id),
+                    self._timeout_sec,
+                    dict(_ACTIVE_LEASES),
+                    _reserved_slots_needed_for_others(self._relay_name),
+                )
+                raise asyncio.TimeoutError()
+            acquire_task = asyncio.ensure_future(self._semaphore.acquire())
+            try:
+                await asyncio.wait_for(asyncio.shield(acquire_task), timeout=min(1.0, remaining))
+            except asyncio.TimeoutError:
+                # wait_for가 timeout 시 acquire_task는 shield로 살아있음.
+                # 이미 acquire 성공 직후일 수 있으므로 callback에서 release 보장.
+                def _release_if_acquired(task):
+                    if not task.cancelled() and task.exception() is None:
+                        try:
+                            self._semaphore.release()
+                        except Exception:
+                            pass
+                acquire_task.add_done_callback(_release_if_acquired)
+                acquire_task.cancel()
+                await asyncio.sleep(0.05)
+                continue
+            reserved_for_others = _reserved_slots_needed_for_others(self._relay_name)
+            if _semaphore_available() >= reserved_for_others:
+                break
+            self._semaphore.release()
+            await asyncio.sleep(0.25)
         self._acquired = True
         _ACTIVE_LEASES[self._relay_name] = _ACTIVE_LEASES.get(self._relay_name, 0) + 1
         # AADS-191B: lease registry 등록
@@ -1913,6 +1961,11 @@ async def handle_health(request):
               "max_concurrent": _MAX_CONCURRENT,
               "semaphore_available": sem_value,
               "active_leases": dict(_ACTIVE_LEASES),
+              "min_available_by_relay": dict(_RELAY_MIN_AVAILABLE_BY_RELAY),
+              "reserved_slots_needed": {
+                  name: _reserved_slots_needed_for_others(name)
+                  for name in ("claude", "codex", "antigravity")
+              },
               "lease_count": len(_LEASE_REGISTRY),
               "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC,
               "max_lease_sec": _MAX_LEASE_SEC,

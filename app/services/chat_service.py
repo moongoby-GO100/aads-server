@@ -183,7 +183,7 @@ _completion_ack_state: Dict[str, Dict[str, Any]] = getattr(
 ) or {}
 _JUST_COMPLETED_GRACE_SECS = int(os.getenv("AADS_JUST_COMPLETED_GRACE_SECONDS", "60"))
 _COMPLETION_ACK_MAX_ENTRIES = 500
-_COMPLETION_ACK_MAX_DELIVERIES = 3
+_COMPLETION_ACK_MAX_DELIVERIES = 1
 
 # 클라이언트 이탈 후 자동 종료 시간 (초): stale watchdog(최대 45분+20분)보다 먼저
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
@@ -232,8 +232,8 @@ def _normalize_final_assistant_intent(intent: Optional[str], content: str) -> Op
         return "execute"
     return intent
 _RECOVERY_PREFIX_LEN = 50
-_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 1200
-_STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 300
+_STALE_PLACEHOLDER_TIMEOUT_SEC_DEFAULT = 90
+_STALE_CLEANUP_INTERVAL_SEC_DEFAULT = 30
 _ACTIVE_STREAM_HARD_TIMEOUT_SEC_DEFAULT = 2700
 _RESPONSE_MODE_QUALITY = "quality"
 _RESPONSE_MODE_FAST = "fast"

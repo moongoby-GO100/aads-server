@@ -5666,3 +5666,27 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-26 15:55:48 KST] [aads-server] legal/sickblack-hq-move/06_이번주_실행일정표.md
 - Chat-Direct 수정: write: legal/sickblack-hq-move/06_이번주_실행일정표.md
+
+## [2026-08-27 08:21:36 KST] [aads-server] docker-compose.prod.yml
+- Chat-Direct 수정: run_remote_command: curl http://127.0.0.1:8102/health
+
+## [2026-08-27 08:48:31 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: run_remote_command: grep -n "collapsed\|collapsedSet\|collapsedIds\|messageCollapse\|collapseOld\|lo
+
+## [2026-08-27 08:49:56 KST] [aads-server] tests/unit/test_chat_lightweight_frontend_static.py
+- Chat-Direct 수정: run_remote_command: sed -n '1960,2070p' /root/aads/aads-dashboard/src/app/chat/page.tsx
+
+## [2026-08-27 08:53:54 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _COMPLETION_ACK_MAX_DELIVERIES = 3→_COMPLETION_ACK_MAX_DELIVERIES = 1
+
+## [2026-08-27 08:54:56 KST] [aads-server] scripts/patch_chat_page_p0.py
+- Chat-Direct 수정: write: scripts/patch_chat_page_p0.py
+
+## [2026-08-27 08:55:34 KST] [aads-server] scripts/patch_chat_page_p0b.py
+- Chat-Direct 수정: write: scripts/patch_chat_page_p0b.py
+
+## [2026-08-27 08:57:05 KST] [aads-server] scripts/patch_chat_page_p0c.py
+- Chat-Direct 수정: write: scripts/patch_chat_page_p0c.py
+
+## [2026-08-27 09:04:46 KST] [aads-server] scripts/rebuild_dashboard.sh
+- Chat-Direct 수정: write: scripts/rebuild_dashboard.sh

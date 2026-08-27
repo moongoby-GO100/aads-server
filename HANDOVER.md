@@ -13,8 +13,12 @@
 - Verification:
   - `python3 -m py_compile app/main.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded.
   - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded: 8 passed.
+  - Blue/green deploy succeeded at 2026-08-27 08:43 KST with `downtime_seconds=0`; active slot is `aads-server` on port `8100`.
+  - Active container env includes `YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID=7f99c528-24d` and `YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS=2e9379a1-fed`.
+  - Stale Coupang Eats running row `397e7606-c85a-459a-b5c7-7c4ca29b5f5b` was marked `failed/BACKGROUND_SYNC_STALE`.
 - Remaining:
-  - Commit, push, deploy/reload, and post-deploy env verification are required for this specific pinning patch.
+  - Latest Git state has an equivalent docs-only local/remote divergence (`ahead 1, behind 1`); code commit `932f2b7a` is present in both local `main` and `origin/main`.
+  - Existing unrelated dirty ledger/docs files were preserved.
 
 ## 2026-08-27 06:58 KST - FOOD Baemin security block cooldown and cleanup
 
@@ -8287,3 +8291,28 @@
 - Remaining:
   - Commit/push/reload are required for the running scheduler process to load the new Baemin no-force-recreate default and orphan cleanup fallback.
   - Existing unrelated dirty files were preserved.
+
+## 2026-08-27 08:57 KST - Chat final response stability P0/P1 direct patch
+
+- Request: Investigate and directly improve the chat issue where final assistant responses can collapse/disappear, the screen refreshes after completion, and completion alerts fire multiple times.
+- Findings:
+  - The dashboard collapsed long assistant responses based on a length threshold even when the message was the latest assistant response.
+  - Completion alerts could be emitted from multiple completion paths: SSE `done`, one-shot completion checks, and polling recovery.
+  - The placeholder status label used broad "checking" language that did not distinguish save wait, reconnect, model retry, tool execution, and preserved interruption states.
+  - Server stale streaming placeholder cleanup defaults were too long for the requested 60-90 second recovery contract.
+  - Relay runtime health still reports `max_concurrent=7` even though config targets 9, so runtime restart/reload is required before the relay-slot change is active.
+- Changes:
+  - `app/services/chat_service.py`: changed stale streaming placeholder defaults to 90 seconds with 30 second cleanup cadence.
+  - `scripts/claude_relay_server.py`: added provider minimum available slot reservation logic and health diagnostics for reservation state.
+  - `scripts/claude-relay-runtime.conf`: added `CLAUDE_RELAY_MIN_AVAILABLE_BY_RELAY=claude=1,antigravity=1`.
+  - `/root/aads/aads-dashboard/src/app/chat/page.tsx`: last assistant stays expanded until the user manually collapses it; placeholder labels are split by state; completion alerts are deduped by stable execution/message token; scroll settling preserves reader position after final merge.
+  - Added static/regression tests covering last assistant expansion, completion alert dedupe, stale placeholder defaults, and relay reservation helper behavior.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py scripts/claude_relay_server.py` succeeded.
+  - `npx eslint src/app/chat/page.tsx` succeeded with 0 errors and 19 existing warnings.
+  - Dashboard/server static string checks succeeded.
+  - Full targeted pytest did not run because the current host Python/venv lacks required packages such as `fastapi` and `structlog`.
+- Remaining:
+  - Commit/push/deploy/restart were not performed in this chat turn.
+  - Relay runtime still needs an approved restart/reload window to activate `max_concurrent=9` and provider reserve slots.
+  - Existing unrelated dirty files and generated backup/patch helper files were preserved.
