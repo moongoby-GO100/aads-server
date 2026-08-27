@@ -41,6 +41,11 @@ DELIVERY_BACKFILL_STALE_AFTER = timedelta(
 DELIVERY_BACKFILL_MAX_ATTEMPTS = max(1, int(os.getenv("YEOLJEONG_DELIVERY_BACKFILL_MAX_ATTEMPTS", "3")))
 DELIVERY_CHALLENGE_TIMEOUT = timedelta(minutes=20)
 DELIVERY_CHALLENGE_MAX_ATTEMPTS = 3
+BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = max(
+    1,
+    int(os.getenv("YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES", "45")),
+)
+BAEMIN_SECURITY_BLOCK_CODES = {"BAEMIN_SECURITY_BLOCKED", "PORTAL_BLOCKED", "SECURITY_BLOCKED"}
 CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
 
 DOCUMENT_TYPES: list[dict[str, str]] = [
@@ -288,6 +293,11 @@ BUSINESS_BY_BRANCH = {
 
 def _now() -> str:
     return datetime.now(KST).isoformat(timespec="seconds")
+
+
+def _delivery_baemin_security_cooldown_until(reference: datetime | None = None) -> str:
+    base = reference or datetime.now(KST)
+    return (base + timedelta(minutes=BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES)).isoformat(timespec="seconds")
 
 
 def _ensure_dirs() -> None:
@@ -7494,6 +7504,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             scopes = list(selected_backfill_statuses)
     response_ledgers = _delivery_empty_record_lists()
     response_records: list[dict[str, Any]] = []
+    baemin_security_blocked = False
 
     for business_id, branch in scopes:
         candidates = [
@@ -7517,6 +7528,8 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 )
 
         for service in requested_services:
+            if service == "baemin" and baemin_security_blocked:
+                continue
             account = accounts_by_service.get(service)
             selected_backfill_status = selected_backfill_statuses.get((business_id, branch))
             run_date_from, run_date_to = date_from, date_to
@@ -7726,7 +7739,16 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
             finished_at = _now()
             public_status = _delivery_public_collection_status(result.get("status"))
             public_error_code = _delivery_public_error_code(public_status, result.get("error_code"))
+            baemin_security_blocked_result = (
+                service == "baemin"
+                and str(result.get("error_code") or "").strip().upper()
+                in BAEMIN_SECURITY_BLOCK_CODES
+            )
             result_diagnostics = dict(result.get("diagnostics") or {})
+            if baemin_security_blocked_result:
+                result_diagnostics["hard_stop_remaining_baemin_scopes"] = True
+                result_diagnostics["cooldown_minutes"] = BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES
+                result_diagnostics["cooldown_until"] = _delivery_baemin_security_cooldown_until(finished_at and datetime.fromisoformat(finished_at))
             browser_session_id = str(browser_auth.get("browser_session_id") or "").strip()
             browser_work_key = str(browser_auth.get("browser_work_key") or "").strip()
             if browser_session_id:
@@ -7749,6 +7771,8 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                         "error_code": public_error_code,
                         "message": result.get("message") or "",
                         "counts": counts,
+                        "hard_stop_remaining_baemin_scopes": result_diagnostics.get("hard_stop_remaining_baemin_scopes") or False,
+                        "cooldown_until": result_diagnostics.get("cooldown_until") or "",
                     },
                 )
             previous_attempts = int(status_record.get("attempt_count") or 0)
@@ -7828,6 +7852,8 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     "portal_message": status_record["message"],
                 }
             )
+            if baemin_security_blocked_result:
+                baemin_security_blocked = True
 
     for kind, ledger_name in ledger_names.items():
         _write_file_rows(ledger_name, ledgers[ledger_name])

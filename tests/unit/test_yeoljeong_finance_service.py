@@ -2843,6 +2843,159 @@ def test_delivery_browser_session_result_event_records_security_block(tmp_path, 
     assert any('"event": "collection_result"' in line and "BAEMIN_SECURITY_BLOCKED" in line for line in lines)
 
 
+def test_sync_delivery_stops_remaining_baemin_scopes_after_security_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin-junghwa",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            },
+            {
+                "id": "acct-baemin-mia",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_for_account",
+        lambda payload, account, service_name, business_id, branch: {
+            "storage_state_path": "",
+            "browser_session_id": f"bb-{business_id}",
+            "browser_bridge_mode": "local_agent",
+            "browser_work_key": "yeoljeong-delivery-baemin-shared",
+            "browser_close_on_complete": "",
+        },
+    )
+    calls = []
+
+    def fake_bridge_collect(account, browser_auth, backfill_context=None):
+        calls.append(account["branch"])
+        return {
+            "status": "portal_action_required",
+            "error_code": "BAEMIN_SECURITY_BLOCKED",
+            "records": {"sales": [], "settlements": [], "reviews": [], "ads": []},
+            "message": "배민 이용 제한",
+        }
+
+    monkeypatch.setattr(service, "_collect_baemin_from_browser_bridge_session", fake_bridge_collect)
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "business_id": "all",
+            "branch": "전체",
+            "all_businesses": True,
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-01",
+            "require_pc_agent": True,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert calls == ["중화점"]
+    assert [item["branch"] for item in result["summary"]] == ["중화점"]
+    assert result["summary"][0]["error_code"] == "BAEMIN_SECURITY_BLOCKED"
+    statuses = service._read("delivery_collection_status")
+    assert len(statuses) == 1
+    assert statuses[0]["branch"] == "중화점"
+    assert statuses[0]["error_code"] == "BAEMIN_SECURITY_BLOCKED"
+    assert statuses[0]["diagnostics"]["hard_stop_remaining_baemin_scopes"] is True
+    assert statuses[0]["diagnostics"]["cooldown_minutes"] == service.BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES
+    assert statuses[0]["diagnostics"]["cooldown_until"]
+
+
+def test_sync_full_backfill_security_block_does_not_enqueue_continuation(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-baemin",
+                "service": "baemin",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+            }
+        ],
+    )
+    service._write(
+        "delivery_collection_status",
+        [
+            {
+                "id": "queued-day",
+                "job_id": "delivery-sync-test",
+                "service": "baemin",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "date_from": "2026-08-25",
+                "date_to": "2026-08-25",
+                "status": "queued",
+                "payload": {
+                    "mode": "full_backfill",
+                    "window": {"date_from": "2026-08-25", "date_to": "2026-08-25"},
+                    "checkpoint": {},
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_for_account",
+        lambda payload, account, service_name, business_id, branch: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-baemin",
+            "browser_bridge_mode": "local_agent",
+            "browser_work_key": "yeoljeong-delivery-baemin-shared",
+            "browser_close_on_complete": "",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_collect_baemin_from_browser_bridge_session",
+        lambda *args, **kwargs: {
+            "status": "portal_action_required",
+            "error_code": "BAEMIN_SECURITY_BLOCKED",
+            "records": {"sales": [], "settlements": [], "reviews": [], "ads": []},
+            "message": "배민 이용 제한",
+        },
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["baemin"],
+            "mode": "full_backfill",
+            "business_id": "all",
+            "branch": "전체",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-25",
+            "window_days": 1,
+            "max_backfill_runs": 1,
+            "require_pc_agent": True,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    statuses = service._read("delivery_collection_status")
+    assert result["summary"][0]["error_code"] == "BAEMIN_SECURITY_BLOCKED"
+    assert not [row for row in statuses if row["status"] == "queued"]
+    done = next(row for row in statuses if row["id"] == "queued-day")
+    assert done["payload"]["continuation_run_id"] == ""
+    assert done["diagnostics"]["hard_stop_remaining_baemin_scopes"] is True
+    assert done["diagnostics"]["cooldown_until"]
+
+
 @pytest.mark.asyncio
 async def test_close_baemin_browser_session_cleans_orphan_tabs_when_session_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
