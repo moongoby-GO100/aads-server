@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -348,6 +349,27 @@ def test_parse_shinhan_sortable_header_rows():
     assert rows[0]["occurred_at"] == "2026-08-24 09:15:00"
     assert rows[0]["direction"] == "in"
     assert rows[0]["amount"] == 123000
+
+
+def test_parse_shinhan_download_csv_extracts_rows():
+    csv_text = "\n".join(
+        [
+            "거래일자,거래시간,기재내용,맡기신금액,찾으신금액,잔액",
+            "2026.08.25,10:11:12,배달정산,123000,,1000000",
+            "2026.08.26,09:00:00,식자재,,45000,955000",
+        ]
+    )
+
+    rows, diag = connector.parse_bank_download_content(csv_text, "shinhan-statement.csv")
+
+    assert diag["download_parser"] == "delimited"
+    assert diag["download_parse_failure"] is False
+    assert len(rows) == 2
+    assert rows[0]["source"] == "bank-browser-download"
+    assert rows[0]["occurred_at"] == "2026-08-25 10:11:12"
+    assert rows[0]["direction"] == "in"
+    assert rows[1]["direction"] == "out"
+    assert rows[1]["amount"] == 45000
 
 
 def test_parse_with_diagnostics_on_unrecognised_table():
@@ -1396,6 +1418,63 @@ def test_collect_async_session_success_returns_parsed_rows():
     assert result["row_count"] == 2
     assert result["diagnostics"]["auth_mode"] == "pc_agent_browser"
     assert result["diagnostics"]["browser_session_id"] == "live-session-abc"
+
+
+def test_collect_async_uses_download_file_when_table_snapshot_has_no_rows():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    csv_text = "거래일자,거래시간,적요,입금액,출금액\n2026.08.25,10:11,배달정산,123000,\n"
+    encoded = base64.b64encode(csv_text.encode("cp949")).decode("ascii")
+
+    async def evaluate(expr, *args, **kwargs):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210101000000"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "계좌조회 거래내역 엑셀 다운로드"
+        if "data-aads-bank-download" in expr:
+            return ['[data-aads-bank-download="aads-bank-download-0"]']
+        if "aads-bank-statement-download" in expr:
+            return ""
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.download = AsyncMock(
+        return_value={
+            "filename": "shinhan-statement.csv",
+            "content_base64": encoded,
+            "size": len(csv_text.encode("cp949")),
+        }
+    )
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "live-session-download"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="live-session-download",
+                browser_work_key="yeoljeong-bank-browser-download",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 1
+    assert result["rows"][0]["source"] == "bank-browser-download"
+    assert result["diagnostics"]["download_status"] == "parsed"
+    assert result["diagnostics"]["screen_state"] == "transaction_download"
 
 
 def test_collect_async_missing_explicit_session_recovers_same_work_key():

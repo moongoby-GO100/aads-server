@@ -13,6 +13,8 @@ Security rules enforced here:
 from __future__ import annotations
 
 import asyncio
+import base64
+import csv
 import hashlib
 import html
 import importlib.util
@@ -1808,6 +1810,262 @@ def parse_bank_portal_html_with_diagnostics(
     return _parse_tables_with_diagnostics(_extract_tables(raw_html))
 
 
+def _decode_download_content(content: bytes) -> str:
+    for encoding in ("utf-8-sig", "cp949", "euc-kr", "utf-16", "utf-16-le"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return content.decode("utf-8", errors="replace")
+
+
+def _download_csv_delimiter(text: str) -> str:
+    first_line = next((line for line in text.splitlines() if line.strip()), "")
+    if first_line.count("\t") > first_line.count(","):
+        return "\t"
+    if first_line.count(";") > first_line.count(","):
+        return ";"
+    return ","
+
+
+def _first_csv_value(row: dict[str, str], *keys: str) -> str:
+    normalized = {_normalize_header_cell(key): value for key, value in row.items()}
+    for key in keys:
+        value = normalized.get(_normalize_header_cell(key))
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _parse_bank_download_delimited(text: str) -> list[dict[str, Any]]:
+    reader = csv.DictReader(text.splitlines(), delimiter=_download_csv_delimiter(text))
+    if not reader.fieldnames:
+        return []
+    rows: list[dict[str, Any]] = []
+    for source_row in reader:
+        raw = {str(key or "").strip(): str(value or "").strip() for key, value in source_row.items()}
+        if not any(raw.values()):
+            continue
+        combined_at = _first_csv_value(raw, "거래일시", "일시")
+        date_part = _first_csv_value(raw, "거래일자", "거래일", "일자", "날짜", "date")
+        time_part = _first_csv_value(raw, "거래시간", "시간", "time")
+        occurred_at = _clean_date(combined_at or date_part)
+        if time_part and occurred_at and re.match(r"^\d{4}-\d{2}-\d{2}$", occurred_at):
+            occurred_at = f"{occurred_at} {time_part}"
+        incoming = _clean_amount(_first_csv_value(raw, "입금액", "입금", "입금금액", "맡기신금액", "받으신금액", "deposit", "credit"))
+        outgoing = _clean_amount(_first_csv_value(raw, "출금액", "출금", "출금금액", "찾으신금액", "지급금액", "withdrawal", "debit"))
+        signed_amount = str(_first_csv_value(raw, "거래금액", "금액", "amount")).strip()
+        if not incoming and not outgoing and signed_amount:
+            amount_value = int(_clean_amount(signed_amount))
+            is_out = signed_amount.replace(",", "").strip().startswith("-") or (
+                _first_csv_value(raw, "입출금", "구분", "거래구분", "direction").lower() in {"출금", "지급", "out", "debit"}
+            )
+            incoming = 0 if is_out else amount_value
+            outgoing = amount_value if is_out else 0
+        if not occurred_at or (not incoming and not outgoing):
+            continue
+        memo = _first_csv_value(raw, "적요", "거래내용", "내용", "기재내용", "메모", "memo", "description")
+        counterparty = _first_csv_value(raw, "보낸분/받는분", "보낸분", "받는분", "거래처", "상대계좌예금주", "counterparty")
+        balance_raw = _first_csv_value(raw, "잔액", "잔고", "거래후잔액", "balance")
+        row: dict[str, Any] = {
+            "occurred_at": occurred_at,
+            "direction": "in" if incoming else "out",
+            "amount": incoming or outgoing,
+            "source": "bank-browser-download",
+        }
+        if memo:
+            row["memo"] = memo
+            row["raw_memo"] = memo
+        if counterparty:
+            row["counterparty"] = counterparty
+        if balance_raw:
+            row["balance"] = _clean_amount(balance_raw)
+        rows.append(row)
+    return rows
+
+
+def parse_bank_download_content(content: bytes | str, filename: str = "") -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Parse a downloaded bank statement without persisting raw file content."""
+    raw_text = _decode_download_content(content) if isinstance(content, bytes) else str(content or "")
+    text = raw_text.lstrip("\ufeff").strip()
+    diagnostics: dict[str, Any] = {
+        "download_filename": Path(str(filename or "bank-statement")).name[:120],
+        "download_bytes": len(raw_text.encode("utf-8", errors="ignore")),
+        "download_parser": "unknown",
+        "download_parse_failure": False,
+    }
+    if not text:
+        diagnostics["download_parse_failure"] = True
+        return [], diagnostics
+    lower_start = text[:300].lower()
+    if "<table" in lower_start or "<html" in lower_start:
+        rows, table_diag = parse_bank_portal_html_with_diagnostics(text)
+        diagnostics.update(
+            {
+                "download_parser": "html_table",
+                "download_table_count": table_diag.get("table_count", 0),
+                "download_transaction_header_found": table_diag.get("transaction_header_found", False),
+                "download_parse_failure": table_diag.get("parse_failure", False) and not rows,
+            }
+        )
+        for row in rows:
+            row.setdefault("source", "bank-browser-download")
+        return rows, diagnostics
+    rows = _parse_bank_download_delimited(text)
+    diagnostics["download_parser"] = "delimited"
+    diagnostics["download_parse_failure"] = not bool(rows)
+    return rows, diagnostics
+
+
+def _download_result_content(result: Any) -> tuple[bytes | None, str]:
+    if result is None:
+        return None, ""
+    if isinstance(result, bytes):
+        return result, ""
+    if not isinstance(result, dict):
+        return None, ""
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    filename = str(data.get("filename") or data.get("name") or data.get("path") or "bank-statement").strip()
+    text_value = data.get("text") or data.get("content") or data.get("csv_text")
+    if isinstance(text_value, str) and text_value:
+        return text_value.encode("utf-8-sig"), filename
+    encoded = data.get("content_base64") or data.get("file_base64") or data.get("base64")
+    if isinstance(encoded, str) and encoded.strip():
+        try:
+            return base64.b64decode(encoded.encode("ascii")), filename
+        except Exception:
+            return None, filename
+    path_value = str(data.get("path") or data.get("file_path") or "").strip()
+    if path_value and os.path.isfile(path_value):
+        try:
+            return Path(path_value).read_bytes(), filename or Path(path_value).name
+        except Exception:
+            return None, filename
+    return None, filename
+
+
+async def _install_synthetic_statement_download(page: Any) -> str:
+    try:
+        selector = await _evaluate_page(
+            page,
+            """
+            () => {
+              const visible = (el) => !!(el && el.offsetParent !== null);
+              const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+              const csvCell = (value) => {
+                const text = clean(value).replace(/"/g, '""');
+                return /[",\\n\\r]/.test(text) ? `"${text}"` : text;
+              };
+              const tables = Array.from(document.querySelectorAll('table')).filter(visible);
+              const target = tables.find((table) => {
+                const text = clean(table.innerText);
+                return /거래일자|거래일|날짜/.test(text) && /입금|출금|잔액|거래금액/.test(text);
+              });
+              if (!target) return '';
+              const rows = Array.from(target.rows || [])
+                .map((row) => Array.from(row.cells || []).map((cell) => csvCell(cell.innerText || cell.textContent || '')))
+                .filter((row) => row.some(Boolean));
+              if (rows.length < 2) return '';
+              const csv = rows.map((row) => row.join(',')).join('\\n');
+              const old = document.querySelector('#aads-bank-statement-download');
+              if (old) old.remove();
+              const a = document.createElement('a');
+              a.id = 'aads-bank-statement-download';
+              a.download = `shinhan-bank-statement-${Date.now()}.csv`;
+              a.href = URL.createObjectURL(new Blob(['\\ufeff' + csv], {type: 'text/csv;charset=utf-8'}));
+              a.style.position = 'fixed';
+              a.style.left = '-10000px';
+              a.textContent = 'AADS 거래내역 다운로드';
+              document.body.appendChild(a);
+              return '#aads-bank-statement-download';
+            }
+            """,
+            timeout_ms=10000,
+        )
+        return str(selector or "")
+    except Exception:
+        return ""
+
+
+async def _bank_download_selectors(page: Any) -> list[str]:
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            () => {
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const textOf = (el) => String(
+                el?.innerText || el?.value || el?.title || el?.ariaLabel || el?.getAttribute?.('aria-label') || ''
+              ).replace(/\\s+/g, ' ').trim();
+              const candidates = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]'))
+                .filter(visible)
+                .map((el) => ({el, label: textOf(el), id: String(el.id || ''), cls: String(el.className || '')}))
+                .filter((item) => /엑셀|excel|csv|다운로드|저장|내려받기|xls/i.test(`${item.label} ${item.id} ${item.cls}`))
+                .filter((item) => !/이체|송금|납부|삭제|해지/i.test(item.label));
+              return candidates.slice(0, 5).map((item, index) => {
+                const attr = `aads-bank-download-${index}`;
+                item.el.setAttribute('data-aads-bank-download', attr);
+                return `[data-aads-bank-download="${attr}"]`;
+              });
+            }
+            """,
+            timeout_ms=10000,
+        )
+        if isinstance(raw, list):
+            return [str(item) for item in raw if str(item or "").strip()]
+    except Exception:
+        pass
+    return []
+
+
+async def _try_download_bank_statement(page: Any, date_from: str, date_to: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    diagnostics: dict[str, Any] = {"download_attempted": "1", "download_status": "not_found"}
+    selectors = await _bank_download_selectors(page)
+    synthetic_selector = await _install_synthetic_statement_download(page)
+    if synthetic_selector:
+        selectors.append(synthetic_selector)
+        diagnostics["download_synthetic_available"] = "1"
+    download_method = getattr(page, "download", None)
+    for selector in selectors:
+        try:
+            if callable(download_method):
+                result = await download_method(selector, timeout_seconds=45)
+            else:
+                expect_download = getattr(page, "expect_download", None)
+                click = getattr(page, "click", None)
+                if not callable(expect_download) or not callable(click):
+                    continue
+                async with expect_download(timeout=45000) as download_info:
+                    await click(selector)
+                download = await download_info.value
+                file_path = await download.path()
+                result = {
+                    "path": file_path,
+                    "filename": getattr(download, "suggested_filename", "") or Path(str(file_path)).name,
+                }
+            content, filename = _download_result_content(result)
+            diagnostics["download_status"] = "clicked"
+            diagnostics["download_selector_used"] = selector[:120]
+            if filename:
+                diagnostics["download_filename"] = Path(filename).name[:120]
+            if content is None:
+                diagnostics["download_content_available"] = "0"
+                continue
+            rows, parse_diag = parse_bank_download_content(content, filename)
+            diagnostics.update(parse_diag)
+            diagnostics["download_content_available"] = "1"
+            if date_from or date_to:
+                rows = [row for row in rows if _row_in_date_range(row, date_from, date_to)]
+            diagnostics["download_row_count"] = len(rows)
+            if rows:
+                diagnostics["download_status"] = "parsed"
+                return rows, diagnostics
+        except Exception as exc:
+            diagnostics["download_status"] = "failed"
+            diagnostics.update(_safe_browser_error_fields(exc))
+    return [], diagnostics
+
+
 async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any]], dict[str, Any], str]:
     """Read a lightweight, redacted portal snapshot.
 
@@ -2593,6 +2851,29 @@ async def collect_bank_via_browser_session_async(
                     safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_RECHECK"
             except Exception:
                 safe_diagnostics["recheck_attempted"] = "failed"
+
+        download_blocked_states = {
+            "captcha_required",
+            "otp_required",
+            "identity_check_required",
+            "certificate_password_required",
+            "login_required",
+        }
+        if not rows and safe_diagnostics.get("screen_state") not in download_blocked_states:
+            download_rows, download_diag = await _try_download_bank_statement(page, date_from, date_to)
+            safe_diagnostics.update(download_diag)
+            if download_rows:
+                rows = download_rows
+                parse_diag = {
+                    "table_count": int(download_diag.get("download_table_count") or 0),
+                    "headers_found": [],
+                    "parse_failure": False,
+                    "transaction_header_found": True,
+                }
+                safe_diagnostics["screen_state"] = "transaction_download"
+                safe_diagnostics["screen_reason_code"] = "TRANSACTION_ROWS_PARSED_FROM_DOWNLOAD"
+                safe_diagnostics["screen_suggested_action"] = "record_download_rows"
+                safe_diagnostics["screen_requires_operator"] = "0"
 
         if rows:
             msg = f"{bank_name or '은행'} 포털에서 {len(rows)}건 수집했습니다."

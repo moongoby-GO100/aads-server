@@ -539,17 +539,17 @@ class PCAgent:
                 break
 
     async def _auto_update_loop(self, ws: Any) -> None:
-        """주기적 서버 업데이트 확인. 업데이트 감지 시 로그만 남기고 연결 유지.
-        실제 다운로드는 launcher의 주기적 체크(1시간)가 처리.
+        """주기적 서버 업데이트 확인.
+
+        업데이트가 감지되면 worker를 종료 코드 42로 내리고, launcher가 즉시
+        최신 ZIP을 다운로드한 뒤 재기동한다. launcher의 1시간 주기 체크만
+        기다리면 은행/브라우저 핫픽스 반영이 지연될 수 있다.
 
         v1.0.50: ws.state 체크 — WS 끊김 시 좀비 태스크 종료 (좀비 update loop 버그 수정).
         """
         if updater is None:
             logger.warning("updater 모듈 미로드 — 자동 업데이트 비활성화")
             return
-
-        update_detect_count = 0
-        MAX_DETECTIONS = 2
 
         await asyncio.sleep(60)
         while True:
@@ -570,16 +570,11 @@ class PCAgent:
             try:
                 has_update = await updater.check_for_updates()
                 if has_update:
-                    update_detect_count += 1
-                    logger.info(
-                        "업데이트 감지 (%d/%d) — 연결 유지, launcher 주기 체크에서 처리",
-                        update_detect_count, MAX_DETECTIONS,
-                    )
-                    if update_detect_count >= MAX_DETECTIONS:
-                        logger.info("업데이트 %d회 감지 — 이 세션에서 추가 체크 중단", MAX_DETECTIONS)
-                        return
-                else:
-                    update_detect_count = 0
+                    logger.info("업데이트 감지 — launcher 즉시 다운로드를 위해 worker 종료 요청")
+                    self._exit_for_update = True
+                    self._running = False
+                    await ws.close(code=1000, reason="auto_update")
+                    return
             except Exception as e:
                 logger.debug("자동 업데이트 확인 실패: %s", e)
             await asyncio.sleep(AUTO_UPDATE_INTERVAL)

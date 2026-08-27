@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -33,6 +34,10 @@ _ERROR_RUNTIME_EVALUATE_TIMEOUT = "RUNTIME_EVALUATE_TIMEOUT"
 _ERROR_STALE_TARGET = "STALE_TARGET"
 _ERROR_SYNTAX_ERROR = "SYNTAX_ERROR"
 _ERROR_SPA_SHELL_ONLY = "SPA_SHELL_ONLY"
+DOWNLOAD_CONTENT_MAX_BYTES = max(
+    0,
+    int(os.getenv("AADS_BROWSER_DOWNLOAD_CONTENT_MAX_BYTES", str(2 * 1024 * 1024)) or "0"),
+)
 _MSG_ID = 0
 
 
@@ -1455,7 +1460,17 @@ async def browser_download(params: Dict[str, Any]) -> Dict[str, Any]:
             if candidates:
                 candidates.sort(reverse=True)
                 path = candidates[0][1]
-                return {"status": "success", "data": {"path": path, "size": os.path.getsize(path), "download_dir": download_dir}}
+                size = os.path.getsize(path)
+                data: Dict[str, Any] = {
+                    "path": path,
+                    "filename": os.path.basename(path),
+                    "size": size,
+                    "download_dir": download_dir,
+                }
+                if DOWNLOAD_CONTENT_MAX_BYTES and size <= DOWNLOAD_CONTENT_MAX_BYTES:
+                    with open(path, "rb") as f:
+                        data["content_base64"] = base64.b64encode(f.read()).decode("ascii")
+                return {"status": "success", "data": data}
             await asyncio.sleep(0.5)
         return {"status": "error", "data": {"error": "다운로드 파일 감지 시간 초과", "download_dir": download_dir}}
     except CDPCommandError as exc:

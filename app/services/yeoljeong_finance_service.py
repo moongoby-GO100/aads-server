@@ -5292,7 +5292,7 @@ def _collect_bank_via_browser(
 
     raw_rows = browser_result.get("rows") or []
     entries = [
-        {**row, "source": "bank-browser"}
+        {**row, "source": str(row.get("source") or "bank-browser")}
         for row in raw_rows
         if isinstance(row, dict)
     ]
@@ -5307,7 +5307,7 @@ def _collect_bank_via_browser(
             "business_id": business_id,
             "branch_id": branch_id,
             "bank_account_id": account_id,
-            "source": "bank-browser",
+            "source": str(diagnostics.get("download_parser") and "bank-browser-download" or "bank-browser"),
             "transactions": annotated_entries,
         },
         user,

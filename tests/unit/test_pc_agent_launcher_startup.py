@@ -105,6 +105,41 @@ class PcAgentLauncherStartupTest(TestCase):
 
 
 class PcAgentSelfUpdateTest(IsolatedAsyncioTestCase):
+    async def test_auto_update_loop_closes_worker_for_launcher_download(self) -> None:
+        class FakeWebSocket:
+            closed = False
+            state = "OPEN"
+            close_code = None
+            close_reason = None
+
+            async def close(self, *, code: int, reason: str) -> None:
+                self.closed = True
+                self.state = "CLOSED"
+                self.close_code = code
+                self.close_reason = reason
+
+        async def fake_sleep(_seconds):  # noqa: ANN001
+            return None
+
+        async def fake_check_for_updates() -> bool:
+            return True
+
+        fake_agent = object.__new__(pc_agent_module.PCAgent)
+        fake_agent._exit_for_update = False
+        fake_agent._running = True
+        fake_agent.is_connected = True
+        ws = FakeWebSocket()
+
+        fake_updater = SimpleNamespace(check_for_updates=fake_check_for_updates)
+        with mock.patch.object(pc_agent_module.asyncio, "sleep", fake_sleep), \
+             mock.patch.object(pc_agent_module, "updater", fake_updater):
+            await fake_agent._auto_update_loop(ws)
+
+        self.assertTrue(fake_agent._exit_for_update)
+        self.assertFalse(fake_agent._running)
+        self.assertEqual(ws.close_code, 1000)
+        self.assertEqual(ws.close_reason, "auto_update")
+
     async def test_self_update_closes_worker_after_sending_result(self) -> None:
         sent: list[dict] = []
 

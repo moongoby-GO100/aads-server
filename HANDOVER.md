@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-27 11:55 KST - FOOD Shinhan PC Agent auto-update and download parsing
+
+- Trigger: CEO rejected paid bank APIs and ordered the PC Agent path to continue, including bank transaction parsing, downloaded statement ingestion, and PC Agent auto-update deployment.
+- Changes:
+  - `pc_agent/agent.py`: when the periodic updater detects a newer server version, the worker now sets `_exit_for_update`, closes the WebSocket with reason `auto_update`, and exits through code 42 so the launcher downloads the latest ZIP immediately instead of waiting for the launcher's 1-hour polling interval.
+  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped the PC Agent package to `1.0.63`.
+  - `pc_agent/commands/browser_auto.py`: `browser_download` now returns filename, size, and base64 file content for files up to the configured size limit so server-side bank parsing can ingest the downloaded statement.
+  - `app/services/yeoljeong_bank_browser_connector.py`: added CSV/TSV/HTML downloaded statement parsing, browser download button detection, synthetic statement download fallback from visible transaction tables, and diagnostics for downloaded rows.
+  - `app/services/yeoljeong_finance_service.py`: preserves `bank-browser-download` source metadata when imported rows came from a downloaded statement.
+  - Added regression tests for automatic updater worker handoff and Shinhan downloaded statement parsing.
+- Verification:
+  - Host `python3 -m py_compile pc_agent/agent.py pc_agent/commands/browser_auto.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py app/api/kakao_bot.py` succeeded.
+  - Container `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_pc_agent_launcher_startup.py tests/unit/test_pc_agent_release_guards.py` succeeded: 70 passed, 1 skipped.
+  - `git diff --check` on the changed PC Agent/bank files succeeded.
+- Deployment status:
+  - At this handover entry, commit/deploy is the next step; unrelated dirty files were left untouched.
+
 ## 2026-08-27 09:55 KST - Chat completion misclassification guard
 
 - Trigger: CEO reported that session `45249276-83a1-42ca-b58d-d5f1737a388b` showed a response as completed even though the assistant text was still an in-progress check.
