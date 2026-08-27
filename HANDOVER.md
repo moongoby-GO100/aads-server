@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-27 12:57 KST - Agent Vault AADS API login fast-path
+
+- Trigger: After deploying the Agent Vault browser timeout fallback, a live `credential_test_login` check still waited on Browser Bridge/PC Agent cleanup even though the AADS credential can be validated through `/api/v1/auth/login`.
+- Changes:
+  - `app/api/ceo_chat_tools.py`: lowered the Agent Vault browser test timeout to 10 seconds and added an AADS-only API login fast-path for `https://aads.newtalk.kr` credentials.
+  - The fast-path posts only to `/api/v1/auth/login`, returns success/failure status without printing tokens or secrets, and updates `agent_vault_credentials.last_used_at` through `mark_agent_credential_used()`.
+  - `tests/unit/test_pc_agent_tool_exposure.py`: kept the Browser timeout fallback regression on a non-AADS origin and added a regression test proving AADS Agent Vault verification does not open Browser Bridge.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat_tools.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_tool_exposure.py -q` succeeded: 17 passed.
+  - Live check on the active container returned `[API 로그인 테스트] status: success vault_type: agent_vault` and updated the representative AADS credential `last_used_at` to `2026-08-27 12:54:05.948321+09`.
+- Deployment status:
+  - `app.api.ceo_chat_tools` was hot-reloaded successfully on the active API container with `active_tasks_pre=7`, `active_tasks_post=7`, `tasks_lost=0`.
+  - `app.browser_bridge.service` remains hot-reload blocked by policy; no process restart was performed because the main workdir still has unrelated FOOD dirty files.
+
 ## 2026-08-27 12:55 KST - Agent Vault E2E timeout fallback
 
 - Trigger: Resume the E2E Agent Vault rollout verification after direct `credential_test_login` hung while recovering a stale Browser Bridge/PC Agent session.

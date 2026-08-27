@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
-_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = 25
+_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = 10
 
 _SECRET_PARAM_KEYS = {
     "password", "passwd", "pwd", "password_enc", "secret",
@@ -4761,6 +4761,42 @@ async def tool_credential_test_login(
             if not agent_cred.get("origin"):
                 return "[ERROR] Agent Vault origin이 설정되지 않아 테스트할 수 없습니다."
             browser_error = ""
+            origin = str(agent_cred.get("origin") or "").rstrip("/")
+            if urlparse(origin).netloc == "aads.newtalk.kr":
+                api_url = f"{origin}/api/v1/auth/login"
+                try:
+                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as _s:
+                        async with _s.post(
+                            api_url,
+                            json={"email": agent_cred["username"], "password": agent_cred["password"]},
+                            ssl=False,
+                        ) as _r:
+                            _h = _r.status
+                    if _h == 200:
+                        from app.services.agent_vault_service import mark_agent_credential_used
+
+                        await mark_agent_credential_used(
+                            tenant_id=tenant_id,
+                            credential_id=str(agent_cred["id"]),
+                            work_key=str(browser_work_key or agent_cred.get("work_key") or "agent-vault-test"),
+                            origin=origin,
+                            details={"method": "api_login_test", "target_url": api_url},
+                        )
+                        return (
+                            "[API 로그인 테스트]\n"
+                            "status: success\n"
+                            "vault_type: agent_vault\n"
+                            f"origin: {origin}"
+                        )
+                    return (
+                        "[API 로그인 테스트]\n"
+                        "status: failed\n"
+                        "vault_type: agent_vault\n"
+                        f"error_code: AADS_API_LOGIN_HTTP_{_h}\n"
+                        f"origin: {origin}"
+                    )
+                except Exception as ae:
+                    browser_error = f"AADS_API_LOGIN_ERROR: {ae}"
             try:
                 from app.browser_bridge.aads_adapter import acquire_browser_context
 

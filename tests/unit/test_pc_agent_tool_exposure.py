@@ -354,7 +354,7 @@ async def test_credential_test_login_agent_vault_times_out_to_api_fallback(monke
                 "id": credential_id,
                 "tenant_id": tenant_id,
                 "work_key": "aads-ceo-browser",
-                "origin": "https://aads.newtalk.kr",
+                "origin": "https://v2.newtalk.kr",
                 "label": "AADS",
                 "username_enc": "ceo@example.test",
                 "password_enc": "secret-password",
@@ -401,6 +401,91 @@ async def test_credential_test_login_agent_vault_times_out_to_api_fallback(monke
     assert "[API 폴백]" in result
     assert "vault_type: agent_vault" in result
     assert "TIMEOUT_AFTER_0.01s" in result
+
+
+@pytest.mark.asyncio
+async def test_credential_test_login_agent_vault_aads_uses_api_login_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    credential_id = "00000000-0000-0000-0000-000000000011"
+    tenant_id = "00000000-0000-0000-0000-000000000012"
+    marked: dict[str, object] = {}
+
+    async def fake_get_credential(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    class _FakePool:
+        async def fetchrow(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return {
+                "id": credential_id,
+                "tenant_id": tenant_id,
+                "work_key": "aads-ceo-browser",
+                "origin": "https://aads.newtalk.kr",
+                "label": "AADS",
+                "username_enc": "ceo@example.test",
+                "password_enc": "secret-password",
+            }
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+    class _FakeSession:
+        def __init__(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        def post(self, url, *, json, ssl):  # noqa: ANN001, A002
+            marked["api_url"] = url
+            marked["email"] = json["email"]
+            marked["password"] = json["password"]
+            marked["ssl"] = ssl
+            return _FakeResponse()
+
+    async def fake_acquire_browser_context(**_kwargs):  # noqa: ANN003
+        raise AssertionError("AADS API login fast-path must not open Browser Bridge")
+
+    async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
+        marked["used"] = kwargs
+
+    monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
+    monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fake_acquire_browser_context)
+    monkeypatch.setattr("app.services.agent_vault_service.mark_agent_credential_used", fake_mark_agent_credential_used)
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+
+    result = await ceo_chat_tools.tool_credential_test_login(
+        credential_id,
+        tenant_id=tenant_id,
+        browser_work_key="agent-vault-test-aads",
+    )
+
+    assert "[API 로그인 테스트]" in result
+    assert "status: success" in result
+    assert "vault_type: agent_vault" in result
+    assert marked["api_url"] == "https://aads.newtalk.kr/api/v1/auth/login"
+    assert marked["email"] == "ceo@example.test"
+    assert marked["password"] == "secret-password"
+    assert marked["ssl"] is False
+    assert marked["used"] == {
+        "tenant_id": tenant_id,
+        "credential_id": credential_id,
+        "work_key": "agent-vault-test-aads",
+        "origin": "https://aads.newtalk.kr",
+        "details": {
+            "method": "api_login_test",
+            "target_url": "https://aads.newtalk.kr/api/v1/auth/login",
+        },
+    }
 
 
 @pytest.mark.asyncio
