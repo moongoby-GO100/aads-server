@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.agent_vault_service import _row_to_credential, normalize_origin
-from app.services.browser_task_gateway import _task_to_dict
+from app.services.browser_task_gateway import _scope_allows_action, _task_to_dict
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
 from app.services.managed_browser import profile_info
 
@@ -28,6 +28,45 @@ def test_permission_policy_allows_routine_read_actions():
     decision = classify_browser_action("snapshot", "read dashboard status")
 
     assert decision.decision == "allow"
+
+
+def test_permission_policy_routes_captcha_model_analysis_to_approval():
+    decision = classify_browser_action(
+        "captcha_model_analysis",
+        "read captcha for approved same-page automation",
+        {"challenge_kind": "captcha", "captcha_value_source": "vision"},
+    )
+
+    assert decision.decision == "ask"
+    assert decision.risk_level == "high"
+
+
+def test_approval_scope_allows_approved_captcha_model_analysis():
+    allowed, reason = _scope_allows_action(
+        {
+            "origin": "https://boss.ddangyo.com",
+            "challenge_kinds": ["captcha"],
+            "allow_model_challenge_analysis": True,
+        },
+        action_type="captcha_model_analysis",
+        origin="https://boss.ddangyo.com/login",
+        payload={"challenge_kind": "captcha", "captcha_value_source": "vision"},
+    )
+
+    assert allowed is True
+    assert reason == "approved_scope_match"
+
+
+def test_approval_scope_blocks_unapproved_captcha_model_analysis():
+    allowed, reason = _scope_allows_action(
+        {"origin": "https://boss.ddangyo.com", "challenge_kinds": ["captcha"]},
+        action_type="captcha_model_analysis",
+        origin="https://boss.ddangyo.com/login",
+        payload={"challenge_kind": "captcha", "captcha_value_source": "vision"},
+    )
+
+    assert allowed is False
+    assert reason == "model_challenge_analysis_not_approved"
 
 
 def test_mask_sensitive_value_recurses_without_masking_safe_fields():

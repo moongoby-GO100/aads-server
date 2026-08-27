@@ -21,9 +21,9 @@ FOOD/열정국밥 판매채널 자동수집은 PC Agent 브라우저 세션, 포
 
 ## 불변 원칙
 
-- CAPTCHA, OTP, 본인인증, 기기 인증, 약관 동의는 우회하지 않는다.
+- CAPTCHA, OTP, 본인인증, 기기 인증, 약관 동의는 우회하지 않는다. 단, 권한 있는 운영자가 특정 페이지/업무/세션/실행횟수를 승인한 경우 그 범위 안에서 모델 분석, 자동입력, 자동제출, 결과 재판정까지 자동화할 수 있다.
 - 완전 자동화 목표는 공식 연동, 조회전용 계정, 신뢰된 PC Agent 세션, Vault write-only 입력, 푸시 승인 polling, 같은 work key 재개로 사람 반복 작업을 줄이는 것이다.
-- 소형 모델은 CAPTCHA/OTP 정답 생성기가 아니라 화면 상태 분류, selector 후보 추천, 파서 실패 원인 분류에만 사용한다.
+- 소형 모델은 승인 없는 CAPTCHA/OTP 정답 생성기로 사용하지 않는다. 승인된 CAPTCHA 자동화 범위에서는 같은 브라우저 세션의 해당 페이지에 한해 CAPTCHA 판독과 입력을 수행할 수 있으며, OTP 무단 생성/외부 기기 조작/승인 없는 값 읽기는 금지한다.
 - 일반 Chrome을 닫지 않는다. PC Agent 관리형 work session만 대상으로 한다.
 - 평문 비밀번호, 포털 원본 HTML, 다운로드 파일, storage state를 문서나 커밋에 남기지 않는다.
 - `browser-automation` 계정은 PC Agent 전용 세션을 우선한다. 서버 headless fallback은 명시 허용이 있을 때만 사용한다.
@@ -55,8 +55,8 @@ python3 scripts/yeoljeong_auto_collect.py --services baemin,coupangeats,yogiyo,d
 2. `delivery_collection_status`에서 최신 row의 `error_code`를 먼저 본다.
 3. `PC_AGENT_SESSION_REQUIRED`, `PC_AGENT_SESSION_NOT_FOUND`, `PC_AGENT_WRONG_PORTAL_SESSION`, `PC_AGENT_COLLECTOR_TIMEOUTERROR`는 세션 재생성 후보로 본다.
 4. `PORTAL_AUTH_CHALLENGE`, `DDANGYO_NUMERIC_CAPTCHA_REQUIRED`, `PORTAL_BLOCKED`, `CSV_UPLOAD_REQUIRED`, `MISSING_CREDENTIALS`는 먼저 `auto_resumable`, `approval_required`, `manual_only`, `blocked_by_policy`로 재분류한다.
-5. CAPTCHA/OTP/기기 인증은 자동 가능 경로를 먼저 시도하되, CAPTCHA 자동 판독, 허가 없는 OTP 생성/대리 입력, 외부 기기 조작, 권한 변경 동의는 정책 차단으로 남긴다.
-6. 땡겨요 숫자 CAPTCHA는 `operator_approved=true`와 1회성 `approved_input`이 들어온 실행에서만 같은 work key 세션에 입력한다. 계정 원장에 CAPTCHA 값을 저장하거나 재사용하지 않는다.
+5. CAPTCHA/OTP/기기 인증은 자동 가능 경로를 먼저 시도하되, 승인 없는 CAPTCHA 판독, 허가 없는 OTP 생성/대리 입력, 외부 기기 조작, 권한 변경 동의는 정책 차단으로 남긴다.
+6. 땡겨요 숫자 CAPTCHA는 `operator_approved=true`와 1회성 `approved_input`이 들어온 실행 또는 `captcha_auto_approved=true`와 승인 scope가 들어온 실행에서만 같은 work key 세션에 입력한다. 계정 원장에 CAPTCHA 값을 저장하거나 재사용하지 않는다.
 7. 수집 성공 판정은 `status=succeeded` 또는 해당 scope의 `counts`만 보지 말고, 계정 x 서비스 x `sales/settlements/reviews/ads` 완료 매트릭스로 판단한다.
 
 ## 안정화 체크

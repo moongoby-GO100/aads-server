@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.services.browser_task_gateway import (
+    consume_approval_token,
     create_browser_task,
     decide_permission,
     get_browser_task,
@@ -44,10 +45,22 @@ class PermissionRequestIn(BaseModel):
     action_type: str = Field(min_length=1, max_length=120)
     action_summary: str = Field(default="", max_length=1000)
     payload: dict[str, Any] = Field(default_factory=dict)
+    automation_scope: dict[str, Any] = Field(default_factory=dict)
+    max_executions: int = Field(default=1, ge=1, le=500)
 
 
 class PermissionDecisionIn(BaseModel):
     reason: str = Field(default="", max_length=1000)
+    approval_scope: dict[str, Any] = Field(default_factory=dict)
+    max_executions: int | None = Field(default=None, ge=1, le=500)
+
+
+class ApprovalTokenConsumeIn(BaseModel):
+    approval_token: str = Field(min_length=20, max_length=300, json_schema_extra={"writeOnly": True})
+    action_type: str = Field(min_length=1, max_length=120)
+    origin: str = Field(default="", max_length=500)
+    selector: str = Field(default="", max_length=500)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -143,6 +156,8 @@ async def api_request_permission(
         action_summary=body.action_summary,
         requested_by=_user_id(context),
         payload=body.payload,
+        automation_scope=body.automation_scope,
+        max_executions=body.max_executions,
     )
 
 
@@ -168,10 +183,35 @@ async def api_approve_permission(
         decision="approved",
         decided_by=_user_id(context),
         reason=body.reason,
+        approval_scope=body.approval_scope,
+        max_executions=body.max_executions,
     )
     if not request:
         raise HTTPException(status_code=404, detail="permission_request_not_found_or_expired")
     return {"status": "approved", "request": request}
+
+
+@router.post("/{task_id}/approval-token/consume")
+async def api_consume_approval_token(
+    task_id: str,
+    body: ApprovalTokenConsumeIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    task = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    result = await consume_approval_token(
+        tenant_id=_tenant_id(context),
+        task_id=task_id,
+        approval_token=body.approval_token,
+        action_type=body.action_type,
+        origin=body.origin,
+        selector=body.selector,
+        payload=body.payload,
+    )
+    if result.get("status") != "approved":
+        raise HTTPException(status_code=403, detail=result)
+    return result
 
 
 @router.post("/permissions/{request_id}/reject")

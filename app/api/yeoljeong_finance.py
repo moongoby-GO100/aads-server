@@ -141,6 +141,8 @@ class SyncPayload(BaseModel):
     captcha_value: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     captcha_values: dict[str, str] = Field(default_factory=dict, repr=False, json_schema_extra={"writeOnly": True})
     operator_approved: bool = False
+    captcha_auto_approved: bool = False
+    captcha_approval_scope: dict[str, Any] = Field(default_factory=dict)
     approved_input: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
     force_recreate_portal_sessions: bool = False
     force_recreate_bank_browser: bool = False

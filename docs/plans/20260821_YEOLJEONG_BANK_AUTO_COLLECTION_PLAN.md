@@ -4,7 +4,7 @@
 - 최종 수정: 2026-08-21 15:33 KST
 - 대상: FOOD/열정국밥 매장비서 `yeoljeong-finance`
 - 목적: 은행 입출금 데이터를 자동 수집해 배달앱 정산, 카드/PG, 수기 매출, 지출 증빙과 대사 가능한 운영 원장으로 만든다.
-- 현재 판정: P0 코어와 PC Agent 은행 기업페이지 자동 오픈, 비밀번호관리자 focus fallback, 자동수집 루프 편입은 구현되어 있다. 완전 자동화 목표는 "공식 연동/API/조회전용 계정/브라우저 신뢰 세션/암호화 Vault/상태 머신/소형 모델 검증"을 조합해 사람 반복입력을 없애는 것이다. OTP/CAPTCHA/본인인증은 무조건 수동으로 멈추지 않고 자동 가능 경로를 먼저 수행하되, CAPTCHA 자동 판독·보안장치 우회·허가 없는 OTP 대리 생성처럼 계정 차단이나 약관 위반 위험이 큰 동작은 정책 게이트에서 차단하고 운영 승인 대상으로 남긴다.
+- 현재 판정: P0 코어와 PC Agent 은행 기업페이지 자동 오픈, 비밀번호관리자 focus fallback, 자동수집 루프 편입은 구현되어 있다. 완전 자동화 목표는 "공식 연동/API/조회전용 계정/브라우저 신뢰 세션/암호화 Vault/상태 머신/소형 모델 검증"을 조합해 사람 반복입력을 없애는 것이다. OTP/CAPTCHA/본인인증은 무조건 수동으로 멈추지 않고 자동 가능 경로를 먼저 수행하되, 승인 없는 CAPTCHA 판독·보안장치 우회·허가 없는 OTP 대리 생성처럼 계정 차단이나 약관 위반 위험이 큰 동작은 정책 게이트에서 차단한다. 권한 있는 운영자가 특정 페이지와 실행 범위를 승인한 CAPTCHA 자동 판독·입력은 허용한다.
 
 ## 1. 목표
 
@@ -66,7 +66,7 @@
   -> 입금대사 화면, 알림, 리포트
 ```
 
-PC Agent 브라우저 방식은 서버 headless 로그인보다 우선한다. 시스템은 업무 전용 브라우저 세션을 열고, 로그인 화면에서는 브라우저 비밀번호관리자 자동완성을 유도하거나 암호화 Vault에 저장된 write-only 값을 PC Agent 세션 안에서만 입력한다. OTP/CAPTCHA/인증서 선택/본인인증 화면이 나오면 즉시 `operator_action_required`로 멈추지 않고, 저장된 인증서 별칭 선택, 인증서 비밀번호 write-only 입력, 앱 푸시 승인 대기, 이미 열린 승인 팝업 확인, CEO가 입력한 OTP 감지 후 자동 재개처럼 합법적이고 허용된 자동처리를 먼저 시도한다. 그래도 자동처리가 불가능한 CAPTCHA 판독, 외부 OTP 기기 조작, 추가 본인확인 같은 단계만 `operator_action_required`로 남기고, 승인 완료 후 같은 세션에서 자동 재수집한다. 세션이 없거나 최종 승인이 필요한 경우 `action_required`로 남기고 CSV 업로드를 대체 경로로 제공한다.
+PC Agent 브라우저 방식은 서버 headless 로그인보다 우선한다. 시스템은 업무 전용 브라우저 세션을 열고, 로그인 화면에서는 브라우저 비밀번호관리자 자동완성을 유도하거나 암호화 Vault에 저장된 write-only 값을 PC Agent 세션 안에서만 입력한다. OTP/CAPTCHA/인증서 선택/본인인증 화면이 나오면 즉시 `operator_action_required`로 멈추지 않고, 저장된 인증서 별칭 선택, 인증서 비밀번호 write-only 입력, 앱 푸시 승인 대기, 이미 열린 승인 팝업 확인, CEO가 입력한 OTP 감지 후 자동 재개, 승인된 CAPTCHA 모델 판독·입력처럼 합법적이고 허용된 자동처리를 먼저 시도한다. 그래도 자동처리가 불가능한 외부 OTP 기기 조작, 추가 본인확인 같은 단계만 `operator_action_required`로 남기고, 승인 완료 후 같은 세션에서 자동 재수집한다. 세션이 없거나 최종 승인이 필요한 경우 `action_required`로 남기고 CSV 업로드를 대체 경로로 제공한다.
 
 ## 4-1. 은행 자동로그인 완전 자동화 설계
 
@@ -149,11 +149,11 @@ P0 구현 단위:
 | 인증서 선택 | 저장된 인증서 별칭과 selector allowlist로 선택 | 별칭 불일치, 인증서 만료, 새 인증서 등록 |
 | 인증서 비밀번호 | 계좌별 opt-in 된 Vault/keychain write-only 입력 | 저장값 없음, 실패 횟수 초과, 비밀번호 변경 필요 |
 | OTP 입력 | CEO가 같은 PC/브라우저에 입력하면 감지 후 자동 재개, 푸시형은 승인 완료 상태 polling | OTP 생성·대리 입력 불가, 외부 기기 조작 필요 |
-| CAPTCHA | 화면 감지, 스크린샷/상태 기록, 입력칸 focus, CEO 입력 후 자동 재개 | CAPTCHA 판독·우회는 항상 CEO 처리 |
+| CAPTCHA | 화면 감지, 스크린샷/상태 기록, 입력칸 focus, 승인 scope 안의 모델 판독·자동입력, CEO 입력 후 자동 재개 | 승인 없는 판독·우회는 차단 |
 | 본인인증 | 팝업/앱푸시/이미 완료된 승인 상태 자동 감지 후 재개 | 휴대폰 본인확인, 추가 약관동의, 신분 확인 |
 
 금지선:
-- CAPTCHA/OTP를 모델로 해독하거나 우회하지 않는다.
+- 승인 없는 CAPTCHA/OTP 모델 해독이나 우회는 하지 않는다. 승인 scope 안의 CAPTCHA 모델 판독·자동입력은 허용한다.
 - 원본 계좌번호, 원본 HTML, 비밀번호, 인증서 비밀번호, OTP 값을 로그/diagnostics/API 응답에 남기지 않는다.
 - `operator_action_required`는 첫 감지 상태가 아니라 자동처리 시도 후 남은 최소 승인 상태에만 사용한다.
 - 서버 headless 브라우저에서 은행 로그인을 반복 시도하지 않는다. 은행은 PC Agent 실사용 브라우저 세션을 정본으로 한다.
@@ -332,7 +332,7 @@ DB 승격 원칙:
 | 계좌번호 | 원본은 write-only 입력 후 즉시 마스킹, 저장 금지 |
 | 은행 로그인 비밀번호 | AADS 은행 파일 원장 저장 금지. Agent Vault 또는 CEO PC 비밀번호관리자에 암호화/로컬 저장하고 API 응답에는 마스킹만 제공 |
 | 계좌비밀번호 | 자동화를 위해 필요하면 계좌별 opt-in 후 Agent Vault write-only 항목으로 저장한다. 파일 원장, 로그, diagnostics에는 절대 남기지 않는다 |
-| OTP/CAPTCHA/본인인증 | 첫 감지 즉시 중단 금지. 승인 팝업 감지, 푸시 승인 polling, CEO 입력 감지 후 자동 재개를 우선하고, CAPTCHA 판독·외부 OTP 기기 조작·휴대폰 본인확인처럼 시스템이 처리할 수 없는 최소 단계만 CEO/운영자가 처리 |
+| OTP/CAPTCHA/본인인증 | 첫 감지 즉시 중단 금지. 승인 팝업 감지, 푸시 승인 polling, 승인 scope 안의 CAPTCHA 모델 판독·입력, CEO 입력 감지 후 자동 재개를 우선하고, 외부 OTP 기기 조작·휴대폰 본인확인처럼 시스템이 처리할 수 없는 최소 단계만 CEO/운영자가 처리 |
 | 인증서 비밀번호 | 계좌별 opt-in이 있을 때만 Agent Vault/CEO PC keychain에서 write-only 입력. 파일 원장, 로그, diagnostics, API 응답 저장 금지 |
 | 원본 HTML | 저장 금지. 파서 diagnostics는 테이블 수/헤더 일부 같은 안전 정보만 저장 |
 | 브라우저 세션 | 업무별 opaque work key 사용. 계좌명/지점명/계좌번호가 key에 드러나지 않게 hash 사용 |
@@ -345,7 +345,7 @@ DB 승격 원칙:
 | PC Agent 미연결/브라우저 로그인 필요 | `PC_AGENT_LOGIN_REQUIRED`, `ACTION_REQUIRED` | PC Agent 자동 재연결, 비밀번호관리자 focus fallback, Vault 자동입력 후 재수집, 또는 CSV 업로드 |
 | 세션 만료 | `BANK_BROWSER_SESSION_NOT_FOUND` | work session 재생성 |
 | 은행 로그인/OTP 필요 | `BANK_BROWSER_AUTH_CHALLENGE_DETECTED`, `BANK_BROWSER_OPERATOR_ACTION_REQUIRED` | 비밀번호관리자/Vault/푸시 승인 polling/CEO 입력 감지 후 자동 재개를 먼저 시도하고, 불가 단계만 운영자가 브라우저에서 인증 완료 후 재수집 |
-| CAPTCHA/본인인증 필요 | `BANK_BROWSER_AUTH_CHALLENGE_DETECTED`, `BANK_BROWSER_OPERATOR_ACTION_REQUIRED` | CAPTCHA 판독·본인확인 대행은 금지. 입력칸 focus, 상태 알림, CEO 처리 감지 후 자동 재개 |
+| CAPTCHA/본인인증 필요 | `BANK_BROWSER_AUTH_CHALLENGE_DETECTED`, `BANK_BROWSER_OPERATOR_ACTION_REQUIRED` | 승인 없는 CAPTCHA 판독·본인확인 대행은 금지. 승인 scope 안의 CAPTCHA 자동 판독·입력, 입력칸 focus, 상태 알림, CEO 처리 감지 후 자동 재개 |
 | 인증서 비밀번호 필요 | `BANK_CERTIFICATE_PASSWORD_REQUIRED`, `BANK_BROWSER_OPERATOR_ACTION_REQUIRED` | opt-in Vault/keychain 값으로 write-only 자동입력, 없거나 실패하면 CEO 1회 입력 후 재수집 |
 | 계좌비밀번호 필요 | `BANK_ACCOUNT_PASSWORD_REQUIRED` | Agent Vault 계좌비밀번호 등록 또는 운영자 1회 입력 후 재수집 |
 | 다른 포털/죽은 세션 | `PC_AGENT_WRONG_PORTAL_SESSION`, `CDP_NOT_READY` | work key별 세션 retire 후 강제 재생성, preferred port 재선택 |
@@ -427,7 +427,7 @@ python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_financ
 2. 자동로그인 opt-in: 비밀번호관리자 사용 여부, Agent Vault ID/PW, 계좌비밀번호, 인증서 별칭을 계좌별로 등록한다.
 3. PC Agent 확인: CEO PC 또는 운영 PC의 Agent가 online인지 확인한다.
 4. 자동 오픈/자동입력 dry-run: 은행 기업페이지 오픈, ID/PW/계좌비번/인증서 비밀번호 입력 가능 여부, OTP/CAPTCHA/본인인증 자동처리 가능 여부를 확인한다.
-5. 은행별 인증 챌린지 처리: 자동처리 가능한 항목은 PC Agent가 계속 진행하고, CAPTCHA 판독·외부 OTP 기기 조작·휴대폰 본인확인처럼 불가능한 최소 단계만 운영자가 처리한다.
+5. 은행별 인증 챌린지 처리: 자동처리 가능한 항목은 PC Agent가 계속 진행하고, 승인 scope 안의 CAPTCHA 판독·입력은 자동 처리하며, 외부 OTP 기기 조작·휴대폰 본인확인처럼 불가능한 최소 단계만 운영자가 처리한다.
 6. 단건 수집: 한 계좌/하루 범위로 먼저 수집해 원장과 UI를 확인한다.
 7. 반복 수집: 같은 기간 재수집으로 중복 방지를 확인한다.
 8. 자동 루프 편입: `yeoljeong_auto_collect.py`의 은행 수집을 주기 실행에 포함한다.
@@ -464,4 +464,4 @@ python3 -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_financ
 
 현재 은행 자동수집은 "원장/API/CSV/PC Agent 브라우저 커넥터/자동수집 루프/비밀번호관리자 focus fallback"까지 P0 코드가 준비되어 있다. CEO 지시 기준의 완전 자동화는 여기에 "Agent Vault write-only 은행 ID/PW/계좌비밀번호 자동입력, 은행별 매크로 상태 머신, PC Agent 세션 안정화, 소형 모델 기반 화면 상태 분류"를 추가하는 방향이 맞다.
 
-따라서 즉시 다음 단계는 두 갈래다. 첫째, 이미 있는 PC Agent 세션 자동 오픈으로 신한/IBK 실계정 E2E를 진행한다. 둘째, 계좌비밀번호와 은행 로그인, 인증서 비밀번호 자동입력은 파일 원장이 아니라 Agent Vault/비밀번호관리자 기반으로 P0 구현해, 이후 자동수집 루프가 사람 개입 없이 거래내역 화면까지 최대한 도달하게 만든다. OTP/CAPTCHA/본인인증/인증서 비밀번호 화면은 첫 감지에서 멈추지 말고 자동처리 가능한 항목을 우선 처리하며, CAPTCHA 판독·외부 OTP 조작·휴대폰 본인확인처럼 불가능한 최소 단계만 CEO 승인으로 넘긴다.
+따라서 즉시 다음 단계는 두 갈래다. 첫째, 이미 있는 PC Agent 세션 자동 오픈으로 신한/IBK 실계정 E2E를 진행한다. 둘째, 계좌비밀번호와 은행 로그인, 인증서 비밀번호 자동입력은 파일 원장이 아니라 Agent Vault/비밀번호관리자 기반으로 P0 구현해, 이후 자동수집 루프가 사람 개입 없이 거래내역 화면까지 최대한 도달하게 만든다. OTP/CAPTCHA/본인인증/인증서 비밀번호 화면은 첫 감지에서 멈추지 말고 자동처리 가능한 항목을 우선 처리하며, 승인 scope 안의 CAPTCHA 판독·입력은 자동화하고 외부 OTP 조작·휴대폰 본인확인처럼 불가능한 최소 단계만 CEO 승인으로 넘긴다.

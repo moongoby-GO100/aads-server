@@ -6284,6 +6284,8 @@ async def _delivery_bridge_page_for_service(context: Any, service: str) -> Any:
             url = str(getattr(page, "url", "") or "").lower()
         if markers and any(marker in url for marker in markers):
             return page
+    if markers:
+        return await context.new_page()
     return pages[0] if pages else await context.new_page()
 
 
@@ -6462,11 +6464,101 @@ def _delivery_captcha_value_for_account(
     return ""
 
 
+def _url_origin(value: str) -> str:
+    parsed = urlparse(str(value or ""))
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    return str(value or "").strip().lower()
+
+
+def _delivery_captcha_automation_approval(
+    payload: dict[str, Any],
+    user: dict[str, Any],
+    service: str,
+    business_id: str,
+    branch: str,
+) -> dict[str, Any]:
+    if service != "ddangyo":
+        return {}
+    approved = payload.get("captcha_auto_approved") is True
+    manual_value = _delivery_captcha_value_for_account(payload, {}, service, business_id, branch)
+    if not approved and payload.get("operator_approved") is True and not manual_value:
+        approved = True
+    if not approved:
+        return {}
+    scope = payload.get("captcha_approval_scope") if isinstance(payload.get("captcha_approval_scope"), dict) else {}
+    allowed_origins = scope.get("origins") if isinstance(scope.get("origins"), list) else []
+    return {
+        "approved": True,
+        "approved_by": str(scope.get("approved_by") or user.get("email") or user.get("id") or "unknown"),
+        "approved_at": _now(),
+        "approval_source": str(scope.get("approval_source") or "operator_request"),
+        "service": service,
+        "business_id": business_id,
+        "branch": branch,
+        "origin": _url_origin(str(scope.get("origin") or scope.get("page_url") or "https://boss.ddangyo.com/")),
+        "origins": [_url_origin(str(item)) for item in allowed_origins if str(item).strip()],
+        "challenge_kind": "captcha",
+        "automation": "llm_vision_read_and_fill",
+        "max_executions": max(1, min(int(scope.get("max_executions") or 1), 10)),
+    }
+
+
+def _delivery_captcha_automation_allowed(approval: dict[str, Any], page_url: str) -> tuple[bool, str]:
+    if not approval or approval.get("approved") is not True:
+        return False, "captcha_auto_approval_missing"
+    actual_origin = _url_origin(page_url)
+    approved_origin = _url_origin(str(approval.get("origin") or ""))
+    allowed_origins = {
+        _url_origin(str(item))
+        for item in approval.get("origins", [])
+        if str(item).strip()
+    }
+    if approved_origin and actual_origin != approved_origin:
+        return False, "captcha_auto_origin_out_of_scope"
+    if allowed_origins and actual_origin not in allowed_origins:
+        return False, "captcha_auto_origin_out_of_scope"
+    if str(approval.get("challenge_kind") or "") != "captcha":
+        return False, "captcha_auto_challenge_kind_out_of_scope"
+    return True, "captcha_auto_approval_scope_match"
+
+
+def _record_delivery_captcha_automation_event(
+    event: str,
+    approval: dict[str, Any],
+    *,
+    url: str,
+    session_id: str,
+    work_key: str,
+    run_id: str = "",
+    reason: str = "",
+) -> None:
+    _append_delivery_browser_session_event(
+        event,
+        {
+            "service": approval.get("service") or "ddangyo",
+            "business_id": approval.get("business_id") or "",
+            "branch": approval.get("branch") or "",
+            "run_id": run_id,
+            "session_id": session_id,
+            "work_key": work_key,
+            "approved_by": approval.get("approved_by") or "",
+            "approved_at": approval.get("approved_at") or "",
+            "approval_source": approval.get("approval_source") or "",
+            "approved_origin": approval.get("origin") or "",
+            "actual_origin": _url_origin(url),
+            "challenge_kind": "captcha",
+            "automation": approval.get("automation") or "llm_vision_read_and_fill",
+            "reason": reason,
+        },
+    )
+
+
 def _delivery_challenge_message(service: str, service_label: str) -> str:
     if service == "ddangyo":
         return (
-            "땡겨요 ID/PW 자동입력은 완료됐고 숫자 캡챠 확인이 필요합니다. "
-            "PC Agent 화면 또는 저장된 스크린샷에서 숫자를 입력한 뒤 같은 세션으로 다시 수집해야 합니다."
+            "땡겨요 ID/PW 자동입력은 완료됐고 숫자 캡챠 승인이 필요합니다. "
+            "승인 범위가 있으면 같은 세션에서 모델 판독과 입력을 자동 수행하고, 승인 범위가 없으면 대기합니다."
         )
     return f"{service_label} 포털이 추가 인증을 요구합니다. PC 브라우저에서 인증을 완료한 뒤 다시 수집해야 합니다."
 
@@ -7073,28 +7165,48 @@ async def _collect_delivery_from_browser_bridge_session_async(
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
             captcha_value = str(account.get("captcha_value") or "")
+            captcha_approval = account.get("_captcha_approval") if isinstance(account.get("_captcha_approval"), dict) else {}
+            captcha_auto_allowed, captcha_auto_reason = _delivery_captcha_automation_allowed(captcha_approval, url)
+            if captcha_approval:
+                diagnostics["captcha_auto_approval"] = captcha_auto_reason
+                diagnostics["captcha_approved_by"] = str(captcha_approval.get("approved_by") or "")
+                diagnostics["captcha_approved_at"] = str(captcha_approval.get("approved_at") or "")
+                diagnostics["captcha_approved_origin"] = str(captcha_approval.get("origin") or "")
             if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED" and not captcha_value:
-                try:
-                    from app.services.captcha_vision_solver import solve_captcha_with_vision
-
-                    captcha_value = await solve_captcha_with_vision(
-                        page,
-                        screenshot_path=str(challenge_screenshot or ""),
+                if captcha_auto_allowed:
+                    _record_delivery_captcha_automation_event(
+                        "captcha_auto_approval_used",
+                        captcha_approval,
+                        url=url,
+                        session_id=session_id,
+                        work_key=str(browser_auth.get("browser_work_key") or ""),
+                        run_id=str(account.get("_run_id") or ""),
+                        reason=captcha_auto_reason,
                     )
-                    if captcha_value:
-                        diagnostics["captcha_mode"] = "vision_auto_solved"
-                        diagnostics["captcha_source"] = "vision_model"
-                    else:
-                        diagnostics["captcha_vision"] = "no_digits"
-                except Exception as _captcha_vision_exc:
-                    diagnostics["captcha_vision_error"] = str(_captcha_vision_exc)[:150]
+                    try:
+                        from app.services.captcha_vision_solver import solve_captcha_with_vision
+
+                        captcha_value = await solve_captcha_with_vision(
+                            page,
+                            screenshot_path=str(challenge_screenshot or ""),
+                            approval_context={**captcha_approval, "page_url": url},
+                        )
+                        if captcha_value:
+                            diagnostics["captcha_mode"] = "approved_vision_auto_solved"
+                            diagnostics["captcha_source"] = "approved_vision_model"
+                        else:
+                            diagnostics["captcha_vision"] = "no_digits"
+                    except Exception as _captcha_vision_exc:
+                        diagnostics["captcha_vision_error"] = str(_captcha_vision_exc)[:150]
+                else:
+                    diagnostics["captcha_vision"] = "approval_required"
             if challenge_code == "DDANGYO_NUMERIC_CAPTCHA_REQUIRED":
                 if not captcha_value:
                     diagnostics["captcha_input"] = "operator_input_required"
                     return {
                         "status": "portal_action_required",
                         "error_code": challenge_code,
-                        "message": "땡겨요 숫자 캡챠 입력이 필요합니다. 승인된 입력값을 같은 PC Agent 세션에 전달하면 수집을 재개합니다.",
+                        "message": "땡겨요 숫자 캡챠 자동입력 승인이 필요합니다. 승인 범위를 전달하면 같은 PC Agent 세션에서 모델 판독과 입력을 자동 수행합니다.",
                         "records": {},
                         "diagnostics": diagnostics,
                     }
@@ -7123,13 +7235,29 @@ async def _collect_delivery_from_browser_bridge_session_async(
                         diagnostics["captcha_mode"] = "operator_confirmed_input"
                     if login_state == "challenge":
                         diagnostics["captcha_input"] = f"rejected_attempt_{_captcha_attempt + 1}"
-                        try:
-                            from app.services.captcha_vision_solver import solve_captcha_with_vision
+                        if captcha_auto_allowed:
+                            _record_delivery_captcha_automation_event(
+                                "captcha_auto_retry_approval_used",
+                                captcha_approval,
+                                url=url,
+                                session_id=session_id,
+                                work_key=str(browser_auth.get("browser_work_key") or ""),
+                                run_id=str(account.get("_run_id") or ""),
+                                reason=f"{captcha_auto_reason}:retry_{_captcha_attempt + 1}",
+                            )
+                            try:
+                                from app.services.captcha_vision_solver import solve_captcha_with_vision
 
-                            captcha_value = await solve_captcha_with_vision(page, max_retries=1)
-                            diagnostics["captcha_source"] = "vision_model_retry"
-                        except Exception as _captcha_retry_exc:
-                            diagnostics["captcha_vision_error"] = str(_captcha_retry_exc)[:150]
+                                captcha_value = await solve_captcha_with_vision(
+                                    page,
+                                    max_retries=1,
+                                    approval_context={**captcha_approval, "page_url": url},
+                                )
+                                diagnostics["captcha_source"] = "approved_vision_model_retry"
+                            except Exception as _captcha_retry_exc:
+                                diagnostics["captcha_vision_error"] = str(_captcha_retry_exc)[:150]
+                                captcha_value = ""
+                        else:
                             captcha_value = ""
                         continue
                     if login_state != "authenticated":
@@ -7790,9 +7918,13 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 collection_account["_max_orders"] = _delivery_backfill_max_orders(payload)
                 collection_account["_max_reviews"] = _delivery_backfill_max_reviews(payload)
                 collection_account["_mode"] = str(payload.get("mode") or "")
+                collection_account["_run_id"] = run_id
                 captcha_value = _delivery_captcha_value_for_account(payload, collection_account, service, business_id, branch)
                 if captcha_value:
                     collection_account["captcha_value"] = captcha_value
+                captcha_approval = _delivery_captcha_automation_approval(payload, user, service, business_id, branch)
+                if captcha_approval:
+                    collection_account["_captcha_approval"] = captcha_approval
                 browser_auth = _delivery_browser_auth_for_account(payload, collection_account, service, business_id, branch)
                 if browser_auth["storage_state_path"]:
                     collection_account["storage_state_path"] = browser_auth["storage_state_path"]

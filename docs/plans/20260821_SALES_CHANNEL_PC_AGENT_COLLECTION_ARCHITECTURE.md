@@ -139,7 +139,7 @@ CEO/매장비서 UI
 | `PC_AGENT_SESSION_REQUIRED` | 전용 브라우저 세션 필요 | PC Agent online, work session 재생성 |
 | `MISSING_CREDENTIALS` | 계정 비밀번호/secret 누락 | Agent Vault 또는 계정 등록 보강 |
 | `PORTAL_AUTH_CHALLENGE` | OTP/본인인증/약관 등 인증 챌린지 | 푸시 승인 polling, 신뢰기기 확인, CEO 입력 감지 후 같은 세션 재개. 불가 시 운영 승인 |
-| `DDANGYO_NUMERIC_CAPTCHA_REQUIRED` | 땡겨요 숫자 CAPTCHA 필요 | CAPTCHA 감지, 입력 위치 focus, `operator_approved=true`와 1회성 `approved_input` 수신 후 같은 work key 재개. 자동 판독/우회는 차단 |
+| `DDANGYO_NUMERIC_CAPTCHA_REQUIRED` | 땡겨요 숫자 CAPTCHA 필요 | CAPTCHA 감지, 입력 위치 focus, `operator_approved=true`와 1회성 `approved_input` 수신 또는 `captcha_auto_approved=true` 승인 scope 수신 후 같은 work key에서 자동 판독·입력·재개. 승인 없는 판독과 우회는 차단 |
 | `PORTAL_BLOCKED` | 포털 보안 차단 | PC/IP/기기 신뢰 상태 확인 |
 | `CSV_UPLOAD_REQUIRED` | 업로드형 계정 | 포털 CSV/엑셀 업로드 |
 | `ATTEMPT_TIMEOUT` | 단일 시도 제한 초과 | 세션 재생성 후 재시도 |
@@ -260,7 +260,7 @@ pytest tests/unit/test_yeoljeong_delivery_collectors.py tests/unit/test_yeoljeon
 
 | 영역 | 자동화 전략 | 정책 게이트 |
 |------|-------------|-------------|
-| CAPTCHA 발생 억제 | 업무 전용 `oby-ceo` PC Agent 프로필, 포털별 work key, keep-open 세션, 과도한 재로그인 방지 | IP/기기 위장, CAPTCHA 자동 판독 차단 |
+| CAPTCHA 발생 억제 | 업무 전용 `oby-ceo` PC Agent 프로필, 포털별 work key, keep-open 세션, 과도한 재로그인 방지 | IP/기기 위장, 승인 없는 CAPTCHA 자동 판독 차단 |
 | OTP/2차 인증 | 푸시 승인 완료 polling, 신뢰기기 등록 상태 확인, CEO가 입력한 OTP 제출 결과 감지 후 자동 재개 | OTP 생성/대리 입력/외부 기기 조작 차단 |
 | 기기 인증 | 기존 신뢰 브라우저 재사용, 기기등록 안내 화면 감지, 승인 후 동일 세션 재개 | 신규 기기 무한 등록 시도 차단 |
 | 약관/공지 팝업 | 허용된 닫기/확인 selector만 클릭 | 결제/권한 변경/약관 동의는 approval 필요 |

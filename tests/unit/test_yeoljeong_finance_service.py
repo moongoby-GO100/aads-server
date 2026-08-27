@@ -3664,6 +3664,118 @@ async def test_ddangyo_pc_agent_enters_confirmed_numeric_captcha(tmp_path, monke
     assert result["error_code"] == "AUTHENTICATED_NO_ROWS"
 
 
+@pytest.mark.asyncio
+async def test_ddangyo_pc_agent_auto_solves_captcha_inside_approved_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "DATA_DIR", tmp_path)
+    solver_calls = []
+
+    class FakeLocator:
+        def __init__(self, page, selector):
+            self.page = page
+            self.selector = selector
+
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            return 1 if self.selector == "#mf_wfm_login_captcha" else 0
+
+        async def is_visible(self, timeout=0):
+            return self.selector == "#mf_wfm_login_captcha"
+
+        async def fill(self, value):
+            self.page.captcha_filled = value
+
+        async def press(self, key):
+            self.page.text = "정산내역 주문내역 리뷰관리"
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://boss.ddangyo.com/login"
+            self.text = "자동입력방지 숫자를 입력해 주세요"
+            self.captcha_filled = ""
+
+        async def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+        async def wait_for_timeout(self, *args, **kwargs):
+            return None
+
+        def locator(self, selector):
+            return FakeLocator(self, selector)
+
+        async def evaluate(self, expression, arg=None):
+            if "window.location.href" in expression:
+                return self.url
+            if "innerHTML" in expression:
+                return f"<main>{self.text}</main>"
+            if "innerText" in expression:
+                return self.text
+            return False
+
+        async def screenshot(self, **kwargs):
+            return b"fake-png"
+
+    class FakeContext:
+        def __init__(self, page):
+            self.pages = [page]
+
+    class FakeBridge:
+        def __init__(self, page):
+            self.sessions = {"bb-ddangyo": object()}
+            self.page = page
+
+        async def _context_for_session(self, session):
+            return FakeContext(self.page)
+
+    async def fake_solve_captcha_with_vision(page, *, screenshot_path="", max_retries=3, approval_context=None):
+        solver_calls.append(approval_context)
+        return "2468"
+
+    page = FakePage()
+
+    import app.browser_bridge.service as bridge_service
+    import app.services.captcha_vision_solver as captcha_solver
+
+    monkeypatch.setattr(bridge_service, "get_browser_bridge_service", lambda: FakeBridge(page))
+    monkeypatch.setattr(captcha_solver, "solve_captcha_with_vision", fake_solve_captcha_with_vision)
+
+    result = await service._collect_delivery_from_browser_bridge_session_async(
+        {
+            "service": "ddangyo",
+            "username": "owner",
+            "password_enc": "encrypted",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "_run_id": "run-approved-captcha",
+            "_captcha_approval": {
+                "approved": True,
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-08-28T07:43:00+09:00",
+                "origin": "https://boss.ddangyo.com",
+                "challenge_kind": "captcha",
+                "automation": "llm_vision_read_and_fill",
+            },
+        },
+        {
+            "browser_session_id": "bb-ddangyo",
+            "browser_bridge_mode": "local_agent",
+            "browser_work_key": "yeoljeong-delivery-ddangyo-biz-junghwa",
+        },
+        "2026-08-01",
+        "2026-08-04",
+    )
+
+    assert solver_calls and solver_calls[0]["approved"] is True
+    assert page.captcha_filled == "2468"
+    assert result["diagnostics"]["captcha_mode"] == "approved_vision_auto_solved"
+    events = (tmp_path / "delivery_browser_session_events.jsonl").read_text(encoding="utf-8")
+    assert "captcha_auto_approval_used" in events
+    assert "owner@example.com" in events
+    assert "2468" not in events
+
+
 def test_import_settlement_csv_is_scoped_and_idempotent():
     user = {"email": "owner@example.com", "is_admin": True}
     csv_text = (

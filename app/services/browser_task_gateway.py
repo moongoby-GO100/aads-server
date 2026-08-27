@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
+import secrets
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
@@ -14,6 +17,8 @@ from app.services.managed_browser import normalize_work_key
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 PUSH_STATUSES = {"approval_required", "auth_required", "completed", "failed"}
 logger = logging.getLogger(__name__)
+CHALLENGE_KINDS = {"otp", "captcha"}
+CHALLENGE_MODEL_SOURCES = {"llm", "model", "vision", "solver", "ocr", "auto"}
 
 
 def _tenant_uuid(tenant_id: str) -> uuid.UUID:
@@ -36,6 +41,102 @@ def _json_dict(value: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+
+def _origin_host(value: str) -> str:
+    parsed = urlparse(str(value or ""))
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    return str(value or "").strip().lower()
+
+
+def _payload_uses_challenge_model_analysis(payload: dict[str, Any]) -> bool:
+    source = str(
+        payload.get("value_source")
+        or payload.get("captcha_value_source")
+        or payload.get("otp_value_source")
+        or ""
+    ).lower()
+    return source in CHALLENGE_MODEL_SOURCES or any(
+        bool(payload.get(key)) for key in ("llm_generated_value", "model_generated_value", "captcha_solved_by_model")
+    )
+
+
+def _contains_challenge_bypass(payload: dict[str, Any]) -> bool:
+    intent = str(payload.get("intent") or payload.get("action") or "").lower()
+    if "bypass" in intent or payload.get("bypass_challenge"):
+        return True
+    challenge_kind = str(payload.get("challenge_kind") or payload.get("challenge") or "").lower()
+    if challenge_kind == "otp" and _payload_uses_challenge_model_analysis(payload):
+        return True
+    if payload.get("otp_generated_by_model"):
+        return True
+    return any(bool(payload.get(key)) for key in ("unauthorized_challenge_bypass", "challenge_bypass_attempt"))
+
+
+def _scope_allows_action(
+    scope: dict[str, Any],
+    *,
+    action_type: str,
+    origin: str,
+    selector: str = "",
+    payload: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    payload = payload or {}
+    policy = classify_browser_action(action_type, str(payload.get("summary") or ""), payload)
+    if policy.decision == "deny":
+        return False, policy.reason
+
+    allowed_action_types = {str(item).lower() for item in _json_list(scope.get("action_types")) if str(item).strip()}
+    if allowed_action_types and str(action_type or "").lower() not in allowed_action_types:
+        return False, "action_type_out_of_scope"
+
+    approved_origin = _origin_host(str(scope.get("origin") or ""))
+    allowed_origins = {_origin_host(str(item)) for item in _json_list(scope.get("origins")) if str(item).strip()}
+    actual_origin = _origin_host(origin)
+    if approved_origin and actual_origin != approved_origin:
+        return False, "origin_out_of_scope"
+    if allowed_origins and actual_origin not in allowed_origins:
+        return False, "origin_out_of_scope"
+
+    selectors = {str(item) for item in _json_list(scope.get("selectors")) if str(item)}
+    if selectors and selector and selector not in selectors:
+        return False, "selector_out_of_scope"
+
+    challenge_kind = str(payload.get("challenge_kind") or payload.get("challenge") or "").lower()
+    if challenge_kind in CHALLENGE_KINDS:
+        if _contains_challenge_bypass(payload):
+            return False, "challenge_bypass_blocked"
+        allowed_challenge_kinds = {
+            str(item).lower()
+            for item in _json_list(scope.get("challenge_kinds"))
+            if str(item).strip()
+        }
+        if allowed_challenge_kinds and challenge_kind not in allowed_challenge_kinds:
+            return False, "challenge_kind_out_of_scope"
+        if challenge_kind == "captcha" and _payload_uses_challenge_model_analysis(payload):
+            if scope.get("allow_model_challenge_analysis") is not True:
+                return False, "model_challenge_analysis_not_approved"
+        elif payload.get("operator_confirmed") is not True and payload.get("operator_approved") is not True:
+            return False, "operator_confirmed_input_required"
+
+    return True, "approved_scope_match"
 
 
 def _task_to_dict(row: Any) -> dict[str, Any]:
@@ -248,6 +349,8 @@ async def request_task_permission(
     action_summary: str,
     requested_by: str,
     payload: dict[str, Any] | None = None,
+    automation_scope: dict[str, Any] | None = None,
+    max_executions: int = 1,
 ) -> dict[str, Any]:
     policy = classify_browser_action(action_type, action_summary, payload)
     if policy.decision == "allow":
@@ -259,9 +362,10 @@ async def request_task_permission(
         row = await conn.fetchrow(
             """
             INSERT INTO agent_permission_requests (
-                tenant_id, task_id, work_key, origin, action_type, action_summary, risk_level, requested_by
+                tenant_id, task_id, work_key, origin, action_type, action_summary, risk_level, requested_by,
+                approval_scope, max_executions
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
             RETURNING *
             """,
             _tenant_uuid(tenant_id),
@@ -272,6 +376,8 @@ async def request_task_permission(
             action_summary,
             policy.risk_level,
             requested_by,
+            json.dumps(mask_sensitive_value(automation_scope or {}), ensure_ascii=False),
+            max(1, min(int(max_executions or 1), 500)),
         )
         task_row = await conn.fetchrow(
             """
@@ -308,17 +414,24 @@ async def decide_permission(
     decision: str,
     decided_by: str,
     reason: str = "",
+    approval_scope: dict[str, Any] | None = None,
+    max_executions: int | None = None,
 ) -> dict[str, Any] | None:
     normalized = decision.lower()
     if normalized not in {"approved", "rejected"}:
         raise ValueError("invalid_permission_decision")
     async with get_pool().acquire() as conn:
+        approval_token = secrets.token_urlsafe(32) if normalized == "approved" else ""
+        approval_token_hash = _token_hash(approval_token) if approval_token else None
         row = await conn.fetchrow(
             """
             UPDATE agent_permission_requests
                SET decision = $3,
                    reason = $4,
                    decided_by = $5,
+                   approval_scope = CASE WHEN $6::jsonb = '{}'::jsonb THEN approval_scope ELSE $6::jsonb END,
+                   max_executions = COALESCE($7, max_executions),
+                   token_hash = $8,
                    decided_at = NOW(),
                    updated_at = NOW()
              WHERE tenant_id = $1
@@ -332,9 +445,39 @@ async def decide_permission(
             normalized,
             reason,
             decided_by,
+            json.dumps(mask_sensitive_value(approval_scope or {}), ensure_ascii=False),
+            max(1, min(int(max_executions), 500)) if max_executions is not None else None,
+            approval_token_hash,
         )
         if not row:
             return None
+        if normalized == "approved" and approval_token_hash:
+            scope = _json_dict(row.get("approval_scope"))
+            if approval_scope:
+                scope = mask_sensitive_value(approval_scope)
+            await conn.execute(
+                """
+                INSERT INTO browser_approval_tokens (
+                    token_hash, tenant_id, task_id, request_id, work_key, origin, action_type,
+                    action_summary, approval_scope, policy, max_executions, expires_at, created_by
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13)
+                ON CONFLICT (token_hash) DO NOTHING
+                """,
+                approval_token_hash,
+                _tenant_uuid(tenant_id),
+                row.get("task_id"),
+                row["id"],
+                row["work_key"],
+                row["origin"],
+                row["action_type"],
+                row["action_summary"],
+                json.dumps(scope, ensure_ascii=False),
+                json.dumps({"risk_level": row["risk_level"], "decision": "approved"}, ensure_ascii=False),
+                max(1, min(int(row.get("max_executions") or 1), 500)),
+                row["expires_at"],
+                decided_by,
+            )
         status = "running" if normalized == "approved" else "failed"
         error = "" if normalized == "approved" else f"permission_rejected:{reason}"[:1000]
         task_row = await conn.fetchrow(
@@ -358,9 +501,106 @@ async def decide_permission(
                 tenant_id=tenant_id,
                 task_id=str(task_row["id"]),
                 event_type=f"permission:{normalized}",
-                payload={"request_id": request_id, "reason": reason},
+                payload={
+                    "request_id": request_id,
+                    "reason": reason,
+                    "approval_scope": approval_scope or {},
+                    "max_executions": max_executions,
+                    "approval_token_issued": bool(approval_token_hash),
+                },
             )
-    return _permission_to_dict(row)
+    result = _permission_to_dict(row)
+    if approval_token:
+        result["approval_token"] = approval_token
+    return result
+
+
+async def consume_approval_token(
+    *,
+    tenant_id: str,
+    task_id: str,
+    approval_token: str,
+    action_type: str,
+    origin: str,
+    selector: str = "",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = payload or {}
+    token_hash = _token_hash(approval_token)
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT *
+              FROM browser_approval_tokens
+             WHERE token_hash = $1
+               AND tenant_id = $2
+               AND task_id = $3
+               AND revoked_at IS NULL
+               AND expires_at > NOW()
+             FOR UPDATE
+            """,
+            token_hash,
+            _tenant_uuid(tenant_id),
+            uuid.UUID(task_id),
+        )
+        if not row:
+            await append_browser_task_event(
+                conn=conn,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                event_type="approval_token:denied",
+                payload={"action_type": action_type, "origin": origin, "reason": "token_not_found_or_expired"},
+            )
+            return {"status": "denied", "reason": "token_not_found_or_expired"}
+        if int(row["used_executions"]) >= int(row["max_executions"]):
+            await append_browser_task_event(
+                conn=conn,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                event_type="approval_token:denied",
+                payload={"action_type": action_type, "origin": origin, "reason": "execution_limit_exceeded"},
+            )
+            return {"status": "denied", "reason": "execution_limit_exceeded"}
+        allowed, reason = _scope_allows_action(
+            _json_dict(row["approval_scope"]),
+            action_type=action_type,
+            origin=origin,
+            selector=selector,
+            payload=payload,
+        )
+        if not allowed:
+            await append_browser_task_event(
+                conn=conn,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                event_type="approval_token:denied",
+                payload={"action_type": action_type, "origin": origin, "selector": selector, "reason": reason},
+            )
+            return {"status": "denied", "reason": reason}
+        updated = await conn.fetchrow(
+            """
+            UPDATE browser_approval_tokens
+               SET used_executions = used_executions + 1,
+                   updated_at = NOW()
+             WHERE token_hash = $1
+             RETURNING used_executions, max_executions, expires_at
+            """,
+            token_hash,
+        )
+        await append_browser_task_event(
+            conn=conn,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            event_type="approval_token:consumed",
+            payload={"action_type": action_type, "origin": origin, "selector": selector, "reason": reason},
+        )
+    return {
+        "status": "approved",
+        "reason": reason,
+        "used_executions": int(updated["used_executions"]),
+        "max_executions": int(updated["max_executions"]),
+        "expires_at": updated["expires_at"].isoformat(),
+    }
 
 
 async def list_permission_requests(*, tenant_id: str, decision: str = "pending", limit: int = 50) -> list[dict[str, Any]]:

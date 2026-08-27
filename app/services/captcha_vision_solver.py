@@ -1,9 +1,8 @@
-"""CAPTCHA auto-solver — vision model로 CAPTCHA 이미지의 숫자/문자를 해독한다.
+"""Approval-bound CAPTCHA vision helper.
 
-1순위: Anthropic Claude Sonnet (직접 SDK, R-AUTH 준수, 높은 정확도)
-2순위: Gemini Flash (REST 직접, GOOGLE_API_KEY)
-3순위: LiteLLM 프록시 (복구 시 자동 사용)
-최대 3회 재시도하며, 매 시도마다 새 스크린샷을 촬영한다.
+CAPTCHA bypass is not allowed. This module may only be called after an
+operator-approved page/task scope explicitly allows model-based analysis and
+same-session entry. Challenge values are transient and must not be logged.
 """
 from __future__ import annotations
 
@@ -51,7 +50,7 @@ async def _call_anthropic_vision(image_b64: str) -> str:
                 kwargs["temperature"] = 0
             resp = await client.messages.create(**kwargs)
             raw = str(resp.content[0].text) if resp.content else ""
-            logger.info("captcha_anthropic_raw", model=model_id, raw=raw[:60])
+            logger.info("captcha_anthropic_response", model=model_id, has_text=bool(raw.strip()))
             return raw
         except Exception as exc:
             logger.warning("captcha_anthropic_fallback", model=model_id, error=str(exc)[:150])
@@ -84,7 +83,7 @@ async def _call_gemini_vision(image_b64: str) -> str:
             resp.raise_for_status()
             data = resp.json()
             raw = str(data["candidates"][0]["content"]["parts"][0]["text"] or "")
-            logger.info("captcha_gemini_raw", raw=raw[:60])
+            logger.info("captcha_gemini_response", has_text=bool(raw.strip()))
             return raw
     except Exception as exc:
         logger.warning("captcha_gemini_error", error=str(exc)[:200])
@@ -119,7 +118,7 @@ async def _call_litellm_vision(image_b64: str) -> str:
             )
             resp.raise_for_status()
             raw = str(resp.json()["choices"][0]["message"]["content"] or "")
-            logger.info("captcha_litellm_raw", raw=raw[:60])
+            logger.info("captcha_litellm_response", has_text=bool(raw.strip()))
             return raw
     except Exception as exc:
         logger.warning("captcha_litellm_error", error=str(exc)[:120])
@@ -146,11 +145,22 @@ async def _call_vision(image_b64: str) -> str:
         result = await caller(image_b64)
         digits = _extract_digits(result)
         if digits:
-            logger.info("captcha_vision_success", provider=name, raw=result.strip()[:30], digits=digits)
+            logger.info("captcha_vision_success", provider=name, digit_count=len(digits))
             return digits
         if result.strip():
-            logger.info("captcha_vision_no_digits", provider=name, raw=result.strip()[:60])
+            logger.info("captcha_vision_no_digits", provider=name)
     return ""
+
+
+def _approval_context_allows_captcha_vision(approval_context: dict[str, Any] | None) -> bool:
+    if not isinstance(approval_context, dict):
+        return False
+    if approval_context.get("approved") is not True:
+        return False
+    if str(approval_context.get("challenge_kind") or "") != "captcha":
+        return False
+    automation = str(approval_context.get("automation") or "")
+    return automation in {"llm_vision_read_and_fill", "approved_model_challenge_analysis"}
 
 
 async def solve_captcha_with_vision(
@@ -158,8 +168,12 @@ async def solve_captcha_with_vision(
     *,
     screenshot_path: str = "",
     max_retries: int = 3,
+    approval_context: dict[str, Any] | None = None,
 ) -> str:
-    """페이지 스크린샷에서 CAPTCHA 숫자/문자를 비전 모델로 해독한다."""
+    """Read CAPTCHA only inside an operator-approved automation scope."""
+    if not _approval_context_allows_captcha_vision(approval_context):
+        logger.warning("captcha_vision_blocked_without_approval")
+        return ""
     for attempt in range(max_retries):
         try:
             image_bytes: bytes | None = None
@@ -175,7 +189,7 @@ async def solve_captcha_with_vision(
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
             digits = await _call_vision(image_b64)
             if digits:
-                logger.info("captcha_solved", attempt=attempt + 1, value=digits)
+                logger.info("captcha_solved", attempt=attempt + 1, digit_count=len(digits))
                 return digits
             logger.info("captcha_no_valid_result", attempt=attempt + 1)
         except Exception as exc:

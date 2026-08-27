@@ -18,9 +18,13 @@ DENY_PATTERNS = (
     "copy secret",
     "export secret",
     "autofill otp",
-    "enter otp",
+    "generate otp",
+    "read otp",
+    "copy otp",
+    "retrieve otp",
     "2fa code",
     "mfa code",
+    "bypass captcha",
 )
 
 ASK_PATTERNS = (
@@ -40,6 +44,16 @@ ASK_PATTERNS = (
     "submit form",
     "purchase",
     "order",
+    "enter otp",
+    "input otp",
+    "captcha",
+    "certificate",
+    "identity verification",
+    "solve captcha",
+    "decode captcha",
+    "read captcha",
+    "captcha solver",
+    "vision captcha",
 )
 
 SECRET_KEYS = re.compile(r"(password|passwd|secret|token|api[_-]?key|otp|mfa|2fa|authorization)", re.I)
@@ -65,7 +79,10 @@ def classify_browser_action(action_type: str, summary: str = "", payload: dict[s
     payload = payload or {}
 
     if any(pattern in text for pattern in DENY_PATTERNS):
-        return PolicyDecision("deny", "critical", "secret_or_otp_disclosure_blocked")
+        return PolicyDecision("deny", "critical", "secret_or_challenge_bypass_blocked")
+
+    if _payload_requests_challenge_bypass(payload):
+        return PolicyDecision("deny", "critical", "challenge_bypass_payload_blocked")
 
     if _payload_requests_secret_disclosure(payload):
         return PolicyDecision("deny", "critical", "secret_payload_disclosure_blocked")
@@ -95,3 +112,29 @@ def _payload_requests_secret_disclosure(payload: dict[str, Any]) -> bool:
     if any(word in intent for word in ("reveal", "show", "copy", "export")):
         return any(SECRET_KEYS.search(str(key)) for key in payload.keys())
     return False
+
+
+def _payload_requests_challenge_bypass(payload: dict[str, Any]) -> bool:
+    intent = str(payload.get("intent") or payload.get("action") or "").lower()
+    if "bypass" in intent:
+        return True
+    if payload.get("bypass_challenge"):
+        return True
+    challenge_kind = str(payload.get("challenge_kind") or payload.get("challenge") or "").lower()
+    source = str(
+        payload.get("value_source")
+        or payload.get("captcha_value_source")
+        or payload.get("otp_value_source")
+        or ""
+    ).lower()
+    if challenge_kind == "otp" and source in {"llm", "model", "vision", "solver", "ocr", "auto"}:
+        return True
+    if payload.get("otp_generated_by_model"):
+        return True
+    return any(
+        bool(payload.get(key))
+        for key in (
+            "unauthorized_challenge_bypass",
+            "challenge_bypass_attempt",
+        )
+    )
