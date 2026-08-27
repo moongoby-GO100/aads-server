@@ -1476,6 +1476,47 @@ def _find(rows: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
     return next((row for row in rows if str(row.get("id")) == str(item_id)), None)
 
 
+EMPLOYEE_ACCESS_ROLES: dict[str, dict[str, Any]] = {
+    "employee": {
+        "label": "직원",
+        "can_edit_local_data": False,
+        "can_manage_settings": False,
+        "can_manage_automation": False,
+        "can_import_settlements": False,
+        "can_manage_onboarding": False,
+    },
+    "viewer": {
+        "label": "조회 전용",
+        "can_edit_local_data": False,
+        "can_manage_settings": False,
+        "can_manage_automation": False,
+        "can_import_settlements": False,
+        "can_manage_onboarding": False,
+    },
+    "member": {
+        "label": "운영 입력자",
+        "can_edit_local_data": True,
+        "can_manage_settings": False,
+        "can_manage_automation": False,
+        "can_import_settlements": True,
+        "can_manage_onboarding": False,
+    },
+    "admin": {
+        "label": "운영 관리자",
+        "can_edit_local_data": True,
+        "can_manage_settings": True,
+        "can_manage_automation": True,
+        "can_import_settlements": True,
+        "can_manage_onboarding": True,
+    },
+}
+
+
+def _employee_access_role(role: Any) -> str:
+    normalized = str(role or "employee").strip().lower()
+    return normalized if normalized in EMPLOYEE_ACCESS_ROLES else "employee"
+
+
 def _is_admin(user: dict[str, Any]) -> bool:
     email = _email(user)
     user_role = str(user.get("user_role") or "").strip().lower()
@@ -1486,7 +1527,10 @@ def _is_admin(user: dict[str, Any]) -> bool:
             None,
         )
         if employee_record:
-            return False
+            return (
+                str(employee_record.get("status") or "").strip().lower() == "approved"
+                and _employee_access_role(employee_record.get("role")) == "admin"
+            )
     tenant_role = str(user.get("tenant_role") or "").strip().lower()
     membership_role = str((user.get("current_membership") or {}).get("role") or "").strip().lower()
     return bool(
@@ -1525,8 +1569,42 @@ def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
     email = _email(user)
     joins = _read("employee_join_requests")
     own = next((row for row in joins if str(row.get("email") or "").strip().lower() == email), None)
+    user_role = str(user.get("user_role") or "").strip().lower()
+    privileged_principal = bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
     admin = _is_admin(user)
-    if admin:
+    if own and not privileged_principal:
+        status = str(own.get("status") or "pending").strip().lower()
+        if status == "approved":
+            access_role = _employee_access_role(own.get("role"))
+            role_config = EMPLOYEE_ACCESS_ROLES[access_role]
+            permissions = {
+                "role": access_role,
+                "role_label": role_config["label"],
+                "employee_request_status": status,
+                "employee_request_id": own.get("id"),
+                "can_view": True,
+                "can_edit_local_data": role_config["can_edit_local_data"],
+                "can_manage_settings": role_config["can_manage_settings"],
+                "can_manage_automation": role_config["can_manage_automation"],
+                "can_import_settlements": role_config["can_import_settlements"],
+                "can_manage_onboarding": role_config["can_manage_onboarding"],
+                "can_upload_own_documents": True,
+            }
+        else:
+            permissions = {
+                "role": f"employee_{status}",
+                "role_label": "직원 가입 반려" if status == "rejected" else "직원 가입요청",
+                "employee_request_status": status,
+                "employee_request_id": own.get("id"),
+                "can_view": True,
+                "can_edit_local_data": False,
+                "can_manage_settings": False,
+                "can_manage_automation": False,
+                "can_import_settlements": False,
+                "can_manage_onboarding": False,
+                "can_upload_own_documents": status != "rejected",
+            }
+    elif admin:
         permissions = {
             "role": "owner",
             "role_label": "총괄 운영관리자",
@@ -1537,21 +1615,6 @@ def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
             "can_import_settlements": True,
             "can_manage_onboarding": True,
             "can_upload_own_documents": True,
-        }
-    elif own:
-        status = str(own.get("status") or "pending")
-        permissions = {
-            "role": "employee" if status == "approved" else f"employee_{status}",
-            "role_label": "직원" if status == "approved" else ("직원 가입 반려" if status == "rejected" else "직원 가입요청"),
-            "employee_request_status": status,
-            "employee_request_id": own.get("id"),
-            "can_view": True,
-            "can_edit_local_data": False,
-            "can_manage_settings": False,
-            "can_manage_automation": False,
-            "can_import_settlements": False,
-            "can_manage_onboarding": False,
-            "can_upload_own_documents": status != "rejected",
         }
     else:
         permissions = {
@@ -1697,6 +1760,29 @@ def review_join_request(request_id: str, action: str, memo: str, user: dict[str,
     record["reviewed_by"] = _email(user)
     record["reviewed_at"] = _now()
     record["updated_at"] = record["reviewed_at"]
+    _write("employee_join_requests", rows)
+    return record
+
+
+def update_approved_employee_role(request_id: str, role: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="직원 권한 변경 권한이 없습니다")
+    access_role = _employee_access_role(role)
+    if access_role != str(role or "").strip().lower():
+        raise HTTPException(status_code=400, detail="지원하지 않는 직원 권한입니다")
+    rows = _read("employee_join_requests")
+    record = _find(rows, request_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="직원을 찾을 수 없습니다")
+    if str(record.get("status") or "").strip().lower() != "approved":
+        raise HTTPException(status_code=400, detail="승인 완료 직원만 권한을 변경할 수 있습니다")
+    now = _now()
+    record["role"] = access_role
+    record["access_role_label"] = EMPLOYEE_ACCESS_ROLES[access_role]["label"]
+    record["access_memo"] = str(memo or "")
+    record["access_updated_by"] = _email(user)
+    record["access_updated_at"] = now
+    record["updated_at"] = now
     _write("employee_join_requests", rows)
     return record
 

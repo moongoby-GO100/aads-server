@@ -463,14 +463,43 @@ def test_member_permission_levels_are_visible_in_audit_view():
     html = html_path.read_text(encoding="utf-8")
     audit = html.split('<section id="auditView"', 1)[1].split('<section id="loginModal"', 1)[0]
 
-    assert "회원 권한 구분 (5단계)" in audit
-    assert 'data-level="owner"' in audit
-    assert 'data-level="admin"' in audit
-    assert 'data-level="employee"' in audit
-    assert 'data-level="employee_pending"' in audit
-    assert 'data-level="employee_rejected"' in audit
+    assert "회원·권한관리" in audit
+    assert "가입 직원 권한설정" in audit
+    assert "가입 승인 대기" in audit
     assert "currentMemberLevelNote" in audit
-    assert "document.querySelectorAll(\".member-level\")" in html
+    assert "data-employee-role-select" in html
+    assert "data-save-employee-role" in html
+    assert "updateApprovedEmployeeRole" in html
+
+
+@pytest.mark.asyncio
+async def test_update_approved_employee_role_route_delegates_to_service(monkeypatch):
+    captured = {}
+
+    def fake_update(request_id, role, memo, current_user):
+        captured.update(
+            request_id=request_id,
+            role=role,
+            memo=memo,
+            current_user=current_user,
+        )
+        return {"id": request_id, "role": role}
+
+    monkeypatch.setattr(api.svc, "update_approved_employee_role", fake_update)
+
+    result = await api.update_approved_employee_role(
+        "join-1",
+        api.EmployeeRoleUpdate(role="member", memo="화면 변경"),
+        current_user={"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result == {"employee": {"id": "join-1", "role": "member"}}
+    assert captured == {
+        "request_id": "join-1",
+        "role": "member",
+        "memo": "화면 변경",
+        "current_user": {"email": "owner@example.com", "is_admin": True},
+    }
 
 
 def test_unni_recipe_redirect_restores_fb_cookie_for_existing_login():

@@ -3607,6 +3607,47 @@ def test_approved_employees_are_filtered_by_business_and_infer_legacy_scope():
     assert rows[0]["branch"] == "열정국밥_미아점"
 
 
+def test_update_approved_employee_role_persists_access_and_session_permissions():
+    seed_approved_employee()
+
+    updated = service.update_approved_employee_role(
+        "join-mia",
+        "member",
+        "회원·권한관리 화면에서 직접 변경",
+        {"email": "owner@example.com", "is_admin": True},
+    )
+    session = service.session_for_user({"email": "member@example.com", "is_admin": False})
+
+    assert updated["role"] == "member"
+    assert updated["access_role_label"] == "운영 입력자"
+    assert updated["access_updated_by"] == "owner@example.com"
+    assert session["permissions"]["role"] == "member"
+    assert session["permissions"]["role_label"] == "운영 입력자"
+    assert session["permissions"]["can_edit_local_data"] is True
+    assert session["permissions"]["can_manage_onboarding"] is False
+
+
+def test_update_approved_employee_role_rejects_pending_employee():
+    service._write("employee_join_requests", [{
+        "id": "join-pending",
+        "name": "대기 직원",
+        "email": "pending@example.com",
+        "branch": "미아점",
+        "status": "pending",
+    }])
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.update_approved_employee_role(
+            "join-pending",
+            "viewer",
+            "",
+            {"email": "owner@example.com", "is_admin": True},
+        )
+
+    assert exc.value.status_code == 400
+    assert "승인 완료 직원" in exc.value.detail
+
+
 def test_contract_selected_employee_autofills_reference_data_but_keeps_edits():
     service._write(
         "employee_join_requests",

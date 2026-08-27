@@ -55,6 +55,11 @@ class ReviewPayload(BaseModel):
     memo: str = ""
 
 
+class EmployeeRoleUpdate(BaseModel):
+    role: str
+    memo: str = ""
+
+
 class DocumentReviewPayload(BaseModel):
     status: str = "approved"
     memo: str = ""
@@ -337,6 +342,23 @@ async def list_approved_employees(
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     return {"employees": await run_in_threadpool(svc.list_approved_employees, current_user, business_id)}
+
+
+@router.patch("/employees/approved/{request_id}/role")
+async def update_approved_employee_role(
+    request_id: str,
+    payload: EmployeeRoleUpdate,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {
+        "employee": await run_in_threadpool(
+            svc.update_approved_employee_role,
+            request_id,
+            payload.role,
+            payload.memo,
+            current_user,
+        )
+    }
 
 
 @router.get("/onboarding/documents")
