@@ -124,6 +124,11 @@ def _release_process_lock(fd: int | None) -> None:
     release_bank_lock(fd)
 
 
+def _process_lock_is_active(lock_path: str) -> bool:
+    from app.services.bank_collection_lock import bank_lock_is_active
+    return bank_lock_is_active(lock_path)
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(str(os.getenv(name) or "").strip() or default)
@@ -1431,6 +1436,18 @@ async def lifespan(app: FastAPI):
                     return
 
                 root_dir = Path(__file__).resolve().parents[1]
+                delivery_lock_path = os.getenv(
+                    "YEOLJEONG_DELIVERY_SYNC_LOCK_PATH",
+                    str(root_dir / "app" / "data" / "yeoljeong_finance" / ".delivery_sync.lock"),
+                )
+                if _process_lock_is_active(delivery_lock_path):
+                    logger.info(
+                        "bank_auto_collect_skip: delivery_sync_running reason=%s lock_path=%s",
+                        reason,
+                        delivery_lock_path,
+                    )
+                    return
+
                 lock_path = os.getenv(
                     "YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH",
                     str(root_dir / "app" / "data" / "yeoljeong_finance" / ".bank_auto_collect.lock"),

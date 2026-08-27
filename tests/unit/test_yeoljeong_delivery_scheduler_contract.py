@@ -85,6 +85,8 @@ def test_bank_auto_collect_is_single_owner_and_locked():
 
     assert "_is_active_api_container_for_background_jobs()" in source
     assert "bank_auto_collect_skip: inactive_api_container" in source
+    assert "YEOLJEONG_DELIVERY_SYNC_LOCK_PATH" in source
+    assert "bank_auto_collect_skip: delivery_sync_running" in source
     assert "YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH" in source
     assert ".bank_auto_collect.lock" in source
     assert "bank_auto_collect_skip: already_running" in source
