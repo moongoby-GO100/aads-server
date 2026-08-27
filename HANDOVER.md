@@ -30,6 +30,26 @@
 - Deployment status:
   - This entry was prepared from the clean `origin/main` worktree `/tmp/aads-e2e-timeout-20260827` to avoid unrelated FOOD dirty files in the main workdir.
 
+## 2026-08-27 12:52 KST - FOOD sales channel DB ledger UI binding
+
+- Trigger: CEO asked to connect the in-progress sales channel collection data to the related page and reflect user-centered UI/UX.
+- Findings:
+  - Backend API already exposes `/api/v1/yeoljeong-finance/sales`, `/settlements`, `/reviews`, and `/collection-status`.
+  - The finance service reads DB ledger tables first and seeds missing file rows into DB when needed.
+  - Live PostgreSQL counts at 12:47 KST: sales 816, settlements 999, reviews 2,147, collection status 3,233.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: the integrations page now loads sales, reviews, settlements, and collection statuses together instead of settlements only.
+  - Added sales channel ledger summary KPIs/table and refresh action using DB ledger API results.
+  - Sales channel readiness rows now show collected DB sales/settlement/review counts, amounts, last collection status, and actionable next steps per service/business/branch.
+  - Sales operations summary now separates local/manual sales from DB-collected sales so accounting totals are not silently double-counted.
+- Verification:
+  - `node -e ... new Function(script)` succeeded for the inline HTML script.
+  - Host pytest could not collect Yeoljeong tests because host Python lacks `fastapi`.
+  - Container pytest passed 156 tests and failed 1 existing static audit-view assertion unrelated to sales channel data (`회원 권한 구분 (5단계)` expectation).
+- Remaining:
+  - Commit, push, deploy, and browser E2E were not run in this turn.
+  - Existing unrelated dirty files were left untouched.
+
 ## 2026-08-27 12:47 KST - FOOD Coupang Eats PC Agent work-key isolation follow-up
 
 - Trigger: CEO ordered reconnecting the alternate PC Agent, preventing Coupang Eats work-key sessions from attaching to Baemin tabs, then recollecting Coupang Eats.
@@ -8466,4 +8486,25 @@
 - Remaining:
   - Runtime API process reload/deploy and real Browser E2E login/capture verification are still required before this can be called production-active.
   - Full `git diff --check` still fails on pre-existing trailing whitespace in `docs/CHANGELOG-go100-direct.md`.
+  - Existing unrelated dirty files were preserved.
+
+## 2026-08-27 12:58 KST - FOOD sales-channel DB ledger UI binding
+
+- Request: Reflect currently collected sales-channel data in the related page and improve the UI/UX around that data.
+- Findings:
+  - DB ledger tables exist and contain collected rows: `yeoljeong_delivery_sales` 817, `yeoljeong_delivery_reviews` 2,148, `yeoljeong_delivery_settlements` 999, `yeoljeong_delivery_collection_status` 3,239.
+  - The static app had API loaders for sales/reviews/status partly staged, but the user-facing integration view still emphasized account readiness instead of actual DB ledger counts and collection outcomes.
+- Changes:
+  - `app/static/apps/yeoljeong-finance/index.html`: added a "판매채널 수집 데이터 현황" panel with DB-backed sales, settlement, review, status, and action summaries.
+  - Bound `/sales`, `/settlements`, `/reviews`, and `/collection-status` refreshes into login, business switching, manual refresh, and post-sync flows.
+  - Updated the sales-channel readiness table to show actual DB ledger counts, latest collection status, and actionable next steps per service/business/branch.
+  - Restored the audit permission-level markers required by the static contract test.
+- Verification:
+  - `node -e` static script syntax check succeeded.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py -q` succeeded: 157 passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_delivery_collectors.py -q` succeeded: 15 passed.
+  - `curl -I http://127.0.0.1:8100/static/apps/yeoljeong-finance/index.html` returned HTTP 200 and the served HTML contained `판매채널 수집 데이터 현황` and `deliveryLedgerSummaryBadge`.
+- Remaining:
+  - Browser E2E screenshot was not run because no browser-control tool was available in this turn; HTTP/static/API-contract verification was used instead.
+  - Commit, push, and deploy were not performed in this chat turn.
   - Existing unrelated dirty files were preserved.

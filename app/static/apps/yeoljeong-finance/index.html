@@ -1606,6 +1606,16 @@
       align-items: center;
     }
 
+    .delivery-ledger-kpis {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .delivery-ledger-kpis .business-summary-card {
+      min-height: 92px;
+    }
+
     .readiness-panel .table-wrap {
       margin-top: 0;
       border: 0;
@@ -2316,6 +2326,7 @@
       .content-grid, .split, .settings-grid, .auth-gate-inner, .unni-shortcuts,
       .integration-service-grid, .integration-requirement-grid, .integration-detail-grid, .integration-form-support, .detail-grid,
       .business-page-grid { grid-template-columns: 1fr; }
+      .delivery-ledger-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .integration-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .integration-preset-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .business-workspace { grid-template-columns: 1fr; }
@@ -2402,6 +2413,7 @@
       .auth-flow-steps,
       .employee-flow-grid,
       .integration-action-grid { grid-template-columns: 1fr; }
+      .delivery-ledger-kpis { grid-template-columns: 1fr; }
       .auth-summary div { min-height: 0; }
       .auth-checklist span { align-items: flex-start; }
       .auth-card { max-width: none; }
@@ -4152,6 +4164,28 @@
           <section class="panel">
             <div class="panel-head">
               <div>
+                <h2 class="panel-title">판매채널 수집 데이터 현황</h2>
+                <p class="muted">DB 원장 기준으로 매출, 정산, 리뷰, 마지막 수집 상태를 사업자·지점별로 확인합니다.</p>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
+                <span id="deliveryLedgerSummaryBadge" class="badge info">DB 조회 대기</span>
+                <button id="refreshDeliveryLedgersBtn" type="button">수집 데이터 새로고침</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="deliveryLedgerKpiRows" class="delivery-ledger-kpis"></div>
+              <div class="table-wrap" style="margin-top:12px">
+                <table>
+                  <thead><tr><th>판매사이트</th><th>사업자·지점</th><th>매출</th><th>정산</th><th>리뷰</th><th>마지막 수집</th><th>다음 조치</th></tr></thead>
+                  <tbody id="deliveryLedgerRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
                 <h2 class="panel-title">연동 설정 바로가기</h2>
                 <p class="muted">사업자·지점 매핑과 인증방식을 서비스별로 관리합니다.</p>
               </div>
@@ -4358,6 +4392,13 @@
             <div class="panel-head"><h2 class="panel-title">회원·권한관리</h2><span id="memberSignupStatusBadge" class="badge warn">조회 필요</span></div>
             <div class="panel-body">
               <div id="currentMemberLevelNote" class="settings-note" style="margin-bottom:12px">로그인하면 현재 계정과 처리할 가입요청이 표시됩니다.</div>
+              <div class="ops-status-grid" aria-label="회원 권한 구분 (5단계)">
+                <article class="ops-card member-level" data-level="owner"><b>소유자</b><span>전체 설정과 권한 위임</span></article>
+                <article class="ops-card member-level" data-level="admin"><b>총괄 운영관리자</b><span>수집·정산·직원 승인</span></article>
+                <article class="ops-card member-level" data-level="employee"><b>직원</b><span>본인 서류와 급여 확인</span></article>
+                <article class="ops-card member-level" data-level="employee_pending"><b>가입 대기</b><span>승인 전 서류 등록</span></article>
+                <article class="ops-card member-level" data-level="employee_rejected"><b>반려</b><span>사유 확인 후 재신청</span></article>
+              </div>
               <div class="ops-status-grid" id="memberSignupStatusCards" aria-label="회원가입 처리 현황"></div>
               <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:12px">
                 <button id="refreshMemberAccessBtn" type="button">새로고침</button>
@@ -4371,7 +4412,7 @@
                 <table><thead><tr><th>직원</th><th>지점</th><th>현재 권한</th><th>바로 변경</th><th>상태</th></tr></thead><tbody id="memberPermissionGrantRows"></tbody></table>
               </div>
               <div class="settings-note" style="margin-top:12px">
-                승인 완료 직원만 이 목록에 표시됩니다. 가입 대기 직원은 아래에서 먼저 승인한 뒤 권한을 지정합니다.
+                회원 권한 구분 (5단계): 소유자, 총괄 운영관리자, 운영관리자, 매니저, 직원. 승인 완료 직원만 이 목록에 표시됩니다. 가입 대기 직원은 아래에서 먼저 승인한 뒤 권한을 지정합니다.
               </div>
             </div>
           </section>
@@ -4879,6 +4920,8 @@
       succeeded: ["수집완료", "good"],
       completed: ["수집완료", "good"],
       no_records: ["신규없음", "info"],
+      failed: ["수집실패", "bad"],
+      action_required: ["조치필요", "warn"],
       upload_required: ["파일필요", "warn"],
       credential_required: ["계정필요", "warn"],
       connector_not_configured: ["커넥터필요", "warn"],
@@ -5359,6 +5402,9 @@
     let approvedEmployees = [];
     let payrollStatements = Array.isArray(state.payrollStatements) ? state.payrollStatements : [];
     let deliverySettlements = Array.isArray(state.deliverySettlements) ? state.deliverySettlements : [];
+    let dbDeliverySales = [];
+    let dbDeliveryReviews = [];
+    let dbCollectionStatuses = [];
     let pendingPhoneInviteToken = "";
     let pendingPhoneInvite = null;
     let pendingContractSignToken = "";
@@ -5899,6 +5945,109 @@
       saveState();
     }
 
+    function deliveryLedgerRows(kind) {
+      const serverRows = {
+        sales: dbDeliverySales,
+        settlements: deliverySettlements,
+        reviews: dbDeliveryReviews
+      }[kind] || [];
+      const localRows = {
+        sales: state.deliverySales,
+        settlements: state.deliverySettlements,
+        reviews: state.deliveryReviews
+      }[kind] || [];
+      return Array.isArray(serverRows) && serverRows.length ? serverRows : (Array.isArray(localRows) ? localRows : []);
+    }
+
+    function deliveryRecordService(record) {
+      return String(record.service || record.platform || "").trim();
+    }
+
+    function deliveryRecordDate(record) {
+      return String(
+        record.occurred_on
+        || record.sales_date
+        || record.settlement_date
+        || record.order_date
+        || record.date
+        || record.finished_at
+        || record.collected_at
+        || record.updated_at
+        || record.created_at
+        || ""
+      ).slice(0, 10);
+    }
+
+    function deliveryRecordAmount(record, kind = "sales") {
+      const keys = kind === "settlements"
+        ? ["settlement_amount", "settlementAmount", "net_amount", "amount", "gross_amount"]
+        : ["gross_amount", "order_amount", "sales_amount", "amount", "net_amount"];
+      return keys.reduce((found, key) => {
+        if (found) return found;
+        const value = Number(String(record[key] ?? "").replace(/[^0-9.-]/g, ""));
+        return Number.isFinite(value) ? value : 0;
+      }, 0);
+    }
+
+    function isDeliveryScopeRecord(record, service, scope) {
+      const serviceKey = deliveryRecordService(record);
+      if (service && serviceKey && serviceKey !== service) return false;
+      if (scope?.businessId && recordBusinessId(record) !== scope.businessId) return false;
+      if (scope?.branch && String(record.branch || "").trim() !== scope.branch) return false;
+      const rowDate = deliveryRecordDate(record);
+      return rowDate ? inScopeDate(rowDate) : true;
+    }
+
+    function collectionStatusTime(record) {
+      return String(record.updated_at || record.finished_at || record.started_at || record.created_at || "");
+    }
+
+    function latestCollectionStatus(service, scope) {
+      return (Array.isArray(dbCollectionStatuses) ? dbCollectionStatuses : [])
+        .filter(row => (
+          deliveryRecordService(row) === service
+          && recordBusinessId(row) === scope.businessId
+          && String(row.branch || "").trim() === scope.branch
+        ))
+        .sort((a, b) => collectionStatusTime(b).localeCompare(collectionStatusTime(a)))[0] || null;
+    }
+
+    function deliveryScopeStats(service, scope) {
+      const salesRows = deliveryLedgerRows("sales").filter(row => isDeliveryScopeRecord(row, service, scope));
+      const settlementRows = deliveryLedgerRows("settlements").filter(row => isDeliveryScopeRecord(row, service, scope));
+      const reviewRows = deliveryLedgerRows("reviews").filter(row => isDeliveryScopeRecord(row, service, scope));
+      const latestStatus = latestCollectionStatus(service, scope);
+      const counts = latestStatus?.counts || {};
+      const salesCount = Math.max(salesRows.length, Number(counts.sales || 0));
+      const settlementCount = Math.max(settlementRows.length, Number(counts.settlements || 0));
+      const reviewCount = Math.max(reviewRows.length, Number(counts.reviews || 0));
+      const salesAmount = salesRows.reduce((sum, row) => sum + deliveryRecordAmount(row, "sales"), 0);
+      const settlementAmount = settlementRows.reduce((sum, row) => sum + deliveryRecordAmount(row, "settlements"), 0);
+      return {
+        salesCount,
+        settlementCount,
+        reviewCount,
+        salesAmount,
+        settlementAmount,
+        latestStatus,
+        hasRows: Boolean(salesCount || settlementCount || reviewCount)
+      };
+    }
+
+    function deliveryStatsSummary(stats) {
+      const parts = [
+        `매출 ${stats.salesCount.toLocaleString("ko-KR")}건${stats.salesAmount ? " / " + formatMoney(stats.salesAmount) : ""}`,
+        `정산 ${stats.settlementCount.toLocaleString("ko-KR")}건${stats.settlementAmount ? " / " + formatMoney(stats.settlementAmount) : ""}`,
+        `리뷰 ${stats.reviewCount.toLocaleString("ko-KR")}건`
+      ];
+      const latest = stats.latestStatus;
+      if (latest) {
+        const time = collectionStatusTime(latest).replace("T", " ").slice(0, 16);
+        parts.push(`최신 ${time || "시각없음"}`);
+      }
+      return parts.join("<br>");
+    }
+
     function formatMoney(value) {
       return `${Math.round(Number(value) || 0).toLocaleString("ko-KR")}원`;
     }
@@ -6083,6 +6232,209 @@
         </div>`;
     }
 
+    function deliverySalesRows() {
+      const rows = dbDeliverySales.length ? dbDeliverySales : (state.deliverySales || []);
+      return rows
+        .filter(isSelectedBusinessRecord)
+        .filter(row => inScopeBranch(row.branch || ""))
+        .filter(row => {
+          const rowDate = deliveryRecordDate(row);
+          return rowDate ? inScopeDate(rowDate) : true;
+        });
+    }
+
+    function deliverySettlementRows() {
+      const rows = deliverySettlements.length ? deliverySettlements : (state.deliverySettlements || []);
+      return rows
+        .filter(isSelectedBusinessRecord)
+        .filter(row => inScopeBranch(row.branch || ""))
+        .filter(row => {
+          const rowDate = deliveryRecordDate(row);
+          return rowDate ? inScopeDate(rowDate) : true;
+        });
+    }
+
+    function deliveryReviewRows() {
+      const rows = dbDeliveryReviews.length ? dbDeliveryReviews : (state.deliveryReviews || []);
+      return rows
+        .filter(isSelectedBusinessRecord)
+        .filter(row => inScopeBranch(row.branch || ""))
+        .filter(row => {
+          const rowDate = deliveryRecordDate(row);
+          return rowDate ? inScopeDate(rowDate) : true;
+        });
+    }
+
+    function deliveryStatusRows() {
+      return (dbCollectionStatuses || [])
+        .filter(isSelectedBusinessRecord)
+        .filter(row => inScopeBranch(row.branch || ""))
+        .filter(row => {
+          const from = String(row.date_from || "").slice(0, 7);
+          const to = String(row.date_to || "").slice(0, 7);
+          const selected = selectedMonth();
+          return !from || !selected || from === selected || to === selected;
+        });
+    }
+
+    function deliveryRecordTimestamp(row) {
+      return String(row.finished_at || row.collected_at || row.updated_at || row.created_at || deliveryRecordDate(row) || "");
+    }
+
+    function deliveryAmount(row, keys) {
+      for (const key of keys) {
+        const value = Number(String(row[key] ?? "").replace(/[^0-9.-]/g, ""));
+        if (value) return value;
+      }
+      return 0;
+    }
+
+    function deliveryGroupKey(service, businessId, branch) {
+      return `${service || ""}|${businessId || ""}|${branch || ""}`;
+    }
+
+    function deliveryLedgerGroups() {
+      const selectedServices = selectedMultiValues(els.integrationServiceFilter);
+      const selectedScopes = selectedMultiValues(els.integrationBusinessBranchFilter);
+      const selectedBusinessId = selectedSettingsBusinessId();
+      const groups = new Map();
+      const allowedByFilter = (service, businessId, branch) => {
+        if (selectedServices.length && !selectedServices.includes(service)) return false;
+        if (selectedScopes.length && !selectedScopes.includes(`${businessId || ""}|${branch || ""}`)) return false;
+        return !selectedBusinessId || businessId === selectedBusinessId;
+      };
+      const ensureGroup = (service, businessId, branch) => {
+        if (!deliveryAutomationServices.has(service) || !allowedByFilter(service, businessId, branch)) return null;
+        const key = deliveryGroupKey(service, businessId, branch);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            service,
+            businessId,
+            branch,
+            salesCount: 0,
+            salesAmount: 0,
+            settlementCount: 0,
+            settlementAmount: 0,
+            reviewCount: 0,
+            ratingTotal: 0,
+            ratingCount: 0,
+            latestAt: "",
+            statusRow: null
+          });
+        }
+        return groups.get(key);
+      };
+      (settings().integrations || []).forEach(item => {
+        ensureGroup(item.service, integrationBusinessId(item), String(item.branch || ""));
+      });
+      deliverySalesRows().forEach(row => {
+        const group = ensureGroup(String(row.service || row.platform || ""), recordBusinessId(row), String(row.branch || ""));
+        if (!group) return;
+        group.salesCount += 1;
+        group.salesAmount += deliveryAmount(row, ["gross_amount", "grossAmount", "sales_amount", "salesAmount", "order_amount", "amount"]);
+        group.latestAt = [group.latestAt, deliveryRecordTimestamp(row)].filter(Boolean).sort().at(-1) || "";
+      });
+      deliverySettlementRows().forEach(row => {
+        const group = ensureGroup(String(row.service || row.platform || ""), recordBusinessId(row), String(row.branch || ""));
+        if (!group) return;
+        group.settlementCount += 1;
+        group.settlementAmount += deliveryAmount(row, ["settlement_amount", "settlementAmount", "deposit_amount", "depositAmount", "amount"]);
+        group.latestAt = [group.latestAt, deliveryRecordTimestamp(row)].filter(Boolean).sort().at(-1) || "";
+      });
+      deliveryReviewRows().forEach(row => {
+        const group = ensureGroup(String(row.service || row.platform || ""), recordBusinessId(row), String(row.branch || ""));
+        if (!group) return;
+        group.reviewCount += 1;
+        const rating = Number(row.rating || row.score || 0);
+        if (rating) {
+          group.ratingTotal += rating;
+          group.ratingCount += 1;
+        }
+        group.latestAt = [group.latestAt, deliveryRecordTimestamp(row)].filter(Boolean).sort().at(-1) || "";
+      });
+      deliveryStatusRows()
+        .slice()
+        .sort((a, b) => deliveryRecordTimestamp(b).localeCompare(deliveryRecordTimestamp(a)))
+        .forEach(row => {
+          const group = ensureGroup(String(row.service || ""), recordBusinessId(row), String(row.branch || ""));
+          if (!group || group.statusRow) return;
+          group.statusRow = row;
+          group.latestAt = [group.latestAt, deliveryRecordTimestamp(row)].filter(Boolean).sort().at(-1) || "";
+        });
+      return Array.from(groups.values()).sort((a, b) => {
+        const serviceGap = String(integrationLabels[a.service] || a.service).localeCompare(String(integrationLabels[b.service] || b.service), "ko");
+        if (serviceGap) return serviceGap;
+        return `${businessName(a.businessId)} ${a.branch}`.localeCompare(`${businessName(b.businessId)} ${b.branch}`, "ko");
+      });
+    }
+
+    function deliveryLedgerStatus(group) {
+      const raw = String(group.statusRow?.status || group.statusRow?.raw_status || "").toLowerCase();
+      if (raw && integrationStatusLabels[raw]) return integrationStatusLabels[raw];
+      if (raw === "action_required") return ["조치필요", "warn"];
+      if (group.salesCount || group.settlementCount || group.reviewCount) return ["DB 반영", "good"];
+      return ["수집대기", "warn"];
+    }
+
+    function deliveryLedgerAction(group) {
+      const status = String(group.statusRow?.status || group.statusRow?.raw_status || "").toLowerCase();
+      if (["action_required", "credential_required", "portal_action_required", "blocked", "failed"].includes(status)) {
+        return `<button type="button" data-integration-detail="sales-channel-connect" data-default-service="${escapeHtml(group.service)}">인증 확인</button>`;
+      }
+      if (!group.salesCount && !group.settlementCount && !group.reviewCount) {
+        return `<button type="button" data-sync-integration="${escapeHtml(group.service)}">수집 실행</button>`;
+      }
+      return `<button type="button" data-open-import="${escapeHtml(group.service)}">파일 보완</button>`;
+    }
+
+    function renderDeliveryLedgerSummary() {
+      if (!els.deliveryLedgerRows) return;
+      const groups = deliveryLedgerGroups();
+      const salesRows = deliverySalesRows();
+      const settlementRows = deliverySettlementRows();
+      const reviewRows = deliveryReviewRows();
+      const statusRows = deliveryStatusRows();
+      const salesAmount = salesRows.reduce((sum, row) => sum + deliveryAmount(row, ["gross_amount", "grossAmount", "sales_amount", "salesAmount", "order_amount", "amount"]), 0);
+      const settlementAmount = settlementRows.reduce((sum, row) => sum + deliveryAmount(row, ["settlement_amount", "settlementAmount", "deposit_amount", "depositAmount", "amount"]), 0);
+      const lastStatusAt = statusRows.map(deliveryRecordTimestamp).filter(Boolean).sort().at(-1) || "";
+      const blockedGroups = groups.filter(group => ["action_required", "credential_required", "portal_action_required", "blocked", "failed"].includes(String(group.statusRow?.status || group.statusRow?.raw_status || "").toLowerCase())).length;
+      if (els.deliveryLedgerSummaryBadge) {
+        const totalRows = salesRows.length + settlementRows.length + reviewRows.length;
+        els.deliveryLedgerSummaryBadge.textContent = totalRows ? `DB ${totalRows.toLocaleString("ko-KR")}건` : "DB 데이터 없음";
+        els.deliveryLedgerSummaryBadge.className = `badge ${totalRows ? "good" : "warn"}`;
+      }
+      if (els.deliveryLedgerKpiRows) {
+        const kpis = [
+          ["매출", `${salesRows.length.toLocaleString("ko-KR")}건`, formatMoney(salesAmount)],
+          ["정산", `${settlementRows.length.toLocaleString("ko-KR")}건`, formatMoney(settlementAmount)],
+          ["리뷰", `${reviewRows.length.toLocaleString("ko-KR")}건`, "평점/답글 확인"],
+          ["수집상태", `${statusRows.length.toLocaleString("ko-KR")}건`, lastStatusAt ? `최근 ${lastStatusAt.slice(0, 16).replace("T", " ")}` : "미실행"],
+          ["조치필요", `${blockedGroups.toLocaleString("ko-KR")}개`, "로그인/권한/커넥터"]
+        ];
+        els.deliveryLedgerKpiRows.innerHTML = kpis.map(([label, value, hint]) => `
+          <article class="business-summary-card">
+            <b>${escapeHtml(label)}</b>
+            <strong>${escapeHtml(value)}</strong>
+            <span class="muted">${escapeHtml(hint)}</span>
+          </article>
+        `).join("");
+      }
+      els.deliveryLedgerRows.innerHTML = groups.length ? groups.map(group => {
+        const status = deliveryLedgerStatus(group);
+        const avgRating = group.ratingCount ? (group.ratingTotal / group.ratingCount).toFixed(1) : "-";
+        const statusMessage = group.statusRow?.message || group.statusRow?.error_code || "";
+        return `<tr>
+          <td><strong>${escapeHtml(integrationLabels[group.service] || group.service || "-")}</strong></td>
+          <td>${escapeHtml(`${businessName(group.businessId)} · ${group.branch || "공통"}`)}</td>
+          <td>${group.salesCount.toLocaleString("ko-KR")}건<br><span class="muted">${escapeHtml(formatMoney(group.salesAmount))}</span></td>
+          <td>${group.settlementCount.toLocaleString("ko-KR")}건<br><span class="muted">${escapeHtml(formatMoney(group.settlementAmount))}</span></td>
+          <td>${group.reviewCount.toLocaleString("ko-KR")}건<br><span class="muted">평균 ${escapeHtml(avgRating)}</span></td>
+          <td>${group.latestAt ? escapeHtml(group.latestAt.slice(0, 16).replace("T", " ")) : "미실행"}<br>${badgeHtml(status[0], status[1])}${statusMessage ? `<br><span class="muted">${escapeHtml(statusMessage)}</span>` : ""}</td>
+          <td>${deliveryLedgerAction(group)}</td>
+        </tr>`;
+      }).join("") : tableEmpty(7, "선택한 사업자·필터 조건에 맞는 판매채널 수집 데이터가 없습니다.");
+    }
+
     function pendingTaskItems() {
       const pendingEntries = scopedEntries().filter(item => item.status === "pending");
       const pendingShifts = scopedShifts().filter(item => item.status === "pending");
@@ -6169,10 +6521,24 @@
         `).join("") : tableEmpty(4, "보관 문서가 없습니다.");
       }
 
-      const salesRows = scopedEntries().filter(item => ["sales", "bank"].includes(item.type)).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const dbSalesRows = deliveryLedgerRows("sales")
+        .filter(row => isSelectedBusinessRecord(row) && inScopeBranch(row.branch || "") && inScopeDate(deliveryRecordDate(row)))
+        .map(row => ({
+          date: deliveryRecordDate(row),
+          channel: integrationLabels[deliveryRecordService(row)] || deliveryRecordService(row) || "판매채널",
+          vendor: `${row.branch || "지점 미지정"} DB 수집매출`,
+          amount: deliveryRecordAmount(row, "sales"),
+          status: "confirmed"
+        }));
+      const salesRows = [
+        ...scopedEntries().filter(item => ["sales", "bank"].includes(item.type)),
+        ...dbSalesRows
+      ].slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const dbSalesAmount = dbSalesRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
       if (els.salesSummaryRows) {
         els.salesSummaryRows.innerHTML = [
           progressRow("매출", formatMoney(m.sales), m.sales ? "good" : "warn", 100),
+          progressRow("DB 판매채널", `${dbSalesRows.length.toLocaleString("ko-KR")}건 · ${formatMoney(dbSalesAmount)}`, dbSalesRows.length ? "good" : "warn", 100),
           progressRow("입금", formatMoney(m.bank), m.bank ? "good" : "warn", 100),
           progressRow("대사 차이", formatMoney(m.depositGap), Math.abs(m.depositGap) > Math.max(10000, m.sales * 0.02) ? "warn" : "good", 60)
         ].join("");
@@ -6403,6 +6769,7 @@
           return progressRow(integrationLabels[item.service] || item.service, `${status[0]} · ${item.portalMessage || item.memo || "설정값 또는 커넥터 확인"}`, status[1], 55);
         }).join("") : progressRow("정상", "현재 오류·재연결 대기 항목이 없습니다.", "good", 100);
       }
+      renderDeliveryLedgerSummary();
       renderSalesChannelReadinessRows();
 
       if (els.marginSummaryBadge) {
@@ -7921,18 +8288,24 @@
           ));
           const latest = matches.slice().sort((a, b) => String(b.lastSyncAt || "").localeCompare(String(a.lastSyncAt || "")))[0] || null;
           const rawStatus = latest?.lastSyncStatus || latest?.portalStatus || latest?.status || "";
+          const stats = deliveryScopeStats(service, scope);
+          const latestCollection = stats.latestStatus;
+          const collectionStatus = String(latestCollection?.status || latestCollection?.raw_status || "").toLowerCase();
+          const displayStatus = collectionStatus || rawStatus;
           const normalizedStatus = String(rawStatus || latest?.status || "").toLowerCase();
-          const isReady = ["completed", "no_records", "ready", "vault-ready", "credential_registered"].includes(normalizedStatus);
+          const isReady = ["completed", "succeeded", "no_records", "ready", "vault-ready", "credential_registered"].includes(normalizedStatus)
+            || (stats.hasRows && !["failed", "action_required", "portal_action_required"].includes(collectionStatus));
           if (latest) registeredCount += 1;
           else missingCount += 1;
           if (latest && isReady) readyCount += 1;
           if (latest && !isReady) blockedCount += 1;
+          if (!latest && stats.hasRows) readyCount += 1;
           const status = latest
-            ? (integrationStatusLabels[rawStatus] || integrationStatusLabels[latest.status] || [rawStatus || "저장됨", "warn"])
-            : ["미등록", "bad"];
+            ? (integrationStatusLabels[displayStatus] || integrationStatusLabels[rawStatus] || integrationStatusLabels[latest.status] || [displayStatus || rawStatus || "저장됨", "warn"])
+            : (stats.hasRows ? ["DB 수집값 있음", "good"] : ["미등록", "bad"]);
           const need = latest
-            ? (latest.portalMessage || latest.memo || (isReady ? "수집 실행 가능" : "계정/권한 확인"))
-            : "연동설정에서 ID/PW 또는 PC Agent 세션 등록";
+            ? (latestCollection?.message || latest.portalMessage || latest.memo || (isReady ? "수집 실행 가능" : "계정/권한 확인"))
+            : (stats.hasRows ? "계정 목록 보강 필요. DB 수집값은 조회 가능" : "연동설정에서 ID/PW 또는 PC Agent 세션 등록");
           const action = latest
             ? `${escapeHtml(need)}<br><button type="button" data-sync-integration="${escapeHtml(service)}" data-sync-integration-id="${escapeHtml(latest.id)}">${isIntegrationSyncActive(latest) ? "처리중..." : "수집 실행"}</button>`
             : `${escapeHtml(need)}<br><button type="button" data-integration-detail="sales-channel-connect" data-default-service="${escapeHtml(service)}">연동설정</button>`;
@@ -7942,7 +8315,7 @@
               <td>${escapeHtml(`${businessName(scope.businessId)} · ${scope.branch}`)}</td>
               <td>${matches.length ? `${matches.length}건${latest?.username ? `<br><span class="muted">${escapeHtml(latest.username)}</span>` : ""}` : "0건"}</td>
               <td>${badgeHtml(status[0], status[1])}</td>
-              <td>${escapeHtml(integrationCatalog[service]?.dataScope || "매출/정산/리뷰")}</td>
+              <td>${deliveryStatsSummary(stats)}</td>
               <td>${action}</td>
             </tr>
           `);
@@ -7954,7 +8327,9 @@
           badgeHtml(`계정 있음 ${registeredCount}개`, registeredCount ? "good" : "warn"),
           badgeHtml(`수집 가능 ${readyCount}개`, readyCount ? "good" : "warn"),
           badgeHtml(`확인 필요 ${blockedCount}개`, blockedCount ? "warn" : "good"),
-          badgeHtml(`미등록 ${missingCount}개`, missingCount ? "bad" : "good")
+          badgeHtml(`미등록 ${missingCount}개`, missingCount ? "bad" : "good"),
+          badgeHtml(`DB 매출 ${deliveryLedgerRows("sales").filter(row => isSelectedBusinessRecord(row) && inScopeDate(deliveryRecordDate(row))).length.toLocaleString("ko-KR")}건`, deliveryLedgerRows("sales").length ? "good" : "warn"),
+          badgeHtml(`DB 리뷰 ${deliveryLedgerRows("reviews").filter(row => isSelectedBusinessRecord(row) && inScopeDate(deliveryRecordDate(row))).length.toLocaleString("ko-KR")}건`, deliveryLedgerRows("reviews").length ? "good" : "warn")
         ].join("");
       }
       els.salesChannelReadinessRows.innerHTML = rows.length ? rows.join("") : tableEmpty(6, "선택한 서비스·사업자 조건에 맞는 판매채널 준비 항목이 없습니다.");
@@ -10249,6 +10624,7 @@
       loadEmployeeContracts().catch(() => {});
       loadApprovedEmployees().catch(() => {});
       loadPayrollStatements().catch(() => {});
+      loadDeliveryLedgers({ silent: true }).catch(() => {});
       if (new URLSearchParams(window.location.search).has("yf_contract_token")) {
         handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));
       }
@@ -10318,6 +10694,7 @@
       loadEmployeeContracts().catch(() => {});
       loadApprovedEmployees().catch(() => {});
       loadPayrollStatements().catch(() => {});
+      loadDeliveryLedgers({ silent: true }).catch(() => {});
     }
 
     async function submitEmployeeSignupJoinRequest({ name, email, branch, phone, address, birthDate, nationality }) {
@@ -10352,9 +10729,14 @@
       employeeJoinRequests = [];
       approvedEmployees = [];
       payrollStatements = [];
+      dbDeliverySales = [];
+      dbDeliveryReviews = [];
+      dbCollectionStatuses = [];
+      deliverySettlements = [];
       renderOnboarding();
       renderEmployees();
       renderPayroll();
+      renderDeliveryLedgerSummary();
       showToast("로그아웃되었습니다.");
     }
 
@@ -10703,6 +11085,52 @@
       renderAll();
     }
 
+    async function loadDeliverySales() {
+      if (!hasServerAuth()) return;
+      const selectedBusiness = selectedSettingsBusinessId();
+      const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
+      const payload = await financeApi(`/sales${query}`);
+      dbDeliverySales = payload.sales || [];
+      state.deliverySales = dbDeliverySales;
+      saveState();
+      renderAll();
+    }
+
+    async function loadDeliveryReviews() {
+      if (!hasServerAuth()) return;
+      const selectedBusiness = selectedSettingsBusinessId();
+      const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
+      const payload = await financeApi(`/reviews${query}`);
+      dbDeliveryReviews = payload.reviews || [];
+      state.deliveryReviews = dbDeliveryReviews;
+      saveState();
+      renderAll();
+    }
+
+    async function loadCollectionStatus() {
+      if (!hasServerAuth()) return;
+      const selectedBusiness = selectedSettingsBusinessId();
+      const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
+      const payload = await financeApi(`/collection-status${query}`);
+      dbCollectionStatuses = payload.statuses || [];
+      renderAll();
+    }
+
+    async function loadDeliveryLedgers({ silent = false } = {}) {
+      if (!hasServerAuth()) return;
+      await Promise.all([
+        loadDeliverySettlements(),
+        loadDeliverySales(),
+        loadDeliveryReviews(),
+        loadCollectionStatus()
+      ]);
+      saveState();
+      renderAll();
+      if (!silent) {
+        showToast(`판매채널 DB 원장: 매출 ${dbDeliverySales.length}건 / 정산 ${deliverySettlements.length}건 / 리뷰 ${dbDeliveryReviews.length}건`);
+      }
+    }
+
     async function syncDeliveryServices(services, scopeOverride = null) {
       if (!canManageAutomation()) {
         showToast("총괄 운영관리자 로그인 후 서버 자동 수집을 실행할 수 있습니다.");
@@ -10731,6 +11159,7 @@
       } else {
         showToast(result.recordsCount ? `자동 수집 매출 ${result.salesCount}건 / 정산 ${result.settlementsCount}건 / 리뷰 ${result.reviewsCount}건 반영` : `수집 실행 완료. 확인필요 ${result.blocked}건${result.messages?.length ? " · " + result.messages.join(" / ") : ""}`);
       }
+      loadDeliveryLedgers({ silent: true }).catch(() => {});
       return result;
     }
 
@@ -11797,9 +12226,11 @@
         setDefaults();
         renderAll();
         loadApprovedEmployees().catch(err => showToast(`승인 직원 조회 실패: ${err.message}`));
+        loadDeliveryLedgers({ silent: true }).catch(err => showToast(`판매채널 DB 조회 실패: ${err.message}`));
         showToast("선택 사업자 기준으로 설정 현황을 다시 정리했습니다.");
       });
       els.refreshServerAccountsBtn.addEventListener("click", () => refreshServerAccounts().catch(err => showToast(err.message)));
+      els.refreshDeliveryLedgersBtn?.addEventListener("click", () => loadDeliveryLedgers().catch(err => showToast(`판매채널 DB 조회 실패: ${err.message}`)));
       els.syncDeliveryBtn.addEventListener("click", () => syncDeliveryServices(["baemin", "coupangeats", "yogiyo", "ddangyo"]).catch(err => showToast(err.message)));
       els.syncFinancialBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
       els.syncFinancialShortcutBtn?.addEventListener("click", () => syncFinancialServices(["shinhan_business", "ibk_business", "card_pg"]).catch(err => showToast(err.message)));
@@ -12224,7 +12655,7 @@
         refreshServerAccounts().catch(() => {});
         refreshBankAccounts({ silent: true }).catch(() => {});
       }
-      if (hasServerAuth()) loadDeliverySettlements().catch(() => {});
+      if (hasServerAuth()) loadDeliveryLedgers({ silent: true }).catch(() => {});
       if (canManageOnboarding()) loadEmployeeInvites().catch(() => {});
       if (hasServerAuth()) {
         loadOnboardingDocumentTypes().catch(() => {});

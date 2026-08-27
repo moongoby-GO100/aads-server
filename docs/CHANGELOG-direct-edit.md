@@ -5690,3 +5690,22 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-27 09:04:46 KST] [aads-server] scripts/rebuild_dashboard.sh
 - Chat-Direct 수정: write: scripts/rebuild_dashboard.sh
+
+## [2026-08-27 11:46:32 KST] [aads-server] pc_agent/commands/browser_auto.py
+- Chat-Direct 수정: run_remote_command: ls -l /root/aads/aads-server/.delivery_sync.lock
+
+## [2026-08-27 11:54:39 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: run_remote_command: date
+
+## [2026-08-27 12:43:57 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: patch:     let deliverySettlements = Array.isAr→    let deliverySettlements = Array.isAr
+
+## [2026-08-27 12:45:00 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: patch:       saveState();
+      renderAll();
+  →      saveState();
+      renderAll();
+
+
+## [2026-08-27 12:52:19 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
+- Chat-Direct 수정: 판매채널 DB 원장 연동 UI 보강. `/sales`, `/settlements`, `/reviews`, `/collection-status`를 함께 불러와 판매채널 수집 현황 KPI, 사업자·지점별 원장 테이블, 자동수집 점검표에 DB 건수/금액/최신상태/조치 버튼을 표시.

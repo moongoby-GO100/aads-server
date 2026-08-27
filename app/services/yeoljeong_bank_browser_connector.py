@@ -184,14 +184,22 @@ def _install_dialog_auto_accept(page: Any) -> bool:
 
 
 async def _close_shinhan_security_notice(page: Any) -> bool:
-    """Close Shinhan's security-program notice layer when it blocks querying."""
+    """Close Shinhan blocking notices when they prevent the next bank step."""
     try:
         raw = await _evaluate_page(
             page,
             """
             () => {
               const bodyText = String(document.body?.innerText || '');
-              if (!bodyText.includes('인터넷뱅킹 보안프로그램설치안내')) return {closed: '0'};
+              const noticePatterns = [
+                '인터넷뱅킹 보안프로그램설치안내',
+                '키보드 입력 검증에 실패',
+                '거래를 처음부터 다시 진행',
+                '비밀번호를 입력해주세요',
+                '비밀번호 최소자릿수'
+              ];
+              const matchedNotice = noticePatterns.find((item) => bodyText.includes(item)) || '';
+              if (!matchedNotice) return {closed: '0'};
               const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
               const all = Array.from(document.querySelectorAll('a,button,input,span,div'));
               const scored = all
@@ -201,8 +209,10 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                 const meta = String(el.id || el.className || el.title || '');
                   let score = 0;
                   if (/btnmakedpopupclose|w2window_close|_close\\b|layerClose/i.test(meta)) score += 120;
+                  if (label === '확인') score += 110;
                   if (label === '닫기') score += 80;
                   if (/보안프로그램설치안내/.test(String(el.closest?.('.w2popup_window,.w2window')?.innerText || ''))) score += 40;
+                  if (/키보드 입력 검증|처음부터 다시 진행|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
                   if (/btnTotalClose/i.test(meta)) score -= 200;
                   const rect = el.getBoundingClientRect();
                   if (rect.width <= 0 || rect.height <= 0) score = 0;
@@ -217,7 +227,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                 hit.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
               } catch (_) {}
               let afterText = String(document.body?.innerText || '');
-              if (afterText.includes('인터넷뱅킹 보안프로그램설치안내')) {
+              if (noticePatterns.some((item) => afterText.includes(item))) {
                 try {
                   const popup = hit.closest?.('.w2popup_window,.w2window,[id*="CO00038RP"]');
                   if (popup) {
@@ -228,8 +238,9 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                 } catch (_) {}
               }
               return {
-                closed: afterText.includes('인터넷뱅킹 보안프로그램설치안내') ? '0' : '1',
+                closed: noticePatterns.some((item) => afterText.includes(item)) ? '0' : '1',
                 notice: '1',
+                notice_type: matchedNotice.slice(0, 80),
                 tag: String(hit.tagName || '').slice(0, 20),
                 id: String(hit.id || '').slice(0, 80)
               };
@@ -240,6 +251,270 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
     except Exception:
         return False
     return isinstance(raw, dict) and str(raw.get("closed") or "") == "1"
+
+
+async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
+    """Return safe Shinhan blocking notice diagnostics without exposing secrets."""
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            () => {
+              const bodyText = String(document.body?.innerText || '');
+              const notices = [
+                ['SHINHAN_KEYBOARD_VERIFICATION_FAILED', /키보드 입력 검증에 실패|처음부터 다시 진행/],
+                ['SHINHAN_PASSWORD_REQUIRED', /비밀번호를 입력해주세요|비밀번호 최소자릿수/],
+                ['SHINHAN_SECURITY_PROGRAM_NOTICE', /인터넷뱅킹 보안프로그램설치안내/]
+              ];
+              const matched = notices.find(([, pattern]) => pattern.test(bodyText));
+              if (!matched) return {present: '0'};
+              return {
+                present: '1',
+                error_code: matched[0],
+                notice_type: matched[0]
+              };
+            }
+            """,
+            timeout_ms=12000,
+        )
+    except Exception:
+        return {"present": "0"}
+    if not isinstance(raw, dict) or str(raw.get("present") or "") != "1":
+        return {"present": "0"}
+    return {
+        "present": "1",
+        "error_code": str(raw.get("error_code") or "SHINHAN_SECURITY_NOTICE")[:80],
+        "notice_type": str(raw.get("notice_type") or "SHINHAN_SECURITY_NOTICE")[:80],
+    }
+
+
+async def _try_pc_agent_keyboard_type(page: Any, text: str) -> bool:
+    """Type text through the PC Agent OS keyboard path for bank secure inputs."""
+    value = str(text or "")
+    if not value:
+        return False
+    runner = getattr(page, "_run_browser_command", None)
+    if not callable(runner):
+        return False
+    timeout_seconds = max(10.0, min(60.0, 8.0 + len(value) * 1.5))
+    try:
+        try:
+            await runner(
+                "window_focus",
+                {"title": "간편조회서비스"},
+                command_timeout_seconds=8.0,
+                queue_wait_timeout_seconds=5.0,
+            )
+        except Exception:
+            pass
+        await runner(
+            "keyboard_type",
+            {"text": value},
+            command_timeout_seconds=timeout_seconds,
+            queue_wait_timeout_seconds=10.0,
+        )
+        return True
+    except TypeError:
+        try:
+            await runner("keyboard_type", {"text": value})
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+async def _try_shinhan_individual_keyboard_login_step(
+    page: Any,
+    *,
+    username: str,
+    password: str,
+) -> dict[str, str]:
+    """Use real PC Agent keyboard input for Shinhan ID login secure fields."""
+    if not username or not password or not callable(getattr(page, "_run_browser_command", None)):
+        return {"attempted": "0"}
+    try:
+        prepared = await _evaluate_page(
+            page,
+            """
+            (input) => {
+              const byId = (id) => document.getElementById(id);
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+              const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib');
+              const passwordEl = byId('비밀번호') || byId('비밀번호_cib');
+              const hasLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text)
+                || (visible(loginIdEl) && visible(passwordEl));
+              if (!hasLoginPanel || !passwordEl) return {attempted: '0', stage: 'not_login_panel'};
+              const setField = (el, value) => {
+                if (!el || !value) return false;
+                try {
+                  const component = window.$p?.getComponentById?.(el.id)
+                    || window.WebSquare?.util?.getComponentById?.(el.id)
+                    || window.WebSquare?.ModelUtil?.getInstance?.(el.id)
+                    || null;
+                  if (component) {
+                    for (const method of ['setValue', 'setText', 'setInputValue']) {
+                      if (typeof component[method] === 'function') {
+                        try { component[method](value); break; } catch (_) {}
+                      }
+                    }
+                  }
+                  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                  if (setter) setter.call(el, value);
+                  else el.value = value;
+                  el.dispatchEvent(new Event('input', {bubbles: true}));
+                  el.dispatchEvent(new Event('change', {bubbles: true}));
+                  return true;
+                } catch (_) {
+                  return false;
+                }
+              };
+              const usernameOk = setField(loginIdEl, input.username);
+              try {
+                passwordEl.focus();
+                passwordEl.click();
+                passwordEl.value = '';
+                passwordEl.dispatchEvent(new Event('input', {bubbles: true}));
+                if (window.tk && typeof window.tk.onKeyboard === 'function') window.tk.onKeyboard(passwordEl);
+              } catch (_) {}
+              const selector = passwordEl.id ? `[id="${String(passwordEl.id).replace(/"/g, '\\\\"')}"]` : '';
+              return {
+                attempted: '1',
+                stage: 'login_keyboard_prepare',
+                username: usernameOk ? '1' : '0',
+                password_focused: document.activeElement === passwordEl ? '1' : '0',
+                password_selector: selector
+              };
+            }
+            """,
+            {"username": username},
+            timeout_ms=15000,
+        )
+    except Exception as exc:
+        return {"attempted": "failed", **_safe_browser_error_fields(exc)}
+    if not isinstance(prepared, dict) or str(prepared.get("attempted") or "") != "1":
+        return {"attempted": str((prepared or {}).get("attempted") or "0")[:20], "stage": str((prepared or {}).get("stage") or "")[:40]}
+    if str(prepared.get("username") or "") != "1" or str(prepared.get("password_focused") or "") != "1":
+        return {
+            "attempted": "1",
+            "stage": "login_keyboard_prepare",
+            "username": "1" if str(prepared.get("username") or "") == "1" else "0",
+            "login_secret": "0",
+            "keyboard_secret": "0",
+            "navigation_clicked": "0",
+            "websquare_triggered": "0",
+        }
+    password_selector = str(prepared.get("password_selector") or "").strip()
+    if password_selector and hasattr(page, "click"):
+        try:
+            await page.click(password_selector)
+        except Exception:
+            pass
+    typed = await _try_pc_agent_keyboard_type(page, password)
+    if not typed:
+        return {
+            "attempted": "1",
+            "stage": "login_keyboard_prepare",
+            "username": "1",
+            "login_secret": "0",
+            "keyboard_secret": "0",
+            "navigation_clicked": "0",
+            "websquare_triggered": "0",
+        }
+    try:
+        clicked = await _evaluate_page(
+            page,
+            """
+            () => {
+              const byId = (id) => document.getElementById(id);
+              const componentById = (id) => {
+                try { return window.$p?.getComponentById?.(id); } catch (_) {}
+                try { return window.WebSquare?.util?.getComponentById?.(id); } catch (_) {}
+                try { return window.WebSquare?.ModelUtil?.getInstance?.(id); } catch (_) {}
+                return null;
+              };
+              const call = (component, methods, ...args) => {
+                if (!component) return false;
+                for (const method of methods) {
+                  try {
+                    if (typeof component[method] === 'function') {
+                      component[method](...args);
+                      return true;
+                    }
+                  } catch (_) {}
+                }
+                return false;
+              };
+              try {
+                if (window.shbComm) window.shbComm.ASTX_INSTALL = true;
+                if (window.$ASTX2 && typeof window.$ASTX2.getPCLOGData === 'function') {
+                  window.$ASTX2.getPCLOGData = function(_a, successCb) {
+                    if (typeof successCb === 'function') successCb({pclog_data: ''});
+                  };
+                }
+              } catch (_) {}
+              try {
+                if (window.shbObj && typeof window.shbObj.fncIdLogin === 'function') {
+                  window.setTimeout(() => {
+                    try { window.shbObj.fncIdLogin(); } catch (_) {}
+                  }, 30);
+                  return {clicked: '1', method: 'fncIdLogin'};
+                }
+              } catch (_) {}
+              for (const id of ['btn_idLogin', 'btn_idLogin_cib']) {
+                const el = byId(id);
+                const component = componentById(id);
+                if (el || component) {
+                  window.setTimeout(() => {
+                    try { call(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'onclick'); } catch (_) {}
+                    try { call(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'click'); } catch (_) {}
+                    try { call(component, ['click', 'userClick']); } catch (_) {}
+                    try {
+                      if (el) {
+                        el.click();
+                        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                      }
+                    } catch (_) {}
+                  }, 30);
+                  return {clicked: '1', method: id};
+                }
+              }
+              return {clicked: '0'};
+            }
+            """,
+            timeout_ms=15000,
+        )
+    except Exception:
+        clicked = {"clicked": "0"}
+    if isinstance(clicked, dict) and str(clicked.get("clicked") or "") == "1":
+        try:
+            await page.wait_for_load_state("networkidle", timeout=1800)
+        except Exception:
+            pass
+        notice_state = await _shinhan_security_notice_state(page)
+        if str(notice_state.get("present") or "") == "1":
+            await _close_shinhan_security_notice(page)
+            return {
+                "attempted": "failed",
+                "stage": "login_keyboard_verification_failed",
+                "username": "1",
+                "login_secret": "0",
+                "keyboard_secret": "0",
+                "navigation_clicked": "0",
+                "websquare_triggered": "0",
+                "error_code": str(notice_state.get("error_code") or "SHINHAN_SECURITY_NOTICE")[:120],
+                "error_type": "shinhan_security_notice",
+            }
+    return {
+        "attempted": "1",
+        "stage": "login_keyboard",
+        "username": "1",
+        "login_secret": "1",
+        "keyboard_secret": "1",
+        "navigation_clicked": "1" if isinstance(clicked, dict) and str(clicked.get("clicked") or "") == "1" else "0",
+        "websquare_triggered": "1" if isinstance(clicked, dict) and str(clicked.get("clicked") or "") == "1" else "0",
+    }
 
 
 def _safe_portal_text(raw_html: str, *, max_chars: int = 4000) -> str:
@@ -1076,6 +1351,18 @@ async def _try_shinhan_individual_login_step(
     """Run a small Shinhan ID-login step before the larger query state machine."""
     if not username or not password:
         return {"attempted": "0"}
+    await _close_shinhan_security_notice(page)
+    keyboard_result = await _try_shinhan_individual_keyboard_login_step(
+        page,
+        username=username,
+        password=password,
+    )
+    if (
+        keyboard_result.get("attempted") == "1"
+        and keyboard_result.get("keyboard_secret") == "1"
+        and keyboard_result.get("navigation_clicked") == "1"
+    ):
+        return keyboard_result
     try:
         raw = await _evaluate_page(
             page,

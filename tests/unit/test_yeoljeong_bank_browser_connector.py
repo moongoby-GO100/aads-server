@@ -1268,6 +1268,51 @@ def test_close_shinhan_security_notice_prefers_visible_popup_close():
     page.evaluate.assert_awaited_once()
 
 
+def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
+    page = AsyncMock()
+    page.click = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+    page._run_browser_command = AsyncMock()
+
+    async def evaluate(expr, *args, **kwargs):
+        if "login_keyboard_prepare" in expr:
+            return {
+                "attempted": "1",
+                "stage": "login_keyboard_prepare",
+                "username": "1",
+                "password_focused": "1",
+                "password_selector": "[id=\"비밀번호\"]",
+            }
+        if "fncIdLogin" in expr:
+            return {"clicked": "1", "method": "fncIdLogin"}
+        if "SHINHAN_KEYBOARD_VERIFICATION_FAILED" in expr:
+            return {
+                "present": "1",
+                "error_code": "SHINHAN_KEYBOARD_VERIFICATION_FAILED",
+                "notice_type": "SHINHAN_KEYBOARD_VERIFICATION_FAILED",
+            }
+        if "noticePatterns" in expr:
+            return {"closed": "1", "notice": "1"}
+        raise AssertionError("unexpected evaluate expression")
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_shinhan_individual_keyboard_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["attempted"] == "failed"
+    assert result["stage"] == "login_keyboard_verification_failed"
+    assert result["error_code"] == "SHINHAN_KEYBOARD_VERIFICATION_FAILED"
+    assert result["keyboard_secret"] == "0"
+    assert "bank-pass" not in str(result)
+    page._run_browser_command.assert_any_await("keyboard_type", {"text": "bank-pass"}, command_timeout_seconds=21.5, queue_wait_timeout_seconds=10.0)
+
+
 def test_prepare_shinhan_corporate_quick_flow_returns_safe_diagnostics():
     page = AsyncMock()
 
