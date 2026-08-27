@@ -6176,7 +6176,7 @@ async def _delivery_bridge_page_for_service(context: Any, service: str) -> Any:
             url = str(getattr(page, "url", "") or "").lower()
         if markers and any(marker in url for marker in markers):
             return page
-    return pages[0] if pages else await context.new_page()
+    return await context.new_page()
 
 
 def _baemin_bridge_page_kind(text: str) -> str:

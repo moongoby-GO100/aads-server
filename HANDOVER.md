@@ -8586,3 +8586,18 @@
 - Remaining:
   - Gate patch is local until commit/deploy.
   - CoupangEats run `50200562-6756-44ca-816b-e62ac9a1d3df` is still running as of the last DB check and needs final success/action_required/timeout confirmation.
+
+## 2026-08-27 14:53 KST - FOOD CoupangEats wrong-portal fallback fix
+
+- Request: Continue after CoupangEats still reached `PC_AGENT_WRONG_PORTAL_SESSION` despite work-key recreation.
+- Findings:
+  - CoupangEats run `11b70139-3c76-46c6-866b-761d7a3df06a` started on other PC agent `7f99c528-24d` at 14:47:22 KST and ended at 14:52:55 KST with `PC_AGENT_WRONG_PORTAL_SESSION`.
+  - The root cause was `_delivery_bridge_page_for_service`: when no page matched the target service marker, it fell back to `pages[0]`. On a reused PC Agent context this could pick a Baemin tab even for CoupangEats.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: changed the wrong-service fallback to create a new page instead of reusing `pages[0]`.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added async regression coverage that CoupangEats does not reuse a Baemin page when no CoupangEats page exists.
+- Verification:
+  - `./.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py::test_delivery_bridge_page_for_service_does_not_reuse_wrong_portal_page tests/unit/test_yeoljeong_finance_service.py::test_normalize_wrong_portal_result_drops_collected_records tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded: 11 passed.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py app/main.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py HANDOVER.md` succeeded.
+- Remaining:
+  - This second fix must be committed, pushed, deployed, then CoupangEats must be rerun to confirm the wrong-portal error clears.

@@ -3185,6 +3185,33 @@ def test_sync_delivery_marks_pc_agent_section_not_found_as_action_required(tmp_p
     assert service._read("delivery_collection_status")[0]["status"] == "action_required"
 
 
+@pytest.mark.asyncio
+async def test_delivery_bridge_page_for_service_does_not_reuse_wrong_portal_page():
+    class FakePage:
+        url = "https://self.baemin.com/orders/history"
+
+        async def evaluate(self, _script):
+            return self.url
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = [FakePage()]
+            self.created = False
+            self.new_page_obj = FakePage()
+            self.new_page_obj.url = "about:blank"
+
+        async def new_page(self):
+            self.created = True
+            return self.new_page_obj
+
+    context = FakeContext()
+
+    page = await service._delivery_bridge_page_for_service(context, "coupangeats")
+
+    assert page is context.new_page_obj
+    assert context.created is True
+
+
 def test_baemin_dashboard_records_extracts_home_summary(monkeypatch):
     class FixedDateTime:
         @classmethod
