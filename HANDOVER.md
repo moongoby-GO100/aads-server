@@ -8508,3 +8508,23 @@
   - Browser E2E screenshot was not run because no browser-control tool was available in this turn; HTTP/static/API-contract verification was used instead.
   - Commit, push, and deploy were not performed in this chat turn.
   - Existing unrelated dirty files were preserved.
+
+## 2026-08-27 13:16 KST - Chat interrupted response recovery hardening
+
+- Request: Directly fix session `bf6f097c-b8d9-4806-a6cf-61f75772ed59`, where the final assistant response disappeared after interruption/retry handling.
+- Findings:
+  - The latest execution `8f63cb89-0374-40b9-9f81-d2feef88a3af` was terminal `interrupted` with `retry_count=6` and `execution_resume_attempt_limit_exceeded`.
+  - Its assistant placeholder `083f530d-9461-4547-8cab-865e5910d8d2` was `is_hidden=true`, so the chat UI had no visible assistant answer for the last user turn.
+  - The periodic watchdog could mark retry scheduling, but closed `recovery_auto_retry_scheduled` / `interrupted_auto_retry_scheduled:*` executions were not reliably reclaimed after restart or cancellation.
+- Changes:
+  - `app/services/chat_service.py`: auto-resume reason detection now includes recovery retry markers, and interrupted placeholders are forced visible unless the interruption is a superseded cancel.
+  - `app/main.py`: watchdog claim logic now recognizes recently stranded retry-scheduled interrupted executions and moves them back to retrying for resume.
+  - `tests/unit/test_chat_service.py`: added regression coverage for the retry marker auto-resume contract.
+  - DB repair: requeued the target execution, restored the assistant message to a visible streaming placeholder, and let the active green resume owner complete it.
+- Verification:
+  - `docker exec aads-server python -m py_compile /app/app/main.py /app/app/services/chat_service.py` succeeded.
+  - `docker exec aads-server pytest -q /app/tests/unit/test_chat_service.py -k 'stranded_auto_retry_markers_are_auto_resumable or mark_execution_interrupted_records_quality_details'` succeeded: 1 passed, 64 deselected, 1 warning.
+  - PostgreSQL verification at 13:29 KST: target execution is `interrupted`, `retry_count=3`, `current_execution_id=NULL`, assistant message is linked and visible with `is_hidden=false`, `intent=interruption_notice`.
+- Remaining:
+  - Existing unrelated dirty files were preserved.
+  - The earlier 310-character recovered partial was already removed by deploy cleanup and was not recreated from memory.

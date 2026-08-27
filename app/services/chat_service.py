@@ -70,6 +70,8 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
     "todo_completion_gate_missing",
     "retroactive_final_report_missing_after_audit",
     "background_producer_incomplete_exit",
+    "recovery_auto_retry_scheduled",
+    "interrupted_auto_retry_scheduled:",
 )
 
 _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES = (
@@ -2803,12 +2805,14 @@ async def _mark_execution_interrupted(
                 SET content = $1,
                     intent = $3,
                     model_used = 'interrupted',
+                    is_hidden = CASE WHEN $4::boolean THEN is_hidden ELSE FALSE END,
                     edited_at = NOW()
                 WHERE id = $2
                 """,
                 final_content,
                 pid,
                 _intent,
+                is_superseded_cancel,
             )
             assistant_message_id = pid
         elif delete_empty_placeholder or is_superseded_cancel:
@@ -2821,6 +2825,7 @@ async def _mark_execution_interrupted(
                 SET content = $1,
                     intent = 'interruption_notice',
                     model_used = 'interrupted',
+                    is_hidden = FALSE,
                     edited_at = NOW()
                 WHERE id = $2
                 """,
@@ -2917,11 +2922,13 @@ async def _mark_execution_interrupted(
             """
             UPDATE chat_messages
             SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb,
+                is_hidden = CASE WHEN $3::boolean THEN is_hidden ELSE FALSE END,
                 edited_at = NOW()
             WHERE id = $1
             """,
             assistant_message_id,
             json.dumps(interruption_quality_details, ensure_ascii=False),
+            is_superseded_cancel,
         )
 
     await conn.execute(

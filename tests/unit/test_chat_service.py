@@ -833,6 +833,15 @@ def test_active_stream_hard_timeout_is_auto_resumable():
     )
 
 
+def test_stranded_auto_retry_markers_are_auto_resumable():
+    assert chat_service._should_auto_resume_interrupted_reason(
+        "recovery_auto_retry_scheduled"
+    )
+    assert chat_service._should_auto_resume_interrupted_reason(
+        "interrupted_auto_retry_scheduled:background_producer_incomplete_exit:missing_done_event"
+    )
+
+
 def test_final_report_tail_is_completion_candidate():
     assert not chat_service._looks_like_incomplete_progress_tail(
         "수행 내역: 완료판정 가드를 적용했습니다.\n"

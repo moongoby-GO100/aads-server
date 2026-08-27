@@ -639,10 +639,16 @@ async def lifespan(app: FastAPI):
                     _retry_rows = [
                         r for r in _claimable
                         if (
-                            _watchdog_retry_enabled
-                            and (r["retry_count"] or 0) < 2
-                            and (r["last_user_msg"] or "").strip()
-                            and not _should_settle_without_retry(r)
+                            (
+                                bool(r["stranded_auto_resume"])
+                                and (r["retry_count"] or 0) < 8
+                            )
+                            or (
+                                _watchdog_retry_enabled
+                                and (r["retry_count"] or 0) < 2
+                                and (r["last_user_msg"] or "").strip()
+                                and not _should_settle_without_retry(r)
+                            )
                         )
                     ]
                     _retry_ids = [r["id"] for r in _retry_rows]
@@ -655,26 +661,53 @@ async def lifespan(app: FastAPI):
                                 retry_count = retry_count + 1,
                                 completed_at = NULL,
                                 updated_at = NOW(),
-                                error_message = 'watchdog_auto_retry_scheduled policy=20m+10m_or_45m+20m'
+                                error_message = CASE
+                                    WHEN status = 'interrupted' THEN 'watchdog_stranded_interrupted_retry_scheduled'
+                                    ELSE 'watchdog_auto_retry_scheduled policy=20m+10m_or_45m+20m'
+                                END
                             WHERE id = ANY($1::uuid[])
-                              AND status IN ('running', 'retrying')
                               AND (
                                 (
-                                  COALESCE(last_event_id, '') = ''
-                                  AND started_at < NOW() - INTERVAL '20 minutes'
-                                  AND updated_at < NOW() - INTERVAL '10 minutes'
+                                  status IN ('running', 'retrying')
+                                  AND (
+                                    (
+                                      COALESCE(last_event_id, '') = ''
+                                      AND started_at < NOW() - INTERVAL '20 minutes'
+                                      AND updated_at < NOW() - INTERVAL '10 minutes'
+                                    )
+                                    OR (
+                                      COALESCE(last_event_id, '') <> ''
+                                      AND started_at < NOW() - INTERVAL '45 minutes'
+                                      AND updated_at < NOW() - INTERVAL '20 minutes'
+                                    )
+                                    OR (
+                                      started_at < NOW() - INTERVAL '30 minutes'
+                                      AND COALESCE(actual_model, '') = ''
+                                    )
+                                    OR (
+                                      started_at < NOW() - INTERVAL '90 minutes'
+                                    )
+                                  )
                                 )
                                 OR (
-                                  COALESCE(last_event_id, '') <> ''
-                                  AND started_at < NOW() - INTERVAL '45 minutes'
-                                  AND updated_at < NOW() - INTERVAL '20 minutes'
-                                )
-                                OR (
-                                  started_at < NOW() - INTERVAL '30 minutes'
-                                  AND COALESCE(actual_model, '') = ''
-                                )
-                                OR (
-                                  started_at < NOW() - INTERVAL '90 minutes'
+                                  status = 'interrupted'
+                                  AND completed_at IS NOT NULL
+                                  AND updated_at > NOW() - INTERVAL '6 hours'
+                                  AND retry_count < 8
+                                  AND (
+                                    COALESCE(error_message, '') = 'recovery_auto_retry_scheduled'
+                                    OR COALESCE(error_message, '') LIKE 'interrupted_auto_retry_scheduled:%'
+                                  )
+                                  AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM chat_turn_executions newer_te
+                                    JOIN chat_messages newer_am
+                                      ON newer_am.id = newer_te.assistant_message_id
+                                    WHERE newer_te.session_id = chat_turn_executions.session_id
+                                      AND newer_te.started_at > chat_turn_executions.started_at
+                                      AND newer_te.status = 'completed'
+                                      AND COALESCE(newer_am.is_hidden, FALSE) = FALSE
+                                  )
                                 )
                               )
                             RETURNING id
