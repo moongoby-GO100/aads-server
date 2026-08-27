@@ -752,7 +752,21 @@ class BrowserBridgeService:
                     tabs_result = tabs_routed.get("result") if isinstance(tabs_routed, dict) else None
                     tabs_data = tabs_result.get("result") if isinstance(tabs_result, dict) else None
                     tabs = tabs_data.get("tabs") if isinstance(tabs_data, dict) else None
-                    if tabs_routed.get("status") == "success" and isinstance(tabs, list):
+                    requested_host = urllib.parse.urlparse(str(url or "")).netloc.lower()
+                    matching_tabs = []
+                    if isinstance(tabs, list) and requested_host:
+                        for tab in tabs:
+                            if not isinstance(tab, dict):
+                                continue
+                            tab_host = urllib.parse.urlparse(str(tab.get("url") or "")).netloc.lower()
+                            if tab_host == requested_host or tab_host.endswith(f".{requested_host}"):
+                                matching_tabs.append(tab)
+                    tabs_fallback_allowed = (
+                        tabs_routed.get("status") == "success"
+                        and isinstance(tabs, list)
+                        and (not requested_host or str(url or "").strip() == "about:blank" or bool(matching_tabs))
+                    )
+                    if tabs_fallback_allowed:
                         routed = {
                             "status": "success",
                             "lease": tabs_routed.get("lease") or {"agent_id": agent_id},
@@ -762,6 +776,17 @@ class BrowserBridgeService:
                                     "work_key": normalized_work_key or launch_params.get("work_key") or "",
                                     "tabs_fallback": True,
                                 }
+                            },
+                        }
+                    elif tabs_routed.get("status") == "success" and isinstance(tabs, list):
+                        routed = {
+                            "status": "error",
+                            "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
+                            "message": "PC Agent tabs fallback did not contain the requested portal URL",
+                            "detail": {
+                                "requested_url": str(url or ""),
+                                "requested_host": requested_host,
+                                "tab_count": len(tabs),
                             },
                         }
         if routed.get("status") != "success":
