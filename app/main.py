@@ -1725,12 +1725,17 @@ async def lifespan(app: FastAPI):
                         retry_count INT NOT NULL DEFAULT 0,
                         last_event_id TEXT,
                         error_message TEXT,
+                        interrupt_category VARCHAR(50),
                         started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         completed_at TIMESTAMPTZ NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
+                )
+                await conn.execute(
+                    "ALTER TABLE chat_turn_executions "
+                    "ADD COLUMN IF NOT EXISTS interrupt_category VARCHAR(50) DEFAULT NULL"
                 )
                 await conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chat_turn_executions_session_created "

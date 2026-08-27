@@ -27,6 +27,23 @@ logger = logging.getLogger(__name__)
 _AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
 _AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-turbo", "gemini-flash-lite"}
 
+_MODEL_TIMEOUT_OVERRIDES = {
+    "gpt-5.6-sol": 1500,
+    "claude-opus-5": 1200,
+    "claude-opus-4-6": 900,
+    "claude-haiku": 900,
+    "claude-sonnet": 900,
+}
+
+_INTERRUPT_REASON_CATEGORIES = {
+    "relay_503": ("codex_relay_busy", "relay_semaphore_timeout"),
+    "watchdog_timeout": ("stale_execution", "active_stream_hard_timeout"),
+    "user_action": ("stopped by user",),
+    "superseded": ("superseded", "newer"),
+    "auto_recovery": ("recovery_auto_retry", "auto-settled"),
+    "process_interrupt": ("resume_claimed_by", "CancelledError"),
+}
+
 # P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
 from contextvars import ContextVar as _ContextVar  # noqa: E402
 _current_branch_id: _ContextVar[Optional[str]] = _ContextVar("_current_branch_id", default=None)
@@ -111,6 +128,8 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
     )
     if any(token in normalized for token in blocked_tokens):
         return False
+    if "auto-settled by stale execution watchdog" in normalized:
+        return True
     return normalized.startswith(
         _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES
         + _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES
@@ -144,6 +163,10 @@ async def with_heartbeat(
     HEARTBEAT = f'data: {json.dumps({"type": "heartbeat"})}\n{_hb_pad}\n'
     ait = gen.__aiter__()
     pending: _heartbeat_asyncio.Task | None = None
+    started_at = _bg_time.monotonic()
+    content_seen = False
+    progress_30_sent = False
+    progress_60_sent = False
     while True:
         if pending is None:
             pending = _heartbeat_asyncio.ensure_future(ait.__anext__())
@@ -152,8 +175,17 @@ async def with_heartbeat(
                 _heartbeat_asyncio.shield(pending), timeout=interval,
             )
             pending = None  # consumed — get next on next iteration
+            if '"type": "delta"' in chunk and re.search(r'"content"\s*:\s*"(?!")', chunk):
+                content_seen = True
             yield chunk
         except _heartbeat_asyncio.TimeoutError:
+            elapsed = _bg_time.monotonic() - started_at
+            if not content_seen and elapsed >= 30 and not progress_30_sent:
+                progress_30_sent = True
+                yield f'data: {json.dumps({"type": "progress", "message": "AI가 분석 중입니다..."}, ensure_ascii=False)}\n\n'
+            elif not content_seen and elapsed >= 60 and not progress_60_sent:
+                progress_60_sent = True
+                yield f'data: {json.dumps({"type": "progress", "message": "복잡한 작업을 처리 중입니다. 최대 15분 소요될 수 있습니다."}, ensure_ascii=False)}\n\n'
             yield HEARTBEAT  # pending is still running, will retry
         except StopAsyncIteration:
             break
@@ -470,7 +502,10 @@ def _is_resume_retryable(error: BaseException) -> bool:
 
     return (
         "ratelimit" in type(error).__name__.lower()
-        or any(token in err_text for token in ("429", "rate", "overloaded", "529", "quota", "timeout", "502", "503", "504"))
+        or any(token in err_text for token in (
+            "429", "rate", "overloaded", "529", "quota", "timeout", "502", "503", "504",
+            "codex_relay_busy", "relay_semaphore_timeout",
+        ))
     )
 
 
@@ -1440,12 +1475,13 @@ async def _get_or_create_turn_execution(
             session_id,
             user_message_id,
             requested_model,
+            actual_model,
             status,
             started_at,
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, 'running', NOW(), NOW(), NOW())
+        VALUES ($1, $2, $3, $3, 'running', NOW(), NOW(), NOW())
         RETURNING id
         """,
         session_id,
@@ -2037,6 +2073,7 @@ async def cleanup_overlong_running_executions(
         else get_active_stream_hard_timeout_sec()
     )
     timeout = max(int(timeout), 600)
+    query_timeout = min((timeout, *_MODEL_TIMEOUT_OVERRIDES.values()))
     live_sessions = _get_live_streaming_session_ids()
 
     async with get_pool().acquire() as conn:
@@ -2046,6 +2083,8 @@ async def cleanup_overlong_running_executions(
                    te.session_id::text AS session_id,
                    COALESCE(ph.id, te.assistant_message_id)::text AS assistant_message_id,
                    COALESCE(ph.content, am.content, '') AS partial_content,
+                   te.actual_model,
+                   te.requested_model,
                    EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS age_seconds
             FROM chat_turn_executions te
             LEFT JOIN chat_messages am
@@ -2063,22 +2102,26 @@ async def cleanup_overlong_running_executions(
               AND COALESCE(te.started_at, te.created_at) < NOW() - ($1::int * INTERVAL '1 second')
             ORDER BY COALESCE(te.started_at, te.created_at) ASC
             """,
-            timeout,
+            query_timeout,
         )
 
         closed = 0
         cancelled_active = 0
         for row in rows:
+            model_name = row["actual_model"] or row["requested_model"] or ""
+            row_timeout = _MODEL_TIMEOUT_OVERRIDES.get(model_name, timeout)
+            if int(row["age_seconds"] or 0) < row_timeout:
+                continue
             session_id = row["session_id"]
             execution_id = row["execution_id"]
             state = _streaming_state.get(session_id) or {}
             partial_content = state.get("content") or row["partial_content"] or ""
             placeholder_id = row["assistant_message_id"]
             reason = _stream_interrupt_diagnostic_reason(
-                f"active_stream_hard_timeout_after_{timeout}s",
+                f"active_stream_hard_timeout_after_{row_timeout}s",
                 state,
                 age_seconds=int(row["age_seconds"] or 0),
-                timeout_sec=timeout,
+                timeout_sec=row_timeout,
             )
 
             task = _active_bg_tasks.get(session_id)
@@ -2184,6 +2227,23 @@ async def cleanup_stale_streaming_placeholders(
     live_sessions = _get_live_streaming_session_ids()
 
     async with get_pool().acquire() as conn:
+        stale_empty_hidden = await conn.fetchval(
+            """
+            WITH hidden AS (
+                UPDATE chat_messages
+                SET is_hidden = TRUE,
+                    intent = 'stale_empty_placeholder',
+                    edited_at = NOW()
+                WHERE role = 'assistant'
+                  AND is_hidden = FALSE
+                  AND intent IS DISTINCT FROM 'streaming_placeholder'
+                  AND length(trim(COALESCE(content, ''))) < 50
+                  AND created_at < NOW() - INTERVAL '10 minutes'
+                RETURNING 1
+            )
+            SELECT count(*) FROM hidden
+            """
+        )
         rows = await conn.fetch(
             """
             SELECT m.id,
@@ -2356,7 +2416,58 @@ async def cleanup_stale_streaming_placeholders(
         "deleted": deleted,
         "skipped_active": skipped_active,
         "timeout_sec": timeout,
+        "stale_empty_hidden": int(stale_empty_hidden or 0),
     }
+
+
+async def archive_old_hidden_messages() -> Dict[str, int]:
+    """Move hidden messages older than 30 days to an archive in bounded transactions."""
+    archived = 0
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "CREATE TABLE IF NOT EXISTS chat_messages_archive "
+            "(LIKE chat_messages INCLUDING ALL)"
+        )
+        while True:
+            async with conn.transaction():
+                batch_count = await conn.fetchval(
+                    """
+                    WITH candidates AS (
+                        SELECT id
+                        FROM chat_messages
+                        WHERE is_hidden = TRUE
+                          AND created_at < NOW() - INTERVAL '30 days'
+                        ORDER BY created_at
+                        LIMIT 1000
+                        FOR UPDATE SKIP LOCKED
+                    ), inserted AS (
+                        INSERT INTO chat_messages_archive
+                        SELECT m.*
+                        FROM chat_messages m
+                        JOIN candidates c ON c.id = m.id
+                        ON CONFLICT (id) DO NOTHING
+                        RETURNING id
+                    ), eligible AS (
+                        SELECT id FROM inserted
+                        UNION
+                        SELECT c.id
+                        FROM candidates c
+                        JOIN chat_messages_archive a ON a.id = c.id
+                    ), deleted AS (
+                        DELETE FROM chat_messages m
+                        USING eligible e
+                        WHERE m.id = e.id
+                        RETURNING m.id
+                    )
+                    SELECT count(*) FROM deleted
+                    """
+                )
+            archived += int(batch_count or 0)
+            if int(batch_count or 0) < 1000:
+                break
+    if archived:
+        logger.info("old_hidden_messages_archived count=%s", archived)
+    return {"archived": archived}
 
 
 async def _reconcile_streaming_state_with_db() -> int:
@@ -2396,6 +2507,7 @@ async def _reconcile_streaming_state_with_db() -> int:
 
 async def _stale_placeholder_cleanup_loop() -> None:
     global _stale_cleanup_task
+    cleanup_count = 0
     try:
         while True:
             await _heartbeat_asyncio.sleep(get_stale_cleanup_interval_sec())
@@ -2403,6 +2515,9 @@ async def _stale_placeholder_cleanup_loop() -> None:
                 await _reconcile_streaming_state_with_db()
                 await cleanup_overlong_running_executions()
                 await cleanup_stale_streaming_placeholders()
+                cleanup_count += 1
+                if cleanup_count % 10 == 0:
+                    await archive_old_hidden_messages()
             except _heartbeat_asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -2522,15 +2637,39 @@ async def _schedule_interrupted_auto_resume(
     retry_count = row["retry_count"] or 0
     process_interruption = _is_process_interruption_reason(reason)
     retry_limit = 8 if process_interruption else 5
+    last_resort = False
     if retry_count >= retry_limit:
-        logger.warning(
-            "interrupted_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s reason=%s",
-            session_id[:8],
-            execution_id[:8],
-            retry_count,
-            reason[:120],
+        has_visible_assistant = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM chat_messages
+                WHERE execution_id = $1
+                  AND role = 'assistant'
+                  AND is_hidden = FALSE
+                  AND (
+                      intent IS NULL
+                      OR intent NOT IN (
+                          'streaming_placeholder',
+                          'interruption_notice',
+                          'stale_empty_placeholder'
+                      )
+                  )
+            )
+            """,
+            eid,
         )
-        return False
+        if has_visible_assistant or retry_count >= retry_limit + 2:
+            logger.warning(
+                "interrupted_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s reason=%s",
+                session_id[:8], execution_id[:8], retry_count, reason[:120],
+            )
+            return False
+        retry_limit += 2
+        last_resort = True
+        logger.warning(
+            "last_resort_recovery session=%s execution=%s retry_count=%s",
+            session_id[:8], execution_id[:8], retry_count,
+        )
     if not (row["last_user_msg"] or "").strip():
         logger.warning(
             "interrupted_auto_resume_skip_no_user session=%s execution=%s reason=%s",
@@ -2607,7 +2746,7 @@ async def _schedule_interrupted_auto_resume(
         placeholder_id,
         f"interrupted_auto_retry_scheduled:{reason}"[:1000],
         sid,
-        process_interruption,
+        process_interruption and not last_resort,
         retry_limit,
     )
     if not claimed:
@@ -2727,6 +2866,14 @@ async def _mark_execution_interrupted(
     pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
     # AADS: reason은 항상 문자열로 정규화 (bool/None이 전달돼도 reason[:1000] 안전)
     reason = str(reason) if not isinstance(reason, str) else reason
+    interrupt_category = next(
+        (
+            category
+            for category, tokens in _INTERRUPT_REASON_CATEGORIES.items()
+            if any(token.lower() in reason.lower() for token in tokens)
+        ),
+        "unknown",
+    )
     is_superseded_cancel = any(
         token in reason
         for token in (
@@ -2944,6 +3091,7 @@ async def _mark_execution_interrupted(
             END,
             status = 'interrupted',
             error_message = $3,
+            interrupt_category = $5,
             completed_at = COALESCE(completed_at, NOW()),
             updated_at = NOW()
         WHERE id = $1
@@ -2953,6 +3101,7 @@ async def _mark_execution_interrupted(
         assistant_message_id,
         reason[:1000],
         bool(delete_empty_placeholder and assistant_message_id is None),
+        interrupt_category,
     )
     await conn.execute(
         """
@@ -4024,6 +4173,7 @@ async def with_background_completion(
                     """
                     UPDATE chat_turn_executions
                     SET assistant_message_id = $2,
+                        actual_model = COALESCE(actual_model, requested_model, 'unknown'),
                         status = 'completed',
                         error_message = NULL,
                         completed_at = COALESCE(completed_at, NOW()),
@@ -5461,6 +5611,7 @@ async def _resume_single_stream(
                     )
 
                 retry_delays = [10, 20, 40, 60, 120]
+                relay_retry_used = False
                 last_error: Optional[BaseException] = None
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
                 cost_usd = Decimal("0")
@@ -5517,6 +5668,19 @@ async def _resume_single_stream(
                         break
                     except Exception as stream_error:
                         last_error = stream_error
+                        stream_error_text = str(stream_error).lower()
+                        is_relay_503 = any(
+                            token in stream_error_text
+                            for token in ("codex_relay_busy", "relay_semaphore_timeout")
+                        )
+                        if is_relay_503 and not relay_retry_used:
+                            relay_retry_used = True
+                            logger.warning(
+                                "resume_relay_503_retry session=%s delay=5s error=%s",
+                                session_id[:8], stream_error,
+                            )
+                            await _heartbeat_asyncio.sleep(5)
+                            continue
                         if attempt >= len(retry_delays) or not _is_resume_retryable(stream_error):
                             raise
 
@@ -7595,7 +7759,7 @@ async def _save_and_update_session(
                             ELSE $2::uuid
                         END,
                         requested_model = COALESCE($3, requested_model),
-                        actual_model = COALESCE($4, actual_model),
+                        actual_model = COALESCE($4, actual_model, requested_model, 'unknown'),
                         status = 'completed',
                         error_message = NULL,
                         completed_at = NOW(),
