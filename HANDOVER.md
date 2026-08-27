@@ -8,6 +8,7 @@
   - `_looks_like_incomplete_progress_tail()` did not include operational follow-up verbs such as `호출`, `대조`, `우회`, and `찾`.
 - Changes:
   - `app/services/chat_service.py`: expanded incomplete-progress tail detection to catch additional operational follow-up verbs.
+  - Follow-up: added `보고` and `정리` to the same guard after active-container verification exposed the "결과를 보고하겠습니다" tail case.
   - `tests/unit/test_chat_service.py`: added regression cases for "직접 호출하겠습니다" and "대조한 뒤 보고하겠습니다".
   - DB repair: the single affected execution `de25186e-0b6a-4223-b223-8953d1ca035a` was changed from `completed` to `interrupted`, and its assistant message was changed to `interrupted_partial`.
 - Verification:
