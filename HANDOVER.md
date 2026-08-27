@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-27 12:55 KST - Agent Vault E2E timeout fallback
+
+- Trigger: Resume the E2E Agent Vault rollout verification after direct `credential_test_login` hung while recovering a stale Browser Bridge/PC Agent session.
+- Cause:
+  - `tool_credential_test_login()` had HTTP fallback for Agent Vault credentials, but the Browser Bridge acquisition and login attempt were not wrapped in an overall timeout.
+  - If PC Agent/CDP recovery stalled, the function could wait for the lower-level browser path instead of returning the fallback result.
+- Changes:
+  - `app/api/ceo_chat_tools.py`: added `_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS=25` and wrapped Agent Vault browser context acquisition plus login execution with `asyncio.wait_for()`.
+  - `tests/unit/test_pc_agent_tool_exposure.py`: added a regression test proving a stuck Agent Vault browser acquisition returns the existing API fallback response with `vault_type: agent_vault`.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat_tools.py tests/unit/test_pc_agent_tool_exposure.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_tool_exposure.py -q` succeeded: 16 passed.
+- Deployment status:
+  - This entry was prepared from the clean `origin/main` worktree `/tmp/aads-e2e-timeout-20260827` to avoid unrelated FOOD dirty files in the main workdir.
+
 ## 2026-08-27 12:13 KST - FOOD PC Agent 1.0.63 rollout verification
 
 - Trigger: CEO asked to continue PC Agent auto-update rollout and verify the deployed update.

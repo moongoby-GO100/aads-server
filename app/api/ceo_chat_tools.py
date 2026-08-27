@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
+_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = 25
 
 _SECRET_PARAM_KEYS = {
     "password", "passwd", "pwd", "password_enc", "secret",
@@ -4764,21 +4765,27 @@ async def tool_credential_test_login(
                 from app.browser_bridge.aads_adapter import acquire_browser_context
 
                 work_key = browser_work_key or str(agent_cred.get("work_key") or "agent-vault-test")
-                ctx, err = await acquire_browser_context(
-                    browser_session_id=browser_session_id or None,
-                    browser_work_key=work_key if not browser_session_id else None,
-                    url=agent_cred["origin"],
+                ctx, err = await asyncio.wait_for(
+                    acquire_browser_context(
+                        browser_session_id=browser_session_id or None,
+                        browser_work_key=work_key if not browser_session_id else None,
+                        url=agent_cred["origin"],
+                    ),
+                    timeout=_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS,
                 )
                 if err:
                     browser_error = err
                 else:
                     page = await ctx.new_page()
-                    login_ok = await _login_with_agent_vault_credential(
-                        page,
-                        agent_cred,
-                        agent_cred["origin"],
-                        tenant_id=tenant_id,
-                        browser_work_key=work_key,
+                    login_ok = await asyncio.wait_for(
+                        _login_with_agent_vault_credential(
+                            page,
+                            agent_cred,
+                            agent_cred["origin"],
+                            tenant_id=tenant_id,
+                            browser_work_key=work_key,
+                        ),
+                        timeout=_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS,
                     )
                     final_url = str(getattr(page, "url", "") or "")
                     return (
@@ -4789,6 +4796,8 @@ async def tool_credential_test_login(
                         f"final_url: {final_url}\n"
                         f"browser_work_key: {work_key}"
                     )
+            except asyncio.TimeoutError:
+                browser_error = f"TIMEOUT_AFTER_{_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS}s"
             except Exception as be:
                 browser_error = str(be)
 

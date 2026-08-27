@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import inspect
 
@@ -337,6 +338,69 @@ def test_credential_test_login_no_longer_uses_genspark_specific_login() -> None:
 
     assert "_attempt_genspark_login" not in source
     assert "_login_with_agent_vault_credential" in source
+
+
+@pytest.mark.asyncio
+async def test_credential_test_login_agent_vault_times_out_to_api_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    credential_id = "00000000-0000-0000-0000-000000000011"
+    tenant_id = "00000000-0000-0000-0000-000000000012"
+
+    async def fake_get_credential(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    class _FakePool:
+        async def fetchrow(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return {
+                "id": credential_id,
+                "tenant_id": tenant_id,
+                "work_key": "aads-ceo-browser",
+                "origin": "https://aads.newtalk.kr",
+                "label": "AADS",
+                "username_enc": "ceo@example.test",
+                "password_enc": "secret-password",
+            }
+
+    async def fake_acquire_browser_context(**_kwargs):  # noqa: ANN003
+        await asyncio.sleep(60)
+        raise AssertionError("unreachable")
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+    class _FakeSession:
+        def __init__(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        def get(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return _FakeResponse()
+
+    monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
+    monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fake_acquire_browser_context)
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+    monkeypatch.setattr(ceo_chat_tools, "_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS", 0.01)
+
+    result = await ceo_chat_tools.tool_credential_test_login(
+        credential_id,
+        tenant_id=tenant_id,
+    )
+
+    assert "[API 폴백]" in result
+    assert "vault_type: agent_vault" in result
+    assert "TIMEOUT_AFTER_0.01s" in result
 
 
 @pytest.mark.asyncio
