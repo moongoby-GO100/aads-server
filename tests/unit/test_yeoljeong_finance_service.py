@@ -168,6 +168,90 @@ def test_import_bank_excel_copied_table_uses_tab_delimiter(tmp_path, monkeypatch
     assert row["account_name"] == "110123456789"
 
 
+def test_bank_timeout_probe_detects_shinhan_fincert_iframe(monkeypatch):
+    def fake_route_execute(payload, timeout_seconds=25.0):
+        assert payload["agent_id"] == "agent-bank"
+        assert payload["params"]["work_key"] == "wk-bank"
+        return {
+            "status": "success",
+            "result": {
+                "result": {
+                    "tabs": [
+                        {
+                            "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                            "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                        },
+                        {
+                            "title": "YESKEY",
+                            "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                        },
+                    ]
+                }
+            },
+        }
+
+    monkeypatch.setattr(service, "_pc_agent_route_execute_json", fake_route_execute)
+
+    result = service._probe_bank_browser_timeout_state(
+        browser_work_key="wk-bank",
+        browser_agent_id="agent-bank",
+        timeout_seconds=180,
+    )
+
+    assert result is not None
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert result["diagnostics"]["last_observed_stage"] == "financial certificate iframe"
+    assert result["diagnostics"]["screen_requires_operator"] == "1"
+
+
+def test_collect_bank_timeout_uses_browser_tab_probe(monkeypatch):
+    def fake_run(coro):
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        raise TimeoutError
+
+    monkeypatch.setattr(service, "_run_bank_browser_async", fake_run)
+    monkeypatch.setattr(
+        service,
+        "_probe_bank_browser_timeout_state",
+        lambda **kwargs: {
+            "status": "action_required",
+            "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {
+                "browser_work_key": kwargs["browser_work_key"],
+                "browser_agent_id": kwargs["browser_agent_id"],
+                "last_observed_stage": "financial certificate iframe",
+            },
+            "message": "신한 금융인증서 입력 화면이 감지됐습니다.",
+        },
+    )
+
+    result = service._collect_bank_via_browser(
+        {"id": "bank-1", "bank_code": "088", "bank_name": "신한은행"},
+        {
+            "browser_work_key": "wk-bank",
+            "browser_agent_id": "agent-bank",
+            "browser_timeout_seconds": 180,
+            "auto_open_browser": True,
+        },
+        business_id="biz-mia",
+        branch_id="branch-gangbuk-mia",
+        date_from="2026-07-27",
+        date_to="2026-08-27",
+        user={"id": "tester"},
+    )
+
+    collection = result["collection"]
+    assert collection["status"] == "action_required"
+    assert collection["connector_status"] == "ACTION_REQUIRED"
+    assert collection["error_code"] == "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert collection["diagnostics"]["last_observed_stage"] == "financial certificate iframe"
+
+
 def test_import_transaction_csv_applies_business_scope(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     csv_text = "거래일자,적요,입금액,출금액,계좌명\n2026-07-01,배달의민족 정산,55000,,신한 중화점\n"

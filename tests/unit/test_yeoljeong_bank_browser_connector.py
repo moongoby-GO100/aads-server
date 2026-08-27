@@ -42,6 +42,25 @@ class _ChallengePage:
         return self.text
 
 
+class _PcAgentTabsChallengePage(_ChallengePage):
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        assert command_type == "browser_tabs"
+        return {
+            "tabs": [
+                {
+                    "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                    "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                    "type": "page",
+                },
+                {
+                    "title": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                    "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                    "type": "iframe",
+                },
+            ]
+        }
+
+
 @pytest.mark.asyncio
 async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
     page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -57,6 +76,19 @@ async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
         "screen_requires_operator": "1",
         "last_observed_stage": "financial certificate iframe",
     }
+    assert "password" not in result
+
+
+@pytest.mark.asyncio
+async def test_shinhan_fincert_iframe_is_detected_from_pc_agent_tabs():
+    page = _PcAgentTabsChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
+
+    result = await connector._detect_shinhan_auth_challenge(page, [page])
+
+    assert result["screen_state"] == "certificate_password_required"
+    assert result["screen_reason_code"] == "SHINHAN_FINCERT_IFRAME_DETECTED"
+    assert result["screen_requires_operator"] == "1"
+    assert result["suggested_action"] == "complete_financial_certificate_then_retry_same_work_key"
     assert "password" not in result
 
 

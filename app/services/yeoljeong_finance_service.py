@@ -19,6 +19,8 @@ import re
 import secrets
 import shutil
 import time
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -5112,6 +5114,105 @@ def _bank_service_code_for_account(account: dict[str, Any]) -> str:
     return ""
 
 
+def _pc_agent_route_execute_json(payload: dict[str, Any], timeout_seconds: float = 25.0) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    urls = [
+        str(os.getenv("AADS_PC_AGENT_ROUTE_EXECUTE_URL") or "").strip(),
+        "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
+        "http://aads-server:8080/api/v1/pc-agent/route-execute",
+        "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
+    ]
+    seen: set[str] = set()
+    for url in [u for u in urls if u and not (u in seen or seen.add(u))]:
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=max(1.0, float(timeout_seconds or 1.0))) as response:
+                parsed = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                parsed = json.loads(exc.read().decode("utf-8", errors="ignore"))
+            except Exception:
+                continue
+            detail = parsed.get("detail") if isinstance(parsed, dict) else None
+            if isinstance(detail, dict):
+                return detail
+            if isinstance(parsed, dict):
+                return parsed
+            continue
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _bank_browser_tabs_from_route_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = [
+        result.get("tabs"),
+        (result.get("result") or {}).get("tabs") if isinstance(result.get("result"), dict) else None,
+        ((result.get("result") or {}).get("result") or {}).get("tabs")
+        if isinstance(result.get("result"), dict) and isinstance((result.get("result") or {}).get("result"), dict)
+        else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
+def _probe_bank_browser_timeout_state(
+    *,
+    browser_work_key: str,
+    browser_agent_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any] | None:
+    if not browser_work_key or not browser_agent_id:
+        return None
+    route_result = _pc_agent_route_execute_json(
+        {
+            "command_type": "browser_tabs",
+            "agent_id": browser_agent_id,
+            "job_type": "bank_collection",
+            "required_capabilities": ["interactive_browser"],
+            "queue_if_busy": False,
+            "command_timeout_seconds": min(20.0, max(5.0, float(timeout_seconds or 20.0))),
+            "params": {
+                "work_key": browser_work_key,
+                "timeout": min(20.0, max(5.0, float(timeout_seconds or 20.0))),
+            },
+        },
+        timeout_seconds=min(25.0, max(6.0, float(timeout_seconds or 25.0))),
+    )
+    tabs = _bank_browser_tabs_from_route_result(route_result)
+    tab_text = " ".join(
+        f"{str(tab.get('title') or '')} {str(tab.get('url') or '')}".lower()
+        for tab in tabs
+    )
+    if "4user.yeskey.or.kr/fincert" in tab_text or "fincert" in tab_text:
+        return {
+            "status": "action_required",
+            "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {
+                "browser_work_key": browser_work_key,
+                "browser_agent_id": browser_agent_id,
+                "browser_timeout_seconds": str(int(timeout_seconds)),
+                "last_observed_stage": "financial certificate iframe",
+                "screen_state": "certificate_password_required",
+                "screen_reason_code": "SHINHAN_FINCERT_IFRAME_DETECTED_AFTER_TIMEOUT",
+                "screen_requires_operator": "1",
+                "screen_suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+                "suggested_action": "complete_financial_certificate_then_retry_same_work_key",
+                "pc_agent_probe_status": str(route_result.get("status") or ""),
+                "pc_agent_probe_tab_count": str(len(tabs)),
+            },
+            "message": "신한 금융인증서 입력 화면이 감지됐습니다. 전용 PC에서 인증을 완료한 뒤 같은 work key로 재시도하십시오.",
+        }
+    return None
+
+
 def _branch_names_for_bank_match(branch_id: str) -> set[str]:
     branch_text = str(branch_id or "").strip()
     names = {branch_text} if branch_text else set()
@@ -5282,6 +5383,7 @@ def _collect_bank_via_browser(
         branch_id=branch_id,
     )
     browser_preferred_port_raw = payload.get("browser_preferred_port")
+    browser_agent_id_val = str(payload.get("browser_agent_id") or "").strip()
     try:
         browser_preferred_port = int(browser_preferred_port_raw) if browser_preferred_port_raw else None
     except (TypeError, ValueError):
@@ -5298,7 +5400,7 @@ def _collect_bank_via_browser(
                 date_to=date_to,
                 portal_url=str(payload.get("portal_url") or bank_credentials.get("portal_url") or ""),
                 auto_open_browser=bool(payload.get("auto_open_browser")),
-                browser_agent_id=str(payload.get("browser_agent_id") or ""),
+                browser_agent_id=browser_agent_id_val,
                 browser_preferred_port=browser_preferred_port,
                 force_recreate_browser=bool(payload.get("force_recreate_browser")),
                 login_username=str(bank_credentials.get("login_username") or ""),
@@ -5326,13 +5428,18 @@ def _collect_bank_via_browser(
             "message": f"은행 브라우저 수집은 이벤트 루프 외부에서만 실행됩니다: {exc!s:.200}",
         }
     except TimeoutError:
-        browser_result = {
+        browser_result = _probe_bank_browser_timeout_state(
+            browser_work_key=browser_work_key_val,
+            browser_agent_id=browser_agent_id_val,
+            timeout_seconds=timeout_seconds,
+        ) or {
             "status": "failed",
             "error_code": "BANK_BROWSER_PC_AGENT_TIMEOUT",
             "rows": [],
             "row_count": 0,
             "diagnostics": {
                 "browser_work_key": browser_work_key_val,
+                "browser_agent_id": browser_agent_id_val,
                 "browser_timeout_seconds": str(int(timeout_seconds)),
                 "last_observed_stage": "login page",
                 "session_recovery_plan": "connect_pc_agent_then_retry_same_work_key",

@@ -1608,6 +1608,26 @@ async def _detect_shinhan_auth_challenge(page: Any, pages: Any = None) -> dict[s
     read or returned.
     """
     urls: list[str] = []
+    runner = getattr(page, "_run_browser_command", None)
+    if callable(runner):
+        try:
+            tabs_payload = await runner(
+                "browser_tabs",
+                {},
+                queue_wait_timeout_seconds=5,
+                command_timeout_seconds=10,
+            )
+            tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else None
+            if isinstance(tabs, list):
+                for tab in tabs:
+                    if not isinstance(tab, dict):
+                        continue
+                    for key in ("url", "title"):
+                        value = str(tab.get(key) or "").strip().lower()
+                        if value:
+                            urls.append(value)
+        except Exception:
+            pass
     for candidate in [page, *(list(pages or []))]:
         url = await _visible_page_url(candidate)
         if url:
