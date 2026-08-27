@@ -61,6 +61,9 @@ def test_baemin_full_backfill_payload_contract_is_resource_limited():
 
     assert "DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45" in source
     assert "selected_services = [service for service in selected_services if service != \"baemin\"]" in source
+    assert "YEOLJEONG_DELIVERY_COUPANGEATS_PRIORITY_OVER_BAEMIN" in source
+    assert "_delivery_auto_collect_coupangeats_priority_active(statuses)" in source
+    assert "delivery_auto_collect_skip: baemin_deferred_for_coupangeats_priority" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_FROM" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_MAX_ORDERS" in source
     assert "YEOLJEONG_BAEMIN_BACKFILL_MAX_REVIEWS" in source

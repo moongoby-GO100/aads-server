@@ -298,6 +298,17 @@ def _delivery_auto_collect_coupangeats_catchup_due(
     )
 
 
+def _delivery_auto_collect_coupangeats_priority_active(statuses: list[dict]) -> bool:
+    if not _env_bool("YEOLJEONG_DELIVERY_COUPANGEATS_PRIORITY_OVER_BAEMIN", True):
+        return False
+    for row in statuses if isinstance(statuses, list) else []:
+        if str(row.get("service") or "") != "coupangeats":
+            continue
+        if str(row.get("status") or "").strip() in {"running", "queued"}:
+            return True
+    return _delivery_auto_collect_coupangeats_catchup_due(statuses)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """서버 시작 시 그래프 + checkpointer + MCP 초기화."""
@@ -1338,6 +1349,18 @@ async def lifespan(app: FastAPI):
                         selected_services = [service for service in selected_services if service != "baemin"]
                         if not selected_services:
                             return
+                    if _delivery_auto_collect_coupangeats_priority_active(statuses):
+                        logger.info(
+                            "delivery_auto_collect_skip: baemin_deferred_for_coupangeats_priority reason=%s mode=%s",
+                            reason,
+                            mode,
+                        )
+                        selected_services = [service for service in selected_services if service != "baemin"]
+                        if not selected_services:
+                            return {
+                                "status": "deferred",
+                                "diagnostics": {"baemin_deferred_for_coupangeats_priority": "1"},
+                            }
                 if reason == "pc_agent_catchup" and mode == "full_backfill":
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if not _delivery_auto_collect_baemin_catchup_due(statuses):

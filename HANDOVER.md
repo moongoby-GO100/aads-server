@@ -8549,3 +8549,40 @@
 - Remaining:
   - Existing unrelated dirty files were preserved.
   - The earlier 310-character recovered partial was already removed by deploy cleanup and was not recreated from memory.
+
+## 2026-08-27 14:14 KST - FOOD CoupangEats other-PC collection continuation
+
+- Request: Continue the interrupted FOOD CoupangEats collection on a PC other than the CEO PC.
+- Findings:
+  - Other PC `DESKTOP-ICU55HK` / agent `7f99c528-24d` was online and could launch Chrome for CoupangEats directly.
+  - Stale delivery lock files were found and removed after PID non-existence was verified.
+  - Direct PC Agent `browser_launch` succeeded on port `54073` and navigated to `https://store.coupangeats.com/merchant/login`.
+  - Server Browser Bridge registration succeeded as session `bb-52688a56f24c`; collection then reached account auth and stopped at `MISSING_CREDENTIALS`.
+  - `yeoljeong_platform_accounts` has three `biz-mia` CoupangEats rows; all have no stored password, and Credential Vault has no AADS/coupangeats entry.
+- Changes:
+  - `app/browser_bridge/service.py`: PC Agent Chrome launch now passes an explicit `ready_timeout_seconds` of at least 30 seconds, avoiding false `CDP_NOT_READY` on slower other-PC launches.
+  - `tests/unit/test_browser_bridge.py`: added assertions that launch commands carry the longer ready timeout.
+- Verification:
+  - `./.venv-playwright/bin/python -m pytest tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_auto_collect.py::test_payload_passes_force_recreate_sessions_flag tests/unit/test_yeoljeong_auto_collect.py::test_until_complete_force_recreates_after_pc_agent_session_required tests/unit/test_yeoljeong_finance_service.py::test_delivery_browser_auth_for_account_passes_configured_pc_agent tests/unit/test_yeoljeong_finance_service.py::test_delivery_browser_auth_for_account_force_recreates_portal_work_session` succeeded: 47 passed.
+  - Final direct collection run at 14:13:58 KST returned `action_required / MISSING_CREDENTIALS` for `biz-mia` CoupangEats with 0 collected rows.
+- Remaining:
+  - CoupangEats collection cannot proceed without either completing login on other PC session `bb-52688a56f24c` or registering the CoupangEats credential in Vault/platform account storage.
+  - Changes are not committed, pushed, or deployed yet.
+
+## 2026-08-27 14:44 KST - FOOD CoupangEats priority over Baemin backfill
+
+- Request: Continue CoupangEats collection after reconnecting the other PC Agent, prevent Coupang work keys from attaching to Baemin tabs, and keep using a PC other than the CEO PC.
+- Findings:
+  - CEO PC `oby-ceo` / agent `2e9379a1-fed` was online but had no managed Baemin delivery session; `browser_close_session` returned `closed_tabs=0` and `session_not_found`.
+  - Other PC `DESKTOP-ICU55HK` / agent `7f99c528-24d` was online and used for CoupangEats.
+  - Baemin full-backfill child processes were holding the delivery sync lock while CoupangEats was still incomplete, so Coupang retries were blocked by `COLLECTION_ALREADY_RUNNING`.
+- Changes:
+  - `app/main.py`: added `YEOLJEONG_DELIVERY_COUPANGEATS_PRIORITY_OVER_BAEMIN` default-on gate. If CoupangEats is running, queued, or catch-up due, scheduled Baemin collection is removed from the selected services so it cannot take the global delivery lock first.
+  - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added static contract coverage for the CoupangEats priority gate.
+- Verification:
+  - `python3 -m pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded: 9 passed.
+  - `docker exec aads-server-green pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_finance_service.py` succeeded before the gate patch: 197 passed.
+  - Baemin child processes were terminated after `docker top aads-server` confirmed their command line was Baemin full-backfill. CoupangEats direct collection was then started on other PC agent `7f99c528-24d` with `--force-recreate-sessions`.
+- Remaining:
+  - Gate patch is local until commit/deploy.
+  - CoupangEats run `50200562-6756-44ca-816b-e62ac9a1d3df` is still running as of the last DB check and needs final success/action_required/timeout confirmation.
