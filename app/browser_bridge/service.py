@@ -776,6 +776,16 @@ class BrowserBridgeService:
         selected_agent_id = str(lease.get("agent_id") or agent_id or "")
         if not selected_agent_id:
             raise BrowserBridgeError("PC Agent browser_launch did not return agent_id")
+        if agent_id and selected_agent_id != agent_id:
+            raise BrowserBridgeError(
+                f"PC Agent route selected unexpected agent_id {selected_agent_id}",
+                error_code="PC_AGENT_AGENT_MISMATCH",
+                detail={
+                    "requested_agent_id": agent_id,
+                    "selected_agent_id": selected_agent_id,
+                    "work_key": normalized_work_key,
+                },
+            )
         command_result = routed.get("result") or {}
         data = command_result.get("result") if isinstance(command_result, dict) else None
         if not isinstance(data, dict):
