@@ -77,6 +77,7 @@ logger = structlog.get_logger()
 app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "memory_store": None}
 KST = timezone(timedelta(hours=9))
 DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45
+DEFAULT_DELIVERY_AUTO_COLLECT_SERVICES = ["coupangeats", "yogiyo", "ddangyo", "baemin"]
 
 
 def _is_active_api_container_for_background_jobs() -> bool:
@@ -147,6 +148,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return default
 
 
+def _delivery_auto_collect_services(services: list[str] | None = None) -> list[str]:
+    selected = [str(service).strip() for service in (services or DEFAULT_DELIVERY_AUTO_COLLECT_SERVICES) if str(service).strip()]
+    priority = ["coupangeats"]
+    return [service for service in priority if service in selected] + [
+        service for service in selected if service not in priority
+    ]
+
+
 def _delivery_auto_collect_payload(
     agent_id: str = "",
     *,
@@ -154,7 +163,7 @@ def _delivery_auto_collect_payload(
     mode: str = "",
     reason: str = "scheduled",
 ) -> dict:
-    selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
+    selected_services = _delivery_auto_collect_services(services)
     today = datetime.now(KST).date()
     baemin_only = set(selected_services) == {"baemin"}
     force_recreate_portal_sessions = reason in {"pc_agent_catchup", "coupangeats_catchup"} or mode == "full_backfill"
@@ -1269,7 +1278,7 @@ async def lifespan(app: FastAPI):
                     "is_internal_admin": True,
                     "name": "자동수집데몬",
                 }
-                selected_services = services or ["baemin", "coupangeats", "yogiyo", "ddangyo"]
+                selected_services = _delivery_auto_collect_services(services)
                 from app.services.bank_collection_lock import bank_lock_is_active, default_bank_lock_path
                 bank_lock_path = os.getenv(
                     "YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH",

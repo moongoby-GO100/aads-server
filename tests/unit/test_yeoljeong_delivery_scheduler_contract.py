@@ -14,6 +14,8 @@ def test_main_registers_baemin_full_backfill_auto_collect_jobs():
 def test_main_registers_coupangeats_auto_collect_catchup_job():
     source = Path("app/main.py").read_text(encoding="utf-8")
 
+    assert 'DEFAULT_DELIVERY_AUTO_COLLECT_SERVICES = ["coupangeats", "yogiyo", "ddangyo", "baemin"]' in source
+    assert "selected_services = _delivery_auto_collect_services(services)" in source
     assert "delivery_auto_collect_coupangeats_catchup" in source
     assert "_delivery_auto_collect_coupangeats_catchup_due" in source
     assert '"reason": "coupangeats_catchup"' in source
@@ -44,12 +46,14 @@ def test_delivery_auto_collect_daemon_honors_dedicated_pc_agent_env():
 
 def test_main_registers_coupangeats_catchup_auto_collect_job():
     source = Path("app/main.py").read_text(encoding="utf-8")
+    cli_source = Path("scripts/yeoljeong_auto_collect.py").read_text(encoding="utf-8")
 
     assert "delivery_auto_collect_coupangeats_catchup" in source
     assert '"reason": "coupangeats_catchup"' in source
     assert '"services": ["coupangeats"]' in source
     assert 'service="coupangeats"' in source
     assert "delivery_auto_collect_catchup_skip: coupangeats_recent_or_running" in source
+    assert 'DEFAULT_SERVICES = ("coupangeats", "yogiyo", "ddangyo", "baemin")' in cli_source
 
 
 def test_baemin_full_backfill_payload_contract_is_resource_limited():

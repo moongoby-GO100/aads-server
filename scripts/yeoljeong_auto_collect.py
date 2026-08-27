@@ -34,7 +34,7 @@ from app.services.yeoljeong_finance_service import (  # noqa: E402
 
 
 KST = timezone(timedelta(hours=9))
-DEFAULT_SERVICES = ("baemin", "coupangeats", "yogiyo", "ddangyo")
+DEFAULT_SERVICES = ("coupangeats", "yogiyo", "ddangyo", "baemin")
 DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
 
 
