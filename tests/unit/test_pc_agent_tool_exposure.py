@@ -234,6 +234,51 @@ class _FakeAadsAuthPage:
         self.evaluate_token = token
 
 
+class _FakeAgentVaultLoginLocator:
+    def __init__(self, page: "_FakeAgentVaultLoginPage", selector: str) -> None:
+        self.page = page
+        self.selector = selector
+        self.first = self
+
+    async def clear(self, *, timeout: int) -> None:
+        self.page.events.append(("clear", self.selector, str(timeout)))
+
+    async def fill(self, value: str, *, timeout: int) -> None:
+        self.page.events.append(("fill", self.selector, value, str(timeout)))
+
+    async def click(self, *, timeout: int) -> None:
+        self.page.events.append(("click", self.selector, str(timeout)))
+        self.page.url = "https://v2.newtalk.kr/dashboard"
+        self.page.login_visible = False
+
+    async def is_visible(self, *, timeout: int) -> bool:
+        self.page.events.append(("visible", self.selector, str(timeout)))
+        return self.page.login_visible and (
+            "password" in self.selector
+            or "email" in self.selector
+            or "submit" in self.selector
+            or "Login" in self.selector
+            or "로그인" in self.selector
+        )
+
+
+class _FakeAgentVaultLoginPage:
+    def __init__(self) -> None:
+        self.url = "about:blank"
+        self.login_visible = True
+        self.events: list[tuple[str, ...]] = []
+
+    async def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+        self.url = url
+        self.events.append(("goto", url, wait_until, str(timeout)))
+
+    def locator(self, selector: str) -> _FakeAgentVaultLoginLocator:
+        return _FakeAgentVaultLoginLocator(self, selector)
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        self.events.append(("wait", str(ms)))
+
+
 @pytest.mark.asyncio
 async def test_apply_aads_e2e_url_injects_token_and_preserves_fragment() -> None:
     page = _FakeAadsAuthPage()
@@ -249,6 +294,49 @@ async def test_apply_aads_e2e_url_injects_token_and_preserves_fragment() -> None
         ("https://aads.newtalk.kr/chat#session-1", "domcontentloaded"),
     ]
     assert target == "https://aads.newtalk.kr/chat#session-1"
+
+
+@pytest.mark.asyncio
+async def test_agent_vault_login_uses_generic_form_and_marks_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    marked: dict[str, object] = {}
+
+    async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
+        marked.update(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.services.agent_vault_service.mark_agent_credential_used",
+        fake_mark_agent_credential_used,
+    )
+    page = _FakeAgentVaultLoginPage()
+
+    ok = await ceo_chat_tools._login_with_agent_vault_credential(
+        page,
+        {
+            "id": "00000000-0000-0000-0000-000000000011",
+            "origin": "https://v2.newtalk.kr",
+            "work_key": "aads-ceo-browser",
+            "username": "admin@example.test",
+            "password": "secret-password",
+        },
+        "https://v2.newtalk.kr/chat",
+        tenant_id="00000000-0000-0000-0000-000000000012",
+        browser_work_key="aads-ceo-browser",
+    )
+
+    assert ok is True
+    assert ("goto", "https://v2.newtalk.kr/login", "domcontentloaded", "15000") in page.events
+    assert any(event[:3] == ("fill", "input[type='password']", "secret-password") for event in page.events)
+    assert marked["credential_id"] == "00000000-0000-0000-0000-000000000011"
+    assert marked["origin"] == "https://v2.newtalk.kr"
+    assert marked["details"] == {"method": "form_login", "target_url": "https://v2.newtalk.kr/chat"}
+
+
+def test_credential_test_login_no_longer_uses_genspark_specific_login() -> None:
+    source = inspect.getsource(ceo_chat_tools.tool_credential_test_login)
+
+    assert "_attempt_genspark_login" not in source
+    assert "_login_with_agent_vault_credential" in source
 
 
 @pytest.mark.asyncio

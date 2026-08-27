@@ -8389,3 +8389,25 @@
   - Local commit was created for this guard patch; push/deploy are not yet performed.
   - Stale delivery status `baemin/biz-sungshin/running` from 09:29:32 KST remains in the ledger until cleanup marks it stale or it is corrected by an approved data maintenance action.
   - Coupang Eats requires normal portal login on the alternate PC before retrying; no further automatic retry should be started on CEO PC.
+
+## 2026-08-27 12:33 KST - E2E Agent Vault login path fix
+
+- Request: Verify and fix why E2E validation still cannot use saved password-manager credentials for login.
+- Findings:
+  - `agent_vault_credentials` had 363 active credentials but 0 rows with `last_used_at`, while `e2e_credentials` had 24 active credentials and 5 used rows.
+  - `credential_test_login` had an Agent Vault fallback, but it called the Genspark-specific `_attempt_genspark_login` helper instead of the generic browser login path.
+  - Agent Vault browser login resolved credentials and wrote `credential_e2e_resolve`, but successful E2E login did not update `agent_vault_credentials.last_used_at`.
+- Changes:
+  - `app/api/ceo_chat_tools.py`: added `_login_with_agent_vault_credential` and routed both `credential_test_login` and browser/capture Agent Vault login through the same generic token/form-login helper.
+  - `app/services/agent_vault_service.py`: added `mark_agent_credential_used` to update Agent Vault `last_used_at` and write `credential_e2e_use` audit logs on successful E2E use.
+  - `tests/unit/test_pc_agent_tool_exposure.py`: added regression coverage that Agent Vault form login uses the generic helper, fills the password field, and marks the credential used.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat_tools.py app/services/agent_vault_service.py` succeeded on host Python.
+  - `docker exec aads-server python -m py_compile /app/app/api/ceo_chat_tools.py /app/app/services/agent_vault_service.py` succeeded.
+  - `docker exec aads-server python -m pytest tests/unit/test_pc_agent_tool_exposure.py -q` succeeded: 13 passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_credential_vault.py tests/unit/test_browser_task_policy.py tests/unit/test_pc_agent_tool_exposure.py -q` succeeded: 39 passed.
+  - `git diff --check -- app/api/ceo_chat_tools.py app/services/agent_vault_service.py tests/unit/test_pc_agent_tool_exposure.py` succeeded.
+- Remaining:
+  - Runtime API process reload/deploy and real Browser E2E login/capture verification are still required before this can be called production-active.
+  - Full `git diff --check` still fails on pre-existing trailing whitespace in `docs/CHANGELOG-go100-direct.md`.
+  - Existing unrelated dirty files were preserved.

@@ -150,6 +150,47 @@ async def get_agent_credential_for_url(
     return _row_to_credential(row, include_secret=True)
 
 
+async def mark_agent_credential_used(
+    *,
+    tenant_id: str,
+    credential_id: str,
+    work_key: str,
+    origin: str,
+    user_id: str = "browser-e2e",
+    details: dict[str, Any] | None = None,
+) -> bool:
+    """Record that an Agent Vault credential was actually used by E2E."""
+    origin_norm = normalize_origin(origin)
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE agent_vault_credentials
+               SET last_used_at = NOW(),
+                   updated_at = NOW()
+             WHERE id = $1
+               AND tenant_id = $2
+               AND is_active = TRUE
+             RETURNING id
+            """,
+            uuid.UUID(credential_id),
+            _tenant_uuid(tenant_id),
+        )
+        if not row:
+            return False
+        await write_access_log(
+            conn=conn,
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            work_key=work_key,
+            origin=origin_norm,
+            action="credential_e2e_use",
+            status="success",
+            user_id=user_id,
+            details=details or {},
+        )
+    return True
+
+
 async def upsert_agent_credential(
     *,
     tenant_id: str,

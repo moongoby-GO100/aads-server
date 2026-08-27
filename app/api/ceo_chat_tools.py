@@ -3413,6 +3413,99 @@ async def _apply_aads_e2e_url(page: Any, e2e_url: str) -> str:
     return target_url
 
 
+async def _login_with_agent_vault_credential(
+    page: Any,
+    credential: dict[str, Any],
+    url: str,
+    tenant_id: str,
+    browser_work_key: str = "",
+) -> bool:
+    """Use a resolved Agent Vault credential for token or form login."""
+    if not tenant_id or not credential:
+        return False
+    origin = str(credential.get("origin") or "").rstrip("/")
+    username = str(credential.get("username") or "")
+    password = str(credential.get("password") or "")
+    work_key = str(browser_work_key or credential.get("work_key") or "")
+    if not origin or not username or not password:
+        return False
+    try:
+        from app.services.agent_vault_service import mark_agent_credential_used
+
+        parsed = urlparse(url or origin)
+        target_url = url if parsed.scheme and parsed.netloc else origin
+        origin_parsed = urlparse(origin)
+        if parsed.netloc == "aads.newtalk.kr":
+            from app.core.credential_vault import _api_token_inject
+
+            redirect_url = target_url
+            if parsed.path.rstrip("/") in ("", "/", "/login"):
+                redirect_url = f"{origin}/chat"
+            ok = await _api_token_inject(
+                page,
+                {
+                    "id": credential["id"],
+                    "tenant_id": tenant_id,
+                    "login_url": f"{origin}/login",
+                    "username": username,
+                    "password": password,
+                },
+                {
+                    "api_url": f"{origin}/api/v1/auth/login",
+                    "storage_key": "aads_token",
+                    "redirect_url": redirect_url,
+                },
+            )
+            if ok:
+                await mark_agent_credential_used(
+                    tenant_id=tenant_id,
+                    credential_id=str(credential["id"]),
+                    work_key=work_key,
+                    origin=origin,
+                    details={"method": "api_token_inject", "target_url": target_url},
+                )
+                logger.info("agent_vault_aads_token_inject_success origin=%s", origin)
+                return True
+
+        current_url = str(getattr(page, "url", "") or "")
+        current = urlparse(current_url)
+        login_url = current_url
+        if current.netloc != origin_parsed.netloc:
+            login_url = f"{origin}/login" if origin_parsed.netloc.endswith("newtalk.kr") else origin
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
+
+        email_input = page.locator(
+            "input[type='email'], input[name='email'], input[name='username'], "
+            "input[name='login'], input#email, input#username, input#login, input[type='text']"
+        ).first
+        await email_input.clear(timeout=5000)
+        await email_input.fill(username, timeout=5000)
+        pw_input = page.locator("input[type='password']").first
+        await pw_input.fill(password, timeout=5000)
+        login_btn = page.locator(
+            "button[type='submit'], input[type='submit'], button:has-text('로그인'), "
+            "button:has-text('Login'), button:has-text('Sign in'), a:has-text('로그인')"
+        ).first
+        await login_btn.click(timeout=5000)
+        await page.wait_for_timeout(3000)
+        from app.core.credential_vault import login_session_completed
+
+        if not await login_session_completed(page, login_url):
+            return False
+        await mark_agent_credential_used(
+            tenant_id=tenant_id,
+            credential_id=str(credential["id"]),
+            work_key=work_key,
+            origin=origin,
+            details={"method": "form_login", "target_url": target_url},
+        )
+        logger.info("agent_vault_form_login_submitted origin=%s work_key=%s", origin, browser_work_key)
+        return True
+    except Exception as exc:
+        logger.warning("agent_vault_login_failed: %s", exc)
+        return False
+
+
 async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_work_key: str = "") -> bool:
     """Use Agent Vault password-manager credentials for a visible login form."""
     if not tenant_id:
@@ -3428,47 +3521,13 @@ async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_w
         )
         if not cred:
             return False
-
-        parsed = urlparse(url)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-        if parsed.netloc == "aads.newtalk.kr":
-            from app.core.credential_vault import _api_token_inject
-
-            ok = await _api_token_inject(
-                page,
-                {
-                    "id": cred["id"],
-                    "tenant_id": tenant_id,
-                    "login_url": f"{origin}/login",
-                    "username": cred["username"],
-                    "password": cred["password"],
-                },
-                {
-                    "api_url": f"{origin}/api/v1/auth/login",
-                    "storage_key": "aads_token",
-                    "redirect_url": url,
-                },
-            )
-            if ok:
-                logger.info("agent_vault_aads_token_inject_success origin=%s", origin)
-                return True
-
-        email_input = page.locator(
-            "input[type='email'], input[name='email'], input[name='username'], "
-            "input[name='login'], input#email, input#username, input#login, input[type='text']"
-        ).first
-        await email_input.clear(timeout=5000)
-        await email_input.fill(str(cred["username"]), timeout=5000)
-        pw_input = page.locator("input[type='password']").first
-        await pw_input.fill(str(cred["password"]), timeout=5000)
-        login_btn = page.locator(
-            "button[type='submit'], input[type='submit'], button:has-text('로그인'), "
-            "button:has-text('Login'), button:has-text('Sign in'), a:has-text('로그인')"
-        ).first
-        await login_btn.click(timeout=5000)
-        await page.wait_for_timeout(3000)
-        logger.info("agent_vault_form_login_submitted origin=%s work_key=%s", origin, browser_work_key)
-        return True
+        return await _login_with_agent_vault_credential(
+            page,
+            cred,
+            url,
+            tenant_id=tenant_id,
+            browser_work_key=browser_work_key,
+        )
     except Exception as exc:
         logger.warning("agent_vault_login_failed: %s", exc)
         return False
@@ -4703,7 +4762,6 @@ async def tool_credential_test_login(
             browser_error = ""
             try:
                 from app.browser_bridge.aads_adapter import acquire_browser_context
-                from app.services.media_generation_service import MediaGenerationService
 
                 work_key = browser_work_key or str(agent_cred.get("work_key") or "agent-vault-test")
                 ctx, err = await acquire_browser_context(
@@ -4715,19 +4773,19 @@ async def tool_credential_test_login(
                     browser_error = err
                 else:
                     page = await ctx.new_page()
-                    svc = MediaGenerationService()
-                    login_result = await svc._attempt_genspark_login(
+                    login_ok = await _login_with_agent_vault_credential(
                         page,
-                        username=agent_cred["username"],
-                        password=agent_cred["password"],
-                        login_url=agent_cred["origin"],
+                        agent_cred,
+                        agent_cred["origin"],
+                        tenant_id=tenant_id,
+                        browser_work_key=work_key,
                     )
                     final_url = str(getattr(page, "url", "") or "")
                     return (
                         "[Browser E2E 로그인 테스트]\n"
-                        f"status: {'success' if login_result.get('ok') else 'failed'}\n"
+                        f"status: {'success' if login_ok else 'failed'}\n"
                         "vault_type: agent_vault\n"
-                        f"error_code: {'' if login_result.get('ok') else login_result.get('error', 'LOGIN_FAILED')}\n"
+                        f"error_code: {'' if login_ok else 'LOGIN_FAILED'}\n"
                         f"final_url: {final_url}\n"
                         f"browser_work_key: {work_key}"
                     )
