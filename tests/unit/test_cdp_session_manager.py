@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent
 from browser_auto import (
     CDPCommandGuardManager,
     CDPSessionManager,
+    browser_launch,
     browser_close_session,
     _default_profile_root,
     _effective_port,
@@ -137,3 +138,38 @@ async def test_browser_close_session_refuses_unmanaged_user_profile(monkeypatch)
     assert result["data"]["error_code"] == "UNMANAGED_BROWSER_PROFILE"
     assert result["data"]["process"]["attempted"] is False
     assert CDPSessionManager.get_session("aads-ceo-browser") is None
+
+
+@pytest.mark.asyncio
+async def test_browser_launch_navigates_existing_work_key_session(monkeypatch):
+    CDPSessionManager._sessions.clear()
+    CDPSessionManager.register(
+        "yeoljeong-delivery-coupangeats-biz-junghwa-test",
+        9444,
+        os.path.join(_default_profile_root(), "isolated-coupang"),
+        pid=1234,
+    )
+
+    async def fake_probe(_port):
+        return {"webSocketDebuggerUrl": "ws://127.0.0.1:9444/devtools/browser/test"}
+
+    navigations: list[dict] = []
+
+    async def fake_browser_navigate(params):
+        navigations.append(dict(params))
+        return {"status": "success", "data": {"url": params["url"]}}
+
+    monkeypatch.setattr("browser_auto._probe_cdp_version", fake_probe)
+    monkeypatch.setattr("browser_auto.browser_navigate", fake_browser_navigate)
+
+    result = await browser_launch(
+        {
+            "work_key": "yeoljeong-delivery-coupangeats-biz-junghwa-test",
+            "url": "https://store.coupangeats.com/merchant/",
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["navigated"] is True
+    assert navigations[0]["url"] == "https://store.coupangeats.com/merchant/"
+    assert navigations[0]["reuse_tab"] is False

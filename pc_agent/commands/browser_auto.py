@@ -1984,6 +1984,31 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         if existing_session:
             existing = await _probe_cdp_version(existing_session.port)
             if existing is not None:
+                navigated = False
+                navigate_error = ""
+                if str(url or "").strip() and str(url).strip() != "about:blank":
+                    try:
+                        navigate_result = await browser_navigate(
+                            {
+                                **params,
+                                "url": str(url),
+                                "port": existing_session.port,
+                                "work_key": work_key,
+                                "reuse_tab": False,
+                            }
+                        )
+                        navigated = isinstance(navigate_result, dict) and navigate_result.get("status") == "success"
+                        if not navigated:
+                            navigate_data = navigate_result.get("data") if isinstance(navigate_result, dict) else {}
+                            if isinstance(navigate_data, dict):
+                                navigate_error = str(
+                                    navigate_data.get("error")
+                                    or navigate_data.get("message")
+                                    or navigate_data.get("error_code")
+                                    or ""
+                                )[:200]
+                    except Exception as exc:
+                        navigate_error = str(exc)[:200]
                 return {
                     "status": "success",
                     "data": {
@@ -1992,6 +2017,8 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                         "user_data_dir": existing_session.profile_dir,
                         "cdp_ready": True,
                         "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
+                        "navigated": navigated,
+                        "navigate_error": navigate_error,
                     },
                 }
             CDPSessionManager.release(work_key)

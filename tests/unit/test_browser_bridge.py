@@ -836,6 +836,50 @@ async def test_ensure_pc_agent_cdp_force_recreate_keeps_profile_by_default(monke
 
 
 @pytest.mark.asyncio
+async def test_ensure_pc_agent_cdp_force_recreate_closes_existing_work_key_first(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    calls: list[dict] = []
+
+    async def fake_execute_routed_command(**kwargs):
+        calls.append(kwargs)
+        if kwargs["command_type"] == "browser_close_session":
+            return {"status": "success", "result": {"result": {"session_released": True}}}
+        return {
+            "status": "success",
+            "lease": {"agent_id": "collector-pc"},
+            "result": {
+                "result": {
+                    "port": 9666,
+                    "user_data_dir": "C:/AADS/chrome/yeoljeong",
+                    "websocket_debugger_url": "ws://127.0.0.1:9666/devtools/browser/test",
+                }
+            },
+        }
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        label="Yeoljeong Coupang",
+        url="https://store.coupangeats.com/",
+        work_key="yeoljeong-delivery-coupangeats-biz-junghwa-test",
+        force_recreate=True,
+    )
+
+    assert [call["command_type"] for call in calls] == ["browser_close_session", "browser_launch"]
+    assert calls[0]["params"]["work_key"] == "yeoljeong-delivery-coupangeats-biz-junghwa-test"
+    assert calls[0]["params"]["close_browser"] is True
+    assert calls[1]["params"]["url"] == "https://store.coupangeats.com/"
+    assert session.endpoint.metadata["agent_id"] == "collector-pc"
+
+
+@pytest.mark.asyncio
 async def test_ensure_pc_agent_cdp_force_recreate_keeps_profile_by_default(monkeypatch, tmp_path) -> None:
     """force_recreate 시에도 기본값은 Chrome 프로필(isolation_id) 유지 — 로그인 쿠키 보존."""
     service = BrowserBridgeService(

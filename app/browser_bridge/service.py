@@ -574,6 +574,70 @@ class BrowserBridgeService:
         if normalized_work_key:
             launch_params["work_key"] = normalized_work_key
 
+        if force_recreate and normalized_work_key:
+            close_params = {
+                "work_key": normalized_work_key,
+                "close_browser": True,
+                "close_tabs": True,
+                "reason": "browser_bridge_force_recreate",
+                "command_timeout_seconds": 10,
+            }
+            close_result: dict[str, Any] | None = None
+            try:
+                if self._route_pc_agent_via_active_api_first():
+                    close_result = await self._execute_pc_agent_route_via_active_api(
+                        command_type="browser_close_session",
+                        params=close_params,
+                        agent_id=agent_id,
+                        job_type="browser_bridge_force_recreate_cleanup",
+                        required_capabilities=["interactive_browser"],
+                        queue_wait_timeout_seconds=10,
+                        lease_ttl_seconds=30,
+                        command_timeout_seconds=10,
+                    )
+                if close_result is None:
+                    close_result = await pc_agent_manager.execute_routed_command(
+                        command_type="browser_close_session",
+                        params=close_params,
+                        agent_id=agent_id,
+                        job_type="browser_bridge_force_recreate_cleanup",
+                        required_capabilities=["interactive_browser"],
+                        queue_if_busy=True,
+                        wait_for_turn=True,
+                        queue_wait_timeout_seconds=10,
+                        lease_ttl_seconds=30,
+                        command_timeout_seconds=10,
+                    )
+                    if (
+                        isinstance(close_result, dict)
+                        and close_result.get("status") != "success"
+                        and str(close_result.get("error_code") or "") in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
+                    ):
+                        peer_close = await self._execute_pc_agent_route_via_active_api(
+                            command_type="browser_close_session",
+                            params=close_params,
+                            agent_id=agent_id,
+                            job_type="browser_bridge_force_recreate_cleanup",
+                            required_capabilities=["interactive_browser"],
+                            queue_wait_timeout_seconds=10,
+                            lease_ttl_seconds=30,
+                            command_timeout_seconds=10,
+                        )
+                        if peer_close is not None:
+                            close_result = peer_close
+                logger.info(
+                    "browser_bridge_force_recreate_cleanup work_key=%s status=%s error_code=%s",
+                    normalized_work_key,
+                    close_result.get("status") if isinstance(close_result, dict) else "",
+                    close_result.get("error_code") if isinstance(close_result, dict) else "",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "browser_bridge_force_recreate_cleanup_failed work_key=%s err=%s",
+                    normalized_work_key,
+                    exc,
+                )
+
         if self._route_pc_agent_via_active_api_first():
             active_queue_wait = (
                 float(queue_wait_timeout_seconds)
