@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.chat_service import _workspace_project_key
+from app.services.chat_service import _workspace_project_key, _workspace_project_key_from_context
 
 
 @pytest.mark.parametrize("workspace,expected", [
@@ -17,3 +17,14 @@ from app.services.chat_service import _workspace_project_key
 ])
 def test_workspace_project_key_regression(workspace, expected):
     assert _workspace_project_key(workspace) == expected
+
+
+def test_workspace_project_key_prefers_settings_project_key():
+    assert _workspace_project_key_from_context(
+        "웹/앱 개발 총괄",
+        {"project_key": "FOOD"},
+    ) == "FOOD"
+
+
+def test_workspace_project_key_context_falls_back_to_workspace_name():
+    assert _workspace_project_key_from_context("[FOOD] 열정국밥", {}) == "FOOD"

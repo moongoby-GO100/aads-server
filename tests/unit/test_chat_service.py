@@ -293,6 +293,14 @@ def test_auto_message_exclude_filter_only_checks_runner_markers_near_head():
     assert "content LIKE '%[Pipeline Runner]%'" not in chat_service._AUTO_MESSAGE_EXCLUDE_FILTER
 
 
+def test_history_filter_excludes_hidden_runner_notifications():
+    history_filter = chat_service._history_intent_filter_sql()
+
+    assert "'pipeline_c'" in history_filter
+    assert "'runner_notification'" in history_filter
+    assert "'ai_review_warning'" in history_filter
+
+
 @pytest.mark.asyncio
 async def test_list_messages_minimal_is_read_only_and_selects_light_fields():
     session_id = str(uuid.uuid4())

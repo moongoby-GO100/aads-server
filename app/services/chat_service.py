@@ -246,8 +246,12 @@ _HISTORY_EXCLUDED_INTENTS = (
     "system_trigger",
     "auto_reaction",
     "runner_response",
+    "pipeline_c",
+    "runner_notification",
+    "ai_review_warning",
     "interrupted_partial",
     "interruption_notice",
+    "_archived_partial",
 )
 
 
@@ -5825,6 +5829,22 @@ def _workspace_project_key(workspace_name: str) -> str:
     return "CEO"
 
 
+def _workspace_project_key_from_context(
+    workspace_name: str,
+    workspace_settings: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Resolve the current chat project from explicit settings before name heuristics."""
+    settings = workspace_settings if isinstance(workspace_settings, dict) else {}
+    for field in ("project_key", "active_project", "project"):
+        value = str(settings.get(field) or "").strip()
+        if not value:
+            continue
+        resolved = normalize_project_label(value)
+        if resolved:
+            return str(resolved).upper()
+    return _workspace_project_key(workspace_name)
+
+
 async def list_workspace_roles(workspace_id: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return DB-backed role options for the selected workspace/project."""
     tenant_uuid = _require_tenant_uuid(tenant_id, "list_workspace_roles")
@@ -8461,8 +8481,12 @@ async def send_message_stream(
             logger.warning(f"url_detection_skipped: {_url_err}")
 
         # ── P2-7: 멘션(@) 프로젝트 감지 → 명시적 프로젝트 컨텍스트 오버라이드 ──
-        _MENTION_PROJECTS = {"KIS", "GO100", "AADS", "SF", "NTV2", "NAS"}
-        _mention_matches = re.findall(r'@(KIS|GO100|AADS|SF|NTV2|NAS)\b', content, re.IGNORECASE)
+        _MENTION_PROJECTS = {
+            "KIS", "GO100", "AADS", "SF", "NTV2", "NAS",
+            "FOOD", "CEO", "WORK", "LAW", "DESIGN", "KAKAOBOT",
+        }
+        _mention_pattern = "|".join(sorted((re.escape(p) for p in _MENTION_PROJECTS), key=len, reverse=True))
+        _mention_matches = re.findall(rf'@({_mention_pattern})\b', content, re.IGNORECASE)
         _mentioned_projects: list = []
         if _mention_matches:
             _mentioned_projects = list(dict.fromkeys(p.upper() for p in _mention_matches))
@@ -8475,6 +8499,10 @@ async def send_message_stream(
         # Persist only the user's visible input. Reply/resume context may be
         # injected into the LLM prompt below, but must not pollute chat history.
         persisted_user_content = _strip_internal_continuation_context(content)
+        _reply_target_content = ""
+        _reply_target_role = ""
+        _reply_target_intent = ""
+        _reply_scope_prompt_block = ""
 
         # ★ Phase A: DB 커넥션 사용 구간 — async with로 자동 반환 (LLM 스트리밍 전 해제)
         # Reply-to: 이전 AI 응답 지정 시 LLM 전용 인용 컨텍스트 주입
@@ -8484,13 +8512,28 @@ async def send_message_stream(
                 try:
                     _reply_to_uuid = uuid.UUID(reply_to_id)
                     _quoted_row = await conn.fetchrow(
-                        "SELECT content FROM chat_messages WHERE id = $1 AND session_id = $2",
+                        """
+                        SELECT role, content, COALESCE(intent, '') AS intent
+                          FROM chat_messages
+                         WHERE id = $1
+                           AND session_id = $2
+                           AND (is_hidden IS NULL OR is_hidden = false)
+                        """,
                         _reply_to_uuid, sid,
                     )
                     if _quoted_row and _quoted_row["content"]:
+                        _reply_target_content = str(_quoted_row["content"] or "")
+                        _reply_target_role = str(_quoted_row["role"] or "")
+                        _reply_target_intent = str(_quoted_row["intent"] or "")
                         _quoted = _quoted_row["content"][:2000]
                         content = f"[CEO가 지정한 이전 AI 응답 (reply_to)]\n{_quoted}\n\n[CEO 추가 지시]\n{content}"
                         logger.info(f"[REPLY_TO] session={session_id[:8]} reply_to={reply_to_id[:8]} quoted={len(_quoted)}chars")
+                    else:
+                        logger.warning(
+                            "[REPLY_TO] target_not_visible session=%s reply_to=%s",
+                            session_id[:8],
+                            str(reply_to_id)[:8],
+                        )
                 except Exception as _rte:
                     logger.warning(f"[REPLY_TO] failed: {_rte}")
 
@@ -8667,6 +8710,20 @@ async def send_message_stream(
             _session_role_key = (sp_row["role_key"] if sp_row and sp_row["role_key"] else "")
             _workspace_settings_prefetched = _row_to_dict(sp_row).get("workspace_settings") if sp_row else {}
             _session_settings_prefetched = _row_to_dict(sp_row).get("session_settings") if sp_row else {}
+            _workspace_project_key_value = _workspace_project_key_from_context(
+                workspace_name,
+                _workspace_settings_prefetched if isinstance(_workspace_settings_prefetched, dict) else {},
+            )
+            if _reply_to_uuid and _reply_target_content:
+                _reply_scope_prompt_block = (
+                    "\n\n[답글형 이어하기 범위 고정]\n"
+                    f"- 현재 채팅 프로젝트: {_workspace_project_key_value}\n"
+                    f"- 현재 워크스페이스: {workspace_name}\n"
+                    f"- 답글 대상 메시지 ID: {_reply_to_uuid}\n"
+                    f"- 답글 대상 role/intent: {_reply_target_role or '-'} / {_reply_target_intent or '-'}\n"
+                    "- CEO의 '이어서 진행해' 같은 짧은 지시는 반드시 위 답글 대상 메시지와 현재 채팅 프로젝트 안에서만 이어서 처리하세요.\n"
+                    "- 같은 세션에 숨김 러너 알림이나 다른 프로젝트 자동보고가 있더라도 작업 대상을 바꾸지 마세요."
+                )
 
             # 3. 세션 히스토리 조회 (#16: 서브쿼리로 ASC 정렬, Python reverse 제거)
             # P2-2: branch 모드일 때는 branch_point 메시지 이전(포함)까지만 히스토리 사용
@@ -8744,6 +8801,14 @@ async def send_message_stream(
                 + _response_mode_prompt_block(response_mode)
                 + _runner_fast_path_prompt_block()
             )
+            if _reply_scope_prompt_block:
+                system_prompt = system_prompt + _reply_scope_prompt_block
+                logger.info(
+                    "[REPLY_TO] scope prompt injected session=%s project=%s reply_to=%s",
+                    session_id[:8],
+                    _workspace_project_key_value,
+                    str(_reply_to_uuid)[:8],
+                )
             _customer_scope_block = _customer_tenant_prompt_block(tenant_scope)
             if _customer_scope_block:
                 system_prompt = system_prompt + _customer_scope_block
@@ -8812,17 +8877,11 @@ async def send_message_stream(
         # P2-2: 분기 모드 시 branch_id ContextVar 설정 → _save_message에서 자동 적용
         _current_branch_id.set(branch_id if branch_id else None)
 
-        # 프로젝트명 정규화 (workspace_name → project code)
-        _PROJECT_KEYS = ("KIS", "AADS", "GO100", "SF", "NTV2", "NAS", "CEO", "KAKAOBOT")
-        _normalized_project = None
-        if workspace_name:
-            _ws_upper = workspace_name.upper()
-            for _pk in _PROJECT_KEYS:
-                if _pk in _ws_upper:
-                    _normalized_project = _pk
-                    break
-            if not _normalized_project:
-                _normalized_project = _ws_upper[:20]
+        # 프로젝트명 정규화 (workspace settings/project_key → workspace_name)
+        _normalized_project = _workspace_project_key_from_context(
+            workspace_name,
+            _workspace_settings_prefetched if isinstance(_workspace_settings_prefetched, dict) else {},
+        )
 
         # P2-7: 멘션이 있으면 첫 번째 멘션 프로젝트로 _normalized_project 오버라이드
         if _mentioned_projects:

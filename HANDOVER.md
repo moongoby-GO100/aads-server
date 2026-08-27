@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-27 13:50 KST - Reply-to chat project scope isolation
+
+- Trigger: CEO reported that clicking the reply/continue button in session `476cae48-9bd5-467b-b2da-2f68606c180e` produced context from another project.
+- Cause:
+  - The session is `[FOOD] 열정국밥` with `settings.project_key=FOOD`, but `send_message_stream()` normalized the project by scanning a fixed internal project tuple that did not include display-only projects.
+  - LLM history filtering excluded `runner_response` but not hidden `pipeline_c`/runner notification intents, allowing GO100 runner auto-report rows to crowd the model context.
+  - Reply-to injection quoted the target content, but did not explicitly bind the reply to the current workspace/project in the system prompt.
+- Changes:
+  - `app/services/chat_service.py`: added `_workspace_project_key_from_context()` so workspace settings project keys win over name heuristics.
+  - `send_message_stream()` now uses the settings-aware project key for prompt compiler, contradiction detection, memory extraction, and reply-to scope binding.
+  - Reply-to context now ignores hidden targets and injects a system scope block with current project, workspace, reply target id, role, and intent.
+  - LLM history now excludes `pipeline_c`, `runner_notification`, `ai_review_warning`, and `_archived_partial`.
+  - `@FOOD` and other display-only project mentions are recognized.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/core/project_config.py` succeeded on host.
+  - `docker exec aads-server python -m pytest -q tests/unit/test_workspace_project_key.py tests/unit/test_chat_service.py -q` succeeded: 74 passed.
+  - `git diff --check -- app/services/chat_service.py tests/unit/test_chat_service.py tests/unit/test_workspace_project_key.py` succeeded.
+- Deployment status:
+  - Commit/push/deploy pending at the time of this entry.
+  - Unrelated dirty FOOD/browser/doc files were left untouched.
+
 ## 2026-08-27 12:57 KST - Agent Vault AADS API login fast-path
 
 - Trigger: After deploying the Agent Vault browser timeout fallback, a live `credential_test_login` check still waited on Browser Bridge/PC Agent cleanup even though the AADS credential can be validated through `/api/v1/auth/login`.
