@@ -1253,6 +1253,15 @@ async def lifespan(app: FastAPI):
                 import sys
                 from pathlib import Path
 
+                if not _is_active_api_container_for_background_jobs():
+                    logger.info(
+                        "delivery_auto_collect_skip: inactive_api_container reason=%s container=%s port=%s",
+                        reason,
+                        os.getenv("AADS_CONTAINER_NAME", ""),
+                        os.getenv("AADS_PUBLIC_PORT", ""),
+                    )
+                    return
+
                 system_user = {
                     "user_id": "system-daemon",
                     "user_role": "system",

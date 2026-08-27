@@ -8316,3 +8316,23 @@
   - Commit/push/deploy/restart were not performed in this chat turn.
   - Relay runtime still needs an approved restart/reload window to activate `max_concurrent=9` and provider reserve slots.
   - Existing unrelated dirty files and generated backup/patch helper files were preserved.
+
+## 2026-08-27 09:31 KST - FOOD delivery scheduler active-slot guard
+
+- Request: Continue the interrupted FOOD delivery auto-collection follow-up and prevent CEO PC reuse while blue/green slots are split across different PC Agents.
+- Findings:
+  - `aads-server` was the active published API slot (`.active_container=aads-server`, `.active_port=8100`), but the inactive `aads-server-green` scheduler had still started delivery catch-up jobs.
+  - The inactive green slot was connected to CEO PC `2e9379a1-fed`, while the active blue slot was connected to alternate PC `7f99c528-24d`.
+  - Delivery auto-collection already honored `YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID=7f99c528-24d` and `YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS=2e9379a1-fed`, but unlike bank auto-collection it did not check `_is_active_api_container_for_background_jobs()` before starting scheduled work.
+  - Latest measured collection result before the patch: Yogiyo `biz-eonni-naengmyeon` succeeded at 09:11 KST; Yogiyo `biz-mia` timed out; Coupang Eats attempts ended with `PC_AGENT_LOGIN_REQUIRED` or `ATTEMPT_TIMEOUT`; Baemin auto-run was interrupted by container recycle and left a stale `running` status for `biz-sungshin`.
+- Changes:
+  - `app/main.py`: delivery auto-collection now exits early on inactive blue/green slots with `delivery_auto_collect_skip: inactive_api_container`.
+  - `tests/unit/test_yeoljeong_delivery_scheduler_contract.py`: added static contract coverage for the delivery active-slot owner guard.
+- Verification:
+  - `python3 -m py_compile app/main.py` succeeded.
+  - `python3 -m pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py` succeeded: 9 passed, 1 existing pytest config warning.
+  - Runtime check at 09:30:44 KST: no `yeoljeong_auto_collect.py` process remained; `aads-server` and `aads-server-green` were healthy.
+- Remaining:
+  - Local commit was created for this guard patch; push/deploy are not yet performed.
+  - Stale delivery status `baemin/biz-sungshin/running` from 09:29:32 KST remains in the ledger until cleanup marks it stale or it is corrected by an approved data maintenance action.
+  - Coupang Eats requires normal portal login on the alternate PC before retrying; no further automatic retry should be started on CEO PC.

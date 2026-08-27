@@ -90,3 +90,16 @@ def test_bank_auto_collect_is_single_owner_and_locked():
     assert "YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH" in source
     assert ".bank_auto_collect.lock" in source
     assert "bank_auto_collect_skip: already_running" in source
+
+
+def test_delivery_auto_collect_is_single_active_slot_owner():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+
+    delivery_block = source.split("async def _run_delivery_auto_collect", 1)[1].split(
+        "async def _run_bank_auto_collect", 1
+    )[0]
+
+    assert "_is_active_api_container_for_background_jobs()" in delivery_block
+    assert "delivery_auto_collect_skip: inactive_api_container" in delivery_block
+    assert 'os.getenv("AADS_CONTAINER_NAME", "")' in delivery_block
+    assert 'os.getenv("AADS_PUBLIC_PORT", "")' in delivery_block
