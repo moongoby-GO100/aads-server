@@ -179,6 +179,24 @@ def test_completion_contract_blocks_long_progress_tail_without_final_report():
     assert "final_report_missing" in result.violation_types
 
 
+def test_completion_contract_blocks_operational_progress_tail_verbs():
+    response = (
+        "세션 API 호출 흔적과 최신 실행 원장을 확인했습니다. "
+        "완료로 닫힌 실행의 본문이 완성 보고인지 DB 메시지와 대조하겠습니다."
+    )
+
+    result = evaluate_completion_contract(
+        response_text=response,
+        user_msg="완료처리되는 원인 확인하고 보고해",
+        intent="diagnosis",
+        changes=[],
+    )
+
+    assert result.adjusted is True
+    assert result.requires_continue is True
+    assert "final_report_missing" in result.violation_types
+
+
 def test_completion_contract_blocks_awaiting_user_decision_with_incomplete_items():
     response = (
         "이전 작업 상태를 실측하고, 상품 기반 숏츠 테스트 영상 계획을 수립하겠습니다."

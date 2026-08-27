@@ -536,3 +536,11 @@
 - 검증: 운영 이미지 의존성 + 현재 소스 bind mount 기준 `python -m pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_auto_collect.py -q` 42 passed, `python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` 187 passed. 대상 파일 `py_compile`과 `git diff --check` 통과.
 - 운영 상태: active port는 `8102`, active container는 `aads-server-green`, `/health`는 `status=ok`, `graph_ready=true`. PC Agent는 blue API `8100`에 2대 온라인이고 green local agent 목록은 아직 0건이라 은행 수집은 peer fallback 또는 명시 agent id로 실행해야 한다.
 - 남은 이슈: 최근 1개월 신한 실수집 `imported_rows > 0` 검증은 배포 보정 커밋/재배포 후 다시 실행해야 한다. 기존 무관 dirty 변경과 원장 이벤트 파일은 커밋 대상에서 제외한다.
+
+## 2026-08-27 11:17 KST - CHAT 완료 판정 및 완료 알림 중복 방지 보강
+
+- 요청: 채팅 응답 완료 여부가 진행 로그를 완료로 오판하는 문제와 새로고침 후 완료 알림이 2~3회 반복되는 문제를 직접 구현으로 개선.
+- 조치: `response_completion_contract.py`의 진행형 꼬리 판정 단어셋을 최종 저장 가드와 맞춰 `호출`, `우회`, `대조`, `비교`, `연결`, `재시도`, `정리` 등 운영 확인 표현도 최종 완료보고 미충족으로 잡도록 보강했다. 이에 따라 "DB 메시지와 대조하겠습니다" 같은 응답은 completed 저장 전 자동 이어쓰기/보존 대상으로 판정된다.
+- 조치: `aads-dashboard/src/app/chat/page.tsx`에서 `completion_token` ack를 30분 TTL로 `localStorage`에 저장하고, 새로고침 후 `streaming-status` 호출에도 ack를 전달하도록 했다. React ref가 초기화되어도 같은 완료 토큰의 `just_completed`/토스트/음성 안내가 반복 발화되지 않게 했다.
+- 검증: 운영 컨테이너 `python -m pytest -q tests/unit/test_response_completion_contract.py tests/unit/test_chat_service.py -q` 75 passed. 서버 `python3 -m py_compile app/services/response_completion_contract.py app/services/chat_service.py app/routers/chat.py` 성공. 대시보드 `npx eslint src/app/chat/page.tsx` 오류 0개, 기존 경고 20개. 대상 파일 `git diff --check` 통과.
+- 남은 이슈: 브라우저 실제 새로고침 E2E는 배포 후 운영 URL에서 확인해야 한다. 서버 repo의 FOOD/GO100 관련 기존 dirty 파일은 이번 채팅 변경 커밋 대상에서 제외한다.
