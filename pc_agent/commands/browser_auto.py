@@ -775,6 +775,11 @@ async def _send_cdp_command(
     if method.startswith("Browser.") or method.startswith("Target."):
         return await _send_cdp(browser_ws_url, method, params, timeout_seconds=timeout_seconds)
 
+    if not target_id:
+        session = CDPSessionManager.get_session(_work_key_from_params(params))
+        if session and session.last_target_id:
+            target_id = session.last_target_id
+
     candidates = await _select_page_targets(port, target_id=target_id, target_idx=target_idx)
     attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
     last_error: CDPCommandError | None = None
@@ -1094,6 +1099,11 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
     target_id = str(params.get("target_id", "") or "")
     reused = False
 
+    if not target_id:
+        session = CDPSessionManager.get_session(_work_key_from_params(params))
+        if session and session.last_target_id:
+            target_id = session.last_target_id
+
     if reuse_tab and not target_id:
         try:
             from urllib.parse import urlparse
@@ -1116,16 +1126,21 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds, target_id=target_id)
-        _record_cdp_success(params, result.get("_target"))
-        logger.info("브라우저 이동: %s (reused=%s)", url, reused)
         target = result.get("_target", {}) if isinstance(result, dict) else {}
+        navigated_target_id = str(target.get("id") or target.get("targetId") or target_id or "")
+        CDPSessionManager.mark_healthy(
+            _work_key_from_params(params),
+            target_id=navigated_target_id,
+            target_url=str(url),
+        )
+        logger.info("브라우저 이동: %s (reused=%s)", url, reused)
         return {
             "status": "success",
             "data": {
                 "url": url,
                 "frameId": result.get("frameId", ""),
-                "target_id": target.get("id"),
-                "target_url": target.get("url"),
+                "target_id": navigated_target_id,
+                "target_url": url,
                 "reused_tab": reused,
             },
         }

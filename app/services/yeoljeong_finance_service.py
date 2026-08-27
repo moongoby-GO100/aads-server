@@ -7482,10 +7482,16 @@ def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) 
     if _delivery_result_is_wrong_portal(service, result):
         label = _delivery_platform_label(service)
         diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+        rejected_counts = {
+            kind: len(result.get("records", {}).get(kind) or [])
+            for kind in DELIVERY_RECORD_TYPES
+        }
+        diagnostics = {**diagnostics, "wrong_portal_rejected_counts": rejected_counts}
         return {
             **result,
             "status": "portal_action_required",
             "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
+            "records": _delivery_empty_record_lists(),
             "message": (
                 f"{label} 자동수집 세션이 다른 포털 화면에 연결됐습니다. "
                 "플랫폼별 PC Agent 작업 세션을 다시 생성한 뒤 재수집해야 합니다."

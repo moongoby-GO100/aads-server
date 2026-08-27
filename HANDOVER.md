@@ -30,6 +30,32 @@
 - Deployment status:
   - This entry was prepared from the clean `origin/main` worktree `/tmp/aads-e2e-timeout-20260827` to avoid unrelated FOOD dirty files in the main workdir.
 
+## 2026-08-27 12:47 KST - FOOD Coupang Eats PC Agent work-key isolation follow-up
+
+- Trigger: CEO ordered reconnecting the alternate PC Agent, preventing Coupang Eats work-key sessions from attaching to Baemin tabs, then recollecting Coupang Eats.
+- Findings:
+  - Previous recollect job `coupang-recollect-20260827-1241` ran on alternate PC Agent `7f99c528-24d` but still ended at 12:46:01 KST with `PC_AGENT_WRONG_PORTAL_SESSION`.
+  - The failed run still reported 2 records per delivery ledger type before normalization, so wrong-portal rows needed to be dropped before persistence.
+- Changes:
+  - `pc_agent/commands/browser_auto.py`: `browser_navigate` and generic CDP commands now reuse the work-key's last target id, and navigation success updates the target URL to the requested URL.
+  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped the PC Agent package to `1.0.64` so the alternate PC Agent can pull the patched command module.
+  - `app/services/yeoljeong_finance_service.py`: wrong-portal normalization now clears all collected records and records `wrong_portal_rejected_counts`.
+  - Added regression tests for wrong-portal record dropping and PC Agent target reuse.
+- Verification:
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_finance_service.py pc_agent/commands/browser_auto.py` succeeded.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'wrong_portal_result_drops_collected_records or pc_agent_section_not_found' -q` succeeded: 1 passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py -k 'wrong_portal_session or first_attempt_from_existing_status' -q` succeeded: 2 passed.
+  - Host direct `asyncio.run` contract for `browser_navigate` target reuse succeeded. Host pytest could not run async tests because `pytest-asyncio` is not installed.
+- Operations after patch:
+  - Active version endpoint returned `1.0.64`.
+  - Sent `self_update force=true` to alternate PC Agent `7f99c528-24d`; it reconnected at 12:53 KST with metadata version `1.0.64`.
+  - Closed one Baemin tab on the alternate PC Agent and confirmed no matching Baemin tab on CEO PC.
+  - Re-ran `coupang-recollect-20260827-1254` on `7f99c528-24d`.
+  - Recollect did not persist wrong-portal records; totals stayed zero. Remaining failures were `ATTEMPT_TIMEOUT`, `PC_AGENT_SESSION_REQUIRED`, and `COLLECTION_ALREADY_RUNNING`.
+- Remaining:
+  - Data recollection is still incomplete; next fix should target PC Agent session creation timeout/routing and stale collection status cleanup.
+  - Existing unrelated dirty files were left untouched.
+
 ## 2026-08-27 12:13 KST - FOOD PC Agent 1.0.63 rollout verification
 
 - Trigger: CEO asked to continue PC Agent auto-update rollout and verify the deployed update.

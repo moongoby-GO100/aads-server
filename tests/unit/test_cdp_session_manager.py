@@ -9,6 +9,7 @@ from browser_auto import (
     CDPCommandGuardManager,
     CDPSessionManager,
     browser_launch,
+    browser_navigate,
     browser_close_session,
     _default_profile_root,
     _effective_port,
@@ -173,3 +174,51 @@ async def test_browser_launch_navigates_existing_work_key_session(monkeypatch):
     assert result["data"]["navigated"] is True
     assert navigations[0]["url"] == "https://store.coupangeats.com/merchant/"
     assert navigations[0]["reuse_tab"] is False
+
+
+@pytest.mark.asyncio
+async def test_browser_navigate_uses_existing_work_key_target(monkeypatch):
+    CDPSessionManager._sessions.clear()
+    CDPSessionManager.register(
+        "yeoljeong-delivery-coupangeats-biz-junghwa-test",
+        9444,
+        os.path.join(_default_profile_root(), "isolated-coupang"),
+        pid=1234,
+    )
+    CDPSessionManager.mark_healthy(
+        "yeoljeong-delivery-coupangeats-biz-junghwa-test",
+        target_id="target-coupang",
+        target_url="https://self.baemin.com/",
+    )
+    calls: list[dict] = []
+
+    async def fake_send_cdp_command(port, method, params, *, timeout_seconds, target_id="", target_idx=0):
+        calls.append(
+            {
+                "port": port,
+                "method": method,
+                "params": dict(params or {}),
+                "target_id": target_id,
+                "target_idx": target_idx,
+            }
+        )
+        return {"frameId": "frame-1", "_target": {"id": target_id, "url": "https://self.baemin.com/"}}
+
+    monkeypatch.setattr("browser_auto._send_cdp_command", fake_send_cdp_command)
+
+    result = await browser_navigate(
+        {
+            "work_key": "yeoljeong-delivery-coupangeats-biz-junghwa-test",
+            "port": 9444,
+            "url": "https://store.coupangeats.com/merchant/",
+            "reuse_tab": False,
+        }
+    )
+
+    session = CDPSessionManager.get_session("yeoljeong-delivery-coupangeats-biz-junghwa-test")
+    assert result["status"] == "success"
+    assert calls[0]["target_id"] == "target-coupang"
+    assert result["data"]["target_url"] == "https://store.coupangeats.com/merchant/"
+    assert session is not None
+    assert session.last_target_id == "target-coupang"
+    assert session.last_target_url == "https://store.coupangeats.com/merchant/"

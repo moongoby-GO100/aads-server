@@ -62,6 +62,33 @@ def test_delivery_public_error_code_keeps_pc_agent_session_required():
     )
 
 
+def test_normalize_wrong_portal_result_drops_collected_records():
+    result = service._normalize_delivery_collection_result(
+        "coupangeats",
+        {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [{"id": "wrong-sale"}],
+                "settlements": [{"id": "wrong-settlement"}],
+                "reviews": [{"id": "wrong-review"}],
+                "ads": [{"id": "wrong-ad"}],
+            },
+            "diagnostics": {"url": "https://self.baemin.com/orders"},
+        },
+    )
+
+    assert result["status"] == "portal_action_required"
+    assert result["error_code"] == "PC_AGENT_WRONG_PORTAL_SESSION"
+    assert all(not rows for rows in result["records"].values())
+    assert result["diagnostics"]["wrong_portal_rejected_counts"] == {
+        "sales": 1,
+        "settlements": 1,
+        "reviews": 1,
+        "ads": 1,
+    }
+
+
 def valid_employment_contract(**overrides):
     payload = {
         "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",
