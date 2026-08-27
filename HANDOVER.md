@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-27 12:13 KST - FOOD PC Agent 1.0.63 rollout verification
+
+- Trigger: CEO asked to continue PC Agent auto-update rollout and verify the deployed update.
+- Actions:
+  - Verified `/api/v1/kakao-bot/agent/version` on both active backend slots returns `1.0.63`.
+  - Verified `download?format=zip` returns a ZIP package with `VERSION=1.0.63` and includes `agent.py`, `launcher.py`, and `commands/browser_auto.py`.
+  - Ran `self_update force=true` on connected PC Agents `2e9379a1-fed` and `7f99c528-24d`.
+  - `7f99c528-24d` updated through the normal self-update path. `2e9379a1-fed` exposed the old launcher exit-code handoff bug, so its ZIP package was manually downloaded/extracted via PC Agent shell command, then the worker was restarted.
+- Verification:
+  - `2e9379a1-fed` reconnected at `2026-08-27T03:12:48Z` with metadata version `1.0.63`.
+  - `7f99c528-24d` reconnected at `2026-08-27T03:09:51Z` with metadata version `1.0.63`.
+  - `/api/v1/pc-agent/diagnostics` showed both Agents online with `self_update` and `browser_download` capabilities.
+- Remaining:
+  - Unrelated dirty files in `app/data/yeoljeong_finance/` and `docs/CHANGELOG-go100-direct.md` were left untouched.
+
 ## 2026-08-27 11:55 KST - FOOD Shinhan PC Agent auto-update and download parsing
 
 - Trigger: CEO rejected paid bank APIs and ordered the PC Agent path to continue, including bank transaction parsing, downloaded statement ingestion, and PC Agent auto-update deployment.
