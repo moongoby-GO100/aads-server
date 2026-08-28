@@ -186,6 +186,28 @@ def test_bank_only_skips_delivery_and_collects_bank_accounts(monkeypatch):
     assert result["bank_totals"]["imported_rows"] == 1
 
 
+def test_payload_and_child_argv_preserve_bank_account_id():
+    args = auto_collect.build_parser().parse_args(
+        [
+            "--bank-only",
+            "--services",
+            "shinhan_business",
+            "--business-id",
+            "biz-mia",
+            "--branch",
+            "branch-gangbuk-mia",
+            "--bank-account-id",
+            "bank-shinhan-mia",
+        ]
+    )
+
+    payload = auto_collect._payload(args)
+    argv = auto_collect._child_collect_argv(payload)
+
+    assert payload["bank_account_id"] == "bank-shinhan-mia"
+    assert argv[argv.index("--bank-account-id") + 1] == "bank-shinhan-mia"
+
+
 def test_bank_scope_accepts_mia_branch_alias(monkeypatch):
     calls = []
 

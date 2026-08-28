@@ -8931,3 +8931,7 @@
 - Current judgement:
   - ID/PW input implementation is improved and committed, but Shinhan actual transaction collection is still not complete.
   - Next code work should add fast persistent-fincert detection after ID/PW retry and avoid 420-second waits, then investigate whether Shinhan's personal quick-query accepts encrypted password injection from hidden TransKey fields at all.
+- Follow-up code correction:
+  - Re-applied the hidden WebSquare ID/PW policy after a conflicting worktree change restored account-query-first behavior.
+  - Updated the Shinhan unit test so hidden login fields must not trigger account-page navigation before saved ID/PW injection.
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py -q` succeeded: 105 passed.

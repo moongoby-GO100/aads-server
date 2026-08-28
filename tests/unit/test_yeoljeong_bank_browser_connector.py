@@ -1572,6 +1572,38 @@ def test_close_shinhan_security_notice_prefers_visible_popup_close():
     page.evaluate.assert_awaited_once()
 
 
+def test_shinhan_keyboard_login_does_not_navigate_before_hidden_idpw_fill():
+    page = AsyncMock()
+    page._run_browser_command = AsyncMock()
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "!loginIdEl && !passwordEl" in expr
+        return {
+            "attempted": "1",
+            "stage": "login_keyboard_prepare",
+            "username": "1",
+            "password_focused": "0",
+            "navigation_clicked": "0",
+            "websquare_triggered": "0",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_shinhan_individual_keyboard_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["stage"] == "login_keyboard_prepare"
+    assert result["navigation_clicked"] == "0"
+    assert result["keyboard_secret"] == "0"
+    assert "bank-pass" not in str(result)
+    page._run_browser_command.assert_not_awaited()
+
+
 def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
     page = AsyncMock()
     page.click = AsyncMock()
