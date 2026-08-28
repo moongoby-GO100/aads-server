@@ -5501,7 +5501,7 @@ def _collect_bank_via_browser(
             "message": f"은행 브라우저 수집은 이벤트 루프 외부에서만 실행됩니다: {exc!s:.200}",
         }
     except TimeoutError:
-        browser_result = _probe_bank_browser_timeout_state(
+        timeout_probe_result = _probe_bank_browser_timeout_state(
             browser_work_key=browser_work_key_val,
             browser_agent_id=browser_agent_id_val,
             timeout_seconds=timeout_seconds,
@@ -5510,7 +5510,54 @@ def _collect_bank_via_browser(
                 and bool(str(bank_credentials.get("login_username") or "").strip())
                 and bool(str(bank_credentials.get("login_password") or "").strip())
             ),
-        ) or {
+        )
+        if (
+            timeout_probe_result
+            and str(timeout_probe_result.get("error_code") or "") == "BANK_BROWSER_IDPW_RETRY_REQUIRED"
+        ):
+            retry_timeout_seconds = max(timeout_seconds, 180)
+            try:
+                browser_result = _run_bank_browser_async(
+                    _with_bank_browser_timeout(
+                        lambda: collect_bank_via_browser_session_async(
+                            account,
+                            browser_session_id="",
+                            browser_work_key=browser_work_key_val,
+                            date_from=date_from,
+                            date_to=date_to,
+                            portal_url=str(payload.get("portal_url") or bank_credentials.get("portal_url") or ""),
+                            auto_open_browser=True,
+                            browser_agent_id=browser_agent_id_val,
+                            browser_preferred_port=browser_preferred_port,
+                            force_recreate_browser=True,
+                            login_username=str(bank_credentials.get("login_username") or ""),
+                            login_password=str(bank_credentials.get("login_password") or ""),
+                            account_no=str(bank_credentials.get("account_no") or ""),
+                            account_password=str(bank_credentials.get("account_password") or ""),
+                            business_registration_no=str(bank_credentials.get("business_registration_no") or ""),
+                            business_entity_type=business_entity_type,
+                            browser_timeout_seconds=retry_timeout_seconds,
+                        ),
+                        retry_timeout_seconds,
+                    )
+                )
+                retry_diag = browser_result.setdefault("diagnostics", {})
+                if isinstance(retry_diag, dict):
+                    retry_diag["shinhan_idpw_retry_after_timeout"] = "1"
+                    retry_diag["previous_timeout_error_code"] = "BANK_BROWSER_IDPW_RETRY_REQUIRED"
+            except TimeoutError:
+                browser_result = timeout_probe_result
+                diagnostics = browser_result.setdefault("diagnostics", {})
+                if isinstance(diagnostics, dict):
+                    diagnostics["shinhan_idpw_retry_after_timeout"] = "timeout"
+            except Exception as exc:
+                browser_result = timeout_probe_result
+                diagnostics = browser_result.setdefault("diagnostics", {})
+                if isinstance(diagnostics, dict):
+                    diagnostics["shinhan_idpw_retry_after_timeout"] = "failed"
+                    diagnostics["shinhan_idpw_retry_error_type"] = exc.__class__.__name__[:80]
+        else:
+            browser_result = timeout_probe_result or {
             "status": "failed",
             "error_code": "BANK_BROWSER_PC_AGENT_TIMEOUT",
             "rows": [],

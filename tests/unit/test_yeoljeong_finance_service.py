@@ -289,6 +289,101 @@ def test_collect_bank_timeout_uses_browser_tab_probe(monkeypatch):
     assert collection["diagnostics"]["last_observed_stage"] == "financial certificate iframe"
 
 
+def test_collect_bank_timeout_retries_saved_shinhan_idpw_once(monkeypatch, tmp_path):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    calls = {"count": 0}
+
+    def fake_run(coro):
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise TimeoutError
+        return {
+            "status": "collected",
+            "rows": [
+                {
+                    "occurred_at": "2026-08-01 10:00:00",
+                    "description": "배달 정산",
+                    "amount": 1000,
+                    "direction": "in",
+                }
+            ],
+            "row_count": 1,
+            "diagnostics": {},
+            "message": "ok",
+        }
+
+    monkeypatch.setattr(service, "_run_bank_browser_async", fake_run)
+    monkeypatch.setattr(
+        service,
+        "_probe_bank_browser_timeout_state",
+        lambda **kwargs: {
+            "status": "action_required",
+            "error_code": "BANK_BROWSER_IDPW_RETRY_REQUIRED",
+            "rows": [],
+            "row_count": 0,
+            "diagnostics": {
+                "browser_work_key": kwargs["browser_work_key"],
+                "browser_agent_id": kwargs["browser_agent_id"],
+                "suggested_action": "retry_saved_idpw_login_same_work_key",
+            },
+            "message": "retry idpw",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_bank_quick_credentials_for_account",
+        lambda *args, **kwargs: {
+            "quick_account_configured": "1",
+            "login_username": "saved-user",
+            "login_password": "saved-pass",
+            "account_no": "110123456789",
+            "account_password": "1234",
+            "business_registration_no": "1234567890",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "record_bank_transactions",
+        lambda payload, user: {
+            "import": {
+                "bank_account_id": payload["bank_account_id"],
+                "business_id": payload["business_id"],
+                "imported_rows": len(payload.get("transactions") or []),
+                "duplicate_rows": 0,
+            },
+            "transactions": payload.get("transactions") or [],
+        },
+    )
+
+    result = service._collect_bank_via_browser(
+        {
+            "id": "bank-1",
+            "bank_code": "088",
+            "bank_name": "신한은행",
+            "institution_code": "shinhan_business",
+        },
+        {
+            "browser_work_key": "wk-bank",
+            "browser_agent_id": "agent-bank",
+            "browser_timeout_seconds": 30,
+            "auto_open_browser": True,
+        },
+        business_id="biz-mia",
+        branch_id="branch-gangbuk-mia",
+        date_from="2026-07-28",
+        date_to="2026-08-28",
+        user={"id": "tester", "is_admin": True},
+    )
+
+    assert calls["count"] == 2
+    assert result["collection"]["status"] == "completed"
+    assert result["collection"]["imported_rows"] == 1
+    assert result["collection"]["diagnostics"]["shinhan_idpw_retry_after_timeout"] == "1"
+
+
 def test_import_transaction_csv_applies_business_scope(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     csv_text = "거래일자,적요,입금액,출금액,계좌명\n2026-07-01,배달의민족 정산,55000,,신한 중화점\n"

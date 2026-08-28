@@ -202,6 +202,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                 '인터넷뱅킹 보안프로그램설치안내',
                 '키보드 입력 검증에 실패',
                 '거래를 처음부터 다시 진행',
+                '이용자ID를 입력해주세요',
                 '비밀번호를 입력해주세요',
                 '비밀번호 최소자릿수'
               ];
@@ -219,7 +220,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                   if (label === '확인') score += 110;
                   if (label === '닫기') score += 80;
                   if (/보안프로그램설치안내/.test(String(el.closest?.('.w2popup_window,.w2window')?.innerText || ''))) score += 40;
-                  if (/키보드 입력 검증|처음부터 다시 진행|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
+                  if (/키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
                   if (/btnTotalClose/i.test(meta)) score -= 200;
                   const rect = el.getBoundingClientRect();
                   if (rect.width <= 0 || rect.height <= 0) score = 0;
@@ -270,6 +271,7 @@ async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
               const bodyText = String(document.body?.innerText || '');
               const notices = [
                 ['SHINHAN_KEYBOARD_VERIFICATION_FAILED', /키보드 입력 검증에 실패|처음부터 다시 진행/],
+                ['SHINHAN_LOGIN_ID_REQUIRED', /이용자ID를 입력해주세요/],
                 ['SHINHAN_PASSWORD_REQUIRED', /비밀번호를 입력해주세요|비밀번호 최소자릿수/],
                 ['SHINHAN_SECURITY_PROGRAM_NOTICE', /인터넷뱅킹 보안프로그램설치안내/]
               ];
@@ -746,6 +748,14 @@ def _portal_url_reusable(current_url: str, portal_url: str) -> bool:
     if current_host == portal_host:
         return True
     return _registrable_host(current_host) == _registrable_host(portal_host)
+
+
+def _browser_session_agent_id(session: Any) -> str:
+    try:
+        metadata = dict(getattr(getattr(session, "endpoint", None), "metadata", None) or {})
+    except Exception:
+        metadata = {}
+    return str(metadata.get("agent_id") or "").strip()
 
 
 def _is_shinhan_service(bank_code: str, bank_name: str, institution_code: str, portal_url: str) -> bool:
@@ -2957,8 +2967,17 @@ async def collect_bank_via_browser_session_async(
 
             bridge = get_browser_bridge_service()
             existing = bridge.sessions.find_by_work_key(browser_work_key)
-            if existing and bridge._session_reusable(existing):
+            existing_agent_id = _browser_session_agent_id(existing) if existing else ""
+            if (
+                existing
+                and bridge._session_reusable(existing)
+                and (not browser_agent_id or not existing_agent_id or existing_agent_id == browser_agent_id)
+            ):
                 session_id_to_use = existing.session_id
+            elif existing and browser_agent_id and existing_agent_id and existing_agent_id != browser_agent_id:
+                safe_diagnostics["browser_session_reuse_skipped"] = "agent_mismatch"
+                safe_diagnostics["browser_session_existing_agent_id"] = existing_agent_id
+                safe_diagnostics["browser_session_required_agent_id"] = browser_agent_id
         except Exception:
             pass
 

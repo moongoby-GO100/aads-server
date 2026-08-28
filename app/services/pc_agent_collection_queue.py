@@ -313,6 +313,20 @@ def claim_next_collection_item(*, agent_id: str = "", now: datetime | None = Non
     for row in rows:
         if row["status"] != "queued" or row["resource_key"] in running_resources:
             continue
+        payload = _json_dict(row.get("payload"))
+        required_agent_id = _clean_key(
+            payload.get("required_browser_agent_id"),
+            _clean_key(payload.get("browser_agent_id"), _clean_key(payload.get("pc_agent_id"), "")),
+        )
+        excluded_agent_ids = {
+            str(value or "").strip()
+            for value in payload.get("excluded_browser_agent_ids", [])
+            if str(value or "").strip()
+        }
+        if required_agent_id and required_agent_id != agent_id:
+            continue
+        if agent_id and agent_id in excluded_agent_ids:
+            continue
         next_run_at = _parse_dt(row.get("next_run_at")) or now_value
         finished_at = _parse_dt(row.get("finished_at"))
         min_interval = int(row.get("min_interval_seconds") or 0)
@@ -345,6 +359,31 @@ async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any
                   FROM pc_agent_collection_queue q
                  WHERE q.status = 'queued'
                    AND q.next_run_at <= $1
+                   AND (
+                       COALESCE(
+                           NULLIF(q.payload->>'required_browser_agent_id', ''),
+                           NULLIF(q.payload->>'browser_agent_id', ''),
+                           NULLIF(q.payload->>'pc_agent_id', ''),
+                           ''
+                       ) = ''
+                       OR COALESCE(
+                           NULLIF(q.payload->>'required_browser_agent_id', ''),
+                           NULLIF(q.payload->>'browser_agent_id', ''),
+                           NULLIF(q.payload->>'pc_agent_id', ''),
+                           ''
+                       ) = $2
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM jsonb_array_elements_text(
+                             CASE
+                                 WHEN jsonb_typeof(q.payload->'excluded_browser_agent_ids') = 'array'
+                                 THEN q.payload->'excluded_browser_agent_ids'
+                                 ELSE '[]'::jsonb
+                             END
+                         ) AS excluded(agent_id)
+                        WHERE excluded.agent_id = $2
+                   )
                    AND (
                        q.finished_at IS NULL
                        OR q.finished_at + make_interval(secs => q.min_interval_seconds) <= $1

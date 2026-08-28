@@ -8747,3 +8747,24 @@
   - Complete Shinhan financial-certificate prompt on PC Agent `7f99c528-24d` and rerun the same work key.
   - Register the missing IBK quick-service credentials before IBK can collect actual transactions.
   - Commit/deploy the code changes through the normal approval path.
+
+## 2026-08-28 18:06 KST - FOOD bank collection non-CEO PC pinning and Shinhan ID/PW retry
+
+- Request: do not run Shinhan bank collection on the CEO PC; pin it to another PC and continue ID/PW-based collection.
+- Changes:
+  - Bank auto-collect now reads `YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID` and `YEOLJEONG_BANK_AUTO_COLLECT_EXCLUDED_AGENT_IDS` separately from delivery collection.
+  - Global bank queue payloads now carry `browser_agent_id`, `pc_agent_id`, `required_browser_agent_id`, and `excluded_browser_agent_ids`; queue claiming skips agents that do not match.
+  - Bank Browser Bridge session reuse now rejects an existing work-key session when its stored PC Agent ID differs from the requested bank Agent ID.
+  - Shinhan timeout handling now performs one automatic saved-ID/PW retry when the timeout probe returns `BANK_BROWSER_IDPW_RETRY_REQUIRED`.
+  - Shinhan notice handling now closes the `이용자ID를 입력해주세요` prompt before retrying login input.
+- Runtime action:
+  - Re-enqueued all bank queue items with required Agent `7f99c528-24d` and excluded Agent `2e9379a1-fed`.
+  - Verified queue payloads for Shinhan Mia, Shinhan Junghwa, and IBK Junghwa all include the required/excluded Agent pins.
+  - Ran Mia Shinhan collection on `7f99c528-24d`; result remained `action_required / BANK_BROWSER_IDPW_RETRY_REQUIRED`, `imported_rows=0`.
+- Verification:
+  - `docker exec aads-server pytest tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 140 passed.
+  - `pytest tests/unit/test_yeoljeong_delivery_scheduler_contract.py -q` succeeded: 9 passed.
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+- Remaining:
+  - Blue/green deploy is required for the new docker-compose bank Agent environment defaults to be loaded by scheduled jobs.
+  - Shinhan still does not import rows; current observed page state is the Shinhan ID/PW login prompt on the non-CEO PC, while timeout diagnostics still see stale fincert tabs from the PC Agent browser state.

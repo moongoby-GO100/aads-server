@@ -131,6 +131,27 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _bank_auto_collect_agent_id(payload: dict[str, Any] | None = None) -> str:
+    payload = payload or {}
+    return str(
+        payload.get("browser_agent_id")
+        or payload.get("pc_agent_id")
+        or os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID")
+        or os.getenv("YEOLJEONG_BANK_BROWSER_AGENT_ID")
+        or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID")
+        or ""
+    ).strip()
+
+
+def _bank_auto_collect_excluded_agent_ids() -> list[str]:
+    raw = (
+        os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_EXCLUDED_AGENT_IDS")
+        or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS")
+        or ""
+    )
+    return _split_csv(raw)
+
+
 def _payload(args: argparse.Namespace) -> dict[str, Any]:
     today = datetime.now(KST).date()
     date_from = args.date_from or today.replace(day=1).isoformat()
@@ -864,6 +885,8 @@ def _global_bank_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> l
     created_by = _queue_created_by(user)
     date_from = str(payload.get("date_from") or datetime.now(KST).date().isoformat())
     date_to = str(payload.get("date_to") or datetime.now(KST).date().isoformat())
+    required_agent_id = _bank_auto_collect_agent_id(payload)
+    excluded_agent_ids = _bank_auto_collect_excluded_agent_ids()
     items: list[dict[str, Any]] = []
     for account in accounts:
         service = _bank_account_service_code(account) or "bank"
@@ -881,6 +904,10 @@ def _global_bank_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> l
             "skip_financial_accounts": False,
             "bank_browser_work_key": str(account.get("browser_work_key") or payload.get("bank_browser_work_key") or ""),
             "sync_job_id": str(payload.get("sync_job_id") or f"pc-agent-global-bank-{date_to}"),
+            "browser_agent_id": required_agent_id,
+            "pc_agent_id": required_agent_id,
+            "required_browser_agent_id": required_agent_id,
+            "excluded_browser_agent_ids": excluded_agent_ids,
         }
         work_key = item_payload["bank_browser_work_key"] or f"yeoljeong-bank-{service}-{business_id}-{branch_id}"
         items.append(
@@ -950,6 +977,32 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
     if not item:
         return {"global_queue": True, "claimed": False, "status": "idle"}
     payload = dict(item.get("payload") or {})
+    required_agent_id = str(payload.get("required_browser_agent_id") or "").strip()
+    excluded_agent_ids = {
+        str(value or "").strip()
+        for value in payload.get("excluded_browser_agent_ids", [])
+        if str(value or "").strip()
+    }
+    if agent_id and (agent_id in excluded_agent_ids or (required_agent_id and agent_id != required_agent_id)):
+        complete_collection_item(
+            str(item["id"]),
+            status="queued",
+            result={
+                "skipped_agent_id": agent_id,
+                "required_browser_agent_id": required_agent_id,
+                "excluded_browser_agent_ids": sorted(excluded_agent_ids),
+            },
+            error_code="PC_AGENT_NOT_ALLOWED",
+            message="현재 PC Agent는 이 은행 수집 작업에 허용되지 않아 재큐잉했습니다.",
+            next_run_at=datetime.now(KST).isoformat(timespec="seconds"),
+        )
+        return {
+            "global_queue": True,
+            "claimed": False,
+            "status": "skipped",
+            "error_code": "PC_AGENT_NOT_ALLOWED",
+            "item": {"id": item.get("id"), "service": item.get("service")},
+        }
     if agent_id:
         payload["browser_agent_id"] = agent_id
         payload["pc_agent_id"] = agent_id

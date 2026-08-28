@@ -1248,6 +1248,20 @@ async def lifespan(app: FastAPI):
                 if item.strip()
             }
 
+        def _bank_auto_collect_excluded_agent_ids() -> set[str]:
+            raw = (
+                os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_EXCLUDED_AGENT_IDS")
+                or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS", "")
+            )
+            return {item.strip() for item in raw.split(",") if item.strip()}
+
+        def _bank_auto_collect_preferred_agent_id() -> str:
+            return str(
+                os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID")
+                or os.getenv("YEOLJEONG_BANK_BROWSER_AGENT_ID")
+                or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "")
+            ).strip()
+
         async def _delivery_auto_collect_peer_agent(excluded_agent_ids: set[str] | None = None) -> dict:
             import asyncio
             import json
@@ -1544,16 +1558,36 @@ async def lifespan(app: FastAPI):
 
                 today = datetime.now(KST).date().isoformat()
                 use_global_queue = _env_bool("YEOLJEONG_PC_AGENT_GLOBAL_QUEUE_ENABLED", True)
+                preferred_agent_id = _bank_auto_collect_preferred_agent_id()
+                excluded_agent_ids = _bank_auto_collect_excluded_agent_ids()
+                if preferred_agent_id and preferred_agent_id in excluded_agent_ids:
+                    logger.warning(
+                        "bank_auto_collect_skip: preferred_agent_excluded reason=%s agent_id=%s",
+                        reason,
+                        preferred_agent_id,
+                    )
+                    return
                 if use_global_queue:
                     wait_result = {
                         "status": "online",
-                        "agent_id": "",
+                        "agent_id": preferred_agent_id,
                         "source": "global_queue_enqueue_without_agent_wait",
                     }
                 else:
-                    wait_result = await pc_agent_manager.wait_for_agent_online(timeout=45)
+                    wait_result = await pc_agent_manager.wait_for_agent_online(
+                        agent_id=preferred_agent_id,
+                        timeout=45,
+                    )
+                    if wait_result["status"] == "online" and wait_result.get("agent_id") in excluded_agent_ids:
+                        wait_result = {"status": "excluded", "error_code": "PC_AGENT_EXCLUDED"}
+                    if wait_result["status"] != "online" and not preferred_agent_id:
+                        for agent in pc_agent_manager.list_agent_statuses():
+                            agent_id = str(agent.get("agent_id") or "").strip()
+                            if str(agent.get("status") or "") == "online" and agent_id and agent_id not in excluded_agent_ids:
+                                wait_result = {"status": "online", "agent_id": agent_id, "source": "local_agent_list"}
+                                break
                     if wait_result["status"] != "online":
-                        wait_result = await _delivery_auto_collect_peer_agent()
+                        wait_result = await _delivery_auto_collect_peer_agent(excluded_agent_ids)
                     if wait_result["status"] != "online":
                         logger.info(
                             "bank_auto_collect_skip: pc_agent_offline reason=%s error_code=%s",
