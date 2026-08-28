@@ -43,7 +43,36 @@ _INTERRUPT_REASON_CATEGORIES = {
     "auto_recovery": ("recovery_auto_retry", "auto-settled"),
     "process_interrupt": ("resume_claimed_by", "CancelledError"),
     "final_save_missing": ("final_save_missing",),
+    "stale_empty": ("stale empty execution",),
+    "resume_no_response": ("resume_no_meaningful_response",),
+    "producer_incomplete": (
+        "background_producer_incomplete_exit",
+        "missing_done_event",
+    ),
+    "completion_guard": (
+        "completion_guard_incomplete",
+        "incomplete_progress_tail",
+    ),
+    "completion_contract": ("todo_completion_gate_missing",),
+    "client_disconnect": (
+        "client_gone=true",
+        "client disconnected",
+        "client_disconnect",
+    ),
+    "resume_cancelled": (
+        "resume_task_cancelled",
+        "asyncio.exceptions.cancellederror",
+    ),
 }
+
+
+def _classify_interruption_reason(reason: str, fallback: str = "unknown") -> str:
+    """Return a stable category for interruption analytics."""
+    normalized = str(reason or "").lower()
+    for category, tokens in _INTERRUPT_REASON_CATEGORIES.items():
+        if any(str(token).lower() in normalized for token in tokens):
+            return category
+    return fallback or "unknown"
 
 # P2-2: 분기 모드에서 AI 응답에 branch_id를 자동 부여하기 위한 ContextVar
 from contextvars import ContextVar as _ContextVar  # noqa: E402
@@ -1796,10 +1825,14 @@ def _build_interruption_diagnostics(
 ) -> Dict[str, Any]:
     """Build query-friendly interruption diagnostics for chat_turn_executions."""
     clean_partial = _strip_streaming_progress_markers(partial_content or "")
+    resolved_category = _classify_interruption_reason(
+        reason,
+        fallback=str(category or "unknown")[:80],
+    )
     details: Dict[str, Any] = {
         "schema_version": 1,
         "reason": str(reason or "")[:500],
-        "category": str(category or "unknown")[:80],
+        "category": resolved_category,
         "partial_len": len(clean_partial),
         "has_placeholder": bool(placeholder_id),
         "delete_empty_placeholder": bool(delete_empty_placeholder),
@@ -1809,6 +1842,7 @@ def _build_interruption_diagnostics(
     if auto_resume_scheduled is not None:
         details["auto_resume_scheduled"] = bool(auto_resume_scheduled)
     details.update(_parse_interrupt_diagnostic_reason(str(reason or "")))
+    details["category"] = resolved_category
     return details
 
 
@@ -2996,14 +3030,7 @@ async def _mark_execution_interrupted(
     pid = uuid.UUID(str(placeholder_id)) if placeholder_id else None
     # AADS: reason은 항상 문자열로 정규화 (bool/None이 전달돼도 reason[:1000] 안전)
     reason = str(reason) if not isinstance(reason, str) else reason
-    interrupt_category = next(
-        (
-            category
-            for category, tokens in _INTERRUPT_REASON_CATEGORIES.items()
-            if any(token.lower() in reason.lower() for token in tokens)
-        ),
-        "unknown",
-    )
+    interrupt_category = _classify_interruption_reason(reason)
     is_superseded_cancel = any(
         token in reason
         for token in (
@@ -7234,7 +7261,11 @@ async def get_interruption_report(
             """
             SELECT
                 te.status,
-                COALESCE(NULLIF(te.interrupt_category, ''), 'none') AS category,
+                COALESCE(
+                    NULLIF(NULLIF(te.interruption_diagnostics->>'category', 'unknown'), ''),
+                    NULLIF(te.interrupt_category, ''),
+                    'none'
+                ) AS category,
                 COALESCE(NULLIF(te.actual_model, ''), NULLIF(te.requested_model, ''), 'unknown') AS model,
                 COUNT(*)::int AS count,
                 AVG(EXTRACT(EPOCH FROM (COALESCE(te.completed_at, te.updated_at) - te.started_at)))::float AS avg_duration_sec,
@@ -7268,7 +7299,11 @@ async def get_interruption_report(
                 te.requested_model,
                 te.actual_model,
                 te.retry_count,
-                COALESCE(NULLIF(te.interrupt_category, ''), 'none') AS category,
+                COALESCE(
+                    NULLIF(NULLIF(te.interruption_diagnostics->>'category', 'unknown'), ''),
+                    NULLIF(te.interrupt_category, ''),
+                    'none'
+                ) AS category,
                 CASE
                     WHEN COALESCE(te.interruption_diagnostics, '{}'::jsonb) <> '{}'::jsonb
                         THEN te.interruption_diagnostics

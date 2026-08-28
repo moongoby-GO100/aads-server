@@ -8975,3 +8975,21 @@
 - Remaining:
   - Add a shorter Browser Bridge command timeout / fail-fast path for Shinhan ID/PW retry so late PC Agent results cannot hold the bank collection process.
   - After that, rerun Mia Shinhan collection and require either `imported_rows > 0` or a verified no-records state.
+
+## 2026-08-29 08:41 KST - Chat interruption diagnostics classification
+
+- Request: verify that chat response interruption reasons are stored, improve reason analysis, and report findings.
+- Code changes:
+  - Added `_classify_interruption_reason()` in `app/services/chat_service.py`.
+  - Expanded stable interruption categories for producer incomplete exits, completion guard blocks, completion contract misses, client disconnects, resume cancellations, stale empty executions, and resume-without-response failures.
+  - Updated interruption diagnostics generation so new interrupted turns store the resolved category in both `chat_turn_executions.interrupt_category` and `chat_turn_executions.interruption_diagnostics.category`.
+  - Updated `get_interruption_report()` to prefer the structured diagnostics category when summarizing interruption data.
+- Data correction:
+  - Backfilled recent 7-day `chat_turn_executions` interruption diagnostics by updating only `interrupt_category`, `interruption_diagnostics.category`, and `updated_at`.
+  - Existing reason text and message content were not changed.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/main.py` succeeded.
+  - `git diff --check -- app/services/chat_service.py` succeeded.
+  - DB checks confirmed recent interruption diagnostics are queryable by category.
+- Deployment:
+  - Pending at handover time; server reload still required after commit.
