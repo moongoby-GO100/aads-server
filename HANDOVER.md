@@ -8887,3 +8887,27 @@
   - `python3 -m py_compile app/services/chat_service.py app/services/output_validator.py app/services/response_critic.py`
   - targeted validator smoke test for short detailed-report response rejection.
   - API health after reload/deploy.
+
+## 2026-08-29 06:15 KST - FOOD Shinhan ID/PW dual WebSquare input fix
+
+- Request: proceed with Shinhan bank auto-collection on non-CEO PC `DESKTOP-ICU55HK`.
+- Runtime checks:
+  - AADS server health was healthy at 2026-08-29 05:53 KST.
+  - Bank Agent env was `YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID=7f99c528-24d`.
+  - CEO PC exclusion env was `YEOLJEONG_BANK_AUTO_COLLECT_EXCLUDED_AGENT_IDS=2e9379a1-fed`.
+  - ICU55HK was online and had `interactive_browser` / `chrome_cdp`.
+- Collection attempts:
+  - `shinhan-manual-20260829-0601` on ICU55HK returned `BANK_BROWSER_OPERATOR_ACTION_REQUIRED`, `imported_rows=0`.
+  - Diagnostics showed Shinhan ID/PW route reached `login_success=1`, then account-query continuation failed with `PC_AGENT_OFFLINE`.
+  - A second run from the active `aads-server` slot timed out at 420 seconds, `imported_rows=0`.
+- Root cause found:
+  - Shinhan renders both `ibx_loginId` and `ibx_loginId_cib` WebSquare inputs. The connector stopped after the first successful set, so the active panel could still report `이용자ID를 입력해주세요`.
+- Changes:
+  - Updated Shinhan ID/PW fallback to write username/password into both personal and CIB WebSquare components.
+  - Confirmed the CLI accepts hidden `--bank-account-id` for scoped child runs; no further parser change was needed in this pass.
+- Verification:
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` succeeded: 65 passed.
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py` succeeded.
+- Remaining:
+  - Commit/deploy this connector patch.
+  - Rerun Mia Shinhan bank collection on ICU55HK and require either `imported_rows > 0` or verified `no_records`.

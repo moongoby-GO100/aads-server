@@ -178,6 +178,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "require_pc_agent": True,
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
         "bank_browser_work_key": str(getattr(args, "bank_browser_work_key", "") or ""),
+        "bank_account_id": str(getattr(args, "bank_account_id", "") or ""),
         "bank_browser_timeout_seconds": int(getattr(args, "bank_browser_timeout_seconds", 90) or 90),
         "force_recreate_bank_browser": bool(getattr(args, "force_recreate_bank_browser", False)),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
@@ -240,6 +241,11 @@ def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) ->
     all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"}
     wanted_business = None if all_businesses else business_id or None
     wanted_branch = "" if all_businesses else _branch_id_for_bank_scope(branch, business_id)
+    wanted_services = {
+        service
+        for service in _payload_services(payload)
+        if service in {"shinhan_business", "ibk_business"}
+    }
     _ensure_browser_bank_accounts_from_platform_accounts(
         user,
         business_id=wanted_business or "",
@@ -256,6 +262,8 @@ def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) ->
     seen_keys: set[tuple[str, str, str]] = set()
     for account in accounts:
         if requested_account_id and str(account.get("id") or "").strip() != requested_account_id:
+            continue
+        if wanted_services and _bank_account_service_code(account) not in wanted_services:
             continue
         if account.get("auto_sync") is False:
             continue
@@ -1119,6 +1127,8 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
         argv.extend(["--browser-preferred-port", str(payload.get("browser_preferred_port") or "")])
     if payload.get("bank_browser_work_key"):
         argv.extend(["--bank-browser-work-key", str(payload.get("bank_browser_work_key") or "")])
+    if payload.get("bank_account_id"):
+        argv.extend(["--bank-account-id", str(payload.get("bank_account_id") or "")])
     if payload.get("skip_financial_accounts"):
         argv.append("--skip-financial-accounts")
     if payload.get("bank_only"):
@@ -1241,14 +1251,14 @@ def _latest_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     services = _payload_services(payload)
-    return {
+    result = {
         "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
         "business_id": payload.get("business_id") or "",
         "branch": payload.get("branch") or "",
         "date_from": payload.get("date_from") or "",
         "date_to": payload.get("date_to") or "",
         "totals": _empty_delivery_counts(),
-        "summary": [
+        "summary": [] if payload.get("bank_only") else [
             {
                 "service": service,
                 "business_id": payload.get("business_id") or "",
@@ -1263,6 +1273,39 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
             for service in services
         ],
     }
+    if payload.get("bank_only"):
+        bank_collections = [
+            {
+                "service": service if service in {"shinhan_business", "ibk_business"} else "bank",
+                "bank_account_id": str(payload.get("bank_account_id") or ""),
+                "business_id": payload.get("business_id") or "",
+                "branch_id": payload.get("branch") or "",
+                "status": "failed",
+                "connector_status": "TIMEOUT",
+                "connection_type": "browser",
+                "error_code": "ATTEMPT_TIMEOUT",
+                "counts": {"transactions": 0},
+                "collected_rows": 0,
+                "imported_rows": 0,
+                "duplicate_rows": 0,
+                "message": f"은행 자동수집 단일 시도가 {timeout_seconds}초를 초과해 중단됐습니다. 다음 시도에서 재개합니다.",
+                "diagnostics": {
+                    "browser_agent_id": str(payload.get("browser_agent_id") or ""),
+                    "bank_browser_work_key": str(payload.get("bank_browser_work_key") or ""),
+                    "attempt_timeout_seconds": str(timeout_seconds),
+                },
+                "last_collected_at": "",
+            }
+            for service in services
+        ]
+        result["bank_collections"] = bank_collections
+        result["bank_totals"] = {
+            "accounts": len(bank_collections),
+            "imported_rows": 0,
+            "duplicate_rows": 0,
+            "collected_rows": 0,
+        }
+    return result
 
 
 def _run_child_collect_with_timeout(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
@@ -1473,6 +1516,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recreate only the bank Browser Bridge work-key session. Default is to reuse the existing bank browser.",
     )
     parser.add_argument("--bank-browser-work-key", default="", help="Override the bank Browser Bridge work key for recovery runs.")
+    parser.add_argument("--bank-account-id", default="", help=argparse.SUPPRESS)
     parser.add_argument("--job-id", default="", help="Optional sync job id.")
     parser.add_argument("--operator-approved", action="store_true", help="Allow one operator-approved challenge input for the current run.")
     parser.add_argument("--approved-input", default="", help="Write-only operator-approved challenge input for the current run.")

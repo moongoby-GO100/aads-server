@@ -362,8 +362,50 @@ async def _try_shinhan_individual_keyboard_login_step(
               const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
               const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib');
               const passwordEl = byId('비밀번호') || byId('비밀번호_cib');
+              const loginFieldsVisible = visible(loginIdEl) && visible(passwordEl);
+              const openAccountInquiry = () => {
+                try {
+                  if (window.shbComm?.menu) {
+                    window.shbComm.menu.redirectUrl = '210101000000';
+                  }
+                } catch (_) {}
+                try {
+                  if (window.shbComm && typeof window.shbComm.goPage === 'function') {
+                    window.setTimeout(() => {
+                      try { window.shbComm.goPage('210101000000'); } catch (_) {}
+                    }, 30);
+                    return true;
+                  }
+                } catch (_) {}
+                const candidate = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit],span'))
+                  .filter((el) => visible(el))
+                  .find((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim() === '계좌조회');
+                if (candidate) {
+                  try { candidate.click(); } catch (_) {}
+                  try { candidate.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); } catch (_) {}
+                  return true;
+                }
+                try {
+                  window.location.hash = '210101000000';
+                  window.dispatchEvent(new HashChangeEvent('hashchange'));
+                  return true;
+                } catch (_) {}
+                return false;
+              };
+              if (!loginFieldsVisible && String(window.location.href || '').includes('#210000000000')) {
+                const opened = openAccountInquiry();
+                return {
+                  attempted: opened ? '1' : '0',
+                  stage: opened ? 'account_page_navigation' : 'hidden_login_panel',
+                  username: '0',
+                  password_focused: '0',
+                  password_selector: '',
+                  navigation_clicked: opened ? '1' : '0',
+                  websquare_triggered: opened ? '1' : '0'
+                };
+              }
               const hasLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text)
-                || (visible(loginIdEl) && visible(passwordEl));
+                || loginFieldsVisible;
               if (!hasLoginPanel || !passwordEl) return {attempted: '0', stage: 'not_login_panel'};
               const setField = (el, value) => {
                 if (!el || !value) return false;
@@ -389,7 +431,9 @@ async def _try_shinhan_individual_keyboard_login_step(
                   return false;
                 }
               };
-              const usernameOk = setField(loginIdEl, input.username);
+              const usernameOkPrimary = setField(byId('ibx_loginId'), input.username);
+              const usernameOkCib = setField(byId('ibx_loginId_cib'), input.username);
+              const usernameOk = usernameOkPrimary || usernameOkCib;
               try {
                 passwordEl.focus();
                 passwordEl.click();
@@ -414,6 +458,16 @@ async def _try_shinhan_individual_keyboard_login_step(
         return {"attempted": "failed", **_safe_browser_error_fields(exc)}
     if not isinstance(prepared, dict) or str(prepared.get("attempted") or "") != "1":
         return {"attempted": str((prepared or {}).get("attempted") or "0")[:20], "stage": str((prepared or {}).get("stage") or "")[:40]}
+    if str(prepared.get("stage") or "") == "account_page_navigation":
+        return {
+            "attempted": "1",
+            "stage": "account_page_navigation",
+            "username": "0",
+            "login_secret": "0",
+            "keyboard_secret": "0",
+            "navigation_clicked": "1" if str(prepared.get("navigation_clicked") or "") == "1" else "0",
+            "websquare_triggered": "1" if str(prepared.get("websquare_triggered") or "") == "1" else "0",
+        }
     if str(prepared.get("username") or "") != "1" or str(prepared.get("password_focused") or "") != "1":
         return {
             "attempted": "1",
@@ -1825,9 +1879,15 @@ async def _try_shinhan_individual_login_step(
                 return false;
               };
               if (!hasLoginPanel) return {attempted: '0', stage: 'not_login_panel'};
-              const usernameOk = setField('ibx_loginId', input.username) || setField('ibx_loginId_cib', input.username);
-              const transkeyOk = await setTransKeyPassword('비밀번호', input.password) || await setTransKeyPassword('비밀번호_cib', input.password);
-              const passwordOk = transkeyOk || setField('비밀번호', input.password) || setField('비밀번호_cib', input.password);
+              const usernameOkPrimary = setField('ibx_loginId', input.username);
+              const usernameOkCib = setField('ibx_loginId_cib', input.username);
+              const usernameOk = usernameOkPrimary || usernameOkCib;
+              const transkeyOkPrimary = await setTransKeyPassword('비밀번호', input.password);
+              const transkeyOkCib = await setTransKeyPassword('비밀번호_cib', input.password);
+              const transkeyOk = transkeyOkPrimary || transkeyOkCib;
+              const passwordOkPrimary = transkeyOkPrimary || setField('비밀번호', input.password);
+              const passwordOkCib = transkeyOkCib || setField('비밀번호_cib', input.password);
+              const passwordOk = passwordOkPrimary || passwordOkCib;
               const submitted = usernameOk && passwordOk ? clickLogin() : false;
               return {
                 attempted: '1',
