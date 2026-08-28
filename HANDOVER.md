@@ -8819,7 +8819,7 @@
   - ICU55HK had duplicate Shinhan tabs and a visible `인터넷뱅킹 보안프로그램설치안내` popup before ID/PW input.
 - Actions:
   - Closed 9 duplicate Shinhan tabs on ICU55HK, leaving 1 Shinhan tab.
-  - Updated Shinhan security notice detection/close logic to use visible DOM text so hidden popup remnants do not keep the flow in a false blocking state.
+  - Updated Shinhan security notice detection/close logic to use visible DOM text, excluding the top-level body text so hidden popup remnants do not keep the flow in a false blocking state.
 - Verification:
   - `python3 -m pytest tests/unit/test_bank_browser_connector.py -q` succeeded: 38 passed.
   - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py` succeeded.

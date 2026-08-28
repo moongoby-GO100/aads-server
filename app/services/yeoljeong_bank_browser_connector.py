@@ -198,7 +198,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
             """
             () => {
               const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-              const visibleText = (root = document) => Array.from(root.querySelectorAll('body, .w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
+              const visibleText = (root = document) => Array.from(root.querySelectorAll('.w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
                 .filter((el) => visible(el))
                 .map((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim())
                 .filter(Boolean)
@@ -274,7 +274,7 @@ async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
             """
             () => {
               const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-              const bodyText = Array.from(document.querySelectorAll('body, .w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
+              const bodyText = Array.from(document.querySelectorAll('.w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
                 .filter((el) => visible(el))
                 .map((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim())
                 .filter(Boolean)
