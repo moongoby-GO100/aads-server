@@ -370,7 +370,24 @@ API 없는 로그인 어드민 자동화는 사이트별 세션, 파일 다운�
 | 과도한 병렬 브라우저 실행 | 서버/PC 메모리 고갈 | recipe별 `max_browser_contexts`, `max_memory_mb`, queue backpressure |
 | 같은 계정 중복 로그인 | 세션 만료/차단 | conflict key로 work_key+origin 직렬화 |
 
-## 19. 즉시 실행 지시서 초안
+## 19. Playwright 접근 제한 대응 구현안
+
+Playwright가 모든 로그인 어드민을 안정적으로 처리할 수 있다는 전제로 운영하지 않는다. 사이트별로 서버 Playwright, PC Agent, 외부 샌드박스 검토 대상이 다르므로 작업 생성 전에 접근 진단과 런타임 계획을 남긴다.
+
+| 우선 | 구현 항목 | 반영 내용 | 완료 기준 |
+|---|---|---|---|
+| P0 | 서버 Playwright 접근 진단 | URL 접근 결과를 `reachable`, `auth_required`, `challenge_required`, `bot_or_waf_blocked`, `unsupported_url`, `runtime_unavailable`, `timeout_or_slow_page`, `network_or_tls_error`로 분류 | Live View/API 응답에 원인과 승인 필요 여부 표시 |
+| P1 | 런타임 권장/폴백 계획 | `BrowserRecipe` dry-run/run-plan에 `runtime_plan`을 포함해 `self_hosted_playwright`, `pc_agent`, `external_sandbox_review` 후보를 제시 | 레시피 실행 전 PC Agent 필요 여부와 self-hosted 가능 여부 확인 |
+| P2 | 오비스 화면 표시 | `/browser-tasks`에 접근 진단 버튼과 Live View 진단 패널 표시 | 사용자가 화면에서 현재 접근 원인, HTTP 상태, 권장 런타임, 승인 필요 여부 확인 |
+
+정책 기준은 다음과 같다.
+
+1. `auth_required`는 Vault 자동입력 또는 사용자 승인 토큰으로 계속 진행한다.
+2. `challenge_required`는 OTP/CAPTCHA/인증서 화면으로 보고, 승인 범위 안에서만 transient 입력 또는 승인형 모델 판독을 실행한다.
+3. `bot_or_waf_blocked`는 우회 시도가 아니라 같은 사용자 권한의 PC Agent 세션 또는 별도 승인된 샌드박스 검토로 전환한다.
+4. `unsupported_url`, `network_or_tls_error`, `runtime_unavailable`은 작업 실패로 묻지 않고 Live View와 이벤트 응답에 대응 계획을 표시한다.
+
+## 20. 즉시 실행 지시서 초안
 
 ```text
 TASK_ID: AADS-APILESS-AUTH-AUTOMATION-P0-20260828
@@ -395,7 +412,7 @@ VERIFY:
 - python3 -m py_compile app/api/browser_tasks.py app/api/browser_recipes.py app/services/browser_task_gateway.py app/services/browser_permission_policy.py app/services/browser_recipe_registry.py
 ```
 
-## 20. 완료 판정
+## 21. 완료 판정
 
 이 기획의 P0 완료는 다음 조건을 모두 만족해야 한다.
 

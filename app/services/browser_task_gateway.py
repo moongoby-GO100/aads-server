@@ -24,6 +24,51 @@ CHALLENGE_MODEL_SOURCES = {"llm", "model", "vision", "solver", "ocr", "auto"}
 SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS = 12_000
 SELF_HOSTED_LIVE_VIEWPORT = {"width": 1366, "height": 768}
 _SELF_HOSTED_CAPTURE_LOCKS: dict[str, asyncio.Lock] = {}
+ACCESS_TEXT_LIMIT = 20_000
+
+
+ACCESS_MARKERS = {
+    "challenge_required": (
+        "captcha",
+        "recaptcha",
+        "hcaptcha",
+        "turnstile",
+        "otp",
+        "one-time",
+        "security code",
+        "verification code",
+        "보안문자",
+        "인증번호",
+        "본인인증",
+        "간편인증",
+        "공동인증서",
+        "금융인증",
+    ),
+    "bot_or_waf_blocked": (
+        "access denied",
+        "forbidden",
+        "cloudflare",
+        "cf-chl",
+        "checking your browser",
+        "verify you are human",
+        "unusual traffic",
+        "bot detection",
+        "automated traffic",
+        "자동화",
+        "비정상",
+        "차단",
+        "접근이 제한",
+    ),
+    "auth_required": (
+        "login",
+        "sign in",
+        "password",
+        "username",
+        "로그인",
+        "아이디",
+        "비밀번호",
+    ),
+}
 
 
 def _tenant_uuid(tenant_id: str) -> uuid.UUID:
@@ -443,16 +488,275 @@ def _target_supports_self_hosted_capture(target_url: str) -> bool:
     return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
 
 
-async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[str, Any]:
+def classify_playwright_access(
+    *,
+    status: str = "",
+    reason: str = "",
+    message: str = "",
+    http_status: int | None = None,
+    current_url: str = "",
+    page_title: str = "",
+    body_text: str = "",
+) -> dict[str, Any]:
+    haystack = " ".join(
+        str(value or "")
+        for value in (reason, message, current_url, page_title, body_text[:ACCESS_TEXT_LIMIT])
+    ).lower()
+    category = "reachable"
+    severity = "info"
+    approval_required = False
+    self_hosted_usable = status in {"captured", "ok", "reachable"} or bool(http_status)
+    reason_code = "page_loaded"
+
+    if reason == "unsupported_target_url":
+        category = "unsupported_url"
+        severity = "warning"
+        self_hosted_usable = False
+        reason_code = "http_https_required"
+    elif reason == "playwright_unavailable":
+        category = "runtime_unavailable"
+        severity = "error"
+        self_hosted_usable = False
+        reason_code = "playwright_dependency_missing"
+    elif any(marker in haystack for marker in ("timeout", "timed out", "timeout 12000ms", "net::err_timed_out")):
+        category = "timeout_or_slow_page"
+        severity = "warning"
+        self_hosted_usable = False
+        reason_code = "navigation_timeout"
+    elif any(marker in haystack for marker in ("net::err_", "ssl", "certificate", "dns", "connection refused")):
+        category = "network_or_tls_error"
+        severity = "error"
+        self_hosted_usable = False
+        reason_code = "network_or_tls_failure"
+    elif http_status in {401, 407}:
+        category = "auth_required"
+        severity = "warning"
+        approval_required = True
+        reason_code = "http_auth_required"
+    elif http_status in {403, 429}:
+        category = "bot_or_waf_blocked"
+        severity = "error"
+        self_hosted_usable = False
+        approval_required = True
+        reason_code = f"http_{http_status}"
+    elif http_status and http_status >= 500:
+        category = "remote_server_error"
+        severity = "warning"
+        reason_code = f"http_{http_status}"
+    elif any(marker in haystack for marker in ACCESS_MARKERS["challenge_required"]):
+        category = "challenge_required"
+        severity = "warning"
+        approval_required = True
+        reason_code = "otp_or_captcha_detected"
+    elif any(marker in haystack for marker in ACCESS_MARKERS["bot_or_waf_blocked"]):
+        category = "bot_or_waf_blocked"
+        severity = "error"
+        self_hosted_usable = False
+        approval_required = True
+        reason_code = "waf_or_bot_marker_detected"
+    elif any(marker in haystack for marker in ACCESS_MARKERS["auth_required"]):
+        category = "auth_required"
+        severity = "info"
+        approval_required = True
+        reason_code = "login_form_detected"
+    elif status == "skipped":
+        category = "unknown_failure"
+        severity = "warning"
+        self_hosted_usable = False
+        reason_code = reason or "self_hosted_skipped"
+
+    return {
+        "category": category,
+        "severity": severity,
+        "reason_code": reason_code,
+        "http_status": http_status,
+        "self_hosted_usable": self_hosted_usable,
+        "approval_required": approval_required,
+    }
+
+
+def build_access_remediation_plan(diagnosis: dict[str, Any]) -> dict[str, Any]:
+    category = str(diagnosis.get("category") or "unknown_failure")
+    if category == "reachable":
+        return {
+            "next_action": "continue_self_hosted",
+            "primary_runtime": "self_hosted_playwright",
+            "fallback_runtimes": ["pc_agent"],
+            "requires_approval": False,
+            "message": "서버 Playwright로 접근 가능합니다.",
+        }
+    if category == "auth_required":
+        return {
+            "next_action": "vault_login_or_approval",
+            "primary_runtime": "self_hosted_playwright",
+            "fallback_runtimes": ["pc_agent"],
+            "requires_approval": True,
+            "message": "로그인 단계입니다. Vault 자동입력 또는 사용자 승인 토큰으로 진행하십시오.",
+        }
+    if category == "challenge_required":
+        return {
+            "next_action": "approval_scoped_challenge_automation",
+            "primary_runtime": "self_hosted_playwright",
+            "fallback_runtimes": ["pc_agent"],
+            "requires_approval": True,
+            "message": "OTP/CAPTCHA/인증 챌린지입니다. 승인된 범위 안에서만 transient 입력 또는 승인형 모델 판독을 실행하십시오.",
+        }
+    if category in {"bot_or_waf_blocked", "unsupported_url", "network_or_tls_error"}:
+        return {
+            "next_action": "switch_runtime",
+            "primary_runtime": "pc_agent",
+            "fallback_runtimes": ["self_hosted_playwright", "external_sandbox_review"],
+            "requires_approval": True,
+            "message": "서버 Playwright 접근이 제한됐습니다. 동일 권한의 사용자 브라우저 세션 또는 별도 승인된 샌드박스 런타임으로 전환하십시오.",
+        }
+    if category == "runtime_unavailable":
+        return {
+            "next_action": "install_or_fix_self_hosted_runtime",
+            "primary_runtime": "self_hosted_playwright",
+            "fallback_runtimes": ["pc_agent"],
+            "requires_approval": False,
+            "message": "서버 Playwright 런타임 준비가 필요합니다.",
+        }
+    return {
+        "next_action": "manual_review",
+        "primary_runtime": "self_hosted_playwright",
+        "fallback_runtimes": ["pc_agent"],
+        "requires_approval": bool(diagnosis.get("approval_required")),
+        "message": "원인을 자동 확정하지 못했습니다. Live View와 이벤트 로그를 확인하십시오.",
+    }
+
+
+async def check_browser_target_access(*, work_key: str, target_url: str) -> dict[str, Any]:
+    task = {
+        "id": "00000000-0000-0000-0000-000000000000",
+        "tenant_id": "00000000-0000-0000-0000-000000000000",
+        "work_key": normalize_work_key(work_key or "access-check"),
+        "target_url": target_url,
+        "current_step": "access check",
+    }
+    result = await _probe_self_hosted_playwright_access(task)
+    diagnosis = result.get("access_diagnosis") or classify_playwright_access(
+        status=str(result.get("status") or ""),
+        reason=str(result.get("reason") or ""),
+        message=str(result.get("message") or ""),
+        http_status=result.get("http_status") if isinstance(result.get("http_status"), int) else None,
+    )
+    return {
+        "status": result.get("status"),
+        "target_url": target_url,
+        "diagnosis": diagnosis,
+        "remediation": build_access_remediation_plan(diagnosis),
+        "runtime": "self_hosted_playwright",
+    }
+
+
+async def _probe_self_hosted_playwright_access(task: dict[str, Any]) -> dict[str, Any]:
     target_url = str(task.get("target_url") or "").strip()
     work_key = str(task.get("work_key") or "").strip()
     if not _target_supports_self_hosted_capture(target_url):
-        return {"status": "skipped", "reason": "unsupported_target_url"}
+        diagnosis = classify_playwright_access(status="skipped", reason="unsupported_target_url")
+        return {"status": "skipped", "reason": "unsupported_target_url", "access_diagnosis": diagnosis}
 
     try:
         from playwright.async_api import async_playwright
     except Exception as exc:
-        return {"status": "skipped", "reason": "playwright_unavailable", "message": str(exc)}
+        diagnosis = classify_playwright_access(status="skipped", reason="playwright_unavailable", message=str(exc))
+        return {"status": "skipped", "reason": "playwright_unavailable", "message": str(exc), "access_diagnosis": diagnosis}
+
+    from app.services.managed_browser import profile_info
+
+    profile = profile_info(work_key, target_url)
+    profile_dir = profile["profile_dir"]
+    lock_key = profile["profile_key"]
+    lock = _SELF_HOSTED_CAPTURE_LOCKS.setdefault(lock_key, asyncio.Lock())
+    async with lock:
+        browser_context = None
+        async with async_playwright() as playwright:
+            try:
+                browser_context = await playwright.chromium.launch_persistent_context(
+                    profile_dir,
+                    headless=True,
+                    viewport=SELF_HOSTED_LIVE_VIEWPORT,
+                    ignore_https_errors=True,
+                    args=[
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
+                )
+                page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
+                response = await page.goto(
+                    target_url,
+                    wait_until="domcontentloaded",
+                    timeout=SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS,
+                )
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=3_000)
+                except Exception:
+                    pass
+                title = await page.title()
+                current_url = page.url
+                body_text = ""
+                try:
+                    body_text = await page.locator("body").inner_text(timeout=1_500)
+                except Exception:
+                    body_text = ""
+                http_status = response.status if response else None
+                diagnosis = classify_playwright_access(
+                    status="reachable",
+                    http_status=http_status,
+                    current_url=current_url,
+                    page_title=title,
+                    body_text=body_text,
+                )
+                return {
+                    "status": "reachable",
+                    "http_status": http_status,
+                    "current_url": current_url,
+                    "page_title": title,
+                    "access_diagnosis": diagnosis,
+                }
+            except Exception as exc:
+                diagnosis = classify_playwright_access(status="skipped", reason="self_hosted_capture_failed", message=str(exc))
+                logger.warning(
+                    "browser_task_self_hosted_access_probe_failed task_id=%s work_key=%s err=%s",
+                    task.get("id"),
+                    work_key,
+                    exc,
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "self_hosted_capture_failed",
+                    "message": str(exc),
+                    "access_diagnosis": diagnosis,
+                }
+            finally:
+                if browser_context:
+                    await browser_context.close()
+
+
+async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[str, Any]:
+    target_url = str(task.get("target_url") or "").strip()
+    work_key = str(task.get("work_key") or "").strip()
+    if not _target_supports_self_hosted_capture(target_url):
+        diagnosis = classify_playwright_access(status="skipped", reason="unsupported_target_url")
+        return {
+            "status": "skipped",
+            "reason": "unsupported_target_url",
+            "access_diagnosis": diagnosis,
+            "remediation": build_access_remediation_plan(diagnosis),
+        }
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as exc:
+        diagnosis = classify_playwright_access(status="skipped", reason="playwright_unavailable", message=str(exc))
+        return {
+            "status": "skipped",
+            "reason": "playwright_unavailable",
+            "message": str(exc),
+            "access_diagnosis": diagnosis,
+            "remediation": build_access_remediation_plan(diagnosis),
+        }
 
     from app.services.managed_browser import profile_info
 
@@ -488,6 +792,19 @@ async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[st
                 frame_base64 = base64.b64encode(image_bytes).decode("ascii")
                 title = await page.title()
                 current_url = page.url
+                body_text = ""
+                try:
+                    body_text = await page.locator("body").inner_text(timeout=1_500)
+                except Exception:
+                    body_text = ""
+                http_status = response.status if response else None
+                diagnosis = classify_playwright_access(
+                    status="captured",
+                    http_status=http_status,
+                    current_url=current_url,
+                    page_title=title,
+                    body_text=body_text,
+                )
                 frame = await upsert_browser_task_live_frame(
                     tenant_id=str(task["tenant_id"]),
                     task_id=str(task["id"]),
@@ -501,19 +818,34 @@ async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[st
                     metadata={
                         "source": "self_hosted_playwright",
                         "runtime": "self_hosted_playwright",
-                        "http_status": response.status if response else None,
+                        "http_status": http_status,
                         "profile_key": profile["profile_key"],
+                        "access_diagnosis": diagnosis,
+                        "remediation": build_access_remediation_plan(diagnosis),
                     },
                 )
-                return {"status": "captured", "source": "self_hosted_playwright", "frame": frame}
+                return {
+                    "status": "captured",
+                    "source": "self_hosted_playwright",
+                    "frame": frame,
+                    "access_diagnosis": diagnosis,
+                    "remediation": build_access_remediation_plan(diagnosis),
+                }
             except Exception as exc:
+                diagnosis = classify_playwright_access(status="skipped", reason="self_hosted_capture_failed", message=str(exc))
                 logger.warning(
                     "browser_task_self_hosted_live_capture_failed task_id=%s work_key=%s err=%s",
                     task.get("id"),
                     work_key,
                     exc,
                 )
-                return {"status": "skipped", "reason": "self_hosted_capture_failed", "message": str(exc)}
+                return {
+                    "status": "skipped",
+                    "reason": "self_hosted_capture_failed",
+                    "message": str(exc),
+                    "access_diagnosis": diagnosis,
+                    "remediation": build_access_remediation_plan(diagnosis),
+                }
             finally:
                 if browser_context:
                     await browser_context.close()
@@ -581,11 +913,18 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
     if pc_agent.get("status") == "captured":
         pc_agent["fallback_from"] = self_hosted
         return pc_agent
+    diagnosis = self_hosted.get("access_diagnosis") or classify_playwright_access(
+        status="skipped",
+        reason=str(self_hosted.get("reason") or pc_agent.get("reason") or "all_capture_backends_failed"),
+        message=str(self_hosted.get("message") or pc_agent.get("message") or ""),
+    )
     return {
         "status": "skipped",
         "reason": "all_capture_backends_failed",
         "self_hosted": self_hosted,
         "pc_agent": pc_agent,
+        "access_diagnosis": diagnosis,
+        "remediation": build_access_remediation_plan(diagnosis),
     }
 
 

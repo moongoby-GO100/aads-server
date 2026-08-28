@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.services.browser_task_gateway import (
+    check_browser_target_access,
     consume_approval_token,
     create_browser_task,
     capture_browser_task_live_frame,
@@ -34,6 +35,11 @@ class BrowserTaskCreate(BaseModel):
     target_url: str = Field(min_length=1, max_length=2000)
     session_id: str | None = None
     current_step: str = Field(default="", max_length=500)
+
+
+class BrowserAccessCheckIn(BaseModel):
+    work_key: str = Field(default="access-check", min_length=1, max_length=120)
+    target_url: str = Field(min_length=1, max_length=2000)
 
 
 class BrowserTaskStatusPatch(BaseModel):
@@ -123,6 +129,14 @@ async def api_create_browser_task(
         current_step=body.current_step,
     )
     return {"status": "created", "task": task, "profile": profile_info(body.work_key, body.target_url)}
+
+
+@router.post("/access-check")
+async def api_check_browser_target_access(
+    body: BrowserAccessCheckIn,
+    context: TenantContext = Depends(require_viewer),
+) -> dict[str, Any]:
+    return await check_browser_target_access(work_key=body.work_key, target_url=body.target_url)
 
 
 @router.get("/{task_id}")

@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-08-28 12:31 KST - Managed Browser Playwright access diagnosis P0-P2
+
+- Trigger: CEO asked to implement all recommended P0/P1/P2 items after the Playwright access-limit report.
+- Changes:
+  - `app/services/browser_task_gateway.py`: added self-hosted Playwright access diagnosis for login, challenge, WAF/bot block, unsupported URL, runtime missing, timeout, network/TLS, and remote server errors.
+  - `app/api/browser_tasks.py`: added `POST /api/v1/browser-tasks/access-check` for pre-task target probing.
+  - `app/services/browser_recipe_registry.py`: added `runtime_plan` to dry-run/run-plan responses so OHVIS can see primary runtime, fallback runtimes, PC Agent requirement, and self-hosted eligibility before execution.
+  - Dashboard `/browser-tasks`: added access diagnosis action and Live View diagnosis panel.
+  - `docs/plans/20260828_APILESS_AUTHENTICATED_ADMIN_AUTOMATION_PLAN.md`: documented P0/P1/P2 Playwright access-limit handling policy.
+- Verification pending in this turn:
+  - Backend `py_compile` and `tests/unit/test_browser_task_policy.py`.
+  - Dashboard `npx eslint src/app/browser-tasks/page.tsx` and TypeScript check.
+- Deployment status:
+  - Code is not deployed yet in this entry.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, and `scripts/deploy_dashboard_bg.sh` remain untouched.
+
 ## 2026-08-28 11:18 KST - Managed Browser Live View server Playwright fallback
 
 - Trigger: CEO asked to make Browser Task Live View work without PC Agent and deploy/test the fix.

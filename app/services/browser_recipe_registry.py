@@ -5,6 +5,7 @@ import hashlib
 import json
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from app.core.db_pool import get_pool
 from app.services.browser_permission_policy import classify_browser_action, mask_sensitive_value
@@ -190,6 +191,7 @@ def build_recipe_dry_run_plan(recipe: dict[str, Any], *, target_url: str = "") -
         "version_hash": version_hash,
         "target_origin": normalize_origin(target_url) if target_url else normalized["allowed_origins"][0],
         "runtime": normalized["resource_policy"]["runtime"],
+        "runtime_plan": build_runtime_execution_plan(normalized, target_url=target_url),
         "concurrency_policy": normalized["concurrency_policy"],
         "resource_policy": normalized["resource_policy"],
         "required_approvals": [item for item in risk_actions if item["approval_required"]],
@@ -226,6 +228,66 @@ def build_resource_claim(recipe: dict[str, Any]) -> dict[str, Any]:
         "memory_mb": resource_policy["max_memory_mb"],
         "runtime_seconds": resource_policy["max_runtime_seconds"],
         "artifact_budget_mb": resource_policy["artifact_budget_mb"],
+    }
+
+
+def _http_target_url(value: str) -> bool:
+    parsed = urlparse(str(value or "").strip())
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def _recipe_requires_pc_agent(recipe: dict[str, Any]) -> tuple[bool, list[str]]:
+    challenge_policy = _json_dict(recipe.get("challenge_policy"))
+    runtime_policy = _json_dict(recipe.get("runtime_policy"))
+    fallbacks = _json_dict(recipe.get("fallbacks"))
+    reasons: list[str] = []
+    if runtime_policy.get("requires_pc_agent") is True:
+        reasons.append("runtime_policy_requires_pc_agent")
+    for key in ("certificate", "local_certificate", "passkey", "desktop_only", "local_file_picker"):
+        if challenge_policy.get(key) or runtime_policy.get(key) or fallbacks.get(key):
+            reasons.append(f"{key}_requires_user_environment")
+    return bool(reasons), reasons
+
+
+def build_runtime_execution_plan(recipe: dict[str, Any], *, target_url: str = "") -> dict[str, Any]:
+    normalized = normalize_recipe_payload(recipe)
+    configured_runtime = normalized["resource_policy"]["runtime"]
+    candidate_target = target_url or (normalized["allowed_origins"][0] if normalized["allowed_origins"] else "")
+    self_hosted_eligible = _http_target_url(candidate_target)
+    pc_agent_required, pc_agent_reasons = _recipe_requires_pc_agent(normalized)
+    fallback_config = _json_dict(normalized.get("fallbacks"))
+    configured_fallbacks = [
+        str(value).strip()
+        for value in fallback_config.values()
+        if str(value).strip() in ALLOWED_RUNTIMES
+    ]
+
+    if configured_runtime != "auto":
+        primary_runtime = configured_runtime
+    elif pc_agent_required:
+        primary_runtime = "pc_agent"
+    elif self_hosted_eligible:
+        primary_runtime = "self_hosted_playwright"
+    else:
+        primary_runtime = "pc_agent"
+
+    fallback_runtimes: list[str] = []
+    for runtime in [*configured_fallbacks, "pc_agent", "self_hosted_playwright", "external_sandbox"]:
+        if runtime != primary_runtime and runtime not in fallback_runtimes:
+            fallback_runtimes.append(runtime)
+
+    return {
+        "configured_runtime": configured_runtime,
+        "primary_runtime": primary_runtime,
+        "fallback_runtimes": fallback_runtimes[:4],
+        "self_hosted_eligible": self_hosted_eligible,
+        "pc_agent_required": pc_agent_required,
+        "pc_agent_reasons": pc_agent_reasons,
+        "access_probe_supported": primary_runtime in {"self_hosted_playwright", "auto"} or self_hosted_eligible,
+        "notes": [
+            "서버 Playwright 접근 실패는 access-check/live-frame diagnosis로 분류합니다.",
+            "OTP/CAPTCHA/인증서는 승인 토큰 범위 안에서만 자동 입력 또는 모델 판독을 허용합니다.",
+        ],
     }
 
 
@@ -267,6 +329,7 @@ def evaluate_recipe_run_admission(
         "max_parallel_runs": max_parallel_runs,
         "queue_strategy": queue_strategy,
         "resource_claim": build_resource_claim(normalized),
+        "runtime_plan": build_runtime_execution_plan(normalized, target_url=target_url),
     }
 
 

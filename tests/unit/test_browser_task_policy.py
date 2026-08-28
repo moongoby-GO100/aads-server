@@ -11,11 +11,14 @@ from app.services.browser_task_gateway import (
     _scope_allows_action,
     _target_supports_self_hosted_capture,
     _task_to_dict,
+    build_access_remediation_plan,
+    classify_playwright_access,
 )
 from app.services.browser_recipe_registry import (
     build_recipe_concurrency_key,
     build_resource_claim,
     build_recipe_dry_run_plan,
+    build_runtime_execution_plan,
     compute_recipe_hash,
     evaluate_recipe_run_admission,
     normalize_concurrency_policy,
@@ -247,6 +250,32 @@ def test_self_hosted_live_capture_only_accepts_http_targets():
     assert _target_supports_self_hosted_capture("file:///tmp/report.html") is False
 
 
+def test_playwright_access_diagnosis_classifies_challenge_and_advice():
+    diagnosis = classify_playwright_access(
+        status="captured",
+        http_status=200,
+        current_url="https://boss.ddangyo.com/login",
+        page_title="로그인",
+        body_text="보안문자 숫자를 입력하십시오",
+    )
+    remediation = build_access_remediation_plan(diagnosis)
+
+    assert diagnosis["category"] == "challenge_required"
+    assert diagnosis["approval_required"] is True
+    assert remediation["next_action"] == "approval_scoped_challenge_automation"
+    assert remediation["primary_runtime"] == "self_hosted_playwright"
+
+
+def test_playwright_access_diagnosis_classifies_waf_block():
+    diagnosis = classify_playwright_access(status="reachable", http_status=403, body_text="Access Denied")
+    remediation = build_access_remediation_plan(diagnosis)
+
+    assert diagnosis["category"] == "bot_or_waf_blocked"
+    assert diagnosis["self_hosted_usable"] is False
+    assert remediation["next_action"] == "switch_runtime"
+    assert remediation["primary_runtime"] == "pc_agent"
+
+
 @pytest.mark.asyncio
 async def test_live_frame_capture_prefers_self_hosted_playwright(monkeypatch):
     tenant_id = "00000000-0000-0000-0000-000000000002"
@@ -372,6 +401,8 @@ def test_browser_recipe_dry_run_reports_approval_and_runtime_budget():
     )
 
     assert plan["runtime"] == "self_hosted_playwright"
+    assert plan["runtime_plan"]["primary_runtime"] == "self_hosted_playwright"
+    assert plan["runtime_plan"]["self_hosted_eligible"] is True
     assert plan["concurrency_policy"]["max_parallel_runs"] == 3
     assert plan["resource_policy"]["max_memory_mb"] == 2048
     assert len(plan["required_approvals"]) == 1
@@ -419,6 +450,7 @@ def test_browser_recipe_admission_starts_when_capacity_available():
 
     assert admission["decision"] == "start"
     assert admission["status"] == "running"
+    assert admission["runtime_plan"]["primary_runtime"] == "self_hosted_playwright"
     assert admission["resource_claim"] == {
         "runtime": "self_hosted_playwright",
         "browser_contexts": 1,
@@ -441,6 +473,23 @@ def test_browser_recipe_admission_queues_or_rejects_on_conflict():
         {**base, "concurrency_policy": {"max_parallel_runs": 1, "queue_strategy": "reject_on_conflict"}},
         active_runs=1,
     )["decision"] == "reject"
+
+
+def test_runtime_execution_plan_routes_pc_agent_for_local_certificate():
+    plan = build_runtime_execution_plan(
+        {
+            "recipe_id": "bank.statement_collect",
+            "version": "v1",
+            "allowed_origins": ["https://bank.example.com"],
+            "resource_policy": {"runtime": "auto"},
+            "challenge_policy": {"local_certificate": True},
+        },
+        target_url="https://bank.example.com/login",
+    )
+
+    assert plan["primary_runtime"] == "pc_agent"
+    assert plan["pc_agent_required"] is True
+    assert "self_hosted_playwright" in plan["fallback_runtimes"]
 
 
 def test_browser_recipe_resource_claim_matches_budget_fields():
