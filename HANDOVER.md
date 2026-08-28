@@ -8913,3 +8913,21 @@
 - Remaining:
   - Commit/deploy this connector patch.
   - Rerun Mia Shinhan bank collection on ICU55HK and require either `imported_rows > 0` or verified `no_records`.
+
+## 2026-08-29 06:34 KST - FOOD Shinhan rerun result after hidden-field fix
+
+- Runtime actions:
+  - Terminated stale `shinhan-manual-20260829-0614` / `shinhan-manual-20260829-0622` collection processes that were holding the bank fd lock.
+  - Verified bank lock released with `bank_lock_is_active(...) == False`.
+  - Closed the remaining Shinhan bank tab on ICU55HK and relaunched one CDP Chrome session.
+  - Pushed commits `829db307` and `3b782bc5` to `origin/main`.
+- Deploy status:
+  - Standard `deploy.sh` blue-green deploy was attempted twice and blocked both times because inactive target `aads-server:8100` had 2 active streams.
+  - No forced deploy was run.
+- Latest collection result:
+  - `shinhan-manual-20260829-0626` ran on ICU55HK `7f99c528-24d`.
+  - Result remained `ATTEMPT_TIMEOUT`, `imported_rows=0`, `collected_rows=0`.
+  - Read-only tab probe during the run showed Shinhan page plus `4user.yeskey.or.kr/fincert` iframe, so the portal still routes the account-query attempt into the financial-certificate frame despite saved ID/PW values.
+- Current judgement:
+  - ID/PW input implementation is improved and committed, but Shinhan actual transaction collection is still not complete.
+  - Next code work should add fast persistent-fincert detection after ID/PW retry and avoid 420-second waits, then investigate whether Shinhan's personal quick-query accepts encrypted password injection from hidden TransKey fields at all.
