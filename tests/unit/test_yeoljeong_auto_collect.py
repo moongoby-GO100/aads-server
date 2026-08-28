@@ -300,6 +300,76 @@ def test_bank_accounts_for_payload_dedupes_same_scope_and_bank(monkeypatch):
     assert [account["id"] for account in accounts] == ["bank-ibk-1"]
 
 
+def test_global_bank_queue_item_collects_only_its_bank_account(monkeypatch):
+    accounts = [
+        {
+            "id": "bank-ibk",
+            "business_id": "biz-junghwa",
+            "branch_id": "branch-junghwa",
+            "bank_code": "003",
+            "bank_name": "IBK기업은행",
+            "institution_code": "ibk_business",
+            "connection_type": "browser",
+            "auto_sync": True,
+        },
+        {
+            "id": "bank-shinhan",
+            "business_id": "biz-junghwa",
+            "branch_id": "branch-junghwa",
+            "bank_code": "088",
+            "bank_name": "신한은행 기업",
+            "institution_code": "shinhan_business",
+            "connection_type": "browser",
+            "auto_sync": True,
+        },
+    ]
+    monkeypatch.setattr(auto_collect, "_ensure_browser_bank_accounts_from_platform_accounts", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: accounts,
+    )
+
+    items = auto_collect._global_bank_queue_items(
+        {
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-28",
+            "date_to": "2026-08-28",
+            "bank_only": True,
+        },
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert [item["payload"]["bank_account_id"] for item in items] == ["bank-ibk", "bank-shinhan"]
+
+    calls = []
+
+    def fake_collect(account_id, payload, user):
+        calls.append(account_id)
+        return {
+            "collection": {
+                "bank_account_id": account_id,
+                "business_id": payload["business_id"],
+                "branch_id": payload["branch_id"],
+                "status": "completed",
+                "connector_status": "CONFIGURED",
+                "connection_type": "browser",
+                "collected_rows": 1,
+                "imported_rows": 1,
+                "duplicate_rows": 0,
+            },
+            "transactions": [],
+        }
+
+    monkeypatch.setattr(auto_collect, "collect_bank_account_transactions", fake_collect)
+
+    result = auto_collect._collect_bank_accounts(items[1]["payload"], {"email": "system@aads.local", "is_admin": True})
+
+    assert calls == ["bank-shinhan"]
+    assert result[0]["bank_account_id"] == "bank-shinhan"
+
+
 def test_skip_financial_accounts_still_disables_bank_collection():
     args = auto_collect.build_parser().parse_args(["--until-complete", "--skip-financial-accounts"])
 

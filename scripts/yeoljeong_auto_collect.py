@@ -215,6 +215,7 @@ def _branch_id_for_bank_scope(branch: str, business_id: str = "") -> str:
 def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
     business_id = str(payload.get("business_id") or "").strip()
     branch = str(payload.get("branch") or "").strip()
+    requested_account_id = str(payload.get("bank_account_id") or "").strip()
     all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"}
     wanted_business = None if all_businesses else business_id or None
     wanted_branch = "" if all_businesses else _branch_id_for_bank_scope(branch, business_id)
@@ -233,6 +234,8 @@ def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) ->
     deduped: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str, str]] = set()
     for account in accounts:
+        if requested_account_id and str(account.get("id") or "").strip() != requested_account_id:
+            continue
         if account.get("auto_sync") is False:
             continue
         key = (
@@ -868,6 +871,7 @@ def _global_bank_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> l
         branch_id = str(account.get("branch_id") or _scope_branch_id(str(payload.get("branch") or ""), business_id))
         item_payload = {
             **payload,
+            "bank_account_id": str(account.get("id") or ""),
             "bank_only": True,
             "business_id": business_id,
             "branch": branch_id,
