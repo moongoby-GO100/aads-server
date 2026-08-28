@@ -19,11 +19,17 @@ if str(ROOT) not in sys.path:
 
 from app.services.yeoljeong_finance_service import (  # noqa: E402
     BRANCH_ALIASES,
+    BUSINESS_BY_BRANCH,
     CANONICAL_BRANCHES,
     FINANCIAL_TRANSACTION_SERVICES,
+    _delivery_browser_work_key,
+    _delivery_requested_services,
+    _delivery_sync_scopes,
+    _delivery_sync_window,
     _read,
     _write_delivery_collection_statuses,
     collect_bank_account_transactions,
+    create_bank_account,
     list_bank_accounts,
     list_accounts as list_platform_accounts,
     list_collection_status,
@@ -31,11 +37,35 @@ from app.services.yeoljeong_finance_service import (  # noqa: E402
     sync_delivery,
     sync_financial_transactions,
 )
+from app.services.pc_agent_collection_queue import (  # noqa: E402
+    claim_next_collection_item,
+    complete_collection_item,
+    enqueue_collection_items,
+    queue_snapshot,
+)
 
 
 KST = timezone(timedelta(hours=9))
 DEFAULT_SERVICES = ("coupangeats", "yogiyo", "ddangyo", "baemin")
 DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
+QUEUE_PRIORITY_BY_SERVICE = {
+    "bank": 10,
+    "shinhan_business": 10,
+    "ibk_business": 10,
+    "coupangeats": 20,
+    "ddangyo": 30,
+    "yogiyo": 40,
+    "baemin": 50,
+}
+QUEUE_MIN_INTERVAL_BY_SERVICE = {
+    "bank": 900,
+    "shinhan_business": 900,
+    "ibk_business": 900,
+    "coupangeats": 1200,
+    "ddangyo": 1200,
+    "yogiyo": 1800,
+    "baemin": 1800,
+}
 
 
 def _empty_delivery_counts() -> dict[str, int]:
@@ -188,13 +218,123 @@ def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) ->
     all_businesses = bool(payload.get("all_businesses")) or business_id in {"all", "*", "__all__", "전체"}
     wanted_business = None if all_businesses else business_id or None
     wanted_branch = "" if all_businesses else _branch_id_for_bank_scope(branch, business_id)
+    _ensure_browser_bank_accounts_from_platform_accounts(
+        user,
+        business_id=wanted_business or "",
+        branch_id=wanted_branch,
+        all_businesses=all_businesses,
+    )
     accounts = list_bank_accounts(
         user,
         wanted_business,
         branch_id=wanted_branch or None,
         status="active",
     )
-    return [account for account in accounts if account.get("auto_sync") is not False]
+    deduped: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+    for account in accounts:
+        if account.get("auto_sync") is False:
+            continue
+        key = (
+            str(account.get("business_id") or ""),
+            str(account.get("branch_id") or ""),
+            _bank_account_service_code(account),
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(account)
+    return deduped
+
+
+def _platform_bank_service_code(account: dict[str, Any]) -> str:
+    service = str(account.get("service") or "").strip().lower()
+    if service in {"shinhan_business", "ibk_business"}:
+        return service
+    label = str(account.get("label") or "").strip().lower()
+    if "신한" in label or "shinhan" in label:
+        return "shinhan_business"
+    if "기업" in label or "ibk" in label:
+        return "ibk_business"
+    return ""
+
+
+def _bank_account_service_code(account: dict[str, Any]) -> str:
+    institution_code = str(account.get("institution_code") or "").strip().lower()
+    if institution_code in {"shinhan_business", "ibk_business"}:
+        return institution_code
+    bank_code = str(account.get("bank_code") or "").strip()
+    bank_name = str(account.get("bank_name") or "")
+    if bank_code == "088" or "신한" in bank_name:
+        return "shinhan_business"
+    if bank_code == "003" or "기업" in bank_name or "IBK" in bank_name.upper():
+        return "ibk_business"
+    return ""
+
+
+def _ensure_browser_bank_accounts_from_platform_accounts(
+    user: dict[str, Any],
+    *,
+    business_id: str,
+    branch_id: str,
+    all_businesses: bool,
+) -> int:
+    platform_accounts = list_platform_accounts(user, None if all_businesses else business_id or None)
+    if not platform_accounts:
+        return 0
+    existing_accounts = list_bank_accounts(
+        user,
+        None if all_businesses else business_id or None,
+        branch_id=branch_id or None,
+    )
+    existing_keys = {
+        (
+            str(account.get("business_id") or ""),
+            str(account.get("branch_id") or ""),
+            _bank_account_service_code(account),
+        )
+        for account in existing_accounts
+    }
+    created = 0
+    for platform_account in platform_accounts:
+        service_code = _platform_bank_service_code(platform_account)
+        if service_code not in {"shinhan_business", "ibk_business"}:
+            continue
+        if str(platform_account.get("collection_mode") or "") != "bank-quick-service":
+            continue
+        if platform_account.get("auto_sync") is False:
+            continue
+        source_business_id = str(platform_account.get("business_id") or "").strip()
+        if business_id and source_business_id != business_id:
+            continue
+        source_branch = str(platform_account.get("branch_id") or platform_account.get("branch") or "").strip()
+        source_branch_id = _branch_id_for_bank_scope(source_branch, source_business_id)
+        if branch_id and source_branch_id != branch_id:
+            continue
+        key = (source_business_id, source_branch_id, service_code)
+        if key in existing_keys:
+            continue
+        bank_code = "088" if service_code == "shinhan_business" else "003"
+        bank_name = "신한은행 기업" if service_code == "shinhan_business" else "IBK기업은행"
+        create_bank_account(
+            {
+                "business_id": source_business_id,
+                "branch_id": source_branch_id,
+                "bank_code": bank_code,
+                "bank_name": bank_name,
+                "account_number_masked": str(platform_account.get("account_no_masked") or ""),
+                "connection_type": "browser",
+                "connector_type": "bank-quick-service",
+                "institution_code": service_code,
+                "status": "active",
+                "auto_sync": True,
+                "memo": "platform_accounts bank-quick-service 자동수집 승격",
+            },
+            user,
+        )
+        existing_keys.add(key)
+        created += 1
+    return created
 
 
 def _bank_collection_error_code(collection: dict[str, Any]) -> str:
@@ -315,6 +455,8 @@ def _platform_financial_accounts_for_payload(payload: dict[str, Any], user: dict
     for row in rows if isinstance(rows, list) else []:
         service = str(row.get("service") or "").strip()
         if service not in FINANCIAL_TRANSACTION_SERVICES:
+            continue
+        if service in {"shinhan_business", "ibk_business"} and str(row.get("collection_mode") or "") == "bank-quick-service":
             continue
         if row.get("auto_sync") is False:
             continue
@@ -645,6 +787,233 @@ def _payload_services(payload: dict[str, Any]) -> list[str]:
     if isinstance(services, str):
         return _split_csv(services)
     return list(DEFAULT_SERVICES)
+
+
+def _queue_created_by(user: dict[str, Any]) -> str:
+    return str(user.get("email") or user.get("user_id") or user.get("name") or "system@aads.local")
+
+
+def _queue_priority(service: str) -> int:
+    return int(QUEUE_PRIORITY_BY_SERVICE.get(service, QUEUE_PRIORITY_BY_SERVICE.get("bank", 10) if service in {"bank"} else 50))
+
+
+def _queue_min_interval(service: str) -> int:
+    return int(QUEUE_MIN_INTERVAL_BY_SERVICE.get(service, 1800))
+
+
+def _scope_branch_id(branch: str, business_id: str = "") -> str:
+    branch_text = str(BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip()) or "").strip()
+    for item in CANONICAL_BRANCHES:
+        if branch_text in {str(item.get("id") or ""), str(item.get("name") or "")}:
+            if business_id and str(item.get("businessId") or "") != business_id:
+                return branch_text
+            return str(item.get("id") or branch_text)
+    return branch_text
+
+
+def _global_delivery_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    requested_services = _delivery_requested_services(payload)
+    date_from, date_to = _delivery_sync_window(payload)
+    all_accounts = _read("platform_accounts")
+    scopes = _delivery_sync_scopes(payload, requested_services, all_accounts)
+    created_by = _queue_created_by(user)
+    items: list[dict[str, Any]] = []
+    for business_id, branch in scopes:
+        for service in requested_services:
+            item_payload = {
+                **payload,
+                "services": [service],
+                "business_id": business_id,
+                "branch": branch,
+                "all_businesses": False,
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "skip_financial_accounts": True,
+                "sync_job_id": str(payload.get("sync_job_id") or f"pc-agent-global-{service}-{date_to.isoformat()}"),
+            }
+            work_key = _delivery_browser_work_key(service, business_id, branch)
+            items.append(
+                {
+                    "queue_type": "delivery",
+                    "site_key": f"delivery:{service}",
+                    "service": service,
+                    "business_id": business_id,
+                    "branch": branch,
+                    "work_key": work_key,
+                    "runtime": "pc_agent",
+                    "priority": _queue_priority(service),
+                    "min_interval_seconds": _queue_min_interval(service),
+                    "latest_only": True,
+                    "payload": item_payload,
+                    "created_by": created_by,
+                }
+            )
+    return items
+
+
+def _global_bank_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("skip_financial_accounts") and not payload.get("bank_only"):
+        return []
+    try:
+        accounts = _bank_accounts_for_payload(payload, user)
+    except Exception:
+        return []
+    created_by = _queue_created_by(user)
+    date_from = str(payload.get("date_from") or datetime.now(KST).date().isoformat())
+    date_to = str(payload.get("date_to") or datetime.now(KST).date().isoformat())
+    items: list[dict[str, Any]] = []
+    for account in accounts:
+        service = _bank_account_service_code(account) or "bank"
+        business_id = str(account.get("business_id") or payload.get("business_id") or "")
+        branch_id = str(account.get("branch_id") or _scope_branch_id(str(payload.get("branch") or ""), business_id))
+        item_payload = {
+            **payload,
+            "bank_only": True,
+            "business_id": business_id,
+            "branch": branch_id,
+            "all_businesses": False,
+            "date_from": date_from,
+            "date_to": date_to,
+            "skip_financial_accounts": False,
+            "bank_browser_work_key": str(account.get("browser_work_key") or payload.get("bank_browser_work_key") or ""),
+            "sync_job_id": str(payload.get("sync_job_id") or f"pc-agent-global-bank-{date_to}"),
+        }
+        work_key = item_payload["bank_browser_work_key"] or f"yeoljeong-bank-{service}-{business_id}-{branch_id}"
+        items.append(
+            {
+                "queue_type": "bank",
+                "site_key": f"bank:{service}",
+                "service": service,
+                "business_id": business_id,
+                "branch": branch_id,
+                "work_key": work_key,
+                "runtime": "pc_agent",
+                "priority": _queue_priority(service),
+                "min_interval_seconds": _queue_min_interval(service),
+                "latest_only": True,
+                "payload": item_payload,
+                "created_by": created_by,
+            }
+        )
+    return items
+
+
+def _global_collection_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if not payload.get("bank_only"):
+        items.extend(_global_delivery_queue_items(payload, user))
+    items.extend(_global_bank_queue_items(payload, user))
+    return items
+
+
+def _enqueue_global_collection_queue(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    items = _global_collection_queue_items(payload, user)
+    result = enqueue_collection_items(items)
+    return {
+        "queued": True,
+        "global_queue": True,
+        "count": result["count"],
+        "items": [
+            {
+                "id": item.get("id"),
+                "queue_type": item.get("queue_type"),
+                "site_key": item.get("site_key"),
+                "service": item.get("service"),
+                "business_id": item.get("business_id"),
+                "branch": item.get("branch"),
+                "work_key": item.get("work_key"),
+                "status": item.get("status"),
+                "priority": item.get("priority"),
+                "next_run_at": item.get("next_run_at"),
+            }
+            for item in result["items"]
+        ],
+        "snapshot": [
+            {
+                "id": item.get("id"),
+                "service": item.get("service"),
+                "status": item.get("status"),
+                "resource_key": item.get("resource_key"),
+                "updated_at": item.get("updated_at"),
+            }
+            for item in queue_snapshot(20)
+        ],
+    }
+
+
+def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "") -> dict[str, Any]:
+    item = claim_next_collection_item(agent_id=agent_id)
+    if not item:
+        return {"global_queue": True, "claimed": False, "status": "idle"}
+    payload = dict(item.get("payload") or {})
+    if agent_id:
+        payload["browser_agent_id"] = agent_id
+        payload["pc_agent_id"] = agent_id
+    try:
+        result = _run_collectors(payload, user, queue_only=False)
+        state = _completion_state(result)
+        status = "succeeded" if state.get("complete") else ("action_required" if state.get("blocked") else "failed")
+        error_code = ",".join(state.get("blocking_codes") or state.get("retryable_codes") or [])
+        complete_collection_item(
+            str(item["id"]),
+            status=status,
+            result=result,
+            error_code=error_code,
+            message=f"completed={state.get('completed', 0)} pending={state.get('pending', 0)}",
+        )
+        return {
+            "global_queue": True,
+            "claimed": True,
+            "item": {
+                "id": item.get("id"),
+                "service": item.get("service"),
+                "business_id": item.get("business_id"),
+                "branch": item.get("branch"),
+            },
+            "status": status,
+            "state": state,
+            "result": result,
+        }
+    except Exception as exc:
+        complete_collection_item(
+            str(item["id"]),
+            status="failed",
+            result={},
+            error_code="GLOBAL_QUEUE_RUN_FAILED",
+            message=str(exc)[:300],
+        )
+        return {
+            "global_queue": True,
+            "claimed": True,
+            "item": {"id": item.get("id"), "service": item.get("service")},
+            "status": "failed",
+            "error_code": "GLOBAL_QUEUE_RUN_FAILED",
+            "message": str(exc)[:300],
+        }
+
+
+def _drain_global_collection_queue(user: dict[str, Any], *, agent_id: str = "", iterations: int = 1) -> dict[str, Any]:
+    runs = []
+    for _ in range(max(1, int(iterations))):
+        result = _run_global_collection_queue_once(user, agent_id=agent_id)
+        runs.append(result)
+        if not result.get("claimed"):
+            break
+    return {
+        "global_queue": True,
+        "drained": len([item for item in runs if item.get("claimed")]),
+        "runs": runs,
+        "snapshot": [
+            {
+                "id": item.get("id"),
+                "service": item.get("service"),
+                "status": item.get("status"),
+                "resource_key": item.get("resource_key"),
+                "updated_at": item.get("updated_at"),
+            }
+            for item in queue_snapshot(20)
+        ],
+    }
 
 
 def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
@@ -1051,6 +1420,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--operator-approved", action="store_true", help="Allow one operator-approved challenge input for the current run.")
     parser.add_argument("--approved-input", default="", help="Write-only operator-approved challenge input for the current run.")
     parser.add_argument("--queue-only", action="store_true", help="Create queued rows and exit without running collectors.")
+    parser.add_argument("--global-queue", action="store_true", help="Enqueue bank/delivery collection work into the global PC Agent queue.")
+    parser.add_argument("--drain-global-queue", action="store_true", help="Claim and run due global PC Agent queue items.")
+    parser.add_argument("--queue-iterations", type=int, default=_env_int("YEOLJEONG_PC_AGENT_QUEUE_ITERATIONS", 1), help="Maximum due global queue items to run in one drain call.")
     parser.add_argument("--skip-financial-accounts", action="store_true", help="Skip bank and financial account collection.")
     parser.add_argument("--bank-only", action="store_true", help="Run only bank account collection without delivery portal collection.")
     parser.add_argument("--until-complete", action="store_true", help="Retry collection until every requested scope has data or succeeds.")
@@ -1070,10 +1442,24 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.queue_only and args.until_complete:
         raise SystemExit("--queue-only and --until-complete cannot be used together")
+    if args.global_queue and args.until_complete:
+        raise SystemExit("--global-queue and --until-complete cannot be used together")
     user = {"email": "system@aads.local", "is_admin": True}
+    if args.drain_global_queue:
+        result = _drain_global_collection_queue(
+            user,
+            agent_id=str(getattr(args, "browser_agent_id", "") or ""),
+            iterations=int(getattr(args, "queue_iterations", 1) or 1),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.until_complete:
         return _run_until_complete(args, user)
     payload = _payload(args)
+    if args.global_queue:
+        result = _enqueue_global_collection_queue(payload, user)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.queue_only or args.child_no_timeout or args.attempt_timeout_seconds <= 0:
         result = _run_collectors(payload, user, queue_only=args.queue_only)
     else:

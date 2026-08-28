@@ -1584,6 +1584,76 @@ def test_collect_async_uses_download_file_when_table_snapshot_has_no_rows():
     assert result["diagnostics"]["screen_state"] == "transaction_download"
 
 
+def test_collect_async_ibk_quick_flow_submits_query_and_parses_rows():
+    account = {"id": "acct-ibk", "bank_name": "IBK기업은행", "bank_code": "003", "institution_code": "ibk_business"}
+    state = {"queried": False}
+
+    async def evaluate(expr, *args, **kwargs):
+        if expr == "window.location.href":
+            return "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp"
+        if "ibkQuickFlow" in expr:
+            state["queried"] = True
+            return {
+                "attempted": "1",
+                "mode": "ibk_quick",
+                "stage": "quick_query",
+                "account_no": "1",
+                "account_secret": "1",
+                "business_registration_no": "1",
+                "date_from": "1",
+                "date_to": "1",
+                "navigation_clicked": "1",
+                "query_submitted": "1",
+            }
+        if "querySelectorAll('table')" in expr:
+            if state["queried"]:
+                return [
+                    [
+                        ["거래일자", "적요", "출금금액", "입금금액", "잔액"],
+                        ["2026-08-10", "이체입금", "", "500,000", "2,000,000"],
+                    ]
+                ]
+            return []
+        if "document.body.innerText" in expr:
+            return "IBK기업은행 빠른조회 계좌번호 계좌비밀번호 조회"
+        if "querySelectorAll('input,button,select,a')" in expr:
+            return []
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "live-session-ibk"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="live-session-ibk",
+                browser_work_key="yeoljeong-bank-ibk-business-abc123",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                account_no="saved-account",
+                account_password="saved-secret",
+                business_registration_no="saved-business-no",
+            )
+        )
+
+    assert result["status"] == "collected"
+    assert result["row_count"] == 1
+    assert result["diagnostics"]["ibk_query_flow"]["query_submitted"] == "1"
+    assert result["diagnostics"]["screen_reason_code"] == "TRANSACTION_TABLE_VISIBLE_AFTER_IBK_QUERY"
+
+
 def test_collect_async_missing_explicit_session_recovers_same_work_key():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 

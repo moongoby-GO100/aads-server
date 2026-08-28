@@ -1384,28 +1384,36 @@ async def lifespan(app: FastAPI):
                     )
                     return
 
-                wait_result = await pc_agent_manager.wait_for_agent_online(
-                    agent_id=preferred_agent_id,
-                    timeout=wait_timeout,
-                )
-                if wait_result["status"] == "online" and wait_result.get("agent_id") in excluded_agent_ids:
-                    wait_result = {"status": "excluded", "error_code": "PC_AGENT_EXCLUDED"}
-                if wait_result["status"] != "online" and not preferred_agent_id:
-                    for agent in pc_agent_manager.list_agent_statuses():
-                        agent_id = str(agent.get("agent_id") or "").strip()
-                        if str(agent.get("status") or "") == "online" and agent_id and agent_id not in excluded_agent_ids:
-                            wait_result = {"status": "online", "agent_id": agent_id, "source": "local_agent_list"}
-                            break
-                if wait_result["status"] != "online" and not preferred_agent_id:
-                    wait_result = await _delivery_auto_collect_peer_agent(excluded_agent_ids)
-                if wait_result["status"] != "online":
-                    logger.info(
-                        "delivery_auto_collect_skip: pc_agent_offline reason=%s mode=%s services=%s",
-                        reason,
-                        mode,
-                        selected_services,
+                use_global_queue = _env_bool("YEOLJEONG_PC_AGENT_GLOBAL_QUEUE_ENABLED", True)
+                if use_global_queue:
+                    wait_result = {
+                        "status": "online",
+                        "agent_id": preferred_agent_id,
+                        "source": "global_queue_enqueue_without_agent_wait",
+                    }
+                else:
+                    wait_result = await pc_agent_manager.wait_for_agent_online(
+                        agent_id=preferred_agent_id,
+                        timeout=wait_timeout,
                     )
-                    return
+                    if wait_result["status"] == "online" and wait_result.get("agent_id") in excluded_agent_ids:
+                        wait_result = {"status": "excluded", "error_code": "PC_AGENT_EXCLUDED"}
+                    if wait_result["status"] != "online" and not preferred_agent_id:
+                        for agent in pc_agent_manager.list_agent_statuses():
+                            agent_id = str(agent.get("agent_id") or "").strip()
+                            if str(agent.get("status") or "") == "online" and agent_id and agent_id not in excluded_agent_ids:
+                                wait_result = {"status": "online", "agent_id": agent_id, "source": "local_agent_list"}
+                                break
+                    if wait_result["status"] != "online" and not preferred_agent_id:
+                        wait_result = await _delivery_auto_collect_peer_agent(excluded_agent_ids)
+                    if wait_result["status"] != "online":
+                        logger.info(
+                            "delivery_auto_collect_skip: pc_agent_offline reason=%s mode=%s services=%s",
+                            reason,
+                            mode,
+                            selected_services,
+                        )
+                        return
 
                 payload = _delivery_auto_collect_payload(
                     str(wait_result.get("agent_id") or ""),
@@ -1439,6 +1447,8 @@ async def lifespan(app: FastAPI):
                     "--attempt-timeout-seconds",
                     str(timeout_seconds),
                 ]
+                if use_global_queue:
+                    cmd.insert(2, "--global-queue")
                 if mode:
                     cmd.extend(["--mode", mode])
                 if payload.get("force_recreate_portal_sessions"):
@@ -1533,16 +1543,24 @@ async def lifespan(app: FastAPI):
                     return
 
                 today = datetime.now(KST).date().isoformat()
-                wait_result = await pc_agent_manager.wait_for_agent_online(timeout=45)
-                if wait_result["status"] != "online":
-                    wait_result = await _delivery_auto_collect_peer_agent()
-                if wait_result["status"] != "online":
-                    logger.info(
-                        "bank_auto_collect_skip: pc_agent_offline reason=%s error_code=%s",
-                        reason,
-                        wait_result.get("error_code") or "",
-                    )
-                    return
+                use_global_queue = _env_bool("YEOLJEONG_PC_AGENT_GLOBAL_QUEUE_ENABLED", True)
+                if use_global_queue:
+                    wait_result = {
+                        "status": "online",
+                        "agent_id": "",
+                        "source": "global_queue_enqueue_without_agent_wait",
+                    }
+                else:
+                    wait_result = await pc_agent_manager.wait_for_agent_online(timeout=45)
+                    if wait_result["status"] != "online":
+                        wait_result = await _delivery_auto_collect_peer_agent()
+                    if wait_result["status"] != "online":
+                        logger.info(
+                            "bank_auto_collect_skip: pc_agent_offline reason=%s error_code=%s",
+                            reason,
+                            wait_result.get("error_code") or "",
+                        )
+                        return
 
                 browser_timeout_seconds = _env_int("YEOLJEONG_BANK_BROWSER_TIMEOUT_SECONDS", 60)
                 process_timeout_seconds = _env_int("YEOLJEONG_BANK_AUTO_COLLECT_TIMEOUT_SECONDS", 180)
@@ -1567,6 +1585,8 @@ async def lifespan(app: FastAPI):
                     "--job-id",
                     f"bank-auto-{reason}-{today}",
                 ]
+                if use_global_queue:
+                    cmd.insert(2, "--global-queue")
                 if force_recreate_bank_browser:
                     cmd.append("--force-recreate-bank-browser")
 
@@ -1623,6 +1643,95 @@ async def lifespan(app: FastAPI):
             finally:
                 _release_process_lock(lock_fd)
 
+        async def _run_pc_agent_global_collection_queue(reason: str = "pc_agent_global_queue_drain"):
+            try:
+                from app.services.pc_agent_manager import pc_agent_manager
+                import asyncio
+                import json
+                import subprocess
+                import sys
+                from pathlib import Path
+
+                if not _is_active_api_container_for_background_jobs():
+                    logger.info(
+                        "pc_agent_global_collection_queue_skip: inactive_api_container reason=%s container=%s port=%s",
+                        reason,
+                        os.getenv("AADS_CONTAINER_NAME", ""),
+                        os.getenv("AADS_PUBLIC_PORT", ""),
+                    )
+                    return
+
+                preferred_agent_id = os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "").strip()
+                excluded_agent_ids = _delivery_auto_collect_excluded_agent_ids()
+                wait_result = await pc_agent_manager.wait_for_agent_online(
+                    agent_id=preferred_agent_id,
+                    timeout=30,
+                )
+                if wait_result["status"] == "online" and wait_result.get("agent_id") in excluded_agent_ids:
+                    wait_result = {"status": "excluded", "error_code": "PC_AGENT_EXCLUDED"}
+                if wait_result["status"] != "online" and not preferred_agent_id:
+                    for agent in pc_agent_manager.list_agent_statuses():
+                        agent_id = str(agent.get("agent_id") or "").strip()
+                        if str(agent.get("status") or "") == "online" and agent_id and agent_id not in excluded_agent_ids:
+                            wait_result = {"status": "online", "agent_id": agent_id, "source": "local_agent_list"}
+                            break
+                if wait_result["status"] != "online" and not preferred_agent_id:
+                    wait_result = await _delivery_auto_collect_peer_agent(excluded_agent_ids)
+                if wait_result["status"] != "online":
+                    logger.info(
+                        "pc_agent_global_collection_queue_skip: pc_agent_offline reason=%s error_code=%s",
+                        reason,
+                        wait_result.get("error_code") or "",
+                    )
+                    return
+
+                root_dir = Path(__file__).resolve().parents[1]
+                iterations = _env_int("YEOLJEONG_PC_AGENT_QUEUE_ITERATIONS", 1)
+                timeout_seconds = _env_int("YEOLJEONG_PC_AGENT_QUEUE_DRAIN_TIMEOUT_SECONDS", 1500)
+                cmd = [
+                    sys.executable,
+                    str(root_dir / "scripts" / "yeoljeong_auto_collect.py"),
+                    "--drain-global-queue",
+                    "--queue-iterations",
+                    str(iterations),
+                    "--browser-agent-id",
+                    str(wait_result.get("agent_id") or ""),
+                ]
+                try:
+                    completed = await asyncio.to_thread(
+                        subprocess.run,
+                        cmd,
+                        cwd=str(root_dir),
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=timeout_seconds,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "pc_agent_global_collection_queue_timeout reason=%s agent_id=%s timeout_seconds=%d",
+                        reason,
+                        wait_result.get("agent_id"),
+                        timeout_seconds,
+                    )
+                    return
+                output = str(completed.stdout or "").strip()
+                try:
+                    result = json.loads(output) if output else {}
+                except json.JSONDecodeError:
+                    result = {"parse_error": "invalid_child_stdout"}
+                logger.info(
+                    "pc_agent_global_collection_queue_done reason=%s agent_id=%s exit=%d drained=%s stderr=%s",
+                    reason,
+                    wait_result.get("agent_id"),
+                    completed.returncode,
+                    result.get("drained") if isinstance(result, dict) else "",
+                    str(completed.stderr or "").strip()[-500:],
+                )
+            except Exception as e:
+                logger.warning(f"pc_agent_global_collection_queue_error: {e}")
+
         scheduler.add_job(
             _run_delivery_auto_collect,
             CronTrigger(hour="7,12,18", minute=0, timezone="Asia/Seoul"),
@@ -1668,6 +1777,15 @@ async def lifespan(app: FastAPI):
                 timezone="Asia/Seoul",
             ),
             id="bank_auto_collect",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _run_pc_agent_global_collection_queue,
+            "interval",
+            minutes=_env_int("YEOLJEONG_PC_AGENT_QUEUE_DRAIN_INTERVAL_MINUTES", 3),
+            id="pc_agent_global_collection_queue_drain",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

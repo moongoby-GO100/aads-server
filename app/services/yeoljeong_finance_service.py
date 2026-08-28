@@ -5307,6 +5307,7 @@ def _bank_quick_credentials_for_account(
         return {}
     selected = candidates[0]
     credentials: dict[str, str] = {
+        "quick_account_configured": "1",
         "login_username": str(selected.get("username") or "").strip(),
         "portal_url": str(selected.get("login_url") or BANK_QUICK_SERVICE_CONFIG.get(service_code, {}).get("login_url") or "").strip(),
     }
@@ -5364,6 +5365,7 @@ def _collect_bank_via_browser(
     from app.services.yeoljeong_bank_browser_connector import (
         bank_browser_work_key,
         collect_bank_via_browser_session_async,
+        ibk_business_browser_work_key,
         shinhan_individual_browser_work_key,
     )
 
@@ -5375,6 +5377,8 @@ def _collect_bank_via_browser(
     if not browser_work_key_val:
         if service_code == "shinhan_business" and business_entity_type not in {"corporation", "corporate", "법인"}:
             browser_work_key_val = shinhan_individual_browser_work_key(business_id, branch_id)
+        elif service_code == "ibk_business":
+            browser_work_key_val = ibk_business_browser_work_key(business_id, branch_id)
         else:
             browser_work_key_val = bank_browser_work_key(account_id, business_id, branch_id)
     bank_credentials = _bank_quick_credentials_for_account(
@@ -5382,6 +5386,52 @@ def _collect_bank_via_browser(
         business_id=business_id,
         branch_id=branch_id,
     )
+    if service_code in {"shinhan_business", "ibk_business"} and bank_credentials.get("quick_account_configured") == "1":
+        required_fields = {
+            "login_password": "로그인 비밀번호",
+            "account_no": "조회용 계좌번호",
+            "account_password": "계좌비밀번호",
+            "business_registration_no": "사업자번호",
+        }
+        missing_labels = [
+            label
+            for field, label in required_fields.items()
+            if not str(bank_credentials.get(field) or "").strip()
+        ]
+        if missing_labels:
+            return {
+                "collection": {
+                    "bank_account_id": account_id,
+                    "business_id": business_id,
+                    "branch_id": branch_id,
+                    "status": "credential_required",
+                    "connector_status": "ACTION_REQUIRED",
+                    "connection_type": "browser",
+                    "message": "은행 간편/빠른조회 필수값 누락: " + ", ".join(missing_labels),
+                    "error_code": "MISSING_CREDENTIALS",
+                    "diagnostics": {
+                        "auth_mode": "pc_agent_browser",
+                        "connector": "bank_browser",
+                        "bank_account_id": account_id,
+                        "bank_code": str(account.get("bank_code") or ""),
+                        "institution_code": service_code,
+                        "saved_login_username": "1" if str(bank_credentials.get("login_username") or "").strip() else "0",
+                        "saved_login_secret": "1" if str(bank_credentials.get("login_password") or "").strip() else "0",
+                        "saved_account_no": "1" if str(bank_credentials.get("account_no") or "").strip() else "0",
+                        "saved_account_secret": "1" if str(bank_credentials.get("account_password") or "").strip() else "0",
+                        "saved_business_registration_no": "1" if str(bank_credentials.get("business_registration_no") or "").strip() else "0",
+                    },
+                    "collected_rows": 0,
+                    "imported_rows": 0,
+                    "duplicate_rows": 0,
+                    "matched_count": 0,
+                    "unmatched_count": 0,
+                    "last_collected_at": str(account.get("last_synced_at") or ""),
+                    "date_from": date_from,
+                    "date_to": date_to,
+                },
+                "transactions": [],
+            }
     browser_preferred_port_raw = payload.get("browser_preferred_port")
     browser_agent_id_val = str(payload.get("browser_agent_id") or "").strip()
     try:

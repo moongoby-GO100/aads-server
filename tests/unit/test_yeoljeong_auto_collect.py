@@ -212,6 +212,94 @@ def test_bank_scope_accepts_mia_branch_alias(monkeypatch):
     assert calls == [{"business_id": "biz-mia", "branch_id": "branch-gangbuk-mia", "status": "active"}]
 
 
+def test_bank_only_promotes_ibk_quick_platform_account_to_browser_bank_account(monkeypatch):
+    created = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "list_platform_accounts",
+        lambda user, business_id=None: [
+            {
+                "id": "platform-ibk",
+                "service": "ibk_business",
+                "label": "중화점 기업은행 기업",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "status": "credential_registered",
+                "auto_sync": True,
+                "account_no_masked": "**********4014",
+            }
+        ],
+    )
+
+    def fake_list_bank_accounts(user, business_id=None, *, branch_id=None, status=None):
+        return list(created) if status == "active" else []
+
+    def fake_create_bank_account(payload, user):
+        record = {
+            "id": "bank-ibk",
+            "business_id": payload["business_id"],
+            "branch_id": payload["branch_id"],
+            "bank_code": payload["bank_code"],
+            "bank_name": payload["bank_name"],
+            "institution_code": payload["institution_code"],
+            "connection_type": payload["connection_type"],
+            "auto_sync": payload["auto_sync"],
+        }
+        created.append(record)
+        return record
+
+    monkeypatch.setattr(auto_collect, "list_bank_accounts", fake_list_bank_accounts)
+    monkeypatch.setattr(auto_collect, "create_bank_account", fake_create_bank_account)
+
+    accounts = auto_collect._bank_accounts_for_payload(
+        {"business_id": "biz-junghwa", "branch": "중화점"},
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert [account["id"] for account in accounts] == ["bank-ibk"]
+    assert created[0]["bank_code"] == "003"
+    assert created[0]["institution_code"] == "ibk_business"
+    assert created[0]["connection_type"] == "browser"
+
+
+def test_bank_accounts_for_payload_dedupes_same_scope_and_bank(monkeypatch):
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [
+            {
+                "id": "bank-ibk-1",
+                "business_id": "biz-junghwa",
+                "branch_id": "branch-junghwa",
+                "bank_code": "003",
+                "bank_name": "IBK기업은행",
+                "institution_code": "ibk_business",
+                "connection_type": "browser",
+                "auto_sync": True,
+            },
+            {
+                "id": "bank-ibk-2",
+                "business_id": "biz-junghwa",
+                "branch_id": "branch-junghwa",
+                "bank_code": "003",
+                "bank_name": "IBK기업은행",
+                "institution_code": "ibk_business",
+                "connection_type": "browser",
+                "auto_sync": True,
+            },
+        ],
+    )
+
+    accounts = auto_collect._bank_accounts_for_payload(
+        {"business_id": "biz-junghwa", "branch": "중화점"},
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert [account["id"] for account in accounts] == ["bank-ibk-1"]
+
+
 def test_skip_financial_accounts_still_disables_bank_collection():
     args = auto_collect.build_parser().parse_args(["--until-complete", "--skip-financial-accounts"])
 
@@ -440,11 +528,11 @@ def test_run_collectors_collects_legacy_platform_financial_accounts(monkeypatch)
         "list_platform_accounts",
         lambda user, business_id=None: [
             {
-                "id": "legacy-bank-1",
-                "service": "ibk_business",
+                "id": "legacy-card-1",
+                "service": "card_pg",
                 "business_id": business_id,
                 "branch": "중화점",
-                "collection_mode": "bank-quick-service",
+                "collection_mode": "api",
                 "auto_sync": True,
             }
         ],
@@ -458,11 +546,11 @@ def test_run_collectors_collects_legacy_platform_financial_accounts(monkeypatch)
             "branch": payload["branch"],
             "summary": [
                 {
-                    "service": "ibk_business",
+                    "service": "card_pg",
                     "status": "connector_not_configured",
                     "message": "커넥터가 아직 연결되지 않았습니다.",
                     "account_id": payload["account_id"],
-                    "collection_mode": "bank-quick-service",
+                    "collection_mode": "api",
                     "imported_rows": 0,
                 }
             ],
@@ -485,8 +573,8 @@ def test_run_collectors_collects_legacy_platform_financial_accounts(monkeypatch)
 
     assert calls == [
         {
-            "services": ["ibk_business"],
-            "account_id": "legacy-bank-1",
+            "services": ["card_pg"],
+            "account_id": "legacy-card-1",
             "business_id": "biz-junghwa",
             "branch": "중화점",
             "date_from": "2026-08-01",
@@ -1332,6 +1420,102 @@ def test_main_child_no_timeout_runs_collectors_without_recursing(monkeypatch):
     assert exit_code == 0
     assert calls[0][0]["services"] == ["baemin"]
     assert calls[0][2] is False
+
+
+def test_global_queue_enqueues_delivery_scopes(monkeypatch):
+    enqueued = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "_delivery_requested_services",
+        lambda payload: ["coupangeats", "ddangyo"],
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "_delivery_sync_window",
+        lambda payload: (
+            auto_collect.datetime(2026, 8, 1, tzinfo=auto_collect.KST).date(),
+            auto_collect.datetime(2026, 8, 28, tzinfo=auto_collect.KST).date(),
+        ),
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "_delivery_sync_scopes",
+        lambda payload, services, accounts: [("biz-mia", "열정국밥_미아점")],
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "enqueue_collection_items",
+        lambda items: {
+            "count": len(items),
+            "items": [dict(item, id=f"queue-{index}", status="queued") for index, item in enumerate(items)],
+        },
+    )
+    monkeypatch.setattr(auto_collect, "queue_snapshot", lambda limit=20: [])
+
+    result = auto_collect._enqueue_global_collection_queue(
+        {
+            "services": ["coupangeats", "ddangyo"],
+            "business_id": "all",
+            "branch": "전체",
+            "all_businesses": True,
+            "skip_financial_accounts": True,
+        },
+        {"email": "system@aads.local", "is_admin": True},
+    )
+    enqueued.extend(result["items"])
+
+    assert result["global_queue"] is True
+    assert result["count"] == 2
+    assert [item["service"] for item in enqueued] == ["coupangeats", "ddangyo"]
+    assert all(item["status"] == "queued" for item in enqueued)
+
+
+def test_drain_global_queue_claims_and_completes(monkeypatch):
+    completed = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "claim_next_collection_item",
+        lambda agent_id="": {
+            "id": "queue-1",
+            "service": "coupangeats",
+            "business_id": "biz-mia",
+            "branch": "미아점",
+            "payload": {
+                "services": ["coupangeats"],
+                "business_id": "biz-mia",
+                "branch": "미아점",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_collectors",
+        lambda payload, user, *, queue_only=False: {
+            "summary": [
+                {
+                    "service": "coupangeats",
+                    "status": "succeeded",
+                    "error_code": "",
+                    "counts": {"sales": 1, "settlements": 0, "reviews": 0, "ads": 0},
+                }
+            ],
+            "bank_collections": [],
+        },
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "complete_collection_item",
+        lambda item_id, **kwargs: completed.append((item_id, kwargs)) or {"id": item_id, **kwargs},
+    )
+
+    result = auto_collect._run_global_collection_queue_once({"is_admin": True}, agent_id="agent-1")
+
+    assert result["claimed"] is True
+    assert result["status"] == "succeeded"
+    assert completed[0][0] == "queue-1"
+    assert completed[0][1]["status"] == "succeeded"
 
 
 def test_bank_only_defers_when_bank_pc_agent_lock_is_held(tmp_path, monkeypatch):

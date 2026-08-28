@@ -1,5 +1,38 @@
 # AADS HANDOVER
 
+## 2026-08-28 15:58 KST - PC Agent global collection queue P0
+
+- Trigger: CEO asked to implement the recommended PC Agent global collection queue so one PC can run multiple authenticated bank/sales-site collection jobs without resource conflicts.
+- Changes:
+  - Added `app/services/pc_agent_collection_queue.py`, a DB-first/JSON-fallback queue service with `site_key`, `work_key`, `resource_key`, `priority`, `min_interval_seconds`, `latest_only`, claim, completion, and snapshot support.
+  - Added `migrations/134_pc_agent_collection_queue.sql` for `pc_agent_collection_queue`. The queue admits only one running row per `resource_key`, supports latest-only supersede, and tracks lease agent, attempts, payload, result, error, and timestamps.
+  - Updated `scripts/yeoljeong_auto_collect.py` with `--global-queue`, `--drain-global-queue`, and `--queue-iterations`. Queue registration splits all-business delivery work into per-service/per-branch items and bank work into higher-priority bank items. Drain mode claims a due item, runs the existing collector, then completes the queue row from the collection result.
+  - Updated `app/main.py` so scheduled bank/delivery auto-collect jobs enqueue work first, even when PC Agent is temporarily offline. Added `pc_agent_global_collection_queue_drain`, an interval job that leases an online PC Agent and drains due queue items one at a time.
+  - Added `tests/unit/test_pc_agent_collection_queue.py` and queue coverage in `tests/unit/test_yeoljeong_auto_collect.py`.
+- Verification:
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -f - < migrations/134_pc_agent_collection_queue.sql` succeeded.
+  - `query_database`: `pc_agent_collection_queue` exists with 28 columns.
+  - `.venv-playwright/bin/python -m py_compile app/services/pc_agent_collection_queue.py scripts/yeoljeong_auto_collect.py app/main.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_bank_browser_connector.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_pc_agent_collection_queue.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` passed: 50 tests.
+  - `env -u DATABASE_URL -u YEOLJEONG_FINANCE_DATABASE_URL AADS_PC_AGENT_COLLECTION_QUEUE_PATH=/tmp/aads-pc-agent-queue-smoke.json .venv-playwright/bin/python scripts/yeoljeong_auto_collect.py --global-queue --services coupangeats --business-id biz-mia --branch 열정국밥_미아점 --date-from 2026-08-28 --date-to 2026-08-28 --skip-financial-accounts` returned `global_queue=true`, `count=1`, `status=queued`.
+  - `git diff --check` on changed queue/scheduler/test files succeeded.
+- Deployment status:
+  - DB migration is applied to the local operating PostgreSQL container.
+  - Code commit, push, and bluegreen deploy have not been performed in this entry.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, `scripts/deploy_dashboard_bg.sh`, `.tmp/`, and prior FOOD bank changes were left untouched.
+
+## 2026-08-28 13:54 KST - Server Playwright bot defense managed browser planning
+
+- Trigger: CEO asked to save a very detailed planning document for server Playwright bot-defense handling, vendor research, and OHVIS implementation direction with references.
+- Changes:
+  - Added `docs/plans/20260828_SERVER_PLAYWRIGHT_BOT_DEFENSE_MANAGED_BROWSER_PLAN.md`.
+  - The document consolidates Playwright access-limit policy, approved CAPTCHA/OTP automation, Browserbase/Browserless/Cloudflare Browser Run/Firecrawl/Apify/Hyperbrowser/Stagehand research, PC Agent-free self-hosted Playwright runtime direction, concurrency/resource allocation, Live View/replay, forbidden bypass boundaries, and P0/P1/P2 implementation backlog.
+- Verification:
+  - Documentation-only change; code/build/deploy verification is not required for this entry.
+- Deployment status:
+  - No code deploy, restart, or push was performed in this entry.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, `scripts/deploy_dashboard_bg.sh`, and `.tmp/` were left untouched.
+
 ## 2026-08-28 12:31 KST - Managed Browser Playwright access diagnosis P0-P2
 
 - Trigger: CEO asked to implement all recommended P0/P1/P2 items after the Playwright access-limit report.
@@ -8637,3 +8670,25 @@
 - Resume: on the dedicated PC Agent session, the CEO/operator must complete
   the Shinhan financial certificate prompt once, then retry the same bank
   browser work key.
+
+## 2026-08-28 15:53 KST - FOOD bank collection PC Agent mainline and IBK quick-service support
+
+- Request: continue the PC Agent bank-collection path and include IBK Business Bank.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: added an IBK quick-service flow that safely fills saved quick-query fields in the connected PC Agent browser, submits the query, rechecks transaction tables, and falls back to statement download parsing. Shinhan-vs-IBK detection was tightened so "신한은행 기업" is not misclassified as IBK.
+  - `app/services/yeoljeong_finance_service.py`: uses an IBK-specific Browser Bridge work key and fails fast with `credential_required / MISSING_CREDENTIALS` when a configured bank quick-service account lacks required saved values.
+  - `scripts/yeoljeong_auto_collect.py`: promotes bank quick-service records from `platform_accounts` into browser `bank_accounts`, dedupes same business/branch/bank combinations, and avoids re-running bank quick-service via the legacy platform-account collector.
+  - Tests added for IBK DOM query flow, platform-account promotion, and duplicate bank-account suppression.
+- Verification:
+  - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py -q` succeeded: 239 passed.
+  - `docker exec aads-server python -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `docker exec aads-server python scripts/yeoljeong_auto_collect.py --bank-only --business-id all --branch 전체 --date-from 2026-07-29 --date-to 2026-08-28 --browser-agent-id 7f99c528-24d --bank-browser-timeout-seconds 60` completed with 3 bank collections and `imported_rows=0`.
+- Collection result:
+  - `biz-mia / branch-gangbuk-mia / Shinhan`: `action_required`, `BANK_BROWSER_AUTH_CHALLENGE_DETECTED`, reason `SHINHAN_FINCERT_IFRAME_DETECTED_AFTER_TIMEOUT`; the dedicated other PC Agent session must complete the financial certificate prompt and retry the same work key.
+  - `biz-junghwa / branch-junghwa / IBK`: `credential_required`, `MISSING_CREDENTIALS`; registered platform account has username only and is missing login password, account number, account password, and business registration number.
+  - `biz-junghwa / branch-junghwa / Shinhan`: `credential_required`, `MISSING_CREDENTIALS`; same required saved values are missing.
+- Runtime note: related changed files were copied into the running `aads-server` container for immediate verification. No formal blue/green deploy was run in this step.
+- Remaining:
+  - Complete Shinhan financial-certificate prompt on PC Agent `7f99c528-24d` and rerun the same work key.
+  - Register the missing IBK quick-service credentials before IBK can collect actual transactions.
+  - Commit/deploy the code changes through the normal approval path.

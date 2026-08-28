@@ -61,6 +61,13 @@ def shinhan_individual_browser_work_key(business_id: str, branch_id: str) -> str
     return f"yeoljeong-bank-shinhan-individual-{digest}"
 
 
+def ibk_business_browser_work_key(business_id: str, branch_id: str) -> str:
+    """Return the dedicated IBK business quick-service work key."""
+    raw = f"ibk-business-quick|{business_id}|{branch_id}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return f"yeoljeong-bank-ibk-business-{digest}"
+
+
 def _diagnostic_screen_state(diagnostics: dict[str, Any]) -> dict[str, Any]:
     return {
         "state": str(diagnostics.get("screen_state") or "unknown"),
@@ -763,6 +770,248 @@ def _shinhan_query_flow_mode(business_entity_type: str, account: dict[str, Any])
     if any(token in normalized for token in ("corporation", "corporate", "법인")):
         return "corporate_quick"
     return "individual_simple"
+
+
+def _is_ibk_service(bank_code: str, bank_name: str, institution_code: str, portal_url: str = "") -> bool:
+    haystack = " ".join(
+        str(value or "").strip().lower()
+        for value in (bank_code, bank_name, institution_code, portal_url)
+    )
+    if (
+        str(bank_code or "").strip() == "088"
+        or str(institution_code or "").strip().lower() == "shinhan_business"
+        or "shinhan" in haystack
+        or "신한" in haystack
+    ):
+        return False
+    return (
+        "ibk" in haystack
+        or "기업은행" in haystack
+        or str(bank_code or "").strip() == "003"
+        or str(institution_code or "").strip() == "003"
+    )
+
+
+async def _try_prepare_ibk_quick_flow(
+    page: Any,
+    *,
+    username: str,
+    password: str,
+    account_no: str,
+    account_password: str,
+    business_registration_no: str,
+    date_from: str,
+    date_to: str,
+) -> dict[str, str]:
+    """Prepare IBK quick-service query screens via the connected PC Agent."""
+    if not any([username, password, account_no, account_password, business_registration_no, date_from, date_to]):
+        return {"attempted": "0", "mode": "ibk_quick"}
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            async (input) => {
+              // ibkQuickFlow
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const digits = (value) => String(value || '').replace(/\\D+/g, '');
+              const textOf = (el) => String(
+                el?.innerText ||
+                el?.value ||
+                el?.getAttribute?.('title') ||
+                el?.getAttribute?.('aria-label') ||
+                el?.getAttribute?.('placeholder') ||
+                ''
+              ).replace(/\\s+/g, ' ').trim();
+              const sameOriginDocuments = () => {
+                const docs = [document];
+                for (const frame of Array.from(document.querySelectorAll('iframe,frame'))) {
+                  try {
+                    if (frame.contentDocument) docs.push(frame.contentDocument);
+                  } catch (_) {}
+                }
+                return docs;
+              };
+              const allElements = (selector) => {
+                const result = [];
+                for (const doc of sameOriginDocuments()) {
+                  try { result.push(...Array.from(doc.querySelectorAll(selector))); } catch (_) {}
+                }
+                return result;
+              };
+              const fieldText = (el) => String([
+                el?.id,
+                el?.name,
+                el?.getAttribute?.('title'),
+                el?.getAttribute?.('aria-label'),
+                el?.getAttribute?.('placeholder'),
+                el?.closest?.('label')?.innerText,
+                el?.parentElement?.innerText
+              ].filter(Boolean).join(' ')).replace(/\\s+/g, ' ').trim();
+              const setValue = (el, value) => {
+                if (!visible(el) || !value) return false;
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, value);
+                else el.value = value;
+                el.focus();
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
+                return true;
+              };
+              const inputs = () => allElements('input,textarea').filter(visible);
+              const firstInput = (patterns, type = '') => inputs().find((el) => {
+                if (type && String(el.type || '').toLowerCase() !== type) return false;
+                const text = fieldText(el);
+                return patterns.some((pattern) => pattern.test(text));
+              }) || null;
+              const fillByPattern = (patterns, value, type = '') => setValue(firstInput(patterns, type), value);
+              const passwordInputs = () => inputs().filter((el) => String(el.type || '').toLowerCase() === 'password');
+              const loginPassword = () => firstInput([
+                /이용자.?비밀번호|로그인.?비밀번호|비밀번호|password|passwd|login.*pw/i
+              ], 'password') || passwordInputs()[0] || null;
+              const quickAccountPassword = () => firstInput([
+                /계좌.?비밀번호|계좌.?암호|통장.?비밀번호|account.*password|acct.*pw|4자리/i
+              ], 'password') || passwordInputs()[1] || passwordInputs()[0] || null;
+              const clickBest = (purpose = 'query') => {
+                const deny = ['이체', '송금', '납부', '삭제', '해지', '출금'];
+                const score = (label, id) => {
+                  const value = `${label} ${id}`.toLowerCase();
+                  if (!value.trim() || deny.some((word) => value.includes(word))) return 0;
+                  if (purpose === 'login') {
+                    if (/로그인|login/.test(value)) return 120;
+                    if (/확인|다음/.test(value)) return 60;
+                    return 0;
+                  }
+                  if (/조회|검색|확인/.test(value)) return value.includes('조회') ? 120 : 70;
+                  return 0;
+                };
+                const item = allElements('a,button,input[type=button],input[type=submit]')
+                  .filter(visible)
+                  .map((el) => ({el, label: textOf(el), id: String(el.id || el.name || '')}))
+                  .map((item) => ({...item, score: score(item.label, item.id)}))
+                  .filter((item) => item.score > 0)
+                  .sort((a, b) => b.score - a.score)[0];
+                if (!item) return '';
+                item.el.focus();
+                try { item.el.click(); } catch (_) {}
+                try { item.el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); } catch (_) {}
+                return item.label.slice(0, 40);
+              };
+              const fillAccountNo = () => {
+                const target = digits(input.accountNo);
+                if (!target) return false;
+                let ok = fillByPattern([
+                  /계좌.?번호|출금.?계좌|조회.?계좌|빠른.?계좌|account|acct|acno|acctno/i
+                ], target);
+                for (const part of target.match(/.{1,6}/g) || []) {
+                  const blank = inputs().find((el) => /계좌|account|acct|acno/i.test(fieldText(el)) && !String(el.value || '').trim());
+                  if (blank) ok = setValue(blank, part) || ok;
+                }
+                return ok;
+              };
+              const fillDateRange = () => {
+                const dashedFrom = String(input.dateFrom || '');
+                const dashedTo = String(input.dateTo || '');
+                const plainFrom = dashedFrom.replace(/-/g, '');
+                const plainTo = dashedTo.replace(/-/g, '');
+                const dotFrom = dashedFrom.replace(/-/g, '.');
+                const dotTo = dashedTo.replace(/-/g, '.');
+                const fromOk = fillByPattern([
+                  /시작일|조회시작|시작.?일자|from|start|fr[_-]?dt|inqr.*start/i
+                ], dashedFrom || plainFrom || dotFrom);
+                const toOk = fillByPattern([
+                  /종료일|조회종료|종료.?일자|to|end|to[_-]?dt|inqr.*end/i
+                ], dashedTo || plainTo || dotTo);
+                if (fromOk || toOk) return {from: fromOk, to: toOk};
+                const dateInputs = inputs().filter((el) => {
+                  const value = String(el.value || '');
+                  const text = fieldText(el);
+                  return /\\d{4}[.\\-/]?\\d{1,2}[.\\-/]?\\d{1,2}/.test(value) || /일자|날짜|기간|date|dt/i.test(text);
+                });
+                return {
+                  from: setValue(dateInputs[0] || null, dashedFrom || plainFrom || dotFrom),
+                  to: setValue(dateInputs[1] || null, dashedTo || plainTo || dotTo)
+                };
+              };
+              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ');
+              const result = {
+                attempted: '1',
+                mode: 'ibk_quick',
+                stage: 'quick_query',
+                username: '0',
+                login_secret: '0',
+                account_no: '0',
+                account_secret: '0',
+                business_registration_no: '0',
+                date_from: '0',
+                date_to: '0',
+                navigation_clicked: '0',
+                query_submitted: '0',
+                login_success: /로그아웃|조회결과|거래내역|빠른조회/i.test(text) ? '1' : '0'
+              };
+              result.username = fillByPattern([
+                /이용자.?id|이용자.?아이디|아이디|user|login.*id|cust.*id/i
+              ], input.username) ? '1' : '0';
+              result.login_secret = setValue(loginPassword(), input.password) ? '1' : '0';
+              result.account_no = fillAccountNo() ? '1' : '0';
+              result.account_secret = setValue(quickAccountPassword(), input.accountPassword) ? '1' : '0';
+              result.business_registration_no = fillByPattern([
+                /사업자|사업자등록|주민.?등록|주민.?사업자|business|bizno|registration/i
+              ], digits(input.businessRegistrationNo)) ? '1' : '0';
+              const dateResult = fillDateRange();
+              result.date_from = dateResult.from ? '1' : '0';
+              result.date_to = dateResult.to ? '1' : '0';
+              const loginLike = result.username === '1' && result.login_secret === '1' && result.account_no === '0';
+              const label = clickBest(loginLike ? 'login' : 'query');
+              if (label) {
+                result.navigation_clicked = '1';
+                result.query_submitted = loginLike ? '0' : '1';
+              }
+              return result;
+            }
+            """,
+            {
+                "username": username,
+                "password": password,
+                "accountNo": account_no,
+                "accountPassword": account_password,
+                "businessRegistrationNo": business_registration_no,
+                "dateFrom": date_from,
+                "dateTo": date_to,
+            },
+            timeout_ms=30000,
+            await_promise=True,
+        )
+    except Exception as exc:
+        return {"attempted": "failed", "mode": "ibk_quick", **_safe_browser_error_fields(exc)}
+    if not isinstance(raw, dict):
+        return {"attempted": "failed", "mode": "ibk_quick"}
+    result: dict[str, str] = {"mode": "ibk_quick"}
+    for key in (
+        "attempted",
+        "stage",
+        "username",
+        "login_secret",
+        "account_no",
+        "account_secret",
+        "business_registration_no",
+        "date_from",
+        "date_to",
+        "navigation_clicked",
+        "query_submitted",
+        "login_success",
+        "error_code",
+        "error_type",
+    ):
+        if key == "stage":
+            result[key] = str(raw.get(key) or "unknown")[:40]
+        elif key in {"error_code", "error_type"}:
+            value = str(raw.get(key) or "").strip()
+            if value:
+                result[key] = value[:120]
+        else:
+            result[key] = "1" if str(raw.get(key) or "") == "1" else "0"
+    return result
 
 
 async def _try_prepare_shinhan_query_flow(
@@ -2591,12 +2840,15 @@ async def collect_bank_via_browser_session_async(
         "bank_exclusive_lock_acquired": "1" if os.getenv("YEOLJEONG_BANK_LOCK_HELD") == "1" else "0",
     }
     shinhan_service = _is_shinhan_service(bank_code, bank_name, institution_code, portal_url)
+    ibk_service = _is_ibk_service(bank_code, bank_name, institution_code, portal_url)
     shinhan_flow_mode = _shinhan_query_flow_mode(business_entity_type, account) if shinhan_service else ""
     if shinhan_flow_mode == "individual_simple":
         portal_url = BANK_PORTAL_URLS["shinhan_business"]
         safe_diagnostics["portal_url_policy"] = "shinhan_individual_simple_override"
     if shinhan_flow_mode:
         safe_diagnostics["shinhan_query_flow_mode"] = shinhan_flow_mode
+    if ibk_service:
+        safe_diagnostics["ibk_query_flow_mode"] = "ibk_quick"
 
     session_id_to_use = browser_session_id.strip() if browser_session_id else ""
     auto_opened_session = False
@@ -3162,6 +3414,87 @@ async def collect_bank_via_browser_session_async(
             shinhan_flow_result = aggregate_flow
             safe_diagnostics["shinhan_query_flow"] = shinhan_flow_result
             safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
+
+        if not rows and ibk_service:
+            ibk_steps: list[dict[str, str]] = []
+            aggregate_flow: dict[str, str] = {"attempted": "0", "mode": "ibk_quick"}
+            for attempt_index in range(3):
+                step_result = await _try_prepare_ibk_quick_flow(
+                    page,
+                    username=str(login_username or ""),
+                    password=str(login_password or ""),
+                    account_no=str(account_no or ""),
+                    account_password=str(account_password or ""),
+                    business_registration_no=str(business_registration_no or ""),
+                    date_from=str(date_from or ""),
+                    date_to=str(date_to or ""),
+                )
+                step_result["attempt_index"] = str(attempt_index + 1)
+                ibk_steps.append(step_result)
+                for key, value in step_result.items():
+                    if key in {"mode", "stage"}:
+                        aggregate_flow[key] = value
+                    elif str(value) == "1":
+                        aggregate_flow[key] = "1"
+                    elif key not in aggregate_flow:
+                        aggregate_flow[key] = str(value)
+                actionable = any(
+                    step_result.get(key) == "1"
+                    for key in (
+                        "username",
+                        "login_secret",
+                        "account_no",
+                        "account_secret",
+                        "business_registration_no",
+                        "date_from",
+                        "date_to",
+                        "navigation_clicked",
+                        "query_submitted",
+                    )
+                )
+                if step_result.get("attempted") != "1" or not actionable:
+                    break
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+                try:
+                    rechecked_url, rechecked_rows, rechecked_diag, rechecked_text = await _read_bank_portal_snapshot(page)
+                    rechecked_url = rechecked_url or current_url
+                    if rechecked_rows and (date_from or date_to):
+                        rechecked_rows = [
+                            row for row in rechecked_rows if _row_in_date_range(row, date_from, date_to)
+                        ]
+                    safe_diagnostics["ibk_query_recheck_attempted"] = "1"
+                    safe_diagnostics["ibk_query_recheck_table_count"] = rechecked_diag["table_count"]
+                    if rechecked_url != current_url:
+                        safe_diagnostics["ibk_query_recheck_url_changed"] = "1"
+                    current_url = rechecked_url
+                    parse_diag = rechecked_diag
+                    safe_diagnostics["current_url"] = current_url
+                    safe_diagnostics["parser_table_count"] = rechecked_diag["table_count"]
+                    safe_diagnostics["parser_failure"] = rechecked_diag["parse_failure"]
+                    safe_diagnostics["parser_transaction_header_found"] = rechecked_diag.get("transaction_header_found", False)
+                    if rechecked_rows:
+                        rows = rechecked_rows
+                        safe_diagnostics["screen_state"] = "transaction_table"
+                        safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_IBK_QUERY"
+                        safe_diagnostics["screen_suggested_action"] = "parse_table"
+                        safe_diagnostics["screen_requires_operator"] = "0"
+                        break
+                    rechecked_decision = classify_portal_state(rechecked_url, rechecked_text)
+                    rechecked_state = rechecked_decision.as_dict()
+                    safe_diagnostics["screen_state"] = rechecked_state.get("state", "unknown")
+                    safe_diagnostics["screen_reason_code"] = rechecked_state.get("reason_code", "")
+                    safe_diagnostics["screen_suggested_action"] = rechecked_state.get("suggested_action", "no_action")
+                    safe_diagnostics["screen_requires_operator"] = "1" if rechecked_state.get("requires_operator") else "0"
+                    if step_result.get("query_submitted") == "1" or rechecked_decision.state in auth_states:
+                        break
+                except Exception:
+                    safe_diagnostics["ibk_query_recheck_attempted"] = "failed"
+                    break
+            safe_diagnostics["ibk_query_flow"] = aggregate_flow
+            safe_diagnostics["ibk_query_flow_steps"] = ibk_steps
 
         screen_state = _diagnostic_screen_state(safe_diagnostics)
         if not rows and screen_state.get("state") == "login_required":
