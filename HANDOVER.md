@@ -8869,3 +8869,21 @@
   - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py` succeeded.
 - Remaining:
   - Deploy the visible-state fix and rerun Shinhan collection to confirm whether ID/PW login proceeds past the security notice.
+
+## 2026-08-29 05:52 KST - CEO chat detailed-response quality gate
+
+- Request: fix cases where chat answers are too simple instead of detailed reports, then deploy to production.
+- Cause:
+  - `response_mode=fast` skipped completion-contract enforcement.
+  - `output_validator` returned OK early for tool-backed status/deploy/action intents, so a short tool-backed answer could be saved as final.
+  - `response_critic` skipped status/task/health/execution verification intents.
+  - Semantic cache could reuse an older concise answer for detailed report/action wording.
+- Changes:
+  - Added detailed CEO request detection for report/cause/risk/action/deploy/verification wording in `app/services/chat_service.py`.
+  - Detailed/action requests now upgrade from fast to quality mode and bypass semantic cache.
+  - `app/services/output_validator.py` now applies report-structure checks to detailed CEO requests even when tools were used.
+  - `app/services/response_critic.py` no longer skips status/task/health/execution intents when the CEO request asks for detailed reporting or action.
+- Verification planned:
+  - `python3 -m py_compile app/services/chat_service.py app/services/output_validator.py app/services/response_critic.py`
+  - targeted validator smoke test for short detailed-report response rejection.
+  - API health after reload/deploy.

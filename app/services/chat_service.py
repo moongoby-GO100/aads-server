@@ -300,6 +300,60 @@ def _normalize_response_mode(response_mode: Optional[str]) -> str:
     return normalized if normalized in _VALID_RESPONSE_MODES else _RESPONSE_MODE_QUALITY
 
 
+_DETAILED_RESPONSE_TRIGGERS = (
+    "문제점",
+    "개선안",
+    "권장",
+    "원인",
+    "근거",
+    "상세",
+    "정밀",
+    "보고",
+    "검수",
+    "검증",
+    "조치",
+    "구현",
+    "배포",
+    "반영",
+    "운영반영",
+    "커밋",
+    "푸시",
+    "결과",
+    "완료",
+    "진행상황",
+    "왜",
+    "어떻게",
+    "확인하고",
+    "파악하고",
+    "분석",
+)
+
+
+def _requires_quality_response_mode(user_message: str, intent: Optional[str] = None) -> bool:
+    """CEO가 원인/조치/검증을 요구한 턴은 fast 설정이어도 품질 게이트를 적용한다."""
+    text = (user_message or "").strip()
+    normalized_intent = (intent or "").strip()
+    if normalized_intent in {
+        "report",
+        "audit",
+        "diagnosis",
+        "debug",
+        "error_analysis",
+        "analysis",
+        "complex_analysis",
+        "code_modify",
+        "deploy",
+        "git_ops",
+        "pipeline_runner",
+        "cto_code_analysis",
+        "cto_verify",
+        "cto_impact",
+        "cto_strategy",
+    }:
+        return True
+    return any(trigger in text for trigger in _DETAILED_RESPONSE_TRIGGERS)
+
+
 def _should_enforce_completion_contract(response_mode: str) -> bool:
     """Fast mode must not turn a valid quick reply into a recoverable stream error."""
     return response_mode != _RESPONSE_MODE_FAST
@@ -8400,6 +8454,8 @@ async def send_message_stream(
     SSE 청크: data: {"type": "delta"|"thinking"|"tool_use"|"tool_result"|"done"|"error", ...}
     """
     response_mode = _normalize_response_mode(response_mode)
+    if response_mode == _RESPONSE_MODE_FAST and _requires_quality_response_mode(content, intent_override):
+        response_mode = _RESPONSE_MODE_QUALITY
     # AADS-186C: Langfuse 트레이스 시작
     _lf_trace = create_trace(
         name="chat_turn",
@@ -9104,7 +9160,7 @@ async def send_message_stream(
             "에러", "버그", "장애", "모니터", "헬스", "status", "check",
             "deploy", "fix", "error", "health", "지시서", "파이프라인",
         )
-        _skip_cache = any(kw in content for kw in _CACHE_BYPASS_KEYWORDS)
+        _skip_cache = any(kw in content for kw in _CACHE_BYPASS_KEYWORDS) or _requires_quality_response_mode(content, intent_override)
 
         # ── 임베딩 1회 공통 생성 (semantic_cache + contradiction_detector 공유) ──
         # skip_cache이고 CHANGE_KEYWORDS도 없으면 임베딩 불필요 → None 유지
@@ -9189,6 +9245,14 @@ async def send_message_stream(
             logger.info(f"contradiction_warning_injected session={session_id[:8]}")
 
         intent = intent_override if intent_override else intent_result.intent
+        if response_mode == _RESPONSE_MODE_FAST and _requires_quality_response_mode(content, intent):
+            response_mode = _RESPONSE_MODE_QUALITY
+            system_prompt = system_prompt + _response_mode_prompt_block(response_mode)
+            logger.info(
+                "chat_response_mode_upgraded session=%s intent=%s reason=detailed_ceo_request",
+                sid_short,
+                intent,
+            )
 
         # OHVIS Tier 1: 복잡한 인텐트에 대해 즉시 계획 응답 선행 (조기 응답 미발동 시만)
         if not intent_override and not _semantic_cache_hit and not _early_plan_emitted:

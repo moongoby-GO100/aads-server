@@ -189,6 +189,34 @@ _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
 _REPORT_MIN_STRUCTURE_CHARS = 280
 _STATUS_REPORT_MIN_STRUCTURE_CHARS = 180
 
+_DETAILED_RESPONSE_TRIGGERS: tuple[str, ...] = (
+    "문제점",
+    "개선안",
+    "권장",
+    "원인",
+    "근거",
+    "상세",
+    "정밀",
+    "보고",
+    "검수",
+    "검증",
+    "조치",
+    "구현",
+    "배포",
+    "반영",
+    "운영반영",
+    "커밋",
+    "푸시",
+    "결과",
+    "완료",
+    "진행상황",
+    "왜",
+    "어떻게",
+    "확인하고",
+    "파악하고",
+    "분석",
+)
+
 # ─── 확인형 질문 예외 (짧은 yes/no 응답 허용) ────────────────────────────────
 
 _CONFIRMATION_QUESTION_PATTERNS: list[re.Pattern] = [
@@ -210,6 +238,31 @@ def _is_confirmation_question(user_message: str) -> bool:
         if pat.search(msg):
             return True
     return False
+
+
+def _requires_detailed_ceo_report(user_message: str, intent: str = "") -> bool:
+    """상세 보고/조치형 요청은 도구 사용 여부와 무관하게 구조 품질 검사를 적용한다."""
+    text = (user_message or "").strip()
+    normalized_intent = (intent or "").strip()
+    if normalized_intent in {
+        "report",
+        "audit",
+        "diagnosis",
+        "debug",
+        "error_analysis",
+        "analysis",
+        "complex_analysis",
+        "code_modify",
+        "deploy",
+        "git_ops",
+        "pipeline_runner",
+        "cto_code_analysis",
+        "cto_verify",
+        "cto_impact",
+        "cto_strategy",
+    }:
+        return True
+    return any(trigger in text for trigger in _DETAILED_RESPONSE_TRIGGERS)
 
 
 def _is_structured_next_action_tail(text: str) -> bool:
@@ -320,8 +373,11 @@ def validate_response(
         # completed bubble just because its report shape is imperfect. Structural
         # quality can be improved by the completion contract/critic path, but the
         # actual tool-backed answer must remain deliverable.
-        if intent in {"status_check", "task_query", "health_check", "execution_verify",
-                       "code_modify", "deploy", "pipeline", "pipeline_runner", "git_ops", "execute"}:
+        if (
+            intent in {"status_check", "task_query", "health_check", "execution_verify",
+                       "code_modify", "deploy", "pipeline", "pipeline_runner", "git_ops", "execute"}
+            and not _requires_detailed_ceo_report(user_message, intent)
+        ):
             return _OK
         if not _skip_report_quality:
             _report_quality = check_report_quality_structure(stripped, intent)
