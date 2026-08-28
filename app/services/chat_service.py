@@ -5915,8 +5915,10 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
         _execution_id = s.get("execution_id")
         _completion_token: Optional[str] = (_execution_id or session_id) if is_completed else None
 
-        _emit_just_completed = is_completed
-        if is_completed and _completion_token:
+        # P0-FIX: producer가 done 이벤트 없이 비정상 종료 시 just_completed=False 반환
+        # → 프론트엔드 "응답 완료" 토스트가 미완료 응답에 뜨는 버그 방지
+        _emit_just_completed = is_completed and s.get("saw_done_event", False)
+        if is_completed and _completion_token and _emit_just_completed:
             _emit_just_completed = should_emit_completion_signal(
                 session_id,
                 _completion_token,
