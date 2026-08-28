@@ -197,7 +197,13 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
             page,
             """
             () => {
-              const bodyText = String(document.body?.innerText || '');
+              const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+              const visibleText = (root = document) => Array.from(root.querySelectorAll('body, .w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
+                .filter((el) => visible(el))
+                .map((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim())
+                .filter(Boolean)
+                .join(' ');
+              const bodyText = visibleText();
               const noticePatterns = [
                 '인터넷뱅킹 보안프로그램설치안내',
                 '키보드 입력 검증에 실패',
@@ -208,7 +214,6 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
               ];
               const matchedNotice = noticePatterns.find((item) => bodyText.includes(item)) || '';
               if (!matchedNotice) return {closed: '0'};
-              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
               const all = Array.from(document.querySelectorAll('a,button,input,span,div'));
               const scored = all
                 .filter(visible)
@@ -234,7 +239,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                 hit.click();
                 hit.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
               } catch (_) {}
-              let afterText = String(document.body?.innerText || '');
+              let afterText = visibleText();
               if (noticePatterns.some((item) => afterText.includes(item))) {
                 try {
                   const popup = hit.closest?.('.w2popup_window,.w2window,[id*="CO00038RP"]');
@@ -242,7 +247,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                     popup.style.display = 'none';
                     popup.setAttribute('aria-hidden', 'true');
                   }
-                  afterText = String(document.body?.innerText || '');
+                  afterText = visibleText();
                 } catch (_) {}
               }
               return {
@@ -268,7 +273,12 @@ async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
             page,
             """
             () => {
-              const bodyText = String(document.body?.innerText || '');
+              const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+              const bodyText = Array.from(document.querySelectorAll('body, .w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
+                .filter((el) => visible(el))
+                .map((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim())
+                .filter(Boolean)
+                .join(' ');
               const notices = [
                 ['SHINHAN_KEYBOARD_VERIFICATION_FAILED', /키보드 입력 검증에 실패|처음부터 다시 진행/],
                 ['SHINHAN_LOGIN_ID_REQUIRED', /이용자ID를 입력해주세요/],

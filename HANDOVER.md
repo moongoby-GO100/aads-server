@@ -8792,3 +8792,19 @@
 - Remaining:
   - Blue/green deploy is required for the new docker-compose bank Agent environment defaults to be loaded by scheduled jobs.
   - Shinhan still does not import rows; current observed page state is the Shinhan ID/PW login prompt on the non-CEO PC, while timeout diagnostics still see stale fincert tabs from the PC Agent browser state.
+
+## 2026-08-29 05:08 KST - FOOD Shinhan security notice visible-state fix
+
+- Request: verify whether Shinhan bank auto-collection is complete and immediately fix missing parts.
+- Findings:
+  - Runtime env is pinned to `DESKTOP-ICU55HK` / agent `7f99c528-24d`; CEO PC `2e9379a1-fed` is excluded.
+  - Live collection on ICU55HK still returned `ATTEMPT_TIMEOUT` with `imported_rows=0`; `transactions.json` remained an empty array.
+  - ICU55HK had duplicate Shinhan tabs and a visible `인터넷뱅킹 보안프로그램설치안내` popup before ID/PW input.
+- Actions:
+  - Closed 9 duplicate Shinhan tabs on ICU55HK, leaving 1 Shinhan tab.
+  - Updated Shinhan security notice detection/close logic to use visible DOM text so hidden popup remnants do not keep the flow in a false blocking state.
+- Verification:
+  - `python3 -m pytest tests/unit/test_bank_browser_connector.py -q` succeeded: 38 passed.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py` succeeded.
+- Remaining:
+  - Deploy the visible-state fix and rerun Shinhan collection to confirm whether ID/PW login proceeds past the security notice.
