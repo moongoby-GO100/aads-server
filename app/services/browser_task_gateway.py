@@ -219,6 +219,32 @@ def _task_to_dict(row: Any) -> dict[str, Any]:
     return item
 
 
+def _event_to_dict(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    for key in ("id", "tenant_id", "task_id"):
+        if item.get(key) is not None:
+            item[key] = str(item[key])
+    if item.get("created_at"):
+        item["created_at"] = item["created_at"].isoformat()
+    item["payload"] = _json_dict(item.get("payload"))
+    return item
+
+
+def _live_frame_to_dict(row: Any) -> dict[str, Any]:
+    if not row:
+        return {}
+    item = dict(row)
+    for key in ("task_id", "tenant_id"):
+        if item.get(key) is not None:
+            item[key] = str(item[key])
+    for key in ("captured_at", "updated_at"):
+        if item.get(key):
+            item[key] = item[key].isoformat()
+    item["cursor"] = _json_dict(item.get("cursor"))
+    item["metadata"] = _json_dict(item.get("metadata"))
+    return item
+
+
 async def create_browser_task(
     *,
     tenant_id: str,
@@ -359,6 +385,192 @@ async def get_browser_task(*, tenant_id: str, task_id: str) -> dict[str, Any] | 
             uuid.UUID(task_id),
         )
     return _task_to_dict(row) if row else None
+
+
+async def list_browser_task_events(*, tenant_id: str, task_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT *
+              FROM browser_task_events
+             WHERE tenant_id = $1
+               AND task_id = $2
+             ORDER BY created_at DESC
+             LIMIT $3
+            """,
+            _tenant_uuid(tenant_id),
+            uuid.UUID(task_id),
+            max(1, min(limit, 200)),
+        )
+    return [_event_to_dict(row) for row in rows]
+
+
+async def get_browser_task_live_frame(*, tenant_id: str, task_id: str) -> dict[str, Any] | None:
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT *
+              FROM browser_task_live_frames
+             WHERE tenant_id = $1
+               AND task_id = $2
+            """,
+            _tenant_uuid(tenant_id),
+            uuid.UUID(task_id),
+        )
+    return _live_frame_to_dict(row) if row else None
+
+
+def _extract_screenshot_base64(result: dict[str, Any]) -> str:
+    candidates = [
+        result.get("screenshot_base64"),
+        result.get("frame_base64"),
+        _json_dict(result.get("result")).get("screenshot_base64"),
+        _json_dict(_json_dict(result.get("result")).get("result")).get("screenshot_base64"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> dict[str, Any]:
+    task = await get_browser_task(tenant_id=tenant_id, task_id=task_id)
+    if not task:
+        return {"status": "not_found"}
+    work_key = str(task.get("work_key") or "").strip()
+    if not work_key:
+        return {"status": "skipped", "reason": "work_key_missing"}
+    try:
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        result = await pc_agent_manager.execute_routed_command(
+            command_type="browser_screenshot",
+            params={
+                "work_key": work_key,
+                "url": task.get("target_url") or "about:blank",
+                "format": "jpeg",
+                "quality": 68,
+                "command_timeout_seconds": 8,
+            },
+            job_type="managed_browser_live_view",
+            required_capabilities=["interactive_browser"],
+            queue_if_busy=True,
+            wait_for_turn=True,
+            queue_wait_timeout_seconds=3,
+            lease_ttl_seconds=20,
+            command_timeout_seconds=8,
+        )
+        if result.get("status") != "success":
+            return {"status": "skipped", "reason": result.get("error_code") or result.get("message") or "capture_failed"}
+        frame_base64 = _extract_screenshot_base64(result)
+        if not frame_base64:
+            return {"status": "skipped", "reason": "screenshot_empty"}
+        command_payload = _json_dict(_json_dict(result.get("result")).get("result"))
+        frame = await upsert_browser_task_live_frame(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            frame_base64=frame_base64,
+            media_type="image/jpeg",
+            width=command_payload.get("width") if isinstance(command_payload.get("width"), int) else None,
+            height=command_payload.get("height") if isinstance(command_payload.get("height"), int) else None,
+            current_url=str(command_payload.get("url") or task.get("target_url") or ""),
+            page_title=str(command_payload.get("title") or ""),
+            current_step=str(task.get("current_step") or "live capture"),
+            metadata={"source": "pc_agent_browser_screenshot", "command_id": result.get("command_id", "")},
+        )
+        return {"status": "captured", "frame": frame}
+    except Exception as exc:
+        logger.warning("browser_task_live_capture_failed task_id=%s err=%s", task_id, exc)
+        return {"status": "skipped", "reason": str(exc)}
+
+
+async def upsert_browser_task_live_frame(
+    *,
+    tenant_id: str,
+    task_id: str,
+    frame_base64: str = "",
+    frame_url: str = "",
+    media_type: str = "image/jpeg",
+    width: int | None = None,
+    height: int | None = None,
+    current_url: str = "",
+    page_title: str = "",
+    current_step: str = "",
+    cursor: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    async with get_pool().acquire() as conn:
+        task_row = await conn.fetchrow(
+            "SELECT * FROM browser_tasks WHERE tenant_id = $1 AND id = $2",
+            _tenant_uuid(tenant_id),
+            uuid.UUID(task_id),
+        )
+        if not task_row:
+            return None
+        row = await conn.fetchrow(
+            """
+            INSERT INTO browser_task_live_frames (
+                task_id, tenant_id, frame_base64, frame_url, media_type, width, height,
+                current_url, page_title, current_step, cursor, metadata, captured_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, NOW(), NOW())
+            ON CONFLICT (task_id) DO UPDATE
+               SET frame_base64 = EXCLUDED.frame_base64,
+                   frame_url = EXCLUDED.frame_url,
+                   media_type = EXCLUDED.media_type,
+                   width = EXCLUDED.width,
+                   height = EXCLUDED.height,
+                   current_url = EXCLUDED.current_url,
+                   page_title = EXCLUDED.page_title,
+                   current_step = EXCLUDED.current_step,
+                   cursor = EXCLUDED.cursor,
+                   metadata = EXCLUDED.metadata,
+                   captured_at = NOW(),
+                   updated_at = NOW()
+            RETURNING *
+            """,
+            uuid.UUID(task_id),
+            _tenant_uuid(tenant_id),
+            frame_base64,
+            frame_url,
+            media_type or "image/jpeg",
+            width,
+            height,
+            current_url[:2000],
+            page_title[:500],
+            current_step[:500],
+            json.dumps(mask_sensitive_value(cursor or {}), ensure_ascii=False),
+            json.dumps(mask_sensitive_value(metadata or {}), ensure_ascii=False),
+        )
+        if current_step:
+            await conn.execute(
+                """
+                UPDATE browser_tasks
+                   SET current_step = $3,
+                       updated_at = NOW()
+                 WHERE tenant_id = $1 AND id = $2
+                """,
+                _tenant_uuid(tenant_id),
+                uuid.UUID(task_id),
+                current_step[:500],
+            )
+        await append_browser_task_event(
+            conn=conn,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            event_type="live_frame",
+            payload={
+                "media_type": media_type or "image/jpeg",
+                "frame_url": frame_url,
+                "width": width,
+                "height": height,
+                "current_url": current_url,
+                "page_title": page_title,
+                "current_step": current_step,
+                "has_inline_frame": bool(frame_base64),
+            },
+        )
+    return _live_frame_to_dict(row)
 
 
 async def update_browser_task_status(

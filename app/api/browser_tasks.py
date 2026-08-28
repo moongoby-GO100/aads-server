@@ -10,12 +10,16 @@ from app.auth import TenantRole, require_tenant_role
 from app.services.browser_task_gateway import (
     consume_approval_token,
     create_browser_task,
+    capture_browser_task_live_frame,
     decide_permission,
     get_browser_task,
+    get_browser_task_live_frame,
+    list_browser_task_events,
     list_browser_tasks,
     list_permission_requests,
     request_task_permission,
     update_browser_task_status,
+    upsert_browser_task_live_frame,
 )
 from app.services.managed_browser import profile_info
 
@@ -61,6 +65,19 @@ class ApprovalTokenConsumeIn(BaseModel):
     origin: str = Field(default="", max_length=500)
     selector: str = Field(default="", max_length=500)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrowserLiveFrameIn(BaseModel):
+    frame_base64: str = Field(default="", max_length=2_500_000, json_schema_extra={"writeOnly": True})
+    frame_url: str = Field(default="", max_length=2000)
+    media_type: str = Field(default="image/jpeg", max_length=80)
+    width: int | None = Field(default=None, ge=1, le=10000)
+    height: int | None = Field(default=None, ge=1, le=10000)
+    current_url: str = Field(default="", max_length=2000)
+    page_title: str = Field(default="", max_length=500)
+    current_step: str = Field(default="", max_length=500)
+    cursor: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -117,6 +134,66 @@ async def api_get_browser_task(
     if not task:
         raise HTTPException(status_code=404, detail="browser_task_not_found")
     return task
+
+
+@router.get("/{task_id}/events")
+async def api_list_browser_task_events(
+    task_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    context: TenantContext = Depends(require_viewer),
+) -> dict[str, Any]:
+    task = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    events = await list_browser_task_events(tenant_id=_tenant_id(context), task_id=task_id, limit=limit)
+    return {"events": events, "count": len(events)}
+
+
+@router.get("/{task_id}/live-frame")
+async def api_get_browser_task_live_frame(
+    task_id: str,
+    event_limit: int = Query(default=20, ge=0, le=100),
+    capture: bool = Query(default=False),
+    context: TenantContext = Depends(require_viewer),
+) -> dict[str, Any]:
+    task = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    capture_result: dict[str, Any] = {"status": "skipped", "reason": "capture_disabled"}
+    if capture:
+        capture_result = await capture_browser_task_live_frame(tenant_id=_tenant_id(context), task_id=task_id)
+    frame = await get_browser_task_live_frame(tenant_id=_tenant_id(context), task_id=task_id)
+    events = []
+    if event_limit:
+        events = await list_browser_task_events(tenant_id=_tenant_id(context), task_id=task_id, limit=event_limit)
+    return {"task": task, "frame": frame, "events": events, "capture": capture_result}
+
+
+@router.post("/{task_id}/live-frame")
+async def api_update_browser_task_live_frame(
+    task_id: str,
+    body: BrowserLiveFrameIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    if not body.frame_base64 and not body.frame_url:
+        raise HTTPException(status_code=400, detail="frame_base64_or_frame_url_required")
+    frame = await upsert_browser_task_live_frame(
+        tenant_id=_tenant_id(context),
+        task_id=task_id,
+        frame_base64=body.frame_base64,
+        frame_url=body.frame_url,
+        media_type=body.media_type,
+        width=body.width,
+        height=body.height,
+        current_url=body.current_url,
+        page_title=body.page_title,
+        current_step=body.current_step,
+        cursor=body.cursor,
+        metadata=body.metadata,
+    )
+    if not frame:
+        raise HTTPException(status_code=404, detail="browser_task_not_found")
+    return {"status": "updated", "frame": frame}
 
 
 @router.patch("/{task_id}/status")
