@@ -11806,7 +11806,17 @@ async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
 # ─── 내부 헬퍼 ────────────────────────────────────────────────────────────────
 
 # #8: JSONB 필드 목록 (파싱 필요한 컬럼만)
-_JSONB_FIELDS = frozenset({"attachments", "sources", "tools_called", "settings", "files", "metadata", "quality_details"})
+_JSONB_FIELDS = frozenset({
+    "attachments",
+    "sources",
+    "tools_called",
+    "settings",
+    "files",
+    "metadata",
+    "quality_details",
+    "diagnostics",
+    "interruption_diagnostics",
+})
 
 
 def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
