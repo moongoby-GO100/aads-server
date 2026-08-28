@@ -7246,8 +7246,8 @@ async def get_interruption_report(
               AND ($3::uuid IS NULL OR te.session_id = $3)
               AND (
                     te.status IN ('interrupted', 'retrying', 'running')
-                    OR te.error_message IS NOT NULL
-                    OR te.interrupt_category IS NOT NULL
+                    OR COALESCE(te.error_message, '') <> ''
+                    OR COALESCE(te.interruption_diagnostics, '{}'::jsonb) <> '{}'::jsonb
                   )
             GROUP BY te.status, category, model
             ORDER BY count DESC, last_seen_at DESC
@@ -7286,10 +7286,15 @@ async def get_interruption_report(
               AND ($3::uuid IS NULL OR te.session_id = $3)
               AND (
                     te.status IN ('interrupted', 'retrying', 'running')
-                    OR te.error_message IS NOT NULL
-                    OR te.interrupt_category IS NOT NULL
+                    OR COALESCE(te.error_message, '') <> ''
+                    OR COALESCE(te.interruption_diagnostics, '{}'::jsonb) <> '{}'::jsonb
                   )
-            ORDER BY te.updated_at DESC
+            ORDER BY
+                CASE
+                    WHEN te.status IN ('interrupted', 'retrying', 'running') THEN 0
+                    ELSE 1
+                END,
+                te.updated_at DESC
             LIMIT $4
             """,
             tenant_uuid,
