@@ -1564,12 +1564,15 @@ def test_close_shinhan_security_notice_prefers_visible_popup_close():
 
     async def evaluate(expr, *args, **kwargs):
         assert "btnTotalClose" in expr
-        return {"closed": "1", "notice": "1", "tag": "A", "id": "CO00038RP_1_btnmakedpopupclose"}
+        if "noticePatterns" in expr:
+            assert "componentById" in expr
+            return {"closed": "1", "notice": "1", "tag": "A", "id": "CO00038RP_1_btnmakedpopupclose"}
+        return {"present": "0"}
 
     page.evaluate = AsyncMock(side_effect=evaluate)
 
     assert _run(connector._close_shinhan_security_notice(page)) is True
-    page.evaluate.assert_awaited_once()
+    assert page.evaluate.await_count == 2
 
 
 def test_shinhan_keyboard_login_does_not_navigate_before_hidden_idpw_fill():

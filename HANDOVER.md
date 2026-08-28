@@ -8935,3 +8935,24 @@
   - Re-applied the hidden WebSquare ID/PW policy after a conflicting worktree change restored account-query-first behavior.
   - Updated the Shinhan unit test so hidden login fields must not trigger account-page navigation before saved ID/PW injection.
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py -q` succeeded: 105 passed.
+
+## 2026-08-29 07:36 KST - FOOD Shinhan popup retry and Browser Bridge timeout follow-up
+
+- Request: continue the next step for Shinhan bank auto-collection on non-CEO PC `DESKTOP-ICU55HK`.
+- Code changes:
+  - Strengthened `_close_shinhan_security_notice()` to retry late Shinhan WebSquare notices, prefer `CO00038RP...btnmakedpopupclose`, and invoke WebSquare component click events before DOM click fallback.
+  - Added a Shinhan state-machine recheck path: when a post-login `이용자ID/비밀번호/보안프로그램` notice remains, close it and continue the remaining login attempts instead of falling through to a terminal parse/auth state.
+  - Updated the unit test expectation because notice closing now performs a close attempt plus a safe state recheck.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py` succeeded.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py` succeeded.
+  - One-off container test with local `app/` and `tests/` bind mounts succeeded: `tests/unit/test_yeoljeong_bank_browser_connector.py` 66 passed.
+  - One-off container test with local `app/` and `tests/` bind mounts succeeded: `tests/unit/test_bank_browser_connector.py` 38 passed.
+- Runtime result:
+  - ICU55HK `7f99c528-24d` was online and used; CEO PC `2e9379a1-fed` was not used.
+  - Browser work key `yeoljeong-bank-shinhan-individual-00e6447fd39dad84` was prepared, then collection runs repeatedly recreated it as stale.
+  - A scoped Mia Shinhan run with external `timeout 240s` exceeded the limit and was terminated; `transactions.json` remained empty and no new queue result row was written.
+  - Recent logs show PC Agent `browser_eval` late-result / 504 timeout behavior, so the remaining blocker is Browser Bridge/CDP command responsiveness and work-key stale recovery, not a completed bank transaction import.
+- Remaining:
+  - Add a shorter Browser Bridge command timeout / fail-fast path for Shinhan ID/PW retry so late PC Agent results cannot hold the bank collection process.
+  - After that, rerun Mia Shinhan collection and require either `imported_rows > 0` or a verified no-records state.

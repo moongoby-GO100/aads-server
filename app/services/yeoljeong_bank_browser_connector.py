@@ -192,78 +192,139 @@ def _install_dialog_auto_accept(page: Any) -> bool:
 
 async def _close_shinhan_security_notice(page: Any) -> bool:
     """Close Shinhan blocking notices when they prevent the next bank step."""
-    try:
-        raw = await _evaluate_page(
-            page,
-            """
-            () => {
-              const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-              const visibleText = (root = document) => Array.from(root.querySelectorAll('.w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
-                .filter((el) => visible(el))
-                .map((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim())
-                .filter(Boolean)
-                .join(' ');
-              const bodyText = visibleText();
-              const noticePatterns = [
-                '인터넷뱅킹 보안프로그램설치안내',
-                '키보드 입력 검증에 실패',
-                '거래를 처음부터 다시 진행',
-                '이용자ID를 입력해주세요',
-                '비밀번호를 입력해주세요',
-                '비밀번호 최소자릿수'
-              ];
-              const matchedNotice = noticePatterns.find((item) => bodyText.includes(item)) || '';
-              if (!matchedNotice) return {closed: '0'};
-              const all = Array.from(document.querySelectorAll('a,button,input,span,div'));
-              const scored = all
-                .filter(visible)
-                .map((el) => {
-                const label = String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim();
-                const meta = String(el.id || el.className || el.title || '');
-                  let score = 0;
-                  if (/btnmakedpopupclose|w2window_close|_close\\b|layerClose/i.test(meta)) score += 120;
-                  if (label === '확인') score += 110;
-                  if (label === '닫기') score += 80;
-                  if (/보안프로그램설치안내/.test(String(el.closest?.('.w2popup_window,.w2window')?.innerText || ''))) score += 40;
-                  if (/키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
-                  if (/btnTotalClose/i.test(meta)) score -= 200;
-                  const rect = el.getBoundingClientRect();
-                  if (rect.width <= 0 || rect.height <= 0) score = 0;
-                  return {el, label, meta, score};
-                })
-                .filter((item) => item.score > 0)
-                .sort((a, b) => b.score - a.score);
-              const hit = scored[0]?.el || null;
-              if (!hit) return {closed: '0', notice: '1'};
-              try {
-                hit.click();
-                hit.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
-              } catch (_) {}
-              let afterText = visibleText();
-              if (noticePatterns.some((item) => afterText.includes(item))) {
-                try {
-                  const popup = hit.closest?.('.w2popup_window,.w2window,[id*="CO00038RP"]');
-                  if (popup) {
-                    popup.style.display = 'none';
-                    popup.setAttribute('aria-hidden', 'true');
+    closed_once = False
+    for _attempt in range(4):
+        try:
+            raw = await _evaluate_page(
+                page,
+                """
+                () => {
+                  const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                  const visibleText = (root = document) => Array.from(root.querySelectorAll('.w2popup_window, .w2window, [role="dialog"], a, button, input, span, div'))
+                    .filter((el) => visible(el))
+                    .map((el) => String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim())
+                    .filter(Boolean)
+                    .join(' ');
+                  const bodyText = visibleText();
+                  const noticePatterns = [
+                    '인터넷뱅킹 보안프로그램설치안내',
+                    '키보드 입력 검증에 실패',
+                    '거래를 처음부터 다시 진행',
+                    '이용자ID를 입력해주세요',
+                    '비밀번호를 입력해주세요',
+                    '비밀번호 최소자릿수'
+                  ];
+                  const matchedNotice = noticePatterns.find((item) => bodyText.includes(item)) || '';
+                  if (!matchedNotice) return {closed: '0'};
+                  const componentById = (id) => {
+                    if (!id) return null;
+                    const candidates = [
+                      () => window.$p?.getComponentById?.(id),
+                      () => window.WebSquare?.util?.getComponentById?.(id),
+                      () => window.WebSquare?.ModelUtil?.getInstance?.(id),
+                      () => window[id]
+                    ];
+                    for (const getter of candidates) {
+                      try {
+                        const component = getter();
+                        if (component) return component;
+                      } catch (_) {}
+                    }
+                    return null;
+                  };
+                  const call = (component, methods, ...args) => {
+                    if (!component) return false;
+                    for (const method of methods) {
+                      try {
+                        if (typeof component[method] === 'function') {
+                          component[method](...args);
+                          return true;
+                        }
+                      } catch (_) {}
+                    }
+                    return false;
+                  };
+                  const clickCandidate = (el) => {
+                    if (!el) return false;
+                    const component = componentById(el.id);
+                    try { call(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'onclick'); } catch (_) {}
+                    try { call(component, ['trigger', 'fireEvent', 'dispatchEvent'], 'click'); } catch (_) {}
+                    try { call(component, ['click', 'userClick']); } catch (_) {}
+                    try {
+                      el.click();
+                      el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                    } catch (_) {}
+                    return true;
+                  };
+                  const exactClose = Array.from(document.querySelectorAll('[id*="CO00038RP"][id*="btnmakedpopupclose"], [id*="btnmakedpopupclose"], [class*="w2window_close"], .w2window_close'))
+                    .filter(visible)
+                    .find((el) => {
+                      const text = String(el.closest?.('.w2popup_window,.w2window,[role="dialog"],[id*="CO00038RP"]')?.innerText || '');
+                      return /보안프로그램설치안내|키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(text)
+                        || /CO00038RP|btnmakedpopupclose/i.test(String(el.id || el.className || ''));
+                    }) || null;
+                  const all = exactClose ? [exactClose] : Array.from(document.querySelectorAll('a,button,input,span,div'));
+                  const scored = all
+                    .filter(visible)
+                    .map((el) => {
+                      const label = String(el.innerText || el.value || el.title || '').replace(/\\s+/g, ' ').trim();
+                      const meta = String(el.id || el.className || el.title || '');
+                      let score = 0;
+                      if (/btnmakedpopupclose|w2window_close|_close\\b|layerClose/i.test(meta)) score += 140;
+                      if (/CO00038RP/i.test(meta)) score += 50;
+                      if (label === '확인') score += 110;
+                      if (label === '닫기') score += 90;
+                      if (/보안프로그램설치안내/.test(String(el.closest?.('.w2popup_window,.w2window')?.innerText || ''))) score += 60;
+                      if (/키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
+                      if (/btnTotalClose/i.test(meta)) score -= 200;
+                      const rect = el.getBoundingClientRect();
+                      if (rect.width <= 0 || rect.height <= 0) score = 0;
+                      return {el, label, meta, score};
+                    })
+                    .filter((item) => item.score > 0)
+                    .sort((a, b) => b.score - a.score);
+                  const hit = scored[0]?.el || null;
+                  if (!hit) return {closed: '0', notice: '1'};
+                  clickCandidate(hit);
+                  let afterText = visibleText();
+                  if (noticePatterns.some((item) => afterText.includes(item))) {
+                    try {
+                      const popup = hit.closest?.('.w2popup_window,.w2window,[id*="CO00038RP"]');
+                      if (popup) {
+                        popup.style.display = 'none';
+                        popup.setAttribute('aria-hidden', 'true');
+                      }
+                      afterText = visibleText();
+                    } catch (_) {}
                   }
-                  afterText = visibleText();
-                } catch (_) {}
-              }
-              return {
-                closed: noticePatterns.some((item) => afterText.includes(item)) ? '0' : '1',
-                notice: '1',
-                notice_type: matchedNotice.slice(0, 80),
-                tag: String(hit.tagName || '').slice(0, 20),
-                id: String(hit.id || '').slice(0, 80)
-              };
-            }
-            """,
-            timeout_ms=25000,
-        )
-    except Exception:
-        return False
-    return isinstance(raw, dict) and str(raw.get("closed") or "") == "1"
+                  return {
+                    closed: noticePatterns.some((item) => afterText.includes(item)) ? '0' : '1',
+                    notice: '1',
+                    notice_type: matchedNotice.slice(0, 80),
+                    tag: String(hit.tagName || '').slice(0, 20),
+                    id: String(hit.id || '').slice(0, 80)
+                  };
+                }
+                """,
+                timeout_ms=25000,
+            )
+        except Exception:
+            raw = None
+        if isinstance(raw, dict) and str(raw.get("closed") or "") == "1":
+            closed_once = True
+            try:
+                await asyncio.sleep(0.75)
+            except Exception:
+                pass
+            notice_state = await _shinhan_security_notice_state(page)
+            if str(notice_state.get("present") or "") != "1":
+                return True
+        else:
+            try:
+                await asyncio.sleep(0.75)
+            except Exception:
+                pass
+    return closed_once
 
 
 async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
@@ -1707,7 +1768,8 @@ async def _try_shinhan_individual_login_step(
                 }
               })();
               const hasLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(text)
-                || (visible(loginIdEl) && visible(loginPasswordEl))
+                || !!loginIdEl
+                || !!loginPasswordEl
                 || isRedirectLoginPage;
               const componentById = (id) => {
                 if (!id) return null;
@@ -1878,6 +1940,40 @@ async def _try_shinhan_individual_login_step(
                 }
                 return false;
               };
+              const openAccountInquiry = () => {
+                try {
+                  if (window.shbComm?.menu) {
+                    window.shbComm.menu.redirectUrl = '210101000000';
+                  }
+                } catch (_) {}
+                try {
+                  if (window.shbComm && typeof window.shbComm.goPage === 'function') {
+                    window.setTimeout(() => {
+                      try { window.shbComm.goPage('210101000000'); } catch (_) {}
+                    }, 30);
+                    return true;
+                  }
+                } catch (_) {}
+                try {
+                  window.location.hash = '210101000000';
+                  window.dispatchEvent(new HashChangeEvent('hashchange'));
+                  return true;
+                } catch (_) {}
+                return false;
+              };
+              if (!loginIdEl && !loginPasswordEl && String(window.location.href || '').includes('#210000000000')) {
+                const opened = openAccountInquiry();
+                return {
+                  attempted: opened ? '1' : '0',
+                  stage: opened ? 'account_page_navigation' : 'hidden_login_panel',
+                  username: '0',
+                  login_secret: '0',
+                  transkey_secret: '0',
+                  navigation_clicked: opened ? '1' : '0',
+                  websquare_triggered: opened ? '1' : '0',
+                  account_page_navigation: opened ? '1' : '0'
+                };
+              }
               if (!hasLoginPanel) return {attempted: '0', stage: 'not_login_panel'};
               const usernameOkPrimary = setField('ibx_loginId', input.username);
               const usernameOkCib = setField('ibx_loginId_cib', input.username);
@@ -1909,7 +2005,7 @@ async def _try_shinhan_individual_login_step(
     if not isinstance(raw, dict):
         return {"attempted": "failed"}
     result: dict[str, str] = {"attempted": "1" if str(raw.get("attempted") or "") == "1" else str(raw.get("attempted") or "0")[:20]}
-    for key in ("stage", "username", "login_secret", "transkey_secret", "navigation_clicked", "websquare_triggered", "error_code", "error_type"):
+    for key in ("stage", "username", "login_secret", "transkey_secret", "navigation_clicked", "websquare_triggered", "account_page_navigation", "error_code", "error_type"):
         value = str(raw.get(key) or "").strip()
         if key == "stage":
             result[key] = value[:40] or "unknown"
@@ -3612,6 +3708,16 @@ async def collect_bank_via_browser_session_async(
                         safe_diagnostics["screen_suggested_action"] = "parse_table"
                         safe_diagnostics["screen_requires_operator"] = "0"
                         break
+                    notice_state = await _shinhan_security_notice_state(page)
+                    if str(notice_state.get("present") or "") == "1":
+                        safe_diagnostics["shinhan_security_notice_after_step"] = "1"
+                        safe_diagnostics["shinhan_security_notice_code_after_step"] = str(
+                            notice_state.get("error_code") or "SHINHAN_SECURITY_NOTICE"
+                        )[:120]
+                        if await _close_shinhan_security_notice(page):
+                            safe_diagnostics["shinhan_security_notice_closed_after_step"] = "1"
+                        if attempt_index < 3:
+                            continue
                     rechecked_decision = classify_portal_state(rechecked_url, rechecked_text)
                     rechecked_state = rechecked_decision.as_dict()
                     safe_diagnostics["screen_state"] = rechecked_state.get("state", "unknown")
