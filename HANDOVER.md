@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-29 04:43 KST - Chat completion signal guard hotfix
+
+- Trigger: CEO instructed immediate production reflection for the first response bubble showing a premature completion toast before the recovered/continued answer appeared.
+- Cause:
+  - `get_streaming_status()` treated any in-memory `completed=True` stream as `just_completed=True`.
+  - When a background producer ended without an SSE `done` event, polling could therefore trigger the frontend completion toast even though the response was incomplete and auto-recovery would continue later.
+- Changes:
+  - `app/services/chat_service.py` now emits `just_completed=True` only when the producer saw the SSE `done` event or when the content is an explicit terminal interrupted/recovered notice.
+  - Added regression coverage proving a completed memory stream without `saw_done_event` does not emit a completion signal, while terminal interrupted content still closes and reloads once.
+  - Updated stale cleanup test fixtures to match the current DB query shape.
+- Verification:
+  - `docker exec aads-server python -m py_compile app/services/chat_service.py app/routers/chat.py` succeeded.
+  - `.venv-playwright/bin/python -m py_compile app/services/chat_service.py app/routers/chat.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_chat_service.py -q` passed: 68 tests, 1 FastAPI deprecation warning.
+  - `docker exec aads-server python -m pytest tests/unit/test_chat_service.py -q` used the stale running container filesystem and failed before redeploy; rerun after blue/green deploy is required.
+- Deployment status:
+  - Commit, push, and blue/green deploy are being performed after this entry.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, `scripts/deploy_dashboard_bg.sh`, `.tmp/`, `.codex_tmp_go100/`, and generated queue JSON were left untouched.
+
 ## 2026-08-28 16:53 KST - Shinhan ID/PW retry after fincert diversion
 
 - Trigger: CEO reiterated that Shinhan must not use financial certificate login and must use the already implemented ID/PW login path.

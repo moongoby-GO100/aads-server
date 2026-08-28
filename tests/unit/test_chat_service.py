@@ -601,6 +601,25 @@ def test_terminal_interrupt_marker_completes_memory_stream_once():
         chat_service._active_bg_tasks.pop(session_id, None)
 
 
+def test_completed_memory_stream_without_done_event_does_not_emit_completion_signal():
+    session_id = str(uuid.uuid4())
+    chat_service._streaming_state[session_id] = {
+        "content": "부분 응답",
+        "started_at": chat_service._bg_time.monotonic(),
+        "completed": True,
+        "execution_id": str(uuid.uuid4()),
+        "saw_done_event": False,
+    }
+    try:
+        status = chat_service.get_streaming_status(session_id)
+        assert status["is_streaming"] is False
+        assert status["just_completed"] is False
+        assert status["completion_token"] is None
+    finally:
+        chat_service._streaming_state.pop(session_id, None)
+        chat_service._active_bg_tasks.pop(session_id, None)
+
+
 def test_begin_streaming_turn_state_clears_previous_completion_in_place():
     session_id = str(uuid.uuid4())
     previous_execution_id = str(uuid.uuid4())
@@ -715,7 +734,7 @@ async def test_cleanup_stale_streaming_placeholders_skips_live_session():
 
         assert result["cleaned"] == 0
         assert result["skipped_active"] == 1
-        conn.fetchval.assert_not_awaited()
+        assert conn.fetchval.await_count == 1
         conn.execute.assert_not_awaited()
     finally:
         chat_service._active_bg_tasks.pop(session_id, None)
@@ -734,6 +753,8 @@ async def test_cleanup_overlong_running_executions_closes_live_task():
             "session_id": session_id,
             "assistant_message_id": message_id,
             "partial_content": "오래 걸린 부분 응답",
+            "actual_model": None,
+            "requested_model": None,
             "age_seconds": 3600,
         }
     ])
