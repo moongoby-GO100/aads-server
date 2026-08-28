@@ -392,7 +392,7 @@ async def _try_shinhan_individual_keyboard_login_step(
                 } catch (_) {}
                 return false;
               };
-              if (!loginFieldsVisible && String(window.location.href || '').includes('#210000000000')) {
+              if (!loginIdEl && !passwordEl && String(window.location.href || '').includes('#210000000000')) {
                 const opened = openAccountInquiry();
                 return {
                   attempted: opened ? '1' : '0',

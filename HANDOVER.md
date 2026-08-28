@@ -8904,10 +8904,12 @@
   - Shinhan renders both `ibx_loginId` and `ibx_loginId_cib` WebSquare inputs. The connector stopped after the first successful set, so the active panel could still report `이용자ID를 입력해주세요`.
 - Changes:
   - Updated Shinhan ID/PW fallback to write username/password into both personal and CIB WebSquare components.
+  - Changed the hidden-login-panel branch so Shinhan account-page navigation is only triggered when login ID/password elements are absent; hidden WebSquare fields now receive ID/PW before any account-query click.
   - Confirmed the CLI accepts hidden `--bank-account-id` for scoped child runs; no further parser change was needed in this pass.
 - Verification:
   - `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` succeeded: 65 passed.
   - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - Re-ran `docker exec aads-server python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` after the hidden-panel fix: 65 passed.
 - Remaining:
   - Commit/deploy this connector patch.
   - Rerun Mia Shinhan bank collection on ICU55HK and require either `imported_rows > 0` or verified `no_records`.
