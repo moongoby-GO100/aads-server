@@ -15,8 +15,13 @@
   - `.venv-playwright/bin/python -m py_compile app/services/chat_service.py app/routers/chat.py` succeeded.
   - `.venv-playwright/bin/python -m pytest tests/unit/test_chat_service.py -q` passed: 68 tests, 1 FastAPI deprecation warning.
   - `docker exec aads-server python -m pytest tests/unit/test_chat_service.py -q` used the stale running container filesystem and failed before redeploy; rerun after blue/green deploy is required.
+  - `bash /root/aads/aads-server/scripts/reload-api.sh` hot-reloaded active `aads-server-green`; response reported `재로드=82개`.
+  - Active-slot runtime smoke check confirmed completed memory streams without `saw_done_event` return `just_completed=False`, while terminal interrupted content returns `just_completed=True`.
+  - Local and nginx-routed health checks returned `{"status":"ok","graph_ready":true,"version":"0.2.1"}`.
 - Deployment status:
-  - Commit, push, and blue/green deploy are being performed after this entry.
+  - Commit `53310523 fix(chat): guard premature completion signal` was pushed to `origin/main`.
+  - Runtime was reflected immediately through active-slot hot-reload.
+  - Full blue/green deploy was attempted twice but safely blocked: first by active stream on target `aads-server:8100`, then by the nginx shared deploy lock held by an existing dashboard deploy. No forced busy-target deployment was performed.
   - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, `scripts/deploy_dashboard_bg.sh`, `.tmp/`, `.codex_tmp_go100/`, and generated queue JSON were left untouched.
 
 ## 2026-08-28 16:53 KST - Shinhan ID/PW retry after fincert diversion
