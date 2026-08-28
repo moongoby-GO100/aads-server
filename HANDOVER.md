@@ -15,8 +15,11 @@
   - `docker exec aads-server python -m py_compile app/api/llm_models.py app/services/model_selector.py` succeeded.
   - `docker exec aads-server pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_model_routing_admin_static.py` passed: 27 passed.
   - Container direct check returned `claude-opus` for both `claude-opus-5` and `claude-opus-4-8`, while preserving `gpt-5.5`.
+  - Post hot-reload check returned route keys `audio/edit_image/image/llm/music/runner_llm/video`, `fallback_chain=23`, `error_models=200`, and blocked counts for each affected route.
+  - `curl http://127.0.0.1:8100/health` returned `status=ok`; `https://aads.newtalk.kr/admin/model-routing` returned the expected login redirect for an authenticated admin route.
 - Deployment status:
-  - Pending commit/push/hot-reload at the time of this note.
+  - Commit `8cd4c4a4` was pushed to `origin/main`.
+  - `bash scripts/reload-api.sh` completed with `재로드=75개`.
 
 ## 2026-08-29 05:33 KST - Shinhan bank auto-collection planning doc refresh
 
