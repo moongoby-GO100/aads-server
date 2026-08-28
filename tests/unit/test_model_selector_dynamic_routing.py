@@ -9,6 +9,14 @@ from app.services import model_selector
 from app.services.intent_router import IntentResult
 
 
+def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-5") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-opus-4-8") == "claude-opus"
+    assert model_selector._to_anthropic_runtime_alias("claude-sonnet-4-6") == "claude-sonnet"
+    assert model_selector._to_anthropic_runtime_alias("claude-haiku-4-5-20251001") == "claude-haiku"
+    assert model_selector._to_anthropic_runtime_alias("gpt-5.5") == "gpt-5.5"
+
+
 async def _collect_claude_route(monkeypatch, *, intent: str, model: str, use_tools: bool, tool_group: str):
     routed_models = []
 

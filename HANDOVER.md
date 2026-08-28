@@ -1,5 +1,40 @@
 # AADS HANDOVER
 
+## 2026-08-29 05:35 KST - Model routing Codex fallback alias hardening
+
+- Trigger: Follow-up validation for CEO request to reflect chat model routing settings in `/admin/model-routing` and show models with errors.
+- Cause:
+  - DB-backed LLM fallback candidates can come from registry rows as Anthropic concrete model IDs such as `claude-opus-5` or `claude-opus-4-8`.
+  - The Codex Relay failure path only recognized internal Claude aliases such as `claude-opus`; concrete Anthropic IDs could be sent to LiteLLM instead of the Claude CLI relay.
+- Changes:
+  - `app/services/model_selector.py` now normalizes Anthropic registry/concrete IDs to internal runtime aliases before returning configured fallback candidates.
+  - Codex Relay provider fallback now defensively normalizes any Anthropic candidate before choosing Claude CLI vs LiteLLM.
+  - `tests/unit/test_model_selector_dynamic_routing.py` covers Anthropic concrete ID to runtime alias normalization.
+- Verification:
+  - `python3 -m py_compile app/api/llm_models.py app/services/model_selector.py` succeeded.
+  - `docker exec aads-server python -m py_compile app/api/llm_models.py app/services/model_selector.py` succeeded.
+  - `docker exec aads-server pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_model_routing_admin_static.py` passed: 27 passed.
+  - Container direct check returned `claude-opus` for both `claude-opus-5` and `claude-opus-4-8`, while preserving `gpt-5.5`.
+- Deployment status:
+  - Pending commit/push/hot-reload at the time of this note.
+
+## 2026-08-29 05:33 KST - Shinhan bank auto-collection planning doc refresh
+
+- Trigger: CEO asked whether a planning document exists for Shinhan bank auto-collection handling, and to create one if missing.
+- Finding:
+  - Existing planning document found at `docs/plans/20260821_YEOLJEONG_BANK_AUTO_COLLECTION_PLAN.md`.
+  - The document already covered the bank auto-collection architecture, PC Agent collection path, Shinhan/IBK scope, security policy, E2E checklist, and completion criteria.
+  - It did not yet reflect the latest operating decision to pin bank collection to `DESKTOP-ICU55HK` / Agent `7f99c528-24d`, exclude CEO PC Agent `2e9379a1-fed`, and treat server headed Playwright as diagnostics-only fallback.
+- Changes:
+  - Refreshed the planning document timestamp and current judgement.
+  - Added a `2026-08-29 운영 보정` section covering dedicated PC routing, Shinhan ID/PW-first retry, bank work-key session separation, server headed fallback scope, and real collection completion criteria.
+  - Replaced older CEO PC credential-storage wording with dedicated PC/Vault wording.
+  - Updated next actions so Shinhan completion requires `imported_rows`, `duplicate_rows`, or normal `no_records`, not just login automation.
+- Verification:
+  - `rg -n "CEO PC|DESKTOP-ICU55HK|2e9379a1-fed|7f99c528|신한 ID/PW|최종 수정" docs/plans/20260821_YEOLJEONG_BANK_AUTO_COLLECTION_PLAN.md` confirmed the refreshed operating criteria.
+- Deployment status:
+  - Documentation-only local change. No code, DB, commit, push, or deploy performed in this entry.
+
 ## 2026-08-29 05:16 KST - Admin model routing fallback and error visibility
 
 - Trigger: CEO requested `/admin/model-routing` to expose chat model routing settings and show models with errors.

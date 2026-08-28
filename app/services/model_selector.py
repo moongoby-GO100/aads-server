@@ -754,6 +754,27 @@ _ANTHROPIC_MODEL_ID = {
     "claude-haiku":  "claude-haiku-4-5-20251001",
 }
 
+_ANTHROPIC_FAMILY_ALIASES = (
+    ("claude-opus", "claude-opus"),
+    ("claude-sonnet", "claude-sonnet"),
+    ("claude-haiku", "claude-haiku"),
+)
+
+
+def _to_anthropic_runtime_alias(model: str) -> str:
+    model_id = str(model or "").strip()
+    if not model_id:
+        return model_id
+    if model_id in _ANTHROPIC_MODEL_ID:
+        return model_id
+    for alias, sdk_model in _ANTHROPIC_MODEL_ID.items():
+        if model_id == sdk_model:
+            return alias
+    for prefix, alias in _ANTHROPIC_FAMILY_ALIASES:
+        if model_id.startswith(prefix):
+            return alias
+    return model_id
+
 # Gemini 모델 (LiteLLM 경유) — 대시보드 ModelSelector id와 동기화 필수 (누락 시 Claude로 폴백됨)
 _GEMINI_MODELS = {
     "gemini-flash",
@@ -1329,6 +1350,8 @@ async def _configured_llm_fallback_candidates(
                 and _is_model_runtime_available(resolved_model, available_models)
             ):
                 selected = resolved_model
+        if provider == "anthropic":
+            selected = _to_anthropic_runtime_alias(selected)
         if selected and selected not in seen:
             seen.add(selected)
             candidates.append(selected)
@@ -1750,8 +1773,15 @@ async def call_stream(
                         "to_model": _cfb,
                     }
                     _cfb_err = False
-                    if _cfb in _ANTHROPIC_MODEL_ID:
-                        _cfb_stream = _stream_cli_relay(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
+                    _cfb_anthropic_alias = _to_anthropic_runtime_alias(_cfb)
+                    if _cfb_anthropic_alias in _ANTHROPIC_MODEL_ID:
+                        _cfb_stream = _stream_cli_relay(
+                            _cfb_anthropic_alias,
+                            system_prompt,
+                            messages,
+                            tools=tools,
+                            session_id=session_id,
+                        )
                     else:
                         _cfb_stream = _stream_litellm(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
                     async for ev in _cfb_stream:
