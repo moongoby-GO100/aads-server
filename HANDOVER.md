@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-29 05:16 KST - Admin model routing fallback and error visibility
+
+- Trigger: CEO requested `/admin/model-routing` to expose chat model routing settings and show models with errors.
+- Cause:
+  - The dashboard page existed, but the visible route tabs omitted `music`, `audio`, and `runner_llm`.
+  - Chat LLM fallback still used code-level fallback selection in key paths, so the admin `llm` route order was not the clear source of truth during runtime fallback.
+  - Error models existed in `llm_models.verification_status`/runtime flags, but `/llm-models/routing-preferences` only returned configured route rows, hiding many broken registry models from the page.
+- Changes:
+  - `app/api/llm_models.py` now returns `blocked_counts`, `fallback_chain`, and `error_models` from `llm_models`.
+  - `app/services/model_selector.py` now consults enabled `model_routing_preferences(route_key='llm')` in admin order when the selected chat model is unavailable or Codex Relay needs a provider fallback.
+  - Codex Relay fallback excludes Codex provider candidates after a Codex runtime error to avoid retrying the same failing relay class.
+- Verification:
+  - `python3 -m py_compile app/api/llm_models.py app/services/model_selector.py` succeeded.
+  - Live DB inspection confirmed 71 model routing preference rows and visible error states such as Gemini `disabled_billing_depleted`.
+- Deployment status:
+  - Pending commit, push, and deploy at the time of this entry.
+
 ## 2026-08-29 04:43 KST - Chat completion signal guard hotfix
 
 - Trigger: CEO instructed immediate production reflection for the first response bubble showing a premature completion toast before the recovered/continued answer appeared.

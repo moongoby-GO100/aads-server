@@ -1242,12 +1242,109 @@ def _fallback_cost_distance(requested: Optional[Dict[str, Any]], candidate: Dict
     return float(abs(requested_input - candidate_input) + abs(requested_output - candidate_output))
 
 
+async def _configured_llm_fallback_candidates(
+    model: str,
+    available_models: set[str],
+    *,
+    excluded_providers: Optional[set[str]] = None,
+) -> list[str]:
+    if not available_models:
+        return []
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT pref.provider, pref.model_id,
+                       models.model_id AS registry_model_id,
+                       models.execution_model_id,
+                       models.metadata
+                FROM model_routing_preferences AS pref
+                LEFT JOIN LATERAL (
+                    SELECT m.model_id, m.execution_model_id, m.metadata, m.updated_at, m.id
+                    FROM llm_models AS m
+                    WHERE m.provider = pref.provider
+                      AND (m.model_id = pref.model_id OR m.execution_model_id = pref.model_id)
+                    ORDER BY CASE WHEN m.model_id = pref.model_id THEN 0 ELSE 1 END,
+                             m.updated_at DESC NULLS LAST, m.id DESC
+                    LIMIT 1
+                ) AS models ON TRUE
+                WHERE pref.route_key = 'llm'
+                  AND pref.is_enabled = TRUE
+                ORDER BY pref.is_default DESC,
+                         pref.display_order ASC,
+                         pref.provider ASC,
+                         pref.model_id ASC
+                """
+            )
+    except Exception as exc:
+        logger.debug("configured_llm_fallback_lookup_failed: model=%s error=%s", model, exc)
+        return []
+
+    excluded = {str(model or "").strip(), _canonical_deepseek_model_id(str(model or "").strip())}
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        provider = str(row["provider"] or "").strip().lower()
+        if excluded_providers and provider in excluded_providers:
+            continue
+        pref_model = str(row["model_id"] or "").strip()
+        registry_model = str(row["registry_model_id"] or "").strip()
+        execution_model = str(row["execution_model_id"] or "").strip()
+        metadata = _coerce_metadata(row["metadata"])
+        aliases = [
+            registry_model,
+            pref_model,
+            execution_model,
+            str(metadata.get("execution_model_id") or "").strip(),
+            str(metadata.get("canonical_model") or "").strip(),
+        ]
+        for alias_key in ("aliases", "accepted_aliases"):
+            values = metadata.get(alias_key) or []
+            if isinstance(values, list):
+                aliases.extend(str(value or "").strip() for value in values)
+
+        selected = ""
+        for candidate in aliases:
+            if not candidate:
+                continue
+            canonical = _canonical_deepseek_model_id(candidate)
+            if candidate in excluded or canonical in excluded:
+                selected = ""
+                break
+            if _is_model_runtime_available(candidate, available_models):
+                selected = registry_model or pref_model or candidate
+                break
+        if not selected:
+            try:
+                resolved_model, _ = await _resolve_registered_model_alias(pref_model, provider=provider)
+            except Exception:
+                resolved_model = pref_model
+            if (
+                resolved_model
+                and resolved_model not in excluded
+                and _canonical_deepseek_model_id(resolved_model) not in excluded
+                and _is_model_runtime_available(resolved_model, available_models)
+            ):
+                selected = resolved_model
+        if selected and selected not in seen:
+            seen.add(selected)
+            candidates.append(selected)
+    return candidates
+
+
 async def _fallback_for_unavailable_model(
     model: str,
     available_models: set[str],
     *,
     requested_row: Optional[Dict[str, Any]] = None,
 ) -> str:
+    configured_candidates = await _configured_llm_fallback_candidates(model, available_models)
+    if configured_candidates:
+        return configured_candidates[0]
+
     try:
         active_rows = await _list_registered_models(active_only=True)
     except Exception as exc:
@@ -1638,7 +1735,13 @@ async def call_stream(
                 "gpt-5.4": ["claude-sonnet", "gemini-2.5-flash"],
                 "gpt-5.4-mini": ["claude-haiku", "gemini-3.1-flash-lite-preview"],
             }
-            for _cfb in _CODEX_FB.get(model, []):
+            _configured_cfb = await _configured_llm_fallback_candidates(
+                model,
+                await get_available_model_ids(),
+                excluded_providers={"codex"},
+            )
+            _codex_fb_candidates = _configured_cfb or _CODEX_FB.get(model, [])
+            for _cfb in _codex_fb_candidates:
                 try:
                     yield {
                         "type": "model_fallback",

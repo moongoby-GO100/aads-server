@@ -306,6 +306,42 @@ def _routing_preference_payload(row: Any) -> dict[str, Any]:
     }
 
 
+def _routing_error_model_payload(row: Any) -> dict[str, Any]:
+    metadata = _coerce_json_object(row["metadata"])
+    note = str(
+        metadata.get("availability_note")
+        or metadata.get("discovery_requirement")
+        or metadata.get("routing_note")
+        or ""
+    ).strip()
+    if not note:
+        status = str(row["verification_status"] or "").strip()
+        if status == "disabled_billing_depleted":
+            note = "provider billing/quota is depleted"
+        elif status == "auth_required":
+            note = "provider authentication is required"
+        elif status == "review_required":
+            note = "admin review is required before enabling"
+        elif not row["is_active"]:
+            note = "model is inactive"
+        elif not row["is_executable"]:
+            note = "model is not executable"
+    return {
+        "provider": row["provider"],
+        "model_id": row["model_id"],
+        "display_name": row["display_name"] or row["model_id"],
+        "family": row["family"],
+        "category": row["category"],
+        "is_active": row["is_active"],
+        "is_selectable": row["is_selectable"],
+        "is_executable": row["is_executable"],
+        "verification_status": row["verification_status"],
+        "note": note,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        "last_verified_at": row["last_verified_at"].isoformat() if row["last_verified_at"] else None,
+    }
+
+
 async def _fetch_last_registry_sync() -> dict[str, Any] | None:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -559,19 +595,50 @@ async def get_model_routing_preferences() -> dict[str, Any]:
                      pref.model_id ASC
             """
         )
+        error_rows = await conn.fetch(
+            """
+            SELECT provider, model_id, display_name, family, category,
+                   is_active, is_selectable, is_executable,
+                   verification_status, metadata, updated_at, last_verified_at
+            FROM llm_models
+            WHERE COALESCE(verification_status, '') NOT IN ('', 'verified', 'ok')
+               OR is_active = FALSE
+               OR is_executable = FALSE
+            ORDER BY CASE
+                         WHEN verification_status IN ('disabled_billing_depleted', 'auth_required', 'rate_limited') THEN 1
+                         WHEN verification_status = 'review_required' THEN 2
+                         WHEN is_active = FALSE OR is_executable = FALSE THEN 3
+                         ELSE 4
+                     END,
+                     provider ASC,
+                     model_id ASC
+            LIMIT 200
+            """
+        )
     preferences = [_routing_preference_payload(row) for row in rows]
     route_counts: dict[str, int] = {}
     default_models: dict[str, str] = {}
+    blocked_counts: dict[str, int] = {}
     for item in preferences:
         route_key = str(item["route_key"])
         route_counts[route_key] = route_counts.get(route_key, 0) + 1
         if item["is_default"]:
             default_models[route_key] = item["model_id"]
+        if item["is_enabled"] and item["availability"] != "available":
+            blocked_counts[route_key] = blocked_counts.get(route_key, 0) + 1
+    fallback_chain = [
+        item
+        for item in preferences
+        if item["route_key"] == "llm" and item["is_enabled"]
+    ]
     return {
         "preferences": preferences,
         "total": len(preferences),
         "route_counts": route_counts,
         "default_models": default_models,
+        "blocked_counts": blocked_counts,
+        "fallback_chain": fallback_chain,
+        "error_models": [_routing_error_model_payload(row) for row in error_rows],
     }
 
 
