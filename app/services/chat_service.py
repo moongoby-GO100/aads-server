@@ -7269,7 +7269,20 @@ async def get_interruption_report(
                 te.actual_model,
                 te.retry_count,
                 COALESCE(NULLIF(te.interrupt_category, ''), 'none') AS category,
-                COALESCE(te.interruption_diagnostics, '{}'::jsonb) AS diagnostics,
+                CASE
+                    WHEN COALESCE(te.interruption_diagnostics, '{}'::jsonb) <> '{}'::jsonb
+                        THEN te.interruption_diagnostics
+                    ELSE jsonb_strip_nulls(jsonb_build_object(
+                        'schema_version', 1,
+                        'status', te.status,
+                        'category', COALESCE(NULLIF(te.interrupt_category, ''), te.status, 'unknown'),
+                        'reason', NULLIF(LEFT(COALESCE(te.error_message, ''), 500), ''),
+                        'age_seconds', EXTRACT(EPOCH FROM (NOW() - te.started_at))::int,
+                        'idle_seconds', EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int,
+                        'retry_count', te.retry_count,
+                        'computed_at', NOW()
+                    ))
+                END AS diagnostics,
                 LEFT(COALESCE(te.error_message, ''), 500) AS error_message,
                 LEFT(COALESCE(um.content, ''), 260) AS user_excerpt,
                 LEFT(COALESCE(am.content, ''), 260) AS assistant_excerpt,
