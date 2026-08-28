@@ -1041,6 +1041,22 @@ async def get_messages(
     return payload
 
 
+@router.get("/chat/interruption-report", tags=["chat-message"])
+async def get_interruption_report(
+    session_id: Optional[UUID] = Query(None),
+    hours: int = Query(24, ge=1, le=720),
+    limit: int = Query(30, ge=1, le=100),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """채팅 응답 끊김 원인 분석 리포트."""
+    return await svc.get_interruption_report(
+        session_id=str(session_id) if session_id else None,
+        hours=hours,
+        limit=limit,
+        tenant_id=_tenant_id(context),
+    )
+
+
 @router.get("/chat/{workspace_id}/sessions/{session_id}/messages", tags=["chat-message"])
 async def get_workspace_session_messages(
     workspace_id: UUID,

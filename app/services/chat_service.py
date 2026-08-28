@@ -1495,6 +1495,7 @@ async def _get_or_create_turn_execution(
         UPDATE chat_turn_executions
         SET status = 'interrupted',
             interrupt_category = 'superseded',
+            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $2::jsonb,
             completed_at = COALESCE(completed_at, NOW()),
             updated_at = NOW(),
             error_message = COALESCE(error_message, 'superseded by newer execution')
@@ -1502,6 +1503,15 @@ async def _get_or_create_turn_execution(
           AND status IN ('running', 'retrying')
         """,
         session_id,
+        json.dumps(
+            _build_interruption_diagnostics(
+                reason="superseded by newer execution",
+                category="superseded",
+                partial_content=existing_state.get("content", "") if existing_state else "",
+                superseded=True,
+            ),
+            ensure_ascii=False,
+        ),
     )
 
     # 중단된 실행의 streaming_placeholder를 즉시 interrupted_partial로 승격
@@ -1771,6 +1781,34 @@ def _parse_interrupt_diagnostic_reason(reason: str) -> Dict[str, Any]:
             details[f"interrupted_{key}"] = int(value)
         else:
             details[f"interrupted_{key}"] = value[:160]
+    return details
+
+
+def _build_interruption_diagnostics(
+    *,
+    reason: str,
+    category: str,
+    partial_content: str = "",
+    placeholder_id: Optional[str] = None,
+    delete_empty_placeholder: bool = False,
+    superseded: bool = False,
+    auto_resume_scheduled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Build query-friendly interruption diagnostics for chat_turn_executions."""
+    clean_partial = _strip_streaming_progress_markers(partial_content or "")
+    details: Dict[str, Any] = {
+        "schema_version": 1,
+        "reason": str(reason or "")[:500],
+        "category": str(category or "unknown")[:80],
+        "partial_len": len(clean_partial),
+        "has_placeholder": bool(placeholder_id),
+        "delete_empty_placeholder": bool(delete_empty_placeholder),
+        "superseded": bool(superseded),
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if auto_resume_scheduled is not None:
+        details["auto_resume_scheduled"] = bool(auto_resume_scheduled)
+    details.update(_parse_interrupt_diagnostic_reason(str(reason or "")))
     return details
 
 
@@ -3007,13 +3045,15 @@ async def _mark_execution_interrupted(
         )
 
     clean_partial = _strip_streaming_progress_markers(partial_content)
-    interruption_quality_details = {
-        "interruption_reason": reason[:500],
-        "interrupted_partial_len": len(clean_partial or ""),
-        "interrupted_has_placeholder": bool(pid),
-        "interrupted_delete_empty_placeholder": bool(delete_empty_placeholder),
-        "interrupted_superseded": bool(is_superseded_cancel),
-    }
+    interruption_quality_details = _build_interruption_diagnostics(
+        reason=reason,
+        category=interrupt_category,
+        partial_content=clean_partial,
+        placeholder_id=str(pid) if pid else None,
+        delete_empty_placeholder=delete_empty_placeholder,
+        superseded=is_superseded_cancel,
+    )
+    interruption_quality_details["interruption_reason"] = reason[:500]
     try:
         _started_at = await conn.fetchval(
             "SELECT started_at FROM chat_turn_executions WHERE id = $1",
@@ -3032,7 +3072,6 @@ async def _mark_execution_interrupted(
             )
     except Exception as _duration_err:
         logger.debug("interrupted_duration_measure_failed execution=%s error=%s", str(eid)[:8], _duration_err)
-    interruption_quality_details.update(_parse_interrupt_diagnostic_reason(reason))
     final_content = clean_partial
     assistant_message_id = pid
     if pid:
@@ -3174,6 +3213,8 @@ async def _mark_execution_interrupted(
             is_superseded_cancel,
         )
 
+    auto_resume_scheduled = False
+    interruption_quality_details["auto_resume_scheduled"] = bool(auto_resume_scheduled)
     await conn.execute(
         """
         UPDATE chat_turn_executions
@@ -3184,6 +3225,7 @@ async def _mark_execution_interrupted(
             status = 'interrupted',
             error_message = $3,
             interrupt_category = $5,
+            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $6::jsonb,
             completed_at = COALESCE(completed_at, NOW()),
             updated_at = NOW()
         WHERE id = $1
@@ -3194,6 +3236,7 @@ async def _mark_execution_interrupted(
         reason[:1000],
         bool(delete_empty_placeholder and assistant_message_id is None),
         interrupt_category,
+        json.dumps(interruption_quality_details, ensure_ascii=False),
     )
     await conn.execute(
         """
@@ -3207,7 +3250,6 @@ async def _mark_execution_interrupted(
         eid,
     )
 
-    auto_resume_scheduled = False
     if not is_superseded_cancel:
         try:
             auto_resume_scheduled = await _schedule_interrupted_auto_resume(
@@ -3226,6 +3268,31 @@ async def _mark_execution_interrupted(
                 reason[:120],
                 exc,
             )
+    resume_payload = json.dumps(
+        {"auto_resume_scheduled": bool(auto_resume_scheduled)},
+        ensure_ascii=False,
+    )
+    await conn.execute(
+        """
+        UPDATE chat_turn_executions
+        SET interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+        WHERE id = $1
+        """,
+        eid,
+        resume_payload,
+    )
+    if assistant_message_id:
+        await conn.execute(
+            """
+            UPDATE chat_messages
+            SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb,
+                edited_at = NOW()
+            WHERE id = $1
+            """,
+            assistant_message_id,
+            resume_payload,
+        )
     logger.warning(
         "chat_execution_interrupted_terminal session=%s execution=%s auto_resume=%s reason=%s",
         str(session_id)[:8],
@@ -5243,11 +5310,18 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
                             sid,
                         )
                     if _execution_uuid:
+                        _stop_diagnostics = _build_interruption_diagnostics(
+                            reason="stopped by user",
+                            category="user_action",
+                            partial_content=partial_content,
+                            placeholder_id=str(_assistant_message_id) if _assistant_message_id else None,
+                        )
                         await conn.execute(
                             """
                             UPDATE chat_turn_executions
                             SET status = 'interrupted',
                                 interrupt_category = 'user_action',
+                                interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $3::jsonb,
                                 assistant_message_id = COALESCE(assistant_message_id, $2),
                                 actual_model = COALESCE(actual_model, 'stopped'),
                                 error_message = 'stopped by user',
@@ -5257,6 +5331,7 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
                             """,
                             _execution_uuid,
                             _assistant_message_id,
+                            json.dumps(_stop_diagnostics, ensure_ascii=False),
                         )
                         await conn.execute(
                             """
@@ -6601,13 +6676,32 @@ def _message_select_fields(fields: str) -> str:
     if fields == "render":
         # Chat timeline projection: preserve the complete visible message while
         # omitting payloads that are only needed after an explicit detail action.
-        # Full tool events remain available from GET /chat/messages/{id}.
-        # Heavy columns (quality_score, quality_details, thinking_summary,
-        # reply_to_id, branch_id) are excluded — fetch via GET /messages/{id}.
+        # Full tool events remain available from GET /chat/messages/{id}. Keep
+        # interruption diagnostics because the chat bubble must explain why a
+        # response stopped without requiring another detail fetch.
         return (
             "id, session_id, execution_id, role, content, model_used, intent, "
             "cost, tokens_in, tokens_out, bookmarked, attachments, sources, artifact_id, "
             "created_at, edited_at, "
+            "CASE "
+            "WHEN quality_details IS NULL THEN NULL "
+            "WHEN role = 'assistant' AND ("
+            "  model_used IN ('interrupted', 'stopped', 'recovered') "
+            "  OR intent IN ('interrupted_partial', 'interruption_notice', '_archived_partial') "
+            "  OR quality_details ? 'interruption_reason' "
+            "  OR quality_details ? 'interruption_reason_group' "
+            ") THEN quality_details "
+            "WHEN quality_details ?| ARRAY['response_duration_ms','response_duration_sec','duration_ms','duration_sec','completion_gate_missing','completion_contract_adjusted','completion_contract_violations'] "
+            "THEN jsonb_strip_nulls(jsonb_build_object("
+            "  'response_duration_ms', quality_details->'response_duration_ms', "
+            "  'response_duration_sec', quality_details->'response_duration_sec', "
+            "  'duration_ms', quality_details->'duration_ms', "
+            "  'duration_sec', quality_details->'duration_sec', "
+            "  'completion_gate_missing', quality_details->'completion_gate_missing', "
+            "  'completion_contract_adjusted', quality_details->'completion_contract_adjusted', "
+            "  'completion_contract_violations', quality_details->'completion_contract_violations'"
+            ")) "
+            "ELSE NULL END AS quality_details, "
             "'[]'::jsonb AS tools_called, "
             f"(jsonb_array_length({_tool_events}) > 0) AS has_tools, "
             f"(SELECT COUNT(*)::int FROM jsonb_array_elements({_tool_events}) AS tool_event(value) "
@@ -7121,6 +7215,113 @@ async def list_messages_cursor(
             "next_cursor": next_cursor,
             "has_more": has_more,
         }
+
+
+async def get_interruption_report(
+    *,
+    session_id: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 30,
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return structured chat interruption diagnostics for admin/chat inspection."""
+    tenant_uuid = _require_tenant_uuid(tenant_id, "get_interruption_report")
+    hours = max(1, min(int(hours or 24), 720))
+    limit = max(1, min(int(limit or 30), 100))
+    session_uuid = uuid.UUID(str(session_id)) if session_id else None
+    async with get_pool().acquire() as conn:
+        summary_rows = await conn.fetch(
+            """
+            SELECT
+                te.status,
+                COALESCE(NULLIF(te.interrupt_category, ''), 'none') AS category,
+                COALESCE(NULLIF(te.actual_model, ''), NULLIF(te.requested_model, ''), 'unknown') AS model,
+                COUNT(*)::int AS count,
+                AVG(EXTRACT(EPOCH FROM (COALESCE(te.completed_at, te.updated_at) - te.started_at)))::float AS avg_duration_sec,
+                MAX(te.updated_at) AS last_seen_at
+            FROM chat_turn_executions te
+            JOIN chat_sessions s ON s.id = te.session_id
+            WHERE s.tenant_id = $1
+              AND te.started_at > NOW() - ($2::int * INTERVAL '1 hour')
+              AND ($3::uuid IS NULL OR te.session_id = $3)
+              AND (
+                    te.status IN ('interrupted', 'retrying', 'running')
+                    OR te.error_message IS NOT NULL
+                    OR te.interrupt_category IS NOT NULL
+                  )
+            GROUP BY te.status, category, model
+            ORDER BY count DESC, last_seen_at DESC
+            LIMIT 100
+            """,
+            tenant_uuid,
+            hours,
+            session_uuid,
+        )
+        recent_rows = await conn.fetch(
+            """
+            SELECT
+                te.id::text AS execution_id,
+                te.session_id::text AS session_id,
+                te.user_message_id::text AS user_message_id,
+                te.assistant_message_id::text AS assistant_message_id,
+                te.status,
+                te.requested_model,
+                te.actual_model,
+                te.retry_count,
+                COALESCE(NULLIF(te.interrupt_category, ''), 'none') AS category,
+                COALESCE(te.interruption_diagnostics, '{}'::jsonb) AS diagnostics,
+                LEFT(COALESCE(te.error_message, ''), 500) AS error_message,
+                LEFT(COALESCE(um.content, ''), 260) AS user_excerpt,
+                LEFT(COALESCE(am.content, ''), 260) AS assistant_excerpt,
+                EXTRACT(EPOCH FROM (COALESCE(te.completed_at, te.updated_at) - te.started_at))::float AS duration_sec,
+                te.started_at,
+                te.completed_at,
+                te.updated_at
+            FROM chat_turn_executions te
+            JOIN chat_sessions s ON s.id = te.session_id
+            LEFT JOIN chat_messages um ON um.id = te.user_message_id
+            LEFT JOIN chat_messages am ON am.id = te.assistant_message_id
+            WHERE s.tenant_id = $1
+              AND te.started_at > NOW() - ($2::int * INTERVAL '1 hour')
+              AND ($3::uuid IS NULL OR te.session_id = $3)
+              AND (
+                    te.status IN ('interrupted', 'retrying', 'running')
+                    OR te.error_message IS NOT NULL
+                    OR te.interrupt_category IS NOT NULL
+                  )
+            ORDER BY te.updated_at DESC
+            LIMIT $4
+            """,
+            tenant_uuid,
+            hours,
+            session_uuid,
+            limit,
+        )
+        llm_error_rows = await conn.fetch(
+            """
+            SELECT
+                model,
+                COALESCE(NULLIF(error_code, ''), 'unknown') AS error_code,
+                COUNT(*)::int AS count,
+                MAX(created_at) AS last_seen_at
+            FROM bg_llm_usage_log
+            WHERE tenant_id = $1
+              AND created_at > NOW() - ($2::int * INTERVAL '1 hour')
+              AND success = FALSE
+            GROUP BY model, error_code
+            ORDER BY count DESC, last_seen_at DESC
+            LIMIT 30
+            """,
+            tenant_uuid,
+            hours,
+        )
+    return {
+        "window_hours": hours,
+        "session_id": str(session_uuid) if session_uuid else None,
+        "summary": [_row_to_dict(row) for row in summary_rows],
+        "recent": [_row_to_dict(row) for row in recent_rows],
+        "llm_errors": [_row_to_dict(row) for row in llm_error_rows],
+    }
 
 
 async def get_message(message_id: str, fields: str = "full", tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:

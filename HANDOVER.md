@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-08-29 07:45 KST - Chat interruption diagnostics and report API
+
+- Request: Apply recommended chat interruption improvements immediately and make LLM response cut-off causes deeply analyzable.
+- Cause:
+  - `chat_turn_executions` kept only `interrupt_category` and a compact `error_message`, so reports had to parse free text.
+  - Chat message render payloads omitted `quality_details`, so interruption cause/duration data could not appear inside the chat bubble.
+- Changes:
+  - Added `chat_turn_executions.interruption_diagnostics` JSONB schema initialization and an interrupted-category index.
+  - `_mark_execution_interrupted()`, superseded execution handling, and user stop handling now persist structured interruption diagnostics.
+  - `fields=render` message lists now include interruption/duration quality details needed by the chat UI.
+  - Added `GET /api/v1/chat/interruption-report` for tenant-scoped summary, recent examples, and LLM error-code breakdown.
+- Verification:
+  - `ALTER TABLE ... ADD COLUMN IF NOT EXISTS interruption_diagnostics` applied on production DB.
+  - Existing interrupted rows were backfilled with baseline diagnostics.
+  - `python3 -m py_compile app/main.py app/routers/chat.py app/models/chat.py app/services/chat_service.py` succeeded.
+  - Targeted `git diff --check` and post-deploy API smoke are required before final completion.
+- Deployment:
+  - Pending commit, push, API reload, and production smoke at the time of this handover entry.
+
 ## 2026-08-29 05:35 KST - Model routing Codex fallback alias hardening
 
 - Trigger: Follow-up validation for CEO request to reflect chat model routing settings in `/admin/model-routing` and show models with errors.

@@ -143,6 +143,8 @@ class ExecutionOut(BaseModel):
     retry_count: int = 0
     last_event_id: Optional[str] = None
     error_message: Optional[str] = None
+    interrupt_category: Optional[str] = None
+    interruption_diagnostics: Dict[str, Any] = Field(default_factory=dict)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime

@@ -1879,6 +1879,7 @@ async def lifespan(app: FastAPI):
                         last_event_id TEXT,
                         error_message TEXT,
                         interrupt_category VARCHAR(50),
+                        interruption_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
                         started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         completed_at TIMESTAMPTZ NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1889,6 +1890,15 @@ async def lifespan(app: FastAPI):
                 await conn.execute(
                     "ALTER TABLE chat_turn_executions "
                     "ADD COLUMN IF NOT EXISTS interrupt_category VARCHAR(50) DEFAULT NULL"
+                )
+                await conn.execute(
+                    "ALTER TABLE chat_turn_executions "
+                    "ADD COLUMN IF NOT EXISTS interruption_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb"
+                )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_turn_executions_interrupt_category "
+                    "ON chat_turn_executions(interrupt_category, updated_at DESC) "
+                    "WHERE status = 'interrupted'"
                 )
                 await conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chat_turn_executions_session_created "
