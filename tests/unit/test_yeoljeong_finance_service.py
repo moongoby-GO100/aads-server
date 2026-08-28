@@ -205,6 +205,43 @@ def test_bank_timeout_probe_detects_shinhan_fincert_iframe(monkeypatch):
     assert result["diagnostics"]["screen_requires_operator"] == "1"
 
 
+def test_bank_timeout_probe_prefers_saved_shinhan_idpw(monkeypatch):
+    def fake_route_execute(payload, timeout_seconds=25.0):
+        return {
+            "status": "success",
+            "result": {
+                "result": {
+                    "tabs": [
+                        {
+                            "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                            "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                        },
+                        {
+                            "title": "YESKEY",
+                            "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                        },
+                    ]
+                }
+            },
+        }
+
+    monkeypatch.setattr(service, "_pc_agent_route_execute_json", fake_route_execute)
+
+    result = service._probe_bank_browser_timeout_state(
+        browser_work_key="wk-bank",
+        browser_agent_id="agent-bank",
+        timeout_seconds=180,
+        prefer_saved_idpw_login=True,
+    )
+
+    assert result is not None
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_IDPW_RETRY_REQUIRED"
+    assert result["diagnostics"]["screen_state"] == "login_required"
+    assert result["diagnostics"]["screen_requires_operator"] == "0"
+    assert result["diagnostics"]["suggested_action"] == "retry_saved_idpw_login_same_work_key"
+
+
 def test_collect_bank_timeout_uses_browser_tab_probe(monkeypatch):
     def fake_run(coro):
         close = getattr(coro, "close", None)

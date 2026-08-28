@@ -5166,6 +5166,7 @@ def _probe_bank_browser_timeout_state(
     browser_work_key: str,
     browser_agent_id: str,
     timeout_seconds: float,
+    prefer_saved_idpw_login: bool = False,
 ) -> dict[str, Any] | None:
     if not browser_work_key or not browser_agent_id:
         return None
@@ -5190,6 +5191,28 @@ def _probe_bank_browser_timeout_state(
         for tab in tabs
     )
     if "4user.yeskey.or.kr/fincert" in tab_text or "fincert" in tab_text:
+        if prefer_saved_idpw_login:
+            return {
+                "status": "action_required",
+                "error_code": "BANK_BROWSER_IDPW_RETRY_REQUIRED",
+                "rows": [],
+                "row_count": 0,
+                "diagnostics": {
+                    "browser_work_key": browser_work_key,
+                    "browser_agent_id": browser_agent_id,
+                    "browser_timeout_seconds": str(int(timeout_seconds)),
+                    "last_observed_stage": "financial certificate iframe",
+                    "screen_state": "login_required",
+                    "screen_reason_code": "SHINHAN_FINCERT_TIMEOUT_BUT_IDPW_CONFIGURED",
+                    "screen_requires_operator": "0",
+                    "screen_suggested_action": "retry_saved_idpw_login_same_work_key",
+                    "suggested_action": "retry_saved_idpw_login_same_work_key",
+                    "shinhan_auth_challenge_policy": "prefer_saved_idpw_login",
+                    "pc_agent_probe_status": str(route_result.get("status") or ""),
+                    "pc_agent_probe_tab_count": str(len(tabs)),
+                },
+                "message": "신한 금융인증서 탭이 감지됐지만 저장된 ID/PW 로그인 설정이 있으므로 금융인증서 완료 대신 같은 work key에서 ID/PW 로그인으로 재시도하십시오.",
+            }
         return {
             "status": "action_required",
             "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
@@ -5482,6 +5505,11 @@ def _collect_bank_via_browser(
             browser_work_key=browser_work_key_val,
             browser_agent_id=browser_agent_id_val,
             timeout_seconds=timeout_seconds,
+            prefer_saved_idpw_login=(
+                service_code == "shinhan_business"
+                and bool(str(bank_credentials.get("login_username") or "").strip())
+                and bool(str(bank_credentials.get("login_password") or "").strip())
+            ),
         ) or {
             "status": "failed",
             "error_code": "BANK_BROWSER_PC_AGENT_TIMEOUT",

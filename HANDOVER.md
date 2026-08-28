@@ -1,5 +1,39 @@
 # AADS HANDOVER
 
+## 2026-08-28 16:53 KST - Shinhan ID/PW retry after fincert diversion
+
+- Trigger: CEO reiterated that Shinhan must not use financial certificate login and must use the already implemented ID/PW login path.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py` now parses PC Agent tab payloads from `tabs`, `data.tabs`, `result.tabs`, and `result.result.tabs`, so YESKEY/fincert popups are detected across route-execute response shapes.
+  - When a Shinhan `individual_simple` flow with saved login ID/password is diverted to YESKEY/fincert after an ID/PW step, the collector closes the certificate tab, reloads the portal, reselects ID/PW login, and immediately retries `_try_shinhan_individual_login_step()` instead of moving to the account query state machine.
+  - Added regression tests for nested PC Agent tab responses and post-IDPW fincert diversion retry.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py -q` passed: 206 tests.
+- Deployment status:
+  - Code is changed locally only. Commit, push, and deployment have not been performed in this entry.
+
+## 2026-08-28 16:49 KST - Shinhan bank ID/PW login priority
+
+- Trigger: CEO clarified Shinhan bank does not use financial certificate login and instructed to use the implemented ID/PW login path.
+- Cause:
+  - `app/services/yeoljeong_bank_browser_connector.py` already had Shinhan ID/PW keyboard and WebSquare login helpers.
+  - The collector checked YESKEY/fincert iframe or tabs before running the Shinhan ID/PW state machine, so a stray financial-certificate prompt could return `BANK_BROWSER_AUTH_CHALLENGE_DETECTED` before saved ID/PW was tried.
+  - The timeout fallback in `app/services/yeoljeong_finance_service.py` also converted fincert tabs into a financial-certificate completion instruction even when saved ID/PW existed.
+- Changes:
+  - Added a Shinhan ID/PW recovery step that closes YESKEY/fincert/cert tabs best-effort, reloads the Shinhan portal, selects the ID/PW login panel, and then runs the existing saved ID/PW login flow.
+  - Changed both pre-flow and post-step Shinhan auth-challenge branches to prefer saved ID/PW for `individual_simple` Shinhan accounts with stored login ID/password.
+  - Changed timeout probing to return `BANK_BROWSER_IDPW_RETRY_REQUIRED` with `retry_saved_idpw_login_same_work_key` when fincert is seen but saved Shinhan ID/PW is configured.
+  - Added regression coverage for preserving certificate detection without credentials and preferring ID/PW when credentials are present.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py -k "shinhan or bank_timeout or collect_bank_timeout"` passed: 21 tests.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py` passed: 204 tests.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py` succeeded.
+- Deployment status:
+  - Code is changed locally only. Commit, push, and deployment have not been performed in this entry.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, `scripts/deploy_dashboard_bg.sh`, `.tmp/`, and prior generated queue files were left untouched.
+
 ## 2026-08-28 16:22 KST - Bank global queue account pin hotfix
 
 - Trigger: While validating the PC Agent global bank queue after deployment, each bank queue row executed all active bank accounts in the same business/branch scope instead of only the intended queued account.

@@ -61,6 +61,129 @@ class _PcAgentTabsChallengePage(_ChallengePage):
         }
 
 
+class _PcAgentNestedTabsChallengePage(_ChallengePage):
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        assert command_type == "browser_tabs"
+        return {
+            "status": "success",
+            "data": {
+                "tabs": [
+                    {
+                        "title": "YESKEY",
+                        "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                        "type": "page",
+                    }
+                ]
+            },
+        }
+
+
+class _ShinhanFincertThenIdpwPage(_ChallengePage):
+    def __init__(self):
+        super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
+        self.frames = [type("Frame", (), {"url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html"})()]
+        self.closed_certificate_tab = False
+        self.goto_calls = []
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        if command_type == "browser_tabs":
+            tabs = [
+                {
+                    "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                    "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                    "type": "page",
+                }
+            ]
+            if not self.closed_certificate_tab:
+                tabs.append(
+                    {
+                        "title": "YESKEY",
+                        "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                        "type": "page",
+                    }
+                )
+            return {"status": "success", "data": {"tabs": tabs}}
+        if command_type == "browser_close_tab":
+            assert params["url_pattern"] == "fincert|yeskey|cert"
+            self.closed_certificate_tab = True
+            self.frames = []
+            return {"status": "success", "data": {"closed": 1, "remaining": 1}}
+        return {"status": "success", "data": {}}
+
+    async def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.url = url
+        self.frames = []
+
+    async def wait_for_load_state(self, *args, **kwargs):
+        return None
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        if "querySelectorAll('table')" in expression:
+            return []
+        if "idpw|idlogin" in expression:
+            return {"selected": "1"}
+        if "document.body ? String(document.body.innerText" in expression:
+            return "이용자 ID 로그인 아이디 비밀번호"
+        if expression == "document.body ? document.body.innerHTML : ''":
+            return "<html><body>이용자 ID 로그인<input id='ibx_loginId'><input id='비밀번호' type='password'></body></html>"
+        return []
+
+
+class _ShinhanPostIdpwFincertPage(_ChallengePage):
+    def __init__(self):
+        super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
+        self.challenge_visible = False
+        self.close_count = 0
+        self.goto_calls = []
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        if command_type == "browser_tabs":
+            tabs = [
+                {
+                    "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                    "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                    "type": "page",
+                }
+            ]
+            if self.challenge_visible:
+                tabs.append(
+                    {
+                        "title": "YESKEY",
+                        "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                        "type": "page",
+                    }
+                )
+            return {"status": "success", "data": {"tabs": tabs}}
+        if command_type == "browser_close_tab":
+            self.challenge_visible = False
+            self.close_count += 1
+            return {"status": "success", "data": {"closed": 1, "remaining": 1}}
+        return {"status": "success", "data": {}}
+
+    async def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.url = url
+
+    async def wait_for_load_state(self, *args, **kwargs):
+        return None
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        if "querySelectorAll('table')" in expression:
+            return []
+        if "idpw|idlogin" in expression:
+            return {"selected": "1"}
+        if "document.body ? String(document.body.innerText" in expression or "document.body.innerText" in expression:
+            return "이용자 ID 로그인 아이디 비밀번호"
+        if expression == "document.body ? document.body.innerHTML : ''":
+            return "<html><body>이용자 ID 로그인<input id='ibx_loginId'><input id='비밀번호' type='password'></body></html>"
+        return []
+
+
 @pytest.mark.asyncio
 async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
     page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -90,6 +213,125 @@ async def test_shinhan_fincert_iframe_is_detected_from_pc_agent_tabs():
     assert result["screen_requires_operator"] == "1"
     assert result["suggested_action"] == "complete_financial_certificate_then_retry_same_work_key"
     assert "password" not in result
+
+
+@pytest.mark.asyncio
+async def test_shinhan_fincert_iframe_is_detected_from_nested_pc_agent_tabs():
+    page = _PcAgentNestedTabsChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
+
+    result = await connector._detect_shinhan_auth_challenge(page, [page])
+
+    assert result["screen_state"] == "certificate_password_required"
+    assert result["screen_reason_code"] == "SHINHAN_FINCERT_IFRAME_DETECTED"
+    assert result["screen_requires_operator"] == "1"
+    assert "password" not in result
+
+
+def test_collect_async_shinhan_saved_idpw_prefers_id_login_over_fincert():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    mock_page = _ShinhanFincertThenIdpwPage()
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-shinhan-idpw"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge, patch.object(
+        connector,
+        "_try_shinhan_individual_login_step",
+        AsyncMock(
+            return_value={
+                "attempted": "1",
+                "stage": "login",
+                "username": "1",
+                "login_secret": "1",
+                "keyboard_secret": "1",
+                "navigation_clicked": "1",
+                "websquare_triggered": "1",
+            }
+        ),
+    ) as mock_login:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-shinhan-idpw",
+                browser_work_key="yeoljeong-bank-shinhan-idpw",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_registration_no="1234567890",
+            )
+        )
+
+    assert mock_login.await_count >= 1
+    assert result.get("error_code") != "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert result["diagnostics"]["shinhan_auth_challenge_policy"] == "prefer_saved_idpw_login"
+    assert result["diagnostics"]["shinhan_idpw_login_reset"]["certificate_tab_closed"] == "1"
+    assert mock_page.goto_calls == ["https://bank.shinhan.com/rib/easy/index.jsp"]
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+
+
+def test_collect_async_shinhan_retries_idpw_after_post_login_fincert():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    mock_page = _ShinhanPostIdpwFincertPage()
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-shinhan-idpw-retry"
+    login_calls = {"count": 0}
+
+    async def login_step(*args, **kwargs):
+        login_calls["count"] += 1
+        if login_calls["count"] == 1:
+            mock_page.challenge_visible = True
+        return {
+            "attempted": "1",
+            "stage": "login",
+            "username": "1",
+            "login_secret": "1",
+            "navigation_clicked": "1",
+            "websquare_triggered": "1",
+        }
+
+    mock_login = AsyncMock(side_effect=login_step)
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge, patch.object(
+        connector,
+        "_try_shinhan_individual_login_step",
+        mock_login,
+    ):
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-shinhan-idpw-retry",
+                browser_work_key="yeoljeong-bank-shinhan-idpw-retry",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_registration_no="1234567890",
+            )
+        )
+
+    assert mock_login.await_count >= 2
+    assert mock_page.close_count == 1
+    assert result["diagnostics"]["shinhan_auth_challenge_policy"] == "retry_saved_idpw_login"
+    assert result["diagnostics"]["shinhan_idpw_login_retried_after_certificate"] == "1"
+    assert result.get("error_code") != "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
 
 
 @pytest.fixture(autouse=True)

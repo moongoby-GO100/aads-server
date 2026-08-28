@@ -1841,6 +1841,103 @@ async def _try_shinhan_individual_login_step(
     return result
 
 
+async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url: str) -> dict[str, str]:
+    """Reset a Shinhan certificate prompt back to the saved ID/PW login flow."""
+    result: dict[str, str] = {"attempted": "1"}
+    runner = getattr(page, "_run_browser_command", None)
+    if callable(runner):
+        try:
+            close_result = await runner(
+                "browser_close_tab",
+                {"url_pattern": "fincert|yeskey|cert", "keep_last": False},
+                command_timeout_seconds=10,
+                queue_wait_timeout_seconds=5,
+            )
+            result["certificate_tab_close_attempted"] = "1"
+            close_payload = close_result if isinstance(close_result, dict) and "closed" in close_result else None
+            if not isinstance(close_payload, dict) and isinstance(close_result, dict):
+                close_payload = close_result.get("data")
+            if not isinstance(close_payload, dict) and isinstance(close_result, dict):
+                close_payload = close_result.get("result") if isinstance(close_result, dict) else None
+            if isinstance(close_payload, dict):
+                result["certificate_tab_closed"] = "1" if int(close_payload.get("closed") or 0) > 0 else "0"
+        except TypeError:
+            try:
+                await runner("browser_close_tab", {"url_pattern": "fincert|yeskey|cert", "keep_last": False})
+                result["certificate_tab_close_attempted"] = "1"
+            except Exception:
+                result["certificate_tab_close_attempted"] = "failed"
+        except Exception:
+            result["certificate_tab_close_attempted"] = "failed"
+    if portal_url and hasattr(page, "goto"):
+        try:
+            await page.goto(portal_url, wait_until="domcontentloaded", timeout=30000)
+            result["portal_reloaded_for_idpw"] = "1"
+        except Exception:
+            result["portal_reloaded_for_idpw"] = "failed"
+        try:
+            await page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:
+            pass
+    try:
+        selected = await _evaluate_page(
+            page,
+            """
+            () => {
+              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+              const textOf = (el) => String(
+                el?.innerText ||
+                el?.value ||
+                el?.getAttribute?.('title') ||
+                el?.getAttribute?.('aria-label') ||
+                ''
+              ).replace(/\\s+/g, ' ').trim();
+              const score = (el) => {
+                const label = textOf(el).toLowerCase();
+                const id = String(el?.id || el?.name || '').toLowerCase();
+                const value = `${label} ${id}`;
+                if (/금융인증|공동인증|인증서|fincert|certificate/.test(value)) return 0;
+                if (/이용자\\s*id\\s*로그인|아이디\\s*로그인|id\\s*\\/\\s*pw|idpw|idlogin/.test(value)) return 120;
+                if (/id/.test(value) && /로그인|login/.test(value)) return 80;
+                return 0;
+              };
+              const item = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]'))
+                .filter((el) => visible(el) || /idlogin|login/.test(String(el.id || el.name || '').toLowerCase()))
+                .map((el) => ({el, score: score(el)}))
+                .filter((item) => item.score > 0)
+                .sort((a, b) => b.score - a.score)[0];
+              if (!item) return {selected: '0'};
+              try { item.el.focus(); } catch (_) {}
+              try { item.el.click(); } catch (_) {}
+              try { item.el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); } catch (_) {}
+              return {selected: '1'};
+            }
+            """,
+            timeout_ms=10000,
+        )
+        result["idpw_login_panel_selected"] = "1" if isinstance(selected, dict) and selected.get("selected") == "1" else "0"
+    except Exception:
+        result["idpw_login_panel_selected"] = "failed"
+    return result
+
+
+def _pc_agent_tabs_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    candidates = [
+        payload.get("tabs"),
+        payload.get("data", {}).get("tabs") if isinstance(payload.get("data"), dict) else None,
+        payload.get("result", {}).get("tabs") if isinstance(payload.get("result"), dict) else None,
+        payload.get("result", {}).get("result", {}).get("tabs")
+        if isinstance(payload.get("result"), dict) and isinstance(payload.get("result", {}).get("result"), dict)
+        else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    return []
+
+
 async def _visible_page_url(page: Any) -> str:
     try:
         return str(await _evaluate_page(page, "window.location.href", timeout_ms=8000) or "")
@@ -1866,15 +1963,11 @@ async def _detect_shinhan_auth_challenge(page: Any, pages: Any = None) -> dict[s
                 queue_wait_timeout_seconds=5,
                 command_timeout_seconds=10,
             )
-            tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else None
-            if isinstance(tabs, list):
-                for tab in tabs:
-                    if not isinstance(tab, dict):
-                        continue
-                    for key in ("url", "title"):
-                        value = str(tab.get(key) or "").strip().lower()
-                        if value:
-                            urls.append(value)
+            for tab in _pc_agent_tabs_from_payload(tabs_payload):
+                for key in ("url", "title"):
+                    value = str(tab.get(key) or "").strip().lower()
+                    if value:
+                        urls.append(value)
         except Exception:
             pass
     for candidate in [page, *(list(pages or []))]:
@@ -3103,20 +3196,31 @@ async def collect_bank_via_browser_session_async(
         safe_diagnostics["current_url"] = current_url
         safe_diagnostics["last_observed_stage"] = "login page"
 
-        # YESKEY may be visible only as a cross-origin iframe or popup. Check
-        # it before any login/query automation so an operator challenge never
-        # consumes the full PC Agent timeout.
+        # YESKEY may be visible only as a cross-origin iframe or popup. If
+        # saved Shinhan ID/PW exists, reset to that login path before falling
+        # back to an operator challenge.
         auth_challenge = await _detect_shinhan_auth_challenge(page, pages)
+        retry_shinhan_idpw_login = False
         if auth_challenge:
-            safe_diagnostics.update(auth_challenge)
-            return {
-                "status": "action_required",
-                "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
-                "rows": [],
-                "row_count": 0,
-                "diagnostics": safe_diagnostics,
-                "message": "신한 금융인증/권한 확인이 필요합니다. 인증을 완료한 뒤 같은 work key로 재시도하십시오.",
-            }
+            if shinhan_flow_mode == "individual_simple" and login_username and login_password:
+                safe_diagnostics["shinhan_auth_challenge_detected_before_idpw"] = "1"
+                safe_diagnostics["shinhan_auth_challenge_reason_code"] = str(
+                    auth_challenge.get("screen_reason_code") or ""
+                )[:120]
+                safe_diagnostics["shinhan_auth_challenge_policy"] = "prefer_saved_idpw_login"
+                reset_result = await _prefer_shinhan_idpw_login_after_auth_challenge(page, portal_url)
+                safe_diagnostics["shinhan_idpw_login_reset"] = reset_result
+                retry_shinhan_idpw_login = True
+            else:
+                safe_diagnostics.update(auth_challenge)
+                return {
+                    "status": "action_required",
+                    "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+                    "rows": [],
+                    "row_count": 0,
+                    "diagnostics": safe_diagnostics,
+                    "message": "신한 금융인증/권한 확인이 필요합니다. ID/PW 저장값이 없으면 인증 완료 후 같은 work key로 재시도하십시오.",
+                }
 
         if rows and (date_from or date_to):
             rows = [r for r in rows if _row_in_date_range(r, date_from, date_to)]
@@ -3254,7 +3358,15 @@ async def collect_bank_via_browser_session_async(
                         except Exception:
                             pass
                 try:
-                    if shinhan_flow_mode == "individual_simple" and attempt_index == 0:
+                    if (
+                        shinhan_flow_mode == "individual_simple"
+                        and login_username
+                        and login_password
+                        and (attempt_index == 0 or retry_shinhan_idpw_login)
+                    ):
+                        if retry_shinhan_idpw_login:
+                            safe_diagnostics["shinhan_idpw_login_retried_after_certificate"] = "1"
+                        retry_shinhan_idpw_login = False
                         step_result = await _try_shinhan_individual_login_step(
                             page,
                             username=str(login_username or ""),
@@ -3331,16 +3443,27 @@ async def collect_bank_via_browser_session_async(
                 shinhan_steps.append(step_result)
                 auth_challenge = await _detect_shinhan_auth_challenge(page, getattr(context, "pages", None))
                 if auth_challenge:
-                    safe_diagnostics.update(auth_challenge)
-                    safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
-                    return {
-                        "status": "action_required",
-                        "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
-                        "rows": [],
-                        "row_count": 0,
-                        "diagnostics": safe_diagnostics,
-                        "message": "신한 금융인증/권한 확인이 필요합니다. 인증을 완료한 뒤 같은 work key로 재시도하십시오.",
-                    }
+                    if shinhan_flow_mode == "individual_simple" and login_username and login_password:
+                        safe_diagnostics["shinhan_auth_challenge_detected_after_idpw_step"] = "1"
+                        safe_diagnostics["shinhan_auth_challenge_reason_code"] = str(
+                            auth_challenge.get("screen_reason_code") or ""
+                        )[:120]
+                        safe_diagnostics["shinhan_auth_challenge_policy"] = "retry_saved_idpw_login"
+                        reset_result = await _prefer_shinhan_idpw_login_after_auth_challenge(page, portal_url)
+                        safe_diagnostics["shinhan_idpw_login_reset"] = reset_result
+                        retry_shinhan_idpw_login = True
+                        continue
+                    else:
+                        safe_diagnostics.update(auth_challenge)
+                        safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
+                        return {
+                            "status": "action_required",
+                            "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+                            "rows": [],
+                            "row_count": 0,
+                            "diagnostics": safe_diagnostics,
+                            "message": "신한 금융인증/권한 확인이 필요합니다. ID/PW 저장값이 없으면 인증 완료 후 같은 work key로 재시도하십시오.",
+                        }
                 for key, value in step_result.items():
                     if key in {"mode", "stage"}:
                         aggregate_flow[key] = value
