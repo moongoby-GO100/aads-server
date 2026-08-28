@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-28 16:22 KST - Bank global queue account pin hotfix
+
+- Trigger: While validating the PC Agent global bank queue after deployment, each bank queue row executed all active bank accounts in the same business/branch scope instead of only the intended queued account.
+- Cause:
+  - `scripts/yeoljeong_auto_collect.py` generated one queue item per bank service, but the queued payload did not include `bank_account_id`.
+  - Drain mode therefore called `_bank_accounts_for_payload()` with only business/branch scope and rechecked both IBK and Shinhan accounts for each claimed queue item.
+- Changes:
+  - Added `bank_account_id` to each global bank queue item payload.
+  - `_bank_accounts_for_payload()` now honors `payload["bank_account_id"]` before dedupe, so a claimed bank queue item runs exactly one bank account.
+  - Added regression coverage proving the queued Shinhan item collects only the Shinhan account.
+- Verification:
+  - `docker run --rm --network aads_network -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_pc_agent_collection_queue.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed: 104 tests.
+  - Live active container source mount check confirmed `/app/scripts/yeoljeong_auto_collect.py` contains the hotfix.
+  - Live queue re-run with `--bank-only --global-queue --business-id biz-junghwa --branch branch-junghwa --date-from 2026-08-28 --date-to 2026-08-28` created 2 DB queue rows.
+  - Live drain with `--drain-global-queue --queue-iterations 2 --browser-agent-id 7f99c528-24d` processed IBK as 1 account and Shinhan as 1 account. Both stopped at `action_required` with `MISSING_CREDENTIALS`.
+- Deployment status:
+  - Commit `2917c914 fix(pc-agent): pin bank queue items to account` was pushed to `origin/main`.
+  - Blue/green deploy was attempted but safely blocked because target slot `aads-server-green:8102` had 2 active streams. No forced deploy was performed.
+  - Runtime effect is active for `scripts/` because `aads-server` mounts `/root/aads/aads-server/scripts` into `/app/scripts`.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, `scripts/deploy_dashboard_bg.sh`, `.tmp/`, and generated queue JSON were left untouched.
+
 ## 2026-08-28 15:58 KST - PC Agent global collection queue P0
 
 - Trigger: CEO asked to implement the recommended PC Agent global collection queue so one PC can run multiple authenticated bank/sales-site collection jobs without resource conflicts.
