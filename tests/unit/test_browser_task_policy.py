@@ -3,11 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.services import browser_task_gateway as browser_gateway
 from app.services.agent_vault_service import _row_to_credential, normalize_origin
 from app.services.browser_task_gateway import (
     _approval_token_audit_payload,
     _permission_decision_audit_payload,
     _scope_allows_action,
+    _target_supports_self_hosted_capture,
     _task_to_dict,
 )
 from app.services.browser_recipe_registry import (
@@ -236,6 +238,74 @@ def test_browser_task_result_jsonb_string_is_dict():
     task = _task_to_dict(row)
 
     assert task["result"] == {"e2e": True, "token": "***MASKED***"}
+
+
+def test_self_hosted_live_capture_only_accepts_http_targets():
+    assert _target_supports_self_hosted_capture("https://aads.newtalk.kr/browser-tasks") is True
+    assert _target_supports_self_hosted_capture("http://localhost:8100/health") is True
+    assert _target_supports_self_hosted_capture("about:blank") is False
+    assert _target_supports_self_hosted_capture("file:///tmp/report.html") is False
+
+
+@pytest.mark.asyncio
+async def test_live_frame_capture_prefers_self_hosted_playwright(monkeypatch):
+    tenant_id = "00000000-0000-0000-0000-000000000002"
+    task_id = "00000000-0000-0000-0000-000000000001"
+
+    async def fake_get_browser_task(*, tenant_id: str, task_id: str):
+        return {
+            "id": task_id,
+            "tenant_id": tenant_id,
+            "work_key": "ohvis-login",
+            "target_url": "https://aads.newtalk.kr/login",
+            "current_step": "login",
+        }
+
+    async def fake_self_hosted(task):
+        return {"status": "captured", "source": "self_hosted_playwright", "frame": {"task_id": task["id"]}}
+
+    async def fail_pc_agent(**kwargs):
+        raise AssertionError("pc agent should not be called when self-hosted capture succeeds")
+
+    monkeypatch.setattr(browser_gateway, "get_browser_task", fake_get_browser_task)
+    monkeypatch.setattr(browser_gateway, "_capture_self_hosted_playwright_frame", fake_self_hosted)
+    monkeypatch.setattr(browser_gateway, "_capture_pc_agent_frame", fail_pc_agent)
+
+    result = await browser_gateway.capture_browser_task_live_frame(tenant_id=tenant_id, task_id=task_id)
+
+    assert result["status"] == "captured"
+    assert result["source"] == "self_hosted_playwright"
+
+
+@pytest.mark.asyncio
+async def test_live_frame_capture_uses_pc_agent_as_fallback(monkeypatch):
+    tenant_id = "00000000-0000-0000-0000-000000000002"
+    task_id = "00000000-0000-0000-0000-000000000001"
+
+    async def fake_get_browser_task(*, tenant_id: str, task_id: str):
+        return {
+            "id": task_id,
+            "tenant_id": tenant_id,
+            "work_key": "pc-only",
+            "target_url": "about:blank",
+            "current_step": "legacy session",
+        }
+
+    async def fake_self_hosted(task):
+        return {"status": "skipped", "reason": "unsupported_target_url"}
+
+    async def fake_pc_agent(*, tenant_id: str, task: dict):
+        return {"status": "captured", "source": "pc_agent_browser_screenshot", "frame": {"task_id": task["id"]}}
+
+    monkeypatch.setattr(browser_gateway, "get_browser_task", fake_get_browser_task)
+    monkeypatch.setattr(browser_gateway, "_capture_self_hosted_playwright_frame", fake_self_hosted)
+    monkeypatch.setattr(browser_gateway, "_capture_pc_agent_frame", fake_pc_agent)
+
+    result = await browser_gateway.capture_browser_task_live_frame(tenant_id=tenant_id, task_id=task_id)
+
+    assert result["status"] == "captured"
+    assert result["source"] == "pc_agent_browser_screenshot"
+    assert result["fallback_from"]["reason"] == "unsupported_target_url"
 
 
 def test_browser_recipe_normalizes_concurrency_and_resource_policy():

@@ -1,6 +1,8 @@
 """DB-backed managed browser task lifecycle service."""
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
 import hashlib
@@ -19,6 +21,9 @@ PUSH_STATUSES = {"approval_required", "auth_required", "completed", "failed"}
 logger = logging.getLogger(__name__)
 CHALLENGE_KINDS = {"otp", "captcha"}
 CHALLENGE_MODEL_SOURCES = {"llm", "model", "vision", "solver", "ocr", "auto"}
+SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS = 12_000
+SELF_HOSTED_LIVE_VIEWPORT = {"width": 1366, "height": 768}
+_SELF_HOSTED_CAPTURE_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _tenant_uuid(tenant_id: str) -> uuid.UUID:
@@ -433,13 +438,89 @@ def _extract_screenshot_base64(result: dict[str, Any]) -> str:
     return ""
 
 
-async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> dict[str, Any]:
-    task = await get_browser_task(tenant_id=tenant_id, task_id=task_id)
-    if not task:
-        return {"status": "not_found"}
+def _target_supports_self_hosted_capture(target_url: str) -> bool:
+    parsed = urlparse(str(target_url or "").strip())
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+async def _capture_self_hosted_playwright_frame(task: dict[str, Any]) -> dict[str, Any]:
+    target_url = str(task.get("target_url") or "").strip()
     work_key = str(task.get("work_key") or "").strip()
-    if not work_key:
-        return {"status": "skipped", "reason": "work_key_missing"}
+    if not _target_supports_self_hosted_capture(target_url):
+        return {"status": "skipped", "reason": "unsupported_target_url"}
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as exc:
+        return {"status": "skipped", "reason": "playwright_unavailable", "message": str(exc)}
+
+    from app.services.managed_browser import profile_info
+
+    profile = profile_info(work_key, target_url)
+    profile_dir = profile["profile_dir"]
+    lock_key = profile["profile_key"]
+    lock = _SELF_HOSTED_CAPTURE_LOCKS.setdefault(lock_key, asyncio.Lock())
+    async with lock:
+        browser_context = None
+        async with async_playwright() as playwright:
+            try:
+                browser_context = await playwright.chromium.launch_persistent_context(
+                    profile_dir,
+                    headless=True,
+                    viewport=SELF_HOSTED_LIVE_VIEWPORT,
+                    ignore_https_errors=True,
+                    args=[
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
+                )
+                page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
+                response = await page.goto(
+                    target_url,
+                    wait_until="domcontentloaded",
+                    timeout=SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS,
+                )
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=3_000)
+                except Exception:
+                    pass
+                image_bytes = await page.screenshot(type="jpeg", quality=68, full_page=False)
+                frame_base64 = base64.b64encode(image_bytes).decode("ascii")
+                title = await page.title()
+                current_url = page.url
+                frame = await upsert_browser_task_live_frame(
+                    tenant_id=str(task["tenant_id"]),
+                    task_id=str(task["id"]),
+                    frame_base64=frame_base64,
+                    media_type="image/jpeg",
+                    width=SELF_HOSTED_LIVE_VIEWPORT["width"],
+                    height=SELF_HOSTED_LIVE_VIEWPORT["height"],
+                    current_url=current_url,
+                    page_title=title,
+                    current_step=str(task.get("current_step") or "server live capture"),
+                    metadata={
+                        "source": "self_hosted_playwright",
+                        "runtime": "self_hosted_playwright",
+                        "http_status": response.status if response else None,
+                        "profile_key": profile["profile_key"],
+                    },
+                )
+                return {"status": "captured", "source": "self_hosted_playwright", "frame": frame}
+            except Exception as exc:
+                logger.warning(
+                    "browser_task_self_hosted_live_capture_failed task_id=%s work_key=%s err=%s",
+                    task.get("id"),
+                    work_key,
+                    exc,
+                )
+                return {"status": "skipped", "reason": "self_hosted_capture_failed", "message": str(exc)}
+            finally:
+                if browser_context:
+                    await browser_context.close()
+
+
+async def _capture_pc_agent_frame(*, tenant_id: str, task: dict[str, Any]) -> dict[str, Any]:
+    work_key = str(task.get("work_key") or "").strip()
     try:
         from app.services.pc_agent_manager import pc_agent_manager
 
@@ -468,7 +549,7 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
         command_payload = _json_dict(_json_dict(result.get("result")).get("result"))
         frame = await upsert_browser_task_live_frame(
             tenant_id=tenant_id,
-            task_id=task_id,
+            task_id=str(task["id"]),
             frame_base64=frame_base64,
             media_type="image/jpeg",
             width=command_payload.get("width") if isinstance(command_payload.get("width"), int) else None,
@@ -478,10 +559,34 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
             current_step=str(task.get("current_step") or "live capture"),
             metadata={"source": "pc_agent_browser_screenshot", "command_id": result.get("command_id", "")},
         )
-        return {"status": "captured", "frame": frame}
+        return {"status": "captured", "source": "pc_agent_browser_screenshot", "frame": frame}
     except Exception as exc:
-        logger.warning("browser_task_live_capture_failed task_id=%s err=%s", task_id, exc)
+        logger.warning("browser_task_live_capture_failed task_id=%s err=%s", task.get("id"), exc)
         return {"status": "skipped", "reason": str(exc)}
+
+
+async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> dict[str, Any]:
+    task = await get_browser_task(tenant_id=tenant_id, task_id=task_id)
+    if not task:
+        return {"status": "not_found"}
+    work_key = str(task.get("work_key") or "").strip()
+    if not work_key:
+        return {"status": "skipped", "reason": "work_key_missing"}
+
+    self_hosted = await _capture_self_hosted_playwright_frame(task)
+    if self_hosted.get("status") == "captured":
+        return self_hosted
+
+    pc_agent = await _capture_pc_agent_frame(tenant_id=tenant_id, task=task)
+    if pc_agent.get("status") == "captured":
+        pc_agent["fallback_from"] = self_hosted
+        return pc_agent
+    return {
+        "status": "skipped",
+        "reason": "all_capture_backends_failed",
+        "self_hosted": self_hosted,
+        "pc_agent": pc_agent,
+    }
 
 
 async def upsert_browser_task_live_frame(

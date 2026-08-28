@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-08-28 11:18 KST - Managed Browser Live View server Playwright fallback
+
+- Trigger: CEO asked to make Browser Task Live View work without PC Agent and deploy/test the fix.
+- Changes:
+  - `app/services/browser_task_gateway.py`: `capture_browser_task_live_frame()` now attempts `self_hosted_playwright` first for `http/https` task targets, using an isolated persistent profile and latest-frame storage. PC Agent screenshot remains only as fallback.
+  - `tests/unit/test_browser_task_policy.py`: added regression tests for self-hosted target gating, self-hosted-first capture, and PC Agent fallback.
+  - Dashboard `/browser-tasks`: Live View now labels capture source and no longer presents the feature as PC Agent-only.
+- Verification prepared:
+  - `.venv-playwright/bin/python -m py_compile app/services/browser_task_gateway.py app/api/browser_tasks.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_browser_task_policy.py -q` succeeded: 29 passed.
+  - `npx eslint src/app/browser-tasks/page.tsx` and `npx tsc --noEmit --pretty false` succeeded.
+- Deployment status:
+  - Commit, push, server deploy, dashboard deploy, and live HTTP/API verification are next in this turn.
+  - Existing unrelated dirty files under `app/data/yeoljeong_finance`, `docs/CHANGELOG-*`, and `scripts/deploy_dashboard_bg.sh` are intentionally left untouched.
+
 ## 2026-08-27 13:50 KST - Reply-to chat project scope isolation
 
 - Trigger: CEO reported that clicking the reply/continue button in session `476cae48-9bd5-467b-b2da-2f68606c180e` produced context from another project.
