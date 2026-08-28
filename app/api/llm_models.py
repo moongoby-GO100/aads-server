@@ -145,7 +145,23 @@ async def _seed_media_models(conn) -> None:
     await conn.execute("""
         INSERT INTO model_routing_preferences
           (route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by)
-        VALUES
+        SELECT seed.route_key, seed.provider, seed.model_id, seed.display_order,
+               seed.is_enabled,
+               CASE
+                   WHEN seed.is_default
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM model_routing_preferences existing
+                        WHERE existing.route_key = seed.route_key
+                          AND existing.is_default = TRUE
+                    )
+                   THEN TRUE
+                   ELSE FALSE
+               END AS is_default,
+               seed.notes,
+               seed.updated_by
+        FROM (
+          VALUES
           ('image','openai','dall-e-3',10,false,false,'OpenAI route disabled by default; enable only when API key is active','system'),
           ('image','gemini','gemini-2.5-flash-image',15,true,false,'Nano Banana','system'),
           ('image','gemini','gemini-3.1-flash-image-preview',18,true,false,'Nano Banana 2','system'),
@@ -173,6 +189,7 @@ async def _seed_media_models(conn) -> None:
           ('runner_llm','anthropic','claude-opus-4-8',10,true,true,'Runner 기본','system'),
           ('runner_llm','openai','gpt-5.5',20,true,false,'GPT-5.5 백업','system'),
           ('runner_llm','google','gemini-2.5-pro',30,true,false,'Gemini 2.5 Pro 백업','system')
+        ) AS seed(route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by)
         ON CONFLICT (route_key, provider, model_id) DO NOTHING
     """)
 

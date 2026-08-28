@@ -14,8 +14,14 @@
 - Verification:
   - `python3 -m py_compile app/api/llm_models.py app/services/model_selector.py` succeeded.
   - Live DB inspection confirmed 71 model routing preference rows and visible error states such as Gemini `disabled_billing_depleted`.
+  - Follow-up validation after deploy smoke found an idempotency bug when an existing route already had a default model; `_seed_media_models()` now preserves the existing default and inserts seed defaults as non-default in that case.
+  - `docker exec aads-server python -m py_compile app/api/llm_models.py app/services/model_selector.py` succeeded.
+  - `docker exec aads-server python -m pytest tests/unit/test_model_routing_admin_static.py tests/unit/test_model_selector_dynamic_routing.py -q` succeeded: 27 passed.
+  - Direct container call to `get_model_routing_preferences()` succeeded and returned `total=72`, routes `audio/edit_image/image/llm/music/runner_llm/video`, `llm_fallback=23`, `error_models=200`, and per-route blocked counts.
 - Deployment status:
-  - Pending commit, push, and deploy at the time of this entry.
+  - Initial commit `580d019a` was pushed.
+  - Blue/green API deploy was blocked by active streams on the standby slot, so the active API was hot-reloaded instead.
+  - Follow-up seed idempotency patch is pending commit/push/reload at the time of this entry update.
 
 ## 2026-08-29 04:43 KST - Chat completion signal guard hotfix
 
