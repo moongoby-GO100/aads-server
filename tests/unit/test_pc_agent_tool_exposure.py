@@ -401,6 +401,7 @@ def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None
     assert 'dedicated_session and "newtalk.kr" in url' not in navigate_source
     assert 'tenant_id and browser_work_key and "newtalk.kr" in url' not in capture_source
     assert "if dedicated_session and tenant_id:" in navigate_source
+    assert 'capture_work_key = "" if tenant_id and not browser_session_id else browser_work_key' in capture_source
     assert "if tenant_id:" in capture_source
 
 

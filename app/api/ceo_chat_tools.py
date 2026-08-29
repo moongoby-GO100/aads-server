@@ -4043,7 +4043,8 @@ async def tool_capture_screenshot(
     blocked = _browser_domain_ok(url)
     if blocked:
         return blocked
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, url)
+    capture_work_key = "" if tenant_id and not browser_session_id else browser_work_key
+    ctx, err = await _acquire_pw_context(browser_session_id, capture_work_key, url)
     if err:
         return err
     try:

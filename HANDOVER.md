@@ -10,6 +10,7 @@
 - Changes:
   - Updated `tool_browser_navigate()` to attempt Vault login whenever a dedicated browser session plus tenant is available and a login form is detected, regardless of domain or direct `/login` URL.
   - Updated `tool_capture_screenshot()` to attempt Vault login with any tenant-scoped request, even when no `browser_work_key` is supplied.
+  - Changed tenant-scoped `tool_capture_screenshot()` to use server-local Playwright unless an explicit `browser_session_id` is supplied; `browser_work_key` remains available for Vault credential selection without forcing a stale PC Agent session.
   - Updated `_pre_inject_vault_token()` to try both requested URL origin and current browser URL origin before falling back to legacy `e2e_credentials`.
   - Replaced GO100 `/auth/callback` dependency with direct browser token injection into `localStorage.token`, `localStorage.access_token`, `token` cookie, and `access_token` cookie before navigating to the protected page.
   - Added unit coverage for redirected login-origin matching and domain-agnostic E2E autologin.
