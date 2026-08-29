@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-29 17:12 KST - E2E required-screen verification contract and interruption notice
+
+- Request: Apply the recommended P0-P2 E2E reporting safeguards immediately and make tasks that require screen verification mandatory.
+- Cause:
+  - Static `system_prompt_v2.py` contained R-E2E fallback rules, but the DB-driven `prompt_assets` path had no global E2E asset, so session/model/role compilation could miss the rule.
+  - Pipeline Runner verification checklist only said browser E2E was mandatory for UI changes, which did not cover login, document viewing, chart/dashboard pages, frontend route work, or capture-required validation.
+  - Interrupted or empty final responses stored diagnostics in metadata but could still appear to the CEO as a generic interruption notice instead of a visible validation/reporting failure card.
+- Changes:
+  - Added migration `migrations/135_global_e2e_verification_contract.sql` and seed asset `global-e2e-verification-contract`.
+  - Updated static R-E2E rules to require screen evidence for login, screenshot, capture, and visual QA tasks.
+  - Expanded Pipeline Runner checklist to require E2E/screen verification for UI, login, document/file open, chart, dashboard, frontend route, and capture-related work, with explicit API fallback reporting language.
+  - Added a visible interruption diagnostic notice for empty/no-final-report executions, including category, reason, preserved partial length, and screen-verification reporting rules.
+- Verification:
+  - `python3.11 -m py_compile app/services/chat_service.py app/services/pipeline_runner_service.py app/core/prompts/system_prompt_v2.py scripts/seed_prompt_assets.py` passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_chat_service.py::test_mark_execution_interrupted_records_quality_details tests/unit/test_chat_service.py::test_mark_execution_interrupted_creates_visible_diagnostic_notice_without_partial tests/unit/test_pipeline_runner_script_guards.py::test_pipeline_runner_service_requires_screen_e2e_for_visual_work -q` passed: 3 passed, 1 warning.
+  - DB migration was applied with `docker exec -i aads-postgres psql -U aads -d aads < migrations/135_global_e2e_verification_contract.sql`.
+  - DB verification confirmed slug `global-e2e-verification-contract`, layer 1, priority 6, enabled true, wildcard scopes, 790 chars.
+- Deployment status:
+  - Pending commit/push/reload at the time this entry was written.
+
 ## 2026-08-29 15:20 KST - Global E2E Vault autologin for authenticated pages
 
 - Request: Fix the recurring issue where E2E screen verification cannot pass login on every authenticated webpage, not only GO100, then deploy and verify.

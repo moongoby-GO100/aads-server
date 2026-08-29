@@ -1835,6 +1835,8 @@ def _build_interruption_diagnostics(
         "category": resolved_category,
         "partial_len": len(clean_partial),
         "has_placeholder": bool(placeholder_id),
+        "interrupted_partial_len": len(clean_partial),
+        "interrupted_has_placeholder": bool(placeholder_id),
         "delete_empty_placeholder": bool(delete_empty_placeholder),
         "superseded": bool(superseded),
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -1844,6 +1846,28 @@ def _build_interruption_diagnostics(
     details.update(_parse_interrupt_diagnostic_reason(str(reason or "")))
     details["category"] = resolved_category
     return details
+
+
+def _format_interruption_notice(
+    reason: str,
+    *,
+    diagnostics: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Create a visible final notice when an execution ends without report content."""
+    details = diagnostics or {}
+    category = str(details.get("category") or _classify_interruption_reason(reason))
+    partial_len = int(details.get("partial_len") or 0)
+    clean_reason = str(reason or "unknown")[:500]
+    return (
+        "⚠️ 응답 생성이 중단되어 최종 보고를 완료하지 못했습니다.\n\n"
+        "**진단**\n"
+        f"- 중단 분류: `{category}`\n"
+        f"- 상세 사유: `{clean_reason}`\n"
+        f"- 보존된 부분 응답: {partial_len}자\n\n"
+        "**검증/보고 원칙**\n"
+        "- 브라우저 E2E, 로그인, 캡처가 실패한 작업은 API 상태코드, 헬스체크, 프로세스 확인으로 폴백 검증 후 재보고해야 합니다.\n"
+        "- 화면 확인이 필수인 작업은 브라우저 접속 또는 스크린샷 근거가 없으면 완료로 보고하지 않습니다."
+    )
 
 
 async def _resolve_stream_execution_binding(
@@ -3138,7 +3162,10 @@ async def _mark_execution_interrupted(
                     edited_at = NOW()
                 WHERE id = $2
                 """,
-                "⚠️ _응답 생성이 중단되었습니다. 최신 지시를 다시 처리할 수 있습니다._",
+                _format_interruption_notice(
+                    reason,
+                    diagnostics=interruption_quality_details,
+                ),
                 pid,
             )
             assistant_message_id = pid
@@ -3195,9 +3222,9 @@ async def _mark_execution_interrupted(
             )
 
     if assistant_message_id is None and "superseded_by_newer_user" not in reason and not is_superseded_cancel:
-        fallback_content = (
-            "⚠️ _응답 생성이 중단되어 복구 응답을 만들지 못했습니다. "
-            "같은 질문으로 다시 이어서 처리할 수 있습니다._"
+        fallback_content = _format_interruption_notice(
+            reason,
+            diagnostics=interruption_quality_details,
         )
         assistant_message_id = await conn.fetchval(
             """

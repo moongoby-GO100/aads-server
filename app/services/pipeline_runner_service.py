@@ -1691,11 +1691,13 @@ _VERIFICATION_CHECKLIST_TEMPLATE = """
 - [ ] 실패 기준: (이런 결과면 실패로 간주)
 - [ ] 서비스 재시작 확인: docker ps → container running
 - [ ] 에러 로그 0건: docker logs --since 60s | grep -i error
-- [ ] 브라우저 E2E 검증: UI 변경 시 필수. 아래 절차 수행:
+- [ ] 브라우저 E2E/화면 검증: UI, 로그인, 문서/파일 열람, 차트, 대시보드, 프론트 라우트, 캡처가 필요한 작업은 필수. 아래 절차 수행:
   1. GET /e2e/credentials/e2e-login-url/{PROJECT} → url 획득
   2. browser_navigate(url) → 자동 로그인
   3. browser_navigate(검증 대상 페이지)
   4. browser_snapshot() 또는 browser_screenshot()으로 렌더링 확인
+  5. 브라우저 실패 시 HTTP 상태코드/API 헬스체크/프로세스 확인으로 폴백 검증하고 "⚠️ 브라우저 E2E 미실행, API 검증으로 대체" 명시
+  6. 화면 검증 필수 작업에서 캡처/스냅샷과 폴백 검증이 모두 없으면 완료 보고 금지
 
 RESULT 파일에 위 체크리스트 항목별 실행 결과를 반드시 포함하세요.
 """

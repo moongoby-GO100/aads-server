@@ -45,6 +45,15 @@ def test_pipeline_runner_service_codex_invocation_avoids_deprecated_full_auto():
     assert '"--full-auto",' not in service
 
 
+def test_pipeline_runner_service_requires_screen_e2e_for_visual_work():
+    service = (ROOT / "app" / "services" / "pipeline_runner_service.py").read_text(encoding="utf-8")
+
+    assert "브라우저 E2E/화면 검증" in service
+    assert "UI, 로그인, 문서/파일 열람, 차트, 대시보드, 프론트 라우트, 캡처가 필요한 작업은 필수" in service
+    assert "브라우저 E2E 미실행, API 검증으로 대체" in service
+    assert "화면 검증 필수 작업에서 캡처/스냅샷과 폴백 검증이 모두 없으면 완료 보고 금지" in service
+
+
 def test_pipeline_runner_claims_legacy_coding_phase_queue_items():
     script = _read_script("pipeline-runner.sh")
 

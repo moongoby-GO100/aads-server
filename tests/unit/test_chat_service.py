@@ -1059,6 +1059,39 @@ async def test_mark_execution_interrupted_records_quality_details():
 
 
 @pytest.mark.asyncio
+async def test_mark_execution_interrupted_creates_visible_diagnostic_notice_without_partial():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+    message_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(side_effect=[
+        None,  # no placeholder found
+        None,  # no started_at measurement
+        None,  # no existing interrupted assistant message
+        message_id,  # inserted interruption notice
+    ])
+    conn.execute = AsyncMock()
+
+    await chat_service._mark_execution_interrupted(
+        conn,
+        session_id,
+        execution_id,
+        "completion_guard_incomplete_progress_tail:final_save content_len=0 last_tool=browser_screenshot",
+        partial_content="",
+    )
+
+    insert_calls = [
+        call for call in conn.fetchval.await_args_list
+        if "INSERT INTO chat_messages" in call.args[0]
+    ]
+    inserted_notice = insert_calls[0].args[3]
+    assert "응답 생성이 중단되어 최종 보고를 완료하지 못했습니다" in inserted_notice
+    assert "보존된 부분 응답: 0자" in inserted_notice
+    assert "브라우저 E2E" in inserted_notice
+    assert "화면 확인이 필수인 작업" in inserted_notice
+
+
+@pytest.mark.asyncio
 async def test_delete_streaming_placeholder_marks_final_missing_as_interrupted_partial():
     session_id = str(uuid.uuid4())
     execution_id = str(uuid.uuid4())
