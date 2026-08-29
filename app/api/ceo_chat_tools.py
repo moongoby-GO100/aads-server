@@ -30,7 +30,7 @@ from datetime import datetime
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
@@ -43,6 +43,9 @@ _AGENT_VAULT_API_LOGIN_TARGETS = {
         "callback_path": "/auth/callback",
         "return_param": "return_to",
         "default_return_path": "/go100/command-center",
+        "login_path": "/auth/login",
+        "storage_keys": ("token", "access_token"),
+        "cookie_names": ("token", "access_token"),
     },
 }
 
@@ -3598,20 +3601,38 @@ async def _inject_agent_vault_api_login_token(
         logger.warning("agent_vault_api_token_login_failed origin=%s status=%s", origin, status)
         return False
 
+    origin_clean = origin.rstrip("/")
     return_path = _agent_vault_return_path(target_url, str(target["default_return_path"]))
-    callback_url = f"{origin.rstrip('/')}{target['callback_path']}?{urlencode({'token': token, str(target['return_param']): return_path})}"
-    await page.goto(callback_url, wait_until="domcontentloaded", timeout=15000)
+    login_path = str(target.get("login_path") or "/login")
+    await page.goto(f"{origin_clean}{login_path}", wait_until="domcontentloaded", timeout=15000)
+    await page.evaluate(
+        """({ token, storageKeys, cookieNames }) => {
+            for (const key of storageKeys) {
+                window.localStorage.setItem(key, token);
+            }
+            const secure = window.location.protocol === "https:" ? "; Secure" : "";
+            for (const name of cookieNames) {
+                document.cookie = `${name}=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Lax${secure}`;
+            }
+        }""",
+        {
+            "token": token,
+            "storageKeys": list(target.get("storage_keys") or ("token",)),
+            "cookieNames": list(target.get("cookie_names") or ("token",)),
+        },
+    )
+    await page.goto(f"{origin_clean}{return_path}", wait_until="domcontentloaded", timeout=15000)
     await page.wait_for_timeout(1500)
-    if not await login_session_completed(page, f"{origin.rstrip('/')}/auth/login"):
+    if not await login_session_completed(page, f"{origin_clean}{login_path}"):
         return False
     await mark_agent_credential_used(
         tenant_id=tenant_id,
         credential_id=str(credential["id"]),
         work_key=work_key,
         origin=origin,
-        details={"method": "api_token_callback", "target_url": target_url, "return_path": return_path},
+        details={"method": "api_token_direct_inject", "target_url": target_url, "return_path": return_path},
     )
-    logger.info("agent_vault_api_token_callback_success origin=%s work_key=%s", origin, work_key)
+    logger.info("agent_vault_api_token_direct_inject_success origin=%s work_key=%s", origin, work_key)
     return True
 
 

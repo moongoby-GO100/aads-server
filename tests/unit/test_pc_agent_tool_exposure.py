@@ -281,10 +281,18 @@ class _FakeAgentVaultLoginPage:
 
 
 class _FakeAgentVaultCallbackPage(_FakeAgentVaultLoginPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.injected: dict[str, object] = {}
+
     async def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
         self.url = url
         self.login_visible = False
         self.events.append(("goto", url, wait_until, str(timeout)))
+
+    async def evaluate(self, _script: str, payload: dict[str, object]) -> None:
+        self.injected = payload
+        self.events.append(("evaluate", ",".join(payload["storageKeys"]), ",".join(payload["cookieNames"])))
 
 
 @pytest.mark.asyncio
@@ -397,7 +405,7 @@ def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None
 
 
 @pytest.mark.asyncio
-async def test_agent_vault_login_go100_uses_callback_token_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_agent_vault_login_go100_uses_direct_token_injection(monkeypatch: pytest.MonkeyPatch) -> None:
     marked: dict[str, object] = {}
 
     async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
@@ -457,16 +465,98 @@ async def test_agent_vault_login_go100_uses_callback_token_injection(monkeypatch
     assert marked["api_url"] == "https://go100.newtalk.kr/api/v1/auth/login"
     assert marked["email"] == "admin@go100.com"
     assert marked["ssl"] is False
-    assert page.events[0] == (
+    assert page.events[:3] == [
+        (
+            "goto",
+            "https://go100.newtalk.kr/auth/login",
+            "domcontentloaded",
+            "15000",
+        ),
+        ("evaluate", "token,access_token", "token,access_token"),
+        (
+            "goto",
+            "https://go100.newtalk.kr/go100/command-center?tab=orders",
+            "domcontentloaded",
+            "15000",
+        ),
+    ]
+    assert page.injected == {
+        "token": "go100-token",
+        "storageKeys": ["token", "access_token"],
+        "cookieNames": ["token", "access_token"],
+    }
+    assert marked["details"] == {
+        "method": "api_token_direct_inject",
+        "target_url": "https://go100.newtalk.kr/go100/command-center?tab=orders",
+        "return_path": "/go100/command-center?tab=orders",
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_vault_login_go100_defaults_login_return_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    marked: dict[str, object] = {}
+
+    async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
+        marked.update(kwargs)
+        return True
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        async def json(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return {"access_token": "go100-token"}
+
+    class _FakeSession:
+        def __init__(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        def post(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+    monkeypatch.setattr(
+        "app.services.agent_vault_service.mark_agent_credential_used",
+        fake_mark_agent_credential_used,
+    )
+
+    page = _FakeAgentVaultCallbackPage()
+    ok = await ceo_chat_tools._login_with_agent_vault_credential(
+        page,
+        {
+            "id": "00000000-0000-0000-0000-000000000011",
+            "origin": "https://go100.newtalk.kr",
+            "work_key": "aads-ceo-browser",
+            "username": "admin@go100.com",
+            "password": "secret-password",
+        },
+        "https://go100.newtalk.kr/auth/login",
+        tenant_id="00000000-0000-0000-0000-000000000012",
+        browser_work_key="go100-e2e",
+    )
+
+    assert ok is True
+    assert page.events[2] == (
         "goto",
-        "https://go100.newtalk.kr/auth/callback?token=go100-token&return_to=%2Fgo100%2Fcommand-center%3Ftab%3Dorders",
+        "https://go100.newtalk.kr/go100/command-center",
         "domcontentloaded",
         "15000",
     )
     assert marked["details"] == {
-        "method": "api_token_callback",
-        "target_url": "https://go100.newtalk.kr/go100/command-center?tab=orders",
-        "return_path": "/go100/command-center?tab=orders",
+        "method": "api_token_direct_inject",
+        "target_url": "https://go100.newtalk.kr/auth/login",
+        "return_path": "/go100/command-center",
     }
 
 

@@ -11,13 +11,15 @@
   - Updated `tool_browser_navigate()` to attempt Vault login whenever a dedicated browser session plus tenant is available and a login form is detected, regardless of domain or direct `/login` URL.
   - Updated `tool_capture_screenshot()` to attempt Vault login with any tenant-scoped request, even when no `browser_work_key` is supplied.
   - Updated `_pre_inject_vault_token()` to try both requested URL origin and current browser URL origin before falling back to legacy `e2e_credentials`.
+  - Replaced GO100 `/auth/callback` dependency with direct browser token injection into `localStorage.token`, `localStorage.access_token`, `token` cookie, and `access_token` cookie before navigating to the protected page.
   - Added unit coverage for redirected login-origin matching and domain-agnostic E2E autologin.
 - Verification:
   - `python3 -m py_compile app/api/ceo_chat_tools.py app/core/credential_vault.py app/services/agent_vault_service.py` passed on host.
   - `docker exec aads-server python3 -m py_compile app/api/ceo_chat_tools.py app/core/credential_vault.py app/services/agent_vault_service.py` passed.
   - `docker exec aads-server python3 -m pytest tests/unit/test_pc_agent_tool_exposure.py -q` passed: 17 passed.
+  - First post-deploy GO100 screenshot saved successfully but still showed `/auth/login`; this proved callback token handling was insufficient for screen verification.
 - Deployment status:
-  - Pending at this handover entry: commit, push, reload deploy, and live browser/screenshot E2E verification still required.
+  - Commit `cd976c49` was pushed and hot-reloaded first; follow-up direct token injection patch still pending commit/reload at this handover entry.
 
 ## 2026-08-29 15:13 KST - GO100 Agent Vault E2E login bridge
 
