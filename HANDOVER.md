@@ -8965,7 +8965,9 @@
 - Verification:
   - `python3 -m py_compile app/models/chat.py app/routers/chat.py` succeeded.
 - Deployment:
-  - Pending at handover write time; server reload and production verification still required.
+  - Commit `3768e493` pushed to `origin/main`.
+  - `bash scripts/reload-api.sh` succeeded at 2026-08-29 10:15:33 KST with `재로드=85개`.
+  - Production health/API verification completed after reload.
 
 ## 2026-08-29 06:34 KST - FOOD Shinhan rerun result after hidden-field fix
 
