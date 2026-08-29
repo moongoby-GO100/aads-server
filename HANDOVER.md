@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-29 17:37 KST - Project Docs Office preview and docs page labels
+
+- Request: Apply the recommended document viewer improvements immediately, verify them, and report.
+- Cause:
+  - Project Docs returned many Office files as binary/base64, so mobile and browser users could not inspect `.pptx`, `.odp`, `.doc`, `.xls`, and `.ppt` content directly from the docs page.
+  - The dashboard format badges did not distinguish converted PowerPoint/Office text previews.
+- Changes:
+  - Added Office text-preview fallback in `app/api/project_docs.py` for PowerPoint/OpenDocument XML packages and legacy Office formats.
+  - Added `powerpoint-text` and `office-text` labels/styles in `aads-dashboard/src/app/docs/page.tsx`.
+- Verification:
+  - `python3 -m py_compile app/api/project_docs.py` passed.
+  - `npx eslint src/app/docs/page.tsx` passed.
+  - `npm run build` in `aads-dashboard` passed.
+  - Authenticated active API probe against `aads-server-green` returned `format=powerpoint-text`, `encoding=text`, `converted_from=pptx`, and probe text present.
+  - `https://aads.newtalk.kr/api/v1/health` returned HTTP 200; `https://aads.newtalk.kr/docs` redirected to login with HTTP 200 after following redirect.
+- Deployment status:
+  - Backend active slot is `aads-server-green:8102` after successful blue-green deploy at `2026-08-29 17:34 KST`.
+  - Dashboard active slot is `aads-dashboard:3100` with release `439b163a6353` after successful blue-green deploy at `2026-08-29 17:12 KST`.
+  - Legacy standby `aads-server:8100` still returned binary for the pptx probe at handover time because active streams were preserved; standby sync is governed by the deploy script drain policy.
+
 ## 2026-08-29 17:12 KST - E2E required-screen verification contract and interruption notice
 
 - Request: Apply the recommended P0-P2 E2E reporting safeguards immediately and make tasks that require screen verification mandatory.
