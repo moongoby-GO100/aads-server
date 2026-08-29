@@ -280,6 +280,13 @@ class _FakeAgentVaultLoginPage:
         self.events.append(("wait", str(ms)))
 
 
+class _FakeAgentVaultCallbackPage(_FakeAgentVaultLoginPage):
+    async def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+        self.url = url
+        self.login_visible = False
+        self.events.append(("goto", url, wait_until, str(timeout)))
+
+
 @pytest.mark.asyncio
 async def test_apply_aads_e2e_url_injects_token_and_preserves_fragment() -> None:
     page = _FakeAadsAuthPage()
@@ -331,6 +338,136 @@ async def test_agent_vault_login_uses_generic_form_and_marks_used(monkeypatch: p
     assert marked["credential_id"] == "00000000-0000-0000-0000-000000000011"
     assert marked["origin"] == "https://v2.newtalk.kr"
     assert marked["details"] == {"method": "form_login", "target_url": "https://v2.newtalk.kr/chat"}
+
+
+@pytest.mark.asyncio
+async def test_pre_inject_vault_token_uses_current_login_redirect_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_get_agent_credential_for_url(**kwargs):  # noqa: ANN003
+        calls.append(kwargs["url"])
+        if kwargs["url"].startswith("https://auth.marketbom.com"):
+            return {
+                "id": "00000000-0000-0000-0000-000000000011",
+                "origin": "https://auth.marketbom.com",
+                "work_key": "aads-ceo-browser",
+                "username": "admin@example.test",
+                "password": "secret-password",
+            }
+        return None
+
+    async def fake_mark_agent_credential_used(**_kwargs):  # noqa: ANN003
+        return True
+
+    monkeypatch.setattr(
+        "app.services.agent_vault_service.get_agent_credential_for_url",
+        fake_get_agent_credential_for_url,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_vault_service.mark_agent_credential_used",
+        fake_mark_agent_credential_used,
+    )
+
+    page = _FakeAgentVaultLoginPage()
+    page.url = "https://auth.marketbom.com/login?redirect=%2Fdashboard"
+
+    ok = await ceo_chat_tools._pre_inject_vault_token(
+        page,
+        "https://www.marketbom.com/dashboard",
+        tenant_id="00000000-0000-0000-0000-000000000012",
+        browser_work_key="aads-ceo-browser",
+    )
+
+    assert ok is True
+    assert calls == [
+        "https://www.marketbom.com/dashboard",
+        "https://auth.marketbom.com/login?redirect=%2Fdashboard",
+    ]
+    assert any(event[:3] == ("fill", "input[type='password']", "secret-password") for event in page.events)
+
+
+def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None:
+    navigate_source = inspect.getsource(ceo_chat_tools.tool_browser_navigate)
+    capture_source = inspect.getsource(ceo_chat_tools.tool_capture_screenshot)
+
+    assert 'dedicated_session and "newtalk.kr" in url' not in navigate_source
+    assert 'tenant_id and browser_work_key and "newtalk.kr" in url' not in capture_source
+    assert "if dedicated_session and tenant_id:" in navigate_source
+    assert "if tenant_id:" in capture_source
+
+
+@pytest.mark.asyncio
+async def test_agent_vault_login_go100_uses_callback_token_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+    marked: dict[str, object] = {}
+
+    async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
+        marked.update(kwargs)
+        return True
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        async def json(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return {"access_token": "go100-token"}
+
+    class _FakeSession:
+        def __init__(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        def post(self, url, *, json, ssl):  # noqa: ANN001, A002
+            marked["api_url"] = url
+            marked["email"] = json["email"]
+            marked["ssl"] = ssl
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+    monkeypatch.setattr(
+        "app.services.agent_vault_service.mark_agent_credential_used",
+        fake_mark_agent_credential_used,
+    )
+
+    page = _FakeAgentVaultCallbackPage()
+    ok = await ceo_chat_tools._login_with_agent_vault_credential(
+        page,
+        {
+            "id": "00000000-0000-0000-0000-000000000011",
+            "origin": "https://go100.newtalk.kr",
+            "work_key": "aads-ceo-browser",
+            "username": "admin@go100.com",
+            "password": "secret-password",
+        },
+        "https://go100.newtalk.kr/go100/command-center?tab=orders",
+        tenant_id="00000000-0000-0000-0000-000000000012",
+        browser_work_key="go100-e2e",
+    )
+
+    assert ok is True
+    assert marked["api_url"] == "https://go100.newtalk.kr/api/v1/auth/login"
+    assert marked["email"] == "admin@go100.com"
+    assert marked["ssl"] is False
+    assert page.events[0] == (
+        "goto",
+        "https://go100.newtalk.kr/auth/callback?token=go100-token&return_to=%2Fgo100%2Fcommand-center%3Ftab%3Dorders",
+        "domcontentloaded",
+        "15000",
+    )
+    assert marked["details"] == {
+        "method": "api_token_callback",
+        "target_url": "https://go100.newtalk.kr/go100/command-center?tab=orders",
+        "return_path": "/go100/command-center?tab=orders",
+    }
 
 
 def test_credential_test_login_no_longer_uses_genspark_specific_login() -> None:
@@ -484,6 +621,92 @@ async def test_credential_test_login_agent_vault_aads_uses_api_login_fast_path(m
         "details": {
             "method": "api_login_test",
             "target_url": "https://aads.newtalk.kr/api/v1/auth/login",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_credential_test_login_agent_vault_go100_uses_api_login_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    credential_id = "00000000-0000-0000-0000-000000000011"
+    tenant_id = "00000000-0000-0000-0000-000000000012"
+    marked: dict[str, object] = {}
+
+    async def fake_get_credential(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    class _FakePool:
+        async def fetchrow(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return {
+                "id": credential_id,
+                "tenant_id": tenant_id,
+                "work_key": "aads-ceo-browser",
+                "origin": "https://go100.newtalk.kr",
+                "label": "GO100",
+                "username_enc": "admin@go100.com",
+                "password_enc": "secret-password",
+            }
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        async def json(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return {"access_token": "go100-token"}
+
+    class _FakeSession:
+        def __init__(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):  # noqa: ANN002
+            return None
+
+        def post(self, url, *, json, ssl):  # noqa: ANN001, A002
+            marked["api_url"] = url
+            marked["email"] = json["email"]
+            marked["ssl"] = ssl
+            return _FakeResponse()
+
+    async def fake_acquire_browser_context(**_kwargs):  # noqa: ANN003
+        raise AssertionError("GO100 API login fast-path must not open Browser Bridge")
+
+    async def fake_mark_agent_credential_used(**kwargs):  # noqa: ANN003
+        marked["used"] = kwargs
+
+    monkeypatch.setattr("app.core.credential_vault.get_credential", fake_get_credential)
+    monkeypatch.setattr("app.core.credential_vault.decrypt_value", lambda value: value)
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _FakePool())
+    monkeypatch.setattr("app.browser_bridge.aads_adapter.acquire_browser_context", fake_acquire_browser_context)
+    monkeypatch.setattr("app.services.agent_vault_service.mark_agent_credential_used", fake_mark_agent_credential_used)
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+
+    result = await ceo_chat_tools.tool_credential_test_login(
+        credential_id,
+        tenant_id=tenant_id,
+        browser_work_key="agent-vault-test-go100",
+    )
+
+    assert "[API 로그인 테스트]" in result
+    assert "status: success" in result
+    assert "vault_type: agent_vault" in result
+    assert marked["api_url"] == "https://go100.newtalk.kr/api/v1/auth/login"
+    assert marked["email"] == "admin@go100.com"
+    assert marked["ssl"] is False
+    assert marked["used"] == {
+        "tenant_id": tenant_id,
+        "credential_id": credential_id,
+        "work_key": "agent-vault-test-go100",
+        "origin": "https://go100.newtalk.kr",
+        "details": {
+            "method": "api_login_test",
+            "target_url": "https://go100.newtalk.kr/api/v1/auth/login",
         },
     }
 

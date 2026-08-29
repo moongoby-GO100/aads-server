@@ -2138,7 +2138,7 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
     local frontend_health_ok="N/A"
     local frontend_health_url=""
     case "$project" in
-        GO100)  frontend_health_url="http://localhost:3002" ;;
+        GO100)  frontend_health_url="https://go100.newtalk.kr/auth/login" ;;
         SF)     frontend_health_url="http://localhost:3000" ;;
         NTV2)   frontend_health_url="http://localhost:3000" ;;
     esac

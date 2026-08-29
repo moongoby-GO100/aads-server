@@ -1,5 +1,49 @@
 # AADS HANDOVER
 
+## 2026-08-29 15:20 KST - Global E2E Vault autologin for authenticated pages
+
+- Request: Fix the recurring issue where E2E screen verification cannot pass login on every authenticated webpage, not only GO100, then deploy and verify.
+- Cause:
+  - Agent Vault credentials were stored, but browser E2E auto-login was constrained by `newtalk.kr` and `browser_work_key` checks in navigation/screenshot paths.
+  - `_pre_inject_vault_token()` only tried the originally requested URL, so credentials registered on a redirected login origin such as `auth.*` could be missed.
+  - Direct `/login` page checks were skipped by the post-load login detection branch.
+- Changes:
+  - Updated `tool_browser_navigate()` to attempt Vault login whenever a dedicated browser session plus tenant is available and a login form is detected, regardless of domain or direct `/login` URL.
+  - Updated `tool_capture_screenshot()` to attempt Vault login with any tenant-scoped request, even when no `browser_work_key` is supplied.
+  - Updated `_pre_inject_vault_token()` to try both requested URL origin and current browser URL origin before falling back to legacy `e2e_credentials`.
+  - Added unit coverage for redirected login-origin matching and domain-agnostic E2E autologin.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat_tools.py app/core/credential_vault.py app/services/agent_vault_service.py` passed on host.
+  - `docker exec aads-server python3 -m py_compile app/api/ceo_chat_tools.py app/core/credential_vault.py app/services/agent_vault_service.py` passed.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_pc_agent_tool_exposure.py -q` passed: 17 passed.
+- Deployment status:
+  - Pending at this handover entry: commit, push, reload deploy, and live browser/screenshot E2E verification still required.
+
+## 2026-08-29 15:13 KST - GO100 Agent Vault E2E login bridge
+
+- Request: Diagnose why GO100 screen E2E verification cannot log in despite an OHVIS/Agent Vault password-manager credential, apply immediate fixes, and report improvements.
+- Cause:
+  - The GO100 Agent Vault credential exists for `https://go100.newtalk.kr`, but `last_used_at` remained null and access logs stopped at `credential_e2e_resolve`, proving it was resolved but not completing login.
+  - `credential_test_login` and Browser Bridge pre-injection handled `aads.newtalk.kr` with API token injection, but GO100 fell through to generic form login only.
+  - GO100 already supports `/api/v1/auth/login` and `/auth/callback?token=...&return_to=...`, so form-only login was an unnecessary fragile path for E2E.
+  - Runner frontend health checked `http://localhost:3002`, while GO100 blue/green frontend actually runs on 3000/3001 and Nginx currently routes to 3001.
+- Changes:
+  - Added GO100 Agent Vault API login target configuration in `app/api/ceo_chat_tools.py`.
+  - Added API login token callback injection for Browser Bridge E2E page verification.
+  - Added Agent Vault API login fast-path for GO100 credential tests.
+  - Changed GO100 Runner frontend health URL to `https://go100.newtalk.kr/auth/login` in both runner scripts.
+  - Added unit coverage for GO100 callback token injection and GO100 Agent Vault API login fast-path.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat_tools.py` passed.
+  - `bash -n scripts/pipeline-runner.sh` and `bash -n scripts/pipeline-runner.sh.local` passed.
+  - `docker exec aads-server pytest /app/tests/unit/test_pc_agent_tool_exposure.py -q` passed: 17 passed.
+  - GO100 API health returned `status=ok`, database connected, redis connected.
+  - `https://go100.newtalk.kr/auth/login` returned HTTP 200.
+- Deployment status:
+  - Local source patch only at handover time.
+  - Not yet committed, pushed, or hot-reloaded into the live MCP tool process.
+  - Live `credential_test_login` still showed the old timeout result until AADS runtime reload.
+
 ## 2026-08-29 09:37 KST - Streaming status exposes persisted final message readiness
 
 - Request: Apply the next-step fix so chat completion is not shown while the answer is still being generated or changing in place.

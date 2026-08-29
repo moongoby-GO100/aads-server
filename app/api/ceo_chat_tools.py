@@ -30,11 +30,21 @@ from datetime import datetime
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
 _AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = 10
+
+_AGENT_VAULT_API_LOGIN_TARGETS = {
+    "go100.newtalk.kr": {
+        "api_path": "/api/v1/auth/login",
+        "token_field": "access_token",
+        "callback_path": "/auth/callback",
+        "return_param": "return_to",
+        "default_return_path": "/go100/command-center",
+    },
+}
 
 _SECRET_PARAM_KEYS = {
     "password", "passwd", "pwd", "password_enc", "secret",
@@ -3436,6 +3446,17 @@ async def _login_with_agent_vault_credential(
         parsed = urlparse(url or origin)
         target_url = url if parsed.scheme and parsed.netloc else origin
         origin_parsed = urlparse(origin)
+        if origin_parsed.netloc in _AGENT_VAULT_API_LOGIN_TARGETS:
+            ok = await _inject_agent_vault_api_login_token(
+                page,
+                credential=credential,
+                origin=origin,
+                target_url=target_url,
+                tenant_id=tenant_id,
+                work_key=work_key,
+            )
+            if ok:
+                return True
         if parsed.netloc == "aads.newtalk.kr":
             from app.core.credential_vault import _api_token_inject
 
@@ -3507,6 +3528,93 @@ async def _login_with_agent_vault_credential(
         return False
 
 
+def _agent_vault_return_path(target_url: str, default_path: str) -> str:
+    parsed = urlparse(target_url or "")
+    path = parsed.path or "/"
+    if path in {"/", "/login", "/auth/login", "/auth/callback"}:
+        return default_path
+    if not path.startswith("/") or path.startswith("//"):
+        return default_path
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    if parsed.fragment:
+        path = f"{path}#{parsed.fragment}"
+    return path
+
+
+async def _agent_vault_api_login(
+    *,
+    origin: str,
+    username: str,
+    password: str,
+) -> tuple[int, dict[str, Any]]:
+    import aiohttp
+
+    parsed = urlparse(origin)
+    target = _AGENT_VAULT_API_LOGIN_TARGETS.get(parsed.netloc)
+    if not target:
+        return 0, {}
+    api_url = f"{origin.rstrip('/')}{target['api_path']}"
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+        async with session.post(
+            api_url,
+            json={"email": username, "password": password},
+            ssl=False,
+        ) as response:
+            data: dict[str, Any] = {}
+            if response.status == 200:
+                try:
+                    parsed_json = await response.json(content_type=None)
+                    if isinstance(parsed_json, dict):
+                        data = parsed_json
+                except Exception:
+                    data = {}
+            return int(response.status), data
+
+
+async def _inject_agent_vault_api_login_token(
+    page: Any,
+    *,
+    credential: dict[str, Any],
+    origin: str,
+    target_url: str,
+    tenant_id: str,
+    work_key: str,
+) -> bool:
+    from app.core.credential_vault import login_session_completed
+    from app.services.agent_vault_service import mark_agent_credential_used
+
+    target = _AGENT_VAULT_API_LOGIN_TARGETS.get(urlparse(origin).netloc)
+    if not target:
+        return False
+
+    status, data = await _agent_vault_api_login(
+        origin=origin,
+        username=str(credential.get("username") or ""),
+        password=str(credential.get("password") or ""),
+    )
+    token = str(data.get(str(target["token_field"])) or "")
+    if status != 200 or not token:
+        logger.warning("agent_vault_api_token_login_failed origin=%s status=%s", origin, status)
+        return False
+
+    return_path = _agent_vault_return_path(target_url, str(target["default_return_path"]))
+    callback_url = f"{origin.rstrip('/')}{target['callback_path']}?{urlencode({'token': token, str(target['return_param']): return_path})}"
+    await page.goto(callback_url, wait_until="domcontentloaded", timeout=15000)
+    await page.wait_for_timeout(1500)
+    if not await login_session_completed(page, f"{origin.rstrip('/')}/auth/login"):
+        return False
+    await mark_agent_credential_used(
+        tenant_id=tenant_id,
+        credential_id=str(credential["id"]),
+        work_key=work_key,
+        origin=origin,
+        details={"method": "api_token_callback", "target_url": target_url, "return_path": return_path},
+    )
+    logger.info("agent_vault_api_token_callback_success origin=%s work_key=%s", origin, work_key)
+    return True
+
+
 async def _agent_vault_login(page: Any, url: str, tenant_id: str = "", browser_work_key: str = "") -> bool:
     """Use Agent Vault password-manager credentials for a visible login form."""
     if not tenant_id:
@@ -3545,20 +3653,27 @@ async def _pre_inject_vault_token(
     React/Next.js 앱은 URL 리다이렉트 없이 클라이언트에서 로그인 폼을 렌더링하므로,
     페이지 이동 전에 토큰을 주입해야 인증된 화면이 즉시 렌더링된다.
     """
-    if await _agent_vault_login(page, url, tenant_id=tenant_id, browser_work_key=browser_work_key):
-        return True
+    candidates: list[str] = []
+    for candidate in (url, str(getattr(page, "url", "") or "")):
+        parsed = urlparse(candidate or "")
+        if parsed.scheme and parsed.netloc and candidate not in candidates:
+            candidates.append(candidate)
+
+    for candidate in candidates or [url]:
+        if await _agent_vault_login(page, candidate, tenant_id=tenant_id, browser_work_key=browser_work_key):
+            return True
     try:
         if not tenant_id:
             raise ValueError("tenant_id_required")
         from app.core.credential_vault import list_credentials, get_credential, _api_token_inject
-        target_netloc = urlparse(url).netloc
+        target_netlocs = {urlparse(candidate).netloc for candidate in candidates if urlparse(candidate).netloc}
         creds = await list_credentials(include_secrets=False, tenant_id=tenant_id)
         for c in creds:
             c_login_url = c.get("login_url", "") or ""
             if not c_login_url:
                 continue
             c_netloc = urlparse(c_login_url).netloc
-            if c_netloc and c_netloc == target_netloc:
+            if c_netloc and c_netloc in target_netlocs:
                 full_cred = await get_credential(c["id"], include_secrets=True, tenant_id=tenant_id)
                 if not full_cred:
                     continue
@@ -3571,13 +3686,13 @@ async def _pre_inject_vault_token(
                 if inject_step:
                     ok = await _api_token_inject(page, full_cred, inject_step)
                     if ok:
-                        logger.info("pre_inject_vault_token: success for %s", target_netloc)
+                        logger.info("pre_inject_vault_token: success for %s", c_netloc)
                         return True
                 else:
                     from app.core.credential_vault import _api_token_inject as _inject
                     ok = await _inject(page, full_cred, {})
                     if ok:
-                        logger.info("pre_inject_vault_token: default inject for %s", target_netloc)
+                        logger.info("pre_inject_vault_token: default inject for %s", c_netloc)
                         return True
     except Exception as e:
         logger.warning("pre_inject_vault_token failed: %s", e, exc_info=True)
@@ -3607,14 +3722,15 @@ async def tool_browser_navigate(
 
         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
 
-        # React/Next.js 클라이언트 렌더링 로그인 감지 + 토큰 사전 주입
-        _login_skip = ("/login", "/signin", "/auth/")
-        if dedicated_session and "newtalk.kr" in url and not any(p in url for p in _login_skip):
+        # 로그인 폼 감지 + Vault 자동 로그인. 도메인 종류나 /login 직접 진입 여부와 무관하게 적용한다.
+        if dedicated_session and tenant_id:
             try:
                 _has_login_form = await page.evaluate("""() => {
                     const pwInput = document.querySelector("input[type='password']");
-                    const loginBtn = document.querySelector("button");
-                    return !!(pwInput && loginBtn && loginBtn.textContent.includes('로그인'));
+                    const buttonText = Array.from(document.querySelectorAll("button,input[type='submit'],a"))
+                      .map((el) => (el.textContent || el.value || "").trim())
+                      .join(" ");
+                    return Boolean(pwInput) || /로그인|Login|Sign in/i.test(buttonText);
                 }""")
                 logger.info("e2e_login_form_detected=%s url=%s", _has_login_form, url)
                 if _has_login_form:
@@ -3918,7 +4034,7 @@ async def tool_capture_screenshot(
                 logger.warning("capture_screenshot initial goto failed: %s", nav_err)
                 await page.goto(url, wait_until="load", timeout=15_000)
 
-            if tenant_id and browser_work_key and "newtalk.kr" in url:
+            if tenant_id:
                 current_url = str(getattr(page, "url", "") or url)
                 login_markers = ("/login", "/signin", "/auth")
                 try:
@@ -4797,6 +4913,34 @@ async def tool_credential_test_login(
                     )
                 except Exception as ae:
                     browser_error = f"AADS_API_LOGIN_ERROR: {ae}"
+            elif urlparse(origin).netloc in _AGENT_VAULT_API_LOGIN_TARGETS:
+                try:
+                    _h, _data = await _agent_vault_api_login(
+                        origin=origin,
+                        username=str(agent_cred["username"]),
+                        password=str(agent_cred["password"]),
+                    )
+                    _target = _AGENT_VAULT_API_LOGIN_TARGETS[urlparse(origin).netloc]
+                    _token = str(_data.get(str(_target["token_field"])) or "")
+                    if _h == 200 and _token:
+                        from app.services.agent_vault_service import mark_agent_credential_used
+
+                        await mark_agent_credential_used(
+                            tenant_id=tenant_id,
+                            credential_id=str(agent_cred["id"]),
+                            work_key=str(browser_work_key or agent_cred.get("work_key") or "agent-vault-test"),
+                            origin=origin,
+                            details={"method": "api_login_test", "target_url": f"{origin}{_target['api_path']}"},
+                        )
+                        return (
+                            "[API 로그인 테스트]\n"
+                            "status: success\n"
+                            "vault_type: agent_vault\n"
+                            f"origin: {origin}"
+                        )
+                    browser_error = f"API_LOGIN_HTTP_{_h}_TOKEN_{'OK' if _token else 'MISSING'}"
+                except Exception as ae:
+                    browser_error = f"API_LOGIN_ERROR: {ae}"
             try:
                 from app.browser_bridge.aads_adapter import acquire_browser_context
 
