@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-29 18:14 KST - Chat incomplete response watchdog auto-retry fix
+
+- Request: Fix cases where an unfinished chat response cannot retry after premature termination, apply all recommended actions, and deploy to production.
+- Cause:
+  - The stale execution watchdog referenced `stranded_auto_resume` while the candidate SELECT did not return that field, so the watchdog could fail before retry/settle handling.
+  - Stranded interrupted executions that had already been marked for auto-resume were not included in the candidate query.
+  - Watchdog retry was disabled by default unless `AADS_WATCHDOG_AUTO_RETRY=1` was explicitly set.
+- Changes:
+  - Added `stranded_auto_resume` candidate selection for recent interrupted executions marked with `recovery_auto_retry_scheduled` or `interrupted_auto_retry_scheduled:*`.
+  - Enabled watchdog auto-retry by default with the existing retry caps.
+  - Added structured `interruption_diagnostics` entries for watchdog auto-retry and watchdog settle-without-retry paths.
+  - Added regression tests covering the watchdog contract.
+- Verification:
+  - `python3 -m py_compile app/main.py app/services/chat_service.py` passed.
+  - `.venv-playwright/bin/python -m py_compile app/main.py app/services/chat_service.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_stale_execution_watchdog_contract.py` passed: 2 passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_chat_service.py::test_active_stream_hard_timeout_is_auto_resumable tests/unit/test_chat_service.py::test_stranded_auto_retry_markers_are_auto_resumable tests/unit/test_chat_service.py::test_cleanup_overlong_running_executions_closes_live_task` passed: 3 passed, 1 warning.
+  - Full `tests/unit/test_chat_service.py` still has an existing unrelated expectation failure around render fields including `quality_details`; not caused by this change.
+- Deployment status:
+  - Pending at handover write time; commit, push, reload, and health checks still required.
+
 ## 2026-08-29 17:37 KST - Project Docs Office preview and docs page labels
 
 - Request: Apply the recommended document viewer improvements immediately, verify them, and report.

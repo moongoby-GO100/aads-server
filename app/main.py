@@ -563,6 +563,27 @@ async def lifespan(app: FastAPI):
                                te.requested_model,
                                te.retry_count,
                                te.error_message,
+                               te.status AS execution_status,
+                               (
+                                 te.status = 'interrupted'
+                                 AND te.completed_at IS NOT NULL
+                                 AND te.updated_at > NOW() - INTERVAL '6 hours'
+                                 AND te.retry_count < 8
+                                 AND (
+                                   COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'
+                                   OR COALESCE(te.error_message, '') LIKE 'interrupted_auto_retry_scheduled:%'
+                                 )
+                                 AND NOT EXISTS (
+                                   SELECT 1
+                                   FROM chat_turn_executions newer_te
+                                   JOIN chat_messages newer_am
+                                     ON newer_am.id = newer_te.assistant_message_id
+                                   WHERE newer_te.session_id = te.session_id
+                                     AND newer_te.started_at > te.started_at
+                                     AND newer_te.status = 'completed'
+                                     AND COALESCE(newer_am.is_hidden, FALSE) = FALSE
+                                 )
+                               ) AS stranded_auto_resume,
                                COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                                COALESCE(ph.content, am.content, '') AS partial_content,
                                COALESCE(um.content, '') AS last_user_msg,
@@ -593,7 +614,8 @@ async def lifespan(app: FastAPI):
                             ORDER BY created_at DESC
                             LIMIT 1
                         ) ph ON TRUE
-                        WHERE te.status IN ('running', 'retrying')
+                        WHERE (
+                          te.status IN ('running', 'retrying')
                           AND (
                             (
                               COALESCE(te.last_event_id, '') = ''
@@ -613,6 +635,27 @@ async def lifespan(app: FastAPI):
                               te.started_at < NOW() - INTERVAL '90 minutes'
                             )
                           )
+                        )
+                        OR (
+                          te.status = 'interrupted'
+                          AND te.completed_at IS NOT NULL
+                          AND te.updated_at > NOW() - INTERVAL '6 hours'
+                          AND te.retry_count < 8
+                          AND (
+                            COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'
+                            OR COALESCE(te.error_message, '') LIKE 'interrupted_auto_retry_scheduled:%'
+                          )
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM chat_turn_executions newer_te
+                            JOIN chat_messages newer_am
+                              ON newer_am.id = newer_te.assistant_message_id
+                            WHERE newer_te.session_id = te.session_id
+                              AND newer_te.started_at > te.started_at
+                              AND newer_te.status = 'completed'
+                              AND COALESCE(newer_am.is_hidden, FALSE) = FALSE
+                          )
+                        )
                         """
                     )
                     _claimable = [
@@ -647,7 +690,7 @@ async def lifespan(app: FastAPI):
                             or _terminal_pipeline_review
                         )
 
-                    _watchdog_retry_enabled = os.getenv("AADS_WATCHDOG_AUTO_RETRY", "0") == "1"
+                    _watchdog_retry_enabled = os.getenv("AADS_WATCHDOG_AUTO_RETRY", "1") == "1"
                     _retry_rows = [
                         r for r in _claimable
                         if (
@@ -673,6 +716,17 @@ async def lifespan(app: FastAPI):
                                 retry_count = retry_count + 1,
                                 completed_at = NULL,
                                 updated_at = NOW(),
+                                interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb)
+                                    || jsonb_build_object(
+                                        'watchdog_auto_retry_scheduled', TRUE,
+                                        'watchdog_retry_source', CASE
+                                            WHEN status = 'interrupted' THEN 'stranded_interrupted'
+                                            ELSE 'stale_running'
+                                        END,
+                                        'watchdog_retry_previous_status', status,
+                                        'watchdog_retry_count_next', retry_count + 1,
+                                        'captured_at', NOW()
+                                    ),
                                 error_message = CASE
                                     WHEN status = 'interrupted' THEN 'watchdog_stranded_interrupted_retry_scheduled'
                                     ELSE 'watchdog_auto_retry_scheduled policy=20m+10m_or_45m+20m'
@@ -819,6 +873,13 @@ async def lifespan(app: FastAPI):
                         SET status = 'interrupted',
                             completed_at = COALESCE(completed_at, NOW()),
                             updated_at = NOW(),
+                            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'watchdog_settled_without_retry', TRUE,
+                                    'watchdog_settle_reason', COALESCE(error_message, 'auto-settled by stale execution watchdog'),
+                                    'watchdog_retry_enabled', $2::boolean,
+                                    'captured_at', NOW()
+                                ),
                             error_message = COALESCE(error_message, 'auto-settled by stale execution watchdog')
                         WHERE id = ANY($1::uuid[])
                           AND status IN ('running', 'retrying')
@@ -844,6 +905,7 @@ async def lifespan(app: FastAPI):
                         RETURNING id, session_id
                         """,
                         _settle_ids,
+                        _watchdog_retry_enabled,
                     )
                     if settled:
                         _sids = list({r["session_id"] for r in settled})
