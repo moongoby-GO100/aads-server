@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">오비스</string>
+    <string name="voice_wake_short_label">오비스 실행</string>
+    <string name="voice_wake_long_label">오비스 음성 깨우기</string>
     <string name="accessibility_service_description">AADS remote UI control</string>
     <string name="device_admin_description">AADS device lock and wipe control</string>
 </resources>

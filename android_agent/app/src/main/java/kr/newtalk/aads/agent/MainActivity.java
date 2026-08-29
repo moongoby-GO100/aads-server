@@ -29,6 +29,8 @@ import java.util.List;
 import java.util.Locale;
 
 public final class MainActivity extends Activity {
+    static final String ACTION_WAKE_FROM_VOICE = "kr.newtalk.aads.agent.action.WAKE_FROM_VOICE";
+
     private static final int REQ_NOTIFICATIONS = 10;
     private static final int REQ_LOCATION = 11;
     private static final int REQ_CAMERA = 12;
@@ -46,6 +48,7 @@ public final class MainActivity extends Activity {
     private TextView heartbeatView;
     private TextView activeCommandView;
     private TextView lastErrorView;
+    private TextView voiceWakeView;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override
@@ -60,6 +63,7 @@ public final class MainActivity extends Activity {
         setContentView(buildContent());
         loadPairingFields();
         applyPairingIntent(getIntent());
+        applyWakeIntent(getIntent());
         refreshState();
     }
 
@@ -68,6 +72,7 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         applyPairingIntent(intent);
+        applyWakeIntent(intent);
         refreshState();
     }
 
@@ -106,10 +111,12 @@ public final class MainActivity extends Activity {
         heartbeatView = text("", 14, false);
         activeCommandView = text("", 14, false);
         lastErrorView = text("", 14, false);
+        voiceWakeView = text("", 14, false);
         root.addView(statusView);
         root.addView(heartbeatView);
         root.addView(activeCommandView);
         root.addView(lastErrorView);
+        root.addView(voiceWakeView);
 
         root.addView(section("Pairing"));
         serverUrlEdit = edit("Server WebSocket URL", false);
@@ -131,6 +138,10 @@ public final class MainActivity extends Activity {
 
         root.addView(section("Service"));
         root.addView(row(button("Start", this::startAgentService), button("Stop", this::stopAgentService)));
+
+        root.addView(section("Voice"));
+        root.addView(row(button("Start Wake", this::startVoiceWake), button("Stop Wake", this::stopVoiceWake)));
+        root.addView(row(button("Bixby Wake", this::openBixbyWakeLink), button("Mic Permission", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
 
         root.addView(section("Permissions"));
         root.addView(row(button("Notifications", v -> requestNotificationPermission()), button("Location", v -> requestLocationPermission())));
@@ -197,6 +208,25 @@ public final class MainActivity extends Activity {
         toast("Pairing applied");
     }
 
+    private void applyWakeIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        Uri dataUri = intent.getData();
+        boolean wakeAction = ACTION_WAKE_FROM_VOICE.equals(intent.getAction());
+        boolean wakeLink = dataUri != null
+                && ("ohvis".equalsIgnoreCase(dataUri.getScheme()) || "aads-agent".equalsIgnoreCase(dataUri.getScheme()))
+                && ("wake".equalsIgnoreCase(dataUri.getHost()) || "open".equalsIgnoreCase(dataUri.getHost()));
+        if (!wakeAction && !wakeLink) {
+            return;
+        }
+        startAgentService(null);
+        if (PermissionGate.has(this, Manifest.permission.RECORD_AUDIO)) {
+            startVoiceWake(null);
+        }
+        toast("OHVIS wake");
+    }
+
     private void startAgentService(View view) {
         savePairing(view);
         Intent intent = new Intent(this, AadsForegroundService.class);
@@ -214,12 +244,45 @@ public final class MainActivity extends Activity {
         startService(intent);
     }
 
+    private void startVoiceWake(View view) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !PermissionGate.has(this, Manifest.permission.RECORD_AUDIO)) {
+            requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO);
+            return;
+        }
+        savePairing(view);
+        Intent intent = new Intent(this, AadsForegroundService.class);
+        intent.setAction(AadsForegroundService.ACTION_VOICE_WAKE_START);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+        toast("Voice wake enabled");
+    }
+
+    private void stopVoiceWake(View view) {
+        Intent intent = new Intent(this, AadsForegroundService.class);
+        intent.setAction(AadsForegroundService.ACTION_VOICE_WAKE_STOP);
+        startService(intent);
+        toast("Voice wake disabled");
+    }
+
+    private void openBixbyWakeLink(View view) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("ohvis://wake?source=bixby"));
+        intent.setPackage(getPackageName());
+        startActivity(intent);
+    }
+
     private void refreshState() {
         AgentStateSnapshot snapshot = AgentStateStore.load(this);
+        VoiceWakeState voiceWake = VoiceWakeController.loadState(this);
         statusView.setText("Status: " + snapshot.status);
         heartbeatView.setText("Last heartbeat: " + formatHeartbeat(snapshot.lastHeartbeatMs));
         activeCommandView.setText("Visible command state: " + emptyToDash(snapshot.activeCommand));
         lastErrorView.setText("Last error: " + emptyToDash(snapshot.lastError));
+        voiceWakeView.setText("Voice wake: " + (voiceWake.enabled ? voiceWake.status : "disabled")
+                + " / last: " + emptyToDash(voiceWake.lastText)
+                + " / error: " + emptyToDash(voiceWake.lastError));
     }
 
     private void requestNotificationPermission() {

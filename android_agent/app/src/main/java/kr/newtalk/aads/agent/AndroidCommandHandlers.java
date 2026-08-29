@@ -1169,8 +1169,52 @@ final class AndroidCommandHandlers {
         }
     }
 
+    static JSONObject voiceWakeStart(Context context) {
+        if (!PermissionGate.has(context, Manifest.permission.RECORD_AUDIO)) {
+            return ResultJson.permissionError(Manifest.permission.RECORD_AUDIO, "voice_wake_start");
+        }
+        Intent intent = new Intent(context, AadsForegroundService.class);
+        intent.setAction(AadsForegroundService.ACTION_VOICE_WAKE_START);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+        JSONObject data = voiceWakeStateJson(context);
+        ResultJson.put(data, "requested", "start");
+        return ResultJson.success(data);
+    }
+
+    static JSONObject voiceWakeStop(Context context) {
+        Intent intent = new Intent(context, AadsForegroundService.class);
+        intent.setAction(AadsForegroundService.ACTION_VOICE_WAKE_STOP);
+        context.startService(intent);
+        JSONObject data = voiceWakeStateJson(context);
+        ResultJson.put(data, "requested", "stop");
+        return ResultJson.success(data);
+    }
+
+    static JSONObject voiceWakeStatus(Context context) {
+        return ResultJson.success(voiceWakeStateJson(context));
+    }
+
     private static int boundedInt(JSONObject params, String key, int defaultValue, int min, int max) {
         return Math.max(min, Math.min(params.optInt(key, defaultValue), max));
+    }
+
+    private static JSONObject voiceWakeStateJson(Context context) {
+        VoiceWakeState state = VoiceWakeController.loadState(context);
+        JSONObject data = new JSONObject();
+        ResultJson.put(data, "enabled", state.enabled);
+        ResultJson.put(data, "status", state.status);
+        ResultJson.put(data, "last_error", state.lastError);
+        ResultJson.put(data, "last_text", state.lastText);
+        ResultJson.put(data, "last_wake_ms", state.lastWakeMs);
+        ResultJson.put(data, "deep_links", new JSONArray()
+                .put("ohvis://wake")
+                .put("aads-agent://wake"));
+        ResultJson.put(data, "bixby_quick_command", "Open OHVIS with ohvis://wake");
+        return data;
     }
 
     private static void addPermissionStatus(JSONArray array, Context context, String permission, String label, String commandType) {

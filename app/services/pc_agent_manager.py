@@ -30,6 +30,9 @@ _DEVICE_COMMAND_WHITELIST = frozenset({
     "swipe",
     "input_text",
     "get_device_info",
+    "voice_wake_start",
+    "voice_wake_stop",
+    "voice_wake_status",
 })
 _DEVICE_COMMAND_BLACKLIST = frozenset({
     "factory_reset",
@@ -45,6 +48,9 @@ _ANDROID_AGENT_COMMAND_MAP = {
     "tap": "tap",
     "swipe": "swipe",
     "input_text": "key_input",
+    "voice_wake_start": "voice_wake_start",
+    "voice_wake_stop": "voice_wake_stop",
+    "voice_wake_status": "voice_wake_status",
 }
 _ANDROID_DEVICE_INFO_PROPS = {
     "manufacturer": "ro.product.manufacturer",

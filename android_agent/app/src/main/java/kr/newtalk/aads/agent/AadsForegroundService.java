@@ -26,6 +26,8 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
     static final String ACTION_STATE_CHANGED = "kr.newtalk.aads.agent.action.STATE_CHANGED";
     static final String ACTION_NETWORK_RESTORED = "kr.newtalk.aads.agent.action.NETWORK_RESTORED";
     static final String ACTION_WATCHDOG_RECONNECT = "kr.newtalk.aads.agent.action.WATCHDOG_RECONNECT";
+    static final String ACTION_VOICE_WAKE_START = "kr.newtalk.aads.agent.action.VOICE_WAKE_START";
+    static final String ACTION_VOICE_WAKE_STOP = "kr.newtalk.aads.agent.action.VOICE_WAKE_STOP";
 
     private static final String CHANNEL_ID = "aads_agent_connection";
     private static final int NOTIFICATION_ID = 231;
@@ -33,6 +35,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
     private static final long HEARTBEAT_TIMEOUT_MS = 120_000;
 
     private AadsWebSocketClient client;
+    private VoiceWakeController voiceWakeController;
     private String currentStatus = AgentStateStore.STATUS_DISCONNECTED;
     private String currentError = "";
     private String activeCommand = "";
@@ -59,6 +62,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
+        voiceWakeController = new VoiceWakeController(this, this::broadcastState);
         AgentStateStore.setStatus(this, AgentStateStore.STATUS_DISCONNECTED, "");
         AgentStateStore.setActiveCommand(this, "");
         requestBatteryOptimizationExemption();
@@ -96,15 +100,31 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             }
             return START_STICKY;
         }
+        if (ACTION_VOICE_WAKE_START.equals(action)) {
+            startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC | microphoneForegroundType());
+            startClient();
+            startWatchdog();
+            startVoiceWake();
+            return START_STICKY;
+        }
+        if (ACTION_VOICE_WAKE_STOP.equals(action)) {
+            stopVoiceWake();
+            startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            return START_STICKY;
+        }
         startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         startClient();
         startWatchdog();
+        if (VoiceWakeController.isEnabled(this)) {
+            startVoiceWake();
+        }
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
         stopWatchdog();
+        releaseVoiceWake();
         stopClient();
         super.onDestroy();
     }
@@ -195,6 +215,37 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         broadcastState();
     }
 
+    private void startVoiceWake() {
+        if (voiceWakeController == null) {
+            voiceWakeController = new VoiceWakeController(this, this::broadcastState);
+        }
+        startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC | microphoneForegroundType());
+        voiceWakeController.start();
+        activeCommand = "voice_wake";
+        AgentStateStore.setActiveCommand(this, activeCommand);
+        updateNotification();
+        broadcastState();
+    }
+
+    private void stopVoiceWake() {
+        if (voiceWakeController != null) {
+            voiceWakeController.stop();
+        } else {
+            VoiceWakeController.setEnabled(this, false);
+        }
+        activeCommand = "";
+        AgentStateStore.setActiveCommand(this, "");
+        updateNotification();
+        broadcastState();
+    }
+
+    private void releaseVoiceWake() {
+        if (voiceWakeController != null) {
+            voiceWakeController.release();
+            voiceWakeController = null;
+        }
+    }
+
     private void startWatchdog() {
         watchdogHandler.removeCallbacks(watchdogRunnable);
         watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS);
@@ -267,8 +318,18 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
                     && PermissionGate.has(this, android.Manifest.permission.RECORD_AUDIO)) {
                 type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
             }
+        } else if ("voice_wake".equals(commandType) || "voice_wake_start".equals(commandType)) {
+            type |= microphoneForegroundType();
         }
         startForegroundWithType(type);
+    }
+
+    private int microphoneForegroundType() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && PermissionGate.has(this, android.Manifest.permission.RECORD_AUDIO)) {
+            return ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        }
+        return 0;
     }
 
     private void startForegroundWithType(int type) {
@@ -296,10 +357,14 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         String text = currentStatus;
+        VoiceWakeState wakeState = VoiceWakeController.loadState(this);
         if (activeCommand != null && !activeCommand.isEmpty()) {
             text = text + " / " + activeCommand;
         } else if (currentError != null && !currentError.isEmpty()) {
             text = text + " / " + currentError;
+        }
+        if (wakeState.enabled) {
+            text = text + " / wake " + wakeState.status;
         }
 
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O

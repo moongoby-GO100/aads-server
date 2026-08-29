@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@android:drawable/ic_btn_speak_now"
+        android:shortcutId="ohvis_wake"
+        android:shortcutLongLabel="@string/voice_wake_long_label"
+        android:shortcutShortLabel="@string/voice_wake_short_label">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="ohvis://wake"
+            android:targetClass="kr.newtalk.aads.agent.MainActivity"
+            android:targetPackage="kr.newtalk.aads.agent" />
+    </shortcut>
+</shortcuts>

@@ -74,6 +74,10 @@ final class CommandDispatcher {
         dispatcher.register("screen_brightness", params -> AndroidCommandHandlers.screenBrightness(context, params));
         dispatcher.register("screen_timeout", params -> AndroidCommandHandlers.screenTimeout(context, params));
         dispatcher.register("audio_record", params -> AndroidCommandHandlers.audioRecord(context, params));
+        dispatcher.register("voice_wake_start", params -> AndroidCommandHandlers.voiceWakeStart(context));
+        dispatcher.register("voice_wake_stop", params -> AndroidCommandHandlers.voiceWakeStop(context));
+        dispatcher.register("voice_wake_status", params -> AndroidCommandHandlers.voiceWakeStatus(context));
+        dispatcher.register("wake_status", params -> AndroidCommandHandlers.voiceWakeStatus(context));
         return dispatcher;
     }
 

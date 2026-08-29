@@ -7,6 +7,7 @@ APK-oriented implementation under `android_agent/`.
 ## Project
 
 - Package: `kr.newtalk.aads.agent`
+- App label: `오비스`
 - Min SDK: 26
 - Target SDK: 35
 - Language: Java
@@ -36,6 +37,28 @@ the dashboard can open an `aads-agent://pair?payload=...` deep link. On Android
 devices with the APK installed, that link saves the pairing values and starts
 the foreground service automatically. Paste values manually only when the device
 blocks the deep link.
+
+## Voice Wake and Bixby Entry
+
+The APK exposes a P1 voice wake path for Samsung/Android devices:
+
+- Bixby Quick Command target: `ohvis://wake`
+- Compatibility deep link: `aads-agent://wake`
+- Static Android shortcut ID: `ohvis_wake`
+- Remote command capabilities: `voice_wake_start`, `voice_wake_stop`,
+  `voice_wake_status`
+
+Use Bixby Quick Command to launch the `ohvis://wake` link or open the `오비스`
+app. The deep link starts the foreground service and enables the voice wake
+listener when microphone permission is already granted. The local listener uses
+Android `SpeechRecognizer` inside the existing foreground service and watches
+for `오비스`, `ohvis`, `obis`, or `aads`. When a wake phrase is detected, it
+brings `MainActivity` to the foreground through `ohvis://wake?source=voice`.
+
+This is not an OS-level hotword replacement for Bixby. Android background
+microphone rules still apply: the user must grant microphone permission, keep
+the foreground notification visible, and allow battery optimization exemption
+when long-running listening is required.
 
 On first launch without a deep link:
 
@@ -100,6 +123,9 @@ Primary Android handlers:
 - `shell_limited`
 - `sms_send`
 - `call_dial`
+- `voice_wake_start`
+- `voice_wake_stop`
+- `voice_wake_status`
 
 Compatibility aliases are also exposed for several Termux-style command names:
 `camera_photo`, `notification_send`, `clipboard_get`, `clipboard_set`,
@@ -120,6 +146,9 @@ permission is missing.
 - Location commands require fine or coarse location permission.
 - Wi-Fi scans require location and, on Android 13+, nearby Wi-Fi permission.
 - Camera capture requires camera permission.
+- Voice wake and `audio_record` require microphone permission. Release builds
+  declare `RECORD_AUDIO` and `FOREGROUND_SERVICE_MICROPHONE`; debug builds keep
+  the same service type through manifest merge.
 - SMS sending requires SMS permission.
 - `call_dial` opens the system dialer and leaves the final call action visible
   to the user.
