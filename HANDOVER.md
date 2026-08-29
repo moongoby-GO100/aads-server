@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-29 09:37 KST - Streaming status exposes persisted final message readiness
+
+- Request: Apply the next-step fix so chat completion is not shown while the answer is still being generated or changing in place.
+- Cause:
+  - `/chat/sessions/{session_id}/streaming-status` exposed `just_completed` but did not tell the dashboard whether the final assistant message had already been persisted and was safe to render as complete.
+  - The dashboard could acknowledge a completion token before the final message was available, causing premature completion UI and delayed in-place changes afterward.
+- Changes:
+  - `StreamingStatusOut` now includes `final_message_id` and `final_message_ready`.
+  - Completed execution status responses include the saved assistant message ID and a readiness boolean.
+  - Running/interrupted placeholder responses explicitly report `final_message_ready=false`.
+  - Recovered response detection reports the recovered message ID as ready.
+- Verification:
+  - `python3 -m py_compile app/models/chat.py app/routers/chat.py` passed.
+  - Post-reload API smoke is required after commit.
+- Deployment:
+  - Pending commit, push, API reload, and production smoke at the time of this handover entry.
+
 ## 2026-08-29 07:45 KST - Chat interruption diagnostics and report API
 
 - Request: Apply recommended chat interruption improvements immediately and make LLM response cut-off causes deeply analyzable.

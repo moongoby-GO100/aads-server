@@ -1467,6 +1467,8 @@ async def get_streaming_status(
                        EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
+                       am.id::text AS final_message_id,
+                       am.intent AS final_message_intent,
                        am.model_used AS assistant_model_used,
                        COALESCE(um.content, '') AS user_content,
                        pj.job_id AS pipeline_job_id,
@@ -1615,6 +1617,8 @@ async def get_streaming_status(
                         "last_tool": "",
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
+                        "final_message_id": execution_row["final_message_id"],
+                        "final_message_ready": False,
                     }, conn)
                 if (
                     execution_row["status"] in ("running", "retrying")
@@ -1654,6 +1658,8 @@ async def get_streaming_status(
                         "last_tool": _lt,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
+                        "final_message_id": execution_row["final_message_id"],
+                        "final_message_ready": False,
                     }, conn)
                 if execution_row["status"] in ("running", "retrying"):
                     _settled = await _settle_stale_execution_for_recovery(
@@ -1758,6 +1764,8 @@ async def get_streaming_status(
                         "partial_content": _partial,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
+                        "final_message_id": execution_row["final_message_id"],
+                        "final_message_ready": False,
                     }, conn)
                 await conn.execute(
                     """
@@ -1782,6 +1790,11 @@ async def get_streaming_status(
                         _completion_token,
                         acked_completion_token,
                     )
+                    _final_message_ready = bool(
+                        execution_row["final_message_id"]
+                        and execution_row["final_message_intent"] != "streaming_placeholder"
+                        and (execution_row["partial_content"] or "").strip()
+                    )
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
                         "just_completed": _emit_just_completed,
@@ -1792,6 +1805,8 @@ async def get_streaming_status(
                         "last_tool": _lt,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
+                        "final_message_id": execution_row["final_message_id"],
+                        "final_message_ready": _final_message_ready,
                     }, conn)
 
             # A different API slot can still retain the prior turn's completed
@@ -1923,6 +1938,8 @@ async def get_streaming_status(
                     "last_tool": "",
                     "execution_id": None,
                     "last_event_id": None,
+                    "final_message_id": str(recovered_row["id"]),
+                    "final_message_ready": True,
                 }, conn)
             return await _finalize_streaming_status(
                 session_id,
