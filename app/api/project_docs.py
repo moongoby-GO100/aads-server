@@ -8,12 +8,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import csv
+import html
 import io
 import json
 import mimetypes
 import os
+import re
 import shlex
 import time
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -119,6 +122,9 @@ BASE64_PREVIEW_EXTENSIONS = {
 
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
 DOCX_EXTENSIONS = {".docx"}
+POWERPOINT_EXTENSIONS = {".pptx", ".odp"}
+XML_OFFICE_EXTENSIONS = {".docx", ".pptx", ".odt", ".ods", ".odp"}
+LEGACY_OFFICE_EXTENSIONS = {".doc", ".xls", ".ppt"}
 SENSITIVE_PATH_MARKERS = (".env", "secrets", "credentials", "id_rsa")
 SENSITIVE_EXTENSIONS = {".key", ".pem"}
 AADS_APP_ROOT = "/app"
@@ -214,11 +220,131 @@ def _docx_bytes_to_text(raw: bytes, filename: str) -> str:
     try:
         import docx
     except Exception as e:
-        raise RuntimeError(f"python-docx unavailable: {e}") from e
+        logger.warning("project_doc_python_docx_unavailable", filename=filename, error=str(e))
+        return _zip_office_bytes_to_text(raw, filename, ".docx")
 
     doc = docx.Document(io.BytesIO(raw))
     paragraphs = [p.text for p in doc.paragraphs if p.text]
     return f"# {filename} text preview\n\n" + "\n".join(paragraphs)
+
+
+def _xml_text_nodes(raw_xml: bytes) -> list[str]:
+    text = raw_xml.decode("utf-8", errors="replace")
+    nodes = re.findall(r"<[^>/!:]+:?t(?:\s[^>]*)?>(.*?)</[^>:]+:?t>", text, flags=re.DOTALL)
+    if not nodes:
+        nodes = re.findall(r"<text:[^>]+>(.*?)</text:[^>]+>", text, flags=re.DOTALL)
+    if not nodes:
+        stripped = re.sub(r"<[^>]+>", " ", text)
+        nodes = [stripped]
+    values: list[str] = []
+    for node in nodes:
+        value = re.sub(r"<[^>]+>", " ", node)
+        value = html.unescape(value)
+        value = re.sub(r"\s+", " ", value).strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _zip_office_bytes_to_text(raw: bytes, filename: str, ext: str) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            names = zf.namelist()
+            parts: list[str] = []
+            if ext == ".pptx":
+                slide_names = sorted(
+                    [name for name in names if re.match(r"ppt/slides/slide\d+\.xml$", name)],
+                    key=lambda value: int(re.search(r"slide(\d+)\.xml$", value).group(1)),  # type: ignore[union-attr]
+                )
+                for index, name in enumerate(slide_names, start=1):
+                    slide_text = _xml_text_nodes(zf.read(name))
+                    if slide_text:
+                        parts.append(f"## Slide {index}\n" + "\n".join(slide_text))
+            elif ext == ".docx":
+                doc_names = [
+                    name for name in names
+                    if name == "word/document.xml"
+                    or re.match(r"word/(header|footer)\d+\.xml$", name)
+                ]
+                for name in doc_names:
+                    parts.extend(_xml_text_nodes(zf.read(name)))
+            elif ext in {".odt", ".ods", ".odp"} and "content.xml" in names:
+                parts.extend(_xml_text_nodes(zf.read("content.xml")))
+            if not parts:
+                raise ValueError("No previewable Office XML text found")
+            label = {
+                ".docx": "Word",
+                ".pptx": "PowerPoint",
+                ".odt": "OpenDocument Text",
+                ".ods": "OpenDocument Sheet",
+                ".odp": "OpenDocument Presentation",
+            }.get(ext, "Office")
+            preview = "\n\n".join(parts)
+            return f"# {filename} {label} preview\n\n{preview[:200_000]}"
+    except Exception as e:
+        raise RuntimeError(f"Office XML preview failed: {e}") from e
+
+
+def _legacy_office_bytes_to_text(raw: bytes, filename: str) -> str:
+    chunks: list[str] = []
+    seen: set[str] = set()
+
+    for encoding in ("utf-16le", "utf-8", "cp949", "latin-1"):
+        decoded = raw.decode(encoding, errors="ignore")
+        for match in re.findall(r"[^\x00-\x08\x0b\x0c\x0e-\x1f\x7f]{4,}", decoded):
+            value = re.sub(r"\s+", " ", match).strip()
+            if len(value) < 4 or value in seen:
+                continue
+            if sum(ch.isalnum() or "\uac00" <= ch <= "\ud7a3" for ch in value) < 3:
+                continue
+            seen.add(value)
+            chunks.append(value[:500])
+            if len(chunks) >= 300:
+                break
+        if len(chunks) >= 300:
+            break
+
+    if not chunks:
+        raise RuntimeError("No readable legacy Office text found")
+    return (
+        f"# {filename} legacy Office text preview\n\n"
+        "구형 Office 바이너리에서 추출한 텍스트 미리보기입니다. 원본 서식은 다운로드 파일에서 확인하십시오.\n\n"
+        + "\n".join(f"- {chunk}" for chunk in chunks)
+    )
+
+
+def _office_preview_format(ext: str) -> str:
+    if ext in {".xlsx", ".xlsm", ".ods", ".xls"}:
+        return "excel-csv" if ext in {".xlsx", ".xlsm"} else "office-text"
+    if ext in {".docx", ".odt", ".doc"}:
+        return "word-text"
+    if ext in {".pptx", ".odp", ".ppt"}:
+        return "powerpoint-text"
+    return "office-text"
+
+
+def _office_preview_response(
+    *,
+    project: str,
+    file_path: str,
+    full_path: str,
+    content: str,
+    source_mime_type: str,
+    ext: str,
+) -> dict:
+    return {
+        "project": project,
+        "file_path": file_path,
+        "full_path": full_path,
+        "content": content,
+        "size": len(content),
+        "encoding": "text",
+        "mime_type": "text/plain",
+        "is_binary": False,
+        "source_mime_type": source_mime_type,
+        "converted_from": ext.lstrip("."),
+        "format": _office_preview_format(ext),
+    }
 
 
 def _load_persistent_cache() -> Optional[dict]:
@@ -578,21 +704,46 @@ async def get_doc_content(
             raw = p.read_bytes()
             try:
                 content = _docx_bytes_to_text(raw, p.name)
-                return {
-                    "project": project,
-                    "file_path": file_path,
-                    "full_path": full_path,
-                    "content": content,
-                    "size": len(content),
-                    "encoding": "text",
-                    "mime_type": "text/plain",
-                    "is_binary": False,
-                    "source_mime_type": mime_type,
-                    "converted_from": ext.lstrip("."),
-                    "format": "word-text",
-                }
+                return _office_preview_response(
+                    project=project,
+                    file_path=file_path,
+                    full_path=full_path,
+                    content=content,
+                    source_mime_type=mime_type,
+                    ext=ext,
+                )
             except Exception as e:
                 logger.warning("project_doc_docx_preview_failed", path=full_path, error=str(e))
+                is_binary = True
+        if ext in (XML_OFFICE_EXTENSIONS - EXCEL_EXTENSIONS - DOCX_EXTENSIONS):
+            raw = p.read_bytes()
+            try:
+                content = _zip_office_bytes_to_text(raw, p.name, ext)
+                return _office_preview_response(
+                    project=project,
+                    file_path=file_path,
+                    full_path=full_path,
+                    content=content,
+                    source_mime_type=mime_type,
+                    ext=ext,
+                )
+            except Exception as e:
+                logger.warning("project_doc_xml_office_preview_failed", path=full_path, error=str(e))
+                is_binary = True
+        if ext in LEGACY_OFFICE_EXTENSIONS:
+            raw = p.read_bytes()
+            try:
+                content = _legacy_office_bytes_to_text(raw, p.name)
+                return _office_preview_response(
+                    project=project,
+                    file_path=file_path,
+                    full_path=full_path,
+                    content=content,
+                    source_mime_type=mime_type,
+                    ext=ext,
+                )
+            except Exception as e:
+                logger.warning("project_doc_legacy_office_preview_failed", path=full_path, error=str(e))
                 is_binary = True
         # 텍스트 1MB / 바이너리 10MB 한도
         max_size = 10_000_000 if is_binary else 1_000_000
@@ -646,21 +797,60 @@ async def get_doc_content(
             raw = base64.b64decode(b64_output.strip())
             try:
                 content = _docx_bytes_to_text(raw, Path(file_path).name)
-                return {
-                    "project": project,
-                    "file_path": file_path,
-                    "full_path": full_path,
-                    "content": content,
-                    "size": len(content),
-                    "encoding": "text",
-                    "mime_type": "text/plain",
-                    "is_binary": False,
-                    "source_mime_type": mime_type,
-                    "converted_from": ext.lstrip("."),
-                    "format": "word-text",
-                }
+                return _office_preview_response(
+                    project=project,
+                    file_path=file_path,
+                    full_path=full_path,
+                    content=content,
+                    source_mime_type=mime_type,
+                    ext=ext,
+                )
             except Exception as e:
                 logger.warning("project_doc_remote_docx_preview_failed", path=full_path, error=str(e))
+                is_binary = True
+        if ext in (XML_OFFICE_EXTENSIONS - EXCEL_EXTENSIONS - DOCX_EXTENSIONS):
+            quoted_full_path = shlex.quote(full_path)
+            b64_output = await _run_cmd(
+                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                timeout=15,
+            )
+            if not b64_output:
+                raise HTTPException(404, "File not found or empty")
+            raw = base64.b64decode(b64_output.strip())
+            try:
+                content = _zip_office_bytes_to_text(raw, Path(file_path).name, ext)
+                return _office_preview_response(
+                    project=project,
+                    file_path=file_path,
+                    full_path=full_path,
+                    content=content,
+                    source_mime_type=mime_type,
+                    ext=ext,
+                )
+            except Exception as e:
+                logger.warning("project_doc_remote_xml_office_preview_failed", path=full_path, error=str(e))
+                is_binary = True
+        if ext in LEGACY_OFFICE_EXTENSIONS:
+            quoted_full_path = shlex.quote(full_path)
+            b64_output = await _run_cmd(
+                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                timeout=15,
+            )
+            if not b64_output:
+                raise HTTPException(404, "File not found or empty")
+            raw = base64.b64decode(b64_output.strip())
+            try:
+                content = _legacy_office_bytes_to_text(raw, Path(file_path).name)
+                return _office_preview_response(
+                    project=project,
+                    file_path=file_path,
+                    full_path=full_path,
+                    content=content,
+                    source_mime_type=mime_type,
+                    ext=ext,
+                )
+            except Exception as e:
+                logger.warning("project_doc_remote_legacy_office_preview_failed", path=full_path, error=str(e))
                 is_binary = True
         if is_binary:
             # SSH base64 인코딩으로 바이너리 안전 전송
