@@ -19,7 +19,9 @@
   - `.venv-playwright/bin/python -m pytest -q tests/unit/test_chat_service.py::test_active_stream_hard_timeout_is_auto_resumable tests/unit/test_chat_service.py::test_stranded_auto_retry_markers_are_auto_resumable tests/unit/test_chat_service.py::test_cleanup_overlong_running_executions_closes_live_task` passed: 3 passed, 1 warning.
   - Full `tests/unit/test_chat_service.py` still has an existing unrelated expectation failure around render fields including `quality_details`; not caused by this change.
 - Deployment status:
-  - Pending at handover write time; commit, push, reload, and health checks still required.
+  - Commit `1b5a40be` pushed to `origin/main`.
+  - `deploy_safe(mode=reload)` succeeded at 2026-08-29 18:18 KST with `재로드=79개`.
+  - Post-deploy health check passed: `pipeline_healthy=true`, stalled queue/running 0, API containers running.
 
 ## 2026-08-29 17:37 KST - Project Docs Office preview and docs page labels
 
