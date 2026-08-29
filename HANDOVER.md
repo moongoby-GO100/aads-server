@@ -18,7 +18,11 @@
   - DB migration was applied with `docker exec -i aads-postgres psql -U aads -d aads < migrations/135_global_e2e_verification_contract.sql`.
   - DB verification confirmed slug `global-e2e-verification-contract`, layer 1, priority 6, enabled true, wildcard scopes, 790 chars.
 - Deployment status:
-  - Pending commit/push/reload at the time this entry was written.
+  - Commit `54fdacc4` was pushed to `origin/main`.
+  - AADS API hot-reload succeeded at `2026-08-29 17:13:59 KST` with `재로드=94개`.
+  - Runtime code verification confirmed the new Runner E2E checklist and interruption notice are loaded in `aads-server`.
+  - PromptCompiler DB-path verification applied `global-e2e-verification-contract` with `fallback_used=false`.
+  - `capture_screenshot` saved `https://aads.newtalk.kr/screenshots/screenshot_20260829_171443_790e2a.png`; HTTP HEAD returned `200 image/png`, 67,052 bytes.
 
 ## 2026-08-29 15:20 KST - Global E2E Vault autologin for authenticated pages
 
