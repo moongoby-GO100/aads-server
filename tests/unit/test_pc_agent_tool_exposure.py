@@ -405,6 +405,21 @@ def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None
     assert "if tenant_id:" in capture_source
 
 
+def test_capture_screenshot_exposes_close_on_complete_cleanup() -> None:
+    capture_tool = next(
+        tool for tool in ceo_chat_tools.TOOL_DEFINITIONS
+        if tool["name"] == "capture_screenshot"
+    )
+    capture_props = capture_tool["input_schema"]["properties"]
+    capture_source = inspect.getsource(ceo_chat_tools.tool_capture_screenshot)
+    executor_source = inspect.getsource(ToolExecutor._capture_screenshot)
+
+    assert capture_props["close_on_complete"]["default"] is True
+    assert "close_work_session" in capture_source
+    assert "close_tabs=True" in capture_source
+    assert "close_on_complete=bool(inp.get(\"close_on_complete\", True))" in executor_source
+
+
 @pytest.mark.asyncio
 async def test_agent_vault_login_go100_uses_direct_token_injection(monkeypatch: pytest.MonkeyPatch) -> None:
     marked: dict[str, object] = {}

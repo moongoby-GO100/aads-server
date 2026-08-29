@@ -1654,6 +1654,11 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
                 },
+                "close_on_complete": {
+                    "type": "boolean",
+                    "description": "독립 캡처 완료 후 비보호 PC Agent 업무 세션 탭을 회수할지 여부. 기본 true",
+                    "default": True,
+                },
             },
             "required": ["url"],
         },
@@ -4036,6 +4041,7 @@ async def tool_capture_screenshot(
     browser_session_id: str = "",
     browser_work_key: str = "",
     tenant_id: str = "",
+    close_on_complete: bool = True,
 ) -> str:
     """URL 스크린샷을 캡처하여 이미지 URL 반환 (채팅에 인라인 표시용)."""
     if not url:
@@ -4047,6 +4053,8 @@ async def tool_capture_screenshot(
     ctx, err = await _acquire_pw_context(browser_session_id, capture_work_key, url)
     if err:
         return err
+    cleanup_work_key = capture_work_key if close_on_complete and capture_work_key and not browser_session_id else ""
+    cleanup_summary = ""
     try:
         page = await ctx.new_page()
         try:
@@ -4101,11 +4109,33 @@ async def tool_capture_screenshot(
         )
         await asyncio.wait_for(proc.communicate(data), timeout=30)
         if proc.returncode != 0:
-            return f"[ERROR] 호스트에 스크린샷 저장 실패 (exit={proc.returncode})"
-        image_url = f"https://aads.newtalk.kr/screenshots/{filename}"
-        return f"스크린샷 저장 완료.\n\n![{url} 스크린샷]({image_url})"
+            result_message = f"[ERROR] 호스트에 스크린샷 저장 실패 (exit={proc.returncode})"
+        else:
+            image_url = f"https://aads.newtalk.kr/screenshots/{filename}"
+            result_message = f"스크린샷 저장 완료.\n\n![{url} 스크린샷]({image_url})"
     except Exception as e:
-        return f"[ERROR] 스크린샷 캡처 실패: {e}"
+        result_message = f"[ERROR] 스크린샷 캡처 실패: {e}"
+    finally:
+        if cleanup_work_key:
+            try:
+                from app.browser_bridge.service import get_browser_bridge_service
+
+                cleanup = await get_browser_bridge_service().close_work_session(
+                    cleanup_work_key,
+                    reason="capture_screenshot_complete",
+                    close_browser=False,
+                    close_tabs=True,
+                    command_timeout_seconds=10.0,
+                )
+                cleanup_summary = (
+                    f"\n\n[브라우저 회수] status={cleanup.get('status')} "
+                    f"reason={cleanup.get('reason', '')} work_key={cleanup.get('work_key', cleanup_work_key)}"
+                )
+                logger.info("capture_screenshot_work_session_cleanup=%s", cleanup)
+            except Exception as cleanup_err:
+                cleanup_summary = f"\n\n[브라우저 회수 실패] {cleanup_err}"
+                logger.warning("capture_screenshot_work_session_cleanup_failed: %s", cleanup_err, exc_info=True)
+    return result_message + cleanup_summary
 
 
 async def tool_browser_click(
@@ -5453,6 +5483,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
             tenant_id=str(params.get("tenant_id") or ""),
+            close_on_complete=bool(params.get("close_on_complete", True)),
         )
     elif name == "browser_snapshot":
         return await tool_browser_snapshot(

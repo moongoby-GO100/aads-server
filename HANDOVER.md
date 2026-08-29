@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-29 18:36 KST - PC Agent E2E capture work-session cleanup
+
+- Request: Check whether the planned PC Agent browser cleanup breaks Browser Bridge session reuse; if risky, include the fix, otherwise apply immediately.
+- Decision:
+  - Do not set `close_on_complete` on chained interactive browser tools such as `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_click`, and `browser_fill` because those tools intentionally reuse the same `browser_work_key` during one E2E verification flow.
+  - Apply automatic cleanup only to independent `capture_screenshot` calls, where capture is terminal and the result is already saved before cleanup.
+  - Keep protected work sessions, including `ntv2-sinsang-registration`, untouched even when cleanup is requested.
+- Changes:
+  - Added `BrowserBridgeService.close_work_session()` to send `browser_close_session` for non-protected PC Agent work sessions, close tabs without closing the browser/profile, retire the Browser Bridge work-key binding, and preserve active sessions.
+  - Added `capture_screenshot.close_on_complete` with default `true`; `ToolExecutor` and direct chat tool dispatch now pass it through.
+  - `capture_screenshot` now appends a browser cleanup status line after capture and runs cleanup in `finally`, including failure cases.
+  - Added regression tests for non-protected cleanup, protected-session skip, and tool exposure.
+- Verification:
+  - `python3 -m py_compile app/browser_bridge/service.py app/api/ceo_chat_tools.py app/services/tool_executor.py` passed.
+  - `docker exec aads-server python -m py_compile app/browser_bridge/service.py app/api/ceo_chat_tools.py app/services/tool_executor.py` passed.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest -q tests/unit/test_browser_bridge.py::test_close_work_session_releases_non_protected_pc_agent_session tests/unit/test_browser_bridge.py::test_close_work_session_skips_protected_session tests/unit/test_pc_agent_tool_exposure.py::test_capture_screenshot_exposes_close_on_complete_cleanup` passed: 3 passed.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server-aads-server python -m pytest -q tests/unit/test_browser_bridge.py::test_work_key_session_does_not_reuse_protected_sinsang_session tests/unit/test_browser_bridge.py::test_work_key_session_recreates_about_blank_when_url_requested tests/unit/test_pc_agent_routing_leases.py::test_vvic_browser_launch_reuses_work_key_profile_without_new_window tests/unit/test_pc_agent_routing_leases.py::test_execute_routed_command_close_on_complete_triggers_session_cleanup tests/unit/test_pc_agent_routing_leases.py::test_execute_routed_command_error_close_on_complete_triggers_session_cleanup` passed: 5 passed, 26 warnings.
+- Deployment status:
+  - Code is verified locally and in an image-backed test container.
+  - Commit/push/deploy are pending CEO approval because this is an AADS API operational deployment.
+
 ## 2026-08-29 18:14 KST - Chat incomplete response watchdog auto-retry fix
 
 - Request: Fix cases where an unfinished chat response cannot retry after premature termination, apply all recommended actions, and deploy to production.

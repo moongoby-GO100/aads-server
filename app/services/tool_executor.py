@@ -3408,6 +3408,7 @@ class ToolExecutor:
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
             tenant_id=str(inp.get("tenant_id") or ""),
+            close_on_complete=bool(inp.get("close_on_complete", True)),
         )
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:

@@ -1113,6 +1113,105 @@ class BrowserBridgeService:
             "sessions": list(self.sessions.public_sessions()),
         }
 
+    async def close_work_session(
+        self,
+        work_key: str,
+        *,
+        reason: str = "browser_work_session_complete",
+        close_browser: bool = False,
+        close_tabs: bool = True,
+        command_timeout_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        """Release a non-protected PC Agent work session without touching active sessions."""
+        normalized_work_key = normalize_work_key(work_key)
+        session = self.sessions.find_by_work_key(normalized_work_key)
+        if not session:
+            return {"status": "skipped", "reason": "work_session_not_found", "work_key": normalized_work_key}
+        if session.protected or session.work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(session.label):
+            return {
+                "status": "skipped",
+                "reason": "protected_work_session",
+                "session_id": session.session_id,
+                "work_key": normalized_work_key,
+            }
+
+        metadata = dict(session.endpoint.metadata or {})
+        if session.endpoint.kind != BrowserEndpointKind.LOCAL_AGENT:
+            self.sessions.retire_session(
+                session.session_id,
+                stale_reason=reason,
+                clear_work_key=True,
+                clear_active=False,
+                clear_lease=True,
+            )
+            self._session_contexts.pop(session.session_id, None)
+            self._session_browsers.pop(session.session_id, None)
+            return {
+                "status": "retired",
+                "reason": "non_local_agent_session",
+                "session_id": session.session_id,
+                "work_key": normalized_work_key,
+            }
+
+        close_params: dict[str, Any] = {
+            "work_key": normalized_work_key,
+            "close_browser": bool(close_browser),
+            "close_tabs": bool(close_tabs),
+            "reason": reason,
+            "command_timeout_seconds": max(1.0, min(10.0, float(command_timeout_seconds))),
+        }
+        if metadata.get("port"):
+            close_params["port"] = int(metadata.get("port") or 0)
+        agent_id = str(metadata.get("agent_id") or "")
+        result: dict[str, Any] | None = None
+        try:
+            if self._route_pc_agent_via_active_api_first():
+                result = await self._execute_pc_agent_route_via_active_api(
+                    command_type="browser_close_session",
+                    params=close_params,
+                    agent_id=agent_id,
+                    job_type=f"browser_bridge_close_{session.session_id}",
+                    required_capabilities=["interactive_browser"],
+                    queue_wait_timeout_seconds=10,
+                    lease_ttl_seconds=30,
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+            if result is None:
+                from app.services.pc_agent_manager import pc_agent_manager
+
+                result = await pc_agent_manager.execute_routed_command(
+                    command_type="browser_close_session",
+                    params=close_params,
+                    agent_id=agent_id,
+                    job_type=f"browser_bridge_close_{session.session_id}",
+                    required_capabilities=["interactive_browser"],
+                    queue_if_busy=True,
+                    wait_for_turn=True,
+                    queue_wait_timeout_seconds=10,
+                    lease_ttl_seconds=30,
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+        finally:
+            self.sessions.retire_session(
+                session.session_id,
+                stale_reason=reason,
+                clear_work_key=True,
+                clear_active=False,
+                clear_lease=True,
+            )
+            self._session_contexts.pop(session.session_id, None)
+            self._session_browsers.pop(session.session_id, None)
+
+        result = self._coerce_pc_agent_embedded_success(result or {})
+        return {
+            "status": str(result.get("status") or "unknown"),
+            "result": result,
+            "session_id": session.session_id,
+            "work_key": normalized_work_key,
+            "close_browser": bool(close_browser),
+            "close_tabs": bool(close_tabs),
+        }
+
     async def _execute_pc_agent_route_via_active_api(
         self,
         *,

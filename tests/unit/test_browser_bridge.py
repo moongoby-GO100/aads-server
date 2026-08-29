@@ -880,6 +880,83 @@ async def test_ensure_pc_agent_cdp_force_recreate_closes_existing_work_key_first
 
 
 @pytest.mark.asyncio
+async def test_close_work_session_releases_non_protected_pc_agent_session(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="GO100 E2E command center",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9777", "endpoint_kind": "local_agent"},
+        work_key="go100-e2e-command-center",
+        protected=False,
+        activate=False,
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    calls: list[dict] = []
+
+    async def fake_execute_routed_command(**kwargs):
+        calls.append(kwargs)
+        return {"status": "success", "result": {"result": {"session_released": True}}}
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    result = await service.close_work_session(
+        "go100-e2e-command-center",
+        reason="capture_screenshot_complete",
+        close_tabs=True,
+    )
+    retired = service.sessions.get(session.session_id)
+
+    assert result["status"] == "success"
+    assert calls[0]["command_type"] == "browser_close_session"
+    assert calls[0]["params"]["work_key"] == "go100-e2e-command-center"
+    assert calls[0]["params"]["close_tabs"] is True
+    assert calls[0]["params"]["close_browser"] is False
+    assert retired is not None
+    assert retired.work_key == ""
+    assert retired.endpoint.metadata["stale"] is True
+    assert retired.endpoint.metadata["stale_reason"] == "capture_screenshot_complete"
+
+
+@pytest.mark.asyncio
+async def test_close_work_session_skips_protected_session(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(state_dir=tmp_path),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    session = service.register_trusted_session(
+        label="NTV2 Sinsang registration",
+        endpoint_kind="local_agent",
+        metadata={"agent_id": "ceo-pc", "port": "9778", "endpoint_kind": "local_agent"},
+        work_key="ntv2-sinsang-registration",
+        protected=True,
+        activate=False,
+    )
+
+    from app.services import pc_agent_manager as manager_module
+
+    async def fail_execute_routed_command(**_kwargs):
+        raise AssertionError("protected work session must not be closed")
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fail_execute_routed_command)
+
+    result = await service.close_work_session("ntv2-sinsang-registration")
+    kept = service.sessions.get(session.session_id)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "protected_work_session"
+    assert kept is not None
+    assert kept.work_key == "ntv2-sinsang-registration"
+    assert kept.endpoint.metadata.get("stale") is not True
+
+
+@pytest.mark.asyncio
 async def test_ensure_pc_agent_cdp_force_recreate_keeps_profile_by_default(monkeypatch, tmp_path) -> None:
     """force_recreate 시에도 기본값은 Chrome 프로필(isolation_id) 유지 — 로그인 쿠키 보존."""
     service = BrowserBridgeService(
