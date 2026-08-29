@@ -18,8 +18,11 @@
   - `docker exec aads-server python3 -m py_compile app/api/ceo_chat_tools.py app/core/credential_vault.py app/services/agent_vault_service.py` passed.
   - `docker exec aads-server python3 -m pytest tests/unit/test_pc_agent_tool_exposure.py -q` passed: 17 passed.
   - First post-deploy GO100 screenshot saved successfully but still showed `/auth/login`; this proved callback token handling was insufficient for screen verification.
+  - After direct token injection, server-local Playwright `tool_capture_screenshot()` captured authenticated GO100 `/go100/command-center`, not the login page: `https://aads.newtalk.kr/screenshots/screenshot_20260829_153530_ba96a7.png`.
+  - GO100 Agent Vault credential `last_used_at` updated to `2026-08-29T06:35:27Z`.
 - Deployment status:
-  - Commit `cd976c49` was pushed and hot-reloaded first; follow-up direct token injection patch still pending commit/reload at this handover entry.
+  - Commits `cd976c49`, `9c1bb4c8` were pushed to `origin/main`.
+  - AADS API hot-reload succeeded at `2026-08-29 15:30:44 KST` with `재로드=87개`; post-health was healthy.
 
 ## 2026-08-29 15:13 KST - GO100 Agent Vault E2E login bridge
 
