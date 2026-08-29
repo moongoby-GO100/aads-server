@@ -163,6 +163,8 @@ class StreamingStatusOut(BaseModel):
     last_message_id: Optional[str] = None
     execution_id: Optional[str] = None
     last_event_id: Optional[str] = None
+    placeholder_message_id: Optional[str] = None
+    placeholder_ready: bool = False
     message_revision: Optional[str] = None
     placeholder_revision: Optional[str] = None
     artifact_revision: Optional[str] = None

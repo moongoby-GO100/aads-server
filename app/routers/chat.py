@@ -215,10 +215,32 @@ async def _ensure_running_placeholder_anchor(
         """,
         execution_uuid,
     )
-    if existing:
-        return existing
-
     clean_partial = svc._strip_streaming_progress_markers(partial_content or "").strip()
+    if existing:
+        existing_content = str(existing["content"] or "").strip()
+        if clean_partial and len(clean_partial) > len(existing_content):
+            updated = await conn.fetchrow(
+                """
+                UPDATE chat_messages
+                SET content = $2,
+                    tools_called = $3::jsonb,
+                    edited_at = NOW()
+                WHERE id = $1
+                  AND intent = 'streaming_placeholder'
+                RETURNING id, content, tools_called, FALSE AS is_new
+                """,
+                existing["id"],
+                clean_partial,
+                json.dumps(svc.normalize_tool_events(tools_called)),
+            )
+            return updated or existing
+        return {
+            "id": existing["id"],
+            "content": existing["content"],
+            "tools_called": existing["tools_called"],
+            "is_new": False,
+        }
+
     if clean_partial:
         display_content = clean_partial + "\n\n⏳ _생성 중... (표시 버블 복구됨)_"
     else:
@@ -1741,6 +1763,7 @@ async def get_streaming_status(
                                 execution_row["execution_id"][:8],
                                 str(_restore_err)[:160],
                             )
+                    _restored_anchor = None
                     if not execution_row["placeholder_id"]:
                         _restored_anchor = await _ensure_running_placeholder_anchor(
                             conn,
@@ -1754,6 +1777,10 @@ async def get_streaming_status(
                             _partial = _restored_anchor["content"] or _partial
                             execution_row = dict(execution_row)
                             execution_row["tools_called"] = _restored_anchor["tools_called"]
+                            execution_row["placeholder_id"] = str(_restored_anchor["id"])
+                    _placeholder_id = execution_row["placeholder_id"] or (
+                        str(_restored_anchor["id"]) if _restored_anchor else None
+                    )
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": True,
@@ -1764,6 +1791,8 @@ async def get_streaming_status(
                         "partial_content": _partial,
                         "execution_id": execution_row["execution_id"],
                         "last_event_id": execution_row["last_event_id"],
+                        "placeholder_message_id": _placeholder_id,
+                        "placeholder_ready": bool(_placeholder_id or str(_partial or "").strip()),
                         "final_message_id": execution_row["final_message_id"],
                         "final_message_ready": False,
                     }, conn)

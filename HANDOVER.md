@@ -8953,6 +8953,20 @@
   - Commit/deploy this connector patch.
   - Rerun Mia Shinhan bank collection on ICU55HK and require either `imported_rows > 0` or verified `no_records`.
 
+## 2026-08-29 10:15 KST - Chat active streaming bubble visibility fix
+
+- Request: ensure the chat window clearly shows a live response bubble when the session has a running execution, then deploy to production.
+- Finding:
+  - Session `45249276-83a1-42ca-b58d-d5f1737a388b` had running execution `f60005d9-02ed-46bd-ae39-4494e9ffdce2`.
+  - The linked assistant row `ad4cc846-61d6-4ef0-ac23-18a4df47cf51` was a `streaming_placeholder` with content, but the UI could still show only a running icon during the session-entry polling gap.
+- Code changes:
+  - Added `placeholder_message_id` and `placeholder_ready` to `StreamingStatusOut`.
+  - Updated `/chat/sessions/{id}/streaming-status` so running executions return the active placeholder id/readiness and refresh stale placeholder content when the DB partial is newer.
+- Verification:
+  - `python3 -m py_compile app/models/chat.py app/routers/chat.py` succeeded.
+- Deployment:
+  - Pending at handover write time; server reload and production verification still required.
+
 ## 2026-08-29 06:34 KST - FOOD Shinhan rerun result after hidden-field fix
 
 - Runtime actions:
