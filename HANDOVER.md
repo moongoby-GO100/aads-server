@@ -13,9 +13,12 @@
   - Recovered response detection reports the recovered message ID as ready.
 - Verification:
   - `python3 -m py_compile app/models/chat.py app/routers/chat.py` passed.
-  - Post-reload API smoke is required after commit.
+  - `docker exec aads-server python -c "from app.models.chat import StreamingStatusOut; ..."` confirmed the live container model exposes `final_message_id` and `final_message_ready`.
+  - `curl http://127.0.0.1:8100/health` returned `status=ok`.
+  - Target session `3294f1c8-6a9a-45e6-8b26-b434ca12e161` latest running execution was terminalized to `interrupted` and remains analyzable through the interruption diagnostics path.
 - Deployment:
-  - Pending commit, push, API reload, and production smoke at the time of this handover entry.
+  - Commit `b098107d` was pushed to `main`.
+  - `bash scripts/reload-api.sh` completed hot reload with `재로드=85개`.
 
 ## 2026-08-29 07:45 KST - Chat interruption diagnostics and report API
 
