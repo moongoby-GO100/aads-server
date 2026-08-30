@@ -9237,4 +9237,8 @@
   - `python3 -m py_compile app/routers/chat.py` succeeded.
   - `git diff --check -- app/routers/chat.py` succeeded.
 - Deployment:
-  - Pending at handover time; deploy after commit with `bash /root/aads/aads-server/deploy.sh bluegreen`.
+  - Blue-green deploy completed at 2026-08-30 16:40 KST.
+  - Deployed code commit: `dbc66398 Fix stale chat streaming send guard`.
+  - Active backend slot after deploy: `aads-server-green` on `:8102`; `:8100` remains healthy as rollback backup.
+  - `deploy_history` recorded success for commit `dbc66398` with duration 719s and downtime 49s.
+  - Post-deploy verification confirmed `/health` returned HTTP 200 on both `:8102` and `:8100`; public `/api/v1/ops/health` reached the API and returned expected HTTP 401 without a bearer token.
