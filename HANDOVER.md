@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-08-30 20:01 KST - OHVIS chat-first app, admin settings menu, and tenant auto-login closeout
+
+- Request: Continue the interrupted OHVIS app/dashboard build and finish the remaining commit, push, deploy, and verification steps.
+- Changes:
+  - Server commit `81c31d89` makes the OHVIS Android app chat-first and aligns app metadata with the `/chat` launch and `/login` session recovery routes.
+  - Dashboard commit `b134c4d` adds the OHVIS app settings menu and redirects `/admin/app-settings` to the mobile agent settings route.
+  - Server commit `6d2e073d` extends Browser Bridge/Vault auto-login lookup to `tenant_id` and exposes the `tenant_id` parameter through chat tool registry metadata.
+  - Global UX contract was already recorded in `docs/HANDOVER.md` for the Android/dashboard/user-centered UX work.
+- Verification:
+  - `python3 -m py_compile app/api/ceo_chat_tools.py app/services/tool_registry.py` passed.
+  - `curl -fsS http://localhost:8100/health` returned HTTP 200 with `status=ok`.
+  - `docker ps` showed `aads-server`, `aads-server-green`, `aads-dashboard`, and `aads-dashboard-green` healthy.
+  - `git diff --quiet HEAD origin/main` returned 0 before this handover entry, confirming the code commit tree matched remote.
+- Deployment status:
+  - Server hot reload completed after the browser auto-login commit; active local API health passed on `127.0.0.1:8100`.
+  - Dashboard deployment was already complete at commit `b134c4d`.
+  - Browser E2E was not rerun during the interrupted closeout; API/container validation was used as fallback evidence.
+
 ## 2026-08-30 18:22 KST - Chat recovery latency and response quality gate hardening
 
 - Request: Apply chat interruption improvement actions immediately and report the technical research result for more natural responses.
