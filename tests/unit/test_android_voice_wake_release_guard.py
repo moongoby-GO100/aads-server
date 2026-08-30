@@ -19,6 +19,9 @@ def test_release_manifest_exposes_ohvis_wake_deep_links_and_shortcut() -> None:
     manifest = (ANDROID / "AndroidManifest.xml").read_text(encoding="utf-8")
     shortcuts = (ANDROID / "res" / "xml" / "shortcuts.xml").read_text(encoding="utf-8")
 
+    assert 'android:label="@string/app_name"' in manifest
+    assert 'android:icon="@drawable/ic_ohvis_launcher"' in manifest
+    assert 'android:roundIcon="@drawable/ic_ohvis_launcher"' in manifest
     assert 'android:scheme="ohvis" android:host="wake"' in manifest
     assert 'android:scheme="aads-agent" android:host="wake"' in manifest
     assert 'android:name="android.app.shortcuts"' in manifest
@@ -69,7 +72,9 @@ def test_android_agent_embeds_ohvis_web_app() -> None:
 
     assert "android.webkit.WebView" in activity
     assert 'OHVIS_CHAT_URL = OHVIS_HOME_URL + "/chat"' in activity
-    assert 'button("Open OHVIS"' in activity
+    assert 'openOhvisWeb(OHVIS_CHAT_URL, "launch")' in activity
+    assert 'button("Open Chat"' in activity
+    assert 'button("Show Settings"' in activity
     assert "openOhvisWeb(resolveOhvisUrl(dataUri)" in activity
     assert "setJavaScriptEnabled(true)" in activity
     assert "setDomStorageEnabled(true)" in activity
@@ -93,10 +98,13 @@ def test_android_manifest_api_reads_version_from_gradle() -> None:
     assert "def _android_build_metadata()" in device_api
     assert '"version": build_metadata["version"]' in device_api
     assert '"version_code": build_metadata["version_code"]' in device_api
+    assert '"name": "오비스"' in device_api
     assert '"voice_wake_deep_links": ["ohvis://wake", "aads-agent://wake"]' in device_api
     assert '"ohvis_web_url": "https://aads.newtalk.kr/chat"' in device_api
     assert '"embedded_ohvis_webview": True' in device_api
+    assert '"launch_route": "/chat"' in device_api
+    assert '"admin_settings_route": "/ops/mobile-agent"' in device_api
     assert '"bixby_quick_command": "Open OHVIS with ohvis://wake"' in device_api
     assert '"voice_wake_capabilities": [' in device_api
-    assert 'versionName "0.1.3"' in gradle
-    assert "versionCode 4" in gradle
+    assert 'versionName "0.1.4"' in gradle
+    assert "versionCode 5" in gradle

@@ -1,6 +1,6 @@
-# AADS Android Agent
+# 오비스 Android App
 
-Native Android agent for the AADS device WebSocket protocol. The existing
+Native Android app for the OHVIS chat surface and AADS device WebSocket protocol. The existing
 `mobile_agent/` Termux prototype remains unchanged; this project is a separate
 APK-oriented implementation under `android_agent/`.
 
@@ -8,6 +8,9 @@ APK-oriented implementation under `android_agent/`.
 
 - Package: `kr.newtalk.aads.agent`
 - App label: `오비스`
+- Launcher icon: `@drawable/ic_ohvis_launcher`
+- First launch route: embedded `https://aads.newtalk.kr/chat`
+- Expired session route: OHVIS web auth redirects to login and returns to chat.
 - Min SDK: 26
 - Target SDK: 35
 - Language: Java
@@ -56,9 +59,11 @@ for `오비스`, `ohvis`, `obis`, or `aads`. When a wake phrase is detected, it
 brings `MainActivity` to the foreground through `ohvis://wake?source=voice`.
 
 The same wake link now opens the embedded OHVIS web screen inside the APK at
-`https://aads.newtalk.kr/chat`. The app keeps the Android Agent controls
-available, but the `Open OHVIS`, `Refresh OHVIS`, and `Close OHVIS` controls let
-the user use the AADS/OHVIS chat UI without leaving the app. Links outside
+`https://aads.newtalk.kr/chat`. A normal launcher tap does the same thing, so the
+user lands in OHVIS Chat first instead of a technical pairing/settings screen.
+Agent settings are collapsed behind the in-app `Show Settings` control and the
+dashboard admin menu `오비스 앱 설정` (`/admin/app-settings`, redirected to
+`/ops/mobile-agent`). Links outside
 `https://aads.newtalk.kr` are handed off to the device browser instead of being
 silently embedded.
 
@@ -67,14 +72,19 @@ microphone rules still apply: the user must grant microphone permission, keep
 the foreground notification visible, and allow battery optimization exemption
 when long-running listening is required.
 
-On first launch without a deep link:
+If the user is already authenticated, the WebView opens the chat directly. If
+the web session is expired, the existing OHVIS web auth flow sends the user to
+login and returns to chat after login.
 
-1. Confirm or edit the server URL. Default:
+On first pairing or maintenance:
+
+1. Open `Show Settings`.
+2. Confirm or edit the server URL. Default:
    `wss://aads.newtalk.kr/api/v1/devices/ws`
-2. Use the generated `agent_id` or paste the server-issued value.
-3. Enter the pairing token manually or paste the full pairing payload.
-4. Optionally paste a QR payload into the QR input hook.
-5. Save pairing and start the foreground service.
+3. Use the generated `agent_id` or paste the server-issued value.
+4. Enter the pairing token manually or paste the full pairing payload.
+5. Optionally paste a QR payload into the QR input hook.
+6. Save pairing and start the foreground service.
 
 Accepted QR/manual hook formats:
 

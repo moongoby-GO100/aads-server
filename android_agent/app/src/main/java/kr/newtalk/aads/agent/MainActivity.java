@@ -60,6 +60,7 @@ public final class MainActivity extends Activity {
     private TextView voiceWakeView;
     private TextView ohvisWebStatusView;
     private WebView ohvisWebView;
+    private LinearLayout agentSettingsPanel;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override
@@ -74,7 +75,9 @@ public final class MainActivity extends Activity {
         setContentView(buildContent());
         loadPairingFields();
         applyPairingIntent(getIntent());
-        applyWakeIntent(getIntent());
+        if (!applyWakeIntent(getIntent())) {
+            openOhvisWeb(OHVIS_CHAT_URL, "launch");
+        }
         refreshState();
     }
 
@@ -115,7 +118,7 @@ public final class MainActivity extends Activity {
         root.setPadding(dp(18), dp(18), dp(18), dp(24));
         scrollView.addView(root);
 
-        TextView title = text("AADS Android Agent", 22, true);
+        TextView title = text("오비스", 22, true);
         root.addView(title);
 
         statusView = text("", 16, true);
@@ -129,35 +132,42 @@ public final class MainActivity extends Activity {
         root.addView(lastErrorView);
         root.addView(voiceWakeView);
 
-        root.addView(section("Pairing"));
+        agentSettingsPanel = new LinearLayout(this);
+        agentSettingsPanel.setOrientation(LinearLayout.VERTICAL);
+        agentSettingsPanel.setVisibility(View.GONE);
+        root.addView(section("Agent Settings"));
+        root.addView(row(button("Show Settings", v -> showAgentSettings(true)), button("Hide Settings", v -> showAgentSettings(false))));
+
+        agentSettingsPanel.addView(section("Pairing"));
         serverUrlEdit = edit("Server WebSocket URL", false);
         tokenEdit = edit("Pairing token", true);
         agentIdView = text("", 14, true);
         qrEdit = edit("Paste pairing JSON or full WebSocket URL", false);
         qrEdit.setMinLines(2);
 
-        root.addView(label("Server URL"));
-        root.addView(serverUrlEdit);
-        root.addView(label("Agent ID"));
-        root.addView(agentIdView);
-        root.addView(row(button("Regenerate", this::regenerateAgentId), button("Save", this::savePairing)));
-        root.addView(label("Token"));
-        root.addView(tokenEdit);
-        root.addView(label("QR input hook"));
-        root.addView(qrEdit);
-        root.addView(row(button("Apply Input", this::applyPairingInput), button("Clear Input", v -> qrEdit.setText(""))));
+        agentSettingsPanel.addView(label("Server URL"));
+        agentSettingsPanel.addView(serverUrlEdit);
+        agentSettingsPanel.addView(label("Agent ID"));
+        agentSettingsPanel.addView(agentIdView);
+        agentSettingsPanel.addView(row(button("Regenerate", this::regenerateAgentId), button("Save", this::savePairing)));
+        agentSettingsPanel.addView(label("Token"));
+        agentSettingsPanel.addView(tokenEdit);
+        agentSettingsPanel.addView(label("QR input hook"));
+        agentSettingsPanel.addView(qrEdit);
+        agentSettingsPanel.addView(row(button("Apply Input", this::applyPairingInput), button("Clear Input", v -> qrEdit.setText(""))));
 
-        root.addView(section("Service"));
-        root.addView(row(button("Start", this::startAgentService), button("Stop", this::stopAgentService)));
+        agentSettingsPanel.addView(section("Service"));
+        agentSettingsPanel.addView(row(button("Start", this::startAgentService), button("Stop", this::stopAgentService)));
 
-        root.addView(section("Voice"));
-        root.addView(row(button("Start Wake", this::startVoiceWake), button("Stop Wake", this::stopVoiceWake)));
-        root.addView(row(button("Bixby Wake", this::openBixbyWakeLink), button("Mic Permission", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
+        agentSettingsPanel.addView(section("Voice"));
+        agentSettingsPanel.addView(row(button("Start Wake", this::startVoiceWake), button("Stop Wake", this::stopVoiceWake)));
+        agentSettingsPanel.addView(row(button("Bixby Wake", this::openBixbyWakeLink), button("Mic Permission", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
+        root.addView(agentSettingsPanel);
 
         root.addView(section("OHVIS"));
         ohvisWebStatusView = text("OHVIS Web: not opened", 14, false);
         root.addView(ohvisWebStatusView);
-        root.addView(row(button("Open OHVIS", v -> openOhvisWeb(OHVIS_CHAT_URL, "button")), button("Refresh OHVIS", v -> reloadOhvisWeb())));
+        root.addView(row(button("Open Chat", v -> openOhvisWeb(OHVIS_CHAT_URL, "button")), button("Refresh", v -> reloadOhvisWeb())));
         root.addView(row(button("Close OHVIS", v -> closeOhvisWeb()), button("Open in Browser", v -> openOhvisExternal())));
         ohvisWebView = new WebView(this);
         ohvisWebView.setVisibility(View.GONE);
@@ -168,14 +178,14 @@ public final class MainActivity extends Activity {
         configureOhvisWebView();
         root.addView(ohvisWebView);
 
-        root.addView(section("Permissions"));
-        root.addView(row(button("Notifications", v -> requestNotificationPermission()), button("Location", v -> requestLocationPermission())));
-        root.addView(row(button("Camera", v -> requestPermission(REQ_CAMERA, Manifest.permission.CAMERA)), button("SMS", v -> requestPermission(REQ_SMS, Manifest.permission.SEND_SMS))));
-        root.addView(row(button("Wi-Fi", v -> requestWifiPermission()), button("Battery Settings", this::openBatterySettings)));
-        root.addView(row(button("Data Access", v -> requestDataPermissions()), button("Microphone", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
-        root.addView(row(button("Bluetooth", v -> requestBluetoothPermission()), button("Write Settings", this::openWriteSettings)));
-        root.addView(row(button("Accessibility", this::openAccessibilitySettings), button("Notify Access", this::openNotificationAccessSettings)));
-        root.addView(row(button("Device Admin", this::openDeviceAdminSettings), button("System Settings", v -> startActivity(new Intent(Settings.ACTION_SETTINGS)))));
+        agentSettingsPanel.addView(section("Permissions"));
+        agentSettingsPanel.addView(row(button("Notifications", v -> requestNotificationPermission()), button("Location", v -> requestLocationPermission())));
+        agentSettingsPanel.addView(row(button("Camera", v -> requestPermission(REQ_CAMERA, Manifest.permission.CAMERA)), button("SMS", v -> requestPermission(REQ_SMS, Manifest.permission.SEND_SMS))));
+        agentSettingsPanel.addView(row(button("Wi-Fi", v -> requestWifiPermission()), button("Battery Settings", this::openBatterySettings)));
+        agentSettingsPanel.addView(row(button("Data Access", v -> requestDataPermissions()), button("Microphone", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
+        agentSettingsPanel.addView(row(button("Bluetooth", v -> requestBluetoothPermission()), button("Write Settings", this::openWriteSettings)));
+        agentSettingsPanel.addView(row(button("Accessibility", this::openAccessibilitySettings), button("Notify Access", this::openNotificationAccessSettings)));
+        agentSettingsPanel.addView(row(button("Device Admin", this::openDeviceAdminSettings), button("System Settings", v -> startActivity(new Intent(Settings.ACTION_SETTINGS)))));
 
         return scrollView;
     }
@@ -233,9 +243,9 @@ public final class MainActivity extends Activity {
         toast("Pairing applied");
     }
 
-    private void applyWakeIntent(Intent intent) {
+    private boolean applyWakeIntent(Intent intent) {
         if (intent == null) {
-            return;
+            return false;
         }
         Uri dataUri = intent.getData();
         boolean wakeAction = ACTION_WAKE_FROM_VOICE.equals(intent.getAction());
@@ -243,7 +253,7 @@ public final class MainActivity extends Activity {
                 && ("ohvis".equalsIgnoreCase(dataUri.getScheme()) || "aads-agent".equalsIgnoreCase(dataUri.getScheme()))
                 && ("wake".equalsIgnoreCase(dataUri.getHost()) || "open".equalsIgnoreCase(dataUri.getHost()));
         if (!wakeAction && !wakeLink) {
-            return;
+            return false;
         }
         startAgentService(null);
         if (PermissionGate.has(this, Manifest.permission.RECORD_AUDIO)) {
@@ -251,6 +261,13 @@ public final class MainActivity extends Activity {
         }
         openOhvisWeb(resolveOhvisUrl(dataUri), wakeAction ? "voice" : "deeplink");
         toast("OHVIS wake");
+        return true;
+    }
+
+    private void showAgentSettings(boolean show) {
+        if (agentSettingsPanel != null) {
+            agentSettingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
     }
 
     private String resolveOhvisUrl(Uri dataUri) {

@@ -71,7 +71,7 @@ def _find_android_apk(apk_name: str = ANDROID_APK_NAME) -> Path | None:
 
 def _android_build_metadata() -> dict[str, Any]:
     build_file = ANDROID_AGENT_DIR / "app" / "build.gradle"
-    fallback = {"version": "0.1.3", "version_code": 4}
+    fallback = {"version": "0.1.4", "version_code": 5}
     if not build_file.exists():
         return fallback
     try:
@@ -332,7 +332,8 @@ async def android_agent_manifest():
     if ANDROID_AGENT_DIR.exists():
         source_count = sum(1 for path in ANDROID_AGENT_DIR.rglob("*") if path.is_file())
     return {
-        "name": "AADS Android Agent",
+        "name": "오비스",
+        "display_name": "오비스",
         "package": "kr.newtalk.aads.agent",
         "version": build_metadata["version"],
         "version_code": build_metadata["version_code"],
@@ -349,6 +350,9 @@ async def android_agent_manifest():
         "voice_wake_deep_links": ["ohvis://wake", "aads-agent://wake"],
         "ohvis_web_url": "https://aads.newtalk.kr/chat",
         "embedded_ohvis_webview": True,
+        "launch_route": "/chat",
+        "expired_session_route": "/login?next=/chat&reason=session_expired",
+        "admin_settings_route": "/ops/mobile-agent",
         "bixby_quick_command": "Open OHVIS with ohvis://wake",
         "voice_wake_capabilities": [
             "voice_wake_start",
@@ -567,7 +571,7 @@ async def android_install_page():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AADS Android Agent</title>
+  <title>오비스 Android 앱</title>
   <style>
     body {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; line-height: 1.5; color: #111827; }}
     main {{ max-width: 760px; margin: 0 auto; }}
@@ -578,8 +582,10 @@ async def android_install_page():
 </head>
 <body>
 <main>
-  <h1>AADS Android Agent</h1>
+  <h1>오비스 Android 앱</h1>
   <p>{apk_status}</p>
+  <p>설치 후 앱을 실행하면 오비스 채팅 화면(<code>/chat</code>)을 앱 안에서 바로 엽니다.
+  로그인 세션이 만료된 경우 웹앱 인증 흐름에 따라 로그인 화면으로 이동한 뒤 다시 채팅 화면으로 돌아옵니다.</p>
   <p>
     <a class="button" href="/api/v1/devices/android/download">APK 다운로드</a>
     <a class="button" href="/api/v1/devices/android/source.zip">소스 ZIP 다운로드</a>
