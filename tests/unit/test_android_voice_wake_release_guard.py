@@ -62,3 +62,17 @@ def test_backend_device_routing_allows_voice_wake_commands() -> None:
     assert '"voice_wake_start": "voice_wake_start"' in manager
     assert '"voice_wake_stop": "voice_wake_stop"' in manager
     assert '"voice_wake_status": "voice_wake_status"' in manager
+
+
+def test_android_manifest_api_reads_version_from_gradle() -> None:
+    device_api = (ROOT / "app" / "api" / "device.py").read_text(encoding="utf-8")
+    gradle = (ROOT / "android_agent" / "app" / "build.gradle").read_text(encoding="utf-8")
+
+    assert "def _android_build_metadata()" in device_api
+    assert '"version": build_metadata["version"]' in device_api
+    assert '"version_code": build_metadata["version_code"]' in device_api
+    assert '"voice_wake_deep_links": ["ohvis://wake", "aads-agent://wake"]' in device_api
+    assert '"bixby_quick_command": "Open OHVIS with ohvis://wake"' in device_api
+    assert '"voice_wake_capabilities": [' in device_api
+    assert 'versionName "0.1.2"' in gradle
+    assert "versionCode 3" in gradle

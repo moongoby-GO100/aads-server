@@ -5,6 +5,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import secrets
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -66,6 +67,24 @@ def _find_android_apk(apk_name: str = ANDROID_APK_NAME) -> Path | None:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
+
+
+def _android_build_metadata() -> dict[str, Any]:
+    build_file = ANDROID_AGENT_DIR / "app" / "build.gradle"
+    fallback = {"version": "0.1.2", "version_code": 3}
+    if not build_file.exists():
+        return fallback
+    try:
+        source = build_file.read_text(encoding="utf-8")
+    except OSError:
+        return fallback
+
+    version_match = re.search(r'versionName\s+"([^"]+)"', source)
+    code_match = re.search(r"versionCode\s+(\d+)", source)
+    return {
+        "version": version_match.group(1) if version_match else fallback["version"],
+        "version_code": int(code_match.group(1)) if code_match else fallback["version_code"],
+    }
 
 
 async def _get_pool_or_none():
@@ -308,14 +327,15 @@ async def android_agent_manifest():
     apk_path = _find_android_apk()
     fresh_apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME)
     apk_available = apk_path is not None
+    build_metadata = _android_build_metadata()
     source_count = 0
     if ANDROID_AGENT_DIR.exists():
         source_count = sum(1 for path in ANDROID_AGENT_DIR.rglob("*") if path.is_file())
     return {
         "name": "AADS Android Agent",
         "package": "kr.newtalk.aads.agent",
-        "version": "0.1.1",
-        "version_code": 2,
+        "version": build_metadata["version"],
+        "version_code": build_metadata["version_code"],
         "device_type": "android",
         "server_ws_base_url": _public_ws_base_url(),
         "install_page_url": _download_base_url() + "/install",
@@ -326,6 +346,13 @@ async def android_agent_manifest():
         "pairing_api": "/api/v1/devices/android/pairing",
         "auto_register_api": "/api/v1/devices/android/auto-register",
         "deep_link_scheme": "aads-agent://pair",
+        "voice_wake_deep_links": ["ohvis://wake", "aads-agent://wake"],
+        "bixby_quick_command": "Open OHVIS with ohvis://wake",
+        "voice_wake_capabilities": [
+            "voice_wake_start",
+            "voice_wake_stop",
+            "voice_wake_status",
+        ],
         "apk_available": apk_available,
         "apk_size": apk_path.stat().st_size if apk_path else 0,
         "fresh_apk_available": fresh_apk_path is not None,
