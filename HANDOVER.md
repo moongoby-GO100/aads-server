@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-30 15:24 KST - Chat stream recovery status enum and fast auto-resume
+
+- Request: Apply the recommended chat interruption recovery improvements, verify the session behavior, then report.
+- Cause:
+  - Chat stream progress labels were split across backend diagnostics and dashboard fallback strings, so the UI could show confusing states such as completion followed by another in-progress phase.
+  - Recoverable `missing_done_event` and `completion_without_visible_final_message` cases could wait behind longer watchdog timing instead of exposing a short auto-resume path.
+- Changes:
+  - Added canonical `stream_status`, `stream_status_label`, and optional `auto_resume_seconds` payloads for chat streaming status.
+  - Mapped server states to `generating`, `tool_running`, `recovering`, `finalizing`, `completed`, and `needs_continuation`.
+  - Exposed recoverable interrupted executions through `streaming-status` with `needs_continuation` and a 5 second auto-resume hint.
+  - Shortened the execution resume scanner cadence so active sessions can reclaim interrupted responses faster after deploy/restart.
+- Verification:
+  - `python3 -m py_compile app/main.py app/models/chat.py app/routers/chat.py app/services/chat_service.py` passed.
+  - Local `/api/v1/health` returned HTTP 200 after deployment.
+  - `aads-server` container was healthy on `127.0.0.1:8100`.
+  - Current chat session DB fallback check showed the active execution and persisted partial assistant message; final completion is expected to be saved by the current response closeout.
+- Deployment status:
+  - Commit `04c6340f` (`Improve chat stream recovery status`) was pushed to `origin/main`.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` completed after retrying a dashboard nginx-lock overlap.
+  - Production API health passed locally; public authenticated routes correctly returned 401 without a bearer token.
+
 ## 2026-08-29 18:36 KST - PC Agent E2E capture work-session cleanup
 
 - Request: Check whether the planned PC Agent browser cleanup breaks Browser Bridge session reuse; if risky, include the fix, otherwise apply immediately.
