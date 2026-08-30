@@ -3749,7 +3749,7 @@ async def tool_browser_navigate(
         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
 
         # 로그인 폼 감지 + Vault 자동 로그인. 도메인 종류나 /login 직접 진입 여부와 무관하게 적용한다.
-        if dedicated_session and tenant_id:
+        if tenant_id:
             try:
                 _has_login_form = await page.evaluate("""() => {
                     const pwInput = document.querySelector("input[type='password']");
@@ -3773,7 +3773,7 @@ async def tool_browser_navigate(
                 logger.warning("post-load token inject failed: %s", pre_err, exc_info=True)
 
         # 서버 리다이렉트 기반 자동 로그인 (URL이 /login으로 변경된 경우)
-        if dedicated_session and "/login" in page.url and "/login" not in url and "newtalk.kr" in url:
+        if tenant_id and "/login" in page.url and "/login" not in url and "newtalk.kr" in url:
             try:
                 await _do_aads_login(page, tenant_id=tenant_id)
                 await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
@@ -3783,7 +3783,7 @@ async def tool_browser_navigate(
         # Vault 자동 로그인: /login, /signin, /auth 리다이렉트 감지
         _login_patterns = ("/login", "/signin", "/auth")
         _cur = page.url
-        if dedicated_session and any(p in _cur for p in _login_patterns) and not any(p in url for p in _login_patterns):
+        if tenant_id and any(p in _cur for p in _login_patterns) and not any(p in url for p in _login_patterns):
             try:
                 from app.core.credential_vault import list_credentials, get_credential, execute_login_steps
                 injected = await _pre_inject_vault_token(

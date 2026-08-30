@@ -1760,6 +1760,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "Playwright 헤드리스 브라우저로 URL에 접속한다. "
             "AADS 대시보드(aads.newtalk.kr), GitHub 등 허용 도메인만 접근 가능. "
+            "로그인 필요 페이지는 tenant_id를 전달하면 Agent Vault 자동 로그인을 시도한다. "
             "'여기 확인해', '이 페이지 봐줘', '화면 열어봐'에 사용."
         ),
         "input_schema": {
@@ -1776,6 +1777,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "browser_work_key": {
                     "type": "string",
                     "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "테넌트 UUID. 로그인 필요 페이지에서 Agent Vault 자동 로그인에 필요. 미지정 시 세션에서 자동 주입",
                 },
             },
             "required": ["url"],
@@ -1835,6 +1840,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "웹 페이지 스크린샷을 캡처하여 채팅에 이미지로 표시한다. "
             "URL을 입력하면 해당 페이지를 캡처하여 이미지 링크를 반환한다. "
             "CEO에게 화면을 보여줘야 할 때 사용. 허용 도메인: *.newtalk.kr, localhost. "
+            "로그인 필요 페이지는 tenant_id를 전달하면 Agent Vault 자동 로그인 후 캡처한다. "
             "'스크린샷 찍어줘', '화면 보여줘', '페이지 캡처해서 보여줘'에 사용."
         ),
         "input_schema": {
@@ -1855,6 +1861,14 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "browser_work_key": {
                     "type": "string",
                     "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "테넌트 UUID. 로그인 필요 페이지에서 Agent Vault 자동 로그인에 필요. 미지정 시 세션에서 자동 주입",
+                },
+                "close_on_complete": {
+                    "type": "boolean",
+                    "description": "캡처 완료 후 브라우저 세션 회수 여부 (기본: true)",
                 },
             },
             "required": ["url"],
