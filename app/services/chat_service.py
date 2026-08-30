@@ -248,6 +248,14 @@ _completion_ack_state: Dict[str, Dict[str, Any]] = getattr(
 _JUST_COMPLETED_GRACE_SECS = int(os.getenv("AADS_JUST_COMPLETED_GRACE_SECONDS", "60"))
 _COMPLETION_ACK_MAX_ENTRIES = 500
 _COMPLETION_ACK_MAX_DELIVERIES = 1
+_STREAM_STATUS_LABELS = {
+    "generating": "생성중",
+    "tool_running": "도구실행중",
+    "recovering": "복구중",
+    "finalizing": "최종저장중",
+    "completed": "완료",
+    "needs_continuation": "이어쓰기필요",
+}
 
 # 클라이언트 이탈 후 자동 종료 시간 (초): stale watchdog(최대 45분+20분)보다 먼저
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
@@ -257,6 +265,22 @@ _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
 _RECOVERY_DEDUPE_MODEL_USED = {"recovered", "recovered_from_redis", "stopped", None}
+
+
+def stream_status_payload(
+    status: str,
+    *,
+    auto_resume_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Return the canonical chat stream status fields for API/UI consumers."""
+    normalized = status if status in _STREAM_STATUS_LABELS else "completed"
+    payload: Dict[str, Any] = {
+        "stream_status": normalized,
+        "stream_status_label": _STREAM_STATUS_LABELS[normalized],
+    }
+    if auto_resume_seconds is not None:
+        payload["auto_resume_seconds"] = max(0, int(auto_resume_seconds))
+    return payload
 
 
 def _looks_like_runner_notification(content: str) -> bool:
@@ -5834,7 +5858,7 @@ async def _resume_single_stream(
                         len(redis_content),
                     )
 
-                retry_delays = [10, 20, 40, 60, 120]
+                retry_delays = [2, 5, 10, 20, 40]
                 _relay_503_count = 0
                 last_error: Optional[BaseException] = None
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
@@ -6109,10 +6133,16 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
                 acked_completion_token,
             )
 
+        _canonical_status = (
+            "completed"
+            if is_completed else
+            ("tool_running" if int(s.get("tool_count") or 0) > 0 else "generating")
+        )
         result = {
             "is_streaming": not is_completed,
             "just_completed": _emit_just_completed,
             "completion_token": _completion_token if _emit_just_completed else None,
+            **stream_status_payload(_canonical_status),
             "content_length": len(_content),
             "token_count": len(_content) // 4,  # 근사 토큰 수 (프론트 진행도 판단용)
             "tool_count": s.get("tool_count", 0),
@@ -6141,6 +6171,7 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
             return {
                 "is_streaming": True,
                 "just_completed": False,
+                **stream_status_payload("generating"),
                 "content_length": 0,
                 "token_count": 0,
                 "tool_count": 0,
@@ -6153,6 +6184,7 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
     return {
         "is_streaming": False,
         "just_completed": False,
+        **stream_status_payload("completed"),
         "content_length": 0,
         "token_count": 0,
         "tool_count": 0,

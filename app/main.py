@@ -2217,7 +2217,7 @@ async def lifespan(app: FastAPI):
         max_rows: int = 5,
         *,
         reclaim_before=None,
-        min_stale_seconds: int = 60,
+        min_stale_seconds: int = 8,
     ):
         try:
             if not _is_execution_resume_owner():
@@ -2287,7 +2287,7 @@ async def lifespan(app: FastAPI):
                               AND GREATEST(
                                   te.updated_at,
                                   COALESCE(ph.edited_at, ph.created_at, te.updated_at)
-                              ) < NOW() - INTERVAL '10 seconds'
+                              ) < NOW() - INTERVAL '5 seconds'
                           )
                           OR (
                               $3::timestamptz IS NOT NULL
@@ -2326,7 +2326,7 @@ async def lifespan(app: FastAPI):
                             if _state_updated_at > 0
                             else 999999
                         )
-                        if _state_age_sec < max(30, min_stale_seconds):
+                        if _state_age_sec < max(8, min_stale_seconds):
                             continue
                         logger.warning(
                             "execution_resume_reclaim_stale_memory_state: session=%s execution=%s state_age=%.1fs",
@@ -2398,7 +2398,7 @@ async def lifespan(app: FastAPI):
                               OR (
                                   status = 'retrying'
                                   AND COALESCE(error_message, '') LIKE ANY ($5::text[])
-                                  AND updated_at < NOW() - INTERVAL '10 seconds'
+                                  AND updated_at < NOW() - INTERVAL '5 seconds'
                               )
                               OR ($4::timestamptz IS NOT NULL AND updated_at < $4::timestamptz)
                           )
@@ -2528,7 +2528,7 @@ async def lifespan(app: FastAPI):
     async def _resume_pending_executions_startup():
         import asyncio as _resume_asyncio
         await _resume_asyncio.sleep(5)
-        _startup_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS", "15"))
+        _startup_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STARTUP_STALE_SECONDS", "8"))
         # P0-3: Rescue interrupted executions from prior shutdown
         try:
             from app.core.db_pool import get_pool as _gp_rescue
@@ -2568,11 +2568,11 @@ async def lifespan(app: FastAPI):
 
     async def _periodic_execution_resume_scanner():
         import asyncio as _prs_asyncio
-        _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "60"))
-        await _prs_asyncio.sleep(15)
+        _periodic_stale_seconds = int(os.getenv("AADS_EXECUTION_RESUME_STALE_SECONDS", "8"))
+        await _prs_asyncio.sleep(5)
         while True:
             try:
-                await _prs_asyncio.sleep(30)
+                await _prs_asyncio.sleep(5)
                 await _resume_pending_executions_once(
                     max_rows=5,
                     min_stale_seconds=_periodic_stale_seconds,

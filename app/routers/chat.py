@@ -176,6 +176,14 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
 
 async def _finalize_streaming_status(session_id: UUID, result: Optional[dict], conn=None) -> dict:
     payload = dict(result or {"is_streaming": False})
+    if not payload.get("stream_status"):
+        if payload.get("just_completed"):
+            status_name = "completed" if payload.get("final_message_ready") else "finalizing"
+        elif payload.get("is_streaming"):
+            status_name = "tool_running" if int(payload.get("tool_count") or 0) > 0 else "generating"
+        else:
+            status_name = "completed"
+        payload.update(svc.stream_status_payload(status_name))
     try:
         if conn is None:
             from app.core.db_pool import get_pool
@@ -651,6 +659,10 @@ async def _settle_stale_execution_for_recovery(
         "is_streaming": bool(_auto_retry_scheduled),
         "just_completed": not bool(_auto_retry_scheduled),
         "auto_retry_scheduled": bool(_auto_retry_scheduled),
+        **svc.stream_status_payload(
+            "recovering" if _auto_retry_scheduled else "needs_continuation",
+            auto_resume_seconds=5 if _auto_retry_scheduled else None,
+        ),
         "content_length": len(_clean_partial),
         "tool_count": _tc,
         "last_tool": _lt,
@@ -1633,6 +1645,7 @@ async def get_streaming_status(
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
                         "just_completed": False,
+                        **svc.stream_status_payload("completed"),
                         "content_length": len(_notice),
                         "token_count": 0,
                         "tool_count": 0,
@@ -1674,6 +1687,7 @@ async def get_streaming_status(
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
                         "just_completed": False,
+                        **svc.stream_status_payload("needs_continuation", auto_resume_seconds=5),
                         "content_length": len(_partial),
                         "token_count": 0,
                         "tool_count": _tc,
@@ -1782,9 +1796,15 @@ async def get_streaming_status(
                         str(_restored_anchor["id"]) if _restored_anchor else None
                     )
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
+                    _status_name = (
+                        "recovering"
+                        if execution_row["status"] == "retrying"
+                        else ("tool_running" if _tc > 0 else "generating")
+                    )
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": True,
                         "just_completed": False,
+                        **svc.stream_status_payload(_status_name),
                         "content_length": len(_partial),
                         "tool_count": _tc,
                         "last_tool": _lt,
@@ -1828,6 +1848,10 @@ async def get_streaming_status(
                         "is_streaming": False,
                         "just_completed": _emit_just_completed,
                         "completion_token": _completion_token if _emit_just_completed else None,
+                        **svc.stream_status_payload(
+                            "completed" if _final_message_ready else "finalizing",
+                            auto_resume_seconds=None if _final_message_ready else 5,
+                        ),
                         "content_length": len(execution_row["partial_content"] or ""),
                         "token_count": 0,
                         "tool_count": _tc,
@@ -1901,6 +1925,7 @@ async def get_streaming_status(
                 return await _finalize_streaming_status(session_id, {
                     "is_streaming": True,
                     "just_completed": False,
+                    **svc.stream_status_payload("generating"),
                     "content_length": len(row["content"] or ""),
                     "tool_count": _tc,
                     "last_tool": _lt,
@@ -1961,6 +1986,7 @@ async def get_streaming_status(
                     "just_completed": _emit_just_completed,
                     "completion_token": _completion_token if _emit_just_completed else None,
                     "recovered": True,
+                    **svc.stream_status_payload("completed"),
                     "content_length": 0,
                     "token_count": 0,
                     "tool_count": 0,
@@ -1969,6 +1995,80 @@ async def get_streaming_status(
                     "last_event_id": None,
                     "final_message_id": str(recovered_row["id"]),
                     "final_message_ready": True,
+                }, conn)
+            interrupted_row = await conn.fetchrow(
+                """
+                SELECT te.id::text AS execution_id,
+                       te.requested_model,
+                       te.retry_count,
+                       COALESCE(te.error_message, '') AS error_message,
+                       am.id AS assistant_message_id,
+                       COALESCE(am.content, '') AS partial_content,
+                       COALESCE(um.content, '') AS last_user_msg
+                FROM chat_turn_executions te
+                JOIN chat_sessions s
+                  ON s.id = te.session_id
+                LEFT JOIN chat_messages am
+                  ON am.id = te.assistant_message_id
+                LEFT JOIN chat_messages um
+                  ON um.id = te.user_message_id
+                WHERE te.session_id = $1
+                  AND te.status = 'interrupted'
+                  AND te.updated_at > NOW() - INTERVAL '30 minutes'
+                  AND te.retry_count < 5
+                  AND COALESCE(um.content, '') <> ''
+                  AND (
+                    COALESCE(te.error_message, '') LIKE '%missing_done_event%'
+                    OR COALESCE(te.error_message, '') LIKE '%completion_without_visible_final_message%'
+                    OR COALESCE(te.error_message, '') LIKE '%background_producer_incomplete_exit%'
+                    OR COALESCE(te.error_message, '') LIKE 'interrupted_auto_retry_scheduled:%'
+                    OR COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'
+                    OR te.interrupt_category IN ('producer_incomplete', 'final_save_missing', 'completion_guard', 'completion_contract', 'watchdog_timeout', 'process_interrupt')
+                    OR te.interruption_diagnostics->>'category' IN ('producer_incomplete', 'final_save_missing', 'completion_guard', 'completion_contract', 'watchdog_timeout', 'process_interrupt')
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM chat_turn_executions newer_te
+                    JOIN chat_messages newer_am
+                      ON newer_am.id = newer_te.assistant_message_id
+                    WHERE newer_te.session_id = te.session_id
+                      AND newer_te.started_at > te.started_at
+                      AND newer_te.status = 'completed'
+                      AND COALESCE(newer_am.is_hidden, FALSE) = FALSE
+                  )
+                ORDER BY te.updated_at DESC
+                LIMIT 1
+                """,
+                session_id,
+            )
+            if interrupted_row:
+                _clean_partial = svc._strip_streaming_progress_markers(interrupted_row["partial_content"] or "")
+                _auto_retry_scheduled = await _schedule_recovery_auto_resume(
+                    conn,
+                    session_id,
+                    UUID(interrupted_row["execution_id"]),
+                    interrupted_row["assistant_message_id"],
+                    _clean_partial,
+                )
+                return await _finalize_streaming_status(session_id, {
+                    "is_streaming": bool(_auto_retry_scheduled),
+                    "just_completed": False,
+                    "auto_retry_scheduled": bool(_auto_retry_scheduled),
+                    **svc.stream_status_payload(
+                        "recovering" if _auto_retry_scheduled else "needs_continuation",
+                        auto_resume_seconds=5 if _auto_retry_scheduled else None,
+                    ),
+                    "content_length": len(_clean_partial),
+                    "token_count": 0,
+                    "tool_count": 0,
+                    "last_tool": "",
+                    "partial_content": _clean_partial,
+                    "execution_id": interrupted_row["execution_id"],
+                    "last_event_id": None,
+                    "placeholder_message_id": str(interrupted_row["assistant_message_id"]) if interrupted_row["assistant_message_id"] else None,
+                    "placeholder_ready": bool(interrupted_row["assistant_message_id"] or _clean_partial),
+                    "final_message_id": None,
+                    "final_message_ready": False,
                 }, conn)
             return await _finalize_streaming_status(
                 session_id,

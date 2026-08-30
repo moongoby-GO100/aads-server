@@ -155,6 +155,9 @@ class StreamingStatusOut(BaseModel):
     is_streaming: bool = False
     just_completed: bool = False
     recovered: bool = False
+    stream_status: str = "completed"
+    stream_status_label: str = "완료"
+    auto_resume_seconds: Optional[int] = None
     content_length: int = 0
     token_count: int = 0
     tool_count: int = 0
