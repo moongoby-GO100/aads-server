@@ -21,7 +21,12 @@
   - Targeted `git diff --check` passed for the touched server and dashboard files.
   - Current DB check before deployment showed recent active chat executions still present; post-deploy operational validation is required before marking production behavior resolved.
 - Deployment status:
-  - Commit/push/deploy pending for this entry at the time of writing.
+  - Server commit `aa836038` (`Improve chat recovery latency and quality gates`) was pushed to `origin/main`.
+  - Dashboard commit `13949da` (`Speed up chat recovery status polling`) was pushed to `origin/main`.
+  - `bash /root/aads/aads-server/deploy.sh bluegreen` completed through the existing deploy process; active API slot is `127.0.0.1:8100`.
+  - `bash /root/aads/aads-dashboard/deploy.sh` completed; active dashboard slot is blue with release `13949daf6197`.
+  - Public `/api/v1/health` returned HTTP 200 and `/chat` returned the expected authenticated redirect to `/login`.
+  - Browser-login E2E was not run; deployment QA step returned `UNKNOWN`, so API/container/DB validation was used as fallback evidence.
 
 ## 2026-08-30 15:24 KST - Chat stream recovery status enum and fast auto-resume
 
