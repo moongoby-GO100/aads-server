@@ -9308,3 +9308,57 @@
   - Active backend slot after deploy: `aads-server-green` on `:8102`; `:8100` remains healthy as rollback backup.
   - `deploy_history` recorded success for commit `dbc66398` with duration 719s and downtime 49s.
   - Post-deploy verification confirmed `/health` returned HTTP 200 on both `:8102` and `:8100`; public `/api/v1/ops/health` reached the API and returned expected HTTP 401 without a bearer token.
+
+## 2026-08-31 08:08 KST - Loop intent false positive for chat diagnostics
+
+- Request: explain why a chat-bubble diagnostics question was routed to the OHVIS loop confirmation prompt.
+- Finding:
+  - `detect_loop_intent()` treated bare `완료시까지` / `끝날 때까지` style phrases as loop-start commands.
+  - The CEO's diagnostic sentence used `완료시까지 이어진다` descriptively, so the loop handler returned `loop_start_confirm` before the normal chat response path.
+- Code change:
+  - Removed bare until/deadline phrases from `LOOP_START_KW`.
+  - Added `_UNTIL_START_RE` so those phrases trigger loop confirmation only when near explicit command verbs such as `진행`, `실행`, `처리`, `작업`, `수행`, `반복`, or `돌려`.
+  - Added a regression case for the exact diagnostics-style sentence in `scripts/_verify_loop_intent.py`.
+- Verification:
+  - `python3 -m py_compile app/services/loop_chat_handler.py scripts/_verify_loop_intent.py` succeeded.
+  - A dependency-isolated function test passed 6/6 cases, including the CEO diagnostics sentence returning `None` and real loop commands still returning `loop_start_confirm`.
+- Deployment:
+  - Not deployed yet in this step; commit/push/deploy requires an explicit deploy instruction or the next approved rollout.
+
+## 2026-08-31 08:40 KST - Chat recovery hard-timeout and loop false-positive rollout
+
+- Request: apply the improvement actions for session `15782f6e-35ca-475b-ac45-c152c26a42fa`.
+- Finding:
+  - The target session had an active `current_execution_id` with a `streaming_placeholder` assistant row that continued to grow, so the generation was not dead.
+  - The prior failure mode can still recur when `updated_at` keeps moving due to recovery/heartbeat while `started_at` is already too old; this delays stale recovery.
+  - Loop intent also misrouted diagnostics text containing descriptive `완료시까지` into loop confirmation.
+- Code change:
+  - `app/routers/chat.py`: stale execution recovery now checks `started_age_seconds` as a hard timeout in addition to `updated_at`.
+  - `app/routers/chat.py`: process/recovery auto-resume can preserve `retry_count` and use an expanded retry limit for hard stale recovery, so UI transport recovery does not burn quality retry budget.
+  - `app/services/loop_chat_handler.py`: loop start detection now requires explicit loop/monitoring intent or command-adjacent until phrases.
+  - `tests/unit/test_tools_and_pipeline.py` and `scripts/_verify_loop_intent.py`: regression coverage added.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py app/services/loop_chat_handler.py scripts/_verify_loop_intent.py tests/unit/test_tools_and_pipeline.py` succeeded.
+  - `docker exec aads-server python3 /app/scripts/_verify_loop_intent.py` passed 13/13 cases.
+  - Dashboard-side finalizing bubble fix is recorded in `/root/aads/aads-dashboard/HANDOVER.md`.
+- Deployment:
+  - Pending at this record point; deploy with `bash /root/aads/aads-server/deploy.sh bluegreen` after commit.
+
+## 2026-08-31 08:39 KST - Chat interrupted response recovery hardening
+
+- Request: immediately apply the proposed fixes for the recent interrupted/partial response recovery issue and report results.
+- Findings:
+  - Session `15782f6e-35ca-475b-ac45-c152c26a42fa` showed a `running` execution with `error_message=resume_claimed_by:*`; these rows can keep `updated_at` fresh while the real producer is gone.
+  - `get_last_response()` called the stale-execution recovery helper without selecting `started_age_seconds`, so the helper's hard timeout fallback could not reliably fire on that route.
+  - Recovery auto-resume was treated like a normal quality retry and could consume `retry_count`, which is undesirable for server/process restart recovery.
+- Code change:
+  - `app/routers/chat.py`: added `started_age_seconds` to the `last-response` execution query so dead executions can be settled by start-age hard timeout even when `updated_at` is recently touched.
+  - `app/routers/chat.py`: added `preserve_retry_count` / `retry_limit` controls to `_schedule_recovery_auto_resume()`.
+  - `app/routers/chat.py`: when stale recovery is triggered by start-age hard timeout, automatic resume now preserves retry budget and uses the process-recovery retry limit.
+  - `tests/unit/test_tools_and_pipeline.py`: added regression coverage for start-age hard timeout and retry-count preservation.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py app/services/loop_chat_handler.py scripts/_verify_loop_intent.py tests/unit/test_tools_and_pipeline.py` succeeded.
+  - `docker exec aads-server python /app/scripts/_verify_loop_intent.py` passed 13/13 cases.
+  - `docker cp tests/unit/test_tools_and_pipeline.py aads-server:/tmp/test_tools_and_pipeline.py` then `docker exec aads-server python -m pytest -q /tmp/test_tools_and_pipeline.py -k 'settle_stale_execution or recovery_auto_resume'` passed 5/5 selected tests with one existing FastAPI deprecation warning.
+- Deployment:
+  - Not deployed yet in this step. Current changes remain local/uncommitted until CEO requests commit/push/deploy or the approved rollout path runs.

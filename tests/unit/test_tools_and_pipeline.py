@@ -696,6 +696,42 @@ class TestRegressions:
         assert settled["just_completed"] is True
 
     @pytest.mark.asyncio
+    async def test_settle_stale_execution_uses_started_age_hard_timeout(self, monkeypatch):
+        """resume_claimed_by 갱신처럼 updated_at만 최근이어도 오래된 dead 실행은 복구."""
+        from app.routers import chat as chat_router
+
+        class FakeConn:
+            async def fetchval(self, query, *args):
+                return None
+
+            async def execute(self, query, *args):
+                return None
+
+        monkeypatch.setattr(chat_router.svc, "normalize_tool_events", lambda tools: tools or [])
+        monkeypatch.setattr(chat_router.svc, "_strip_streaming_progress_markers", lambda text: text)
+        monkeypatch.setattr(chat_router.svc, "_has_meaningful_partial_content", lambda text: bool((text or "").strip()))
+        monkeypatch.setattr(chat_router.svc, "_FIRST_RESPONSE_TIMEOUT_SEC", 120, raising=False)
+
+        settled = await chat_router._settle_stale_execution_for_recovery(
+            FakeConn(),
+            uuid4(),
+            {
+                "status": "running",
+                "partial_content": "",
+                "tools_called": [],
+                "last_event_id": None,
+                "updated_age_seconds": 0,
+                "started_age_seconds": 301,
+                "updated_recently": True,
+                "execution_id": str(uuid4()),
+            },
+            has_live_runtime=False,
+        )
+
+        assert settled is not None
+        assert settled["just_completed"] is True
+
+    @pytest.mark.asyncio
     async def test_recovery_auto_resume_restores_retrying_execution(self, monkeypatch):
         """recovery 정리 후 retry budget이 있으면 자동 이어쓰기를 예약."""
         from app.routers import chat as chat_router
@@ -743,6 +779,62 @@ class TestRegressions:
         assert calls["resumed"]
         assert any("status = 'retrying'" in query for query, _ in calls["fetchval"])
         assert any("current_execution_id" in query for query, _ in calls["execute"])
+
+    @pytest.mark.asyncio
+    async def test_recovery_auto_resume_can_preserve_retry_count(self, monkeypatch):
+        """서버/프로세스 복구성 자동 재개는 품질 재시도 예산을 소모하지 않음."""
+        from app.routers import chat as chat_router
+
+        execution_id = uuid4()
+        session_id = uuid4()
+        assistant_id = uuid4()
+        calls = {"fetchval": [], "resumed": []}
+
+        class FakeConn:
+            async def fetchrow(self, query, *args):
+                return {
+                    "retry_count": 4,
+                    "requested_model": "gpt-5.5",
+                    "last_user_msg": "원래 질문",
+                    "workspace_name": "CEO",
+                }
+
+            async def fetchval(self, query, *args):
+                calls["fetchval"].append((query, args))
+                if "UPDATE chat_turn_executions" in query:
+                    return execution_id
+                return None
+
+            async def execute(self, query, *args):
+                return None
+
+        async def fake_resume(*args, **kwargs):
+            calls["resumed"].append((args, kwargs))
+
+        monkeypatch.setattr(chat_router.svc, "_strip_streaming_progress_markers", lambda text: text)
+        monkeypatch.setattr(chat_router.svc, "_resume_single_stream", fake_resume)
+
+        scheduled = await chat_router._schedule_recovery_auto_resume(
+            FakeConn(),
+            session_id,
+            execution_id,
+            assistant_id,
+            "partial answer",
+            preserve_retry_count=True,
+            retry_limit=8,
+        )
+
+        await chat_router.asyncio.sleep(0)
+
+        update_args = [
+            args for query, args in calls["fetchval"]
+            if "UPDATE chat_turn_executions" in query
+        ]
+        assert scheduled is True
+        assert update_args
+        assert update_args[0][3] is True
+        assert update_args[0][4] == 8
+        assert calls["resumed"]
 
     @pytest.mark.asyncio
     async def test_interrupted_auto_resume_schedules_completion_gate_retry(self, monkeypatch):

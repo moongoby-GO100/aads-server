@@ -361,6 +361,9 @@ async def _schedule_recovery_auto_resume(
     execution_id: UUID,
     assistant_message_id: Optional[UUID],
     partial_content: str,
+    *,
+    preserve_retry_count: bool = False,
+    retry_limit: int = 5,
 ) -> bool:
     """Turn a recovered stale chat execution back into a retrying stream.
 
@@ -387,7 +390,7 @@ async def _schedule_recovery_auto_resume(
         )
         if not row:
             return False
-        if (row["retry_count"] or 0) >= 5:
+        if (row["retry_count"] or 0) >= retry_limit:
             logger.warning(
                 "recovery_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s",
                 str(session_id)[:8],
@@ -453,7 +456,10 @@ async def _schedule_recovery_auto_resume(
             """
             UPDATE chat_turn_executions
             SET status = 'retrying',
-                retry_count = retry_count + 1,
+                retry_count = CASE
+                    WHEN $4::boolean THEN retry_count
+                    ELSE retry_count + 1
+                END,
                 assistant_message_id = $2,
                 completed_at = NULL,
                 error_message = 'recovery_auto_retry_scheduled',
@@ -461,12 +467,14 @@ async def _schedule_recovery_auto_resume(
             WHERE id = $1
               AND session_id = $3
               AND status = 'interrupted'
-              AND retry_count < 5
+              AND retry_count < $5
             RETURNING id
             """,
             execution_id,
             placeholder_id,
             session_id,
+            preserve_retry_count,
+            retry_limit,
         )
         if not claimed:
             return False
@@ -514,10 +522,11 @@ async def _schedule_recovery_auto_resume(
 
         task.add_done_callback(_on_recovery_resume_done)
         logger.info(
-            "recovery_auto_resume_scheduled session=%s execution=%s partial_len=%s",
+            "recovery_auto_resume_scheduled session=%s execution=%s partial_len=%s preserve_retry_count=%s",
             str(session_id)[:8],
             str(execution_id)[:8],
             len(clean_partial),
+            preserve_retry_count,
         )
         return True
     except Exception as exc:
@@ -655,6 +664,8 @@ async def _settle_stale_execution_for_recovery(
         _execution_uuid,
         _assistant_id,
         _clean_partial,
+        preserve_retry_count=bool(_hard_stale_by_started_at),
+        retry_limit=8 if _hard_stale_by_started_at else 5,
     )
     return {
         "is_streaming": bool(_auto_retry_scheduled),
@@ -2329,6 +2340,7 @@ async def get_last_response(
                    te.last_event_id,
                    te.updated_at,
                    EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
+                   EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
                    (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                    pm.id::text AS placeholder_id,
                    CASE

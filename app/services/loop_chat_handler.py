@@ -23,8 +23,6 @@ logger = logging.getLogger("ohvis.loop_chat_handler")
 LOOP_START_KW = (
     "감시해", "감시하고", "모니터링해", "모니터해", "반복해", "반복 실행",
     "루프 시작", "루프 돌려",
-    "완료시까지", "완료할 때까지", "완료할때까지", "끝날 때까지", "끝날때까지",
-    "될 때까지", "될때까지", "날 때까지", "날때까지",
     "계속 진행", "계속 실행",
     "추적해", "추적하고", "추적관리",
     "루프로 진행", "루프를 진행", "루프로 돌려", "루프를 돌려",
@@ -32,6 +30,11 @@ LOOP_START_KW = (
 )
 # "매 N분/초/시간" 패턴만 루프로 인식 (단독 "매 "는 오탐 위험)
 _INTERVAL_START_RE = re.compile(r"매\s*\d+\s*(?:초|분|시간)")
+_UNTIL_START_RE = re.compile(
+    r"(?:완료\s*시\s*까지|완료\s*할\s*때\s*까지|끝\s*날\s*때\s*까지|"
+    r"될\s*때\s*까지|날\s*때\s*까지)"
+    r".{0,24}?(?:계속\s*)?(?:진행|실행|처리|작업|수행|반복|돌려)"
+)
 
 # CEO 확인 프롬프트 승인 키워드 → loop_start (확인 없이 즉시 생성)
 LOOP_CONFIRM_KW = ("루프 시작", "루프 진행", "루프 승인", "루프 생성",
@@ -110,6 +113,8 @@ def detect_loop_intent(content: str) -> str | None:
 
     P0: _NON_COMMAND_HINT는 STOP/STATUS/RESUME 오탐 방지에만 적용.
         START에는 적용하지 않음 (CEO 화법 "…하고 보고해" 차단 방지).
+        단, "완료시까지" 계열은 증상 설명에도 자주 등장하므로 명령 동사
+        인접 패턴(_UNTIL_START_RE)일 때만 START로 본다.
     P1: START 판정 시 "loop_start_confirm" 반환 → 확인 프롬프트.
     """
     text = str(content or "").strip()
@@ -121,7 +126,11 @@ def detect_loop_intent(content: str) -> str | None:
         return "loop_start"
 
     # START는 _NON_COMMAND_HINT 가드 없이 판정 (CEO 화법 호환)
-    if any(kw in text for kw in LOOP_START_KW) or _INTERVAL_START_RE.search(text):
+    if (
+        any(kw in text for kw in LOOP_START_KW)
+        or _INTERVAL_START_RE.search(text)
+        or _UNTIL_START_RE.search(text)
+    ):
         return "loop_start_confirm"
 
     # STOP/RESUME/STATUS는 오탐 방지 가드 적용
