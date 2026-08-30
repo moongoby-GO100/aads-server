@@ -1237,17 +1237,52 @@ async def send_message(
         raise HTTPException(status_code=429, detail=e.decision.message) from e
 
     if is_streaming(session_id_str):
-        push_interrupt(
-            session_id_str,
-            message=content,
-            attachments=attachments if isinstance(attachments, list) else None,
-        )
-        logger.info(
-            "send_message_interrupt_queued",
-            session_id=session_id_str,
-            attachment_count=len(attachments or []),
-        )
-        return {"status": "interrupt_queued", "session_id": session_id_str}
+        has_active_db_execution = True
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                has_active_db_execution = bool(await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                          FROM chat_sessions s
+                          JOIN chat_turn_executions te
+                            ON te.id = s.current_execution_id
+                         WHERE s.id = $1
+                           AND s.tenant_id = $2::uuid
+                           AND te.status IN ('running', 'retrying')
+                    )
+                    """,
+                    uuid.UUID(session_id_str),
+                    tenant_id,
+                ))
+        except Exception as stale_check_err:
+            logger.warning(
+                "send_message_streaming_guard_check_failed",
+                session_id=session_id_str,
+                error=str(stale_check_err)[:160],
+            )
+
+        if not has_active_db_execution:
+            set_streaming(session_id_str, False)
+            logger.warning(
+                "stale_streaming_memory_cleared_before_send",
+                session_id=session_id_str,
+                reason="no_active_db_execution",
+            )
+        else:
+            push_interrupt(
+                session_id_str,
+                message=content,
+                attachments=attachments if isinstance(attachments, list) else None,
+            )
+            logger.info(
+                "send_message_interrupt_queued",
+                session_id=session_id_str,
+                attachment_count=len(attachments or []),
+            )
+            return {"status": "interrupt_queued", "session_id": session_id_str}
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
     # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록

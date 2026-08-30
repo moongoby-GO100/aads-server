@@ -9223,3 +9223,18 @@
   - `python3 -m py_compile app/services/intent_router.py app/services/chat_service.py app/routers/chat.py app/main.py` succeeded.
   - `git diff --check -- app/services/intent_router.py` succeeded.
   - Host import smoke test could not run because the host Python environment lacks `structlog`; verify in deployed container logs after rollout.
+
+## 2026-08-30 16:16 KST - Chat stale streaming guard before new sends
+
+- Request: fix session `bf6f097c-b8d9-4806-a6cf-61f75772ed59` where a chat could appear unable to answer after a stale streaming state.
+- Finding:
+  - The session could have `is_streaming(session_id)=true` in process memory while the DB no longer had an active `chat_turn_executions` row for that session.
+  - In that state, `send_message()` treated the next CEO message as an interrupt and returned `interrupt_queued`, so no new assistant turn started.
+- Code change:
+  - Updated `app/routers/chat.py` so `send_message()` verifies `chat_sessions.current_execution_id` against `chat_turn_executions.status IN ('running', 'retrying')` before queueing an interrupt.
+  - If no active DB execution exists, the stale in-memory streaming flag is cleared and the new message proceeds through normal response generation.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py` succeeded.
+  - `git diff --check -- app/routers/chat.py` succeeded.
+- Deployment:
+  - Pending at handover time; deploy after commit with `bash /root/aads/aads-server/deploy.sh bluegreen`.
