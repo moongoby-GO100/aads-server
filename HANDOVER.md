@@ -9210,3 +9210,16 @@
 - Notes:
   - The first deploy attempt was blocked by the nginx upstream lock while dashboard deployment was active; retry succeeded after the lock cleared.
   - Three unrelated running chat executions existed at verification time, but they were not the requested session.
+
+## 2026-08-30 15:28 KST - Multimodal follow-up resume AttributeError fix
+
+- Finding:
+  - Session `3294f1c8-6a9a-45e6-8b26-b434ca12e161` triggered fast auto-retry after deployment, but the retry failed immediately with `AttributeError: 'list' object has no attribute 'strip'`.
+  - The failure came from `_contextual_followup_override()` comparing previous user message content as a string while the actual content could be a multimodal list.
+- Code change:
+  - Added `_message_text()` in `app/services/intent_router.py` to normalize plain strings, multimodal list content, and dict text content before follow-up comparison.
+  - Updated `_contextual_followup_override()` to use normalized text for both the current message and recent message history.
+- Verification:
+  - `python3 -m py_compile app/services/intent_router.py app/services/chat_service.py app/routers/chat.py app/main.py` succeeded.
+  - `git diff --check -- app/services/intent_router.py` succeeded.
+  - Host import smoke test could not run because the host Python environment lacks `structlog`; verify in deployed container logs after rollout.

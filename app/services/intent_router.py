@@ -600,6 +600,30 @@ async def classify(
     return result
 
 
+def _message_text(value: object) -> str:
+    """Return comparable text from plain or multimodal chat content."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                continue
+            if isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    if isinstance(value, dict):
+        text = value.get("text")
+        if isinstance(text, str):
+            return text
+    return str(value)
+
+
 def _is_context_dependent_message(message: str) -> bool:
     """이전 턴 의미에 의존하는 짧은 후속 지시 여부."""
     msg = (message or "").lower().strip()
@@ -620,18 +644,20 @@ def _contextual_followup_override(
     recent_messages: list | None = None,
 ) -> str | None:
     """짧은 후속 실행 지시가 casual로 빠지지 않도록 이전 assistant 문맥으로 보정."""
-    msg = (message or "").lower().replace(" ", "").strip()
-    if not msg or not recent_messages or not _is_context_dependent_message(message):
+    message_text = _message_text(message)
+    msg = message_text.lower().replace(" ", "").strip()
+    if not msg or not recent_messages or not _is_context_dependent_message(message_text):
         return None
     if not any(marker.replace(" ", "") in msg for marker in CONTEXT_FOLLOWUP_ACTION_MARKERS):
         return None
 
     previous_assistant = ""
     for item in reversed(recent_messages):
-        if item.get("role") == "user" and (item.get("content") or "").strip() == (message or "").strip():
+        item_content = _message_text(item.get("content"))
+        if item.get("role") == "user" and item_content.strip() == message_text.strip():
             continue
         if item.get("role") == "assistant":
-            previous_assistant = str(item.get("content") or "").lower()
+            previous_assistant = _message_text(item.get("content")).lower()
             break
     if not previous_assistant:
         return None
