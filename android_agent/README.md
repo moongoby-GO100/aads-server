@@ -55,6 +55,13 @@ Android `SpeechRecognizer` inside the existing foreground service and watches
 for `오비스`, `ohvis`, `obis`, or `aads`. When a wake phrase is detected, it
 brings `MainActivity` to the foreground through `ohvis://wake?source=voice`.
 
+The same wake link now opens the embedded OHVIS web screen inside the APK at
+`https://aads.newtalk.kr/chat`. The app keeps the Android Agent controls
+available, but the `Open OHVIS`, `Refresh OHVIS`, and `Close OHVIS` controls let
+the user use the AADS/OHVIS chat UI without leaving the app. Links outside
+`https://aads.newtalk.kr` are handed off to the device browser instead of being
+silently embedded.
+
 This is not an OS-level hotword replacement for Bixby. Android background
 microphone rules still apply: the user must grant microphone permission, keep
 the foreground notification visible, and allow battery optimization exemption

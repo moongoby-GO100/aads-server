@@ -51,6 +51,28 @@ def test_android_agent_exposes_voice_wake_commands() -> None:
     assert 'dispatcher.register("voice_wake_status"' in dispatcher
     assert 'SpeechRecognizer.createSpeechRecognizer' in controller
     assert '"오비스"' in controller
+    assert "ERROR_NO_MATCH" in controller
+    assert "ERROR_SPEECH_TIMEOUT" in controller
+    assert "resetRecognizer()" in controller
+
+
+def test_android_agent_embeds_ohvis_web_app() -> None:
+    activity = (
+        ANDROID
+        / "java"
+        / "kr"
+        / "newtalk"
+        / "aads"
+        / "agent"
+        / "MainActivity.java"
+    ).read_text(encoding="utf-8")
+
+    assert "android.webkit.WebView" in activity
+    assert 'OHVIS_CHAT_URL = OHVIS_HOME_URL + "/chat"' in activity
+    assert 'button("Open OHVIS"' in activity
+    assert "openOhvisWeb(resolveOhvisUrl(dataUri)" in activity
+    assert "setJavaScriptEnabled(true)" in activity
+    assert "setDomStorageEnabled(true)" in activity
 
 
 def test_backend_device_routing_allows_voice_wake_commands() -> None:
@@ -72,7 +94,9 @@ def test_android_manifest_api_reads_version_from_gradle() -> None:
     assert '"version": build_metadata["version"]' in device_api
     assert '"version_code": build_metadata["version_code"]' in device_api
     assert '"voice_wake_deep_links": ["ohvis://wake", "aads-agent://wake"]' in device_api
+    assert '"ohvis_web_url": "https://aads.newtalk.kr/chat"' in device_api
+    assert '"embedded_ohvis_webview": True' in device_api
     assert '"bixby_quick_command": "Open OHVIS with ohvis://wake"' in device_api
     assert '"voice_wake_capabilities": [' in device_api
-    assert 'versionName "0.1.2"' in gradle
-    assert "versionCode 3" in gradle
+    assert 'versionName "0.1.3"' in gradle
+    assert "versionCode 4" in gradle

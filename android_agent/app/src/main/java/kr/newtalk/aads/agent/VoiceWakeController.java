@@ -263,6 +263,17 @@ final class VoiceWakeController {
         public void onError(int error) {
             listening = false;
             String message = errorMessage(error);
+            if (running && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                store(STATUS_LISTENING, "", message);
+                scheduleListen(700L);
+                return;
+            }
+            if (running && (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT)) {
+                resetRecognizer();
+                store(STATUS_LISTENING, "", message);
+                scheduleListen(1_500L);
+                return;
+            }
             store(STATUS_ERROR, message, "");
             if (running && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                 scheduleListen(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 3_000L : 1_500L);
@@ -311,5 +322,18 @@ final class VoiceWakeController {
             default:
                 return "speech error " + error;
         }
+    }
+
+    private void resetRecognizer() {
+        if (recognizer != null) {
+            try {
+                recognizer.cancel();
+                recognizer.destroy();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to reset speech recognizer", e);
+            }
+            recognizer = null;
+        }
+        ensureRecognizer();
     }
 }

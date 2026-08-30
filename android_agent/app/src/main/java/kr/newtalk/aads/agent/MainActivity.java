@@ -15,6 +15,13 @@ import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.webkit.CookieManager;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -30,6 +37,8 @@ import java.util.Locale;
 
 public final class MainActivity extends Activity {
     static final String ACTION_WAKE_FROM_VOICE = "kr.newtalk.aads.agent.action.WAKE_FROM_VOICE";
+    private static final String OHVIS_HOME_URL = "https://aads.newtalk.kr";
+    private static final String OHVIS_CHAT_URL = OHVIS_HOME_URL + "/chat";
 
     private static final int REQ_NOTIFICATIONS = 10;
     private static final int REQ_LOCATION = 11;
@@ -49,6 +58,8 @@ public final class MainActivity extends Activity {
     private TextView activeCommandView;
     private TextView lastErrorView;
     private TextView voiceWakeView;
+    private TextView ohvisWebStatusView;
+    private WebView ohvisWebView;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override
@@ -143,6 +154,20 @@ public final class MainActivity extends Activity {
         root.addView(row(button("Start Wake", this::startVoiceWake), button("Stop Wake", this::stopVoiceWake)));
         root.addView(row(button("Bixby Wake", this::openBixbyWakeLink), button("Mic Permission", v -> requestPermission(REQ_MIC, Manifest.permission.RECORD_AUDIO))));
 
+        root.addView(section("OHVIS"));
+        ohvisWebStatusView = text("OHVIS Web: not opened", 14, false);
+        root.addView(ohvisWebStatusView);
+        root.addView(row(button("Open OHVIS", v -> openOhvisWeb(OHVIS_CHAT_URL, "button")), button("Refresh OHVIS", v -> reloadOhvisWeb())));
+        root.addView(row(button("Close OHVIS", v -> closeOhvisWeb()), button("Open in Browser", v -> openOhvisExternal())));
+        ohvisWebView = new WebView(this);
+        ohvisWebView.setVisibility(View.GONE);
+        ohvisWebView.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(620)
+        ));
+        configureOhvisWebView();
+        root.addView(ohvisWebView);
+
         root.addView(section("Permissions"));
         root.addView(row(button("Notifications", v -> requestNotificationPermission()), button("Location", v -> requestLocationPermission())));
         root.addView(row(button("Camera", v -> requestPermission(REQ_CAMERA, Manifest.permission.CAMERA)), button("SMS", v -> requestPermission(REQ_SMS, Manifest.permission.SEND_SMS))));
@@ -224,7 +249,29 @@ public final class MainActivity extends Activity {
         if (PermissionGate.has(this, Manifest.permission.RECORD_AUDIO)) {
             startVoiceWake(null);
         }
+        openOhvisWeb(resolveOhvisUrl(dataUri), wakeAction ? "voice" : "deeplink");
         toast("OHVIS wake");
+    }
+
+    private String resolveOhvisUrl(Uri dataUri) {
+        if (dataUri == null) {
+            return OHVIS_CHAT_URL;
+        }
+        String target = dataUri.getQueryParameter("target");
+        if (target == null || target.trim().isEmpty()) {
+            target = dataUri.getQueryParameter("url");
+        }
+        if (target == null || target.trim().isEmpty()) {
+            return OHVIS_CHAT_URL;
+        }
+        String normalized = target.trim();
+        if (normalized.startsWith("/")) {
+            return OHVIS_HOME_URL + normalized;
+        }
+        if (normalized.startsWith(OHVIS_HOME_URL + "/") || OHVIS_HOME_URL.equals(normalized)) {
+            return normalized;
+        }
+        return OHVIS_CHAT_URL;
     }
 
     private void startAgentService(View view) {
@@ -268,9 +315,96 @@ public final class MainActivity extends Activity {
     }
 
     private void openBixbyWakeLink(View view) {
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("ohvis://wake?source=bixby"));
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("ohvis://wake?source=bixby&target=/chat"));
         intent.setPackage(getPackageName());
         startActivity(intent);
+    }
+
+    private void configureOhvisWebView() {
+        if (ohvisWebView == null) {
+            return;
+        }
+        WebSettings settings = ohvisWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        settings.setSupportZoom(true);
+        settings.setBuiltInZoomControls(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.setSafeBrowsingEnabled(true);
+        }
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(ohvisWebView, true);
+        }
+        ohvisWebView.setWebChromeClient(new WebChromeClient());
+        ohvisWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri uri = request == null ? null : request.getUrl();
+                if (uri == null) {
+                    return false;
+                }
+                String url = uri.toString();
+                if (url.startsWith(OHVIS_HOME_URL + "/") || OHVIS_HOME_URL.equals(url)) {
+                    return false;
+                }
+                startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                ohvisWebStatusView.setText("OHVIS Web: loaded " + safeUrl(url));
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request != null && request.isForMainFrame()) {
+                    String description = error == null ? "unknown" : String.valueOf(error.getDescription());
+                    ohvisWebStatusView.setText("OHVIS Web error: " + description);
+                }
+            }
+        });
+    }
+
+    private void openOhvisWeb(String url, String source) {
+        if (ohvisWebView == null) {
+            return;
+        }
+        String targetUrl = resolveOhvisUrl(Uri.parse("ohvis://open?target=" + Uri.encode(url == null ? "" : url)));
+        ohvisWebView.setVisibility(View.VISIBLE);
+        ohvisWebStatusView.setText("OHVIS Web: loading from " + source);
+        startAgentService(null);
+        ohvisWebView.loadUrl(targetUrl);
+    }
+
+    private void reloadOhvisWeb() {
+        if (ohvisWebView == null) {
+            return;
+        }
+        if (ohvisWebView.getUrl() == null || ohvisWebView.getUrl().trim().isEmpty()) {
+            openOhvisWeb(OHVIS_CHAT_URL, "refresh");
+            return;
+        }
+        ohvisWebStatusView.setText("OHVIS Web: reloading");
+        ohvisWebView.reload();
+    }
+
+    private void closeOhvisWeb() {
+        if (ohvisWebView == null) {
+            return;
+        }
+        ohvisWebView.stopLoading();
+        ohvisWebView.setVisibility(View.GONE);
+        ohvisWebStatusView.setText("OHVIS Web: closed");
+    }
+
+    private void openOhvisExternal() {
+        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(OHVIS_CHAT_URL)));
     }
 
     private void refreshState() {
@@ -459,6 +593,31 @@ public final class MainActivity extends Activity {
 
     private String emptyToDash(String value) {
         return value == null || value.trim().isEmpty() ? "-" : value;
+    }
+
+    private String safeUrl(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "-";
+        }
+        if (value.startsWith(OHVIS_HOME_URL)) {
+            return value.substring(OHVIS_HOME_URL.length()).isEmpty()
+                    ? "/"
+                    : value.substring(OHVIS_HOME_URL.length());
+        }
+        return "external";
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (ohvisWebView != null && ohvisWebView.getVisibility() == View.VISIBLE) {
+            if (ohvisWebView.canGoBack()) {
+                ohvisWebView.goBack();
+                return;
+            }
+            closeOhvisWeb();
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void toast(String message) {

@@ -9172,6 +9172,26 @@
   - Add a shorter Browser Bridge command timeout / fail-fast path for Shinhan ID/PW retry so late PC Agent results cannot hold the bank collection process.
   - After that, rerun Mia Shinhan collection and require either `imported_rows > 0` or a verified no-records state.
 
+## 2026-08-30 18:09 KST - Android OHVIS embedded WebView and voice wake recovery
+
+- Request: make OHVIS easier to wake, use, verify, and control from the Android app itself; also address current voice recognition error behavior.
+- Code changes:
+  - Added an embedded OHVIS WebView to `android_agent/app/src/main/java/kr/newtalk/aads/agent/MainActivity.java`.
+  - `Open OHVIS`, `Refresh OHVIS`, `Close OHVIS`, and external browser fallback controls now open `https://aads.newtalk.kr/chat` inside the APK.
+  - `ohvis://wake` and `aads-agent://wake` deep links now start the foreground service and open the embedded OHVIS chat screen.
+  - External links outside `https://aads.newtalk.kr` are handed off to the device browser instead of being embedded.
+  - Updated `VoiceWakeController` so normal no-match/speech-timeout cycles do not remain as fatal errors; recognizer busy/client errors now reset the recognizer and continue listening.
+  - Bumped Android APK metadata to `0.1.3` / `versionCode 4`.
+  - Exposed `embedded_ohvis_webview=true` and `ohvis_web_url=https://aads.newtalk.kr/chat` from `/api/v1/devices/android/manifest`.
+- Verification:
+  - `python3 -m py_compile app/api/device.py` succeeded.
+  - `pytest -q tests/unit/test_android_voice_wake_release_guard.py` succeeded: 6 passed.
+  - `cd android_agent && ./build_release_apk.sh` succeeded and copied release/fresh APKs to `android_agent/dist/`.
+  - Release output metadata confirmed `applicationId=kr.newtalk.aads.agent`, `versionCode=4`, `versionName=0.1.3`.
+  - Merged release manifest confirmed `INTERNET`, `RECORD_AUDIO`, `FOREGROUND_SERVICE_MICROPHONE`, `ohvis`, and `aads-agent` entries.
+- Deployment:
+  - Pending at handover write time; commit, push, deploy, and public manifest verification still required.
+
 ## 2026-08-29 08:41 KST - Chat interruption diagnostics classification
 
 - Request: verify that chat response interruption reasons are stored, improve reason analysis, and report findings.

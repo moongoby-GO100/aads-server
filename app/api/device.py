@@ -71,7 +71,7 @@ def _find_android_apk(apk_name: str = ANDROID_APK_NAME) -> Path | None:
 
 def _android_build_metadata() -> dict[str, Any]:
     build_file = ANDROID_AGENT_DIR / "app" / "build.gradle"
-    fallback = {"version": "0.1.2", "version_code": 3}
+    fallback = {"version": "0.1.3", "version_code": 4}
     if not build_file.exists():
         return fallback
     try:
@@ -347,6 +347,8 @@ async def android_agent_manifest():
         "auto_register_api": "/api/v1/devices/android/auto-register",
         "deep_link_scheme": "aads-agent://pair",
         "voice_wake_deep_links": ["ohvis://wake", "aads-agent://wake"],
+        "ohvis_web_url": "https://aads.newtalk.kr/chat",
+        "embedded_ohvis_webview": True,
         "bixby_quick_command": "Open OHVIS with ohvis://wake",
         "voice_wake_capabilities": [
             "voice_wake_start",
