@@ -9168,3 +9168,24 @@
   - DB checks confirmed recent interruption diagnostics are queryable by category.
 - Deployment:
   - Pending at handover time; server reload still required after commit.
+
+## 2026-08-30 15:25 KST - Chat stream recovery enum and fast auto-resume deployment
+
+- Request: apply the recommended chat interruption handling so incomplete responses resume faster, expose clear stream states, then verify the affected chat session.
+- Code changes:
+  - Added canonical stream states to `StreamingStatusOut`: `stream_status`, `stream_status_label`, and `auto_resume_seconds`.
+  - Standardized server-side state labels to `generating`, `tool_running`, `recovering`, `finalizing`, `completed`, and `needs_continuation`.
+  - Shortened auto-resume retry delays from `10/20/40/60/120s` to `2/5/10/20/40s`.
+  - Lowered the startup/periodic stale execution scanner from about 60s loops to an 8s stale threshold and 5s scan interval.
+  - Updated `streaming-status` recovery paths so recent `missing_done_event` and `completion_without_visible_final_message` cases schedule automatic recovery before exposing a manual continuation state.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py app/models/chat.py app/main.py` succeeded.
+  - Blue-green deploy completed. Active backend slot is now `:8100`.
+  - Deployment health, DB schema, chat table access, and LLM service checks passed.
+  - Local health check on `http://127.0.0.1:8100/api/v1/health` returned HTTP 200.
+  - Session `3294f1c8-6a9a-45e6-8b26-b434ca12e161` latest turn was verified as `completed` with visible assistant message length 9267.
+- Git:
+  - Committed and pushed `04c6340f Improve chat stream recovery status`.
+- Notes:
+  - The first deploy attempt was blocked by the nginx upstream lock while dashboard deployment was active; retry succeeded after the lock cleared.
+  - Three unrelated running chat executions existed at verification time, but they were not the requested session.
