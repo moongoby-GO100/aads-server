@@ -491,6 +491,7 @@ async def _schedule_recovery_auto_resume(
                 row["workspace_name"] or "CEO",
                 execution_id=str(execution_id),
                 requested_model=row["requested_model"],
+                recovery_reason="recovery_auto_retry_scheduled",
             )
         )
 

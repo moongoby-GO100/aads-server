@@ -48,6 +48,15 @@ _DETAILED_RESPONSE_TRIGGERS = (
     "결과",
     "완료",
     "진행상황",
+    "전수",
+    "최신기술",
+    "기술연구",
+    "연구",
+    "세션",
+    "채팅창",
+    "끊김",
+    "불편함",
+    "자연스러운",
     "왜",
     "어떻게",
     "확인하고",
@@ -129,7 +138,8 @@ async def critique_response(
     # 스킵 조건
     if intent in _SKIP_INTENTS and not _requires_detailed_ceo_report(user_msg, intent):
         return None
-    if len(ai_response) < _MIN_RESPONSE_LEN:
+    requires_detailed_report = _requires_detailed_ceo_report(user_msg, intent)
+    if len(ai_response) < _MIN_RESPONSE_LEN and not requires_detailed_report:
         return None
 
     start = time.time()
@@ -181,7 +191,8 @@ async def critique_response(
         overall = min(1.0, max(0.0, overall))
         details["overall"] = round(overall, 3)
 
-        verdict = "PASS" if overall >= _SCORE_THRESHOLD else "REGENERATE"
+        threshold = max(_SCORE_THRESHOLD, 0.68) if requires_detailed_report else _SCORE_THRESHOLD
+        verdict = "PASS" if overall >= threshold else "REGENERATE"
         feedback = details.get("feedback", "") if verdict == "REGENERATE" else ""
 
         # DB 저장 (비동기)

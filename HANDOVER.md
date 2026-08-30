@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-30 18:22 KST - Chat recovery latency and response quality gate hardening
+
+- Request: Apply chat interruption improvement actions immediately and report the technical research result for more natural responses.
+- Cause:
+  - Recent chat execution data showed recoverable interruptions still present, especially `relay_503`, `producer_incomplete`, and retrying states.
+  - Automatic resume existed, but relay congestion could repeat heavy same-route waits before the user saw recovery progress.
+  - Some detailed CEO requests could bypass quality mode/Critic checks when phrased as session, interruption, full-audit, or latest-technology research.
+- Changes:
+  - Expanded auto-resume eligibility for relay congestion, producer incomplete, completion guard, watchdog, process interruption, resume cancellation, and no-response categories.
+  - Added configurable fast recovery model candidates through `AADS_FAST_RECOVERY_MODELS`, defaulting to lightweight non-primary candidates before falling back.
+  - Reduced first-response timeout default from 180 seconds to 30 seconds and shortened resume retry backoff to 1/2/4/8/12 seconds.
+  - Reduced relay-503 extra resume wait from 5/10/15 seconds to a single 1 second retry before normal fallback handling.
+  - Added detailed-request triggers for full audits, latest-technology research, chat/session interruption, inconvenience, and natural-response requests.
+  - Made detailed CEO requests bypass the Critic minimum-length skip and raised the detailed-report Critic pass threshold to 0.68.
+  - Reduced the dashboard chat background status tick to 1.5 seconds while preserving idle-session skip logic.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/services/response_critic.py app/routers/chat.py` passed.
+  - `npx eslint src/app/chat/page.tsx` passed with existing warnings only and no errors.
+  - Targeted `git diff --check` passed for the touched server and dashboard files.
+  - Current DB check before deployment showed recent active chat executions still present; post-deploy operational validation is required before marking production behavior resolved.
+- Deployment status:
+  - Commit/push/deploy pending for this entry at the time of writing.
+
 ## 2026-08-30 15:24 KST - Chat stream recovery status enum and fast auto-resume
 
 - Request: Apply the recommended chat interruption recovery improvements, verify the session behavior, then report.

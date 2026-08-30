@@ -110,6 +110,8 @@ def _safe_reset_context_var(ctx_var: _ContextVar, token, label: str = "") -> Non
 
 
 _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
+    "Codex Relay 503:",
+    "All LLM providers failed",
     "output_validator_autonomous_failed:",
     "output_validator_retry_failed:",
     "output_validator_retry_empty",
@@ -117,6 +119,10 @@ _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES = (
     "todo_completion_gate_missing",
     "retroactive_final_report_missing_after_audit",
     "background_producer_incomplete_exit",
+    "resume_single_stream_error: Codex Relay 503",
+    "resume_single_stream_error: all_slots_failed",
+    "resume_single_stream_error: resume_no_meaningful_response",
+    "resume_task_cancelled",
     "recovery_auto_retry_scheduled",
     "interrupted_auto_retry_scheduled:",
 )
@@ -160,6 +166,18 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
         return False
     if "auto-settled by stale execution watchdog" in normalized:
         return True
+    if _classify_interruption_reason(normalized) in {
+        "relay_503",
+        "producer_incomplete",
+        "final_save_missing",
+        "completion_guard",
+        "completion_contract",
+        "watchdog_timeout",
+        "process_interrupt",
+        "resume_cancelled",
+        "resume_no_response",
+    }:
+        return True
     return normalized.startswith(
         _AUTO_RESUME_INTERRUPTED_REASON_PREFIXES
         + _AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES
@@ -168,6 +186,43 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
 
 def _is_process_interruption_reason(reason: str) -> bool:
     return (reason or "").strip().startswith(_AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES)
+
+
+def _is_fast_recovery_reason(reason: str) -> bool:
+    """Return True when same heavy relay retry is likely to delay user-visible recovery."""
+    normalized = (reason or "").strip()
+    if not normalized:
+        return False
+    category = _classify_interruption_reason(normalized)
+    return (
+        category in {"relay_503", "resume_no_response"}
+        or "llm_first_response_timeout" in normalized
+        or "first_response=false" in normalized
+        or "first_response=False" in normalized
+        or "resume_no_meaningful_response" in normalized
+        or "all_slots_failed" in normalized
+    )
+
+
+async def _select_fast_recovery_model(current_model: Optional[str]) -> Optional[str]:
+    """Pick a configured light model for recovery when the primary relay is congested."""
+    if not _FAST_RECOVERY_MODEL_CANDIDATES:
+        return None
+    current = (current_model or "").strip()
+    try:
+        from app.services.model_selector import get_available_model_ids
+
+        available = await get_available_model_ids()
+    except Exception as exc:
+        logger.warning("fast_recovery_model_availability_failed: %s", str(exc)[:160])
+        available = set()
+
+    for candidate in _FAST_RECOVERY_MODEL_CANDIDATES:
+        if candidate == current:
+            continue
+        if not available or candidate in available:
+            return candidate
+    return None
 
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream  # noqa: E402
@@ -260,7 +315,15 @@ _STREAM_STATUS_LABELS = {
 # 클라이언트 이탈 후 자동 종료 시간 (초): stale watchdog(최대 45분+20분)보다 먼저
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
-_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "180"))
+_FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "30"))
+_FAST_RECOVERY_MODEL_CANDIDATES = tuple(
+    model.strip()
+    for model in os.getenv(
+        "AADS_FAST_RECOVERY_MODELS",
+        "gemini-3.1-flash-lite-preview,deepseek-v4-flash,claude-haiku",
+    ).split(",")
+    if model.strip()
+)
 _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX", "3"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
@@ -374,6 +437,15 @@ _DETAILED_RESPONSE_TRIGGERS = (
     "결과",
     "완료",
     "진행상황",
+    "전수",
+    "최신기술",
+    "기술연구",
+    "연구",
+    "세션",
+    "채팅창",
+    "끊김",
+    "불편함",
+    "자연스러운",
     "왜",
     "어떻게",
     "확인하고",
@@ -426,6 +498,10 @@ def _response_mode_prompt_block(response_mode: str) -> str:
         "- 목표: 사용자의 원 요청을 완결성 있게 처리하고 최종 완료보고 조건을 만족한다.\n"
         "- 코드/DB/배포/운영 조치가 있으면 실제 검증 결과와 남은 미완료 항목을 반드시 분리해 보고한다.\n"
         "- 중간 보고로 끝내지 말고 가능한 확인, 조치, 검증을 이어서 수행한다."
+        "\n- CEO가 문제점/개선안/연구/전수검수를 요청한 경우 3문장 안팎의 단답으로 끝내지 말고, "
+        "요약, 원인/근거, 조치/개선안, 검증 기준을 자연스러운 최종 보고로 작성한다."
+        "\n- 도구 호출 예정 안내나 진행 중 문장을 최종 답변처럼 끝내지 않는다. "
+        "실제 결과가 없으면 미검증/미완료와 다음 검증 경로를 명확히 분리한다."
     )
 
 
@@ -2993,6 +3069,7 @@ async def _schedule_interrupted_auto_resume(
             execution_id=execution_id,
             requested_model=row["requested_model"],
             recovery_instruction=recovery_instruction,
+            recovery_reason=reason,
         )
     )
     _active_bg_tasks[session_id] = task
@@ -5578,6 +5655,7 @@ async def _resume_single_stream(
     execution_id: Optional[str] = None,
     requested_model: Optional[str] = None,
     recovery_instruction: Optional[str] = None,
+    recovery_reason: Optional[str] = None,
 ) -> None:
     """단일 세션의 중단된 스트리밍을 이어서 생성."""
     _resume_task = _heartbeat_asyncio.current_task()
@@ -5781,6 +5859,19 @@ async def _resume_single_stream(
                     _resume_model = "claude-sonnet"
                     logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
 
+            if _is_fast_recovery_reason(recovery_reason or ""):
+                _fast_recovery_model = await _select_fast_recovery_model(_resume_model)
+                if _fast_recovery_model:
+                    logger.warning(
+                        "resume_fast_recovery_model session=%s execution=%s reason=%s model=%s -> %s",
+                        session_id[:8],
+                        str(_execution_uuid or "")[:8],
+                        (recovery_reason or "")[:160],
+                        _resume_model,
+                        _fast_recovery_model,
+                    )
+                    _resume_model = _fast_recovery_model
+
             intent_result = IntentResult(
                 intent="status_check",
                 model=_resume_model,
@@ -5858,7 +5949,7 @@ async def _resume_single_stream(
                         len(redis_content),
                     )
 
-                retry_delays = [2, 5, 10, 20, 40]
+                retry_delays = [1, 2, 4, 8, 12]
                 _relay_503_count = 0
                 last_error: Optional[BaseException] = None
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
@@ -5921,11 +6012,11 @@ async def _resume_single_stream(
                             token in stream_error_text
                             for token in ("codex_relay_busy", "relay_semaphore_timeout")
                         )
-                        if is_relay_503 and _relay_503_count < 3:
+                        if is_relay_503 and _relay_503_count < 1:
                             _relay_503_count += 1
-                            _relay_delay = 5 * _relay_503_count
+                            _relay_delay = 1
                             logger.warning(
-                                "resume_relay_503_retry session=%s attempt=%s/3 delay=%ss error=%s",
+                                "resume_relay_503_retry session=%s attempt=%s/1 delay=%ss error=%s",
                                 session_id[:8], _relay_503_count, _relay_delay, stream_error,
                             )
                             await _heartbeat_asyncio.sleep(_relay_delay)
