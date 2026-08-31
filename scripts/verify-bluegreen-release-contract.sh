@@ -23,6 +23,8 @@ grep -q 'release_nginx_switch_lock' "$deploy_file" \
     || fail "nginx cutover lock must be explicitly released"
 grep -q 'active/standby image digest mismatch' "$deploy_file" \
     || fail "same-image digest verification is missing"
+grep -q 'git -C "$COMPOSE_DIR" archive --format=tar HEAD' "$deploy_file" \
+    || fail "API image must be built from an isolated committed release context"
 
 dashboard_deploy="/root/aads/aads-dashboard/deploy.sh"
 if [[ -f "$dashboard_deploy" ]]; then
@@ -32,6 +34,8 @@ if [[ -f "$dashboard_deploy" ]]; then
         || fail "dashboard slot starts must use --no-build"
     grep -q 'release_nginx_switch_lock' "$dashboard_deploy" \
         || fail "dashboard nginx cutover lock must be explicitly released"
+    grep -q 'git -C "$STATE_DIR" archive --format=tar HEAD' "$dashboard_deploy" \
+        || fail "dashboard image must be built from an isolated committed release context"
 fi
 
 echo "[release-contract] PASS"

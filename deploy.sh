@@ -22,7 +22,26 @@ ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
 DEPLOY_START_EPOCH=$(date +%s)
 DEPLOY_GENERATION_FILE="${COMPOSE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
+RELEASE_CONTEXT_DIR=""
 mkdir -p "${COMPOSE_DIR}/logs"
+
+cleanup_release_context() {
+    case "${RELEASE_CONTEXT_DIR:-}" in
+        /tmp/aads-server-release.*)
+            rm -rf -- "$RELEASE_CONTEXT_DIR"
+            ;;
+    esac
+    RELEASE_CONTEXT_DIR=""
+}
+
+build_release_image() {
+    cleanup_release_context
+    RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
+    git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
+    echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA})"
+    docker build --tag "aads-server:${AADS_RELEASE_SHA}" "$RELEASE_CONTEXT_DIR"
+    cleanup_release_context
+}
 
 if [[ -x "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" ]]; then
     "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" "$COMPOSE_DIR"
@@ -306,7 +325,12 @@ if [ -f "$LOCKFILE" ]; then
     fi
 fi
 echo $$ > "$LOCKFILE"
-trap "stop_downtime_monitor; rm -f $LOCKFILE" EXIT
+cleanup_deploy() {
+    stop_downtime_monitor
+    cleanup_release_context
+    rm -f "$LOCKFILE"
+}
+trap cleanup_deploy EXIT
 
 # nginx upstream is shared by backend and dashboard blue-green deploys. Only
 # the routing cutover is serialized; image build and health checks run without
@@ -860,7 +884,7 @@ case "$MODE" in
         # ① release image 1회 빌드 + 새 컨테이너 시작
         cd "$COMPOSE_DIR"
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
-        docker compose $COMPOSE_FILE $PROFILE_CMD build "$NEW_CONTAINER"
+        build_release_image
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
         docker compose $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps "$NEW_CONTAINER"
 

@@ -39,6 +39,7 @@ def test_bluegreen_deploy_builds_once_and_starts_without_build():
     assert "release image 1회 빌드" in deploy
     assert "up -d --no-build --no-deps" in deploy
     assert "active/standby image digest mismatch" in deploy
+    assert 'git -C "$COMPOSE_DIR" archive --format=tar HEAD' in deploy
     assert compose.count("image: aads-server:${AADS_RELEASE_SHA:-local}") == 2
 
 
