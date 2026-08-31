@@ -132,7 +132,8 @@ def test_pipeline_runner_does_not_duplicate_non_anthropic_model_attempts():
 
     assert "append_model_for_attempts()" in script
     assert 'if [[ "$model" == claude-* ]]; then' in script
-    assert 'MODEL_CYCLE+=("$model" "$model")' in script
+    assert "max_attempts=2" in script
+    assert "current_count -lt $max_attempts" in script
     assert 'MODEL_CYCLE+=("$model")' in script
     assert "append_model_twice" not in script
 

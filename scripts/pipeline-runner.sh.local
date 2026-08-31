@@ -268,11 +268,17 @@ append_model_for_attempts() {
     [[ -z "$model" || "$model" == "auto" ]] && return 0
     # Anthropic CLI can use two OAuth slots. Codex/LiteLLM do not benefit from
     # duplicate same-model attempts, so keep them single-pass for faster fallback.
+    local max_attempts=1 current_count=0 existing
     if [[ "$model" == claude-* ]]; then
-        MODEL_CYCLE+=("$model" "$model")
-    else
-        MODEL_CYCLE+=("$model")
+        max_attempts=2
     fi
+    for existing in "${MODEL_CYCLE[@]:-}"; do
+        [[ "$existing" == "$model" ]] && current_count=$((current_count + 1))
+    done
+    while [[ $current_count -lt $max_attempts ]]; do
+        MODEL_CYCLE+=("$model")
+        current_count=$((current_count + 1))
+    done
 }
 
 normalize_runner_model() {
