@@ -123,6 +123,18 @@ def test_pipeline_runner_records_telemetry_and_fail_closes_review_outage():
     assert "approval_requested_at=NOW()" in script
     assert "CREATE TABLE IF NOT EXISTS pipeline_runner_events" in migration
     assert "CREATE OR REPLACE VIEW pipeline_runner_model_stats" in migration
+    assert "project," in migration
+    assert "work_success_rate_pct" in migration
+
+
+def test_pipeline_runner_does_not_duplicate_non_anthropic_model_attempts():
+    script = _read_script("pipeline-runner.sh")
+
+    assert "append_model_for_attempts()" in script
+    assert 'if [[ "$model" == claude-* ]]; then' in script
+    assert 'MODEL_CYCLE+=("$model" "$model")' in script
+    assert 'MODEL_CYCLE+=("$model")' in script
+    assert "append_model_twice" not in script
 
 
 def test_pipeline_runner_passes_parallel_group_to_work_lock_and_run_job():

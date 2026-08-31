@@ -95,7 +95,13 @@ SELECT
         )::numeric,
         1
     ) AS p90_seconds,
-    MAX(COALESCE(completed_at, updated_at)) AS last_observed_at
+    MAX(COALESCE(completed_at, updated_at)) AS last_observed_at,
+    project,
+    COUNT(*) FILTER (WHERE status IN ('queued','claimed','running','approved','deploying'))::INTEGER AS active_jobs,
+    ROUND(
+        100.0 * COUNT(*) FILTER (WHERE status IN ('done','awaiting_approval')) / NULLIF(COUNT(*), 0),
+        1
+    ) AS work_success_rate_pct
 FROM pipeline_jobs
 WHERE COALESCE(started_at, created_at) IS NOT NULL
-GROUP BY model_key, size;
+GROUP BY project, model_key, size;

@@ -262,11 +262,17 @@ get_db_model_cycle() {
     done <<< "$result"
 }
 
-append_model_twice() {
+append_model_for_attempts() {
     local model
     model=$(normalize_runner_model "${1:-}")
     [[ -z "$model" || "$model" == "auto" ]] && return 0
-    MODEL_CYCLE+=("$model" "$model")
+    # Anthropic CLI can use two OAuth slots. Codex/LiteLLM do not benefit from
+    # duplicate same-model attempts, so keep them single-pass for faster fallback.
+    if [[ "$model" == claude-* ]]; then
+        MODEL_CYCLE+=("$model" "$model")
+    else
+        MODEL_CYCLE+=("$model")
+    fi
 }
 
 normalize_runner_model() {
@@ -1173,7 +1179,7 @@ run_job() {
         if [[ -n "$db_models" ]]; then
             MODEL_CYCLE=()
             while IFS= read -r m; do
-                append_model_twice "$m"
+                append_model_for_attempts "$m"
             done <<< "$db_models"
             log "  DB_MODEL_CONFIG job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
         else
@@ -1192,10 +1198,10 @@ run_job() {
         local db_models
         db_models=$(get_db_model_cycle "$job_size") || db_models=""
         MODEL_CYCLE=()
-        append_model_twice "$job_model"
+        append_model_for_attempts "$job_model"
         if [[ -n "$db_models" ]]; then
             while IFS= read -r m; do
-                [[ "$(normalize_runner_model "$m")" != "$job_model" ]] && append_model_twice "$m"
+                [[ "$(normalize_runner_model "$m")" != "$job_model" ]] && append_model_for_attempts "$m"
             done <<< "$db_models"
         fi
         if [[ ${#MODEL_CYCLE[@]} -le 2 ]]; then
@@ -1205,8 +1211,8 @@ run_job() {
                 L|M)     claude_primary="claude-sonnet-4-6";         claude_secondary="claude-opus-5" ;;
                 S|XS|*)  claude_primary="claude-haiku-4-5-20251001"; claude_secondary="claude-sonnet-4-6" ;;
             esac
-            append_model_twice "$claude_primary"
-            append_model_twice "$claude_secondary"
+            append_model_for_attempts "$claude_primary"
+            append_model_for_attempts "$claude_secondary"
         fi
         log "  DB_MODEL_CONFIG_OVERRIDE job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
     fi

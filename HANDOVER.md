@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-08-31 15:03 KST - Pipeline Runner next-step telemetry hardening
+
+- Request:
+  - Continue the next runner reliability step and report results.
+- Findings:
+  - `runner-06d193db` completed read-only successfully and recorded 5 telemetry rows: `job_started`, `model_attempt_started`, `model_attempt_completed`, `actual_model_selected`, `job_terminal`.
+  - AADS runner service log showed DB review-order fallback was applied, but the candidate list duplicated non-Anthropic models such as `codex:gpt-5.6-sol` twice, wasting fallback attempts for Codex/LiteLLM.
+  - `pipeline_runner_model_stats` existed but was not project-scoped, making cross-project model speed/completion comparison too coarse.
+- Changes:
+  - Updated `scripts/pipeline-runner.sh` and `.local` so Claude models keep two OAuth-slot attempts, while Codex/LiteLLM models use one attempt per model for faster fallback.
+  - Extended `/api/v1/pipeline/runner/model-stats` to return project-scoped rows, active job counts, and `work_success_rate_pct`.
+  - Updated `migrations/139_pipeline_runner_telemetry.sql` so `pipeline_runner_model_stats` groups by `project, model_key, size` and exposes `active_jobs` plus `work_success_rate_pct`.
+  - Added regression assertions for non-Anthropic duplicate prevention and project-aware model stats.
+- Verification:
+  - `bash -n scripts/pipeline-runner.sh` passed.
+  - `bash -n scripts/pipeline-runner.sh.local` passed.
+  - `python3 -m py_compile app/api/pipeline_runner.py` passed.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py` passed: 23 tests, 1 existing pytest config warning.
+  - Re-applying `migrations/139_pipeline_runner_telemetry.sql` to `aads-postgres` succeeded after preserving existing view column order.
+  - DB verification: `pipeline_runner_model_stats` now exposes `project`, `active_jobs`, and `work_success_rate_pct`; recent telemetry includes `runner-06d193db` attempt duration `12411ms`.
+- Remaining:
+  - Commit, push, deploy/restart, remote script sync, and post-deploy smoke are pending in this entry.
+
 ## 2026-08-31 14:16 KST - Pipeline Runner telemetry and review fail-close
 
 - Request:

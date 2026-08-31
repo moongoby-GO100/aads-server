@@ -1182,6 +1182,7 @@ async def get_runner_model_stats(
         rows = await conn.fetch(
             f"""
             SELECT
+                project,
                 COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
                 COALESCE(NULLIF(size, ''), 'M') AS size,
                 COUNT(*)::int AS total_jobs,
@@ -1189,7 +1190,9 @@ async def get_runner_model_stats(
                 COUNT(*) FILTER (WHERE status = 'awaiting_approval')::int AS awaiting_approval_jobs,
                 COUNT(*) FILTER (WHERE status = 'rejected_done')::int AS rejected_done_jobs,
                 COUNT(*) FILTER (WHERE status = 'error')::int AS error_jobs,
+                COUNT(*) FILTER (WHERE status IN ('queued','claimed','running','approved','deploying'))::int AS active_jobs,
                 ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'done') / NULLIF(COUNT(*), 0), 1) AS done_rate_pct,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE status IN ('done','awaiting_approval')) / NULLIF(COUNT(*), 0), 1) AS work_success_rate_pct,
                 ROUND(AVG(EXTRACT(EPOCH FROM ({finish_expr} - COALESCE(started_at, created_at))))::numeric, 1) AS avg_seconds,
                 ROUND(percentile_cont(0.5) WITHIN GROUP (
                     ORDER BY EXTRACT(EPOCH FROM ({finish_expr} - COALESCE(started_at, created_at)))
@@ -1201,8 +1204,8 @@ async def get_runner_model_stats(
             FROM pipeline_jobs
             WHERE {where}
               AND COALESCE(started_at, created_at) IS NOT NULL
-            GROUP BY model_key, size
-            ORDER BY total_jobs DESC, model_key ASC, size ASC
+            GROUP BY project, model_key, size
+            ORDER BY total_jobs DESC, project ASC, model_key ASC, size ASC
             LIMIT 100
             """,
             *params,
@@ -1210,7 +1213,9 @@ async def get_runner_model_stats(
         event_rows = await conn.fetch(
             f"""
             SELECT
+                project,
                 COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
+                COALESCE(NULLIF(size, ''), 'M') AS size,
                 COUNT(*) FILTER (WHERE event_type = 'model_attempt_started')::int AS attempts,
                 COUNT(*) FILTER (
                     WHERE event_type = 'model_attempt_completed'
@@ -1224,23 +1229,28 @@ async def get_runner_model_stats(
             WHERE tenant_id = $1::uuid
               AND observed_at >= NOW() - ($2::int * INTERVAL '1 day')
               {event_project_filter}
-            GROUP BY model_key
-            ORDER BY attempts DESC, model_key ASC
+            GROUP BY project, model_key, size
+            ORDER BY attempts DESC, project ASC, model_key ASC, size ASC
             LIMIT 100
             """,
             *params,
         ) if await conn.fetchval("SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL") else []
 
-    attempt_by_model = {row["model_key"]: dict(row) for row in event_rows}
+    attempt_by_model = {
+        (row["project"], row["model_key"], row["size"]): dict(row)
+        for row in event_rows
+    }
     stats = []
     for row in rows:
         item = dict(row)
         last_seen = item.get("last_observed_at")
         if last_seen:
             item["last_observed_at"] = last_seen.isoformat()
-        item["attempts"] = attempt_by_model.get(item["model_key"], {}).get("attempts", 0)
-        item["successful_attempts"] = attempt_by_model.get(item["model_key"], {}).get("successful_attempts", 0)
-        item["avg_attempt_seconds"] = attempt_by_model.get(item["model_key"], {}).get("avg_attempt_seconds")
+        event_key = (item["project"], item["model_key"], item["size"])
+        event_stats = attempt_by_model.get(event_key, {})
+        item["attempts"] = event_stats.get("attempts", 0)
+        item["successful_attempts"] = event_stats.get("successful_attempts", 0)
+        item["avg_attempt_seconds"] = event_stats.get("avg_attempt_seconds")
         stats.append(item)
     return {"days": days, "project": project or "all", "stats": stats}
 
