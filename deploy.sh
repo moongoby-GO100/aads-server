@@ -438,6 +438,10 @@ restart_old_slot_after_drain() {
     local expected_generation="$3"
 
     (
+        # This worker intentionally outlives the main deploy. Do not inherit the
+        # global nginx upstream lock or unrelated deploys will remain blocked
+        # for the full stream-drain window.
+        exec 8>&-
         exec 9>"/tmp/aads-standby-sync.lock"
         flock -w 30 9 || {
             audit_control "standby-restart" "${old_container}:${old_port}" "skipped" "standby lock busy"
@@ -481,6 +485,9 @@ sync_standby_slot_after_drain() {
     local expected_generation="$3"
 
     (
+        # The delayed standby rebuild can run for many minutes. Release the
+        # parent's global nginx lock before sleeping/building in background.
+        exec 8>&-
         # Do not rebuild the previous active slot immediately after switching.
         # Existing nginx workers may still hold SSE/WebSocket streams on that slot,
         # and the active-stream counter can be briefly stale during handoff.
