@@ -30,10 +30,13 @@ _AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-tur
 # Blue/Green API processes share the same DB.  A process-local task map cannot
 # prevent the other slot from reclaiming or finalising the same execution, so
 # every mutable execution is fenced by a renewable DB lease and epoch.
-_EXECUTION_OWNER_INSTANCE = (
-    f"{os.getenv('AADS_CONTAINER_NAME', os.getenv('HOSTNAME', 'aads'))}:"
-    f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
-)
+# Slot identity is stable across an in-process module reload, which lets the
+# first lease-aware rollout adopt streams already running on that slot. Epoch
+# fencing still distinguishes successive claims/restarts on the same slot.
+_EXECUTION_OWNER_INSTANCE = os.getenv(
+    "AADS_CONTAINER_NAME",
+    os.getenv("HOSTNAME", "aads"),
+).strip() or "aads"
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
 _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "8")))
@@ -3960,7 +3963,18 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                         _exec_state["status"] if _exec_state else "missing",
                     )
                     return
-                if _exec_state["owner_instance"] != _EXECUTION_OWNER_INSTANCE:
+                exec_owner = _exec_state["owner_instance"]
+                exec_epoch = int(_exec_state["owner_epoch"] or 0)
+                if exec_owner is None:
+                    adopted_epoch = await _claim_execution_lease(
+                        conn,
+                        _eid,
+                        status=_exec_state["status"],
+                    )
+                    if adopted_epoch is not None:
+                        exec_owner = _EXECUTION_OWNER_INSTANCE
+                        exec_epoch = adopted_epoch
+                if exec_owner != _EXECUTION_OWNER_INSTANCE:
                     state["completed"] = True
                     state["_terminal_execution_closed"] = True
                     state["_producer_incomplete_exit"] = "execution_lease_owned_elsewhere"
@@ -3968,10 +3982,10 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                         "interim_save_stopped_lease_owner session=%s execution=%s owner=%s",
                         session_id[:8],
                         str(_eid)[:8],
-                        str(_exec_state["owner_instance"] or "-")[:80],
+                        str(exec_owner or "-")[:80],
                     )
                     return
-                state["owner_epoch"] = int(_exec_state["owner_epoch"] or 0)
+                state["owner_epoch"] = exec_epoch
                 await _archive_competing_stream_placeholder(conn, _sid, _eid)
                 # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
                 if force:
