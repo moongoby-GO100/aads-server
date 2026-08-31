@@ -9636,3 +9636,26 @@
   - SF/NTV2 runner service is active on cafe24_114.
 - Deployment:
   - Code is patched locally and not yet pushed/deployed/restarted. Remote 211/114 runner script rollout requires a sequential operational restart after the active GO100 runner job is clear or CEO explicitly approves interruption risk.
+
+## 2026-08-31 15:20 KST - Blue/Green chat execution lease and build-once release gates
+
+- Request:
+  - Eliminate Blue/Green execution ownership collisions, preserve interrupted responses, allow an explicit resume model, shorten deployments with one image build, raise relay concurrency to 15, preserve chat scroll position across bubble transitions and version refresh, and make the rollout sequence a global rule.
+- Root cause:
+  - Recovery ownership was process-local. The active scanner could reclaim an execution still produced by the previous slot.
+  - The scanner incremented `retry_count` before a real model call and then collided with the session-wide streaming placeholder index.
+  - Programmatic viewport restoration could record its temporary `scrollTop=0` as the next stable position. Version refresh did not persist a message anchor at all.
+- Code change:
+  - Migration `140_chat_execution_lease_and_deferred_reactions.sql` adds fenced `owner_instance`/`owner_epoch`, heartbeat/expiry, `resume_model_override`, and a durable deferred-reaction queue.
+  - `chat_service.py` renews leases during normal and resumed streams, rejects stale-owner interim/final writes, archives competing placeholders only after a lease claim, increments retry count only before an actual model call, and hands inactive-slot automatic reactions to the active slot through DB.
+  - `chat.py` accepts manual resume model override and explicit retry reset while preserving the original requested model.
+  - Dashboard interrupted bubbles expose original-model and selected-model resume actions. Viewport restoration ignores its own programmatic scroll events, and version refresh persists/restores a session-scoped message anchor.
+  - API/dashboard deploy scripts now build one release-SHA image, start both slots with `--no-build`, keep the shared nginx lock only for cutover, and verify active/standby image digest equality.
+  - `/root/aads/AGENTS.md` plus repository `AGENTS.md` files define the mandatory global release contract; `scripts/verify-bluegreen-release-contract.sh` makes key gates fail closed.
+  - Claude relay runtime configuration is set to 15. The idle restart worker is applying it without interrupting existing leases.
+- Verification before commit:
+  - Python compile, shell syntax, Compose config, release-contract verifier, and dashboard `npx tsc --noEmit` passed.
+  - Chat/recovery regression suite passed 74/74 in the application container.
+  - New source-contract tests passed 4/4 on the host.
+- Deployment:
+  - Commit/push and sequential Blue/Green rollout are the next steps. Do not certify complete until external health/session checks and five-minute P0/P1 monitoring pass.

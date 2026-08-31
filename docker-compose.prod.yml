@@ -85,6 +85,7 @@ services:
         max-file: "3"
 
   aads-server:
+    image: aads-server:${AADS_RELEASE_SHA:-local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -173,6 +174,7 @@ services:
 
   # ★ Blue-Green: green 인스턴스 (profiles로 수동 시작만 가능)
   aads-server-green:
+    image: aads-server:${AADS_RELEASE_SHA:-local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -428,6 +430,7 @@ services:
         max-file: "3"
 
   aads-dashboard:
+    image: aads-dashboard:${AADS_RELEASE_SHA:-local}
     build:
       context: ../aads-dashboard
       dockerfile: Dockerfile
@@ -457,6 +460,7 @@ services:
         max-file: "3"
 
   aads-dashboard-green:
+    image: aads-dashboard:${AADS_RELEASE_SHA:-local}
     build:
       context: ../aads-dashboard
       dockerfile: Dockerfile

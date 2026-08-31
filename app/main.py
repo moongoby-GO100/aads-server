@@ -1938,6 +1938,11 @@ async def lifespan(app: FastAPI):
                         actual_model VARCHAR(100),
                         status VARCHAR(32) NOT NULL DEFAULT 'running',
                         retry_count INT NOT NULL DEFAULT 0,
+                        owner_instance TEXT,
+                        owner_epoch BIGINT NOT NULL DEFAULT 0,
+                        heartbeat_at TIMESTAMPTZ,
+                        lease_expires_at TIMESTAMPTZ,
+                        resume_model_override VARCHAR(100),
                         last_event_id TEXT,
                         error_message TEXT,
                         interrupt_category VARCHAR(50),
@@ -1956,6 +1961,44 @@ async def lifespan(app: FastAPI):
                 await conn.execute(
                     "ALTER TABLE chat_turn_executions "
                     "ADD COLUMN IF NOT EXISTS interruption_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb"
+                )
+                for _lease_col, _lease_type in (
+                    ("owner_instance", "TEXT"),
+                    ("owner_epoch", "BIGINT NOT NULL DEFAULT 0"),
+                    ("heartbeat_at", "TIMESTAMPTZ"),
+                    ("lease_expires_at", "TIMESTAMPTZ"),
+                    ("resume_model_override", "VARCHAR(100)"),
+                ):
+                    await conn.execute(
+                        f"ALTER TABLE chat_turn_executions ADD COLUMN IF NOT EXISTS {_lease_col} {_lease_type}"
+                    )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_turn_executions_expired_lease "
+                    "ON chat_turn_executions(lease_expires_at, updated_at) "
+                    "WHERE status IN ('running', 'retrying') AND completed_at IS NULL"
+                )
+                await conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS chat_deferred_reactions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                        system_message TEXT NOT NULL,
+                        ohvis_task_id TEXT,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        attempts INT NOT NULL DEFAULT 0,
+                        claimed_by TEXT,
+                        lease_expires_at TIMESTAMPTZ,
+                        error_message TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        completed_at TIMESTAMPTZ
+                    )
+                    """
+                )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chat_deferred_reactions_pending "
+                    "ON chat_deferred_reactions(status, created_at) "
+                    "WHERE status IN ('pending', 'claimed')"
                 )
                 await conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chat_turn_executions_interrupt_category "
@@ -2236,6 +2279,10 @@ async def lifespan(app: FastAPI):
                 _mark_execution_interrupted as _mei_exec,
                 _strip_streaming_progress_markers as _strip_streaming_progress_markers_exec,
                 _has_meaningful_partial_content as _has_meaningful_partial_content_exec,
+                _archive_competing_stream_placeholder as _archive_competing_placeholder_exec,
+                _claim_execution_lease as _claim_execution_lease_exec,
+                _EXECUTION_OWNER_INSTANCE as _execution_owner_instance_exec,
+                _EXECUTION_RESUME_MAX_ATTEMPTS as _execution_resume_max_attempts_exec,
             )
             _pool = _gp_exec()
             async with _pool.acquire() as conn:
@@ -2244,6 +2291,7 @@ async def lifespan(app: FastAPI):
                     SELECT te.id::text AS execution_id,
                            te.session_id::text AS session_id,
                            te.requested_model,
+                           te.resume_model_override,
                            te.retry_count,
                            COALESCE(te.error_message, '') AS error_message,
                            COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
@@ -2276,6 +2324,11 @@ async def lifespan(app: FastAPI):
                     ) ph ON TRUE
                     WHERE te.status IN ('running', 'retrying')
                       AND te.updated_at > NOW() - INTERVAL '2 hours'
+                      AND (
+                          te.owner_instance IS NULL
+                          OR te.lease_expires_at IS NULL
+                          OR te.lease_expires_at <= NOW()
+                      )
                       AND (
                           GREATEST(
                               te.updated_at,
@@ -2347,7 +2400,7 @@ async def lifespan(app: FastAPI):
                         )
                         logger.info("stale_force_interrupt: session=%s execution=%s stale=%ds", sid[:8], execution_id[:8], _stale_sec)
                         continue
-                    if (row.get("retry_count") or 0) > 5:
+                    if (row.get("retry_count") or 0) >= _execution_resume_max_attempts_exec:
                         await _mei_exec(
                             conn,
                             sid,
@@ -2384,37 +2437,16 @@ async def lifespan(app: FastAPI):
                         )
                         continue
 
-                    _claim_id = await conn.fetchval(
-                        """
-                        UPDATE chat_turn_executions
-                        SET status = 'retrying',
-                            retry_count = retry_count + 1,
-                            updated_at = NOW(),
-                            error_message = $2
-                        WHERE id = $1::uuid
-                          AND status IN ('running', 'retrying')
-                          AND (
-                              updated_at < NOW() - ($3::int * INTERVAL '1 second')
-                              OR (
-                                  status = 'retrying'
-                                  AND COALESCE(error_message, '') LIKE ANY ($5::text[])
-                                  AND updated_at < NOW() - INTERVAL '5 seconds'
-                              )
-                              OR ($4::timestamptz IS NOT NULL AND updated_at < $4::timestamptz)
-                          )
-                        RETURNING id::text
-                        """,
+                    owner_epoch = await _claim_execution_lease_exec(
+                        conn,
                         execution_id,
-                        "resume_claimed_by:" + os.getenv("HOSTNAME", "unknown")[:80],
-                        min_stale_seconds,
-                        reclaim_before,
-                        [
-                            "interrupted_auto_retry_scheduled:%",
-                            "interrupted_auto_resume_cancelled:%",
-                        ],
+                        status="retrying",
+                        error_message="resume_claimed_by:" + _execution_owner_instance_exec[:160],
                     )
-                    if not _claim_id:
+                    if owner_epoch is None:
                         continue
+
+                    await _archive_competing_placeholder_exec(conn, sid, execution_id)
 
                     placeholder_id = row["assistant_message_id"]
                     if not placeholder_id:
@@ -2453,6 +2485,8 @@ async def lifespan(app: FastAPI):
                             row["workspace_name"] or "CEO",
                             execution_id=execution_id,
                             requested_model=row["requested_model"],
+                            resume_model_override=row["resume_model_override"],
+                            owner_epoch=owner_epoch,
                         )
                     )
                     def _on_resume_done(_t, _sid=sid, _eid=execution_id):
@@ -2520,7 +2554,7 @@ async def lifespan(app: FastAPI):
                         "execution_resume: session=%s execution=%s attempt=%s",
                         sid[:8],
                         execution_id[:8],
-                        (row.get("retry_count") or 0) + 1,
+                        row.get("retry_count") or 0,
                     )
         except Exception as e:
             logger.warning(f"execution_resume_scan_failed: {e}")
@@ -2616,6 +2650,20 @@ async def lifespan(app: FastAPI):
     _startup_asyncio.create_task(_run_execution_resume_reclaim_once())
     _startup_asyncio.create_task(_resume_pending_executions_startup())
     _startup_asyncio.create_task(_periodic_execution_resume_scanner())
+
+    async def _periodic_deferred_reaction_handoff():
+        from app.services.chat_service import _process_deferred_reactions_once
+        await _startup_asyncio.sleep(5)
+        while True:
+            try:
+                started = await _process_deferred_reactions_once(max_rows=3)
+                if started:
+                    logger.info("deferred_reaction_handoff_started", count=started)
+            except Exception as deferred_error:
+                logger.warning("deferred_reaction_handoff_failed", error=str(deferred_error))
+            await _startup_asyncio.sleep(5)
+
+    _startup_asyncio.create_task(_periodic_deferred_reaction_handoff())
 
     # Pipeline Runner: 재시작 복구 + Watchdog 시작 (DB 풀 초기화 이후)
     try:

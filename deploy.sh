@@ -12,6 +12,7 @@ set -euo pipefail
 REQUESTED_MODE="${1:-bluegreen}"
 MODE="$REQUESTED_MODE"
 COMPOSE_DIR="/root/aads/aads-server"
+export AADS_RELEASE_SHA="${AADS_RELEASE_SHA:-$(git -C "$COMPOSE_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
 HEALTH_URL="http://localhost:8100/api/v1/health"
 MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-30}"
 INTERVAL=2
@@ -22,6 +23,13 @@ DEPLOY_START_EPOCH=$(date +%s)
 DEPLOY_GENERATION_FILE="${COMPOSE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 mkdir -p "${COMPOSE_DIR}/logs"
+
+if [[ -x "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" ]]; then
+    "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" "$COMPOSE_DIR"
+else
+    echo "[deploy.sh] ❌ release contract verifier missing or not executable"
+    exit 1
+fi
 
 # ── 다운타임 자동 측정 (2026-08-20 Blue/Green 동시 다운 인시던트 재발 방지) ──
 # nginx를 통한 실제 사용자 경로를 1초 주기로 폴링해 실패 구간을 누적한다.
@@ -300,15 +308,30 @@ fi
 echo $$ > "$LOCKFILE"
 trap "stop_downtime_monitor; rm -f $LOCKFILE" EXIT
 
-# nginx upstream is shared by backend and dashboard blue-green deploys.
-# Hold a common lock for the whole deployment to prevent concurrent rewrites.
+# nginx upstream is shared by backend and dashboard blue-green deploys. Only
+# the routing cutover is serialized; image build and health checks run without
+# this lock so a long build cannot block another safe release.
 NGINX_SWITCH_LOCK="/tmp/aads-nginx-upstream.lock"
 exec 8>"$NGINX_SWITCH_LOCK"
-if ! flock -w 300 8; then
-    echo "[deploy.sh] ❌ nginx upstream 공통 락 획득 실패. 다른 배포가 진행 중입니다."
-    record_deploy "blocked" "$MODE" "nginx upstream lock acquisition failed"
-    exit 1
-fi
+NGINX_LOCK_HELD=false
+acquire_nginx_switch_lock() {
+    if [[ "$NGINX_LOCK_HELD" == "true" ]]; then return 0; fi
+    if ! flock -w 300 8; then
+        echo "[deploy.sh] ❌ nginx upstream 전환 락 획득 실패. 다른 배포가 전환 중입니다."
+        record_deploy "blocked" "$MODE" "nginx upstream cutover lock acquisition failed"
+        return 1
+    fi
+    NGINX_LOCK_HELD=true
+    echo "[deploy.sh] ✅ nginx upstream 전환 락 획득"
+}
+
+release_nginx_switch_lock() {
+    if [[ "$NGINX_LOCK_HELD" == "true" ]]; then
+        flock -u 8
+        NGINX_LOCK_HELD=false
+        echo "[deploy.sh] ✅ nginx upstream 전환 락 해제"
+    fi
+}
 
 # Every background drain/sync job is bound to this generation. A newer deploy
 # invalidates older jobs before they can mutate a slot that has become active.
@@ -393,6 +416,7 @@ switch_api_upstream() {
     local new_container="$3"
     local old_container="$4"
 
+    acquire_nginx_switch_lock
     cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_code_switch"
     sed -i -E \
         -e "s/server 127\.0\.0\.1:${new_port} [^;]*;/server 127.0.0.1:${new_port} max_fails=1 fail_timeout=10s;/g" \
@@ -416,6 +440,7 @@ switch_api_upstream() {
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     audit_control "nginx-switch" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "code mode slot switch"
+    release_nginx_switch_lock
 }
 
 standby_ownership_valid() {
@@ -535,15 +560,23 @@ sync_standby_slot_after_drain() {
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
 
-        echo "[deploy.sh] standby sync: rebuilding ${old_container}:${old_port} from current release"
+        echo "[deploy.sh] standby sync: starting ${old_container}:${old_port} from release image ${AADS_RELEASE_SHA}"
         cd "$COMPOSE_DIR"
         if [[ "$old_container" == "aads-server-green" ]]; then
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --build --no-deps "$old_container"
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --no-build --no-deps "$old_container"
         else
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --build --no-deps "$old_container"
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --no-build --no-deps "$old_container"
         fi
 
         if wait_port_health "$old_port" 90; then
+            active_container="$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)"
+            active_image="$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null || true)"
+            standby_image="$(docker inspect "$old_container" --format '{{.Image}}' 2>/dev/null || true)"
+            if [[ -z "$active_image" || -z "$standby_image" || "$active_image" != "$standby_image" ]]; then
+                echo "[deploy.sh] standby sync ERROR: image digest mismatch active=${active_image:-missing} standby=${standby_image:-missing}"
+                audit_control "standby-sync" "${old_container}:${old_port}" "failed" "active/standby image digest mismatch"
+                return 1
+            fi
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             echo "[deploy.sh] standby sync complete: ${old_container}:${old_port}"
             audit_control "standby-sync" "${old_container}:${old_port}" "success" "rebuilt and healthy"
@@ -821,10 +854,12 @@ case "$MODE" in
             echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
         fi
 
-        # ① 새 컨테이너 빌드 + 시작
+        # ① release image 1회 빌드 + 새 컨테이너 시작
         cd "$COMPOSE_DIR"
-        echo "[deploy.sh] ① ${NEW_CONTAINER} 빌드 + 시작..."
-        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --build --no-deps "$NEW_CONTAINER"
+        echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
+        docker compose $COMPOSE_FILE $PROFILE_CMD build "$NEW_CONTAINER"
+        echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
+        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps "$NEW_CONTAINER"
 
         # ② 새 컨테이너 헬스체크
         BG_HEALTH_MAX_WAIT="${AADS_DEPLOY_BG_HEALTH_MAX_WAIT:-150}"
@@ -873,6 +908,7 @@ case "$MODE" in
 
         # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)
         echo "[deploy.sh] ③ upstream 전환: :${CURRENT_PORT} → :${NEW_PORT}"
+        acquire_nginx_switch_lock
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
         # 새 포트에서 backup 제거, 기존 포트에 backup 추가
         sed -i -E \
@@ -921,6 +957,7 @@ case "$MODE" in
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+        release_nginx_switch_lock
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"

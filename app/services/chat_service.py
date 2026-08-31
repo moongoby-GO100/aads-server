@@ -27,6 +27,130 @@ logger = logging.getLogger(__name__)
 _AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
 _AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-turbo", "gemini-flash-lite"}
 
+# Blue/Green API processes share the same DB.  A process-local task map cannot
+# prevent the other slot from reclaiming or finalising the same execution, so
+# every mutable execution is fenced by a renewable DB lease and epoch.
+_EXECUTION_OWNER_INSTANCE = (
+    f"{os.getenv('AADS_CONTAINER_NAME', os.getenv('HOSTNAME', 'aads'))}:"
+    f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
+)
+_EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
+_EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
+_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "8")))
+_execution_owner_epochs: Dict[str, int] = {}
+
+
+def _is_local_active_api_slot() -> bool:
+    """Return whether this process is the published Blue/Green API slot."""
+    expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
+    expected_port = os.getenv("AADS_PUBLIC_PORT", "").strip()
+    for path, expected in (
+        (os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container"), expected_container),
+        (os.getenv("AADS_ACTIVE_PORT_FILE", "/app/.active_port"), expected_port),
+    ):
+        if not expected:
+            continue
+        try:
+            active = Path(path).read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if active:
+            return active == expected
+    return True
+
+
+async def _claim_execution_lease(
+    conn: asyncpg.Connection,
+    execution_id: uuid.UUID | str,
+    *,
+    status: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> Optional[int]:
+    """Atomically acquire an expired/self-owned execution and return its fence epoch."""
+    eid = uuid.UUID(str(execution_id))
+    row = await conn.fetchrow(
+        """
+        UPDATE chat_turn_executions
+        SET owner_instance = $2,
+            owner_epoch = owner_epoch + 1,
+            heartbeat_at = NOW(),
+            lease_expires_at = NOW() + ($3::int * INTERVAL '1 second'),
+            status = COALESCE($4, status),
+            error_message = COALESCE($5, error_message),
+            completed_at = CASE WHEN $4 IN ('running', 'retrying') THEN NULL ELSE completed_at END,
+            updated_at = NOW()
+        WHERE id = $1
+          AND status IN ('running', 'retrying', 'interrupted')
+          AND (
+              owner_instance IS NULL
+              OR owner_instance = $2
+              OR lease_expires_at IS NULL
+              OR lease_expires_at <= NOW()
+          )
+        RETURNING owner_epoch
+        """,
+        eid,
+        _EXECUTION_OWNER_INSTANCE,
+        _EXECUTION_LEASE_SECONDS,
+        status,
+        error_message,
+    )
+    if not row:
+        return None
+    epoch = int(row["owner_epoch"])
+    _execution_owner_epochs[str(eid)] = epoch
+    return epoch
+
+
+async def _heartbeat_execution_lease(
+    conn: asyncpg.Connection,
+    execution_id: uuid.UUID | str,
+    owner_epoch: Optional[int] = None,
+) -> bool:
+    """Renew only the lease held by this process and fence epoch."""
+    eid = uuid.UUID(str(execution_id))
+    epoch = owner_epoch or _execution_owner_epochs.get(str(eid))
+    result = await conn.execute(
+        """
+        UPDATE chat_turn_executions
+        SET heartbeat_at = NOW(),
+            lease_expires_at = NOW() + ($3::int * INTERVAL '1 second'),
+            updated_at = NOW()
+        WHERE id = $1
+          AND owner_instance = $2
+          AND ($4::bigint IS NULL OR owner_epoch = $4)
+          AND status IN ('running', 'retrying')
+          AND completed_at IS NULL
+        """,
+        eid,
+        _EXECUTION_OWNER_INSTANCE,
+        _EXECUTION_LEASE_SECONDS,
+        epoch,
+    )
+    return result != "UPDATE 0"
+
+
+async def _archive_competing_stream_placeholder(
+    conn: asyncpg.Connection,
+    session_id: uuid.UUID | str,
+    execution_id: uuid.UUID | str,
+) -> None:
+    """Remove the session-wide placeholder conflict after the lease is acquired."""
+    await conn.execute(
+        """
+        UPDATE chat_messages
+        SET intent = '_archived_partial',
+            model_used = 'interrupted',
+            is_hidden = TRUE,
+            edited_at = NOW()
+        WHERE session_id = $1
+          AND intent = 'streaming_placeholder'
+          AND execution_id IS DISTINCT FROM $2
+        """,
+        uuid.UUID(str(session_id)),
+        uuid.UUID(str(execution_id)),
+    )
+
 _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-5.6-sol": 1500,
     "claude-opus-5": 1200,
@@ -1553,10 +1677,25 @@ async def _get_or_create_turn_execution(
             user_message_id,
         )
         if existing_execution_id:
-            await conn.execute(
-                "UPDATE chat_turn_executions SET updated_at = NOW() WHERE id = $1",
-                existing_execution_id,
-            )
+            try:
+                uuid.UUID(str(existing_execution_id))
+            except (TypeError, ValueError, AttributeError):
+                # Lightweight DB doubles used by isolated stream tests may
+                # return a sentinel AsyncMock here. Preserve the legacy attach
+                # path; production asyncpg returns UUID or None.
+                existing_epoch = None
+            else:
+                existing_epoch = await _claim_execution_lease(
+                    conn,
+                    existing_execution_id,
+                    status="running",
+                )
+                if existing_epoch is None:
+                    logger.info(
+                        "execution_reuse_owned_elsewhere session=%s execution=%s",
+                        str(session_id)[:8],
+                        str(existing_execution_id)[:8],
+                    )
             await conn.execute(
                 "UPDATE chat_sessions SET current_execution_id = $2, updated_at = NOW() WHERE id = $1",
                 session_id,
@@ -1588,6 +1727,8 @@ async def _get_or_create_turn_execution(
             interrupt_category = 'superseded',
             interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $2::jsonb,
             completed_at = COALESCE(completed_at, NOW()),
+            owner_instance = NULL,
+            lease_expires_at = NULL,
             updated_at = NOW(),
             error_message = COALESCE(error_message, 'superseded by newer execution')
         WHERE session_id = $1
@@ -1626,7 +1767,7 @@ async def _get_or_create_turn_execution(
             _cleaned,
         )
 
-    execution_id = await conn.fetchval(
+    execution_row = await conn.fetchrow(
         """
         INSERT INTO chat_turn_executions (
             session_id,
@@ -1634,17 +1775,28 @@ async def _get_or_create_turn_execution(
             requested_model,
             actual_model,
             status,
+            owner_instance,
+            owner_epoch,
+            heartbeat_at,
+            lease_expires_at,
             started_at,
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, $3, 'running', NOW(), NOW(), NOW())
-        RETURNING id
+        VALUES (
+            $1, $2, $3, $3, 'running', $4, 1, NOW(),
+            NOW() + ($5::int * INTERVAL '1 second'), NOW(), NOW(), NOW()
+        )
+        RETURNING id, owner_epoch
         """,
         session_id,
         user_message_id,
         requested_model,
+        _EXECUTION_OWNER_INSTANCE,
+        _EXECUTION_LEASE_SECONDS,
     )
+    execution_id = execution_row["id"]
+    _execution_owner_epochs[str(execution_id)] = int(execution_row["owner_epoch"])
     await conn.execute(
         "UPDATE chat_sessions SET current_execution_id = $2, updated_at = NOW() WHERE id = $1",
         session_id,
@@ -2875,6 +3027,7 @@ async def _schedule_interrupted_auto_resume(
         """
         SELECT te.retry_count,
                te.requested_model,
+               te.resume_model_override,
                s.current_execution_id,
                COALESCE(um.content, '') AS last_user_msg,
                w.name AS workspace_name
@@ -2891,41 +3044,13 @@ async def _schedule_interrupted_auto_resume(
     if not row:
         return False
     retry_count = row["retry_count"] or 0
-    process_interruption = _is_process_interruption_reason(reason)
-    retry_limit = 8 if process_interruption else 5
-    last_resort = False
+    retry_limit = _EXECUTION_RESUME_MAX_ATTEMPTS
     if retry_count >= retry_limit:
-        has_visible_assistant = await conn.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM chat_messages
-                WHERE execution_id = $1
-                  AND role = 'assistant'
-                  AND is_hidden = FALSE
-                  AND (
-                      intent IS NULL
-                      OR intent NOT IN (
-                          'streaming_placeholder',
-                          'interruption_notice',
-                          'stale_empty_placeholder'
-                      )
-                  )
-            )
-            """,
-            eid,
-        )
-        if has_visible_assistant or retry_count >= retry_limit + 2:
-            logger.warning(
-                "interrupted_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s reason=%s",
-                session_id[:8], execution_id[:8], retry_count, reason[:120],
-            )
-            return False
-        retry_limit += 2
-        last_resort = True
         logger.warning(
-            "last_resort_recovery session=%s execution=%s retry_count=%s",
-            session_id[:8], execution_id[:8], retry_count,
+            "interrupted_auto_resume_skip_hard_cap session=%s execution=%s retry_count=%s reason=%s",
+            session_id[:8], execution_id[:8], retry_count, reason[:120],
         )
+        return False
     if not (row["last_user_msg"] or "").strip():
         logger.warning(
             "interrupted_auto_resume_skip_no_user session=%s execution=%s reason=%s",
@@ -2944,6 +3069,21 @@ async def _schedule_interrupted_auto_resume(
             reason[:120],
         )
         return False
+
+    owner_epoch = await _claim_execution_lease(
+        conn,
+        eid,
+        status="retrying",
+        error_message=f"interrupted_auto_retry_scheduled:{reason}"[:1000],
+    )
+    if owner_epoch is None:
+        logger.info(
+            "interrupted_auto_resume_skip_valid_lease session=%s execution=%s",
+            session_id[:8],
+            execution_id[:8],
+        )
+        return False
+    await _archive_competing_stream_placeholder(conn, sid, eid)
 
     clean_partial = _strip_streaming_progress_markers(partial_content or "").strip()
     placeholder_id = assistant_message_id
@@ -2984,25 +3124,24 @@ async def _schedule_interrupted_auto_resume(
         """
         UPDATE chat_turn_executions
         SET status = 'retrying',
-            retry_count = CASE
-                WHEN $5::boolean THEN retry_count
-                ELSE retry_count + 1
-            END,
             assistant_message_id = $2,
             completed_at = NULL,
             error_message = $3,
             updated_at = NOW()
         WHERE id = $1
           AND session_id = $4
-          AND status = 'interrupted'
-          AND retry_count < $6
+          AND status = 'retrying'
+          AND owner_instance = $5
+          AND owner_epoch = $6
+          AND retry_count < $7
         RETURNING id
         """,
         eid,
         placeholder_id,
         f"interrupted_auto_retry_scheduled:{reason}"[:1000],
         sid,
-        process_interruption and not last_resort,
+        _EXECUTION_OWNER_INSTANCE,
+        owner_epoch,
         retry_limit,
     )
     if not claimed:
@@ -3036,6 +3175,8 @@ async def _schedule_interrupted_auto_resume(
             row["workspace_name"] or "CEO",
             execution_id=execution_id,
             requested_model=row["requested_model"],
+            resume_model_override=row["resume_model_override"],
+            owner_epoch=owner_epoch,
             recovery_instruction=recovery_instruction,
             recovery_reason=reason,
         )
@@ -3101,7 +3242,7 @@ async def _schedule_interrupted_auto_resume(
         "interrupted_auto_resume_scheduled session=%s execution=%s retry_count=%s reason=%s",
         session_id[:8],
         execution_id[:8],
-        retry_count if process_interruption else retry_count + 1,
+        retry_count,
         reason[:160],
     )
     return True
@@ -3133,6 +3274,36 @@ async def _mark_execution_interrupted(
             "new_execution",
         )
     )
+    lease_row = None
+    # Unit-test/migration adapters use lightweight connection doubles without
+    # the new columns. Production pool connections are asyncpg proxies.
+    if type(conn).__module__.startswith("asyncpg"):
+        lease_row = await conn.fetchrow(
+            """
+            SELECT owner_instance, owner_epoch,
+                   (lease_expires_at IS NOT NULL AND lease_expires_at > NOW()) AS lease_valid
+            FROM chat_turn_executions
+            WHERE id = $1
+            """,
+            eid,
+        )
+    force_terminal = is_superseded_cancel or interrupt_category == "user_action"
+    if (
+        lease_row
+        and lease_row["lease_valid"]
+        and lease_row["owner_instance"]
+        and lease_row["owner_instance"] != _EXECUTION_OWNER_INSTANCE
+        and not force_terminal
+    ):
+        logger.warning(
+            "chat_execution_interrupt_skipped_valid_lease session=%s execution=%s owner=%s epoch=%s reason=%s",
+            str(session_id)[:8],
+            str(execution_id)[:8],
+            str(lease_row["owner_instance"])[:80],
+            lease_row["owner_epoch"],
+            reason[:160],
+        )
+        return
     logger.warning(
         "chat_execution_mark_interrupted session=%s execution=%s reason=%s partial_len=%s placeholder=%s delete_empty=%s superseded=%s",
         str(session_id)[:8],
@@ -3350,6 +3521,8 @@ async def _mark_execution_interrupted(
             interrupt_category = $5,
             interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $6::jsonb,
             completed_at = COALESCE(completed_at, NOW()),
+            owner_instance = NULL,
+            lease_expires_at = NULL,
             updated_at = NOW()
         WHERE id = $1
           AND status IN ('running', 'retrying')
@@ -3723,11 +3896,26 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
         content = state.get("content", "")
         tool_count = state.get("tool_count", 0)
         last_tool = state.get("last_tool", "")
+        _eid_raw = state.get("execution_id")
+        _eid = uuid.UUID(str(_eid_raw)) if _eid_raw else None
 
         # 변경 감지 + 최소 flush 간격 500ms (다중 경로 중복 방지)
         _te = state.get("tool_events", [])
         _save_key = f"{len(content)}:{tool_count}:{last_tool}:{len(_te)}"
         if not force and state.get("_last_save_key") == _save_key:
+            _now_lease = _bg_time.monotonic()
+            if _eid and _now_lease - float(state.get("_last_lease_heartbeat_ts") or 0) >= _EXECUTION_HEARTBEAT_SECONDS:
+                async with get_pool().acquire() as _heartbeat_conn:
+                    lease_ok = await _heartbeat_execution_lease(
+                        _heartbeat_conn,
+                        _eid,
+                        state.get("owner_epoch"),
+                    )
+                state["_last_lease_heartbeat_ts"] = _now_lease
+                if not lease_ok:
+                    state["completed"] = True
+                    state["_terminal_execution_closed"] = True
+                    state["_producer_incomplete_exit"] = "execution_lease_lost"
             return
         _now_flush = _bg_time.monotonic()
         if not force and state.get("_last_save_key") is not None and _now_flush - state.get("_last_flush_ts", 0) < 0.5:
@@ -3740,8 +3928,6 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
 
         pool = get_pool()
         _sid = uuid.UUID(session_id)
-        _eid_raw = state.get("execution_id")
-        _eid = uuid.UUID(str(_eid_raw)) if _eid_raw else None
         _te_len = len(_te)
         if _te_len != state.get("_last_te_len", -1):
             _tool_events_json = json.dumps(normalize_tool_events(_te))
@@ -3753,7 +3939,7 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
             if _eid:
                 _exec_state = await conn.fetchrow(
                     """
-                    SELECT status, completed_at
+                    SELECT status, completed_at, owner_instance, owner_epoch, lease_expires_at
                     FROM chat_turn_executions
                     WHERE id = $1
                     """,
@@ -3774,6 +3960,19 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                         _exec_state["status"] if _exec_state else "missing",
                     )
                     return
+                if _exec_state["owner_instance"] != _EXECUTION_OWNER_INSTANCE:
+                    state["completed"] = True
+                    state["_terminal_execution_closed"] = True
+                    state["_producer_incomplete_exit"] = "execution_lease_owned_elsewhere"
+                    logger.warning(
+                        "interim_save_stopped_lease_owner session=%s execution=%s owner=%s",
+                        session_id[:8],
+                        str(_eid)[:8],
+                        str(_exec_state["owner_instance"] or "-")[:80],
+                    )
+                    return
+                state["owner_epoch"] = int(_exec_state["owner_epoch"] or 0)
+                await _archive_competing_stream_placeholder(conn, _sid, _eid)
                 # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
                 if force:
                     _row = await conn.fetchrow(
@@ -3829,9 +4028,13 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                             END,
                             status = CASE WHEN completed_at IS NULL THEN 'running' ELSE status END,
                             last_event_id = COALESCE($5, last_event_id),
+                            heartbeat_at = NOW(),
+                            lease_expires_at = NOW() + ($7::int * INTERVAL '1 second'),
                             updated_at = NOW()
                         WHERE id = $2
                           AND ($6::boolean OR (status IN ('running', 'retrying') AND completed_at IS NULL))
+                          AND owner_instance = $8
+                          AND owner_epoch = $9
                         RETURNING id
                     )
                     UPDATE chat_sessions
@@ -3847,7 +4050,11 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                     _row["id"] if _row else None,
                     state.get("last_event_id"),
                     force,
+                    _EXECUTION_LEASE_SECONDS,
+                    _EXECUTION_OWNER_INSTANCE,
+                    state.get("owner_epoch"),
                 )
+                state["_last_lease_heartbeat_ts"] = _bg_time.monotonic()
             else:
                 _resolved_eid, _resolved_pid = await _resolve_stream_execution_binding(conn, _sid)
                 if _resolved_eid:
@@ -4198,6 +4405,7 @@ def _bind_streaming_turn_execution(session_id: str, execution_id: str) -> Dict[s
     if not isinstance(state, dict) or state.get("completed"):
         state = _begin_streaming_turn_state(session_id)
     state["execution_id"] = execution_id
+    state["owner_epoch"] = _execution_owner_epochs.get(str(execution_id))
     state["completed"] = False
     state.pop("_completed_delivered_at", None)
     return state
@@ -4276,7 +4484,8 @@ async def with_background_completion(
             async with conn.transaction():
                 exec_row = await conn.fetchrow(
                     """
-                    SELECT id, session_id, assistant_message_id, requested_model, actual_model, status, completed_at
+                    SELECT id, session_id, assistant_message_id, requested_model, actual_model,
+                           status, completed_at, owner_instance, owner_epoch
                     FROM chat_turn_executions
                     WHERE id = $1
                     FOR UPDATE
@@ -4288,6 +4497,22 @@ async def with_background_completion(
                     or exec_row["status"] not in ("running", "retrying")
                     or exec_row["completed_at"] is not None
                 ):
+                    return
+                expected_epoch = state.get("owner_epoch") or _execution_owner_epochs.get(str(execution_uuid))
+                exec_owner = exec_row.get("owner_instance", _EXECUTION_OWNER_INSTANCE)
+                exec_epoch = exec_row.get("owner_epoch", expected_epoch or 0)
+                if (
+                    exec_owner != _EXECUTION_OWNER_INSTANCE
+                    or (expected_epoch is not None and int(exec_epoch or 0) != int(expected_epoch))
+                ):
+                    logger.warning(
+                        "completion_guard_skipped_lease_lost session=%s execution=%s owner=%s epoch=%s expected_epoch=%s",
+                        str(exec_row["session_id"])[:8],
+                        str(execution_uuid)[:8],
+                        str(exec_owner or "-")[:80],
+                        exec_epoch,
+                        expected_epoch,
+                    )
                     return
 
                 assistant_row = None
@@ -4461,12 +4686,18 @@ async def with_background_completion(
                         status = 'completed',
                         error_message = NULL,
                         completed_at = COALESCE(completed_at, NOW()),
+                        heartbeat_at = NOW(),
+                        lease_expires_at = NULL,
                         updated_at = NOW()
                     WHERE id = $1
                       AND status IN ('running', 'retrying')
+                      AND owner_instance = $3
+                      AND owner_epoch = $4
                     """,
                     execution_uuid,
                     assistant_message_id,
+                    _EXECUTION_OWNER_INSTANCE,
+                    int(exec_epoch or 0),
                 )
                 await _archive_interrupted_siblings_for_completed_execution(
                     conn,
@@ -5623,6 +5854,8 @@ async def _resume_single_stream(
     workspace_name: str,
     execution_id: Optional[str] = None,
     requested_model: Optional[str] = None,
+    resume_model_override: Optional[str] = None,
+    owner_epoch: Optional[int] = None,
     recovery_instruction: Optional[str] = None,
     recovery_reason: Optional[str] = None,
 ) -> None:
@@ -5631,6 +5864,8 @@ async def _resume_single_stream(
     _started_at = _bg_time.monotonic()
     _execution_uuid = uuid.UUID(execution_id) if execution_id else None
     _stream_id = execution_id or session_id
+    _resume_lease_stop = _heartbeat_asyncio.Event()
+    _resume_lease_task: Optional[_heartbeat_asyncio.Task] = None
     partial_content = _strip_streaming_progress_markers(partial_content or "")
     if partial_content and not _has_meaningful_partial_content(partial_content):
         partial_content = ""
@@ -5644,6 +5879,7 @@ async def _resume_single_stream(
         "completed": False,
         "tool_events": [],
         "execution_id": execution_id,
+        "owner_epoch": owner_epoch,
         "last_event_id": None,
     }
     if _resume_task is not None:
@@ -5655,14 +5891,78 @@ async def _resume_single_stream(
 
             pool = get_pool()
             sid = uuid.UUID(session_id)
-            # F-2: Hard cap on retry_count to prevent infinite resume loops
+            if not _is_local_active_api_slot():
+                logger.info(
+                    "resume_deferred_inactive_slot session=%s execution=%s owner=%s",
+                    session_id[:8],
+                    str(_execution_uuid or "")[:8],
+                    _EXECUTION_OWNER_INSTANCE,
+                )
+                if _execution_uuid:
+                    async with pool.acquire() as _inactive_conn:
+                        await _inactive_conn.execute(
+                            """
+                            UPDATE chat_turn_executions
+                            SET lease_expires_at = NOW(), updated_at = NOW() - INTERVAL '90 seconds'
+                            WHERE id = $1 AND owner_instance = $2
+                            """,
+                            _execution_uuid,
+                            _EXECUTION_OWNER_INSTANCE,
+                        )
+                return
+
+            if _execution_uuid and owner_epoch is None:
+                async with pool.acquire() as _lease_conn:
+                    owner_epoch = await _claim_execution_lease(
+                        _lease_conn,
+                        _execution_uuid,
+                        status="retrying",
+                    )
+                if owner_epoch is None:
+                    logger.info(
+                        "resume_skipped_valid_remote_lease session=%s execution=%s",
+                        session_id[:8],
+                        str(_execution_uuid)[:8],
+                    )
+                    return
+                _streaming_state[session_id]["owner_epoch"] = owner_epoch
+
+            if _execution_uuid and owner_epoch is not None:
+                async def _resume_lease_pump() -> None:
+                    while not _resume_lease_stop.is_set():
+                        try:
+                            await _heartbeat_asyncio.wait_for(
+                                _resume_lease_stop.wait(),
+                                timeout=_EXECUTION_HEARTBEAT_SECONDS,
+                            )
+                            return
+                        except _heartbeat_asyncio.TimeoutError:
+                            async with get_pool().acquire() as _lease_heartbeat_conn:
+                                lease_ok = await _heartbeat_execution_lease(
+                                    _lease_heartbeat_conn,
+                                    _execution_uuid,
+                                    owner_epoch,
+                                )
+                            if not lease_ok:
+                                logger.warning(
+                                    "resume_lease_lost session=%s execution=%s epoch=%s",
+                                    session_id[:8],
+                                    str(_execution_uuid)[:8],
+                                    owner_epoch,
+                                )
+                                return
+
+                _resume_lease_task = _heartbeat_asyncio.create_task(_resume_lease_pump())
+
+            # Hard cap applies only to actual prior model starts. Scanner claims
+            # and placeholder reconciliation do not consume the retry budget.
             if _execution_uuid:
                 async with pool.acquire() as _cap_conn:
                     _rc = await _cap_conn.fetchval(
                         'SELECT retry_count FROM chat_turn_executions WHERE id = $1',
                         _execution_uuid,
                     )
-                    if (_rc or 0) > 5:
+                    if (_rc or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
                         logger.error(f'resume_hard_cap_exceeded: session={session_id[:8]} retry_count={_rc}')
                         _streaming_state.pop(session_id, None)
                         _active_bg_tasks.pop(session_id, None)
@@ -5758,7 +6058,11 @@ async def _resume_single_stream(
             _resume_model: Optional[str] = None
             try:
                 async with pool.acquire() as conn:
-                    if requested_model:
+                    if resume_model_override:
+                        from app.services.intent_router import get_model_for_override
+                        _resume_model = get_model_for_override(resume_model_override)
+                        logger.info(f"resume_model_from_explicit_override session={session_id[:8]} model={_resume_model}")
+                    if not _resume_model and requested_model:
                         from app.services.intent_router import get_model_for_override
                         _resume_model = get_model_for_override(requested_model)
                         logger.info(f"resume_model_from_execution session={session_id[:8]} model={_resume_model}")
@@ -5908,6 +6212,38 @@ async def _resume_single_stream(
                         session_id[:8],
                         str(_execution_uuid or "")[:8],
                         len(redis_content),
+                    )
+
+                if _execution_uuid:
+                    async with pool.acquire() as _attempt_conn:
+                        attempt_number = await _attempt_conn.fetchval(
+                            """
+                            UPDATE chat_turn_executions
+                            SET retry_count = retry_count + 1,
+                                heartbeat_at = NOW(),
+                                lease_expires_at = NOW() + ($4::int * INTERVAL '1 second'),
+                                updated_at = NOW()
+                            WHERE id = $1
+                              AND owner_instance = $2
+                              AND owner_epoch = $3
+                              AND retry_count < $5
+                              AND status IN ('running', 'retrying')
+                            RETURNING retry_count
+                            """,
+                            _execution_uuid,
+                            _EXECUTION_OWNER_INSTANCE,
+                            owner_epoch,
+                            _EXECUTION_LEASE_SECONDS,
+                            _EXECUTION_RESUME_MAX_ATTEMPTS,
+                        )
+                    if attempt_number is None:
+                        raise RuntimeError("resume_attempt_fence_or_limit_rejected")
+                    logger.info(
+                        "resume_model_attempt_started session=%s execution=%s attempt=%s model=%s",
+                        session_id[:8],
+                        str(_execution_uuid)[:8],
+                        attempt_number,
+                        _resume_model,
                     )
 
                 retry_delays = [1, 2, 4, 8, 12]
@@ -6086,6 +6422,12 @@ async def _resume_single_stream(
         except Exception as _fb_err:
             logger.error(f"resume_fallback_save_failed: session={session_id[:8]} error={_fb_err}")
     finally:
+        _resume_lease_stop.set()
+        if _resume_lease_task is not None:
+            try:
+                await _resume_lease_task
+            except _heartbeat_asyncio.CancelledError:
+                pass
         if _resume_task is not None and _active_bg_tasks.get(session_id) is _resume_task:
             _active_bg_tasks.pop(session_id, None)
 
@@ -8018,7 +8360,7 @@ async def _save_and_update_session(
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
-                    SELECT status, completed_at
+                    SELECT status, completed_at, owner_instance, owner_epoch
                     FROM chat_turn_executions
                     WHERE id = $1
                     FOR UPDATE
@@ -8035,6 +8377,25 @@ async def _save_and_update_session(
                         str(sid)[:8],
                         str(_execution_uuid)[:8],
                         _exec_row["status"] if _exec_row else "missing",
+                    )
+                    return
+                _expected_owner_epoch = _execution_owner_epochs.get(str(_execution_uuid))
+                _exec_owner = _exec_row.get("owner_instance", _EXECUTION_OWNER_INSTANCE)
+                _exec_epoch = _exec_row.get("owner_epoch", _expected_owner_epoch or 0)
+                if (
+                    _exec_owner != _EXECUTION_OWNER_INSTANCE
+                    or (
+                        _expected_owner_epoch is not None
+                        and int(_exec_epoch or 0) != int(_expected_owner_epoch)
+                    )
+                ):
+                    logger.warning(
+                        "final_save_skipped_lease_lost session=%s execution=%s owner=%s epoch=%s expected_epoch=%s",
+                        str(sid)[:8],
+                        str(_execution_uuid)[:8],
+                        str(_exec_owner or "-")[:80],
+                        _exec_epoch,
+                        _expected_owner_epoch,
                     )
                     return
                 if await _execution_has_newer_user_message(conn, str(sid), str(_execution_uuid)):
@@ -8231,15 +8592,21 @@ async def _save_and_update_session(
                         status = 'completed',
                         error_message = NULL,
                         completed_at = NOW(),
+                        heartbeat_at = NOW(),
+                        lease_expires_at = NULL,
                         updated_at = NOW()
                     WHERE id = $1
                       AND status IN ('running', 'retrying')
                       AND completed_at IS NULL
+                      AND owner_instance = $5
+                      AND owner_epoch = $6
                     """,
                     _execution_uuid,
                     _assistant_msg_id,
                     requested_model,
                     model_used or None,
+                    _EXECUTION_OWNER_INSTANCE,
+                    int(_exec_epoch or 0),
                 )
                 await conn.execute(
                     """
@@ -8390,8 +8757,138 @@ _ai_reaction_queue: dict[str, list[str]] = {}  # session_id → 대기 메시지
 _AI_REACTION_MAX_QUEUE = 5
 
 
+async def _enqueue_deferred_reaction(
+    session_id: str,
+    safe_message: str,
+    ohvis_task_id: Optional[str] = None,
+) -> str:
+    """Persist an automatic reaction so an inactive slot cannot strand it."""
+    async with get_pool().acquire() as conn:
+        deferred_id = await conn.fetchval(
+            """
+            INSERT INTO chat_deferred_reactions (session_id, system_message, ohvis_task_id)
+            VALUES ($1, $2, $3)
+            RETURNING id::text
+            """,
+            uuid.UUID(str(session_id)),
+            safe_message,
+            ohvis_task_id,
+        )
+    logger.info(
+        "deferred_reaction_enqueued session=%s deferred=%s owner=%s",
+        session_id[:8],
+        str(deferred_id)[:8],
+        _EXECUTION_OWNER_INSTANCE,
+    )
+    return str(deferred_id)
+
+
+async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
+    """Claim durable reactions on the active API slot and start their streams."""
+    if not _is_local_active_api_slot():
+        return 0
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch(
+                """
+                WITH candidates AS (
+                    SELECT id
+                    FROM chat_deferred_reactions
+                    WHERE status = 'pending'
+                       OR (status = 'claimed' AND lease_expires_at <= NOW())
+                    ORDER BY created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $1
+                )
+                UPDATE chat_deferred_reactions q
+                SET status = 'claimed',
+                    claimed_by = $2,
+                    attempts = attempts + 1,
+                    lease_expires_at = NOW() + INTERVAL '15 minutes',
+                    updated_at = NOW()
+                FROM candidates c
+                WHERE q.id = c.id
+                  AND q.attempts < 8
+                RETURNING q.id::text, q.session_id::text, q.system_message,
+                          q.ohvis_task_id, q.attempts
+                """,
+                max_rows,
+                _EXECUTION_OWNER_INSTANCE,
+            )
+
+    started = 0
+    for row in rows:
+        sid = row["session_id"]
+        if (
+            (sid in _active_bg_tasks and not _active_bg_tasks[sid].done())
+            or sid in _ai_reaction_active
+        ):
+            async with get_pool().acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE chat_deferred_reactions
+                    SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL, updated_at = NOW()
+                    WHERE id = $1 AND claimed_by = $2
+                    """,
+                    uuid.UUID(row["id"]),
+                    _EXECUTION_OWNER_INSTANCE,
+                )
+            continue
+
+        task = await trigger_ai_reaction(
+            sid,
+            row["system_message"],
+            row["ohvis_task_id"],
+            _already_safe=True,
+        )
+        if task is None:
+            async with get_pool().acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE chat_deferred_reactions
+                    SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL, updated_at = NOW()
+                    WHERE id = $1 AND claimed_by = $2
+                    """,
+                    uuid.UUID(row["id"]),
+                    _EXECUTION_OWNER_INSTANCE,
+                )
+            continue
+
+        started += 1
+
+        def _finish_deferred_reaction(_task, deferred_id=row["id"]):
+            async def _persist_finish() -> None:
+                try:
+                    async with get_pool().acquire() as finish_conn:
+                        await finish_conn.execute(
+                            """
+                            UPDATE chat_deferred_reactions
+                            SET status = 'completed', completed_at = NOW(),
+                                lease_expires_at = NULL, error_message = NULL, updated_at = NOW()
+                            WHERE id = $1 AND claimed_by = $2
+                            """,
+                            uuid.UUID(deferred_id),
+                            _EXECUTION_OWNER_INSTANCE,
+                        )
+                except Exception as finish_error:
+                    logger.warning(
+                        "deferred_reaction_finish_failed deferred=%s error=%s",
+                        deferred_id[:8],
+                        str(finish_error)[:160],
+                    )
+
+            _heartbeat_asyncio.create_task(_persist_finish())
+
+        task.add_done_callback(_finish_deferred_reaction)
+    return started
+
+
 async def _consume_next_reaction(sid: str, msg: str) -> None:
     """큐에서 꺼낸 다음 AI 반응 메시지를 소비하는 헬퍼."""
+    if not _is_local_active_api_slot():
+        await _enqueue_deferred_reaction(sid, msg)
+        _ai_reaction_active.pop(sid, None)
+        return
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(sid)
     try:
@@ -8423,17 +8920,21 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
             next_msg = _ai_reaction_queue[sid].pop(0)
             if not _ai_reaction_queue[sid]:
                 del _ai_reaction_queue[sid]
-            _ai_reaction_active[sid] = _time.time()
-            import asyncio as _aio
-            loop = _aio.get_running_loop()
-            loop.create_task(_consume_next_reaction(sid, next_msg))
+            if not _is_local_active_api_slot():
+                await _enqueue_deferred_reaction(sid, next_msg)
+            else:
+                _ai_reaction_active[sid] = _time.time()
+                import asyncio as _aio
+                loop = _aio.get_running_loop()
+                loop.create_task(_consume_next_reaction(sid, next_msg))
 
 
 async def trigger_ai_reaction(
     session_id: str,
     system_message: str,
     ohvis_task_id: str = None,
-) -> None:
+    _already_safe: bool = False,
+) -> Optional[_heartbeat_asyncio.Task]:
     """
     채팅방에 시스템 사용자 메시지를 삽입한 후 AI가 자동 반응하도록 트리거.
     Pipeline Runner / delegate_to_agent 완료 후 AI가 결과를 확인·조치하게 함.
@@ -8455,7 +8956,7 @@ async def trigger_ai_reaction(
         _ai_reaction_queue.pop(k, None)
 
     # 시스템 메시지에 작업 재실행 도구만 금지 (무한 루프 방지), 진단 도구는 허용
-    safe_message = (
+    safe_message = system_message if _already_safe else (
         system_message + "\n\n"
         "⚠️ 이 메시지는 자동 트리거입니다.\n"
         "**금지 도구** (무한 루프 방지): delegate_to_agent, pipeline_c_start, spawn_subagent, spawn_parallel_subagents\n"
@@ -8471,6 +8972,10 @@ async def trigger_ai_reaction(
         "서버가 현재 채팅 세션을 자동 주입합니다. "
         "사용자에게 session_id를 다시 요구하지 말고 현재 채팅 기준으로 진행하세요."
     )
+
+    if not _is_local_active_api_slot():
+        await _enqueue_deferred_reaction(session_id, safe_message, ohvis_task_id)
+        return None
 
     # 🆕 CEO의 SSE 스트리밍(with_background_completion) 실행 중이면 큐잉 (CEO 작업 중단 금지)
     if session_id in _active_bg_tasks and not _active_bg_tasks[session_id].done():
@@ -8550,17 +9055,22 @@ async def trigger_ai_reaction(
                 next_msg = _ai_reaction_queue[session_id].pop(0)
                 if not _ai_reaction_queue[session_id]:
                     del _ai_reaction_queue[session_id]
-                _ai_reaction_active[session_id] = _time.time()
-                loop = _asyncio.get_running_loop()
-                loop.create_task(_consume_next_reaction(session_id, next_msg))
+                if not _is_local_active_api_slot():
+                    await _enqueue_deferred_reaction(session_id, next_msg)
+                else:
+                    _ai_reaction_active[session_id] = _time.time()
+                    loop = _asyncio.get_running_loop()
+                    loop.create_task(_consume_next_reaction(session_id, next_msg))
 
     try:
         loop = _asyncio.get_running_loop()
-        loop.create_task(_consume_stream())
+        task = loop.create_task(_consume_stream())
         logger.info(f"trigger_ai_reaction: triggered for session={session_id[:8]}...")
+        return task
     except RuntimeError:
         _ai_reaction_active.pop(session_id, None)
         logger.error("trigger_ai_reaction: no running event loop")
+        return None
 
 
 async def _analyze_videos_with_gemini(

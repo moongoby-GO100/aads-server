@@ -2,7 +2,7 @@
 set -euo pipefail
 
 max_wait_sec="${1:-7200}"
-expected_max_concurrent="${AADS_RELAY_EXPECTED_MAX_CONCURRENT:-12}"
+expected_max_concurrent="${AADS_RELAY_EXPECTED_MAX_CONCURRENT:-15}"
 expected_acquire_timeout_sec="${AADS_RELAY_EXPECTED_ACQUIRE_TIMEOUT_SEC:-45}"
 poll_sec="${AADS_RELAY_IDLE_POLL_SEC:-5}"
 idle_streak_needed="${AADS_RELAY_IDLE_STREAK_NEEDED:-3}"

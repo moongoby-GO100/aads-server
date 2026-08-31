@@ -2679,9 +2679,15 @@ async def interrupt_session(
         return {"queued": False, "message": "현재 AI가 응답 생성 중이 아닙니다. 일반 메시지로 전송하세요."}
 
 
+class ResumeInterruptedRequest(BaseModel):
+    model_override: Optional[str] = Field(default=None, max_length=100)
+    reset_retry_count: bool = False
+
+
 @router.post("/chat/sessions/{session_id}/resume", tags=["chat-session"])
 async def resume_interrupted(
     session_id: UUID,
+    payload: Optional[ResumeInterruptedRequest] = None,
     context: TenantContext = Depends(require_tenant_member),
 ):
     """서버 재시작으로 중단된 응답을 수동으로 이어서 생성 요청.
@@ -2691,7 +2697,13 @@ async def resume_interrupted(
     """
     if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
         raise _NOT_FOUND("session")
-    from app.services.chat_service import _resume_single_stream, get_streaming_status
+    from app.services.chat_service import (
+        _EXECUTION_OWNER_INSTANCE,
+        _archive_competing_stream_placeholder,
+        _claim_execution_lease,
+        _resume_single_stream,
+        get_streaming_status,
+    )
     import re
 
     sid = str(session_id)
@@ -2710,6 +2722,7 @@ async def resume_interrupted(
             SELECT te.id::text AS execution_id,
                    te.status AS execution_status,
                    te.requested_model,
+                   te.resume_model_override,
                    COALESCE(ph.id, te.assistant_message_id) AS placeholder_id,
                    COALESCE(ph.content, am.content, '') AS partial_content,
                    COALESCE(um.content, (
@@ -2752,7 +2765,8 @@ async def resume_interrupted(
         )
         if not row:
             row = await conn.fetchrow("""
-                SELECT NULL::text AS execution_id, NULL::text AS execution_status, NULL::text AS requested_model,
+                SELECT NULL::text AS execution_id, NULL::text AS execution_status,
+                       NULL::text AS requested_model, NULL::text AS resume_model_override,
                        m.id AS placeholder_id, m.content AS partial_content,
                        (SELECT content FROM chat_messages
                         WHERE session_id = m.session_id AND role = 'user'
@@ -2769,6 +2783,7 @@ async def resume_interrupted(
                 SELECT te.id::text AS execution_id,
                        te.status AS execution_status,
                        te.requested_model,
+                       te.resume_model_override,
                        am.id AS placeholder_id,
                        am.content AS partial_content,
                        COALESCE(um.content, (
@@ -2800,7 +2815,12 @@ async def resume_interrupted(
     if not row:
         return {"resumed": False, "message": "중단된 응답이 없습니다."}
 
-    # F-5: retry_count hard cap + increment for manual resume
+    requested_override = (payload.model_override or "").strip() if payload else ""
+    reset_retry_count = bool(payload and payload.reset_retry_count)
+
+    # Manual resume claims the lease but does not consume retry budget until
+    # _resume_single_stream actually starts a model call.
+    owner_epoch = None
     if row["execution_id"]:
         async with pool.acquire() as conn2:
             _cap_row = await conn2.fetchrow(
@@ -2809,24 +2829,41 @@ async def resume_interrupted(
             )
             _rc = (_cap_row["retry_count"] if _cap_row else 0) or 0
             _err = (_cap_row["error_message"] if _cap_row else "") or ""
-            _resume_cap_boundary = _rc == 5 and _err == "execution_resume_attempt_limit_exceeded"
-            if _rc > 5 or (_rc >= 5 and not _resume_cap_boundary):
-                return {"resumed": False, "message": f"재시도 한도 초과 (retry_count={_rc}). 새 메시지를 보내주세요."}
+            if _rc >= svc._EXECUTION_RESUME_MAX_ATTEMPTS and not reset_retry_count:
+                return {
+                    "resumed": False,
+                    "message": f"재시도 한도 초과 (retry_count={_rc}). 재시도 초기화 후 다시 시도하세요.",
+                    "can_reset_retry_count": True,
+                }
+            owner_epoch = await _claim_execution_lease(
+                conn2,
+                uuid.UUID(row["execution_id"]),
+                status="retrying",
+                error_message="manual_resume_claimed",
+            )
+            if owner_epoch is None:
+                return {"resumed": False, "message": "다른 서버에서 이미 응답 생성 중입니다."}
+            await _archive_competing_stream_placeholder(conn2, session_id, row["execution_id"])
             await conn2.execute(
                 """
                 UPDATE chat_turn_executions
-                SET retry_count = CASE
-                        WHEN retry_count < 8 THEN retry_count + 1
-                        ELSE retry_count
-                    END,
+                SET retry_count = CASE WHEN $4::boolean THEN 0 ELSE retry_count END,
                     status = 'retrying',
+                    resume_model_override = CASE
+                        WHEN $3::text = '' THEN resume_model_override
+                        ELSE $3::text
+                    END,
                     completed_at = NULL,
                     error_message = NULL,
                     updated_at = NOW()
                 WHERE id = $1
                   AND status IN ('running', 'retrying', 'interrupted')
+                  AND owner_instance = $2
                 """,
                 uuid.UUID(row["execution_id"]),
+                _EXECUTION_OWNER_INSTANCE,
+                requested_override,
+                reset_retry_count,
             )
             await conn2.execute(
                 """
@@ -2870,9 +2907,16 @@ async def resume_interrupted(
             row["last_user_msg"] or "", row["workspace_name"] or "CEO",
             execution_id=row["execution_id"],
             requested_model=row["requested_model"],
+            resume_model_override=requested_override or row["resume_model_override"],
+            owner_epoch=owner_epoch,
         )
     )
-    return {"resumed": True, "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요."}
+    return {
+        "resumed": True,
+        "message": "이어서 생성을 시작합니다. 잠시 후 채팅창을 확인하세요.",
+        "requested_model": row["requested_model"],
+        "resume_model_override": requested_override or row["resume_model_override"],
+    }
 
 
 @router.post("/chat/messages/{message_id}/regenerate", tags=["chat-message"])
