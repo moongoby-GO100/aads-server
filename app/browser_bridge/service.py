@@ -564,6 +564,11 @@ class BrowserBridgeService:
             "isolated_profile": isolated_profile,
             "new_window": False,
         }
+        if command_timeout_seconds is not None:
+            launch_params["ready_timeout_seconds"] = max(
+                15.0,
+                min(90.0, float(command_timeout_seconds) - 5.0),
+            )
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
         base_isolation_id = isolation_id or normalized_work_key

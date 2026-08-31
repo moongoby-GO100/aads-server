@@ -686,6 +686,7 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
         url="https://aads.newtalk.kr/",
         preferred_port=9333,
         work_key="ntv2-china-sourcing-admin",
+        command_timeout_seconds=45,
     )
 
     assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
@@ -695,6 +696,7 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
     assert captured_kwargs["params"]["work_key"] == "ntv2-china-sourcing-admin"
     assert captured_kwargs["params"]["isolation_id"] == "ntv2-china-sourcing-admin"
     assert captured_kwargs["params"]["new_window"] is False
+    assert captured_kwargs["params"]["ready_timeout_seconds"] == 40.0
     assert session.work_key == "ntv2-china-sourcing-admin"
 
 

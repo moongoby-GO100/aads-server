@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-08-31 11:52 KST - Runner review model fallback order P1
+
+- Request:
+  - Apply runner model priority from `https://aads.newtalk.kr/settings` review model selection order and make runner work fallback through that order.
+  - Immediately address the runner progress reliability recommendations and report results.
+- Code change:
+  - `app/api/pipeline_runner.py`: submit-time model selection now builds an effective chain from size config, `AI_REVIEW`, `runner_llm`, then `llm`, and `/settings/runner-models` exposes `effective_models`.
+  - `app/services/pipeline_runner_service.py`: Python runner path now uses the same DB/review/routing fallback chain.
+  - `app/services/code_reviewer.py`: AI review model lookup now falls back from `AI_REVIEW` into `runner_llm` and `llm`.
+  - `scripts/pipeline-runner.sh` and `.local`: shell runner now uses the same DB/review/routing fallback chain for both auto and explicit `worker_model` jobs.
+  - `app/api/llm_models.py` and migration `134_runner_review_model_fallback_order.sql`: seed/align `runner_llm` to Codex 5.6 Sol, Terra, Luna, then Claude/GPT backups.
+  - Dashboard `settings/page.tsx`: each size card now shows the effective automatic fallback chain.
+- Verification:
+  - Pending at record time: py_compile, bash -n, pytest, DB migration apply check, 3-server runner script propagation, health and smoke jobs.
+- Deployment:
+  - Pending at record time.
+
 ## 2026-08-31 09:20 KST - Chat premature completed signal hardening
 
 - Request: Immediately fix the case where an unfinished chat response is still treated as completed, including the current response issue, then report after applying the change.
@@ -9412,11 +9429,13 @@
   - The Shinhan result file still had `imported_rows=0`; this record is not a successful collection completion.
 - Code change:
   - `pc_agent/commands/browser_auto.py`: bank work_key reuse now verifies that the current CDP page host matches the requested bank URL before reusing a port.
+  - `app/browser_bridge/service.py`: PC Agent browser launch now passes a longer `ready_timeout_seconds` derived from the collection command timeout, preventing bank Chrome startup from failing after the Agent default 15 seconds.
   - `scripts/yeoljeong_auto_collect.py`: bank timeout diagnostics now include a derived bank browser work_key when the payload did not carry one.
   - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped PC Agent to `1.0.65` so ICU55HK can self-update to the work_key isolation fix.
   - `tests/unit/test_cdp_session_manager.py` and `tests/unit/test_yeoljeong_auto_collect.py`: regression coverage added.
 - Verification:
   - `docker exec -w /app aads-server-green python -m pytest tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_auto_collect.py -q` passed 59 tests.
+  - `docker exec -w /app aads-server-green python -m pytest tests/unit/test_browser_bridge.py -q` passed 45 tests.
   - `python3 -m py_compile pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py` succeeded.
   - `git diff --check -- pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_auto_collect.py` succeeded.
 - Next:
