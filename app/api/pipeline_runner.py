@@ -471,25 +471,83 @@ async def _record_blocked_dependency(conn, *, job_id: str, req: "JobSubmitReques
 
 
 async def _get_model_for_size(conn, size: str) -> str:
-    """작업 규모 → DB(runner_model_config)에서 1순위 모델 조회."""
+    """작업 규모 → DB 설정/리뷰 라우팅 순서 기반 1순위 모델 조회."""
+    cycle = await _get_model_cycle_for_size(conn, size)
+    if cycle:
+        return cycle[0]
+    # DB 조회 실패 시 안전망
+    return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
+            "M": "claude-sonnet-4-6", "L": "claude-sonnet-4-6",
+            "XL": "claude-opus-5"}.get((size or "M").upper(), "claude-sonnet-4-6")
+
+
+def _model_spec_from_routing(provider: str, model_id: str) -> str:
+    """model_routing_preferences row를 runner가 실행 가능한 model spec으로 변환."""
+    provider_name = (provider or "").strip().lower()
+    model_name = (model_id or "").strip()
+    if not model_name:
+        return ""
+    if provider_name in {"codex", "openai"} and model_name.startswith("gpt-"):
+        return f"codex:{model_name}"
+    if provider_name == "anthropic":
+        return model_name
+    if provider_name in {"gemini", "google", "deepseek", "kimi", "minimax", "qwen", "groq", "openrouter", "litellm"}:
+        return f"litellm:{model_name}"
+    if ":" in model_name:
+        return model_name
+    return f"{provider_name}:{model_name}" if provider_name else model_name
+
+
+async def _get_model_cycle_for_size(conn, size: str) -> list[str]:
+    """size 설정 → AI_REVIEW 설정 → runner_llm/llm 라우팅 순으로 중복 제거한 폴백 체인."""
     import json as _json_model
     from app.services.model_registry import filter_executable_models
 
     _size = (size or "M").upper()
-    row = await conn.fetchrow(
-        "SELECT models FROM runner_model_config WHERE size = $1", _size
-    )
-    if row and row["models"]:
+    candidates: list[str] = []
+
+    async def _append_config(config_size: str) -> None:
+        row = await conn.fetchrow(
+            "SELECT models FROM runner_model_config WHERE size = $1",
+            config_size,
+        )
+        if not row or not row["models"]:
+            return
         raw = row["models"]
         models = _json_model.loads(raw) if isinstance(raw, str) else raw
-        if models:
-            executable = await filter_executable_models(models)
-            if executable:
-                return executable[0]
-    # DB 조회 실패 시 안전망
-    return {"XS": "claude-haiku-4-5-20251001", "S": "claude-haiku-4-5-20251001",
-            "M": "claude-sonnet-4-6", "L": "claude-sonnet-4-6",
-            "XL": "claude-opus-5"}.get(_size, "claude-sonnet-4-6")
+        candidates.extend(str(model).strip() for model in (models or []) if str(model).strip())
+
+    await _append_config(_size)
+    if _size != "AI_REVIEW":
+        await _append_config("AI_REVIEW")
+
+    routing_rows = await conn.fetch(
+        """
+        SELECT route_key, provider, model_id
+        FROM model_routing_preferences
+        WHERE route_key IN ('runner_llm', 'llm')
+          AND is_enabled = TRUE
+        ORDER BY CASE route_key WHEN 'runner_llm' THEN 0 ELSE 1 END,
+                 is_default DESC,
+                 display_order ASC,
+                 provider ASC,
+                 model_id ASC
+        """
+    )
+    candidates.extend(
+        _model_spec_from_routing(row["provider"], row["model_id"])
+        for row in routing_rows
+    )
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for model in candidates:
+        normalized = str(model or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return await filter_executable_models(deduped)
 
 
 
@@ -1692,7 +1750,7 @@ class _RunnerModelConfigUpdate(BaseModel):
 
 @router.get("/settings/runner-models")
 async def get_runner_model_config():
-    """size별 러너 모델 우선순위 조회."""
+    """size별 러너 모델 우선순위와 실제 자동 폴백 체인 조회."""
     import json as _json_get
     from app.core.db_pool import get_pool
     pool = get_pool()
@@ -1701,6 +1759,10 @@ async def get_runner_model_config():
             "SELECT size, models, updated_at, updated_by "
             "FROM runner_model_config ORDER BY size"
         )
+        effective_by_size = {
+            size: await _get_model_cycle_for_size(conn, size)
+            for size in ["XS", "S", "M", "L", "XL", "AI_REVIEW"]
+        }
     configs = []
     for r in rows:
         # asyncpg JSONB → str일 수 있으므로 안전하게 파싱
@@ -1714,10 +1776,11 @@ async def get_runner_model_config():
         configs.append({
             "size": r["size"],
             "models": models,
+            "effective_models": effective_by_size.get(r["size"], models),
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
             "updated_by": r["updated_by"],
         })
-    return {"configs": configs}
+    return {"configs": configs, "effective_by_size": effective_by_size}
 
 
 @router.put("/settings/runner-models")

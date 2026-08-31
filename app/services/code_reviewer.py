@@ -132,24 +132,66 @@ _SUSPICIOUS_INPUT_PATTERNS: list[tuple[re.Pattern[str], str, str, bool, str]] = 
 
 
 async def _get_review_models() -> list[str]:
-    """DB runner_model_config에서 AI_REVIEW 모델 목록 조회."""
+    """DB AI_REVIEW 설정을 우선하고 runner/llm 라우팅 순서로 폴백."""
     try:
         from app.core.db_pool import get_pool
         import json as _j
         from app.services.model_registry import filter_executable_models
+
+        def _routing_model(provider: str, model_id: str) -> str:
+            provider_name = (provider or "").strip().lower()
+            model_name = (model_id or "").strip()
+            if not model_name:
+                return ""
+            if provider_name in {"codex", "openai"} and model_name.startswith("gpt-"):
+                return f"codex:{model_name}"
+            if provider_name == "anthropic":
+                return model_name
+            if provider_name in {"gemini", "google", "deepseek", "kimi", "minimax", "qwen", "groq", "openrouter", "litellm"}:
+                return f"litellm:{model_name}"
+            if ":" in model_name:
+                return model_name
+            return f"{provider_name}:{model_name}" if provider_name else model_name
+
         pool = get_pool()
+        candidates: list[str] = []
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT models FROM runner_model_config WHERE size = 'AI_REVIEW'"
             )
+            route_rows = await conn.fetch(
+                """
+                SELECT route_key, provider, model_id
+                FROM model_routing_preferences
+                WHERE route_key IN ('runner_llm', 'llm')
+                  AND is_enabled = TRUE
+                ORDER BY CASE route_key WHEN 'runner_llm' THEN 0 ELSE 1 END,
+                         is_default DESC,
+                         display_order ASC,
+                         provider ASC,
+                         model_id ASC
+                """
+            )
         if row:
             raw = row["models"]
             if isinstance(raw, str):
-                return await filter_executable_models(_j.loads(raw))
+                candidates.extend(_j.loads(raw))
             elif isinstance(raw, list):
-                return await filter_executable_models(raw)
-            return await filter_executable_models(list(raw) if raw else [_REVIEW_MODEL_FALLBACK])
-        return [_REVIEW_MODEL_FALLBACK]
+                candidates.extend(raw)
+            else:
+                candidates.extend(list(raw) if raw else [])
+        candidates.extend(_routing_model(r["provider"], r["model_id"]) for r in route_rows)
+        candidates.append(_REVIEW_MODEL_FALLBACK)
+        seen: set[str] = set()
+        ordered = []
+        for model in candidates:
+            normalized = str(model or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(normalized)
+        filtered = await filter_executable_models(ordered)
+        return filtered or [_REVIEW_MODEL_FALLBACK]
     except Exception as e:
         logger.warning("review_model_db_lookup_failed: %s", str(e)[:80])
         return [_REVIEW_MODEL_FALLBACK]

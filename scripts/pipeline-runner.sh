@@ -196,11 +196,48 @@ get_job_status() {
 get_db_model_cycle() {
     local size="$1"
     local result
-    result=$(db_exec "SELECT m.value FROM runner_model_config c, jsonb_array_elements_text(c.models) WITH ORDINALITY m(value, ord) WHERE c.size='${size}' ORDER BY m.ord;" 2>/dev/null) || return 1
+    result=$(db_exec "WITH candidates AS (
+        SELECT 0 AS group_order, m.value, m.ord
+        FROM runner_model_config c,
+             jsonb_array_elements_text(c.models) WITH ORDINALITY m(value, ord)
+        WHERE c.size='${size}'
+        UNION ALL
+        SELECT 1 AS group_order, m.value, m.ord
+        FROM runner_model_config c,
+             jsonb_array_elements_text(c.models) WITH ORDINALITY m(value, ord)
+        WHERE c.size='AI_REVIEW'
+          AND '${size}' <> 'AI_REVIEW'
+        UNION ALL
+        SELECT CASE route_key WHEN 'runner_llm' THEN 2 ELSE 3 END AS group_order,
+               CASE
+                 WHEN provider IN ('codex','openai') AND model_id LIKE 'gpt-%' THEN 'codex:' || model_id
+                 WHEN provider = 'anthropic' THEN model_id
+                 WHEN provider IN ('gemini','google','deepseek','kimi','minimax','qwen','groq','openrouter','litellm') THEN 'litellm:' || model_id
+                 WHEN position(':' in model_id) > 0 THEN model_id
+                 ELSE provider || ':' || model_id
+               END AS value,
+               row_number() OVER (PARTITION BY route_key ORDER BY is_default DESC, display_order ASC, provider ASC, model_id ASC) AS ord
+        FROM model_routing_preferences
+        WHERE route_key IN ('runner_llm','llm')
+          AND is_enabled = TRUE
+    ), ranked AS (
+        SELECT value, MIN(group_order * 1000 + ord) AS rank
+        FROM candidates
+        WHERE COALESCE(value, '') <> ''
+        GROUP BY value
+    )
+    SELECT value FROM ranked ORDER BY rank;" 2>/dev/null) || return 1
     [[ -z "$result" ]] && return 1
     while IFS= read -r model; do
         normalize_runner_model "$model"
     done <<< "$result"
+}
+
+append_model_twice() {
+    local model
+    model=$(normalize_runner_model "${1:-}")
+    [[ -z "$model" || "$model" == "auto" ]] && return 0
+    MODEL_CYCLE+=("$model" "$model")
 }
 
 normalize_runner_model() {
@@ -1022,7 +1059,7 @@ run_job() {
         if [[ -n "$db_models" ]]; then
             MODEL_CYCLE=()
             while IFS= read -r m; do
-                [[ -n "$m" ]] && MODEL_CYCLE+=("$m" "$m")
+                append_model_twice "$m"
             done <<< "$db_models"
             log "  DB_MODEL_CONFIG job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
         else
@@ -1037,26 +1074,27 @@ run_job() {
             MODEL_CYCLE=("litellm:minimax-m2.7" "litellm:minimax-m2.7" "$claude_fb" "$claude_fb")
         fi
     else
-        # worker_model 명시 지정 → 지정 모델 우선, 크기별 Claude 폴백
-        local claude_primary claude_secondary
-        case "$job_size" in
-            XL)      claude_primary="claude-opus-4-6";           claude_secondary="claude-sonnet-4-6" ;;
-            L|M)     claude_primary="claude-sonnet-4-6";         claude_secondary="claude-opus-4-6" ;;
-            S|XS|*)  claude_primary="claude-haiku-4-5-20251001"; claude_secondary="claude-sonnet-4-6" ;;
-        esac
-        if [[ "$job_model" == codex:* ]]; then
-            MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
-        elif [[ "$job_model" == litellm:* ]]; then
-            if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
-                MODEL_CYCLE=("$job_model")
-            else
-                MODEL_CYCLE=("$job_model" "$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
-            fi
-        elif [[ "$job_model" == "claude-"* ]]; then
-            MODEL_CYCLE=("$job_model" "$job_model" "$claude_secondary" "$claude_secondary" "$claude_primary" "$claude_primary")
-        else
-            MODEL_CYCLE=("$claude_primary" "$claude_primary" "$claude_secondary" "$claude_secondary")
+        # worker_model 명시 지정 → 지정 모델 우선, 이후에도 CEO 설정/리뷰 라우팅 순서로 폴백
+        local db_models
+        db_models=$(get_db_model_cycle "$job_size") || db_models=""
+        MODEL_CYCLE=()
+        append_model_twice "$job_model"
+        if [[ -n "$db_models" ]]; then
+            while IFS= read -r m; do
+                [[ "$(normalize_runner_model "$m")" != "$job_model" ]] && append_model_twice "$m"
+            done <<< "$db_models"
         fi
+        if [[ ${#MODEL_CYCLE[@]} -le 2 ]]; then
+            local claude_primary claude_secondary
+            case "$job_size" in
+                XL)      claude_primary="claude-opus-5";              claude_secondary="claude-sonnet-4-6" ;;
+                L|M)     claude_primary="claude-sonnet-4-6";         claude_secondary="claude-opus-5" ;;
+                S|XS|*)  claude_primary="claude-haiku-4-5-20251001"; claude_secondary="claude-sonnet-4-6" ;;
+            esac
+            append_model_twice "$claude_primary"
+            append_model_twice "$claude_secondary"
+        fi
+        log "  DB_MODEL_CONFIG_OVERRIDE job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
     fi
     # TOKEN_CYCLE 동적 생성 (MODEL_CYCLE 길이에 맞춤)
     local TOKEN_CYCLE=()

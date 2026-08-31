@@ -186,9 +186,12 @@ async def _seed_media_models(conn) -> None:
           ('audio','elevenlabs','eleven-v3',10,true,true,'ElevenLabs v3','system'),
           ('audio','openai','tts-1-hd',20,true,false,'OpenAI TTS HD','system'),
           ('audio','google','google-wavenet-tts',30,false,false,'WaveNet TTS','system'),
-          ('runner_llm','anthropic','claude-opus-4-8',10,true,true,'Runner 기본','system'),
-          ('runner_llm','openai','gpt-5.5',20,true,false,'GPT-5.5 백업','system'),
-          ('runner_llm','google','gemini-2.5-pro',30,true,false,'Gemini 2.5 Pro 백업','system')
+          ('runner_llm','codex','gpt-5.6-sol',5,true,true,'Runner/review primary from settings order','system'),
+          ('runner_llm','codex','gpt-5.6-terra',6,true,false,'Runner/review fallback from settings order','system'),
+          ('runner_llm','codex','gpt-5.6-luna',7,true,false,'Runner/review fallback from settings order','system'),
+          ('runner_llm','anthropic','claude-opus-5',10,true,false,'Claude fallback after Codex 5.6 family','system'),
+          ('runner_llm','openai','gpt-5.5',20,true,false,'GPT-5.5 legacy backup','system'),
+          ('runner_llm','google','gemini-2.5-pro',30,true,false,'Gemini 2.5 Pro backup','system')
         ) AS seed(route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by)
         ON CONFLICT (route_key, provider, model_id) DO NOTHING
     """)
@@ -648,6 +651,11 @@ async def get_model_routing_preferences() -> dict[str, Any]:
         for item in preferences
         if item["route_key"] == "llm" and item["is_enabled"]
     ]
+    runner_fallback_chain = [
+        item
+        for item in preferences
+        if item["route_key"] == "runner_llm" and item["is_enabled"]
+    ]
     return {
         "preferences": preferences,
         "total": len(preferences),
@@ -655,6 +663,7 @@ async def get_model_routing_preferences() -> dict[str, Any]:
         "default_models": default_models,
         "blocked_counts": blocked_counts,
         "fallback_chain": fallback_chain,
+        "runner_fallback_chain": runner_fallback_chain,
         "error_models": [_routing_error_model_payload(row) for row in error_rows],
     }
 

@@ -171,22 +171,72 @@ def list_jobs(chat_session_id: str = None) -> list:
 
 
 async def _get_db_model_config(size: str) -> list[str]:
-    """DB runner_model_config에서 size별 모델 우선순위 조회. 실패 시 빈 리스트 반환."""
-    query = """
-        SELECT m.model
-        FROM runner_model_config c,
-             jsonb_array_elements_text(c.models) WITH ORDINALITY AS m(model, priority)
-        WHERE c.size = $1
-        ORDER BY m.priority
-    """
+    """DB 설정 → AI_REVIEW → runner_llm/llm 라우팅 순서로 실행 후보 조회."""
     try:
         from app.core.db_pool import get_pool
         from app.services.model_registry import filter_executable_models
 
+        def _routing_model(provider: str, model_id: str) -> str:
+            provider_name = (provider or "").strip().lower()
+            model_name = (model_id or "").strip()
+            if not model_name:
+                return ""
+            if provider_name in {"codex", "openai"} and model_name.startswith("gpt-"):
+                return f"codex:{model_name}"
+            if provider_name == "anthropic":
+                return model_name
+            if provider_name in {"gemini", "google", "deepseek", "kimi", "minimax", "qwen", "groq", "openrouter", "litellm"}:
+                return f"litellm:{model_name}"
+            if ":" in model_name:
+                return model_name
+            return f"{provider_name}:{model_name}" if provider_name else model_name
+
         pool = get_pool()
+        requested_size = (size or "M").upper()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query, (size or "M").upper())
-        models = [row["model"] for row in rows if row and row["model"]]
+            rows = await conn.fetch(
+                """
+                WITH config_models AS (
+                    SELECT 0 AS group_order, m.model, m.priority
+                    FROM runner_model_config c,
+                         jsonb_array_elements_text(c.models) WITH ORDINALITY AS m(model, priority)
+                    WHERE c.size = $1
+                    UNION ALL
+                    SELECT 1 AS group_order, m.model, m.priority
+                    FROM runner_model_config c,
+                         jsonb_array_elements_text(c.models) WITH ORDINALITY AS m(model, priority)
+                    WHERE c.size = 'AI_REVIEW'
+                      AND $1 <> 'AI_REVIEW'
+                )
+                SELECT group_order, model, priority, NULL::text AS provider
+                FROM config_models
+                UNION ALL
+                SELECT CASE route_key WHEN 'runner_llm' THEN 2 ELSE 3 END AS group_order,
+                       model_id AS model,
+                       row_number() OVER (
+                           PARTITION BY route_key
+                           ORDER BY is_default DESC, display_order ASC, provider ASC, model_id ASC
+                       ) AS priority,
+                       provider
+                FROM model_routing_preferences
+                WHERE route_key IN ('runner_llm', 'llm')
+                  AND is_enabled = TRUE
+                ORDER BY group_order, priority
+                """,
+                requested_size,
+            )
+        models: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            raw_model = (
+                _routing_model(row["provider"], row["model"])
+                if row["provider"]
+                else str(row["model"] or "").strip()
+            )
+            if not raw_model or raw_model in seen:
+                continue
+            seen.add(raw_model)
+            models.append(raw_model)
         return await filter_executable_models(models)
     except Exception as e:
         logger.warning("pipeline_c_model_config_db_lookup_failed size=%s error=%s", size, str(e)[:120])

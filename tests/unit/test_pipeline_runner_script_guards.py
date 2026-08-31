@@ -109,6 +109,23 @@ def test_pipeline_runner_general_claim_uses_admin_model_column():
 
     assert "model_return_expr=\"COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')\"" in script
     assert "get_db_model_cycle \"$job_size\"" in script
+    assert "c.size='AI_REVIEW'" in script
+    assert "model_routing_preferences" in script
+    assert "route_key IN ('runner_llm','llm')" in script
+    assert "DB_MODEL_CONFIG_OVERRIDE" in script
+
+
+def test_pipeline_runner_api_uses_review_routing_fallback_chain():
+    api = (ROOT / "app" / "api" / "pipeline_runner.py").read_text(encoding="utf-8")
+    service = (ROOT / "app" / "services" / "pipeline_runner_service.py").read_text(encoding="utf-8")
+    reviewer = (ROOT / "app" / "services" / "code_reviewer.py").read_text(encoding="utf-8")
+
+    assert "_get_model_cycle_for_size" in api
+    assert "effective_by_size" in api
+    assert "route_key IN ('runner_llm', 'llm')" in api
+    assert "CASE route_key WHEN 'runner_llm' THEN 2 ELSE 3 END" in service
+    assert "AI_REVIEW" in reviewer
+    assert "route_key IN ('runner_llm', 'llm')" in reviewer
 
 
 def test_pipeline_runner_allows_codex_56_cli_models_without_fallback():

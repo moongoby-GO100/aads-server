@@ -10,7 +10,7 @@
   - `app/services/pipeline_runner_service.py`: Python runner path now uses the same DB/review/routing fallback chain.
   - `app/services/code_reviewer.py`: AI review model lookup now falls back from `AI_REVIEW` into `runner_llm` and `llm`.
   - `scripts/pipeline-runner.sh` and `.local`: shell runner now uses the same DB/review/routing fallback chain for both auto and explicit `worker_model` jobs.
-  - `app/api/llm_models.py` and migration `134_runner_review_model_fallback_order.sql`: seed/align `runner_llm` to Codex 5.6 Sol, Terra, Luna, then Claude/GPT backups.
+  - `app/api/llm_models.py` and migration `137_runner_review_model_fallback_order.sql`: seed/align `runner_llm` to Codex 5.6 Sol, Terra, Luna, then Claude/GPT backups.
   - Dashboard `settings/page.tsx`: each size card now shows the effective automatic fallback chain.
 - Verification:
   - Pending at record time: py_compile, bash -n, pytest, DB migration apply check, 3-server runner script propagation, health and smoke jobs.
