@@ -9403,6 +9403,25 @@
 - Deployment:
   - Pending at this record point; deploy after commit/push with `bash /root/aads/aads-server/deploy.sh bluegreen`.
 
+## 2026-08-31 11:50 KST - FOOD Shinhan bank PC Agent work_key isolation
+
+- Request: complete Shinhan automatic bank collection and report actual collection rows from the dedicated non-CEO PC.
+- Finding:
+  - `DESKTOP-ICU55HK` / Agent `7f99c528-24d` was correctly selected; CEO PC `2e9379a1-fed` remained excluded.
+  - Mia Shinhan credentials were present, but the bank work_key reused stale CDP targets from Coupang/GO100 tabs, so the Shinhan run could not reliably reach the intended bank page.
+  - The Shinhan result file still had `imported_rows=0`; this record is not a successful collection completion.
+- Code change:
+  - `pc_agent/commands/browser_auto.py`: bank work_key reuse now verifies that the current CDP page host matches the requested bank URL before reusing a port.
+  - `scripts/yeoljeong_auto_collect.py`: bank timeout diagnostics now include a derived bank browser work_key when the payload did not carry one.
+  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped PC Agent to `1.0.65` so ICU55HK can self-update to the work_key isolation fix.
+  - `tests/unit/test_cdp_session_manager.py` and `tests/unit/test_yeoljeong_auto_collect.py`: regression coverage added.
+- Verification:
+  - `docker exec -w /app aads-server-green python -m pytest tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_auto_collect.py -q` passed 59 tests.
+  - `python3 -m py_compile pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py` succeeded.
+  - `git diff --check -- pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_auto_collect.py` succeeded.
+- Next:
+  - Commit/push the selected files, trigger `self_update` on Agent `7f99c528-24d`, then rerun Mia Shinhan collection and accept completion only when `imported_rows > 0` or a verified normal no-record result is returned.
+
 ## 2026-08-31 08:40 KST - Chat recovery hard-timeout and loop false-positive rollout
 
 - Request: apply the improvement actions for session `15782f6e-35ca-475b-ac45-c152c26a42fa`.

@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import threading
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
@@ -440,6 +441,39 @@ def _looks_like_translated_target(url: str, title: str) -> bool:
 def _looks_like_vvic_target(url: str, title: str) -> bool:
     haystack = f"{url} {title}".lower()
     return "vvic" in haystack
+
+
+def _url_hostname(value: str) -> str:
+    try:
+        return urllib.parse.urlparse(str(value or "")).hostname or ""
+    except Exception:
+        return ""
+
+
+def _same_or_child_host(candidate: str, expected: str) -> bool:
+    candidate_host = _url_hostname(candidate).lower()
+    expected_host = _url_hostname(expected).lower()
+    if not candidate_host or not expected_host:
+        return False
+    return candidate_host == expected_host or candidate_host.endswith("." + expected_host)
+
+
+async def _bank_work_key_port_matches_url(port: int, requested_url: str) -> bool:
+    requested = str(requested_url or "").strip()
+    if not requested or requested == "about:blank":
+        return True
+    try:
+        targets = await _list_cdp_targets(port)
+    except Exception:
+        return False
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        if str(target.get("type") or "").strip().lower() not in {"", "page"}:
+            continue
+        if _same_or_child_host(str(target.get("url") or ""), requested):
+            return True
+    return False
 
 
 def _target_sort_key(target: dict[str, Any], *, preferred_target_id: str = "") -> tuple[int, int, int, int, str]:
@@ -1999,43 +2033,56 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         if existing_session:
             existing = await _probe_cdp_version(existing_session.port)
             if existing is not None:
-                navigated = False
-                navigate_error = ""
-                if str(url or "").strip() and str(url).strip() != "about:blank":
-                    try:
-                        navigate_result = await browser_navigate(
-                            {
-                                **params,
-                                "url": str(url),
-                                "port": existing_session.port,
-                                "work_key": work_key,
-                                "reuse_tab": False,
-                            }
-                        )
-                        navigated = isinstance(navigate_result, dict) and navigate_result.get("status") == "success"
-                        if not navigated:
-                            navigate_data = navigate_result.get("data") if isinstance(navigate_result, dict) else {}
-                            if isinstance(navigate_data, dict):
-                                navigate_error = str(
-                                    navigate_data.get("error")
-                                    or navigate_data.get("message")
-                                    or navigate_data.get("error_code")
-                                    or ""
-                                )[:200]
-                    except Exception as exc:
-                        navigate_error = str(exc)[:200]
-                return {
-                    "status": "success",
-                    "data": {
-                        "message": f"기존 CDP 세션 사용 (port {existing_session.port})",
-                        "port": existing_session.port,
-                        "user_data_dir": existing_session.profile_dir,
-                        "cdp_ready": True,
-                        "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
-                        "navigated": navigated,
-                        "navigate_error": navigate_error,
-                    },
-                }
+                if work_key.startswith("yeoljeong-bank-") and not await _bank_work_key_port_matches_url(
+                    existing_session.port,
+                    str(url or ""),
+                ):
+                    logger.warning(
+                        "browser_launch_bank_work_key_port_mismatch work_key=%s port=%d url=%s",
+                        work_key,
+                        existing_session.port,
+                        str(url or "")[:160],
+                    )
+                    CDPSessionManager.release(work_key)
+                    existing = None
+                else:
+                    navigated = False
+                    navigate_error = ""
+                    if str(url or "").strip() and str(url).strip() != "about:blank":
+                        try:
+                            navigate_result = await browser_navigate(
+                                {
+                                    **params,
+                                    "url": str(url),
+                                    "port": existing_session.port,
+                                    "work_key": work_key,
+                                    "reuse_tab": False,
+                                }
+                            )
+                            navigated = isinstance(navigate_result, dict) and navigate_result.get("status") == "success"
+                            if not navigated:
+                                navigate_data = navigate_result.get("data") if isinstance(navigate_result, dict) else {}
+                                if isinstance(navigate_data, dict):
+                                    navigate_error = str(
+                                        navigate_data.get("error")
+                                        or navigate_data.get("message")
+                                        or navigate_data.get("error_code")
+                                        or ""
+                                    )[:200]
+                        except Exception as exc:
+                            navigate_error = str(exc)[:200]
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message": f"기존 CDP 세션 사용 (port {existing_session.port})",
+                            "port": existing_session.port,
+                            "user_data_dir": existing_session.profile_dir,
+                            "cdp_ready": True,
+                            "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
+                            "navigated": navigated,
+                            "navigate_error": navigate_error,
+                        },
+                    }
             CDPSessionManager.release(work_key)
 
         first_port = CDPSessionManager.allocate_port(work_key, preferred=preferred, candidates=ports)

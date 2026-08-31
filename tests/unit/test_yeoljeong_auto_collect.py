@@ -1229,6 +1229,24 @@ def test_run_sync_with_timeout_runs_child_process(monkeypatch):
     assert summary["summary"][0]["status"] == "succeeded"
 
 
+def test_bank_timeout_result_includes_derived_work_key():
+    result = auto_collect._timeout_result(
+        {
+            "services": ["shinhan_business"],
+            "bank_only": True,
+            "bank_account_id": "bank-1",
+            "business_id": "biz-mia",
+            "branch": "branch-gangbuk-mia",
+            "browser_agent_id": "7f99c528-24d",
+        },
+        320,
+    )
+
+    diagnostics = result["bank_collections"][0]["diagnostics"]
+    assert diagnostics["bank_browser_work_key"] == "yeoljeong-bank-shinhan_business-biz-mia-branch-gangbuk-mia"
+    assert diagnostics["browser_agent_id"] == "7f99c528-24d"
+
+
 def test_run_sync_with_timeout_splits_multi_service_attempts(monkeypatch):
     calls = []
 

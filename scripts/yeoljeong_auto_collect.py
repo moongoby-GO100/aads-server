@@ -1251,10 +1251,12 @@ def _latest_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
     services = _payload_services(payload)
+    business_id = str(payload.get("business_id") or "")
+    branch = str(payload.get("branch") or "")
     result = {
         "synced_at": datetime.now(KST).isoformat(timespec="seconds"),
-        "business_id": payload.get("business_id") or "",
-        "branch": payload.get("branch") or "",
+        "business_id": business_id,
+        "branch": branch,
         "date_from": payload.get("date_from") or "",
         "date_to": payload.get("date_to") or "",
         "totals": _empty_delivery_counts(),
@@ -1278,8 +1280,8 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
             {
                 "service": service if service in {"shinhan_business", "ibk_business"} else "bank",
                 "bank_account_id": str(payload.get("bank_account_id") or ""),
-                "business_id": payload.get("business_id") or "",
-                "branch_id": payload.get("branch") or "",
+                "business_id": business_id,
+                "branch_id": branch,
                 "status": "failed",
                 "connector_status": "TIMEOUT",
                 "connection_type": "browser",
@@ -1291,7 +1293,10 @@ def _timeout_result(payload: dict[str, Any], timeout_seconds: int) -> dict[str, 
                 "message": f"은행 자동수집 단일 시도가 {timeout_seconds}초를 초과해 중단됐습니다. 다음 시도에서 재개합니다.",
                 "diagnostics": {
                     "browser_agent_id": str(payload.get("browser_agent_id") or ""),
-                    "bank_browser_work_key": str(payload.get("bank_browser_work_key") or ""),
+                    "bank_browser_work_key": str(
+                        payload.get("bank_browser_work_key")
+                        or f"yeoljeong-bank-{service}-{business_id}-{branch}"
+                    ),
                     "attempt_timeout_seconds": str(timeout_seconds),
                 },
                 "last_collected_at": "",

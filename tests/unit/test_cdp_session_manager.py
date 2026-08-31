@@ -11,6 +11,7 @@ from browser_auto import (
     browser_launch,
     browser_navigate,
     browser_close_session,
+    _bank_work_key_port_matches_url,
     _default_profile_root,
     _effective_port,
 )
@@ -174,6 +175,46 @@ async def test_browser_launch_navigates_existing_work_key_session(monkeypatch):
     assert result["data"]["navigated"] is True
     assert navigations[0]["url"] == "https://store.coupangeats.com/merchant/"
     assert navigations[0]["reuse_tab"] is False
+
+
+@pytest.mark.asyncio
+async def test_bank_work_key_port_rejects_other_portal_targets(monkeypatch):
+    async def fake_list_targets(_port):
+        return [
+            {
+                "id": "target-coupang",
+                "type": "page",
+                "url": "https://store.coupangeats.com/merchant/login",
+                "webSocketDebuggerUrl": "ws://target",
+            }
+        ]
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+
+    assert await _bank_work_key_port_matches_url(
+        9222,
+        "https://bank.shinhan.com/rib/easy/index.jsp",
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_bank_work_key_port_accepts_requested_bank_target(monkeypatch):
+    async def fake_list_targets(_port):
+        return [
+            {
+                "id": "target-shinhan",
+                "type": "page",
+                "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                "webSocketDebuggerUrl": "ws://target",
+            }
+        ]
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+
+    assert await _bank_work_key_port_matches_url(
+        9222,
+        "https://bank.shinhan.com/rib/easy/index.jsp",
+    ) is True
 
 
 @pytest.mark.asyncio
