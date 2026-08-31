@@ -32,3 +32,14 @@ def test_pipeline_runner_approval_requires_review_and_commit_gate():
     assert "승인 차단: AI 리뷰 결과가 없습니다" in source
     assert "latest_review[\"verdict\"] != \"APPROVE\"" in source
     assert "'event', 'approval_decision'" in source
+
+
+def test_pipeline_runner_exposes_model_stats_and_approval_timestamps():
+    source = (ROOT / "app/api/pipeline_runner.py").read_text()
+
+    assert '"/pipeline/runner/model-stats"' in source
+    assert "pipeline_runner_events" in source
+    assert "avg_attempt_seconds" in source
+    assert "done_rate_pct" in source
+    assert "approved_at = NOW()" in source
+    assert "rejected_at = NOW()" in source

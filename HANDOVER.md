@@ -1,5 +1,31 @@
 # AADS HANDOVER
 
+## 2026-08-31 14:16 KST - Pipeline Runner telemetry and review fail-close
+
+- Request:
+  - Re-check prior and current runner reliability recommendations, apply improvements, compute model speed/duration/completion statistics, and store/manage all data needed for runner improvement.
+- Findings:
+  - GO100 `runner-cdf3e27d` showed `AI_REVIEW_SKIP ... HTTP 000` followed by `AWAITING_APPROVAL`, meaning review API outage could still default to approval-ready.
+  - Current DB distribution after backfill: `rejected_done=622`, `done=2`, `error=2`, `awaiting_approval=1`.
+  - Model stats are now queryable, but historical `rejected_done` rows mix CEO rejection/cleanup with model execution quality, so future attempt-level telemetry is required for clean model comparison.
+- Changes:
+  - Added `migrations/139_pipeline_runner_telemetry.sql`.
+  - Added `pipeline_runner_events` and `pipeline_runner_model_stats` for model attempt speed, terminal timing, review result, approval, and deployment statistics.
+  - Backfilled `pipeline_jobs.completed_at` for 626 terminal rows and latest review fields for 298 rows.
+  - Updated `scripts/pipeline-runner.sh` and `.local` to record job/model/review/approval/terminal events, set `completed_at`, and fail-close when AI review API is unavailable.
+  - Changed runner DB calls to pass SQL through stdin instead of `psql -c`, preventing full claim/update SQL from appearing in `systemctl status` process arguments.
+  - Added `/api/v1/pipeline/runner/model-stats` endpoint in `app/api/pipeline_runner.py`.
+  - Added regression tests for telemetry, review outage fail-close, model stats API, and approval timestamps.
+- Verification:
+  - `bash -n scripts/pipeline-runner.sh` passed.
+  - `bash -n scripts/pipeline-runner.sh.local` passed.
+  - `python3 -m py_compile app/api/pipeline_runner.py` passed.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py` passed: 22 tests, 1 existing pytest config warning.
+  - `docker exec aads-postgres psql -U aads -d aads < migrations/139_pipeline_runner_telemetry.sql` succeeded: `ALTER TABLE`, `UPDATE 626`, `UPDATE 298`, `CREATE TABLE`, 3 indexes, `CREATE VIEW`.
+- Deployment:
+  - DB migration is applied on the running AADS PostgreSQL container.
+  - Code is verified locally but not pushed/deployed/restarted yet in this entry.
+
 ## 2026-08-31 12:24 KST - Claude/Codex relay slot target and acquire metrics
 
 - Request:

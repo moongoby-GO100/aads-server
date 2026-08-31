@@ -172,8 +172,10 @@ db_exec() {
     # instruction에 | 문자가 포함되면 IFS='|' 파싱이 깨지는 버그 수정
     # -q: UPDATE ... RETURNING 0 rows일 때 "UPDATE 0" command tag가 stdout에 섞여
     #     job_id 처리 루프를 오염시키는 문제 방지.
+    # SQL은 -c 인자로 넘기지 않고 stdin으로 전달한다.
+    # systemctl/ps 출력에 claim/update SQL 전문이 노출되는 운영 리스크를 막는다.
     local out
-    out=$(_psql_cmd -q -t -A -P footer=off -F $'\x1e' -c "$1" 2>&1) || {
+    out=$(printf '%s' "$1" | _psql_cmd -q -t -A -P footer=off -F $'\x1e' 2>&1) || {
         _notify_db_failure "$1"
         return 1
     }
@@ -181,7 +183,31 @@ db_exec() {
 }
 
 db_update() {
-    _psql_cmd -c "$1" >/dev/null 2>&1
+    printf '%s' "$1" | _psql_cmd >/dev/null 2>&1
+}
+
+record_runner_event() {
+    local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}" metadata_json="${9:-{}}"
+    [[ -z "$job_id" || -z "$event_type" ]] && return 0
+    local table_exists
+    table_exists=$(db_exec "SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL;" 2>/dev/null | tr -d '[:space:]') || table_exists=""
+    [[ "$table_exists" == "t" ]] || return 0
+    [[ "$metadata_json" =~ ^[[:space:]]*\{ ]] || metadata_json="{}"
+    local duration_expr="NULL"
+    [[ "$duration_ms" =~ ^[0-9]+$ ]] && duration_expr="$duration_ms"
+    db_update "INSERT INTO pipeline_runner_events
+                 (job_id, tenant_id, project, event_type, status, phase, model, actual_model, size, duration_ms, metadata)
+               SELECT job_id, tenant_id, project,
+                      $(sql_escape "$event_type"),
+                      COALESCE(NULLIF($(sql_escape "$status"), ''), status),
+                      COALESCE(NULLIF($(sql_escape "$phase"), ''), phase),
+                      COALESCE(NULLIF($(sql_escape "$model"), ''), NULLIF(model, '')),
+                      COALESCE(NULLIF($(sql_escape "$actual_model"), ''), NULLIF(actual_model, '')),
+                      COALESCE(NULLIF($(sql_escape "$size"), ''), NULLIF(size, '')),
+                      ${duration_expr},
+                      $(sql_escape "$metadata_json")::jsonb
+               FROM pipeline_jobs
+               WHERE job_id='${job_id}';" 2>/dev/null || true
 }
 
 get_job_status() {
@@ -755,7 +781,8 @@ _fail_job() {
     db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                error_detail='${error_type}',
                result_output=${safe_detail},
-               updated_at=NOW() WHERE job_id='${job_id}';"
+               completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+    record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"${error_type}\"}"
     post_to_chat "$session_id" "❌ [Pipeline Runner] 사전 검증 실패 (${error_type}): ${detail:0:500}"
     _notify_ai "$job_id"
 }
@@ -808,7 +835,7 @@ cleanup_blocked_dependencies() {
                                 phase='blocked_dependency',
                                 error_detail='blocked_dependency: parent ' || p.depends_on || ' is ' || dep.status,
                                 review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 상태가 ' || dep.status || '라 자동 진행 불가 — blocked_dependency로 종결',
-                                updated_at=NOW()
+                                completed_at=NOW(), updated_at=NOW()
                                 FROM pipeline_jobs dep
                                 WHERE p.depends_on = dep.job_id
                                   AND p.status='queued'
@@ -819,7 +846,7 @@ cleanup_blocked_dependencies() {
                                phase='blocked_dependency',
                                error_detail='blocked_dependency: parent ' || p.depends_on || ' is missing',
                                review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 DB에 없어 자동 진행 불가 — blocked_dependency로 종결',
-                               updated_at=NOW()
+                               completed_at=NOW(), updated_at=NOW()
                                WHERE p.status='queued'
                                  AND p.phase IN ('queued','coding')
                                  AND p.depends_on IS NOT NULL
@@ -878,7 +905,8 @@ check_duplicate() {
             db_update "UPDATE pipeline_jobs SET status='cancelled', phase='dedup_blocked',
                        error_detail='dedup_blocked: 기존 작업 ${dup_job} 계속 진행',
                        review_feedback=E'[중복 차단] 동일 작업 진행 중: ${dup_job} (${dup_status})',
-                       updated_at=NOW() WHERE job_id='${job_id}';"
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "job_terminal" "cancelled" "dedup_blocked" "" "" "" "" "{\"reason\":\"dedup_blocked\",\"existing_job\":\"${dup_job}\"}"
             return 1
         fi
         log "  DEDUP_WARN: 10분 내 동일 작업 완료: $dup_job (계속 실행하되 경고)"
@@ -897,7 +925,7 @@ _watchdog_check() {
     timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                          error_detail='timeout_max_runtime',
                          review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] 최대 실행시간 ${MAX_JOB_RUNTIME}s 초과 타임아웃',
-                         updated_at=NOW()
+                         completed_at=NOW(), updated_at=NOW()
                          WHERE status='running'
                            AND started_at IS NOT NULL
                            AND started_at < NOW() - INTERVAL '${MAX_JOB_RUNTIME} seconds'
@@ -913,6 +941,7 @@ _watchdog_check() {
             t_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null) || true
             t_session="${t_session// /}"
             post_to_chat "$t_session" "⏰ [Pipeline Runner] 작업 타임아웃 (${MAX_JOB_RUNTIME}초 초과): $t_job — 자동 종료됨"
+            record_runner_event "$t_job" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"timeout_max_runtime\"}"
             _notify_ai "$t_job"
             local t_project
             t_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${t_job}';" 2>/dev/null) || true
@@ -937,7 +966,8 @@ _watchdog_check() {
                 db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                            error_detail='process_died',
                            review_feedback=COALESCE(review_feedback,'') || E'\n[Watchdog] Claude Code 프로세스(PID=${s_pid}) 죽음 감지',
-                           updated_at=NOW() WHERE job_id='${s_job_id}' AND status='running';"
+                           completed_at=NOW(), updated_at=NOW() WHERE job_id='${s_job_id}' AND status='running';"
+                record_runner_event "$s_job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"process_died\",\"runner_pid\":\"${s_pid}\"}"
                 # 채팅 알림 + AI 자동 반응 트리거
                 local d_session
                 d_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${s_job_id}';" 2>/dev/null) || true
@@ -1123,6 +1153,7 @@ run_job() {
     pre_exec_sha=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) || pre_exec_sha=""
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                started_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+    record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\"}"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
     # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
@@ -1189,7 +1220,8 @@ run_job() {
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
                    error_detail='token_missing',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Auth] ANTHROPIC_AUTH_TOKEN / ANTHROPIC_AUTH_TOKEN_2 모두 비어있음',
-                   updated_at=NOW() WHERE job_id='$job_id'" 2>/dev/null || true
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='$job_id'" 2>/dev/null || true
+        record_runner_event "$job_id" "job_terminal" "error" "token_missing" "$job_model" "" "$job_size" "" "{\"error_detail\":\"token_missing\"}"
         post_to_chat "$session_id" "🔴 [러너 토큰 없음] ANTHROPIC_AUTH_TOKEN 확인 필요 — job=$job_id"
         return 1
     fi
@@ -1251,11 +1283,15 @@ ${safe_instruction}"
         else
             log "  MODEL_FALLBACK job=$job_id model=$current_model cycle=$cycle_num attempt=$((attempt+1))/$total_attempts"
         fi
+        local attempt_started_ms
+        attempt_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+        record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
         if [[ "$current_model" == codex:* ]]; then
             local codex_disabled_until=""
             if codex_disabled_until=$(codex_auth_disabled_until); then
                 log "  CODEX_AUTH_DISABLED_SKIP job=$job_id model=$current_model until_epoch=$codex_disabled_until"
                 db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} skip: auth cooldown active until ${codex_disabled_until}' WHERE job_id='${job_id}';"
+                record_runner_event "$job_id" "model_attempt_skipped" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"reason\":\"codex_auth_cooldown\",\"until_epoch\":\"${codex_disabled_until}\"}"
                 attempt=$((attempt + 1))
                 continue
             fi
@@ -1385,9 +1421,15 @@ ${safe_instruction}"
             fi
         fi
 
+        local attempt_finished_ms attempt_duration_ms
+        attempt_finished_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+        attempt_duration_ms=$((attempt_finished_ms - attempt_started_ms))
+        record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false)}"
+
         if [[ $exit_code -eq 0 ]]; then
             # actual_model 기록 — CEO가 어떤 모델이 실행했는지 추적 (2026-04-14)
             db_update "UPDATE pipeline_jobs SET actual_model='${effective_model}', updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "actual_model_selected" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"cycle\":${cycle_num}}"
             log "  ACTUAL_MODEL job=$job_id configured=$current_model actual=$effective_model"
             break
         fi
@@ -1453,7 +1495,8 @@ $out_tail")
                    error_detail=${safe_error_detail},
                    result_output=${safe_output},
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "error" "error" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${error_type}\",\"exit_code\":${exit_code},\"attempts\":${attempt}}"
         post_to_chat "$session_id" "❌ [Pipeline Runner] 작업 실패 (${error_type}, exit=$exit_code, ${attempt}회 시도): ${err_content:0:500}"
         record_actual_changed_files "$job_id" "" "$worktree_dir" "$parallel_group"
         _release_work_lock "$project" "$job_id" "$parallel_group"
@@ -1513,8 +1556,9 @@ ${_untracked_files}"
                        result_output=$(sql_escape "$output"),
                        git_diff='',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] read-only 작업 완료 — 변경사항 0건이 정상 조건',
-                       updated_at=NOW()
+                       completed_at=NOW(), updated_at=NOW()
                        WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "job_terminal" "done" "done" "$job_model" "" "$job_size" "" "{\"read_only\":true,\"changed_files\":0}"
             post_to_chat "$session_id" "✅ [Pipeline Runner] read-only 작업 완료: $job_id — 변경사항 없이 실행 결과를 저장했습니다.
 
 \`\`\`
@@ -1546,7 +1590,8 @@ ${output:0:1500}
                    error_detail=$(sql_escape "$no_change_reason"),
                    result_output=$(sql_escape "$output"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner Guard] 변경사항 0건 — 실제 대상 저장소에 반영된 diff가 없어 승인 대기로 보내지 않음',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "cancelled" "no_changes" "$job_model" "" "$job_size" "" "{\"reason\":\"no_changes\",\"changed_files\":0}"
         post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
@@ -1611,7 +1656,11 @@ ${output:0:1500}
                     log "  AI_REVIEW_FLAG job=$job_id category=$review_flag_category"
                 fi
             else
-                log "  AI_REVIEW_SKIP job=$job_id (HTTP ${review_http_code:-timeout})"
+                review_verdict="FLAG"
+                review_score="0.0"
+                review_flag_category="REVIEW_API_UNAVAILABLE"
+                review_needs_retry="true"
+                log "  AI_REVIEW_FAIL_CLOSE job=$job_id (HTTP ${review_http_code:-timeout})"
             fi
         else
             review_verdict="FLAG"
@@ -1621,6 +1670,14 @@ ${output:0:1500}
             log "  AI_REVIEW_PRECHECK_FAIL job=$job_id category=$review_flag_category"
         fi
     fi
+    db_update "UPDATE pipeline_jobs
+               SET review_verdict=$(sql_escape "$review_verdict"),
+                   review_score=${review_score:-0.0},
+                   review_flag_category=NULLIF($(sql_escape "$review_flag_category"), ''),
+                   review_needs_retry=$([[ "$review_needs_retry" == "true" ]] && echo TRUE || echo FALSE),
+                   updated_at=NOW()
+               WHERE job_id='${job_id}';" 2>/dev/null || true
+    record_runner_event "$job_id" "ai_review_result" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"verdict\":\"${review_verdict}\",\"score\":\"${review_score}\",\"flag_category\":\"${review_flag_category}\",\"needs_retry\":$([[ "$review_needs_retry" == "true" ]] && echo true || echo false)}"
 
     if [[ "$review_verdict" != "APPROVE" ]]; then
         local review_error_detail="review_failed: verdict=${review_verdict} score=${review_score}"
@@ -1632,7 +1689,8 @@ ${output:0:1500}
                    result_output=$(sql_escape "$output"),
                    git_diff=$(sql_escape "$git_diff"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] 승인 대기 차단 — ${review_error_detail}',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "error" "review_failed" "$job_model" "" "$job_size" "" "{\"error_detail\":\"review_failed\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\"}"
         post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}"
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
@@ -1670,7 +1728,9 @@ ${output:0:1500}
                result_output=$(sql_escape "$output"),
                git_diff=$(sql_escape "$git_diff"),
                error_detail=NULL,
+               approval_requested_at=NOW(),
                updated_at=NOW() WHERE job_id='${job_id}';"
+    record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "$job_model" "" "$job_size" "" "{\"commit_hash\":\"${approval_commit_sha}\",\"review_verdict\":\"${review_verdict}\"}"
 
     local diff_summary="${git_diff:0:3000}"
     local review_badge=""
@@ -1788,7 +1848,8 @@ deploy_job() {
         db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_lock_fail',
                    error_detail='deploy_lock_fail',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패] deploy lock 3회 획득 실패 — 다른 배포가 장시간 점유',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "error" "deploy_lock_fail" "" "" "" "" "{\"error_detail\":\"deploy_lock_fail\"}"
         post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 락 3회 획득 실패 (다른 배포 진행 중): $job_id"
         _release_deploy_lock "$project" "$job_id"
         _notify_ai "$job_id"
@@ -1843,7 +1904,8 @@ deploy_job() {
         db_update "UPDATE pipeline_jobs SET status='error', phase='push_fail',
                    error_detail=$(sql_escape "$push_error_detail"),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[자동] isolated worktree git push 실패 — 진단은 error_detail/logs 참조',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "error" "push_fail" "" "" "" "" "{\"error_detail\":\"push_fail\"}"
         post_to_chat "$session_id" "🔴 [Pipeline Runner] git push 실패 — 배포 중단: $job_id (${push_error_detail:0:500})"
         _release_deploy_lock "$project" "$job_id"
         _notify_ai "$job_id"
@@ -2253,7 +2315,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
             db_update "UPDATE pipeline_jobs SET status='error', phase='health_check_fail_rollback',
                        error_detail='health_check_fail_rollback',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
-                       updated_at=NOW() WHERE job_id='${job_id}';"
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "job_terminal" "error" "health_check_fail_rollback" "" "" "" "" "{\"error_detail\":\"health_check_fail_rollback\",\"rollback_health\":\"${rollback_health}\"}"
             post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백으로 에러 처리: $job_id"
             _release_deploy_lock "$project" "$job_id"
             _notify_ai "$job_id"
@@ -2273,13 +2336,15 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
         db_update "UPDATE pipeline_jobs SET status='error', phase='build_fail',
                    error_detail='${_build_fail}',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포실패] backend_health=${health_ok} frontend_health=${frontend_health_ok} build_fail=${_build_fail}',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "error" "build_fail" "" "" "" "" "{\"error_detail\":\"${_build_fail}\"}"
         post_to_chat "$session_id" "🔴 [Pipeline Runner] 배포 부분 실패 — 빌드 실패 감지: ${_build_fail} (backend=${health_ok} frontend=${frontend_health_ok}): $job_id"
         log "  DEPLOYED_PARTIAL_FAIL job=$job_id build_fail=$_build_fail"
     else
         db_update "UPDATE pipeline_jobs SET status='done', phase='done',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] backend_health=${health_ok} frontend_health=${frontend_health_ok} by=${RUNNER_HOSTNAME}',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
+                   deployed_at=NOW(), completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "done" "done" "" "" "" "" "{\"backend_health\":\"${health_ok}\",\"frontend_health\":\"${frontend_health_ok}\"}"
         _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
         post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (backend=${health_ok} frontend=${frontend_health_ok})"
         log "  DEPLOYED job=$job_id backend_health=$health_ok frontend_health=$frontend_health_ok"
@@ -2324,7 +2389,8 @@ reject_job() {
         log "  REJECT_NO_WORKTREE: $job_id — main workdir mutation skipped"
     fi
 
-    db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', updated_at=NOW() WHERE job_id='${job_id}';"
+    db_update "UPDATE pipeline_jobs SET status='rejected_done', phase='rejected_done', rejected_at=COALESCE(rejected_at, NOW()), completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+    record_runner_event "$job_id" "job_terminal" "rejected_done" "rejected_done" "" "" "" "" "{\"reason\":\"user_rejected\"}"
     _release_work_lock "$project" "$job_id"
     _release_deploy_lock "$project" "$job_id"
     post_to_chat "$session_id" "↩️ [Pipeline Runner] 거부된 작업 코드 원복 완료: $job_id"
@@ -2372,7 +2438,8 @@ _recover_stuck_jobs() {
                        error_detail='zombie_killed',
                        runner_pid=NULL,
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Zombie Kill] PID=${z_pid} SIGTERM→SIGKILL, MAX_RUNTIME=${MAX_RUNTIME}s 초과',
-                       updated_at=NOW() WHERE job_id='${z_job}';"
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${z_job}';"
+            record_runner_event "$z_job" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"zombie_killed\",\"runner_pid\":\"${z_pid}\"}"
             post_to_chat "$z_session" "💀 [Pipeline Runner] 좀비 작업 강제 종료 (PID=${z_pid}, ${MAX_RUNTIME}s 초과): $z_job"
             _notify_ai "$z_job"
             if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
@@ -2391,7 +2458,7 @@ _recover_stuck_jobs() {
     deploy_timed_out=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                                 error_detail='deploy_timeout',
                                 review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 20분 초과',
-                                updated_at=NOW()
+                                completed_at=NOW(), updated_at=NOW()
                                 WHERE status='deploying'
                                   AND updated_at < NOW() - INTERVAL '20 minutes'
                                   $filter
@@ -2408,6 +2475,7 @@ _recover_stuck_jobs() {
             _dt_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_dt_id}';" 2>/dev/null) || true
             _dt_project="${_dt_project// /}"
             post_to_chat "$_dt_session" "⏰ [Pipeline Runner] 배포 타임아웃 (20분 초과): $_dt_id — 자동 에러 처리됨"
+            record_runner_event "$_dt_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"deploy_timeout\"}"
             _notify_ai "$_dt_id"
             [[ -n "$_dt_project" ]] && promote_next_queued "$_dt_project"
         done <<< "$deploy_timed_out"
@@ -2418,7 +2486,7 @@ _recover_stuck_jobs() {
     stuck=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                      error_detail='stale_recovered',
                      review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
-                     updated_at=NOW()
+                     completed_at=NOW(), updated_at=NOW()
                      WHERE status IN ('running','claimed')
                        AND updated_at < NOW() - INTERVAL '60 minutes'
                        $filter
@@ -2436,6 +2504,7 @@ _recover_stuck_jobs() {
             _rec_session=$(db_exec "SELECT chat_session_id FROM pipeline_jobs WHERE job_id='${_recovered_id}';" 2>/dev/null) || true
             _rec_session="${_rec_session// /}"
             post_to_chat "$_rec_session" "🔄 [Pipeline Runner] 장기 중단 작업 복구: $_recovered_id — 에러 처리됨"
+            record_runner_event "$_recovered_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"stale_recovered\"}"
             _notify_ai "$_recovered_id"
             [[ -n "$_rec_project" ]] && promote_next_queued "$_rec_project"
         done <<< "$stuck"
@@ -2446,7 +2515,7 @@ _recover_stuck_jobs() {
     expired=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
                        error_detail='approval_timeout',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[승인 타임아웃 ${APPROVAL_TIMEOUT_HOURS}h]',
-                       updated_at=NOW()
+                       completed_at=NOW(), updated_at=NOW()
                        WHERE status='awaiting_approval'
                          AND updated_at < NOW() - INTERVAL '${APPROVAL_TIMEOUT_HOURS} hours'
                          $filter
@@ -2463,6 +2532,7 @@ _recover_stuck_jobs() {
             _exp_project=$(db_exec "SELECT project FROM pipeline_jobs WHERE job_id='${_exp_id}';" 2>/dev/null) || true
             _exp_project="${_exp_project///}"
             post_to_chat "$_exp_session" "⏰ [Pipeline Runner] 승인 타임아웃 (${APPROVAL_TIMEOUT_HOURS}시간 초과): $_exp_id — 자동 에러 처리됨"
+            record_runner_event "$_exp_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"approval_timeout\"}"
             _notify_ai "$_exp_id"
             [[ -n "$_exp_project" ]] && promote_next_queued "$_exp_project"
         done <<< "$expired"
@@ -2567,7 +2637,8 @@ main() {
             db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                        error_detail='runner_restarted',
                        review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 재시작으로 중단]',
-                       updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${prev_job}' AND status='running';" || true
+            record_runner_event "$prev_job" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_restarted\"}"
             log "WARN: 이전 running 작업 $prev_job 을 error로 정리 (러너 재시작)"
         fi
         rm -f /tmp/.pipeline_current_job
@@ -2691,7 +2762,8 @@ cleanup() {
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
-                   updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
+        record_runner_event "$_jid" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_shutdown\"}"
         log "  Marked $_jid as error (runner shutdown)"
         post_to_chat "$_sid" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_jid"
         _notify_ai "$_jid"
@@ -2701,7 +2773,8 @@ cleanup() {
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
                    error_detail='runner_shutdown',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 종료로 중단]',
-                   updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
+                   completed_at=NOW(), updated_at=NOW() WHERE job_id='${_current_job_id}' AND status='running';" || true
+        record_runner_event "$_current_job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"runner_shutdown\"}"
         log "  Marked $_current_job_id as error (runner shutdown)"
         post_to_chat "$_current_session_id" "🔴 [Pipeline Runner] 러너 종료로 작업 중단: $_current_job_id"
         _notify_ai "$_current_job_id"

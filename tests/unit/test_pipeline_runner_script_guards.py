@@ -103,9 +103,25 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "is_read_only_instruction()" in script
     assert "NO_CHANGES_READ_ONLY job=$job_id" in script
     assert "status='done', phase='done'" in script
-    assert "completed_at=NOW()" not in script
+    assert "completed_at=NOW()" in script
     assert "읽기[[:space:]]*전용" in script
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script
+
+
+def test_pipeline_runner_records_telemetry_and_fail_closes_review_outage():
+    script = _read_script("pipeline-runner.sh")
+    migration = (ROOT / "migrations" / "139_pipeline_runner_telemetry.sql").read_text(encoding="utf-8")
+
+    assert "record_runner_event()" in script
+    assert "pipeline_runner_events" in script
+    assert "model_attempt_started" in script
+    assert "model_attempt_completed" in script
+    assert "REVIEW_API_UNAVAILABLE" in script
+    assert "AI_REVIEW_FAIL_CLOSE" in script
+    assert "review_verdict=$(sql_escape \"$review_verdict\")" in script
+    assert "approval_requested_at=NOW()" in script
+    assert "CREATE TABLE IF NOT EXISTS pipeline_runner_events" in migration
+    assert "CREATE OR REPLACE VIEW pipeline_runner_model_stats" in migration
 
 
 def test_pipeline_runner_passes_parallel_group_to_work_lock_and_run_job():
