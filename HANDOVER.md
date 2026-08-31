@@ -9422,3 +9422,22 @@
   - `docker cp tests/unit/test_tools_and_pipeline.py aads-server:/tmp/test_tools_and_pipeline.py` then `docker exec aads-server python -m pytest -q /tmp/test_tools_and_pipeline.py -k 'settle_stale_execution or recovery_auto_resume'` passed 5/5 selected tests with one existing FastAPI deprecation warning.
 - Deployment:
   - Not deployed yet in this step. Current changes remain local/uncommitted until CEO requests commit/push/deploy or the approved rollout path runs.
+## 2026-08-31 10:04 KST - Chat response recovery normalization hotfix
+
+- Request: chat responses were repeatedly marked complete or failed to continue; normalize chat response generation immediately.
+- Finding:
+  - Recent interrupted executions repeatedly fell into `gemini-3.1-flash-lite-preview` fast-recovery and failed with provider permission 403.
+  - Terminal provider errors could preserve meaningful partial text through a final-save path before the execution was marked interrupted, which allowed partial answers to look completed.
+  - API hot-reload at 10:03 KST reported 4 active tasks before and after reload, so active response tasks were not dropped by the reload step.
+- Code change:
+  - `app/services/chat_service.py`: default `AADS_FAST_RECOVERY_MODELS` now avoids Gemini preview/lite and uses `deepseek-v4-flash,claude-haiku,gpt-5.4-mini`.
+  - `app/services/chat_service.py`: terminal LLM/provider errors no longer call `_save_and_update_session()` for partial text; they preserve the visible bubble through `_mark_execution_interrupted()` so auto-resume/UI recovery can continue instead of exposing false completion.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py` succeeded.
+  - `git diff --check -- app/services/chat_service.py` succeeded.
+  - `docker exec aads-server python -m py_compile /app/app/services/chat_service.py` succeeded.
+  - Host `pytest tests/unit/test_chat_service.py -q` could not run because host Python lacks `fastapi`; this is an environment dependency issue, not a collection error in the changed file.
+  - `bash scripts/reload-api.sh` succeeded and reloaded 69 modules on `aads-server-green`.
+  - Public `https://aads.newtalk.kr/api/v1/health`, local `:8100/health`, and local `:8102/health` returned HTTP 200 after hot-reload.
+- Deployment:
+  - Hot-reload applied to the active backend slot. Commit/push is pending in this turn.

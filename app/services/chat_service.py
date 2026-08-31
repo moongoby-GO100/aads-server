@@ -320,7 +320,10 @@ _FAST_RECOVERY_MODEL_CANDIDATES = tuple(
     model.strip()
     for model in os.getenv(
         "AADS_FAST_RECOVERY_MODELS",
-        "gemini-3.1-flash-lite-preview,deepseek-v4-flash,claude-haiku",
+        # Keep the default recovery path on currently stable chat backends.
+        # Gemini preview/lite models have caused auth/permission 403 loops in
+        # interrupted chat recovery, which makes the UI look like it cannot answer.
+        "deepseek-v4-flash,claude-haiku,gpt-5.4-mini",
     ).split(",")
     if model.strip()
 )
@@ -10654,24 +10657,15 @@ async def send_message_stream(
                         if _stream_attempt > 0:
                             logger.error(f"stream_retry_exhausted: session={session_id[:8]} attempts=3 error={_err_content[:80]}")
                         yield f"data: {json.dumps({'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                        # 에러 시에도 의미 있는 partial response가 있으면 저장한다. 재시도/진행 마커만 있으면 terminal interrupted로 닫는다.
+                        # Terminal LLM/provider errors must not promote a partial
+                        # answer as completed. Keep the same visible bubble as an
+                        # interrupted partial so auto-resume/UI recovery can continue.
                         if full_response.strip() and _has_meaningful_partial_content(full_response):
-                            try:
-                                await _save_and_update_session(
-                                    sid, full_response,
-                                    session_id_str=session_id,
-                                    raw_messages=raw_messages,
-                                    model_used=model_used or "error_partial",
-                                    intent=intent,
-                                    cost=cost_usd,
-                                    tokens_in=input_tokens,
-                                    tokens_out=output_tokens,
-                                    tools_called=tools_called,
-                                    **_artifact_chain_kwargs,
-                                )
-                                logger.info(f"error_partial_saved session={session_id[:8]} len={len(full_response)}")
-                            except Exception as _eps:
-                                logger.warning(f"error_partial_save_failed session={session_id[:8]}: {_eps}")
+                            logger.warning(
+                                "stream_error_partial_preserved_as_interrupted session=%s len=%s",
+                                session_id[:8],
+                                len(full_response),
+                            )
                         if _execution_id_str:
                             try:
                                 async with get_pool().acquire() as _conn:
