@@ -1671,7 +1671,8 @@ ${output:0:1500}
             review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
                 -H "Content-Type: application/json" \
                 -d "$review_body" \
-                --max-time 30 2>/dev/null) || true
+                --connect-timeout 5 \
+                --max-time "${AADS_REVIEW_MAX_TIME:-120}" 2>/dev/null) || true
 
             review_http_code=$(echo "$review_response" | tail -1)
             review_response=$(echo "$review_response" | sed '$d')
