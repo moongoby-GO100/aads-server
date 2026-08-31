@@ -39,6 +39,10 @@ htmlcov/
 logs/
 *.log
 tmp/google-oauth-*.png
+tmp_*
+.tmp/
+.tmp*/
+.codex_tmp*/
 
 # OS
 .DS_Store
@@ -69,6 +73,7 @@ app/data/yeoljeong_finance/delivery_auth_challenges/
 app/data/yeoljeong_finance/bank_accounts.json
 app/data/yeoljeong_finance/employee_join_requests.json
 app/data/yeoljeong_finance/onboarding_documents.json
+app/data/yeoljeong_finance/pc_agent_collection_queue.json
 app/data/yeoljeong_finance/settings.json
 app/data/yeoljeong_finance/uploads/
 nginx-aads-upstream.conf

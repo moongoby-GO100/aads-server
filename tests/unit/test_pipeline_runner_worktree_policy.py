@@ -52,6 +52,15 @@ def test_pipeline_runner_pushes_only_from_verified_isolated_worktree():
     assert "\n            git push " not in script
 
 
+def test_pipeline_runner_does_not_deploy_dashboard_by_recent_commit_age():
+    script = _runner_script()
+
+    assert "DASHBOARD_LAST_COMMIT" not in script
+    assert "DIFF_SECONDS" not in script
+    assert "[ \"$DASHBOARD_CHANGED\" = true ]" in script
+    assert "no dashboard-targeted changes" in script
+
+
 def test_pipeline_runner_records_masked_push_diagnostics():
     script = _runner_script()
 
