@@ -696,6 +696,12 @@ def _is_resume_retryable(error: BaseException) -> bool:
     )
 
 
+def _require_resume_done_event(saw_done_event: bool) -> None:
+    """Do not persist a recovered response unless its stream reached terminal done."""
+    if not saw_done_event:
+        raise RuntimeError("resume_stream_missing_done_event")
+
+
 async def _wait_for_resume_slot_cooldown() -> None:
     """resume 직전 모든 OAuth 슬롯이 쿨다운이면 가장 먼저 풀리는 슬롯까지 대기."""
     from app.services.model_selector import _SLOT_COOLDOWN
@@ -5976,6 +5982,7 @@ async def _resume_single_stream(
                     full_response = partial_content
                     tools_called = []
                     cost_usd = Decimal("0")
+                    _resume_saw_done_event = False
 
                     try:
                         async for event in call_stream(
@@ -6014,10 +6021,12 @@ async def _resume_single_stream(
                                     "completed": False,
                                 }
                             elif etype == "done":
+                                _resume_saw_done_event = True
                                 cost_usd = Decimal(str(event.get("cost", "0")))
                             elif etype == "error":
                                 raise RuntimeError(str(event.get("content") or "resume_stream_error"))
 
+                        _require_resume_done_event(_resume_saw_done_event)
                         last_error = None
                         break
                     except Exception as stream_error:

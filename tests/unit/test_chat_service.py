@@ -922,6 +922,13 @@ def test_producer_interruption_reason_preserves_client_gone_subreason():
     )
 
 
+def test_resume_done_guard_rejects_graceful_stream_exit_without_done():
+    with pytest.raises(RuntimeError, match="resume_stream_missing_done_event"):
+        chat_service._require_resume_done_event(False)
+
+    assert chat_service._require_resume_done_event(True) is None
+
+
 def test_active_stream_hard_timeout_is_auto_resumable():
     assert chat_service._should_auto_resume_interrupted_reason(
         "active_stream_hard_timeout_after_2700s age=2826s idle=68s content_len=4092"
