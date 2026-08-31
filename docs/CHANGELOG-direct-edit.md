@@ -5709,3 +5709,53 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-27 12:52:19 KST] [aads-server] app/static/apps/yeoljeong-finance/index.html
 - Chat-Direct 수정: 판매채널 DB 원장 연동 UI 보강. `/sales`, `/settlements`, `/reviews`, `/collection-status`를 함께 불러와 판매채널 수집 현황 KPI, 사업자·지점별 원장 테이블, 자동수집 점검표에 DB 건수/금액/최신상태/조치 버튼을 표시.
+
+## [2026-08-30 20:03:39 KST] [aads-server] , r.scalar())\n            except Exception as e:\n                print(sql, ERR, type(e).__name__, e)\n                await db.rollback()\nasyncio.run(main())\nPY
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:39 KST] [aads-server] .codex_tmp_go100/backend/app/services/go100/analysis/wave_cycle_trader.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:40 KST] [aads-server] .codex_tmp_go100/scripts/go100/run_card310_full_wave_backtest.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:40 KST] [aads-server] .tmp/go100_opening_wave/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:41 KST] [aads-server] .tmp/go100_opening_wave/test_card303_wave_recovery_gate.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:42 KST] [aads-server] 0
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:43 KST] [aads-server] 11
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:43 KST] [aads-server] 18
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:43 KST] [aads-server] app/data/yeoljeong_finance/pc_agent_collection_queue.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:44 KST] [aads-server] tmp_card119_current_3day_direct_report.py
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-30 20:03:44 KST] [aads-server] tmp_go100_card119_current_3day_direct_report.json
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git stash pop 2>&1 | head -10
+
+## [2026-08-31 09:41:30 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     _first_response_grace = int(getattr(→    _first_response_grace = int(getattr(
+
+## [2026-08-31 09:41:36 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 # 클라이언트 연결 중 1초마다 중간 저장 →                # 클라이언트 연결 중 중간 저장: 실 이벤
+
+## [2026-08-31 09:41:54 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             if not _task_alive and _idle→            _orphan_idle_threshold = 180
+
+## [2026-08-31 09:42:52 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     _stale_empty_no_runtime = (
+        →    _stale_empty_no_runtime = (
+        
+
+## [2026-08-31 12:43:13 KST] [aads-server] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -sf http://localhost:9090/health

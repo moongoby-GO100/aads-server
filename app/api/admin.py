@@ -64,6 +64,14 @@ def _task_board_status_sql(auth_state_expr: str = "NULL::text") -> str:
         1,
     )
 
+
+def _admin_error_detail(error_detail: Any, phase: Any) -> str:
+    """Keep historical push failures actionable even when old rows stored only a code."""
+    detail = str(error_detail or "").strip()
+    if str(phase or "").strip() == "push_fail" and detail in {"", "push_fail"}:
+        return "push_fail: git push 실패 진단이 저장되지 않은 이전 runner 기록입니다. pipeline job logs를 확인하세요."
+    return detail
+
 _ADMIN_AGENT_ROLE_COLUMN_CANDIDATES = (
     "agent_role",
     "role",
@@ -2077,7 +2085,7 @@ async def list_admin_tasks(
                 "worker_model": row["worker_model"] or "",
                 "created_at": _admin_iso(row["created_at"]),
                 "updated_at": _admin_iso(row["updated_at"]),
-                "error_detail": row["error_detail"] or "",
+                "error_detail": _admin_error_detail(row["error_detail"], row["phase"]),
                 "auth_recovery_state": row["auth_recovery_state"] or "",
             }
             for row in rows
@@ -2219,7 +2227,7 @@ async def get_admin_task(job_id: str):
         "result_output": row["result_output"] or "",
         "git_diff": row["git_diff"] or "",
         "review_feedback": row["review_feedback"] or "",
-        "error_detail": row["error_detail"] or "",
+        "error_detail": _admin_error_detail(row["error_detail"], row["phase"]),
         "auth_recovery_state": row["auth_recovery_state"] or "",
         "auth_recovery_metadata": row["auth_recovery_metadata"] or {},
         "started_at": _admin_iso(row["started_at"]),

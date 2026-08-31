@@ -1184,3 +1184,6 @@ path = '/root/aads/aads-dashboard/src/components/chat/Sid
 
 ## [2026-08-27 08:54:12 KST] [aads-dashboard] ../aads-dashboard/src/app/chat/page.tsx
 - Chat-Direct 수정: patch:     const lastAssistantId = capped.slice→    const lastAssistantId = capped.slice
+
+## [2026-08-30 20:02:14 KST] [aads-dashboard] src/hooks/useChatSSE.ts
+- Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git pull --rebase origin main 2>&1 | tail -10

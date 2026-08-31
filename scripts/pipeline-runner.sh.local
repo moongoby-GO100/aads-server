@@ -376,6 +376,86 @@ git_ahead_behind_counts() {
     git -C "$repo" rev-list --left-right --count "${base_ref}...HEAD" 2>/dev/null | awk '{print $2" "$1}'
 }
 
+mask_git_diagnostics() {
+    sed -E \
+        -e 's#(https?://)[^/@[:space:]]+@#\1***@#g' \
+        -e 's#(oauth2:|x-access-token:)[^@[:space:]]+#\1***#g' \
+        -e 's#(sk-(ant-)?[A-Za-z0-9_-]{8})[A-Za-z0-9_-]*#\1***#g' \
+        -e 's#([?&](access_token|token|auth)=)[^&[:space:]]+#\1***#Ig' \
+        | head -c 6000
+}
+
+record_git_diagnostics() {
+    local job_id="$1" event="$2" repo="$3" exit_code="$4" stdout_text="${5:-}" stderr_text="${6:-}"
+    local branch head_sha origin_url safe_status diagnostics diagnostics_sql
+    branch=$(git -C "$repo" symbolic-ref --short -q HEAD 2>/dev/null || echo "DETACHED")
+    head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "unknown")
+    origin_url=$(git -C "$repo" remote get-url origin 2>/dev/null || echo "unknown")
+    safe_status=$(git -C "$repo" status --short --branch --untracked-files=no 2>/dev/null | head -50 || true)
+    diagnostics=$(printf 'event=%s\nexit_code=%s\nbranch=%s\nhead_sha=%s\norigin_url=%s\nstatus=%s\nstdout=%s\nstderr=%s\n' \
+        "$event" "$exit_code" "$branch" "$head_sha" "$origin_url" "$safe_status" "$stdout_text" "$stderr_text" \
+        | mask_git_diagnostics)
+    diagnostics_sql=$(sql_escape "$diagnostics")
+    db_update "UPDATE pipeline_jobs
+               SET logs=COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                       'ts', NOW()::text, 'event', $(sql_escape "$event"),
+                       'exit_code', ${exit_code:-999}, 'diagnostics', ${diagnostics_sql}
+                   )), updated_at=NOW()
+               WHERE job_id='${job_id}';" 2>/dev/null || true
+    printf '%s' "$diagnostics"
+}
+
+verify_isolated_job_worktree() {
+    local job_id="$1" repo="$2" expected_main="$3"
+    local expected_path="/tmp/aads-wt-${job_id}" repo_root common_dir main_root
+    repo_root=$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null) || return 1
+    main_root=$(git -C "$expected_main" rev-parse --show-toplevel 2>/dev/null) || return 1
+    common_dir=$(git -C "$repo" rev-parse --git-common-dir 2>/dev/null) || return 1
+    [[ "$repo_root" == "$expected_path" ]] || return 1
+    [[ "$repo_root" != "$main_root" ]] || return 1
+    [[ "$(git -C "$repo" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || return 1
+    [[ -n "$common_dir" ]]
+}
+
+commit_job_worktree_for_approval() {
+    local job_id="$1" session_id="$2" worktree_dir="$3" main_workdir="$4" instruction="$5"
+    if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
+        _fail_job "$job_id" "$session_id" "approval_worktree_not_isolated" "BLOCK: awaiting_approval 거부 — runner isolated worktree 검증 실패 (${worktree_dir})"
+        return 1
+    fi
+    git -C "$worktree_dir" add -A >/dev/null 2>&1 || {
+        _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — runner worktree stage 실패"
+        return 1
+    }
+    local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}" commit_out commit_err exit_code=0
+    commit_out=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.out.XXXXXX")
+    commit_err=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.err.XXXXXX")
+    ALLOW_AUTH_COMMIT=1 git -C "$worktree_dir" commit -m "$commit_msg" >"$commit_out" 2>"$commit_err" || exit_code=$?
+    if [[ "$exit_code" -ne 0 ]]; then
+        local detail
+        detail=$(record_git_diagnostics "$job_id" "approval_commit_failed" "$worktree_dir" "$exit_code" "$(tail -20 "$commit_out")" "$(tail -20 "$commit_err")")
+        _fail_job "$job_id" "$session_id" "approval_commit_failed" "awaiting_approval 거부 — commit 실패: ${detail:0:1000}"
+        rm -f "$commit_out" "$commit_err"
+        return 1
+    fi
+    rm -f "$commit_out" "$commit_err"
+    local commit_sha head_sha
+    commit_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+    head_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+    if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ || "$commit_sha" != "$head_sha" ]]; then
+        _fail_job "$job_id" "$session_id" "approval_commit_sha_invalid" "awaiting_approval 거부 — commit SHA 비어 있음 또는 worktree HEAD 불일치"
+        return 1
+    fi
+    db_update "UPDATE pipeline_jobs
+               SET commit_hash=$(sql_escape "$commit_sha"),
+                   logs=COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                       'ts', NOW()::text, 'event', 'approval_commit_ready',
+                       'commit_sha', $(sql_escape "$commit_sha"), 'worktree_path', $(sql_escape "$worktree_dir")
+                   )), updated_at=NOW()
+               WHERE job_id='${job_id}';"
+    printf '%s' "$commit_sha"
+}
+
 # dirty 파일 경로 목록 (rename은 신규 경로 기준, 공백 경로 안전)
 git_dirty_paths() {
     local repo="$1"
@@ -1001,7 +1081,7 @@ run_job() {
 
     # 로컬 Git 프로젝트는 항상 origin/main 기반 clean worktree에서만 실행한다.
     # main workdir fallback은 세션 간 변경 혼입과 최신 main 이탈을 만들기 때문에 금지한다.
-    if ! is_remote_project "$project" && is_git_workdir "$workdir"; then
+    if is_git_workdir "$workdir"; then
         worktree_dir="/tmp/aads-wt-${job_id}"
         local avail_gb
         avail_gb=$(df --output=avail -BG /tmp 2>/dev/null | tail -1 | tr -d ' G') || avail_gb=999
@@ -1026,7 +1106,7 @@ run_job() {
         }
         workdir="$worktree_dir"
         use_worktree=true
-    elif ! is_remote_project "$project"; then
+    else
         _fail_job "$job_id" "$session_id" "worktree_required" "로컬 프로젝트는 Git clean worktree가 필수입니다: ${workdir:-undefined}"
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
@@ -1542,10 +1622,27 @@ ${output:0:1500}
         fi
     fi
 
+    local approval_commit_sha=""
+    approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction") || {
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        _cleanup_artifacts "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
+    }
+    if [[ -z "$approval_commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$approval_commit_sha" ]]; then
+        _fail_job "$job_id" "$session_id" "approval_commit_sha_mismatch" "awaiting_approval 거부 — 저장 commit SHA와 runner worktree HEAD 불일치"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        return 1
+    fi
+
     db_update "UPDATE pipeline_jobs SET phase='awaiting_approval',
                status='awaiting_approval',
                result_output=$(sql_escape "$output"),
                git_diff=$(sql_escape "$git_diff"),
+               error_detail=NULL,
                updated_at=NOW() WHERE job_id='${job_id}';"
 
     local diff_summary="${git_diff:0:3000}"
@@ -1683,188 +1780,51 @@ deploy_job() {
         return 1
     fi
 
-    # flock으로 같은 프로젝트 동시 배포 방지
-    local lock_file="/tmp/pipeline-deploy-${project}.lock"
+    if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
+        _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "BLOCK: 승인/배포 push 거부 — isolated runner worktree가 아님 (${worktree_dir})"
+        _release_deploy_lock "$project" "$job_id"
+        return 1
+    fi
+
+    local expected_sha current_sha
+    expected_sha=$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || expected_sha=""
+    current_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+    if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ || "$current_sha" != "$expected_sha" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_commit_sha_mismatch" "BLOCK: 승인 commit SHA가 비어 있거나 runner worktree HEAD와 불일치 (expected=${expected_sha:-empty}, head=${current_sha:-empty})"
+        _release_deploy_lock "$project" "$job_id"
+        return 1
+    fi
+
+    local _pre_sha _py_changed="false"
+    _pre_sha=$(git -C "$worktree_dir" rev-parse "${current_sha}^" 2>/dev/null || true)
+    git -C "$worktree_dir" diff-tree --no-commit-id --name-only -r "$current_sha" 2>/dev/null | grep -q '\.py$' && _py_changed="true"
+
+    local lock_file="/tmp/pipeline-deploy-${project}.lock" push_out push_err push_exit=0 push_diag=""
+    push_out=$(mktemp "/tmp/pipeline-push-${job_id}.out.XXXXXX")
+    push_err=$(mktemp "/tmp/pipeline-push-${job_id}.err.XXXXXX")
     (
-        flock -w 300 200 || { log "  DEPLOY_LOCK_TIMEOUT: $project"; return 1; }
+        flock -w 300 200 || exit 75
+        git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main"
+    ) >"$push_out" 2>"$push_err" || push_exit=$?
+    push_diag=$(record_git_diagnostics "$job_id" "$([[ "$push_exit" -eq 0 ]] && echo push_succeeded || echo push_failed)" \
+        "$worktree_dir" "$push_exit" "$(tail -30 "$push_out")" "$(tail -30 "$push_err")")
+    rm -f "$push_out" "$push_err"
 
-        # FIX (P0-A): 커밋 전 HEAD SHA 캡처 — 커밋 후 frontend/ 변경 감지용 (git diff HEAD는 커밋 후 항상 빈값)
-        local _pre_sha=""
-        _pre_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _pre_sha=""
-        echo "$_pre_sha" > "/tmp/pipeline-pre-sha-${job_id}"
-
-            if [[ -d "$worktree_dir" ]]; then
-                cd "$worktree_dir"
-            local _wt_add_failed="false"
-            if ! git add -A 2>/dev/null; then
-                log "  WARN: worktree git add -A failed, using file-copy fallback"
-                _wt_add_failed="true"
-            fi
-            git reset -q -- .active_container .active_port 2>/dev/null || true
-
-            local diff_content
-            diff_content=$(git diff --cached HEAD 2>/dev/null) || true
-            if [[ -n "$diff_content" && "$_wt_add_failed" != "true" ]]; then
-                cd "$main_workdir"
-                echo "$diff_content" | git apply --3way 2>/dev/null || {
-                    log "  WORKTREE_MERGE_CONFLICT: $job_id"
-                    cd "$worktree_dir"
-                    git diff --cached --name-only HEAD 2>/dev/null | while read -r f; do
-                        [[ -f "$worktree_dir/$f" ]] && cp "$worktree_dir/$f" "$main_workdir/$f" 2>/dev/null || true
-                    done
-                    cd "$main_workdir"
-                }
-                git add -A 2>/dev/null || true
-                git reset -q -- .active_container .active_port 2>/dev/null || true
-            else
-                # diff_content가 비어있어도 실제 변경 파일이 있을 수 있음 (git index 이상 등)
-                local _changed_files
-                _changed_files=$(cd "$worktree_dir" && git status --porcelain 2>/dev/null | awk '{print $NF}')
-                if [[ -z "$_changed_files" ]]; then
-                    # git status도 비면 find로 최근 수정 파일 탐색 (Claude 실행 시간 기준)
-                    _changed_files=$(find "$worktree_dir" -newer "$worktree_dir/.git" -type f \
-                        ! -path '*/.git/*' ! -path '*/__pycache__/*' ! -path '*/node_modules/*' \
-                        -printf '%P\n' 2>/dev/null)
-                fi
-                if [[ -n "$_changed_files" ]]; then
-                    log "  WORKTREE_DIFF_EMPTY_BUT_FILES_CHANGED: file-copy fallback"
-                    while IFS= read -r f; do
-                        [[ -z "$f" ]] && continue
-                        if [[ -f "$worktree_dir/$f" ]]; then
-                            mkdir -p "$main_workdir/$(dirname "$f")" 2>/dev/null || true
-                            if cp "$worktree_dir/$f" "$main_workdir/$f" 2>/dev/null; then
-                                log "    COPY: $f"
-                            else
-                                log "    COPY_FAIL: $f"
-                            fi
-                        fi
-                    done <<< "$_changed_files"
-                    cd "$main_workdir"
-                    git add -A 2>/dev/null || true
-                    git reset -q -- .active_container .active_port 2>/dev/null || true
-                else
-                    log "  WORKTREE_NO_CHANGES: $job_id"
-                fi
-            fi
-            cd "$main_workdir"
-        else
-            cd "$main_workdir"
-            git add -A 2>/dev/null || true
-            git reset -q -- .active_container .active_port 2>/dev/null || true
-        fi
-
-        # .py 파일 변경 여부 감지 (커밋 전 staged 변경 기준)
-        local _py_changed="false"
-        if git diff --cached --name-only HEAD 2>/dev/null | grep -q '\.py$'; then
-            _py_changed="true"
-        fi
-
-        # FIX-1: HOOK_VERIFIED 파일 생성 (pre-push hook 통과용)
-        touch "$(git -C "$main_workdir" rev-parse --git-dir)/HOOK_VERIFIED" 2>/dev/null || true
-
-        # FIX-6: 커밋 메시지 보존 — worktree 커밋 > DB 제목 > 기본값
-        local _commit_msg="Pipeline-Runner: ${job_id}"
-        if [[ -d "$worktree_dir" ]]; then
-            local _wt_msg
-            _wt_msg=$(git -C "$worktree_dir" log -1 --format="%s" HEAD 2>/dev/null) || true
-            local _main_msg
-            _main_msg=$(git -C "$main_workdir" log -1 --format="%s" HEAD 2>/dev/null) || true
-            if [[ -n "$_wt_msg" && "$_wt_msg" != "$_main_msg" ]]; then
-                _commit_msg="$_wt_msg"
-            fi
-        fi
-        if [[ "$_commit_msg" == "Pipeline-Runner: ${job_id}" ]]; then
-            local _job_title
-            _job_title=$(db_exec "SELECT LEFT(instruction, 80) FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || _job_title=""
-            _job_title="${_job_title//[$'\n\r']/}"
-            _job_title="${_job_title## }"
-            [[ -n "$_job_title" ]] && _commit_msg="Pipeline-Runner: ${job_id} — ${_job_title:0:80}"
-        fi
-        local _commit_result="ok"
-
-        local _commit_err="/tmp/pipeline-commit-${job_id}.err"
-        if ! ALLOW_AUTH_COMMIT=1 git commit -m "$_commit_msg" 2>"$_commit_err"; then
-            if git diff --cached --quiet HEAD 2>/dev/null; then
-                log "  WARN: git commit skipped — no staged changes"
-                _commit_result="no_changes"
-            else
-                local _commit_err_tail
-                _commit_err_tail=$(tail -20 "$_commit_err" 2>/dev/null | head -c 1500)
-                log "  ERROR: git commit failed (hook or other error): ${_commit_err_tail//$'\n'/ }"
-                _commit_result="commit_fail"
-                echo "$_commit_result" > "/tmp/pipeline-push-result-${job_id}"
-                local _commit_feedback
-                _commit_feedback=$(sql_escape "[commit_fail]
-${_commit_err_tail}")
-                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${_commit_feedback} WHERE job_id='${job_id}';"
-            fi
-        else
-            local _new_sha
-            _new_sha=$(git -C "$main_workdir" rev-parse HEAD 2>/dev/null) || _new_sha=""
-            local _staged_count
-            _staged_count=$(git -C "$main_workdir" diff --stat "${_pre_sha}..${_new_sha}" 2>/dev/null | tail -1)
-            [[ -z "$_staged_count" ]] && _staged_count="stat_unavailable"
-            log "  COMMIT_OK: ${_new_sha:-unknown} (${_staged_count})"
-
-            # commit 성공 — push 시도
-            local _push_err="/tmp/pipeline-push-${job_id}.err"
-            if ! git push 2>"$_push_err"; then
-                local _push_err_tail
-                _push_err_tail=$(tail -20 "$_push_err" 2>/dev/null | head -c 1500)
-                log "  ERROR: git push failed: ${_push_err_tail//$'\n'/ }"
-                local _push_feedback
-                _push_feedback=$(sql_escape "[push_fail]
-${_push_err_tail}")
-                db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || ${_push_feedback} WHERE job_id='${job_id}';"
-                echo "push_fail" > "/tmp/pipeline-push-result-${job_id}"
-            else
-                log "  GIT_PUSH_OK job=$job_id"
-                echo "ok" > "/tmp/pipeline-push-result-${job_id}"
-                # HEARTBEAT: push 성공 후 updated_at 갱신 (deploy_timeout 20분 방지)
-                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-            fi
-        fi
-
-        # _py_changed를 서브셸 밖으로 전달 (파일 경유)
-        echo "$_py_changed" > "/tmp/pipeline-py-changed-${job_id}"
-
-    ) 200>"$lock_file"
-
-    cd "$main_workdir"
-
-    # FIX-1: git push 결과 읽고 에러 처리 (flock 서브셸 바깥에서)
-    local _push_result="ok"
-    if [[ -f "/tmp/pipeline-push-result-${job_id}" ]]; then
-        _push_result=$(cat "/tmp/pipeline-push-result-${job_id}" 2>/dev/null) || _push_result="unknown"
-        rm -f "/tmp/pipeline-push-result-${job_id}" 2>/dev/null || true
-    fi
-
-    # FIX (P0-A): 커밋 전 SHA 복원 — GO100/SF/NTV2 frontend 변경 감지용
-    local _pre_sha=""
-    if [[ -f "/tmp/pipeline-pre-sha-${job_id}" ]]; then
-        _pre_sha=$(cat "/tmp/pipeline-pre-sha-${job_id}" 2>/dev/null) || _pre_sha=""
-        rm -f "/tmp/pipeline-pre-sha-${job_id}" 2>/dev/null || true
-    fi
-
-    if [[ "$_push_result" != "ok" ]]; then
-        log "  PUSH_FAIL job=$job_id result=$_push_result — 배포 중단"
+    if [[ "$push_exit" -ne 0 ]]; then
+        local push_error_detail
+        push_error_detail="push_fail: ${push_diag:0:1800}"
         db_update "UPDATE pipeline_jobs SET status='error', phase='push_fail',
-                   error_detail='${_push_result}',
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[자동] git ${_push_result} — main 반영 실패',
+                   error_detail=$(sql_escape "$push_error_detail"),
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[자동] isolated worktree git push 실패 — 진단은 error_detail/logs 참조',
                    updated_at=NOW() WHERE job_id='${job_id}';"
-        post_to_chat "$session_id" "🔴 [Pipeline Runner] git push 실패 — 배포 중단: $job_id (${_push_result})"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] git push 실패 — 배포 중단: $job_id (${push_error_detail:0:500})"
         _release_deploy_lock "$project" "$job_id"
         _notify_ai "$job_id"
         promote_next_queued "$project"
         return 1
     fi
-
-    # 서브셸에서 감지한 .py 변경 여부 읽기
-    local _py_changed="false"
-    if [[ -f "/tmp/pipeline-py-changed-${job_id}" ]]; then
-        _py_changed=$(cat "/tmp/pipeline-py-changed-${job_id}" 2>/dev/null) || _py_changed="false"
-        rm -f "/tmp/pipeline-py-changed-${job_id}" 2>/dev/null || true
-    fi
+    log "  GIT_PUSH_OK job=$job_id sha=$current_sha worktree=$worktree_dir"
+    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
@@ -1936,11 +1896,9 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
             if [[ "$target_repo" == "aads-dashboard" ]]; then
                 DASHBOARD_CHANGED=true
             elif [ -n "$(git -C /root/aads/aads-dashboard status --porcelain 2>/dev/null)" ]; then
-                log "  COMMIT aads-dashboard changes"
-                git -C /root/aads/aads-dashboard add -A 2>/dev/null || true
-                git -C /root/aads/aads-dashboard commit -m "Pipeline-Runner: ${job_id} (dashboard)" 2>/dev/null || true
-                git -C /root/aads/aads-dashboard push 2>/dev/null || true
-                DASHBOARD_CHANGED=true
+                log "  BLOCK aads-dashboard shared worktree changes — 별도 isolated runner job 필요"
+                _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:isolated_worktree_required"
+                DASHBOARD_CHANGED=false
             else
                 DASHBOARD_CHANGED=false
             fi
@@ -2020,13 +1978,8 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
             log "  RESTART kis-v41-api"
             # webapp은 별도 workdir이므로 변경 감지
             if [ -n "$(git -C /root/webapp status --porcelain 2>/dev/null)" ]; then
-                git -C /root/webapp add -A 2>/dev/null || true
-                git -C /root/webapp commit -m "Pipeline-Runner: ${job_id} (webapp)" 2>/dev/null || true
-                git -C /root/webapp push 2>/dev/null || true
-                # HEARTBEAT: 서비스 재시작 직전 갱신
-                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                systemctl restart kis-webapp-api 2>/dev/null || true
-                log "  RESTART kis-webapp-api"
+                log "  BLOCK webapp shared worktree changes — 별도 isolated runner job 필요"
+                _build_fail="${_build_fail:+${_build_fail};}webapp:isolated_worktree_required"
             fi
             ;;
         GO100)
@@ -2206,9 +2159,21 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
         log "  ROLLBACK_START job=$job_id project=$project — health-check 실패 (backend=$health_ok frontend=$frontend_health_ok)"
         post_to_chat "$session_id" "🔴 [Pipeline Runner] health-check 실패 (backend=$health_ok frontend=$frontend_health_ok) — 자동 롤백 시작: $job_id"
 
-        cd "$main_workdir" 2>/dev/null || cd "${PROJECT_WORKDIR[$project]:-}"
-        if git revert --no-edit HEAD 2>/dev/null; then
-            git push 2>/dev/null || true
+        cd "$worktree_dir" 2>/dev/null || true
+        if verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir" \
+            && git -C "$worktree_dir" revert --no-edit "$current_sha" 2>/dev/null; then
+            local rollback_sha rollback_out rollback_err rollback_exit=0
+            rollback_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+            rollback_out=$(mktemp "/tmp/pipeline-rollback-${job_id}.out.XXXXXX")
+            rollback_err=$(mktemp "/tmp/pipeline-rollback-${job_id}.err.XXXXXX")
+            git -C "$worktree_dir" push origin "${rollback_sha}:refs/heads/main" >"$rollback_out" 2>"$rollback_err" || rollback_exit=$?
+            record_git_diagnostics "$job_id" "$([[ "$rollback_exit" -eq 0 ]] && echo rollback_push_succeeded || echo rollback_push_failed)" \
+                "$worktree_dir" "$rollback_exit" "$(tail -30 "$rollback_out")" "$(tail -30 "$rollback_err")" >/dev/null
+            rm -f "$rollback_out" "$rollback_err"
+            if [[ "$rollback_exit" -ne 0 ]]; then
+                _build_fail="${_build_fail:+${_build_fail};}rollback:push_fail"
+                log "  ROLLBACK_PUSH_FAIL: 진단을 pipeline_jobs.logs에 저장"
+            fi
             log "  ROLLBACK_REVERT: git revert HEAD 성공"
 
             case "$project" in
