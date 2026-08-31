@@ -221,10 +221,10 @@ async def _ensure_running_placeholder_anchor(
     execution_uuid = UUID(execution_id)
     existing = await conn.fetchrow(
         """
-        SELECT id, content, tools_called
+        SELECT id, content, tools_called, intent
         FROM chat_messages
         WHERE execution_id = $1
-          AND intent = 'streaming_placeholder'
+          AND role = 'assistant'
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -232,7 +232,56 @@ async def _ensure_running_placeholder_anchor(
     )
     clean_partial = svc._strip_streaming_progress_markers(partial_content or "").strip()
     if existing:
+        existing_intent = str(existing["intent"] or "")
         existing_content = str(existing["content"] or "").strip()
+        if existing_intent != "streaming_placeholder":
+            resumable_intents = {
+                "interrupted_partial",
+                "interruption_notice",
+                "continued",
+                "_archived_partial",
+            }
+            if existing_intent not in resumable_intents:
+                return {
+                    "id": existing["id"],
+                    "content": existing["content"],
+                    "tools_called": existing["tools_called"],
+                    "is_new": False,
+                }
+            display_content = (
+                clean_partial + "\n\n⏳ _생성 중... (표시 버블 복구됨)_"
+                if clean_partial
+                else "⏳ _AI가 응답을 생성 중입니다... (표시 버블 복구됨)_"
+            )
+            repaired = await conn.fetchrow(
+                """
+                UPDATE chat_messages
+                SET content = $2,
+                    intent = 'streaming_placeholder',
+                    model_used = 'streaming',
+                    tools_called = $3::jsonb,
+                    is_hidden = FALSE,
+                    edited_at = NOW()
+                WHERE id = $1
+                  AND role = 'assistant'
+                  AND intent IN (
+                    'interrupted_partial',
+                    'interruption_notice',
+                    'continued',
+                    '_archived_partial'
+                  )
+                RETURNING id, content, tools_called, FALSE AS is_new
+                """,
+                existing["id"],
+                display_content,
+                json.dumps(svc.normalize_tool_events(tools_called)),
+            )
+            return repaired or {
+                "id": existing["id"],
+                "content": existing["content"],
+                "tools_called": existing["tools_called"],
+                "is_new": False,
+            }
         if clean_partial and len(clean_partial) > len(existing_content):
             updated = await conn.fetchrow(
                 """
@@ -279,12 +328,9 @@ async def _ensure_running_placeholder_anchor(
               AND completed_at IS NULL
         )
         ON CONFLICT (execution_id)
-          WHERE intent = 'streaming_placeholder'
+          WHERE role = 'assistant'
             AND execution_id IS NOT NULL
-        DO UPDATE
-          SET content = EXCLUDED.content,
-              tools_called = EXCLUDED.tools_called,
-              edited_at = NOW()
+        DO NOTHING
         RETURNING id, content, tools_called, (xmax = 0) AS is_new
         """,
         session_id,
@@ -293,7 +339,19 @@ async def _ensure_running_placeholder_anchor(
         tools_json,
     )
     if not restored:
-        return None
+        restored = await conn.fetchrow(
+            """
+            SELECT id, content, tools_called, FALSE AS is_new
+            FROM chat_messages
+            WHERE execution_id = $1
+              AND role = 'assistant'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            execution_uuid,
+        )
+        if not restored:
+            return None
     await conn.execute(
         """
         WITH upd_exec AS (

@@ -40,3 +40,16 @@ def test_bluegreen_deploy_builds_once_and_starts_without_build():
     assert "up -d --no-build --no-deps" in deploy
     assert "active/standby image digest mismatch" in deploy
     assert compose.count("image: aads-server:${AADS_RELEASE_SHA:-local}") == 2
+
+
+def test_placeholder_repair_uses_the_actual_assistant_execution_unique_index():
+    router = Path("app/routers/chat.py").read_text(encoding="utf-8")
+    helper = router.split("async def _ensure_running_placeholder_anchor", 1)[1].split(
+        "async def ", 1
+    )[0]
+
+    assert "AND role = 'assistant'" in helper
+    assert "ON CONFLICT (execution_id)" in helper
+    assert "WHERE role = 'assistant'" in helper
+    assert "DO NOTHING" in helper
+    assert "interrupted_partial" in helper
