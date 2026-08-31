@@ -417,12 +417,34 @@ async def _try_shinhan_individual_keyboard_login_step(
         prepared = await _evaluate_page(
             page,
             """
-            (input) => {
-              const byId = (id) => document.getElementById(id);
-              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
-              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
-              const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib');
-              const passwordEl = byId('비밀번호') || byId('비밀번호_cib');
+	            (input) => {
+	              const byId = (id) => document.getElementById(id);
+	              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+	              const firstVisible = (selectors) => {
+	                for (const selector of selectors) {
+	                  try {
+	                    const found = Array.from(document.querySelectorAll(selector)).find((el) => visible(el));
+	                    if (found) return found;
+	                  } catch (_) {}
+	                }
+	                return null;
+	              };
+	              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+	              const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib') || byId('mf_wfm_main_ibx_loginId')
+	                || firstVisible([
+	                  'input[id$="_ibx_loginId"]',
+	                  'input[id*="loginId"]',
+	                  'input[title*="ID"]',
+	                  'input[placeholder*="로그인ID"]'
+	                ]);
+	              const passwordEl = byId('비밀번호') || byId('비밀번호_cib') || byId('wq_uuid_769_scr_pwd')
+	                || firstVisible([
+	                  'input[id$="_scr_pwd"]',
+	                  'input[id*="scr_pwd"]',
+	                  'input[title*="비밀번호"]',
+	                  'input[placeholder*="비밀번호"]',
+	                  'input[type="password"]'
+	                ]);
               const loginFieldsVisible = visible(loginIdEl) && visible(passwordEl);
               const openAccountInquiry = () => {
                 try {
@@ -492,9 +514,7 @@ async def _try_shinhan_individual_keyboard_login_step(
                   return false;
                 }
               };
-              const usernameOkPrimary = setField(byId('ibx_loginId'), input.username);
-              const usernameOkCib = setField(byId('ibx_loginId_cib'), input.username);
-              const usernameOk = usernameOkPrimary || usernameOkCib;
+	              const usernameOk = setField(loginIdEl, input.username);
               try {
                 passwordEl.focus();
                 passwordEl.click();
@@ -596,7 +616,7 @@ async def _try_shinhan_individual_keyboard_login_step(
                   return {clicked: '1', method: 'fncIdLogin'};
                 }
               } catch (_) {}
-              for (const id of ['btn_idLogin', 'btn_idLogin_cib']) {
+	              for (const id of ['btn_idLogin', 'btn_idLogin_cib', 'mf_wfm_main_btn_login']) {
                 const el = byId(id);
                 const component = componentById(id);
                 if (el || component) {
@@ -1751,13 +1771,35 @@ async def _try_shinhan_individual_login_step(
         raw = await _evaluate_page(
             page,
             """
-            async (input) => {
-              const byId = (id) => document.getElementById(id);
-              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
-              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
-              const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib');
-              const loginPasswordEl = byId('비밀번호') || byId('비밀번호_cib');
+	            async (input) => {
+	              const byId = (id) => document.getElementById(id);
+	              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+	              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+	              const firstVisible = (selectors) => {
+	                for (const selector of selectors) {
+	                  try {
+	                    const found = Array.from(document.querySelectorAll(selector)).find((el) => visible(el));
+	                    if (found) return found;
+	                  } catch (_) {}
+	                }
+	                return null;
+	              };
+	              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+	              const loginIdEl = byId('ibx_loginId') || byId('ibx_loginId_cib') || byId('mf_wfm_main_ibx_loginId')
+	                || firstVisible([
+	                  'input[id$="_ibx_loginId"]',
+	                  'input[id*="loginId"]',
+	                  'input[title*="ID"]',
+	                  'input[placeholder*="로그인ID"]'
+	                ]);
+	              const loginPasswordEl = byId('비밀번호') || byId('비밀번호_cib') || byId('wq_uuid_769_scr_pwd')
+	                || firstVisible([
+	                  'input[id$="_scr_pwd"]',
+	                  'input[id*="scr_pwd"]',
+	                  'input[title*="비밀번호"]',
+	                  'input[placeholder*="비밀번호"]',
+	                  'input[type="password"]'
+	                ]);
               const isRedirectLoginPage = (() => {
                 try {
                   const currentMenu = String(window.shbComm?.menu?.getCurrentMenuCode?.() || window.shbComm?.menu?.currentMenuCode || '');
@@ -1909,7 +1951,7 @@ async def _try_shinhan_individual_login_step(
                     return true;
                   }
                 } catch (_) {}
-                const candidates = ['btn_idLogin', 'btn_idLogin_cib'];
+	                const candidates = ['btn_idLogin', 'btn_idLogin_cib', 'mf_wfm_main_btn_login'];
                 for (const id of candidates) {
                   const el = byId(id);
                   const component = componentById(id);
@@ -1975,14 +2017,16 @@ async def _try_shinhan_individual_login_step(
                 };
               }
               if (!hasLoginPanel) return {attempted: '0', stage: 'not_login_panel'};
-              const usernameOkPrimary = setField('ibx_loginId', input.username);
-              const usernameOkCib = setField('ibx_loginId_cib', input.username);
-              const usernameOk = usernameOkPrimary || usernameOkCib;
-              const transkeyOkPrimary = await setTransKeyPassword('비밀번호', input.password);
-              const transkeyOkCib = await setTransKeyPassword('비밀번호_cib', input.password);
-              const transkeyOk = transkeyOkPrimary || transkeyOkCib;
-              const passwordOkPrimary = transkeyOkPrimary || setField('비밀번호', input.password);
-              const passwordOkCib = transkeyOkCib || setField('비밀번호_cib', input.password);
+	              const loginId = loginIdEl?.id || 'ibx_loginId';
+	              const loginPassword = loginPasswordEl?.id || '비밀번호';
+	              const usernameOkPrimary = setField(loginId, input.username);
+	              const usernameOkCib = loginId === 'ibx_loginId_cib' ? false : setField('ibx_loginId_cib', input.username);
+	              const usernameOk = usernameOkPrimary || usernameOkCib;
+	              const transkeyOkPrimary = await setTransKeyPassword(loginPassword, input.password);
+	              const transkeyOkCib = loginPassword === '비밀번호_cib' ? false : await setTransKeyPassword('비밀번호_cib', input.password);
+	              const transkeyOk = transkeyOkPrimary || transkeyOkCib;
+	              const passwordOkPrimary = transkeyOkPrimary || setField(loginPassword, input.password);
+	              const passwordOkCib = transkeyOkCib || setField('비밀번호_cib', input.password);
               const passwordOk = passwordOkPrimary || passwordOkCib;
               const submitted = usernameOk && passwordOk ? clickLogin() : false;
               return {

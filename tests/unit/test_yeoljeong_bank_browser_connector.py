@@ -1581,6 +1581,8 @@ def test_shinhan_keyboard_login_does_not_navigate_before_hidden_idpw_fill():
 
     async def evaluate(expr, *args, **kwargs):
         assert "!loginIdEl && !passwordEl" in expr
+        assert "mf_wfm_main_ibx_loginId" in expr
+        assert "wq_uuid_769_scr_pwd" in expr
         return {
             "attempted": "1",
             "stage": "login_keyboard_prepare",
@@ -1615,6 +1617,8 @@ def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
 
     async def evaluate(expr, *args, **kwargs):
         if "login_keyboard_prepare" in expr:
+            assert "mf_wfm_main_ibx_loginId" in expr
+            assert "wq_uuid_769_scr_pwd" in expr
             return {
                 "attempted": "1",
                 "stage": "login_keyboard_prepare",
@@ -1623,6 +1627,7 @@ def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
                 "password_selector": "[id=\"비밀번호\"]",
             }
         if "fncIdLogin" in expr:
+            assert "mf_wfm_main_btn_login" in expr
             return {"clicked": "1", "method": "fncIdLogin"}
         if "SHINHAN_KEYBOARD_VERIFICATION_FAILED" in expr:
             return {

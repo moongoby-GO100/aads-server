@@ -9549,3 +9549,20 @@
   - Public `https://aads.newtalk.kr/api/v1/health`, local `:8100/health`, and local `:8102/health` returned HTTP 200 after hot-reload.
 - Deployment:
   - Hot-reload applied to the active backend slot. Commit/push is pending in this turn.
+
+## 2026-08-31 12:52 KST - FOOD Shinhan ID/PW bank collection DOM selector fix
+
+- Request: complete Shinhan bank auto-collection and report collected results from the dedicated non-CEO PC.
+- Findings:
+  - Active FOOD bank routing is pinned to PC Agent `7f99c528-24d` (`DESKTOP-ICU55HK`) and excludes CEO PC Agent `2e9379a1-fed`.
+  - A measured Shinhan run on `2026-08-31` failed with `BANK_BROWSER_PC_AGENT_TIMEOUT`, `last_observed_stage=login page`, and `imported_rows=0`.
+  - Live Shinhan DOM inspection showed the current corporate login form uses `mf_wfm_main_ibx_loginId`, `wq_uuid_769_scr_pwd`, and `mf_wfm_main_btn_login`, while the connector only searched the older `ibx_loginId` / `비밀번호` / `btn_idLogin` identifiers.
+- Code change:
+  - `app/services/yeoljeong_bank_browser_connector.py`: broadened Shinhan ID/PW login field discovery to visible WebSquare dynamic IDs, title/placeholder selectors, and the current main login button.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added regression assertions that the current Shinhan corporate DOM selectors remain in the login automation script.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py` passed 66/66.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py` succeeded.
+- Deployment:
+  - Pending at this record point; commit, push, hot reload, then rerun the dedicated ICU55HK Shinhan collection.
