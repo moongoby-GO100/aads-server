@@ -9429,13 +9429,15 @@
   - The Shinhan result file still had `imported_rows=0`; this record is not a successful collection completion.
 - Code change:
   - `pc_agent/commands/browser_auto.py`: bank work_key reuse now verifies that the current CDP page host matches the requested bank URL before reusing a port.
+  - `pc_agent/commands/browser_auto.py`: ownerless bank CDP ports left after Agent reconnect are now re-registered to the requested bank work_key when the port already serves the same bank host.
   - `app/browser_bridge/service.py`: PC Agent browser launch now passes a longer `ready_timeout_seconds` derived from the collection command timeout, preventing bank Chrome startup from failing after the Agent default 15 seconds.
   - `scripts/yeoljeong_auto_collect.py`: bank timeout diagnostics now include a derived bank browser work_key when the payload did not carry one.
-  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped PC Agent to `1.0.65` so ICU55HK can self-update to the work_key isolation fix.
+  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped PC Agent to `1.0.66` so ICU55HK can self-update to the work_key isolation fix.
   - `tests/unit/test_cdp_session_manager.py` and `tests/unit/test_yeoljeong_auto_collect.py`: regression coverage added.
 - Verification:
   - `docker exec -w /app aads-server-green python -m pytest tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_auto_collect.py -q` passed 59 tests.
   - `docker exec -w /app aads-server-green python -m pytest tests/unit/test_browser_bridge.py -q` passed 45 tests.
+  - `docker exec -w /app aads-server-green python -m pytest tests/unit/test_cdp_session_manager.py -q` passed 18 tests after the ownerless-port regression was added.
   - `python3 -m py_compile pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py` succeeded.
   - `git diff --check -- pc_agent/commands/browser_auto.py scripts/yeoljeong_auto_collect.py tests/unit/test_cdp_session_manager.py tests/unit/test_yeoljeong_auto_collect.py` succeeded.
 - Next:

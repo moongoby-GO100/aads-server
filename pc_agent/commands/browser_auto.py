@@ -2116,6 +2116,40 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                             "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
                         },
                     }
+                if (
+                    work_key.startswith("yeoljeong-bank-")
+                    and owner is None
+                    and await _bank_work_key_port_matches_url(port, str(url or ""))
+                ):
+                    CDPSessionManager.register(work_key, port, profile_dir)
+                    navigated = False
+                    navigate_error = ""
+                    if str(url or "").strip() and str(url).strip() != "about:blank":
+                        try:
+                            navigate_result = await browser_navigate(
+                                {
+                                    **params,
+                                    "url": str(url),
+                                    "port": port,
+                                    "work_key": work_key,
+                                    "reuse_tab": False,
+                                }
+                            )
+                            navigated = isinstance(navigate_result, dict) and navigate_result.get("status") == "success"
+                        except Exception as exc:
+                            navigate_error = str(exc)[:200]
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message": f"기존 은행 CDP 세션 재등록 (port {port})",
+                            "port": port,
+                            "user_data_dir": profile_dir,
+                            "cdp_ready": True,
+                            "websocket_debugger_url": existing.get("webSocketDebuggerUrl", ""),
+                            "navigated": navigated,
+                            "navigate_error": navigate_error,
+                        },
+                    }
                 # 다른 work_key 또는 외부 CDP가 이미 점유한 포트는 재사용하지 않는다.
                 continue
 

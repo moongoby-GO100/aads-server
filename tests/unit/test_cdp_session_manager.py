@@ -218,6 +218,50 @@ async def test_bank_work_key_port_accepts_requested_bank_target(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_browser_launch_registers_ownerless_matching_bank_port(monkeypatch):
+    CDPSessionManager._sessions.clear()
+
+    async def fake_probe(port):
+        if port == 9222:
+            return {"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/test"}
+        return None
+
+    async def fake_list_targets(_port):
+        return [
+            {
+                "id": "target-shinhan",
+                "type": "page",
+                "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                "webSocketDebuggerUrl": "ws://target",
+            }
+        ]
+
+    navigations: list[dict] = []
+
+    async def fake_browser_navigate(params):
+        navigations.append(dict(params))
+        return {"status": "success", "data": {"url": params["url"]}}
+
+    monkeypatch.setattr("browser_auto._probe_cdp_version", fake_probe)
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+    monkeypatch.setattr("browser_auto.browser_navigate", fake_browser_navigate)
+
+    result = await browser_launch(
+        {
+            "work_key": "yeoljeong-bank-shinhan-individual-abc",
+            "url": "https://bank.shinhan.com/rib/easy/index.jsp",
+            "isolated_profile": True,
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["port"] == 9222
+    assert "재등록" in result["data"]["message"]
+    assert CDPSessionManager.get_session("yeoljeong-bank-shinhan-individual-abc").port == 9222
+    assert navigations[0]["reuse_tab"] is False
+
+
+@pytest.mark.asyncio
 async def test_browser_navigate_uses_existing_work_key_target(monkeypatch):
     CDPSessionManager._sessions.clear()
     CDPSessionManager.register(
