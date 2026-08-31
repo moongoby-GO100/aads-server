@@ -654,8 +654,8 @@ class TestRegressions:
         assert "ELSE $2::uuid" in src
 
     @pytest.mark.asyncio
-    async def test_settle_stale_execution_recovers_recent_progress_without_live_runtime(self, monkeypatch):
-        """메모리상 live runtime이 없으면 recent partial도 recovery가 정리."""
+    async def test_settle_stale_execution_keeps_recent_progress_incomplete_without_live_runtime(self, monkeypatch):
+        """recent partial은 live runtime이 없어도 completed/recovered로 정리하지 않는다."""
         from app.routers import chat as chat_router
 
         class FakeConn:
@@ -692,10 +692,7 @@ class TestRegressions:
             has_live_runtime=False,
         )
 
-        assert settled is not None
-        assert settled["just_completed"] is False
-        assert settled["stream_status"] in {"recovering", "needs_continuation"}
-        assert settled["final_message_ready"] is False
+        assert settled is None
 
     @pytest.mark.asyncio
     async def test_settle_stale_execution_uses_started_age_hard_timeout(self, monkeypatch):

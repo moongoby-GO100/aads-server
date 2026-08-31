@@ -569,3 +569,11 @@
 - 스케줄러: `app/main.py`는 기존 `DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45`와 `_delivery_auto_collect_security_block_cooldown_active()`로 최근 배민 차단 원장이 있으면 `delivery_auto_collect_skip: baemin_security_block_cooldown`을 기록하고 배민 서비스를 제외한다. 이번 검증에서 최근 차단은 active, 46분 경과 차단은 expired로 판정됨을 확인했다.
 - 검증: `python3 -m py_compile app/services/yeoljeong_finance_service.py app/main.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py` 성공. 운영 컨테이너 `python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_delivery_scheduler_contract.py -q` 결과 140 passed. `/health`는 `status=ok`, `graph_ready=true`.
 - 남은 이슈: 이번 턴에서는 운영 브라우저로 배민 보안차단을 재현하지 않았다. 실제 보안차단 재현 E2E는 배민 계정 차단 위험이 있어 API/단위 계약 검증으로 대체했다. 배포/재시작은 아직 수행하지 않았고, 기존 무관 dirty 파일은 보존했다.
+
+## 2026-08-31 09:44 KST - CHAT 미완료 응답 premature completed 재방지 보강
+
+- 요청: 응답이 실제 완료가 아닌데 completed로 닫히는 현상을 즉시 조치하고 결과 보고.
+- 조치: `app/routers/chat.py`의 stale execution recovery가 최근 partial 또는 도구 진행이 있는 실행을 너무 빨리 recovered/completed로 정리하지 않도록 grace를 확대했다. 도구 진행 실행은 120초, 도구 없는 실행은 60초, empty no-runtime은 90초 이상일 때만 복구 정리 대상으로 본다.
+- 조치: `app/services/chat_service.py`에서 heartbeat도 25초 간격으로 DB 중간 저장해 blue-green 배포 중 `updated_at`이 오래돼 보이는 문제를 줄였다. 메모리 streaming state의 orphan 완료 판정도 도구 진행 시 180초, 일반 실행 90초로 늘려 완료 신호가 먼저 나가지 않게 했다.
+- 검증: 운영 컨테이너 소스에서 `recovery_grace`, heartbeat 저장, orphan threshold 반영을 확인했다. `python3 -m py_compile app/routers/chat.py app/services/chat_service.py tests/unit/test_tools_and_pipeline.py` 성공. 운영 이미지 의존성 + bind mount 기준 `pytest tests/unit/test_chat_service.py tests/unit/test_tools_and_pipeline.py -q` 결과 135 passed, 1 warning.
+- 배포/커밋: 서버 코드 커밋 `6a69660f fix: prevent premature completion during tool execution`이 생성됐다. 본 HANDOVER와 회귀 테스트 기대값 보정은 후속 커밋으로 정리한다. 대시보드는 `d42481a88d90 fix(chat): require final message before completion ui`까지 배포됐으나 원격 push가 아직 남아 있어 후속 단계에서 정리한다.
