@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pc_agent
 from browser_auto import (
     CDPCommandGuardManager,
     CDPSessionManager,
+    browser_eval,
     browser_launch,
     browser_navigate,
     browser_close_session,
@@ -338,6 +339,57 @@ async def test_select_page_targets_prefers_target_url_over_default_order(monkeyp
     )
 
     assert targets[0]["id"] == "target-shinhan"
+
+
+@pytest.mark.asyncio
+async def test_browser_eval_preserves_bank_target_url_hint(monkeypatch):
+    CDPSessionManager._sessions.clear()
+    CDPCommandGuardManager._guards.clear()
+    CDPSessionManager.register(
+        "yeoljeong-bank-shinhan-individual-abc",
+        9222,
+        os.path.join(_default_profile_root(), "isolated-shinhan"),
+        pid=1234,
+    )
+    captured: list[dict] = []
+
+    async def fake_send_cdp_command(port, method, params, *, timeout_seconds, target_id="", target_idx=0):
+        captured.append(
+            {
+                "port": port,
+                "method": method,
+                "params": dict(params or {}),
+                "target_id": target_id,
+                "target_idx": target_idx,
+            }
+        )
+        return {
+            "result": {"value": "ok", "type": "string"},
+            "_target": {
+                "id": "target-shinhan",
+                "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+            },
+        }
+
+    async def fake_collect_page_diagnostics(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr("browser_auto._send_cdp_command", fake_send_cdp_command)
+    monkeypatch.setattr("browser_auto._collect_page_diagnostics", fake_collect_page_diagnostics)
+
+    result = await browser_eval(
+        {
+            "work_key": "yeoljeong-bank-shinhan-individual-abc",
+            "target_url": "https://bank.shinhan.com/rib/easy/index.jsp",
+            "expression": "document.title",
+            "command_timeout_seconds": 10,
+            "evaluate_timeout_seconds": 5,
+        }
+    )
+
+    assert result["status"] == "success"
+    assert captured[0]["params"]["work_key"] == "yeoljeong-bank-shinhan-individual-abc"
+    assert captured[0]["params"]["target_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
 
 
 @pytest.mark.asyncio

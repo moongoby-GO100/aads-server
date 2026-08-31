@@ -1,3 +1,4 @@
+v1.0.69: browser_eval이 work_key와 target_url/url_pattern hint를 Runtime.evaluate target 선택까지 전달해 은행 전용 세션에서 다른 탭 평가를 방지
 v1.0.68: 은행 work_key에 요청 은행 URL target이 없으면 다른 탭 fallback을 금지하고 stale target 회복으로 새 은행 세션 생성
 v1.0.67: 은행 work_key의 Runtime/CDP 명령이 stale last_target_id 대신 요청 은행 target_url을 우선 선택해 GO100/타 포털 탭 오조작 방지
 v1.0.66: Agent 재연결 후 ownerless 상태로 남은 은행 CDP 포트가 요청 은행 도메인과 일치하면 work_key에 재등록해 신한 세션 중복 생성 방지

@@ -1687,14 +1687,18 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
             wait_timeout_seconds=guard_wait_seconds,
             stale_after_seconds=guard_stale_after_seconds,
         )
+        cdp_params = {
+            "expression": expression,
+            "returnByValue": True,
+            "awaitPromise": await_promise,
+        }
+        for hint_key in ("work_key", "target_url", "url_pattern", "url"):
+            if params.get(hint_key):
+                cdp_params[hint_key] = params.get(hint_key)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
-            {
-                "expression": expression,
-                "returnByValue": True,
-                "awaitPromise": await_promise,
-            },
+            cdp_params,
             timeout_seconds=timeout_seconds,
             target_id=str(params.get("target_id") or ""),
             target_idx=int(params.get("target_idx", 0) or 0),

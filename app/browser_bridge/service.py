@@ -719,7 +719,10 @@ class BrowserBridgeService:
                 )
                 if health_routed is not None:
                     health_routed = self._coerce_pc_agent_embedded_success(health_routed)
-                    if health_routed.get("status") == "success":
+                    if health_routed.get("status") == "success" and (
+                        not normalized_work_key.startswith("yeoljeong-bank-")
+                        or self._route_result_matches_requested_host(health_routed, str(url or ""))
+                    ):
                         routed = health_routed
                 if routed.get("status") != "success" and not self._route_pc_agent_via_active_api_first():
                     health_routed = await pc_agent_manager.execute_routed_command(
@@ -735,7 +738,10 @@ class BrowserBridgeService:
                         command_timeout_seconds=health_timeout,
                     )
                     health_routed = self._coerce_pc_agent_embedded_success(health_routed)
-                    if health_routed.get("status") == "success":
+                    if health_routed.get("status") == "success" and (
+                        not normalized_work_key.startswith("yeoljeong-bank-")
+                        or self._route_result_matches_requested_host(health_routed, str(url or ""))
+                    ):
                         routed = health_routed
                 if routed.get("status") != "success":
                     tabs_params: dict[str, Any] = {
@@ -1493,6 +1499,30 @@ class BrowserBridgeService:
             if url not in deduped:
                 deduped.append(url)
         return deduped
+
+    @staticmethod
+    def _route_result_matches_requested_host(result: dict[str, Any] | None, requested_url: str) -> bool:
+        requested_host = urllib.parse.urlparse(str(requested_url or "")).netloc.lower()
+        if not requested_host:
+            return True
+        payload = result if isinstance(result, dict) else {}
+        command_result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        data = command_result.get("result") if isinstance(command_result.get("result"), dict) else {}
+        urls: list[str] = []
+        page = data.get("page") if isinstance(data.get("page"), dict) else {}
+        for key in ("href", "url", "last_url"):
+            value = str(page.get(key) or data.get(key) or "").strip()
+            if value:
+                urls.append(value)
+        tabs = data.get("tabs") if isinstance(data.get("tabs"), list) else []
+        for tab in tabs:
+            if isinstance(tab, dict) and str(tab.get("url") or "").strip():
+                urls.append(str(tab.get("url") or "").strip())
+        for candidate in urls:
+            candidate_host = urllib.parse.urlparse(candidate).netloc.lower()
+            if candidate_host == requested_host or candidate_host.endswith(f".{requested_host}"):
+                return True
+        return False
 
     @staticmethod
     def _running_in_docker() -> bool:

@@ -1603,6 +1603,9 @@ async def test_pc_agent_cdp_session_falls_back_to_browser_health_on_cdp_not_read
                         "port": 9222,
                         "work_key": "yeoljeong-bank-shinhan-individual-test",
                         "cdp_version": "Chrome/151",
+                        "page": {
+                            "href": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                        },
                     }
                 },
             }
@@ -1623,6 +1626,87 @@ async def test_pc_agent_cdp_session_falls_back_to_browser_health_on_cdp_not_read
     assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
     assert session.endpoint.metadata["agent_id"] == "ceo-pc"
     assert session.endpoint.metadata["port"] == "9222"
+
+
+@pytest.mark.asyncio
+async def test_bank_pc_agent_cdp_session_rejects_wrong_host_health_fallback(monkeypatch, tmp_path) -> None:
+    service = BrowserBridgeService(
+        pairings=PairingManager(default_ttl_seconds=60),
+        sessions=SessionRegistry(tmp_path / "sessions"),
+        storage_states=StorageStateManager(tmp_path),
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(service, "_route_pc_agent_via_active_api_first", lambda: True)
+
+    async def fake_route(**kwargs):
+        command_type = kwargs["command_type"]
+        calls.append(command_type)
+        if command_type == "browser_launch":
+            return {
+                "status": "error",
+                "error_code": "CDP_NOT_READY",
+                "message": "CDP endpoint 준비 실패",
+            }
+        if command_type == "browser_health":
+            return {
+                "status": "success",
+                "lease": {"agent_id": "icu55hk"},
+                "result": {
+                    "result": {
+                        "port": 9222,
+                        "work_key": "yeoljeong-bank-shinhan-individual-test",
+                        "cdp_version": "Chrome/151",
+                        "page": {"href": "https://go100.newtalk.kr/auth/login"},
+                    }
+                },
+            }
+        if command_type == "browser_tabs":
+            return {
+                "status": "success",
+                "lease": {"agent_id": "icu55hk"},
+                "result": {
+                    "result": {
+                        "tabs": [
+                            {
+                                "id": "tab-1",
+                                "title": "Dashboard",
+                                "url": "https://go100.newtalk.kr/auth/login",
+                                "type": "page",
+                            }
+                        ],
+                        "count": 1,
+                        "port": 9222,
+                    }
+                },
+            }
+        if command_type == "browser_navigate":
+            assert kwargs["params"]["url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+            assert kwargs["params"]["work_key"] == "yeoljeong-bank-shinhan-individual-test"
+            return {
+                "status": "success",
+                "lease": {"agent_id": "icu55hk"},
+                "result": {"result": {"ok": True}},
+            }
+        raise AssertionError(command_type)
+
+    monkeypatch.setattr(service, "_execute_pc_agent_route_via_active_api", fake_route)
+
+    session = await service.ensure_pc_agent_cdp_session(
+        agent_id="icu55hk",
+        label="신한 간편조회",
+        url="https://bank.shinhan.com/rib/easy/index.jsp",
+        work_key="yeoljeong-bank-shinhan-individual-test",
+        preferred_port=9222,
+        command_timeout_seconds=90,
+    )
+
+    assert calls == ["browser_launch", "browser_health", "browser_tabs", "browser_navigate"]
+    assert session.work_key == "yeoljeong-bank-shinhan-individual-test"
+    assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
+    assert session.endpoint.metadata["agent_id"] == "icu55hk"
+    assert session.endpoint.metadata["port"] == "9222"
+    assert session.endpoint.metadata["last_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
 
 
 @pytest.mark.asyncio
