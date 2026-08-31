@@ -87,6 +87,29 @@ def test_relay_reservation_keeps_minimum_slots_for_other_providers(monkeypatch) 
     assert relay._reserved_slots_needed_for_others("claude") == 1
 
 
+def test_relay_acquire_metrics_report_actual_wait_success_rate(monkeypatch) -> None:
+    relay = _load_claude_relay_module()
+    relay._RELAY_ACQUIRE_METRICS.clear()
+    monkeypatch.setattr(relay, "_WAIT_OBSERVED_THRESHOLD_SEC", 0.05)
+
+    for _ in range(3):
+        relay._record_relay_acquire_attempt("codex")
+    relay._record_relay_acquire_success("codex", 0.001)
+    relay._record_relay_acquire_success("codex", 2.0)
+    relay._record_relay_acquire_timeout("codex", 45.0)
+
+    metrics = relay._relay_acquire_metrics_payload()["codex"]
+    assert metrics["attempts"] == 3
+    assert metrics["successes"] == 2
+    assert metrics["timeouts"] == 1
+    assert metrics["success_rate_pct"] == 66.7
+    assert metrics["wait_attempts"] == 2
+    assert metrics["waited_successes"] == 1
+    assert metrics["wait_success_rate_pct"] == 50.0
+    assert metrics["avg_success_wait_sec"] == 2.0
+    assert metrics["max_wait_sec"] == 45.0
+
+
 def test_model_selector_resolves_codex_project_from_workspace_settings() -> None:
     assert _normalize_model_selector_codex_project(
         "[GO100] 백억이",

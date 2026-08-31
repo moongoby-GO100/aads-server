@@ -77,10 +77,13 @@ _CODEX_CWD_MAP = {
 # 운영자가 명시적으로 override하지 않으면 보수적으로 1개만 허용한다.
 _MAX_CONCURRENT = int(os.getenv("CLAUDE_RELAY_MAX_CONCURRENT", "1"))
 _SEMAPHORE_ACQUIRE_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_ACQUIRE_TIMEOUT_SEC", "20"))
+_WAIT_OBSERVED_THRESHOLD_SEC = float(os.getenv("CLAUDE_RELAY_WAIT_OBSERVED_THRESHOLD_SEC", "0.05"))
 _semaphore = None  # 앱 시작 시 실제 이벤트 루프에서 생성 (Python 3.6 different loop 방지)
 
 # AADS-191: 세마포어 leak 진단/방지용 활성 lease 카운터
 _ACTIVE_LEASES = {"claude": 0, "codex": 0, "antigravity": 0}
+_RELAY_ACQUIRE_METRICS = {}
+_RELAY_METRICS_STARTED_MONOTONIC = time.monotonic()
 _RELAY_MIN_AVAILABLE_DEFAULT = {"claude": 1, "antigravity": 1}
 _STDERR_READ_TIMEOUT_SEC = float(os.getenv("CLAUDE_RELAY_STDERR_READ_TIMEOUT_SEC", "3"))
 
@@ -129,6 +132,74 @@ def _reserved_slots_needed_for_others(relay_name):
         active = int(_ACTIVE_LEASES.get(reserved_relay, 0) or 0)
         needed += max(0, int(minimum) - active)
     return needed
+
+
+def _relay_metrics_for(relay_name):
+    name = (relay_name or "unknown").strip().lower() or "unknown"
+    metrics = _RELAY_ACQUIRE_METRICS.get(name)
+    if metrics is None:
+        metrics = {
+            "attempts": 0,
+            "successes": 0,
+            "timeouts": 0,
+            "waited_successes": 0,
+            "wait_sec_total": 0.0,
+            "successful_wait_sec_total": 0.0,
+            "wait_sec_max": 0.0,
+        }
+        _RELAY_ACQUIRE_METRICS[name] = metrics
+    return metrics
+
+
+def _record_relay_acquire_attempt(relay_name):
+    _relay_metrics_for(relay_name)["attempts"] += 1
+
+
+def _record_relay_acquire_success(relay_name, waited_sec):
+    metrics = _relay_metrics_for(relay_name)
+    waited = max(0.0, float(waited_sec or 0.0))
+    metrics["successes"] += 1
+    metrics["wait_sec_total"] += waited
+    metrics["wait_sec_max"] = max(float(metrics.get("wait_sec_max") or 0.0), waited)
+    if waited >= _WAIT_OBSERVED_THRESHOLD_SEC:
+        metrics["waited_successes"] += 1
+        metrics["successful_wait_sec_total"] += waited
+
+
+def _record_relay_acquire_timeout(relay_name, waited_sec):
+    metrics = _relay_metrics_for(relay_name)
+    waited = max(0.0, float(waited_sec or 0.0))
+    metrics["timeouts"] += 1
+    metrics["wait_sec_total"] += waited
+    metrics["wait_sec_max"] = max(float(metrics.get("wait_sec_max") or 0.0), waited)
+
+
+def _relay_acquire_metrics_payload():
+    payload = {}
+    for relay_name, metrics in sorted(_RELAY_ACQUIRE_METRICS.items()):
+        attempts = int(metrics.get("attempts") or 0)
+        successes = int(metrics.get("successes") or 0)
+        timeouts = int(metrics.get("timeouts") or 0)
+        waited_successes = int(metrics.get("waited_successes") or 0)
+        wait_total = float(metrics.get("wait_sec_total") or 0.0)
+        successful_wait_total = float(metrics.get("successful_wait_sec_total") or 0.0)
+        terminal = successes + timeouts
+        wait_attempts = waited_successes + timeouts
+        payload[relay_name] = {
+            "attempts": attempts,
+            "successes": successes,
+            "timeouts": timeouts,
+            "success_rate": round(successes / terminal, 4) if terminal else None,
+            "success_rate_pct": round(100.0 * successes / terminal, 1) if terminal else None,
+            "wait_attempts": wait_attempts,
+            "waited_successes": waited_successes,
+            "wait_success_rate": round(waited_successes / wait_attempts, 4) if wait_attempts else None,
+            "wait_success_rate_pct": round(100.0 * waited_successes / wait_attempts, 1) if wait_attempts else None,
+            "avg_wait_sec": round(wait_total / terminal, 3) if terminal else None,
+            "avg_success_wait_sec": round(successful_wait_total / waited_successes, 3) if waited_successes else None,
+            "max_wait_sec": round(float(metrics.get("wait_sec_max") or 0.0), 3),
+        }
+    return payload
 
 # AADS-191B: hard timeout — 90분 초과 시 강제 종료 (정상 작업의 99% 차지하는 30분 이하 영향 없음)
 # 데이터 근거: 7일간 2834건 중 30분 이하 98.87%, 60분+ 4건 전부 interrupted(비정상)
@@ -188,10 +259,13 @@ class _SemaphoreLease:
             entry["cli_model"] = model
 
     async def __aenter__(self):
+        started_at = time.monotonic()
+        _record_relay_acquire_attempt(self._relay_name)
         deadline = time.monotonic() + self._timeout_sec
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                _record_relay_acquire_timeout(self._relay_name, time.monotonic() - started_at)
                 logger.error(
                     "%s_relay_busy: session=%s acquire_timeout=%.1fs active_leases=%s reserved_for_others=%s",
                     self._relay_name,
@@ -222,6 +296,7 @@ class _SemaphoreLease:
                 break
             self._semaphore.release()
             await asyncio.sleep(0.25)
+        _record_relay_acquire_success(self._relay_name, time.monotonic() - started_at)
         self._acquired = True
         _ACTIVE_LEASES[self._relay_name] = _ACTIVE_LEASES.get(self._relay_name, 0) + 1
         # AADS-191B: lease registry 등록
@@ -1959,6 +2034,7 @@ async def handle_health(request):
               "antigravity_cmd_mode": "docker_exec",
               "mcp_bridge_mode": _MCP_BRIDGE_MODE,
               "max_concurrent": _MAX_CONCURRENT,
+              "acquire_timeout_sec": _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
               "semaphore_available": sem_value,
               "active_leases": dict(_ACTIVE_LEASES),
               "min_available_by_relay": dict(_RELAY_MIN_AVAILABLE_BY_RELAY),
@@ -1966,6 +2042,11 @@ async def handle_health(request):
                   name: _reserved_slots_needed_for_others(name)
                   for name in ("claude", "codex", "antigravity")
               },
+              "acquire_metrics": _relay_acquire_metrics_payload(),
+              "acquire_metrics_uptime_sec": round(
+                  max(0.0, time.monotonic() - _RELAY_METRICS_STARTED_MONOTONIC), 1
+              ),
+              "wait_observed_threshold_sec": _WAIT_OBSERVED_THRESHOLD_SEC,
               "lease_count": len(_LEASE_REGISTRY),
               "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC,
               "max_lease_sec": _MAX_LEASE_SEC,
