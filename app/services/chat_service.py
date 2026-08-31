@@ -4643,10 +4643,11 @@ async def with_background_completion(
                 if not _queued and not _client_gone:
                     return
 
-                # 클라이언트 연결 중 1초마다 중간 저장 — heartbeat-only 구간 스킵 (중단 시 유실 최소화)
-                if not _client_gone and _event_type not in ("heartbeat", None, ""):
+                # 클라이언트 연결 중 중간 저장: 실 이벤트는 5초마다, heartbeat은 25초마다 (blue-green stale 판정 방지)
+                if not _client_gone:
                     _now_rt = _bg_time.monotonic()
-                    if _now_rt - state["last_save"] > 5:
+                    _save_interval = 5 if _event_type not in ("heartbeat", None, "") else 25
+                    if _now_rt - state["last_save"] > _save_interval:
                         state["last_save"] = _now_rt
                         await _interim_save_streaming(session_id, state)
                         if state.get("_terminal_execution_closed"):
@@ -6199,8 +6200,9 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
             _idle = (_bg_time.monotonic() - _last_evt) if _last_evt else (_bg_time.monotonic() - _started) if _started else 0
             _task = _active_bg_tasks.get(session_id)
             _task_alive = _task is not None and not _task.done()
-            if not _task_alive and _idle > 60:
-                logger.warning(f"streaming_state_orphaned session={session_id[:8]} idle={_idle:.0f}s")
+            _orphan_idle_threshold = 180 if s.get("tool_count", 0) > 0 else 90
+            if not _task_alive and _idle > _orphan_idle_threshold:
+                logger.warning(f"streaming_state_orphaned session={session_id[:8]} idle={_idle:.0f}s threshold={_orphan_idle_threshold}")
                 is_completed = True
                 s["completed"] = True
             elif _started and (_bg_time.monotonic() - _started) > _max_age and _idle > 120:

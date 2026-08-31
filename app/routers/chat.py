@@ -561,7 +561,7 @@ async def _settle_stale_execution_for_recovery(
     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
     _clean_partial = svc._strip_streaming_progress_markers(_partial)
     _first_response_grace = int(getattr(svc, "_FIRST_RESPONSE_TIMEOUT_SEC", 120)) + 30
-    _recovery_grace = 10
+    _recovery_grace = 120 if _tc > 0 else 60
     _no_db_progress = (
         not svc._has_meaningful_partial_content(_clean_partial)
         and not execution_row["last_event_id"]
@@ -574,7 +574,7 @@ async def _settle_stale_execution_for_recovery(
     _stale_empty_no_runtime = (
         _no_db_progress
         and not has_live_runtime
-        and int(execution_row["updated_age_seconds"] or 0) >= 30
+        and int(execution_row["updated_age_seconds"] or 0) >= 90
     )
     _stale_progressed_execution = (
         not has_live_runtime
