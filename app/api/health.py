@@ -16,6 +16,10 @@ _RELAY_SECRET_PATHS = (
 )
 _RELAY_HEALTH_URL = os.getenv("CLAUDE_RELAY_HEALTH_URL", "http://host.docker.internal:8199/health")
 _RELAY_CAPACITY_CACHE_TTL_SEC = float(os.getenv("AADS_RELAY_CAPACITY_CACHE_TTL_SEC", "30"))
+_RELAY_DESIRED_MAX_CONCURRENT = max(
+    1,
+    int(os.getenv("AADS_RELAY_DESIRED_MAX_CONCURRENT", "15")),
+)
 _relay_capacity_cache = None
 _RELAY_NAMES = ("claude", "codex", "antigravity")
 _RELAY_METRIC_FIELDS = (
@@ -115,6 +119,11 @@ def _normalize_relay_capacity(payload: dict) -> dict:
     return {
         "status": "ok" if payload.get("status") == "ok" and maximum > 0 else "unavailable",
         "max_concurrent": maximum,
+        "desired_max_concurrent": _RELAY_DESIRED_MAX_CONCURRENT,
+        "capacity_transition_pending": maximum != _RELAY_DESIRED_MAX_CONCURRENT,
+        "capacity_transition_blocked_by_active_leases": (
+            sum(active.values()) if maximum != _RELAY_DESIRED_MAX_CONCURRENT else 0
+        ),
         "used": max(0, maximum - available),
         "available": available,
         "usage_percent": round(100.0 * (maximum - available) / maximum, 1) if maximum else 0.0,
@@ -142,6 +151,9 @@ def _relay_capacity_fallback() -> dict:
     return {
         "status": "unavailable",
         "max_concurrent": 0,
+        "desired_max_concurrent": _RELAY_DESIRED_MAX_CONCURRENT,
+        "capacity_transition_pending": True,
+        "capacity_transition_blocked_by_active_leases": 0,
         "used": 0,
         "available": 0,
         "usage_percent": 0.0,

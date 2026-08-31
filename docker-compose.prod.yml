@@ -107,6 +107,7 @@ services:
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
       - AADS_CONTAINER_NAME=aads-server
       - AADS_PUBLIC_PORT=8100
+      - AADS_RELAY_DESIRED_MAX_CONCURRENT=${CLAUDE_RELAY_MAX_CONCURRENT:-15}
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
       - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
@@ -196,6 +197,7 @@ services:
       - DOCKER_HOST=tcp://aads-socket-proxy:2375
       - AADS_CONTAINER_NAME=aads-server-green
       - AADS_PUBLIC_PORT=8102
+      - AADS_RELAY_DESIRED_MAX_CONCURRENT=${CLAUDE_RELAY_MAX_CONCURRENT:-15}
       - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-}
       - AADS_ACTIVE_CONTAINER_FILE=/app/.active_container
       - AADS_ACTIVE_PORT_FILE=/app/.active_port
