@@ -527,6 +527,7 @@ async def _select_page_targets(
     target_idx: int = 0,
     target_url: str = "",
     url_pattern: str = "",
+    require_url_match: bool = False,
 ) -> list[dict[str, Any]]:
     try:
         targets = await _list_cdp_targets(port)
@@ -569,6 +570,16 @@ async def _select_page_targets(
             pages = sorted(matched, key=lambda target: _target_sort_key(target)) + [
                 page for page in pages if page not in matched
             ]
+        elif require_url_match:
+            raise CDPCommandError(
+                _ERROR_STALE_TARGET,
+                f"matching page target 없음 (port={port})",
+                details={
+                    "port": port,
+                    "target_url": target_url,
+                    "url_pattern": url_pattern,
+                },
+            )
     else:
         pages = sorted(pages, key=lambda target: _target_sort_key(target))
         if 0 <= target_idx < len(pages):
@@ -835,6 +846,8 @@ async def _send_cdp_command(
 
     target_url_hint = str((params or {}).get("target_url") or (params or {}).get("url") or "")
     url_pattern_hint = str((params or {}).get("url_pattern") or "")
+    work_key = _work_key_from_params(params)
+    require_url_match = bool((target_url_hint or url_pattern_hint) and work_key.startswith("yeoljeong-bank-"))
 
     if not target_id and not (target_url_hint or url_pattern_hint):
         session = CDPSessionManager.get_session(_work_key_from_params(params))
@@ -847,6 +860,7 @@ async def _send_cdp_command(
         target_idx=target_idx,
         target_url=target_url_hint,
         url_pattern=url_pattern_hint,
+        require_url_match=require_url_match,
     )
     attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
     last_error: CDPCommandError | None = None
@@ -2126,6 +2140,12 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
             if existing is not None:
                 owner = CDPSessionManager.get_by_port(port)
                 if owner and owner.work_key == work_key:
+                    if work_key.startswith("yeoljeong-bank-") and not await _bank_work_key_port_matches_url(
+                        port,
+                        str(url or ""),
+                    ):
+                        CDPSessionManager.release(work_key)
+                        continue
                     CDPSessionManager.register(work_key, port, profile_dir, pid=owner.pid)
                     return {
                         "status": "success",

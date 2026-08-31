@@ -34,9 +34,17 @@
   - `app/api/llm_models.py` and migration `137_runner_review_model_fallback_order.sql`: seed/align `runner_llm` to Codex 5.6 Sol, Terra, Luna, then Claude/GPT backups.
   - Dashboard `settings/page.tsx`: each size card now shows the effective automatic fallback chain.
 - Verification:
-  - Pending at record time: py_compile, bash -n, pytest, DB migration apply check, 3-server runner script propagation, health and smoke jobs.
+  - `docker exec aads-postgres psql -U aads -d aads -f /tmp/137_runner_review_model_fallback_order.sql` applied the DB order migration successfully: `INSERT 0 6`, `UPDATE 12`, `COMMIT`.
+  - DB check confirmed every `runner_model_config` size now starts with `codex:gpt-5.6-sol`, then `codex:gpt-5.6-terra`, then `codex:gpt-5.6-luna`.
+  - `python3 -m py_compile app/api/pipeline_runner.py app/api/llm_models.py` passed.
+  - `bash -n scripts/pipeline-runner.sh` passed locally; copied the same script to contabo14 and cafe24_114 after remote backup, and both remote `bash -n` checks passed.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_model_routing_admin_static.py` passed: 19 tests.
+  - Dashboard `npm run build` passed in `/root/aads/aads-dashboard`.
+  - AADS/SF/GO100 read-only smoke jobs all selected `codex:gpt-5.6-sol` as the actual first model after the DB migration and runner restart.
 - Deployment:
-  - Pending at record time.
+  - AADS, GO100/KIS, and SF/NTV2/NAS runner services were restarted at 2026-08-31 12:36 KST so the shell runner script changes are active.
+  - AADS API health returned OK after restart. `/settings` route returned the expected login redirect.
+  - AADS and SF smoke jobs completed as read-only with no file changes. GO100 smoke proved the model route but was rejected because existing GO100 worktree changes were detected; rejection used `REJECT_NO_WORKTREE`, so the pre-existing GO100 changes were not reset.
 
 ## 2026-08-31 09:20 KST - Chat premature completed signal hardening
 
@@ -9447,11 +9455,13 @@
 - Finding:
   - `DESKTOP-ICU55HK` / Agent `7f99c528-24d` was online and selected; CEO PC `2e9379a1-fed` remained excluded.
   - The live Shinhan work key contained a Shinhan tab, but a `browser_eval` command resolved to `https://go100.newtalk.kr/auth/login`; the Shinhan login attempt then left the bank page at "이용자ID를 입력해주세요" and `transactions.json` stayed empty.
+  - After `1.0.67`, a forced run still timed out with `ATTEMPT_TIMEOUT`; probing showed the bank work key could have only a GO100 page target, so URL preference alone was insufficient because unmatched bank hints still fell back to the first healthy tab.
 - Code change:
   - `app/browser_bridge/service.py`: local-agent JS commands now pass the page `target_url` hint when a page URL is known.
   - `pc_agent/commands/browser_auto.py`: CDP target selection now prefers a matching `target_url` or `url_pattern` before stale/default target ordering.
-  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped to `1.0.67` for ICU55HK self-update.
-  - `tests/unit/test_cdp_session_manager.py`: added regression coverage that a Shinhan target beats a GO100 target when `target_url` points to Shinhan.
+  - `pc_agent/commands/browser_auto.py`: bank work keys now require a matching bank target when a `target_url` hint is present; otherwise they raise `STALE_TARGET` so Browser Bridge recreates the bank session instead of operating on GO100.
+  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped to `1.0.68` for ICU55HK self-update.
+  - `tests/unit/test_cdp_session_manager.py`: added regression coverage that a Shinhan target beats a GO100 target and that bank target hints can require an exact match.
 - Verification:
   - `python3 -m py_compile app/browser_bridge/service.py pc_agent/commands/browser_auto.py` succeeded.
   - `.venv-playwright/bin/python -m pytest -q tests/unit/test_cdp_session_manager.py` passed: 22 tests.

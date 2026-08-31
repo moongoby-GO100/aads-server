@@ -338,3 +338,28 @@ async def test_select_page_targets_prefers_target_url_over_default_order(monkeyp
     )
 
     assert targets[0]["id"] == "target-shinhan"
+
+
+@pytest.mark.asyncio
+async def test_select_page_targets_can_require_target_url_match(monkeypatch):
+    async def fake_list_targets(_port):
+        return [
+            {
+                "id": "target-go100",
+                "type": "page",
+                "url": "https://go100.newtalk.kr/auth/login",
+                "title": "KIS AutoTrade V4",
+                "webSocketDebuggerUrl": "ws://target-go100",
+            },
+        ]
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+
+    with pytest.raises(Exception) as exc_info:
+        await _select_page_targets(
+            9222,
+            target_url="https://bank.shinhan.com/rib/easy/index.jsp",
+            require_url_match=True,
+        )
+
+    assert getattr(exc_info.value, "code", "") == "STALE_TARGET"
