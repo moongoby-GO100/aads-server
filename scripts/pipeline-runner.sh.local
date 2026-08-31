@@ -161,7 +161,7 @@ _init_db_mode() {
 
 _psql_cmd() {
     if [[ "$DB_MODE" == "docker" ]]; then
-        docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+        docker exec -i "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" "$@"
     else
         PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
     fi

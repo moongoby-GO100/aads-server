@@ -13,7 +13,7 @@
   - Added `pipeline_runner_events` and `pipeline_runner_model_stats` for model attempt speed, terminal timing, review result, approval, and deployment statistics.
   - Backfilled `pipeline_jobs.completed_at` for 626 terminal rows and latest review fields for 298 rows.
   - Updated `scripts/pipeline-runner.sh` and `.local` to record job/model/review/approval/terminal events, set `completed_at`, and fail-close when AI review API is unavailable.
-  - Changed runner DB calls to pass SQL through stdin instead of `psql -c`, preventing full claim/update SQL from appearing in `systemctl status` process arguments.
+  - Changed runner DB calls to pass SQL through stdin instead of `psql -c`, preventing full claim/update SQL from appearing in `systemctl status` process arguments; Docker DB mode now uses `docker exec -i` so stdin SQL reaches container psql.
   - Added `/api/v1/pipeline/runner/model-stats` endpoint in `app/api/pipeline_runner.py`.
   - Added regression tests for telemetry, review outage fail-close, model stats API, and approval timestamps.
 - Verification:
