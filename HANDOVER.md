@@ -21,8 +21,14 @@
   - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py` passed: 23 tests, 1 existing pytest config warning.
   - Re-applying `migrations/139_pipeline_runner_telemetry.sql` to `aads-postgres` succeeded after preserving existing view column order.
   - DB verification: `pipeline_runner_model_stats` now exposes `project`, `active_jobs`, and `work_success_rate_pct`; recent telemetry includes `runner-06d193db` attempt duration `12411ms`.
+- Deployment:
+  - Committed and pushed runner telemetry/model fallback changes to `main`.
+  - Reload-deployed AADS API with healthy pre/post checks.
+  - Synced `/root/scripts/pipeline-runner.sh` to contabo14 and cafe24_114, then restarted AADS, GO100/KIS, and SF/NTV2 runner services.
+  - Post-deploy smoke passed on AADS (`runner-d4310d47`, total attempts 36), GO100 (`runner-c421a982`, total attempts 36), and SF (`runner-91ab306a`, total attempts 36 after removing old orphan runner PID 2224567).
 - Remaining:
-  - Commit, push, deploy/restart, remote script sync, and post-deploy smoke are pending in this entry.
+  - Historical `rejected_done` rows still distort long-term model completion metrics; new `pipeline_runner_events` rows are the reliable forward-looking source.
+  - `pipeline_runner_status(job_id=...)` returned one blank error during smoke polling even though the job completed and telemetry was recorded; this API edge case remains for follow-up.
 
 ## 2026-08-31 14:16 KST - Pipeline Runner telemetry and review fail-close
 
