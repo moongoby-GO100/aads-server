@@ -395,7 +395,8 @@ async def test_list_messages_render_keeps_content_and_omits_heavy_detail_fields(
     assert "AS tool_count" in query
     assert "AS tool_names" in query
     assert "thinking_summary" not in query
-    assert "quality_details" not in query
+    assert "CASE WHEN quality_details IS NULL THEN NULL" in query
+    assert "jsonb_strip_nulls(jsonb_build_object(" in query
     assert "embedding" not in query
     assert result[0]["content"] == content
     assert result[0]["has_tools"] is True
@@ -565,6 +566,68 @@ def test_message_response_headers_include_timing_size_and_row_count():
     assert response.headers["X-Response-Time"].endswith("ms")
     assert int(response.headers["X-Payload-Bytes"]) > 0
     assert response.headers["X-Row-Count"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_streaming_status_revisions_match_visible_message_filter():
+    session_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={
+        "message_count": 1,
+        "message_changed_at": datetime.now(timezone.utc),
+        "placeholder_count": 0,
+        "placeholder_changed_at": None,
+        "artifact_count": 0,
+        "artifact_changed_at": None,
+        "last_message_id": str(uuid.uuid4()),
+    })
+
+    with patch("app.routers.chat._chat_messages_has_edited_at", AsyncMock(return_value=False)):
+        result = await chat_router._get_streaming_status_revisions(session_id, conn)
+
+    sql = " ".join(conn.fetchrow.await_args.args[0].split())
+    assert result["last_message_id"]
+    assert "COALESCE(m.is_hidden, FALSE) = FALSE" in sql
+    assert "m.intent IS DISTINCT FROM '_deleted_duplicate'" in sql
+    assert "left(ltrim(COALESCE(content, '')), 240) LIKE '%[Pipeline Runner]%'" in sql
+
+
+@pytest.mark.asyncio
+async def test_streaming_status_recovered_signal_uses_visible_message_filter():
+    session_id = uuid.uuid4()
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=[
+        None,  # execution row
+        None,  # active placeholder row
+        None,  # recovered row
+        None,  # interrupted row
+        {
+            "message_count": 0,
+            "message_changed_at": None,
+            "placeholder_count": 0,
+            "placeholder_changed_at": None,
+            "artifact_count": 0,
+            "artifact_changed_at": None,
+            "last_message_id": None,
+        },
+    ])
+    conn.fetchval = AsyncMock(return_value=False)
+    conn.execute = AsyncMock()
+
+    with (
+        patch("app.routers.chat.svc.get_session", AsyncMock(return_value={"id": str(session_id)})),
+        patch("app.routers.chat._tenant_id", return_value=str(uuid.uuid4())),
+        patch("app.core.db_pool.get_pool", return_value=_Pool(conn)),
+        patch("app.routers.chat._chat_messages_has_edited_at", AsyncMock(return_value=False)),
+    ):
+        result = await chat_router.get_streaming_status(session_id)
+
+    recovered_sql = " ".join(conn.fetchrow.await_args_list[2].args[0].split())
+    assert result["is_streaming"] is False
+    assert result["just_completed"] is False
+    assert "COALESCE(is_hidden, FALSE) = FALSE" in recovered_sql
+    assert "intent IS DISTINCT FROM '_deleted_duplicate'" in recovered_sql
+    assert "left(ltrim(COALESCE(content, '')), 240) LIKE '%[Pipeline Runner]%'" in recovered_sql
 
 
 def test_streaming_progress_markers_are_not_meaningful_partial_content():

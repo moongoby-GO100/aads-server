@@ -113,6 +113,11 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
         if has_edited_at else
         "m.created_at"
     )
+    visible_message_filter = (
+        "AND COALESCE(m.is_hidden, FALSE) = FALSE "
+        "AND m.intent IS DISTINCT FROM '_deleted_duplicate' "
+        f"{svc._AUTO_MESSAGE_EXCLUDE_FILTER}"
+    )
     row = await conn.fetchrow(
         f"""
         SELECT
@@ -130,6 +135,7 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
             FROM chat_messages m
             WHERE m.session_id = $1
               AND m.intent IS DISTINCT FROM 'streaming_placeholder'
+              {visible_message_filter}
         ) AS msg
         CROSS JOIN (
             SELECT
@@ -151,6 +157,7 @@ async def _get_streaming_status_revisions(session_id: UUID, conn) -> dict:
             FROM chat_messages m
             WHERE m.session_id = $1
               AND m.intent IS DISTINCT FROM 'streaming_placeholder'
+              {visible_message_filter}
             ORDER BY m.created_at DESC
             LIMIT 1
         ) AS last_msg ON TRUE
@@ -1550,6 +1557,7 @@ async def get_streaming_status(
                        te.completed_at,
                        am.id::text AS final_message_id,
                        am.intent AS final_message_intent,
+                       COALESCE(am.is_hidden, FALSE) AS final_message_hidden,
                        am.model_used AS assistant_model_used,
                        COALESCE(um.content, '') AS user_content,
                        pj.job_id AS pipeline_job_id,
@@ -1889,7 +1897,11 @@ async def get_streaming_status(
                     _final_message_ready = bool(
                         execution_row["final_message_id"]
                         and execution_row["final_message_intent"] != "streaming_placeholder"
+                        and not execution_row["final_message_hidden"]
                         and (execution_row["partial_content"] or "").strip()
+                        and not svc._looks_like_incomplete_progress_tail(
+                            execution_row["partial_content"] or ""
+                        )
                     )
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
@@ -2011,10 +2023,18 @@ async def get_streaming_status(
             # 서버 재시작 후 recovered 메시지 감지: 5분 이내 model_used='recovered' 메시지 존재 시
             # just_completed=True, recovered=True 반환 → 클라이언트가 메시지 리로드 수행
             recovered_row = await conn.fetchrow(
-                "SELECT id FROM chat_messages"
-                " WHERE session_id = $1 AND model_used IN ('recovered', 'recovered_from_redis')"
-                "   AND created_at > NOW() - interval '5 minutes'"
-                " ORDER BY created_at DESC LIMIT 1",
+                f"""
+                SELECT id
+                FROM chat_messages
+                WHERE session_id = $1
+                  AND model_used IN ('recovered', 'recovered_from_redis')
+                  AND created_at > NOW() - interval '5 minutes'
+                  AND COALESCE(is_hidden, FALSE) = FALSE
+                  AND intent IS DISTINCT FROM '_deleted_duplicate'
+                  {svc._AUTO_MESSAGE_EXCLUDE_FILTER}
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
                 session_id,
             )
             if recovered_row:

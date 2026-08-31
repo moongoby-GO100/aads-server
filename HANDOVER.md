@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-08-31 09:10 KST - Chat completion visibility follow-up
+
+- Request: Re-check prior improvement items, apply any missed actions, and report the current corrective actions together.
+- Preflight:
+  - `git status --short` showed existing dirty/untracked files outside this chat fix scope, including Yeoljeong finance data/docs/tmp artifacts. This change only touches `app/routers/chat.py`, `tests/unit/test_chat_service.py`, and this handover entry.
+  - `pipeline_runner_status(scope=all,status=running)` returned no active AADS runner conflicts.
+  - DB time check returned `2026-08-31T09:08:39` KST.
+- Findings:
+  - Previously documented P1 `streaming_placeholder` cleanup and `_deleted_duplicate` cleanup scheduler are already implemented in `chat_service.py` and `main.py`.
+  - Current DB SELECT still showed 1 terminal `streaming_placeholder` candidate and 1 older-than-90s placeholder candidate. No DB delete/update was executed in this turn.
+  - The remaining directly actionable bug was `streaming-status` allowing hidden/deleted/runner-like recovered messages to emit `just_completed`, which can trigger a frontend reload for a message that `/chat/messages` will not render.
+- Code changes:
+  - `app/routers/chat.py`: recovered-message completion detection now applies the same visible-message policy used by normal chat rendering: not hidden, not `_deleted_duplicate`, and not runner/system auto-message.
+  - `tests/unit/test_chat_service.py`: updated render projection expectations to match the current limited `quality_details` contract and added regression coverage for recovered-message visible filtering.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py tests/unit/test_chat_service.py` passed.
+  - `docker run --rm -e JWT_SECRET_KEY=test-jwt-secret-for-unit-tests -v /root/aads/aads-server:/app -w /app aads-server-aads-server pytest tests/unit/test_chat_service.py -q` passed: 71 tests, 1 existing FastAPI deprecation warning.
+- Deployment status:
+  - Not pushed or deployed in this turn. Git push/deploy and DB cleanup are operational actions that require the rollout/approval path.
+
 ## 2026-08-30 20:01 KST - OHVIS chat-first app, admin settings menu, and tenant auto-login closeout
 
 - Request: Continue the interrupted OHVIS app/dashboard build and finish the remaining commit, push, deploy, and verification steps.
@@ -9308,6 +9328,24 @@
   - Active backend slot after deploy: `aads-server-green` on `:8102`; `:8100` remains healthy as rollback backup.
   - `deploy_history` recorded success for commit `dbc66398` with duration 719s and downtime 49s.
   - Post-deploy verification confirmed `/health` returned HTTP 200 on both `:8102` and `:8100`; public `/api/v1/ops/health` reached the API and returned expected HTTP 401 without a bearer token.
+
+## 2026-08-31 08:52 KST - Chat streaming-status hidden message revision fix
+
+- Request: immediately apply the proposed fixes for the recent response recovery/completion reporting issue and report results.
+- Findings:
+  - Session `15782f6e-35ca-475b-ac45-c152c26a42fa` currently has no `streaming_placeholder`, no running/retrying execution, and the latest execution is completed.
+  - The same session has 283 non-streaming messages but only 272 visible non-streaming messages; 11 hidden messages include runner/system artifacts that `/chat/messages` does not render.
+  - `_get_streaming_status_revisions()` counted hidden non-placeholder messages and could return a `last_message_id` / `message_revision` that the visible message API would not return. This can make the frontend reload for a phantom completion and then appear to have no answer.
+- Code change:
+  - `app/routers/chat.py`: `streaming-status` revision and `last_message_id` now use the same hidden/deleted/runner-notification exclusion policy as the visible message list.
+  - `app/routers/chat.py`: recently completed execution readiness now rejects hidden assistant rows, so hidden runner/system rows cannot satisfy `final_message_ready`.
+  - `tests/unit/test_chat_service.py`: added regression coverage for the `streaming-status` visible-message revision filter.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py tests/unit/test_chat_service.py` succeeded.
+  - `docker exec -i aads-server python - <<'PY' ...` verified `last_message_id`, hidden filter, deleted filter, and runner filter all true against imported current code.
+  - Full `docker exec aads-server pytest tests/unit/test_chat_service.py -q` still has one pre-existing failure: `test_list_messages_render_keeps_content_and_omits_heavy_detail_fields` expects `quality_details` to be absent, while current render projection intentionally includes selected `quality_details`.
+- Deployment:
+  - Not deployed yet. Current changes are local/uncommitted; deploy requires explicit commit/push/deploy instruction or the approved rollout path.
 
 ## 2026-08-31 08:08 KST - Loop intent false positive for chat diagnostics
 
