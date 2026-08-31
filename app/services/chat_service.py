@@ -188,42 +188,6 @@ def _is_process_interruption_reason(reason: str) -> bool:
     return (reason or "").strip().startswith(_AUTO_RESUME_PROCESS_INTERRUPTION_PREFIXES)
 
 
-def _is_fast_recovery_reason(reason: str) -> bool:
-    """Return True when same heavy relay retry is likely to delay user-visible recovery."""
-    normalized = (reason or "").strip()
-    if not normalized:
-        return False
-    category = _classify_interruption_reason(normalized)
-    return (
-        category in {"relay_503", "resume_no_response"}
-        or "llm_first_response_timeout" in normalized
-        or "first_response=false" in normalized
-        or "first_response=False" in normalized
-        or "resume_no_meaningful_response" in normalized
-        or "all_slots_failed" in normalized
-    )
-
-
-async def _select_fast_recovery_model(current_model: Optional[str]) -> Optional[str]:
-    """Pick a configured light model for recovery when the primary relay is congested."""
-    if not _FAST_RECOVERY_MODEL_CANDIDATES:
-        return None
-    current = (current_model or "").strip()
-    try:
-        from app.services.model_selector import get_available_model_ids
-
-        available = await get_available_model_ids()
-    except Exception as exc:
-        logger.warning("fast_recovery_model_availability_failed: %s", str(exc)[:160])
-        available = set()
-
-    for candidate in _FAST_RECOVERY_MODEL_CANDIDATES:
-        if candidate == current:
-            continue
-        if not available or candidate in available:
-            return candidate
-    return None
-
 # AADS-191 Phase1: Redis Stream 토큰 버퍼링 (서버 재시작 시 스트리밍 복구)
 from app.services import redis_stream as _redis_stream  # noqa: E402
 
@@ -316,17 +280,6 @@ _STREAM_STATUS_LABELS = {
 # 정상 장시간 응답을 중단하지 않도록 기본 65분으로 둔다.
 _BG_AUTO_CANCEL_SEC = int(os.getenv("BG_AUTO_CANCEL_SEC", "3900"))
 _FIRST_RESPONSE_TIMEOUT_SEC = float(os.getenv("AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC", "30"))
-_FAST_RECOVERY_MODEL_CANDIDATES = tuple(
-    model.strip()
-    for model in os.getenv(
-        "AADS_FAST_RECOVERY_MODELS",
-        # Keep the default recovery path on currently stable chat backends.
-        # Gemini preview/lite models have caused auth/permission 403 loops in
-        # interrupted chat recovery, which makes the UI look like it cannot answer.
-        "deepseek-v4-flash,claude-haiku,gpt-5.4-mini",
-    ).split(",")
-    if model.strip()
-)
 _COMPLETION_AUTO_CONTINUE_MAX = int(os.getenv("AADS_COMPLETION_AUTO_CONTINUE_MAX", "3"))
 _FINALIZE_DB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _COOLDOWN_SECS_DEFAULT = 300
@@ -5879,19 +5832,6 @@ async def _resume_single_stream(
                         str(_execution_uuid or "")[:8],
                     )
                     raise RuntimeError("resume_model_unavailable_after_db_default")
-
-            if _is_fast_recovery_reason(recovery_reason or ""):
-                _fast_recovery_model = await _select_fast_recovery_model(_resume_model)
-                if _fast_recovery_model:
-                    logger.warning(
-                        "resume_fast_recovery_model session=%s execution=%s reason=%s model=%s -> %s",
-                        session_id[:8],
-                        str(_execution_uuid or "")[:8],
-                        (recovery_reason or "")[:160],
-                        _resume_model,
-                        _fast_recovery_model,
-                    )
-                    _resume_model = _fast_recovery_model
 
             intent_result = IntentResult(
                 intent="status_check",

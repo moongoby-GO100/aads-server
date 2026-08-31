@@ -67,3 +67,52 @@ def test_health_response_keys(client):
     assert "status" in data
     assert "graph_ready" in data
     assert "version" in data
+
+
+def test_normalize_relay_capacity_exposes_only_safe_operational_fields():
+    from app.api.health import _normalize_relay_capacity
+
+    result = _normalize_relay_capacity({
+        "status": "ok",
+        "max_concurrent": 12,
+        "semaphore_available": 7,
+        "lease_count": 5,
+        "active_leases": {"claude": 2, "codex": 3, "antigravity": 0, "secret-provider": 9},
+        "acquire_timeout_sec": 45,
+        "acquire_metrics_uptime_sec": 120.5,
+        "acquire_metrics": {
+            "codex": {
+                "attempts": 8,
+                "successes": 7,
+                "timeouts": 1,
+                "wait_attempts": 3,
+                "waited_successes": 2,
+                "wait_success_rate_pct": 66.7,
+                "avg_success_wait_sec": 4.2,
+                "private": "hidden",
+            },
+        },
+        "oauth_label": "must-not-leak@example.com",
+        "token_available": True,
+    })
+
+    assert result["status"] == "ok"
+    assert result["max_concurrent"] == 12
+    assert result["used"] == 5
+    assert result["available"] == 7
+    assert result["usage_percent"] == 41.7
+    assert result["active_leases"] == {"claude": 2, "codex": 3, "antigravity": 0}
+    assert result["acquire_metrics"]["codex"]["wait_success_rate_pct"] == 66.7
+    assert "private" not in result["acquire_metrics"]["codex"]
+    assert "oauth_label" not in result
+    assert "token_available" not in result
+
+
+def test_normalize_relay_capacity_handles_invalid_payload():
+    from app.api.health import _normalize_relay_capacity
+
+    result = _normalize_relay_capacity({"status": "ok", "max_concurrent": "bad"})
+
+    assert result["status"] == "unavailable"
+    assert result["max_concurrent"] == 0
+    assert result["used"] == 0

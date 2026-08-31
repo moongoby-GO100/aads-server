@@ -14,6 +14,20 @@ _RELAY_SECRET_PATHS = (
     Path(os.getenv("CLAUDE_RELAY_SHARED_SECRET_FILE", "/app/scripts/claude_relay_secret.txt")),
     Path("/root/aads/aads-server/scripts/claude_relay_secret.txt"),
 )
+_RELAY_HEALTH_URL = os.getenv("CLAUDE_RELAY_HEALTH_URL", "http://host.docker.internal:8199/health")
+_RELAY_NAMES = ("claude", "codex", "antigravity")
+_RELAY_METRIC_FIELDS = (
+    "attempts",
+    "successes",
+    "timeouts",
+    "success_rate_pct",
+    "wait_attempts",
+    "waited_successes",
+    "wait_success_rate_pct",
+    "avg_wait_sec",
+    "avg_success_wait_sec",
+    "max_wait_sec",
+)
 
 
 def _load_relay_secret() -> str:
@@ -71,6 +85,46 @@ def _detect_key_type(val: str) -> str:
     return "unknown"
 
 
+def _safe_nonnegative_int(value) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_relay_capacity(payload: dict) -> dict:
+    """Expose capacity and wait telemetry without relay credentials or process details."""
+    maximum = _safe_nonnegative_int(payload.get("max_concurrent"))
+    available = min(maximum, _safe_nonnegative_int(payload.get("semaphore_available")))
+    active_raw = payload.get("active_leases") if isinstance(payload.get("active_leases"), dict) else {}
+    active = {name: _safe_nonnegative_int(active_raw.get(name)) for name in _RELAY_NAMES}
+    metrics_raw = payload.get("acquire_metrics") if isinstance(payload.get("acquire_metrics"), dict) else {}
+    metrics = {}
+    for name in _RELAY_NAMES:
+        provider_raw = metrics_raw.get(name)
+        if not isinstance(provider_raw, dict):
+            continue
+        metrics[name] = {
+            field: provider_raw.get(field)
+            for field in _RELAY_METRIC_FIELDS
+            if provider_raw.get(field) is not None
+        }
+
+    return {
+        "status": "ok" if payload.get("status") == "ok" and maximum > 0 else "unavailable",
+        "max_concurrent": maximum,
+        "used": max(0, maximum - available),
+        "available": available,
+        "usage_percent": round(100.0 * (maximum - available) / maximum, 1) if maximum else 0.0,
+        "active_leases": active,
+        "lease_count": _safe_nonnegative_int(payload.get("lease_count")),
+        "acquire_timeout_sec": payload.get("acquire_timeout_sec"),
+        "acquire_metrics": metrics,
+        "acquire_metrics_uptime_sec": payload.get("acquire_metrics_uptime_sec"),
+        "sampled_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/health")
 async def health_check():
     from app.main import app_state
@@ -82,6 +136,30 @@ async def health_check():
         "version": "0.2.1",
         "sandbox": sandbox_health,
     }
+
+
+@router.get("/health/relay-capacity")
+async def relay_capacity():
+    """Sanitized real-time relay capacity for the authenticated chat surface."""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
+            response = await client.get(_RELAY_HEALTH_URL)
+            response.raise_for_status()
+            return _normalize_relay_capacity(response.json())
+    except Exception:
+        return {
+            "status": "unavailable",
+            "max_concurrent": 0,
+            "used": 0,
+            "available": 0,
+            "usage_percent": 0.0,
+            "active_leases": {name: 0 for name in _RELAY_NAMES},
+            "lease_count": 0,
+            "acquire_timeout_sec": None,
+            "acquire_metrics": {},
+            "acquire_metrics_uptime_sec": None,
+            "sampled_at": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 @router.get("/health/api-keys")

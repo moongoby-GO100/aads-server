@@ -14,6 +14,16 @@ from app.routers import chat as chat_router
 from app.core import interrupt_queue
 
 
+def test_fast_recovery_model_override_is_removed():
+    """Interrupted recovery must retain its selected peer model instead of forcing a fast model."""
+    with open(chat_service.__file__, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    assert "AADS_FAST_RECOVERY_MODELS" not in source
+    assert "resume_fast_recovery_model" not in source
+    assert "_select_fast_recovery_model" not in source
+
+
 def test_stale_placeholder_defaults_match_chat_recovery_contract(monkeypatch):
     monkeypatch.delenv("STALE_PLACEHOLDER_TIMEOUT_SEC", raising=False)
     monkeypatch.delenv("STALE_CLEANUP_INTERVAL_SEC", raising=False)

@@ -2,6 +2,8 @@
 set -euo pipefail
 
 max_wait_sec="${1:-7200}"
+expected_max_concurrent="${AADS_RELAY_EXPECTED_MAX_CONCURRENT:-12}"
+expected_acquire_timeout_sec="${AADS_RELAY_EXPECTED_ACQUIRE_TIMEOUT_SEC:-45}"
 poll_sec="${AADS_RELAY_IDLE_POLL_SEC:-5}"
 idle_streak_needed="${AADS_RELAY_IDLE_STREAK_NEEDED:-3}"
 started_at="$(date +%s)"
@@ -22,11 +24,11 @@ while (( $(date +%s) - started_at < max_wait_sec )); do
             if printf '%s' "$health" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-assert d.get("max_concurrent") == 10
-assert float(d.get("acquire_timeout_sec", 0)) == 45
+assert d.get("max_concurrent") == int("'"$expected_max_concurrent"'")
+assert float(d.get("acquire_timeout_sec", 0)) == float("'"$expected_acquire_timeout_sec"'")
 assert "acquire_metrics" in d
 ' 2>/dev/null; then
-                logger -t aads-relay-config-apply "idle restart applied max_concurrent=10 acquire_timeout_sec=45"
+                logger -t aads-relay-config-apply "idle restart applied max_concurrent=${expected_max_concurrent} acquire_timeout_sec=${expected_acquire_timeout_sec}"
                 exit 0
             fi
             sleep 1
