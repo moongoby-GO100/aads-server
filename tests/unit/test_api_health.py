@@ -116,3 +116,24 @@ def test_normalize_relay_capacity_handles_invalid_payload():
     assert result["status"] == "unavailable"
     assert result["max_concurrent"] == 0
     assert result["used"] == 0
+
+
+def test_relay_capacity_fallback_reuses_recent_safe_snapshot(monkeypatch):
+    from datetime import datetime, timezone
+    from app.api import health
+
+    cached = health._normalize_relay_capacity({
+        "status": "ok",
+        "max_concurrent": 12,
+        "semaphore_available": 5,
+        "active_leases": {"codex": 7},
+    })
+    monkeypatch.setattr(health, "_relay_capacity_cache", (datetime.now(timezone.utc), cached))
+
+    result = health._relay_capacity_fallback()
+
+    assert result["status"] == "ok"
+    assert result["max_concurrent"] == 12
+    assert result["used"] == 7
+    assert result["stale"] is True
+    assert result["stale_age_sec"] >= 0

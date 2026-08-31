@@ -15,6 +15,8 @@ _RELAY_SECRET_PATHS = (
     Path("/root/aads/aads-server/scripts/claude_relay_secret.txt"),
 )
 _RELAY_HEALTH_URL = os.getenv("CLAUDE_RELAY_HEALTH_URL", "http://host.docker.internal:8199/health")
+_RELAY_CAPACITY_CACHE_TTL_SEC = float(os.getenv("AADS_RELAY_CAPACITY_CACHE_TTL_SEC", "30"))
+_relay_capacity_cache = None
 _RELAY_NAMES = ("claude", "codex", "antigravity")
 _RELAY_METRIC_FIELDS = (
     "attempts",
@@ -122,6 +124,34 @@ def _normalize_relay_capacity(payload: dict) -> dict:
         "acquire_metrics": metrics,
         "acquire_metrics_uptime_sec": payload.get("acquire_metrics_uptime_sec"),
         "sampled_at": datetime.now(timezone.utc).isoformat(),
+        "stale": False,
+    }
+
+
+def _relay_capacity_fallback() -> dict:
+    now = datetime.now(timezone.utc)
+    if _relay_capacity_cache:
+        cached_at, cached_payload = _relay_capacity_cache
+        age_sec = max(0.0, (now - cached_at).total_seconds())
+        if age_sec <= _RELAY_CAPACITY_CACHE_TTL_SEC:
+            stale_payload = dict(cached_payload)
+            stale_payload["stale"] = True
+            stale_payload["stale_age_sec"] = round(age_sec, 1)
+            stale_payload["observed_at"] = now.isoformat()
+            return stale_payload
+    return {
+        "status": "unavailable",
+        "max_concurrent": 0,
+        "used": 0,
+        "available": 0,
+        "usage_percent": 0.0,
+        "active_leases": {name: 0 for name in _RELAY_NAMES},
+        "lease_count": 0,
+        "acquire_timeout_sec": None,
+        "acquire_metrics": {},
+        "acquire_metrics_uptime_sec": None,
+        "sampled_at": now.isoformat(),
+        "stale": True,
     }
 
 
@@ -141,25 +171,16 @@ async def health_check():
 @router.get("/health/relay-capacity")
 async def relay_capacity():
     """Sanitized real-time relay capacity for the authenticated chat surface."""
+    global _relay_capacity_cache
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=1.0)) as client:
             response = await client.get(_RELAY_HEALTH_URL)
             response.raise_for_status()
-            return _normalize_relay_capacity(response.json())
+            normalized = _normalize_relay_capacity(response.json())
+            _relay_capacity_cache = (datetime.now(timezone.utc), normalized)
+            return normalized
     except Exception:
-        return {
-            "status": "unavailable",
-            "max_concurrent": 0,
-            "used": 0,
-            "available": 0,
-            "usage_percent": 0.0,
-            "active_leases": {name: 0 for name in _RELAY_NAMES},
-            "lease_count": 0,
-            "acquire_timeout_sec": None,
-            "acquire_metrics": {},
-            "acquire_metrics_uptime_sec": None,
-            "sampled_at": datetime.now(timezone.utc).isoformat(),
-        }
+        return _relay_capacity_fallback()
 
 
 @router.get("/health/api-keys")
