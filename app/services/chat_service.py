@@ -5793,8 +5793,9 @@ async def _resume_single_stream(
             from app.services.model_selector import call_stream
             from app.services.intent_router import IntentResult
 
-            # BUG-4 FIX v3: 세션의 마지막 사용 모델로 이어서 생성 (CEO 선택 모델 유지)
-            # 우선순위: 1) user 메시지의 model_override → 2) assistant model_used → 3) 워크스페이스 기본 모델
+            # BUG-4 FIX v4: 세션/워크스페이스/DB 기본까지만 이어쓰기 모델로 허용한다.
+            # 우선순위: 1) requested_model → 2) user model_override → 3) assistant model_used
+            #          → 4) workspace default_model → 5) DB default model
             _resume_model: Optional[str] = None
             try:
                 async with pool.acquire() as conn:
@@ -5866,8 +5867,12 @@ async def _resume_single_stream(
                 if _resume_model:
                     logger.info(f"resume_model_from_db_default session={session_id[:8]} model={_resume_model}")
                 else:
-                    _resume_model = "claude-sonnet"
-                    logger.info(f"resume_model_fallback session={session_id[:8]} model={_resume_model}")
+                    logger.error(
+                        "resume_model_unavailable_after_db_default session=%s execution=%s",
+                        session_id[:8],
+                        str(_execution_uuid or "")[:8],
+                    )
+                    raise RuntimeError("resume_model_unavailable_after_db_default")
 
             if _is_fast_recovery_reason(recovery_reason or ""):
                 _fast_recovery_model = await _select_fast_recovery_model(_resume_model)

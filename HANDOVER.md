@@ -9385,6 +9385,24 @@
 - Deployment:
   - Not deployed yet in this step; commit/push/deploy requires an explicit deploy instruction or the next approved rollout.
 
+## 2026-08-31 10:27 KST - Auto recovery model fallback governance hotfix
+
+- Request: keep automatic chat recovery model selection to `requested_model -> last user selected model -> last assistant model -> workspace default -> DB default`, and remove the hard-coded `claude-sonnet` fallback after DB default.
+- Finding:
+  - `_resume_single_stream()` still selected `claude-sonnet` when DB default lookup returned no model.
+  - Current DB default for `route_key='llm'` is `codex:gpt-5.6-sol` from `model_routing_preferences`.
+  - The previous uncommitted `gpt-5.6-luna -> claude-haiku` recovery change was rolled back; the remaining diff is limited to `app/services/chat_service.py`.
+- Code change:
+  - `app/services/chat_service.py`: documented the exact resume model priority and removed the post-DB hard-coded `claude-sonnet` fallback.
+  - If no model is available after DB default lookup, recovery now raises `resume_model_unavailable_after_db_default` so it remains an explicit recovery failure instead of silently switching providers.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/services/model_selector.py tests/unit/test_chat_service.py tests/unit/test_model_selector_dynamic_routing.py` succeeded.
+  - `docker exec aads-server python -m py_compile /app/app/services/chat_service.py /app/app/services/model_selector.py` succeeded.
+  - `docker exec aads-server python -m pytest -q /app/tests/unit/test_chat_service.py -k 'final_report_tail or stranded_auto_retry'` passed 2/2 selected tests.
+  - Host pytest could not collect `tests/unit/test_chat_service.py` because host Python lacks `fastapi`; container verification was used instead.
+- Deployment:
+  - Pending at this record point; deploy after commit/push with `bash /root/aads/aads-server/deploy.sh bluegreen`.
+
 ## 2026-08-31 08:40 KST - Chat recovery hard-timeout and loop false-positive rollout
 
 - Request: apply the improvement actions for session `15782f6e-35ca-475b-ac45-c152c26a42fa`.
