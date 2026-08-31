@@ -89,6 +89,7 @@ _KNOWN_ROUTING_ERRORS = frozenset({
 })
 _VVIC_JOB_TYPES = frozenset({"vvic", "vvic_cdp", "vvic_scrape"})
 _DEFAULT_MAX_CONCURRENCY_BY_JOB = {
+    "browser_bridge": 1,
     "vvic_cdp": 1,
     "vvic": 1,
     "vvic_scrape": 1,
@@ -536,6 +537,8 @@ class PCAgentManager:
 
     def _normalize_job_type(self, value: str) -> str:
         job_type = str(value or "general").strip().lower().replace("-", "_")
+        if job_type.startswith("browser_bridge"):
+            return "browser_bridge"
         return job_type or "general"
 
     def _normalize_error_code(self, value: str) -> str:

@@ -779,16 +779,49 @@ class BrowserBridgeService:
                             },
                         }
                     elif tabs_routed.get("status") == "success" and isinstance(tabs, list):
-                        routed = {
-                            "status": "error",
-                            "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
-                            "message": "PC Agent tabs fallback did not contain the requested portal URL",
-                            "detail": {
-                                "requested_url": str(url or ""),
-                                "requested_host": requested_host,
-                                "tab_count": len(tabs),
-                            },
+                        navigate_params: dict[str, Any] = {
+                            "url": str(url or ""),
+                            "work_key": normalized_work_key or launch_params.get("work_key") or "",
+                            "command_timeout_seconds": health_timeout,
                         }
+                        if preferred_port:
+                            navigate_params["preferred_port"] = int(preferred_port)
+                            navigate_params["port"] = int(preferred_port)
+                        navigate_routed = await self._execute_pc_agent_route_via_active_api(
+                            command_type="browser_navigate",
+                            params=navigate_params,
+                            agent_id=agent_id,
+                            job_type="browser_bridge_navigate_fallback",
+                            required_capabilities=["interactive_browser"],
+                            queue_wait_timeout_seconds=min(10.0, float(queue_wait_timeout_seconds or 10.0)),
+                            lease_ttl_seconds=int(health_timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                            command_timeout_seconds=health_timeout,
+                        )
+                        navigate_routed = self._coerce_pc_agent_embedded_success(navigate_routed)
+                        if navigate_routed.get("status") == "success":
+                            routed = {
+                                "status": "success",
+                                "lease": navigate_routed.get("lease") or tabs_routed.get("lease") or {"agent_id": agent_id},
+                                "result": {
+                                    "result": {
+                                        "port": int(preferred_port or tabs_data.get("port") or 9222),
+                                        "work_key": normalized_work_key or launch_params.get("work_key") or "",
+                                        "tabs_navigation_fallback": True,
+                                    }
+                                },
+                            }
+                        else:
+                            routed = {
+                                "status": "error",
+                                "error_code": "PC_AGENT_WRONG_PORTAL_SESSION",
+                                "message": "PC Agent tabs fallback did not contain the requested portal URL",
+                                "detail": {
+                                    "requested_url": str(url or ""),
+                                    "requested_host": requested_host,
+                                    "tab_count": len(tabs),
+                                    "navigate_error_code": str(navigate_routed.get("error_code") or ""),
+                                },
+                            }
         if routed.get("status") != "success":
             error_code, error_message, error_detail = self._extract_pc_agent_route_error(routed)
             raise BrowserBridgeError(

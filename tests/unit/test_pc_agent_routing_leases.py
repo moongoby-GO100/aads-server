@@ -154,6 +154,35 @@ async def test_vvic_queue_serializes_per_agent_and_promotes_next() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browser_bridge_work_keys_serialize_per_agent() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "icu55hk",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "DESKTOP-ICU55HK", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    bank = await manager.acquire_lease(
+        preferred_agent_id="icu55hk",
+        job_type="browser_bridge_bank_session",
+        command_type="browser_eval",
+        required_capabilities=["interactive_browser"],
+    )
+    chat = await manager.acquire_lease(
+        preferred_agent_id="icu55hk",
+        job_type="browser_bridge_chat_plan_check",
+        command_type="browser_eval",
+        required_capabilities=["interactive_browser"],
+    )
+
+    assert bank["status"] == "running"
+    assert bank["lease"]["job_type"] == "browser_bridge"
+    assert chat["status"] == "queued"
+    assert chat["lease"]["job_type"] == "browser_bridge"
+
+
+@pytest.mark.asyncio
 async def test_stale_running_lease_is_reclaimed_before_new_request() -> None:
     manager = PCAgentManager()
     ws = _DummyWebSocket()
