@@ -1151,6 +1151,100 @@ async def list_jobs(
     return results
 
 
+@router.get("/pipeline/runner/model-stats", tags=["pipeline-runner"])
+async def get_runner_model_stats(
+    days: int = Query(30, ge=1, le=180),
+    project: Optional[str] = Query(None, max_length=10),
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """모델별 러너 작업 속도/완료율 통계."""
+    if project and project not in _VALID_PROJECTS:
+        raise HTTPException(status_code=400, detail="유효하지 않은 프로젝트")
+
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    tenant_id = _tenant_id(context)
+    conditions = ["tenant_id = $1::uuid", "created_at >= NOW() - ($2::int * INTERVAL '1 day')"]
+    params: list[object] = [tenant_id, days]
+    idx = 3
+    event_project_filter = ""
+    if project:
+        conditions.append(f"project = ${idx}")
+        event_project_filter = f"AND project = ${idx}"
+        params.append(project)
+        idx += 1
+    where = " AND ".join(conditions)
+
+    async with pool.acquire() as conn:
+        has_completed_at = await _pipeline_column_exists(conn, "completed_at")
+        finish_expr = "COALESCE(completed_at, updated_at)" if has_completed_at else "updated_at"
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
+                COALESCE(NULLIF(size, ''), 'M') AS size,
+                COUNT(*)::int AS total_jobs,
+                COUNT(*) FILTER (WHERE status = 'done')::int AS done_jobs,
+                COUNT(*) FILTER (WHERE status = 'awaiting_approval')::int AS awaiting_approval_jobs,
+                COUNT(*) FILTER (WHERE status = 'rejected_done')::int AS rejected_done_jobs,
+                COUNT(*) FILTER (WHERE status = 'error')::int AS error_jobs,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'done') / NULLIF(COUNT(*), 0), 1) AS done_rate_pct,
+                ROUND(AVG(EXTRACT(EPOCH FROM ({finish_expr} - COALESCE(started_at, created_at))))::numeric, 1) AS avg_seconds,
+                ROUND(percentile_cont(0.5) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM ({finish_expr} - COALESCE(started_at, created_at)))
+                )::numeric, 1) AS p50_seconds,
+                ROUND(percentile_cont(0.9) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM ({finish_expr} - COALESCE(started_at, created_at)))
+                )::numeric, 1) AS p90_seconds,
+                MAX({finish_expr}) AS last_observed_at
+            FROM pipeline_jobs
+            WHERE {where}
+              AND COALESCE(started_at, created_at) IS NOT NULL
+            GROUP BY model_key, size
+            ORDER BY total_jobs DESC, model_key ASC, size ASC
+            LIMIT 100
+            """,
+            *params,
+        )
+        event_rows = await conn.fetch(
+            f"""
+            SELECT
+                COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
+                COUNT(*) FILTER (WHERE event_type = 'model_attempt_started')::int AS attempts,
+                COUNT(*) FILTER (
+                    WHERE event_type = 'model_attempt_completed'
+                      AND metadata->>'success' = 'true'
+                )::int AS successful_attempts,
+                ROUND(AVG(duration_ms) FILTER (
+                    WHERE event_type = 'model_attempt_completed'
+                      AND duration_ms IS NOT NULL
+                )::numeric / 1000.0, 1) AS avg_attempt_seconds
+            FROM pipeline_runner_events
+            WHERE tenant_id = $1::uuid
+              AND observed_at >= NOW() - ($2::int * INTERVAL '1 day')
+              {event_project_filter}
+            GROUP BY model_key
+            ORDER BY attempts DESC, model_key ASC
+            LIMIT 100
+            """,
+            *params,
+        ) if await conn.fetchval("SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL") else []
+
+    attempt_by_model = {row["model_key"]: dict(row) for row in event_rows}
+    stats = []
+    for row in rows:
+        item = dict(row)
+        last_seen = item.get("last_observed_at")
+        if last_seen:
+            item["last_observed_at"] = last_seen.isoformat()
+        item["attempts"] = attempt_by_model.get(item["model_key"], {}).get("attempts", 0)
+        item["successful_attempts"] = attempt_by_model.get(item["model_key"], {}).get("successful_attempts", 0)
+        item["avg_attempt_seconds"] = attempt_by_model.get(item["model_key"], {}).get("avg_attempt_seconds")
+        stats.append(item)
+    return {"days": days, "project": project or "all", "stats": stats}
+
+
 @router.get("/pipeline/jobs/{job_id}", tags=["pipeline-runner"])
 async def get_job(
     job_id: str,
@@ -1386,8 +1480,15 @@ async def approve_or_reject(
         async with conn.transaction():
             has_commit_hash = await _pipeline_column_exists(conn, "commit_hash")
             has_actual_files = await _pipeline_column_exists(conn, "actual_changed_files")
+            has_approved_at = await _pipeline_column_exists(conn, "approved_at")
+            has_rejected_at = await _pipeline_column_exists(conn, "rejected_at")
             commit_hash_expr = "commit_hash" if has_commit_hash else "NULL::text"
             actual_files_expr = "actual_changed_files" if has_actual_files else "'[]'::jsonb"
+            decision_ts_clause = ""
+            if req.action == "approve" and has_approved_at:
+                decision_ts_clause = "approved_at = NOW(),"
+            elif req.action == "reject" and has_rejected_at:
+                decision_ts_clause = "rejected_at = NOW(),"
             row = await conn.fetchrow(
                 f"""
                 SELECT job_id, project, status, phase, git_diff,
@@ -1436,7 +1537,7 @@ async def approve_or_reject(
                     raise HTTPException(status_code=409, detail=detail)
 
             result = await conn.execute(
-                """
+                f"""
                 UPDATE pipeline_jobs
                 SET status = $2,
                     review_feedback = COALESCE(review_feedback, '') || E'\n[CEO] ' || $3,
@@ -1448,6 +1549,7 @@ async def approve_or_reject(
                         'review_verdict', $6::text,
                         'review_score', $7::text
                     )),
+                    {decision_ts_clause}
                     updated_at = NOW()
                 WHERE job_id = $1 AND tenant_id = $8::uuid AND status = 'awaiting_approval'
                 """,
@@ -1460,6 +1562,35 @@ async def approve_or_reject(
                 str(latest_review["score"]) if latest_review else None,
                 tenant_id,
             )
+            if await conn.fetchval("SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL"):
+                await conn.execute(
+                    """
+                    INSERT INTO pipeline_runner_events
+                      (job_id, tenant_id, project, event_type, status, phase, model, actual_model, size, metadata)
+                    SELECT job_id, tenant_id, project,
+                           'approval_decision',
+                           $2,
+                           $2,
+                           NULLIF(model, ''),
+                           NULLIF(actual_model, ''),
+                           NULLIF(size, ''),
+                           jsonb_build_object(
+                               'action', $3::text,
+                               'actor', $4::text,
+                               'review_verdict', $5::text,
+                               'review_score', $6::text
+                           )
+                    FROM pipeline_jobs
+                    WHERE job_id = $1 AND tenant_id = $7::uuid
+                    """,
+                    job_id,
+                    "approved" if req.action == "approve" else "rejected",
+                    req.action,
+                    str(context.get("user", {}).get("user_id") or "unknown"),  # type: ignore[union-attr]
+                    latest_review["verdict"] if latest_review else None,
+                    str(latest_review["score"]) if latest_review else None,
+                    tenant_id,
+                )
 
     affected = int(result.split()[-1]) if result else 0
     if affected == 0:
