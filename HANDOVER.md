@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-08-31 12:24 KST - Claude/Codex relay slot target and acquire metrics
+
+- Request:
+  - Restore `CLAUDE_RELAY_MAX_CONCURRENT` to 10 and review the prior chat recovery discussion.
+  - Explain why fast recovery uses `AADS_FAST_RECOVERY_MODELS`.
+  - Prepare the temporary Claude/Codex-only same-grade cross-fallback plan.
+  - Add a way to measure relay slot wait success while longer response completion waits are allowed.
+- Changes:
+  - `scripts/claude-relay-runtime.conf`: changed the stored relay max-concurrent target from 9 to 10.
+  - `/etc/systemd/system/claude-relay.service`: changed the live systemd unit target from 9 to 10 and ran `systemctl daemon-reload`.
+  - `scripts/claude_relay_server.py`: added in-memory relay slot acquire metrics for attempts, successes, timeouts, success rate, average wait seconds, and max wait seconds; exposed them through `/health` as `acquire_metrics`.
+- Findings:
+  - Before relay restart, the running process still reported `max_concurrent=7` while systemd now reports target `CLAUDE_RELAY_MAX_CONCURRENT=10`.
+  - Runtime restart is required before the new max-concurrent value and `acquire_metrics` code are active.
+- Verification:
+  - `python3 -m py_compile scripts/claude_relay_server.py` passed.
+  - `systemctl show claude-relay.service -p Environment -p MainPID` showed `CLAUDE_RELAY_MAX_CONCURRENT=10`.
+  - `curl -sS http://127.0.0.1:8199/health` still showed running process `max_concurrent=7`, `active_leases={"claude":1,"codex":5,"antigravity":0}`, and `lease_count=6` before restart.
+- Deployment:
+  - Relay process restart was not executed in this entry because active leases were present and restart is an operational interruption requiring explicit rollout approval.
+
 ## 2026-08-31 11:52 KST - Runner review model fallback order P1
 
 - Request:
@@ -9419,6 +9440,25 @@
   - Host pytest could not collect `tests/unit/test_chat_service.py` because host Python lacks `fastapi`; container verification was used instead.
 - Deployment:
   - Pending at this record point; deploy after commit/push with `bash /root/aads/aads-server/deploy.sh bluegreen`.
+
+## 2026-08-31 12:36 KST - FOOD Shinhan bank target-url command isolation
+
+- Request: finish Shinhan bank automatic collection and report the actual collection result.
+- Finding:
+  - `DESKTOP-ICU55HK` / Agent `7f99c528-24d` was online and selected; CEO PC `2e9379a1-fed` remained excluded.
+  - The live Shinhan work key contained a Shinhan tab, but a `browser_eval` command resolved to `https://go100.newtalk.kr/auth/login`; the Shinhan login attempt then left the bank page at "이용자ID를 입력해주세요" and `transactions.json` stayed empty.
+- Code change:
+  - `app/browser_bridge/service.py`: local-agent JS commands now pass the page `target_url` hint when a page URL is known.
+  - `pc_agent/commands/browser_auto.py`: CDP target selection now prefers a matching `target_url` or `url_pattern` before stale/default target ordering.
+  - `pc_agent/VERSION` and `pc_agent/CHANGELOG`: bumped to `1.0.67` for ICU55HK self-update.
+  - `tests/unit/test_cdp_session_manager.py`: added regression coverage that a Shinhan target beats a GO100 target when `target_url` points to Shinhan.
+- Verification:
+  - `python3 -m py_compile app/browser_bridge/service.py pc_agent/commands/browser_auto.py` succeeded.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_cdp_session_manager.py` passed: 22 tests.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py` passed: 66 tests.
+  - `git diff --check -- app/browser_bridge/service.py pc_agent/commands/browser_auto.py tests/unit/test_cdp_session_manager.py` succeeded.
+- Next:
+  - Commit/push selected files, trigger `self_update` on ICU55HK, verify Agent version `1.0.67`, rerun Mia Shinhan bank-only collection, and accept completion only when the bank collector returns `completed` or verified `no_records`.
 
 ## 2026-08-31 11:50 KST - FOOD Shinhan bank PC Agent work_key isolation
 

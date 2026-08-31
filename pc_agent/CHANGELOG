@@ -1,3 +1,4 @@
+v1.0.67: 은행 work_key의 Runtime/CDP 명령이 stale last_target_id 대신 요청 은행 target_url을 우선 선택해 GO100/타 포털 탭 오조작 방지
 v1.0.66: Agent 재연결 후 ownerless 상태로 남은 은행 CDP 포트가 요청 은행 도메인과 일치하면 work_key에 재등록해 신한 세션 중복 생성 방지
 v1.0.65: 은행 전용 work_key 재사용 시 기존 CDP 포트가 요청 은행 도메인과 다르면 세션을 버리고 새 포트를 할당해 쿠팡/GO100 등 비은행 탭 오접속 방지
 v1.0.64: 브라우저 work_key 재사용 시 마지막 CDP target을 고정하고 URL 이동 후 target URL을 갱신해 쿠팡이츠 세션이 배민 탭에 붙는 문제 방지

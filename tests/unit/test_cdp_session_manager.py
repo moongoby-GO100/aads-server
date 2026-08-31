@@ -14,6 +14,7 @@ from browser_auto import (
     _bank_work_key_port_matches_url,
     _default_profile_root,
     _effective_port,
+    _select_page_targets,
 )
 
 
@@ -307,3 +308,33 @@ async def test_browser_navigate_uses_existing_work_key_target(monkeypatch):
     assert session is not None
     assert session.last_target_id == "target-coupang"
     assert session.last_target_url == "https://store.coupangeats.com/merchant/"
+
+
+@pytest.mark.asyncio
+async def test_select_page_targets_prefers_target_url_over_default_order(monkeypatch):
+    async def fake_list_targets(_port):
+        return [
+            {
+                "id": "target-go100",
+                "type": "page",
+                "url": "https://go100.newtalk.kr/auth/login",
+                "title": "KIS AutoTrade V4",
+                "webSocketDebuggerUrl": "ws://target-go100",
+            },
+            {
+                "id": "target-shinhan",
+                "type": "page",
+                "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+                "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                "webSocketDebuggerUrl": "ws://target-shinhan",
+            },
+        ]
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+
+    targets = await _select_page_targets(
+        9222,
+        target_url="https://bank.shinhan.com/rib/easy/index.jsp",
+    )
+
+    assert targets[0]["id"] == "target-shinhan"

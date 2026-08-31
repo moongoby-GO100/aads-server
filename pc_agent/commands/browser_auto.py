@@ -489,6 +489,19 @@ def _target_sort_key(target: dict[str, Any], *, preferred_target_id: str = "") -
     )
 
 
+def _target_matches_url_hint(target: dict[str, Any], *, target_url: str = "", url_pattern: str = "") -> bool:
+    url = str(target.get("url") or "")
+    title = str(target.get("title") or "")
+    if target_url and _same_or_child_host(url, target_url):
+        return True
+    if url_pattern:
+        try:
+            return bool(re.search(url_pattern, f"{url} {title}", re.IGNORECASE))
+        except re.error:
+            return False
+    return False
+
+
 async def _get_browser_ws_url(port: int) -> str:
     version = await _probe_cdp_version(port)
     if version is None:
@@ -512,6 +525,8 @@ async def _select_page_targets(
     *,
     target_id: str = "",
     target_idx: int = 0,
+    target_url: str = "",
+    url_pattern: str = "",
 ) -> list[dict[str, Any]]:
     try:
         targets = await _list_cdp_targets(port)
@@ -545,6 +560,15 @@ async def _select_page_targets(
         exact = [page for page in pages if str(page.get("targetId") or "") == target_id]
         if exact:
             pages = exact + [page for page in pages if page not in exact]
+    elif target_url or url_pattern:
+        matched = [
+            page for page in pages
+            if _target_matches_url_hint(page, target_url=target_url, url_pattern=url_pattern)
+        ]
+        if matched:
+            pages = sorted(matched, key=lambda target: _target_sort_key(target)) + [
+                page for page in pages if page not in matched
+            ]
     else:
         pages = sorted(pages, key=lambda target: _target_sort_key(target))
         if 0 <= target_idx < len(pages):
@@ -809,12 +833,21 @@ async def _send_cdp_command(
     if method.startswith("Browser.") or method.startswith("Target."):
         return await _send_cdp(browser_ws_url, method, params, timeout_seconds=timeout_seconds)
 
-    if not target_id:
+    target_url_hint = str((params or {}).get("target_url") or (params or {}).get("url") or "")
+    url_pattern_hint = str((params or {}).get("url_pattern") or "")
+
+    if not target_id and not (target_url_hint or url_pattern_hint):
         session = CDPSessionManager.get_session(_work_key_from_params(params))
         if session and session.last_target_id:
             target_id = session.last_target_id
 
-    candidates = await _select_page_targets(port, target_id=target_id, target_idx=target_idx)
+    candidates = await _select_page_targets(
+        port,
+        target_id=target_id,
+        target_idx=target_idx,
+        target_url=target_url_hint,
+        url_pattern=url_pattern_hint,
+    )
     attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
     last_error: CDPCommandError | None = None
     deadline = asyncio.get_running_loop().time() + max(0.5, timeout_seconds)

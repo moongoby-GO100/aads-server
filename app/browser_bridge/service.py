@@ -144,6 +144,8 @@ class _LocalAgentPage:
             merged = self._params(params)
             if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
                 merged["work_key"] = self._session.work_key
+            if command_type in LOCAL_AGENT_JS_COMMANDS and requested_url and requested_url != "about:blank":
+                merged.setdefault("target_url", requested_url)
             if command_type in LOCAL_AGENT_JS_COMMANDS:
                 merged.setdefault("evaluate_timeout_seconds", max(1.0, min(60.0, command_timeout_seconds - 0.5)))
 
