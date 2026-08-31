@@ -281,6 +281,25 @@ append_model_for_attempts() {
     done
 }
 
+dedupe_model_cycle_for_attempt_caps() {
+    local original=("${MODEL_CYCLE[@]:-}")
+    MODEL_CYCLE=()
+    local model max_attempts current_count existing
+    for model in "${original[@]}"; do
+        model=$(normalize_runner_model "$model")
+        [[ -z "$model" || "$model" == "auto" ]] && continue
+        max_attempts=1
+        if [[ "$model" == claude-* ]]; then
+            max_attempts=2
+        fi
+        current_count=0
+        for existing in "${MODEL_CYCLE[@]:-}"; do
+            [[ "$existing" == "$model" ]] && current_count=$((current_count + 1))
+        done
+        [[ $current_count -lt $max_attempts ]] && MODEL_CYCLE+=("$model")
+    done
+}
+
 normalize_runner_model() {
     local model="${1:-}"
     case "$model" in
@@ -1222,6 +1241,8 @@ run_job() {
         fi
         log "  DB_MODEL_CONFIG_OVERRIDE job=$job_id size=$job_size models=${MODEL_CYCLE[*]}"
     fi
+    dedupe_model_cycle_for_attempt_caps
+    log "  MODEL_CYCLE_CAPPED job=$job_id size=$job_size total=${#MODEL_CYCLE[@]} models=${MODEL_CYCLE[*]}"
     # TOKEN_CYCLE 동적 생성 (MODEL_CYCLE 길이에 맞춤)
     local TOKEN_CYCLE=()
     for ((i=0; i<${#MODEL_CYCLE[@]}; i++)); do

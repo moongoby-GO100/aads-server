@@ -10,6 +10,7 @@
   - `pipeline_runner_model_stats` existed but was not project-scoped, making cross-project model speed/completion comparison too coarse.
 - Changes:
   - Updated `scripts/pipeline-runner.sh` and `.local` so Claude models keep at most two OAuth-slot attempts, while Codex/LiteLLM models use at most one attempt per normalized model for faster fallback.
+  - Added a final `MODEL_CYCLE_CAPPED` pass after model list construction, so remote runner mode differences cannot reintroduce duplicate normalized attempts.
   - Extended `/api/v1/pipeline/runner/model-stats` to return project-scoped rows, active job counts, and `work_success_rate_pct`.
   - Updated `migrations/139_pipeline_runner_telemetry.sql` so `pipeline_runner_model_stats` groups by `project, model_key, size` and exposes `active_jobs` plus `work_success_rate_pct`.
   - Added regression assertions for non-Anthropic duplicate prevention and project-aware model stats.
