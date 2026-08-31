@@ -2146,6 +2146,12 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
     )
     if progress_tail:
         return True
+    if re.search(
+        r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비|빌드|배포|기다리)"
+        r"\s*(?:하겠습니다|합니다|중입니다)\.?\s+.{1,80}$",
+        tail,
+    ):
+        return True
     return bool(
         re.search(r"(?:⏳|생성 중|응답 생성 중|조회 중|확인 중)\s*\.{0,3}\s*$", tail)
     )
@@ -9669,7 +9675,7 @@ async def send_message_stream(
         # OHVIS Loop: 채팅 루프 명령 감지 → 즉시 처리 후 return
         if not intent_override:
             from app.services.loop_chat_handler import detect_loop_intent
-            _loop_intent = detect_loop_intent(persisted_user_content)
+            _loop_intent = detect_loop_intent(persisted_user_content, session_id=session_id)
             if _loop_intent:
                 try:
                     _loop_resp = ""

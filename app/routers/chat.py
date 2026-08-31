@@ -676,7 +676,7 @@ async def _settle_stale_execution_for_recovery(
     )
     return {
         "is_streaming": bool(_auto_retry_scheduled),
-        "just_completed": not bool(_auto_retry_scheduled),
+        "just_completed": False,
         "auto_retry_scheduled": bool(_auto_retry_scheduled),
         **svc.stream_status_payload(
             "recovering" if _auto_retry_scheduled else "needs_continuation",
@@ -687,6 +687,8 @@ async def _settle_stale_execution_for_recovery(
         "last_tool": _lt,
         "execution_id": execution_row["execution_id"],
         "last_event_id": execution_row["last_event_id"],
+        "final_message_id": None,
+        "final_message_ready": False,
     }
 
 
@@ -1889,11 +1891,6 @@ async def get_streaming_status(
                 if _finished_recently:
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     _completion_token = str(execution_row["execution_id"])
-                    _emit_just_completed = svc.should_emit_completion_signal(
-                        str(session_id),
-                        _completion_token,
-                        acked_completion_token,
-                    )
                     _final_message_ready = bool(
                         execution_row["final_message_id"]
                         and execution_row["final_message_intent"] != "streaming_placeholder"
@@ -1903,6 +1900,13 @@ async def get_streaming_status(
                             execution_row["partial_content"] or ""
                         )
                     )
+                    _emit_just_completed = False
+                    if _final_message_ready:
+                        _emit_just_completed = svc.should_emit_completion_signal(
+                            str(session_id),
+                            _completion_token,
+                            acked_completion_token,
+                        )
                     return await _finalize_streaming_status(session_id, {
                         "is_streaming": False,
                         "just_completed": _emit_just_completed,

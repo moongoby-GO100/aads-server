@@ -54,4 +54,12 @@ def test_completion_alert_is_deduped_by_execution_token():
     assert "completionAlertKeysRef" in source
     assert "completion_token" in source
     assert "completionAlertKey(aiMsgId, sessionId, executionId, completionToken)" in source
-    assert "showCompletionToastOnce(_lastAi979?.id, sid, ss.execution_id || currentExecutionIdRef.current, ss.completion_token)" in source
+    assert "showCompletionToastOnce(_lastAi979?.id, sid, statusExecutionId || ss.execution_id || currentExecutionIdRef.current, ss.completion_token" in source
+
+
+def test_completion_status_requires_visible_final_message_before_ui_done():
+    source = CHAT_PAGE.read_text()
+
+    assert "function isCompletionStatusReadyForUi" in source
+    assert "if (status.final_message_ready === false) return false;" in source
+    assert "if (!isCompletionStatusReadyForUi(activeStatus))" in source

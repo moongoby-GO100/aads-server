@@ -693,7 +693,9 @@ class TestRegressions:
         )
 
         assert settled is not None
-        assert settled["just_completed"] is True
+        assert settled["just_completed"] is False
+        assert settled["stream_status"] in {"recovering", "needs_continuation"}
+        assert settled["final_message_ready"] is False
 
     @pytest.mark.asyncio
     async def test_settle_stale_execution_uses_started_age_hard_timeout(self, monkeypatch):
@@ -729,7 +731,9 @@ class TestRegressions:
         )
 
         assert settled is not None
-        assert settled["just_completed"] is True
+        assert settled["just_completed"] is False
+        assert settled["stream_status"] in {"recovering", "needs_continuation"}
+        assert settled["final_message_ready"] is False
 
     @pytest.mark.asyncio
     async def test_recovery_auto_resume_restores_retrying_execution(self, monkeypatch):

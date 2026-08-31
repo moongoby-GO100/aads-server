@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-08-31 09:20 KST - Chat premature completed signal hardening
+
+- Request: Immediately fix the case where an unfinished chat response is still treated as completed, including the current response issue, then report after applying the change.
+- Cause:
+  - `streaming-status` could emit `just_completed=True` for recently terminalized executions before a visible non-placeholder final assistant message was actually ready.
+  - Stale running execution recovery returned `just_completed=True` when auto-resume was not scheduled, which made the dashboard eligible to close the bubble even though the state was really `needs_continuation`.
+  - The incomplete-tail guard did not catch a real truncation pattern where a progress sentence ended and the next sentence was cut mid-token.
+- Changes:
+  - `app/routers/chat.py`: `just_completed` is now emitted only when `final_message_ready=True`. Stale execution settlement always returns `just_completed=False` with `final_message_ready=False` and `needs_continuation`/`recovering`.
+  - `app/services/chat_service.py`: incomplete final-response detection now catches progress sentences followed by a truncated next fragment, such as a build/deploy wait line cut mid-response.
+  - `tests/unit/test_chat_service.py`, `tests/unit/test_tools_and_pipeline.py`, and `tests/unit/test_chat_lightweight_frontend_static.py`: added/updated regression coverage for incomplete-tail blocking, no premature completion on stale recovery, and frontend completion readiness.
+  - `src/app/chat/page.tsx`: dashboard keeps completion UI blocked when `final_message_ready === false`.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py app/services/chat_service.py app/services/loop_chat_handler.py` passed.
+  - `docker exec aads-server python -c ...` verified the real truncated-tail sample returns `True` and a normal closeout sample returns `False`.
+  - `docker exec aads-server python -c ...` verified stale recovery returns `just_completed=False`, `stream_status='needs_continuation'`, and `final_message_ready=False`.
+  - `docker run --rm -e JWT_SECRET_KEY=test-jwt-secret-for-unit-tests -v /root/aads:/root/aads -w /root/aads/aads-server aads-server-aads-server pytest -q tests/unit/test_chat_service.py tests/unit/test_tools_and_pipeline.py tests/unit/test_chat_lightweight_frontend_static.py` passed: 142 tests, 1 existing FastAPI deprecation warning.
+  - `npx tsc --noEmit` passed in `/root/aads/aads-dashboard`.
+  - Targeted `git diff --check` passed for touched chat files. Full `git diff --check` still fails on pre-existing `docs/CHANGELOG-go100-direct.md` trailing whitespace outside this scope.
+- Deployment status:
+  - Code verified locally and against the AADS image. Commit, push, and production deploy are next.
+
 ## 2026-08-31 09:10 KST - Chat completion visibility follow-up
 
 - Request: Re-check prior improvement items, apply any missed actions, and report the current corrective actions together.

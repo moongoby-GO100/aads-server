@@ -869,6 +869,9 @@ def test_incomplete_progress_tail_is_not_completion_candidate():
     assert chat_service._looks_like_incomplete_progress_tail(
         "운영 라우터와 DB 후보를 대조한 뒤 결과를 보고하겠습니다."
     )
+    assert chat_service._looks_like_incomplete_progress_tail(
+        "빌드 로그가 새 출력 없이 계속 진행 중입니다. 이전 로컬 빌드도 tra"
+    )
 
 
 def test_producer_interruption_reason_preserves_missing_done_subreason():

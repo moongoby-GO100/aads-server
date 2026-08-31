@@ -74,6 +74,21 @@ def _take_pending(session_id: str, content: str) -> str:
     if len(stripped.strip()) <= 10:
         return original
     return content
+
+
+def _has_pending(session_id: str | None) -> bool:
+    if not session_id:
+        return False
+    entry = _PENDING_CONFIRM.get(session_id)
+    if not entry:
+        return False
+    ts, _ = entry
+    if time.time() - ts > _PENDING_TTL_SEC:
+        _PENDING_CONFIRM.pop(session_id, None)
+        return False
+    return True
+
+
 LOOP_STOP_KW = ("루프 중지", "루프 정지", "루프 취소", "감시 중지", "감시 취소", "루프 멈춰", "루프 중단")
 LOOP_RESUME_KW = ("루프 재개", "루프 재시작", "감시 재개")
 LOOP_STATUS_KW = ("루프 상태", "루프 목록", "감시 목록", "활성 루프")
@@ -93,7 +108,7 @@ _LOOP_CMD_MAX_LEN = 200
 # 보고/설명/질의 요청은 루프 제어 명령이 아니다.
 _NON_COMMAND_HINT = re.compile(
     r"보고해|보고하|보고드|보고 |설명|뭐지|뭔가|무엇|어떻게|어떤|구현|기획|"
-    r"문서|분석|검토|점검|정리해|알려주|가르쳐|차이|의미"
+    r"문서|분석|검토|점검|정리해|알려주|가르쳐|차이|의미|수정|조치|개선|감지|요청"
 )
 
 _ANCHOR = r"(?:루프|loop|감시|모니터링|모니터)"
@@ -103,34 +118,46 @@ _STOP_CMD = re.compile(
 )
 _RESUME_CMD = re.compile(_ANCHOR + _SUFFIX + r"(?:재개|재시작|resume)")
 _STATUS_CMD = re.compile(_ANCHOR + _SUFFIX + r"(?:상태|목록|list|status)")
+_EXPLICIT_LOOP_START_CMD = re.compile(
+    r"(?:루프|loop)\s*(?:로|를|을|가|는|은)?\s*"
+    r"(?:진행|시작|생성|돌려|실행|켜|가동|start|run)(?!\s*(?:요청|감지|조건|로직))"
+)
+_EXPLICIT_MONITOR_START_CMD = re.compile(
+    r"(?:감시|모니터링|모니터)\s*(?:해|하고|해줘|시작|돌려|켜|가동)"
+)
+_EXPLICIT_REPEAT_START_CMD = re.compile(
+    r"(?:반복)\s*(?:해|실행|처리|수행|돌려|시작)"
+)
 
 
-def detect_loop_intent(content: str) -> str | None:
+def detect_loop_intent(content: str, session_id: str | None = None) -> str | None:
     """채팅 입력에서 루프 제어 명령만 정확히 판정한다.
 
     호출자는 반드시 reply_to 인용문/재개 스캐폴드가 제거된
     사용자 원문(persisted_user_content)을 전달해야 한다.
 
-    P0: _NON_COMMAND_HINT는 STOP/STATUS/RESUME 오탐 방지에만 적용.
-        START에는 적용하지 않음 (CEO 화법 "…하고 보고해" 차단 방지).
-        단, "완료시까지" 계열은 증상 설명에도 자주 등장하므로 명령 동사
-        인접 패턴(_UNTIL_START_RE)일 때만 START로 본다.
+    P0: START는 루프/감시/모니터링/반복이 명시된 실행 요청만 판정한다.
+        "완료시까지 진행", "계속 진행", "루프로 진행요청만 감지하게 수정"은
+        일반 채팅 지시로 본다.
     P1: START 판정 시 "loop_start_confirm" 반환 → 확인 프롬프트.
     """
     text = str(content or "").strip()
     if not text or len(text) > _LOOP_CMD_MAX_LEN:
         return None
 
-    # CEO 승인 응답 → 즉시 루프 생성 (50자 이하 짧은 승인만)
-    if len(text) <= 50 and any(kw in text for kw in LOOP_CONFIRM_KW):
+    # CEO 승인 응답 → 직전에 이 세션에서 루프 확인 프롬프트가 있었을 때만 생성.
+    if _has_pending(session_id) and len(text) <= 50 and any(kw in text for kw in LOOP_CONFIRM_KW):
         return "loop_start"
 
-    # START는 _NON_COMMAND_HINT 가드 없이 판정 (CEO 화법 호환)
+    # START는 명시적 루프/감시/반복 요청만 허용한다.
     if (
-        any(kw in text for kw in LOOP_START_KW)
-        or _INTERVAL_START_RE.search(text)
-        or _UNTIL_START_RE.search(text)
+        _EXPLICIT_LOOP_START_CMD.search(text)
+        or _EXPLICIT_MONITOR_START_CMD.search(text)
+        or _EXPLICIT_REPEAT_START_CMD.search(text)
+        or (_INTERVAL_START_RE.search(text) and re.search(r"감시|모니터링|모니터", text))
     ):
+        if _NON_COMMAND_HINT.search(text) and not re.search(r"감시|모니터링|모니터", text):
+            return None
         return "loop_start_confirm"
 
     # STOP/RESUME/STATUS는 오탐 방지 가드 적용
