@@ -653,7 +653,10 @@ WITH candidates AS (
       AND NOT (
           s.current_execution_id = m.execution_id
           AND te.status IN ('running', 'retrying')
-          AND te.updated_at > NOW() - INTERVAL '10 minutes'
+          AND (
+              te.lease_expires_at > NOW()
+              OR te.updated_at > NOW() - INTERVAL '10 minutes'
+          )
       )
 ),
 promoted AS (
