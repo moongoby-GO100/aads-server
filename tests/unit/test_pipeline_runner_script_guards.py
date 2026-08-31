@@ -112,6 +112,7 @@ def test_pipeline_runner_records_telemetry_and_fail_closes_review_outage():
     script = _read_script("pipeline-runner.sh")
     migration = (ROOT / "migrations" / "139_pipeline_runner_telemetry.sql").read_text(encoding="utf-8")
 
+    assert script.count("record_runner_event()") == 1
     assert "record_runner_event()" in script
     assert "pipeline_runner_events" in script
     assert "model_attempt_started" in script

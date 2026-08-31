@@ -187,35 +187,14 @@ db_update() {
 }
 
 record_runner_event() {
-    local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}" metadata_json="${9:-{}}"
+    local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}"
+    local metadata_json
+    metadata_json="${9-}"
     [[ -z "$job_id" || -z "$event_type" ]] && return 0
     local table_exists
     table_exists=$(db_exec "SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL;" 2>/dev/null | tr -d '[:space:]') || table_exists=""
     [[ "$table_exists" == "t" ]] || return 0
-    [[ "$metadata_json" =~ ^[[:space:]]*\{ ]] || metadata_json="{}"
-    local duration_expr="NULL"
-    [[ "$duration_ms" =~ ^[0-9]+$ ]] && duration_expr="$duration_ms"
-    db_update "INSERT INTO pipeline_runner_events
-                 (job_id, tenant_id, project, event_type, status, phase, model, actual_model, size, duration_ms, metadata)
-               SELECT job_id, tenant_id, project,
-                      $(sql_escape "$event_type"),
-                      COALESCE(NULLIF($(sql_escape "$status"), ''), status),
-                      COALESCE(NULLIF($(sql_escape "$phase"), ''), phase),
-                      COALESCE(NULLIF($(sql_escape "$model"), ''), NULLIF(model, '')),
-                      COALESCE(NULLIF($(sql_escape "$actual_model"), ''), NULLIF(actual_model, '')),
-                      COALESCE(NULLIF($(sql_escape "$size"), ''), NULLIF(size, '')),
-                      ${duration_expr},
-                      $(sql_escape "$metadata_json")::jsonb
-               FROM pipeline_jobs
-               WHERE job_id='${job_id}';" 2>/dev/null || true
-}
-
-record_runner_event() {
-    local job_id="$1" event_type="$2" status="${3:-}" phase="${4:-}" model="${5:-}" actual_model="${6:-}" size="${7:-}" duration_ms="${8:-}" metadata_json="${9:-{}}"
-    [[ -z "$job_id" || -z "$event_type" ]] && return 0
-    local table_exists
-    table_exists=$(db_exec "SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL;" 2>/dev/null | tr -d '[:space:]') || table_exists=""
-    [[ "$table_exists" == "t" ]] || return 0
+    [[ -n "$metadata_json" ]] || metadata_json="{}"
     [[ "$metadata_json" =~ ^[[:space:]]*\{ ]] || metadata_json="{}"
     local duration_expr="NULL"
     [[ "$duration_ms" =~ ^[0-9]+$ ]] && duration_expr="$duration_ms"
