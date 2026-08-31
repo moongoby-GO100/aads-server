@@ -9566,3 +9566,23 @@
   - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py` succeeded.
 - Deployment:
   - Pending at this record point; commit, push, hot reload, then rerun the dedicated ICU55HK Shinhan collection.
+
+## 2026-08-31 13:52 KST - Pipeline Runner approval/review fail-close hardening
+
+- Request: immediately apply the runner improvement plan and explain where approval is requested, who approves it, and how.
+- Code change:
+  - `scripts/pipeline-runner.sh`: if AI code review returns anything other than `APPROVE`, the job now fails closed as `status='error', phase='review_failed'` and never reaches `awaiting_approval`.
+  - `scripts/pipeline-runner.sh.local`: synced with the primary runner script.
+  - `app/api/pipeline_runner.py`: the approve API now requires a valid git diff, approval commit SHA, actual changed file list, and latest `code_reviews.verdict='APPROVE'` before moving a job to `approved`.
+  - `app/api/pipeline_runner.py`: approval/reject decisions now append an `approval_decision` log entry with actor and review verdict context.
+  - `tests/unit/test_pipeline_runner_script_guards.py` and `tests/unit/test_pipeline_runner_reliability.py`: added regression guards for review fail-close and API approval gate.
+- Verification:
+  - `python3 -m py_compile app/api/pipeline_runner.py` succeeded.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_pipeline_runner_reliability.py tests/unit/test_pipeline_runner_worktree_policy.py` passed 27/27 with one existing pytest config warning.
+  - `git diff --check` succeeded.
+- Runtime observations:
+  - AADS runner service is active on contabo116.
+  - GO100/KIS runner service is active on contabo14, but a GO100 job was running at the time of this record, so remote runner script restart must wait or be explicitly approved to avoid interrupting the active job.
+  - SF/NTV2 runner service is active on cafe24_114.
+- Deployment:
+  - Code is patched locally and not yet pushed/deployed/restarted. Remote 211/114 runner script rollout requires a sequential operational restart after the active GO100 runner job is clear or CEO explicitly approves interruption risk.

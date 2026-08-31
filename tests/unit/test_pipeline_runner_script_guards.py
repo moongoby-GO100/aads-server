@@ -20,6 +20,21 @@ def test_pipeline_runner_scripts_keep_git_diff_precheck_guards():
         assert "review_needs_retry=\"true\"" in script
 
 
+def test_pipeline_runner_ai_review_fail_closes_before_approval():
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        fail_close = script.index("AI_REVIEW_FAIL_CLOSE")
+        commit_gate = script.index("approval_commit_sha=$(commit_job_worktree_for_approval")
+        approval_transition = script.index("SET phase='awaiting_approval'")
+
+        assert fail_close < commit_gate < approval_transition
+        assert "if [[ \"$review_verdict\" != \"APPROVE\" ]]" in script
+        assert "status='error', phase='review_failed'" in script
+        assert "승인 대기 차단" in script
+        assert "_notify_ai \"$job_id\"" in script[fail_close:commit_gate]
+
+
 def test_local_pipeline_runner_template_stays_synced_with_primary_runner():
     primary = _read_script("pipeline-runner.sh")
     local_template = _read_script("pipeline-runner.sh.local")

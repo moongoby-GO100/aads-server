@@ -1380,25 +1380,90 @@ async def approve_or_reject(
 
     from app.core.db_pool import get_pool
     pool = get_pool()
+    tenant_id = _tenant_id(context)
 
     async with pool.acquire() as conn:
-        result = await conn.execute(
-            """
-            UPDATE pipeline_jobs
-            SET status = $2,
-                review_feedback = COALESCE(review_feedback, '') || E'\n[CEO] ' || $3,
-                updated_at = NOW()
-            WHERE job_id = $1 AND tenant_id = $4::uuid AND status = 'awaiting_approval'
-            """,
-            job_id,
-            "approved" if req.action == "approve" else "rejected",
-            req.feedback or req.action,
-            _tenant_id(context),
-        )
+        async with conn.transaction():
+            has_commit_hash = await _pipeline_column_exists(conn, "commit_hash")
+            has_actual_files = await _pipeline_column_exists(conn, "actual_changed_files")
+            commit_hash_expr = "commit_hash" if has_commit_hash else "NULL::text"
+            actual_files_expr = "actual_changed_files" if has_actual_files else "'[]'::jsonb"
+            row = await conn.fetchrow(
+                f"""
+                SELECT job_id, project, status, phase, git_diff,
+                       {commit_hash_expr} AS commit_hash,
+                       {actual_files_expr} AS actual_changed_files
+                FROM pipeline_jobs
+                WHERE job_id = $1 AND tenant_id = $2::uuid
+                FOR UPDATE
+                """,
+                job_id,
+                tenant_id,
+            )
+            if not row or row["status"] != "awaiting_approval":
+                raise HTTPException(status_code=400, detail="승인 대기 상태가 아닙니다")
+
+            latest_review = None
+            if req.action == "approve":
+                git_diff = row["git_diff"] or ""
+                commit_hash = (row["commit_hash"] or "").strip()
+                changed_files = row["actual_changed_files"] or []
+                if "diff --git " not in git_diff:
+                    raise HTTPException(status_code=409, detail="승인 차단: 유효한 git diff가 없습니다")
+                if not re.match(r"^[0-9a-f]{40}$", commit_hash):
+                    raise HTTPException(status_code=409, detail="승인 차단: 승인용 commit_hash가 없습니다")
+                if not changed_files:
+                    raise HTTPException(status_code=409, detail="승인 차단: 실제 변경 파일 목록이 없습니다")
+                latest_review = await conn.fetchrow(
+                    """
+                    SELECT verdict, score, flag_category, needs_retry
+                    FROM code_reviews
+                    WHERE job_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    job_id,
+                )
+                if not latest_review:
+                    raise HTTPException(status_code=409, detail="승인 차단: AI 리뷰 결과가 없습니다")
+                if latest_review["verdict"] != "APPROVE":
+                    detail = (
+                        f"승인 차단: AI 리뷰 미통과 "
+                        f"({latest_review['verdict']}, score={latest_review['score']})"
+                    )
+                    if latest_review["flag_category"]:
+                        detail += f", category={latest_review['flag_category']}"
+                    raise HTTPException(status_code=409, detail=detail)
+
+            result = await conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET status = $2,
+                    review_feedback = COALESCE(review_feedback, '') || E'\n[CEO] ' || $3,
+                    logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                        'ts', NOW()::text,
+                        'event', 'approval_decision',
+                        'action', $4,
+                        'actor', $5,
+                        'review_verdict', $6::text,
+                        'review_score', $7::text
+                    )),
+                    updated_at = NOW()
+                WHERE job_id = $1 AND tenant_id = $8::uuid AND status = 'awaiting_approval'
+                """,
+                job_id,
+                "approved" if req.action == "approve" else "rejected",
+                req.feedback or req.action,
+                req.action,
+                str(context.get("user", {}).get("user_id") or "unknown"),  # type: ignore[union-attr]
+                latest_review["verdict"] if latest_review else None,
+                str(latest_review["score"]) if latest_review else None,
+                tenant_id,
+            )
 
     affected = int(result.split()[-1]) if result else 0
     if affected == 0:
-        raise HTTPException(status_code=400, detail="승인 대기 상태가 아닙니다")
+        raise HTTPException(status_code=409, detail="승인 처리 중 상태가 변경되었습니다")
 
     action_kr = "승인됨" if req.action == "approve" else "거부됨"
     logger.info("pipeline_runner.job_action", job_id=job_id, action=req.action)
@@ -1410,7 +1475,7 @@ async def approve_or_reject(
             job_row = await conn.fetchrow(
                 "SELECT project FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
                 job_id,
-                _tenant_id(context),
+                tenant_id,
             )
             if job_row:
                 if req.action == "approve":

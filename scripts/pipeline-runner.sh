@@ -1622,6 +1622,33 @@ ${output:0:1500}
         fi
     fi
 
+    if [[ "$review_verdict" != "APPROVE" ]]; then
+        local review_error_detail="review_failed: verdict=${review_verdict} score=${review_score}"
+        [[ -n "$review_flag_category" ]] && review_error_detail="${review_error_detail} category=${review_flag_category}"
+        [[ "$review_needs_retry" == "true" ]] && review_error_detail="${review_error_detail} needs_retry=true"
+        log "  AI_REVIEW_FAIL_CLOSE job=$job_id ${review_error_detail}"
+        db_update "UPDATE pipeline_jobs SET status='error', phase='review_failed',
+                   error_detail=$(sql_escape "$review_error_detail"),
+                   result_output=$(sql_escape "$output"),
+                   git_diff=$(sql_escape "$git_diff"),
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] 승인 대기 차단 — ${review_error_detail}',
+                   updated_at=NOW() WHERE job_id='${job_id}';"
+        post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        _cleanup_artifacts "$job_id"
+        if [[ -d "$worktree_dir" ]]; then
+            cd "${main_workdir:-/tmp}"
+            git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+            log "  WORKTREE_CLEANUP: $worktree_dir"
+        fi
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        _current_job_id=""
+        _current_session_id=""
+        rm -f /tmp/.pipeline_current_job
+        return 1
+    fi
+
     local approval_commit_sha=""
     approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction") || {
         _release_work_lock "$project" "$job_id" "$parallel_group"
