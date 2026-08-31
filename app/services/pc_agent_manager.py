@@ -591,10 +591,12 @@ class PCAgentManager:
                 or normalized_params.get("cmd")
                 or ""
             ).strip()
-            if raw_command and not raw_command.lower().startswith("powershell"):
+            raw_command_lower = raw_command.lower()
+            if raw_command and not raw_command_lower.startswith(("powershell", "powershell.exe", "pwsh", "pwsh.exe")):
+                encoded = base64.b64encode(raw_command.encode("utf-16le")).decode("ascii")
                 normalized_params["command"] = (
-                    "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-                    f"{raw_command}"
+                    "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+                    f"{encoded}"
                 )
 
         return dispatched_type, normalized_params

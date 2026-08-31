@@ -7,6 +7,7 @@ import os
 import json
 import asyncio
 import hashlib
+import re
 import time as _time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -1051,10 +1052,170 @@ def _remote_health_config(server_id: str) -> dict[str, Any] | None:
     cfg = get_server_config(sid)
     if not cfg:
         return None
-    ssh = f"root@{cfg['host']}"
-    if int(cfg.get("ssh_port", 22)) != 22:
-        ssh = f"{ssh} -p {cfg['ssh_port']}"
-    return {"host": cfg["host"], "port": 9090, "ssh": ssh}
+    return {
+        "id": sid,
+        "host": cfg["host"],
+        "port": 9090,
+        "ssh_port": int(cfg.get("ssh_port", 22)),
+        "type": cfg.get("type", "ssh"),
+    }
+
+
+def _run_server_probe(cfg: dict[str, Any], command: str, timeout: int = 8):
+    import subprocess as _sp
+
+    if cfg.get("type") == "local":
+        return _sp.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+    return _sp.run(
+        [
+            "ssh",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-p", str(cfg.get("ssh_port", 22)),
+            f"root@{cfg['host']}",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _parse_free_m(output: str) -> dict[str, Any]:
+    for line in output.splitlines():
+        if line.strip().startswith("Mem:"):
+            parts = line.split()
+            if len(parts) >= 7:
+                total = int(parts[1])
+                used = int(parts[2])
+                available = int(parts[6])
+                return {
+                    "memory_pct": round((used / total) * 100, 1) if total else None,
+                    "memory_total_mb": total,
+                    "memory_used_mb": used,
+                    "memory_available_mb": available,
+                }
+    return {}
+
+
+def _parse_meminfo(output: str) -> dict[str, Any]:
+    values: dict[str, int] = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, raw = line.split(":", 1)
+        parts = raw.strip().split()
+        if not parts:
+            continue
+        try:
+            values[key] = int(parts[0])
+        except ValueError:
+            continue
+    total_kb = values.get("MemTotal")
+    available_kb = values.get("MemAvailable")
+    if not total_kb or available_kb is None:
+        return {}
+    used_kb = max(0, total_kb - available_kb)
+    return {
+        "memory_pct": round((used_kb / total_kb) * 100, 1),
+        "memory_total_mb": round(total_kb / 1024),
+        "memory_used_mb": round(used_kb / 1024),
+        "memory_available_mb": round(available_kb / 1024),
+    }
+
+
+def _parse_df_h(output: str) -> dict[str, Any]:
+    lines = [line for line in output.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return {}
+    parts = lines[1].split()
+    if len(parts) < 5:
+        return {}
+    pct_match = re.search(r"(\d+)%", parts[4])
+    return {
+        "disk_pct": int(pct_match.group(1)) if pct_match else None,
+        "disk_total": parts[1],
+        "disk_used": parts[2],
+        "disk_available": parts[3],
+    }
+
+
+def _parse_uptime(output: str) -> dict[str, Any]:
+    match = re.search(r"load average:\s*([0-9.]+),\s*([0-9.]+),\s*([0-9.]+)", output)
+    if not match:
+        return {"uptime": output.strip()[:160]} if output.strip() else {}
+    return {
+        "load_1m": float(match.group(1)),
+        "load_5m": float(match.group(2)),
+        "load_15m": float(match.group(3)),
+        "uptime": output.strip()[:160],
+    }
+
+
+def _parse_loadavg(output: str) -> dict[str, Any]:
+    parts = output.split()
+    if len(parts) < 3:
+        return {}
+    try:
+        return {
+            "load_1m": float(parts[0]),
+            "load_5m": float(parts[1]),
+            "load_15m": float(parts[2]),
+        }
+    except ValueError:
+        return {}
+
+
+def _status_from_metrics(metrics: dict[str, Any]) -> str:
+    disk_pct = metrics.get("disk_pct")
+    memory_pct = metrics.get("memory_pct")
+    if (isinstance(disk_pct, (int, float)) and disk_pct >= 90) or (
+        isinstance(memory_pct, (int, float)) and memory_pct >= 90
+    ):
+        return "critical"
+    if (isinstance(disk_pct, (int, float)) and disk_pct >= 80) or (
+        isinstance(memory_pct, (int, float)) and memory_pct >= 80
+    ):
+        return "warning"
+    return "ok"
+
+
+def _collect_server_health_fallback(cfg: dict[str, Any]) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    errors: list[str] = []
+    probes: list[tuple[str, Any, str | None, Any | None]] = [
+        ("free -m", _parse_free_m, "cat /proc/meminfo", _parse_meminfo),
+        ("df -h /", _parse_df_h, None, None),
+        ("uptime", _parse_uptime, "cat /proc/loadavg", _parse_loadavg),
+    ]
+    for command, parser, fallback_command, fallback_parser in probes:
+        try:
+            result = _run_server_probe(cfg, command, timeout=8)
+            if result.returncode == 0:
+                metrics.update(parser(result.stdout))
+                continue
+            if fallback_command and fallback_parser:
+                fallback_result = _run_server_probe(cfg, fallback_command, timeout=8)
+                if fallback_result.returncode == 0:
+                    metrics.update(fallback_parser(fallback_result.stdout))
+                    continue
+            errors.append(f"{command}: {result.stderr.strip()[:120]}")
+        except Exception as exc:
+            errors.append(f"{command}: {str(exc)[:120]}")
+
+    status = _status_from_metrics(metrics) if metrics else "fail"
+    return {
+        "server_id": cfg.get("id"),
+        "host": cfg.get("host"),
+        "status": status,
+        "healthy": status in {"ok", "warning"},
+        "source": "ssh_system_probe_fallback" if cfg.get("type") != "local" else "local_system_probe_fallback",
+        "checked_at": datetime.now(KST).isoformat(),
+        "services": {},
+        "errors": errors[:3],
+        **metrics,
+    }
 
 @router.get("/ops/server-health/{server_id}")
 async def remote_server_health(server_id: str):
@@ -1063,20 +1224,22 @@ async def remote_server_health(server_id: str):
     if not cfg:
         raise HTTPException(404, f"Unknown server: {server_id}")
     try:
-        import subprocess as _sp
-        # SSH 경유로 localhost:9090 호출
-        ssh_parts = cfg["ssh"].split()
-        r = _sp.run(
-            ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"] + ssh_parts +
-            [f"curl -sf http://localhost:{cfg['port']}/health"],
-            capture_output=True, text=True, timeout=10,
-        )
+        r = _run_server_probe(cfg, f"curl -sf --max-time 3 http://localhost:{cfg['port']}/health", timeout=8)
         if r.returncode == 0 and r.stdout.strip():
             import json as _json
-            return _json.loads(r.stdout.strip())
-        return {"status": "fail", "error": r.stderr.strip()[:200]}
+            payload = _json.loads(r.stdout.strip())
+            payload.setdefault("server_id", cfg.get("id"))
+            payload.setdefault("host", cfg.get("host"))
+            payload.setdefault("source", "health_server")
+            return payload
+        fallback = _collect_server_health_fallback(cfg)
+        if r.stderr.strip():
+            fallback["health_server_error"] = r.stderr.strip()[:200]
+        return fallback
     except Exception as e:
-        return {"status": "fail", "error": str(e)[:200]}
+        fallback = _collect_server_health_fallback(cfg)
+        fallback["health_server_error"] = str(e)[:200]
+        return fallback
 
 
 def _build_issues(stalled_queue, stalled_running, pipeline_blocked):
