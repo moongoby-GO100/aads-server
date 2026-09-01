@@ -1,5 +1,90 @@
 # AADS HANDOVER
 
+## 2026-09-02 08:02 KST - contabo116 OOM recurrence guard applied
+
+- Request:
+  - Apply the recommended actions after the contabo116 restart/OOM diagnosis and report results.
+- Finding:
+  - The host OS did not reboot. The latest service interruption pattern was API slot failover after `aads-server-green` hit the container memory cgroup limit at 2026-09-02 07:29:50 KST.
+  - Host swap was absent, so the existing container `memory-swap` allowance could not absorb short memory spikes.
+- Runtime action:
+  - Created and enabled `/swapfile` with 4GiB swap.
+  - Added `/swapfile none swap sw 0 0` to `/etc/fstab` after backing up the previous file to `/etc/fstab.aads-pre-swap-20260902`.
+  - Raised runtime memory limits for `aads-server` and `aads-server-green` from 2GiB RAM / 4GiB memory+swap to 3GiB RAM / 5GiB memory+swap using `docker update`; this did not restart either container.
+- Code/config action:
+  - `docker-compose.prod.yml` now keeps both API blue/green slots at 3GiB so the limit survives future blue-green deploys.
+  - `scripts/aads_api_watchdog.sh` now records high-memory and Docker OOM observations into `/var/log/aads-control-audit.jsonl` once per event window.
+  - `scripts/disk_cleanup_v2.sh` now ensures `/root/aads/logs` exists before writing cleanup logs.
+- Verification:
+  - `free -h` shows `Swap: 4.0Gi total / 0B used / 4.0Gi free`.
+  - `docker inspect aads-server aads-server-green` shows `memory=3221225472` and `swap=5368709120`.
+  - `docker stats --no-stream` after the change showed `aads-server` at about 1.178GiB/3GiB and `aads-server-green` at about 576.9MiB/3GiB.
+  - Both `http://127.0.0.1:8100/api/v1/health` and `http://127.0.0.1:8102/api/v1/health` returned `status=ok`.
+  - `bash scripts/aads_api_watchdog.sh --check` returned `OK active=aads-server:8100`.
+  - `bash -n scripts/aads_api_watchdog.sh`, `bash -n scripts/disk_cleanup_v2.sh`, and `docker compose -f docker-compose.prod.yml config --quiet` passed.
+- Notes:
+  - Docker `State.OOMKilled=true` remains visible until containers are recreated; it is historical state from the prior OOM, not a new failure after this mitigation.
+  - No blue-green deploy or active API restart was performed for this change.
+
+## 2026-09-01 11:23 KST - contabo116 disk emergency cleanup and Docker image retention guard
+
+- Request:
+  - Apply immediate disk cleanup actions on contabo116 and report a management plan for unused Docker images.
+- Runtime cleanup:
+  - Before cleanup, `/` was `193G total / 186G used / 7.4G available / 97%`.
+  - Removed unused tagged project/build images that were not referenced by any running container: old `aads-server`, `aads-dashboard`, compose-generated `aads-server-aads-*`, unused `yeoljeong-finance` build images, and unused Android SDK image.
+  - Ran journald retention cleanup with `journalctl --vacuum-size=1G`, reducing journal usage from about `4.0G` to `1005.5M`.
+  - Re-pulled `node:20-slim` after health smoke showed sandbox `node_image=false`; final active and standby API health both report `node_image=true`.
+- Policy changes:
+  - `scripts/disk_cleanup_v2.sh` now preserves active Docker image digests, never runs `docker volume prune`, prunes only dangling images/build cache, and selectively removes unused AADS project tags.
+  - `/root/aads/scripts/disk_cleanup.sh` now delegates to the repository `scripts/disk_cleanup_v2.sh` and falls back to safe dangling/cache/journald cleanup only.
+  - Installed root crontab now uses `/root/aads/scripts/disk_cleanup.sh` for both daily and weekly cleanup, avoiding split Docker cleanup behavior.
+- Verification:
+  - Final `/` usage: `193G total / 142G used / 52G available / 74%`.
+  - `docker system df`: images `44.28GB`, reclaimable `338.3MB`; local volumes `21.52GB`, reclaimable `0B`; build cache `20.83GB`.
+  - `curl -fsS http://127.0.0.1:8100/health` and `curl -fsS http://127.0.0.1:8102/health` returned `status=ok`, `docker_connected=true`, `python_image=true`, `node_image=true`.
+  - `docker ps` showed all 12 runtime containers still up; health-marked containers remained healthy.
+  - `bash -n scripts/disk_cleanup_v2.sh` and `bash -n /root/aads/scripts/disk_cleanup.sh` passed.
+- Deployment:
+  - No API/dashboard deploy or container restart was performed.
+  - Code/config changes are local/uncommitted pending final commit decision because the worktree already contains unrelated dirty files.
+
+## 2026-08-31 16:22 KST - Standard server connection names fixed for ops docs/cards
+
+- Request:
+  - Fix `contabo116`, `contabo14`, and `cafe24_114` as the standard names for future operations documents and dashboard cards.
+- Changes:
+  - Dashboard `/ops/servers` cards now type the server ID/connection name as `contabo116 | contabo14 | cafe24_114` and label the visible SSH alias as `표준 접속명`.
+  - `docs/knowledge/CTO-SYSTEM-MAP.md` now states that legacy numeric names such as `68`, `211`, and `114` are compatibility inputs only, not primary names for CEO reports, operations cards, or new documents.
+  - NAS is explicitly mapped to `cafe24_114` in the server connection table.
+- Verification:
+  - `npm run lint -- src/app/ops/servers/page.tsx` passed in `aads-dashboard`.
+  - `npx tsc --noEmit --pretty false` passed in `aads-dashboard`.
+  - `git diff --check -- docs/knowledge/CTO-SYSTEM-MAP.md HANDOVER.md` passed in `aads-server`.
+  - `git diff --check -- src/app/ops/servers/page.tsx` passed in `aads-dashboard`.
+  - Local dashboard route fallback passed: `curl -I --cookie 'aads_token=local-render-check' http://127.0.0.1:3001/ops/servers` returned HTTP 200 at 2026-08-31 16:24 KST.
+  - Visual screenshot was attempted but not completed: AADS `capture_screenshot` timed out, and local Playwright had no browser binary installed.
+- Deployment:
+  - Not deployed yet.
+
+## 2026-08-31 15:51 KST - Server connection names added to ops cards
+
+- Request:
+  - Confirm each server connection name and reflect it in the card UI.
+- Server connection names:
+  - AADS: `contabo116` (`5.104.86.116`, SSH 22)
+  - KIS/GO100: `contabo14` (`5.104.86.14`, SSH 22)
+  - SF/NTV2/NAS: `cafe24_114` (`114.207.244.86`, SSH 7916)
+- Changes:
+  - Updated dashboard `/ops/servers` cards to show the canonical connection name as the card title, expose `ssh <connectionName>` in the card metadata, and keep the existing IP/port-based PowerShell launch command for reliable execution.
+  - Updated `docs/knowledge/CTO-SYSTEM-MAP.md` project alias card with connection name, IP, and SSH port columns.
+- Verification:
+  - `npm run lint -- src/app/ops/servers/page.tsx` passed in `aads-dashboard`.
+  - `git diff --check -- docs/knowledge/CTO-SYSTEM-MAP.md` passed.
+  - Local dashboard route check passed: `curl -I --cookie 'aads_token=local-render-check' http://127.0.0.1:3001/ops/servers` returned HTTP 200.
+- Deployment:
+  - Not deployed. This turn only applied the requested card/document update locally.
+
 ## 2026-08-31 15:03 KST - Pipeline Runner next-step telemetry hardening
 
 - Request:
@@ -9665,3 +9750,23 @@
   - New source-contract tests passed 4/4 on the host.
 - Deployment:
   - Commit/push and sequential Blue/Green rollout are the next steps. Do not certify complete until external health/session checks and five-minute P0/P1 monitoring pass.
+
+## 2026-08-31 18:15 KST - Relay 15 runtime activation and chat UI production rollout
+
+- Production result:
+  - `claude-relay` was restarted after the idle-only transition could not obtain a zero-lease window under continuous traffic. Runtime `/health` now reports `max_concurrent=15`.
+  - Active chat requests reconnected through the existing partial-save/retry path immediately after the short restart. The first post-restart sample was 4 active / 11 available with 4/4 acquisitions; the later load sample was 9 active / 6 available with 38/38 acquisitions and zero acquisition timeouts.
+  - Public `/api/v1/health/relay-capacity` returned `max_concurrent=15`; both API slots returned the same capacity. The dashboard therefore renders the live denominator as 15 instead of the former ambiguous 12.
+  - Dashboard release `7ba256109adb` is active on both dashboard slots and contains the chat fixes from ancestor `979e127d9cef`. Its production bundle includes the current-versus-target relay display and the session-scoped message-anchor refresh event.
+- Chat recovery hardening:
+  - Server commits through `cc877a14a5c7` are pushed to `origin/main`, including fenced Blue/Green execution leases, hot-reload lease adoption, idempotent assistant-placeholder repair, desired relay-capacity diagnostics, and clean release contexts.
+  - The placeholder repair first adopts an existing assistant row and uses the actual `idx_one_assistant_per_execution` conflict predicate, preventing the observed `interrupted_partial` versus `streaming_placeholder` unique violation.
+  - Related chat/recovery tests passed 77/77; execution-lease contract tests and release-contract verification passed.
+- Build and rollout evidence:
+  - A clean committed release context reduced Docker build input from about 1.6 GB to 83.22 MB; `.venv-playwright` is excluded.
+  - Cold image `aads-server:cc877a14a5c7` was built once successfully. It took about 12.7 minutes because the updated base image invalidated apt/pip/browser layers and exporting/unpacking the 1.38 GB runtime image was I/O-bound.
+  - The final API slot replacement remains gated because the inactive Blue slot continuously owns valid, heartbeating chat executions. Do not use the busy-target override; cut over only after its active-stream count reaches zero, then run the five-minute P0/P1 observation gate.
+- Verification after the cold build:
+  - Both slots `/health/live` returned 200 in 13-49 ms.
+  - Public relay-capacity returned 200 in 0.61 seconds after transient build I/O subsided.
+  - No relay acquisition timeout was observed after the 15-slot activation.

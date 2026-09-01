@@ -17,6 +17,8 @@ DEPLOY_LOCK="${AADS_DEPLOY_LOCK:-/tmp/aads-deploy.lock}"
 NGINX_LOCK="${AADS_NGINX_LOCK:-/tmp/aads-nginx-upstream.lock}"
 AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 FAIL_THRESHOLD="${AADS_WATCHDOG_FAIL_THRESHOLD:-2}"
+MEMORY_WARN_PCT="${AADS_WATCHDOG_MEMORY_WARN_PCT:-85}"
+MEMORY_CLEAR_PCT="${AADS_WATCHDOG_MEMORY_CLEAR_PCT:-75}"
 DRY_RUN=false
 
 if [[ "${1:-}" == "--dry-run" || "${1:-}" == "--check" ]]; then
@@ -112,6 +114,42 @@ slot_healthy() {
     curl -fsS --max-time 4 "http://127.0.0.1:${port}/health/live" >/dev/null 2>&1 || return 1
 }
 
+container_memory_percent() {
+    local container="$1"
+    docker stats --no-stream --format '{{.MemPerc}}' "$container" 2>/dev/null \
+        | awk 'NR==1 {gsub(/%/, "", $1); print int($1 + 0.5)}'
+}
+
+audit_slot_memory() {
+    local container="$1"
+    local state_file="${STATE_DIR}/memory_${container}"
+    local oom_file="${STATE_DIR}/oom_${container}"
+    local mem_pct oom_killed
+
+    mem_pct="$(container_memory_percent "$container" || true)"
+    if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
+        if (( mem_pct >= MEMORY_WARN_PCT )); then
+            if [[ ! -f "$state_file" ]]; then
+                audit "memory-pressure" "$container" "warning" "mem_pct=${mem_pct} threshold=${MEMORY_WARN_PCT}"
+                log "WARN memory pressure ${container} mem_pct=${mem_pct}"
+                printf '%s\n' "$mem_pct" > "$state_file"
+            fi
+        elif (( mem_pct <= MEMORY_CLEAR_PCT )); then
+            if [[ -f "$state_file" ]]; then
+                audit "memory-pressure" "$container" "cleared" "mem_pct=${mem_pct} clear_threshold=${MEMORY_CLEAR_PCT}"
+                rm -f "$state_file"
+            fi
+        fi
+    fi
+
+    oom_killed="$(docker inspect -f '{{.State.OOMKilled}}' "$container" 2>/dev/null || echo false)"
+    if [[ "$oom_killed" == "true" && ! -f "$oom_file" ]]; then
+        audit "oom-observed" "$container" "warning" "docker State.OOMKilled=true"
+        log "WARN oom observed ${container}"
+        printf 'true\n' > "$oom_file"
+    fi
+}
+
 nginx_test() {
     if command -v nginx >/dev/null 2>&1; then
         nginx -t
@@ -199,6 +237,9 @@ fi
 active_container="$(container_for_port "$active_port")"
 peer_port="$(peer_port_for "$active_port")"
 peer_container="$(container_for_port "$peer_port")"
+
+audit_slot_memory "$active_container"
+audit_slot_memory "$peer_container"
 
 if slot_healthy "$active_port" "$active_container"; then
     printf '0\n' > "$FAIL_FILE"

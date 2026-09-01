@@ -160,7 +160,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 3G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
       interval: 15s
@@ -249,7 +249,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 3G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
       interval: 15s
