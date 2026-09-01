@@ -216,3 +216,40 @@ def test_pipeline_runner_auth_recovery_metadata_is_bounded_and_schema_optional()
     assert "'max_retries'" in script
     assert "'retry_after_seconds'" in script
     assert "'bounded',true" in script
+
+
+def test_pipeline_runner_retries_review_api_before_declaring_unavailable():
+    """리뷰 API 전송 실패(HTTP 000/5xx)는 1회로 단정하지 않고 재시도한다."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        assert 'review_max_attempts="${AADS_REVIEW_MAX_ATTEMPTS:-3}"' in script
+        assert "while [[ $review_attempt -lt $review_max_attempts ]]; do" in script
+        assert "AI_REVIEW_TRANSPORT_FAIL" in script
+        assert "ai_review_transport_fail" in script
+
+        retry_loop = script.index("review_max_attempts=")
+        fail_close = script.index('review_flag_category="REVIEW_API_UNAVAILABLE"')
+        assert retry_loop < fail_close
+
+
+def test_pipeline_runner_separates_review_infra_failure_from_code_rejection():
+    """리뷰 인프라 장애는 코드 반려와 구분하고 산출물 worktree를 보존한다."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        assert 'review_infra_failure="false"' in script
+        assert "REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)" in script
+        assert 'review_error_detail="review_infra_failed:' in script
+        assert "WORKTREE_PRESERVED_FOR_REREVIEW" in script
+        assert "AI 리뷰 인프라 장애로 승인 보류" in script
+
+
+def test_pipeline_runner_does_not_label_unreviewed_diff_as_approved():
+    """서버가 fail-open APPROVE(needs_retry)를 반환해도 '리뷰 통과'로 표기하지 않는다."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        assert 'if [[ "$review_verdict" == "APPROVE" && "$review_needs_retry" == "true" ]]; then' in script
+        assert "AI 리뷰 미수행" in script
+        assert "사람 검수 필요" in script
