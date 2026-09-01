@@ -15,6 +15,10 @@ def test_main_registers_coupangeats_auto_collect_catchup_job():
     source = Path("app/main.py").read_text(encoding="utf-8")
 
     assert 'DEFAULT_DELIVERY_AUTO_COLLECT_SERVICES = ["coupangeats", "yogiyo", "ddangyo", "baemin"]' in source
+    assert "DEFAULT_DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES = 45" in source
+    assert "PC_AGENT_LOGIN_REQUIRED" in source
+    assert "_delivery_auto_collect_services_in_operator_cooldown(statuses, selected_services)" in source
+    assert "delivery_auto_collect_skip: operator_action_cooldown" in source
     assert "selected_services = _delivery_auto_collect_services(services)" in source
     assert "delivery_auto_collect_coupangeats_catchup" in source
     assert "_delivery_auto_collect_coupangeats_catchup_due" in source

@@ -83,6 +83,7 @@ BLOCKING_ERROR_CODES = {
     "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
     "BANK_ACCOUNT_PASSWORD_REQUIRED",
     "MISSING_CREDENTIALS",
+    "PC_AGENT_LOGIN_REQUIRED",
     "PC_AGENT_SESSION_REQUIRED",
     "PORTAL_AUTH_CHALLENGE",
     "PORTAL_BLOCKED",
@@ -833,6 +834,13 @@ def _queue_min_interval(service: str) -> int:
     return int(QUEUE_MIN_INTERVAL_BY_SERVICE.get(service, 1800))
 
 
+def _blocked_queue_next_run_at(state: dict[str, Any]) -> str:
+    if not state.get("blocked"):
+        return ""
+    cooldown_minutes = _env_int("YEOLJEONG_DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES", 45)
+    return (datetime.now(KST) + timedelta(minutes=max(1, cooldown_minutes))).isoformat(timespec="seconds")
+
+
 def _scope_branch_id(branch: str, business_id: str = "") -> str:
     branch_text = str(BRANCH_ALIASES.get(str(branch or "").strip(), str(branch or "").strip()) or "").strip()
     for item in CANONICAL_BRANCHES:
@@ -1025,6 +1033,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
             result=result,
             error_code=error_code,
             message=f"completed={state.get('completed', 0)} pending={state.get('pending', 0)}",
+            next_run_at=_blocked_queue_next_run_at(state),
         )
         return {
             "global_queue": True,

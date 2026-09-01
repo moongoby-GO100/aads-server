@@ -4,6 +4,7 @@ lifespan으로 그래프 컴파일 + checkpointer + MCP 초기화.
 """
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import inspect
 import os
 
 import structlog
@@ -78,7 +79,18 @@ logger = structlog.get_logger()
 app_state: dict = {"graph": None, "checkpointer": None, "mcp_manager": None, "memory_store": None}
 KST = timezone(timedelta(hours=9))
 DEFAULT_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = 45
+DEFAULT_DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES = 45
 DEFAULT_DELIVERY_AUTO_COLLECT_SERVICES = ["coupangeats", "yogiyo", "ddangyo", "baemin"]
+DELIVERY_AUTO_COLLECT_OPERATOR_ACTION_ERROR_CODES = {
+    "BAEMIN_SECURITY_BLOCKED",
+    "COUPANGEATS_SECURITY_BLOCKED",
+    "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+    "MISSING_CREDENTIALS",
+    "PC_AGENT_LOGIN_REQUIRED",
+    "PC_AGENT_SESSION_REQUIRED",
+    "PORTAL_AUTH_CHALLENGE",
+    "PORTAL_BLOCKED",
+}
 
 
 def _is_active_api_container_for_background_jobs() -> bool:
@@ -112,6 +124,25 @@ def _is_active_api_container_for_background_jobs() -> bool:
             pass
 
     return True
+
+
+def _active_only_background_job(job_name: str, func):
+    """Prevent standby blue/green slots from running duplicate schedulers."""
+    async def _wrapped(*args, **kwargs):
+        if not _is_active_api_container_for_background_jobs():
+            logger.info(
+                "background_job_skip_inactive_api_container",
+                job=job_name,
+                container=os.getenv("AADS_CONTAINER_NAME", ""),
+                port=os.getenv("AADS_PUBLIC_PORT", ""),
+            )
+            return None
+        result = func(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    return _wrapped
 
 
 def _try_acquire_process_lock(lock_path: str) -> int | None:
@@ -231,6 +262,8 @@ def _delivery_auto_collect_service_catchup_due(
             return False
         if status == "queued":
             return True
+        if _delivery_auto_collect_operator_cooldown_active(row):
+            return False
         if status in {"failed", "action_required"}:
             return True
         if str(row.get("error_code") or "").strip():
@@ -253,6 +286,64 @@ def _delivery_auto_collect_row_time(row: dict) -> datetime | None:
             parsed = parsed.replace(tzinfo=KST)
         return parsed.astimezone(KST)
     return None
+
+
+def _delivery_auto_collect_parse_time(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=KST)
+    return parsed.astimezone(KST)
+
+
+def _delivery_auto_collect_row_cooldown_until(row: dict) -> datetime | None:
+    diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
+    return _delivery_auto_collect_parse_time(row.get("cooldown_until") or diagnostics.get("cooldown_until"))
+
+
+def _delivery_auto_collect_operator_cooldown_active(row: dict) -> bool:
+    error_code = str(row.get("error_code") or "").strip().upper()
+    if error_code not in DELIVERY_AUTO_COLLECT_OPERATOR_ACTION_ERROR_CODES:
+        return False
+    cooldown_until = _delivery_auto_collect_row_cooldown_until(row)
+    if cooldown_until:
+        return cooldown_until > datetime.now(KST)
+    cooldown_minutes = _env_int(
+        "YEOLJEONG_DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES",
+        DEFAULT_DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES,
+    )
+    if cooldown_minutes <= 0:
+        return False
+    row_time = _delivery_auto_collect_row_time(row)
+    return bool(row_time and row_time >= datetime.now(KST) - timedelta(minutes=cooldown_minutes))
+
+
+def _delivery_auto_collect_services_in_operator_cooldown(
+    statuses: list[dict],
+    selected_services: list[str],
+) -> set[str]:
+    selected = set(selected_services)
+    blocked: set[str] = set()
+    latest: dict[tuple[str, str, str], dict] = {}
+    for row in statuses if isinstance(statuses, list) else []:
+        service = str(row.get("service") or "").strip()
+        if service not in selected:
+            continue
+        key = (service, str(row.get("business_id") or ""), str(row.get("branch") or ""))
+        current = latest.get(key)
+        if current is None or str(row.get("updated_at") or row.get("created_at") or "") > str(
+            current.get("updated_at") or current.get("created_at") or ""
+        ):
+            latest[key] = row
+    for row in latest.values():
+        if _delivery_auto_collect_operator_cooldown_active(row):
+            blocked.add(str(row.get("service") or "").strip())
+    return blocked
 
 
 def _delivery_auto_collect_security_block_cooldown_active(statuses: list[dict]) -> bool:
@@ -947,6 +1038,13 @@ async def lifespan(app: FastAPI):
                 logger.warning("stale_execution_watchdog_failed: %s", str(e)[:200])
 
         scheduler = AsyncIOScheduler()
+        _scheduler_add_job = scheduler.add_job
+
+        def _add_active_only_job(func, *args, **kwargs):
+            job_name = str(kwargs.get("id") or getattr(func, "__name__", "background_job"))
+            return _scheduler_add_job(_active_only_background_job(job_name, func), *args, **kwargs)
+
+        scheduler.add_job = _add_active_only_job
         # 2분마다 규칙 평가
         scheduler.add_job(_run_alert_evaluation, "interval", minutes=2, id="alert_eval")
         # 30초마다 자율복구 사이클
@@ -1415,8 +1513,26 @@ async def lifespan(app: FastAPI):
                         "status": "deferred",
                         "diagnostics": {"delivery_deferred_due_to_bank_lock": "1"},
                     }
-                if "baemin" in selected_services:
+                statuses: list[dict] | None = None
+                if selected_services:
                     statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    cooldown_services = _delivery_auto_collect_services_in_operator_cooldown(statuses, selected_services)
+                    if cooldown_services:
+                        logger.info(
+                            "delivery_auto_collect_skip: operator_action_cooldown reason=%s mode=%s services=%s",
+                            reason,
+                            mode,
+                            sorted(cooldown_services),
+                        )
+                        selected_services = [service for service in selected_services if service not in cooldown_services]
+                        if not selected_services:
+                            return {
+                                "status": "deferred",
+                                "diagnostics": {"operator_action_cooldown": ",".join(sorted(cooldown_services))},
+                            }
+                if "baemin" in selected_services:
+                    if statuses is None:
+                        statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if _delivery_auto_collect_security_block_cooldown_active(statuses):
                         logger.info(
                             "delivery_auto_collect_skip: baemin_security_block_cooldown reason=%s mode=%s",
@@ -1439,12 +1555,14 @@ async def lifespan(app: FastAPI):
                                 "diagnostics": {"baemin_deferred_for_coupangeats_priority": "1"},
                             }
                 if reason == "pc_agent_catchup" and mode == "full_backfill":
-                    statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    if statuses is None:
+                        statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if not _delivery_auto_collect_baemin_catchup_due(statuses):
                         logger.info("delivery_auto_collect_catchup_skip: baemin_recent_or_running")
                         return
                 if reason == "coupangeats_catchup":
-                    statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    if statuses is None:
+                        statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
                     if not _delivery_auto_collect_coupangeats_catchup_due(statuses):
                         logger.info("delivery_auto_collect_catchup_skip: coupangeats_recent_or_running")
                         return

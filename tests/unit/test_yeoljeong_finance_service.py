@@ -2803,6 +2803,67 @@ def test_sync_delivery_browser_automation_password_requires_pc_agent_session(tmp
     status = service._read("delivery_collection_status")[0]
     assert status["error_code"] == "PC_AGENT_SESSION_REQUIRED"
     assert status["diagnostics"]["browser_bridge_error"] == "pc unavailable"
+    assert status["diagnostics"]["cooldown_minutes"] == service.DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES
+    assert status["diagnostics"]["cooldown_until"]
+    assert status["cooldown_until"] == status["diagnostics"]["cooldown_until"]
+
+
+def test_sync_delivery_login_required_records_operator_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-coupangeats-junghwa",
+                "service": "coupangeats",
+                "username": "owner",
+                "collection_mode": "browser-automation",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_delivery_browser_auth_for_account",
+        lambda payload, account, service_name, business_id, branch: {
+            "storage_state_path": "",
+            "browser_session_id": "bb-coupang",
+            "browser_bridge_mode": "local_agent",
+            "browser_work_key": "yeoljeong-delivery-coupangeats-biz-junghwa-test",
+            "browser_close_on_complete": "",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_collect_delivery_from_browser_bridge_session",
+        lambda *args, **kwargs: {
+            "status": "portal_action_required",
+            "error_code": "PC_AGENT_LOGIN_REQUIRED",
+            "records": {"sales": [], "settlements": [], "reviews": [], "ads": []},
+            "message": "쿠팡이츠 로그인 후 다시 실행하세요.",
+        },
+    )
+
+    result = service.sync_delivery(
+        {
+            "services": ["coupangeats"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-04",
+            "require_pc_agent": True,
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["summary"][0]["status"] == "action_required"
+    assert result["summary"][0]["error_code"] == "PC_AGENT_LOGIN_REQUIRED"
+    assert result["summary"][0]["cooldown_until"]
+    status = service._read("delivery_collection_status")[0]
+    assert status["error_code"] == "PC_AGENT_LOGIN_REQUIRED"
+    assert status["diagnostics"]["cooldown_minutes"] == service.DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES
+    assert status["cooldown_until"] == status["diagnostics"]["cooldown_until"]
 
 
 def test_delivery_browser_auth_options_uses_active_bridge_session(monkeypatch):

@@ -760,6 +760,26 @@ def test_completion_state_blocks_on_bank_browser_operator_action_required():
     assert state["blocking_codes"] == ["BANK_BROWSER_OPERATOR_ACTION_REQUIRED"]
 
 
+def test_completion_state_blocks_on_pc_agent_login_required():
+    summary = {
+        "summary": [
+            {
+                "service": "coupangeats",
+                "status": "action_required",
+                "error_code": "PC_AGENT_LOGIN_REQUIRED",
+                "counts": {"sales": 0, "settlements": 0, "reviews": 0, "ads": 0},
+            }
+        ],
+    }
+
+    state = auto_collect._completion_state(summary)
+
+    assert state["complete"] is False
+    assert state["blocked"] is True
+    assert state["pending"] == 1
+    assert state["blocking_codes"] == ["PC_AGENT_LOGIN_REQUIRED"]
+
+
 def test_completion_state_treats_imported_rows_as_complete():
     summary = {
         "summary": [

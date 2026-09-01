@@ -9789,3 +9789,23 @@
   - `docker inspect` confirmed both running API containers still have `Memory=3221225472`, `MemorySwap=5368709120`, `Health=healthy`, `RestartCount=0`.
 - Deployment:
   - Runtime recreation is not required for the memory limit because the live containers already have the intended 3 GiB / 5 GiB limits. A future Blue/Green release will now preserve the same limits from source-controlled prod Compose.
+
+## 2026-09-02 08:29 KST - Yeoljeong delivery auto-collection retry cooldown guard
+
+- Request:
+  - Diagnose why FOOD delivery sales collection kept retrying after errors, implement the immediate guard, and report the result.
+- Runtime evidence:
+  - `yeoljeong_delivery_collection_status` showed repeated action-required rows, led by `coupangeats/COLLECTION_ALREADY_RUNNING` 678 rows, `baemin/COLLECTION_ALREADY_RUNNING` 631 rows, and `coupangeats/PC_AGENT_LOGIN_REQUIRED` 433 rows.
+  - No `pc_agent_collection_queue` rows were present at the verification query time, and no active `yeoljeong_auto_collect.py` worker process was identified outside the current shell grep.
+- Code change:
+  - `app/main.py`: delivery scheduler now treats operator-action failures such as `PC_AGENT_LOGIN_REQUIRED`, `PC_AGENT_SESSION_REQUIRED`, `MISSING_CREDENTIALS`, captcha/auth challenge, and portal block as a 45-minute auto retry cooldown. Services in cooldown are removed from scheduled/catch-up auto-collect runs before queueing.
+  - `app/services/yeoljeong_finance_service.py`: delivery collection status records now persist `diagnostics.cooldown_until` and top-level `cooldown_until` for operator-action failures, so DB/API/scheduler share the same retry gate.
+  - `scripts/yeoljeong_auto_collect.py`: `PC_AGENT_LOGIN_REQUIRED` is now blocking, not retryable, and global queue completion pushes the next due time by the operator-action cooldown.
+  - `app/services/pc_agent_collection_queue.py`: latest-only enqueue no longer revives an `action_required` item whose `next_run_at` is still in the future.
+- Verification:
+  - `python3 -m py_compile app/main.py app/services/yeoljeong_finance_service.py app/services/pc_agent_collection_queue.py scripts/yeoljeong_auto_collect.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_pc_agent_collection_queue.py tests/unit/test_yeoljeong_auto_collect.py::test_completion_state_blocks_on_pc_agent_login_required tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_browser_automation_password_requires_pc_agent_session tests/unit/test_yeoljeong_finance_service.py::test_sync_delivery_login_required_records_operator_cooldown` passed 15/15.
+  - Pre-commit Python checks passed on the committed files.
+- Deployment:
+  - Committed locally as `fe764e13 Guard delivery collection retry cooldowns`.
+  - Not pushed or deployed. Production behavior remains unchanged until an approved Blue/Green release is run.

@@ -43,6 +43,20 @@ DELIVERY_BACKFILL_STALE_AFTER = timedelta(
 DELIVERY_BACKFILL_MAX_ATTEMPTS = max(1, int(os.getenv("YEOLJEONG_DELIVERY_BACKFILL_MAX_ATTEMPTS", "3")))
 DELIVERY_CHALLENGE_TIMEOUT = timedelta(minutes=20)
 DELIVERY_CHALLENGE_MAX_ATTEMPTS = 3
+DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES = max(
+    1,
+    int(os.getenv("YEOLJEONG_DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES", "45")),
+)
+DELIVERY_OPERATOR_ACTION_COOLDOWN_CODES = {
+    "BAEMIN_SECURITY_BLOCKED",
+    "COUPANGEATS_SECURITY_BLOCKED",
+    "DDANGYO_NUMERIC_CAPTCHA_REQUIRED",
+    "MISSING_CREDENTIALS",
+    "PC_AGENT_LOGIN_REQUIRED",
+    "PC_AGENT_SESSION_REQUIRED",
+    "PORTAL_AUTH_CHALLENGE",
+    "PORTAL_BLOCKED",
+}
 BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = max(
     1,
     int(os.getenv("YEOLJEONG_BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES", "45")),
@@ -300,6 +314,18 @@ def _now() -> str:
 def _delivery_baemin_security_cooldown_until(reference: datetime | None = None) -> str:
     base = reference or datetime.now(KST)
     return (base + timedelta(minutes=BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES)).isoformat(timespec="seconds")
+
+
+def _delivery_operator_action_cooldown_until(reference: datetime | None = None) -> str:
+    base = reference or datetime.now(KST)
+    return (base + timedelta(minutes=DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES)).isoformat(timespec="seconds")
+
+
+def _delivery_result_requires_operator_cooldown(public_status: str, public_error_code: str) -> bool:
+    return (
+        str(public_status or "").strip() == "action_required"
+        and str(public_error_code or "").strip().upper() in DELIVERY_OPERATOR_ACTION_COOLDOWN_CODES
+    )
 
 
 def _ensure_dirs() -> None:
@@ -8206,6 +8232,11 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                 result_diagnostics["hard_stop_remaining_baemin_scopes"] = True
                 result_diagnostics["cooldown_minutes"] = BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES
                 result_diagnostics["cooldown_until"] = _delivery_baemin_security_cooldown_until(finished_at and datetime.fromisoformat(finished_at))
+            elif _delivery_result_requires_operator_cooldown(public_status, public_error_code):
+                result_diagnostics["cooldown_minutes"] = DELIVERY_OPERATOR_ACTION_COOLDOWN_MINUTES
+                result_diagnostics["cooldown_until"] = _delivery_operator_action_cooldown_until(
+                    finished_at and datetime.fromisoformat(finished_at)
+                )
             browser_session_id = str(browser_auth.get("browser_session_id") or "").strip()
             browser_work_key = str(browser_auth.get("browser_work_key") or "").strip()
             if browser_session_id:
@@ -8277,6 +8308,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     ),
                     "error_code": public_error_code,
                     "diagnostics": result_diagnostics,
+                    "cooldown_until": result_diagnostics.get("cooldown_until") or "",
                     "attempt_count": attempt_count,
                     "max_attempts": DELIVERY_CHALLENGE_MAX_ATTEMPTS,
                     "challenge_timeout_seconds": int(DELIVERY_CHALLENGE_TIMEOUT.total_seconds()),
@@ -8307,6 +8339,7 @@ def _sync_delivery_unlocked(payload: dict[str, Any], user: dict[str, Any]) -> di
                     "branch": branch,
                     "message": status_record["message"],
                     "portal_message": status_record["message"],
+                    "cooldown_until": status_record.get("cooldown_until") or "",
                 }
             )
             if baemin_security_blocked_result:

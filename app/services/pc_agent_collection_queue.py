@@ -199,13 +199,31 @@ async def _enqueue_db(item: dict[str, Any]) -> dict[str, Any]:
                        latest_only = EXCLUDED.latest_only,
                        status = CASE
                            WHEN pc_agent_collection_queue.status = 'running' THEN 'running'
+                           WHEN pc_agent_collection_queue.status = 'action_required'
+                                AND pc_agent_collection_queue.next_run_at > NOW()
+                           THEN 'action_required'
                            ELSE 'queued'
                        END,
-                       next_run_at = EXCLUDED.next_run_at,
+                       next_run_at = CASE
+                           WHEN pc_agent_collection_queue.status = 'action_required'
+                                AND pc_agent_collection_queue.next_run_at > NOW()
+                           THEN pc_agent_collection_queue.next_run_at
+                           ELSE EXCLUDED.next_run_at
+                       END,
                        payload = EXCLUDED.payload,
                        max_attempts = EXCLUDED.max_attempts,
-                       error_code = '',
-                       message = '',
+                       error_code = CASE
+                           WHEN pc_agent_collection_queue.status = 'action_required'
+                                AND pc_agent_collection_queue.next_run_at > NOW()
+                           THEN pc_agent_collection_queue.error_code
+                           ELSE ''
+                       END,
+                       message = CASE
+                           WHEN pc_agent_collection_queue.status = 'action_required'
+                                AND pc_agent_collection_queue.next_run_at > NOW()
+                           THEN pc_agent_collection_queue.message
+                           ELSE ''
+                       END,
                        updated_at = NOW()
                 RETURNING *
                 """,
@@ -282,8 +300,30 @@ def enqueue_collection_item(item: dict[str, Any]) -> dict[str, Any]:
                 row["updated_at"] = _now_text()
     existing = next((row for row in rows if row["job_key"] == normalized["job_key"]), None)
     if existing:
-        keep_status = "running" if existing.get("status") == "running" else "queued"
-        existing.update({**normalized, "id": existing.get("id") or normalized["id"], "status": keep_status, "updated_at": _now_text()})
+        existing_next_run_at = _parse_dt(existing.get("next_run_at"))
+        keep_action_required = existing.get("status") == "action_required" and bool(
+            existing_next_run_at and existing_next_run_at > _now()
+        )
+        keep_status = (
+            "running"
+            if existing.get("status") == "running"
+            else ("action_required" if keep_action_required else "queued")
+        )
+        preserved = {
+            "error_code": existing.get("error_code") or "",
+            "message": existing.get("message") or "",
+            "finished_at": existing.get("finished_at") or "",
+            "next_run_at": existing.get("next_run_at") or normalized["next_run_at"],
+        } if keep_action_required else {}
+        existing.update(
+            {
+                **normalized,
+                **preserved,
+                "id": existing.get("id") or normalized["id"],
+                "status": keep_status,
+                "updated_at": _now_text(),
+            }
+        )
         item_out = existing
     else:
         rows.insert(0, normalized)
