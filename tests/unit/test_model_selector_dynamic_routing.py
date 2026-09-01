@@ -17,6 +17,33 @@ def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
     assert model_selector._to_anthropic_runtime_alias("gpt-5.5") == "gpt-5.5"
 
 
+def test_cli_result_preserves_runtime_model_for_actual_model_audit():
+    events = model_selector._map_cli_event(
+        {
+            "type": "result",
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+            "modelUsage": {
+                "claude-opus-4-6[1m]": {
+                    "inputTokens": 3,
+                    "outputTokens": 5,
+                    "costUSD": 0.123456,
+                }
+            },
+        }
+    )
+
+    assert events == [
+        {
+            "type": "done",
+            "model": "claude-opus-4-6",
+            "actual_model": "claude-opus-4-6",
+            "cost": "0.123456",
+            "input_tokens": 3,
+            "output_tokens": 5,
+        }
+    ]
+
+
 async def _collect_claude_route(monkeypatch, *, intent: str, model: str, use_tools: bool, tool_group: str):
     routed_models = []
 

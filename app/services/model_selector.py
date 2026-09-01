@@ -2858,11 +2858,13 @@ async def _stream_cli_relay_once(
                             delta_text = aads_evt.get("content", "")
                             full_text += delta_text
 
-                        # done 이벤트에서 session_id 캡처 (result 이벤트)
+                        # done 이벤트에서 session_id 캡처 + 표시 모델 정규화
                         if evt_type == "done":
                             result_sid = event.get("session_id")
                             if result_sid:
                                 _captured_cli_sid = result_sid
+                            aads_evt["actual_model"] = aads_evt.get("actual_model") or aads_evt.get("model") or sdk_model
+                            aads_evt["model"] = sdk_model
 
                         yield aads_evt
 
@@ -3992,6 +3994,7 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
         events.append({
             "type": "done",
             "model": model,
+            "actual_model": model,
             "cost": str(round(total_cost, 6)),
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,
@@ -4671,7 +4674,7 @@ async def _stream_anthropic(
                 tools = None
 
     cost = _estimate_cost(model_alias, input_tokens, output_tokens)
-    # 프론트 표시용: alias(claude-opus) → 실제 모델ID(claude-opus-4-6)
+    # 프론트 표시용: alias(claude-opus) → 사용자 표시명(claude-opus-5)
     _display_model = _ANTHROPIC_MODEL_ID.get(model_alias, model_alias)
     if use_thinking:
         logger.info(f"anthropic_thinking_result: model={model_id} thinking_len={len(thinking_text)} turns={_turn}")

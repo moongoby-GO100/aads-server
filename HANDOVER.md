@@ -9809,3 +9809,21 @@
 - Deployment:
   - Committed locally as `fe764e13 Guard delivery collection retry cooldowns`.
   - Not pushed or deployed. Production behavior remains unchanged until an approved Blue/Green release is run.
+
+## 2026-09-02 08:30 KST - Chat selected-model display and actual-model audit split
+
+- Request:
+  - Fix the chat case where the CEO selected `claude-opus-5` but the assistant bubble footer showed `claude-opus-4-6`.
+- Runtime evidence:
+  - Session `7542104d-61d4-469c-bd44-029308b41b2d` had completed executions where `requested_model=claude-opus-5` but `actual_model=claude-opus-4-6` at 2026-09-02 06:51 and 07:12 KST.
+  - The DB default chat model is `gpt-5.6-sol` from `model_routing_preferences(route_key='llm', is_default=true)`.
+- Code change:
+  - `app/services/model_selector.py`: Claude CLI result events now preserve the runtime-returned model in `actual_model`, while `_stream_cli_relay_once()` normalizes the outward `done.model` to the CEO-selected display model such as `claude-opus-5`.
+  - `app/services/chat_service.py`: stream handlers now track display `model_used` separately from `actual_model`, and final execution completion writes `chat_turn_executions.actual_model` from the runtime audit value instead of the bubble display value.
+  - `tests/unit/test_model_selector_dynamic_routing.py`: added a regression test for preserving CLI runtime model usage in `actual_model`.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:8d5c79af698d python -m py_compile app/services/model_selector.py app/services/chat_service.py` passed.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:8d5c79af698d pytest tests/unit/test_model_selector_dynamic_routing.py -q` passed 26/26.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -v /root/aads/aads-server:/app -w /app aads-server:8d5c79af698d pytest tests/unit/test_chat_service.py -q` passed 73/73 with one existing FastAPI deprecation warning.
+- Deployment:
+  - Pending commit/push/Blue-Green release. Do not include unrelated dirty files in the release context.

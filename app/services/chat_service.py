@@ -8300,6 +8300,7 @@ async def _save_and_update_session(
     execution_id: Optional[uuid.UUID] = None,
     raw_messages: Optional[List[Dict[str, Any]]] = None,
     model_used: str = "",
+    actual_model: Optional[str] = None,
     requested_model: Optional[str] = None,
     intent: str = "",
     cost: Decimal = Decimal("0"),
@@ -8618,7 +8619,7 @@ async def _save_and_update_session(
                     _execution_uuid,
                     _assistant_msg_id,
                     requested_model,
-                    model_used or None,
+                    actual_model or model_used or None,
                     _EXECUTION_OWNER_INSTANCE,
                     int(_exec_epoch or 0),
                 )
@@ -11035,6 +11036,7 @@ async def send_message_stream(
         full_response = ""
         thinking_summary = ""
         model_used = intent_result.model
+        actual_model_used = intent_result.model
         cost_usd = Decimal("0")
         input_tokens = 0
         output_tokens = 0
@@ -11058,6 +11060,7 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                     elif etype == "model_info":
                         model_used = event.get("model", model_used)
+                        actual_model_used = event.get("actual_model", actual_model_used or model_used)
                         yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
                     elif etype == "interrupt_applied":
                         yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
@@ -11093,7 +11096,10 @@ async def send_message_stream(
                     elif etype == "yellow_limit":
                         yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                     elif etype == "done":
-                        model_used = event.get("model", intent_result.model)
+                        _done_display_model = event.get("model", intent_result.model)
+                        _done_actual_model = event.get("actual_model") or _done_display_model
+                        model_used = _done_display_model
+                        actual_model_used = _done_actual_model
                         cost_usd = Decimal(str(event.get("cost", "0")))
                         input_tokens = event.get("input_tokens", 0) or 0
                         output_tokens = event.get("output_tokens", 0) or 0
@@ -11257,6 +11263,7 @@ async def send_message_stream(
                     yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                 elif etype == "model_info":
                     model_used = event.get("model", model_used)
+                    actual_model_used = event.get("actual_model", actual_model_used or model_used)
                     yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
                 elif etype == "interrupt_applied":
                     yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
@@ -11286,7 +11293,10 @@ async def send_message_stream(
                 elif etype == "yellow_limit":
                     yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                 elif etype == "done":
-                    model_used = event.get("model", model_used or intent_result.model)
+                    _done_display_model = event.get("model", model_used or intent_result.model)
+                    _done_actual_model = event.get("actual_model") or _done_display_model
+                    model_used = _done_display_model
+                    actual_model_used = _done_actual_model
                     cost_usd += Decimal(str(event.get("cost", "0")))
                     input_tokens += event.get("input_tokens", 0) or 0
                     output_tokens += event.get("output_tokens", 0) or 0
@@ -11388,7 +11398,10 @@ async def send_message_stream(
                         )
                     yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
                 elif etype == "done":
-                    model_used = event.get("model", intent_result.model)
+                    _done_display_model = event.get("model", intent_result.model)
+                    _done_actual_model = event.get("actual_model") or _done_display_model
+                    model_used = _done_display_model
+                    actual_model_used = _done_actual_model
                     cost_usd += Decimal(str(event.get("cost", "0")))
                     input_tokens = event.get("input_tokens", 0) or 0
                     output_tokens = event.get("output_tokens", 0) or 0
@@ -11556,7 +11569,10 @@ async def send_message_stream(
                     tools_called.append(tool_result_payload)
                     yield f"data: {json.dumps(_tool_result_event_snapshot(event, content_limit=300))}\n\n"
                 elif etype == "done":
-                    model_used = event.get("model", model_used)
+                    _done_display_model = event.get("model", model_used)
+                    _done_actual_model = event.get("actual_model") or _done_display_model
+                    model_used = _done_display_model
+                    actual_model_used = _done_actual_model
                     cost_usd += Decimal(str(event.get("cost", "0")))
                     input_tokens = event.get("input_tokens", 0) or input_tokens
                     output_tokens = event.get("output_tokens", 0) or output_tokens
@@ -11692,7 +11708,10 @@ async def send_message_stream(
                         elif etype == "yellow_limit":
                             yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                         elif etype == "done":
-                            model_used = event.get("model", model_used or intent_result.model)
+                            _done_display_model = event.get("model", model_used or intent_result.model)
+                            _done_actual_model = event.get("actual_model") or _done_display_model
+                            model_used = _done_display_model
+                            actual_model_used = _done_actual_model
                             cost_usd += Decimal(str(event.get("cost", "0")))
                             input_tokens += event.get("input_tokens", 0) or 0
                             output_tokens += event.get("output_tokens", 0) or 0
@@ -11745,6 +11764,7 @@ async def send_message_stream(
             session_id_str=session_id,
             raw_messages=raw_messages,
             model_used=model_used,
+            actual_model=actual_model_used,
             intent=intent,
             cost=cost_usd,
             tokens_in=input_tokens,
