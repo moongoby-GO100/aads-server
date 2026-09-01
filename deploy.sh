@@ -156,8 +156,8 @@ record_deploy() {
     if [[ "$status" == "started" ]]; then
         downtime=0
     fi
-    commit=$(git -C "$COMPOSE_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    msg=$(git -C "$COMPOSE_DIR" log -1 --pretty=%s 2>/dev/null || echo "unknown")
+    commit="${AADS_RELEASE_SHA:-unknown}"
+    msg=$(git -C "$COMPOSE_DIR" log -1 --pretty=%s "$commit" 2>/dev/null || echo "unknown")
 
     type_sql=$(sql_escape "$deploy_type")
     commit_sql=$(sql_escape "$commit")
