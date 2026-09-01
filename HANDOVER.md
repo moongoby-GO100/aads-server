@@ -9779,6 +9779,7 @@
   - Both API slots already had Docker runtime memory/swap limits of 3 GiB / 5 GiB and were healthy with restart count 0.
   - Host crontab already used `/root/aads/scripts/disk_cleanup.sh` for daily and weekly Docker cleanup.
 - Code/config change:
+  - `deploy.sh`: added a fail-closed memory-limit guard after candidate slot startup and standby slot resync. A Blue/Green release now aborts before routing if the new API container is not running with 3 GiB memory and 5 GiB memory+swap.
   - `docker-compose.prod.yml`: added explicit `mem_limit: 3g` and `memswap_limit: 5g` to both `aads-server` and `aads-server-green`, so future Compose recreations preserve the runtime OOM guard even on non-Swarm Compose paths.
   - `scripts/aads-crontab.txt`: kept the safe weekly Docker cleanup policy that delegates to `/root/aads/scripts/disk_cleanup.sh`, matching the installed crontab.
 - Verification:

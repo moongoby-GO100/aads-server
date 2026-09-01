@@ -19,6 +19,8 @@ INTERVAL=2
 UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
 ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
+API_MEMORY_BYTES="${AADS_API_MEMORY_BYTES:-3221225472}"
+API_MEMORY_SWAP_BYTES="${AADS_API_MEMORY_SWAP_BYTES:-5368709120}"
 DEPLOY_START_EPOCH=$(date +%s)
 DEPLOY_GENERATION_FILE="${COMPOSE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
@@ -112,6 +114,22 @@ audit_control() {
     printf '{"ts":"%s","actor":"deploy.sh","generation":"%s","action":"%s","target":"%s","result":"%s","detail":"%s"}\n' \
         "$(date --iso-8601=seconds)" "${DEPLOY_GENERATION:-not-assigned}" "$action" "$target" "$result" "$detail" \
         >> "$CONTROL_AUDIT_LOG" 2>/dev/null || true
+}
+
+verify_container_memory_limit() {
+    local container="$1"
+    local memory=""
+    local memory_swap=""
+
+    memory="$(docker inspect "$container" --format '{{.HostConfig.Memory}}' 2>/dev/null || true)"
+    memory_swap="$(docker inspect "$container" --format '{{.HostConfig.MemorySwap}}' 2>/dev/null || true)"
+    if [[ "$memory" != "$API_MEMORY_BYTES" || "$memory_swap" != "$API_MEMORY_SWAP_BYTES" ]]; then
+        echo "[deploy.sh] ❌ ${container} memory limit mismatch: memory=${memory:-missing} swap=${memory_swap:-missing}, expected=${API_MEMORY_BYTES}/${API_MEMORY_SWAP_BYTES}"
+        audit_control "memory-limit" "$container" "failed" "memory=${memory:-missing} swap=${memory_swap:-missing}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ ${container} memory limit verified: memory=${memory} swap=${memory_swap}"
+    audit_control "memory-limit" "$container" "success" "memory=${memory} swap=${memory_swap}"
 }
 
 record_deploy() {
@@ -591,6 +609,10 @@ sync_standby_slot_after_drain() {
         else
             docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --no-build --no-deps "$old_container"
         fi
+        if ! verify_container_memory_limit "$old_container"; then
+            audit_control "standby-sync" "${old_container}:${old_port}" "failed" "memory limit mismatch"
+            return 1
+        fi
 
         if wait_port_health "$old_port" 90; then
             active_container="$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)"
@@ -887,6 +909,13 @@ case "$MODE" in
         build_release_image
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
         docker compose $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps "$NEW_CONTAINER"
+        if ! verify_container_memory_limit "$NEW_CONTAINER"; then
+            docker stop "$NEW_CONTAINER" 2>/dev/null || true
+            docker rm "$NEW_CONTAINER" 2>/dev/null || true
+            notify "❌ Blue-Green 실패: ${NEW_CONTAINER} memory limit mismatch"
+            record_deploy "failed" "$MODE" "${NEW_CONTAINER} memory limit mismatch"
+            exit 1
+        fi
 
         # ② 새 컨테이너 헬스체크
         BG_HEALTH_MAX_WAIT="${AADS_DEPLOY_BG_HEALTH_MAX_WAIT:-150}"
