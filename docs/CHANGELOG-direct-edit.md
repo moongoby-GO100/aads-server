@@ -5759,3 +5759,144 @@ from app.services.yeoljeong_fin
 
 ## [2026-08-31 12:43:13 KST] [aads-server] HANDOVER.md
 - Chat-Direct 수정: run_remote_command: curl -sf http://localhost:9090/health
+
+## [2026-08-31 13:24:01 KST] [aads-server] app/api/admin.py
+- Chat-Direct 수정: run_remote_command: bash -n /tmp/aads-wt-runner-18894b34/scripts/pipeline-runner.sh
+
+## [2026-08-31 13:24:06 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: bash -n /tmp/aads-wt-runner-18894b34/scripts/pipeline-runner.sh
+
+## [2026-08-31 13:24:07 KST] [aads-server] migrations/138_pipeline_runner_commit_gate.sql
+- Chat-Direct 수정: run_remote_command: bash -n /tmp/aads-wt-runner-18894b34/scripts/pipeline-runner.sh
+
+## [2026-08-31 13:24:08 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: run_remote_command: bash -n /tmp/aads-wt-runner-18894b34/scripts/pipeline-runner.sh
+
+## [2026-08-31 13:24:08 KST] [aads-server] scripts/pipeline-runner.sh.local
+- Chat-Direct 수정: run_remote_command: bash -n /tmp/aads-wt-runner-18894b34/scripts/pipeline-runner.sh
+
+## [2026-08-31 13:24:09 KST] [aads-server] tests/unit/test_pipeline_runner_worktree_policy.py
+- Chat-Direct 수정: run_remote_command: bash -n /tmp/aads-wt-runner-18894b34/scripts/pipeline-runner.sh
+
+## [2026-08-31 13:28:45 KST] [aads-server] , r.scalar())\n            except Exception as e:\n                print(sql, ERR, type(e).__name__, e)\n                await db.rollback()\nasyncio.run(main())\nPY
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:46 KST] [aads-server] .codex_tmp_go100/backend/app/services/go100/analysis/wave_cycle_trader.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:47 KST] [aads-server] .codex_tmp_go100/scripts/go100/run_card310_full_wave_backtest.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:48 KST] [aads-server] .tmp/go100_opening_wave/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:48 KST] [aads-server] .tmp/go100_opening_wave/test_card303_wave_recovery_gate.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:49 KST] [aads-server] .tmp_go100_patch/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:49 KST] [aads-server] .tmp_go100_patch/TradingWorkbenchTab.tsx
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:50 KST] [aads-server] .tmp_go100_patch/card119_p0p1/backend/app/routers/go100/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:51 KST] [aads-server] .tmp_go100_patch/card119_p0p1/backend/app/services/go100/live_trading/scalping_entry_engine.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:52 KST] [aads-server] .tmp_go100_patch/card119_p0p1/docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:52 KST] [aads-server] .tmp_go100_patch/card119_p0p1/frontend/src/app/protected_ops/page.tsx
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:53 KST] [aads-server] .tmp_go100_patch/card119_p0p1/frontend/src/go100/api/cardTradesApi.ts
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:54 KST] [aads-server] .tmp_go100_patch/card119_p0p1/frontend/tsconfig.json
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:54 KST] [aads-server] .tmp_go100_patch/card_trades_router.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:55 KST] [aads-server] .tmp_go100_patch/strategy_router.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:55 KST] [aads-server] 0
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:56 KST] [aads-server] 11
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:56 KST] [aads-server] 18
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:57 KST] [aads-server] tmp_card119_current_3day_direct_report.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:58 KST] [aads-server] tmp_generate_card119_july2_report.py
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:28:58 KST] [aads-server] tmp_go100_card119_current_3day_direct_report.json
+- Chat-Direct 수정: run_remote_command: ps -p 3066272
+
+## [2026-08-31 13:29:31 KST] [aads-server] docs/HANDOVER.md
+- Chat-Direct 수정: run_remote_command: curl -s http://127.0.0.1:8100/health
+
+## [2026-09-02 08:11:48 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:                         # done 이벤트에서 ses→                        # done 이벤트에서 ses
+
+## [2026-09-02 08:11:52 KST] [aads-server] app/services/model_selector.py
+- Chat-Direct 수정: patch:     # 프론트 표시용: alias(claude-opus) → 실제 모→    # 프론트 표시용: alias(claude-opus) → 사용자 
+
+## [2026-09-02 08:14:14 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:         class FakeConn:
+            asyn→        class FakeConn:
+            asyn
+
+## [2026-09-02 08:14:16 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:         class FakeConn:
+            asyn→        class FakeConn:
+            asyn
+
+## [2026-09-02 08:14:53 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:                 return {
+               →                return {
+               
+
+## [2026-09-02 08:14:54 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:                 return {
+               →                return {
+               
+
+## [2026-09-02 08:16:12 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:         assert update_calls
+        asse→        assert update_calls
+        asse
+
+## [2026-09-02 08:19:34 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import re
+f='/root/aads/aads-server/tests/unit/test_tools_and_pipel
+
+## [2026-09-02 08:38:08 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:             local review_http_code=""
+  →            # P0: 리뷰 API 전송 실패는 코드 품질 문제
+
+## [2026-09-02 08:38:26 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:     if [[ "$review_verdict" != "APPROVE"→    # P0: 인프라 원인(리뷰 API/모델/파서 장애)과 실제 코드
+
+## [2026-09-02 08:38:36 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:         post_to_chat "$session_id" "🔴 [P→        if [[ "$review_infra_failure" ==
+
+## [2026-09-02 08:38:45 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:     if [[ "$review_verdict" == "APPROVE"→    if [[ "$review_verdict" == "APPROVE"
+
+## [2026-09-02 08:39:26 KST] [aads-server] scripts/pipeline-runner.sh.local
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/scripts/pipeline-runner.sh /root/aads/aads-server/scri
+
+## [2026-09-02 08:40:00 KST] [aads-server] tests/unit/test_pipeline_runner_script_guards.py
+- Chat-Direct 수정: patch:     assert "'max_retries'" in script
+   →    assert "'max_retries'" in script
+   

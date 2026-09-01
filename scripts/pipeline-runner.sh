@@ -1667,15 +1667,34 @@ ${output:0:1500}
                 --arg files "$changed_files" \
                 '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
 
+            # P0: 리뷰 API 전송 실패는 코드 품질 문제가 아니므로 즉시 fail-close하지 않고 재시도
             local review_http_code=""
-            review_response=$(curl -4 -s -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
-                -H "Content-Type: application/json" \
-                -d "$review_body" \
-                --connect-timeout 5 \
-                --max-time "${AADS_REVIEW_MAX_TIME:-120}" 2>/dev/null) || true
+            local review_attempt=0
+            local review_max_attempts="${AADS_REVIEW_MAX_ATTEMPTS:-3}"
+            while [[ $review_attempt -lt $review_max_attempts ]]; do
+                review_attempt=$((review_attempt + 1))
+                review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff" \
+                    -H "Content-Type: application/json" \
+                    -d "$review_body" \
+                    --connect-timeout 10 \
+                    --max-time "${AADS_REVIEW_MAX_TIME:-120}" 2>/dev/null) || true
 
-            review_http_code=$(echo "$review_response" | tail -1)
-            review_response=$(echo "$review_response" | sed '$d')
+                review_http_code=$(echo "$review_response" | tail -1)
+                review_response=$(echo "$review_response" | sed '$d')
+
+                if [[ "$review_http_code" == "200" && -n "$review_response" ]]; then
+                    if [[ $review_attempt -gt 1 ]]; then
+                        log "  AI_REVIEW_TRANSPORT_RECOVERED job=$job_id attempt=${review_attempt}/${review_max_attempts}"
+                    fi
+                    break
+                fi
+
+                log "  AI_REVIEW_TRANSPORT_FAIL job=$job_id attempt=${review_attempt}/${review_max_attempts} http=${review_http_code:-000}"
+                record_runner_event "$job_id" "ai_review_transport_fail" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"attempt\":${review_attempt},\"http_code\":\"${review_http_code:-000}\"}"
+                if [[ $review_attempt -lt $review_max_attempts ]]; then
+                    sleep $((review_attempt * 15))
+                fi
+            done
 
             if [[ "$review_http_code" == "200" ]] && [[ -n "$review_response" ]]; then
                 review_verdict=$(echo "$review_response" | jq -r '.verdict // "APPROVE"')
@@ -1716,8 +1735,19 @@ ${output:0:1500}
                WHERE job_id='${job_id}';" 2>/dev/null || true
     record_runner_event "$job_id" "ai_review_result" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"verdict\":\"${review_verdict}\",\"score\":\"${review_score}\",\"flag_category\":\"${review_flag_category}\",\"needs_retry\":$([[ "$review_needs_retry" == "true" ]] && echo true || echo false)}"
 
+    # P0: 인프라 원인(리뷰 API/모델/파서 장애)과 실제 코드 반려를 구분
+    local review_infra_failure="false"
+    case "$review_flag_category" in
+        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)
+            review_infra_failure="true"
+            ;;
+    esac
+
     if [[ "$review_verdict" != "APPROVE" ]]; then
         local review_error_detail="review_failed: verdict=${review_verdict} score=${review_score}"
+        if [[ "$review_infra_failure" == "true" ]]; then
+            review_error_detail="review_infra_failed: verdict=${review_verdict} score=${review_score}"
+        fi
         [[ -n "$review_flag_category" ]] && review_error_detail="${review_error_detail} category=${review_flag_category}"
         [[ "$review_needs_retry" == "true" ]] && review_error_detail="${review_error_detail} needs_retry=true"
         log "  AI_REVIEW_FAIL_CLOSE job=$job_id ${review_error_detail}"
@@ -1728,13 +1758,22 @@ ${output:0:1500}
                    review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] 승인 대기 차단 — ${review_error_detail}',
                    completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         record_runner_event "$job_id" "job_terminal" "error" "review_failed" "$job_model" "" "$job_size" "" "{\"error_detail\":\"review_failed\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\"}"
-        post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}"
+        if [[ "$review_infra_failure" == "true" ]]; then
+            post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
+코드 반려가 아니라 리뷰 시스템 장애입니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"
+        else
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] AI 리뷰 미통과로 승인 대기 차단: $job_id — ${review_error_detail}"
+        fi
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
         if [[ -d "$worktree_dir" ]]; then
-            cd "${main_workdir:-/tmp}"
-            git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
-            log "  WORKTREE_CLEANUP: $worktree_dir"
+            if [[ "$review_infra_failure" == "true" ]]; then
+                log "  WORKTREE_PRESERVED_FOR_REREVIEW: $worktree_dir"
+            else
+                cd "${main_workdir:-/tmp}"
+                git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
+                log "  WORKTREE_CLEANUP: $worktree_dir"
+            fi
         fi
         _notify_ai "$job_id"
         promote_next_queued "$project"
@@ -1771,7 +1810,14 @@ ${output:0:1500}
 
     local diff_summary="${git_diff:0:3000}"
     local review_badge=""
-    if [[ "$review_verdict" == "APPROVE" ]]; then
+    if [[ "$review_verdict" == "APPROVE" && "$review_needs_retry" == "true" ]]; then
+        # 서버가 인프라 장애를 fail-open APPROVE로 반환한 경우 — '통과'로 표기하면 CEO 오판 유발
+        review_badge="⚠️ AI 리뷰 미수행 — 리뷰 인프라 장애로 검증 불가"
+        if [[ -n "$review_flag_category" ]]; then
+            review_badge="${review_badge} [${review_flag_category}]"
+        fi
+        review_badge="${review_badge} (score=${review_score}) / 사람 검수 필요"
+    elif [[ "$review_verdict" == "APPROVE" ]]; then
         review_badge="✅ AI 리뷰 통과 (score=${review_score})"
     elif [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
         review_badge="⚠️ AI 리뷰 수정 권고 (score=${review_score})"

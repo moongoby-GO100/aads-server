@@ -110,13 +110,16 @@ pipeline_runner_submit → pipeline_jobs INSERT
 
 `app/core/project_config.py`가 프로젝트 정규 키, 표시명, 별칭을 단일 맵으로 관리한다. `resolve_project()`는 대소문자 무시 완전일치·표시명·`[PROJECT] 표시명`을 정규 키로 변환하고, `normalize_project_label()`은 DB 저장 라벨을 정규화한다. `[SRC:CODE:app/core/project_config.py]`
 
-| 정규 키 | 주요 별칭/표시명 | 서버 |
-|---|---|---|
-| AADS | `aads`, AADS 자율개발시스템 | contabo116 |
-| KIS | `kis`, 자동매매, kis-autotrade | contabo14 |
-| GO100 | `go100`, 백억이, 백억이투자분석 | contabo14 (KIS workdir 공유) |
-| SF | `sf`, ShortFlow, 숏폼 | cafe24_114 |
-| NTV2 | `ntv2`, NewTalk, newtalk-v2 | cafe24_114 |
+운영 문서와 대시보드 서버 카드는 아래 `서버 접속명` 3개를 표준명으로 사용한다. 숫자형 레거시 명칭(`68`, `211`, `114`, `server68` 등)은 API/SSH 호환 입력으로만 허용하고, CEO 보고·운영 카드·신규 문서의 대표 표기로 쓰지 않는다. `[SRC:CODE:app/services/server_registry.py, aads-dashboard/src/app/ops/servers/page.tsx]`
+
+| 정규 키 | 주요 별칭/표시명 | 서버 접속명 | IP | SSH 포트 |
+|---|---|---|---|---:|
+| AADS | `aads`, AADS 자율개발시스템 | `contabo116` | `5.104.86.116` | 22 |
+| KIS | `kis`, 자동매매, kis-autotrade | `contabo14` | `5.104.86.14` | 22 |
+| GO100 | `go100`, 백억이, 백억이투자분석 | `contabo14` (KIS workdir 공유) | `5.104.86.14` | 22 |
+| SF | `sf`, ShortFlow, 숏폼 | `cafe24_114` | `114.207.244.86` | 7916 |
+| NTV2 | `ntv2`, NewTalk, newtalk-v2 | `cafe24_114` | `114.207.244.86` | 7916 |
+| NAS | `nas`, 이미지처리 | `cafe24_114` | `114.207.244.86` | 7916 |
 
 실행 대상이 아닌 표시 전용 프로젝트(FOOD, NAS, CEO, WORK 등)는 별도 집합으로 구분한다. `[SRC:CODE:app/core/project_config.py]`
 

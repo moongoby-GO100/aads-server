@@ -1187,3 +1187,6 @@ path = '/root/aads/aads-dashboard/src/components/chat/Sid
 
 ## [2026-08-30 20:02:14 KST] [aads-dashboard] src/hooks/useChatSSE.ts
 - Chat-Direct 수정: run_remote_command: cd /root/aads/aads-server && git pull --rebase origin main 2>&1 | tail -10
+
+## [2026-08-31 15:50:49 KST] [aads-dashboard] src/app/ops/servers/page.tsx
+- Chat-Direct 수정: run_remote_command: docker logs --since 2026-08-31T06:40:00 aads-litellm
