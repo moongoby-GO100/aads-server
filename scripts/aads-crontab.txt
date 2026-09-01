@@ -27,8 +27,9 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin
 # Claude 전서버 업데이트 — 매일 04:00
 0 4 * * * /root/aads/aads-server/scripts/update_claude_all_servers.sh >> /var/log/claude_update.log 2>&1
 
-# Docker 빌드캐시 주간 정리 (일요일 04:00)
-0 4 * * 0 docker system prune -f >> /var/log/docker_disk_cleanup.log 2>&1
+# Docker 빌드캐시/과거 이미지 주간 정리 (일요일 04:00)
+# daily cleanup과 같은 안전 정책을 사용한다: active image/volume 보존, AADS 과거 태그만 선별 정리.
+0 4 * * 0 /root/aads/scripts/disk_cleanup.sh >> /var/log/docker_disk_cleanup.log 2>&1
 
 # Docker 디스크 사용량 월간 모니터 (매월 1일 05:00)
 0 5 1 * * docker system df >> /var/log/docker_disk_cleanup.log 2>&1

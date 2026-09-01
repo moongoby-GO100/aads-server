@@ -92,6 +92,8 @@ services:
     container_name: aads-server
     restart: always
     stop_grace_period: 30s
+    mem_limit: 3g
+    memswap_limit: 5g
     ports:
       # Host-only API port. Public traffic must enter through nginx :443.
       - "127.0.0.1:8100:8080"
@@ -182,6 +184,8 @@ services:
     container_name: aads-server-green
     restart: unless-stopped
     stop_grace_period: 30s
+    mem_limit: 3g
+    memswap_limit: 5g
     ports:
       # Host-only API port. Public traffic must enter through nginx :443.
       - "127.0.0.1:8102:8080"

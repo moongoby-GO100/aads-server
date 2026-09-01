@@ -9770,3 +9770,21 @@
   - Both slots `/health/live` returned 200 in 13-49 ms.
   - Public relay-capacity returned 200 in 0.61 seconds after transient build I/O subsided.
   - No relay acquisition timeout was observed after the 15-slot activation.
+
+## 2026-09-02 08:08 KST - contabo116 OOM and Docker disk maintenance hardening
+
+- Request:
+  - Apply the next-step actions from the contabo116 OOM/disk report and report the result.
+- Runtime state before the change:
+  - Both API slots already had Docker runtime memory/swap limits of 3 GiB / 5 GiB and were healthy with restart count 0.
+  - Host crontab already used `/root/aads/scripts/disk_cleanup.sh` for daily and weekly Docker cleanup.
+- Code/config change:
+  - `docker-compose.prod.yml`: added explicit `mem_limit: 3g` and `memswap_limit: 5g` to both `aads-server` and `aads-server-green`, so future Compose recreations preserve the runtime OOM guard even on non-Swarm Compose paths.
+  - `scripts/aads-crontab.txt`: kept the safe weekly Docker cleanup policy that delegates to `/root/aads/scripts/disk_cleanup.sh`, matching the installed crontab.
+- Verification:
+  - `bash -n deploy.sh` passed.
+  - `docker compose -f docker-compose.prod.yml config --quiet` passed.
+  - `diff -u <(crontab -l) scripts/aads-crontab.txt` passed, confirming the tracked crontab mirror matches the installed crontab.
+  - `docker inspect` confirmed both running API containers still have `Memory=3221225472`, `MemorySwap=5368709120`, `Health=healthy`, `RestartCount=0`.
+- Deployment:
+  - Runtime recreation is not required for the memory limit because the live containers already have the intended 3 GiB / 5 GiB limits. A future Blue/Green release will now preserve the same limits from source-controlled prod Compose.
