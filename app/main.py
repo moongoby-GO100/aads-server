@@ -57,6 +57,7 @@ from app.api.credential_vault import router as credential_vault_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.llm_models import router as llm_models_router
 from app.api.user_api_keys import router as user_api_keys_router
+from app.api.user_project_servers import router as user_project_servers_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.api.files import router as files_router
@@ -3180,6 +3181,7 @@ app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"
 app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
 app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(user_api_keys_router)
+app.include_router(user_project_servers_router)
 app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 app.include_router(files_router, prefix="/api/v1", tags=["files"])
