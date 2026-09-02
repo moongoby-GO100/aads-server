@@ -39,7 +39,7 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 ).strip() or "aads"
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
-_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "3")))
+_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5")))
 _execution_owner_epochs: Dict[str, int] = {}
 
 _RESUME_FAIL_SUFFIX = "⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
@@ -785,6 +785,7 @@ def _is_resume_retryable(error: BaseException) -> bool:
         or any(token in err_text for token in (
             "429", "rate", "overloaded", "529", "quota", "timeout", "502", "503", "504",
             "codex_relay_busy", "relay_semaphore_timeout",
+            "connection closed", "connection reset", "connectionreset",
         ))
     )
 
@@ -2273,18 +2274,28 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
     clean = _strip_streaming_progress_markers(text or "").strip()
     if not clean:
         return True
+    # 충분한 길이 + 완료 신호가 있으면 진행형 꼬리가 있어도 완료로 인정
+    _COMPLETION_SIGNALS = (
+        "최종 보고", "최종 결과", "결과 보고", "완료 보고",
+        "수행 내역", "현재 작업은 완료", "작업 완료",
+        "미완료/주의", "다음 단계", "→ 다음",
+        "커밋 완료", "배포 완료", "푸시 완료",
+        "현재 작업은 완료되었습니다",
+    )
+    if len(clean) > 400 and any(sig in clean for sig in _COMPLETION_SIGNALS):
+        return False
     tail = clean[-600:]
     progress_tail = re.search(
         r"(?:이제|먼저|다음으로|추가로|바로|곧|현재)?\s*.{0,120}"
         r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비|로드|읽겠|읽|찾|호출|우회|대조|비교|캡처|접속|연결|재시도|보고|정리)"
-        r"(?:하겠습니다|합니다|하겠습니|하겠|중입니다)\.?\s*$",
+        r"(?:하겠습니다|하겠습니|하겠|중입니다)\.?\s*$",
         tail,
     )
     if progress_tail:
         return True
     if re.search(
         r"(?:확인|조회|점검|분석|파악|조사|검토|진행|실행|처리|수정|패치|적용|반영|준비|빌드|배포|기다리)"
-        r"\s*(?:하겠습니다|합니다|중입니다)\.?\s+.{1,80}$",
+        r"\s*(?:하겠습니다|중입니다)\.?\s+.{1,80}$",
         tail,
     ):
         return True
@@ -4670,7 +4681,8 @@ async def with_background_completion(
 
                 if assistant_row and clean_content:
                     assistant_message_id = assistant_row["id"]
-                    if _looks_like_incomplete_progress_tail(clean_content):
+                    _guard_saw_done = bool(state.get("saw_done_event"))
+                    if not _guard_saw_done and _looks_like_incomplete_progress_tail(clean_content):
                         reason = _stream_interrupt_diagnostic_reason(
                             "completion_guard_incomplete_progress_tail",
                             state,
@@ -4726,7 +4738,8 @@ async def with_background_completion(
                         assistant_message_id,
                     )
                 elif clean_content:
-                    if _looks_like_incomplete_progress_tail(clean_content):
+                    _guard_saw_done2 = bool(state.get("saw_done_event"))
+                    if not _guard_saw_done2 and _looks_like_incomplete_progress_tail(clean_content):
                         reason = _stream_interrupt_diagnostic_reason(
                             "completion_guard_incomplete_progress_tail",
                             state,
@@ -4978,7 +4991,7 @@ async def with_background_completion(
                 not isinstance(e, (_heartbeat_asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit))
                 and (
                     "ratelimit" in type(e).__name__.lower()
-                    or any(k in _err_str for k in ("429", "rate", "overloaded", "529", "quota", "timeout", "502", "503"))
+                    or any(k in _err_str for k in ("429", "rate", "overloaded", "529", "quota", "timeout", "502", "503", "connection closed", "connection reset"))
                 )
             )
             if _is_retryable:
