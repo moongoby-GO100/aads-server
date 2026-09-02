@@ -5037,6 +5037,12 @@ async def with_background_completion(
                                     except (json.JSONDecodeError, ValueError):
                                         pass
                             if _fb_ok:
+                                state["fallback_info"] = {
+                                    "from": _original_model,
+                                    "to": _fb_model,
+                                    "reason": "429_rate_limit",
+                                    "retry_count": _max_retries,
+                                }
                                 await _save_and_update_session(
                                     uuid.UUID(session_id),
                                     state.get("content", "").strip(),
@@ -5046,6 +5052,7 @@ async def with_background_completion(
                                     tokens_in=_fb_tokens_in,
                                     tokens_out=_fb_tokens_out,
                                     tools_called=state.get("tool_events", []),
+                                    fallback_info=state.get("fallback_info"),
                                 )
                                 state["saw_done_event"] = True
                                 _retried = True
@@ -8314,6 +8321,7 @@ async def _save_and_update_session(
     parent_artifact_id: Optional[uuid.UUID] = None,
     edit_intent: bool = False,
     notify_user_id: Optional[str] = None,
+    fallback_info: Optional[dict] = None,
 ) -> None:
     """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
     BUG-FIX: placeholder가 있으면 UPDATE로 전환 (DELETE+INSERT gap 제거).
@@ -8595,6 +8603,7 @@ async def _save_and_update_session(
                     _assistant_msg_id,
                     reason="final_save_completed",
                 )
+                _fallback_chain_json = json.dumps(fallback_info) if fallback_info else None
                 await conn.execute(
                     """
                     UPDATE chat_turn_executions
@@ -8604,6 +8613,7 @@ async def _save_and_update_session(
                         END,
                         requested_model = COALESCE($3, requested_model),
                         actual_model = COALESCE($4, actual_model, requested_model, 'unknown'),
+                        fallback_chain = COALESCE($7::jsonb, fallback_chain),
                         status = 'completed',
                         error_message = NULL,
                         completed_at = NOW(),
@@ -8622,6 +8632,7 @@ async def _save_and_update_session(
                     actual_model or model_used or None,
                     _EXECUTION_OWNER_INSTANCE,
                     int(_exec_epoch or 0),
+                    _fallback_chain_json,
                 )
                 await conn.execute(
                     """
@@ -11953,7 +11964,8 @@ async def send_message_stream(
             _confidence_label = "mixed"
         else:
             _confidence_label = None  # 도구 사용했지만 DB 아닌 경우 (웹검색 등) — 레이블 미표시
-        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'duration_sec': _final_response_duration_sec, 'duration_ms': int(round(_final_response_duration_sec * 1000)), 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
+        _fb_info = state.get("fallback_info") if isinstance(state, dict) else None
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'requested_model': (model_override or None) if model_override and model_override != model_used else None, 'fallback_reason': (_fb_info or {}).get('reason') if _fb_info else None, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'duration_sec': _final_response_duration_sec, 'duration_ms': int(round(_final_response_duration_sec * 1000)), 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
         # ContextVar set/reset이 async generator/Task 경계에서 분리되면 ValueError 발생.
