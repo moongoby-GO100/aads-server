@@ -1621,6 +1621,9 @@ def test_shinhan_idpw_login_reports_success_marker_and_elapsed_time(monkeypatch)
 
     async def evaluate(expr, *args, **kwargs):
         assert "loggedInMarker" in expr
+        assert "fincert" in expr
+        assert "yeskey" in expr
+        assert "빠른조회|조회기간" not in expr
         payload = args[0]
         assert payload["username"] == "bank-user"
         return {

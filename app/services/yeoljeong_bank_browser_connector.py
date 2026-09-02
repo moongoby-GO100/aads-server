@@ -1964,11 +1964,19 @@ async def _try_shinhan_individual_login_step(
 		              const loggedInMarker = () => {
 		                const currentText = authText();
 		                const currentUrl = authUrl();
-		                if (!/이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText)
-		                  && /로그아웃|조회기간|계좌조회|거래내역|출금가능|잔액|빠른조회/i.test(currentText)) {
+		                const hasFinancialCertificate = !!Array.from(document.querySelectorAll('iframe')).find((frame) => {
+		                  const src = String(frame.src || '').toLowerCase();
+		                  return src.includes('fincert') || src.includes('yeskey');
+		                });
+		                if (hasFinancialCertificate) return '';
+		                const stillLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText);
+		                if (/로그아웃/i.test(currentText)) {
 		                  return 'post_login_text';
 		                }
-		                if (/#210101|acct|inq|조회/.test(currentUrl) && !/login/i.test(currentUrl)) {
+		                if (!stillLoginPanel && /조회기간|계좌조회|거래내역|출금가능|잔액/i.test(currentText)) {
+		                  return 'post_login_text';
+		                }
+		                if (/#210101|acct|inq|조회/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
 		                  return 'post_login_url';
 		                }
 		                return '';
