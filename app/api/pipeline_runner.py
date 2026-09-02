@@ -1650,6 +1650,107 @@ async def approve_or_reject(
     return {"job_id": job_id, "action": req.action, "message": f"작업이 {action_kr}"}
 
 
+@router.post("/pipeline/jobs/{job_id}/retry-review", tags=["pipeline-runner"])
+async def retry_review(
+    job_id: str,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """review_hold 상태인 작업을 재검수. 통과 시 awaiting_approval로 전이."""
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
+
+    from app.core.db_pool import get_pool
+    from app.services.code_reviewer import review_code_diff
+
+    pool = get_pool()
+    tenant_id = _tenant_id(context)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT job_id, project, status, git_diff, instruction,
+                   chat_session_id, review_flag_category, error_detail
+            FROM pipeline_jobs
+            WHERE job_id = $1 AND tenant_id = $2::uuid
+            """,
+            job_id,
+            tenant_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+        if row["status"] != "review_hold":
+            raise HTTPException(
+                status_code=400,
+                detail=f"review_hold 상태가 아닙니다 (현재: {row['status']})",
+            )
+
+        git_diff = row["git_diff"] or ""
+        if not git_diff.strip():
+            raise HTTPException(status_code=409, detail="재검수 차단: 저장된 git diff가 없습니다")
+
+        verdict = await review_code_diff(
+            project=row["project"],
+            job_id=job_id,
+            diff=git_diff,
+            instruction=row["instruction"] or "",
+        )
+
+        if verdict.verdict == "APPROVE":
+            await conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET status = 'awaiting_approval',
+                    phase = 'awaiting_approval',
+                    review_verdict = $2,
+                    review_score = $3,
+                    review_flag_category = NULL,
+                    review_needs_retry = FALSE,
+                    review_feedback = COALESCE(review_feedback, '') || E'\n[재검수] PASS — ' || $4,
+                    error_detail = NULL,
+                    updated_at = NOW()
+                WHERE job_id = $1
+                """,
+                job_id,
+                verdict.verdict,
+                verdict.score,
+                verdict.feedback.get("summary", "재검수 통과"),
+            )
+            return {
+                "job_id": job_id,
+                "result": "approved",
+                "verdict": verdict.verdict,
+                "score": verdict.score,
+                "message": "재검수 통과 — awaiting_approval 전이 완료",
+            }
+        else:
+            category = verdict.flag_category or "UNKNOWN"
+            summary = verdict.feedback.get("summary", "재검수 실패")
+            await conn.execute(
+                """
+                UPDATE pipeline_jobs
+                SET review_verdict = $2,
+                    review_score = $3,
+                    review_flag_category = $4,
+                    review_feedback = COALESCE(review_feedback, '') || E'\n[재검수 재실패] ' || $5,
+                    updated_at = NOW()
+                WHERE job_id = $1
+                """,
+                job_id,
+                verdict.verdict,
+                verdict.score,
+                category,
+                f"{verdict.verdict} (score={verdict.score}) — {summary}",
+            )
+            return {
+                "job_id": job_id,
+                "result": "still_held",
+                "verdict": verdict.verdict,
+                "score": verdict.score,
+                "flag_category": category,
+                "message": f"재검수 미통과 — review_hold 유지 ({category})",
+            }
+
+
 # ─── AADS-211: 배치 제출 — 복수 작업을 의존성 그래프로 한번에 제출 ────────────
 
 class BatchJobItem(BaseModel):
