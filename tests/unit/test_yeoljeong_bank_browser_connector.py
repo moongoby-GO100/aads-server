@@ -1679,7 +1679,32 @@ def test_shinhan_flow_stage_logs_are_secret_free_and_granular():
     ]
     assert all(item["status"] == "success" for item in logs)
     assert all("elapsed_ms" in item for item in logs)
+    assert all("recorded_at" in item for item in logs)
     assert "bank-pass" not in str(logs)
+
+
+def test_browser_collection_audit_redacts_secret_stage_fields():
+    logs = []
+
+    entry = connector.append_site_stage_log(
+        logs,
+        stage="portal_login",
+        status="failed",
+        started_at=connector.time.monotonic(),
+        error_code="TIMEOUT",
+        reason="login_form_wait_timeout",
+        password="bank-pass",
+        account_no="110123456789",
+        success_condition="form_visible",
+        timeout_ms=45000,
+    )
+
+    assert entry["password"] == "[REDACTED]"
+    assert entry["account_no"] == "[REDACTED]"
+    assert entry["success_condition"] == "form_visible"
+    assert entry["timeout_ms"] == "45000"
+    assert "bank-pass" not in str(logs)
+    assert "110123456789" not in str(logs)
 
 
 def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():

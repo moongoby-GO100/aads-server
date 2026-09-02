@@ -1768,6 +1768,7 @@ def test_drain_global_queue_claims_and_completes(monkeypatch):
     assert result["claimed"] is True
     assert result["status"] == "succeeded"
     assert completed[0][0] == "queue-1"
+    assert completed[0][1]["status"] == "succeeded"
 
 
 def test_drain_bank_queue_cancels_non_collectable_account_before_browser(monkeypatch):

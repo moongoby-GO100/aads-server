@@ -31,6 +31,7 @@ from urllib.parse import urlparse
 
 try:
     from app.services.auth_challenge_orchestrator import classify_portal_state
+    from app.services.browser_collection_audit import SITE_STAGE_LOG_SCHEMA, append_site_stage_log
 except Exception:  # pragma: no cover - keeps standalone unit loading dependency-light
     _AUTH_SPEC = importlib.util.spec_from_file_location(
         "auth_challenge_orchestrator",
@@ -41,6 +42,16 @@ except Exception:  # pragma: no cover - keeps standalone unit loading dependency
     sys.modules[_AUTH_SPEC.name] = _AUTH_MODULE
     _AUTH_SPEC.loader.exec_module(_AUTH_MODULE)
     classify_portal_state = _AUTH_MODULE.classify_portal_state
+    _AUDIT_SPEC = importlib.util.spec_from_file_location(
+        "browser_collection_audit",
+        Path(__file__).with_name("browser_collection_audit.py"),
+    )
+    _AUDIT_MODULE = importlib.util.module_from_spec(_AUDIT_SPEC)
+    assert _AUDIT_SPEC and _AUDIT_SPEC.loader
+    sys.modules[_AUDIT_SPEC.name] = _AUDIT_MODULE
+    _AUDIT_SPEC.loader.exec_module(_AUDIT_MODULE)
+    SITE_STAGE_LOG_SCHEMA = _AUDIT_MODULE.SITE_STAGE_LOG_SCHEMA
+    append_site_stage_log = _AUDIT_MODULE.append_site_stage_log
 
 
 logger = logging.getLogger(__name__)
@@ -101,30 +112,16 @@ def _append_shinhan_stage_log(
     **fields: Any,
 ) -> None:
     """Append a secret-free Shinhan collection stage audit entry."""
-    elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
-    entry: dict[str, str] = {
-        "stage": str(stage or "unknown")[:80],
-        "status": str(status or "unknown")[:40],
-        "elapsed_ms": str(elapsed_ms),
-    }
-    if error_code:
-        entry["error_code"] = str(error_code)[:120]
-    if reason:
-        entry["reason"] = str(reason)[:160]
-    for key, value in fields.items():
-        if value is None:
-            continue
-        text = str(value)
-        if text:
-            entry[str(key)[:60]] = text[:160]
-    stage_logs.append(entry)
-    logger.info(
-        "shinhan_bank_collection_stage stage=%s status=%s elapsed_ms=%s error_code=%s reason=%s",
-        entry["stage"],
-        entry["status"],
-        entry["elapsed_ms"],
-        entry.get("error_code", ""),
-        entry.get("reason", ""),
+    append_site_stage_log(
+        stage_logs,
+        stage=stage,
+        status=status,
+        started_at=started_at,
+        logger=logger,
+        event_name="shinhan_bank_collection_stage",
+        error_code=error_code,
+        reason=reason,
+        **fields,
     )
 
 
@@ -3407,9 +3404,7 @@ async def collect_bank_via_browser_session_async(
     shinhan_stage_logs: list[dict[str, str]] = []
     if shinhan_service:
         safe_diagnostics["shinhan_stage_logs"] = shinhan_stage_logs
-        safe_diagnostics["shinhan_stage_log_schema"] = (
-            "stage,status,elapsed_ms,error_code,reason,attempt_index,success_condition,failure_condition"
-        )
+        safe_diagnostics["shinhan_stage_log_schema"] = SITE_STAGE_LOG_SCHEMA
 
     session_id_to_use = browser_session_id.strip() if browser_session_id else ""
     auto_opened_session = False
