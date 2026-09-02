@@ -6,9 +6,12 @@ stage log schema without pulling in Browser Bridge internals.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 SITE_STAGE_LOG_SCHEMA = (
@@ -84,6 +87,7 @@ def append_site_stage_log(
         if safe_value:
             entry[safe_key] = safe_value
     stage_logs.append(entry)
+    _append_stage_log_file(event_name, entry)
     if logger is not None:
         logger.info(
             "%s stage=%s status=%s elapsed_ms=%s error_code=%s reason=%s",
@@ -95,3 +99,18 @@ def append_site_stage_log(
             entry.get("reason", ""),
         )
     return entry
+
+
+def _append_stage_log_file(event_name: str, entry: dict[str, str]) -> None:
+    path = str(os.getenv("AADS_BROWSER_STAGE_LOG_PATH") or "").strip()
+    if not path:
+        return
+    try:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"event": _safe_stage_text(event_name, limit=80), **entry}
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
+            logging.getLogger(__name__).debug("browser_stage_log_file_write_failed", exc_info=True)

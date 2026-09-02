@@ -1711,6 +1711,32 @@ def test_browser_collection_audit_redacts_secret_stage_fields():
     assert "110123456789" not in str(logs)
 
 
+def test_browser_collection_audit_writes_secret_free_jsonl(tmp_path, monkeypatch):
+    log_path = tmp_path / "browser_stage_logs.jsonl"
+    monkeypatch.setenv("AADS_BROWSER_STAGE_LOG_PATH", str(log_path))
+    logs = []
+
+    entry = connector.append_site_stage_log(
+        logs,
+        stage="shinhan_login_submit",
+        status="failed",
+        started_at=connector.time.monotonic(),
+        event_name="shinhan_bank_collection_stage",
+        error_code="COMMAND_TIMEOUT",
+        password="bank-pass",
+        account_no="110123456789",
+        success_condition="login_button_clicked",
+    )
+
+    raw = log_path.read_text(encoding="utf-8")
+    assert "shinhan_bank_collection_stage" in raw
+    assert "bank-pass" not in raw
+    assert "110123456789" not in raw
+    assert '"password": "[REDACTED]"' in raw
+    assert '"account_no": "[REDACTED]"' in raw
+    assert entry["error_code"] == "COMMAND_TIMEOUT"
+
+
 def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
     page = AsyncMock()
     page.click = AsyncMock()

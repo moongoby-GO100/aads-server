@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-09-03 08:53 KST - FOOD Shinhan page-step audit checkpoint logging
+
+- Request:
+  - Report the Shinhan auto-collection pages/buttons and verify site access, simple-query access, security-program popup handling, ID/PW input, login button click, elapsed time, and success conditions.
+  - Clean up the current dedicated PC browser first and keep logging detailed page-step outcomes.
+- Runtime evidence:
+  - Dedicated Agent `7f99c528-24d` / `DESKTOP-ICU55HK` was online at 08:43-08:51 KST.
+  - PC cleanup closed the stale managed browser session; Windows Chrome/Edge process check after cleanup returned no remaining Chrome/Edge rows.
+  - A direct Mia Shinhan-only run was executed for account `a7354484-aafe-4bcf-a865-0c0330e01574`, date window `2026-09-01` to `2026-09-03`, Agent `7f99c528-24d`.
+  - Result: `ATTEMPT_TIMEOUT` after 220 seconds, `imported_rows=0`, `collected_rows=0`.
+  - Post-run PC tab/text check confirmed the browser reached `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`, title `간편조회서비스 | 신한은행 개인뱅킹`.
+  - The page text still showed `이용자ID를 입력해주세요` and `인터넷뱅킹 보안프로그램설치안내`, so login success was not confirmed.
+- Code change:
+  - `app/services/browser_collection_audit.py`: stage entries can now be appended to a secret-safe JSONL checkpoint file via `AADS_BROWSER_STAGE_LOG_PATH`. This prevents complete stage loss when the parent collection attempt times out.
+  - `scripts/yeoljeong_auto_collect.py`: auto-collection now defaults that path to `app/data/yeoljeong_finance/browser_collection_stage_logs.jsonl`.
+- Verification:
+  - `python3 -m py_compile app/services/browser_collection_audit.py app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py::test_browser_collection_audit_redacts_secret_stage_fields tests/unit/test_yeoljeong_bank_browser_connector.py::test_browser_collection_audit_writes_secret_free_jsonl tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_idpw_login_reports_success_marker_and_elapsed_time tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_flow_stage_logs_are_secret_free_and_granular tests/unit/test_yeoljeong_auto_collect.py::test_drain_bank_queue_cancels_non_collectable_account_before_browser` passed 5/5.
+- Next:
+  - Commit/push this checkpoint logging patch, deploy with blue-green, then re-run Mia Shinhan-only collection and inspect `browser_collection_stage_logs.jsonl` for per-stage elapsed times even if the attempt times out.
+
 ## 2026-09-03 08:11 KST - FOOD browser collection global stage audit follow-up
 
 - Request:
