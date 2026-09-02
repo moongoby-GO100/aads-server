@@ -1190,3 +1190,73 @@ path = '/root/aads/aads-dashboard/src/components/chat/Sid
 
 ## [2026-08-31 15:50:49 KST] [aads-dashboard] src/app/ops/servers/page.tsx
 - Chat-Direct 수정: run_remote_command: docker logs --since 2026-08-31T06:40:00 aads-litellm
+
+## [2026-09-02 09:55:47 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/ops/page.tsx
+- Chat-Direct 수정: patch: function statusColor(status: string): st→function statusColor(status: string): st
+
+## [2026-09-02 09:56:06 KST] [aads-dashboard] src/app/ops/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/case "requeued": return "#f97316";/case "requeued": return "#f97316";\
+
+## [2026-09-02 10:04:38 KST] [aads-dashboard] ../aads-dashboard/src/services/chatApi.ts
+- Chat-Direct 수정: patch:   confidence_label?: "db_realtime" | "ai→  confidence_label?: "db_realtime" | "ai
+
+## [2026-09-02 10:04:38 KST] [aads-dashboard] ../aads-dashboard/src/components/chat/ChatBubble.tsx
+- Chat-Direct 수정: patch:             {message.model_used && <span→            {message.model_used && <span
+
+## [2026-09-02 10:08:46 KST] [aads-dashboard] src/app/chat/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/_patch_dashboard_fallback.py
+
+## [2026-09-02 10:08:46 KST] [aads-dashboard] src/components/chat/ChatBubble.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/_patch_dashboard_fallback.py
+
+## [2026-09-02 10:08:46 KST] [aads-dashboard] src/services/chatApi.ts
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/_patch_dashboard_fallback.py
+
+## [2026-09-02 16:13:17 KST] [aads-dashboard] src/components/Sidebar.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_sidebar_llm_report.py
+
+## [2026-09-02 16:54:37 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: cat /root/aads/aads-dashboard/src/app/login/page.tsx
+
+## [2026-09-02 16:56:05 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/login/page.tsx
+- Chat-Direct 수정: patch:   const [email, setEmail] = useState("")→  const [email, setEmail] = useState(sea
+
+## [2026-09-02 16:56:10 KST] [aads-dashboard] /root/aads/aads-dashboard/src/app/admin/users/page.tsx
+- Chat-Direct 수정: patch:                     <tr key={user.user_i→                    <tr key={user.user_i
+
+## [2026-09-02 16:57:06 KST] [aads-dashboard] src/app/login/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's/\[email, setEmail\] = useState("")/[email, setEmail] = useState(search
+
+## [2026-09-02 17:01:56 KST] [aads-dashboard] src/app/admin/users/page.tsx
+- Chat-Direct 수정: run_remote_command: sed -i 's|{user\.email}</div>|{user.email} <a href={`/login?email=${encodeURICom
+
+## [2026-09-02 17:09:27 KST] [aads-dashboard] public/reports/llm-models-current.html
+- Chat-Direct 수정: run_remote_command: ssh -o ConnectTimeout=5 partner@5.104.85.244 "cat /srv/biseo/회계비서/회계비서/규칙/_목차.md
+
+## [2026-09-02 18:07:50 KST] [aads-dashboard] HANDOVER.md
+- Chat-Direct 수정: run_remote_command: ssh partner@5.104.85.244 "git -C /srv/biseo/회계비서/회계비서 -c safe.directory=/srv/bis
+
+## [2026-09-02 18:16:14 KST] [aads-dashboard] /root/aads/aads-dashboard/src/lib/api.ts
+- Chat-Direct 수정: patch:   getAdminUsersOverview: (params?: { day→  adminImpersonate: (userId: string) =>
+
+
+## [2026-09-02 18:17:22 KST] [aads-dashboard] public/reports/ACCT_next_steps_20260902.html
+- Chat-Direct 수정: run_remote_command: cp /root/aads/aads-server/app/static/reports/ACCT_next_steps_20260902.html /root
+
+## [2026-09-02 18:18:42 KST] [aads-dashboard] src/app/admin/users/page.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "location" /etc/nginx/conf.d/aads.conf
+
+## [2026-09-02 18:18:42 KST] [aads-dashboard] src/app/impersonate/page.tsx
+- Chat-Direct 수정: run_remote_command: grep -n "location" /etc/nginx/conf.d/aads.conf
+
+## [2026-09-02 18:18:42 KST] [aads-dashboard] src/lib/api.ts
+- Chat-Direct 수정: run_remote_command: grep -n "location" /etc/nginx/conf.d/aads.conf
+
+## [2026-09-02 18:18:42 KST] [aads-dashboard] src/app/admin/users/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_dashboard_impersonate.py
+
+## [2026-09-02 18:18:42 KST] [aads-dashboard] src/app/impersonate/page.tsx
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_dashboard_impersonate.py
+
+## [2026-09-02 18:18:42 KST] [aads-dashboard] src/lib/api.ts
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/patch_dashboard_impersonate.py

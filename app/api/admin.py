@@ -27,6 +27,7 @@ _TASK_BOARD_STATUSES = {
     "build_fail",
     "deploy_failed",
     "review_failed",
+    "review_hold",
     "auth_unavailable",
     "auth_recovery_pending",
     "awaiting_user_auth",
@@ -40,6 +41,7 @@ _TASK_BOARD_STATUS_SQL = (
     "WHEN phase = 'blocked_dependency' OR error_detail LIKE 'blocked_dependency%' THEN 'blocked_dependency' "
     "WHEN phase = 'build_fail' OR error_detail LIKE 'build_fail%' THEN 'build_fail' "
     "WHEN phase = 'deploy_failed' OR error_detail LIKE 'deploy_failed%' THEN 'deploy_failed' "
+    "WHEN phase = 'review_hold' OR error_detail LIKE 'review_infra_failed%' THEN 'review_hold' "
     "WHEN phase = 'review_failed' OR error_detail LIKE 'review_failed%' THEN 'review_failed' "
     "WHEN phase = 'auth_unavailable' OR error_detail LIKE 'auth_unavailable%' THEN 'auth_unavailable' "
     "WHEN phase = 'tool_timeout' OR error_detail LIKE 'tool_timeout%' THEN 'tool_timeout' "
@@ -2121,6 +2123,7 @@ async def get_admin_task_stats():
                 COUNT(*) FILTER (WHERE board_status = 'build_fail') AS build_fail,
                 COUNT(*) FILTER (WHERE board_status = 'deploy_failed') AS deploy_failed,
                 COUNT(*) FILTER (WHERE board_status = 'review_failed') AS review_failed,
+                COUNT(*) FILTER (WHERE board_status = 'review_hold') AS review_hold,
                 COUNT(*) FILTER (WHERE board_status = 'auth_unavailable') AS auth_unavailable,
                 COUNT(*) FILTER (WHERE board_status = 'auth_recovery_pending') AS auth_recovery_pending,
                 COUNT(*) FILTER (WHERE board_status = 'awaiting_user_auth') AS awaiting_user_auth,
@@ -2142,6 +2145,7 @@ async def get_admin_task_stats():
         "build_fail": row["build_fail"] or 0,
         "deploy_failed": row["deploy_failed"] or 0,
         "review_failed": row["review_failed"] or 0,
+        "review_hold": row["review_hold"] or 0,
         "auth_unavailable": row["auth_unavailable"] or 0,
         "auth_recovery_pending": row["auth_recovery_pending"] or 0,
         "awaiting_user_auth": row["awaiting_user_auth"] or 0,

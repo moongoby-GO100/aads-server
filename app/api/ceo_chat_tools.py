@@ -5965,7 +5965,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         classified = {
             "no_changes", "dedup_blocked", "blocked_dependency",
             "build_fail", "deploy_failed", "review_failed",
-            "auth_unavailable", "tool_timeout",
+            "review_hold", "auth_unavailable", "tool_timeout",
         }
         for r in pc_rows:
             phase = r["phase"] or ""

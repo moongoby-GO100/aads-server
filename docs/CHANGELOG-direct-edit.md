@@ -5900,3 +5900,274 @@ f='/root/aads/aads-server/tests/unit/test_tools_and_pipel
 - Chat-Direct 수정: patch:     assert "'max_retries'" in script
    →    assert "'max_retries'" in script
    
+
+## [2026-09-02 08:40:48 KST] [aads-server] docs/CHANGELOG-go100-direct.md
+- Chat-Direct 수정: run_remote_command: grep -rln "pipeline-runner.sh" /root/aads/aads-server/scripts/*.sh /root/aads/aa
+
+## [2026-09-02 08:46:20 KST] [aads-server] tests/unit/test_pipeline_runner_script_guards.py
+- Chat-Direct 수정: patch:     assert "'max_retries'" in script
+   →    assert "'max_retries'" in script
+   
+
+## [2026-09-02 08:47:56 KST] [aads-server] scripts/_append_review_infra_tests.py
+- Chat-Direct 수정: write: scripts/_append_review_infra_tests.py
+
+## [2026-09-02 08:48:04 KST] [aads-server] tests/unit/test_pipeline_runner_script_guards.py
+- Chat-Direct 수정: run_remote_command: python3 /root/aads/aads-server/scripts/_append_review_infra_tests.py
+
+## [2026-09-02 09:24:30 KST] [aads-server] card_trades_router.remote.py
+- Chat-Direct 수정: run_remote_command: find /root/aads/aads-server/app -name "model_selector.py" -type f
+
+## [2026-09-02 09:25:09 KST] [aads-server] app/api/admin.py
+- Chat-Direct 수정: run_remote_command: grep -n "_ANTHROPIC_MODEL_ID\|_ANTHROPIC_FAMILY_ALIASES" /root/aads/aads-server/
+
+## [2026-09-02 09:25:10 KST] [aads-server] migrations/139_pipeline_runner_telemetry.sql
+- Chat-Direct 수정: run_remote_command: grep -n "_ANTHROPIC_MODEL_ID\|_ANTHROPIC_FAMILY_ALIASES" /root/aads/aads-server/
+
+## [2026-09-02 09:44:13 KST] [aads-server] tests/unit/test_pipeline_runner_script_guards.py
+- Chat-Direct 수정: patch:         fail_close = script.index("AI_RE→        fail_hold = script.index("AI_REV
+
+## [2026-09-02 09:44:17 KST] [aads-server] tests/unit/test_pipeline_runner_script_guards.py
+- Chat-Direct 수정: patch:     assert "AI_REVIEW_FAIL_CLOSE" in scr→    assert "AI_REVIEW_HOLD" in script
+
+## [2026-09-02 09:56:06 KST] [aads-server] scripts/pipeline-runner.sh
+- Chat-Direct 수정: patch:         local review_error_detail="revie→        local review_error_detail="revie
+
+## [2026-09-02 09:57:39 KST] [aads-server] app/api/pipeline_runner.py
+- Chat-Direct 수정: patch:     return {"job_id": job_id, "action": →    return {"job_id": job_id, "action": 
+
+## [2026-09-02 10:02:25 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     edit_intent: bool = False,
+    notif→    edit_intent: bool = False,
+    notif
+
+## [2026-09-02 10:03:45 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 await conn.execute(
+    →                _fallback_chain_json = j
+
+## [2026-09-02 10:05:57 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                             if _fb_ok:
+ →                            if _fb_ok:
+ 
+
+## [2026-09-02 10:07:09 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         yield f"data: {json.dumps({'type→        _fb_info = state.get("fallback_i
+
+## [2026-09-02 10:08:36 KST] [aads-server] scripts/_patch_dashboard_fallback.py
+- Chat-Direct 수정: write: scripts/_patch_dashboard_fallback.py
+
+## [2026-09-02 10:12:29 KST] [aads-server] scripts/_rebuild_dashboard.sh
+- Chat-Direct 수정: write: scripts/_rebuild_dashboard.sh
+
+## [2026-09-02 13:41:26 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, →_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, 
+
+## [2026-09-02 13:41:40 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     partial_content = _strip_streaming_p→    partial_content = _strip_resume_fail
+
+## [2026-09-02 13:41:50 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 if _execution_uuid:
+    →                if _execution_uuid:
+    
+
+## [2026-09-02 13:42:01 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                 else:
+                  →                else:
+                  
+
+## [2026-09-02 13:43:46 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:                     "retry_count": 4,
+  →                    "retry_count": 2,
+  
+
+## [2026-09-02 13:43:57 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:     async def test_api_shutdown_auto_res→    async def test_api_shutdown_auto_res
+
+## [2026-09-02 13:44:03 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: patch:         assert update_calls[0][6] == 8→        assert update_calls[0][6] == cha
+
+## [2026-09-02 13:45:54 KST] [aads-server] tests/unit/test_tools_and_pipeline.py
+- Chat-Direct 수정: run_remote_command: python3 -c "
+import pathlib
+p = pathlib.Path('/root/aads/aads-server/tests/unit/
+
+## [2026-09-02 14:08:39 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     preserve_retry_count: bool = False,
+→    preserve_retry_count: bool = False,
+
+
+## [2026-09-02 14:08:43 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: def _strip_resume_fail_markers(text: str→_INTERRUPT_MARKER = "_(이전 응답은 중단 처리되었습니다
+
+## [2026-09-02 14:09:04 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:     """Turn a recovered stale chat execu→    """Turn a recovered stale chat execu
+
+## [2026-09-02 14:09:09 KST] [aads-server] app/routers/chat.py
+- Chat-Direct 수정: patch:         preserve_retry_count=bool(_hard_→        preserve_retry_count=bool(_hard_
+
+## [2026-09-02 14:10:16 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             marker = "\n\n_(이전 응답은 중단 처리→            final_content = clean_partia
+
+## [2026-09-02 14:11:31 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:         marker = "\n\n_(이전 응답은 중단 처리되었습니→        final_content = clean_partial if
+
+## [2026-09-02 14:12:21 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:                                     _mar→                                    _orp
+
+## [2026-09-02 14:49:26 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch:     def register_agent(
+        self, ag→    def register_agent(
+        self,
+  
+
+## [2026-09-02 14:49:29 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-postgres psql -U aads -d aads -c "CREATE INDEX IF NOT EXISTS id
+
+## [2026-09-02 14:49:39 KST] [aads-server] app/services/pc_agent_manager.py
+- Chat-Direct 수정: patch:     def _build_agent_status(self, conn: →    def _build_agent_status(self, conn: 
+
+## [2026-09-02 14:50:14 KST] [aads-server] app/api/user_api_keys.py
+- Chat-Direct 수정: write: app/api/user_api_keys.py
+
+## [2026-09-02 14:50:35 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: async def call_llm_with_fallback(
+    pr→async def call_llm_with_fallback(
+    pr
+
+## [2026-09-02 14:50:36 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: from fastapi import APIRouter, HTTPExcep→from fastapi import APIRouter, HTTPExcep
+
+## [2026-09-02 14:51:34 KST] [aads-server] app/core/anthropic_client.py
+- Chat-Direct 수정: patch: # ── 공개 함수 ─────────────────────────────→# ── BYOK(Bring Your Own Key) 사용자별 API 키
+
+## [2026-09-02 14:51:41 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: async def _verify_token_db(token: str) -→async def _verify_token_db(token: str) -
+
+## [2026-09-02 14:52:35 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:     # 인증: DB 토큰 → 환경변수 폴백
+    token_vali→    # 인증: DB 토큰 → 환경변수 폴백
+    token_vali
+
+## [2026-09-02 14:52:44 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:             revised_response = ""
+      →            revised_response = ""
+      
+
+## [2026-09-02 14:52:50 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch:     try:
+        from app.core.anthropic→    try:
+        from app.core.anthropic
+
+## [2026-09-02 14:53:10 KST] [aads-server] app/services/chat_service.py
+- Chat-Direct 수정: patch: async def _get_conn() -> asyncpg.Connect→async def _get_conn() -> asyncpg.Connect
+
+## [2026-09-02 14:53:25 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: from app.api.llm_keys import router as l→from app.api.llm_keys import router as l
+
+## [2026-09-02 14:53:30 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch:         await _record_agent_event(
+     →        await _record_agent_event(
+     
+
+## [2026-09-02 14:53:42 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: @router.get("/pc-agent/agents")
+async de→def _filter_agents_by_owner(agents: list
+
+## [2026-09-02 14:53:50 KST] [aads-server] app/api/pc_agent.py
+- Chat-Direct 수정: patch: @router.post("/pc-agent/execute")
+async →@router.post("/pc-agent/execute")
+async 
+
+## [2026-09-02 15:23:36 KST] [aads-server] device_sdk/models.py
+- Chat-Direct 수정: run_remote_command: docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\
+
+## [2026-09-02 15:26:08 KST] [aads-server] tests/unit/test_pc_agent_api_disconnects.py
+- Chat-Direct 수정: run_remote_command: docker logs aads-postgres --since 6h 2>&1 | grep -c "null value in column"
+
+## [2026-09-02 16:11:49 KST] [aads-server] app/api/llm_report.py
+- Chat-Direct 수정: write: app/api/llm_report.py
+
+## [2026-09-02 16:11:51 KST] [aads-server] app/api/llm_report.py
+- Chat-Direct 수정: run_remote_command: grep -rl "embedding\|embed(" /app/app/core /app/app/services --include=*.py -i
+
+## [2026-09-02 16:11:57 KST] [aads-server] scripts/patch_sidebar_llm_report.py
+- Chat-Direct 수정: write: scripts/patch_sidebar_llm_report.py
+
+## [2026-09-02 16:12:10 KST] [aads-server] scripts/patch_main_llm_report.py
+- Chat-Direct 수정: write: scripts/patch_main_llm_report.py
+
+## [2026-09-02 16:13:59 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: from app.api.llm_models import router as→from app.api.llm_models import router as
+
+## [2026-09-02 16:14:09 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch: app.include_router(llm_models_router, pr→app.include_router(llm_models_router, pr
+
+## [2026-09-02 16:16:22 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:         logger.info("apscheduler_started→        # 매월 1일 00:05 KST — LLM 모델 레지스트리
+
+## [2026-09-02 16:23:59 KST] [aads-server] app/api/llm_report.py
+- Chat-Direct 수정: write: app/api/llm_report.py
+
+## [2026-09-02 16:28:36 KST] [aads-server] app/main.py
+- Chat-Direct 수정: patch:     "/api/v1/devices/android/manifest",
+→    "/api/v1/llm-models/report",
+    "/a
+
+## [2026-09-02 16:49:35 KST] [aads-server] tests/unit/test_ai_route_resolver.py
+- Chat-Direct 수정: run_remote_command: grep -r "e2e_login\|get_e2e_login" /root/aads/aads-server/app/ --include="*.py" 
+
+## [2026-09-02 16:52:05 KST] [aads-server] scripts/refresh_llm_report_export.sh
+- Chat-Direct 수정: run_remote_command: grep -r "login" /root/aads/aads-dashboard/src/app/ --include="*.tsx" --include="
+
+## [2026-09-02 16:57:54 KST] [aads-server] tmp_patch_users.py
+- Chat-Direct 수정: write: tmp_patch_users.py
+
+## [2026-09-02 17:09:22 KST] [aads-server] app/static/reports/llm-models-current.html
+- Chat-Direct 수정: run_remote_command: ssh -o ConnectTimeout=5 partner@5.104.85.244 "cat /srv/biseo/회계비서/회계비서/규칙/_목차.md
+
+## [2026-09-02 17:32:08 KST] [aads-server] app/services/media_generation_service.py
+- Chat-Direct 수정: run_remote_command: ssh -o ConnectTimeout=10 partner@5.104.85.244 "cd /srv/biseo/회계비서/회계비서 && sudo p
+
+## [2026-09-02 18:09:58 KST] [aads-server] tests/unit/test_chat_embedding_routing.py
+- Chat-Direct 수정: run_remote_command: ssh -o BatchMode=yes partner@5.104.85.244 "sudo systemctl list-units --type=serv
+
+## [2026-09-02 18:11:49 KST] [aads-server] reports/20260902_ACCT_next_steps_report.html
+- Chat-Direct 수정: write: reports/20260902_ACCT_next_steps_report.html
+
+## [2026-09-02 18:16:08 KST] [aads-server] app/static/reports/ACCT_next_steps_20260902.html
+- Chat-Direct 수정: write: app/static/reports/ACCT_next_steps_20260902.html
+
+## [2026-09-02 18:16:09 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch:     raise HTTPException(status_code=401,→    raise HTTPException(status_code=401,
+
+## [2026-09-02 18:18:19 KST] [aads-server] scripts/patch_dashboard_impersonate.py
+- Chat-Direct 수정: write: scripts/patch_dashboard_impersonate.py
+
+## [2026-09-02 18:18:22 KST] [aads-server] scripts/patch_dashboard_impersonate.py
+- Chat-Direct 수정: run_remote_command: docker exec aads-dashboard ls -la /app/public/reports/ACCT_next_steps_20260902.h
+
+## [2026-09-02 18:24:04 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch:     from app.core.db_pool import get_poo→    from app.core.db_pool import get_poo
+
+## [2026-09-02 18:36:43 KST] [aads-server] app/api/llm_report.py
+- Chat-Direct 수정: write: app/api/llm_report.py
+
+## [2026-09-02 18:36:49 KST] [aads-server] app/api/llm_report.py
+- Chat-Direct 수정: run_remote_command: docker ps --filter name=aads-server --format "{{.Names}} {{.Status}} {{.Image}}"
+
+## [2026-09-02 18:42:31 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch:     """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다→    """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다
+
+## [2026-09-02 18:55:55 KST] [aads-server] app/services/patch_impersonate.py
+- Chat-Direct 수정: run_remote_command: cat > /tmp/patch_impersonate.py << 'PYEOF'
+"""
+Temporary patch module — when rel
+
+## [2026-09-02 18:56:10 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch:     """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다→    """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다
+
+## [2026-09-02 19:05:51 KST] [aads-server] app/api/llm_report.py
+- Chat-Direct 수정: run_remote_command: curl -s http://localhost:11434/api/tags 2>/dev/null
+
+## [2026-09-02 19:07:55 KST] [aads-server] app/api/auth.py
+- Chat-Direct 수정: patch:     """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다→    """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다

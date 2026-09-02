@@ -3317,19 +3317,19 @@ class ToolExecutor:
                 display_status = phase if phase in {
                     "no_changes", "dedup_blocked", "blocked_dependency",
                     "build_fail", "deploy_failed", "review_failed",
-                    "auth_unavailable", "tool_timeout",
+                    "review_hold", "auth_unavailable", "tool_timeout",
                 } else (error_detail.split(":", 1)[0] if error_detail else status)
                 if display_status not in {
                     "no_changes", "dedup_blocked", "blocked_dependency",
                     "build_fail", "deploy_failed", "review_failed",
-                    "auth_unavailable", "tool_timeout",
+                    "review_hold", "auth_unavailable", "tool_timeout",
                 }:
                     display_status = status
                 if display_status == "no_changes":
                     status_group = "complete"
                 elif display_status in {"dedup_blocked", "blocked_dependency"}:
                     status_group = "blocked"
-                elif display_status in {"build_fail", "deploy_failed", "review_failed", "auth_unavailable", "tool_timeout"}:
+                elif display_status in {"build_fail", "deploy_failed", "review_failed", "review_hold", "auth_unavailable", "tool_timeout"}:
                     status_group = "action_required"
                 elif status in {"running", "claimed", "queued"}:
                     status_group = "active"

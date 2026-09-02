@@ -219,6 +219,45 @@ async def login(req: LoginRequest):
     raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
 
 
+@router.post("/auth/admin/impersonate/{user_id}")
+async def admin_impersonate(
+    user_id: str,
+    current_user: dict = Depends(auth_module.require_internal_admin),
+):
+    """관리자 대리 로그인 — 대상 사용자의 JWT 토큰을 발급한다."""
+    import traceback as _tb
+    from app.core.db_pool import get_pool
+    pool = get_pool()
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="유효하지 않은 사용자 ID입니다")
+    try:
+        logger.info("impersonate: step1 user_id=%s type=%s", user_id, type(user_id).__name__)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, email, name, default_tenant_id::text, role FROM saas_users WHERE id = $1::text",
+                str(user_id),
+            )
+        if not row:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+        target = dict(row)
+        logger.info("impersonate: step2 target_keys=%s", {k: type(v).__name__ for k, v in target.items()})
+        tenant_id = await auth_module.resolve_login_tenant_for_user(target)
+        logger.info("impersonate: step3 tenant_id=%s", tenant_id)
+        token = auth_module.create_token(str(target["id"]), target["email"], tenant_id=str(tenant_id) if tenant_id else None)
+        return {
+            "token": token,
+            "user_id": str(target["id"]),
+            "email": target["email"],
+            "name": target.get("name"),
+            "tenant_id": str(tenant_id) if tenant_id else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("impersonate: FAILED %s\n%s", e, _tb.format_exc())
+        raise HTTPException(status_code=500, detail=f"Impersonate error: {type(e).__name__}: {e}")
+
+
 @router.get("/auth/tenants")
 async def list_my_tenants(context: dict = Depends(require_tenant_role(TenantRole.VIEWER))):
     """현재 사용자가 접근 가능한 SaaS 조직 목록."""
@@ -411,7 +450,7 @@ async def e2e_inject(
     if saas_user:
         uid = str(saas_user["id"])
         token = auth_module.create_token(
-            uid,
+            user_id,
             saas_user["email"],
             tenant_id=await auth_module.resolve_login_tenant_for_user(saas_user),
         )

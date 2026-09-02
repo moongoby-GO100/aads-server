@@ -1558,8 +1558,8 @@ async def approve_or_reject(
                     logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
                         'ts', NOW()::text,
                         'event', 'approval_decision',
-                        'action', $4,
-                        'actor', $5,
+                        'action', $4::text,
+                        'actor', $5::text,
                         'review_verdict', $6::text,
                         'review_score', $7::text
                     )),
