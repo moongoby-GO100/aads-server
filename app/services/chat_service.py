@@ -39,8 +39,19 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 ).strip() or "aads"
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
-_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "8")))
+_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "3")))
 _execution_owner_epochs: Dict[str, int] = {}
+
+_RESUME_FAIL_SUFFIX = "⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
+_RESUME_FAIL_SUFFIX_ALT = "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
+
+
+def _strip_resume_fail_markers(text: str) -> str:
+    if not text:
+        return text
+    for marker in (_RESUME_FAIL_SUFFIX, _RESUME_FAIL_SUFFIX_ALT):
+        text = text.replace("\n\n" + marker, "").replace(marker, "")
+    return text.rstrip()
 
 
 def _is_local_active_api_slot() -> bool:
@@ -5904,7 +5915,7 @@ async def _resume_single_stream(
     _stream_id = execution_id or session_id
     _resume_lease_stop = _heartbeat_asyncio.Event()
     _resume_lease_task: Optional[_heartbeat_asyncio.Task] = None
-    partial_content = _strip_streaming_progress_markers(partial_content or "")
+    partial_content = _strip_resume_fail_markers(_strip_streaming_progress_markers(partial_content or ""))
     if partial_content and not _has_meaningful_partial_content(partial_content):
         partial_content = ""
     _streaming_state[session_id] = {
@@ -6414,9 +6425,10 @@ async def _resume_single_stream(
         try:
             async with get_pool().acquire() as c:
                 if _execution_uuid:
+                    _clean_partial = _strip_resume_fail_markers(partial_content)
                     final = (
-                        partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
-                        if partial_content
+                        _clean_partial + "\n\n" + _RESUME_FAIL_SUFFIX
+                        if _clean_partial
                         else ""
                     )
                     await _mark_execution_interrupted(
@@ -6430,10 +6442,11 @@ async def _resume_single_stream(
                         expected_owner_epoch=owner_epoch,
                     )
                 else:
+                    _clean_partial = _strip_resume_fail_markers(partial_content)
                     final = (
-                        partial_content + "\n\n⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
-                        if partial_content
-                        else "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
+                        _clean_partial + "\n\n" + _RESUME_FAIL_SUFFIX
+                        if _clean_partial
+                        else _RESUME_FAIL_SUFFIX_ALT
                     )
                     _upd_result = await c.execute(
                         "UPDATE chat_messages SET content = $1, intent = 'interruption_notice', model_used = 'interrupted' WHERE id = $2",

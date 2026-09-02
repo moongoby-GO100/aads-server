@@ -920,7 +920,7 @@ class TestRegressions:
         class FakeConn:
             async def fetchrow(self, query, *args):
                 return {
-                    "retry_count": 4,
+                    "retry_count": 2,
                     "requested_model": "gpt-5.5",
                     "current_execution_id": execution_id,
                     "last_user_msg": "원래 질문",
@@ -965,7 +965,7 @@ class TestRegressions:
             if "UPDATE chat_turn_executions" in query
         ]
         assert update_calls
-        assert update_calls[0][6] == 8
+        assert update_calls[0][6] == chat_service._EXECUTION_RESUME_MAX_ATTEMPTS
         assert calls["resumed"]
         assert any("current_execution_id" in query for query, _ in calls["execute"])
 
