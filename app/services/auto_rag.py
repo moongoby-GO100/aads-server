@@ -188,6 +188,7 @@ async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[
                     str(query_emb), _RAG_TOP_K * 2, project.upper(),
                 )
             else:
+                # 프로젝트 미지정 시: 공통 팩트만 검색 (타 프로젝트 오염 방지)
                 rows = await conn.fetch(
                     """
                     SELECT id, subject, detail, category, project, created_at,
@@ -197,6 +198,7 @@ async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[
                     WHERE embedding IS NOT NULL
                       AND superseded_by IS NULL
                       AND confidence > 0.3
+                      AND (project IS NULL OR project = '')
                     ORDER BY embedding <=> $1::vector
                     LIMIT $2
                     """,
@@ -273,6 +275,7 @@ async def _search_chat_messages(query_emb: list, session_id: str, project: Optio
                     str(query_emb), _RAG_TOP_K * 2, project.upper(),
                 )
             else:
+                # 프로젝트 미지정 시: 동일 워크스페이스 내 세션으로 제한 (전역 검색 → 세션 오염 방지)
                 rows = await conn.fetch(
                     """
                     SELECT m.id, m.role, m.content, m.created_at,
@@ -282,10 +285,13 @@ async def _search_chat_messages(query_emb: list, session_id: str, project: Optio
                     FROM chat_messages m
                     JOIN chat_sessions s ON s.id = m.session_id
                     WHERE m.embedding IS NOT NULL
+                      AND s.workspace_id = (
+                          SELECT workspace_id FROM chat_sessions WHERE id = $3::uuid
+                      )
                     ORDER BY m.embedding <=> $1::vector
                     LIMIT $2
                     """,
-                    str(query_emb), _RAG_TOP_K * 2,
+                    str(query_emb), _RAG_TOP_K * 2, session_id,
                 )
 
         output = []
