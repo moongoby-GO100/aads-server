@@ -280,13 +280,13 @@ def _bank_eval_timeout_ms(timeout_ms: int | None) -> int | None:
     except ValueError:
         multiplier = 1.0
     try:
-        min_timeout = int(os.getenv("YEOLJEONG_BANK_BROWSER_MIN_EVAL_TIMEOUT_MS", "5000") or "5000")
+        min_timeout = int(os.getenv("YEOLJEONG_BANK_BROWSER_MIN_EVAL_TIMEOUT_MS", "12000") or "12000")
     except ValueError:
-        min_timeout = 5000
+        min_timeout = 12000
     try:
-        max_timeout = int(os.getenv("YEOLJEONG_BANK_BROWSER_MAX_EVAL_TIMEOUT_MS", "15000") or "15000")
+        max_timeout = int(os.getenv("YEOLJEONG_BANK_BROWSER_MAX_EVAL_TIMEOUT_MS", "45000") or "45000")
     except ValueError:
-        max_timeout = 15000
+        max_timeout = 45000
     expanded = max(base_timeout, min_timeout, int(base_timeout * max(multiplier, 1.0)))
     return max(1000, min(max_timeout, expanded))
 

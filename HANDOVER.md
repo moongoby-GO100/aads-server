@@ -1,5 +1,36 @@
 # AADS HANDOVER
 
+## 2026-09-03 08:11 KST - FOOD Shinhan live collection timing and PC Agent eval timeout tuning
+
+- Request:
+  - Proceed with all immediate improvements for Shinhan automatic bank collection.
+  - Keep collection limited to branches with actual Shinhan credentials; do not attempt Junghwa/other businesses without complete data.
+  - Record detailed per-stage success/failure logs through site access, simple-query page, ID/PW entry, login, account selection, period selection, query, and data collection.
+- Runtime facts:
+  - Active PC Agent route is currently on `aads-server` / port `8100`; `aads-server-green` / `8102` reported no local online agents after hot reload.
+  - Dedicated bank PC `7f99c528-24d` (`DESKTOP-ICU55HK`) was online. Cleanup against Shinhan work key closed the remaining Shinhan tab (`closed_tabs=1`) and released the work session.
+  - Mia Shinhan API collection was executed for account `a7354484-aafe-4bcf-a865-0c0330e01574`, window `2026-09-01` to `2026-09-03`, work key `yeoljeong-bank-shinhan-individual-1b49c1c79be26318`, agent `7f99c528-24d`.
+  - The API client timed out after 380 seconds with no response body. `transactions.json` remained `0` rows.
+  - Stage logs confirmed:
+    - `shinhan_browser_session`: success, 12,583 ms.
+    - `shinhan_site_access`: success, 32,264 ms.
+    - `shinhan_simple_query_page`: unknown, URL/title showed Shinhan simple inquiry page.
+    - `shinhan_idpw_input`: success, 73,065 ms.
+    - `shinhan_login_submit`: success, 73,065 ms.
+    - `shinhan_login_success`: success, 73,067 ms, reason `post_login_text`.
+  - After login, account/query follow-up checks repeatedly hit `COMMAND_TIMEOUT`; PC Agent returned multiple late successful results, so the failure is server-side timeout sensitivity, not an offline Agent.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: raised bank browser DOM evaluate default timeout floor from 5,000 ms to 12,000 ms and cap from 15,000 ms to 45,000 ms. Env overrides remain supported.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: updated timeout regression expectations for the new bank-safe defaults.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py::test_bank_eval_timeout_uses_bank_safe_defaults tests/unit/test_yeoljeong_bank_browser_connector.py::test_bank_eval_timeout_respects_env_caps tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_flow_stage_logs_are_secret_free_and_granular tests/unit/test_yeoljeong_bank_browser_connector.py::test_browser_collection_audit_redacts_secret_stage_fields` passed: 4 tests.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_auto_collect.py::test_drain_bank_queue_cancels_non_collectable_account_before_browser tests/unit/test_yeoljeong_auto_collect.py::test_drain_global_queue_claims_and_completes tests/unit/test_yeoljeong_bank_browser_connector.py::test_bank_eval_timeout_uses_bank_safe_defaults tests/unit/test_yeoljeong_bank_browser_connector.py::test_bank_eval_timeout_respects_env_caps tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_flow_stage_logs_are_secret_free_and_granular tests/unit/test_yeoljeong_bank_browser_connector.py::test_browser_collection_audit_redacts_secret_stage_fields` passed: 6 tests.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py` passed.
+- Remaining:
+  - Hot reload / commit / push is still required for the timeout tuning.
+  - Re-run Mia Shinhan collection after hot reload and confirm account query, period selection, query success, and row import/no-record result.
+
 ## 2026-09-03 07:54 KST - FOOD Shinhan granular stage logs and queue preflight skip
 
 - Request:

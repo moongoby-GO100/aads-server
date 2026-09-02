@@ -236,14 +236,17 @@ def _branch_id_for_bank_scope(branch: str, business_id: str = "") -> str:
 
 
 def _quick_account_has_required_secrets(account: dict[str, Any]) -> bool:
-    return all(
-        str(account.get(field) or "").strip()
-        for field in (
-            "password_enc",
-            "account_no_enc",
-            "account_password_enc",
-            "business_registration_no_enc",
-        )
+    required_fields = (
+        "password_enc",
+        "account_no_enc",
+        "account_password_enc",
+        "business_registration_no_enc",
+    )
+    if any(field in account for field in required_fields):
+        return all(str(account.get(field) or "").strip() for field in required_fields)
+    return (
+        str(account.get("status") or "").strip() == "credential_registered"
+        and bool(str(account.get("account_no_masked") or "").strip())
     )
 
 
@@ -253,13 +256,27 @@ def _quick_account_mask_matches(bank_account: dict[str, Any], platform_account: 
     return not bank_mask or not platform_mask or bank_mask == platform_mask
 
 
+def _platform_accounts_for_bank_sync(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    try:
+        rows = list_platform_accounts(user, business_id)
+        if isinstance(rows, list) and rows:
+            return [row for row in rows if isinstance(row, dict)]
+    except Exception:
+        pass
+    try:
+        rows = _read("platform_accounts")
+    except Exception:
+        return []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
 def _matching_quick_platform_account(bank_account: dict[str, Any]) -> dict[str, Any] | None:
     service_code = _bank_account_service_code(bank_account)
     if service_code not in {"shinhan_business", "ibk_business"}:
         return None
     business_id = str(bank_account.get("business_id") or "").strip()
     branch_id = str(bank_account.get("branch_id") or "").strip()
-    for row in _read("platform_accounts"):
+    for row in _platform_accounts_for_bank_sync({}, business_id or None):
         if not isinstance(row, dict):
             continue
         if _platform_bank_service_code(row) != service_code:
@@ -286,8 +303,32 @@ def _bank_account_is_collectable(account: dict[str, Any]) -> bool:
     service_code = _bank_account_service_code(account)
     if service_code not in {"shinhan_business", "ibk_business"}:
         return True
-    platform_account = _matching_quick_platform_account(account)
-    return bool(platform_account and _quick_account_has_required_secrets(platform_account))
+    if not str(account.get("account_number_masked") or "").strip():
+        return True
+    matching_platform_accounts = [
+        row
+        for row in _platform_accounts_for_bank_sync({}, str(account.get("business_id") or "").strip() or None)
+        if isinstance(row, dict)
+        and _platform_bank_service_code(row) == service_code
+        and str(row.get("collection_mode") or "").strip() == "bank-quick-service"
+        and row.get("auto_sync") is not False
+        and (
+            not str(account.get("business_id") or "").strip()
+            or str(row.get("business_id") or "").strip() == str(account.get("business_id") or "").strip()
+        )
+        and (
+            not str(account.get("branch_id") or "").strip()
+            or _branch_id_for_bank_scope(
+                str(row.get("branch_id") or row.get("branch") or ""),
+                str(row.get("business_id") or ""),
+            )
+            == str(account.get("branch_id") or "").strip()
+        )
+        and _quick_account_mask_matches(account, row)
+    ]
+    if not matching_platform_accounts:
+        return True
+    return any(_quick_account_has_required_secrets(row) for row in matching_platform_accounts)
 
 
 def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -302,18 +343,26 @@ def _bank_accounts_for_payload(payload: dict[str, Any], user: dict[str, Any]) ->
         for service in _payload_services(payload)
         if service in {"shinhan_business", "ibk_business"}
     }
-    _ensure_browser_bank_accounts_from_platform_accounts(
-        user,
-        business_id=wanted_business or "",
-        branch_id=wanted_branch,
-        all_businesses=all_businesses,
-    )
     accounts = list_bank_accounts(
         user,
         wanted_business,
         branch_id=wanted_branch or None,
         status="active",
     )
+    active_services = {_bank_account_service_code(account) for account in accounts}
+    needs_platform_promotion = not accounts or bool(wanted_services - active_services)
+    if needs_platform_promotion and _ensure_browser_bank_accounts_from_platform_accounts(
+        user,
+        business_id=wanted_business or "",
+        branch_id=wanted_branch,
+        all_businesses=all_businesses,
+    ):
+        accounts = list_bank_accounts(
+            user,
+            wanted_business,
+            branch_id=wanted_branch or None,
+            status="active",
+        )
     deduped: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str, str]] = set()
     for account in accounts:
@@ -369,13 +418,14 @@ def _ensure_browser_bank_accounts_from_platform_accounts(
     branch_id: str,
     all_businesses: bool,
 ) -> int:
-    platform_accounts = _read("platform_accounts")
+    platform_accounts = _platform_accounts_for_bank_sync(user, None if all_businesses else business_id or None)
     if not platform_accounts:
         return 0
     existing_accounts = list_bank_accounts(
         user,
         None if all_businesses else business_id or None,
         branch_id=branch_id or None,
+        status="active",
     )
     existing_keys = {
         (
