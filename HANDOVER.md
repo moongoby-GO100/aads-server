@@ -10003,3 +10003,35 @@
 - Deployment:
   - API blue/green release not run in this step because the working tree contains unrelated dirty files. Runtime public HTML was published through the existing `/exports/` nginx alias.
   - Commit/push pending until target files are safely isolated from unrelated dirty changes.
+
+## 2026-09-02 16:37 KST - Google commercial route pause and AI capability routing expansion
+
+- CEO request:
+  - Pause Google/Gemini commercial use for now.
+  - Route search, deep research, image/video analysis, image/video generation, embedding, and background LLM fallback through DB/admin settings.
+  - Apply native deep research and native/local embedding where possible.
+- Immediate DB action:
+  - Applied `migrations/145_ai_capability_routing_google_pause.sql` directly to the operating PostgreSQL instance.
+  - `model_routing_preferences` now accepts 18 route keys: `llm`, `background_llm`, `runner_llm`, `search`, `deep_research`, `url_analyze`, `image_analyze`, `video_analyze`, `image`, `edit_image`, `video`, `embedding`, `semantic_search`, `visual_qa`, `fact_check`, `code_exec`, `audio`, `music`.
+  - All current Google/Gemini route rows were preserved but changed to `is_enabled=false`, `is_default=false`.
+  - Non-Google defaults were seeded for native search/deep research, local embedding, Codex code execution, Claude/Qwen analysis routes, and existing non-Google media routes.
+- Code changes prepared:
+  - `app/services/ai_route_resolver.py`: new DB-backed route candidate resolver and 768-dimension embedding normalization helper.
+  - `app/api/llm_models.py`: route-key schema/DB CHECK/admin response metadata expanded to all AI capabilities.
+  - `app/services/deep_research_service.py`: Google key is no longer required; default route uses AADS native SearXNG/Jina/Crawl4AI + LLM synthesis.
+  - `app/services/chat_embedding_service.py`: default route uses PC Agent/Ollama embedding first, OpenAI fallback only when configured, deterministic dummy as last resort.
+  - `app/services/image_service.py`: image generation no longer selects Google merely because a Google key exists; DB route must explicitly enable it.
+  - `app/services/model_router.py`: Gemini intent/agent primary defaults changed to Codex/Claude/Qwen alternatives.
+  - `app/api/ceo_chat.py`: legacy chat model map and LiteLLM failure fallback no longer route to Gemini automatically.
+  - `app/services/intent_router.py`: search/deep_research/video analysis intent defaults no longer set `gemini_direct`; Naver/SearXNG/tool routes and Claude/Qwen defaults are used instead.
+  - `/root/aads/aads-dashboard/src/app/admin/model-routing/page.tsx`: operational dashboard now renders the expanded route keys dynamically.
+- Verification:
+  - `python3 -m py_compile app/services/ai_route_resolver.py app/api/llm_models.py app/services/chat_embedding_service.py app/services/deep_research_service.py app/services/image_service.py app/services/model_router.py` passed.
+  - `./.venv-playwright/bin/python -m pytest tests/unit/test_ai_route_resolver.py tests/unit/test_model_routing_admin_static.py tests/test_deep_research.py` passed 53/53.
+  - `npx eslint src/app/admin/model-routing/page.tsx` passed in `/root/aads/aads-dashboard`.
+  - Full dashboard `npm run lint` remains blocked by existing unrelated lint errors in other files.
+  - Full dashboard `npx tsc --noEmit --pretty false --incremental false` remains blocked by existing unrelated `src/app/chat/page.tsx` `requested_model` type error.
+- Runner coordination:
+  - Submitted `runner-affd8e53` for full AI routing implementation/review.
+  - Submitted dependent `runner-f6293c0b` for Google route disable verification after `runner-affd8e53`.
+  - Do not commit/push/deploy this direct patch while those runners are still modifying the same functional area; reconcile with runner output first.

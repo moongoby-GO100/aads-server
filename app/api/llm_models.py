@@ -14,6 +14,7 @@ from app.services.model_registry import (
     normalize_provider,
     sync_model_registry,
 )
+from app.services.ai_route_resolver import AI_ROUTE_KEYS, ROUTE_GROUPS
 
 router = APIRouter(prefix="/llm-models", tags=["llm-models"])
 
@@ -29,7 +30,7 @@ class ChatModelPreferenceInput(BaseModel):
 
 
 class ModelRoutingPreferenceInput(BaseModel):
-    route_key: str = Field(..., pattern=r"^(image|edit_image|video|llm|music|audio|runner_llm)$")
+    route_key: str = Field(..., pattern=r"^(llm|background_llm|runner_llm|search|deep_research|url_analyze|image_analyze|video_analyze|image|edit_image|video|embedding|semantic_search|visual_qa|fact_check|code_exec|audio|music)$")
     provider: str
     model_id: str
     display_order: int = Field(100, ge=0)
@@ -191,7 +192,24 @@ async def _seed_media_models(conn) -> None:
           ('runner_llm','codex','gpt-5.6-luna',7,true,false,'Runner/review fallback from settings order','system'),
           ('runner_llm','anthropic','claude-opus-5',10,true,false,'Claude fallback after Codex 5.6 family','system'),
           ('runner_llm','openai','gpt-5.5',20,true,false,'GPT-5.5 legacy backup','system'),
-          ('runner_llm','google','gemini-2.5-pro',30,true,false,'Gemini 2.5 Pro backup','system')
+                   ('runner_llm','google','gemini-2.5-pro',30,false,false,'Google commercial route disabled by default','system'),
+                  ('background_llm','qwen','qwen-turbo',10,true,true,'Background synthesis primary without Google','system'),
+                  ('background_llm','anthropic','claude-haiku-4-5-20251001',20,true,false,'Background fallback via central auth','system'),
+                  ('search','searxng','searxng-local',10,true,true,'Self-hosted metasearch default','system'),
+                  ('search','naver','naver-search',20,true,false,'Korean search route','system'),
+                  ('deep_research','self','smart-search-synthesis',10,true,true,'AADS native deep research: search/crawl + LLM synthesis','system'),
+                  ('deep_research','anthropic','claude-sonnet-4-6',20,true,false,'Research synthesis fallback','system'),
+                  ('url_analyze','self','jina-crawl4ai-synthesis',10,true,true,'Jina/Crawl4AI extraction with LLM synthesis','system'),
+                  ('image_analyze','anthropic','claude-vision',10,true,true,'Claude vision analysis route','system'),
+                  ('image_analyze','qwen','qwen-vl-plus',20,true,false,'Qwen vision fallback','system'),
+                  ('video_analyze','qwen','qwen-vl-plus',10,true,true,'Frame extraction + Qwen/Claude vision route','system'),
+                  ('embedding','pc_ollama','qwen3-embedding:0.6b',10,true,true,'Local PC Agent Ollama embedding primary','system'),
+                  ('embedding','pc_ollama','bge-m3',20,true,false,'Local PC Agent Ollama embedding fallback','system'),
+                  ('embedding','openai','text-embedding-3-small',30,true,false,'External embedding fallback when key is active','system'),
+                  ('semantic_search','self','pgvector-cosine',10,true,true,'pgvector semantic search over stored embeddings','system'),
+                  ('visual_qa','anthropic','claude-vision',10,true,true,'Visual QA without Google','system'),
+                  ('fact_check','self','smart-search-synthesis',10,true,true,'Search/crawl based fact check route','system'),
+                  ('code_exec','codex','gpt-5.6-sol',10,true,true,'Codex CLI/code execution route','system')
         ) AS seed(route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by)
         ON CONFLICT (route_key, provider, model_id) DO NOTHING
     """)
@@ -238,8 +256,9 @@ async def _ensure_model_routing_preferences_table() -> None:
         await conn.execute(
             "ALTER TABLE model_routing_preferences "
             "ADD CONSTRAINT model_routing_preferences_route_key_chk "
-            "CHECK (route_key IN "
-            "('image','edit_image','video','llm','music','audio','runner_llm'))"
+            "CHECK (route_key IN ("
+            + ",".join(f"'{key}'" for key in AI_ROUTE_KEYS)
+            + "))"
         )
         await conn.execute(
             'ALTER TABLE model_routing_preferences ADD COLUMN IF NOT EXISTS display_name TEXT'
@@ -599,13 +618,24 @@ async def get_model_routing_preferences() -> dict[str, Any]:
                 LIMIT 1
             ) AS models ON TRUE
             ORDER BY CASE pref.route_key
-                         WHEN 'image' THEN 1
-                         WHEN 'edit_image' THEN 2
-                         WHEN 'video' THEN 3
-                         WHEN 'llm' THEN 4
-                         WHEN 'music' THEN 5
-                         WHEN 'audio' THEN 6
-                         WHEN 'runner_llm' THEN 7
+                         WHEN 'llm' THEN 1
+                         WHEN 'background_llm' THEN 2
+                         WHEN 'runner_llm' THEN 3
+                         WHEN 'search' THEN 4
+                         WHEN 'deep_research' THEN 5
+                         WHEN 'url_analyze' THEN 6
+                         WHEN 'fact_check' THEN 7
+                         WHEN 'image_analyze' THEN 8
+                         WHEN 'video_analyze' THEN 9
+                         WHEN 'visual_qa' THEN 10
+                         WHEN 'embedding' THEN 11
+                         WHEN 'semantic_search' THEN 12
+                         WHEN 'image' THEN 13
+                         WHEN 'edit_image' THEN 14
+                         WHEN 'video' THEN 15
+                         WHEN 'music' THEN 16
+                         WHEN 'audio' THEN 17
+                         WHEN 'code_exec' THEN 18
                          ELSE 99
                      END,
                      pref.is_default DESC,
@@ -635,7 +665,7 @@ async def get_model_routing_preferences() -> dict[str, Any]:
             LIMIT 200
             """
         )
-    preferences = [_routing_preference_payload(row) for row in rows]
+        preferences = [_routing_preference_payload(row) for row in rows]
     route_counts: dict[str, int] = {}
     default_models: dict[str, str] = {}
     blocked_counts: dict[str, int] = {}
@@ -659,6 +689,8 @@ async def get_model_routing_preferences() -> dict[str, Any]:
     return {
         "preferences": preferences,
         "total": len(preferences),
+        "route_keys": list(AI_ROUTE_KEYS),
+        "route_groups": ROUTE_GROUPS,
         "route_counts": route_counts,
         "default_models": default_models,
         "blocked_counts": blocked_counts,

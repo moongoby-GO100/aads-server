@@ -12,6 +12,7 @@ import re
 import httpx
 
 from app.config import settings
+from app.services.ai_route_resolver import get_route_candidates
 
 
 class ImageService:
@@ -36,15 +37,24 @@ class ImageService:
         Returns: {"url": str, "provider": str, "prompt": str}
         url은 base64 data URI 형식 (data:image/png;base64,...)
         """
-        if self.provider == "none":
-            raise ValueError("이미지 생성 API 키가 없습니다 (GOOGLE_API_KEY 또는 OPENAI_API_KEY 필요)")
-
         sanitized = self._sanitize_prompt(prompt)
 
-        if self.provider == "google":
-            return await self._generate_google(sanitized, prompt)
-        else:
+        for route in await get_route_candidates("image"):
+            if route.provider == "openai":
+                openai_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else ""
+                if openai_key:
+                    return await self._generate_openai(sanitized, prompt, size, model_names=[route.runtime_model, "gpt-image-1", "dall-e-3"])
+                continue
+            if route.provider in {"google", "gemini"}:
+                return await self._generate_google(sanitized, prompt)
+            # Non-API UI/provider routes are kept visible in admin, but this chat
+            # endpoint can only execute providers with a backend adapter.
+            continue
+
+        openai_key = settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else ""
+        if openai_key:
             return await self._generate_openai(sanitized, prompt, size)
+        raise ValueError("이미지 생성 실행 가능한 non-Google API 키가 없습니다")
 
     async def _generate_google(self, sanitized: str, original: str) -> dict:
         try:
@@ -76,13 +86,18 @@ class ImageService:
                 return await self._generate_openai(sanitized, original, "1024x1024")
             raise ValueError(f"Google Imagen 실패: {e}")
 
-    async def _generate_openai(self, sanitized: str, original: str, size: str) -> dict:
+    async def _generate_openai(self, sanitized: str, original: str, size: str, model_names: list[str] | None = None) -> dict:
         """GPT-Image-1 우선 시도, 실패 시 DALL-E 3 폴백"""
         from openai import AsyncOpenAI
         openai_key = settings.OPENAI_API_KEY.get_secret_value()
         client = AsyncOpenAI(api_key=openai_key)
 
-        for model_name in ["gpt-image-1", "dall-e-3"]:
+        candidates = []
+        for name in (model_names or ["gpt-image-1", "dall-e-3"]):
+            if name and name not in candidates:
+                candidates.append(name)
+
+        for model_name in candidates:
             try:
                 resp = await client.images.generate(
                     model=model_name,

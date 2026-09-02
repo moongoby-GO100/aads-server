@@ -1,7 +1,9 @@
 """
-채팅 메시지 임베딩 서비스 — 시맨틱 검색용
-Gemini gemini-embedding-001 (768차원, output_dimensionality=768) 사용, pgvector 저장.
-pgvector 0.8.2 hnsw/ivfflat 2000차원 제한으로 768차원 사용.
+채팅 메시지 임베딩 서비스 — 시맨틱 검색용.
+
+DB route_key='embedding' 기준으로 로컬 PC Agent/Ollama를 우선 사용하고,
+외부 provider가 활성화된 경우에만 fallback한다. 저장 차원은 pgvector 계약에
+맞춰 768차원으로 고정한다.
 """
 from __future__ import annotations
 
@@ -13,6 +15,12 @@ from collections import OrderedDict
 from typing import Any, List, Optional
 
 import structlog
+
+from app.services.ai_route_resolver import (
+    GOOGLE_PROVIDERS,
+    get_route_candidates,
+    normalize_embedding_dimension,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -63,9 +71,9 @@ _embed_cache = _EmbedCache(ttl=_EMBED_CACHE_TTL, maxsize=_EMBED_CACHE_MAX)
 
 async def embed_texts(texts: List[str]) -> List[List[float]]:
     """
-    Google Gemini gemini-embedding-001 로 텍스트 임베딩.
+    DB 라우팅 기반 텍스트 임베딩.
     인메모리 캐시(TTL 300초, 최대 500항목) 적용 — 동일 텍스트 반복 호출 최소화.
-    API 키 없으면 hash 기반 dummy 반환.
+    가용 provider가 없으면 hash 기반 dummy 반환.
     """
     # 캐시 적중 여부 확인 — 캐시 HIT 항목은 API 호출 스킵
     results: List[List[float] | None] = [_embed_cache.get(t) for t in texts]
@@ -76,46 +84,7 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
 
     uncached_texts = [texts[i] for i in uncached_indices]
 
-    global _gemini_blocked_until
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    now = time.monotonic()
-    if not api_key or not _EMBED_GEMINI_ENABLED or now < _gemini_blocked_until:
-        if not api_key:
-            logger.debug("[ChatEmbed] GEMINI_API_KEY 없음 — dummy 임베딩")
-        elif not _EMBED_GEMINI_ENABLED:
-            logger.debug("[ChatEmbed] EMBED_GEMINI_ENABLED=0 — dummy 임베딩")
-        else:
-            logger.debug("[ChatEmbed] Gemini 서킷 브레이커 활성 (%.0f초 남음) — dummy 임베딩",
-                         _gemini_blocked_until - now)
-        fetched: List[List[float]] = [_dummy_embedding(t) for t in uncached_texts]
-    else:
-        try:
-            from google import genai as google_genai  # type: ignore
-            client = google_genai.Client(api_key=api_key)
-            loop = asyncio.get_running_loop()
-            fetched = []
-
-            for i in range(0, len(uncached_texts), _EMBED_BATCH_SIZE):
-                batch = uncached_texts[i: i + _EMBED_BATCH_SIZE]
-
-                def _call(b: List[str] = batch) -> Any:
-                    return client.models.embed_content(
-                        model="models/gemini-embedding-001",
-                        contents=b,
-                        config={"output_dimensionality": _EMBED_DIM},
-                    )
-
-                result = await loop.run_in_executor(None, _call)
-                for emb in result.embeddings:
-                    fetched.append(list(emb.values))
-        except Exception as e:
-            err_str = str(e)
-            if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
-                _gemini_blocked_until = now + _GEMINI_BLOCK_SECONDS
-                logger.warning("[ChatEmbed] Gemini 429/크레딧 고갈 → %d초 서킷 브레이커 발동", _GEMINI_BLOCK_SECONDS)
-            else:
-                logger.warning(f"[ChatEmbed] Gemini 임베딩 실패: {e}")
-            fetched = [_dummy_embedding(t) for t in uncached_texts]
+    fetched = await _embed_uncached_with_routes(uncached_texts)
 
     # 캐시에 저장 + 결과 병합
     for idx, vec in zip(uncached_indices, fetched):
@@ -123,6 +92,93 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
         results[idx] = vec
 
     return [r for r in results]  # type: ignore[return-value]
+
+
+async def _embed_uncached_with_routes(texts: List[str]) -> List[List[float]]:
+    candidates = await get_route_candidates("embedding")
+    for candidate in candidates:
+        provider = candidate.provider
+        if provider in {"pc_ollama", "local", "ollama"}:
+            try:
+                from app.core.local_embedding_bridge import embed as local_embed
+                result = await local_embed(texts, model=candidate.runtime_model)
+                vectors = result.get("embeddings") or []
+                if len(vectors) == len(texts):
+                    normalized = [normalize_embedding_dimension([float(x) for x in vec], _EMBED_DIM) for vec in vectors]
+                    logger.info("[ChatEmbed] local embedding route ok", provider=provider, model=candidate.runtime_model)
+                    return normalized
+            except Exception as exc:
+                logger.warning(
+                    "[ChatEmbed] local embedding route failed",
+                    provider=provider,
+                    model=candidate.runtime_model,
+                    error=str(exc)[:160],
+                )
+                continue
+        if provider == "openai":
+            try:
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    continue
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=api_key)
+                resp = await client.embeddings.create(model=candidate.runtime_model, input=texts)
+                vectors = [item.embedding for item in resp.data]
+                if len(vectors) == len(texts):
+                    normalized = [normalize_embedding_dimension([float(x) for x in vec], _EMBED_DIM) for vec in vectors]
+                    logger.info("[ChatEmbed] openai embedding route ok", model=candidate.runtime_model)
+                    return normalized
+            except Exception as exc:
+                logger.warning(
+                    "[ChatEmbed] openai embedding route failed",
+                    model=candidate.runtime_model,
+                    error=str(exc)[:160],
+                )
+                continue
+        if provider in GOOGLE_PROVIDERS:
+            google_vectors = await _try_gemini_embeddings(texts, candidate.runtime_model)
+            if google_vectors:
+                return google_vectors
+
+    logger.debug("[ChatEmbed] no embedding route available — dummy embedding")
+    return [_dummy_embedding(t) for t in texts]
+
+
+async def _try_gemini_embeddings(texts: List[str], model_name: str = "models/gemini-embedding-001") -> List[List[float]] | None:
+    """Legacy Gemini embedding path. Only reached when DB route explicitly enables it."""
+    global _gemini_blocked_until
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    now = time.monotonic()
+    if not api_key or not _EMBED_GEMINI_ENABLED or now < _gemini_blocked_until:
+        return None
+    try:
+        from google import genai as google_genai  # type: ignore
+        client = google_genai.Client(api_key=api_key)
+        loop = asyncio.get_running_loop()
+        fetched: List[List[float]] = []
+
+        for i in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[i: i + _EMBED_BATCH_SIZE]
+
+            def _call(b: List[str] = batch) -> Any:
+                return client.models.embed_content(
+                    model=model_name if model_name.startswith("models/") else f"models/{model_name}",
+                    contents=b,
+                    config={"output_dimensionality": _EMBED_DIM},
+                )
+
+            result = await loop.run_in_executor(None, _call)
+            for emb in result.embeddings:
+                fetched.append(normalize_embedding_dimension(list(emb.values), _EMBED_DIM))
+        return fetched
+    except Exception as e:
+        err_str = str(e)
+        if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
+            _gemini_blocked_until = now + _GEMINI_BLOCK_SECONDS
+            logger.warning("[ChatEmbed] Gemini 429/크레딧 고갈 → 서킷 브레이커 발동", seconds=_GEMINI_BLOCK_SECONDS)
+        else:
+            logger.warning(f"[ChatEmbed] Gemini 임베딩 실패: {e}")
+        return None
 
 
 def _dummy_embedding(text: str, dim: int = _EMBED_DIM) -> List[float]:

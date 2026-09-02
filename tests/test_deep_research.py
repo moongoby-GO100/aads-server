@@ -88,11 +88,11 @@ class TestDeepResearchService:
         assert hasattr(svc, "_agent")
 
     def test_is_available_without_key(self):
-        """GEMINI_API_KEY 미설정 시 is_available=False."""
+        """GEMINI_API_KEY 미설정 시에도 자체 Deep Research 사용 가능."""
         from app.services.deep_research_service import DeepResearchService
         svc = DeepResearchService()
         svc._api_key = ""
-        assert svc.is_available() is False
+        assert svc.is_available() is True
 
     def test_is_available_with_key(self):
         """GEMINI_API_KEY 설정 시 is_available=True."""
@@ -102,14 +102,21 @@ class TestDeepResearchService:
         assert svc.is_available() is True
 
     @pytest.mark.asyncio
-    async def test_research_no_api_key_returns_error(self):
-        """API 키 없이 research() 호출 시 status='error' 반환."""
-        from app.services.deep_research_service import DeepResearchService
+    async def test_research_no_api_key_uses_native_route(self):
+        """API 키 없이 research() 호출 시 자체 경로를 사용."""
+        from app.services.deep_research_service import DeepResearchService, ResearchResult
         svc = DeepResearchService()
         svc._api_key = ""
-        result = await svc.research("test query")
-        assert result.status == "error"
-        assert "GEMINI_API_KEY" in result.report
+        native_result = ResearchResult(
+            report="native report",
+            status="done",
+            interaction_id="self-test",
+            citations=[{"url": "https://example.com", "title": "example"}],
+        )
+        with patch.object(svc, "_research_native", new=AsyncMock(return_value=native_result)):
+            result = await svc.research("test query")
+        assert result.status == "done"
+        assert result.report == "native report"
 
     @pytest.mark.asyncio
     async def test_research_daily_limit_exceeded(self):
@@ -138,11 +145,9 @@ class TestDeepResearchService:
         svc._api_key = "fake_key"
         svc._sdk_available = False
 
-        async def mock_http_error(prompt, cb):
-            raise Exception("HTTP 연결 실패")
-
-        with patch.object(svc, "_research_via_http", side_effect=Exception("HTTP 연결 실패")):
-            result = await svc.research("test query", timeout=1)
+        with patch.object(svc, "_select_route", new=AsyncMock(return_value={"provider": "google", "model_id": "gemini-deep-research"})):
+            with patch.object(svc, "_research_via_http", side_effect=Exception("HTTP 연결 실패")):
+                result = await svc.research("test query", timeout=1)
         assert result.status in ("error", "timeout")
 
     def test_daily_limit_check_initial(self):
@@ -332,17 +337,17 @@ class TestDeepResearchStreamFeatures:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_research_stream_no_api_key_yields_error(self):
-        """API 키 없을 때 research_stream()은 error 이벤트 yield."""
-        from app.services.deep_research_service import DeepResearchService
-        from app.models.research import ResearchEvent
+    async def test_research_stream_no_api_key_uses_native_route(self):
+        """API 키 없을 때 research_stream()은 자체 리서치 이벤트를 yield."""
+        from app.services.deep_research_service import DeepResearchService, ResearchResult
         svc = DeepResearchService()
         svc._api_key = ""
+        native_result = ResearchResult(report="native report", status="done", interaction_id="self-test")
         events = []
-        async for ev in svc.research_stream("AI 시장 동향"):
-            events.append(ev)
-        assert len(events) == 1
-        assert events[0].type == "error"
+        with patch.object(svc, "_research_native", new=AsyncMock(return_value=native_result)):
+            async for ev in svc.research_stream("AI 시장 동향"):
+                events.append(ev)
+        assert any(ev.type == "complete" for ev in events)
 
     @pytest.mark.asyncio
     async def test_research_stream_daily_limit_yields_error(self):

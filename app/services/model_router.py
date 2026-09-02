@@ -29,22 +29,22 @@ LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://aads-litellm:4000/
 
 # 인텐트 → LiteLLM 모델명 매핑 (AADS-171)
 INTENT_MODEL_MAP: dict[str, str | None] = {
-    "casual":            "gemini-flash-lite",
-    "search":            "gemini-flash",
-    "deep_research":     "gemini-pro",
-    "url_analyze":       "gemini-flash",
-    "video_analyze":     "gemini-flash",
-    "image_analyze":     "gemini-flash",
+    "casual":            "claude-haiku",
+    "search":            "qwen-turbo",
+    "deep_research":     "claude-sonnet",
+    "url_analyze":       "qwen-turbo",
+    "video_analyze":     "claude-sonnet",
+    "image_analyze":     "claude-sonnet",
     "planning":          "claude-sonnet",
     "decision":          "claude-opus",
-    "code_exec":         "gemini-flash",
+    "code_exec":         "gpt-5.6-sol",
     "directive_gen":     "claude-sonnet",
-    "memory_recall":     "gemini-flash-lite",
+    "memory_recall":     "qwen-turbo",
     "workspace_switch":  None,  # 모델 불필요
     # 기존 인텐트
-    "dashboard":         "gemini-flash-lite",
+    "dashboard":         "qwen-turbo",
     "diagnosis":         "claude-sonnet",
-    "research":          "gemini-flash",
+    "research":          "qwen-turbo",
     "execute":           "claude-sonnet",
     "browser":           "claude-sonnet",
     "strategy":          "claude-opus",
@@ -53,7 +53,7 @@ INTENT_MODEL_MAP: dict[str, str | None] = {
     "design_fix":        "claude-sonnet",
     "architect":         "claude-opus",
     "execution_verify":  "claude-sonnet",
-    "health_check":      "gemini-flash-lite",
+    "health_check":      "qwen-turbo",
 }
 
 # 일 $5 초과 시 Opus 비용 이상치만 감지 (v2.1 Q-COST: 강제 차단 없음)
@@ -87,7 +87,7 @@ async def resolve_intent_model(intent: str) -> str | None:
     월 $150 초과 시 경고 로그.
     workspace_switch 등 모델 불필요 인텐트는 None 반환.
     """
-    model = INTENT_MODEL_MAP.get(intent, "gemini-flash")
+    model = INTENT_MODEL_MAP.get(intent, "qwen-turbo")
 
     if model is None:
         return None
@@ -181,10 +181,10 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
         "fallback": ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
         "error":    ModelConfig("anthropic", "claude-haiku-4-5",  1.0,   5.0),
     },
-    # Judge: gemini-3.1-pro-preview ($2/$12) — Developer/QA와 다른 모델 (T-002)
+    # Judge: Google commercial route paused by CEO policy (2026-09-02 KST)
     "judge": {
-        "primary":  ModelConfig("google",    "gemini-3.1-pro-preview", 2.0, 12.0),
-        "fallback": ModelConfig("anthropic", "claude-sonnet-4-6",      3.0, 15.0),
+        "primary":  ModelConfig("anthropic", "claude-sonnet-4-6",      3.0, 15.0),
+        "fallback": ModelConfig("openai",    "gpt-5.6-sol",            5.0, 30.0),
         "error":    ModelConfig("anthropic", "claude-haiku-4-5",       1.0,  5.0),
     },
     # DevOps: gpt-5-mini ($0.25/$2)
@@ -193,16 +193,16 @@ AGENT_MODELS: dict[str, dict[str, ModelConfig]] = {
         "fallback": ModelConfig("anthropic", "claude-haiku-4-5",   1.0,   5.0),
         "error":    ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
     },
-    # Researcher: gemini-2.5-flash ($0.30/$2.50)
+    # Researcher: Google commercial route paused by CEO policy (2026-09-02 KST)
     "researcher": {
-        "primary":  ModelConfig("google",    "gemini-2.5-flash",   0.30,  2.50),
-        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+        "primary":  ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+        "fallback": ModelConfig("openai",    "gpt-5.6-luna",       1.0,   6.0),
         "error":    ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
     },
-    # Strategist 수집: gemini-2.5-flash ($0.30/$2.50) — 비용 효율 (AADS-125)
+    # Strategist 수집: Google commercial route paused by CEO policy (2026-09-02 KST)
     "strategist_collect": {
-        "primary":  ModelConfig("google",    "gemini-2.5-flash",   0.30,  2.50),
-        "fallback": ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+        "primary":  ModelConfig("anthropic", "claude-haiku-4-5",   0.80,  4.0),
+        "fallback": ModelConfig("openai",    "gpt-5.6-luna",       1.0,   6.0),
         "error":    ModelConfig("anthropic", "claude-sonnet-4-6",  3.0,  15.0),
     },
     # Strategist 분석: claude-opus-4.6 ($5/$25) — 고품질 전략 분석 (AADS-125)

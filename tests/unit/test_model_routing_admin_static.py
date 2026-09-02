@@ -28,6 +28,11 @@ def test_model_routing_admin_page_exposes_required_model_fields():
     for text in (
         "이미지",
         "동영상",
+        "검색",
+        "딥리서치",
+        "임베딩",
+        "배경 LLM",
+        "route_keys",
         "LLM",
         "provider",
         "model_id",

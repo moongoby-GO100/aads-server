@@ -58,7 +58,7 @@ INTENT_MAP: dict[str, dict] = {
     # ─── 도구 불필요 인텐트 ───────────────────────────────────────────────────
     "casual":           {"model": AUTO_DEFAULT_LLM_MODEL, "tools": False, "group": ""},
     "greeting":         {"model": AUTO_DEFAULT_LLM_MODEL, "tools": False, "group": ""},
-    "deep_research":    {"model": "gemini-pro",                  "tools": False, "group": "",        "gemini_direct": "deep_research"},
+    "deep_research":    {"model": "claude-sonnet",               "tools": True,  "group": "all"},
     "strategy":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "discussion":       {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     "planning":         {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
@@ -66,7 +66,7 @@ INTENT_MAP: dict[str, dict] = {
     "design":           {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "design_fix":       {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "image_analyze":    {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
-    "video_analyze":    {"model": "gemini-3-flash-preview",       "tools": False, "group": ""},
+    "video_analyze":    {"model": "claude-sonnet",               "tools": False, "group": ""},
     "cto_strategy":     {"model": "claude-opus",                 "tools": False, "group": "",        "thinking": True},
     # ─── 도구 사용 인텐트 — 전부 group="all", 기본 Opus ───────────────────────
     "system_status":    {"model": "claude-sonnet",                "tools": True,  "group": "all",     "thinking": True},
@@ -74,7 +74,7 @@ INTENT_MAP: dict[str, dict] = {
     "dashboard":        {"model": "claude-sonnet",                "tools": True,  "group": "all",     "thinking": True},
     "diagnosis":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "task_history":     {"model": "claude-sonnet",                "tools": True,  "group": "all",     "thinking": True},
-    "search":           {"model": "gemini-3-flash-preview",       "tools": True,  "group": "all",     "gemini_direct": "grounding"},
+    "search":           {"model": "qwen-turbo",                  "tools": True,  "group": "all"},
     "url_analyze":      {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "code_task":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
     "directive":        {"model": "claude-opus",                 "tools": True,  "group": "all",     "thinking": True},
@@ -127,14 +127,14 @@ INTENT_MAP: dict[str, dict] = {
     "analyze_changes":    {"model": "claude-opus",               "tools": True,  "group": "all",     "thinking": True},
     "search_all_projects":{"model": "claude-opus",               "tools": True,  "group": "all",     "thinking": True},
     # Naver 특화 검색 인텐트
-    "news_search":        {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "news"},
-    "blog_search":        {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "blog"},
-    "shop_search":        {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "shop"},
-    "local_search":       {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "local"},
-    "book_search":        {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "book"},
-    "image_search":       {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "image"},
-    "encyclopedia_search":{"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "encyc"},
-    "knowledge_search":   {"model": "gemini-3-flash-preview",     "tools": True,  "group": "all",     "gemini_direct": "grounding", "naver_type": "kin"},
+    "news_search":        {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "news"},
+    "blog_search":        {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "blog"},
+    "shop_search":        {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "shop"},
+    "local_search":       {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "local"},
+    "book_search":        {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "book"},
+    "image_search":       {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "image"},
+    "encyclopedia_search":{"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "encyc"},
+    "knowledge_search":   {"model": "qwen-turbo",                "tools": True,  "group": "all",     "naver_type": "kin"},
 }
 
 INTENT_RULES: dict[str, dict[str, Any]] = {

@@ -10,7 +10,7 @@ import {
   getProviderDisplayLabel,
 } from "@/lib/modelRegistryPresentation";
 
-type RouteKey = "image" | "edit_image" | "video" | "llm";
+type RouteKey = string;
 
 interface RoutingPreference {
   route_key: RouteKey;
@@ -33,11 +33,30 @@ interface RoutingPreference {
   updated_by?: string | null;
 }
 
+interface RoutingPreferencesResponse {
+  preferences?: RoutingPreference[];
+  route_keys?: string[];
+}
+
 const ROUTES: Array<{ key: RouteKey; label: string; desc: string }> = [
+  { key: "llm", label: "LLM", desc: "어드민 기본 LLM 표시/선호" },
+  { key: "background_llm", label: "배경 LLM", desc: "압축·메모리·평가 등 백그라운드 작업" },
+  { key: "runner_llm", label: "Runner LLM", desc: "Pipeline Runner 모델 후보" },
+  { key: "search", label: "검색", desc: "SearXNG/Naver/Kakao/grounding 검색" },
+  { key: "deep_research", label: "딥리서치", desc: "자체 검색·크롤링·종합 보고서" },
+  { key: "url_analyze", label: "URL 분석", desc: "Jina/Crawl4AI 원문 추출과 요약" },
+  { key: "fact_check", label: "팩트체크", desc: "검색 근거 교차검증" },
+  { key: "image_analyze", label: "이미지 분석", desc: "첨부 이미지·화면 분석" },
+  { key: "video_analyze", label: "영상 분석", desc: "영상 프레임 추출·분석" },
+  { key: "visual_qa", label: "Visual QA", desc: "화면/스크린샷 품질 검증" },
+  { key: "embedding", label: "임베딩", desc: "메시지·기억 벡터화" },
+  { key: "semantic_search", label: "시맨틱 검색", desc: "pgvector 유사도 검색" },
   { key: "image", label: "이미지", desc: "generate_image 기본 라우팅" },
   { key: "edit_image", label: "이미지 편집", desc: "edit_image 기본 라우팅" },
   { key: "video", label: "동영상", desc: "generate_video job 라우팅" },
-  { key: "llm", label: "LLM", desc: "어드민 기본 LLM 표시/선호" },
+  { key: "music", label: "음악", desc: "generate_music 기본 라우팅" },
+  { key: "audio", label: "음성", desc: "TTS/audio 기본 라우팅" },
+  { key: "code_exec", label: "코드 실행", desc: "Codex/CLI 기반 코드 실행" },
 ];
 
 function availabilityStyle(value: string): { background: string; color: string; border: string } {
@@ -100,7 +119,7 @@ export default function ModelRoutingPage() {
     setLoading(true);
     setMessage("");
     api.getModelRoutingPreferences()
-      .then((res: any) => setItems(Array.isArray(res.preferences) ? res.preferences : []))
+      .then((res: RoutingPreferencesResponse) => setItems(Array.isArray(res.preferences) ? res.preferences : []))
       .catch((err) => setMessage(err instanceof Error ? err.message : "모델 라우팅 설정을 불러오지 못했습니다."))
       .finally(() => setLoading(false));
   }, []);

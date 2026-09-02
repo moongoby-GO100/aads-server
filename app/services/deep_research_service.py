@@ -99,7 +99,7 @@ class DeepResearchService:
             return False
 
     def is_available(self) -> bool:
-        return bool(self._api_key)
+        return True
 
     # ─── 스트리밍 AsyncGenerator (AADS-188A 신규) ──────────────────────────────
 
@@ -127,14 +127,6 @@ class DeepResearchService:
         """
         from app.models.research import ResearchEvent
 
-        if not self.is_available():
-            yield ResearchEvent(
-                type="error",
-                text="GEMINI_API_KEY 미설정 — Deep Research 비활성",
-                content="GEMINI_API_KEY 미설정 — Deep Research 비활성",
-            )
-            return
-
         if not _check_daily_limit():
             yield ResearchEvent(
                 type="error",
@@ -152,6 +144,22 @@ class DeepResearchService:
         await asyncio.sleep(0)
 
         prompt = _build_prompt(query, context, _format_preset(format))
+        route = await self._select_route()
+        if route and route.get("provider") not in {"google", "gemini"}:
+            async for event in self._research_stream_native(query, context, format, timeout, route):
+                yield event
+            return
+
+        if not self._api_key:
+            async for event in self._research_stream_native(
+                query,
+                context,
+                format,
+                timeout,
+                {"provider": "self", "model_id": "smart-search-synthesis"},
+            ):
+                yield event
+            return
 
         # Langfuse 트레이스 시작
         lf_span = None
@@ -354,10 +362,28 @@ class DeepResearchService:
             pass
 
         try:
-            result = await asyncio.wait_for(
-                self._research_impl(prompt, stream_callback),
-                timeout=timeout,
-            )
+            route = await self._select_route()
+            if route and route.get("provider") not in {"google", "gemini"}:
+                result = await asyncio.wait_for(
+                    self._research_native(query, context, combined_format, route, stream_callback),
+                    timeout=timeout,
+                )
+            elif self._api_key:
+                result = await asyncio.wait_for(
+                    self._research_impl(prompt, stream_callback),
+                    timeout=timeout,
+                )
+            else:
+                result = await asyncio.wait_for(
+                    self._research_native(
+                        query,
+                        context,
+                        combined_format,
+                        {"provider": "self", "model_id": "smart-search-synthesis"},
+                        stream_callback,
+                    ),
+                    timeout=timeout,
+                )
             _increment_daily()
             result.elapsed_sec = round(time.monotonic() - start_ts, 1)
 
@@ -391,6 +417,106 @@ class DeepResearchService:
             )
 
     # ─── 내부 구현 라우터 ─────────────────────────────────────────────────────
+
+    async def _select_route(self) -> dict[str, str] | None:
+        try:
+            from app.services.ai_route_resolver import get_first_route_candidate
+            candidate = await get_first_route_candidate("deep_research")
+            if not candidate:
+                return None
+            return {"provider": candidate.provider, "model_id": candidate.runtime_model}
+        except Exception as exc:
+            logger.warning(f"[DeepResearch] route select failed: {str(exc)[:160]}")
+            return None
+
+    async def _research_stream_native(
+        self,
+        query: str,
+        context: Optional[str],
+        format: Optional[str],
+        timeout: int,
+        route: dict[str, str],
+    ) -> AsyncGenerator[Any, None]:
+        from app.models.research import ResearchEvent
+
+        yield ResearchEvent(type="searching", content="자체 검색/크롤링 수집 중...", phase="searching", progress_pct=20)
+        try:
+            result = await asyncio.wait_for(
+                self._research_native(query, context, _format_preset(format), route, None),
+                timeout=timeout,
+            )
+            yield ResearchEvent(type="analyzing", content="수집 근거 종합 중...", phase="analyzing", progress_pct=80)
+            yield ResearchEvent(
+                type="complete",
+                content=result.report,
+                sources=result.citations[:15],
+                interaction_id=result.interaction_id,
+                phase="complete",
+                progress_pct=100,
+            )
+        except Exception as exc:
+            logger.error(f"[DeepResearch.native_stream] error: {exc}")
+            yield ResearchEvent(
+                type="error",
+                content=f"[자체 Deep Research 오류: {str(exc)[:200]}]",
+                text=str(exc)[:200],
+            )
+
+    async def _research_native(
+        self,
+        query: str,
+        context: Optional[str],
+        format_instructions: Optional[str],
+        route: dict[str, str],
+        stream_callback: Optional[Callable[[str, str], None]],
+    ) -> ResearchResult:
+        """Google 없이 SearXNG/Jina/Crawl4AI 수집 후 LLM으로 종합한다."""
+        from app.core.anthropic_client import call_llm_with_fallback
+        from app.services.smart_search_service import smart_search
+
+        start_ts = time.monotonic()
+        search_result = await smart_search(query, complexity="DEEP")
+        evidence = search_result.get("formatted_text") or ""
+        citations = search_result.get("citations") or []
+        if stream_callback:
+            await _maybe_await(stream_callback("research_progress", f"자체 검색 결과 {len(citations)}개 수집"))
+
+        if not evidence:
+            return ResearchResult(
+                report=f"[자체 Deep Research 검색 결과 없음]\n\n질문: {query}",
+                citations=[],
+                interaction_id=f"self-{int(time.time())}",
+                status="error",
+                elapsed_sec=round(time.monotonic() - start_ts, 1),
+            )
+
+        synthesis_model = route.get("model_id") or "claude-sonnet-4-6"
+        if synthesis_model in {"smart-search-synthesis", "jina-crawl4ai-synthesis"}:
+            synthesis_model = "claude-sonnet-4-6"
+
+        prompt = (
+            "아래 검색/크롤링 근거만 사용해 CEO용 Deep Research 보고서를 작성하세요.\n"
+            "없는 내용은 추정하지 말고, 불확실하면 미검증으로 표시하세요.\n\n"
+            f"질문: {query}\n\n"
+            f"배경 컨텍스트:\n{context or '-'}\n\n"
+            f"보고서 형식:\n{format_instructions or '요약, 근거, 리스크, 권장 조치, 출처'}\n\n"
+            f"근거:\n{evidence[:50000]}"
+        )
+        report = await call_llm_with_fallback(
+            prompt,
+            model=synthesis_model,
+            max_tokens=4000,
+            system="검색 근거 기반 보고서를 작성하는 AADS 자체 Deep Research 엔진입니다.",
+        )
+        return ResearchResult(
+            report=report or "[자체 Deep Research 종합 실패]",
+            interaction_id=f"self-{int(time.time())}",
+            citations=citations[:20],
+            thinking_summary=f"native route={route.get('provider')}:{route.get('model_id')}",
+            status="done" if report else "error",
+            cost_usd=0.0,
+            elapsed_sec=round(time.monotonic() - start_ts, 1),
+        )
 
     async def _research_impl(
         self,

@@ -268,15 +268,15 @@ _CHAT_FIRST_INTENTS = {
 
 # 신규 인텐트 → 권장 모델 매핑
 _CHAT_FIRST_MODEL_MAP: Dict[str, str] = {
-    "casual":           "gemini-2.0-flash",
-    "search":           "gemini-2.5-flash",
-    "deep_research":    "gemini-2.5-pro",
-    "url_analyze":      "gemini-2.5-flash",
-    "video_analyze":    "gemini-2.5-flash",
-    "image_analyze":    "gemini-2.5-flash",
+    "casual":           "claude-haiku-4-5",
+    "search":           "qwen-turbo",
+    "deep_research":    "claude-sonnet-4-6",
+    "url_analyze":      "qwen-turbo",
+    "video_analyze":    "claude-sonnet-4-6",
+    "image_analyze":    "claude-sonnet-4-6",
     "planning":         "claude-sonnet-4-6",
     "decision":         "claude-opus-4-6",
-    "code_exec":        "gemini-2.5-flash",
+    "code_exec":        "gpt-5.6-sol",
     "directive_gen":    "claude-sonnet-4-6",
     "memory_recall":    "claude-sonnet-4-6",
     "workspace_switch": "claude-sonnet-4-6",
@@ -362,7 +362,7 @@ def route_model(message: str) -> str:
     if any(p in message for p in code):
         return 'claude-sonnet-4-6'
     if any(p in message for p in simple):
-        return 'gemini-2.5-flash'
+        return 'qwen-turbo'
     return 'claude-sonnet-4-6'
 
 
@@ -526,8 +526,8 @@ async def _call_litellm_openai(model: str, system_prompt: str, messages: List[Di
         usage = data.get("usage", {})
         return text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
     except Exception as e:
-        logger.warning(f"LiteLLM call failed for {model}, fallback to gemini-2.5-flash: {e}")
-        return await _call_gemini("gemini-2.5-flash", system_prompt, messages)
+        logger.warning(f"LiteLLM call failed for {model}, fallback to claude-haiku-4-5: {e}")
+        return await _call_anthropic("claude-haiku-4-5", system_prompt, messages)
 
 
 async def _call_anthropic_with_tools(
