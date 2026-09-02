@@ -56,6 +56,7 @@ from app.api.hot_reload import router as hot_reload_router
 from app.api.credential_vault import router as credential_vault_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.llm_models import router as llm_models_router
+from app.api.llm_report import router as llm_report_router
 from app.api.user_api_keys import router as user_api_keys_router
 from app.api.user_project_servers import router as user_project_servers_router
 from app.api.braming import router as braming_router
@@ -2016,7 +2017,51 @@ async def lifespan(app: FastAPI):
             set_scheduler(scheduler)
         except Exception:
             pass
-        logger.info("apscheduler_started", jobs=["alert_eval", "healing_cycle", "daily_summary", "weekly_briefing"])
+        # 매월 1일 00:05 KST — LLM 모델 레지스트리 자동 동기화
+        try:
+            from app.services.model_registry import sync_model_registry as _sync_registry
+
+            async def _monthly_llm_sync_job():
+                try:
+                    registry_result = await _sync_registry(
+                        triggered_by="scheduler",
+                        reason="monthly_llm_model_sync",
+                    )
+                    try:
+                        from app.api.llm_report import refresh_static_report
+
+                        report_summary = await refresh_static_report(refresh=True)
+                        report_error = report_summary.get("error")
+                    except Exception as report_exc:
+                        report_error = str(report_exc)
+                        report_summary = {}
+                    logger.info(
+                        "monthly_llm_sync_done",
+                        registry_ok=bool(registry_result.get("ok")),
+                        registry_models=registry_result.get("models_synced", registry_result.get("total_models")),
+                        report_models=report_summary.get("models"),
+                        report_providers=report_summary.get("providers"),
+                        report_free_models=report_summary.get("free"),
+                        report_bytes=report_summary.get("bytes"),
+                        report_error=report_error,
+                    )
+                except Exception as _exc:
+                    logger.error("monthly_llm_sync_failed", error=str(_exc))
+
+            scheduler.add_job(
+                lambda: __import__("asyncio").run(_monthly_llm_sync_job()),
+                trigger="cron",
+                day=1,
+                hour=0,
+                minute=5,
+                timezone="Asia/Seoul",
+                id="monthly_llm_model_sync",
+                replace_existing=True,
+                name="LLM 모델 레지스트리 월간 자동 동기화",
+            )
+        except Exception:
+            pass
+        logger.info("apscheduler_started", jobs=["alert_eval", "healing_cycle", "daily_summary", "weekly_briefing", "monthly_llm_model_sync"])
     except Exception as e:
         logger.warning("apscheduler_start_failed_graceful_degradation", error=str(e))
         scheduler = None
@@ -3036,6 +3081,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/kakao-bot/msgbot/webhook",
     "/api/v1/kakao-bot/respond",
     "/api/v1/kakao-bot/agent",
+    "/api/v1/llm-models/report",
     "/api/v1/devices/android/manifest",
     "/api/v1/devices/android/install",
     "/api/v1/devices/android/download",
@@ -3180,6 +3226,7 @@ app.include_router(google_sheets.router, prefix="/api/v1", tags=["google-sheets"
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
 app.include_router(llm_models_router, prefix="/api/v1", tags=["llm-models"])
+app.include_router(llm_report_router, prefix="/api/v1", tags=["llm-models"])
 app.include_router(user_api_keys_router)
 app.include_router(user_project_servers_router)
 app.include_router(braming_router)

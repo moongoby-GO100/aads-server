@@ -9975,3 +9975,31 @@
 - 변경: `app/api/pipeline_runner.py`, `app/api/admin.py`, `app/api/ceo_chat_tools.py`, `app/services/tool_executor.py` 표시/통계 상태에 `review_hold`를 action_required로 추가했다. `pipeline_runner_model_stats` view도 `review_hold_jobs`를 별도 집계한다.
 - 추가: `migrations/141_pipeline_runner_review_hold.sql`로 과거 리뷰 인프라 실패 row를 `review_hold`로 정규화할 수 있게 했다.
 - 검증: `python3 -m py_compile app/services/code_reviewer.py app/services/pipeline_runner_service.py app/api/pipeline_runner.py app/api/admin.py app/api/ceo_chat_tools.py app/services/tool_executor.py tests/unit/test_code_reviewer_flag_classification.py tests/unit/test_pipeline_runner_script_guards.py` 통과. `python3 -m pytest tests/unit/test_code_reviewer_flag_classification.py tests/unit/test_pipeline_runner_script_guards.py -q` → 27 passed, 1 warning(`pytest-asyncio` 미설치 경고).
+
+## 2026-09-02 16:55 KST - LLM market report and monthly refresh export
+
+- CEO request:
+  - Produce a browser-readable HTML report for latest LLM companies/models as of 2026-09-02, sorted by performance, coding capability, feature capability, free/paid availability, and add an admin link plus monthly refresh.
+- Evidence:
+  - OpenRouter public models API returned 421 models, 58 providers, 21 free API models, and 400 paid API models.
+  - Official OpenAI documentation confirmed `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-image-2`, and `sora-2` pricing/capability data.
+  - Official Anthropic pricing confirmed Claude Fable 5.1, Mythos 5.1, Opus 5, Sonnet 5, and Haiku 4.5 pricing.
+- Changes:
+  - `app/api/llm_report.py`: replaced static hardcoded HTML with live OpenRouter catalog backed report generation, JSON smoke endpoint, performance/coding/capability/free/paid/provider/all-model sections, and `refresh_static_report()`.
+  - `app/main.py`: monthly `monthly_llm_model_sync` now also refreshes the HTML report cache/static artifact and logs model/provider/free counts.
+  - `scripts/trigger_model_sync.py`: manual sync now refreshes the report and uses a generic refresh reason.
+  - `scripts/refresh_llm_report_export.sh`: host cron wrapper regenerates the report inside the API container and publishes it to `/var/www/certbot/exports/llm-models-current.html`.
+  - `app/static/reports/llm-models-current.html`: generated current report artifact for API/static reference.
+- Runtime publication:
+  - Public browser URL: `https://aads.newtalk.kr/exports/llm-models-current.html`.
+  - Screenshot: `https://aads.newtalk.kr/screenshots/screenshot_20260902_165256_c5fc8f.png`.
+  - Actual crontab: `10 9 1 * * /root/aads/aads-server/scripts/refresh_llm_report_export.sh >> /var/log/aads-llm-report-refresh.log 2>&1 # AADS_LLM_REPORT_MONTHLY_REFRESH`.
+- Verification:
+  - `docker exec aads-server python -m ruff check /app/app/api/llm_report.py /app/scripts/trigger_model_sync.py` passed.
+  - `docker exec aads-server python -m py_compile /app/app/api/llm_report.py /app/app/main.py /app/scripts/trigger_model_sync.py` passed.
+  - `docker exec aads-server python -m pytest /app/tests/unit/test_llm_registry_sync_flow.py -q` passed 6/6.
+  - `bash scripts/refresh_llm_report_export.sh` generated 195,544-byte backend report with 421 models.
+  - `curl https://aads.newtalk.kr/exports/llm-models-current.html` returned HTTP 200 and contained `전체 모델 목록 (421개)`, `gpt-5.6-sol`, and `Claude Fable 5.1`.
+- Deployment:
+  - API blue/green release not run in this step because the working tree contains unrelated dirty files. Runtime public HTML was published through the existing `/exports/` nginx alias.
+  - Commit/push pending until target files are safely isolated from unrelated dirty changes.
