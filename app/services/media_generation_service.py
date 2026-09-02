@@ -292,7 +292,8 @@ class MediaGenerationService:
         try:
             async with pool.acquire() as conn:
                 select_columns = """
-                    provider, model_id, execution_model_id, execution_backend,
+                    provider, model_id, execution_model_id,
+                    metadata->>'execution_backend' AS execution_backend,
                     is_active, is_selectable, is_executable,
                     verification_status, metadata, capabilities
                 """
@@ -348,7 +349,8 @@ class MediaGenerationService:
                     SELECT pref.route_key, pref.provider, pref.model_id,
                            pref.display_order, pref.is_enabled, pref.is_default,
                            pref.notes, pref.updated_at, pref.updated_by,
-                           models.execution_model_id, models.execution_backend,
+                           models.execution_model_id,
+                           models.metadata->>'execution_backend' AS execution_backend,
                            models.is_active, models.is_selectable, models.is_executable,
                            models.verification_status, models.metadata, models.capabilities
                     FROM model_routing_preferences AS pref
@@ -385,7 +387,8 @@ class MediaGenerationService:
                     SELECT pref.route_key, pref.provider, pref.model_id,
                            pref.display_order, pref.is_enabled, pref.is_default,
                            pref.notes, pref.updated_at, pref.updated_by,
-                           models.execution_model_id, models.execution_backend,
+                           models.execution_model_id,
+                           models.metadata->>'execution_backend' AS execution_backend,
                            models.is_active, models.is_selectable, models.is_executable,
                            models.verification_status, models.metadata, models.capabilities
                     FROM model_routing_preferences AS pref
