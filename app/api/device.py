@@ -115,11 +115,20 @@ async def _ensure_pairing_table() -> bool:
                     token_hash TEXT UNIQUE NOT NULL,
                     label TEXT DEFAULT '',
                     created_by TEXT DEFAULT '',
+                    user_id TEXT,
+                    tenant_id UUID,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     expires_at TIMESTAMPTZ,
                     last_used_at TIMESTAMPTZ,
                     revoked_at TIMESTAMPTZ
                 )
+                """
+            )
+            await conn.execute(
+                """
+                ALTER TABLE device_pairing_tokens
+                    ADD COLUMN IF NOT EXISTS user_id TEXT,
+                    ADD COLUMN IF NOT EXISTS tenant_id UUID
                 """
             )
             await conn.execute(
@@ -135,6 +144,12 @@ async def _ensure_pairing_table() -> bool:
                 WHERE revoked_at IS NULL
                 """
             )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_device_pairing_tokens_owner_recent
+                ON device_pairing_tokens(user_id, tenant_id, id DESC)
+                """
+            )
         _PAIRING_TABLE_READY = True
         return True
     except Exception as e:
@@ -142,12 +157,12 @@ async def _ensure_pairing_table() -> bool:
         return False
 
 
-async def _verify_token(token: str, agent_id: str = "", device_type: str = "") -> bool:
+async def _verify_token(token: str, agent_id: str = "", device_type: str = "") -> tuple[bool, str, str]:
     if not token:
-        return False
+        return False, "", ""
     expected = os.environ.get("PC_AGENT_TOKEN", "")
     if expected and token == expected:
-        return True
+        return True, "", ""
     if await _ensure_pairing_table():
         pool = await _get_pool_or_none()
         if pool is not None:
@@ -162,14 +177,14 @@ async def _verify_token(token: str, agent_id: str = "", device_type: str = "") -
                           AND ($3 = '' OR device_type = $3)
                           AND revoked_at IS NULL
                           AND (expires_at IS NULL OR expires_at > NOW() OR last_used_at IS NOT NULL)
-                        RETURNING id
+                        RETURNING user_id, tenant_id
                         """,
                         _token_hash(token),
                         agent_id,
                         device_type,
                     )
                     if row is not None:
-                        return True
+                        return True, str(row["user_id"] or "").strip(), str(row["tenant_id"] or "").strip()
             except Exception as e:
                 logger.warning("device_pairing_token_verify_failed: %s", e)
     try:
@@ -180,9 +195,26 @@ async def _verify_token(token: str, agent_id: str = "", device_type: str = "") -
             row = await conn.fetchrow(
                 "SELECT 1 FROM api_tokens WHERE token=$1 AND is_active=true", token
             )
-            return row is not None
+            return (row is not None), "", ""
     except Exception:
-        return bool(expected and token == expected)
+        return bool(expected and token == expected), "", ""
+
+
+def _owner_scope(current_user: dict) -> str:
+    if current_user.get("is_internal_admin"):
+        return ""
+    return str(current_user.get("user_id") or "").strip()
+
+
+def _assert_device_access(agent_id: str, current_user: dict) -> None:
+    if current_user.get("is_internal_admin"):
+        return
+    status = device_manager.get_device_status(agent_id)
+    if status is None:
+        return
+    owner_user_id = str(status.get("user_id") or "").strip()
+    if owner_user_id != str(current_user.get("user_id") or "").strip():
+        raise HTTPException(status_code=403, detail="다른 사용자의 디바이스에는 접근할 수 없습니다.")
 
 
 @router.websocket("/devices/ws/{agent_id}")
@@ -192,7 +224,8 @@ async def ws_device(
     token: str = Query(""),
     device_type: str = Query("pc"),
 ):
-    if not await _verify_token(token, agent_id, device_type):
+    token_valid, owner_user_id, owner_tenant_id = await _verify_token(token, agent_id, device_type)
+    if not token_valid:
         await websocket.close(code=4001, reason="인증 실패")
         return
 
@@ -208,7 +241,12 @@ async def ws_device(
         payload = raw.get("payload", {})
         actual_type = payload.get("device_type", device_type)
         device_info = device_manager.register_device(
-            agent_id, websocket, actual_type, payload
+            agent_id,
+            websocket,
+            actual_type,
+            payload,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
         )
 
         await websocket.send_json({"type": "registered", "payload": {"agent_id": agent_id}})
@@ -275,21 +313,28 @@ async def _require_admin(current_user: dict = Depends(get_current_user)) -> dict
 
 
 @router.get("/devices")
-async def list_devices(device_type: str = Query(None)):
-    devices = device_manager.list_device_statuses(device_type)
+async def list_devices(device_type: str = Query(None), current_user: dict = Depends(get_current_user)):
+    devices = device_manager.list_device_statuses(device_type, owner_user_id=_owner_scope(current_user))
     return {"devices": devices, "count": len(devices)}
 
 
 @router.post("/devices/execute")
-async def execute_command(req: CommandRequest):
+async def execute_command(req: CommandRequest, current_user: dict = Depends(get_current_user)):
+    if req.agent_id:
+        _assert_device_access(req.agent_id, current_user)
     result = await device_manager.send_command(
-        req.agent_id, req.command_type, req.params, req.timeout
+        req.agent_id,
+        req.command_type,
+        req.params,
+        req.timeout,
+        owner_user_id=_owner_scope(current_user),
     )
     return result.model_dump()
 
 
 @router.get("/devices/{agent_id}/status")
-async def device_status(agent_id: str):
+async def device_status(agent_id: str, current_user: dict = Depends(get_current_user)):
+    _assert_device_access(agent_id, current_user)
     status = device_manager.get_device_status(agent_id)
     if status is None:
         return {
@@ -308,7 +353,8 @@ async def device_status(agent_id: str):
 
 
 @router.get("/devices/{agent_id}/capabilities")
-async def device_capabilities(agent_id: str):
+async def device_capabilities(agent_id: str, current_user: dict = Depends(get_current_user)):
+    _assert_device_access(agent_id, current_user)
     caps = device_manager.get_device_capabilities(agent_id)
     status = device_manager.get_device_status(agent_id)
     return {
@@ -371,7 +417,7 @@ async def android_agent_manifest():
 @router.post("/devices/android/pairing")
 async def create_android_pairing(
     req: AndroidPairingRequest,
-    current_user: dict = Depends(_require_admin),
+    current_user: dict = Depends(get_current_user),
 ):
     if not await _ensure_pairing_table():
         raise HTTPException(status_code=503, detail="DB pool 또는 페어링 테이블을 사용할 수 없습니다")
@@ -388,15 +434,17 @@ async def create_android_pairing(
         await conn.execute(
             """
             INSERT INTO device_pairing_tokens (
-                agent_id, device_type, token_hash, label, created_by, expires_at
+                agent_id, device_type, token_hash, label, created_by, user_id, tenant_id, expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8)
             """,
             agent_id,
             req.device_type,
             token_hash,
             req.label,
             current_user.get("email", ""),
+            str(current_user.get("user_id") or ""),
+            current_user.get("tenant_id"),
             expires_at,
         )
 
@@ -423,7 +471,7 @@ async def create_android_pairing(
 @router.post("/devices/android/pairing/{agent_id}/revoke")
 async def revoke_android_pairing(
     agent_id: str,
-    current_user: dict = Depends(_require_admin),
+    current_user: dict = Depends(get_current_user),
 ):
     if not await _ensure_pairing_table():
         raise HTTPException(status_code=503, detail="DB pool 또는 페어링 테이블을 사용할 수 없습니다")
@@ -437,8 +485,10 @@ async def revoke_android_pairing(
             SET revoked_at = NOW()
             WHERE agent_id = $1
               AND revoked_at IS NULL
+              AND ($2::text = '' OR user_id = $2)
             """,
             agent_id,
+            "" if current_user.get("is_internal_admin") else str(current_user.get("user_id") or ""),
         )
     return {"agent_id": agent_id, "result": result, "revoked_by": current_user.get("email", "")}
 

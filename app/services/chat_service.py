@@ -1435,11 +1435,13 @@ async def _apply_deferred_interrupts_to_state(
             try:
                 from app.core.anthropic_client import call_llm_with_fallback
 
+                _fr_user_id = await _resolve_session_user_id(session_id)
                 revised_response = await _heartbeat_asyncio.wait_for(
                     call_llm_with_fallback(
                         fast_prompt,
                         max_tokens=2048,
                         system=system_prompt,
+                        user_id=_fr_user_id,
                     ),
                     timeout=75,
                 ) or ""
@@ -2376,6 +2378,7 @@ async def _rewrite_incomplete_final_report_once(
         from app.core.anthropic_client import call_llm_with_fallback
 
         timeout_sec = float(os.getenv("AADS_FINAL_REPORT_REWRITE_TIMEOUT_SEC", "35"))
+        _rw_user_id = await _resolve_session_user_id(session_id)
         rewritten = await _heartbeat_asyncio.wait_for(
             call_llm_with_fallback(
                 prompt,
@@ -2385,6 +2388,7 @@ async def _rewrite_incomplete_final_report_once(
                     "You rewrite incomplete operational chat responses into concise final reports. "
                     "Do not invent verification, commits, deployments, or measurements."
                 ),
+                user_id=_rw_user_id,
             ),
             timeout=timeout_sec,
         ) or ""
@@ -6668,6 +6672,25 @@ async def _get_conn() -> asyncpg.Connection:
     """
     pool = get_pool()
     return await pool.acquire(timeout=10)
+
+
+async def _resolve_session_user_id(session_id: Optional[uuid.UUID]) -> Optional[str]:
+    """AADS-BYOK: session_id로 chat_sessions.user_id를 조회.
+
+    call_llm_with_fallback(user_id=...)에 전달해 사용자 등록 API 키(BYOK)를
+    시스템 키보다 우선 사용하도록 한다. 조회 실패 시 None(시스템 키로 폴백).
+    """
+    if not session_id:
+        return None
+    try:
+        pool = get_pool()
+        return await pool.fetchval(
+            "SELECT user_id FROM chat_sessions WHERE id = $1",
+            session_id if isinstance(session_id, uuid.UUID) else uuid.UUID(str(session_id)),
+        )
+    except Exception as e:
+        logger.debug("resolve_session_user_id_failed session=%s error=%s", str(session_id)[:8], str(e)[:80])
+        return None
 
 
 # ─── Anthropic 클라이언트 ──────────────────────────────────────────────────────

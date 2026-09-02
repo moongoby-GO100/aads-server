@@ -58,6 +58,55 @@ async def test_execute_routed_command_returns_no_capable_agent() -> None:
     assert result["error_code"] == "NO_CAPABLE_AGENT"
 
 
+@pytest.mark.asyncio
+async def test_execute_routed_command_does_not_auto_select_other_owner_agent() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "other-user-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "other", "capabilities": ["chrome_cdp", "interactive_browser"]},
+        owner_user_id="user-b",
+    )
+
+    result = await manager.execute_routed_command(
+        command_type="browser_eval",
+        params={"expression": "document.title"},
+        job_type="managed_browser",
+        required_capabilities=["interactive_browser"],
+        owner_user_id="user-a",
+        command_timeout_seconds=0.1,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "PC_AGENT_OFFLINE"
+
+
+@pytest.mark.asyncio
+async def test_execute_routed_command_rejects_preferred_other_owner_agent() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "other-user-pc",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "other", "capabilities": ["chrome_cdp", "interactive_browser"]},
+        owner_user_id="user-b",
+    )
+
+    result = await manager.execute_routed_command(
+        command_type="browser_eval",
+        params={"expression": "document.title"},
+        agent_id="other-user-pc",
+        job_type="managed_browser",
+        required_capabilities=["interactive_browser"],
+        owner_user_id="user-a",
+        command_timeout_seconds=0.1,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "AGENT_FORBIDDEN"
+
+
 def test_register_agent_status_exposes_shell_alias_command_types() -> None:
     manager = PCAgentManager()
     ws = _DummyWebSocket()
@@ -116,7 +165,7 @@ async def test_send_command_normalizes_powershell_alias() -> None:
     assert ws.messages
     payload = ws.messages[0]["payload"]
     assert payload["command_type"] == "shell"
-    assert payload["params"]["command"].startswith("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ")
+    assert payload["params"]["command"].startswith("powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ")
 
 
 @pytest.mark.asyncio

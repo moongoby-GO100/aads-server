@@ -20,6 +20,12 @@ class _DummyTask:
 class _DummyRequest:
     def __init__(self, headers: dict[str, str] | None = None) -> None:
         self.headers = headers or {}
+        self.cookies = {}
+        self.client = None
+
+
+def _internal_request() -> _DummyRequest:
+    return _DummyRequest(headers={pc_agent._PEER_FALLBACK_HEADER: "1"})
 
 
 def test_peer_fallback_urls_skip_local_container_and_use_peer_dns(
@@ -102,7 +108,7 @@ def _setup_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_agent_connections", {})
     monkeypatch.setattr(pc_agent, "_pending_reload_disconnects", [])
     monkeypatch.setattr(pc_agent, "_RELOAD_DISCONNECT_FLUSH_TASK", None)
-    monkeypatch.setattr(pc_agent, "_verify_token_db", AsyncMock(return_value=True))
+    monkeypatch.setattr(pc_agent, "_verify_token_db", AsyncMock(return_value=(True, "", "")))
     monkeypatch.setattr(pc_agent.pc_agent_manager, "register_agent", Mock())
     monkeypatch.setattr(pc_agent.pc_agent_manager, "unregister_agent", Mock(return_value=True))
     monkeypatch.setattr(pc_agent.pc_agent_manager, "update_heartbeat", Mock())
@@ -152,7 +158,7 @@ async def test_list_agents_returns_peer_snapshot_when_local_registry_empty(monke
         ),
     )
 
-    result = await pc_agent.list_agents(_DummyRequest())
+    result = await pc_agent.list_agents(_internal_request())
 
     assert result["agents"][0]["agent_id"] == "oby-ceo"
     assert result["online_count"] == 1
@@ -351,7 +357,7 @@ async def test_route_execute_uses_peer_fallback_on_local_offline(
     )
 
     request = pc_agent.RoutedCommandRequest(command_type="system_info", params={})
-    result = await pc_agent.route_execute_command(request, _DummyRequest())
+    result = await pc_agent.route_execute_command(request, _internal_request())
 
     assert result["status"] == "success"
     assert result["command_id"] == "peer-cmd-1"
@@ -375,7 +381,7 @@ async def test_route_execute_browser_eval_allows_long_bank_evaluation_timeout(
         params={"expression": "document.body.innerText"},
         command_timeout_seconds=90,
     )
-    result = await pc_agent.route_execute_command(request, _DummyRequest())
+    result = await pc_agent.route_execute_command(request, _internal_request())
 
     assert result["status"] == "success"
     assert captured["command_timeout_seconds"] == 90
@@ -399,7 +405,7 @@ async def test_execute_browser_command_adds_default_work_key(
     monkeypatch.setattr(pc_agent.pc_agent_manager, "send_command", fake_send_command)
 
     request = pc_agent.CommandRequest(agent_id="ceo-pc", command_type="browser_launch", params={})
-    result = await pc_agent.execute_command(request)
+    result = await pc_agent.execute_command(request, _internal_request())
 
     assert result == {"command_id": "cmd-browser-1", "status": "pending"}
     assert captured["agent_id"] == "ceo-pc"

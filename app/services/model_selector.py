@@ -949,6 +949,41 @@ _DIRECT_PROVIDER_ENV_KEYS = {
     "kimi": "MOONSHOT_API_KEY",
     "minimax": "MINIMAX_API_KEY",
 }
+_DIRECT_PROVIDER_BYOK_ALIASES = {
+    "qwen": "dashscope",
+}
+
+
+async def _resolve_session_user_id(session_id: Optional[str]) -> Optional[str]:
+    if not session_id:
+        return None
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        return await pool.fetchval("SELECT user_id FROM chat_sessions WHERE id = $1::uuid", str(session_id))
+    except Exception as exc:
+        logger.debug("model_selector_resolve_session_user_failed session=%s err=%s", str(session_id)[:8], str(exc)[:80])
+        return None
+
+
+async def _get_session_user_api_key(session_id: Optional[str], provider: str) -> str:
+    user_id = await _resolve_session_user_id(session_id)
+    if not user_id:
+        return ""
+    try:
+        from app.core.anthropic_client import _get_user_api_key
+
+        byok_provider = _DIRECT_PROVIDER_BYOK_ALIASES.get(provider, provider)
+        return await _get_user_api_key(str(user_id), byok_provider) or ""
+    except Exception as exc:
+        logger.debug(
+            "model_selector_byok_key_lookup_failed session=%s provider=%s err=%s",
+            str(session_id)[:8],
+            provider,
+            str(exc)[:80],
+        )
+        return ""
 
 
 async def get_available_model_ids() -> set[str]:
@@ -1136,7 +1171,7 @@ async def _stream_direct_openai_provider(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     request_model = str(metadata.get("execution_model_id") or display_model).strip() or display_model
     base_url = str(metadata.get("execution_base_url") or _DIRECT_PROVIDER_BASE_URLS.get(provider, "")).rstrip("/")
-    api_key = await _get_direct_provider_api_key(provider)
+    api_key = await _get_session_user_api_key(session_id, provider) or await _get_direct_provider_api_key(provider)
     if not base_url or not api_key:
         yield {"type": "error", "content": f"direct provider route unavailable: provider={provider}"}
         return
@@ -2218,12 +2253,19 @@ async def _stream_litellm_anthropic(
     output_tokens = 0
     _MAX_RETRIES = 10
     _MAX_TOOL_TURNS = 50
+    _user_anthropic_key = await _get_session_user_api_key(session_id, "anthropic")
     _headers = {
-        "x-api-key": LITELLM_API_KEY,
+        "x-api-key": _user_anthropic_key or LITELLM_API_KEY,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    _url = f"{LITELLM_BASE_URL}/v1/messages?beta=true"
+    _url = (
+        "https://api.anthropic.com/v1/messages"
+        if _user_anthropic_key
+        else f"{LITELLM_BASE_URL}/v1/messages?beta=true"
+    )
+    if _user_anthropic_key:
+        logger.info("model_selector_byok_anthropic_stream_enabled session=%s model=%s", str(session_id)[:8], litellm_model)
 
     yield {"type": "model_info", "model": _display_model}
 

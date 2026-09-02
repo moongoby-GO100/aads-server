@@ -19,6 +19,11 @@ class AgentInfo(BaseModel):
     command_types: list[str] = Field(default_factory=list)
     connected_at: datetime = Field(default_factory=datetime.utcnow)
     last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
+    # AADS-다중PC격리: 소유자(로그인 사용자) 귀속 정보. 빈 문자열이면 소유자 미상(레거시/공유 시크릿 연결).
+    user_id: str = ""
+    tenant_id: str = ""
+    # 다중 에이전트 구분용 표시 정보 (대시보드에서 PC 여러 대를 구분하기 위함)
+    agent_name: str = ""
 
 
 class CommandRequest(BaseModel):

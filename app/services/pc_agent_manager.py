@@ -177,25 +177,42 @@ class PCAgentManager:
     # ── 에이전트 등록/해제 ──────────────────────────────────────────
 
     def register_agent(
-        self, agent_id: str, websocket: WebSocket, info: Dict[str, Any]
+        self,
+        agent_id: str,
+        websocket: WebSocket,
+        info: Dict[str, Any],
+        *,
+        owner_user_id: str = "",
+        owner_tenant_id: str = "",
     ) -> AgentInfo:
-        """에이전트 등록."""
+        """에이전트 등록.
+
+        owner_user_id/owner_tenant_id는 WS 인증 시 확인된 토큰 소유자다.
+        다중 PC 에이전트를 사용자별로 격리하기 위해 연결 메타데이터에 함께 저장한다.
+        """
         capabilities = self._normalize_capabilities(info.get("capabilities"))
         command_type_set = self._normalize_command_types(info.get("command_types"))
         if "browser_launch" in command_type_set:
             capabilities.update({"chrome_cdp", "interactive_browser"})
+        agent_name = str(
+            info.get("agent_name") or info.get("label") or info.get("hostname") or agent_id
+        ).strip()
         agent_info = AgentInfo(
             agent_id=agent_id,
             hostname=info.get("hostname", ""),
             os_info=info.get("os_info", ""),
             capabilities=sorted(capabilities),
             command_types=sorted(command_type_set),
+            user_id=str(owner_user_id or "").strip(),
+            tenant_id=str(owner_tenant_id or "").strip(),
+            agent_name=agent_name,
         )
         self._agents[agent_id] = _AgentConnection(agent_id, websocket, agent_info)
         logger.info(
-            "pc_agent_registered agent_id=%s hostname=%s capabilities=%s command_types=%s",
+            "pc_agent_registered agent_id=%s hostname=%s user_id=%s capabilities=%s command_types=%s",
             agent_id,
             agent_info.hostname,
+            agent_info.user_id or "-",
             ",".join(agent_info.capabilities),
             ",".join(agent_info.command_types),
         )
@@ -480,18 +497,27 @@ class PCAgentManager:
 
     async def wait_for_agent_online(
         self, agent_id: str = "", timeout: float = 120.0, poll_interval: float = 2.0,
+        owner_user_id: str = "",
     ) -> dict[str, Any]:
         """에이전트가 온라인이 될 때까지 대기. 수집 루프의 재연결 대기에 사용."""
+        owner_user_id = str(owner_user_id or "").strip()
         deadline = asyncio.get_running_loop().time() + max(timeout, 1.0)
         waited_start = asyncio.get_running_loop().time()
         while True:
             if agent_id:
-                if self._is_online_locked(agent_id):
+                conn = self._agents.get(agent_id)
+                owner_matches = (
+                    not owner_user_id
+                    or (conn is not None and str(getattr(conn.info, "user_id", "") or "").strip() == owner_user_id)
+                )
+                if owner_matches and self._is_online_locked(agent_id):
                     waited = asyncio.get_running_loop().time() - waited_start
                     logger.info("pc_agent_wait_online_success agent_id=%s waited=%.1fs", agent_id, waited)
                     return {"status": "online", "agent_id": agent_id, "waited_seconds": round(waited, 1)}
             else:
                 for conn in self._agents.values():
+                    if owner_user_id and str(getattr(conn.info, "user_id", "") or "").strip() != owner_user_id:
+                        continue
                     if self._is_online_locked(conn.agent_id):
                         waited = asyncio.get_running_loop().time() - waited_start
                         logger.info("pc_agent_wait_online_success agent_id=%s waited=%.1fs", conn.agent_id, waited)
@@ -810,15 +836,22 @@ class PCAgentManager:
         command_types = list(getattr(conn.info, "command_types", []) or [])
         return {
             "agent_id": conn.info.agent_id,
+            "agent_name": getattr(conn.info, "agent_name", "") or conn.info.hostname or conn.info.agent_id,
             "hostname": conn.info.hostname,
             "os_info": conn.info.os_info,
+            "device_info": {
+                "hostname": conn.info.hostname,
+                "os_info": conn.info.os_info,
+            },
             "status": "online" if online else "offline",
+            "is_online": online,
             "heartbeat_age_seconds": round(heartbeat_age_seconds, 1),
             "capabilities": list(conn.info.capabilities),
             "command_types": command_types,
             "connected_at": conn.info.connected_at.isoformat() if conn.info.connected_at else None,
             "last_heartbeat": conn.info.last_heartbeat.isoformat() if conn.info.last_heartbeat else None,
             "last_seen": conn.info.last_heartbeat.isoformat() if conn.info.last_heartbeat else None,
+            "user_id": getattr(conn.info, "user_id", "") or "",
             "reconnect_guidance": self._reconnect_guidance(online),
         }
 
@@ -969,8 +1002,10 @@ class PCAgentManager:
         required_capabilities: set[str],
         job_type: str,
         now: datetime,
+        owner_user_id: str = "",
     ) -> dict[str, Any]:
         preferred = str(preferred_agent_id or "").strip()
+        owner_user_id = str(owner_user_id or "").strip()
 
         if preferred:
             conn = self._agents.get(preferred)
@@ -978,6 +1013,11 @@ class PCAgentManager:
                 return {
                     "error_code": _ERROR_PC_AGENT_OFFLINE,
                     "message": f"agent '{preferred}' is offline",
+                }
+            if owner_user_id and str(getattr(conn.info, "user_id", "") or "").strip() != owner_user_id:
+                return {
+                    "error_code": "AGENT_FORBIDDEN",
+                    "message": f"agent '{preferred}' is not owned by requester",
                 }
             capabilities = {cap.lower() for cap in conn.info.capabilities}
             missing = sorted(required_capabilities - capabilities)
@@ -994,6 +1034,12 @@ class PCAgentManager:
             for conn in self._agents.values()
             if self._is_online_locked(conn.agent_id, now)
         ]
+        if owner_user_id:
+            online_agents = [
+                conn
+                for conn in online_agents
+                if str(getattr(conn.info, "user_id", "") or "").strip() == owner_user_id
+            ]
         if not online_agents:
             return {
                 "error_code": _ERROR_PC_AGENT_OFFLINE,
@@ -1130,6 +1176,7 @@ class PCAgentManager:
         preferred_agent_id: str = "",
         required_capabilities: list[str] | None = None,
         ttl_seconds: int | None = None,
+        owner_user_id: str = "",
     ) -> dict[str, Any]:
         normalized_job = self._normalize_job_type(job_type)
         required = self._normalize_capabilities(required_capabilities or [])
@@ -1146,6 +1193,7 @@ class PCAgentManager:
                 required_capabilities=required,
                 job_type=normalized_job,
                 now=now,
+                owner_user_id=owner_user_id,
             )
             selected_agent_id = str(selected.get("agent_id", "") or "")
             if not selected_agent_id:
@@ -1315,6 +1363,7 @@ class PCAgentManager:
         agent_id: str = "",
         job_type: str = "",
         status: str = "",
+        owner_user_id: str = "",
     ) -> list[dict[str, Any]]:
         normalized_job = self._normalize_job_type(job_type) if job_type else ""
         status_filter = str(status or "").strip().lower()
@@ -1324,6 +1373,14 @@ class PCAgentManager:
             items: list[_LeaseRecord] = list(self._leases.values())
             if agent_id:
                 items = [item for item in items if item.agent_id == agent_id]
+            if owner_user_id:
+                items = [
+                    item for item in items
+                    if (
+                        self._agents.get(item.agent_id) is not None
+                        and str(getattr(self._agents[item.agent_id].info, "user_id", "") or "").strip() == owner_user_id
+                    )
+                ]
             if normalized_job:
                 items = [item for item in items if item.job_type == normalized_job]
             if status_filter:
@@ -1372,6 +1429,7 @@ class PCAgentManager:
         lease_ttl_seconds: int = 180,
         command_timeout_seconds: float = 120.0,
         wait_for_agent_seconds: float = 0,
+        owner_user_id: str = "",
     ) -> dict[str, Any]:
         request_params: Dict[str, Any] = dict(params or {})
         effective_command_timeout_seconds = self._effective_command_timeout_seconds(
@@ -1385,6 +1443,7 @@ class PCAgentManager:
             preferred_agent_id=agent_id,
             required_capabilities=required_capabilities,
             ttl_seconds=lease_ttl_seconds,
+            owner_user_id=owner_user_id,
         )
         if lease_response.get("status") == "error":
             error_code = str(lease_response.get("error_code", ""))
@@ -1394,7 +1453,9 @@ class PCAgentManager:
                     command_type, agent_id, wait_for_agent_seconds,
                 )
                 wait_result = await self.wait_for_agent_online(
-                    agent_id=agent_id, timeout=wait_for_agent_seconds,
+                    agent_id=agent_id,
+                    timeout=wait_for_agent_seconds,
+                    owner_user_id=owner_user_id,
                 )
                 if wait_result.get("status") == "online":
                     reconnected_agent_id = wait_result.get("agent_id", agent_id)
@@ -1404,6 +1465,7 @@ class PCAgentManager:
                         preferred_agent_id=reconnected_agent_id,
                         required_capabilities=required_capabilities,
                         ttl_seconds=lease_ttl_seconds,
+                        owner_user_id=owner_user_id,
                     )
                     if lease_response.get("status") == "error":
                         lease_response["waited_for_agent"] = True

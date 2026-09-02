@@ -102,6 +102,71 @@ class _LiteLLMResponse:
         self.stop_reason = "end_turn"
 
 
+# ── BYOK(Bring Your Own Key) 사용자별 API 키 조회 ─────────────────────
+# AADS-BYOK(2026-09-02): 사용자가 등록한 본인 API 키를 시스템 키보다 우선 사용.
+
+async def _get_user_api_key(user_id: str, provider: str) -> Optional[str]:
+    """user_api_keys 테이블에서 활성 키를 조회, 복호화하여 반환. 실패 시 None."""
+    try:
+        from app.core.credential_vault import decrypt_value
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id, encrypted_key
+            FROM user_api_keys
+            WHERE user_id = $1 AND provider = $2 AND is_active = TRUE
+            """,
+            str(user_id),
+            provider,
+        )
+        if not row:
+            return None
+        plain = decrypt_value(row["encrypted_key"])
+        # 조회 성공 시점에 last_used_at 갱신 (베스트 에포트, 실패해도 무시)
+        try:
+            await pool.execute(
+                "UPDATE user_api_keys SET last_used_at = NOW() WHERE id = $1",
+                row["id"],
+            )
+        except Exception:
+            pass
+        return plain
+    except Exception as e:
+        logger.debug("get_user_api_key_failed: user_id=%s provider=%s error=%s", str(user_id)[:12], provider, str(e)[:80])
+        return None
+
+
+async def _try_user_key_claude(
+    prompt: str,
+    model: str,
+    max_tokens: int,
+    system: Optional[str],
+    user_id: str,
+) -> Optional[str]:
+    """BYOK: 사용자 본인 Anthropic API 키로 직접 호출 시도.
+
+    사용자 키가 없거나 호출이 실패하면 None을 반환하여 기존 시스템 키
+    폴백 체인(OAuth → Gemini → qwen → LiteLLM)으로 이어지게 한다.
+    """
+    user_key = await _get_user_api_key(user_id, "anthropic")
+    if not user_key:
+        return None
+    try:
+        client = AsyncAnthropic(api_key=user_key)
+        msgs = [{"role": "user", "content": prompt}]
+        kwargs = {"model": model, "max_tokens": max_tokens, "messages": msgs}
+        if system:
+            kwargs["system"] = system
+        resp = await client.messages.create(**kwargs)
+        logger.info("byok_user_key_used: user_id=%s model=%s", str(user_id)[:12], model)
+        return resp.content[0].text
+    except Exception as e:
+        logger.warning("byok_user_key_failed: user_id=%s model=%s error=%s", str(user_id)[:12], model, str(e)[:120])
+        return None
+
+
 # ── 공개 함수 ────────────────────────────────────────────────────────
 
 def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
@@ -158,11 +223,17 @@ async def call_llm_with_fallback(
     max_tokens: int = 256,
     system: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Optional[str]:
     """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
 
     비Claude 모델(qwen-turbo 등) 지정 시 DashScope/LiteLLM으로 직접 라우팅.
 
+    user_id가 주어지면(BYOK, AADS-BYOK) user_api_keys 테이블에서 해당 사용자의
+    Anthropic 키를 조회해 시스템 키보다 우선 사용한다. 사용자 키가 없거나
+    호출이 실패하면 기존 시스템 키 폴백 체인(0순위 아래)을 그대로 유지한다.
+
+    0순위: 사용자 본인 API 키 (BYOK, user_id 제공 시)
     1순위: Claude moong76@gmail (slot:naver, PRIMARY)
     2순위: Claude moongoby@gmail (slot:gmail, FALLBACK)
     3순위: Gemini 2.5 Flash (LiteLLM 경유)
@@ -173,6 +244,11 @@ async def call_llm_with_fallback(
         from app.services.tenant_usage_limits import check_tenant_usage_limit
 
         await check_tenant_usage_limit(tenant_id, operation=f"llm:{model}", projected_calls=1)
+
+    if user_id and model.startswith("claude"):
+        _user_text = await _try_user_key_claude(prompt, model, max_tokens, system, user_id)
+        if _user_text is not None:
+            return _user_text
 
     # 비Claude 모델 → DashScope/LiteLLM 직접
     if not model.startswith("claude"):

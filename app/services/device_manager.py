@@ -36,6 +36,8 @@ class DeviceManager:
         websocket: WebSocket,
         device_type: str = "pc",
         info: Dict[str, Any] | None = None,
+        owner_user_id: str = "",
+        owner_tenant_id: str = "",
     ) -> DeviceInfo:
         info = info or {}
         device_info = DeviceInfo(
@@ -44,9 +46,12 @@ class DeviceManager:
             hostname=info.get("hostname", ""),
             os_info=info.get("os_info", ""),
             capabilities=info.get("capabilities", []),
+            user_id=str(owner_user_id or "").strip(),
+            tenant_id=str(owner_tenant_id or "").strip(),
+            label=str(info.get("label") or info.get("device_name") or info.get("hostname") or agent_id).strip(),
         )
         self._devices[agent_id] = _DeviceConnection(agent_id, websocket, device_info)
-        logger.info("디바이스 등록: %s (%s)", agent_id, device_type)
+        logger.info("디바이스 등록: %s (%s) user_id=%s", agent_id, device_type, device_info.user_id or "-")
         return device_info
 
     def unregister_device(self, agent_id: str) -> None:
@@ -54,19 +59,25 @@ class DeviceManager:
             del self._devices[agent_id]
             logger.info("디바이스 해제: %s", agent_id)
 
-    def get_devices(self, device_type: str | None = None) -> list[dict[str, Any]]:
+    def get_devices(self, device_type: str | None = None, owner_user_id: str = "") -> list[dict[str, Any]]:
+        owner_user_id = str(owner_user_id or "").strip()
         result = []
         for conn in self._devices.values():
             if device_type and conn.info.device_type != device_type:
                 continue
+            if owner_user_id and str(getattr(conn.info, "user_id", "") or "").strip() != owner_user_id:
+                continue
             result.append(conn.info.model_dump())
         return result
 
-    def list_device_statuses(self, device_type: str | None = None) -> list[dict[str, Any]]:
+    def list_device_statuses(self, device_type: str | None = None, owner_user_id: str = "") -> list[dict[str, Any]]:
+        owner_user_id = str(owner_user_id or "").strip()
         now = self._now()
         items: list[dict[str, Any]] = []
         for conn in self._devices.values():
             if device_type and conn.info.device_type != device_type:
+                continue
+            if owner_user_id and str(getattr(conn.info, "user_id", "") or "").strip() != owner_user_id:
                 continue
             items.append(self._status_payload(conn.info, now))
         items.sort(key=lambda item: (item["status"] != "online", item["heartbeat_age_seconds"], item["agent_id"]))
@@ -92,7 +103,9 @@ class DeviceManager:
         command_type: str,
         params: Dict[str, Any],
         timeout: float = 30.0,
+        owner_user_id: str = "",
     ) -> CommandResponse:
+        owner_user_id = str(owner_user_id or "").strip()
         conn = self._devices.get(agent_id)
         if conn is None:
             if len(self._devices) == 1:
@@ -104,6 +117,12 @@ class DeviceManager:
                     status="error",
                     data={"error": f"디바이스 미연결: {agent_id}"},
                 )
+        if owner_user_id and str(getattr(conn.info, "user_id", "") or "").strip() != owner_user_id:
+            return CommandResponse(
+                command_id="",
+                status="error",
+                data={"error": "다른 사용자의 디바이스에는 접근할 수 없습니다.", "error_code": "DEVICE_FORBIDDEN"},
+            )
 
         command_id = str(uuid.uuid4())
         self._pending_commands[command_id] = asyncio.Event()
@@ -207,6 +226,9 @@ class DeviceManager:
             "last_heartbeat": heartbeat_at.isoformat() if heartbeat_at else None,
             "last_seen": heartbeat_at.isoformat() if heartbeat_at else None,
             "heartbeat_age_seconds": round(heartbeat_age_seconds, 1),
+            "user_id": getattr(info, "user_id", "") or "",
+            "tenant_id": getattr(info, "tenant_id", "") or "",
+            "label": getattr(info, "label", "") or "",
             "reconnect_guidance": self._reconnect_guidance(info.device_type, online),
         }
 

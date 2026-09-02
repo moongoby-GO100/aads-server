@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
+from app.auth import extract_aads_cookie_token, verify_token
 from app.models.pc_agent import CommandRequest, RoutedCommandRequest, StreamConfig, WSMessage
 from app.services.pc_agent_manager import pc_agent_manager
 
@@ -25,6 +26,7 @@ router = APIRouter()
 PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
 _PEER_FALLBACK_HEADER = "x-aads-pc-agent-peer-fallback"
+_PEER_OWNER_HEADER = "x-aads-pc-agent-owner-user-id"
 _PEER_RETRYABLE_ERROR_CODES = {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
 _DEFAULT_BROWSER_WORK_KEY = os.environ.get("PC_AGENT_DEFAULT_BROWSER_WORK_KEY", "aads-ceo-browser").strip() or "aads-ceo-browser"
 
@@ -344,15 +346,24 @@ async def _latest_pc_agent_alert_session_id() -> str:
         return ""
 
 
-async def _verify_token_db(token: str) -> bool:
-    """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블)."""
+async def _verify_token_db(token: str) -> tuple[bool, str, str]:
+    """DB에서 토큰 유효성 검증 (kakao_pc_agent_tokens 테이블).
+
+    반환값: (valid, owner_user_id, owner_tenant_id). is_active=false(레거시/비활성)
+    토큰은 존재해도 무효 처리한다.
+    """
     try:
         from app.core.db_pool import get_pool
 
         pool = get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT 1 FROM kakao_pc_agent_tokens WHERE token = $1",
+                """
+                SELECT user_id, tenant_id
+                  FROM kakao_pc_agent_tokens
+                 WHERE token = $1
+                   AND COALESCE(is_active, TRUE) = TRUE
+                """,
                 token,
             )
             if row is not None:
@@ -360,10 +371,100 @@ async def _verify_token_db(token: str) -> bool:
                     "UPDATE kakao_pc_agent_tokens SET last_used_at = NOW() WHERE token = $1",
                     token,
                 )
-        return row is not None
+                return True, str(row["user_id"] or "").strip(), str(row["tenant_id"] or "").strip()
+        return False, "", ""
     except Exception as exc:
         logger.warning("pc_agent_token_db_check_failed: %s", exc)
-        return False
+        return False, "", ""
+
+
+def _resolve_requester_user_id(request: Request) -> str:
+    """대시보드 요청의 Bearer/쿠키 토큰에서 user_id를 추출한다.
+
+    FastAPI Depends(get_current_user)와 달리 인증 실패 시 예외를 던지지 않는다 —
+    이 값은 PC Agent 목록/실행 API에서 "요청자 소유 필터링" 용도로만 쓰인다.
+    """
+    token = ""
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = extract_aads_cookie_token(request) or ""
+    if not token:
+        return ""
+    try:
+        payload = verify_token(token)
+    except Exception:
+        return ""
+    if not payload:
+        return ""
+    return str(payload.get("sub") or "").strip()
+
+
+def _is_trusted_internal_request(request: Request) -> bool:
+    if request.headers.get(_PEER_FALLBACK_HEADER, "") == "1":
+        return True
+    monitor_key = (
+        request.headers.get("x-monitor-key")
+        or request.headers.get("X-Monitor-Key")
+        or ""
+    ).strip()
+    service_key = os.getenv("AADS_MONITOR_KEY", "").strip()
+    if monitor_key and service_key and monitor_key == service_key:
+        return True
+    client_host = getattr(getattr(request, "client", None), "host", "") or ""
+    return (
+        client_host in {"127.0.0.1", "::1", "localhost"}
+        or client_host.startswith("10.")
+        or client_host.startswith("172.")
+        or client_host.startswith("192.168.")
+    )
+
+
+def _peer_owner_user_id(request: Request) -> str:
+    if request.headers.get(_PEER_FALLBACK_HEADER, "") != "1":
+        return ""
+    return str(request.headers.get(_PEER_OWNER_HEADER, "") or "").strip()
+
+
+def _request_user_scope(request: Request) -> tuple[str, bool]:
+    requester_user_id = _resolve_requester_user_id(request) or _peer_owner_user_id(request)
+    return requester_user_id, _is_trusted_internal_request(request)
+
+
+def _assert_agent_access(agent_id: str, requester_user_id: str, is_internal_request: bool) -> None:
+    if is_internal_request and not requester_user_id:
+        return
+    if not requester_user_id:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+    agent = pc_agent_manager.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+    agent_owner_user_id = str(getattr(agent, "user_id", "") or "").strip()
+    if agent_owner_user_id != requester_user_id:
+        raise HTTPException(status_code=403, detail="다른 사용자의 PC 에이전트에는 접근할 수 없습니다.")
+
+
+def _resolve_websocket_user_id(websocket: WebSocket) -> str:
+    token = ""
+    try:
+        token = str(websocket.query_params.get("auth_token") or websocket.query_params.get("access_token") or "").strip()
+    except Exception:
+        token = ""
+    if not token:
+        try:
+            token = str((getattr(websocket, "cookies", {}) or {}).get("aads_token") or "").strip()
+        except Exception:
+            token = ""
+    if not token:
+        return ""
+    try:
+        payload = verify_token(token)
+    except Exception:
+        return ""
+    if not payload:
+        return ""
+    return str(payload.get("sub") or "").strip()
 
 
 # ── WebSocket ──────────────────────────────────────────────────────────
@@ -375,10 +476,13 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
     # 인증: DB 토큰 → 환경변수 폴백
     token_valid = False
+    owner_user_id = ""
+    owner_tenant_id = ""
     if token:
-        token_valid = await _verify_token_db(token)
+        token_valid, owner_user_id, owner_tenant_id = await _verify_token_db(token)
         if not token_valid and PC_AGENT_SECRET and token == PC_AGENT_SECRET:
             token_valid = True
+            owner_user_id = ""  # 공유 시크릿 연결은 소유자 미상 — 사용자별 목록에 노출되지 않음
     if not token_valid and not PC_AGENT_SECRET:
         token_valid = True
     if not token_valid:
@@ -494,9 +598,15 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         version = (msg.payload or {}).get("version", "")
         await _record_agent_event(
             agent_id, "connected",
-            metadata={"device_type": device_type, "version": version},
+            metadata={"device_type": device_type, "version": version, "user_id": owner_user_id or ""},
         )
-        pc_agent_manager.register_agent(agent_id, websocket, msg.payload)
+        pc_agent_manager.register_agent(
+            agent_id,
+            websocket,
+            msg.payload,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+        )
     except (asyncio.TimeoutError, Exception) as exc:
         logger.error("pc_agent_ws_register_failed agent_id=%s err=%s", agent_id, exc)
         await _record_agent_event(agent_id, "register_failed", reason=str(exc)[:300])
@@ -770,6 +880,7 @@ async def _request_peer_fallback_json(
     method: str,
     path: str,
     payload: dict[str, Any] | None = None,
+    owner_user_id: str = "",
 ) -> dict[str, Any] | None:
     if not _peer_fallback_allowed(request):
         return None
@@ -781,6 +892,8 @@ async def _request_peer_fallback_json(
     def _send() -> dict[str, Any] | None:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {_PEER_FALLBACK_HEADER: "1"}
+        if owner_user_id:
+            headers[_PEER_OWNER_HEADER] = owner_user_id
         if body is not None:
             headers["Content-Type"] = "application/json"
 
@@ -885,19 +998,45 @@ async def pc_agent_status(request: Request):
     return local_payload
 
 
+def _filter_agents_by_owner(agents: list[dict[str, Any]], requester_user_id: str) -> list[dict[str, Any]]:
+    """요청자 소유 에이전트만 남긴다. requester_user_id가 비어 있으면 아무것도 노출하지 않는다
+    (다른 사용자/미인증 요청에게 소유자 미상 에이전트가 보이지 않도록 기본 차단)."""
+    if not requester_user_id:
+        return []
+    return [a for a in agents if str(a.get("user_id") or "").strip() == requester_user_id]
+
+
 @router.get("/pc-agent/agents")
 async def list_agents(request: Request):
-    """연결된 에이전트 목록 조회."""
+    """연결된 에이전트 목록 조회.
+
+    AADS-다중PC격리: 대시보드 등 일반 요청은 요청자(user_id) 소유 에이전트만 반환한다.
+    내부 blue/green 피어 페일오버 및 MCP 브리지 프로세스 간 조회(x-aads-pc-agent-peer-fallback
+    헤더로 식별되는 신뢰된 내부 호출)는 기존과 동일하게 전체 목록을 반환한다 — 이 호출자들은
+    "다른 사용자"가 아니라 같은 백엔드의 내부 프로세스이기 때문이다.
+    """
     await _flush_pending_reload_disconnects()
+    requester_user_id, is_internal_call = _request_user_scope(request)
+
     agents = pc_agent_manager.list_agent_statuses()
+    if requester_user_id or not is_internal_call:
+        agents = _filter_agents_by_owner(agents, requester_user_id)
     online_count = sum(1 for agent in agents if agent.get("status") == "online")
     if online_count <= 0:
         peer_payload = await _request_peer_fallback_json(
             request=request,
             method="GET",
             path="/api/v1/pc-agent/agents",
+            owner_user_id=requester_user_id,
         )
         if peer_payload is not None:
+            if requester_user_id or not is_internal_call:
+                peer_agents = peer_payload.get("agents") or []
+                peer_payload = dict(peer_payload)
+                peer_payload["agents"] = _filter_agents_by_owner(peer_agents, requester_user_id)
+                peer_payload["online_count"] = sum(
+                    1 for a in peer_payload["agents"] if a.get("status") == "online"
+                )
             return peer_payload
     return {
         "agents": agents,
@@ -917,11 +1056,18 @@ async def graceful_shutdown():
 
 
 @router.post("/pc-agent/execute")
-async def execute_command(req: CommandRequest):
-    """에이전트에 명령 실행 요청."""
+async def execute_command(req: CommandRequest, request: Request):
+    """에이전트에 명령 실행 요청.
+
+    AADS-다중PC격리: 요청자 인증 후, 대상 agent_id의 소유자(user_id)와 일치하는 경우에만
+    실행을 허용한다. 소유자가 없는(레거시/공유 시크릿) 에이전트는 기존 동작을 유지한다.
+    """
     agent = pc_agent_manager.get_agent(req.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"에이전트 '{req.agent_id}'가 연결되어 있지 않습니다.")
+
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    _assert_agent_access(req.agent_id, requester_user_id, is_internal_call)
 
     params = _normalize_browser_command_params(req.command_type, req.params)
     try:
@@ -937,6 +1083,10 @@ async def execute_command(req: CommandRequest):
 @router.post("/pc-agent/route-execute")
 async def route_execute_command(req: RoutedCommandRequest, request: Request):
     """Capability 기반 라우팅 + lease/queue 제어로 명령 실행."""
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    if not requester_user_id and not is_internal_call:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+
     params = _normalize_browser_command_params(req.command_type, req.params)
     effective_command_timeout_seconds = float(req.command_timeout_seconds)
     raw_param_timeout = (
@@ -967,6 +1117,7 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
         lease_ttl_seconds=req.lease_ttl_seconds,
         command_timeout_seconds=effective_command_timeout_seconds,
         wait_for_agent_seconds=req.wait_for_agent_seconds,
+        owner_user_id=requester_user_id,
     )
     if result.get("status") == "error" and str(result.get("error_code") or "") in _PEER_RETRYABLE_ERROR_CODES:
         peer_result = await _request_peer_fallback_json(
@@ -985,6 +1136,7 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
                 "lease_ttl_seconds": req.lease_ttl_seconds,
                 "command_timeout_seconds": effective_command_timeout_seconds,
             },
+            owner_user_id=requester_user_id,
         )
         if peer_result is not None:
             result = peer_result
@@ -993,6 +1145,8 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
         status_code = 409 if error_code in {"AGENT_BUSY", "LEASE_EXPIRED"} else 503
         if error_code in {"NO_CAPABLE_AGENT"}:
             status_code = 422
+        if error_code in {"AGENT_FORBIDDEN"}:
+            status_code = 403
         if error_code in {"COMMAND_TIMEOUT", "RUNTIME_EVALUATE_TIMEOUT"}:
             status_code = 504
         if error_code in {"CDP_NOT_READY", "STALE_TARGET", "SYNTAX_ERROR", "SPA_SHELL_ONLY", "VVIC_LOGIN_REQUIRED", "VVIC_BLOCKED"}:
@@ -1003,34 +1157,49 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
 
 @router.get("/pc-agent/leases")
 async def list_pc_agent_leases(
+    request: Request,
     agent_id: str = Query(""),
     job_type: str = Query(""),
     status: str = Query(""),
 ):
     """현재 lease/queue 상태 조회."""
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    if not requester_user_id and not is_internal_call:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+    if agent_id:
+        _assert_agent_access(agent_id, requester_user_id, is_internal_call)
     leases = await pc_agent_manager.list_leases(
         agent_id=agent_id,
         job_type=job_type,
         status=status,
+        owner_user_id=requester_user_id,
     )
     return {"leases": leases, "count": len(leases)}
 
 
 @router.get("/pc-agent/leases/{lease_id}")
-async def get_pc_agent_lease(lease_id: str):
+async def get_pc_agent_lease(lease_id: str, request: Request):
     """특정 lease 상태 조회."""
     lease = await pc_agent_manager.get_lease(lease_id)
     if lease is None:
         raise HTTPException(status_code=404, detail={"error_code": "LEASE_EXPIRED", "message": "lease not found"})
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    _assert_agent_access(str(lease.get("agent_id") or ""), requester_user_id, is_internal_call)
     return {"lease": lease}
 
 
 @router.post("/pc-agent/leases/{lease_id}/heartbeat")
 async def heartbeat_pc_agent_lease(
+    request: Request,
     lease_id: str,
     extend_seconds: int = Query(180, ge=30, le=1800),
 ):
     """진행 중 lease heartbeat/만료 연장."""
+    lease = await pc_agent_manager.get_lease(lease_id)
+    if lease is None:
+        raise HTTPException(status_code=404, detail={"error_code": "LEASE_EXPIRED", "message": "lease not found"})
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    _assert_agent_access(str(lease.get("agent_id") or ""), requester_user_id, is_internal_call)
     result = await pc_agent_manager.heartbeat_lease(lease_id, extend_seconds=extend_seconds)
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result)
@@ -1038,13 +1207,18 @@ async def heartbeat_pc_agent_lease(
 
 
 @router.get("/pc-agent/result/{command_id}")
-async def get_result(command_id: str, timeout: float = Query(30.0, ge=1.0, le=120.0)):
+async def get_result(request: Request, command_id: str, timeout: float = Query(30.0, ge=1.0, le=120.0)):
     """명령 실행 결과 조회 (대기)."""
     try:
         result = await pc_agent_manager.get_result(command_id, timeout=timeout)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    if result.agent_id:
+        _assert_agent_access(result.agent_id, requester_user_id, is_internal_call)
+    elif not requester_user_id and not is_internal_call:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
     return result.model_dump(mode="json")
 
 
@@ -1056,6 +1230,11 @@ async def ws_stream(websocket: WebSocket, agent_id: str):
     agent = pc_agent_manager.get_agent(agent_id)
     if agent is None:
         await websocket.close(code=4004, reason=f"agent '{agent_id}' not connected")
+        return
+    requester_user_id = _resolve_websocket_user_id(websocket)
+    agent_owner_user_id = str(getattr(agent, "user_id", "") or "").strip()
+    if not requester_user_id or agent_owner_user_id != requester_user_id:
+        await websocket.close(code=4003, reason="forbidden")
         return
 
     await websocket.accept()
@@ -1095,11 +1274,13 @@ async def ws_stream(websocket: WebSocket, agent_id: str):
 
 
 @router.post("/pc-agent/stream/{agent_id}/start")
-async def stream_start(agent_id: str, config: StreamConfig | None = None):
+async def stream_start(request: Request, agent_id: str, config: StreamConfig | None = None):
     """스트리밍 시작 (REST 폴백)."""
     agent = pc_agent_manager.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    _assert_agent_access(agent_id, requester_user_id, is_internal_call)
 
     if config is None:
         config = StreamConfig()
@@ -1113,11 +1294,13 @@ async def stream_start(agent_id: str, config: StreamConfig | None = None):
 
 
 @router.post("/pc-agent/stream/{agent_id}/stop")
-async def stream_stop(agent_id: str):
+async def stream_stop(request: Request, agent_id: str):
     """스트리밍 중지."""
     agent = pc_agent_manager.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"에이전트 '{agent_id}'가 연결되어 있지 않습니다.")
+    requester_user_id, is_internal_call = _request_user_scope(request)
+    _assert_agent_access(agent_id, requester_user_id, is_internal_call)
 
     try:
         command_id = await pc_agent_manager.stop_stream(agent_id)
@@ -1295,7 +1478,8 @@ async def ingest_launcher_status(payload: dict[str, Any]):
     token = str(payload.get("agent_token") or "").strip()
     if not token:
         raise HTTPException(status_code=401, detail="agent_token required")
-    if not (token == PC_AGENT_SECRET or await _verify_token_db(token)):
+    token_valid, _, _ = await _verify_token_db(token)
+    if not (token == PC_AGENT_SECRET or token_valid):
         raise HTTPException(status_code=401, detail="invalid token")
 
     agent_id = str(payload.get("agent_id") or "unknown")[:64]
@@ -1451,7 +1635,8 @@ async def ingest_client_log(payload: dict[str, Any]):
     if not token:
         raise HTTPException(status_code=401, detail="agent_token required")
 
-    if not (token == PC_AGENT_SECRET or await _verify_token_db(token)):
+    token_valid, _, _ = await _verify_token_db(token)
+    if not (token == PC_AGENT_SECRET or token_valid):
         raise HTTPException(status_code=401, detail="invalid token")
 
     agent_id = (payload.get("agent_id") or "unknown")[:64]
