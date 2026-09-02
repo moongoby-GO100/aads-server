@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-02 18:10 KST - AI routing Google discovery and embedding fallback hardening
+
+- Request:
+  - Google/Gemini 상용 중단 기간 동안 검색/리서치/임베딩/미디어 라우팅이 DB 정책을 우회하지 않도록 추가 문제를 찾아 즉시 조치.
+- Findings:
+  - `model_routing_preferences` 기준 Google/Gemini enabled route는 0건이지만, startup `model_registry` sync가 Gemini catalog API를 직접 호출해 403을 만들었다.
+  - 임베딩 route에서 PC Ollama가 연결되지 않고 OpenAI embedding이 크레딧 429를 반환해도 다음 요청에서 같은 외부 후보를 반복 호출했다.
+- Changes:
+  - `app/services/model_registry.py`: Gemini model discovery를 DB route policy 뒤로 게이트. `AADS_ALLOW_GOOGLE_COMMERCIAL_ROUTES=true`가 명시되거나 DB에서 Google/Gemini route가 enabled일 때만 Google catalog API를 호출한다.
+  - `app/services/chat_embedding_service.py`: 비가용 route candidate(`not_configured`, `review_required`, `rate_limited`) skip, PC Ollama/OpenAI 일시 실패 300초 provider cooldown 추가.
+  - `tests/unit/test_model_registry.py`, `tests/unit/test_chat_embedding_routing.py`, `tests/unit/test_ai_route_resolver.py`: Google discovery skip, embedding unavailable route skip, runtime model 선택 회귀 테스트 추가.
+- Verification:
+  - `.venv-playwright/bin/python -m py_compile app/services/model_registry.py app/services/chat_embedding_service.py tests/unit/test_model_registry.py tests/unit/test_ai_route_resolver.py tests/unit/test_chat_embedding_routing.py` PASS.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_model_registry.py tests/unit/test_ai_route_resolver.py tests/unit/test_chat_embedding_routing.py -q` -> 17 passed.
+- Deploy:
+  - Commit/push/deploy pending at this entry creation time.
+
 ## 2026-09-02 15:12 KST - resume failure banner recurrence cleanup and standby certification
 
 - Request:

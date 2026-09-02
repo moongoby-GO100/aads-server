@@ -37,6 +37,8 @@ _EMBED_CACHE_MAX = int(os.getenv("EMBED_CACHE_MAX", "500"))
 _EMBED_GEMINI_ENABLED = os.getenv("EMBED_GEMINI_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 _GEMINI_BLOCK_SECONDS = int(os.getenv("EMBED_GEMINI_BLOCK_SECONDS", "3600"))
 _gemini_blocked_until: float = 0.0
+_PROVIDER_BLOCK_SECONDS = int(os.getenv("EMBED_PROVIDER_BLOCK_SECONDS", "300"))
+_provider_blocked_until: dict[tuple[str, str], float] = {}
 
 class _EmbedCache:
     """TTL + LRU 인메모리 임베딩 캐시."""
@@ -98,6 +100,17 @@ async def _embed_uncached_with_routes(texts: List[str]) -> List[List[float]]:
     candidates = await get_route_candidates("embedding")
     for candidate in candidates:
         provider = candidate.provider
+        if candidate.availability not in {"available", "unknown"}:
+            logger.info(
+                "[ChatEmbed] embedding route skipped unavailable",
+                provider=provider,
+                model=candidate.runtime_model,
+                availability=candidate.availability,
+            )
+            continue
+        block_key = (provider, candidate.runtime_model)
+        if time.time() < _provider_blocked_until.get(block_key, 0.0):
+            continue
         if provider in {"pc_ollama", "local", "ollama"}:
             try:
                 from app.core.local_embedding_bridge import embed as local_embed
@@ -114,6 +127,7 @@ async def _embed_uncached_with_routes(texts: List[str]) -> List[List[float]]:
                     model=candidate.runtime_model,
                     error=str(exc)[:160],
                 )
+                _provider_blocked_until[block_key] = time.time() + _PROVIDER_BLOCK_SECONDS
                 continue
         if provider == "openai":
             try:
@@ -134,6 +148,7 @@ async def _embed_uncached_with_routes(texts: List[str]) -> List[List[float]]:
                     model=candidate.runtime_model,
                     error=str(exc)[:160],
                 )
+                _provider_blocked_until[block_key] = time.time() + _PROVIDER_BLOCK_SECONDS
                 continue
         if provider in GOOGLE_PROVIDERS:
             google_vectors = await _try_gemini_embeddings(texts, candidate.runtime_model)

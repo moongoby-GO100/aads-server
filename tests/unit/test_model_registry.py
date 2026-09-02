@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -214,3 +215,15 @@ async def test_fetch_anthropic_models_reports_oauth_runtime_only(monkeypatch):
     assert result["runtime_executable"] is True
     assert result["auto_discovery_supported"] is False
     assert "x-api-key required" in result["discovery_requirement"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_gemini_models_skips_when_google_routes_disabled(monkeypatch):
+    monkeypatch.delenv("AADS_ALLOW_GOOGLE_COMMERCIAL_ROUTES", raising=False)
+    monkeypatch.setattr(model_registry, "_google_commercial_routes_enabled", AsyncMock(return_value=False))
+
+    rows, result = await model_registry._fetch_gemini_models()
+
+    assert rows == []
+    assert result["status"] == "skipped"
+    assert result["error"] == "google_routes_disabled"

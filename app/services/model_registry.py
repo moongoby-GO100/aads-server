@@ -22,6 +22,7 @@ _DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("LLM_MODEL_DISCOVERY_TIMEOUT_SECOND
 _AUTO_REFRESH_MIN_INTERVAL_SECONDS = max(15, int(os.getenv("LLM_MODEL_REGISTRY_AUTO_REFRESH_SECONDS", "15")))
 _cache: dict[str, tuple[Any, float]] = {}
 _auto_refresh_attempts: dict[str, float] = {}
+_GOOGLE_ROUTE_ENV = "AADS_ALLOW_GOOGLE_COMMERCIAL_ROUTES"
 
 _PROVIDER_ALIASES = {
     "anthropic": "anthropic",
@@ -921,6 +922,15 @@ async def _fetch_anthropic_models() -> tuple[list[dict[str, Any]], dict[str, Any
 
 
 async def _fetch_gemini_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not await _google_commercial_routes_enabled():
+        return [], {
+            "status": "skipped",
+            "error": "google_routes_disabled",
+            "count": 0,
+            "auto_discovery_supported": False,
+            "discovery_requirement": "Google/Gemini routes disabled by DB policy",
+            "model_source": "template",
+        }
     api_key = await _get_first_provider_key("gemini")
     if not api_key:
         return [], {"status": "skipped", "error": "missing_key"}
@@ -935,6 +945,29 @@ async def _fetch_gemini_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if model_id:
             rows.append({"model_id": model_id, "display_name": item.get("displayName") or _display_name_for_provider("gemini", model_id), "raw": item})
     return rows, {"status": "ok", "count": len(rows)}
+
+
+async def _google_commercial_routes_enabled() -> bool:
+    """Gate Gemini/Google catalog calls behind the DB routing policy."""
+    if os.getenv(_GOOGLE_ROUTE_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            enabled = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM model_routing_preferences
+                    WHERE provider IN ('google', 'gemini')
+                      AND is_enabled = TRUE
+                )
+                """
+            )
+        return bool(enabled)
+    except Exception as exc:
+        logger.warning("model_registry.google_route_policy_check_failed: %s", str(exc)[:160])
+        return False
 
 
 async def _fetch_litellm_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
