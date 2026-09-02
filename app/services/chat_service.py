@@ -11982,6 +11982,7 @@ async def send_message_stream(
             _confidence_label = "mixed"
         else:
             _confidence_label = None  # 도구 사용했지만 DB 아닌 경우 (웹검색 등) — 레이블 미표시
+        state = _streaming_state.get(session_id, {})
         _fb_info = state.get("fallback_info") if isinstance(state, dict) else None
         yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'requested_model': (model_override or None) if model_override and model_override != model_used else None, 'fallback_reason': (_fb_info or {}).get('reason') if _fb_info else None, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'duration_sec': _final_response_duration_sec, 'duration_ms': int(round(_final_response_duration_sec * 1000)), 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 

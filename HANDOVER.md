@@ -24,6 +24,23 @@
 - Deployment:
   - No blue-green deploy or container restart was performed in this hotfix step.
 
+## 2026-09-02 11:20 KST - chat final done event NameError hotfix
+
+- Request:
+  - Re-check the new OOM log and diagnose why the chat window again appeared stuck after a server restart.
+- Findings:
+  - Kernel logs showed one cgroup OOM at `2026-09-02 07:29:50 KST` killing `uvicorn` inside an API container, with no newer OOM entries through `2026-09-02 11:16 KST`.
+  - Blue/Green routing was active on `aads-server-green:8102`; both API slots were healthy and Docker reported `RestartCount=0` / `OOMKilled=false`.
+  - DB still showed older stalled executions caused by `resume_single_stream_error: resume_attempt_fence_or_limit_rejected`, while the current session execution had been reclaimed by `aads-server-green`.
+  - Full chat-service unit tests exposed an additional finalization bug: `send_message_stream()` referenced `state` while emitting the final `done` SSE event without defining it in that scope.
+- Code action:
+  - `app/services/chat_service.py`: resolve `state` from `_streaming_state.get(session_id, {})` immediately before reading `fallback_info`, so final `done` emission cannot crash with `NameError`.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` passed.
+  - `docker exec aads-server-green python -m pytest /app/tests/unit/test_chat_service.py -q` passed 75/75 with one existing FastAPI `regex` deprecation warning.
+- Deployment:
+  - Pending commit/push/Blue-Green release for this additional `NameError` hotfix.
+
 ## 2026-09-02 08:02 KST - contabo116 OOM recurrence guard applied
 
 - Request:
