@@ -13,7 +13,7 @@ DB 매핑:
 - 세미콜론 다중 쿼리 차단
 - 민감 컬럼(password, token, secret, api_key) 마스킹
 - 결과 LIMIT 1000, 기본 100
-- 쿼리 타임아웃 30초
+- 쿼리 타임아웃 기본 90초 (환경변수로 조정)
 - 연결 풀링 (PostgreSQL: asyncpg pool, MySQL: SSH 터널 + pymysql)
 """
 from __future__ import annotations
@@ -192,6 +192,11 @@ _pg_pool_closing: set[int] = set()
 _SSH_TUNNEL_POOL: Dict[Tuple[str, int, str, int], Dict[str, Any]] = {}
 _SSH_TUNNEL_IDLE_SECONDS = 300.0
 _MAX_POOL_SIZE = 3
+_PG_POOL_CONNECT_TIMEOUT_SECONDS = _env_int(("PROJECT_DB_PG_CONNECT_TIMEOUT_SECONDS",), 15)
+_PG_POOL_ACQUIRE_TIMEOUT_SECONDS = _env_int(("PROJECT_DB_PG_ACQUIRE_TIMEOUT_SECONDS",), 20)
+_PROJECT_DB_QUERY_TIMEOUT_SECONDS = _env_int(("PROJECT_DB_QUERY_TIMEOUT_SECONDS",), 90)
+_MYSQL_CONNECT_TIMEOUT_SECONDS = _env_int(("PROJECT_DB_MYSQL_CONNECT_TIMEOUT_SECONDS",), 15)
+_MYSQL_READ_TIMEOUT_SECONDS = _env_int(("PROJECT_DB_MYSQL_READ_TIMEOUT_SECONDS",), 90)
 _pool_lock = asyncio.Lock()          # PG 풀 생성/재생성 경쟁 방지
 _pool_drain_condition = asyncio.Condition(_pool_lock)
 _ssh_tunnel_lock = threading.Lock()  # SSH 터널 생성/정리 경쟁 방지
@@ -378,7 +383,8 @@ async def _get_pg_pool(project: str):
             )
             pool = await asyncpg.create_pool(
                 dsn, min_size=1, max_size=_MAX_POOL_SIZE,
-                command_timeout=30, timeout=10,
+                command_timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS,
+                timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS,
             )
         except Exception:
             # H3: DSN에 credentials 포함 — 상세 에러 로그만 남기고 안전한 메시지 반환
@@ -429,9 +435,13 @@ async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
             async with _borrow_pg_pool(project) as pool:
                 if not _is_pg_pool_open(pool):
                     raise ConnectionError("PostgreSQL pool is closed")
-                async with pool.acquire(timeout=10) as conn:
+                async with pool.acquire(timeout=_PG_POOL_ACQUIRE_TIMEOUT_SECONDS) as conn:
                     async with conn.transaction():
                         await conn.execute("SET LOCAL default_transaction_read_only = on")
+                        await conn.execute(
+                            "SELECT set_config('statement_timeout', $1, true)",
+                            str(max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS) * 1000),
+                        )
                         rows = await conn.fetch(q)
                     return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
         except Exception as exc:
@@ -670,8 +680,8 @@ def _query_mysql_sync(project: str, q: str, config: Dict[str, str]) -> List[Dict
                 password=config["password"],
                 database=config["database"],
                 charset="utf8mb4",
-                connect_timeout=10,
-                read_timeout=30,
+                connect_timeout=_MYSQL_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=_MYSQL_READ_TIMEOUT_SECONDS,
                 cursorclass=pymysql.cursors.DictCursor,
             )
             try:
@@ -772,9 +782,15 @@ async def query_project_database(
         db_type = _get_db_type(resolved)
 
         if db_type == "postgresql":
-            result_rows = await _query_postgresql(project, q)
+            result_rows = await asyncio.wait_for(
+                _query_postgresql(project, q),
+                timeout=max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS + _PG_POOL_ACQUIRE_TIMEOUT_SECONDS + 5),
+            )
         else:
-            result_rows = await _query_mysql(resolved, q, db_name=db_name)
+            result_rows = await asyncio.wait_for(
+                _query_mysql(resolved, q, db_name=db_name),
+                timeout=max(1, _MYSQL_CONNECT_TIMEOUT_SECONDS + _MYSQL_READ_TIMEOUT_SECONDS + 10),
+            )
 
         result_rows = _mask_sensitive_values(result_rows)
         columns = list(result_rows[0].keys()) if result_rows else []
@@ -791,6 +807,20 @@ async def query_project_database(
             "row_count": len(result_rows),
             "columns": columns,
             "query": q,
+            "timeout_seconds": _PROJECT_DB_QUERY_TIMEOUT_SECONDS if db_type == "postgresql" else _MYSQL_READ_TIMEOUT_SECONDS,
+        }
+
+    except asyncio.TimeoutError:
+        timeout_sec = _PROJECT_DB_QUERY_TIMEOUT_SECONDS if _get_db_type(_PROJECT_ALIAS.get(project, project)) == "postgresql" else _MYSQL_READ_TIMEOUT_SECONDS
+        logger.error(
+            f"query_project_database: TIMEOUT | project={project} timeout={timeout_sec}s query={q[:80]}"
+        )
+        return {
+            "error": f"DB 쿼리 시간 초과 ({project}): {timeout_sec}초 초과",
+            "project": project,
+            "timeout_seconds": timeout_sec,
+            "query": q,
+            "hint": "조건/기간을 줄이거나 요약 테이블/인덱스를 사용하십시오.",
         }
 
     except Exception as e:
