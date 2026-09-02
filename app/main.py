@@ -94,6 +94,10 @@ DELIVERY_AUTO_COLLECT_OPERATOR_ACTION_ERROR_CODES = {
     "PORTAL_AUTH_CHALLENGE",
     "PORTAL_BLOCKED",
 }
+# AADS-FOOD-QUEUE-DRAIN-AGENT-ONLINE-MISMATCH-P0: 동일 사유로 연속 스킵될 때 로그 스팸을
+# 줄이기 위한 사유별 연속 스킵 카운터. reason -> consecutive skip count.
+_PC_AGENT_QUEUE_SKIP_STREAK: dict[str, int] = {}
+_PC_AGENT_QUEUE_SKIP_LOG_EVERY = 10
 
 
 def _is_active_api_container_for_background_jobs() -> bool:
@@ -1886,21 +1890,43 @@ async def lifespan(app: FastAPI):
                 )
                 if wait_result["status"] == "online" and wait_result.get("agent_id") in excluded_agent_ids:
                     wait_result = {"status": "excluded", "error_code": "PC_AGENT_EXCLUDED"}
-                if wait_result["status"] != "online" and not preferred_agent_id:
+                if wait_result["status"] != "online":
+                    # 판정 소스 통일: /pc-agent/diagnostics가 쓰는 list_agent_statuses()로
+                    # 재확인한다. preferred_agent_id가 지정된 경우에도 적용 — wait_for_agent_online()
+                    # 이 놓친 경우의 폴백. (AADS-FOOD-QUEUE-DRAIN-AGENT-ONLINE-MISMATCH-P0)
+                    prior_error_code = wait_result.get("error_code") or ""
                     for agent in pc_agent_manager.list_agent_statuses():
                         agent_id = str(agent.get("agent_id") or "").strip()
-                        if str(agent.get("status") or "") == "online" and agent_id and agent_id not in excluded_agent_ids:
-                            wait_result = {"status": "online", "agent_id": agent_id, "source": "local_agent_list"}
-                            break
+                        if str(agent.get("status") or "") != "online" or not agent_id or agent_id in excluded_agent_ids:
+                            continue
+                        if preferred_agent_id and agent_id != preferred_agent_id:
+                            continue
+                        wait_result = {
+                            "status": "online",
+                            "agent_id": agent_id,
+                            "source": "pc_agent_queue_drain_online_fallback",
+                        }
+                        logger.info(
+                            "pc_agent_queue_drain_online_fallback reason=%s agent_id=%s prior_error_code=%s",
+                            reason,
+                            agent_id,
+                            prior_error_code,
+                        )
+                        break
                 if wait_result["status"] != "online" and not preferred_agent_id:
                     wait_result = await _delivery_auto_collect_peer_agent(excluded_agent_ids)
                 if wait_result["status"] != "online":
-                    logger.info(
-                        "pc_agent_global_collection_queue_skip: pc_agent_offline reason=%s error_code=%s",
-                        reason,
-                        wait_result.get("error_code") or "",
-                    )
+                    streak = _PC_AGENT_QUEUE_SKIP_STREAK.get(reason, 0) + 1
+                    _PC_AGENT_QUEUE_SKIP_STREAK[reason] = streak
+                    if streak == 1 or streak % _PC_AGENT_QUEUE_SKIP_LOG_EVERY == 0:
+                        logger.info(
+                            "pc_agent_global_collection_queue_skip: pc_agent_offline reason=%s error_code=%s consecutive_skips=%d",
+                            reason,
+                            wait_result.get("error_code") or "",
+                            streak,
+                        )
                     return
+                _PC_AGENT_QUEUE_SKIP_STREAK[reason] = 0
 
                 root_dir = Path(__file__).resolve().parents[1]
                 iterations = _env_int("YEOLJEONG_PC_AGENT_QUEUE_ITERATIONS", 1)

@@ -37,6 +37,14 @@ _BLOCKED_MODULES = {
     "app.core.anthropic_client",
     "app.services.checkpointer",
     "app.main",
+    # AADS-FOOD-QUEUE-DRAIN-AGENT-ONLINE-MISMATCH-P0: importlib.reload()는 모듈 최상단의
+    # `pc_agent_manager = PCAgentManager()`를 재실행해 새 빈 싱글톤을 만든다. 이미
+    # `from ... import pc_agent_manager`로 바인딩을 끝낸 app.api.pc_agent(재로드 대상 아님,
+    # 실제 WebSocket 연결을 들고 있음)는 옛 인스턴스를 계속 참조하지만, app.main 안의
+    # 지연 import(`async def` 내부에서 매 호출마다 재-import)는 재로드 직후부터 항상 빈
+    # 새 인스턴스를 집어 diagnostics(온라인)와 wait_for_agent_online(오프라인)이 서로
+    # 영구히 어긋난다. 재로드를 막아 싱글톤을 프로세스 생애주기 동안 하나로 유지한다.
+    "app.services.pc_agent_manager",
 }
 
 

@@ -30,7 +30,30 @@
 - Remaining risks:
   - Actual Shinhan website login/transaction collection is not yet certified. After deploying queue-drain and this scope/login instrumentation patch, run Mia-only Shinhan collection and verify `login_success=1`, measured `login_elapsed_ms`, and imported rows or a normal no-records result.
   - `bank_accounts.json` contains many duplicate `biz-mia` Shinhan rows and one incomplete `biz-junghwa` Shinhan row. Code now filters/dedupes before execution, but ledger cleanup should be done as a separate data-maintenance task.
+## 2026-09-03 06:40 KST - PC Agent 큐 드레인 온라인 판정 불일치 (hot-reload 싱글톤 재생성) P0 수정
 
+- Request (AADS-FOOD-QUEUE-DRAIN-AGENT-ONLINE-MISMATCH-P0):
+  - `aads-server-green`에서 3분마다 `pc_agent_wait_online_timeout agent_id=7f99c528-24d` → `pc_agent_global_collection_queue_skip: pc_agent_offline`이 무한 반복. 같은 컨테이너 `/pc-agent/diagnostics`는 해당 에이전트를 online(heartbeat_age 10~23초)으로 보고해 판정이 어긋남. `pc_agent_collection_queue.json` 19건 미드레인, 신한 미아점 항목이 `status=running`/`lease_agent_id=""`로 좀비화.
+- Root cause (실제 운영 컨테이너 `aads-server-green`을 read-only로 직접 조사해 확정):
+  - `app/api/hot_reload.py`의 기본 hot-reload(`POST /ops/hot-reload`, 인자 없이 호출 시 `app.services.*` 전체 재로드)가 `app.services.pc_agent_manager`를 차단 목록에서 빠뜨려 매번 `importlib.reload()` 대상에 포함시켰다.
+  - `importlib.reload()`는 모듈 최상단의 `pc_agent_manager = PCAgentManager()`를 재실행해 **새 빈 싱글톤**을 만든다. `app.api.pc_agent`는 모듈 최상단에서 `from ... import pc_agent_manager`로 이미 바인딩을 끝냈고 `app.api.*`는 기본 재로드 대상이 아니므로, WebSocket 핸들러(`ws_pc_agent`)와 `/pc-agent/diagnostics`는 계속 실제 연결을 가진 **옛 인스턴스**를 참조한다.
+  - 반면 `app/main.py`의 스케줄 잡 `_run_pc_agent_global_collection_queue()`는 함수 본문 안에서 매 호출(3분마다)마다 `from app.services.pc_agent_manager import pc_agent_manager`를 다시 실행하는 지연 import라서, 재로드 이후에는 매번 **새 빈 인스턴스**를 집어 `wait_for_agent_online()`이 영구히 offline을 반환했다. 실제 컨테이너 로그에서 `hot_reload_ok: app.services.pc_agent_manager` 직후부터 타임아웃이 결정론적으로(매회 정확히 30.0~30.2s) 반복되는 것을 확인했다.
+  - `docker exec aads-postgres psql ... pc_agent_collection_queue` 결과 0 rows — DB 경로는 비어 있고 실제로는 JSON 큐 파일(`app/data/yeoljeong_finance/pc_agent_collection_queue.json`)만 쓰이고 있었다.
+- Changes:
+  - `app/api/hot_reload.py`: `_BLOCKED_MODULES`에 `app.services.pc_agent_manager` 추가 — 싱글톤이 프로세스 생애주기 동안 하나만 존재하도록 재로드 자체를 차단(근본 원인 수정, 판정 소스 통일).
+  - `app/main.py`: `_run_pc_agent_global_collection_queue()`에서 `wait_for_agent_online()` 타임아웃 시 `preferred_agent_id`가 설정돼 있어도 `pc_agent_manager.list_agent_statuses()`(diagnostics와 동일 소스)로 재확인 후 온라인이면 `pc_agent_queue_drain_online_fallback` 로그를 남기고 드레인을 진행하도록 폴백 추가. 동일 사유로 연속 스킵될 때는 1회차만 로그하고 이후 10회마다 1회(`consecutive_skips` 포함)로 요약.
+  - `app/services/pc_agent_collection_queue.py`: `recover_stale_running_items()` 추가 — `status=running` + `lease_agent_id=""` + `updated_at` 경과가 `YEOLJEONG_QUEUE_STALE_RUNNING_SECONDS`(기본 1800초) 이상이면 `queued`로 복구하고 `message`에 사유 기록. JSON 경로(`claim_next_collection_item`)와 DB 경로(`_claim_next_db`, UPDATE 선행) 양쪽에 적용. `lease_agent_id`가 채워진 정상 running 항목은 건드리지 않음.
+  - `tests/unit/test_hot_reload.py`(신규), `tests/unit/test_pc_agent_collection_queue.py`(좀비 복구 2건 추가): 회귀 가드.
+- Verification:
+  - 컨테이너(`aads-server-green`, `python3 -m pytest`)에서 `tests/unit/test_hot_reload.py`, `tests/unit/test_pc_agent_collection_queue.py` 7/7 PASS.
+  - 전체 `tests/unit/` 실행(1284 passed / 68 failed / 1 skipped) — 실패 68건을 프로덕션 라이브 체크아웃(`/app`, 미수정)에서 동일 파일로 재실행해 대조한 결과, 전부 이번 변경과 무관한 기존 실패(마이그레이션/정적 파일 스캐폴딩 비교 등, 사전 존재)로 확인됨. 이번 변경이 원인인 실패 0건.
+  - `pc_agent_collection_queue.json`의 신한 미아점 좀비 `running` 항목(`updated_at=2026-09-02T23:10:01+09:00`, `lease_agent_id=""`)은 배포 후 `claim_next_collection_item()` 첫 호출에서 `queued`로 자동 복구됨(코드 경로 확인, 배포 전이라 실제 파일 미반영).
+- Deploy:
+  - Commit/push/deploy는 Runner 승인 후 진행 예정 (이 항목 작성 시점 기준 미실행).
+- 남은 리스크 / 미완료:
+  - 신한 실거래 수집(`transactions.json` > 0건)은 이번 작업 범위 밖 — 배포 후 드레인이 정상 진행되는지, 실제 은행 로그인/세션 이슈가 없는지는 별도 확인 필요.
+  - DB 경로(`pc_agent_collection_queue` 테이블)가 왜 0 rows인지(듀얼라이트 실패 여부)는 미조사 — 현재는 JSON 경로가 canonical이라 이번 P0 범위에서는 영향 없음.
+  - 배포 후 5분 로그 모니터링(`pc_agent_wait_online_success` 또는 `pc_agent_queue_drain_online_fallback` 등장, `pc_agent_wait_online_timeout` 3분 주기 재발 여부) 필요.
 ## 2026-09-02 18:10 KST - AI routing Google discovery and embedding fallback hardening
 
 - Request:

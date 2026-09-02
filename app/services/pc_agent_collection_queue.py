@@ -342,12 +342,51 @@ def enqueue_collection_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _stale_running_seconds() -> int:
+    return _as_int(
+        os.getenv("YEOLJEONG_QUEUE_STALE_RUNNING_SECONDS"),
+        default=1800,
+        minimum=60,
+        maximum=86400,
+    )
+
+
+def recover_stale_running_items(rows: list[dict[str, Any]], *, now_value: datetime | None = None) -> int:
+    """lease_agent_id 없이 status=running으로 방치된 좀비 항목을 queued로 되돌린다.
+
+    큐 드레이너가 오래(예: hot-reload로 판정 소스가 어긋나 온라인 확인에 계속 실패)
+    멈춰 있으면, 이전 시도의 running 항목이 영영 claim_next_collection_item()의
+    resource_key 충돌 검사에 걸려 재시도되지 못한다. lease_agent_id가 비어 있고
+    updated_at 기준 임계값(기본 1800초)을 넘긴 항목만 복구 대상으로 삼아, 정상적으로
+    에이전트가 lease를 쥐고 있는 running 항목은 건드리지 않는다.
+    """
+    now_value = now_value or _now()
+    threshold = timedelta(seconds=_stale_running_seconds())
+    recovered = 0
+    for row in rows:
+        if row.get("status") != "running" or _clean_key(row.get("lease_agent_id")):
+            continue
+        updated_at = _parse_dt(row.get("updated_at")) or _parse_dt(row.get("started_at"))
+        if updated_at is None or (now_value - updated_at) < threshold:
+            continue
+        row["status"] = "queued"
+        row["message"] = (
+            f"auto-recovered: stale running without lease_agent_id "
+            f"(updated_at={row.get('updated_at')})"
+        )
+        row["updated_at"] = _now_text()
+        recovered += 1
+    return recovered
+
+
 def claim_next_collection_item(*, agent_id: str = "", now: datetime | None = None) -> dict[str, Any] | None:
     now_value = now or _now()
     db_item = _run_db(_claim_next_db(agent_id=agent_id, now_value=now_value))
     if isinstance(db_item, dict):
         return db_item
     rows = _read_json_queue()
+    if recover_stale_running_items(rows, now_value=now_value):
+        _write_json_queue(rows)
     running_resources = {row["resource_key"] for row in rows if row["status"] == "running"}
     due: list[dict[str, Any]] = []
     for row in rows:
@@ -392,6 +431,18 @@ async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any
     pool = await _ensure_pool()
 
     async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE pc_agent_collection_queue
+               SET status = 'queued',
+                   message = 'auto-recovered: stale running without lease_agent_id',
+                   updated_at = NOW()
+             WHERE status = 'running'
+               AND COALESCE(lease_agent_id, '') = ''
+               AND updated_at <= $1
+            """,
+            now_value - timedelta(seconds=_stale_running_seconds()),
+        )
         row = await conn.fetchrow(
             """
             WITH candidate AS (
