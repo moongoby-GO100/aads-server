@@ -140,7 +140,7 @@ async def _search_relevant(
         # 병렬: memory_facts 검색 + chat_messages 검색
         fact_results, msg_results = await asyncio.gather(
             _search_memory_facts(query_emb, project),
-            _search_chat_messages(query_emb, session_id),
+            _search_chat_messages(query_emb, session_id, project),
             return_exceptions=True,
         )
 
@@ -248,27 +248,57 @@ async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[
         return []
 
 
-async def _search_chat_messages(query_emb: list, session_id: str) -> List[Dict]:
-    """chat_messages 테이블에서 시맨틱 검색 (크로스 세션 포함). query_emb는 사전 생성된 임베딩."""
+async def _search_chat_messages(query_emb: list, session_id: str, project: Optional[str] = None) -> List[Dict]:
+    """chat_messages 테이블에서 시맨틱 검색 (동일 프로젝트 워크스페이스 내 크로스 세션)."""
     try:
-        from app.services.chat_embedding_service import search_semantic
         from app.core.db_pool import get_pool
 
         pool = get_pool()
-        # Cross-session search: session_id를 전달하지 않아 모든 세션에서 검색 (F3)
-        results_all = await search_semantic(pool, query_emb, session_id=None, limit=_RAG_TOP_K * 2, pre_embedded=True)
+        async with pool.acquire() as conn:
+            if project:
+                rows = await conn.fetch(
+                    """
+                    SELECT m.id, m.role, m.content, m.created_at,
+                           m.session_id::text AS session_id,
+                           s.title AS session_name,
+                           1 - (m.embedding <=> $1::vector) AS similarity
+                    FROM chat_messages m
+                    JOIN chat_sessions s ON s.id = m.session_id
+                    JOIN chat_workspaces w ON w.id = s.workspace_id
+                    WHERE m.embedding IS NOT NULL
+                      AND w.project_key = $3
+                    ORDER BY m.embedding <=> $1::vector
+                    LIMIT $2
+                    """,
+                    str(query_emb), _RAG_TOP_K * 2, project.upper(),
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT m.id, m.role, m.content, m.created_at,
+                           m.session_id::text AS session_id,
+                           s.title AS session_name,
+                           1 - (m.embedding <=> $1::vector) AS similarity
+                    FROM chat_messages m
+                    JOIN chat_sessions s ON s.id = m.session_id
+                    WHERE m.embedding IS NOT NULL
+                    ORDER BY m.embedding <=> $1::vector
+                    LIMIT $2
+                    """,
+                    str(query_emb), _RAG_TOP_K * 2,
+                )
 
         output = []
-        for r in results_all:
-            sim = r.get("similarity", 0)
+        for r in rows:
+            sim = float(r["similarity"]) if r["similarity"] else 0
             if sim < 0.3:
                 continue
 
-            is_current = str(r.get("session_id", "")) == session_id
+            is_current = r["session_id"] == session_id
             origin = "same_session" if is_current else "cross_session"
-            session_name = r.get("session_name", "")
+            session_name = r["session_name"] or ""
             ts = ""
-            if r.get("created_at"):
+            if r["created_at"]:
                 try:
                     ts = r["created_at"].strftime("%m/%d")
                 except (AttributeError, TypeError):
@@ -276,11 +306,11 @@ async def _search_chat_messages(query_emb: list, session_id: str) -> List[Dict]:
 
             output.append({
                 "source": f"대화({session_name[:20]})" if session_name else "대화",
-                "text": (r.get("content", ""))[:200],
+                "text": (r["content"] or "")[:200],
                 "similarity": sim,
                 "timestamp": ts,
                 "origin": origin,
-                "msg_id": str(r.get("id", "")),
+                "msg_id": str(r["id"]),
             })
 
         return output
