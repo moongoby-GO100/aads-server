@@ -366,6 +366,51 @@ class MediaGenerationService:
         except Exception:
             return None
 
+    async def _fetch_route_preference(
+        self,
+        route_key: str,
+        provider: str,
+        model_id: str,
+    ) -> dict[str, Any] | None:
+        pool = self._get_pool_or_none()
+        route_key = str(route_key or "").strip()
+        provider = str(provider or "").strip().lower()
+        model_id = _canonical_media_model_id(model_id or "")
+        if not pool or not route_key or not provider or not model_id:
+            return None
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT pref.route_key, pref.provider, pref.model_id,
+                           pref.display_order, pref.is_enabled, pref.is_default,
+                           pref.notes, pref.updated_at, pref.updated_by,
+                           models.execution_model_id, models.execution_backend,
+                           models.is_active, models.is_selectable, models.is_executable,
+                           models.verification_status, models.metadata, models.capabilities
+                    FROM model_routing_preferences AS pref
+                    LEFT JOIN llm_models AS models
+                      ON models.provider = pref.provider
+                     AND (models.model_id = pref.model_id OR models.execution_model_id = pref.model_id)
+                    WHERE pref.route_key = $1
+                      AND pref.provider = $2
+                      AND (
+                            pref.model_id = $3
+                         OR ($2 = 'google' AND $3 LIKE 'imagen-4.0-%' AND pref.model_id LIKE 'imagen-4.0-%')
+                      )
+                    ORDER BY CASE WHEN pref.model_id = $3 THEN 0 ELSE 1 END,
+                             pref.is_default DESC, pref.display_order ASC,
+                             pref.updated_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    route_key,
+                    provider,
+                    model_id,
+                )
+                return _normalize_job_row(row) if row else None
+        except Exception:
+            return None
+
     def _provider_configured(self, provider: str) -> bool:
         normalized = str(provider or "").lower()
         if normalized in {"pc_local", "local_pc", "local", "ceo_pc", "pc_agent"}:
@@ -525,6 +570,15 @@ class MediaGenerationService:
             requested_provider = "google" if _secret_value(self.settings, "GOOGLE_API_KEY") else "openai"
         if genspark_provider_requested and requested_model not in {"genspark-image-ui", "genspark-video-ui"}:
             requested_model = self._default_model_for(normalized_kind, "genspark_ui")
+
+        route_pref = await self._fetch_route_preference(
+            str(kind or "").strip() or normalized_kind,
+            requested_provider,
+            requested_model,
+        )
+        if route_pref:
+            enabled = enabled and self._db_route_enabled(route_pref)
+            route_note = route_note or self._db_route_note(route_pref)
 
         configured = self._provider_configured(requested_provider)
         if requested_provider == "kling" and not configured:

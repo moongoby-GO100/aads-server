@@ -35,10 +35,13 @@ class _Conn:
         self.rows: dict[str, dict] = {}
         self.model_routes: dict[str, dict] = {}
         self.default_routes: dict[str, dict] = {}
+        self.route_preferences: dict[tuple[str, str, str], dict] = {}
         self.next_id = 1
 
     async def fetchrow(self, query: str, *args):
         if "FROM model_routing_preferences" in query:
+            if len(args) >= 3:
+                return self.route_preferences.get((args[0], args[1], args[2]))
             return self.default_routes.get(args[0])
         if "FROM llm_models" in query:
             if args:
@@ -276,6 +279,43 @@ async def test_disabled_db_default_returns_clear_status_before_credentials():
     assert result["availability"] == "disabled"
     assert result["route_source"] == "db_default"
     assert result["message"] == "disabled in admin"
+
+
+@pytest.mark.asyncio
+async def test_disabled_explicit_google_family_model_is_blocked_before_provider_call():
+    conn = _Conn()
+    conn.model_routes["gemini-3.1-flash-image-preview"] = {
+        "provider": "gemini",
+        "model_id": "gemini-3.1-flash-image-preview",
+        "execution_model_id": "gemini-3.1-flash-image-preview",
+        "is_active": True,
+        "is_selectable": True,
+        "is_executable": True,
+        "verification_status": "verified",
+    }
+    conn.route_preferences[("image", "gemini", "gemini-3.1-flash-image-preview")] = {
+        "route_key": "image",
+        "provider": "gemini",
+        "model_id": "gemini-3.1-flash-image-preview",
+        "is_enabled": False,
+        "is_selectable": True,
+        "notes": "Google commercial route disabled",
+    }
+    svc = MediaGenerationService(
+        settings_obj=_settings(google_key="google-test"),
+        pool_provider=lambda: _Pool(conn),
+    )
+
+    result = await svc.generate_image(
+        "a clean product photo",
+        model_id="gemini-3.1-flash-image-preview",
+    )
+
+    assert result["error"] == "MODEL_DISABLED"
+    assert result["availability"] == "disabled"
+    assert result["route_source"] == "explicit"
+    assert result["provider"] == "gemini"
+    assert result["model_id"] == "gemini-3.1-flash-image-preview"
 
 
 @pytest.mark.asyncio
