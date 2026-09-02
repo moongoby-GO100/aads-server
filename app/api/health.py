@@ -7,7 +7,6 @@ from pathlib import Path
 import httpx
 
 from fastapi import APIRouter, HTTPException, Request
-from app.services.sandbox import check_sandbox_health
 
 router = APIRouter()
 _RELAY_SECRET_PATHS = (
@@ -169,14 +168,21 @@ def _relay_capacity_fallback() -> dict:
 
 @router.get("/health")
 async def health_check():
+    """Fast readiness endpoint.
+
+    Keep public health independent from Docker/sandbox inspection. Deep checks
+    are exposed separately at /api/v1/health/deep.
+    """
     from app.main import app_state
     graph_ready = app_state.get("graph") is not None
-    sandbox_health = await check_sandbox_health()
     return {
         "status": "ok" if graph_ready else "initializing",
         "graph_ready": graph_ready,
         "version": "0.2.1",
-        "sandbox": sandbox_health,
+        "checks": {
+            "app": "ok" if graph_ready else "initializing",
+            "sandbox": "deferred",
+        },
     }
 
 

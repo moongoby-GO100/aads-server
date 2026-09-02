@@ -9827,3 +9827,18 @@
   - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -v /root/aads/aads-server:/app -w /app aads-server:8d5c79af698d pytest tests/unit/test_chat_service.py -q` passed 73/73 with one existing FastAPI deprecation warning.
 - Deployment:
   - Pending commit/push/Blue-Green release. Do not include unrelated dirty files in the release context.
+
+## 2026-09-02 09:03 KST - Public health timeout hotfix
+
+- Request:
+  - Proceed with the next OOM/standby step and investigate `aads-server` upstream timeouts reported as 7 events over about three hours, with SSE/relay event-loop blocking suspected.
+- Runtime evidence:
+  - nginx logged repeated `upstream timed out` errors for `GET /api/v1/health` against both 8102 and 8100, most recently 2026-09-02 08:55:09 KST.
+  - Direct `curl` to 8100, 8102, and the public URL reproduced slow `/api/v1/health` responses at about 7.5 seconds, while `/health/live` remained fast.
+  - The route was not an SSE stream route. It awaited `check_sandbox_health()`, which performs Docker SDK image/container listing on every public health request.
+- Code change:
+  - `app/api/health.py`: changed `/api/v1/health` to a fast readiness response and marked sandbox diagnostics as `deferred`; deep Docker/sandbox checks remain available at `/api/v1/health/deep`.
+  - `app/main.py`: changed root `/health` the same way so nginx/external probes cannot block on Docker inspection.
+- Verification:
+  - `python3 -m py_compile app/api/health.py app/main.py` passed before commit.
+  - Deploy from a clean release worktree is required before certifying production latency.

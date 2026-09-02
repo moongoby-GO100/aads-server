@@ -3196,16 +3196,17 @@ from fastapi.responses import JSONResponse as _JSONResponse
 
 @app.get("/health", tags=["health"], include_in_schema=False)
 async def root_health_check():
-    """루트 /health — /api/v1/health 와 동일한 응답. 인증 불필요."""
+    """Fast root health endpoint. Keep Docker/sandbox checks on /api/v1/health/deep."""
     from app.main import app_state
-    from app.services.sandbox import check_sandbox_health
     graph_ready = app_state.get("graph") is not None
-    sandbox_health = await check_sandbox_health()
     return _JSONResponse({
         "status": "ok" if graph_ready else "initializing",
         "graph_ready": graph_ready,
         "version": "0.2.1",
-        "sandbox": sandbox_health,
+        "checks": {
+            "app": "ok" if graph_ready else "initializing",
+            "sandbox": "deferred",
+        },
     })# 정적 파일 서빙
 
 
