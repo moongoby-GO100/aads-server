@@ -4,7 +4,7 @@ AADS-188B: 코드베이스 인덱싱 서비스
 - Python: ast 모듈로 함수/클래스 단위 청킹
 - TS/JS: regex로 함수/클래스 단위 청킹
 - 원격 프로젝트: SSH로 파일 목록·내용 수집
-- 임베딩: Google Gemini text-embedding-004 (GEMINI_API_KEY 없으면 hash dummy)
+- 임베딩: 서버 로컬 Ollama nomic-embed-text (768차원), 폴백 hash dummy
 - 저장소: ChromaDB PersistentClient (/root/aads/data/chromadb/)
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _CHROMADB_PATH = os.getenv("CHROMADB_PATH", "/root/aads/data/chromadb")
 _COLLECTION_NAME = "code_chunks"
 _MAX_CHUNK_SIZE = 1500       # 청크당 최대 문자 수
-_EMBED_BATCH_SIZE = 50       # Gemini API 배치 크기
+_EMBED_BATCH_SIZE = 50       # 임베딩 배치 크기
 _MAX_FILES_PER_PROJECT = 300  # 프로젝트당 최대 파일 수
 
 # 프로젝트 → 서버 정보 (중앙 설정에서 import)
@@ -84,7 +84,7 @@ class IndexResult:
 # ─── 메인 서비스 ──────────────────────────────────────────────────────────────
 
 class CodeIndexerService:
-    """코드베이스 인덱싱 서비스 — ChromaDB + Gemini Embedding."""
+    """코드베이스 인덱싱 서비스 — ChromaDB + Ollama Embedding."""
 
     def __init__(self) -> None:
         self._chroma_client: Any = None
@@ -115,52 +115,20 @@ class CodeIndexerService:
 
     # ── 임베딩 ──────────────────────────────────────────────────────────────
 
-    _gemini_blocked_until: float = 0.0
-
     async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """
-        Google Gemini gemini-embedding-001 (3072차원) 으로 텍스트 임베딩.
-        GEMINI_API_KEY 없으면 또는 크레딧 고갈 서킷 브레이커 발동 시 dummy 반환.
-        """
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        now = time.monotonic()
-        if not api_key or now < self._gemini_blocked_until:
-            if not api_key:
-                logger.debug("[CodeIndexer] GEMINI_API_KEY 없음 — dummy 임베딩 사용")
-            else:
-                logger.debug("[CodeIndexer] Gemini 서킷 브레이커 활성 — dummy 임베딩")
-            return [self._dummy_embedding(t) for t in texts]
-
+        """서버 로컬 Ollama nomic-embed-text (768차원) 임베딩. 실패 시 dummy."""
         try:
-            from google import genai as google_genai  # type: ignore
-            client = google_genai.Client(api_key=api_key)
-            loop = asyncio.get_event_loop()
-            all_embeddings: List[List[float]] = []
-
-            for i in range(0, len(texts), _EMBED_BATCH_SIZE):
-                batch = texts[i: i + _EMBED_BATCH_SIZE]
-
-                def _call(b: List[str] = batch) -> Any:
-                    return client.models.embed_content(
-                        model="models/gemini-embedding-001",
-                        contents=b,
-                    )
-
-                result = await loop.run_in_executor(None, _call)
-                for emb in result.embeddings:
-                    all_embeddings.append(list(emb.values))
-
-            return all_embeddings
+            from app.core.local_embedding_bridge import embed as local_embed
+            result = await local_embed(texts, model="nomic-embed-text")
+            embeddings = result.get("embeddings", [])
+            if len(embeddings) == len(texts):
+                return [list(map(float, vec)) for vec in embeddings]
+            logger.warning("[CodeIndexer] 임베딩 수 불일치 expected=%d got=%d", len(texts), len(embeddings))
         except Exception as e:
-            err_str = str(e)
-            if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
-                self._gemini_blocked_until = now + 3600
-                logger.warning("[CodeIndexer] Gemini 429/크레딧 고갈 → 1시간 서킷 브레이커 발동")
-            else:
-                logger.warning(f"[CodeIndexer] Gemini 임베딩 실패: {e}")
-            return [self._dummy_embedding(t) for t in texts]
+            logger.warning("[CodeIndexer] Ollama 임베딩 실패 — dummy 사용: %s", str(e)[:120])
+        return [self._dummy_embedding(t) for t in texts]
 
-    def _dummy_embedding(self, text: str, dim: int = 3072) -> List[float]:
+    def _dummy_embedding(self, text: str, dim: int = 768) -> List[float]:
         """테스트/폴백용 hash 기반 dummy 임베딩 (재현 가능)."""
         h = hashlib.sha256(text.encode()).digest()
         # 32바이트 → 8개 float, 반복하여 768차원 채우기
