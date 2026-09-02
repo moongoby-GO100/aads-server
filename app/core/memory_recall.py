@@ -213,23 +213,39 @@ async def _build_session_notes(
         return ""
 
 
-async def _build_preferences() -> tuple[str, list[int]]:
-    """섹션 2: CEO 운영 원칙/선호 — 전역 공통 (프로젝트 필터 없음)."""
+async def _build_preferences(project_id: Optional[str] = None) -> tuple[str, list[int]]:
+    """섹션 2: CEO 운영 원칙/선호 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
         _conf = _CONFIDENCE.get("ceo_preference", 0.2)
         async with _get_pool().acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, key, value FROM ai_observations
-                WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
-                  AND confidence >= $1
-                ORDER BY
-                    CASE WHEN category IN ('compaction_directive','ceo_directive') THEN 0 ELSE 1 END,
-                    (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
-                LIMIT 20
-                """,
-                _conf,
-            )
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, key, value FROM ai_observations
+                    WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
+                      AND confidence >= $2
+                      AND (project IS NULL OR project = '' OR project = $1)
+                    ORDER BY
+                        CASE WHEN project = $1 THEN 0 ELSE 1 END,
+                        CASE WHEN category IN ('compaction_directive','ceo_directive') THEN 0 ELSE 1 END,
+                        (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
+                    LIMIT 20
+                    """,
+                    project_id, _conf,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, key, value FROM ai_observations
+                    WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
+                      AND confidence >= $1
+                    ORDER BY
+                        CASE WHEN category IN ('compaction_directive','ceo_directive') THEN 0 ELSE 1 END,
+                        (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
+                    LIMIT 20
+                    """,
+                    _conf,
+                )
             if not rows:
                 return "", []
             used_ids = [r["id"] for r in rows]
@@ -551,18 +567,32 @@ async def _build_strategy_updates(project_id: Optional[str] = None) -> str:
 
 async def _build_learned_memory(project_id: Optional[str] = None) -> str:
     """섹션 6: learn_pattern으로 저장된 AI 학습 메모리 (ai_meta_memory).
-    CEO 선호 + 프로젝트 패턴 + 결정 이력을 프로젝트 무관하게 전체 주입.
+    CEO 선호 + 프로젝트 패턴 + 결정 이력을 해당 프로젝트 + 공통(project IS NULL) 범위로 주입.
     """
     try:
         async with _get_pool().acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT category, key, value FROM ai_meta_memory
-                WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
-                ORDER BY confidence DESC, updated_at DESC
-                LIMIT 15
-                """,
-            )
+            if project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT category, key, value FROM ai_meta_memory
+                    WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
+                      AND (project IS NULL OR project = '' OR project = $1)
+                    ORDER BY
+                        CASE WHEN project = $1 THEN 0 ELSE 1 END,
+                        confidence DESC
+                    LIMIT 15
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT category, key, value FROM ai_meta_memory
+                    WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
+                    ORDER BY confidence DESC
+                    LIMIT 15
+                    """,
+                )
             if not rows:
                 return ""
             import json as _json
@@ -854,7 +884,7 @@ async def build_memory_context(
         quality_booster, exp_memory, proc_memory, kg_context,
     ) = await asyncio.gather(
         _build_session_notes(session_id, project_id, tenant_id, user_id),
-        _build_preferences(),
+        _build_preferences(project_id),
         _build_tool_strategy(project_id),
         _build_active_directives(project_id),
         _build_discoveries(project_id),
