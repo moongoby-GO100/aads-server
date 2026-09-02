@@ -86,7 +86,6 @@ async def _claim_execution_lease(
           AND status IN ('running', 'retrying', 'interrupted')
           AND (
               owner_instance IS NULL
-              OR owner_instance = $2
               OR lease_expires_at IS NULL
               OR lease_expires_at <= NOW()
           )
@@ -3260,6 +3259,7 @@ async def _mark_execution_interrupted(
     partial_content: str = "",
     placeholder_id: Optional[str] = None,
     delete_empty_placeholder: bool = False,
+    expected_owner_epoch: Optional[int] = None,
 ) -> None:
     """실패/취소된 실행을 terminal 상태로 닫아 자동 복구가 오작동하지 않게 한다."""
     sid = uuid.UUID(str(session_id))
@@ -3304,6 +3304,23 @@ async def _mark_execution_interrupted(
             str(execution_id)[:8],
             str(lease_row["owner_instance"])[:80],
             lease_row["owner_epoch"],
+            reason[:160],
+        )
+        return
+    if (
+        lease_row
+        and lease_row["lease_valid"]
+        and lease_row["owner_instance"] == _EXECUTION_OWNER_INSTANCE
+        and expected_owner_epoch is not None
+        and int(lease_row["owner_epoch"] or 0) != int(expected_owner_epoch)
+        and not force_terminal
+    ):
+        logger.warning(
+            "chat_execution_interrupt_skipped_stale_epoch session=%s execution=%s epoch=%s expected_epoch=%s reason=%s",
+            str(session_id)[:8],
+            str(execution_id)[:8],
+            lease_row["owner_epoch"],
+            expected_owner_epoch,
             reason[:160],
         )
         return
@@ -6410,6 +6427,7 @@ async def _resume_single_stream(
                         partial_content=final,
                         placeholder_id=str(placeholder_id) if placeholder_id else None,
                         delete_empty_placeholder=not bool(final),
+                        expected_owner_epoch=owner_epoch,
                     )
                 else:
                     final = (

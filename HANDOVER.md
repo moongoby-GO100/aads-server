@@ -1,5 +1,29 @@
 # AADS HANDOVER
 
+## 2026-09-02 10:58 KST - chat OOM/restart recovery lease race hotfix
+
+- Request:
+  - Investigate the new OOM log and the recurring chat window stall reported as "server restart", then apply immediate corrective action.
+- Findings:
+  - The host OS did not reboot; `uptime -s` remained `2026-04-29 19:09:03 KST`.
+  - Kernel logs showed one memcg OOM on `2026-09-02 07:29:50 KST`, killing `uvicorn` inside a Docker cgroup.
+  - Recent chat stalls were primarily caused by duplicate auto-resume attempts for the same execution. Multiple resume tasks on the same `owner_instance` incremented `owner_epoch`, causing the older task to lose its lease and fail with `resume_attempt_fence_or_limit_rejected`.
+  - Nginx was routing the active API to `aads-server:8100`; `aads-server-green:8102` was backup during the diagnosis.
+- Code action:
+  - `app/services/chat_service.py`: `_claim_execution_lease()` no longer steals a still-valid lease just because the owner name matches the current container. It can reclaim only empty or expired leases.
+  - `app/services/chat_service.py`: `_mark_execution_interrupted()` accepts `expected_owner_epoch` and refuses to interrupt a newer same-owner epoch. This prevents stale resume tasks from terminalizing a newer retrying execution.
+  - `tests/unit/test_chat_service.py`: added regression tests for same-owner lease stealing and stale epoch interrupt protection.
+- Runtime action:
+  - Hot-reloaded `app.services.chat_service` on active `8100` and standby `8102`.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` passed on the host.
+  - `docker exec aads-server python -m py_compile /app/app/services/chat_service.py` passed.
+  - Hot-reload result on active: `success=1`, `failed=0`, `active_tasks_pre=3`, `active_tasks_post=3`, `tasks_lost=0`.
+  - Hot-reload result on standby: `success=1`, `failed=0`, `active_tasks_pre=0`, `active_tasks_post=0`, `tasks_lost=0`.
+  - Full container `tests/unit/test_chat_service.py` had 70 passed and 3 pre-existing failures at `chat_service.py:11985` (`NameError: state is not defined`), unrelated to this patch.
+- Deployment:
+  - No blue-green deploy or container restart was performed in this hotfix step.
+
 ## 2026-09-02 08:02 KST - contabo116 OOM recurrence guard applied
 
 - Request:

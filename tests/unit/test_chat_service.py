@@ -1175,6 +1175,56 @@ async def test_mark_execution_interrupted_creates_visible_diagnostic_notice_with
 
 
 @pytest.mark.asyncio
+async def test_mark_execution_interrupted_skips_stale_same_owner_epoch():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+
+    class FakeAsyncpgConn:
+        __module__ = "asyncpg.connection"
+
+        def __init__(self):
+            self.execute = AsyncMock()
+            self.fetchval = AsyncMock()
+
+        async def fetchrow(self, query, *args):
+            return {
+                "owner_instance": chat_service._EXECUTION_OWNER_INSTANCE,
+                "owner_epoch": 3,
+                "lease_valid": True,
+            }
+
+    conn = FakeAsyncpgConn()
+
+    await chat_service._mark_execution_interrupted(
+        conn,
+        session_id,
+        execution_id,
+        "resume_single_stream_error: resume_stream_missing_done_event",
+        partial_content="부분 응답입니다.",
+        expected_owner_epoch=2,
+    )
+
+    conn.execute.assert_not_awaited()
+    conn.fetchval.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_execution_lease_does_not_steal_valid_self_owned_lease():
+    execution_id = uuid.uuid4()
+    captured = {}
+
+    class FakeConn:
+        async def fetchrow(self, query, *args):
+            captured["query"] = " ".join(query.split())
+            captured["args"] = args
+            return None
+
+    await chat_service._claim_execution_lease(FakeConn(), execution_id, status="retrying")
+
+    assert "OR owner_instance = $2" not in captured["query"]
+
+
+@pytest.mark.asyncio
 async def test_delete_streaming_placeholder_marks_final_missing_as_interrupted_partial():
     session_id = str(uuid.uuid4())
     execution_id = str(uuid.uuid4())
