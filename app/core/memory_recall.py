@@ -158,6 +158,7 @@ async def _build_session_notes(
                 if project_id:
                     params.append(project_id)
                     project_param = len(params)
+                    where_clauses.append(f"(${project_param} = ANY(sn.projects_discussed) OR sn.projects_discussed IS NULL)")
                     order_clause = f"ORDER BY CASE WHEN ${project_param} = ANY(sn.projects_discussed) THEN 0 ELSE 1 END, sn.created_at DESC"
                 else:
                     order_clause = "ORDER BY sn.created_at DESC"
@@ -177,6 +178,7 @@ async def _build_session_notes(
                     """
                     SELECT summary, key_decisions, created_at, projects_discussed
                     FROM session_notes
+                    WHERE $1 = ANY(projects_discussed) OR projects_discussed IS NULL
                     ORDER BY
                         CASE WHEN $1 = ANY(projects_discussed) THEN 0 ELSE 1 END,
                         created_at DESC
