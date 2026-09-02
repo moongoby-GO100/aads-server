@@ -1115,6 +1115,69 @@ async def test_save_and_update_session_preserves_interrupted_partial_when_rewrit
 
 
 @pytest.mark.asyncio
+async def test_save_and_update_session_saves_completed_when_todo_gate_missing():
+    """A final response that was already generated/streamed must not be re-classified
+    as interrupted/retrying just because the TODO completion gate heuristic missed a match
+    (regression for the todo_completion_gate_missing retry loop)."""
+    session_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    placeholder_id = uuid.uuid4()
+    final_answer = (
+        "수행 내역: 원인을 파악하고 코드를 수정했습니다.\n"
+        "검증 결과: 단위 테스트를 통과했습니다.\n"
+        "남은 리스크: 없습니다."
+    )
+    conn = AsyncMock()
+    conn.transaction = lambda: _TransactionCtx()
+    conn.fetchrow = AsyncMock(return_value={"status": "running", "completed_at": None})
+    conn.fetchval = AsyncMock(return_value=placeholder_id)
+    conn.execute = AsyncMock()
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch(
+            "app.services.chat_service._rewrite_incomplete_final_report_once",
+            new=AsyncMock(return_value=final_answer),
+        ),
+        patch(
+            "app.services.chat_service._apply_todo_completion_gate",
+            new=AsyncMock(return_value=(
+                final_answer,
+                {"all_completed": False, "missing_titles": ["chat_service 통합"]},
+            )),
+        ),
+        patch("app.services.chat_service._execution_has_newer_user_message", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service._archive_interrupted_siblings_for_completed_execution", new=AsyncMock()),
+        patch("app.services.chat_service._mark_execution_interrupted", new=AsyncMock()) as mark_interrupted,
+        patch("app.services.chat_service._extract_artifacts", new=AsyncMock()),
+    ):
+        await chat_service._save_and_update_session(
+            session_id,
+            final_answer,
+            execution_id=execution_id,
+            raw_messages=[{"role": "user", "content": "원인 파악하고 수정해"}],
+            model_used="gpt-5.5",
+            tools_called=[{"name": "run_remote_command"}],
+        )
+
+    mark_interrupted.assert_not_awaited()
+
+    completed_updates = [
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_turn_executions" in call.args[0] and "status = 'completed'" in call.args[0]
+    ]
+    assert completed_updates
+
+    todo_gate_quality_updates = [
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_messages" in call.args[0] and "quality_details" in call.args[0]
+        and call.args[1] == placeholder_id
+        and "todo_completion_gate_missing" in call.args[2]
+    ]
+    assert todo_gate_quality_updates
+
+
+@pytest.mark.asyncio
 async def test_mark_execution_interrupted_records_quality_details():
     session_id = str(uuid.uuid4())
     execution_id = str(uuid.uuid4())

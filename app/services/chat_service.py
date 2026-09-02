@@ -8501,22 +8501,20 @@ async def _save_and_update_session(
                 conn=conn,
             )
             if _execution_uuid and _todo_gate and not _todo_gate.get("all_completed", True):
+                # AADS: 최종 응답은 이미 SSE로 전송/생성이 끝난 상태이므로, TODO 완료
+                # 게이트 누락만으로 execution을 interrupted/retrying 처리하지 않는다.
+                # 과거에는 여기서 _mark_execution_interrupted 를 호출해 완성된 응답을
+                # "partial"로 재분류하고 auto-resume가 같은 내용을 재생성하게 만들어
+                # retrying 루프(todo_completion_gate_missing)에 빠졌다. 미완료 TODO는
+                # 이미 _apply_todo_completion_gate 가 pending/in_progress 로 남겨두므로
+                # 다음 턴에서 세션 스코프로 다시 안내된다 — 여기서는 기록만 남긴다.
                 _missing_titles = _todo_gate.get("missing_titles") or []
                 logger.warning(
-                    "todo_completion_gate_blocked_completed session=%s execution=%s missing=%s",
+                    "todo_completion_gate_missing_saved_as_completed session=%s execution=%s missing=%s",
                     str(sid)[:8],
                     str(_execution_uuid)[:8],
                     _missing_titles[:5],
                 )
-                await _mark_execution_interrupted(
-                    conn,
-                    str(sid),
-                    str(_execution_uuid),
-                    "todo_completion_gate_missing",
-                    partial_content=content,
-                    delete_empty_placeholder=False,
-                )
-                return
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
@@ -8705,6 +8703,30 @@ async def _save_and_update_session(
                         str(sid)[:8],
                         str(_assistant_msg_id)[:8],
                         _duration_save_err,
+                    )
+            if _assistant_msg_id and _todo_gate and not _todo_gate.get("all_completed", True):
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE chat_messages
+                        SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb
+                        WHERE id = $1
+                        """,
+                        _assistant_msg_id,
+                        json.dumps(
+                            {
+                                "todo_completion_gate_missing": True,
+                                "todo_completion_gate_missing_titles": (_todo_gate.get("missing_titles") or [])[:8],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                except Exception as _todo_gate_save_err:
+                    logger.warning(
+                        "todo_completion_gate_quality_details_save_failed session=%s message=%s error=%s",
+                        str(sid)[:8],
+                        str(_assistant_msg_id)[:8],
+                        _todo_gate_save_err,
                     )
             if _execution_uuid:
                 if _assistant_msg_id is None:
