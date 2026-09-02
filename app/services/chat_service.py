@@ -3600,6 +3600,34 @@ async def _mark_execution_interrupted(
                 reason[:120],
                 exc,
             )
+        # P0: lease_owned_elsewhere — lease 만료 후 지연 복구
+        if not auto_resume_scheduled and "lease_owned_elsewhere" in (reason or ""):
+            _p0_delay = _EXECUTION_LEASE_SECONDS + 15
+            _p0_sid, _p0_eid = session_id, execution_id
+            _p0_amid, _p0_partial, _p0_reason = assistant_message_id, clean_partial, reason
+
+            async def _delayed_lease_recovery():
+                try:
+                    await _heartbeat_asyncio.sleep(_p0_delay)
+                    async with get_pool().acquire() as _rc:
+                        _ok = await _schedule_interrupted_auto_resume(
+                            _rc, _p0_sid, _p0_eid, _p0_amid, _p0_partial, _p0_reason,
+                        )
+                        logger.info(
+                            "delayed_lease_recovery_%s session=%s execution=%s",
+                            "ok" if _ok else "skip", _p0_sid[:8], _p0_eid[:8],
+                        )
+                except Exception as _e:
+                    logger.warning(
+                        "delayed_lease_recovery_error session=%s: %s",
+                        _p0_sid[:8], str(_e)[:200],
+                    )
+
+            _heartbeat_asyncio.create_task(_delayed_lease_recovery())
+            logger.info(
+                "delayed_lease_recovery_scheduled session=%s delay=%ss",
+                _p0_sid[:8], _p0_delay,
+            )
     resume_payload = json.dumps(
         {"auto_resume_scheduled": bool(auto_resume_scheduled)},
         ensure_ascii=False,
@@ -4019,6 +4047,20 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                     )
                     return
                 state["owner_epoch"] = exec_epoch
+                # P0: 도구 호출 중 save_key 변경으로 heartbeat 경로를 우회해 lease 만료되는 버그 수정
+                _now_hb = _bg_time.monotonic()
+                if _now_hb - float(state.get("_last_lease_heartbeat_ts") or 0) >= _EXECUTION_HEARTBEAT_SECONDS:
+                    _lease_renewed = await _heartbeat_execution_lease(conn, _eid, exec_epoch)
+                    state["_last_lease_heartbeat_ts"] = _now_hb
+                    if not _lease_renewed:
+                        state["completed"] = True
+                        state["_terminal_execution_closed"] = True
+                        state["_producer_incomplete_exit"] = "execution_lease_lost_on_renewal"
+                        logger.warning(
+                            "interim_save_lease_renewal_failed session=%s execution=%s epoch=%s",
+                            session_id[:8], str(_eid)[:8], exec_epoch,
+                        )
+                        return
                 await _archive_competing_stream_placeholder(conn, _sid, _eid)
                 # pre-SELECT 제거: UPSERT의 WHERE EXISTS가 terminal 상태 자동 필터링
                 if force:
@@ -6115,6 +6157,17 @@ async def _resume_single_stream(
                         from app.services.intent_router import get_model_for_override
                         _resume_model = get_model_for_override(resume_model_override)
                         logger.info(f"resume_model_from_explicit_override session={session_id[:8]} model={_resume_model}")
+                    # P1 FIX: 세션 설정 모델 우선 (CEO 드롭다운 — frontend fallback 오염 방지)
+                    if not _resume_model:
+                        _session_current_model = await conn.fetchval(
+                            "SELECT current_model FROM chat_sessions WHERE id = $1", sid,
+                        )
+                        if _session_current_model:
+                            from app.services.intent_router import get_model_for_override
+                            _normalized_session = get_model_for_override(_session_current_model)
+                            if _normalized_session not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
+                                _resume_model = _normalized_session
+                                logger.info(f"resume_model_from_session_current session={session_id[:8]} model={_resume_model}")
                     if not _resume_model and requested_model:
                         from app.services.intent_router import get_model_for_override
                         _resume_model = get_model_for_override(requested_model)
