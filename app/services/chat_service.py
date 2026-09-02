@@ -203,6 +203,10 @@ _INTERRUPT_REASON_CATEGORIES = {
         "resume_task_cancelled",
         "asyncio.exceptions.cancellederror",
     ),
+    "resume_exhausted": (
+        "resume_attempt_fence_or_limit_rejected",
+        "execution_resume_attempt_limit_exceeded",
+    ),
 }
 
 
@@ -2695,6 +2699,7 @@ async def cleanup_stale_streaming_placeholders(
             LEFT JOIN chat_turn_executions te
               ON te.id = m.execution_id
             WHERE m.intent = 'streaming_placeholder'
+              AND (te.status IS NULL OR te.status NOT IN ('completed', 'interrupted'))
               AND COALESCE(
                     m.edited_at,
                     m.created_at,

@@ -2963,6 +2963,7 @@ _RELAY_RETRYABLE_ERROR_MARKERS = (
     "connect failed",
     "connection reset",
     "connection aborted",
+    "connection closed",
     "broken pipe",
     "econnreset",
     "network is unreachable",
