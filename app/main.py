@@ -2049,7 +2049,7 @@ async def lifespan(app: FastAPI):
                     logger.error("monthly_llm_sync_failed", error=str(_exc))
 
             scheduler.add_job(
-                lambda: __import__("asyncio").run(_monthly_llm_sync_job()),
+                _monthly_llm_sync_job,
                 trigger="cron",
                 day=1,
                 hour=0,
