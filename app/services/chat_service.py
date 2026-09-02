@@ -5224,7 +5224,13 @@ async def with_background_completion(
             )
             if not _completed_ok and not state.get("_rate_limited") and not state.get("_producer_exception_type") and not state.get("_producer_incomplete_exit"):
                 _content_len = len((state.get("content") or "").strip())
-                if _content_len > 0:
+                if _content_len > 500:
+                    logger.info(
+                        "partial_accepted_as_completed session=%s content_len=%d — missing_done_event with substantial content accepted",
+                        session_id[:8], _content_len,
+                    )
+                    _completed_ok = True
+                elif _content_len > 0:
                     logger.warning("bg_producer_no_done_event session=%s content_len=%d — NOT marking as completed", session_id[:8], _content_len)
             if _completed_ok:
                 try:
@@ -11577,28 +11583,35 @@ async def send_message_stream(
                     user_message=content,
                 )
                 if not _retry_validation.is_valid:
-                    logger.error(
-                        f"output_validator_retry_also_failed: {_retry_validation.violation_type} — "
-                        f"{_retry_validation.message} (intent={intent})"
-                    )
-                    await _save_interrupted_partial_message(
-                        session_id=session_id,
-                        content=_retry_response,
-                        reason="output_validator_retry_failed",
-                        execution_id=_execution_id_str,
-                    )
-                    if _execution_id_str:
-                        async with get_pool().acquire() as _conn:
-                            await _mark_execution_interrupted(
-                                _conn,
-                                session_id,
-                                _execution_id_str,
-                                f"output_validator_retry_failed:{_retry_validation.violation_type}",
-                                partial_content=_retry_response,
-                                delete_empty_placeholder=False,
-                            )
-                    yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증에 실패해 완료 처리하지 않았습니다. 중간 응답은 보존했고 같은 지시로 다시 이어서 처리할 수 있습니다.', 'recoverable': True, 'reason': _retry_validation.violation_type, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
-                    return
+                    if _retry_validation.violation_type == "REPORT_STRUCTURE_WEAK" and bool(tools_called):
+                        logger.warning(
+                            f"retry_weak_report_bypassed: {_retry_validation.message} "
+                            f"(tools_called={len(tools_called) if isinstance(tools_called, list) else tools_called})"
+                        )
+                        full_response = _retry_response
+                    else:
+                        logger.error(
+                            f"output_validator_retry_also_failed: {_retry_validation.violation_type} — "
+                            f"{_retry_validation.message} (intent={intent})"
+                        )
+                        await _save_interrupted_partial_message(
+                            session_id=session_id,
+                            content=_retry_response,
+                            reason="output_validator_retry_failed",
+                            execution_id=_execution_id_str,
+                        )
+                        if _execution_id_str:
+                            async with get_pool().acquire() as _conn:
+                                await _mark_execution_interrupted(
+                                    _conn,
+                                    session_id,
+                                    _execution_id_str,
+                                    f"output_validator_retry_failed:{_retry_validation.violation_type}",
+                                    partial_content=_retry_response,
+                                    delete_empty_placeholder=False,
+                                )
+                        yield f"data: {json.dumps({'type': 'error', 'content': '응답 재검증에 실패해 완료 처리하지 않았습니다. 중간 응답은 보존했고 같은 지시로 다시 이어서 처리할 수 있습니다.', 'recoverable': True, 'reason': _retry_validation.violation_type, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        return
                 full_response = _retry_response
             else:
                 logger.error(f"retry_also_empty_response: session={session_id[:8]}")

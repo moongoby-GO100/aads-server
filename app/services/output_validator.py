@@ -510,7 +510,7 @@ def check_report_quality_structure(
     if has_quantified_claim and not has_source_tags and len(text) >= 500:
         structural_gaps.append("source_tags")
 
-    if len(structural_gaps) < 2:
+    if len(structural_gaps) < 3:
         return None
 
     return ValidationResult(
