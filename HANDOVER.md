@@ -1,5 +1,33 @@
 # AADS HANDOVER
 
+## 2026-09-02 14:33 KST - chat resume retry-loop and repeated restart notice guard
+
+- Request:
+  - Continue the interrupted fix, immediately apply the next actions, and verify whether the repeated "server restart resume failed" notice is still occurring in other sessions.
+- Findings:
+  - DB count at 2026-09-02 14:30 KST showed `165` messages across `41` sessions containing the resume-failure notice.
+  - The interrupt marker appeared in `998` messages across `72` sessions, confirming historical marker accumulation.
+  - `chat_turn_executions` still had interrupted rows over the previous executor hard cap: retry_count `4=34`, `5=122`, `6=20`, `7=1`, `8=9`.
+  - The root cause was three inconsistent recovery paths: recovery scheduler allowed `5/8` attempts, executor allowed `3`, and `/streaming-status` polling still selected rows with `retry_count < 5`.
+- Code action:
+  - `app/routers/chat.py`: `_schedule_recovery_auto_resume()` now defaults to `svc._EXECUTION_RESUME_MAX_ATTEMPTS`, stale execution recovery passes the same cap, and `/streaming-status` uses the same cap instead of hard-coded `5`.
+  - `app/services/chat_service.py`: promoted the Korean interrupted notice to `_INTERRUPT_MARKER` and strips it together with resume-failure notices before appending a new marker.
+  - `tests/unit/test_chat_service.py`: added a regression test proving resume-failure and interrupted markers strip back to the preserved partial answer.
+  - `tests/unit/test_stale_execution_watchdog_contract.py`: added a contract test preventing `/streaming-status` from reintroducing `retry_count < 5`.
+- Verification:
+  - `python3 -m py_compile app/routers/chat.py app/services/chat_service.py` passed on the host.
+  - `docker exec aads-server python -m py_compile /app/app/routers/chat.py /app/app/services/chat_service.py` passed.
+  - Temporary test container with the current worktree mounted passed 7 focused tests:
+    `test_recovery_auto_resume_restores_retrying_execution`,
+    `test_recovery_auto_resume_can_preserve_retry_count`,
+    `test_interrupted_auto_resume_schedules_completion_gate_retry`,
+    two `_mark_execution_interrupted` tests,
+    `test_strip_resume_fail_markers_removes_interruption_marker`,
+    and `test_streaming_status_uses_resume_attempt_cap_constant`.
+  - Target-file `git diff --check` passed. Whole-repo `git diff --check` is still blocked by pre-existing whitespace in unrelated dirty changelog files.
+- Deployment:
+  - Commit/push/deploy pending at the time of this note.
+
 ## 2026-09-02 10:58 KST - chat OOM/restart recovery lease race hotfix
 
 - Request:

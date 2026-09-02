@@ -428,7 +428,7 @@ async def _schedule_recovery_auto_resume(
     partial_content: str,
     *,
     preserve_retry_count: bool = False,
-    retry_limit: int = 5,
+    retry_limit: int = 0,
 ) -> bool:
     """Turn a recovered stale chat execution back into a retrying stream.
 
@@ -436,6 +436,8 @@ async def _schedule_recovery_auto_resume(
     execution. For chat UX, a recoverable stale stream should keep answering
     automatically when we still have the original user message and retry budget.
     """
+    if retry_limit <= 0:
+        retry_limit = svc._EXECUTION_RESUME_MAX_ATTEMPTS
     try:
         row = await conn.fetchrow(
             """
@@ -730,7 +732,7 @@ async def _settle_stale_execution_for_recovery(
         _assistant_id,
         _clean_partial,
         preserve_retry_count=bool(_hard_stale_by_started_at),
-        retry_limit=8 if _hard_stale_by_started_at else 5,
+        retry_limit=svc._EXECUTION_RESUME_MAX_ATTEMPTS,
     )
     return {
         "is_streaming": bool(_auto_retry_scheduled),
@@ -2144,7 +2146,7 @@ async def get_streaming_status(
                 WHERE te.session_id = $1
                   AND te.status = 'interrupted'
                   AND te.updated_at > NOW() - INTERVAL '30 minutes'
-                  AND te.retry_count < 5
+                  AND te.retry_count < $2
                   AND COALESCE(um.content, '') <> ''
                   AND (
                     COALESCE(te.error_message, '') LIKE '%missing_done_event%'
@@ -2169,6 +2171,7 @@ async def get_streaming_status(
                 LIMIT 1
                 """,
                 session_id,
+                svc._EXECUTION_RESUME_MAX_ATTEMPTS,
             )
             if interrupted_row:
                 _clean_partial = svc._strip_streaming_progress_markers(interrupted_row["partial_content"] or "")

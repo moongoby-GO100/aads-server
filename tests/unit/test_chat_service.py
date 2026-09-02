@@ -650,6 +650,16 @@ def test_streaming_progress_markers_are_not_meaningful_partial_content():
     assert chat_service._has_meaningful_partial_content("원인 분석 보고입니다.\n\n⏳ _생성 중..._")
 
 
+def test_strip_resume_fail_markers_removes_interruption_marker():
+    content = (
+        "부분 응답\n\n"
+        "⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._\n\n"
+        "_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+    )
+
+    assert chat_service._strip_resume_fail_markers(content) == "부분 응답"
+
+
 def test_terminal_interrupt_marker_completes_memory_stream_once():
     session_id = str(uuid.uuid4())
     chat_service._streaming_state[session_id] = {

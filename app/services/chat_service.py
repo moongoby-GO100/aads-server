@@ -46,10 +46,13 @@ _RESUME_FAIL_SUFFIX = "⚠️ _서버 재시작 후 이어서 생성에 실패�
 _RESUME_FAIL_SUFFIX_ALT = "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
 
 
+_INTERRUPT_MARKER = "_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
+
+
 def _strip_resume_fail_markers(text: str) -> str:
     if not text:
         return text
-    for marker in (_RESUME_FAIL_SUFFIX, _RESUME_FAIL_SUFFIX_ALT):
+    for marker in (_RESUME_FAIL_SUFFIX, _RESUME_FAIL_SUFFIX_ALT, _INTERRUPT_MARKER):
         text = text.replace("\n\n" + marker, "").replace(marker, "")
     return text.rstrip()
 
@@ -3398,8 +3401,7 @@ async def _mark_execution_interrupted(
     assistant_message_id = pid
     if pid:
         if clean_partial:
-            marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
-            final_content = clean_partial if "최신 지시를 우선 처리" in clean_partial else clean_partial + marker
+            final_content = clean_partial if _INTERRUPT_MARKER in clean_partial else clean_partial + "\n\n" + _INTERRUPT_MARKER
             _intent = '_archived_partial' if is_superseded_cancel else (
                 'interrupted_partial' if len(clean_partial) > 50 else 'interruption_notice'
             )
@@ -3463,8 +3465,7 @@ async def _mark_execution_interrupted(
         )
 
     if assistant_message_id is None and clean_partial and is_superseded_cancel:
-        marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
-        final_content = clean_partial if "최신 지시를 우선 처리" in clean_partial else clean_partial + marker
+        final_content = clean_partial if _INTERRUPT_MARKER in clean_partial else clean_partial + "\n\n" + _INTERRUPT_MARKER
         assistant_message_id = await conn.fetchval(
             """
             INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent, tools_called)
@@ -5235,12 +5236,11 @@ async def with_background_completion(
                                         str(_ph_id)[:8] if _ph_id else "-",
                                     )
                                 else:
-                                    _marker = "\n\n_(이전 응답은 중단 처리되었습니다. 최신 지시를 우선 처리합니다.)_"
                                     _orphan = await _mark_orphan_stream_placeholder(
                                         _conn,
                                         uuid.UUID(str(session_id)),
                                         placeholder_id=_ph_id,
-                                        content=_partial_clean + _marker,
+                                        content=_partial_clean + "\n\n" + _INTERRUPT_MARKER,
                                         reason="orphan_placeholder_no_execution",
                                     )
                                     logger.warning(
