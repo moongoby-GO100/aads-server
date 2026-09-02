@@ -29,6 +29,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
+from app.services.browser_collection_audit import SITE_STAGE_LOG_SCHEMA, append_site_stage_log
 
 KST = timezone(timedelta(hours=9))
 DATA_DIR = Path(os.getenv("YEOLJEONG_FINANCE_DATA_DIR", "app/data/yeoljeong_finance"))
@@ -6165,6 +6166,54 @@ def _append_delivery_browser_session_event(event: str, payload: dict[str, Any]) 
         return
 
 
+def _append_delivery_stage_log(
+    stage_logs: list[dict[str, str]],
+    *,
+    service: str,
+    stage: str,
+    status: str,
+    started_at: float,
+    error_code: str = "",
+    reason: str = "",
+    **fields: Any,
+) -> None:
+    service_key = re.sub(r"[^a-z0-9_:-]+", "_", str(service or "portal").strip().lower()).strip("_") or "portal"
+    append_site_stage_log(
+        stage_logs,
+        stage=f"{service_key}_{stage}",
+        status=status,
+        started_at=started_at,
+        event_name="delivery_browser_collection_stage",
+        error_code=error_code,
+        reason=reason,
+        **fields,
+    )
+
+
+def _delivery_browser_diagnostics(
+    browser_auth: dict[str, Any],
+    session_id: str,
+    *,
+    url: str = "",
+    stage_logs: list[dict[str, str]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "auth_mode": "pc_agent_browser",
+        "browser_session_id": session_id,
+        "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
+        "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
+    }
+    if url:
+        diagnostics["url"] = url
+    if stage_logs is not None:
+        diagnostics["browser_stage_logs"] = stage_logs
+        diagnostics["browser_stage_log_schema"] = SITE_STAGE_LOG_SCHEMA
+    if extra:
+        diagnostics.update(extra)
+    return diagnostics
+
+
 def _run_delivery_browser_async(coro: Any) -> Any:
     try:
         asyncio.get_running_loop()
@@ -7308,8 +7357,24 @@ async def _collect_delivery_from_browser_bridge_session_async(
 ) -> dict[str, Any]:
     service = str(account.get("service") or "").strip()
     session_id = str(browser_auth.get("browser_session_id") or "").strip()
+    stage_logs: list[dict[str, str]] = []
     if not session_id:
-        return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_REQUIRED", "records": {}}
+        started_at = time.monotonic()
+        _append_delivery_stage_log(
+            stage_logs,
+            service=service,
+            stage="browser_session",
+            status="failed",
+            started_at=started_at,
+            error_code="PC_AGENT_SESSION_REQUIRED",
+            reason="session_id_missing",
+        )
+        return {
+            "status": "credential_required",
+            "error_code": "PC_AGENT_SESSION_REQUIRED",
+            "records": {},
+            "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, stage_logs=stage_logs),
+        }
     try:
         from app.browser_bridge.service import get_browser_bridge_service
         from app.services.yeoljeong_delivery_collectors import PORTAL_CONFIG, parse_portal_export
@@ -7321,7 +7386,31 @@ async def _collect_delivery_from_browser_bridge_session_async(
         bridge = get_browser_bridge_service()
         session = bridge.sessions.get(session_id)
         if not session:
-            return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_NOT_FOUND", "records": {}}
+            started_at = time.monotonic()
+            _append_delivery_stage_log(
+                stage_logs,
+                service=service,
+                stage="browser_session",
+                status="failed",
+                started_at=started_at,
+                error_code="PC_AGENT_SESSION_NOT_FOUND",
+                reason="session_not_found",
+            )
+            return {
+                "status": "credential_required",
+                "error_code": "PC_AGENT_SESSION_NOT_FOUND",
+                "records": {},
+                "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, stage_logs=stage_logs),
+            }
+        session_started_at = time.monotonic()
+        _append_delivery_stage_log(
+            stage_logs,
+            service=service,
+            stage="browser_session",
+            status="success",
+            started_at=session_started_at,
+            reason="session_ready",
+        )
         context = await bridge._context_for_session(session)
         page = await _delivery_bridge_page_for_service(context, service)
 
@@ -7329,10 +7418,29 @@ async def _collect_delivery_from_browser_bridge_session_async(
             home_url = "https://self.baemin.com/"
         else:
             home_url = str(account.get("portal_home_url") or account.get("home_url") or account.get("login_url") or config["login_url"])
+        site_started_at = time.monotonic()
         try:
             await page.goto(home_url, wait_until="domcontentloaded", timeout=45000)
+            _append_delivery_stage_log(
+                stage_logs,
+                service=service,
+                stage="site_access",
+                status="success",
+                started_at=site_started_at,
+                reason="goto_domcontentloaded",
+                timeout_ms=45000,
+            )
         except Exception:
-            pass
+            _append_delivery_stage_log(
+                stage_logs,
+                service=service,
+                stage="site_access",
+                status="failed",
+                started_at=site_started_at,
+                error_code="PORTAL_NAVIGATION_FAILED",
+                reason="page_goto_failed",
+                timeout_ms=45000,
+            )
         try:
             await page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
@@ -7350,6 +7458,15 @@ async def _collect_delivery_from_browser_bridge_session_async(
 
         auth_diagnostics: dict[str, str] = {}
         login_state = _baemin_bridge_login_state(url, text) if service == "baemin" else _delivery_bridge_login_state(url, text)
+        _append_delivery_stage_log(
+            stage_logs,
+            service=service,
+            stage="auth_state",
+            status="success" if login_state == "authenticated" else "pending",
+            started_at=time.monotonic(),
+            reason=login_state,
+            current_url=url[:120],
+        )
         if login_state == "login":
             login_result = (
                 await _baemin_bridge_login_with_saved_secret(page, account)
@@ -7363,6 +7480,8 @@ async def _collect_delivery_from_browser_bridge_session_async(
                         "browser_session_id": session_id,
                         "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                         "url": url,
+                        "browser_stage_logs": stage_logs,
+                        "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
                     }
                 )
                 return login_result
@@ -7378,12 +7497,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "status": "portal_action_required",
                 "error_code": f"{service.upper()}_SECURITY_BLOCKED",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-                    "url": url,
-                },
+                "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, url=url, stage_logs=stage_logs),
                 "message": f"{service_label} 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         if login_state == "challenge":
@@ -7400,6 +7514,8 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "browser_session_id": session_id,
                 "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "url": url,
+                "browser_stage_logs": stage_logs,
+                "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
             }
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
@@ -7534,7 +7650,9 @@ async def _collect_delivery_from_browser_bridge_session_async(
                 "browser_session_id": session_id,
                 "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "url": url,
+                "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
             }
+            login_diagnostics["browser_stage_logs"] = stage_logs
             login_screenshot = await _capture_delivery_challenge_screenshot(
                 page,
                 service=service,
@@ -7553,13 +7671,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
             }
 
         records = _delivery_empty_record_lists()
-        diagnostics: dict[str, str] = {
-            "auth_mode": "pc_agent_browser",
-            "browser_session_id": session_id,
-            "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-            "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-            "url": url,
-        }
+        diagnostics = _delivery_browser_diagnostics(browser_auth, session_id, url=url, stage_logs=stage_logs)
         diagnostics.update(auth_diagnostics)
         if service == "baemin":
             dashboard_records = _baemin_dashboard_records(
@@ -7575,6 +7687,7 @@ async def _collect_delivery_from_browser_bridge_session_async(
             diagnostics["dashboard_reviews"] = str(len(dashboard_records["reviews"]))
 
         for kind, labels in config["sections"].items():
+            section_started_at = time.monotonic()
             clicked = await _delivery_bridge_click_first(page, tuple(labels), timeout=3500)
             if clicked:
                 await _delivery_bridge_set_period(page, date_from, date_to)
@@ -7599,8 +7712,29 @@ async def _collect_delivery_from_browser_bridge_session_async(
             if incoming:
                 records[kind] = incoming
             diagnostics[kind] = str(parsed.get("diagnostics", {}).get("source") or ("clicked" if clicked else "section_not_found"))
+            _append_delivery_stage_log(
+                stage_logs,
+                service=service,
+                stage=f"{kind}_data_collection",
+                status="success" if incoming else "failed",
+                started_at=section_started_at,
+                error_code="" if incoming else str(parsed.get("error_code") or "NO_PARSEABLE_ROWS"),
+                reason="rows_parsed" if incoming else diagnostics[kind],
+                row_count=str(len(incoming)),
+                timeout_ms=8500,
+            )
 
         total_records = sum(len(rows) for rows in records.values())
+        _append_delivery_stage_log(
+            stage_logs,
+            service=service,
+            stage="data_collection",
+            status="success" if total_records else "failed",
+            started_at=time.monotonic(),
+            error_code="" if total_records else "AUTHENTICATED_NO_ROWS",
+            reason="records_found" if total_records else "authenticated_no_rows",
+            row_count=str(total_records),
+        )
         return {
             "status": "succeeded" if total_records else "partial",
             "error_code": "" if total_records else "AUTHENTICATED_NO_ROWS",
@@ -7609,15 +7743,20 @@ async def _collect_delivery_from_browser_bridge_session_async(
             "message": "" if total_records else f"{service_label} 로그인은 확인됐지만 조회 구간에서 표 데이터를 찾지 못했습니다.",
         }
     except Exception as exc:
+        _append_delivery_stage_log(
+            stage_logs,
+            service=service,
+            stage="collector_exception",
+            status="failed",
+            started_at=time.monotonic(),
+            error_code=f"PC_AGENT_COLLECTOR_{exc.__class__.__name__.upper()}",
+            reason=str(exc)[:160],
+        )
         return {
             "status": "failed",
             "error_code": f"PC_AGENT_COLLECTOR_{exc.__class__.__name__.upper()}",
             "records": {},
-            "diagnostics": {
-                "auth_mode": "pc_agent_browser",
-                "browser_session_id": session_id,
-                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-            },
+            "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, stage_logs=stage_logs),
             "message": str(exc)[:300],
         }
     finally:
@@ -7633,8 +7772,23 @@ async def _collect_baemin_from_browser_bridge_session_async(
     backfill: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     session_id = str(browser_auth.get("browser_session_id") or "").strip()
+    stage_logs: list[dict[str, str]] = []
     if not session_id:
-        return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_REQUIRED", "records": {}}
+        _append_delivery_stage_log(
+            stage_logs,
+            service="baemin",
+            stage="browser_session",
+            status="failed",
+            started_at=time.monotonic(),
+            error_code="PC_AGENT_SESSION_REQUIRED",
+            reason="session_id_missing",
+        )
+        return {
+            "status": "credential_required",
+            "error_code": "PC_AGENT_SESSION_REQUIRED",
+            "records": {},
+            "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, stage_logs=stage_logs),
+        }
     try:
         from app.browser_bridge.service import get_browser_bridge_service
         from app.services.baemin_order_history_collector import BackfillLimits, collect_baemin_order_history
@@ -7645,7 +7799,29 @@ async def _collect_baemin_from_browser_bridge_session_async(
         bridge = get_browser_bridge_service()
         session = bridge.sessions.get(session_id)
         if not session:
-            return {"status": "credential_required", "error_code": "PC_AGENT_SESSION_NOT_FOUND", "records": {}}
+            _append_delivery_stage_log(
+                stage_logs,
+                service="baemin",
+                stage="browser_session",
+                status="failed",
+                started_at=time.monotonic(),
+                error_code="PC_AGENT_SESSION_NOT_FOUND",
+                reason="session_not_found",
+            )
+            return {
+                "status": "credential_required",
+                "error_code": "PC_AGENT_SESSION_NOT_FOUND",
+                "records": {},
+                "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, stage_logs=stage_logs),
+            }
+        _append_delivery_stage_log(
+            stage_logs,
+            service="baemin",
+            stage="browser_session",
+            status="success",
+            started_at=time.monotonic(),
+            reason="session_ready",
+        )
         context = await bridge._context_for_session(session)
         page = await _delivery_bridge_page_for_service(context, "baemin")
         url = str(getattr(page, "url", "") or "")
@@ -7654,6 +7830,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
         except Exception:
             pass
         if "baemin.com" not in url.lower():
+            site_started_at = time.monotonic()
             try:
                 await page.goto("https://self.baemin.com/", wait_until="domcontentloaded", timeout=45000)
                 try:
@@ -7661,8 +7838,37 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 except Exception:
                     pass
                 url = str(await page.evaluate("window.location.href") or "")
+                _append_delivery_stage_log(
+                    stage_logs,
+                    service="baemin",
+                    stage="site_access",
+                    status="success",
+                    started_at=site_started_at,
+                    reason="goto_domcontentloaded",
+                    timeout_ms=45000,
+                    current_url=url[:120],
+                )
             except Exception:
-                pass
+                _append_delivery_stage_log(
+                    stage_logs,
+                    service="baemin",
+                    stage="site_access",
+                    status="failed",
+                    started_at=site_started_at,
+                    error_code="PORTAL_NAVIGATION_FAILED",
+                    reason="page_goto_failed",
+                    timeout_ms=45000,
+                )
+        else:
+            _append_delivery_stage_log(
+                stage_logs,
+                service="baemin",
+                stage="site_access",
+                status="success",
+                started_at=time.monotonic(),
+                reason="reused_baemin_tab",
+                current_url=url[:120],
+            )
         text = ""
         html = ""
         try:
@@ -7674,18 +7880,21 @@ async def _collect_baemin_from_browser_bridge_session_async(
         except Exception:
             html = text
         login_state = _baemin_bridge_login_state(url, text)
+        _append_delivery_stage_log(
+            stage_logs,
+            service="baemin",
+            stage="auth_state",
+            status="success" if login_state == "authenticated" else "pending",
+            started_at=time.monotonic(),
+            reason=login_state,
+            current_url=url[:120],
+        )
         if login_state == "blocked":
             return {
                 "status": "portal_action_required",
                 "error_code": "BAEMIN_SECURITY_BLOCKED",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-                    "url": url,
-                },
+                "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, url=url, stage_logs=stage_logs),
                 "message": "배민 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 직접 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         if login_state == "challenge":
@@ -7702,6 +7911,8 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
+                "browser_stage_logs": stage_logs,
+                "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
             }
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
@@ -7722,6 +7933,8 @@ async def _collect_baemin_from_browser_bridge_session_async(
                         "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                         "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                         "url": url,
+                        "browser_stage_logs": stage_logs,
+                        "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
                     }
                 )
                 return login_result
@@ -7743,13 +7956,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "status": "credential_required",
                 "error_code": "PC_AGENT_LOGIN_REQUIRED",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-                    "url": url,
-                },
+                "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, url=url, stage_logs=stage_logs),
                 "message": "PC Agent 브라우저가 배민 로그인 화면입니다. 먼저 해당 브라우저에서 배민 관리자 로그인이 필요합니다.",
             }
         if login_state == "challenge":
@@ -7766,6 +7973,8 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
                 "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
                 "url": url,
+                "browser_stage_logs": stage_logs,
+                "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
             }
             if challenge_screenshot:
                 diagnostics["challenge_screenshot_path"] = challenge_screenshot
@@ -7781,13 +7990,7 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "status": "portal_action_required",
                 "error_code": "BAEMIN_SECURITY_BLOCKED",
                 "records": {},
-                "diagnostics": {
-                    "auth_mode": "pc_agent_browser",
-                    "browser_session_id": session_id,
-                    "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-                    "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-                    "url": url,
-                },
+                "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, url=url, stage_logs=stage_logs),
                 "message": "배민 포털이 접속을 보안 정책으로 차단했습니다. PC 브라우저에서 직접 인증 또는 정산 CSV 업로드가 필요합니다.",
             }
         full_backfill = bool(backfill and backfill.get("mode") == "full_backfill")
@@ -7808,6 +8011,16 @@ async def _collect_baemin_from_browser_bridge_session_async(
             len(rows)
             for rows in (history_records or {}).values()
             if isinstance(rows, list)
+        )
+        _append_delivery_stage_log(
+            stage_logs,
+            service="baemin",
+            stage="order_history_data_collection",
+            status="success" if history_total else "failed",
+            started_at=time.monotonic(),
+            error_code="" if history_total else str((history_result or {}).get("error_code") or "NO_ORDER_HISTORY_ROWS"),
+            reason="rows_parsed" if history_total else str((history_result or {}).get("status") or "empty"),
+            row_count=str(history_total),
         )
 
         source = html or text
@@ -7844,6 +8057,26 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 business_id=str(account.get("business_id") or ""),
                 branch=str(account.get("branch") or ""),
             )
+            _append_delivery_stage_log(
+                stage_logs,
+                service="baemin",
+                stage="review_data_collection",
+                status="success" if ((review_result or {}).get("records") or {}).get("reviews") else "failed",
+                started_at=time.monotonic(),
+                error_code="" if ((review_result or {}).get("records") or {}).get("reviews") else str((review_result or {}).get("error_code") or "NO_REVIEW_ROWS"),
+                reason=str((review_result or {}).get("status") or ""),
+                row_count=str(len(((review_result or {}).get("records") or {}).get("reviews") or [])),
+            )
+            _append_delivery_stage_log(
+                stage_logs,
+                service="baemin",
+                stage="ads_data_collection",
+                status="success" if ((ads_result or {}).get("records") or {}).get("ads") else "failed",
+                started_at=time.monotonic(),
+                error_code="" if ((ads_result or {}).get("records") or {}).get("ads") else str((ads_result or {}).get("error_code") or "NO_ADS_ROWS"),
+                reason=str((ads_result or {}).get("status") or ""),
+                row_count=str(len(((ads_result or {}).get("records") or {}).get("ads") or [])),
+            )
             for name, rows in (review_result.get("records") or {}).items():
                 if rows:
                     records[name] = list(rows)
@@ -7857,6 +8090,16 @@ async def _collect_baemin_from_browser_bridge_session_async(
             if rows and not records.get(name):
                 records[name] = rows
         total_records = sum(len(rows) for rows in records.values())
+        _append_delivery_stage_log(
+            stage_logs,
+            service="baemin",
+            stage="data_collection",
+            status="success" if total_records else "failed",
+            started_at=time.monotonic(),
+            error_code="" if total_records else str(parsed.get("error_code") or "NO_PARSEABLE_ROWS"),
+            reason="records_found" if total_records else str(parsed.get("status") or "empty"),
+            row_count=str(total_records),
+        )
         status = "succeeded" if total_records else str(parsed.get("status") or "partial")
         error_code = "" if total_records else str(parsed.get("error_code") or "")
         diagnostics = dict(parsed.get("diagnostics") or {})
@@ -7890,6 +8133,8 @@ async def _collect_baemin_from_browser_bridge_session_async(
                 "dashboard_sales": str(len(dashboard_records["sales"])),
                 "dashboard_settlements": str(len(dashboard_records["settlements"])),
                 "dashboard_reviews": str(len(dashboard_records["reviews"])),
+                "browser_stage_logs": stage_logs,
+                "browser_stage_log_schema": SITE_STAGE_LOG_SCHEMA,
             }
         )
         return {
@@ -7900,16 +8145,20 @@ async def _collect_baemin_from_browser_bridge_session_async(
             "message": parsed.get("message") or "",
         }
     except Exception as exc:
+        _append_delivery_stage_log(
+            stage_logs,
+            service="baemin",
+            stage="collector_exception",
+            status="failed",
+            started_at=time.monotonic(),
+            error_code=f"PC_AGENT_COLLECTOR_{exc.__class__.__name__.upper()}",
+            reason=str(exc)[:160],
+        )
         return {
             "status": "failed",
             "error_code": f"PC_AGENT_COLLECTOR_{exc.__class__.__name__.upper()}",
             "records": {},
-            "diagnostics": {
-                "auth_mode": "pc_agent_browser",
-                "browser_session_id": session_id,
-                "browser_work_key": str(browser_auth.get("browser_work_key") or ""),
-                "browser_bridge_mode": str(browser_auth.get("browser_bridge_mode") or ""),
-            },
+            "diagnostics": _delivery_browser_diagnostics(browser_auth, session_id, stage_logs=stage_logs),
             "message": str(exc)[:300],
         }
     finally:

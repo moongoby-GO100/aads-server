@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-09-03 08:11 KST - FOOD browser collection global stage audit follow-up
+
+- Request:
+  - CEO requested direct follow-up on runner improvement items, granular Shinhan per-page/per-stage success/failure/time logs, failure reason and timeout logging, a step checklist, and a global plan for all site-access automation to reach final collection results.
+- Changes:
+  - `app/services/yeoljeong_finance_service.py`: applied the common browser stage log schema to generic delivery portal collection and Baemin-specific full-backfill collection. Results now include `diagnostics.browser_stage_logs` and `diagnostics.browser_stage_log_schema` for browser session, site access, auth state, per-section data collection, aggregate data collection, and collector exception paths.
+  - `scripts/yeoljeong_auto_collect.py`: fixed bank account selection so active accounts are checked before platform promotion, platform account lookup supports canonical service results with JSON fallback, legacy `credential_registered` quick-service rows can still promote, duplicate promotions are avoided, and incomplete masked quick-service rows are blocked before browser execution.
+  - `docs/reports/FOOD-BROWSER-COLLECTION-AUDIT-20260903.md`: added the detailed global browser collection audit/failure-prevention plan.
+- Verification:
+  - `docker exec aads-server-green python -m py_compile /app/app/services/browser_collection_audit.py /app/app/services/yeoljeong_bank_browser_connector.py /app/app/services/yeoljeong_finance_service.py /app/scripts/yeoljeong_auto_collect.py` passed.
+  - `docker exec aads-server-green python -m pytest /app/tests/unit/test_yeoljeong_bank_browser_connector.py /app/tests/unit/test_yeoljeong_auto_collect.py -q` passed: 109 tests in 97.30s.
+- Deploy:
+  - Not deployed in this chat turn. AADS API deployment requires blue/green release approval and clean release SHA handling.
+- Remaining:
+  - After deploy, run actual Mia Shinhan collection and verify `shinhan_stage_logs`, `browser_stage_logs`, `bank_collections[].imported_rows`, and transactions/no-records result before declaring final data collection complete.
+
 ## 2026-09-03 08:11 KST - FOOD Shinhan live collection timing and PC Agent eval timeout tuning
 
 - Request:
