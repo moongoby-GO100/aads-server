@@ -789,10 +789,14 @@ def _is_resume_retryable(error: BaseException) -> bool:
     )
 
 
-def _require_resume_done_event(saw_done_event: bool) -> None:
-    """Do not persist a recovered response unless its stream reached terminal done."""
-    if not saw_done_event:
-        raise RuntimeError("resume_stream_missing_done_event")
+def _require_resume_done_event(saw_done_event: bool, content_len: int = 0) -> None:
+    """Do not persist a recovered response unless its stream reached terminal done or has substantial content."""
+    if saw_done_event:
+        return
+    if content_len >= 500:
+        logger.warning("resume_done_missing_but_content_accepted len=%d", content_len)
+        return
+    raise RuntimeError("resume_stream_missing_done_event")
 
 
 async def _wait_for_resume_slot_cooldown() -> None:
@@ -3186,6 +3190,13 @@ async def _schedule_interrupted_auto_resume(
         "반드시 원인, 조치 내용, 검증 결과, 남은 리스크/다음 조치를 포함하세요. "
         "커밋/푸시/배포/문서반영을 실제 수행하지 않았다면 완료했다고 보고하지 마세요."
     )
+    existing_task = _active_bg_tasks.get(session_id)
+    if existing_task and not existing_task.done():
+        logger.info(
+            "interrupted_auto_resume_skip_active_task session=%s execution=%s",
+            session_id[:8], execution_id[:8],
+        )
+        return False
     task = _heartbeat_asyncio.create_task(
         _resume_single_stream(
             session_id,
@@ -6408,7 +6419,7 @@ async def _resume_single_stream(
                             elif etype == "error":
                                 raise RuntimeError(str(event.get("content") or "resume_stream_error"))
 
-                        _require_resume_done_event(_resume_saw_done_event)
+                        _require_resume_done_event(_resume_saw_done_event, len((full_response or "").strip()))
                         last_error = None
                         break
                     except Exception as stream_error:
