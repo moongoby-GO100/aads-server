@@ -1984,7 +1984,7 @@ deploy_job() {
     (
         flock -w 300 200 || exit 75
         git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main"
-    ) >"$push_out" 2>"$push_err" || push_exit=$?
+    ) 200>"$lock_file" >"$push_out" 2>"$push_err" || push_exit=$?
     push_diag=$(record_git_diagnostics "$job_id" "$([[ "$push_exit" -eq 0 ]] && echo push_succeeded || echo push_failed)" \
         "$worktree_dir" "$push_exit" "$(tail -30 "$push_out")" "$(tail -30 "$push_err")")
     rm -f "$push_out" "$push_err"
