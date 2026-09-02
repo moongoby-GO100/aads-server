@@ -166,6 +166,16 @@ class ProjectServerOut(BaseModel):
 
 
 def _row_to_out(row: asyncpg.Record) -> dict[str, Any]:
+    raw_metadata = row["metadata"] or {}
+    if isinstance(raw_metadata, str):
+        try:
+            metadata = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    elif isinstance(raw_metadata, dict):
+        metadata = raw_metadata
+    else:
+        metadata = dict(raw_metadata)
     return {
         "id": str(row["id"]),
         "label": row["label"],
@@ -177,7 +187,7 @@ def _row_to_out(row: asyncpg.Record) -> dict[str, Any]:
         "connection_state": row["connection_state"],
         "workspace_id": str(row["workspace_id"]) if row["workspace_id"] else None,
         "project_key": row["project_key"] or "",
-        "metadata": dict(row["metadata"] or {}),
+        "metadata": metadata,
         "last_checked_at": row["last_checked_at"].isoformat() if row["last_checked_at"] else None,
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
