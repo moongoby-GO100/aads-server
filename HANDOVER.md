@@ -9846,3 +9846,12 @@
   - No new `upstream timed out` entries were observed in the first 6+ minutes after the active cutover.
   - Relay capacity was healthy (`max_concurrent=15`, `used=4`, `timeouts=0` in acquire metrics), so relay/SSE pressure was a contributing load signal, not the direct timed-out route.
   - Standby same-digest sync remained incomplete because backup slot `aads-server-green:8102` still had an active SSE execution; do not force restart it until `/api/v1/ops/active-streams` returns zero for 8102.
+# 2026-09-02 09:20 KST - Pipeline Runner FLAG+hold review infra policy
+
+- CEO 지시: 리뷰 API/모델/파서 장애가 코드 반려 또는 미검증 승인 대기로 처리되지 않게 `FLAG+hold` 정책을 직접 구현.
+- 변경: `scripts/pipeline-runner.sh`와 `scripts/pipeline-runner.sh.local`에서 리뷰 인프라 장애(`REVIEW_API_UNAVAILABLE`, `REVIEW_MODEL_NO_RESPONSE`, `REVIEW_PARSER_FAILURE`, `REVIEW_TIMEOUT`)는 `status='review_hold'`, `phase='review_hold'`로 저장하고 worktree를 보존한다. 실제 코드 품질 미통과는 기존처럼 승인 대기 차단 경로를 유지한다.
+- 변경: `app/services/code_reviewer.py`에서 리뷰 AI 무응답, JSON 파싱 실패, 리뷰 런타임 예외를 더 이상 `APPROVE`로 반환하지 않고 `FLAG + needs_retry=true`로 반환한다.
+- 변경: `app/services/pipeline_runner_service.py`의 legacy Python 서비스에서 LLM 검수 실패 `DELEGATED` 경로가 `awaiting_approval`로 유입되던 fail-open을 `review_hold`로 차단한다.
+- 변경: `app/api/pipeline_runner.py`, `app/api/admin.py`, `app/api/ceo_chat_tools.py`, `app/services/tool_executor.py` 표시/통계 상태에 `review_hold`를 action_required로 추가했다. `pipeline_runner_model_stats` view도 `review_hold_jobs`를 별도 집계한다.
+- 추가: `migrations/141_pipeline_runner_review_hold.sql`로 과거 리뷰 인프라 실패 row를 `review_hold`로 정규화할 수 있게 했다.
+- 검증: `python3 -m py_compile app/services/code_reviewer.py app/services/pipeline_runner_service.py app/api/pipeline_runner.py app/api/admin.py app/api/ceo_chat_tools.py app/services/tool_executor.py tests/unit/test_code_reviewer_flag_classification.py tests/unit/test_pipeline_runner_script_guards.py` 통과. `python3 -m pytest tests/unit/test_code_reviewer_flag_classification.py tests/unit/test_pipeline_runner_script_guards.py -q` → 27 passed, 1 warning(`pytest-asyncio` 미설치 경고).

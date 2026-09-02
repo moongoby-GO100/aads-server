@@ -77,6 +77,7 @@ _TERMINAL_JOB_STATUSES = {
     "error",
     "cancelled",
     "rejected_done",
+    "review_hold",
 }
 
 
@@ -571,30 +572,34 @@ class PipelineCJob:
                 review = await self._ai_review()
 
                 if review["verdict"] == "DELEGATED":
-                    # LLM 검수 실패 → 채팅 AI에게 직접 검수 위임
-                    self._log("review_delegated", f"[{self.cycle}차] LLM 검수 실패, 채팅 AI에게 위임")
+                    # LLM 검수 실패는 미검증 diff이므로 승인 대기로 넘기지 않는다.
+                    self._log("review_hold", f"[{self.cycle}차] LLM 검수 실패, 승인 보류")
                     diff_summary = self._format_diff_summary(self.git_diff)
                     output_text = self.result_output[-2000:] if self.result_output else "(출력 없음)"
-                    await self._post_to_chat(
-                        f"⚠️ **[{self.cycle}차 검수 위임]** `{self.job_id}`\n"
-                        f"LLM 검수 호출 실패로 채팅 AI에게 검수를 위임합니다."
+                    self.status = "review_hold"
+                    self.review_feedback = (
+                        "FLAG+HOLD: AI 리뷰 인프라 장애로 자동 승인/승인대기 차단 — "
+                        f"{review.get('summary', '리뷰 실패')}"
                     )
-                    self.status = "awaiting_approval"
-                    self.review_feedback = "DELEGATED: 채팅 AI 검수 위임"
                     await self._save_to_db()
+                    await self._post_to_chat(
+                        f"🟠 **[AI 리뷰 보류]** `{self.job_id}`\n"
+                        f"LLM 검수 호출 실패로 승인 대기에 올리지 않았습니다.\n"
+                        f"상태: **review_hold** / 정책: **FLAG+hold**\n\n"
+                        f"**출력:**\n```\n{output_text}\n```\n\n"
+                        f"**변경사항:**\n{diff_summary}"
+                    )
                     await self._trigger_ai_reaction(
                         f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})의 "
-                        f"AI 자동 검수가 실패하여 당신에게 검수를 위임합니다.\n\n"
+                        f"AI 자동 검수가 실패해 FLAG+hold 상태로 보류되었습니다. "
+                        f"이 작업은 승인 대기가 아니며 approve 호출 대상이 아닙니다.\n\n"
                         f"## 원래 지시\n{self.instruction}\n\n"
                         f"## Claude Code 출력 (마지막 부분)\n{output_text}\n\n"
                         f"## 변경사항\n{diff_summary}\n\n"
-                        f"## 검수 기준\n"
-                        f"1. 원래 지시 사항이 정확히 반영됐는가?\n"
-                        f"2. 명백한 버그가 새로 생기지 않았는가?\n"
-                        f"3. 변경사항이 없으면 FAIL\n\n"
-                        f"검수 후 판단:\n"
-                        f"- PASS: pipeline_runner_approve(job_id='{self.job_id}', action='approve')\n"
-                        f"- FAIL: pipeline_runner_approve(job_id='{self.job_id}', action='reject', feedback='구체적 사유')"
+                        f"## 필요한 조치\n"
+                        f"1. 리뷰 인프라 복구 여부를 확인하세요.\n"
+                        f"2. 동일 산출물을 재검수하거나 작업을 재제출하세요.\n"
+                        f"3. 검증 없는 승인/배포는 금지입니다."
                     )
                     return
 

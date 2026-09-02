@@ -440,10 +440,13 @@ async def review_code_diff(
         if not result_text:
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
             verdict = _build_review_verdict(
-                verdict="APPROVE",
+                verdict="FLAG",
                 score=0.2,
-                summary="리뷰 AI 응답 없음",
-                issues=["리뷰 AI가 응답하지 않았습니다."],
+                summary="리뷰 AI 응답 없음 — 승인 보류 필요",
+                issues=[
+                    "리뷰 AI가 응답하지 않았습니다.",
+                    "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
+                ],
                 flag_category="REVIEW_MODEL_NO_RESPONSE",
                 failure_stage="review_llm",
                 needs_retry=True,
@@ -467,13 +470,16 @@ async def review_code_diff(
                 job_id, used_model, (result_text or "")[:200]
             )
             verdict_obj = _build_review_verdict(
-                verdict="APPROVE",
+                verdict="FLAG",
                 score=0.5,
-                summary="리뷰 응답 파싱 실패 (코드 품질 무관 — 인프라 이슈)",
-                issues=["LLM 리뷰 응답이 유효한 JSON이 아님 — 코드 품질과 무관"],
+                summary="리뷰 응답 파싱 실패 — 승인 보류 필요",
+                issues=[
+                    "LLM 리뷰 응답이 유효한 JSON이 아닙니다.",
+                    "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
+                ],
                 feedback={
                     "raw_preview": (result_text or "")[:500],
-                    "summary": "리뷰 응답 파싱 실패 (코드 품질 무관 — 인프라 이슈)",
+                    "summary": "리뷰 응답 파싱 실패 — 승인 보류 필요",
                 },
                 flag_category="REVIEW_PARSER_FAILURE",
                 failure_stage="review_json_parse",
@@ -547,10 +553,13 @@ async def review_code_diff(
     except Exception as e:
         logger.error(f"code_reviewer_error: job_id={job_id} error={e}")
         verdict = _build_review_verdict(
-            verdict="APPROVE",
+            verdict="FLAG",
             score=0.2,
-            summary="리뷰 중 오류 발생",
-            issues=[f"리뷰 오류: {str(e)[:200]}"],
+            summary="리뷰 중 오류 발생 — 승인 보류 필요",
+            issues=[
+                f"리뷰 오류: {str(e)[:200]}",
+                "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
+            ],
             feedback={"error": str(e)},
             flag_category="REVIEW_SYSTEM_FAILURE",
             failure_stage="review_runtime",

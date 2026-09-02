@@ -1716,7 +1716,7 @@ ${output:0:1500}
                 review_score="0.0"
                 review_flag_category="REVIEW_API_UNAVAILABLE"
                 review_needs_retry="true"
-                log "  AI_REVIEW_FAIL_CLOSE job=$job_id (HTTP ${review_http_code:-timeout})"
+                log "  AI_REVIEW_HOLD job=$job_id (HTTP ${review_http_code:-timeout})"
             fi
         else
             review_verdict="FLAG"
@@ -1750,14 +1750,22 @@ ${output:0:1500}
         fi
         [[ -n "$review_flag_category" ]] && review_error_detail="${review_error_detail} category=${review_flag_category}"
         [[ "$review_needs_retry" == "true" ]] && review_error_detail="${review_error_detail} needs_retry=true"
-        log "  AI_REVIEW_FAIL_CLOSE job=$job_id ${review_error_detail}"
-        db_update "UPDATE pipeline_jobs SET status='error', phase='review_failed',
+        local review_hold_status="error"
+        local review_hold_phase="review_failed"
+        local review_hold_note="승인 대기 차단"
+        if [[ "$review_infra_failure" == "true" ]]; then
+            review_hold_status="review_hold"
+            review_hold_phase="review_hold"
+            review_hold_note="FLAG+hold — 리뷰 인프라 장애로 승인 보류"
+        fi
+        log "  AI_REVIEW_HOLD job=$job_id status=${review_hold_status} phase=${review_hold_phase} ${review_error_detail}"
+        db_update "UPDATE pipeline_jobs SET status='${review_hold_status}', phase='${review_hold_phase}',
                    error_detail=$(sql_escape "$review_error_detail"),
                    result_output=$(sql_escape "$output"),
                    git_diff=$(sql_escape "$git_diff"),
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] 승인 대기 차단 — ${review_error_detail}',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ${review_hold_note} — ${review_error_detail}',
                    completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-        record_runner_event "$job_id" "job_terminal" "error" "review_failed" "$job_model" "" "$job_size" "" "{\"error_detail\":\"review_failed\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\"}"
+        record_runner_event "$job_id" "job_terminal" "$review_hold_status" "$review_hold_phase" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${review_hold_phase}\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\",\"policy\":\"FLAG+hold\"}"
         if [[ "$review_infra_failure" == "true" ]]; then
             post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
 코드 반려가 아니라 리뷰 시스템 장애입니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"

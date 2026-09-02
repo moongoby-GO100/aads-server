@@ -749,6 +749,8 @@ class TestRegressions:
                     "requested_model": "gpt-5.5",
                     "last_user_msg": "원래 질문",
                     "workspace_name": "CEO",
+                    "owner_epoch": 1,
+                    "resume_model_override": None,
                 }
 
             async def fetchval(self, query, *args):
@@ -798,6 +800,8 @@ class TestRegressions:
                     "requested_model": "gpt-5.5",
                     "last_user_msg": "원래 질문",
                     "workspace_name": "CEO",
+                    "owner_epoch": 1,
+                    "resume_model_override": None,
                 }
 
             async def fetchval(self, query, *args):
@@ -859,6 +863,8 @@ class TestRegressions:
                     "current_execution_id": execution_id,
                     "last_user_msg": "원래 질문",
                     "workspace_name": "CEO",
+                    "owner_epoch": 1,
+                    "resume_model_override": None,
                 }
 
             async def fetchval(self, query, *args):
@@ -919,6 +925,8 @@ class TestRegressions:
                     "current_execution_id": execution_id,
                     "last_user_msg": "원래 질문",
                     "workspace_name": "CEO",
+                    "owner_epoch": 1,
+                    "resume_model_override": None,
                 }
 
             async def fetchval(self, query, *args):
@@ -957,8 +965,7 @@ class TestRegressions:
             if "UPDATE chat_turn_executions" in query
         ]
         assert update_calls
-        assert update_calls[0][4] is True
-        assert update_calls[0][5] == 8
+        assert update_calls[0][6] == 8
         assert calls["resumed"]
         assert any("current_execution_id" in query for query, _ in calls["execute"])
 

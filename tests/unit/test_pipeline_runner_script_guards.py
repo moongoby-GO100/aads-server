@@ -20,17 +20,18 @@ def test_pipeline_runner_scripts_keep_git_diff_precheck_guards():
         assert "review_needs_retry=\"true\"" in script
 
 
-def test_pipeline_runner_ai_review_fail_closes_before_approval():
+def test_pipeline_runner_ai_review_holds_before_approval():
     for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
         script = _read_script(script_name)
 
-        fail_close = script.index("AI_REVIEW_FAIL_CLOSE")
+        fail_close = script.index("AI_REVIEW_HOLD")
         commit_gate = script.index("approval_commit_sha=$(commit_job_worktree_for_approval")
         approval_transition = script.index("SET phase='awaiting_approval'")
 
         assert fail_close < commit_gate < approval_transition
         assert "if [[ \"$review_verdict\" != \"APPROVE\" ]]" in script
-        assert "status='error', phase='review_failed'" in script
+        assert "review_hold_status=\"review_hold\"" in script
+        assert "review_hold_phase=\"review_hold\"" in script
         assert "승인 대기 차단" in script
         assert "_notify_ai \"$job_id\"" in script[fail_close:commit_gate]
 
@@ -108,7 +109,7 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script
 
 
-def test_pipeline_runner_records_telemetry_and_fail_closes_review_outage():
+def test_pipeline_runner_records_telemetry_and_holds_review_outage():
     script = _read_script("pipeline-runner.sh")
     migration = (ROOT / "migrations" / "139_pipeline_runner_telemetry.sql").read_text(encoding="utf-8")
 
@@ -118,7 +119,8 @@ def test_pipeline_runner_records_telemetry_and_fail_closes_review_outage():
     assert "model_attempt_started" in script
     assert "model_attempt_completed" in script
     assert "REVIEW_API_UNAVAILABLE" in script
-    assert "AI_REVIEW_FAIL_CLOSE" in script
+    assert "AI_REVIEW_HOLD" in script
+    assert "FLAG+hold" in script
     assert "review_verdict=$(sql_escape \"$review_verdict\")" in script
     assert "approval_requested_at=NOW()" in script
     assert "CREATE TABLE IF NOT EXISTS pipeline_runner_events" in migration

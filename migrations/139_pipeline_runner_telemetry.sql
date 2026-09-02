@@ -74,6 +74,7 @@ SELECT
     COUNT(*) FILTER (WHERE status = 'done')::INTEGER AS done_jobs,
     COUNT(*) FILTER (WHERE status = 'awaiting_approval')::INTEGER AS awaiting_approval_jobs,
     COUNT(*) FILTER (WHERE status = 'rejected_done')::INTEGER AS rejected_done_jobs,
+    COUNT(*) FILTER (WHERE status = 'review_hold')::INTEGER AS review_hold_jobs,
     COUNT(*) FILTER (WHERE status = 'error')::INTEGER AS error_jobs,
     ROUND(
         100.0 * COUNT(*) FILTER (WHERE status = 'done') / NULLIF(COUNT(*), 0),
