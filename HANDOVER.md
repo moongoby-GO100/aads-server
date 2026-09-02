@@ -39,7 +39,9 @@
   - `python3 -m py_compile app/services/chat_service.py tests/unit/test_chat_service.py` passed.
   - `docker exec aads-server-green python -m pytest /app/tests/unit/test_chat_service.py -q` passed 75/75 with one existing FastAPI `regex` deprecation warning.
 - Deployment:
-  - Pending commit/push/Blue-Green release for this additional `NameError` hotfix.
+  - Committed and pushed as `57616803 fix chat done event fallback state`.
+  - Hot-reloaded the active API slot `aads-server-green:8102`; reload succeeded with `69` modules reloaded.
+  - Full Blue/Green image release for this additional one-line hotfix is not yet run; standby `aads-server:8100` remains on the previous image until the next approved Blue/Green release.
 
 ## 2026-09-02 08:02 KST - contabo116 OOM recurrence guard applied
 
