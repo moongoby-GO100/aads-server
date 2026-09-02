@@ -1,5 +1,30 @@
 # AADS HANDOVER
 
+## 2026-09-02 15:12 KST - resume failure banner recurrence cleanup and standby certification
+
+- Request:
+  - Continue the interrupted next actions for the repeated "server restart resume failed" banner, verify whether it is happening in other sessions, and apply immediate remediation.
+- Findings:
+  - Current runtime active slot is `aads-server-green:8102`; nginx routes `8102` as active and `8100` as backup.
+  - Release SHA `5400c323e73e` is committed and pushed to `origin/main`.
+  - Exact visible standalone resume-failure banners after the fix were `0`; broad text matches were `18` messages across `6` sessions, but most were CEO/user queries or diagnostic reports quoting the phrase.
+  - The target session `634361af-cb52-41e0-a26c-4ecf71e6234e` had no visible standalone resume-failure banner remaining.
+  - Recent resume-related interrupted executions after the deployed fix window were `0`; no new kernel OOM entries were found after `2026-09-02 14:43 KST`.
+  - Separate repeated log noise remains from `GET /api/v1/external/chat/config?provider=newtalk&service=v1_new`, returning `external_chat_not_configured`; this is not the resume banner root cause.
+- Runtime/data action:
+  - Recreated inactive standby `aads-server:8100` from release image `aads-server:5400c323e73e` with `--no-build --no-deps`.
+  - Backed up `8` old standalone resume-failure banner messages into `chat_resume_fail_message_backup_20260902`.
+  - Marked those `8` standalone banner messages hidden with `intent='_deleted_duplicate'` and recalculated `message_count` for the `3` affected sessions.
+- Verification:
+  - `docker exec aads-server-green python -m pytest ...` passed 5 focused resume/watchdog/lease tests.
+  - Active and standby health returned `status=ok`.
+  - Active and standby image digests both resolved to `sha256:e485b23f1553786d29a946203967cc6fd04f181324ddec5c06eb15fc3cf215ef`.
+  - Both API slots have `memory=3221225472`, `memory_swap=5368709120`, `RestartCount=0`, and `OOMKilled=false`.
+  - DB verification after cleanup showed `visible_exact_banners=0`, `hidden_exact_banners=8`, `recent_exact_after_fix=0`.
+- Notes:
+  - No route cutover was performed in this follow-up; active user streams on `8102` were preserved.
+  - Compose emitted a host-env warning for `BRAVE_API_KEY` during manual standby sync. Health passed, but future compose invocations should load `.env` into the shell or remove duplicate shell interpolation for this variable.
+
 ## 2026-09-02 14:33 KST - chat resume retry-loop and repeated restart notice guard
 
 - Request:
