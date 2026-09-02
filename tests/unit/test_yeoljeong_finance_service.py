@@ -4879,6 +4879,28 @@ def test_create_browser_bank_account_infers_shinhan_codes_for_ui_payload(tmp_pat
     assert account["account_number_masked"].endswith("1031")
 
 
+def test_create_auto_browser_bank_account_is_idempotent_by_scope_service_and_mask(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    payload = {
+        "business_id": "biz-mia",
+        "branch_id": "branch-gangbuk-mia",
+        "bank_name": "신한은행 기업",
+        "account_number_masked": "**********1031",
+        "connection_type": "browser",
+        "connector_type": "bank-quick-service",
+        "institution_code": "shinhan_business",
+        "status": "active",
+        "auto_sync": True,
+        "memo": "platform_accounts bank-quick-service 자동수집 승격",
+    }
+
+    first = service.create_bank_account(payload, ADMIN_USER)
+    second = service.create_bank_account(payload, ADMIN_USER)
+
+    assert second["id"] == first["id"]
+    assert len(service._read_file_rows("bank_accounts")) == 1
+
+
 def test_create_bank_account_requires_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     with pytest.raises(Exception) as exc:

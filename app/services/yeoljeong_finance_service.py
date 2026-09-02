@@ -4587,6 +4587,60 @@ def _infer_bank_service_code(*values: Any) -> str:
     return ""
 
 
+def _same_bank_account_key(account: dict[str, Any], *, business_id: str, branch_id: str, service_code: str, mask: str) -> bool:
+    if str(account.get("business_id") or "").strip() != business_id:
+        return False
+    if str(account.get("branch_id") or "").strip() != branch_id:
+        return False
+    account_service = _infer_bank_service_code(
+        account.get("institution_code"),
+        account.get("bank_code"),
+        account.get("bank_name"),
+    )
+    if service_code and account_service != service_code:
+        return False
+    account_mask = str(account.get("account_number_masked") or "").strip()
+    return bool(mask and account_mask and account_mask == mask)
+
+
+def _find_existing_bank_account_by_key(
+    rows: list[dict[str, Any]],
+    *,
+    business_id: str,
+    branch_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    connection_type = str(payload.get("connection_type") or "").strip().lower()
+    connector_type = str(payload.get("connector_type") or "").strip().lower()
+    memo = str(payload.get("memo") or "").strip()
+    auto_sync = payload.get("auto_sync") is True
+    is_auto_browser_account = connection_type == "browser" and (
+        auto_sync
+        or connector_type in {"bank-browser", "bank-quick-service"}
+        or "platform_accounts" in memo
+    )
+    if not is_auto_browser_account:
+        return None
+    service_code = _infer_bank_service_code(
+        payload.get("institution_code"),
+        payload.get("bank_code"),
+        payload.get("bank_name"),
+    )
+    mask = _bank_account_number_masked(payload, None)
+    if not business_id or not branch_id or not service_code or not mask:
+        return None
+    for row in rows:
+        if _same_bank_account_key(
+            row,
+            business_id=business_id,
+            branch_id=branch_id,
+            service_code=service_code,
+            mask=mask,
+        ):
+            return row
+    return None
+
+
 def _bank_numeric_code_for_service(service_code: str) -> str:
     return BANK_SERVICE_CODE_ALIASES.get(service_code, ("", ""))[0]
 
@@ -4719,6 +4773,14 @@ def create_bank_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
         raise HTTPException(status_code=403, detail="은행계좌 등록 권한이 없습니다")
     business_id, branch_id = _normalize_bank_scope(payload.get("business_id"), payload.get("branch_id"))
     rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    existing = _find_existing_bank_account_by_key(
+        rows,
+        business_id=business_id,
+        branch_id=branch_id,
+        payload=payload,
+    )
+    if existing is not None:
+        return _sanitize_bank_account(existing)
     now = _now()
     record: dict[str, Any] = {
         "id": str(uuid4()),

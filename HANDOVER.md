@@ -9,17 +9,21 @@
 - Changes:
   - `scripts/yeoljeong_auto_collect.py`: bank queue account selection now requires matching quick-service platform credentials for Shinhan/IBK and skips incomplete accounts before queue item creation. Duplicate bank account rows are still deduped by business, branch, and bank service.
   - `app/services/yeoljeong_finance_service.py`: scoped Shinhan sync requests without a collectable account now return `skipped` with `BANK_ACCOUNT_NOT_PRESENT_FOR_SCOPE`; incomplete quick-service secrets return `BANK_QUICK_ACCOUNT_NOT_COLLECTABLE`.
+  - `app/services/yeoljeong_finance_service.py`: auto-sync browser bank account creation is now idempotent by `(business_id, branch_id, bank service, account_number_masked)` so the Mia Shinhan quick-service account is reused instead of repeatedly creating duplicate rows.
   - `app/services/yeoljeong_bank_browser_connector.py`: Shinhan ID/PW login step now reports `login_submitted`, `login_success`, `login_success_reason`, and `login_elapsed_ms`. Success is only marked after post-login page markers such as logout, inquiry period, account inquiry, transaction history, balance, or post-login URL markers appear.
   - Tests updated for collectable-only Shinhan selection and login elapsed-time reporting.
 - Runtime action:
   - PC Agent `7f99c528-24d` responded successfully from `DESKTOP-ICU55HK`.
   - Closed 69 Chrome/Edge processes limited to `KakaoBot\cdp-profile\isolated-yeoljeong-*` automation profiles and no-startup Edge background processes. The visible `KIS AutoTrade V4 - Chrome` window was left open.
+  - Rechecked browser cleanup at `2026-09-03 07:40 KST`: Shinhan managed CDP session was already absent (`closed_tabs=0`, `session_not_found`), Chrome process count was 0, and `window_list` showed no visible Chrome/Edge browser windows.
 - Verification:
   - `date` measured `2026-09-03 07:27:28 KST`; DB `NOW() AT TIME ZONE 'Asia/Seoul'` measured `2026-09-03T07:29:57.364993`.
   - Local data: `platform_accounts.json` has Shinhan quick-service rows for `biz-junghwa` and `biz-mia`, but only `biz-mia` has all four encrypted required values.
   - Local data: `transactions.json` length is still 0; no successful Shinhan transaction import has been verified.
   - `.venv-playwright/bin/python3 -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed 255 tests in 103.55s.
   - `.venv-playwright/bin/python3 -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker exec aads-server-green python3 -c ...` verified duplicate auto-browser bank account creation returns the original account ID and leaves one ledger row in an isolated temp ledger.
+  - `docker exec aads-server-green python3 -m pytest tests/unit/test_yeoljeong_finance_service.py::test_create_browser_bank_account_infers_shinhan_codes_for_ui_payload tests/unit/test_yeoljeong_finance_service.py::test_create_bank_account_masks_and_never_stores_raw_number tests/unit/test_yeoljeong_finance_service.py::test_update_bank_account_changes_status_and_remasks` passed 3/3.
   - Target-file `git diff --check` passed. Whole-repo `git diff --check` remains blocked by unrelated dirty changelog whitespace.
 - Deploy:
   - Not deployed at entry creation time. Related queue-drain root-cause runner `runner-12d37750` is still awaiting approval; deploy order must preserve that dependency.
