@@ -9841,4 +9841,8 @@
   - `app/main.py`: changed root `/health` the same way so nginx/external probes cannot block on Docker inspection.
 - Verification:
   - `python3 -m py_compile app/api/health.py app/main.py` passed before commit.
-  - Deploy from a clean release worktree is required before certifying production latency.
+  - Blue-green deployment routed active API to `aads-server:8100` on image `aads-server:1102437d99d5`.
+  - Post-deploy `/api/v1/health` latency measured 3-25 ms on `127.0.0.1:8100` and 405-969 ms via `https://aads.newtalk.kr`.
+  - No new `upstream timed out` entries were observed in the first 6+ minutes after the active cutover.
+  - Relay capacity was healthy (`max_concurrent=15`, `used=4`, `timeouts=0` in acquire metrics), so relay/SSE pressure was a contributing load signal, not the direct timed-out route.
+  - Standby same-digest sync remained incomplete because backup slot `aads-server-green:8102` still had an active SSE execution; do not force restart it until `/api/v1/ops/active-streams` returns zero for 8102.
