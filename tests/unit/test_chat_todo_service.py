@@ -154,7 +154,11 @@ class _TodoConn:
             message_id = str(args[arg_index])
             arg_index += 1
         if "status = ANY" in normalized:
-            statuses = set(args[-1])
+            statuses = set(args[arg_index])
+            arg_index += 1
+        max_items = None
+        if " LIMIT $" in normalized:
+            max_items = int(args[-1])
 
         rows = []
         for row in self.items.values():
@@ -169,6 +173,8 @@ class _TodoConn:
             rows.append(dict(row))
 
         rows.sort(key=lambda item: (0 if item["status"] in svc.TODO_ACTIVE_STATUSES else 1, item["sort_order"]))
+        if max_items is not None:
+            rows = rows[:max_items]
         return rows
 
 
@@ -247,6 +253,24 @@ async def test_todo_rows_decode_jsonb_metadata_strings_for_api_response():
 
     assert listed[0]["metadata"] == {"created_from": "asyncpg"}
     ChatTodoItemOut.model_validate(listed[0])
+
+
+@pytest.mark.asyncio
+async def test_list_todo_items_caps_response_size():
+    conn = _TodoConn()
+    session_id = str(uuid.uuid4())
+    await svc.create_todo_items(
+        session_id=session_id,
+        message_id=str(uuid.uuid4()),
+        execution_id=str(uuid.uuid4()),
+        titles=["첫 항목", "둘째 항목", "셋째 항목"],
+        source="user_turn",
+        conn=conn,
+    )
+
+    listed = await svc.list_todo_items(session_id=session_id, max_items=2, conn=conn)
+
+    assert [item["title"] for item in listed] == ["첫 항목", "둘째 항목"]
 
 
 @pytest.mark.asyncio

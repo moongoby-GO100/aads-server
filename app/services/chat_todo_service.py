@@ -580,6 +580,7 @@ async def list_todo_items(
     message_id: Optional[str] = None,
     statuses: Optional[Iterable[str]] = None,
     include_completed: bool = True,
+    max_items: Optional[int] = 200,
     conn: Any | None = None,
 ) -> list[dict[str, Any]]:
     sid = uuid.UUID(str(session_id))
@@ -612,6 +613,10 @@ async def list_todo_items(
             sort_order ASC,
             created_at ASC
     """
+    if max_items is not None:
+        safe_max_items = max(1, min(int(max_items), 500))
+        params.append(safe_max_items)
+        query = f"{query}\nLIMIT ${index}"
 
     async def _list(active_conn: Any) -> list[dict[str, Any]]:
         rows = await active_conn.fetch(query, *params)

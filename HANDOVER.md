@@ -9889,6 +9889,30 @@
   - No new `upstream timed out` entries were observed in the first 6+ minutes after the active cutover.
   - Relay capacity was healthy (`max_concurrent=15`, `used=4`, `timeouts=0` in acquire metrics), so relay/SSE pressure was a contributing load signal, not the direct timed-out route.
   - Standby same-digest sync remained incomplete because backup slot `aads-server-green:8102` still had an active SSE execution; do not force restart it until `/api/v1/ops/active-streams` returns zero for 8102.
+# 2026-09-02 11:46 KST - Chat stream done and TODO response-size release guard
+
+- CEO request:
+  - Apply the immediate recommendations for recurring chat stalls after API restart/OOM symptoms and report the result.
+- Runtime evidence:
+  - Both API containers were healthy with `OOMKilled=false` and `RestartCount=0` at verification time.
+  - `aads-server-green:8102` still had three visible active streams before cleanup: current session `b165b490` plus stale retrying sessions `3294f1c8` and `5090a247`.
+  - Logs showed repeated `bg_producer_error ... NameError: name 'state' is not defined` followed by `stream_producer_exit ... saw_done_event=False`, which caused preserved partial responses and auto-resume loops.
+  - `/chat/sessions/{session_id}/todos?include_completed=true` had been repeatedly polled by the chat UI and can grow large on long sessions.
+- Code change:
+  - `app/services/chat_service.py`: the final SSE `done` payload no longer uses a broad local `state` variable name; it safely reads `_streaming_state` through a guarded `_done_stream_state`, preventing this final event path from dying with a `NameError`.
+  - `app/services/chat_todo_service.py`: `list_todo_items()` now caps returned rows by default and supports `max_items`, bounded to 1..500.
+  - `app/routers/chat.py`: `/chat/sessions/{session_id}/todos` now defaults to `include_completed=false` and exposes `limit` capped to 1..200, so normal chat polling only returns active TODO rows.
+  - `tests/unit/test_chat_todo_service.py`: added a regression test for TODO response-size capping and updated the fake DB adapter to handle `LIMIT`.
+- Runtime cleanup:
+  - Stale retrying executions `6c0b4321` (`3294f1c8`) and `9da5d66f` (`5090a247`) were marked `interrupted` in a DB transaction with reason `manual stale retry drain before release: NameError loop`.
+  - After cleanup, active-streams on 8102 dropped from 3 to 1; the remaining active stream is the current chat session `b165b490`.
+- Verification:
+  - `python3 -m py_compile app/services/chat_todo_service.py app/routers/chat.py app/services/chat_service.py` passed.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -v /root/aads/aads-server:/app -w /app aads-server:8efa6bf304b7 python -m pytest tests/unit/test_chat_todo_service.py tests/unit/test_chat_service.py -q` passed 86/86 with one existing FastAPI deprecation warning.
+- Deployment note:
+  - The release must be built from a clean committed tree and deployed with `deploy.sh bluegreen`.
+  - Since the current chat response itself appears in active-streams on 8102, a synchronous deploy from inside this response can wait on itself. Use the standard deploy path after this response has ended, or run it from an isolated clean release worktree.
+
 # 2026-09-02 09:20 KST - Pipeline Runner FLAG+hold review infra policy
 
 - CEO 지시: 리뷰 API/모델/파서 장애가 코드 반려 또는 미검증 승인 대기로 처리되지 않게 `FLAG+hold` 정책을 직접 구현.

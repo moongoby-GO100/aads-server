@@ -3560,7 +3560,8 @@ async def create_session_todo(session_id: UUID, req: ChatTodoCreateRequest):
 @router.get("/chat/sessions/{session_id}/todos", response_model=List[ChatTodoItemOut], tags=["chat-todo"])
 async def get_session_todos(
     session_id: UUID,
-    include_completed: bool = Query(True),
+    include_completed: bool = Query(False),
+    limit: int = Query(100, ge=1, le=200),
     cleanup_stale: bool = Query(True, description="오래된 in_progress todo를 pending으로 정리"),
     stale_minutes: int = Query(120, ge=5, le=1440),
 ):
@@ -3576,6 +3577,7 @@ async def get_session_todos(
         return await list_todo_items(
             session_id=str(session_id),
             include_completed=include_completed,
+            max_items=limit,
         )
     except Exception as exc:
         logger.warning("chat_todo_list_failed", session_id=str(session_id), error=str(exc))
