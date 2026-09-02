@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-09-03 07:54 KST - FOOD Shinhan granular stage logs and queue preflight skip
+
+- Request:
+  - CEO reiterated that Shinhan bank collection currently applies only to the Mia branch. Junghwa and other businesses without complete Shinhan data must not even attempt browser collection.
+  - CEO requested granular success/failure/elapsed-time logs for Shinhan site access, simple-query page access, ID/PW input, login success, account query page, account selection/password input, period selection, query success, and data collection.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: added secret-free `shinhan_stage_logs` diagnostics plus `shinhan_bank_collection_stage` structured logs. Logged fields are limited to `stage`, `status`, `elapsed_ms`, `error_code`, `reason`, `attempt_index`, and safe flags.
+  - `scripts/yeoljeong_auto_collect.py`: bank queue drain now revalidates collectable bank accounts before invoking collectors. A queued bank item with no collectable configured account is completed as `cancelled` / `BANK_ACCOUNT_NOT_COLLECTABLE` with `browser_attempted=false`.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added granular stage-log regression coverage.
+  - `tests/unit/test_yeoljeong_auto_collect.py`: added regression coverage that a non-collectable Shinhan queue item is cancelled before browser collection.
+- Runtime facts:
+  - Local data inspection at 2026-09-03 07:47 KST: `platform_accounts.json` has Shinhan rows for Junghwa and Mia, but only Mia has all required quick-service encrypted fields (`password_enc`, `account_no_enc`, `account_password_enc`, `business_registration_no_enc`).
+  - `pc_agent_collection_queue.json` still had an old Junghwa Shinhan queue item; after this patch it will be cancelled before browser access if claimed.
+  - PC Agent `7f99c528-24d` (`DESKTOP-ICU55HK`) cleanup command returned `session_not_found` / `closed_tabs=0` for the Shinhan work key. System info showed CPU 1.2%, memory 46.2%.
+- Verification:
+  - `.venv-playwright/bin/python -m py_compile app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py app/main.py app/api/hot_reload.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_idpw_login_reports_success_marker_and_elapsed_time tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_flow_stage_logs_are_secret_free_and_granular tests/unit/test_yeoljeong_auto_collect.py::test_bank_accounts_for_payload_skips_incomplete_shinhan_quick_service tests/unit/test_yeoljeong_auto_collect.py::test_global_bank_queue_item_collects_only_its_bank_account tests/unit/test_yeoljeong_auto_collect.py::test_drain_bank_queue_cancels_non_collectable_account_before_browser tests/unit/test_pc_agent_collection_queue.py` passed: 10 tests.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py app/main.py app/api/hot_reload.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_pc_agent_collection_queue.py HANDOVER.md` passed.
+- Remaining:
+  - Actual Mia Shinhan collection must run after commit/push/deploy. Completion will be judged from `shinhan_stage_logs`, `bank_collections[].imported_rows`, and `transactions.json` update or explicit no-record result.
+
 ## 2026-09-03 07:30 KST - FOOD Shinhan collectable-only scope and login instrumentation
 
 - Request:

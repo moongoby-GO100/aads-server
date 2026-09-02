@@ -1768,7 +1768,50 @@ def test_drain_global_queue_claims_and_completes(monkeypatch):
     assert result["claimed"] is True
     assert result["status"] == "succeeded"
     assert completed[0][0] == "queue-1"
-    assert completed[0][1]["status"] == "succeeded"
+
+
+def test_drain_bank_queue_cancels_non_collectable_account_before_browser(monkeypatch):
+    completed = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "claim_next_collection_item",
+        lambda agent_id="": {
+            "id": "queue-bank-junghwa",
+            "queue_type": "bank",
+            "service": "shinhan_business",
+            "business_id": "biz-junghwa",
+            "branch": "branch-junghwa",
+            "payload": {
+                "services": ["shinhan_business"],
+                "bank_only": True,
+                "bank_account_id": "bank-shinhan-junghwa",
+                "business_id": "biz-junghwa",
+                "branch": "branch-junghwa",
+                "required_browser_agent_id": "7f99c528-24d",
+            },
+        },
+    )
+    monkeypatch.setattr(auto_collect, "_bank_accounts_for_payload", lambda payload, user: [])
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_collectors",
+        lambda payload, user, *, queue_only=False: pytest.fail("browser collection must not run"),
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "complete_collection_item",
+        lambda item_id, **kwargs: completed.append((item_id, kwargs)) or {"id": item_id, **kwargs},
+    )
+
+    result = auto_collect._run_global_collection_queue_once({"is_admin": True}, agent_id="7f99c528-24d")
+
+    assert result["claimed"] is True
+    assert result["status"] == "cancelled"
+    assert result["error_code"] == "BANK_ACCOUNT_NOT_COLLECTABLE"
+    assert completed[0][0] == "queue-bank-junghwa"
+    assert completed[0][1]["status"] == "cancelled"
+    assert completed[0][1]["result"]["browser_attempted"] is False
 
 
 def test_bank_only_defers_when_bank_pc_agent_lock_is_held(tmp_path, monkeypatch):

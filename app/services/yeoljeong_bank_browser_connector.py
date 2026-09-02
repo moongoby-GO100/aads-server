@@ -19,9 +19,11 @@ import hashlib
 import html
 import importlib.util
 import inspect
+import logging
 import os
 import re
 import sys
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,9 @@ except Exception:  # pragma: no cover - keeps standalone unit loading dependency
     sys.modules[_AUTH_SPEC.name] = _AUTH_MODULE
     _AUTH_SPEC.loader.exec_module(_AUTH_MODULE)
     classify_portal_state = _AUTH_MODULE.classify_portal_state
+
+
+logger = logging.getLogger(__name__)
 
 
 # ── Work-key generation ──────────────────────────────────────────────────────
@@ -83,6 +88,187 @@ def _safe_browser_error_fields(exc: Exception) -> dict[str, str]:
     if error_code:
         fields["error_code"] = error_code[:120]
     return fields
+
+
+def _append_shinhan_stage_log(
+    stage_logs: list[dict[str, str]],
+    *,
+    stage: str,
+    status: str,
+    started_at: float,
+    error_code: str = "",
+    reason: str = "",
+    **fields: Any,
+) -> None:
+    """Append a secret-free Shinhan collection stage audit entry."""
+    elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    entry: dict[str, str] = {
+        "stage": str(stage or "unknown")[:80],
+        "status": str(status or "unknown")[:40],
+        "elapsed_ms": str(elapsed_ms),
+    }
+    if error_code:
+        entry["error_code"] = str(error_code)[:120]
+    if reason:
+        entry["reason"] = str(reason)[:160]
+    for key, value in fields.items():
+        if value is None:
+            continue
+        text = str(value)
+        if text:
+            entry[str(key)[:60]] = text[:160]
+    stage_logs.append(entry)
+    logger.info(
+        "shinhan_bank_collection_stage stage=%s status=%s elapsed_ms=%s error_code=%s reason=%s",
+        entry["stage"],
+        entry["status"],
+        entry["elapsed_ms"],
+        entry.get("error_code", ""),
+        entry.get("reason", ""),
+    )
+
+
+def _append_shinhan_flow_stage_logs(
+    stage_logs: list[dict[str, str]],
+    *,
+    step_result: dict[str, str],
+    started_at: float,
+    attempt_index: int,
+) -> None:
+    stage = str(step_result.get("stage") or "")
+    error_code = str(step_result.get("error_code") or "")
+    attempted = str(step_result.get("attempted") or "")
+    common = {"attempt_index": str(attempt_index + 1), "source_stage": stage[:80]}
+    if attempted == "failed":
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_flow_step",
+            status="failed",
+            started_at=started_at,
+            error_code=error_code or str(step_result.get("error_type") or "SHINHAN_STEP_FAILED"),
+            failure_condition="step_exception_or_recoverable_browser_error",
+            **common,
+        )
+        return
+
+    if stage in {"login", "login_keyboard", "login_keyboard_prepare"}:
+        input_ok = (
+            step_result.get("username") == "1"
+            and (
+                step_result.get("login_secret") == "1"
+                or step_result.get("keyboard_secret") == "1"
+                or step_result.get("transkey_secret") == "1"
+            )
+        )
+        submit_ok = (
+            step_result.get("login_submitted") == "1"
+            or step_result.get("navigation_clicked") == "1"
+            or step_result.get("websquare_triggered") == "1"
+        )
+        login_ok = step_result.get("login_success") == "1"
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_idpw_input",
+            status="success" if input_ok else "failed",
+            started_at=started_at,
+            error_code="" if input_ok else (error_code or "IDPW_INPUT_NOT_CONFIRMED"),
+            success_condition="username_and_secret_input_confirmed" if input_ok else "",
+            failure_condition="" if input_ok else "username_or_secret_input_not_confirmed",
+            **common,
+        )
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_login_submit",
+            status="success" if submit_ok else "failed",
+            started_at=started_at,
+            error_code="" if submit_ok else (error_code or "LOGIN_SUBMIT_NOT_CONFIRMED"),
+            success_condition="login_button_or_websquare_submit_triggered" if submit_ok else "",
+            failure_condition="" if submit_ok else "login_submit_not_triggered",
+            **common,
+        )
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_login_success",
+            status="success" if login_ok else "pending",
+            started_at=started_at,
+            error_code="" if login_ok else (error_code or "LOGIN_SUCCESS_NOT_OBSERVED"),
+            reason=str(step_result.get("login_success_reason") or ""),
+            login_elapsed_ms=str(step_result.get("login_elapsed_ms") or ""),
+            success_condition="post_login_text_or_url_marker_observed" if login_ok else "",
+            failure_condition="" if login_ok else "post_login_marker_not_observed_before_timeout",
+            **common,
+        )
+        return
+
+    if stage in {"login_notice_confirm", "account_page_navigation"}:
+        account_page_ok = (
+            step_result.get("notice_confirm") == "1"
+            or step_result.get("account_page_navigation") == "1"
+            or step_result.get("account_page_direct_hash") == "1"
+            or step_result.get("navigation_clicked") == "1"
+        )
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_account_query_page",
+            status="success" if account_page_ok else "failed",
+            started_at=started_at,
+            error_code="" if account_page_ok else (error_code or "ACCOUNT_QUERY_PAGE_NOT_CONFIRMED"),
+            success_condition="account_query_page_navigation_confirmed" if account_page_ok else "",
+            failure_condition="" if account_page_ok else "account_query_page_navigation_not_confirmed",
+            **common,
+        )
+        return
+
+    if stage in {"account_query", "corporate_quick"}:
+        account_ok = (
+            step_result.get("account_resolved") == "1"
+            or step_result.get("account_selected") == "1"
+            or step_result.get("account_no") == "1"
+            or step_result.get("account_direct_input") == "1"
+        )
+        secret_ok = step_result.get("account_secret") == "1"
+        date_ok = step_result.get("date_from") == "1" and step_result.get("date_to") == "1"
+        query_ok = step_result.get("query_submitted") == "1"
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_account_select",
+            status="success" if account_ok else "failed",
+            started_at=started_at,
+            error_code="" if account_ok else (error_code or "ACCOUNT_SELECTION_NOT_CONFIRMED"),
+            success_condition="account_selected_or_direct_account_input_confirmed" if account_ok else "",
+            failure_condition="" if account_ok else "account_selection_or_input_not_confirmed",
+            **common,
+        )
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_account_password_input",
+            status="success" if secret_ok else "failed",
+            started_at=started_at,
+            error_code="" if secret_ok else (error_code or "ACCOUNT_PASSWORD_NOT_CONFIRMED"),
+            success_condition="account_password_input_confirmed" if secret_ok else "",
+            failure_condition="" if secret_ok else "account_password_input_not_confirmed",
+            **common,
+        )
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_period_select",
+            status="success" if date_ok else "failed",
+            started_at=started_at,
+            error_code="" if date_ok else (error_code or "PERIOD_SELECTION_NOT_CONFIRMED"),
+            success_condition="date_from_and_date_to_confirmed" if date_ok else "",
+            failure_condition="" if date_ok else "date_range_not_confirmed",
+            **common,
+        )
+        _append_shinhan_stage_log(
+            stage_logs,
+            stage="shinhan_query_submit",
+            status="success" if query_ok else "failed",
+            started_at=started_at,
+            error_code="" if query_ok else (error_code or "QUERY_SUBMIT_NOT_CONFIRMED"),
+            success_condition="query_submit_triggered" if query_ok else "",
+            failure_condition="" if query_ok else "query_submit_not_confirmed",
+            **common,
+        )
 
 
 def _bank_eval_timeout_ms(timeout_ms: int | None) -> int | None:
@@ -3218,6 +3404,12 @@ async def collect_bank_via_browser_session_async(
         safe_diagnostics["shinhan_query_flow_mode"] = shinhan_flow_mode
     if ibk_service:
         safe_diagnostics["ibk_query_flow_mode"] = "ibk_quick"
+    shinhan_stage_logs: list[dict[str, str]] = []
+    if shinhan_service:
+        safe_diagnostics["shinhan_stage_logs"] = shinhan_stage_logs
+        safe_diagnostics["shinhan_stage_log_schema"] = (
+            "stage,status,elapsed_ms,error_code,reason,attempt_index,success_condition,failure_condition"
+        )
 
     session_id_to_use = browser_session_id.strip() if browser_session_id else ""
     auto_opened_session = False
@@ -3248,6 +3440,7 @@ async def collect_bank_via_browser_session_async(
             pass
 
     if not session_id_to_use and auto_open_browser and browser_work_key:
+        stage_started_at = time.monotonic()
         try:
             from app.browser_bridge.service import get_browser_bridge_service
 
@@ -3272,6 +3465,14 @@ async def collect_bank_via_browser_session_async(
             safe_diagnostics["auto_open_browser"] = "1"
             safe_diagnostics["cdp_preflight_session_id"] = session_id_to_use
             safe_diagnostics["cdp_preflight"] = "ready"
+            if shinhan_service:
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_browser_session",
+                    status="success",
+                    started_at=stage_started_at,
+                    reason="auto_open_browser_ready",
+                )
         except Exception as exc:
             safe_diagnostics["auto_open_browser"] = "failed"
             exc_error_code = str(getattr(exc, "error_code", "") or "").strip()
@@ -3288,6 +3489,7 @@ async def collect_bank_via_browser_session_async(
                 and (exc_error_code or "").upper() in {"CDP_NOT_READY", "COMMAND_TIMEOUT"}
             ):
                 try:
+                    recreate_started_at = time.monotonic()
                     session = await bridge.ensure_work_session(
                         work_key=browser_work_key,
                         label=session_label,
@@ -3305,6 +3507,14 @@ async def collect_bank_via_browser_session_async(
                         safe_diagnostics["auto_open_browser"] = "1"
                         safe_diagnostics["session_recovery"] = "recreated_same_work_key"
                         safe_diagnostics["session_recovery_error"] = exc_error_code
+                        if shinhan_service:
+                            _append_shinhan_stage_log(
+                                shinhan_stage_logs,
+                                stage="shinhan_browser_session",
+                                status="success",
+                                started_at=recreate_started_at,
+                                reason="recreated_same_work_key",
+                            )
                 except Exception as retry_exc:
                     retry_error_code = str(getattr(retry_exc, "error_code", "") or "").strip()
                     safe_diagnostics["session_recovery"] = "failed"
@@ -3312,8 +3522,26 @@ async def collect_bank_via_browser_session_async(
                     retry_detail = _safe_error_detail(getattr(retry_exc, "detail", None))
                     if retry_detail:
                         safe_diagnostics["session_recovery_error_detail"] = retry_detail
+            if shinhan_service and not session_id_to_use:
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_browser_session",
+                    status="failed",
+                    started_at=stage_started_at,
+                    error_code=exc_error_code or "PC_AGENT_UNAVAILABLE",
+                    reason="auto_open_browser_failed",
+                )
 
     if not session_id_to_use:
+        if shinhan_service:
+            _append_shinhan_stage_log(
+                shinhan_stage_logs,
+                stage="shinhan_browser_session",
+                status="failed",
+                started_at=time.monotonic(),
+                error_code="PC_AGENT_LOGIN_REQUIRED",
+                reason="session_id_missing",
+            )
         return {
             "status": "action_required",
             "error_code": "PC_AGENT_LOGIN_REQUIRED",
@@ -3332,6 +3560,14 @@ async def collect_bank_via_browser_session_async(
     safe_diagnostics.setdefault("cdp_preflight", "ready")
     if auto_opened_session:
         safe_diagnostics["auto_opened_session"] = "1"
+    if shinhan_service and not any(item.get("stage") == "shinhan_browser_session" for item in shinhan_stage_logs):
+        _append_shinhan_stage_log(
+            shinhan_stage_logs,
+            stage="shinhan_browser_session",
+            status="success",
+            started_at=time.monotonic(),
+            reason="session_ready",
+        )
 
     try:
         from app.browser_bridge.service import get_browser_bridge_service
@@ -3402,14 +3638,40 @@ async def collect_bank_via_browser_session_async(
         _disable_local_agent_auto_recovery(page)
 
         if portal_url:
+            portal_stage_started_at = time.monotonic()
             if _portal_url_reusable(initial_url, portal_url):
                 safe_diagnostics["portal_navigation"] = "skipped_reusable_tab"
+                if shinhan_service:
+                    _append_shinhan_stage_log(
+                        shinhan_stage_logs,
+                        stage="shinhan_site_access",
+                        status="success",
+                        started_at=portal_stage_started_at,
+                        reason="reused_bank_tab",
+                    )
             else:
                 try:
                     await page.goto(portal_url, wait_until="domcontentloaded", timeout=30000)
                     safe_diagnostics["portal_navigation"] = "navigated"
+                    if shinhan_service:
+                        _append_shinhan_stage_log(
+                            shinhan_stage_logs,
+                            stage="shinhan_site_access",
+                            status="success",
+                            started_at=portal_stage_started_at,
+                            reason="goto_domcontentloaded",
+                        )
                 except Exception:
                     safe_diagnostics["portal_navigation"] = "failed"
+                    if shinhan_service:
+                        _append_shinhan_stage_log(
+                            shinhan_stage_logs,
+                            stage="shinhan_site_access",
+                            status="failed",
+                            started_at=portal_stage_started_at,
+                            error_code="PORTAL_NAVIGATION_FAILED",
+                            reason="page_goto_failed",
+                        )
                 try:
                     await page.wait_for_load_state("networkidle", timeout=6000)
                 except Exception:
@@ -3480,6 +3742,20 @@ async def collect_bank_via_browser_session_async(
 
         safe_diagnostics["current_url"] = current_url
         safe_diagnostics["last_observed_stage"] = "login page"
+        if shinhan_service:
+            simple_query_status = (
+                "success"
+                if "bank.shinhan.com" in current_url and "/rib/easy/index.jsp" in current_url
+                else "unknown"
+            )
+            _append_shinhan_stage_log(
+                shinhan_stage_logs,
+                stage="shinhan_simple_query_page",
+                status=simple_query_status,
+                started_at=time.monotonic(),
+                reason="visible_url_checked",
+                current_url=current_url[:120],
+            )
 
         # YESKEY may be visible only as a cross-origin iframe or popup. If
         # saved Shinhan ID/PW exists, reset to that login path before falling
@@ -3642,6 +3918,7 @@ async def collect_bank_via_browser_session_async(
                             await page.wait_for_load_state("networkidle", timeout=2000)
                         except Exception:
                             pass
+                step_started_at = time.monotonic()
                 try:
                     if (
                         shinhan_flow_mode == "individual_simple"
@@ -3726,6 +4003,12 @@ async def collect_bank_via_browser_session_async(
                     }
                 step_result["attempt_index"] = str(attempt_index + 1)
                 shinhan_steps.append(step_result)
+                _append_shinhan_flow_stage_logs(
+                    shinhan_stage_logs,
+                    step_result=step_result,
+                    started_at=step_started_at,
+                    attempt_index=attempt_index,
+                )
                 auth_challenge = await _detect_shinhan_auth_challenge(page, getattr(context, "pages", None))
                 if auth_challenge:
                     if shinhan_flow_mode == "individual_simple" and login_username and login_password:
@@ -3807,6 +4090,24 @@ async def collect_bank_via_browser_session_async(
                         safe_diagnostics["screen_reason_code"] = "TRANSACTION_TABLE_VISIBLE_AFTER_SHINHAN_QUERY"
                         safe_diagnostics["screen_suggested_action"] = "parse_table"
                         safe_diagnostics["screen_requires_operator"] = "0"
+                        _append_shinhan_stage_log(
+                            shinhan_stage_logs,
+                            stage="shinhan_query_success",
+                            status="success",
+                            started_at=step_started_at,
+                            reason="transaction_table_visible",
+                            attempt_index=str(attempt_index + 1),
+                            row_count=str(len(rechecked_rows)),
+                        )
+                        _append_shinhan_stage_log(
+                            shinhan_stage_logs,
+                            stage="shinhan_data_collection",
+                            status="success",
+                            started_at=step_started_at,
+                            reason="rows_parsed",
+                            attempt_index=str(attempt_index + 1),
+                            row_count=str(len(rechecked_rows)),
+                        )
                         break
                     notice_state = await _shinhan_security_notice_state(page)
                     if str(notice_state.get("present") or "") == "1":
@@ -3832,6 +4133,15 @@ async def collect_bank_via_browser_session_async(
             shinhan_flow_result = aggregate_flow
             safe_diagnostics["shinhan_query_flow"] = shinhan_flow_result
             safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
+            if not rows and not any(item.get("stage") == "shinhan_data_collection" for item in shinhan_stage_logs):
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_data_collection",
+                    status="failed",
+                    started_at=time.monotonic(),
+                    error_code=str(safe_diagnostics.get("screen_reason_code") or "TRANSACTION_ROWS_NOT_OBSERVED"),
+                    reason=str(safe_diagnostics.get("screen_state") or "rows_empty"),
+                )
 
         if not rows and ibk_service:
             ibk_steps: list[dict[str, str]] = []
@@ -4028,8 +4338,26 @@ async def collect_bank_via_browser_session_async(
                 safe_diagnostics["screen_requires_operator"] = "0"
 
         if rows:
+            if shinhan_service and not any(item.get("stage") == "shinhan_data_collection" for item in shinhan_stage_logs):
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_data_collection",
+                    status="success",
+                    started_at=time.monotonic(),
+                    reason="rows_parsed",
+                    row_count=str(len(rows)),
+                )
             msg = f"{bank_name or '은행'} 포털에서 {len(rows)}건 수집했습니다."
         elif safe_diagnostics.get("screen_state") == "no_records":
+            if shinhan_service and not any(item.get("stage") == "shinhan_data_collection" for item in shinhan_stage_logs):
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_data_collection",
+                    status="success",
+                    started_at=time.monotonic(),
+                    reason="no_records",
+                    row_count="0",
+                )
             msg = f"{bank_name or '은행'} 포털에 해당 기간 거래 내역이 없습니다."
         elif parse_diag["parse_failure"]:
             msg = (

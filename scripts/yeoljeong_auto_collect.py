@@ -1081,6 +1081,35 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
     if agent_id:
         payload["browser_agent_id"] = agent_id
         payload["pc_agent_id"] = agent_id
+    if str(item.get("queue_type") or "") == "bank":
+        collectable_accounts = _bank_accounts_for_payload(payload, user)
+        if not collectable_accounts:
+            complete_collection_item(
+                str(item["id"]),
+                status="cancelled",
+                result={
+                    "bank_account_id": str(payload.get("bank_account_id") or ""),
+                    "business_id": str(payload.get("business_id") or ""),
+                    "branch": str(payload.get("branch") or ""),
+                    "service": str(item.get("service") or ""),
+                    "browser_attempted": False,
+                },
+                error_code="BANK_ACCOUNT_NOT_COLLECTABLE",
+                message="은행 자동수집 필수 데이터가 없는 계좌라 브라우저 접속 전 제외했습니다.",
+            )
+            return {
+                "global_queue": True,
+                "claimed": True,
+                "item": {
+                    "id": item.get("id"),
+                    "service": item.get("service"),
+                    "business_id": item.get("business_id"),
+                    "branch": item.get("branch"),
+                },
+                "status": "cancelled",
+                "error_code": "BANK_ACCOUNT_NOT_COLLECTABLE",
+                "message": "은행 자동수집 필수 데이터가 없는 계좌라 브라우저 접속 전 제외했습니다.",
+            }
     try:
         result = _run_collectors(payload, user, queue_only=False)
         state = _completion_state(result)

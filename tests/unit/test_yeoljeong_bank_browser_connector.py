@@ -1653,6 +1653,35 @@ def test_shinhan_idpw_login_reports_success_marker_and_elapsed_time(monkeypatch)
     assert "bank-pass" not in str(result)
 
 
+def test_shinhan_flow_stage_logs_are_secret_free_and_granular():
+    logs = []
+
+    connector._append_shinhan_flow_stage_logs(
+        logs,
+        step_result={
+            "attempted": "1",
+            "stage": "account_query",
+            "account_selected": "1",
+            "account_secret": "1",
+            "date_from": "1",
+            "date_to": "1",
+            "query_submitted": "1",
+        },
+        started_at=connector.time.monotonic(),
+        attempt_index=0,
+    )
+
+    assert [item["stage"] for item in logs] == [
+        "shinhan_account_select",
+        "shinhan_account_password_input",
+        "shinhan_period_select",
+        "shinhan_query_submit",
+    ]
+    assert all(item["status"] == "success" for item in logs)
+    assert all("elapsed_ms" in item for item in logs)
+    assert "bank-pass" not in str(logs)
+
+
 def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
     page = AsyncMock()
     page.click = AsyncMock()
