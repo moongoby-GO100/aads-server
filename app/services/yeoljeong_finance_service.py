@@ -4202,13 +4202,39 @@ def sync_financial_transactions(payload: dict[str, Any], user: dict[str, Any]) -
             summary.append(
                 {
                     "service": service,
-                    "status": "credential_required",
-                    "message": "설정에서 계정/가맹점 정보를 먼저 등록해야 합니다.",
+                    "status": "skipped",
+                    "message": "해당 사업자/지점에 등록된 자동수집 대상 계좌가 없어 실행하지 않았습니다.",
+                    "error_code": "BANK_ACCOUNT_NOT_PRESENT_FOR_SCOPE",
                     "imported_rows": 0,
                 }
             )
             continue
         collection_mode = str(account.get("collection_mode") or "").strip()
+        if service in BANK_QUICK_SERVICE_CONFIG and collection_mode == "bank-quick-service":
+            quick_missing = [
+                label
+                for label, key in (
+                    ("로그인 비밀번호", "password"),
+                    ("조회용 계좌번호", "account_no"),
+                    ("계좌비밀번호", "account_password"),
+                    ("사업자번호", "business_registration_no"),
+                )
+                if not _has_secret_value(account, key)
+            ]
+            if quick_missing:
+                summary.append(
+                    {
+                        "service": service,
+                        "status": "skipped",
+                        "message": "은행 간편/빠른조회 필수값이 없어 실행하지 않았습니다.",
+                        "error_code": "BANK_QUICK_ACCOUNT_NOT_COLLECTABLE",
+                        "missing_requirements": quick_missing,
+                        "account_id": account.get("id") or "",
+                        "collection_mode": collection_mode,
+                        "imported_rows": 0,
+                    }
+                )
+                continue
         if collection_mode in {"bank-excel", "card-pg-report", "statement-upload"}:
             summary.append(
                 {

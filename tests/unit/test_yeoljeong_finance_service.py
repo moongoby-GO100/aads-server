@@ -1059,6 +1059,43 @@ def test_sync_financial_transactions_reports_connector_gap(tmp_path, monkeypatch
     assert result["summary"][0]["status"] == "connector_not_configured"
 
 
+def test_sync_financial_transactions_skips_incomplete_shinhan_quick_service(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "platform-shinhan-junghwa",
+                "service": "shinhan_business",
+                "username": "quick-user",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+                "password_enc": "",
+                "account_no_enc": "",
+                "account_password_enc": "",
+                "business_registration_no_enc": "",
+            }
+        ],
+    )
+
+    result = service.sync_financial_transactions(
+        {
+            "services": ["shinhan_business"],
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "date_from": "2026-09-01",
+            "date_to": "2026-09-03",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+
+    assert result["totals"]["transactions"] == 0
+    assert result["summary"][0]["status"] == "skipped"
+    assert result["summary"][0]["error_code"] == "BANK_QUICK_ACCOUNT_NOT_COLLECTABLE"
+
+
 @pytest.mark.asyncio
 async def test_save_integration_evidence_uploads_file_and_creates_pending_transaction(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))

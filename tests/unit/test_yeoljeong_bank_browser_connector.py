@@ -1609,6 +1609,50 @@ def test_shinhan_keyboard_login_does_not_navigate_before_hidden_idpw_fill():
     page._run_browser_command.assert_not_awaited()
 
 
+def test_shinhan_idpw_login_reports_success_marker_and_elapsed_time(monkeypatch):
+    page = AsyncMock()
+
+    monkeypatch.setattr(
+        connector,
+        "_close_shinhan_security_notice",
+        AsyncMock(return_value=False),
+    )
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "loggedInMarker" in expr
+        payload = args[0]
+        assert payload["username"] == "bank-user"
+        return {
+            "attempted": "1",
+            "stage": "login",
+            "username": "1",
+            "login_secret": "1",
+            "transkey_secret": "1",
+            "navigation_clicked": "1",
+            "websquare_triggered": "1",
+            "login_submitted": "1",
+            "login_success": "1",
+            "login_success_reason": "post_login_text",
+            "login_elapsed_ms": "2345",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_shinhan_individual_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["login_submitted"] == "1"
+    assert result["login_success"] == "1"
+    assert result["login_success_reason"] == "post_login_text"
+    assert result["login_elapsed_ms"] == "2345"
+    assert "bank-pass" not in str(result)
+
+
 def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
     page = AsyncMock()
     page.click = AsyncMock()

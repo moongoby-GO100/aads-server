@@ -224,6 +224,7 @@ def test_bank_scope_accepts_mia_branch_alias(monkeypatch):
         ]
 
     monkeypatch.setattr(auto_collect, "list_bank_accounts", fake_list_bank_accounts)
+    monkeypatch.setattr(auto_collect, "_read", lambda ledger: [] if ledger == "platform_accounts" else [])
 
     accounts = auto_collect._bank_accounts_for_payload(
         {"business_id": "biz-mia", "branch": "미아점"},
@@ -239,8 +240,8 @@ def test_bank_only_promotes_ibk_quick_platform_account_to_browser_bank_account(m
 
     monkeypatch.setattr(
         auto_collect,
-        "list_platform_accounts",
-        lambda user, business_id=None: [
+        "_read",
+        lambda ledger: [
             {
                 "id": "platform-ibk",
                 "service": "ibk_business",
@@ -251,8 +252,12 @@ def test_bank_only_promotes_ibk_quick_platform_account_to_browser_bank_account(m
                 "status": "credential_registered",
                 "auto_sync": True,
                 "account_no_masked": "**********4014",
+                "password_enc": "encrypted:login-secret",
+                "account_no_enc": "encrypted:account-no",
+                "account_password_enc": "encrypted:account-secret",
+                "business_registration_no_enc": "encrypted:biz-no",
             }
-        ],
+        ] if ledger == "platform_accounts" else [],
     )
 
     def fake_list_bank_accounts(user, business_id=None, *, branch_id=None, status=None):
@@ -289,6 +294,24 @@ def test_bank_only_promotes_ibk_quick_platform_account_to_browser_bank_account(m
 def test_bank_accounts_for_payload_dedupes_same_scope_and_bank(monkeypatch):
     monkeypatch.setattr(
         auto_collect,
+        "_read",
+        lambda ledger: [
+            {
+                "id": "platform-ibk",
+                "service": "ibk_business",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+                "password_enc": "encrypted:login-secret",
+                "account_no_enc": "encrypted:account-no",
+                "account_password_enc": "encrypted:account-secret",
+                "business_registration_no_enc": "encrypted:biz-no",
+            }
+        ] if ledger == "platform_accounts" else [],
+    )
+    monkeypatch.setattr(
+        auto_collect,
         "list_bank_accounts",
         lambda user, business_id=None, *, branch_id=None, status=None: [
             {
@@ -322,6 +345,76 @@ def test_bank_accounts_for_payload_dedupes_same_scope_and_bank(monkeypatch):
     assert [account["id"] for account in accounts] == ["bank-ibk-1"]
 
 
+def test_bank_accounts_for_payload_skips_incomplete_shinhan_quick_service(monkeypatch):
+    monkeypatch.setattr(
+        auto_collect,
+        "_read",
+        lambda ledger: [
+            {
+                "id": "platform-shinhan-junghwa",
+                "service": "shinhan_business",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+                "account_no_masked": "********6789",
+                "password_enc": "",
+                "account_no_enc": "",
+                "account_password_enc": "",
+                "business_registration_no_enc": "",
+            },
+            {
+                "id": "platform-shinhan-mia",
+                "service": "shinhan_business",
+                "business_id": "biz-mia",
+                "branch": "열정국밥_미아점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+                "account_no_masked": "**********1031",
+                "password_enc": "encrypted:login-secret",
+                "account_no_enc": "encrypted:account-no",
+                "account_password_enc": "encrypted:account-secret",
+                "business_registration_no_enc": "encrypted:biz-no",
+            },
+        ] if ledger == "platform_accounts" else [],
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "list_bank_accounts",
+        lambda user, business_id=None, *, branch_id=None, status=None: [
+            {
+                "id": "bank-junghwa",
+                "business_id": "biz-junghwa",
+                "branch_id": "branch-junghwa",
+                "bank_code": "088",
+                "bank_name": "신한은행 기업",
+                "institution_code": "shinhan_business",
+                "connection_type": "browser",
+                "auto_sync": True,
+                "account_number_masked": "********6789",
+            },
+            {
+                "id": "bank-mia",
+                "business_id": "biz-mia",
+                "branch_id": "branch-gangbuk-mia",
+                "bank_code": "088",
+                "bank_name": "신한은행 기업",
+                "institution_code": "shinhan_business",
+                "connection_type": "browser",
+                "auto_sync": True,
+                "account_number_masked": "**********1031",
+            },
+        ],
+    )
+
+    accounts = auto_collect._bank_accounts_for_payload(
+        {"business_id": "all", "branch": "전체", "services": ["shinhan_business"]},
+        {"email": "system@aads.local", "is_admin": True},
+    )
+
+    assert [account["id"] for account in accounts] == ["bank-mia"]
+
+
 def test_global_bank_queue_item_collects_only_its_bank_account(monkeypatch):
     accounts = [
         {
@@ -346,6 +439,36 @@ def test_global_bank_queue_item_collects_only_its_bank_account(monkeypatch):
         },
     ]
     monkeypatch.setattr(auto_collect, "_ensure_browser_bank_accounts_from_platform_accounts", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        auto_collect,
+        "_read",
+        lambda ledger: [
+            {
+                "id": "platform-ibk",
+                "service": "ibk_business",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+                "password_enc": "encrypted:login-secret",
+                "account_no_enc": "encrypted:account-no",
+                "account_password_enc": "encrypted:account-secret",
+                "business_registration_no_enc": "encrypted:biz-no",
+            },
+            {
+                "id": "platform-shinhan",
+                "service": "shinhan_business",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "collection_mode": "bank-quick-service",
+                "auto_sync": True,
+                "password_enc": "encrypted:login-secret",
+                "account_no_enc": "encrypted:account-no",
+                "account_password_enc": "encrypted:account-secret",
+                "business_registration_no_enc": "encrypted:biz-no",
+            },
+        ] if ledger == "platform_accounts" else [],
+    )
     monkeypatch.setattr(
         auto_collect,
         "list_bank_accounts",

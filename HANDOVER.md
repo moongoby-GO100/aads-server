@@ -1,5 +1,32 @@
 # AADS HANDOVER
 
+## 2026-09-03 07:30 KST - FOOD Shinhan collectable-only scope and login instrumentation
+
+- Request:
+  - Run Shinhan only for businesses/branches that actually have collectable Shinhan credentials; do not attempt missing accounts.
+  - Clarify how Shinhan login success is detected and record elapsed login time.
+  - Clean up unused browser processes on dedicated PC Agent `7f99c528-24d` (`DESKTOP-ICU55HK`) before further collection attempts.
+- Changes:
+  - `scripts/yeoljeong_auto_collect.py`: bank queue account selection now requires matching quick-service platform credentials for Shinhan/IBK and skips incomplete accounts before queue item creation. Duplicate bank account rows are still deduped by business, branch, and bank service.
+  - `app/services/yeoljeong_finance_service.py`: scoped Shinhan sync requests without a collectable account now return `skipped` with `BANK_ACCOUNT_NOT_PRESENT_FOR_SCOPE`; incomplete quick-service secrets return `BANK_QUICK_ACCOUNT_NOT_COLLECTABLE`.
+  - `app/services/yeoljeong_bank_browser_connector.py`: Shinhan ID/PW login step now reports `login_submitted`, `login_success`, `login_success_reason`, and `login_elapsed_ms`. Success is only marked after post-login page markers such as logout, inquiry period, account inquiry, transaction history, balance, or post-login URL markers appear.
+  - Tests updated for collectable-only Shinhan selection and login elapsed-time reporting.
+- Runtime action:
+  - PC Agent `7f99c528-24d` responded successfully from `DESKTOP-ICU55HK`.
+  - Closed 69 Chrome/Edge processes limited to `KakaoBot\cdp-profile\isolated-yeoljeong-*` automation profiles and no-startup Edge background processes. The visible `KIS AutoTrade V4 - Chrome` window was left open.
+- Verification:
+  - `date` measured `2026-09-03 07:27:28 KST`; DB `NOW() AT TIME ZONE 'Asia/Seoul'` measured `2026-09-03T07:29:57.364993`.
+  - Local data: `platform_accounts.json` has Shinhan quick-service rows for `biz-junghwa` and `biz-mia`, but only `biz-mia` has all four encrypted required values.
+  - Local data: `transactions.json` length is still 0; no successful Shinhan transaction import has been verified.
+  - `.venv-playwright/bin/python3 -m pytest tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed 255 tests in 103.55s.
+  - `.venv-playwright/bin/python3 -m py_compile scripts/yeoljeong_auto_collect.py app/services/yeoljeong_finance_service.py app/services/yeoljeong_bank_browser_connector.py` passed.
+  - Target-file `git diff --check` passed. Whole-repo `git diff --check` remains blocked by unrelated dirty changelog whitespace.
+- Deploy:
+  - Not deployed at entry creation time. Related queue-drain root-cause runner `runner-12d37750` is still awaiting approval; deploy order must preserve that dependency.
+- Remaining risks:
+  - Actual Shinhan website login/transaction collection is not yet certified. After deploying queue-drain and this scope/login instrumentation patch, run Mia-only Shinhan collection and verify `login_success=1`, measured `login_elapsed_ms`, and imported rows or a normal no-records result.
+  - `bank_accounts.json` contains many duplicate `biz-mia` Shinhan rows and one incomplete `biz-junghwa` Shinhan row. Code now filters/dedupes before execution, but ledger cleanup should be done as a separate data-maintenance task.
+
 ## 2026-09-02 18:10 KST - AI routing Google discovery and embedding fallback hardening
 
 - Request:

@@ -1772,10 +1772,25 @@ async def _try_shinhan_individual_login_step(
             page,
             """
 	            async (input) => {
-	              const byId = (id) => document.getElementById(id);
-	              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
-	              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-	              const firstVisible = (selectors) => {
+		              const byId = (id) => document.getElementById(id);
+		              const visible = (el) => !!(el && !el.disabled && el.offsetParent !== null);
+		              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+		              const startedAt = performance.now();
+		              const authText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+		              const authUrl = () => String(window.location.href || '');
+		              const loggedInMarker = () => {
+		                const currentText = authText();
+		                const currentUrl = authUrl();
+		                if (!/이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText)
+		                  && /로그아웃|조회기간|계좌조회|거래내역|출금가능|잔액|빠른조회/i.test(currentText)) {
+		                  return 'post_login_text';
+		                }
+		                if (/#210101|acct|inq|조회/.test(currentUrl) && !/login/i.test(currentUrl)) {
+		                  return 'post_login_url';
+		                }
+		                return '';
+		              };
+		              const firstVisible = (selectors) => {
 	                for (const selector of selectors) {
 	                  try {
 	                    const found = Array.from(document.querySelectorAll(selector)).find((el) => visible(el));
@@ -2027,19 +2042,40 @@ async def _try_shinhan_individual_login_step(
 	              const transkeyOk = transkeyOkPrimary || transkeyOkCib;
 	              const passwordOkPrimary = transkeyOkPrimary || setField(loginPassword, input.password);
 	              const passwordOkCib = transkeyOkCib || setField('비밀번호_cib', input.password);
-              const passwordOk = passwordOkPrimary || passwordOkCib;
-              const submitted = usernameOk && passwordOk ? clickLogin() : false;
-              return {
-                attempted: '1',
-                stage: 'login',
-                username: usernameOk ? '1' : '0',
-                login_secret: passwordOk ? '1' : '0',
-                transkey_secret: transkeyOk ? '1' : '0',
-                navigation_clicked: submitted ? '1' : '0',
-                websquare_triggered: submitted ? '1' : '0'
-              };
-            }
-            """,
+	              const passwordOk = passwordOkPrimary || passwordOkCib;
+	              const submitted = usernameOk && passwordOk ? clickLogin() : false;
+	              let loginSuccess = '0';
+	              let loginSuccessReason = '';
+	              if (submitted) {
+	                for (let i = 0; i < 30; i += 1) {
+	                  await sleep(500);
+	                  loginSuccessReason = loggedInMarker();
+	                  if (loginSuccessReason) {
+	                    loginSuccess = '1';
+	                    break;
+	                  }
+	                  const currentText = authText();
+	                  if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)|보안프로그램.*설치/i.test(currentText)) {
+	                    loginSuccessReason = 'login_error_or_security_notice';
+	                    break;
+	                  }
+	                }
+	              }
+	              return {
+	                attempted: '1',
+	                stage: 'login',
+	                username: usernameOk ? '1' : '0',
+	                login_secret: passwordOk ? '1' : '0',
+	                transkey_secret: transkeyOk ? '1' : '0',
+	                navigation_clicked: submitted ? '1' : '0',
+	                websquare_triggered: submitted ? '1' : '0',
+	                login_submitted: submitted ? '1' : '0',
+	                login_success: loginSuccess,
+	                login_success_reason: loginSuccessReason,
+	                login_elapsed_ms: String(Math.round(performance.now() - startedAt))
+	              };
+	            }
+	            """,
             {"username": username, "password": password},
             timeout_ms=25000,
             await_promise=True,
@@ -2049,13 +2085,33 @@ async def _try_shinhan_individual_login_step(
     if not isinstance(raw, dict):
         return {"attempted": "failed"}
     result: dict[str, str] = {"attempted": "1" if str(raw.get("attempted") or "") == "1" else str(raw.get("attempted") or "0")[:20]}
-    for key in ("stage", "username", "login_secret", "transkey_secret", "navigation_clicked", "websquare_triggered", "account_page_navigation", "error_code", "error_type"):
+    for key in (
+        "stage",
+        "username",
+        "login_secret",
+        "transkey_secret",
+        "navigation_clicked",
+        "websquare_triggered",
+        "login_submitted",
+        "login_success",
+        "account_page_navigation",
+        "login_success_reason",
+        "login_elapsed_ms",
+        "error_code",
+        "error_type",
+    ):
         value = str(raw.get(key) or "").strip()
         if key == "stage":
             result[key] = value[:40] or "unknown"
         elif key in {"error_code", "error_type"}:
             if value:
                 result[key] = value[:120]
+        elif key == "login_success_reason":
+            if value:
+                result[key] = value[:120]
+        elif key == "login_elapsed_ms":
+            if value.isdigit():
+                result[key] = value[:12]
         else:
             result[key] = "1" if value == "1" else "0"
     return result
