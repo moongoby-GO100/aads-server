@@ -13,6 +13,9 @@ from app.services.managed_browser import normalize_origin, normalize_work_key
 
 
 ALLOWED_RUNTIMES = {"pc_agent", "self_hosted_playwright", "external_sandbox", "auto"}
+SAAS_PROJECT_KEYS = {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CUSTOM"}
+SITE_ENVIRONMENTS = {"webview2", "chrome_extension", "chrome_cdp", "playwright_server", "file_upload", "official_api", "manual_export"}
+VERSION_STATUSES = {"draft", "active", "archived"}
 ALLOWED_QUEUE_STRATEGIES = {"fifo", "priority", "latest_only", "reject_on_conflict"}
 DEFAULT_CONCURRENCY_POLICY = {
     "max_parallel_runs": 1,
@@ -45,6 +48,12 @@ RECIPE_HASH_FIELDS = (
     "risk_actions",
     "verifier",
     "fallbacks",
+    "project_key",
+    "site_environment",
+    "record_types",
+    "normalization_schema",
+    "fixture_cases",
+    "version_status",
 )
 
 
@@ -138,6 +147,15 @@ def normalize_recipe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     runtime_policy = _json_dict(payload.get("runtime_policy"))
     resource_policy = normalize_resource_policy(payload.get("resource_policy") or runtime_policy)
     runtime_policy = {**runtime_policy, "runtime": resource_policy["runtime"]}
+    project_key = str(payload.get("project_key") or "CUSTOM").strip().upper()
+    site_environment = str(payload.get("site_environment") or "chrome_cdp").strip().lower()
+    version_status = str(payload.get("version_status") or "draft").strip().lower()
+    if project_key not in SAAS_PROJECT_KEYS:
+        raise ValueError("unsupported_project_key")
+    if site_environment not in SITE_ENVIRONMENTS:
+        raise ValueError("unsupported_site_environment")
+    if version_status not in VERSION_STATUSES:
+        raise ValueError("unsupported_version_status")
     return {
         "recipe_id": recipe_id,
         "version": version,
@@ -158,6 +176,12 @@ def normalize_recipe_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "verifier": _json_dict(payload.get("verifier")),
         "fallbacks": _json_dict(payload.get("fallbacks")),
         "enabled": bool(payload.get("enabled", True)),
+        "project_key": project_key,
+        "site_environment": site_environment,
+        "record_types": _json_list(payload.get("record_types")),
+        "normalization_schema": _json_dict(payload.get("normalization_schema")),
+        "fixture_cases": _json_list(payload.get("fixture_cases")),
+        "version_status": version_status,
     }
 
 
@@ -353,9 +377,12 @@ def _row_to_recipe(row: Any) -> dict[str, Any]:
         "risk_actions",
         "verifier",
         "fallbacks",
+        "record_types",
+        "normalization_schema",
+        "fixture_cases",
     ):
         if key in item:
-            item[key] = _json_dict(item[key]) if key.endswith("_policy") or key in {"challenge_policy", "capture_rules", "upload_rules", "verifier", "fallbacks"} else _json_list(item[key])
+            item[key] = _json_dict(item[key]) if key.endswith("_policy") or key in {"challenge_policy", "capture_rules", "upload_rules", "verifier", "fallbacks", "normalization_schema"} else _json_list(item[key])
     return mask_sensitive_value(item)
 
 
@@ -369,13 +396,15 @@ async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[s
                 tenant_id, recipe_id, version, title, service, allowed_origins, work_key_template,
                 runtime_policy, concurrency_policy, resource_policy, login_steps, challenge_policy,
                 navigation_steps, capture_rules, parser_id, upload_rules, risk_actions, verifier,
-                fallbacks, enabled, version_hash, created_by, updated_at
+                fallbacks, enabled, version_hash, created_by, project_key, site_environment,
+                record_types, normalization_schema, fixture_cases, version_status, updated_at
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6::jsonb, $7,
                 $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb,
                 $13::jsonb, $14::jsonb, $15, $16::jsonb, $17::jsonb, $18::jsonb,
-                $19::jsonb, $20, $21, $22, NOW()
+                $19::jsonb, $20, $21, $22, $23, $24,
+                $25::jsonb, $26::jsonb, $27::jsonb, $28, NOW()
             )
             ON CONFLICT (tenant_id, recipe_id, version) DO UPDATE
                SET title = EXCLUDED.title,
@@ -396,6 +425,12 @@ async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[s
                    fallbacks = EXCLUDED.fallbacks,
                    enabled = EXCLUDED.enabled,
                    version_hash = EXCLUDED.version_hash,
+                   project_key = EXCLUDED.project_key,
+                   site_environment = EXCLUDED.site_environment,
+                   record_types = EXCLUDED.record_types,
+                   normalization_schema = EXCLUDED.normalization_schema,
+                   fixture_cases = EXCLUDED.fixture_cases,
+                   version_status = EXCLUDED.version_status,
                    updated_at = NOW()
             RETURNING *
             """,
@@ -421,11 +456,17 @@ async def upsert_browser_recipe(*, tenant_id: str, user_id: str, payload: dict[s
             recipe["enabled"],
             recipe["version_hash"],
             user_id,
+            recipe["project_key"],
+            recipe["site_environment"],
+            json.dumps(recipe["record_types"], ensure_ascii=False),
+            json.dumps(recipe["normalization_schema"], ensure_ascii=False),
+            json.dumps(recipe["fixture_cases"], ensure_ascii=False),
+            recipe["version_status"],
         )
     return _row_to_recipe(row)
 
 
-async def list_browser_recipes(*, tenant_id: str, service: str | None = None, enabled: bool | None = None) -> list[dict[str, Any]]:
+async def list_browser_recipes(*, tenant_id: str, service: str | None = None, enabled: bool | None = None, project_key: str | None = None) -> list[dict[str, Any]]:
     args: list[Any] = [uuid.UUID(str(tenant_id))]
     where = ["tenant_id = $1"]
     if service:
@@ -434,6 +475,9 @@ async def list_browser_recipes(*, tenant_id: str, service: str | None = None, en
     if enabled is not None:
         args.append(enabled)
         where.append(f"enabled = ${len(args)}")
+    if project_key:
+        args.append(project_key.upper())
+        where.append(f"project_key = ${len(args)}")
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
             f"""

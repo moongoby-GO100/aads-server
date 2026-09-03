@@ -130,6 +130,13 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 
 > 판매채널/은행 자동수집은 `yeoljeong_finance_service.py` orchestration, `yeoljeong_delivery_collectors.py` portal adapter, `yeoljeong_bank_browser_connector.py` 은행 커넥터, `scripts/yeoljeong_auto_collect.py` 운영 CLI를 정본 구현으로 본다.
 
+## 6-2. 로그인 사이트 수집 SaaS
+
+| 문서 | 경로 | 등급 | 갱신일 |
+|------|------|------|--------|
+| Authenticated Site Collector SaaS MVP | `docs/plans/AUTHENTICATED_SITE_COLLECTOR_SAAS_MVP.md` | 현행 | 2026-09-03 |
+| 제품·구현 상세 계획 | `reports/20260903_logged_in_site_collection_platform_plan.md` | 현행 | 2026-09-03 |
+
 ## 7. 장애 · WRAP (최근)
 
 | 문서 | 경로 | 갱신일 |

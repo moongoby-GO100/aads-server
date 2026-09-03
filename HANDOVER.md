@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-03 - Authenticated Site Collector SaaS MVP
+
+- 다중 tenant/project/site 프로필·계정 상태·감사 로그 스키마와 BrowserRecipe SaaS 운영 필드를 additive migration으로 추가했다.
+- VIEWER 조회/MEMBER 변경 권한의 `/api/v1/authenticated-site-collector` overview, site profile, recipe, dry-run, job, same-work-key resume API를 추가했다.
+- 작업은 기존 `pc_agent_collection_queue`의 `browser_recipe` 타입에 연결하며 active 레시피만 실행한다.
+- OTP/CAPTCHA 답, 비밀번호, 쿠키, 토큰은 입력·저장하지 않고 사용자 조치 완료 상태만 감사한다.
+- Dashboard `/authenticated-collector`에 프로젝트 필터, 요약, 사이트 연결, 작업 큐, 사용자 개입 재개 UI를 추가했다.
+
 ## 2026-09-03 14:01 KST - 신한 YESKEY reset 실패 시 work key force-recreate 재획득
 
 - Request:

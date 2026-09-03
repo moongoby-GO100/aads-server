@@ -1,6 +1,9 @@
 // T-072: Flat API response types
 export interface DirectiveItem { task_id: string; title: string; project: string; status: string; error_type: string | null; started_at: string; completed_at: string | null; duration_seconds: number | null; created_at: string; file_path: string; }
 export interface DirectivesResponse { status: string; total: number; running: number; completed: number; error: number; error_breakdown: Record<string, number>; project_breakdown: Record<string, number>; summary: Record<string, number>; items: DirectiveItem[]; directives: DirectiveItem[]; }
+export interface CollectorOverview { projects: Array<{project_key: string; site_count: number; active_account_count: number}>; totals: {connected_sites: number; active_accounts: number; running_jobs: number; action_required_jobs: number; failed_jobs: number}; job_statuses: Record<string, number>; demo: boolean; }
+export interface CollectorSite { id: string; project_key: string; site_key: string; display_name: string; runtime: string; data_categories: string[]; account_count: number; connected_account_count: number; last_collected_at?: string; enabled: boolean; }
+export interface CollectorJob { id: string; status: string; site_key: string; work_key: string; runtime: string; error_code?: string; message?: string; updated_at: string; payload: {project_key?: string; recipe_id?: string}; }
 
 import type {
   HealthResponse,
@@ -63,6 +66,20 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getCollectorOverview: () => request<CollectorOverview>("/authenticated-site-collector/overview"),
+  getCollectorSites: (projectKey?: string) => request<{sites: CollectorSite[]; count: number}>(`/authenticated-site-collector/site-profiles${projectKey ? `?project_key=${encodeURIComponent(projectKey)}` : ""}`),
+  getCollectorJobs: (projectKey?: string, status?: string) => {
+    const query = new URLSearchParams();
+    if (projectKey) query.set("project_key", projectKey);
+    if (status) query.set("status", status);
+    return request<{jobs: CollectorJob[]; count: number}>(`/authenticated-site-collector/jobs${query.size ? `?${query}` : ""}`);
+  },
+  createCollectorJob: (data: {project_key: string; site_key: string; recipe_id: string; recipe_version?: string; work_key?: string}) =>
+    request<{status: string; job: CollectorJob}>("/authenticated-site-collector/jobs", {method: "POST", body: JSON.stringify(data)}),
+  resumeCollectorJob: (jobId: string, resolution: string, note = "") =>
+    request<{status: string; same_work_key: boolean; job: CollectorJob}>(`/authenticated-site-collector/jobs/${encodeURIComponent(jobId)}/resume`, {method: "POST", body: JSON.stringify({resolution, note})}),
+  dryRunCollectorRecipe: (recipeId: string, version = "v1", targetUrl = "") =>
+    request<any>(`/authenticated-site-collector/recipes/${encodeURIComponent(recipeId)}/dry-run?version=${encodeURIComponent(version)}`, {method: "POST", body: JSON.stringify({target_url: targetUrl})}),
   getHealth: () => request<HealthResponse>("/health"),
 
   getProjects: (limit = 20, offset = 0) =>
