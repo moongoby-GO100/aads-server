@@ -1746,7 +1746,7 @@ ${output:0:1500}
     if [[ "$review_verdict" != "APPROVE" ]]; then
         local review_error_detail="review_failed: verdict=${review_verdict} score=${review_score}"
         if [[ "$review_infra_failure" == "true" ]]; then
-            review_error_detail="review_infra_failed: verdict=${review_verdict} score=${review_score}"
+            review_error_detail="review_infra_failed: verdict=${review_verdict} score=${review_score} http=${review_http_code:-000} model=${job_model:-unknown} attempts=${review_attempt:-0}/${review_max_attempts:-3}"
         fi
         [[ -n "$review_flag_category" ]] && review_error_detail="${review_error_detail} category=${review_flag_category}"
         [[ "$review_needs_retry" == "true" ]] && review_error_detail="${review_error_detail} needs_retry=true"

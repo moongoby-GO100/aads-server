@@ -10475,3 +10475,23 @@
   - `/root/aads/aads-dashboard`: targeted `npx eslint src/app/authenticated-collector/page.tsx src/lib/api.ts src/components/Sidebar.tsx` returned 0 errors and existing warnings in `src/lib/api.ts`.
 - Deployment:
   - Not deployed in this recovery step. Blue-green release still requires clean committed release worktree and five-minute P0/P1 monitoring.
+
+## 2026-09-03 17:30 KST - GO100 runner-e436a4f8 review parser failure triage
+
+- CEO request:
+  - Diagnose and act on GO100 `runner-e436a4f8` failure classified as `review_infra_failed / REVIEW_PARSER_FAILURE`.
+- Finding:
+  - The GO100 code work completed, but AI review returned an unparsable response. This is a review infrastructure failure, not a code-quality rejection.
+  - The job row incorrectly remained `status='error'`, `phase='review_failed'` despite `review_flag_category='REVIEW_PARSER_FAILURE'` and `review_needs_retry=true`.
+  - The preserved GO100 worktree remains at `/tmp/aads-wt-runner-e436a4f8`.
+- Action:
+  - Updated the single AADS DB row for `runner-e436a4f8` to `status='review_hold'`, `phase='review_hold'`, preserving review feedback for audit.
+  - Synchronized `scripts/pipeline-runner.sh.local` with `scripts/pipeline-runner.sh` so local runner template includes `http/model/attempts` in review infrastructure error details.
+- Verification:
+  - `pipeline_runner_status(job_id='runner-e436a4f8')` now reports `review_hold / AI 리뷰 보류`.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py tests/unit/test_code_reviewer_flag_classification.py -q` passed 27/27.
+  - GO100 preserved worktree checks passed: `python3 -m py_compile ...live_engine.py ...scalping_entry_engine.py ...go100_verify_card119_watch20_prelock.py`; `git -C /tmp/aads-wt-runner-e436a4f8 diff --check`.
+  - GO100 service health check reported `HEALTHY`; process file scan had a tool keyword-filter error.
+- Not completed:
+  - GO100 #119 runner output was not merged, committed, pushed, or deployed because GO100 main worktree has unrelated dirty files and `runner-482a321b` is currently running.
+  - GO100 DB `information_schema` check timed out via `query_project_database`; migration column application remains unverified in this triage.
