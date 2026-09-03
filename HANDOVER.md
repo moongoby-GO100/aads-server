@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-09-03 14:01 KST - 신한 YESKEY reset 실패 시 work key force-recreate 재획득
+
+- Request:
+  - 신한 전용 work key에서 금융인증서/YESKEY 흐름을 닫고 ID/PW 로그인으로 강제 재시도한 뒤, 실제 거래자료 저장과 `imported_rows > 0`까지 검증.
+- Observed failure before patch:
+  - 최근 단계 로그에서 `shinhan_idpw_reset_after_certificate`가 `status=failed`, `error_code=SHINHAN_IDPW_RESET_NOT_CONFIRMED`, `failure_condition=idpw_panel_not_confirmed_after_certificate_reset`로 종료.
+  - 세부값은 `certificate_tab_closed=0`, `work_key_relaunch_attempted=failed`, `idpw_login_panel_selected=failed`였으므로 기존 page/CDP에 계속 붙어 있으면 ID/PW 재시도까지 안정적으로 가지 못함.
+- Change:
+  - `app/services/yeoljeong_bank_browser_connector.py`: YESKEY/금융인증서 reset 후 ID/PW 패널 확인이 실패하면 Browser Bridge `ensure_work_session(force_recreate=True)`로 같은 신한 전용 work key를 강제 재획득하고, 새 page/context/session_id로 ID/PW 로그인 루프를 계속 진행.
+  - `shinhan_idpw_work_key_reacquire` 단계 로그 추가. 성공 조건은 `fresh_work_key_page_selected_after_certificate_reset_failure`, 실패 조건은 `force_recreate_same_work_key_failed`.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: reset 실패 후 force-recreate된 새 page에서 ID/PW 로그인 함수가 호출되는 회귀 테스트 추가.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_reacquires_work_key_when_idpw_reset_fails tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_saved_idpw_prefers_id_login_over_fincert tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_retries_idpw_after_post_login_fincert` passed: 3 tests.
+- Pending:
+  - Commit/push, blue-green deploy, Mia Shinhan-only real collection. Completion requires the actual storage file `app/data/yeoljeong_finance/transactions.json` to increase with `imported_rows > 0` or an explicit verified no-record result.
+
 ## 2026-09-03 13:24 KST - 신한 YESKEY/금융인증서 전환 시 ID/PW work key 강제 복구
 
 - Request:

@@ -2624,6 +2624,76 @@ async def _select_bank_page(pages: Any, portal_url: str) -> tuple[Any | None, st
     return first_page, first_url, False
 
 
+async def _reacquire_shinhan_work_key_page(
+    bridge: Any,
+    *,
+    browser_work_key: str,
+    bank_name: str,
+    browser_agent_id: str,
+    portal_url: str,
+    browser_preferred_port: int | None,
+    launch_queue_wait_seconds: float,
+    launch_timeout_seconds: float,
+    safe_diagnostics: dict[str, str],
+    shinhan_stage_logs: list[dict[str, str]],
+    reason: str,
+) -> tuple[Any | None, Any | None, str]:
+    """Force-recreate the Shinhan work-key session and return a fresh page."""
+    if not browser_work_key:
+        return None, None, ""
+    started_at = time.monotonic()
+    try:
+        session = await bridge.ensure_work_session(
+            work_key=browser_work_key,
+            label=f"{bank_name or '신한은행'} 간편조회",
+            agent_id=str(browser_agent_id or ""),
+            url=portal_url or BANK_PORTAL_URLS["shinhan_business"],
+            preferred_port=browser_preferred_port,
+            force_recreate=True,
+            queue_wait_timeout_seconds=launch_queue_wait_seconds,
+            command_timeout_seconds=launch_timeout_seconds,
+        )
+        context = await bridge._context_for_session(session)
+        pages = getattr(context, "pages", None)
+        page, initial_url, matched_existing_page = await _select_bank_page(pages, portal_url)
+        if page is None:
+            page = await context.new_page()
+            initial_url = ""
+            matched_existing_page = False
+        _disable_local_agent_auto_recovery(page)
+        session_id = str(getattr(session, "session_id", "") or "")
+        safe_diagnostics["browser_session_id"] = session_id
+        safe_diagnostics["shinhan_idpw_reset_session_reacquired"] = "1"
+        safe_diagnostics["shinhan_idpw_reset_session_reacquire_reason"] = reason[:120]
+        if initial_url:
+            safe_diagnostics["shinhan_idpw_reset_reacquired_initial_url"] = initial_url[:120]
+        _append_shinhan_stage_log(
+            shinhan_stage_logs,
+            stage="shinhan_idpw_work_key_reacquire",
+            status="success",
+            started_at=started_at,
+            reason=reason[:120],
+            success_condition="fresh_work_key_page_selected_after_certificate_reset_failure",
+            initial_url=initial_url[:120],
+            matched_existing_page="1" if matched_existing_page else "0",
+        )
+        return page, context, session_id
+    except Exception as exc:
+        error_code = str(getattr(exc, "error_code", "") or "").strip() or exc.__class__.__name__
+        safe_diagnostics["shinhan_idpw_reset_session_reacquired"] = "failed"
+        safe_diagnostics["shinhan_idpw_reset_session_reacquire_error"] = error_code[:120]
+        _append_shinhan_stage_log(
+            shinhan_stage_logs,
+            stage="shinhan_idpw_work_key_reacquire",
+            status="failed",
+            started_at=started_at,
+            error_code=error_code[:120],
+            reason=reason[:120],
+            failure_condition="force_recreate_same_work_key_failed",
+        )
+        return None, None, ""
+
+
 def _bank_session_recovery_plan(error_code: str = "") -> str:
     code = str(error_code or "").strip().upper()
     if code in {"CDP_NOT_READY", "PC_AGENT_SESSION_NOT_FOUND", "BANK_BROWSER_SESSION_NOT_FOUND"}:
@@ -3992,6 +4062,26 @@ async def collect_bank_via_browser_session_async(
                     portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
                     idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
                 )
+                if reset_result.get("idpw_reset_ready") != "1" and browser_work_key:
+                    reacquired_page, reacquired_context, reacquired_session_id = await _reacquire_shinhan_work_key_page(
+                        bridge,
+                        browser_work_key=browser_work_key,
+                        bank_name=bank_name,
+                        browser_agent_id=browser_agent_id,
+                        portal_url=portal_url,
+                        browser_preferred_port=browser_preferred_port,
+                        launch_queue_wait_seconds=launch_queue_wait_seconds,
+                        launch_timeout_seconds=launch_timeout_seconds,
+                        safe_diagnostics=safe_diagnostics,
+                        shinhan_stage_logs=shinhan_stage_logs,
+                        reason="idpw_panel_not_confirmed_after_certificate_reset",
+                    )
+                    if reacquired_page is not None and reacquired_context is not None:
+                        page = reacquired_page
+                        context = reacquired_context
+                        pages = getattr(context, "pages", None)
+                        if reacquired_session_id:
+                            session_id_to_use = reacquired_session_id
                 retry_shinhan_idpw_login = True
             else:
                 safe_diagnostics.update(auth_challenge)
@@ -4261,6 +4351,26 @@ async def collect_bank_via_browser_session_async(
                             portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
                             idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
                         )
+                        if reset_result.get("idpw_reset_ready") != "1" and browser_work_key:
+                            reacquired_page, reacquired_context, reacquired_session_id = await _reacquire_shinhan_work_key_page(
+                                bridge,
+                                browser_work_key=browser_work_key,
+                                bank_name=bank_name,
+                                browser_agent_id=browser_agent_id,
+                                portal_url=portal_url,
+                                browser_preferred_port=browser_preferred_port,
+                                launch_queue_wait_seconds=launch_queue_wait_seconds,
+                                launch_timeout_seconds=launch_timeout_seconds,
+                                safe_diagnostics=safe_diagnostics,
+                                shinhan_stage_logs=shinhan_stage_logs,
+                                reason="idpw_panel_not_confirmed_after_certificate_reset",
+                            )
+                            if reacquired_page is not None and reacquired_context is not None:
+                                page = reacquired_page
+                                context = reacquired_context
+                                pages = getattr(context, "pages", None)
+                                if reacquired_session_id:
+                                    session_id_to_use = reacquired_session_id
                         retry_shinhan_idpw_login = True
                         continue
                     else:

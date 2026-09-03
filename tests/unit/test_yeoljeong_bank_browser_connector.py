@@ -195,6 +195,87 @@ class _ShinhanPostIdpwFincertPage(_ChallengePage):
         return []
 
 
+class _ShinhanResetFailPage(_ChallengePage):
+    def __init__(self):
+        super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
+        self.frames = [type("Frame", (), {"url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html"})()]
+        self.browser_commands = []
+        self.goto_calls = []
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        self.browser_commands.append((command_type, params))
+        if command_type == "browser_tabs":
+            return {
+                "status": "success",
+                "data": {
+                    "tabs": [
+                        {
+                            "title": "YESKEY",
+                            "url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html",
+                            "type": "page",
+                        }
+                    ]
+                },
+            }
+        if command_type == "browser_close_tab":
+            return {"status": "success", "data": {"closed": 0, "remaining": 1}}
+        if command_type == "browser_launch":
+            raise RuntimeError("agent busy")
+        return {"status": "success", "data": {}}
+
+    async def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.url = url
+
+    async def wait_for_load_state(self, *args, **kwargs):
+        return None
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        if "idpw|idlogin" in expression:
+            return {"selected": "0"}
+        if "querySelectorAll('table')" in expression:
+            return []
+        if "document.body" in expression:
+            return "금융인증 YESKEY"
+        return []
+
+
+class _ShinhanRecoveredIdpwPage(_ChallengePage):
+    def __init__(self):
+        super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
+        self.frames = []
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        if command_type == "browser_tabs":
+            return {
+                "status": "success",
+                "data": {
+                    "tabs": [
+                        {
+                            "title": "간편조회서비스 | 신한은행 개인뱅킹",
+                            "url": self.url,
+                            "type": "page",
+                        }
+                    ]
+                },
+            }
+        return {"status": "success", "data": {}}
+
+    async def wait_for_load_state(self, *args, **kwargs):
+        return None
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        if "querySelectorAll('table')" in expression:
+            return []
+        if "document.body" in expression:
+            return "이용자 ID 로그인 아이디 비밀번호"
+        return []
+
+
 @pytest.mark.asyncio
 async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
     page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -350,6 +431,77 @@ def test_collect_async_shinhan_retries_idpw_after_post_login_fincert():
     assert result["diagnostics"]["shinhan_idpw_login_retried_after_certificate"] == "1"
     assert result["diagnostics"]["shinhan_idpw_login_reset"]["work_key_relaunch_attempted"] == "1"
     assert result.get("error_code") != "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+
+
+def test_collect_async_shinhan_reacquires_work_key_when_idpw_reset_fails():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    stale_page = _ShinhanResetFailPage()
+    recovered_page = _ShinhanRecoveredIdpwPage()
+    stale_context = MagicMock()
+    stale_context.pages = [stale_page]
+    recovered_context = MagicMock()
+    recovered_context.pages = [recovered_page]
+    stale_session = MagicMock()
+    stale_session.session_id = "stale-shinhan"
+    recovered_session = MagicMock()
+    recovered_session.session_id = "fresh-shinhan"
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge, patch.object(
+        connector,
+        "_shinhan_security_program_runtime_state",
+        AsyncMock(return_value={"checked": "1", "required_runtime_ready": "1"}),
+    ), patch.object(
+        connector,
+        "_shinhan_security_notice_state",
+        AsyncMock(return_value={"present": "0"}),
+    ), patch.object(
+        connector,
+        "_try_shinhan_individual_login_step",
+        AsyncMock(
+            return_value={
+                "attempted": "1",
+                "stage": "login",
+                "username": "1",
+                "login_secret": "1",
+                "login_submitted": "1",
+                "navigation_clicked": "1",
+                "websquare_triggered": "1",
+            }
+        ),
+    ) as mock_login:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = stale_session
+        bridge_inst.ensure_work_session = AsyncMock(return_value=recovered_session)
+        bridge_inst._context_for_session = AsyncMock(side_effect=[stale_context, recovered_context])
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="stale-shinhan",
+                browser_work_key="yeoljeong-bank-shinhan-idpw",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+                browser_agent_id="agent-bank",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_registration_no="1234567890",
+            )
+        )
+
+    assert bridge_inst.ensure_work_session.await_args.kwargs["force_recreate"] is True
+    assert result["diagnostics"]["browser_session_id"] == "fresh-shinhan"
+    assert result["diagnostics"]["shinhan_idpw_reset_session_reacquired"] == "1"
+    assert mock_login.await_args.args[0] is recovered_page
+    assert any(
+        item.get("stage") == "shinhan_idpw_work_key_reacquire"
+        and item.get("status") == "success"
+        for item in result["diagnostics"]["shinhan_stage_logs"]
+    )
     assert "bank-pass" not in str(result["diagnostics"])
     assert "4321" not in str(result["diagnostics"])
 
