@@ -369,15 +369,15 @@ def collector_runtime_contract_for_profile(profile: dict[str, Any]) -> dict[str,
         "local_runtime": runtime,
         "job_type": "browser_bridge",
         "lease_policy": {
-            "scope": "work_key",
+            "scope": "pc_agent_interactive_browser_lane",
             "exclusive": False,
-            "max_concurrency_per_agent": 4,
+            "max_concurrency_per_agent": 1,
             "queue_if_busy": True,
             "wait_for_turn": True,
         },
         "throughput_policy": {
-            "site_parallelism": 4,
-            "recommended_pc_agent_pool": "scale_by_work_key_and_site_resource_cost",
+            "site_parallelism": 1,
+            "recommended_pc_agent_pool": "scale_by_additional_windows_collector_pc_agents",
             "poll_interval_seconds": 120,
         },
         "success_contract": {
@@ -716,7 +716,7 @@ async def collector_overview(*, tenant_id: str) -> dict[str, Any]:
                 "supported_projects": sorted(FINANCIAL_PROJECT_KEYS | {"STORE_ASSISTANT", "MARKETING"}),
                 "financial_job_type": FINANCIAL_EXCLUSIVE_JOB_TYPE,
                 "financial_max_concurrency_per_pc": 1,
-                "general_site_parallelism_per_pc": 4,
+                "general_site_parallelism_per_pc": 1,
             },
             "financial_realtime_strategy": {
                 "primary_runtime": "windows_collector",

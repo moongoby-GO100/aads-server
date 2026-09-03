@@ -28,6 +28,7 @@ async def test_collector_overview_uses_project_defaults_without_database(collect
     assert overview["totals"]["connected_sites"] >= 9
     assert overview["runtime_contracts"]["windows_collector"]["financial_job_type"] == "financial_exclusive"
     assert overview["runtime_contracts"]["windows_collector"]["financial_max_concurrency_per_pc"] == 1
+    assert overview["runtime_contracts"]["windows_collector"]["general_site_parallelism_per_pc"] == 1
     assert {item["project_key"] for item in overview["projects"]} >= {
         "AADS",
         "KIS",
