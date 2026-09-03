@@ -207,6 +207,11 @@ _INTERRUPT_REASON_CATEGORIES = {
         "resume_attempt_fence_or_limit_rejected",
         "execution_resume_attempt_limit_exceeded",
     ),
+    "connection_error": (
+        "connection closed",
+        "connection reset",
+        "connectionreset",
+    ),
 }
 
 
@@ -320,6 +325,7 @@ def _should_auto_resume_interrupted_reason(reason: str) -> bool:
         "process_interrupt",
         "resume_cancelled",
         "resume_no_response",
+        "connection_error",
     }:
         return True
     return normalized.startswith(
@@ -2303,6 +2309,17 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
         tail,
     ):
         return True
+    if re.search(
+        r"(?:병렬로|순차적으로|순차로|동시에)\s*.{0,80}"
+        r"(?:진행|실행|시작|처리|조회|확인|실측)"
+        r"(?:하겠습니다|합니다|중입니다)\.?\s*$",
+        tail,
+    ):
+        return True
+    if re.search(r"```[a-z]*\n(?:(?!```).)*$", tail, re.DOTALL):
+        return True
+    if re.search(r"[가-힣a-zA-Z0-9]{1,4}$", tail) and not re.search(r"[.!?다요함됨임음]\s*$", tail):
+        return True
     return bool(
         re.search(r"(?:⏳|생성 중|응답 생성 중|조회 중|확인 중)\s*\.{0,3}\s*$", tail)
     )
@@ -2688,6 +2705,50 @@ async def cleanup_stale_streaming_placeholders(
             _orphan_terminal_cleaned += 1
         if _orphan_terminal_cleaned:
             logger.info("orphan_terminal_placeholder_cleanup cleaned=%s", _orphan_terminal_cleaned)
+
+        _stale_lease_rows = await conn.fetch(
+            """
+            SELECT te.id, te.session_id
+            FROM chat_turn_executions te
+            WHERE te.status IN ('running', 'retrying')
+              AND te.lease_expires_at IS NOT NULL
+              AND te.lease_expires_at < NOW() - INTERVAL '120 seconds'
+            """,
+        )
+        _stale_lease_cleaned = 0
+        for _lr in _stale_lease_rows:
+            _lr_sid_str = str(_lr["session_id"])
+            if _lr_sid_str in live_sessions:
+                continue
+            await conn.execute(
+                """
+                UPDATE chat_turn_executions
+                SET status = 'interrupted',
+                    interrupt_category = 'watchdog_timeout',
+                    completed_at = COALESCE(completed_at, NOW()),
+                    error_message = 'force_interrupted_stale_lease_expired',
+                    owner_instance = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status IN ('running', 'retrying')
+                """,
+                _lr["id"],
+            )
+            await conn.execute(
+                """
+                UPDATE chat_sessions
+                SET current_execution_id = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND current_execution_id = $2
+                """,
+                _lr["session_id"],
+                _lr["id"],
+            )
+            _stale_lease_cleaned += 1
+        if _stale_lease_cleaned:
+            logger.info("stale_lease_execution_cleanup cleaned=%s", _stale_lease_cleaned)
 
         rows = await conn.fetch(
             """
@@ -5242,14 +5303,20 @@ async def with_background_completion(
             )
             if not _completed_ok and not state.get("_rate_limited") and not state.get("_producer_exception_type") and not state.get("_producer_incomplete_exit"):
                 _content_len = len((state.get("content") or "").strip())
-                if _content_len > 500:
+                _content_text = (state.get("content") or "").strip()
+                _tail_incomplete = _looks_like_incomplete_progress_tail(_content_text) if _content_len > 0 else True
+                if _content_len > 1500 and not _tail_incomplete:
                     logger.info(
-                        "partial_accepted_as_completed session=%s content_len=%d — missing_done_event with substantial content accepted",
+                        "partial_accepted_as_completed session=%s content_len=%d — missing_done_event with substantial complete content accepted",
                         session_id[:8], _content_len,
                     )
                     _completed_ok = True
                 elif _content_len > 0:
-                    logger.warning("bg_producer_no_done_event session=%s content_len=%d — NOT marking as completed", session_id[:8], _content_len)
+                    state["_producer_incomplete_exit"] = "missing_done_event_content_incomplete"
+                    logger.warning(
+                        "partial_not_accepted session=%s content_len=%d tail_incomplete=%s — missing_done_event, routing to interrupted",
+                        session_id[:8], _content_len, _tail_incomplete,
+                    )
             if _completed_ok:
                 try:
                     await _redis_stream.mark_stream_done(_stream_id_for_state(session_id, state))
