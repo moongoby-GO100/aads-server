@@ -66,10 +66,30 @@ SERVER_CONFIG = {
         "paths": [
             {"base": "/root/kis-autotrade-v4/report", "label": "리포트"},
             {"base": "/root/kis-autotrade-v4/reports", "label": "리포트"},
+            {"base": "/root/kis-autotrade-v4/artifacts/go100", "label": "GO100 산출물",
+             "include": ["latest.md", "report", "summary", "audit", "plan", ".html"]},
             {"base": "/root/kis-autotrade-v4/docs/go100", "label": "문서"},
             {"base": "/root/kis-autotrade-v4/docs/technical", "label": "기술문서"},
+            {"base": "/root/kis-autotrade-v4/docs/reports", "label": "문서 리포트"},
+            {"base": "/root/kis-autotrade-v4/docs/plans", "label": "기획문서"},
+            {"base": "/root/kis-autotrade-v4/docs/plan", "label": "기획문서"},
+            {"base": "/root/kis-autotrade-v4/docs/api", "label": "API 문서"},
+            {"base": "/root/kis-autotrade-v4/docs/handover", "label": "인수인계"},
+            {"base": "/root/kis-autotrade-v4/docs/operations", "label": "운영문서"},
+            {"base": "/root/kis-autotrade-v4/docs/architecture", "label": "아키텍처"},
+            {"base": "/root/kis-autotrade-v4/docs/design", "label": "설계문서"},
+            {"base": "/root/kis-autotrade-v4/docs/agenda", "label": "아젠다"},
+            {"base": "/root/kis-autotrade-v4/docs/features", "label": "기능명세"},
+            {"base": "/root/kis-autotrade-v4/docs/analysis", "label": "분석문서"},
+            {"base": "/root/kis-autotrade-v4/docs/whitepapers", "label": "백서"},
             {"base": "/root/kis-autotrade-v4/docs", "label": "문서",
-             "include": ["GO100", "go100"], "exclude": ["go100/", "technical/"]},
+             "include": ["GO100", "go100"],
+             "exclude": [
+                 "go100/", "technical/", "reports/", "plans/", "plan/", "api/",
+                 "handover/", "operations/", "architecture/", "design/",
+                 "agenda/", "features/", "analysis/", "whitepapers/",
+                 "kis-api-portal/",
+             ]},
         ],
     },
     "SF": {
@@ -165,6 +185,16 @@ def _is_safe_relative_path(file_path: str) -> bool:
 def _candidate_local_bases(base_path: str) -> list[Path]:
     normalized = str(Path(base_path))
     return [Path(p) for p in LOCAL_BASE_ALIASES.get(normalized, [normalized])]
+
+
+def _matches_path_filters(rel_path: str, *, include: list[str] | None, exclude: list[str] | None) -> bool:
+    """Return whether a scanned relative path should be shown in 문서현황."""
+    normalized = rel_path.replace("\\", "/")
+    if exclude and any(ex in normalized for ex in exclude):
+        return False
+    if include and not any(inc in normalized for inc in include):
+        return False
+    return True
 
 
 def _resolve_local_file(project: str, base_path: str, file_path: str) -> Path:
@@ -445,9 +475,7 @@ async def _scan_local(base: str, exclude: list[str] | None = None, include: list
         if p.suffix.lower() not in EXTENSIONS:
             continue
         rel = str(p.relative_to(base_path))
-        if exclude and any(ex in rel for ex in exclude):
-            continue
-        if include and not any(inc in p.name for inc in include):
+        if not _matches_path_filters(rel, include=include, exclude=exclude):
             continue
         stat = p.stat()
         results.append({
@@ -474,10 +502,8 @@ async def _scan_remote(host: str, base: str, exclude: list[str] | None = None, i
         if len(parts) < 3:
             continue
         rel_path, size_str, mtime_str = parts[0], parts[1], parts[2]
-        if exclude and any(ex in rel_path for ex in exclude):
-            continue
         name = rel_path.rsplit("/", 1)[-1] if "/" in rel_path else rel_path
-        if include and not any(inc in name for inc in include):
+        if not _matches_path_filters(rel_path, include=include, exclude=exclude):
             continue
         results.append({
             "name": name,

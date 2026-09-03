@@ -10,6 +10,10 @@ def test_go100_remote_tools_target_contabo14():
     assert go100["server_name"] == "contabo14"
     assert go100["workdir"] == "/root/kis-autotrade-v4"
     assert SERVER_CONFIG["GO100"]["host"] == "contabo14"
+    bases = {path["base"] for path in SERVER_CONFIG["GO100"]["paths"]}
+    assert "/root/kis-autotrade-v4/docs/api" in bases
+    assert "/root/kis-autotrade-v4/docs/plans" in bases
+    assert "/root/kis-autotrade-v4/artifacts/go100" in bases
 
 
 def test_go100_server_registry_is_separate_from_kis():

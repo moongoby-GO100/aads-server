@@ -128,3 +128,42 @@ def test_excel_bytes_to_csv_text_uses_all_sheets():
     assert "a,b" in content
     assert "## Sheet: Second" in content
     assert "x,y" in content
+
+
+@pytest.mark.asyncio
+async def test_project_docs_scan_include_filter_matches_relative_path(tmp_path, monkeypatch):
+    docs_dir = tmp_path / "docs"
+    nested = docs_dir / "go100" / "user-guide"
+    nested.mkdir(parents=True)
+    (nested / "onboarding.md").write_text("# onboarding", encoding="utf-8")
+    (docs_dir / "README.md").write_text("# generic", encoding="utf-8")
+
+    results = await project_docs._scan_local(str(docs_dir), include=["go100/"])
+
+    assert [item["path"] for item in results] == ["go100/user-guide/onboarding.md"]
+
+
+@pytest.mark.asyncio
+async def test_go100_document_status_scans_api_and_artifacts_paths(monkeypatch):
+    captured_bases = []
+
+    async def fake_scan_remote(host, base, exclude=None, include=None):
+        captured_bases.append((host, base, tuple(include or ()), tuple(exclude or ())))
+        return []
+
+    monkeypatch.setattr(project_docs, "_scan_remote", fake_scan_remote)
+
+    await project_docs._scan_project("GO100", project_docs.SERVER_CONFIG["GO100"])
+
+    bases = {base for _, base, _, _ in captured_bases}
+    assert "/root/kis-autotrade-v4/docs/api" in bases
+    assert "/root/kis-autotrade-v4/docs/plans" in bases
+    assert "/root/kis-autotrade-v4/docs/handover" in bases
+    assert "/root/kis-autotrade-v4/artifacts/go100" in bases
+
+    catch_all = next(
+        item for item in captured_bases
+        if item[1] == "/root/kis-autotrade-v4/docs"
+    )
+    assert "api/" in catch_all[3]
+    assert "kis-api-portal/" in catch_all[3]

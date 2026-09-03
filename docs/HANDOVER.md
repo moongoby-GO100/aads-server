@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-09-02
+최종 업데이트: 2026-09-04
+
+## 2026-09-04
+- AADS-GO100-PROJECT-DOCS-CATALOG-FIX-20260904: 06:15 KST 기준 CEO 지시(`고백프로젝트에서 작성된 문서가 문서현황에 안뜨는 문제 즉시 조치`)에 따라 문서현황 스캔 규칙을 보강했다. 원격 GO100 `/root/kis-autotrade-v4` 확인 결과 문서가 `docs/`, `docs/reports`, `docs/plans`, `docs/plan`, `docs/api`, `docs/handover`, `docs/operations`, `docs/architecture`, `docs/design`, `docs/agenda`, `docs/features`, `docs/analysis`, `docs/whitepapers`, `docs/go100`, `reports`, `report`, `artifacts/go100`에 분산되어 있었고, 기존 `app/api/project_docs.py`는 일부 경로만 스캔하거나 `include`를 파일명 기준으로만 적용해 하위 폴더 문서를 누락할 수 있었다. 조치: GO100 스캔 base_path에 실제 문서 저장 경로와 선별 산출물 경로를 추가하고, include/exclude 판정을 상대 경로 기준으로 통일했다. 회귀 테스트: `tests/unit/test_project_docs_viewer.py`에 경로 기반 include와 GO100 문서 base_path 계약을 추가했고, `tests/test_go100_control_plane_mapping.py`에 GO100 제어면 문서 경로 매핑 검증을 추가했다. 후속 검증/커밋/푸시/배포 결과는 최종 보고에 분리 기록한다.
 
 ## 2026-09-02
 - AADS-ACCT-USER-SERVER-REGISTRY-HOTFIX-20260902: 16:03 KST 운영 API 검증에서 `/api/v1/user/project-servers`가 인증 후 500을 반환하는 문제를 확인했다. 원인은 운영 asyncpg `jsonb` metadata가 문자열로 반환되는 경우 `_row_to_out()`이 `dict(str)`을 호출한 것이다. `app/api/user_project_servers.py`에서 dict/json string/기타 mapping을 모두 처리하도록 보정했고 `tests/unit/test_user_project_servers.py`에 jsonb 문자열 회귀 테스트를 추가했다. 검증: `python3 -m py_compile app/api/user_project_servers.py app/main.py` 성공, `.venv-playwright/bin/python -m pytest -q tests/unit/test_user_project_servers.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_pc_agent_api_disconnects.py` 39 passed. 커밋/푸시: `c825708b fix(acct): handle jsonb metadata in project servers` push 완료. 배포: 직전 릴리스 `9b4eb4f6`는 bluegreen 성공했으나 핫픽스 재배포는 target `aads-server-green:8102` active stream 3건 보호 게이트로 차단되어 아직 운영 미반영이다.
