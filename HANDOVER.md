@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-09-03 11:57 KST - 은행 work_key blank URL 기존 CDP 오인 재등록 차단
+
+- Request:
+  - 창 위치 고정 배포 후 실기 테스트 중 `yeoljeong-bank-*` work_key가 `about:blank`로 기존 `9222` 포트를 재등록하면서 GO100 탭이 은행 테스트 세션으로 잘못 묶이는 문제를 확인.
+- Change:
+  - `pc_agent/commands/browser_auto.py`: 은행 work_key의 기존 포트 매칭은 실제 은행 URL이 요청된 경우에만 허용하고, 빈 URL 또는 `about:blank`는 기존 CDP 포트 재사용을 거부하도록 수정.
+  - `tests/unit/test_cdp_session_manager.py`: blank URL이 기존 CDP 포트를 검사/재사용하지 않는 회귀 테스트 추가.
+- Verification:
+  - `python3 -m py_compile pc_agent/commands/browser_auto.py tests/unit/test_cdp_session_manager.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_cdp_session_manager.py::test_bank_work_key_port_rejects_blank_requested_url tests/unit/test_cdp_session_manager.py::test_bank_work_key_port_rejects_other_portal_targets tests/unit/test_cdp_session_manager.py::test_bank_work_key_port_accepts_requested_bank_target tests/unit/test_cdp_session_manager.py::test_browser_window_cli_args_accepts_position_and_size tests/unit/test_browser_bridge.py::test_window_layout_for_work_key_separates_bank_and_delivery_windows tests/unit/test_browser_bridge.py::test_ensure_pc_agent_cdp_registers_local_agent_session tests/unit/test_browser_bridge.py::test_ensure_pc_agent_cdp_falls_back_to_active_api_when_no_local_agent tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_flow_stage_logs_are_secret_free_and_granular` passed: 8 tests.
+  - `git diff --check -- pc_agent/commands/browser_auto.py tests/unit/test_cdp_session_manager.py` passed.
+- Follow-up:
+  - Commit/push this fix and run `deploy.sh bluegreen` so active/standby slots both carry the safer bank CDP reuse rule.
+
 ## 2026-09-03 11:21 KST - PC Agent 업무별 브라우저 창 위치 고정 + 신한 포커스 가드
 
 - Request:

@@ -201,6 +201,17 @@ async def test_bank_work_key_port_rejects_other_portal_targets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bank_work_key_port_rejects_blank_requested_url(monkeypatch):
+    async def fake_list_targets(_port):
+        raise AssertionError("blank bank URL must not inspect or reuse an existing CDP port")
+
+    monkeypatch.setattr("browser_auto._list_cdp_targets", fake_list_targets)
+
+    assert await _bank_work_key_port_matches_url(9222, "about:blank") is False
+    assert await _bank_work_key_port_matches_url(9222, "") is False
+
+
+@pytest.mark.asyncio
 async def test_bank_work_key_port_accepts_requested_bank_target(monkeypatch):
     async def fake_list_targets(_port):
         return [

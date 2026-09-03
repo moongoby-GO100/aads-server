@@ -514,7 +514,7 @@ def _same_or_child_host(candidate: str, expected: str) -> bool:
 async def _bank_work_key_port_matches_url(port: int, requested_url: str) -> bool:
     requested = str(requested_url or "").strip()
     if not requested or requested == "about:blank":
-        return True
+        return False
     try:
         targets = await _list_cdp_targets(port)
     except Exception:
