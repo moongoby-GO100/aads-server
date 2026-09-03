@@ -67,6 +67,7 @@ from app.api.ohvis_tasks import router as ohvis_tasks_router
 from app.api.loops import router as loops_router
 from app.api.browser_tasks import router as browser_tasks_router
 from app.api.browser_recipes import router as browser_recipes_router
+from app.api.authenticated_site_collector import router as authenticated_site_collector_router
 from app.routers.chat import router as chat_v2_router
 from app.routers.agent_vault import router as agent_vault_router
 from app.config import settings
@@ -3266,6 +3267,7 @@ app.include_router(ohvis_tasks_router, prefix="/api/v1", tags=["ohvis-tasks"])
 app.include_router(loops_router, prefix="/api/v1", tags=["loops"])
 app.include_router(browser_tasks_router, prefix="/api/v1", tags=["browser-tasks"])
 app.include_router(browser_recipes_router, prefix="/api/v1", tags=["browser-recipes"])
+app.include_router(authenticated_site_collector_router, prefix="/api/v1", tags=["authenticated-site-collector"])
 app.include_router(agent_vault_router, prefix="/api/v1", tags=["agent-vault"])
 
 # 루트 /health — 모니터링 도구 호환 (인증 면제)

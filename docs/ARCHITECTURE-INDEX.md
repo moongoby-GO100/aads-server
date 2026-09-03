@@ -118,6 +118,7 @@ _작성: 2026-08-21 11:00 KST | 검증 기준: contabo116(5.104.86.116) 실측_
 | OHVIS 완전응답 청사진 | `docs/reports/20260802_OHVIS_PERFECT_RESPONSE_SYSTEM_BLUEPRINT.md` | 부분현행 | 2026-08-02 |
 | OHVIS 브라우저 에이전트 아키텍처 | `docs/plans/20260819_OHVIS_ASIDE_BROWSER_AGENT_ARCHITECTURE.md` | 현행 | 2026-08-19 |
 | Agent Vault 계정등록 UI 계획 | `docs/plans/20260820_OHVIS_AGENT_VAULT_ACCOUNT_REGISTRATION_UI_PLAN.md` | 현행 | 2026-08-20 |
+| 로그인 사이트 수집 SaaS MVP | `docs/plans/AUTHENTICATED_SITE_COLLECTOR_SAAS_MVP.md`, `reports/20260903_logged_in_site_collection_platform_plan.md` | 현행 | 2026-09-03 |
 
 ## 6-1. FOOD · 판매채널 자동수집
 
