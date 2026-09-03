@@ -551,6 +551,16 @@ async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
     }
 
 
+def _is_shinhan_blocking_security_notice(notice_state: dict[str, str]) -> bool:
+    """Separate install/security blockers from normal login validation dialogs."""
+    if str(notice_state.get("present") or "") != "1":
+        return False
+    return str(notice_state.get("error_code") or "").strip().upper() in {
+        "SHINHAN_SECURITY_PROGRAM_NOTICE",
+        "SHINHAN_KEYBOARD_VERIFICATION_FAILED",
+    }
+
+
 def _extract_pc_agent_output(payload: Any) -> str:
     if isinstance(payload, str):
         return payload
@@ -3785,12 +3795,17 @@ async def collect_bank_via_browser_session_async(
             if shinhan_service:
                 notice_started_at = time.monotonic()
                 notice_state = await _shinhan_security_notice_state(page)
-                notice_present = str(notice_state.get("present") or "") == "1"
+                notice_present = _is_shinhan_blocking_security_notice(notice_state)
                 if notice_present:
                     safe_diagnostics["shinhan_security_notice_before_login"] = "1"
                     safe_diagnostics["shinhan_security_notice_before_login_code"] = str(
                         notice_state.get("error_code") or "SHINHAN_SECURITY_NOTICE"
                     )[:120]
+                elif str(notice_state.get("present") or "") == "1":
+                    safe_diagnostics["shinhan_nonblocking_login_notice_before_login"] = str(
+                        notice_state.get("error_code") or ""
+                    )[:120]
+                    await _close_shinhan_security_notice(page)
                 _append_shinhan_stage_log(
                     shinhan_stage_logs,
                     stage="shinhan_security_notice",
@@ -4235,7 +4250,7 @@ async def collect_bank_via_browser_session_async(
                         )
                         break
                     notice_state = await _shinhan_security_notice_state(page)
-                    if str(notice_state.get("present") or "") == "1":
+                    if _is_shinhan_blocking_security_notice(notice_state):
                         safe_diagnostics["shinhan_security_notice_after_step"] = "1"
                         safe_diagnostics["shinhan_security_notice_code_after_step"] = str(
                             notice_state.get("error_code") or "SHINHAN_SECURITY_NOTICE"
@@ -4244,6 +4259,11 @@ async def collect_bank_via_browser_session_async(
                             safe_diagnostics["shinhan_security_notice_closed_after_step"] = "1"
                         if attempt_index < 3:
                             continue
+                    elif str(notice_state.get("present") or "") == "1":
+                        safe_diagnostics["shinhan_nonblocking_login_notice_after_step"] = str(
+                            notice_state.get("error_code") or ""
+                        )[:120]
+                        await _close_shinhan_security_notice(page)
                     rechecked_decision = classify_portal_state(rechecked_url, rechecked_text)
                     rechecked_state = rechecked_decision.as_dict()
                     safe_diagnostics["screen_state"] = rechecked_state.get("state", "unknown")

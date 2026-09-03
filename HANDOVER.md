@@ -1,5 +1,40 @@
 # AADS HANDOVER
 
+## 2026-09-03 10:00 KST - FOOD Shinhan blue-green deploy and ID/PW flow blocker follow-up
+
+- Request:
+  - Deploy the latest Shinhan bank auto-collection patches with `deploy.sh bluegreen`.
+  - Run Mia Shinhan real collection on dedicated PC Agent `7f99c528-24d` / `DESKTOP-ICU55HK`.
+  - Monitor P0/P1 health for five minutes and report the collection result.
+- Deploy evidence:
+  - `./deploy.sh bluegreen` completed at 09:50 KST.
+  - Release SHA: `931ec229461c`.
+  - Active slot changed from `aads-server:8100` to `aads-server-green:8102`.
+  - Candidate health passed in 18 seconds; routed health, DB schema, chat table, and LLM checks passed. Frontend QA was skipped because there was no frontend change.
+- Collection evidence:
+  - Direct run target: `--bank-only --business-id biz-mia --browser-agent-id 7f99c528-24d --bank-browser-timeout-seconds 180 --force-recreate-bank-browser --attempt-timeout-seconds 360`.
+  - Scope was correctly limited to one Mia Shinhan account: `a7354484-aafe-4bcf-a865-0c0330e01574`.
+  - Result: `status=action_required`, `error_code=BANK_BROWSER_IDPW_RETRY_REQUIRED`, `imported_rows=0`, `duplicate_rows=0`, `collected_rows=0`.
+  - Browser stage log showed:
+    - `shinhan_browser_session` success in 9,916 ms.
+    - `shinhan_security_program_check` success in 1,925 ms; VeraPort/AhnLab/INISAFE/keyboard-security signals detected.
+    - `shinhan_site_access` success on reused bank tab.
+    - `shinhan_security_notice` failed after 11,438 ms with `SHINHAN_SECURITY_PROGRAM_NOTICE`.
+    - `shinhan_simple_query_page` success at `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`.
+  - PC Agent text probe after the run showed the page title `간편조회서비스 | 신한은행 개인뱅킹` and the body text `이용자ID를 입력해주세요`, `확인`, `닫기`. This indicates the browser is at the correct page but login did not complete.
+- Root cause update:
+  - Security programs are installed/running; the current blocker is not a total install absence.
+  - The page still opens or keeps a YESKEY/Fincert iframe tab, causing the connector to return `SHINHAN_FINCERT_TIMEOUT_BUT_IDPW_CONFIGURED`.
+  - The connector also treated normal ID/PW validation notices such as `이용자ID를 입력해주세요` as a blocking Shinhan security notice in some pre-login and post-step paths.
+- Code change:
+  - `app/services/yeoljeong_bank_browser_connector.py`: added `_is_shinhan_blocking_security_notice()` so only `SHINHAN_SECURITY_PROGRAM_NOTICE` and `SHINHAN_KEYBOARD_VERIFICATION_FAILED` block the security-notice stage.
+  - Normal login validation notices are now recorded as non-blocking login notices and closed before continuing toward ID/PW entry.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed: `70 passed in 93.58s`.
+- Next:
+  - Commit/push this targeted patch, run `deploy.sh bluegreen` again, then rerun Mia Shinhan collection using the same work key or a forced-clean browser session.
+
 ## 2026-09-03 09:35 KST - FOOD Shinhan security program popup root-cause check and runtime checkpoint logging
 
 - Request:
