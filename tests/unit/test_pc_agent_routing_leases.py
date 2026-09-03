@@ -226,9 +226,80 @@ async def test_browser_bridge_work_keys_serialize_per_agent() -> None:
     )
 
     assert bank["status"] == "running"
-    assert bank["lease"]["job_type"] == "browser_bridge"
+    assert bank["lease"]["job_type"] == "financial_exclusive"
     assert chat["status"] == "queued"
     assert chat["lease"]["job_type"] == "browser_bridge"
+
+
+@pytest.mark.asyncio
+async def test_financial_exclusive_blocks_managed_browser_on_same_agent() -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "icu55hk",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "DESKTOP-ICU55HK", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    financial = await manager.acquire_lease(
+        preferred_agent_id="icu55hk",
+        job_type="authenticated_collector_banking_shinhan",
+        command_type="browser_eval",
+        required_capabilities=["interactive_browser"],
+    )
+    managed = await manager.acquire_lease(
+        preferred_agent_id="icu55hk",
+        job_type="managed_browser",
+        command_type="browser_eval",
+        required_capabilities=["interactive_browser"],
+    )
+
+    assert financial["status"] == "running"
+    assert financial["lease"]["job_type"] == "financial_exclusive"
+    assert managed["status"] == "queued"
+    assert managed["lease"]["queue_position"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bank_work_key_promotes_browser_bridge_route_to_financial_exclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = PCAgentManager()
+    ws = _DummyWebSocket()
+    manager.register_agent(
+        "icu55hk",
+        ws,  # type: ignore[arg-type]
+        {"hostname": "DESKTOP-ICU55HK", "capabilities": ["chrome_cdp", "interactive_browser"]},
+    )
+
+    async def fake_send_command(_agent_id: str, _command_type: str, _params: dict[str, object]) -> str:
+        return "cmd-1"
+
+    async def fake_get_result(command_id: str, timeout: float = 30.0) -> CommandResult:
+        return CommandResult(
+            command_id=command_id,
+            agent_id="icu55hk",
+            status="success",
+            result={"ok": True},
+        )
+
+    monkeypatch.setattr(manager, "send_command", fake_send_command)
+    monkeypatch.setattr(manager, "get_result", fake_get_result)
+
+    result = await manager.execute_routed_command(
+        command_type="browser_launch",
+        params={
+            "work_key": "yeoljeong-bank-shinhan-mia",
+            "url": "https://bizbank.shinhan.com",
+        },
+        agent_id="icu55hk",
+        job_type="browser_bridge_launch",
+        required_capabilities=["interactive_browser"],
+        command_timeout_seconds=5.0,
+    )
+
+    assert result["status"] == "success"
+    assert result["lease"]["job_type"] == "financial_exclusive"
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,8 @@ async def test_collector_overview_uses_project_defaults_without_database(collect
 
     assert overview["demo"] is True
     assert overview["totals"]["connected_sites"] >= 9
+    assert overview["runtime_contracts"]["windows_collector"]["financial_job_type"] == "financial_exclusive"
+    assert overview["runtime_contracts"]["windows_collector"]["financial_max_concurrency_per_pc"] == 1
     assert {item["project_key"] for item in overview["projects"]} >= {
         "AADS",
         "KIS",
@@ -192,6 +194,44 @@ def test_windows_collector_maps_to_pc_agent_execution_runtime(collector_modules)
     assert plan["saas_extension"]["project_key"] == "BANKING"
     assert plan["saas_extension"]["site_environment"] == "windows_collector"
     assert plan["saas_extension"]["execution_runtime"] == "pc_agent"
+    assert plan["saas_extension"]["runtime_contract"]["job_type"] == "financial_exclusive"
+    assert plan["saas_extension"]["lease_policy"]["exclusive"] is True
+    assert plan["saas_extension"]["success_contract"]["minimum_imported_rows"] == 1
+
+
+async def test_banking_job_uses_financial_exclusive_runtime_contract(collector_modules):
+    collector, queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    await collector.upsert_site_profile(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "BANKING",
+            "site_key": "shinhan.easyview",
+            "display_name": "Shinhan easy inquiry",
+            "base_origin": "https://bizbank.shinhan.com",
+            "runtime": "windows_collector",
+            "data_categories": ["transactions", "balances"],
+        },
+    )
+
+    created = await collector.create_collection_job(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "BANKING",
+            "site_key": "shinhan.easyview",
+            "recipe_id": "shinhan.easyview.collect",
+            "work_key": "yeoljeong-bank-shinhan-mia",
+        },
+    )
+    queued = queue_module.queue_snapshot(limit=1)[0]
+
+    assert created["job"]["runtime_contract"]["job_type"] == "financial_exclusive"
+    assert created["job"]["lease_policy"]["scope"] == "pc_agent_interactive_browser_lane"
+    assert created["job"]["success_contract"]["minimum_imported_rows"] == 1
+    assert queued["resource_key"].startswith(f"financial_exclusive|{tenant_id}|")
 
 
 async def test_challenge_deny_policy_blocks_resume_automation(collector_modules):

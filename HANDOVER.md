@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-09-03 21:05 KST - Windows Collector financial exclusive runtime contract
+
+- CEO request:
+  - Implement the Windows Collector approach for fast bank/card authenticated-site collection without relying on paid official APIs.
+- Changes:
+  - `app/services/authenticated_site_collector.py`: added runtime contract details for `BANKING`/financial site profiles, including `financial_exclusive` job type, per-PC exclusive lease policy, throughput guidance, and success contract requiring persisted records plus `imported_rows > 0` or verified no-record terminal state.
+  - `app/services/pc_agent_collection_queue.py`: financial/bank/card/BANKING queue items now share a `financial_exclusive|tenant|agent` resource key so bank/card jobs do not drain concurrently on the same financial lane.
+  - `app/services/pc_agent_manager.py`: financial/bank/card/Shinhan/YESKEY/certificate job hints normalize to `financial_exclusive`; interactive browser jobs share an exclusive per-agent lane, and bank work_key/URL hints promote generic Browser Bridge calls into the financial lane.
+  - `tests/unit/test_authenticated_site_collector.py` and `tests/unit/test_pc_agent_routing_leases.py`: added regression coverage for runtime contract, queue resource key, and financial exclusive lease behavior.
+- Verification:
+  - `/root/aads/aads-server/.venv-playwright/bin/python -m pytest -q tests/unit/test_authenticated_site_collector.py tests/unit/test_pc_agent_routing_leases.py` passed: 37 tests.
+  - `/root/aads/aads-server/.venv-playwright/bin/python -m py_compile app/services/authenticated_site_collector.py app/services/pc_agent_collection_queue.py app/services/pc_agent_manager.py` passed.
+  - `git diff --check -- app/services/authenticated_site_collector.py app/services/pc_agent_collection_queue.py app/services/pc_agent_manager.py tests/unit/test_authenticated_site_collector.py tests/unit/test_pc_agent_routing_leases.py` passed.
+
 ## 2026-09-03 17:15 KST - Authenticated Collector FOOD project/runtime contract
 
 - Request:

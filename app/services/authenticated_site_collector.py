@@ -64,6 +64,11 @@ ACTIVE_JOB_STATUSES = {"queued", "running", "action_required"}
 LOCAL_WINDOWS_SITE_ENVIRONMENTS = {"webview2", "windows_collector"}
 CHALLENGE_HOLD_UNTIL = "2099-01-01T00:00:00+09:00"
 PHYSICAL_INPUT_CHALLENGE_KINDS = {"otp", "identity_check", "certificate"}
+FINANCIAL_PROJECT_KEYS = {"BANKING"}
+FINANCIAL_DATA_CATEGORIES = {"transactions", "balances", "statements", "card_usage", "approvals"}
+FINANCIAL_SITE_MARKERS = ("bank", "banking", "card", "shinhan")
+WINDOWS_COLLECTOR_CONTRACT_VERSION = "windows_collector_v1"
+FINANCIAL_EXCLUSIVE_JOB_TYPE = "financial_exclusive"
 
 DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
     {
@@ -305,6 +310,84 @@ def resolve_collector_execution_runtime(site_environment: Any) -> str:
     return "pc_agent" if runtime in LOCAL_WINDOWS_SITE_ENVIRONMENTS else runtime
 
 
+def _is_financial_profile(profile: dict[str, Any]) -> bool:
+    project_key = _normalize_project_key(profile.get("project_key"))
+    site_key = str(profile.get("site_key") or "").strip().lower()
+    categories = {
+        str(value or "").strip().lower()
+        for value in _json_list(profile.get("data_categories") or profile.get("record_types"))
+        if str(value or "").strip()
+    }
+    return (
+        project_key in FINANCIAL_PROJECT_KEYS
+        or bool(categories & FINANCIAL_DATA_CATEGORIES)
+        or any(marker in site_key for marker in FINANCIAL_SITE_MARKERS)
+    )
+
+
+def collector_runtime_contract_for_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    runtime = _normalize_enum(profile.get("runtime") or profile.get("site_environment"), SITE_ENVIRONMENTS, "webview2")
+    execution_runtime = resolve_collector_execution_runtime(runtime)
+    financial = _is_financial_profile(profile)
+    if financial:
+        return {
+            "contract_version": WINDOWS_COLLECTOR_CONTRACT_VERSION,
+            "execution_runtime": execution_runtime,
+            "local_runtime": runtime,
+            "job_type": FINANCIAL_EXCLUSIVE_JOB_TYPE,
+            "lease_policy": {
+                "scope": "pc_agent_interactive_browser_lane",
+                "exclusive": True,
+                "max_concurrency_per_agent": 1,
+                "queue_if_busy": True,
+                "wait_for_turn": True,
+                "reason": "financial_sites_share_security_modules_and_physical_input",
+            },
+            "throughput_policy": {
+                "site_parallelism": 1,
+                "recommended_pc_agent_pool": "one_windows_collector_per_busy_financial_site_group",
+                "poll_interval_seconds": 60,
+                "stale_session_recovery": "close_certificate_or_stale_tabs_then_resume_same_work_key",
+            },
+            "success_contract": {
+                "record_artifact_required": True,
+                "minimum_imported_rows": 1,
+                "allow_no_records_terminal_state": True,
+                "required_stage_logs": [
+                    "security_program_check",
+                    "login_page_open",
+                    "id_password_login",
+                    "transaction_page_open",
+                    "transaction_capture",
+                    "ledger_persist",
+                ],
+            },
+        }
+    return {
+        "contract_version": WINDOWS_COLLECTOR_CONTRACT_VERSION if runtime in LOCAL_WINDOWS_SITE_ENVIRONMENTS else "server_collector_v1",
+        "execution_runtime": execution_runtime,
+        "local_runtime": runtime,
+        "job_type": "browser_bridge",
+        "lease_policy": {
+            "scope": "work_key",
+            "exclusive": False,
+            "max_concurrency_per_agent": 4,
+            "queue_if_busy": True,
+            "wait_for_turn": True,
+        },
+        "throughput_policy": {
+            "site_parallelism": 4,
+            "recommended_pc_agent_pool": "scale_by_work_key_and_site_resource_cost",
+            "poll_interval_seconds": 120,
+        },
+        "success_contract": {
+            "record_artifact_required": True,
+            "minimum_imported_rows": 0,
+            "allow_no_records_terminal_state": True,
+        },
+    }
+
+
 def _challenge_resolution_contract(kind: str, policy: dict[str, Any]) -> dict[str, Any]:
     requires_physical_input = kind in PHYSICAL_INPUT_CHALLENGE_KINDS
     user_approved_automation_allowed = bool(policy.get("user_approved_automation_allowed")) and not requires_physical_input
@@ -344,8 +427,8 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
     runtime = _normalize_enum(payload.get("runtime") or payload.get("site_environment"), SITE_ENVIRONMENTS, "webview2")
     metadata = _json_dict(payload.get("metadata"))
     if runtime in LOCAL_WINDOWS_SITE_ENVIRONMENTS and "runtime_contract" not in metadata:
-        metadata["runtime_contract"] = "windows_collector_v1"
-    return {
+        metadata["runtime_contract"] = WINDOWS_COLLECTOR_CONTRACT_VERSION
+    profile = {
         "id": _clean_text(payload.get("id"), default=str(uuid.uuid4()), max_length=80),
         "project_key": project_key,
         "site_key": site_key,
@@ -370,6 +453,9 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
         "created_at": _clean_text(payload.get("created_at"), default=_now_text(), max_length=80),
         "updated_at": _clean_text(payload.get("updated_at"), default=_now_text(), max_length=80),
     }
+    if "runtime_contract_detail" not in metadata:
+        metadata["runtime_contract_detail"] = collector_runtime_contract_for_profile(profile)
+    return profile
 
 
 def normalize_recipe_extension(payload: dict[str, Any]) -> dict[str, Any]:
@@ -377,10 +463,21 @@ def normalize_recipe_extension(payload: dict[str, Any]) -> dict[str, Any]:
     runtime = _normalize_enum(payload.get("site_environment") or payload.get("runtime"), SITE_ENVIRONMENTS, "webview2")
     execution_runtime = resolve_collector_execution_runtime(runtime)
     version_status = _normalize_enum(payload.get("version_status"), VERSION_STATUSES, "draft")
+    profile_like = {
+        "project_key": project_key,
+        "site_key": payload.get("site_key") or payload.get("service") or payload.get("recipe_id") or "",
+        "runtime": runtime,
+        "data_categories": payload.get("record_types") or payload.get("data_categories") or [],
+    }
+    runtime_contract = collector_runtime_contract_for_profile(profile_like)
     return {
         "project_key": project_key,
         "site_environment": runtime,
         "execution_runtime": execution_runtime,
+        "runtime_contract": runtime_contract,
+        "lease_policy": runtime_contract["lease_policy"],
+        "throughput_policy": runtime_contract["throughput_policy"],
+        "success_contract": runtime_contract["success_contract"],
         "record_types": [
             _clean_text(value, max_length=80)
             for value in _json_list(payload.get("record_types"))
@@ -612,6 +709,22 @@ async def collector_overview(*, tenant_id: str) -> dict[str, Any]:
             "failed_jobs": status_counts.get("failed", 0),
         },
         "job_statuses": status_counts,
+        "runtime_contracts": {
+            "windows_collector": {
+                "contract_version": WINDOWS_COLLECTOR_CONTRACT_VERSION,
+                "execution_runtime": "pc_agent",
+                "supported_projects": sorted(FINANCIAL_PROJECT_KEYS | {"STORE_ASSISTANT", "MARKETING"}),
+                "financial_job_type": FINANCIAL_EXCLUSIVE_JOB_TYPE,
+                "financial_max_concurrency_per_pc": 1,
+                "general_site_parallelism_per_pc": 4,
+            },
+            "financial_realtime_strategy": {
+                "primary_runtime": "windows_collector",
+                "lease_policy": "financial_sites_run_on_exclusive_interactive_browser_lane",
+                "scaling_unit": "additional_windows_collector_pc_agent",
+                "completion_condition": "ledger_created_and_imported_rows_gt_0_or_verified_no_records",
+            },
+        },
         "demo": bool(profile_result.get("demo")),
     }
 
@@ -619,6 +732,7 @@ async def collector_overview(*, tenant_id: str) -> dict[str, Any]:
 def _job_out(item: dict[str, Any]) -> dict[str, Any]:
     payload = _json_dict(item.get("payload"))
     result = _json_dict(item.get("result"))
+    runtime_contract = _json_dict(payload.get("runtime_contract"))
     return {
         "id": str(item.get("id") or ""),
         "status": str(item.get("status") or "queued"),
@@ -632,6 +746,10 @@ def _job_out(item: dict[str, Any]) -> dict[str, Any]:
         "payload": payload,
         "result": mask_sensitive_value(result),
         "challenge": mask_sensitive_value(_json_dict(result.get("challenge_gate"))),
+        "runtime_contract": runtime_contract,
+        "lease_policy": _json_dict(payload.get("lease_policy") or runtime_contract.get("lease_policy")),
+        "throughput_policy": _json_dict(payload.get("throughput_policy") or runtime_contract.get("throughput_policy")),
+        "success_contract": _json_dict(payload.get("success_contract") or runtime_contract.get("success_contract")),
         "queue_type": str(item.get("queue_type") or ""),
         "same_work_key": True,
     }
@@ -668,6 +786,8 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
     recipe_version = _clean_text(payload.get("recipe_version"), default="v1", max_length=80)
     raw_work_key = _clean_text(payload.get("work_key"), max_length=120)
     work_key = normalize_work_key(raw_work_key or f"{project_key.lower()}-{site_key}")
+    runtime_contract = collector_runtime_contract_for_profile(profile)
+    execution_runtime = runtime_contract["execution_runtime"]
     item = queue_module.enqueue_collection_item(
         {
             "tenant_id": tenant_id,
@@ -677,17 +797,24 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
             "business_id": project_key,
             "branch": profile["display_name"],
             "work_key": work_key,
-            "runtime": resolve_collector_execution_runtime(profile["runtime"]),
+            "runtime": execution_runtime,
             "priority": int(payload.get("priority") or 50),
             "latest_only": bool(payload.get("latest_only", True)),
             "payload": {
                 "project_key": project_key,
+                "site_key": site_key,
                 "recipe_id": recipe_id,
                 "recipe_version": recipe_version,
                 "site_environment": profile["runtime"],
-                "execution_runtime": resolve_collector_execution_runtime(profile["runtime"]),
+                "execution_runtime": execution_runtime,
                 "allowed_origins": profile["allowed_origins"],
                 "challenge_policy": profile["challenge_policy"],
+                "runtime_contract": runtime_contract,
+                "lease_policy": runtime_contract["lease_policy"],
+                "throughput_policy": runtime_contract["throughput_policy"],
+                "success_contract": runtime_contract["success_contract"],
+                "job_type": runtime_contract["job_type"],
+                "record_types": profile["data_categories"],
                 "intervention_contract": {
                     "auto_bypass_allowed": False,
                     "user_approved_automation_allowed": profile["challenge_policy"].get(
@@ -848,6 +975,16 @@ def build_collector_recipe_dry_run(
         "resource_policy": {
             **_json_dict(recipe.get("resource_policy")),
             "runtime": extension["execution_runtime"],
+            "job_type": extension["runtime_contract"]["job_type"],
+            "lease_policy": extension["lease_policy"],
+        },
+        "concurrency_policy": {
+            **_json_dict(recipe.get("concurrency_policy")),
+            **extension["throughput_policy"],
+        },
+        "verifier": {
+            **_json_dict(recipe.get("verifier")),
+            "success_contract": extension["success_contract"],
         },
     }
     plan = build_recipe_dry_run_plan(base_recipe, target_url=target_url)

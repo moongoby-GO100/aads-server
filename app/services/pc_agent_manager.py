@@ -90,11 +90,31 @@ _KNOWN_ROUTING_ERRORS = frozenset({
 _VVIC_JOB_TYPES = frozenset({"vvic", "vvic_cdp", "vvic_scrape"})
 _DEFAULT_MAX_CONCURRENCY_BY_JOB = {
     "browser_bridge": 1,
+    "financial_exclusive": 1,
+    "interactive_browser": 1,
     "vvic_cdp": 1,
     "vvic": 1,
     "vvic_scrape": 1,
     "local_model_install": 1,
     "local_media_job": 1,
+}
+_FINANCIAL_JOB_MARKERS = (
+    "financial",
+    "bank",
+    "banking",
+    "card",
+    "shinhan",
+    "yeskey",
+    "certificate",
+)
+_INTERACTIVE_BROWSER_EXCLUSIVE_LANE = "interactive_browser"
+_INTERACTIVE_BROWSER_JOB_TYPES = {
+    "browser_bridge",
+    "financial_exclusive",
+    "managed_browser",
+    "vvic_cdp",
+    "vvic",
+    "vvic_scrape",
 }
 _PC_AGENT_COMMAND_ALIASES = {
     "cmd": "shell",
@@ -563,9 +583,23 @@ class PCAgentManager:
 
     def _normalize_job_type(self, value: str) -> str:
         job_type = str(value or "general").strip().lower().replace("-", "_")
+        if any(marker in job_type for marker in _FINANCIAL_JOB_MARKERS):
+            return "financial_exclusive"
         if job_type.startswith("browser_bridge"):
             return "browser_bridge"
         return job_type or "general"
+
+    def _job_type_with_param_hints(self, job_type: str, params: Dict[str, Any]) -> str:
+        hint_parts = [
+            str(job_type or ""),
+            str(params.get("work_key") or ""),
+            str(params.get("site_key") or ""),
+            str(params.get("url") or params.get("target_url") or ""),
+        ]
+        hint = " ".join(hint_parts).strip().lower().replace("-", "_")
+        if any(marker in hint for marker in _FINANCIAL_JOB_MARKERS):
+            return "financial_exclusive"
+        return job_type
 
     def _normalize_error_code(self, value: str) -> str:
         code = str(value or "").strip().upper()
@@ -867,6 +901,8 @@ class PCAgentManager:
         return max(1, int(self._job_max_concurrency.get(job_type, self._default_max_concurrency)))
 
     def _lease_key(self, agent_id: str, job_type: str) -> tuple[str, str]:
+        if job_type in _INTERACTIVE_BROWSER_JOB_TYPES:
+            return (agent_id, _INTERACTIVE_BROWSER_EXCLUSIVE_LANE)
         return (agent_id, job_type)
 
     def _queue_for_key_locked(self, key: tuple[str, str]) -> Deque[str]:
@@ -1095,6 +1131,7 @@ class PCAgentManager:
         browser_job = (
             normalized_job.startswith("browser")
             or normalized_job.startswith("managed_browser")
+            or normalized_job == "financial_exclusive"
             or normalized_job in _VVIC_JOB_TYPES
             or bool({"interactive_browser", "chrome_cdp"} & required_capabilities)
         )
@@ -1206,7 +1243,7 @@ class PCAgentManager:
 
             key = self._lease_key(selected_agent_id, normalized_job)
             running = self._running_for_key_locked(key)
-            max_concurrency = self._max_concurrency_for_job(normalized_job)
+            max_concurrency = self._max_concurrency_for_job(key[1])
             ttl = max(int(ttl_seconds or self._lease_default_ttl_seconds), 30)
             lease_id = str(uuid.uuid4())
             status = "running" if len(running) < max_concurrency else "queued"
@@ -1437,8 +1474,9 @@ class PCAgentManager:
             request_params,
         )
         request_params["command_timeout_seconds"] = effective_command_timeout_seconds
+        effective_job_type = self._job_type_with_param_hints(job_type, request_params)
         lease_response = await self.acquire_lease(
-            job_type=job_type,
+            job_type=effective_job_type,
             command_type=command_type,
             preferred_agent_id=agent_id,
             required_capabilities=required_capabilities,
@@ -1460,7 +1498,7 @@ class PCAgentManager:
                 if wait_result.get("status") == "online":
                     reconnected_agent_id = wait_result.get("agent_id", agent_id)
                     lease_response = await self.acquire_lease(
-                        job_type=job_type,
+                        job_type=effective_job_type,
                         command_type=command_type,
                         preferred_agent_id=reconnected_agent_id,
                         required_capabilities=required_capabilities,

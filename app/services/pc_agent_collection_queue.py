@@ -17,6 +17,9 @@ QUEUE_PATH = Path(os.getenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(DATA_DIR 
 ACTIVE_STATUSES = {"queued", "running", "action_required"}
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "superseded"}
 ALLOWED_QUEUE_TYPES = {"delivery", "bank", "financial", "browser_recipe"}
+FINANCIAL_QUEUE_PROJECTS = {"BANKING"}
+FINANCIAL_QUEUE_TYPES = {"bank", "financial"}
+FINANCIAL_RESOURCE_KEY = "financial_exclusive"
 
 
 def _now() -> datetime:
@@ -66,6 +69,27 @@ def _clean_key(value: Any, fallback: str = "") -> str:
 
 
 def build_resource_key(item: dict[str, Any]) -> str:
+    payload = _json_dict(item.get("payload"))
+    project_key = str(payload.get("project_key") or item.get("business_id") or "").strip().upper()
+    site_key_raw = str(item.get("site_key") or item.get("service") or payload.get("site_key") or "").strip().lower()
+    category_values = payload.get("record_types") or payload.get("data_categories") or []
+    categories = {
+        str(value or "").strip().lower()
+        for value in category_values
+        if str(value or "").strip()
+    } if isinstance(category_values, list) else set()
+    if (
+        item.get("queue_type") in FINANCIAL_QUEUE_TYPES
+        or project_key in FINANCIAL_QUEUE_PROJECTS
+        or any(marker in site_key_raw for marker in ("bank", "banking", "card", "shinhan"))
+        or bool(categories & {"transactions", "balances", "statements", "card_usage", "approvals"})
+    ):
+        tenant = _clean_key(item.get("tenant_id"), "global")
+        agent_hint = _clean_key(
+            payload.get("required_browser_agent_id"),
+            _clean_key(payload.get("browser_agent_id"), _clean_key(payload.get("pc_agent_id"), "default")),
+        )
+        return f"{FINANCIAL_RESOURCE_KEY}|{tenant}|{agent_hint}"
     site_key = _clean_key(item.get("site_key"), _clean_key(item.get("service"), "site"))
     work_key = _clean_key(item.get("work_key"), site_key)
     runtime = _clean_key(item.get("runtime"), "pc_agent")
