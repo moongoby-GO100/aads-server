@@ -10613,3 +10613,19 @@
   - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:5c08fe1ee096 python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_authenticated_site_collector.py -q` passed 205/205.
 - Not completed:
   - Blue/green deploy and live Shinhan collection verification are pending this commit/push cycle.
+
+## 2026-09-04 04:45 KST - Shinhan native login marker wait follow-up
+
+- CEO request:
+  - Continue immediately after live Shinhan collection still timed out after security modules became available.
+- Server changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: after the native Windows ID/PW path submits Shinhan login, the flow now waits for the same post-login success/error markers used by the DOM/WebSquare login path instead of returning immediately after button submission.
+  - This preserves `login_submitted`, `login_success`, `login_success_reason`, and `login_elapsed_ms` in stage logs for the native path without logging plaintext secrets.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:ba8651980101 python3 -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed 74/74.
+- Live observation before this patch:
+  - PC Agent security module check succeeded for Shinhan with Veraport/AhnLab/keyboard security detected.
+  - Shinhan ID/PW input and login submit were recorded as successful, but post-login marker was not observed before timeout; `bank_transactions.json` was still missing.
+- Not completed:
+  - This follow-up patch still needs commit, push, blue/green deploy, and another live Shinhan collection retry.

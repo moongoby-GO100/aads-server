@@ -2163,6 +2163,81 @@ async def _try_prepare_shinhan_query_flow(
     return result
 
 
+async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
+    """Observe whether Shinhan moved past ID/PW login without reading secrets."""
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            async () => {
+              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+              const startedAt = performance.now();
+              const authText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+              const authUrl = () => String(window.location.href || '');
+              const loginErrorMarker = () => {
+                const currentText = authText();
+                if (/이용자\\s*ID를\\s*입력|이용자ID를\\s*입력|비밀번호를\\s*입력|비밀번호\\s*최소자릿수|키보드\\s*입력\\s*검증|처음부터\\s*다시\\s*진행/i.test(currentText)) {
+                  return 'login_input_rejected';
+                }
+                if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)|보안프로그램.*설치/i.test(currentText)) {
+                  return 'login_error_or_security_notice';
+                }
+                return '';
+              };
+              const loggedInMarker = () => {
+                const currentText = authText();
+                const currentUrl = authUrl();
+                const hasFinancialCertificate = !!Array.from(document.querySelectorAll('iframe')).find((frame) => {
+                  const src = String(frame.src || '').toLowerCase();
+                  return src.includes('fincert') || src.includes('yeskey');
+                });
+                if (hasFinancialCertificate) return '';
+                const stillLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText);
+                if (/로그아웃/i.test(currentText)) return 'post_login_text';
+                if (!stillLoginPanel && /거래내역\\s*(조회|다운로드)|조회결과|출금가능금액|계좌잔액/i.test(currentText)) {
+                  return 'post_login_text';
+                }
+                if (/#210101/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
+                  return 'post_login_url';
+                }
+                return '';
+              };
+              let reason = '';
+              let success = '0';
+              for (let i = 0; i < 60; i += 1) {
+                await sleep(500);
+                reason = loginErrorMarker();
+                if (reason) break;
+                reason = loggedInMarker();
+                if (reason) {
+                  success = '1';
+                  break;
+                }
+              }
+              return {
+                login_success: success,
+                login_success_reason: reason,
+                login_elapsed_ms: String(Math.round(performance.now() - startedAt))
+              };
+            }
+            """,
+            timeout_ms=35000,
+            await_promise=True,
+        )
+    except Exception as exc:
+        return {
+            "login_success": "0",
+            "error_code": str(_safe_browser_error_fields(exc).get("error_code") or "LOGIN_MARKER_WAIT_FAILED")[:120],
+        }
+    if not isinstance(raw, dict):
+        return {"login_success": "0", "error_code": "LOGIN_MARKER_WAIT_BAD_PAYLOAD"}
+    return {
+        "login_success": "1" if str(raw.get("login_success") or "") == "1" else "0",
+        "login_success_reason": str(raw.get("login_success_reason") or "")[:120],
+        "login_elapsed_ms": str(raw.get("login_elapsed_ms") or "")[:12],
+    }
+
+
 async def _try_shinhan_individual_login_step(
     page: Any,
     *,
@@ -2183,7 +2258,17 @@ async def _try_shinhan_individual_login_step(
         and keyboard_result.get("keyboard_secret") == "1"
         and keyboard_result.get("navigation_clicked") == "1"
     ):
-        return keyboard_result
+        marker = await _wait_shinhan_post_login_marker(page)
+        merged = dict(keyboard_result)
+        merged["login_submitted"] = "1"
+        merged["login_success"] = "1" if marker.get("login_success") == "1" else "0"
+        if marker.get("login_success_reason"):
+            merged["login_success_reason"] = str(marker.get("login_success_reason") or "")[:120]
+        if marker.get("login_elapsed_ms"):
+            merged["login_elapsed_ms"] = str(marker.get("login_elapsed_ms") or "")[:12]
+        if marker.get("error_code"):
+            merged["error_code"] = str(marker.get("error_code") or "")[:120]
+        return merged
     try:
         raw = await _evaluate_page(
             page,

@@ -1928,6 +1928,60 @@ def test_shinhan_idpw_login_reports_success_marker_and_elapsed_time(monkeypatch)
     assert "bank-pass" not in str(result)
 
 
+def test_shinhan_idpw_login_waits_for_success_after_native_keyboard(monkeypatch):
+    page = AsyncMock()
+
+    monkeypatch.setattr(
+        connector,
+        "_close_shinhan_security_notice",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        connector,
+        "_try_shinhan_individual_keyboard_login_step",
+        AsyncMock(
+            return_value={
+                "attempted": "1",
+                "stage": "login_keyboard",
+                "username": "1",
+                "login_secret": "1",
+                "keyboard_secret": "1",
+                "native_username": "1",
+                "native_secret": "1",
+                "native_mouse_focus": "1",
+                "navigation_clicked": "1",
+                "websquare_triggered": "1",
+            }
+        ),
+    )
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "loggedInMarker" in expr
+        assert "login_input_rejected" in expr
+        return {
+            "login_success": "1",
+            "login_success_reason": "post_login_url",
+            "login_elapsed_ms": "1732",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_shinhan_individual_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["login_submitted"] == "1"
+    assert result["login_success"] == "1"
+    assert result["login_success_reason"] == "post_login_url"
+    assert result["login_elapsed_ms"] == "1732"
+    assert result["native_username"] == "1"
+    assert "bank-pass" not in str(result)
+
+
 def test_shinhan_individual_login_does_not_treat_id_required_notice_as_success(monkeypatch):
     page = SimpleNamespace(evaluate=AsyncMock())
     monkeypatch.setattr(
