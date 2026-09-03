@@ -12,7 +12,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth import TenantRole, require_tenant_role
@@ -65,6 +65,23 @@ CREATE INDEX IF NOT EXISTS idx_user_project_servers_owner
 CREATE INDEX IF NOT EXISTS idx_user_project_servers_workspace
     ON user_project_servers(workspace_id)
     WHERE workspace_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS user_project_server_route_events (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    tenant_id UUID NOT NULL,
+    workspace_id UUID,
+    server_id UUID,
+    route_target TEXT NOT NULL,
+    project_key TEXT NOT NULL DEFAULT '',
+    instruction_preview TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'accepted',
+    metadata JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_project_server_route_events_owner
+    ON user_project_server_route_events(user_id, tenant_id, created_at DESC);
 """
 
 
@@ -163,6 +180,26 @@ class ProjectServerOut(BaseModel):
     last_checked_at: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class ProjectServerRouteRequest(BaseModel):
+    server_id: str = ""
+    workspace_id: Optional[str] = None
+    project_key: str = Field(default="", max_length=32)
+    instruction: str = Field(default="", min_length=1, max_length=50000)
+    size: str = Field(default="M", max_length=4)
+    dry_run: bool = True
+
+    @field_validator("project_key")
+    @classmethod
+    def _v_project_key(cls, value: str) -> str:
+        return str(value or "").strip().upper()
+
+    @field_validator("size")
+    @classmethod
+    def _v_size(cls, value: str) -> str:
+        size = str(value or "M").strip().upper()
+        return size if size in {"XS", "S", "M", "L", "XL"} else "M"
 
 
 def _row_to_out(row: asyncpg.Record) -> dict[str, Any]:
@@ -316,3 +353,101 @@ async def archive_project_server(
     if not row:
         raise HTTPException(status_code=404, detail="Server not found")
     return {"ok": True, "id": str(row["id"])}
+
+
+@router.post("/route-execute", status_code=status.HTTP_202_ACCEPTED)
+async def route_project_execution(
+    body: ProjectServerRouteRequest,
+    context: dict = Depends(require_tenant_member),
+) -> dict[str, Any]:
+    """Resolve a customer project execution target with user/tenant isolation.
+
+    This is the SaaS-safe routing gate. It does not accept SSH secrets and it
+    never routes to another user's server. When no user server is selected, the
+    request is explicitly routed to the isolated OHVIS managed resource pool.
+    """
+    await _ensure_table()
+    user_id = _context_user_id(context)
+    tenant_id = _context_tenant_id(context)
+    normalized_server_id = str(body.server_id or "").strip().lower()
+    use_ohvis_pool = normalized_server_id in {"", "ohvis", "ovis", "ohvis_pool", "managed"}
+    instruction_preview = " ".join(body.instruction.split())[:240]
+    metadata = {
+        "size": body.size,
+        "dry_run": body.dry_run,
+        "isolation": "user_id+tenant_id+workspace_id",
+    }
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if body.workspace_id:
+            await _assert_workspace_in_tenant(conn, body.workspace_id, tenant_id)
+
+        server_row = None
+        if not use_ohvis_pool:
+            try:
+                server_uuid = UUID(body.server_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid server_id") from exc
+            server_row = await conn.fetchrow(
+                """
+                SELECT id, label, host, ssh_user, ssh_port, auth_type, status,
+                       connection_state, workspace_id, project_key, metadata,
+                       last_checked_at, created_at, updated_at
+                  FROM user_project_servers
+                 WHERE id = $1
+                   AND user_id = $2
+                   AND tenant_id = $3::uuid
+                   AND status = 'active'
+                """,
+                server_uuid,
+                user_id,
+                tenant_id,
+            )
+            if not server_row:
+                raise HTTPException(status_code=404, detail="Server not found")
+
+        route_target = "ohvis_managed_pool" if use_ohvis_pool else "user_project_server"
+        event_row = await conn.fetchrow(
+            """
+            INSERT INTO user_project_server_route_events (
+                user_id, tenant_id, workspace_id, server_id, route_target,
+                project_key, instruction_preview, status, metadata
+            )
+            VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, 'accepted', $8::jsonb)
+            RETURNING id, created_at
+            """,
+            user_id,
+            tenant_id,
+            body.workspace_id,
+            str(server_row["id"]) if server_row else None,
+            route_target,
+            body.project_key,
+            instruction_preview,
+            json.dumps(metadata, ensure_ascii=False),
+        )
+
+    selected_server = _row_to_out(server_row) if server_row else None
+    requires_connection = bool(server_row) and selected_server["connection_state"] != "reachable"
+    return {
+        "ok": True,
+        "status": "accepted",
+        "event_id": int(event_row["id"]),
+        "created_at": event_row["created_at"].isoformat(),
+        "route_target": route_target,
+        "will_use_ohvis_resources": use_ohvis_pool,
+        "requires_user_server_connection": requires_connection,
+        "server": selected_server,
+        "routing": {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "workspace_id": body.workspace_id,
+            "project_key": body.project_key,
+            "size": body.size,
+        },
+        "next_action": (
+            "OHVIS managed isolated resources will be used until a customer server is selected."
+            if use_ohvis_pool
+            else "Selected server ownership verified. Attach SSH/Agent Vault connection before real remote execution."
+        ),
+    }

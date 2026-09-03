@@ -1,5 +1,19 @@
 # AADS HANDOVER
 
+## 2026-09-03 11:02 KST - User project server execution routing gate
+
+- Request:
+  - Support SaaS users selecting their own registered server for project execution, while falling back to isolated OHVIS resources until server registration is complete.
+- Code change:
+  - `app/api/user_project_servers.py`: added `/api/v1/user/project-servers/route-execute`.
+  - The route verifies `user_id + tenant_id + optional workspace_id` ownership before accepting a user server target.
+  - No SSH password, private key, or API secret is accepted or stored by this route.
+  - Added lazy-created `user_project_server_route_events` audit table for route decisions.
+- Verification before deploy:
+  - `python3 -m py_compile app/api/user_project_servers.py` passed.
+- Deployment:
+  - Pending at this entry. Commit, push, API blue-green deploy, external route verification, and five-minute P0/P1 monitoring are required before completion.
+
 ## 2026-09-03 10:50 KST - FOOD Shinhan deploy completed; collection blocked by PC Agent/CDP state
 
 - Request:
