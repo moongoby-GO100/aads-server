@@ -345,6 +345,33 @@ class _ShinhanNativeUnfocusedPasswordPage(_ShinhanNativeInputPage):
         return await super().evaluate(expression, *args, **kwargs)
 
 
+class _ShinhanLoginFailureSnapshotPage(_ChallengePage):
+    def __init__(self):
+        super().__init__("https://bank.shinhan.com/rib/easy/index.jsp#210000000000")
+        self.screenshot_calls = []
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if "visible_error_code" in expression:
+            return {
+                "current_url": self.url,
+                "page_title": "간편조회서비스",
+                "visible_error_code": "SHINHAN_LOGIN_ID_REQUIRED",
+                "visible_error_text": "이용자ID를 입력해주세요",
+                "dialog_count": "1",
+                "iframe_count": "1",
+                "iframe_hosts": "4user.yeskey.or.kr",
+                "fincert_iframe_visible": "1",
+                "login_panel_visible": "1",
+                "post_login_marker_visible": "0",
+            }
+        return await super().evaluate(expression, *args, **kwargs)
+
+    async def screenshot(self, **kwargs):
+        path = kwargs["path"]
+        self.screenshot_calls.append(kwargs)
+        Path(path).write_bytes(b"fake-png")
+
+
 @pytest.mark.asyncio
 async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
     page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -491,6 +518,22 @@ def test_shinhan_keyboard_login_uses_native_input_when_password_dom_focus_fails(
     command_types = [command for command, _params in page.browser_commands]
     assert command_types.count("mouse_click") >= 2
     assert command_types.count("keyboard_type") >= 2
+    assert "bank-pass" not in str(result)
+
+
+def test_shinhan_login_failure_snapshot_records_safe_artifact(tmp_path, monkeypatch):
+    page = _ShinhanLoginFailureSnapshotPage()
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+
+    result = _run(connector._capture_shinhan_login_failure_diagnostics(page))
+
+    assert result["visible_error_code"] == "SHINHAN_LOGIN_ID_REQUIRED"
+    assert result["fincert_iframe_visible"] == "1"
+    assert result["login_panel_visible"] == "1"
+    assert result["screenshot_saved"] == "1"
+    assert result["screenshot_sha256"] == connector.hashlib.sha256(b"fake-png").hexdigest()
+    assert result["screenshot_path"].startswith(str(tmp_path))
+    assert page.screenshot_calls
     assert "bank-pass" not in str(result)
 
 

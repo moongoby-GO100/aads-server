@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -2240,6 +2241,118 @@ async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
         "login_success_reason": str(raw.get("login_success_reason") or "")[:120],
         "login_elapsed_ms": str(raw.get("login_elapsed_ms") or "")[:12],
     }
+
+
+def _shinhan_login_diagnostic_dir() -> Path:
+    base = Path(
+        os.getenv("YEOLJEONG_FINANCE_DATA_DIR")
+        or Path(__file__).resolve().parents[2] / "app/data/yeoljeong_finance"
+    )
+    return base / "shinhan_login_diagnostics"
+
+
+async def _capture_shinhan_login_failure_diagnostics(page: Any) -> dict[str, str]:
+    """Capture secret-safe Shinhan login failure state after submit."""
+    diagnostics: dict[str, str] = {}
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            () => {
+              const safeText = (value, limit = 120) => String(value || '')
+                .replace(/\\s+/g, ' ')
+                .replace(/\\b\\d{2,}[-.\\s]?\\d{2,}[-.\\s]?\\d{2,}\\b/g, '[redacted-number]')
+                .replace(/\\b\\d{6,}\\b/g, '[redacted-number]')
+                .trim()
+                .slice(0, limit);
+              const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+              const bodyText = safeText(document.body?.innerText || '', 1200);
+              const dialogs = Array.from(document.querySelectorAll('.w2popup_window,.w2window,[role="dialog"],[aria-live],.error,.error_msg,.txt_error,.msg_error'))
+                .filter(visible)
+                .map((el) => safeText(el.innerText || el.textContent || el.value || el.title || '', 160))
+                .filter(Boolean)
+                .slice(0, 5);
+              const iframeHosts = Array.from(document.querySelectorAll('iframe,frame'))
+                .map((frame) => {
+                  try {
+                    const src = String(frame.src || frame.getAttribute('src') || '');
+                    return src ? new URL(src, window.location.href).hostname : '';
+                  } catch (_) {
+                    return '';
+                  }
+                })
+                .filter(Boolean)
+                .slice(0, 8);
+              const hasFincert = iframeHosts.some((host) => /fincert|yeskey|cert/i.test(host));
+              const loginPanelVisible = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(bodyText)
+                || !!Array.from(document.querySelectorAll('input')).find((el) => visible(el) && /loginId|scr_pwd|비밀번호|password/i.test(String(el.id || el.name || el.title || el.placeholder || el.type || '')));
+              const postLoginMarkerVisible = /로그아웃|거래내역\\s*(조회|다운로드)|조회결과|출금가능금액|계좌잔액/i.test(bodyText);
+              let visibleErrorCode = '';
+              if (/이용자\\s*ID를\\s*입력|이용자ID를\\s*입력/i.test(bodyText)) visibleErrorCode = 'SHINHAN_LOGIN_ID_REQUIRED';
+              else if (/비밀번호를\\s*입력|비밀번호\\s*최소자릿수/i.test(bodyText)) visibleErrorCode = 'SHINHAN_PASSWORD_REQUIRED';
+              else if (/키보드\\s*입력\\s*검증|처음부터\\s*다시\\s*진행/i.test(bodyText)) visibleErrorCode = 'SHINHAN_KEYBOARD_VERIFICATION_FAILED';
+              else if (/보안프로그램.*설치|인터넷뱅킹 보안프로그램설치안내/i.test(bodyText)) visibleErrorCode = 'SHINHAN_SECURITY_PROGRAM_NOTICE';
+              else if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)/i.test(bodyText)) visibleErrorCode = 'SHINHAN_LOGIN_REJECTED';
+              return {
+                current_url: String(window.location.href || '').slice(0, 160),
+                page_title: safeText(document.title || '', 120),
+                visible_error_code: visibleErrorCode,
+                visible_error_text: dialogs[0] || '',
+                dialog_count: String(dialogs.length),
+                iframe_count: String(iframeHosts.length),
+                iframe_hosts: iframeHosts.join(',').slice(0, 160),
+                fincert_iframe_visible: hasFincert ? '1' : '0',
+                login_panel_visible: loginPanelVisible ? '1' : '0',
+                post_login_marker_visible: postLoginMarkerVisible ? '1' : '0'
+              };
+            }
+            """,
+            timeout_ms=12000,
+        )
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                text = str(value or "").strip()
+                if text:
+                    diagnostics[str(key)[:60]] = text[:180]
+    except Exception as exc:
+        diagnostics["state_capture_error"] = str(
+            _safe_browser_error_fields(exc).get("error_code")
+            or _safe_browser_error_fields(exc).get("error_type")
+            or "STATE_CAPTURE_FAILED"
+        )[:120]
+
+    screenshot = getattr(page, "screenshot", None)
+    if callable(screenshot):
+        target_dir = _shinhan_login_diagnostic_dir()
+        filename = (
+            "shinhan-login-failure-"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + hashlib.sha256(str(time.monotonic()).encode("utf-8")).hexdigest()[:8]
+            + ".png"
+        )
+        target_path = target_dir / filename
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            maybe_bytes = await screenshot(path=str(target_path), full_page=False, timeout=5000)
+            if not target_path.exists() and isinstance(maybe_bytes, (bytes, bytearray)):
+                target_path.write_bytes(bytes(maybe_bytes))
+            if target_path.exists():
+                digest = hashlib.sha256(target_path.read_bytes()).hexdigest()
+                diagnostics["screenshot_saved"] = "1"
+                diagnostics["screenshot_path"] = str(target_path)[:180]
+                diagnostics["screenshot_sha256"] = digest
+        except Exception as exc:
+            diagnostics["screenshot_saved"] = "0"
+            diagnostics["screenshot_error"] = str(
+                _safe_browser_error_fields(exc).get("error_code")
+                or _safe_browser_error_fields(exc).get("error_type")
+                or "SCREENSHOT_FAILED"
+            )[:120]
+    else:
+        diagnostics["screenshot_saved"] = "0"
+        diagnostics["screenshot_error"] = "SCREENSHOT_UNAVAILABLE"
+    return diagnostics
 
 
 async def _try_shinhan_individual_login_step(
@@ -4569,6 +4682,46 @@ async def collect_bank_via_browser_session_async(
                     started_at=step_started_at,
                     attempt_index=attempt_index,
                 )
+                if (
+                    shinhan_flow_mode == "individual_simple"
+                    and step_result.get("login_submitted") == "1"
+                    and step_result.get("login_success") != "1"
+                ):
+                    failure_snapshot = await _capture_shinhan_login_failure_diagnostics(page)
+                    if failure_snapshot:
+                        safe_diagnostics["shinhan_login_failure_snapshot"] = failure_snapshot
+                        snapshot_status = (
+                            "success"
+                            if failure_snapshot.get("visible_error_code")
+                            or failure_snapshot.get("screenshot_saved") == "1"
+                            or failure_snapshot.get("fincert_iframe_visible") == "1"
+                            else "warning"
+                        )
+                        _append_shinhan_stage_log(
+                            shinhan_stage_logs,
+                            stage="shinhan_login_failure_snapshot",
+                            status=snapshot_status,
+                            started_at=step_started_at,
+                            error_code=str(
+                                failure_snapshot.get("visible_error_code")
+                                or step_result.get("error_code")
+                                or "LOGIN_SUCCESS_NOT_OBSERVED"
+                            )[:120],
+                            reason=str(step_result.get("login_success_reason") or "post_login_marker_not_observed")[:120],
+                            attempt_index=str(attempt_index + 1),
+                            current_url=failure_snapshot.get("current_url", ""),
+                            page_title=failure_snapshot.get("page_title", ""),
+                            visible_error_text=failure_snapshot.get("visible_error_text", ""),
+                            dialog_count=failure_snapshot.get("dialog_count", ""),
+                            iframe_count=failure_snapshot.get("iframe_count", ""),
+                            iframe_hosts=failure_snapshot.get("iframe_hosts", ""),
+                            fincert_iframe_visible=failure_snapshot.get("fincert_iframe_visible", ""),
+                            login_panel_visible=failure_snapshot.get("login_panel_visible", ""),
+                            post_login_marker_visible=failure_snapshot.get("post_login_marker_visible", ""),
+                            screenshot_saved=failure_snapshot.get("screenshot_saved", ""),
+                            screenshot_path=failure_snapshot.get("screenshot_path", ""),
+                            screenshot_sha256=failure_snapshot.get("screenshot_sha256", ""),
+                        )
                 auth_challenge = await _detect_shinhan_auth_challenge(page, getattr(context, "pages", None))
                 if auth_challenge:
                     if shinhan_flow_mode == "individual_simple" and login_username and login_password:
