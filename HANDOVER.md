@@ -10495,3 +10495,42 @@
 - Not completed:
   - GO100 #119 runner output was not merged, committed, pushed, or deployed because GO100 main worktree has unrelated dirty files and `runner-482a321b` is currently running.
   - GO100 DB `information_schema` check timed out via `query_project_database`; migration column application remains unverified in this triage.
+
+## 2026-09-03 18:32 KST - Authenticated Collector challenge approval gate
+
+- CEO request:
+  - Keep CAPTCHA/OTP automatic bypass prohibited, but allow collection automation to continue after explicit user approval/intervention.
+- Server changes:
+  - `app/services/authenticated_site_collector.py`: normalized challenge policies now force `auto_bypass_allowed=false`, `stores_challenge_values=false`, and same-work-key resume after user intervention.
+  - Added `mark_collection_job_action_required()` so PC Agent/collector workers can park jobs at `status=action_required` when CAPTCHA, OTP, certificate, identity check, terms, permission, or login gates are detected.
+  - Resume now only accepts `action_required` jobs and requeues them without storing one-time challenge values.
+  - `app/api/authenticated_site_collector.py`: added `/jobs/{job_id}/challenge-action-required` and exposed the collector challenge contract from `/overview`.
+- Dashboard changes:
+  - `/root/aads/aads-dashboard/src/app/authenticated-collector/page.tsx`: action-required cards now show challenge kind, no-bypass/no-value-storage badges, user confirmation checkbox, resolution selector, and resume note.
+  - `/root/aads/aads-dashboard/src/lib/api.ts`: collector overview/job types and `reportCollectorChallenge()` client API were extended.
+- Verification:
+  - `/root/aads/aads-server`: `.venv-playwright/bin/python3 -m py_compile app/services/authenticated_site_collector.py app/api/authenticated_site_collector.py` passed.
+  - `/root/aads/aads-server`: `.venv-playwright/bin/python3 -m pytest -q tests/unit/test_authenticated_site_collector.py` passed 9/9.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit --pretty false` passed.
+  - `/root/aads/aads-dashboard`: `npm run lint -- src/app/authenticated-collector/page.tsx src/lib/api.ts` returned 0 errors and existing `no-explicit-any` warnings in unrelated lower sections of `src/lib/api.ts`.
+- Not completed:
+  - Not committed, pushed, or deployed in this direct patch because `aads-server` already has unrelated dirty changes and is `ahead 1`; dashboard also has unrelated dirty report output.
+
+## 2026-09-03 18:41 KST - Authenticated Collector resume responsibility policy split
+
+- CEO request:
+  - Support two challenge resume paths: user-approved automation can proceed without further direct user intervention where allowed, while OTP/certificate/identity checks require the user to physically complete the input and then resume the same `work_key`.
+- Server changes:
+  - `app/services/authenticated_site_collector.py`: added `user_approved_automation` and `user_input_completed` resume resolutions.
+  - Added `PHYSICAL_INPUT_CHALLENGE_KINDS` for `otp`, `identity_check`, and `certificate`.
+  - Challenge gates now expose `user_approved_automation_allowed`, `requires_user_physical_input`, `responsibility_acceptance_required`, and `same_work_key_required` separately from `auto_bypass_allowed=false`.
+  - `resume_collection_job()` now rejects user-approved automation for physical-input challenges, requires `responsibility_accepted=true` for user-approved automation, and requires `physical_input_completed=true` for OTP/certificate/identity-check resume.
+  - `app/api/authenticated_site_collector.py`: `/jobs/{job_id}/resume` accepts `responsibility_accepted` and `physical_input_completed`; `/overview` exposes physical-input challenge kinds.
+- Dashboard changes:
+  - `/root/aads/aads-dashboard/src/app/authenticated-collector/page.tsx`: action-required cards now hide the automation option for physical-input challenges and send responsibility/physical-input confirmations.
+  - `/root/aads/aads-dashboard/src/lib/api.ts`: collector types and `resumeCollectorJob()` payload were extended for the new resume contract.
+- Verification:
+  - `/root/aads/aads-server`: `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:e8bec2db1252 python -m pytest -q tests/unit/test_authenticated_site_collector.py` passed 11/11.
+  - `/root/aads/aads-dashboard`: `npx eslint src/app/authenticated-collector/page.tsx src/lib/api.ts` returned 0 errors and existing `no-explicit-any` warnings in lower sections of `src/lib/api.ts`.
+- Not completed:
+  - Not committed, pushed, or deployed in this direct patch because both repositories already contain unrelated dirty changes. A clean release worktree or separated staging is required before blue-green deployment.
