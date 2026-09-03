@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import shlex
 from collections import defaultdict
 from typing import Any, Dict, Iterable, Optional
@@ -22,13 +23,35 @@ _STATUS_DIRTY = "dirty"
 _STATUS_COMMITTED = "committed"
 _STATUS_PUSHED = "pushed"
 _STATUS_DEPLOYED = "deployed"
+_STATUS_RECONCILED_CLEAN = "reconciled_clean"
+_STATUS_SUPERSEDED_OWNER = "superseded_owner"
 _AADS_RUNTIME_STATE_PATHS = {".active_container", ".active_port"}
+_AADS_RUNTIME_PREFIXES = ("app/data/",)
+_AADS_RUNTIME_SUFFIXES = (".lock", ".jsonl", ".tsbuildinfo", ".bak")
 
 
 def _is_ignored_change_path(project: str, repo: str, file_path: str) -> bool:
     """Return true for runtime state files that must not enter the change ledger."""
     normalized = _normalize_repo_path(project, repo, file_path)
-    return project == "AADS" and repo == "aads-server" and normalized in _AADS_RUNTIME_STATE_PATHS
+    if project == "AADS" and repo == "aads-server" and normalized in _AADS_RUNTIME_STATE_PATHS:
+        return True
+    if project == "AADS" and normalized.endswith(_AADS_RUNTIME_SUFFIXES):
+        return True
+    if project == "AADS" and repo == "aads-server" and normalized.startswith(_AADS_RUNTIME_PREFIXES):
+        return True
+    return False
+
+
+def _derive_change_owner(session_id: str, source_tool: str, owner: Optional[str] = None) -> str:
+    """Return a compact owner label for file-level dirty attribution."""
+    explicit = (owner or "").strip()
+    if explicit:
+        return explicit[:120]
+    sid = (session_id or "").strip()
+    if sid:
+        return f"chat:{sid[:12]}"
+    tool = (source_tool or "").strip()
+    return (f"tool:{tool}" if tool else "unknown")[:120]
 
 
 async def ensure_workspace_change_table() -> None:
@@ -67,6 +90,18 @@ async def ensure_workspace_change_table() -> None:
         )
         await conn.execute(
             """
+            ALTER TABLE chat_workspace_change_ledger
+            ADD COLUMN IF NOT EXISTS owner TEXT DEFAULT '',
+            ADD COLUMN IF NOT EXISTS task_id TEXT DEFAULT '',
+            ADD COLUMN IF NOT EXISTS change_origin TEXT DEFAULT 'chat_direct',
+            ADD COLUMN IF NOT EXISTS git_status TEXT DEFAULT '',
+            ADD COLUMN IF NOT EXISTS git_branch TEXT DEFAULT '',
+            ADD COLUMN IF NOT EXISTS git_head_sha TEXT DEFAULT '',
+            ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ DEFAULT NOW()
+            """
+        )
+        await conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_workspace_change_ledger_session_status
             ON chat_workspace_change_ledger (session_id, status, updated_at DESC)
             """
@@ -75,6 +110,12 @@ async def ensure_workspace_change_table() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_workspace_change_ledger_project_repo_status
             ON chat_workspace_change_ledger (project, repo, status, updated_at DESC)
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_workspace_change_ledger_file_owner
+            ON chat_workspace_change_ledger (project, repo, file_path, status, updated_at DESC)
             """
         )
 
@@ -87,6 +128,12 @@ async def record_change(
     file_path: str,
     change_summary: str,
     source_tool: str,
+    owner: Optional[str] = None,
+    task_id: Optional[str] = None,
+    change_origin: str = "chat_direct",
+    git_status: str = "",
+    git_branch: str = "",
+    git_head_sha: str = "",
 ) -> None:
     """세션별 변경 파일 기록 또는 갱신."""
     sid = (session_id or "").strip()
@@ -107,11 +154,13 @@ async def record_change(
             INSERT INTO chat_workspace_change_ledger
                 (session_id, project, repo, file_path, source_tool, change_summary,
                  status, last_error, commit_sha, commit_message,
-                 last_modified_at, updated_at)
+                 last_modified_at, updated_at, owner, task_id, change_origin,
+                 git_status, git_branch, git_head_sha, detected_at)
             VALUES
                 ($1, $2, $3, $4, $5, $6,
                  $7, '', NULL, NULL,
-                 NOW(), NOW())
+                 NOW(), NOW(), $8, $9, $10,
+                 $11, $12, $13, NOW())
             ON CONFLICT (session_id, project, repo, file_path) DO UPDATE SET
                 source_tool = EXCLUDED.source_tool,
                 change_summary = EXCLUDED.change_summary,
@@ -119,6 +168,13 @@ async def record_change(
                 last_error = '',
                 commit_sha = NULL,
                 commit_message = NULL,
+                owner = EXCLUDED.owner,
+                task_id = EXCLUDED.task_id,
+                change_origin = EXCLUDED.change_origin,
+                git_status = EXCLUDED.git_status,
+                git_branch = EXCLUDED.git_branch,
+                git_head_sha = EXCLUDED.git_head_sha,
+                detected_at = NOW(),
                 last_modified_at = NOW(),
                 updated_at = NOW(),
                 finalized_at = NULL,
@@ -131,6 +187,12 @@ async def record_change(
             source_tool,
             change_summary[:1000],
             _STATUS_DIRTY,
+            _derive_change_owner(sid, source_tool, owner),
+            (task_id or "").strip()[:80],
+            (change_origin or "chat_direct").strip()[:80],
+            (git_status or "").strip()[:12],
+            (git_branch or "").strip()[:120],
+            (git_head_sha or "").strip()[:40],
         )
 
 
@@ -167,6 +229,7 @@ async def list_changes(
             f"""
             SELECT session_id, project, repo, file_path, source_tool, change_summary,
                    status, last_error, commit_sha, commit_message,
+                   owner, task_id, change_origin, git_status, git_branch, git_head_sha, detected_at,
                    created_at, updated_at, last_modified_at, finalized_at, pushed_at, deployed_at
             FROM chat_workspace_change_ledger
             WHERE {where}
@@ -324,6 +387,183 @@ def _parse_porcelain_paths(text: str) -> set[str]:
         if path:
             paths.add(path)
     return paths
+
+
+def _parse_porcelain_entries(text: str) -> list[dict[str, str]]:
+    """Parse `git status --porcelain=v1 -b` into path/status/branch entries."""
+    entries: list[dict[str, str]] = []
+    branch = ""
+    for line in (text or "").splitlines():
+        raw = line.rstrip()
+        if not raw or raw.startswith("[") or raw.startswith("$ "):
+            continue
+        if raw.startswith("## "):
+            branch = raw[3:].split("...", 1)[0].strip()
+            continue
+        if len(raw) < 4:
+            continue
+        xy = raw[:2]
+        path = raw[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        path = path.strip('"')
+        if path:
+            entries.append({"path": path, "git_status": xy, "git_branch": branch})
+    return entries
+
+
+def _repo_workdir(project: str, repo: str) -> str:
+    if project == "AADS" and repo == "aads-dashboard":
+        return "/root/aads/aads-dashboard"
+    if project == "AADS":
+        return "/root/aads/aads-server"
+    return "."
+
+
+async def _run_local_git(repo_dir: str, *args: str) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "-C",
+        repo_dir,
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    text = stdout.decode("utf-8", errors="replace")
+    err = stderr.decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError((err or text).strip() or f"git exited {proc.returncode}")
+    return text
+
+
+async def sync_git_dirty_snapshot(
+    *,
+    session_id: str,
+    project: str = "AADS",
+    repo: Optional[str] = None,
+    owner: Optional[str] = None,
+    task_id: Optional[str] = None,
+    claim_paths: Optional[Iterable[str]] = None,
+    mark_stale_clean: bool = True,
+) -> dict[str, Any]:
+    """Record current git dirty files and reconcile stale dirty ledger rows.
+
+    This is the bridge between the real worktree and `chat_workspace_change_ledger`.
+    It lets reports and future automation answer: file -> owner/session/task_id.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        raise ValueError("session_id is required")
+    await ensure_workspace_change_table()
+    repos = [repo] if repo else ["aads-server", "aads-dashboard"]
+    summary: dict[str, Any] = {
+        "ok": True,
+        "session_id": sid,
+        "project": project,
+        "repos": [],
+        "recorded": 0,
+        "ignored": 0,
+        "stale_reconciled": 0,
+        "superseded": 0,
+    }
+    raw_claim_paths = [str(path).strip() for path in (claim_paths or []) if str(path or "").strip()]
+    pool = get_pool()
+    for repo_name in repos:
+        claim_set = {
+            _normalize_repo_path(project, repo_name, path)
+            for path in raw_claim_paths
+        }
+        repo_dir = _repo_workdir(project, repo_name)
+        status_text = await _run_local_git(repo_dir, "status", "--porcelain=v1", "-b")
+        head_sha = (await _run_local_git(repo_dir, "rev-parse", "HEAD")).strip()
+        entries = _parse_porcelain_entries(status_text)
+        current_paths: set[str] = set()
+        ignored_paths: list[str] = []
+        recorded_paths: list[str] = []
+        for entry in entries:
+            path = _normalize_repo_path(project, repo_name, entry["path"])
+            if _is_ignored_change_path(project, repo_name, path):
+                ignored_paths.append(path)
+                continue
+            is_claimed = not claim_set or path in claim_set
+            current_paths.add(path)
+            recorded_paths.append(path)
+            await record_change(
+                session_id=sid,
+                project=project,
+                repo=repo_name,
+                file_path=path,
+                source_tool="git_status_snapshot",
+                change_summary=f"git dirty snapshot: {entry['git_status'].strip() or 'changed'}",
+                owner=owner if is_claimed else "UNKNOWN-PREEXISTING-DIRTY",
+                task_id=task_id if is_claimed else "",
+                change_origin="git_status_snapshot",
+                git_status=entry["git_status"],
+                git_branch=entry["git_branch"],
+                git_head_sha=head_sha,
+            )
+        stale_ids: list[int] = []
+        superseded_ids: list[int] = []
+        if mark_stale_clean:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, session_id, file_path
+                    FROM chat_workspace_change_ledger
+                    WHERE project=$1 AND repo=$2 AND status=$3
+                    """,
+                    project,
+                    repo_name,
+                    _STATUS_DIRTY,
+                )
+                for row in rows:
+                    path = _normalize_repo_path(project, repo_name, row["file_path"])
+                    if path not in current_paths or _is_ignored_change_path(project, repo_name, path):
+                        stale_ids.append(int(row["id"]))
+                    elif row["session_id"] != sid:
+                        superseded_ids.append(int(row["id"]))
+                if stale_ids:
+                    await conn.execute(
+                        """
+                        UPDATE chat_workspace_change_ledger
+                        SET status=$1,
+                            last_error='',
+                            change_summary=LEFT(COALESCE(change_summary, '') || ' | reconciled: clean in git status', 1000),
+                            updated_at=NOW()
+                        WHERE id = ANY($2::bigint[])
+                        """,
+                        _STATUS_RECONCILED_CLEAN,
+                        stale_ids,
+                    )
+                if superseded_ids:
+                    await conn.execute(
+                        """
+                        UPDATE chat_workspace_change_ledger
+                        SET status=$1,
+                            last_error='',
+                            change_summary=LEFT(COALESCE(change_summary, '') || ' | reconciled: superseded by latest git dirty owner', 1000),
+                            updated_at=NOW()
+                        WHERE id = ANY($2::bigint[])
+                        """,
+                        _STATUS_SUPERSEDED_OWNER,
+                        superseded_ids,
+                    )
+        repo_summary = {
+            "repo": repo_name,
+            "recorded": len(recorded_paths),
+            "ignored": len(ignored_paths),
+            "stale_reconciled": len(stale_ids),
+            "superseded": len(superseded_ids),
+            "dirty_files": recorded_paths[:100],
+            "ignored_files": ignored_paths[:100],
+        }
+        summary["repos"].append(repo_summary)
+        summary["recorded"] += len(recorded_paths)
+        summary["ignored"] += len(ignored_paths)
+        summary["stale_reconciled"] += len(stale_ids)
+        summary["superseded"] += len(superseded_ids)
+    return summary
 
 
 def _is_committable_path(path: str) -> bool:
