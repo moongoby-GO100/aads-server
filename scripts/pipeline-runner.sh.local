@@ -1978,13 +1978,22 @@ deploy_job() {
     _pre_sha=$(git -C "$worktree_dir" rev-parse "${current_sha}^" 2>/dev/null || true)
     git -C "$worktree_dir" diff-tree --no-commit-id --name-only -r "$current_sha" 2>/dev/null | grep -q '\.py$' && _py_changed="true"
 
-    local lock_file="/tmp/pipeline-deploy-${project}.lock" push_out push_err push_exit=0 push_diag=""
+    local lock_file="/tmp/pipeline-deploy-${project}.lock" push_out push_err push_exit=0 push_diag="" push_lock_fd=""
     push_out=$(mktemp "/tmp/pipeline-push-${job_id}.out.XXXXXX")
     push_err=$(mktemp "/tmp/pipeline-push-${job_id}.err.XXXXXX")
-    (
-        flock -w 300 200 || exit 75
-        git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main"
-    ) 200>"$lock_file" >"$push_out" 2>"$push_err" || push_exit=$?
+    if ! exec {push_lock_fd}>"$lock_file"; then
+        push_exit=75
+        echo "failed to open push lock fd: $lock_file" >"$push_err"
+    else
+        {
+            if flock -w 300 "$push_lock_fd"; then
+                git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main" || push_exit=$?
+            else
+                push_exit=75
+            fi
+        } >"$push_out" 2>"$push_err"
+        exec {push_lock_fd}>&-
+    fi
     push_diag=$(record_git_diagnostics "$job_id" "$([[ "$push_exit" -eq 0 ]] && echo push_succeeded || echo push_failed)" \
         "$worktree_dir" "$push_exit" "$(tail -30 "$push_out")" "$(tail -30 "$push_err")")
     rm -f "$push_out" "$push_err"
