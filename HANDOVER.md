@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-09-03 13:24 KST - 신한 YESKEY/금융인증서 전환 시 ID/PW work key 강제 복구
+
+- Request:
+  - CEO 지시: 신한 전용 work key에서 금융인증서/YESKEY 흐름을 닫고 ID/PW 로그인으로 강제 재시도하도록 패치한 뒤, `bank_transactions.json` 생성과 `imported_rows > 0`을 완료 기준으로 실검증.
+- Change:
+  - `app/services/yeoljeong_bank_browser_connector.py`: 신한 인증서/YESKEY 감지 시 `browser_close_tab` 후 같은 `browser_work_key`로 `browser_launch(url=신한 간편조회, new_window=false)`를 실행하고, `page.goto`와 ID/PW 패널 선택까지 확인한 뒤 ID/PW 로그인 루프로 재진입.
+  - `app/services/yeoljeong_bank_browser_connector.py`: `shinhan_idpw_reset_after_certificate` 단계 로그 추가. 성공 조건, 실패 조건, 인증서 탭 닫기, work key 재오픈, ID/PW 패널 선택 여부와 elapsed_ms를 비밀값 없이 기록.
+  - `app/services/yeoljeong_finance_service.py`: 브라우저 타임아웃 probe에서 YESKEY/Fincert가 감지되고 저장 ID/PW가 있으면 `action_required`로만 끝내지 않고 먼저 인증서 탭 닫기와 신한 work key 재오픈을 수행한 뒤 ID/PW 재시도 경로로 넘김.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`, `tests/unit/test_yeoljeong_finance_service.py`: 인증서 탭 닫기, work key 재오픈, ID/PW reset stage log, 타임아웃 probe의 `browser_close_tab`/`browser_launch` 호출 검증 추가.
+- Verification before deploy:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_saved_idpw_prefers_id_login_over_fincert tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_retries_idpw_after_post_login_fincert tests/unit/test_yeoljeong_finance_service.py::test_bank_timeout_probe_prefers_saved_shinhan_idpw tests/unit/test_yeoljeong_finance_service.py::test_collect_bank_timeout_retries_saved_shinhan_idpw_once tests/unit/test_yeoljeong_auto_collect.py::test_drain_bank_queue_cancels_non_collectable_account_before_browser` passed: 5 tests.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py -k "shinhan or bank_timeout or collect_bank_timeout"` passed: 28 tests.
+- Deployment/real collection:
+  - Pending at record time. Commit selected files, push, `deploy.sh bluegreen`, then run Mia Shinhan bank-only collection on `DESKTOP-ICU55HK` and verify `bank_transactions.json` plus `imported_rows > 0`.
+
 ## 2026-09-03 11:57 KST - 은행 work_key blank URL 기존 CDP 오인 재등록 차단
 
 - Request:

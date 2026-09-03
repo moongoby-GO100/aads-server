@@ -5276,12 +5276,83 @@ def _bank_browser_tabs_from_route_result(result: dict[str, Any]) -> list[dict[st
     return []
 
 
+def _reset_shinhan_timeout_probe_to_idpw(
+    *,
+    browser_work_key: str,
+    browser_agent_id: str,
+    portal_url: str,
+    browser_preferred_port: int | None,
+    timeout_seconds: float,
+) -> dict[str, str]:
+    diagnostics: dict[str, str] = {"attempted": "1"}
+    close_payload = {
+        "command_type": "browser_close_tab",
+        "agent_id": browser_agent_id,
+        "job_type": "bank_collection",
+        "required_capabilities": ["interactive_browser"],
+        "queue_if_busy": False,
+        "command_timeout_seconds": 15,
+        "params": {
+            "work_key": browser_work_key,
+            "url_pattern": "fincert|yeskey|cert",
+            "keep_last": False,
+        },
+    }
+    close_result = _pc_agent_route_execute_json(close_payload, timeout_seconds=min(20.0, max(6.0, timeout_seconds)))
+    diagnostics["certificate_tab_close_status"] = str(close_result.get("status") or "")[:40]
+    close_tabs = _bank_browser_tabs_from_route_result(close_result)
+    if close_tabs:
+        diagnostics["certificate_tab_close_remaining_tabs"] = str(len(close_tabs))
+    close_data = close_result.get("data") if isinstance(close_result.get("data"), dict) else {}
+    close_nested = close_result.get("result") if isinstance(close_result.get("result"), dict) else {}
+    if not close_data and isinstance(close_nested.get("result"), dict):
+        close_data = close_nested.get("result") or {}
+    elif not close_data and isinstance(close_nested.get("data"), dict):
+        close_data = close_nested.get("data") or {}
+    if isinstance(close_data, dict) and "closed" in close_data:
+        diagnostics["certificate_tab_closed"] = str(int(close_data.get("closed") or 0))
+
+    launch_params: dict[str, Any] = {
+        "work_key": browser_work_key,
+        "url": portal_url,
+        "new_window": False,
+        "ready_timeout_seconds": 20,
+    }
+    if browser_preferred_port:
+        launch_params["preferred_port"] = browser_preferred_port
+    launch_result = _pc_agent_route_execute_json(
+        {
+            "command_type": "browser_launch",
+            "agent_id": browser_agent_id,
+            "job_type": "bank_collection",
+            "required_capabilities": ["interactive_browser"],
+            "queue_if_busy": False,
+            "command_timeout_seconds": 35,
+            "params": launch_params,
+        },
+        timeout_seconds=min(40.0, max(10.0, timeout_seconds)),
+    )
+    diagnostics["work_key_relaunch_status"] = str(launch_result.get("status") or "")[:40]
+    launch_result_block = launch_result.get("result") if isinstance(launch_result.get("result"), dict) else {}
+    launch_data = launch_result.get("data") if isinstance(launch_result.get("data"), dict) else {}
+    if not launch_data and isinstance(launch_result_block.get("result"), dict):
+        launch_data = launch_result_block.get("result") or {}
+    elif not launch_data and isinstance(launch_result_block.get("data"), dict):
+        launch_data = launch_result_block.get("data") or {}
+    if isinstance(launch_data, dict):
+        diagnostics["work_key_relaunch_cdp_ready"] = "1" if launch_data.get("cdp_ready") else "0"
+        diagnostics["work_key_relaunch_navigated"] = "1" if launch_data.get("navigated") else "0"
+    return diagnostics
+
+
 def _probe_bank_browser_timeout_state(
     *,
     browser_work_key: str,
     browser_agent_id: str,
     timeout_seconds: float,
     prefer_saved_idpw_login: bool = False,
+    portal_url: str = "",
+    browser_preferred_port: int | None = None,
 ) -> dict[str, Any] | None:
     if not browser_work_key or not browser_agent_id:
         return None
@@ -5306,7 +5377,15 @@ def _probe_bank_browser_timeout_state(
         for tab in tabs
     )
     if "4user.yeskey.or.kr/fincert" in tab_text or "fincert" in tab_text:
+        reset_diagnostics: dict[str, str] = {}
         if prefer_saved_idpw_login:
+            reset_diagnostics = _reset_shinhan_timeout_probe_to_idpw(
+                browser_work_key=browser_work_key,
+                browser_agent_id=browser_agent_id,
+                portal_url=portal_url or BANK_QUICK_SERVICE_CONFIG["shinhan_business"]["login_url"],
+                browser_preferred_port=browser_preferred_port,
+                timeout_seconds=timeout_seconds,
+            )
             return {
                 "status": "action_required",
                 "error_code": "BANK_BROWSER_IDPW_RETRY_REQUIRED",
@@ -5323,6 +5402,7 @@ def _probe_bank_browser_timeout_state(
                     "screen_suggested_action": "retry_saved_idpw_login_same_work_key",
                     "suggested_action": "retry_saved_idpw_login_same_work_key",
                     "shinhan_auth_challenge_policy": "prefer_saved_idpw_login",
+                    "shinhan_timeout_idpw_reset": reset_diagnostics,
                     "pc_agent_probe_status": str(route_result.get("status") or ""),
                     "pc_agent_probe_tab_count": str(len(tabs)),
                 },
@@ -5620,6 +5700,8 @@ def _collect_bank_via_browser(
             browser_work_key=browser_work_key_val,
             browser_agent_id=browser_agent_id_val,
             timeout_seconds=timeout_seconds,
+            portal_url=str(payload.get("portal_url") or bank_credentials.get("portal_url") or ""),
+            browser_preferred_port=browser_preferred_port,
             prefer_saved_idpw_login=(
                 service_code == "shinhan_business"
                 and bool(str(bank_credentials.get("login_username") or "").strip())

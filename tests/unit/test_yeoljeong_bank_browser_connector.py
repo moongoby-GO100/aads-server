@@ -84,8 +84,10 @@ class _ShinhanFincertThenIdpwPage(_ChallengePage):
         self.frames = [type("Frame", (), {"url": "https://4user.yeskey.or.kr/fincert/web/v1/fincert.html"})()]
         self.closed_certificate_tab = False
         self.goto_calls = []
+        self.browser_commands = []
 
     async def _run_browser_command(self, command_type, params, **kwargs):
+        self.browser_commands.append((command_type, params))
         if command_type == "browser_tabs":
             tabs = [
                 {
@@ -108,6 +110,10 @@ class _ShinhanFincertThenIdpwPage(_ChallengePage):
             self.closed_certificate_tab = True
             self.frames = []
             return {"status": "success", "data": {"closed": 1, "remaining": 1}}
+        if command_type == "browser_launch":
+            self.url = params["url"]
+            self.frames = []
+            return {"status": "success", "data": {"cdp_ready": True, "navigated": True}}
         return {"status": "success", "data": {}}
 
     async def goto(self, url, **kwargs):
@@ -138,8 +144,10 @@ class _ShinhanPostIdpwFincertPage(_ChallengePage):
         self.challenge_visible = False
         self.close_count = 0
         self.goto_calls = []
+        self.browser_commands = []
 
     async def _run_browser_command(self, command_type, params, **kwargs):
+        self.browser_commands.append((command_type, params))
         if command_type == "browser_tabs":
             tabs = [
                 {
@@ -161,6 +169,9 @@ class _ShinhanPostIdpwFincertPage(_ChallengePage):
             self.challenge_visible = False
             self.close_count += 1
             return {"status": "success", "data": {"closed": 1, "remaining": 1}}
+        if command_type == "browser_launch":
+            self.url = params["url"]
+            return {"status": "success", "data": {"cdp_ready": True, "navigated": True}}
         return {"status": "success", "data": {}}
 
     async def goto(self, url, **kwargs):
@@ -273,6 +284,14 @@ def test_collect_async_shinhan_saved_idpw_prefers_id_login_over_fincert():
     assert result.get("error_code") != "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
     assert result["diagnostics"]["shinhan_auth_challenge_policy"] == "prefer_saved_idpw_login"
     assert result["diagnostics"]["shinhan_idpw_login_reset"]["certificate_tab_closed"] == "1"
+    assert result["diagnostics"]["shinhan_idpw_login_reset"]["work_key_relaunch_attempted"] == "1"
+    assert result["diagnostics"]["shinhan_idpw_login_reset"]["idpw_reset_ready"] == "1"
+    assert ("browser_launch", {"url": "https://bank.shinhan.com/rib/easy/index.jsp", "new_window": False, "ready_timeout_seconds": 20}) in mock_page.browser_commands
+    assert any(
+        item.get("stage") == "shinhan_idpw_reset_after_certificate"
+        and item.get("status") == "success"
+        for item in result["diagnostics"]["shinhan_stage_logs"]
+    )
     assert mock_page.goto_calls == ["https://bank.shinhan.com/rib/easy/index.jsp"]
     assert "bank-pass" not in str(result["diagnostics"])
     assert "4321" not in str(result["diagnostics"])
@@ -329,6 +348,7 @@ def test_collect_async_shinhan_retries_idpw_after_post_login_fincert():
     assert mock_page.close_count == 1
     assert result["diagnostics"]["shinhan_auth_challenge_policy"] == "retry_saved_idpw_login"
     assert result["diagnostics"]["shinhan_idpw_login_retried_after_certificate"] == "1"
+    assert result["diagnostics"]["shinhan_idpw_login_reset"]["work_key_relaunch_attempted"] == "1"
     assert result.get("error_code") != "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
     assert "bank-pass" not in str(result["diagnostics"])
     assert "4321" not in str(result["diagnostics"])

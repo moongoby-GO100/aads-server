@@ -2423,6 +2423,30 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
                 result["certificate_tab_close_attempted"] = "failed"
         except Exception:
             result["certificate_tab_close_attempted"] = "failed"
+        try:
+            launch_result = await runner(
+                "browser_launch",
+                {
+                    "url": portal_url,
+                    "new_window": False,
+                    "ready_timeout_seconds": 20,
+                },
+                command_timeout_seconds=35,
+                queue_wait_timeout_seconds=10,
+            )
+            result["work_key_relaunch_attempted"] = "1"
+            result["work_key_relaunch_status"] = str(
+                launch_result.get("status") if isinstance(launch_result, dict) else ""
+            )[:40] or "success"
+        except TypeError:
+            try:
+                await runner("browser_launch", {"url": portal_url, "new_window": False})
+                result["work_key_relaunch_attempted"] = "1"
+                result["work_key_relaunch_status"] = "success"
+            except Exception:
+                result["work_key_relaunch_attempted"] = "failed"
+        except Exception:
+            result["work_key_relaunch_attempted"] = "failed"
     if portal_url and hasattr(page, "goto"):
         try:
             await page.goto(portal_url, wait_until="domcontentloaded", timeout=30000)
@@ -2472,6 +2496,10 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
         result["idpw_login_panel_selected"] = "1" if isinstance(selected, dict) and selected.get("selected") == "1" else "0"
     except Exception:
         result["idpw_login_panel_selected"] = "failed"
+    result["idpw_reset_ready"] = "1" if (
+        result.get("portal_reloaded_for_idpw") == "1"
+        and result.get("idpw_login_panel_selected") == "1"
+    ) else "0"
     return result
 
 
@@ -3941,8 +3969,29 @@ async def collect_bank_via_browser_session_async(
                     auth_challenge.get("screen_reason_code") or ""
                 )[:120]
                 safe_diagnostics["shinhan_auth_challenge_policy"] = "prefer_saved_idpw_login"
+                reset_started_at = time.monotonic()
                 reset_result = await _prefer_shinhan_idpw_login_after_auth_challenge(page, portal_url)
                 safe_diagnostics["shinhan_idpw_login_reset"] = reset_result
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_idpw_reset_after_certificate",
+                    status="success" if reset_result.get("idpw_reset_ready") == "1" else "failed",
+                    started_at=reset_started_at,
+                    error_code="" if reset_result.get("idpw_reset_ready") == "1" else "SHINHAN_IDPW_RESET_NOT_CONFIRMED",
+                    reason=str(auth_challenge.get("screen_reason_code") or "auth_challenge_detected")[:120],
+                    success_condition="certificate_tab_closed_or_ignored_and_idpw_panel_selected"
+                    if reset_result.get("idpw_reset_ready") == "1"
+                    else "",
+                    failure_condition="idpw_panel_not_confirmed_after_certificate_reset"
+                    if reset_result.get("idpw_reset_ready") != "1"
+                    else "",
+                    certificate_tab_close_attempted=reset_result.get("certificate_tab_close_attempted", ""),
+                    certificate_tab_closed=reset_result.get("certificate_tab_closed", ""),
+                    work_key_relaunch_attempted=reset_result.get("work_key_relaunch_attempted", ""),
+                    work_key_relaunch_status=reset_result.get("work_key_relaunch_status", ""),
+                    portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
+                    idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
+                )
                 retry_shinhan_idpw_login = True
             else:
                 safe_diagnostics.update(auth_challenge)
@@ -4189,8 +4238,29 @@ async def collect_bank_via_browser_session_async(
                             auth_challenge.get("screen_reason_code") or ""
                         )[:120]
                         safe_diagnostics["shinhan_auth_challenge_policy"] = "retry_saved_idpw_login"
+                        reset_started_at = time.monotonic()
                         reset_result = await _prefer_shinhan_idpw_login_after_auth_challenge(page, portal_url)
                         safe_diagnostics["shinhan_idpw_login_reset"] = reset_result
+                        _append_shinhan_stage_log(
+                            shinhan_stage_logs,
+                            stage="shinhan_idpw_reset_after_certificate",
+                            status="success" if reset_result.get("idpw_reset_ready") == "1" else "failed",
+                            started_at=reset_started_at,
+                            error_code="" if reset_result.get("idpw_reset_ready") == "1" else "SHINHAN_IDPW_RESET_NOT_CONFIRMED",
+                            reason=str(auth_challenge.get("screen_reason_code") or "auth_challenge_detected")[:120],
+                            success_condition="certificate_tab_closed_or_ignored_and_idpw_panel_selected"
+                            if reset_result.get("idpw_reset_ready") == "1"
+                            else "",
+                            failure_condition="idpw_panel_not_confirmed_after_certificate_reset"
+                            if reset_result.get("idpw_reset_ready") != "1"
+                            else "",
+                            certificate_tab_close_attempted=reset_result.get("certificate_tab_close_attempted", ""),
+                            certificate_tab_closed=reset_result.get("certificate_tab_closed", ""),
+                            work_key_relaunch_attempted=reset_result.get("work_key_relaunch_attempted", ""),
+                            work_key_relaunch_status=reset_result.get("work_key_relaunch_status", ""),
+                            portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
+                            idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
+                        )
                         retry_shinhan_idpw_login = True
                         continue
                     else:

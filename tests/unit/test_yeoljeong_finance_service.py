@@ -206,7 +206,14 @@ def test_bank_timeout_probe_detects_shinhan_fincert_iframe(monkeypatch):
 
 
 def test_bank_timeout_probe_prefers_saved_shinhan_idpw(monkeypatch):
+    commands = []
+
     def fake_route_execute(payload, timeout_seconds=25.0):
+        commands.append(payload)
+        if payload["command_type"] == "browser_close_tab":
+            return {"status": "success", "data": {"closed": 1, "remaining": 1}}
+        if payload["command_type"] == "browser_launch":
+            return {"status": "success", "data": {"cdp_ready": True, "navigated": True}}
         return {
             "status": "success",
             "result": {
@@ -232,6 +239,8 @@ def test_bank_timeout_probe_prefers_saved_shinhan_idpw(monkeypatch):
         browser_agent_id="agent-bank",
         timeout_seconds=180,
         prefer_saved_idpw_login=True,
+        portal_url="https://bank.shinhan.com/rib/easy/index.jsp",
+        browser_preferred_port=9224,
     )
 
     assert result is not None
@@ -240,6 +249,13 @@ def test_bank_timeout_probe_prefers_saved_shinhan_idpw(monkeypatch):
     assert result["diagnostics"]["screen_state"] == "login_required"
     assert result["diagnostics"]["screen_requires_operator"] == "0"
     assert result["diagnostics"]["suggested_action"] == "retry_saved_idpw_login_same_work_key"
+    assert [item["command_type"] for item in commands] == ["browser_tabs", "browser_close_tab", "browser_launch"]
+    assert commands[1]["params"]["url_pattern"] == "fincert|yeskey|cert"
+    assert commands[2]["params"]["work_key"] == "wk-bank"
+    assert commands[2]["params"]["url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+    assert commands[2]["params"]["preferred_port"] == 9224
+    assert result["diagnostics"]["shinhan_timeout_idpw_reset"]["certificate_tab_closed"] == "1"
+    assert result["diagnostics"]["shinhan_timeout_idpw_reset"]["work_key_relaunch_cdp_ready"] == "1"
 
 
 def test_collect_bank_timeout_uses_browser_tab_probe(monkeypatch):
