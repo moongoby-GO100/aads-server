@@ -1,6 +1,6 @@
 """
-AADS-186A: 도구 실행기 — Anthropic Tool Use API 도구 실행
-10초 타임아웃, 결과 2000토큰(~6000자) 제한 (기본값, 실제 25,000 토큰 허용).
+AADS-186A: 도구 실행기 — Anthropic Tool Use API 도구 실행.
+일반 도구 20초, DB 도구 125초, 장시간 도구 55초, 브라우저 도구 210초 타임아웃.
 신규 워크플로우 도구: inspect_service, get_all_service_status, generate_directive
 """
 from __future__ import annotations
@@ -149,12 +149,19 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
+_DATABASE_TOOL_TIMEOUT = float(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS", "125"))
 _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내로 응답 보장
 _BROWSER_TOOL_TIMEOUT = 210.0  # Browser Bridge CDP/PC Agent 명령(최대 180s) + 여유
 _BROWSER_TOOLS = frozenset({
     "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
     "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
+})
+_DATABASE_TOOLS = frozenset({
+    "query_database",
+    "query_db",
+    "query_project_database",
+    "list_project_databases",
 })
 
 
@@ -279,6 +286,16 @@ _EXECUTION_CACHEABLE_TOOLS = frozenset({
     "query_project_database",
     "recall_tool_result",
 })
+
+
+def _timeout_for_tool(tool_name: str) -> float:
+    if tool_name in _BROWSER_TOOLS:
+        return _BROWSER_TOOL_TIMEOUT
+    if tool_name in _DATABASE_TOOLS:
+        return _DATABASE_TOOL_TIMEOUT
+    if tool_name in _LONG_TOOLS:
+        return _LONG_TOOL_TIMEOUT
+    return _TOOL_TIMEOUT
 _TOOL_CACHE_META_PREFIX = "[tool_cache_meta cache_hit=True source=execution_scope_cache"
 _PROJECT_SCOPED_TOOLS = frozenset({
     "query_project_database",
@@ -595,10 +612,7 @@ class ToolExecutor:
                             decorated_result = decorated_result[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
                         return decorated_result
 
-            if tool_name in _BROWSER_TOOLS:
-                _timeout = _BROWSER_TOOL_TIMEOUT
-            else:
-                _timeout = _LONG_TOOL_TIMEOUT if tool_name in _LONG_TOOLS else _TOOL_TIMEOUT
+            _timeout = _timeout_for_tool(tool_name)
             result = await asyncio.wait_for(
                 self._dispatch(tool_name, tool_input),
                 timeout=_timeout,
@@ -620,8 +634,18 @@ class ToolExecutor:
                 )
             return result_str
         except asyncio.TimeoutError:
-            logger.warning(f"tool_executor timeout: tool={tool_name}")
-            return json.dumps({"error": "timeout", "tool": tool_name})
+            timeout = _timeout_for_tool(tool_name)
+            logger.warning("tool_executor timeout: tool=%s timeout_seconds=%.1f", tool_name, timeout)
+            return json.dumps(
+                {
+                    "error": "timeout",
+                    "error_code": "tool_executor_timeout",
+                    "tool": tool_name,
+                    "timeout_seconds": timeout,
+                    "hint": "도구 실행 래퍼 제한입니다. DB 도구는 DB 내부 pool/query timeout과 별도로 기록됩니다.",
+                },
+                ensure_ascii=False,
+            )
         except Exception as e:
             logger.error(f"tool_executor error: tool={tool_name} error={e}")
             return json.dumps({"error": str(e), "tool": tool_name})
@@ -755,6 +779,7 @@ class ToolExecutor:
             "query_timeline":         self._query_timeline,
             "recall_tool_result":     self._recall_tool_result,
             "tool_metrics":           self._tool_metrics,
+            "llm_response_metrics":    self._llm_response_metrics,
             "query_decision_graph":   self._query_decision_graph,
             # AADS-195 Phase 3: PC Agent 도구
             "pc_execute":             self._pc_execute,
@@ -1170,23 +1195,36 @@ class ToolExecutor:
         # 세미콜론으로 다중 쿼리 차단
         if ";" in clean_query:
             return {"error": "다중 쿼리(;) 사용 불가"}
-        # 위험 키워드 차단
+        # 위험 키워드 차단. 컬럼명(created_at 등)의 부분 문자열 오탐을 피하기 위해 단어 경계로 검사한다.
         _DANGEROUS_SQL = {"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE", "EXEC"}
         upper_q = clean_query.upper()
         for kw in _DANGEROUS_SQL:
-            if kw in upper_q:
+            if re.search(rf"\b{kw}\b", upper_q):
                 return {"error": f"금지된 키워드: {kw}"}
         try:
             from app.core.db_pool import get_pool
             pool = get_pool()
-            async with pool.acquire() as conn:
+            acquire_timeout = float(os.getenv("AADS_QUERY_DATABASE_ACQUIRE_TIMEOUT_SECONDS", "20"))
+            statement_timeout = float(os.getenv("AADS_QUERY_DATABASE_STATEMENT_TIMEOUT_SECONDS", "90"))
+            async with pool.acquire(timeout=acquire_timeout) as conn:
                 # SET LOCAL: 현재 트랜잭션에서만 적용, 커넥션 반환 시 원복됨
                 async with conn.transaction():
                     await conn.execute("SET LOCAL default_transaction_read_only = on")
+                    await conn.execute("SELECT set_config('statement_timeout', $1, true)", str(int(statement_timeout * 1000)))
                     if "LIMIT" not in upper_q:
                         clean_query = clean_query + f" LIMIT {limit}"
-                    rows = await conn.fetch(clean_query)
+                    rows = await conn.fetch(clean_query, timeout=statement_timeout)
                     return [dict(r) for r in rows]
+        except asyncio.TimeoutError:
+            return {
+                "error": "DB 연결 풀 대기 또는 쿼리 실행 시간이 초과되었습니다.",
+                "error_code": "query_database_timeout",
+                "timeout_policy": {
+                    "tool_executor_timeout_seconds": _DATABASE_TOOL_TIMEOUT,
+                    "pool_acquire_timeout_seconds": float(os.getenv("AADS_QUERY_DATABASE_ACQUIRE_TIMEOUT_SECONDS", "20")),
+                    "query_statement_timeout_seconds": float(os.getenv("AADS_QUERY_DATABASE_STATEMENT_TIMEOUT_SECONDS", "90")),
+                },
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -3582,6 +3620,18 @@ class ToolExecutor:
             },
             "metrics": metrics,
         }
+
+    async def _llm_response_metrics(self, inp: Dict[str, Any]) -> Any:
+        """채팅/백그라운드 LLM/Claude·Codex CLI 응답속도 통합 조회."""
+        try:
+            hours = int(inp.get("hours", 24) or 24)
+        except (TypeError, ValueError):
+            hours = 24
+        hours = max(1, min(hours, 168))
+        model = str(inp.get("model", "") or "").strip()
+        from app.services.llm_response_metrics import get_llm_response_metrics
+
+        return await get_llm_response_metrics(hours=hours, model=model)
 
     # ── tool_layer_audit 헬퍼 ────────────────────────────────────────────────
 

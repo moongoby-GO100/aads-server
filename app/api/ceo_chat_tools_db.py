@@ -202,6 +202,15 @@ _pool_drain_condition = asyncio.Condition(_pool_lock)
 _ssh_tunnel_lock = threading.Lock()  # SSH 터널 생성/정리 경쟁 방지
 
 
+class ProjectDbTimeoutError(TimeoutError):
+    """Project DB timeout with the exact layer that failed."""
+
+    def __init__(self, phase: str, timeout_seconds: int, message: str = "") -> None:
+        self.phase = phase
+        self.timeout_seconds = timeout_seconds
+        super().__init__(message or f"{phase} exceeded {timeout_seconds}s")
+
+
 # ─── 환경변수에서 DB 설정 조회 ────────────────────────────────────────────────
 
 def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
@@ -435,15 +444,41 @@ async def _query_postgresql(project: str, q: str) -> List[Dict[str, Any]]:
             async with _borrow_pg_pool(project) as pool:
                 if not _is_pg_pool_open(pool):
                     raise ConnectionError("PostgreSQL pool is closed")
-                async with pool.acquire(timeout=_PG_POOL_ACQUIRE_TIMEOUT_SECONDS) as conn:
+                try:
+                    conn_cm = pool.acquire(timeout=_PG_POOL_ACQUIRE_TIMEOUT_SECONDS)
+                    conn = await conn_cm.__aenter__()
+                except asyncio.TimeoutError as exc:
+                    raise ProjectDbTimeoutError(
+                        "pool_acquire_timeout",
+                        _PG_POOL_ACQUIRE_TIMEOUT_SECONDS,
+                        "PostgreSQL pool acquire timeout",
+                    ) from exc
+                try:
                     async with conn.transaction():
                         await conn.execute("SET LOCAL default_transaction_read_only = on")
                         await conn.execute(
                             "SELECT set_config('statement_timeout', $1, true)",
                             str(max(1, _PROJECT_DB_QUERY_TIMEOUT_SECONDS) * 1000),
                         )
-                        rows = await conn.fetch(q)
+                        try:
+                            rows = await conn.fetch(q, timeout=_PROJECT_DB_QUERY_TIMEOUT_SECONDS)
+                        except asyncio.TimeoutError as exc:
+                            raise ProjectDbTimeoutError(
+                                "query_statement_timeout",
+                                _PROJECT_DB_QUERY_TIMEOUT_SECONDS,
+                                "PostgreSQL query timeout",
+                            ) from exc
+                        except Exception as exc:
+                            if exc.__class__.__name__ in {"QueryCanceledError", "TimeoutError"}:
+                                raise ProjectDbTimeoutError(
+                                    "query_statement_timeout",
+                                    _PROJECT_DB_QUERY_TIMEOUT_SECONDS,
+                                    str(exc),
+                                ) from exc
+                            raise
                     return [{k: _serialize_value(v) for k, v in dict(r).items()} for r in rows]
+                finally:
+                    await conn_cm.__aexit__(None, None, None)
         except Exception as exc:
             if attempt == 0 and _should_recreate_pg_pool(exc):
                 logger.warning(
@@ -810,6 +845,28 @@ async def query_project_database(
             "timeout_seconds": _PROJECT_DB_QUERY_TIMEOUT_SECONDS if db_type == "postgresql" else _MYSQL_READ_TIMEOUT_SECONDS,
         }
 
+    except ProjectDbTimeoutError as e:
+        logger.error(
+            "query_project_database: TIMEOUT | project=%s phase=%s timeout=%ss query=%s",
+            project,
+            e.phase,
+            e.timeout_seconds,
+            q[:80],
+        )
+        return {
+            "error": f"DB 쿼리 시간 초과 ({project}): {e.timeout_seconds}초 초과",
+            "error_code": e.phase,
+            "project": project,
+            "timeout_seconds": e.timeout_seconds,
+            "timeout_policy": {
+                "tool_executor_timeout_seconds": int(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS", "125")),
+                "pool_acquire_timeout_seconds": _PG_POOL_ACQUIRE_TIMEOUT_SECONDS,
+                "query_statement_timeout_seconds": _PROJECT_DB_QUERY_TIMEOUT_SECONDS,
+            },
+            "query": q,
+            "hint": "조건/기간을 줄이거나 요약 테이블/인덱스를 사용하십시오.",
+        }
+
     except asyncio.TimeoutError:
         timeout_sec = _PROJECT_DB_QUERY_TIMEOUT_SECONDS if _get_db_type(_PROJECT_ALIAS.get(project, project)) == "postgresql" else _MYSQL_READ_TIMEOUT_SECONDS
         logger.error(
@@ -817,8 +874,14 @@ async def query_project_database(
         )
         return {
             "error": f"DB 쿼리 시간 초과 ({project}): {timeout_sec}초 초과",
+            "error_code": "tool_executor_or_driver_timeout",
             "project": project,
             "timeout_seconds": timeout_sec,
+            "timeout_policy": {
+                "tool_executor_timeout_seconds": int(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS", "125")),
+                "pool_acquire_timeout_seconds": _PG_POOL_ACQUIRE_TIMEOUT_SECONDS,
+                "query_statement_timeout_seconds": _PROJECT_DB_QUERY_TIMEOUT_SECONDS,
+            },
             "query": q,
             "hint": "조건/기간을 줄이거나 요약 테이블/인덱스를 사용하십시오.",
         }

@@ -83,6 +83,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "code_execution": True,
     "observe": True,
     "query_decision_graph": True,       # 온디맨드 — 의존관계 탐색
+    "llm_response_metrics": True,       # 온디맨드 — LLM 응답속도 통합 조회
     # ── AADS-190: 내보내기 + 스케줄러 ──────────────────────────────────
     "export_data": True,              # 온디맨드
     "schedule_task": True,            # 온디맨드
@@ -2453,6 +2454,32 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"period": "7d", "tool_name": "query_database"},
         ],
     },
+    "llm_response_metrics": {
+        "name": "llm_response_metrics",
+        "description": "채팅 응답, 백그라운드 LLM, Claude/Codex CLI 러너의 모델별 응답속도와 실패율을 통합 조회합니다.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hours": {
+                    "type": "integer",
+                    "description": "조회 기간 시간 단위. 기본 24, 최대 168",
+                    "default": 24,
+                    "minimum": 1,
+                    "maximum": 168,
+                },
+                "model": {
+                    "type": "string",
+                    "description": "모델명 부분 필터. 예: claude, codex, gpt-5.6-sol",
+                },
+            },
+            "required": [],
+        },
+        "input_examples": [
+            {"hours": 24},
+            {"hours": 168, "model": "codex"},
+            {"hours": 168, "model": "claude"},
+        ],
+    },
     "db_safe_write": {
         "name": "db_safe_write",
         "description": "안전한 DB 쓰기 (INSERT/UPDATE/DELETE만 허용, DDL 차단, 트랜잭션 강제, 전후 카운트 검증, dry-run 지원)",
@@ -3115,7 +3142,7 @@ _GROUPS: Dict[str, List[str]] = {
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹
-    "ops": ["tool_metrics", "deploy_safe", "db_safe_write", "notify_channel", "tool_layer_audit"],
+    "ops": ["tool_metrics", "llm_response_metrics", "deploy_safe", "db_safe_write", "notify_channel", "tool_layer_audit"],
     # AADS-186E-1: 크롤링 도구 그룹
     "crawl": ["jina_read", "crawl4ai_fetch", "deep_crawl"],
     # AADS-186E-2: 메모리 도구 그룹 (+ Memory Upgrade F5/F12)

@@ -2404,6 +2404,17 @@ async def get_tool_stats(hours: int = Query(24, ge=1, le=168)):
     }
 
 
+@router.get("/ops/llm-response-metrics")
+async def get_llm_response_metrics_endpoint(
+    hours: int = Query(24, ge=1, le=168),
+    model: str = Query("", max_length=120),
+):
+    """채팅/백그라운드 LLM/Claude·Codex CLI 응답속도 통합 지표."""
+    from app.services.llm_response_metrics import get_llm_response_metrics
+
+    return await get_llm_response_metrics(hours=hours, model=model)
+
+
 @router.get("/ops/prompt-profile")
 async def get_prompt_profile():
     """시스템 프롬프트 섹션별 토큰 프로파일 조회."""

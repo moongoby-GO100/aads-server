@@ -10666,3 +10666,22 @@
   - Active slot `aads-server-green` on `dcb1367b53bd` reached Shinhan security-module success and ID/PW panel reset, but the login outcome was `login_input_rejected` with no bank transactions imported.
 - Not completed:
   - This second follow-up patch still needs commit, push, blue/green deploy, and another live Shinhan collection retry.
+
+## 2026-09-04 07:23 KST - DB MCP timeout split and LLM response metrics
+
+- CEO request:
+  - Fix repeated "DB MCP 20 second limit" behavior, deploy the change, and confirm whether AI/LLM model response speed can be measured for Claude/Codex CLI focused workflows.
+- Server changes:
+  - `app/services/tool_executor.py`: split DB tools (`query_database`, `query_db`, `query_project_database`, `list_project_databases`) from the generic 20s tool timeout into a dedicated `AADS_DATABASE_TOOL_TIMEOUT_SECONDS` bucket, default 125s.
+  - `app/services/tool_executor.py`: timeout responses now include `error_code=tool_executor_timeout` and `timeout_seconds`, so wrapper timeout is distinguishable from DB pool/query timeout.
+  - `app/services/tool_executor.py`: internal `query_database` SQL danger checks now use word-boundary matching, preventing false positives such as `created_at` being blocked as `CREATE`.
+  - `app/api/ceo_chat_tools_db.py`: project DB PostgreSQL execution now labels `pool_acquire_timeout` separately from `query_statement_timeout` and returns the active timeout policy.
+  - `app/services/llm_response_metrics.py`, `app/api/ops.py`, `app/services/tool_registry.py`, `app/api/ceo_chat_tools.py`: added `/api/v1/ops/llm-response-metrics` and `llm_response_metrics` tool to aggregate chat final response, OAuth/API LLM, background LLM, and Claude/Codex runner elapsed metrics.
+- Verification before deploy:
+  - `python3 -m py_compile` passed for changed server modules.
+  - Container `python -m py_compile` passed for mounted changed server modules.
+  - Container pytest for existing mounted test set passed: `test_tool_executor_aliases.py` and `test_tool_metrics.py` 4/4.
+  - Host py_compile passed for new/modified unit tests.
+  - Direct container DB-backed metrics smoke test returned 621 observations in the last 24h across all four metric sources.
+- Not completed:
+  - Commit, push, blue/green deploy, routed health, and post-deploy API metric check are pending in this release cycle.
