@@ -1,5 +1,46 @@
 # AADS HANDOVER
 
+## 2026-09-03 09:35 KST - FOOD Shinhan security program popup root-cause check and runtime checkpoint logging
+
+- Request:
+  - Analyze why the Shinhan security-program notice popup appears during automatic bank collection.
+  - Verify whether required security programs are installed on dedicated PC `DESKTOP-ICU55HK`; install if missing.
+  - Add step checkpoints so the collection log can show page access, security popup handling, ID/PW fields, login button readiness, success/failure reason, elapsed time, and timeout cause.
+- Runtime evidence:
+  - KST measured time: `2026-09-03 09:26:26 KST`.
+  - Dedicated Agent `7f99c528-24d` / `DESKTOP-ICU55HK` was online with heartbeat age about 6 seconds.
+  - PC resource state before Shinhan check: CPU 6.6%, memory 53.9%, C: 63.3% used.
+  - Windows installed-program registry showed Shinhan-relevant programs already installed, including `AhnLab Safe Transaction 1.18.1.1997` installed `20260903`, `AnySign4PC 1.1.3.3`, `INISAFE CrossWeb EX V3 3.4.1.19`, `nProtect Online Security V1.0(PFS)`, `TouchEn nxKey with E2E for 32bit`, `Veraport G3 3,8,5,2`, and `WIZVERA Process Manager`.
+  - Windows service check showed security services running: `SafeTransactionSVC`, `nossvc`, `INISAFEClientManager`, `WizveraPMSvc`, `AnySign4PC Launcher`, and `CrossEX Live Checker`.
+  - Browser cleanup: a stale GO100 CDP Chrome profile on ICU55HK was closed; final targeted remaining count was `0`.
+  - Shinhan official install page confirmed the bank expects VeraPort / AhnLab Safe Transaction / INISAFE / TouchEnKey style modules, and advises browser restart or reinstall if install prompts repeat.
+  - Wrong candidate URL `https://bizbank.shinhan.com/sbiz/index.jsp` rendered "page not found"; the actual code path remains `https://bank.shinhan.com/rib/easy/index.jsp`.
+  - ICU55HK page check against `https://bank.shinhan.com/rib/easy/index.jsp#210000000000` confirmed:
+    - page title: `간편조회서비스 | 신한은행 개인뱅킹`
+    - ID field: present
+    - password field: present
+    - login button: present
+    - security notice before close: present
+    - after clicking `닫기`: security notice absent
+- Root cause:
+  - The popup observed in this run is not caused by total security-program absence. Required Shinhan-related programs/services are installed and running on ICU55HK.
+  - The popup is an initial Shinhan security-program 안내 layer shown on the simple-query page; it blocks automation until the layer close button is clicked.
+  - A secondary risk remains: if VeraPort/browser native-message detection fails after browser/session reuse, Shinhan can still route to the install guide even with installed programs. The mitigation is browser cleanup/recreate plus runtime program/service checkpoint logging.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: added `_shinhan_security_program_runtime_state()` to query the same PC Agent for registry/service evidence before Shinhan login.
+  - `app/services/yeoljeong_bank_browser_connector.py`: added `shinhan_security_program_check` stage log with `veraport_detected`, `ahnlab_detected`, `keyboard_security_detected`, `inisafe_detected`, `installed_match_count`, and `running_match_count`.
+  - `app/services/yeoljeong_bank_browser_connector.py`: added `shinhan_security_notice` stage log after page navigation and before ID/PW login to record whether the security notice is visible and whether it blocks login.
+  - `tests/unit/test_bank_browser_connector.py`: added tests for nested PC Agent output extraction and security program runtime detection.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py app/services/browser_collection_audit.py scripts/yeoljeong_auto_collect.py` passed.
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py tests/unit/test_bank_browser_connector.py` passed.
+  - `python3 -m pytest tests/unit/test_bank_browser_connector.py -q` passed: `40 passed, 1 warning`.
+  - Broader local test `python3 -m pytest tests/unit/test_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py -q` could not run in the local base environment because `structlog` is not installed; this is an environment dependency issue, not a syntax failure.
+- Deploy:
+  - Not deployed yet. Current main worktree has unrelated dirty files; API blue-green deployment must use a clean committed release SHA or isolated clean worktree.
+- Next:
+  - Commit/push this targeted patch, deploy with `deploy.sh bluegreen` from a clean release state, then run Mia Shinhan collection again and verify stage logs include `shinhan_security_program_check`, `shinhan_security_notice`, `shinhan_idpw_input`, `shinhan_login_submit`, and `shinhan_login_success`.
+
 ## 2026-09-03 08:53 KST - FOOD Shinhan page-step audit checkpoint logging
 
 - Request:

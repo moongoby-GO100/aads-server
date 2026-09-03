@@ -430,6 +430,39 @@ class TestDeduplication:
         assert "2026-08-01" in filtered[0]["occurred_at"]
 
 
+class TestShinhanSecurityProgramRuntimeState:
+    def test_extract_pc_agent_output_reads_nested_result(self):
+        payload = {"result": {"result": {"output": '{"installed":["AhnLab Safe Transaction"]}'}}}
+
+        assert "AhnLab Safe Transaction" in connector._extract_pc_agent_output(payload)
+
+    def test_runtime_state_detects_required_shinhan_programs(self):
+        import asyncio
+
+        class FakePage:
+            async def _run_browser_command(self, command_type, params, **kwargs):
+                assert command_type == "powershell"
+                assert "Get-Service" in params["command"]
+                return {
+                    "result": {
+                        "output": (
+                            '{"installed":["Veraport G3","AhnLab Safe Transaction",'
+                            '"TouchEn nxKey","INISAFE CrossWeb EX V3"],'
+                            '"running":["SafeTransactionSVC","WizveraPMSvc","nossvc"]}'
+                        )
+                    }
+                }
+
+        result = asyncio.run(connector._shinhan_security_program_runtime_state(FakePage()))
+
+        assert result["checked"] == "1"
+        assert result["required_runtime_ready"] == "1"
+        assert result["veraport_detected"] == "1"
+        assert result["ahnlab_detected"] == "1"
+        assert result["keyboard_security_detected"] == "1"
+        assert result["inisafe_detected"] == "1"
+
+
 # ── _clean_date 정규화 ───────────────────────────────────────────────────────
 
 class TestCleanDate:

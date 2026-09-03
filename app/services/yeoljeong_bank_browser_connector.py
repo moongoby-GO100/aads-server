@@ -551,6 +551,83 @@ async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
     }
 
 
+def _extract_pc_agent_output(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("output", "stdout"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    for key in ("result", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            output = _extract_pc_agent_output(nested)
+            if output:
+                return output
+        elif isinstance(nested, str):
+            return nested
+    return ""
+
+
+async def _shinhan_security_program_runtime_state(page: Any) -> dict[str, str]:
+    """Check Shinhan security program install/service state from the same PC Agent."""
+    runner = getattr(page, "_run_browser_command", None)
+    if not callable(runner):
+        return {"checked": "0", "reason": "pc_agent_command_unavailable"}
+    command = (
+        "$namePat='VeraPort|Veraport|TouchEn|nProtect|AhnLab|Safe Transaction|AnySign|"
+        "INISAFE|CrossWeb|Delfino|Wizvera|Xecure|VestCert|MagicLine|NOS|ObCross|IniClient'; "
+        "$paths='HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+        "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+        "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; "
+        "$installed=@(); foreach($p in $paths){$installed += Get-ItemProperty $p -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.DisplayName -match $namePat } | Select-Object -ExpandProperty DisplayName}; "
+        "$svcPat='Vera|Touch|nProtect|Ahn|SafeTransaction|AnySign|INISAFE|Cross|Delfino|Wiz|Xecure|Vest|MagicLine|NOS'; "
+        "$running=Get-Service -ErrorAction SilentlyContinue | Where-Object { "
+        "($_.Name -match $svcPat -or $_.DisplayName -match $svcPat) -and $_.Status -eq 'Running' } | "
+        "Select-Object -ExpandProperty Name; "
+        "[pscustomobject]@{installed=($installed|Sort-Object -Unique); running=($running|Sort-Object -Unique)} | "
+        "ConvertTo-Json -Depth 4 -Compress"
+    )
+    try:
+        payload = await runner(
+            "powershell",
+            {"command": command},
+            command_timeout_seconds=20,
+            queue_wait_timeout_seconds=8,
+        )
+    except TypeError:
+        try:
+            payload = await runner("powershell", {"command": command})
+        except Exception as exc:
+            return {"checked": "failed", **_safe_browser_error_fields(exc)}
+    except Exception as exc:
+        return {"checked": "failed", **_safe_browser_error_fields(exc)}
+
+    output = _extract_pc_agent_output(payload)
+    lower = output.lower()
+    has_veraport = "veraport" in lower or "veraport" in output
+    has_ahnlab = "ahnlab" in lower or "safetransaction" in lower or "safe transaction" in lower
+    has_keyboard = "touchen" in lower or "nprotect" in lower
+    has_inisafe = "inisafe" in lower or "crossweb" in lower
+    running_count = len(re.findall(r'"[^"]*(?:svc|service|nossvc|launcher|checker)[^"]*"', output, flags=re.I))
+    installed_count = lower.count("displayname")
+    if installed_count == 0:
+        installed_count = sum(1 for token in ("veraport", "ahnlab", "touchen", "nprotect", "anysign", "inisafe") if token in lower)
+    return {
+        "checked": "1",
+        "required_runtime_ready": "1" if has_ahnlab and has_veraport else "0",
+        "veraport_detected": "1" if has_veraport else "0",
+        "ahnlab_detected": "1" if has_ahnlab else "0",
+        "keyboard_security_detected": "1" if has_keyboard else "0",
+        "inisafe_detected": "1" if has_inisafe else "0",
+        "installed_match_count": str(installed_count)[:12],
+        "running_match_count": str(running_count)[:12],
+    }
+
+
 async def _try_pc_agent_keyboard_type(page: Any, text: str) -> bool:
     """Type text through the PC Agent OS keyboard path for bank secure inputs."""
     value = str(text or "")
@@ -3639,6 +3716,32 @@ async def collect_bank_via_browser_session_async(
             safe_diagnostics["browser_tab_reused"] = "1"
         safe_diagnostics["browser_session_reuse_policy"] = "work_key_domain_first"
         _disable_local_agent_auto_recovery(page)
+        if shinhan_service:
+            security_check_started_at = time.monotonic()
+            security_program_state = await _shinhan_security_program_runtime_state(page)
+            safe_diagnostics["shinhan_security_program_state"] = security_program_state
+            runtime_ready = str(security_program_state.get("required_runtime_ready") or "") == "1"
+            checked = str(security_program_state.get("checked") or "")
+            _append_shinhan_stage_log(
+                shinhan_stage_logs,
+                stage="shinhan_security_program_check",
+                status="success" if runtime_ready else "failed",
+                started_at=security_check_started_at,
+                error_code="" if runtime_ready else "SHINHAN_SECURITY_PROGRAM_NOT_READY",
+                reason=(
+                    "pc_agent_registry_and_service_check"
+                    if checked == "1"
+                    else str(security_program_state.get("reason") or checked or "check_failed")
+                ),
+                success_condition="veraport_and_ahnlab_runtime_detected" if runtime_ready else "",
+                failure_condition="" if runtime_ready else "veraport_or_ahnlab_runtime_not_detected",
+                veraport_detected=security_program_state.get("veraport_detected", ""),
+                ahnlab_detected=security_program_state.get("ahnlab_detected", ""),
+                keyboard_security_detected=security_program_state.get("keyboard_security_detected", ""),
+                inisafe_detected=security_program_state.get("inisafe_detected", ""),
+                installed_match_count=security_program_state.get("installed_match_count", ""),
+                running_match_count=security_program_state.get("running_match_count", ""),
+            )
 
         if portal_url:
             portal_stage_started_at = time.monotonic()
@@ -3679,6 +3782,25 @@ async def collect_bank_via_browser_session_async(
                     await page.wait_for_load_state("networkidle", timeout=6000)
                 except Exception:
                     pass
+            if shinhan_service:
+                notice_started_at = time.monotonic()
+                notice_state = await _shinhan_security_notice_state(page)
+                notice_present = str(notice_state.get("present") or "") == "1"
+                if notice_present:
+                    safe_diagnostics["shinhan_security_notice_before_login"] = "1"
+                    safe_diagnostics["shinhan_security_notice_before_login_code"] = str(
+                        notice_state.get("error_code") or "SHINHAN_SECURITY_NOTICE"
+                    )[:120]
+                _append_shinhan_stage_log(
+                    shinhan_stage_logs,
+                    stage="shinhan_security_notice",
+                    status="failed" if notice_present else "success",
+                    started_at=notice_started_at,
+                    error_code=str(notice_state.get("error_code") or "") if notice_present else "",
+                    reason="notice_detected_before_login" if notice_present else "no_blocking_notice_before_login",
+                    success_condition="security_program_notice_not_visible" if not notice_present else "",
+                    failure_condition="security_program_notice_visible" if notice_present else "",
+                )
 
         current_url = ""
         rows: list[dict[str, Any]] = []
