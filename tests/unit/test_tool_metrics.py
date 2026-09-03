@@ -83,7 +83,8 @@ async def test_tool_metrics_aggregates_summary_and_top3():
     assert result["summary"]["slowest_tools_top3"][0]["tool_name"] == "slow_tool"
     assert result["summary"]["slowest_tools_top3"][1]["tool_name"] == "read_remote_file"
     assert result["summary"]["slowest_tools_top3"][2]["tool_name"] == "web_search"
-    assert fake_pool.conn.last_args == ("7 days", "")
+    assert fake_pool.conn.last_args[0].days == 7
+    assert fake_pool.conn.last_args[1] == ""
     assert "COUNT(*) FILTER (WHERE success = false)" in fake_pool.conn.last_query
     assert "PERCENTILE_CONT(0.95)" in fake_pool.conn.last_query
     assert "$1::interval" in fake_pool.conn.last_query
@@ -101,7 +102,8 @@ async def test_tool_metrics_uses_bind_parameters_for_tool_name_filter():
         result = await executor._tool_metrics({"tool_name": payload})
 
     assert result["period"] == "24h"
-    assert fake_pool.conn.last_args == ("24 hours", payload)
+    assert fake_pool.conn.last_args[0].total_seconds() == 86400
+    assert fake_pool.conn.last_args[1] == payload
     assert payload not in fake_pool.conn.last_query
 
 

@@ -10674,6 +10674,7 @@
 - Server changes:
   - `app/services/tool_executor.py`: split DB tools (`query_database`, `query_db`, `query_project_database`, `list_project_databases`) from the generic 20s tool timeout into a dedicated `AADS_DATABASE_TOOL_TIMEOUT_SECONDS` bucket, default 125s.
   - `app/services/tool_executor.py`: timeout responses now include `error_code=tool_executor_timeout` and `timeout_seconds`, so wrapper timeout is distinguishable from DB pool/query timeout.
+  - `app/services/tool_executor.py`: fixed existing `tool_metrics` asyncpg interval binding so tool latency reports can be queried together with LLM response metrics.
   - `app/services/tool_executor.py`: internal `query_database` SQL danger checks now use word-boundary matching, preventing false positives such as `created_at` being blocked as `CREATE`.
   - `app/api/ceo_chat_tools_db.py`: project DB PostgreSQL execution now labels `pool_acquire_timeout` separately from `query_statement_timeout` and returns the active timeout policy.
   - `app/services/llm_response_metrics.py`, `app/api/ops.py`, `app/services/tool_registry.py`, `app/api/ceo_chat_tools.py`: added `/api/v1/ops/llm-response-metrics` and `llm_response_metrics` tool to aggregate chat final response, OAuth/API LLM, background LLM, and Claude/Codex runner elapsed metrics.

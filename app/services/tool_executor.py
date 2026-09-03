@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import uuid
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
 
 import httpx
@@ -3546,9 +3546,9 @@ class ToolExecutor:
         tool_name = str(inp.get("tool_name", "") or "").strip()
 
         interval_map = {
-            "24h": "24 hours",
-            "7d": "7 days",
-            "30d": "30 days",
+            "24h": timedelta(hours=24),
+            "7d": timedelta(days=7),
+            "30d": timedelta(days=30),
         }
         interval_value = interval_map.get(period)
         if not interval_value:
