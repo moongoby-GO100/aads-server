@@ -1782,7 +1782,8 @@ async def get_streaming_status(
                         SET status = 'interrupted',
                             completed_at = COALESCE(completed_at, NOW()),
                             updated_at = NOW(),
-                            error_message = COALESCE(error_message, 'assistant message already terminal')
+                            error_message = COALESCE(error_message, 'assistant message already terminal'),
+                            interrupt_category = COALESCE(interrupt_category, 'assistant_terminal_reconcile')
                         WHERE id = $1
                           AND status IN ('running', 'retrying')
                         """,
