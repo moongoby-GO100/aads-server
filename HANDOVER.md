@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-09-03 10:12 KST - FOOD Shinhan security notice close-and-continue patch
+
+- Request:
+  - Continue the approved deployment and rerun Mia Shinhan collection after the interrupted response.
+- Runtime state:
+  - `HEAD` and `origin/main` are both `c4ff437dc44fc72fc980cc581f33de72ac6a1404`.
+  - One old-image Mia Shinhan collection process is still running with `--attempt-timeout-seconds 360`; it was started before this patch was deployed.
+  - Active API health at `http://127.0.0.1:8102/health/live` returned `{"status":"ok","version":"0.2.1"}`.
+- Code change:
+  - `app/services/yeoljeong_bank_browser_connector.py`: when a blocking Shinhan security-program notice appears before login, the connector now immediately attempts `_close_shinhan_security_notice(page)`, rechecks the notice state, and continues toward ID/PW login if the blocking notice disappeared.
+  - The stage reason changes from only `no_blocking_notice_before_login` to `no_blocking_notice_before_login_or_closed` so the log distinguishes closed-and-continued cases from hard blockers.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_bank_browser_connector.py -q` passed: `110 passed in 96.38s`.
+  - Local base-environment pytest could not collect because `fastapi` is not installed there; run tests inside the deployed container.
+- Next:
+  - Commit/push the targeted patch and this handover record, deploy with `./deploy.sh bluegreen`, then rerun Mia Shinhan collection.
+
 ## 2026-09-03 10:00 KST - FOOD Shinhan blue-green deploy and ID/PW flow blocker follow-up
 
 - Request:

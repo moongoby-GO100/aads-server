@@ -3801,6 +3801,10 @@ async def collect_bank_via_browser_session_async(
                     safe_diagnostics["shinhan_security_notice_before_login_code"] = str(
                         notice_state.get("error_code") or "SHINHAN_SECURITY_NOTICE"
                     )[:120]
+                    if await _close_shinhan_security_notice(page):
+                        safe_diagnostics["shinhan_security_notice_closed_before_login"] = "1"
+                        notice_state = await _shinhan_security_notice_state(page)
+                        notice_present = _is_shinhan_blocking_security_notice(notice_state)
                 elif str(notice_state.get("present") or "") == "1":
                     safe_diagnostics["shinhan_nonblocking_login_notice_before_login"] = str(
                         notice_state.get("error_code") or ""
@@ -3812,7 +3816,7 @@ async def collect_bank_via_browser_session_async(
                     status="failed" if notice_present else "success",
                     started_at=notice_started_at,
                     error_code=str(notice_state.get("error_code") or "") if notice_present else "",
-                    reason="notice_detected_before_login" if notice_present else "no_blocking_notice_before_login",
+                    reason="notice_detected_before_login" if notice_present else "no_blocking_notice_before_login_or_closed",
                     success_condition="security_program_notice_not_visible" if not notice_present else "",
                     failure_condition="security_program_notice_visible" if notice_present else "",
                 )
