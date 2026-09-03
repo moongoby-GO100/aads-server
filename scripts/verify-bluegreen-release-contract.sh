@@ -25,6 +25,18 @@ grep -q 'active/standby image digest mismatch' "$deploy_file" \
     || fail "same-image digest verification is missing"
 grep -q 'git -C "$COMPOSE_DIR" archive --format=tar HEAD' "$deploy_file" \
     || fail "API image must be built from an isolated committed release context"
+api_sections="$(
+    awk '
+      /^  aads-server:$/ {in_api=1}
+      /^  aads-server-green:$/ {in_api=1}
+      /^  [a-zA-Z0-9_-]+:$/ && $1 !~ /^aads-server:?$/ && $1 !~ /^aads-server-green:?$/ {in_api=0}
+      in_api {print}
+    ' "$compose_file"
+)"
+! grep -q '/root/aads/aads-server/app:/app/app:rw' <<<"$api_sections" \
+    || fail "API app source bind mount bypasses release-SHA image"
+! grep -q '/root/aads/aads-server/scripts:/app/scripts:rw' <<<"$api_sections" \
+    || fail "API scripts source bind mount bypasses release-SHA image"
 
 dashboard_deploy="/root/aads/aads-dashboard/deploy.sh"
 if [[ -f "$dashboard_deploy" ]]; then

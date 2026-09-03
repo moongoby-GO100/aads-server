@@ -130,10 +130,16 @@ def _short_session_id(session_id: Any) -> str:
 async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, Any]:
     from app.services.chat_service import get_active_bg_tasks
 
+    local_owner = (
+        os.getenv("AADS_CONTAINER_NAME")
+        or os.getenv("HOSTNAME")
+        or ""
+    ).strip()
     active_map = get_active_bg_tasks()
     raw_executing_session_ids = [str(sid) for sid, active in active_map.items() if active]
     raw_executing_set = set(raw_executing_session_ids)
     db_running_session_ids: List[str] = []
+    db_local_session_ids: List[str] = []
     placeholder_session_ids: List[str] = []
     placeholder_sessions: List[str] = []
 
@@ -149,6 +155,21 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
                   AND completed_at IS NULL
                 """
             )
+            local_rows = await conn.fetch(
+                """
+                SELECT DISTINCT session_id::text AS session_id
+                FROM chat_turn_executions
+                WHERE status IN ('running', 'retrying')
+                  AND completed_at IS NULL
+                  AND owner_instance = $1
+                  AND (
+                      lease_expires_at IS NULL
+                      OR lease_expires_at > NOW()
+                      OR heartbeat_at > NOW() - INTERVAL '60 seconds'
+                  )
+                """,
+                local_owner,
+            )
             rows = await conn.fetch(
                 """
                 SELECT DISTINCT ON (session_id)
@@ -161,29 +182,38 @@ async def _get_stream_activity_snapshot(recent_minutes: int = 5) -> Dict[str, An
                 recent_minutes,
             )
         db_running_session_ids = [row["session_id"] for row in running_rows]
+        db_local_session_ids = [row["session_id"] for row in local_rows]
         placeholder_session_ids = [row["session_id"] for row in rows]
         placeholder_sessions = [_short_session_id(row["session_id"]) for row in rows]
     except Exception as e:
         logger.warning("stream_activity_snapshot_failed", error=str(e))
 
     db_running_set = set(db_running_session_ids)
+    db_local_set = set(db_local_session_ids)
     placeholder_set = set(placeholder_session_ids)
     # Active task maps can retain a live asyncio task after DB finalization.
     # Count it for deploy drain only when the DB still has an active turn or
-    # the UI still has a recent placeholder tied to the session.
-    executing_set = raw_executing_set & (db_running_set | placeholder_set)
+    # the UI still has a recent placeholder tied to the session.  In blue/green
+    # mode the drain endpoint must be slot-local: DB rows owned by the peer slot
+    # must not make this slot look busy and block same-digest standby sync.
+    executing_set = raw_executing_set & db_local_set
+    if not local_owner:
+        executing_set = raw_executing_set & (db_running_set | placeholder_set)
     executing_session_ids = sorted(executing_set)
     executing_sessions = [_short_session_id(sid) for sid in executing_session_ids]
     recovery_pending_ids = [sid for sid in placeholder_session_ids if sid not in executing_set]
     visible_ids = list(executing_set | placeholder_set)
 
     return {
+        "owner_instance": local_owner,
         "executing_count": len(executing_session_ids),
         "executing_sessions": executing_sessions,
         "raw_executing_count": len(raw_executing_session_ids),
         "raw_executing_sessions": [_short_session_id(sid) for sid in raw_executing_session_ids],
         "db_running_count": len(db_running_session_ids),
         "db_running_sessions": [_short_session_id(sid) for sid in db_running_session_ids],
+        "db_local_running_count": len(db_local_session_ids),
+        "db_local_running_sessions": [_short_session_id(sid) for sid in db_local_session_ids],
         "placeholder_recent_count": len(placeholder_session_ids),
         "placeholder_recent_sessions": placeholder_sessions,
         "recovery_pending_count": len(recovery_pending_ids),

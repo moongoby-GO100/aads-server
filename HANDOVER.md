@@ -10564,6 +10564,27 @@
 - Not completed:
   - No commit, push, or blue-green deploy was performed. This is a static public export publish only; repository worktrees already contain unrelated dirty changes.
 
+## 2026-09-04 07:14 KST - API Blue/Green release certification hardening
+
+- CEO request:
+  - Fix every problematic item in the AADS zero-downtime Blue/Green path, apply the implementation, and report whether the system can reach the 100% target.
+- Server changes:
+  - `app/api/ops.py`: `/api/v1/ops/active-streams` now reports slot-local drain activity. It counts process-local tasks only when they are owned by the current container's `chat_turn_executions.owner_instance` lease, and exposes global DB/placeholder counts separately.
+  - `deploy.sh`: `stream_count_for_port()` now uses PostgreSQL owner leases for the target container before falling back to the HTTP endpoint. Target-slot busy handling now waits for drain before rebuilding instead of failing immediately. Standby synchronization is now a release certification gate: it waits for consecutive zero samples, starts the old slot with `--no-build`, validates memory limits, and fails the deployment if active/standby image digests differ.
+  - `docker-compose.prod.yml`: API blue/green services no longer bind-mount the whole `app` and `scripts` trees over the release image. Runtime mounts are limited to data/static/state/secret paths, so dirty code cannot bypass the release-SHA image.
+  - `scripts/verify-bluegreen-release-contract.sh`: verifier now fails closed when API blue/green services reintroduce full source bind mounts.
+  - `docs/operations/BLUEGREEN_RELEASE_GATES.md` and `docs/BLUEGREEN_DEPLOY_SPEC.md`: documented the slot-local drain counter and runtime immutability contract.
+- Verification:
+  - `bash -n deploy.sh scripts/verify-bluegreen-release-contract.sh` passed.
+  - `python3 -m py_compile app/api/ops.py` passed.
+  - `docker compose -f docker-compose.prod.yml config --quiet` passed with only existing compose warnings about unset `BRAVE_API_KEY` and obsolete `version`.
+  - `scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server` passed.
+- Runtime observation before deployment:
+  - Current API slots were not same-digest (`aads-server:e756a3b3018b` vs `aads-server:4d75a3fc1fe2`), while Dashboard slots were same-digest.
+  - DB showed live executions owned by both `aads-server` and `aads-server-green`; old code therefore overreported standby activity and could skip sync permanently.
+- Not completed at this record point:
+  - Commit, push, Blue/Green deploy, same-digest runtime certification, and five-minute P0/P1 monitoring are still pending after this documentation entry.
+
 ## 2026-09-03 18:41 KST - Authenticated Collector resume responsibility policy split
 
 - CEO request:

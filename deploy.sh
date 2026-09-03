@@ -410,6 +410,29 @@ peer_port_for() {
 
 stream_count_for_port() {
     local port="$1"
+    local container
+    local db_count
+    container="$(container_for_port "$port")"
+    if [[ -n "$container" ]] && docker inspect aads-postgres --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        db_count="$(
+            docker exec aads-postgres psql -U aads -d aads -Atc "
+                SELECT count(*)::int
+                FROM chat_turn_executions
+                WHERE status IN ('running','retrying')
+                  AND completed_at IS NULL
+                  AND owner_instance = '${container}'
+                  AND (
+                      lease_expires_at IS NULL
+                      OR lease_expires_at > NOW()
+                      OR heartbeat_at > NOW() - INTERVAL '60 seconds'
+                  );
+            " 2>/dev/null | tr -d '[:space:]' || true
+        )"
+        if [[ "$db_count" =~ ^[0-9]+$ ]]; then
+            echo "$db_count"
+            return 0
+        fi
+    fi
     (
         curl -s -m 5 "http://127.0.0.1:${port}/api/v1/ops/active-streams" 2>/dev/null \
         | python3 -c "import sys,json; value=json.load(sys.stdin).get('count', 'unknown'); print(value if value is not None else 'unknown')" 2>/dev/null
@@ -551,14 +574,12 @@ sync_standby_slot_after_drain() {
     local old_port="$2"
     local expected_generation="$3"
 
-    (
-        # The delayed standby rebuild can run for many minutes. Release the
-        # parent's global nginx lock before sleeping/building in background.
-        exec 8>&-
-        # Do not rebuild the previous active slot immediately after switching.
-        # Existing nginx workers may still hold SSE/WebSocket streams on that slot,
-        # and the active-stream counter can be briefly stale during handoff.
-        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-600}"
+    {
+        # This step is part of release certification, not a best-effort
+        # background task. The caller releases the nginx lock before entering it.
+        # Existing nginx workers may still hold SSE/WebSocket streams on the old
+        # slot, so require a short grace period plus consecutive zero samples.
+        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-30}"
         if [[ "$min_wait" != "0" ]]; then
             echo "[deploy.sh] standby sync grace wait ${old_container}:${old_port} ${min_wait}s"
             sleep "$min_wait"
@@ -577,10 +598,16 @@ sync_standby_slot_after_drain() {
         local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
         local elapsed=0
         local active="0"
+        local zero_seen=0
         while [[ $elapsed -lt $drain_max ]]; do
             active="$(stream_count_for_port "$old_port")"
             if [[ "$active" == "0" || -z "$active" ]]; then
-                break
+                zero_seen=$((zero_seen + 1))
+                if [[ "$zero_seen" -ge "${AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-2}" ]]; then
+                    break
+                fi
+            else
+                zero_seen=0
             fi
             echo "[deploy.sh] standby sync wait ${old_container}:${old_port} active streams=${active}; wait 30s"
             sleep 30
@@ -588,14 +615,15 @@ sync_standby_slot_after_drain() {
         done
 
         if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
-            echo "[deploy.sh] standby sync skipped: ${old_container}:${old_port} still has active streams=${active}"
+            echo "[deploy.sh] standby sync ERROR: ${old_container}:${old_port} still has active streams=${active}"
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-            return 0
+            audit_control "standby-sync" "${old_container}:${old_port}" "failed" "drain timeout active=${active}"
+            return 1
         fi
 
         if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
             audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "ownership changed after drain"
-            return 0
+            return 1
         fi
 
         echo "[deploy.sh] standby sync PC Agent reconnect trigger on drained old slot :${old_port}"
@@ -625,13 +653,15 @@ sync_standby_slot_after_drain() {
             fi
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             echo "[deploy.sh] standby sync complete: ${old_container}:${old_port}"
-            audit_control "standby-sync" "${old_container}:${old_port}" "success" "rebuilt and healthy"
+            audit_control "standby-sync" "${old_container}:${old_port}" "success" "same release image and healthy"
+            return 0
         else
             echo "[deploy.sh] standby sync WARN: ${old_container}:${old_port} health failed after rebuild"
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "health failed after rebuild"
+            return 1
         fi
-    ) >> "${COMPOSE_DIR}/logs/standby-sync.log" 2>&1 &
-    disown
+    } 2>&1 | tee -a "${COMPOSE_DIR}/logs/standby-sync.log"
+    return "${PIPESTATUS[0]}"
 }
 
 # .env에서 텔레그램 변수 로드
@@ -894,11 +924,26 @@ case "$MODE" in
 
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
-            echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 존재 — 재빌드 시 응답 끊김 위험으로 배포 중단"
-            echo "[deploy.sh]    잠시 후 재시도하거나, 긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
-            notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
-            record_deploy "blocked" "$MODE" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
-            exit 1
+            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800}"
+            local_target_elapsed=0
+            echo "[deploy.sh] ⏳ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 — 재빌드 전 drain 대기 (최대 ${local_target_drain_max}초)"
+            while [[ "$local_target_elapsed" -lt "$local_target_drain_max" ]]; do
+                sleep 30
+                local_target_elapsed=$((local_target_elapsed + 30))
+                TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
+                if [[ "$TARGET_STREAMS" == "0" || -z "$TARGET_STREAMS" ]]; then
+                    echo "[deploy.sh] ✅ target slot drain 완료 (${local_target_elapsed}초)"
+                    break
+                fi
+                echo "[deploy.sh]   target drain 대기중... active=${TARGET_STREAMS} (${local_target_elapsed}/${local_target_drain_max}초)"
+            done
+            if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]]; then
+                echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 잔존 — 100% 무중단 원칙상 배포 차단"
+                echo "[deploy.sh]    긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
+                notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+                record_deploy "blocked" "$MODE" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+                exit 1
+            fi
         elif [[ "$TARGET_STREAMS" != "0" ]]; then
             echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
         fi
@@ -1008,17 +1053,20 @@ case "$MODE" in
         fi
 
         # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
-        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화 백그라운드 예약"
+        echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         release_nginx_switch_lock
-        sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"
+        if ! sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"; then
+            notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
+            record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
+            exit 1
+        fi
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
-        echo "[deploy.sh] ✅ Blue-Green active 전환 완료: :${NEW_PORT} 활성"
-        echo "[deploy.sh] ℹ️ standby 동기화는 old slot drain 후 백그라운드에서 별도 완료/skip 로그를 남깁니다."
+        echo "[deploy.sh] ✅ Blue-Green active 전환 + standby same-digest 동기화 완료: :${NEW_PORT} 활성"
         notify "✅ Blue-Green active 전환 완료: :${CURRENT_PORT} → :${NEW_PORT}"
         ;;
     *)

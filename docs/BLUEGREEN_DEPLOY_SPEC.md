@@ -1,5 +1,5 @@
 # AADS Blue-Green 무중단 배포 기술 명세서
-_최종 갱신: 2026-08-21_
+_최종 갱신: 2026-09-04_
 
 ---
 
@@ -57,8 +57,9 @@ upstream aads_api {
 | 포트 바인딩 | `8100→8080` | `8102→8080` |
 | `restart` 정책 | `always` | `unless-stopped` |
 | Docker Compose profile | (기본 — 항상 포함) | `green` |
-| 메모리 한도 (`deploy.resources.limits.memory`) | `2G` | `2G` |
-| 코드 볼륨 | `app:/app/app:rw` (공유) | `app:/app/app:rw` (동일 볼륨) |
+| 메모리 한도 (`deploy.resources.limits.memory`) | `3G` | `3G` |
+| 코드 공급원 | release-SHA Docker image | release-SHA Docker image |
+| 런타임 볼륨 | `app/data`, `app/static`, generated media, state/secret files | 동일 |
 | 역할 | active 또는 warm standby | active 또는 warm standby |
 
 두 슬롯은 배포 후에도 healthy한 warm standby를 유지한다. 현재 active는 컨테이너 이름이 아니라 Nginx upstream의 비-`backup` 라인으로 판정한다.
@@ -100,7 +101,8 @@ upstream aads_api {
    ```
 2. 활성이 Blue(8100)면 → Green(8102)을 빌드 대상으로 선택
 3. 활성이 Green(8102)이면 → Blue(8100)를 빌드 대상으로 선택
-4. `docker compose --profile green up -d --build --no-deps aads-server-green`
+4. `git archive HEAD`로 깨끗한 release context를 만들고 `aads-server:${AADS_RELEASE_SHA}` 이미지를 1회만 빌드
+5. `docker compose --profile green up -d --no-build --no-deps aads-server-green`
 
 ### Phase 1-②: 헬스체크 (최대 90초)
 
@@ -134,7 +136,9 @@ docker exec aads-nginx nginx -s reload   # 무중단 리로드
 
 - 전환 직후 이전 슬롯을 종료하지 않는다.
 - 최소 grace wait와 `/api/v1/ops/active-streams` drain 확인 후 standby를 현재 release로 동기화한다.
+- drain count는 해당 슬롯의 `owner_instance` DB lease와 process-local task가 일치하는 경우만 센다. 다른 슬롯이 소유한 DB 실행과 최근 placeholder는 standby sync를 막지 않는다.
 - 백그라운드 작업은 `.deploy_generation`, `.active_port`, `.active_container`를 재검증한다.
+- standby same-digest 동기화는 배포 완료 전 인증 게이트다. drain timeout, health 실패, digest 불일치는 배포 실패로 기록한다.
 - 세대가 바뀌었거나 대상 슬롯이 다시 active가 됐으면 재시작·재빌드를 수행하지 않고 종료한다.
 
 ### Phase 2~6: 후속 검증
