@@ -307,8 +307,6 @@ def _bank_account_is_collectable(account: dict[str, Any]) -> bool:
     service_code = _bank_account_service_code(account)
     if service_code not in {"shinhan_business", "ibk_business"}:
         return True
-    if not str(account.get("account_number_masked") or "").strip():
-        return True
     matching_platform_accounts = [
         row
         for row in _platform_accounts_for_bank_sync({}, str(account.get("business_id") or "").strip() or None)
@@ -330,8 +328,6 @@ def _bank_account_is_collectable(account: dict[str, Any]) -> bool:
         )
         and _quick_account_mask_matches(account, row)
     ]
-    if not matching_platform_accounts:
-        return True
     return any(_quick_account_has_required_secrets(row) for row in matching_platform_accounts)
 
 

@@ -1815,6 +1815,69 @@ def test_drain_bank_queue_cancels_non_collectable_account_before_browser(monkeyp
     assert completed[0][1]["result"]["browser_attempted"] is False
 
 
+def test_shinhan_bank_account_without_matching_platform_credentials_is_not_collectable(monkeypatch):
+    monkeypatch.setattr(auto_collect, "_platform_accounts_for_bank_sync", lambda user, business_id=None: [])
+
+    assert auto_collect._bank_account_is_collectable(
+        {
+            "business_id": "biz-junghwa",
+            "branch_id": "branch-junghwa",
+            "bank_name": "신한은행 기업",
+            "bank_code": "088",
+            "institution_code": "shinhan_business",
+            "account_number_masked": "********6789",
+            "status": "active",
+            "auto_sync": True,
+        }
+    ) is False
+
+
+def test_shinhan_bank_account_requires_complete_platform_credentials(monkeypatch):
+    platform_account = {
+        "service": "shinhan_business",
+        "business_id": "biz-mia",
+        "branch_id": "branch-gangbuk-mia",
+        "collection_mode": "bank-quick-service",
+        "auto_sync": True,
+        "account_no_masked": "**********1031",
+        "password_enc": "enc-login",
+        "account_no_enc": "enc-account",
+        "account_password_enc": "enc-account-password",
+        "business_registration_no_enc": "enc-business-no",
+    }
+    monkeypatch.setattr(auto_collect, "_platform_accounts_for_bank_sync", lambda user, business_id=None: [platform_account])
+
+    assert auto_collect._bank_account_is_collectable(
+        {
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_name": "신한은행 기업",
+            "bank_code": "088",
+            "institution_code": "shinhan_business",
+            "account_number_masked": "**********1031",
+            "status": "active",
+            "auto_sync": True,
+        }
+    ) is True
+
+    incomplete = dict(platform_account)
+    incomplete["account_password_enc"] = ""
+    monkeypatch.setattr(auto_collect, "_platform_accounts_for_bank_sync", lambda user, business_id=None: [incomplete])
+
+    assert auto_collect._bank_account_is_collectable(
+        {
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_name": "신한은행 기업",
+            "bank_code": "088",
+            "institution_code": "shinhan_business",
+            "account_number_masked": "**********1031",
+            "status": "active",
+            "auto_sync": True,
+        }
+    ) is False
+
+
 def test_bank_only_defers_when_bank_pc_agent_lock_is_held(tmp_path, monkeypatch):
     lock_path = tmp_path / "bank.lock"
     monkeypatch.setenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", str(lock_path))

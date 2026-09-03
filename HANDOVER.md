@@ -13,6 +13,24 @@
   - `/root/aads/aads-server/.venv-playwright/bin/python -m pytest -q tests/unit/test_authenticated_site_collector.py tests/unit/test_pc_agent_routing_leases.py` passed: 37 tests.
   - `/root/aads/aads-server/.venv-playwright/bin/python -m py_compile app/services/authenticated_site_collector.py app/services/pc_agent_collection_queue.py app/services/pc_agent_manager.py` passed.
   - `git diff --check -- app/services/authenticated_site_collector.py app/services/pc_agent_collection_queue.py app/services/pc_agent_manager.py tests/unit/test_authenticated_site_collector.py tests/unit/test_pc_agent_routing_leases.py` passed.
+- Pending:
+  - Selective commit/push/deploy if requested. Existing unrelated dirty files remain in the worktree and must not be included accidentally.
+
+## 2026-09-03 18:55 KST - Nicechip Instagram mood logo extension
+
+- CEO request:
+  - Add five more Nicechip logo concepts with a slightly emotional Instagram feel and report with a directly viewable link.
+- Changes:
+  - Updated `app/static/reports/nicechip_logo_concepts_20260903.html` from 10 concepts to 15 concepts.
+  - Added concepts 11-15: pastel picnic label, cafe drawing wordmark, film mood snack cut, ribbon gift chip, and soft store sticker.
+  - Synced identical public copies to `app/static/exports/nicechip_logo_concepts_20260903.html`, `/var/www/certbot/exports/nicechip_logo_concepts_20260903.html`, `/root/aads/aads-dashboard/public/reports/nicechip_logo_concepts_20260903.html`, and `/root/aads/aads-dashboard/public/exports/nicechip_logo_concepts_20260903.html`.
+- Verification:
+  - Local exported HTML contains 15 `<article class="concept">` cards.
+  - Public URL `https://aads.newtalk.kr/exports/nicechip_logo_concepts_20260903.html` returned HTTP 200 `text/html`.
+  - Public HTML contains `나이스칩 로고 시안 15종` and concepts 11-15 labels.
+  - `capture_screenshot` succeeded and saved `https://aads.newtalk.kr/screenshots/screenshot_20260903_185553_1d1a67.png`.
+- Not completed:
+  - No commit, push, or blue-green deploy was performed. This is a static public export update, and the repository already has unrelated dirty changes.
 
 ## 2026-09-03 17:15 KST - Authenticated Collector FOOD project/runtime contract
 
@@ -10530,6 +10548,22 @@
 - Not completed:
   - Not committed, pushed, or deployed in this direct patch because `aads-server` already has unrelated dirty changes and is `ahead 1`; dashboard also has unrelated dirty report output.
 
+## 2026-09-03 18:39 KST - Nicechip logo benchmark extension
+
+- CEO request:
+  - Benchmark external snack/rice-chip branding and add five more logo directions with different moods to the existing Nicechip HTML page.
+- Changes:
+  - Updated `app/static/reports/nicechip_logo_concepts_20260903.html` from 5 concepts to 10 concepts.
+  - Added an external benchmarking summary covering Dang Thai Rice Chips, Popchips, Hippeas, and Siete-style positioning cues.
+  - Added concepts 6-10: clean rice label, neon crunch pop, artisan nurungji seal, daily smile character, and sunrise market pack.
+  - Published identical public copies to `app/static/exports/nicechip_logo_concepts_20260903.html` and `/var/www/certbot/exports/nicechip_logo_concepts_20260903.html`.
+- Verification:
+  - `curl https://aads.newtalk.kr/exports/nicechip_logo_concepts_20260903.html` returned HTTP 200 `text/html`.
+  - Remote HTML contains `나이스칩 로고 시안 10종`, `외부 벤치마킹 반영점`, and concepts 6-10 labels.
+  - `capture_screenshot` succeeded for the public URL and saved `https://aads.newtalk.kr/screenshots/screenshot_20260903_183936_4ac0b4.png`.
+- Not completed:
+  - No commit, push, or blue-green deploy was performed. This is a static public export publish only; repository worktrees already contain unrelated dirty changes.
+
 ## 2026-09-03 18:41 KST - Authenticated Collector resume responsibility policy split
 
 - CEO request:
@@ -10548,3 +10582,34 @@
   - `/root/aads/aads-dashboard`: `npx eslint src/app/authenticated-collector/page.tsx src/lib/api.ts` returned 0 errors and existing `no-explicit-any` warnings in lower sections of `src/lib/api.ts`.
 - Not completed:
   - Not committed, pushed, or deployed in this direct patch because both repositories already contain unrelated dirty changes. A clean release worktree or separated staging is required before blue-green deployment.
+
+## 2026-09-03 19:16 KST - Nicechip recommended logo expansion
+
+- CEO request:
+  - Apply the recommended benchmark direction by adding brighter K-rice snack concepts and premium/Instagram-friendly concepts to the Nicechip logo page.
+- Changes:
+  - Updated `app/static/reports/nicechip_logo_concepts_20260903.html` from 15 concepts to 25 concepts.
+  - Added concepts 16-20 for bright K-rice snack positioning and concepts 21-25 for premium, cafe, Instagram shopping, and gift-channel positioning.
+  - Updated benchmark summary and recommendation table to prioritize initial package, K-rice snack, health/raw ingredient, premium, SNS, and cafe/edit-shop use cases.
+  - Published identical copies to `app/static/exports/nicechip_logo_concepts_20260903.html`, `/root/aads/aads-dashboard/public/reports/nicechip_logo_concepts_20260903.html`, `/root/aads/aads-dashboard/public/exports/nicechip_logo_concepts_20260903.html`, and `/var/www/certbot/exports/nicechip_logo_concepts_20260903.html`.
+- Verification:
+  - Local HTML contains exactly 25 `<article class="concept">` cards.
+  - All published copies compare byte-identical to the report HTML.
+  - `curl https://aads.newtalk.kr/exports/nicechip_logo_concepts_20260903.html` returned HTTP 200 `text/html` and 25 concept cards.
+  - `capture_screenshot` succeeded and saved `https://aads.newtalk.kr/screenshots/screenshot_20260903_191637_c5251d.png`.
+- Not completed:
+  - No commit, push, or blue-green deploy was performed. This is a static public export publish only; repository worktrees already contain unrelated dirty changes.
+
+## 2026-09-04 04:00 KST - Shinhan Windows native input fallback for bank collection
+
+- CEO request:
+  - Proceed with the next step after Shinhan CDP/DOM login input failed: use a Windows Collector style real mouse/keyboard path and verify collection again.
+- Server changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: added PC Agent native element focus and input helpers. Shinhan ID/PW login now resolves element screen coordinates, focuses the bank window, clicks the actual field through `mouse_click`, clears it, and types through the PC Agent OS keyboard path before submitting.
+  - Shinhan stage logs now preserve `native_username_input`, `native_secret_input`, and `native_mouse_focus` flags without logging plaintext secrets.
+  - `scripts/yeoljeong_auto_collect.py`: bank queue collectability remains strict for Shinhan/IBK quick-service accounts; accounts without matching platform credentials are excluded before browser launch.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:5c08fe1ee096 python -m py_compile app/services/yeoljeong_bank_browser_connector.py scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py` passed.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:5c08fe1ee096 python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_auto_collect.py tests/unit/test_browser_bridge.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_authenticated_site_collector.py -q` passed 205/205.
+- Not completed:
+  - Blue/green deploy and live Shinhan collection verification are pending this commit/push cycle.

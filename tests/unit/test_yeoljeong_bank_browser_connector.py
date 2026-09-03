@@ -5,6 +5,7 @@ import asyncio
 import base64
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -276,6 +277,60 @@ class _ShinhanRecoveredIdpwPage(_ChallengePage):
         return []
 
 
+class _ShinhanNativeInputPage(_ChallengePage):
+    def __init__(self):
+        super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
+        self.browser_commands = []
+        self.clicked_selectors = []
+        self.values = {"#login-id": "", "#login-pw": ""}
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        self.browser_commands.append((command_type, params))
+        if command_type == "keyboard_type":
+            text = str(params.get("text") or "")
+            if self.clicked_selectors:
+                self.values[self.clicked_selectors[-1]] = text
+            return {"status": "success", "data": {}}
+        return {"status": "success", "data": {}}
+
+    async def click(self, selector, **kwargs):
+        self.clicked_selectors.append(selector)
+
+    async def wait_for_load_state(self, *args, **kwargs):
+        return None
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        if "selectorFor" in expression:
+            return {
+                "attempted": "1",
+                "stage": "login_keyboard_prepare",
+                "username": "1",
+                "password_focused": "1",
+                "username_selector": "#login-id",
+                "password_selector": "#login-pw",
+            }
+        if "getBoundingClientRect" in expression:
+            selector = str(args[0])
+            self.clicked_selectors.append(selector)
+            return {
+                "resolved": "1",
+                "x": "240",
+                "y": "180",
+                "width": "120",
+                "height": "30",
+                "active": "1",
+            }
+        if "String(el.value" in expression:
+            return bool(self.values.get(str(args[0]), ""))
+        if "window.shbObj" in expression or "fncIdLogin" in expression:
+            return {"clicked": "1", "method": "fncIdLogin"}
+        if "querySelectorAll('.w2popup_window" in expression:
+            return {"present": "0"}
+        return []
+
+
 @pytest.mark.asyncio
 async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
     page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -376,6 +431,31 @@ def test_collect_async_shinhan_saved_idpw_prefers_id_login_over_fincert():
     assert mock_page.goto_calls == ["https://bank.shinhan.com/rib/easy/index.jsp"]
     assert "bank-pass" not in str(result["diagnostics"])
     assert "4321" not in str(result["diagnostics"])
+
+
+def test_shinhan_keyboard_login_uses_native_mouse_and_keyboard_commands():
+    page = _ShinhanNativeInputPage()
+
+    result = _run(
+        connector._try_shinhan_individual_keyboard_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["attempted"] == "1"
+    assert result["stage"] == "login_keyboard"
+    assert result["native_username"] == "1"
+    assert result["native_secret"] == "1"
+    assert result["native_mouse_focus"] == "1"
+    assert result["navigation_clicked"] == "1"
+    command_types = [command for command, _params in page.browser_commands]
+    assert command_types.count("mouse_click") >= 2
+    assert command_types.count("keyboard_type") >= 2
+    assert "keyboard_hotkey" in command_types
+    assert "keyboard_press" in command_types
+    assert "bank-pass" not in str(result)
 
 
 def test_collect_async_shinhan_retries_idpw_after_post_login_fincert():
@@ -1801,12 +1881,13 @@ def test_shinhan_idpw_login_reports_success_marker_and_elapsed_time(monkeypatch)
         "_close_shinhan_security_notice",
         AsyncMock(return_value=False),
     )
+    monkeypatch.setattr(
+        connector,
+        "_try_shinhan_individual_keyboard_login_step",
+        AsyncMock(return_value={"attempted": "0"}),
+    )
 
     async def evaluate(expr, *args, **kwargs):
-        assert "loggedInMarker" in expr
-        assert "fincert" in expr
-        assert "yeskey" in expr
-        assert "빠른조회|조회기간" not in expr
         payload = args[0]
         assert payload["username"] == "bank-user"
         return {
@@ -1833,10 +1914,62 @@ def test_shinhan_idpw_login_reports_success_marker_and_elapsed_time(monkeypatch)
         )
     )
 
+    expr = page.evaluate.await_args.args[0]
+    assert "loggedInMarker" in expr
+    assert "fincert" in expr
+    assert "yeskey" in expr
+    assert "login_input_rejected" in expr
+    assert "이용자" in expr and "ID" in expr and "입력" in expr
+    assert "빠른조회|조회기간" not in expr
     assert result["login_submitted"] == "1"
     assert result["login_success"] == "1"
     assert result["login_success_reason"] == "post_login_text"
     assert result["login_elapsed_ms"] == "2345"
+    assert "bank-pass" not in str(result)
+
+
+def test_shinhan_individual_login_does_not_treat_id_required_notice_as_success(monkeypatch):
+    page = SimpleNamespace(evaluate=AsyncMock())
+    monkeypatch.setattr(
+        connector,
+        "_try_shinhan_individual_keyboard_login_step",
+        AsyncMock(return_value={"attempted": "0"}),
+    )
+    monkeypatch.setattr(
+        connector,
+        "_close_shinhan_security_notice",
+        AsyncMock(return_value=False),
+    )
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "login_input_rejected" in expr
+        return {
+            "attempted": "1",
+            "stage": "login",
+            "username": "1",
+            "login_secret": "1",
+            "transkey_secret": "1",
+            "navigation_clicked": "1",
+            "websquare_triggered": "1",
+            "login_submitted": "1",
+            "login_success": "0",
+            "login_success_reason": "login_input_rejected",
+            "login_elapsed_ms": "1500",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_shinhan_individual_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["login_submitted"] == "1"
+    assert result["login_success"] == "0"
+    assert result["login_success_reason"] == "login_input_rejected"
     assert "bank-pass" not in str(result)
 
 

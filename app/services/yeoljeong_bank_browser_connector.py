@@ -155,6 +155,7 @@ def _append_shinhan_flow_stage_logs(
                 step_result.get("login_secret") == "1"
                 or step_result.get("keyboard_secret") == "1"
                 or step_result.get("transkey_secret") == "1"
+                or step_result.get("native_secret") == "1"
             )
         )
         submit_ok = (
@@ -191,6 +192,9 @@ def _append_shinhan_flow_stage_logs(
             error_code="" if login_ok else (error_code or "LOGIN_SUCCESS_NOT_OBSERVED"),
             reason=str(step_result.get("login_success_reason") or ""),
             login_elapsed_ms=str(step_result.get("login_elapsed_ms") or ""),
+            native_username_input=step_result.get("native_username", ""),
+            native_secret_input=step_result.get("native_secret", ""),
+            native_mouse_focus=step_result.get("native_mouse_focus", ""),
             success_condition="post_login_text_or_url_marker_observed" if login_ok else "",
             failure_condition="" if login_ok else "post_login_marker_not_observed_before_timeout",
             **common,
@@ -674,6 +678,114 @@ async def _try_pc_agent_keyboard_type(page: Any, text: str) -> bool:
         return False
 
 
+async def _pc_agent_element_click_point(page: Any, selector: str) -> dict[str, str]:
+    """Return a best-effort absolute screen coordinate for a visible element."""
+    selector = str(selector or "").strip()
+    if not selector:
+        return {"resolved": "0", "reason": "missing_selector"}
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            (selector) => {
+              const el = document.querySelector(selector);
+              if (!el || el.disabled) return {resolved: '0', reason: 'element_missing_or_disabled'};
+              const rect = el.getBoundingClientRect();
+              if (!rect || rect.width <= 0 || rect.height <= 0) {
+                return {resolved: '0', reason: 'element_not_visible'};
+              }
+              const chromeTop = Math.max(80, Number(window.outerHeight || 0) - Number(window.innerHeight || 0));
+              const chromeLeft = Math.max(0, Number(window.outerWidth || 0) - Number(window.innerWidth || 0)) / 2;
+              const x = Math.round(Number(window.screenX || 0) + chromeLeft + rect.left + rect.width / 2);
+              const y = Math.round(Number(window.screenY || 0) + chromeTop + rect.top + rect.height / 2);
+              try { el.scrollIntoView({block: 'center', inline: 'center'}); } catch (_) {}
+              try { el.focus(); } catch (_) {}
+              return {
+                resolved: '1',
+                x: String(x),
+                y: String(y),
+                width: String(Math.round(rect.width)),
+                height: String(Math.round(rect.height)),
+                active: document.activeElement === el ? '1' : '0'
+              };
+            }
+            """,
+            selector,
+            timeout_ms=10000,
+        )
+    except Exception as exc:
+        return {"resolved": "failed", **_safe_browser_error_fields(exc)}
+    if not isinstance(raw, dict):
+        return {"resolved": "0", "reason": "bad_coordinate_payload"}
+    result: dict[str, str] = {}
+    for key in ("resolved", "x", "y", "width", "height", "active", "reason", "error_code", "error_type"):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            result[key] = value[:120]
+    return result or {"resolved": "0"}
+
+
+async def _try_pc_agent_click_and_type(page: Any, selector: str, text: str) -> dict[str, str]:
+    """Focus a browser element with real mouse input, then type through PC Agent."""
+    value = str(text or "")
+    if not value:
+        return {"attempted": "0", "reason": "empty_text"}
+    runner = getattr(page, "_run_browser_command", None)
+    if not callable(runner):
+        return {"attempted": "0", "reason": "pc_agent_command_unavailable"}
+
+    result: dict[str, str] = {"attempted": "1"}
+    point = await _pc_agent_element_click_point(page, selector)
+    result["coordinate_resolved"] = "1" if point.get("resolved") == "1" else "0"
+    if point.get("reason"):
+        result["coordinate_reason"] = str(point.get("reason") or "")[:120]
+    try:
+        await runner(
+            "window_focus",
+            {"title": "간편조회서비스"},
+            command_timeout_seconds=8.0,
+            queue_wait_timeout_seconds=5.0,
+        )
+        result["window_focused"] = "1"
+    except Exception:
+        result["window_focused"] = "0"
+
+    if point.get("resolved") == "1":
+        try:
+            await runner(
+                "mouse_click",
+                {"x": int(point.get("x") or 0), "y": int(point.get("y") or 0), "button": "left", "clicks": 1},
+                command_timeout_seconds=8.0,
+                queue_wait_timeout_seconds=5.0,
+            )
+            result["mouse_clicked"] = "1"
+        except Exception:
+            result["mouse_clicked"] = "0"
+    else:
+        result["mouse_clicked"] = "0"
+
+    try:
+        await runner(
+            "keyboard_hotkey",
+            {"keys": ["ctrl", "a"]},
+            command_timeout_seconds=8.0,
+            queue_wait_timeout_seconds=5.0,
+        )
+        await runner(
+            "keyboard_press",
+            {"key": "backspace"},
+            command_timeout_seconds=8.0,
+            queue_wait_timeout_seconds=5.0,
+        )
+        result["field_cleared"] = "1"
+    except Exception:
+        result["field_cleared"] = "0"
+
+    typed = await _try_pc_agent_keyboard_type(page, value)
+    result["typed"] = "1" if typed else "0"
+    return result
+
+
 async def _try_shinhan_individual_keyboard_login_step(
     page: Any,
     *,
@@ -792,13 +904,21 @@ async def _try_shinhan_individual_keyboard_login_step(
                 passwordEl.dispatchEvent(new Event('input', {bubbles: true}));
                 if (window.tk && typeof window.tk.onKeyboard === 'function') window.tk.onKeyboard(passwordEl);
               } catch (_) {}
-              const selector = passwordEl.id ? `[id="${String(passwordEl.id).replace(/"/g, '\\\\"')}"]` : '';
+              const selectorFor = (el) => {
+                if (!el) return '';
+                if (el.id) return `[id="${String(el.id).replace(/"/g, '\\\\"')}"]`;
+                if (el.name) return `[name="${String(el.name).replace(/"/g, '\\\\"')}"]`;
+                return '';
+              };
+              const usernameSelector = selectorFor(loginIdEl);
+              const passwordSelector = selectorFor(passwordEl);
               return {
                 attempted: '1',
                 stage: 'login_keyboard_prepare',
                 username: usernameOk ? '1' : '0',
                 password_focused: document.activeElement === passwordEl ? '1' : '0',
-                password_selector: selector
+                username_selector: usernameSelector,
+                password_selector: passwordSelector
               };
             }
             """,
@@ -829,13 +949,33 @@ async def _try_shinhan_individual_keyboard_login_step(
             "navigation_clicked": "0",
             "websquare_triggered": "0",
         }
+    username_selector = str(prepared.get("username_selector") or "").strip()
     password_selector = str(prepared.get("password_selector") or "").strip()
+    native_username_result: dict[str, str] = {"attempted": "0"}
+    if username_selector:
+        native_username_result = await _try_pc_agent_click_and_type(page, username_selector, username)
+        if native_username_result.get("typed") == "1":
+            try:
+                prepared["username"] = "1" if bool(await _evaluate_page(
+                    page,
+                    """
+                    (selector) => {
+                      const el = document.querySelector(selector);
+                      return !!(el && String(el.value || '').length > 0);
+                    }
+                    """,
+                    username_selector,
+                    timeout_ms=6000,
+                )) else prepared.get("username", "0")
+            except Exception:
+                pass
     if password_selector and hasattr(page, "click"):
         try:
             await page.click(password_selector)
         except Exception:
             pass
-    typed = await _try_pc_agent_keyboard_type(page, password)
+    native_secret_result = await _try_pc_agent_click_and_type(page, password_selector, password) if password_selector else {"attempted": "0"}
+    typed = native_secret_result.get("typed") == "1"
     if not typed:
         return {
             "attempted": "1",
@@ -845,6 +985,10 @@ async def _try_shinhan_individual_keyboard_login_step(
             "keyboard_secret": "0",
             "navigation_clicked": "0",
             "websquare_triggered": "0",
+            "native_username": native_username_result.get("typed", "0"),
+            "native_secret": native_secret_result.get("typed", "0"),
+            "native_mouse_focus": native_secret_result.get("mouse_clicked", "0"),
+            "error_code": "SHINHAN_NATIVE_PASSWORD_INPUT_FAILED",
         }
     try:
         clicked = await _evaluate_page(
@@ -936,6 +1080,9 @@ async def _try_shinhan_individual_keyboard_login_step(
         "username": "1",
         "login_secret": "1",
         "keyboard_secret": "1",
+        "native_username": native_username_result.get("typed", "0"),
+        "native_secret": native_secret_result.get("typed", "0"),
+        "native_mouse_focus": native_secret_result.get("mouse_clicked", "0"),
         "navigation_clicked": "1" if isinstance(clicked, dict) and str(clicked.get("clicked") or "") == "1" else "0",
         "websquare_triggered": "1" if isinstance(clicked, dict) and str(clicked.get("clicked") or "") == "1" else "0",
     }
@@ -2048,6 +2195,16 @@ async def _try_shinhan_individual_login_step(
 		              const startedAt = performance.now();
 		              const authText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
 		              const authUrl = () => String(window.location.href || '');
+		              const loginErrorMarker = () => {
+		                const currentText = authText();
+		                if (/이용자\\s*ID를\\s*입력|이용자ID를\\s*입력|비밀번호를\\s*입력|비밀번호\\s*최소자릿수|키보드\\s*입력\\s*검증|처음부터\\s*다시\\s*진행/i.test(currentText)) {
+		                  return 'login_input_rejected';
+		                }
+		                if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)|보안프로그램.*설치/i.test(currentText)) {
+		                  return 'login_error_or_security_notice';
+		                }
+		                return '';
+		              };
 		              const loggedInMarker = () => {
 		                const currentText = authText();
 		                const currentUrl = authUrl();
@@ -2060,10 +2217,10 @@ async def _try_shinhan_individual_login_step(
 		                if (/로그아웃/i.test(currentText)) {
 		                  return 'post_login_text';
 		                }
-		                if (!stillLoginPanel && /조회기간|계좌조회|거래내역|출금가능|잔액/i.test(currentText)) {
+		                if (!stillLoginPanel && /거래내역\\s*(조회|다운로드)|조회결과|출금가능금액|계좌잔액/i.test(currentText)) {
 		                  return 'post_login_text';
 		                }
-		                if (/#210101|acct|inq|조회/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
+		                if (/#210101/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
 		                  return 'post_login_url';
 		                }
 		                return '';
@@ -2327,14 +2484,14 @@ async def _try_shinhan_individual_login_step(
 	              if (submitted) {
 	                for (let i = 0; i < 30; i += 1) {
 	                  await sleep(500);
+	                  const loginErrorReason = loginErrorMarker();
+	                  if (loginErrorReason) {
+	                    loginSuccessReason = loginErrorReason;
+	                    break;
+	                  }
 	                  loginSuccessReason = loggedInMarker();
 	                  if (loginSuccessReason) {
 	                    loginSuccess = '1';
-	                    break;
-	                  }
-	                  const currentText = authText();
-	                  if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)|보안프로그램.*설치/i.test(currentText)) {
-	                    loginSuccessReason = 'login_error_or_security_notice';
 	                    break;
 	                  }
 	                }
@@ -2368,6 +2525,9 @@ async def _try_shinhan_individual_login_step(
         "username",
         "login_secret",
         "transkey_secret",
+        "native_username",
+        "native_secret",
+        "native_mouse_focus",
         "navigation_clicked",
         "websquare_triggered",
         "login_submitted",
