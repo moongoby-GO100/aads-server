@@ -10570,6 +10570,7 @@
   - Fix every problematic item in the AADS zero-downtime Blue/Green path, apply the implementation, and report whether the system can reach the 100% target.
 - Server changes:
   - `app/api/ops.py`: `/api/v1/ops/active-streams` now reports slot-local drain activity. It counts process-local tasks only when they are owned by the current container's `chat_turn_executions.owner_instance` lease, and exposes global DB/placeholder counts separately.
+  - `app/services/chat_service.py`: inactive Blue/Green slots now refuse to adopt `owner_instance IS NULL` executions during interim save. This prevents a standby process from re-owning a recovery stream after the active slot has released it for reclaim.
   - `deploy.sh`: `stream_count_for_port()` now uses PostgreSQL owner leases for the target container before falling back to the HTTP endpoint. Target-slot busy handling now waits for drain before rebuilding instead of failing immediately. Standby synchronization is now a release certification gate: it waits for consecutive zero samples, starts the old slot with `--no-build`, validates memory limits, and fails the deployment if active/standby image digests differ.
   - `docker-compose.prod.yml`: API blue/green services no longer bind-mount the whole `app` and `scripts` trees over the release image. Runtime mounts are limited to data/static/state/secret paths, so dirty code cannot bypass the release-SHA image.
   - `scripts/verify-bluegreen-release-contract.sh`: verifier now fails closed when API blue/green services reintroduce full source bind mounts.
@@ -10583,7 +10584,7 @@
   - Current API slots were not same-digest (`aads-server:e756a3b3018b` vs `aads-server:4d75a3fc1fe2`), while Dashboard slots were same-digest.
   - DB showed live executions owned by both `aads-server` and `aads-server-green`; old code therefore overreported standby activity and could skip sync permanently.
 - Not completed at this record point:
-  - Commit, push, Blue/Green deploy, same-digest runtime certification, and five-minute P0/P1 monitoring are still pending after this documentation entry.
+  - Blue/Green deploy, same-digest runtime certification, and five-minute P0/P1 monitoring are still pending after this documentation entry.
 
 ## 2026-09-03 18:41 KST - Authenticated Collector resume responsibility policy split
 

@@ -4115,6 +4115,17 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                 exec_owner = _exec_state["owner_instance"]
                 exec_epoch = int(_exec_state["owner_epoch"] or 0)
                 if exec_owner is None:
+                    if not _is_local_active_api_slot():
+                        state["completed"] = True
+                        state["_terminal_execution_closed"] = True
+                        state["_producer_incomplete_exit"] = "inactive_slot_refused_null_lease"
+                        logger.warning(
+                            "interim_save_inactive_slot_refused_null_lease session=%s execution=%s owner=%s",
+                            session_id[:8],
+                            str(_eid)[:8],
+                            _EXECUTION_OWNER_INSTANCE,
+                        )
+                        return
                     adopted_epoch = await _claim_execution_lease(
                         conn,
                         _eid,
