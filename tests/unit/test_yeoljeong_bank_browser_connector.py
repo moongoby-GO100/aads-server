@@ -331,6 +331,20 @@ class _ShinhanNativeInputPage(_ChallengePage):
         return []
 
 
+class _ShinhanNativeUnfocusedPasswordPage(_ShinhanNativeInputPage):
+    async def evaluate(self, expression, *args, **kwargs):
+        if "selectorFor" in expression:
+            return {
+                "attempted": "1",
+                "stage": "login_keyboard_prepare",
+                "username": "1",
+                "password_focused": "0",
+                "username_selector": "#login-id",
+                "password_selector": "#login-pw",
+            }
+        return await super().evaluate(expression, *args, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
     page = _ChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -455,6 +469,28 @@ def test_shinhan_keyboard_login_uses_native_mouse_and_keyboard_commands():
     assert command_types.count("keyboard_type") >= 2
     assert "keyboard_hotkey" in command_types
     assert "keyboard_press" in command_types
+    assert "bank-pass" not in str(result)
+
+
+def test_shinhan_keyboard_login_uses_native_input_when_password_dom_focus_fails():
+    page = _ShinhanNativeUnfocusedPasswordPage()
+
+    result = _run(
+        connector._try_shinhan_individual_keyboard_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["attempted"] == "1"
+    assert result["stage"] == "login_keyboard"
+    assert result["native_username"] == "1"
+    assert result["native_secret"] == "1"
+    assert result["native_mouse_focus"] == "1"
+    command_types = [command for command, _params in page.browser_commands]
+    assert command_types.count("mouse_click") >= 2
+    assert command_types.count("keyboard_type") >= 2
     assert "bank-pass" not in str(result)
 
 
@@ -2122,6 +2158,7 @@ def test_shinhan_keyboard_login_fails_fast_on_security_verification_notice():
                 "stage": "login_keyboard_prepare",
                 "username": "1",
                 "password_focused": "1",
+                "username_selector": "[id=\"ibx_loginId\"]",
                 "password_selector": "[id=\"비밀번호\"]",
             }
         if "fncIdLogin" in expr:

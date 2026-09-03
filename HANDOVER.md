@@ -10629,3 +10629,18 @@
   - Shinhan ID/PW input and login submit were recorded as successful, but post-login marker was not observed before timeout; `bank_transactions.json` was still missing.
 - Not completed:
   - This follow-up patch still needs commit, push, blue/green deploy, and another live Shinhan collection retry.
+
+## 2026-09-04 05:11 KST - Shinhan native input focus guard relaxation
+
+- CEO request:
+  - Continue immediately after the deployed marker wait showed Shinhan still rejected ID/PW input.
+- Server changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: removed the premature return that skipped native PC Agent input when Shinhan's DOM did not report the password input as focused. If username/password selectors are resolved, the connector now proceeds with real mouse click plus OS keyboard typing and only fails early when selectors are missing.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added regression coverage for the unfocused-password case and updated the security-verification test double to include a username selector.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:dcb1367b53bd python3 -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed 75/75.
+- Live observation before this patch:
+  - Active slot `aads-server-green` on `dcb1367b53bd` reached Shinhan security-module success and ID/PW panel reset, but the login outcome was `login_input_rejected` with no bank transactions imported.
+- Not completed:
+  - This second follow-up patch still needs commit, push, blue/green deploy, and another live Shinhan collection retry.

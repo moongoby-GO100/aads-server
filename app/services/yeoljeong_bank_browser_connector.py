@@ -939,7 +939,9 @@ async def _try_shinhan_individual_keyboard_login_step(
             "navigation_clicked": "1" if str(prepared.get("navigation_clicked") or "") == "1" else "0",
             "websquare_triggered": "1" if str(prepared.get("websquare_triggered") or "") == "1" else "0",
         }
-    if str(prepared.get("username") or "") != "1" or str(prepared.get("password_focused") or "") != "1":
+    username_selector = str(prepared.get("username_selector") or "").strip()
+    password_selector = str(prepared.get("password_selector") or "").strip()
+    if not username_selector or not password_selector:
         return {
             "attempted": "1",
             "stage": "login_keyboard_prepare",
@@ -948,9 +950,11 @@ async def _try_shinhan_individual_keyboard_login_step(
             "keyboard_secret": "0",
             "navigation_clicked": "0",
             "websquare_triggered": "0",
+            "native_username": "0",
+            "native_secret": "0",
+            "native_mouse_focus": "0",
+            "error_code": "SHINHAN_LOGIN_SELECTOR_NOT_RESOLVED",
         }
-    username_selector = str(prepared.get("username_selector") or "").strip()
-    password_selector = str(prepared.get("password_selector") or "").strip()
     native_username_result: dict[str, str] = {"attempted": "0"}
     if username_selector:
         native_username_result = await _try_pc_agent_click_and_type(page, username_selector, username)
