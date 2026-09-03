@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from app.services import pc_agent_collection_queue as queue_module
+from app.services.auth_challenge_orchestrator import make_resume_token
+from app.services.browser_permission_policy import mask_sensitive_value
 from app.services.browser_recipe_registry import build_recipe_dry_run_plan
 from app.services.managed_browser import normalize_origin, normalize_work_key
 
@@ -47,9 +49,21 @@ SITE_ENVIRONMENTS = {
 }
 LOGIN_MODES = {"user_session", "agent_vault", "manual_export", "official_api", "none"}
 CHALLENGE_POLICIES = {"user_intervention", "manual_export", "deny", "none"}
+CHALLENGE_KINDS = {"captcha", "otp", "identity_check", "certificate", "terms", "permission", "login"}
+RESUME_RESOLUTIONS = {
+    "user_completed",
+    "user_input_completed",
+    "user_approved_automation",
+    "manual_export_uploaded",
+    "approved_same_session",
+    "skip_optional_step",
+    "completed",
+}
 VERSION_STATUSES = {"draft", "active", "archived"}
 ACTIVE_JOB_STATUSES = {"queued", "running", "action_required"}
 LOCAL_WINDOWS_SITE_ENVIRONMENTS = {"webview2", "windows_collector"}
+CHALLENGE_HOLD_UNTIL = "2099-01-01T00:00:00+09:00"
+PHYSICAL_INPUT_CHALLENGE_KINDS = {"otp", "identity_check", "certificate"}
 
 DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
     {
@@ -249,9 +263,36 @@ def _normalize_challenge_policy(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         policy = {str(key)[:80]: val for key, val in value.items() if str(key).strip()}
         mode = _normalize_enum(policy.get("mode"), CHALLENGE_POLICIES, "user_intervention")
-        return {**policy, "mode": mode}
+        return _safe_challenge_policy({**policy, "mode": mode})
     mode = _normalize_enum(value, CHALLENGE_POLICIES, "user_intervention")
-    return {"mode": mode}
+    return _safe_challenge_policy({"mode": mode})
+
+
+def _safe_challenge_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    """Collector-level safety contract. Challenge values are never persisted."""
+    mode = _normalize_enum(policy.get("mode"), CHALLENGE_POLICIES, "user_intervention")
+    challenge_kinds = [
+        _normalize_enum(value, CHALLENGE_KINDS, "captcha")
+        for value in _json_list(policy.get("challenge_kinds"))
+    ]
+    allowed_resolutions = [
+        _normalize_enum(value, RESUME_RESOLUTIONS, "user_completed")
+        for value in _json_list(policy.get("allowed_resolutions"))
+    ]
+    safe_policy = {
+        **mask_sensitive_value(policy),
+        "mode": mode,
+        "auto_bypass_allowed": False,
+        "user_approved_automation_allowed": bool(policy.get("user_approved_automation_allowed", True))
+        and mode == "user_intervention",
+        "responsibility_acceptance_required": True,
+        "resume_strategy": "same_work_key_after_user_intervention",
+        "challenge_kinds": sorted(set(challenge_kinds or CHALLENGE_KINDS)),
+        "allowed_resolutions": sorted(set(allowed_resolutions or RESUME_RESOLUTIONS)),
+        "stores_challenge_values": False,
+    }
+    safe_policy.pop("approved_input", None)
+    return safe_policy
 
 
 def _normalize_project_key(value: Any) -> str:
@@ -262,6 +303,23 @@ def _normalize_project_key(value: Any) -> str:
 def resolve_collector_execution_runtime(site_environment: Any) -> str:
     runtime = _normalize_enum(site_environment, SITE_ENVIRONMENTS, "webview2")
     return "pc_agent" if runtime in LOCAL_WINDOWS_SITE_ENVIRONMENTS else runtime
+
+
+def _challenge_resolution_contract(kind: str, policy: dict[str, Any]) -> dict[str, Any]:
+    requires_physical_input = kind in PHYSICAL_INPUT_CHALLENGE_KINDS
+    user_approved_automation_allowed = bool(policy.get("user_approved_automation_allowed")) and not requires_physical_input
+    return {
+        "auto_bypass_allowed": False,
+        "user_approved_automation_allowed": user_approved_automation_allowed,
+        "requires_user_approval": True,
+        "responsibility_acceptance_required": user_approved_automation_allowed,
+        "requires_user_physical_input": requires_physical_input,
+        "challenge_values_persisted": False,
+        "same_work_key_required": True,
+        "resume_strategy": "same_work_key_after_user_intervention",
+        "automation_resolution": "user_approved_automation" if user_approved_automation_allowed else "",
+        "physical_input_resolution": "user_input_completed" if requires_physical_input else "",
+    }
 
 
 def _normalize_site_key(value: Any, *, fallback: str) -> str:
@@ -560,6 +618,7 @@ async def collector_overview(*, tenant_id: str) -> dict[str, Any]:
 
 def _job_out(item: dict[str, Any]) -> dict[str, Any]:
     payload = _json_dict(item.get("payload"))
+    result = _json_dict(item.get("result"))
     return {
         "id": str(item.get("id") or ""),
         "status": str(item.get("status") or "queued"),
@@ -571,9 +630,15 @@ def _job_out(item: dict[str, Any]) -> dict[str, Any]:
         "updated_at": str(item.get("updated_at") or _now_text()),
         "created_at": str(item.get("created_at") or ""),
         "payload": payload,
+        "result": mask_sensitive_value(result),
+        "challenge": mask_sensitive_value(_json_dict(result.get("challenge_gate"))),
         "queue_type": str(item.get("queue_type") or ""),
         "same_work_key": True,
     }
+
+
+def _find_job(job_id: str) -> dict[str, Any] | None:
+    return next((row for row in queue_module.queue_snapshot(limit=200) if str(row.get("id")) == str(job_id)), None)
 
 
 def list_jobs(*, project_key: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
@@ -601,9 +666,8 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
         raise ValueError("site_profile_not_found")
     recipe_id = _clean_text(payload.get("recipe_id"), default=f"{site_key}.collect", max_length=200)
     recipe_version = _clean_text(payload.get("recipe_version"), default="v1", max_length=80)
-    work_key = normalize_work_key(
-        _clean_text(payload.get("work_key"), default=f"{project_key.lower()}-{site_key}", max_length=120)
-    )
+    raw_work_key = _clean_text(payload.get("work_key"), max_length=120)
+    work_key = normalize_work_key(raw_work_key or f"{project_key.lower()}-{site_key}")
     item = queue_module.enqueue_collection_item(
         {
             "tenant_id": tenant_id,
@@ -624,6 +688,18 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
                 "execution_runtime": resolve_collector_execution_runtime(profile["runtime"]),
                 "allowed_origins": profile["allowed_origins"],
                 "challenge_policy": profile["challenge_policy"],
+                "intervention_contract": {
+                    "auto_bypass_allowed": False,
+                    "user_approved_automation_allowed": profile["challenge_policy"].get(
+                        "user_approved_automation_allowed",
+                        False,
+                    ),
+                    "responsibility_acceptance_required": True,
+                    "challenge_values_persisted": False,
+                    "requires_user_approval": True,
+                    "resume_strategy": "same_work_key_after_user_intervention",
+                    "allowed_challenge_kinds": profile["challenge_policy"]["challenge_kinds"],
+                },
                 "created_by": user_id,
             },
             "created_by": user_id,
@@ -632,13 +708,124 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
     return {"status": "created", "job": _job_out(item)}
 
 
-def resume_collection_job(*, job_id: str, resolution: str, note: str = "") -> dict[str, Any] | None:
+def mark_collection_job_action_required(
+    *,
+    job_id: str,
+    challenge_kind: str,
+    page_url: str = "",
+    message: str = "",
+    evidence: list[str] | None = None,
+    approval_scope: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    existing = _find_job(job_id)
+    if not existing:
+        return None
+    kind = _normalize_enum(challenge_kind, CHALLENGE_KINDS, "captcha")
+    payload = _json_dict(existing.get("payload"))
+    policy = _normalize_challenge_policy(payload.get("challenge_policy"))
+    if policy["mode"] == "deny":
+        item = queue_module.complete_collection_item(
+            job_id,
+            status="failed",
+            result={
+                "challenge_gate": {
+                    "kind": kind,
+                    "auto_bypass_allowed": False,
+                    "requires_user_intervention": True,
+                    "blocked_by_policy": True,
+                }
+            },
+            error_code="COLLECTOR_CHALLENGE_BLOCKED_BY_POLICY",
+            message="Challenge automation is blocked by this site profile policy.",
+        )
+        return {"status": "failed", "same_work_key": True, "job": _job_out(item)} if item else None
+
+    gate = {
+        "kind": kind,
+        "page_url": _clean_text(page_url, max_length=2000),
+        "evidence": [_clean_text(value, max_length=120) for value in (evidence or [])][:5],
+        "approval_scope": mask_sensitive_value(approval_scope or {}),
+        "resume_token": make_resume_token(
+            str(existing.get("work_key") or ""),
+            str(existing.get("id") or ""),
+            str(existing.get("attempt_count") or "0"),
+        ),
+        "auto_bypass_allowed": False,
+        "challenge_values_persisted": False,
+        "requires_user_intervention": True,
+        "allowed_resolutions": policy["allowed_resolutions"],
+        **_challenge_resolution_contract(kind, policy),
+    }
+    item = queue_module.complete_collection_item(
+        job_id,
+        status="action_required",
+        result={"challenge_gate": gate},
+        error_code=f"COLLECTOR_{kind.upper()}_USER_ACTION_REQUIRED",
+        message=_clean_text(
+            message,
+            default="User must complete the portal challenge in the active session before automation resumes.",
+            max_length=1000,
+        ),
+        next_run_at=CHALLENGE_HOLD_UNTIL,
+    )
+    if not item:
+        return None
+    return {"status": "action_required", "same_work_key": True, "job": _job_out(item)}
+
+
+def resume_collection_job(
+    *,
+    job_id: str,
+    resolution: str,
+    note: str = "",
+    responsibility_accepted: bool = False,
+    physical_input_completed: bool = False,
+) -> dict[str, Any] | None:
+    existing = _find_job(job_id)
+    if not existing:
+        return None
+    if existing.get("status") != "action_required":
+        raise ValueError("collector_job_not_action_required")
+    normalized_resolution = _normalize_enum(resolution, RESUME_RESOLUTIONS, "user_completed")
+    previous_result = _json_dict(existing.get("result"))
+    challenge_gate = _json_dict(previous_result.get("challenge_gate"))
+    kind = _normalize_enum(challenge_gate.get("kind"), CHALLENGE_KINDS, "captcha")
+    if normalized_resolution == "user_approved_automation":
+        if kind in PHYSICAL_INPUT_CHALLENGE_KINDS or not challenge_gate.get("user_approved_automation_allowed"):
+            raise ValueError("collector_user_approved_automation_not_allowed_for_challenge")
+        if not responsibility_accepted:
+            raise ValueError("collector_responsibility_acceptance_required")
+    elif kind in PHYSICAL_INPUT_CHALLENGE_KINDS and not physical_input_completed:
+        raise ValueError("collector_physical_input_completion_required")
+
+    resumed_by_user = normalized_resolution != "user_approved_automation"
     item = queue_module.complete_collection_item(
         job_id,
         status="queued",
-        result={"resolution": _clean_text(resolution, max_length=80), "note": _clean_text(note, max_length=1000)},
+        result=mask_sensitive_value(
+            {
+                "resolution": normalized_resolution,
+                "note": _clean_text(note, max_length=1000),
+                "responsibility_accepted": bool(responsibility_accepted),
+                "physical_input_completed": bool(physical_input_completed),
+                "challenge_gate": {
+                    **challenge_gate,
+                    "resolved_by_user": resumed_by_user,
+                    "approved_automation_requested": normalized_resolution == "user_approved_automation",
+                    "responsibility_accepted": bool(responsibility_accepted),
+                    "physical_input_completed": bool(physical_input_completed),
+                    "resolved_at": _now_text(),
+                    "challenge_values_persisted": False,
+                    "auto_bypass_allowed": False,
+                },
+            }
+        ),
         error_code="",
-        message="User intervention completed; queued for same work_key resume.",
+        message=(
+            "User approved responsible automation; queued for same work_key resume without storing challenge values."
+            if normalized_resolution == "user_approved_automation"
+            else "User physical intervention completed; queued for same work_key resume without storing OTP/CAPTCHA values."
+        ),
         next_run_at=_now_text(),
     )
     if not item:

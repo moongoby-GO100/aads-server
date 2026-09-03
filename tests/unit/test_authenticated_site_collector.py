@@ -91,17 +91,38 @@ async def test_create_and_resume_collector_job_preserves_work_key(collector_modu
         },
     )
     job = created["job"]
+    blocked = collector.mark_collection_job_action_required(
+        job_id=job["id"],
+        challenge_kind="otp",
+        page_url="https://studio.example/login",
+        message="OTP entry required",
+        evidence=["인증번호"],
+        approval_scope={"origin": "https://studio.example", "otp": "do-not-store"},
+    )
     resumed = collector.resume_collection_job(
         job_id=job["id"],
-        resolution="completed",
-        note="OTP entered by user",
+        resolution="user_input_completed",
+        note="OTP entered by user in the live browser",
+        physical_input_completed=True,
     )
 
     assert created["status"] == "created"
     assert job["work_key"] == "sf-creator-local"
+    assert blocked is not None
+    assert blocked["status"] == "action_required"
+    assert blocked["job"]["challenge"]["kind"] == "otp"
+    assert blocked["job"]["challenge"]["auto_bypass_allowed"] is False
+    assert blocked["job"]["challenge"]["challenge_values_persisted"] is False
+    assert blocked["job"]["challenge"]["requires_user_physical_input"] is True
+    assert blocked["job"]["challenge"]["user_approved_automation_allowed"] is False
+    assert blocked["job"]["challenge"]["approval_scope"]["otp"] == "***MASKED***"
     assert resumed is not None
     assert resumed["same_work_key"] is True
     assert resumed["job"]["work_key"] == "sf-creator-local"
+    assert resumed["job"]["status"] == "queued"
+    assert resumed["job"]["challenge"]["resolved_by_user"] is True
+    assert resumed["job"]["challenge"]["physical_input_completed"] is True
+    assert resumed["job"]["challenge"]["auto_bypass_allowed"] is False
     assert collector.list_jobs(project_key="SF")["count"] == 1
 
 
@@ -146,7 +167,9 @@ async def test_food_project_keys_and_challenge_policy_object_are_preserved(colle
     )
 
     assert profile["project_key"] == "STORE_ASSISTANT"
-    assert profile["challenge_policy"] == {"mode": "user_intervention"}
+    assert profile["challenge_policy"]["mode"] == "user_intervention"
+    assert profile["challenge_policy"]["auto_bypass_allowed"] is False
+    assert profile["challenge_policy"]["stores_challenge_values"] is False
     assert profile["metadata"]["runtime_contract"] == "windows_collector_v1"
 
 
@@ -171,12 +194,167 @@ def test_windows_collector_maps_to_pc_agent_execution_runtime(collector_modules)
     assert plan["saas_extension"]["execution_runtime"] == "pc_agent"
 
 
+async def test_challenge_deny_policy_blocks_resume_automation(collector_modules):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    await collector.upsert_site_profile(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "KIS",
+            "site_key": "kis.secure",
+            "display_name": "KIS secure",
+            "base_origin": "https://securities.example/login",
+            "runtime": "manual_export",
+            "data_categories": ["statements"],
+            "challenge_policy": {"mode": "deny"},
+        },
+    )
+    created = await collector.create_collection_job(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "KIS",
+            "site_key": "kis.secure",
+            "recipe_id": "kis.secure.collect",
+        },
+    )
+    result = collector.mark_collection_job_action_required(
+        job_id=created["job"]["id"],
+        challenge_kind="captcha",
+        page_url="https://securities.example/login",
+    )
+
+    assert result is not None
+    assert result["status"] == "failed"
+    assert result["job"]["error_code"] == "COLLECTOR_CHALLENGE_BLOCKED_BY_POLICY"
+    assert result["job"]["challenge"]["auto_bypass_allowed"] is False
+
+
+async def test_user_approved_automation_requires_responsibility_acceptance(collector_modules):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    await collector.upsert_site_profile(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "MARKETING",
+            "site_key": "meta.business",
+            "display_name": "Meta Business",
+            "base_origin": "https://business.facebook.com",
+            "runtime": "webview2",
+            "data_categories": ["ads"],
+            "challenge_policy": {"mode": "user_intervention", "user_approved_automation_allowed": True},
+        },
+    )
+    created = await collector.create_collection_job(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "MARKETING",
+            "site_key": "meta.business",
+            "recipe_id": "meta.business.collect",
+        },
+    )
+    blocked = collector.mark_collection_job_action_required(
+        job_id=created["job"]["id"],
+        challenge_kind="captcha",
+        page_url="https://business.facebook.com/login",
+    )
+
+    with pytest.raises(ValueError, match="collector_responsibility_acceptance_required"):
+        collector.resume_collection_job(
+            job_id=created["job"]["id"],
+            resolution="user_approved_automation",
+        )
+
+    resumed = collector.resume_collection_job(
+        job_id=created["job"]["id"],
+        resolution="user_approved_automation",
+        note="User approved responsible same-session automation",
+        responsibility_accepted=True,
+    )
+
+    assert blocked is not None
+    assert blocked["job"]["challenge"]["auto_bypass_allowed"] is False
+    assert blocked["job"]["challenge"]["user_approved_automation_allowed"] is True
+    assert resumed is not None
+    assert resumed["job"]["status"] == "queued"
+    assert resumed["job"]["work_key"] == created["job"]["work_key"]
+    assert resumed["job"]["challenge"]["approved_automation_requested"] is True
+    assert resumed["job"]["challenge"]["responsibility_accepted"] is True
+    assert resumed["job"]["challenge"]["resolved_by_user"] is False
+
+
+async def test_otp_challenge_rejects_user_approved_automation_and_requires_physical_input(collector_modules):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    await collector.upsert_site_profile(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "BANKING",
+            "site_key": "shinhan.easyview",
+            "display_name": "Shinhan easy inquiry",
+            "base_origin": "https://bizbank.shinhan.com",
+            "runtime": "windows_collector",
+            "data_categories": ["transactions"],
+            "challenge_policy": {"mode": "user_intervention", "user_approved_automation_allowed": True},
+        },
+    )
+    created = await collector.create_collection_job(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "BANKING",
+            "site_key": "shinhan.easyview",
+            "recipe_id": "shinhan.easyview.collect",
+        },
+    )
+    blocked = collector.mark_collection_job_action_required(
+        job_id=created["job"]["id"],
+        challenge_kind="otp",
+        page_url="https://bizbank.shinhan.com/login",
+    )
+
+    with pytest.raises(ValueError, match="collector_user_approved_automation_not_allowed_for_challenge"):
+        collector.resume_collection_job(
+            job_id=created["job"]["id"],
+            resolution="user_approved_automation",
+            responsibility_accepted=True,
+        )
+
+    with pytest.raises(ValueError, match="collector_physical_input_completion_required"):
+        collector.resume_collection_job(
+            job_id=created["job"]["id"],
+            resolution="user_input_completed",
+        )
+
+    resumed = collector.resume_collection_job(
+        job_id=created["job"]["id"],
+        resolution="user_input_completed",
+        note="OTP entered directly by user",
+        physical_input_completed=True,
+    )
+
+    assert blocked is not None
+    assert blocked["job"]["challenge"]["requires_user_physical_input"] is True
+    assert blocked["job"]["challenge"]["user_approved_automation_allowed"] is False
+    assert resumed is not None
+    assert resumed["job"]["status"] == "queued"
+    assert resumed["job"]["work_key"] == created["job"]["work_key"]
+
+
 def test_collector_api_overview_uses_tenant_context(collector_modules):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     import app.api.authenticated_site_collector as api_module
 
+    api_module = importlib.reload(api_module)
     app = FastAPI()
     app.include_router(api_module.router)
     app.dependency_overrides[api_module.require_viewer] = lambda: {
@@ -188,3 +366,62 @@ def test_collector_api_overview_uses_tenant_context(collector_modules):
 
     assert response.status_code == 200
     assert response.json()["totals"]["connected_sites"] >= 6
+    assert response.json()["challenge_contract"]["auto_bypass_allowed"] is False
+
+
+def test_collector_api_challenge_then_resume(collector_modules):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import app.api.authenticated_site_collector as api_module
+
+    api_module = importlib.reload(api_module)
+    app = FastAPI()
+    app.include_router(api_module.router)
+    app.dependency_overrides[api_module.require_viewer] = lambda: {
+        "tenant": {"id": "00000000-0000-0000-0000-000000000001"},
+        "membership": {"user_id": "ceo"},
+    }
+    app.dependency_overrides[api_module.require_member] = lambda: {
+        "tenant": {"id": "00000000-0000-0000-0000-000000000001"},
+        "membership": {"user_id": "ceo"},
+    }
+    client = TestClient(app)
+
+    saved = client.post(
+        "/authenticated-site-collector/site-profiles",
+        json={
+            "project_key": "MARKETING",
+            "site_key": "meta.business",
+            "display_name": "Meta Business",
+            "base_origin": "https://business.facebook.com",
+            "runtime": "webview2",
+            "data_categories": ["ads"],
+        },
+    )
+    created = client.post(
+        "/authenticated-site-collector/jobs",
+        json={"project_key": "MARKETING", "site_key": "meta.business", "recipe_id": "meta.business.collect"},
+    )
+    job_id = created.json()["job"]["id"]
+    challenge = client.post(
+        f"/authenticated-site-collector/jobs/{job_id}/challenge-action-required",
+        json={
+            "challenge_kind": "captcha",
+            "page_url": "https://business.facebook.com/login",
+            "message": "CAPTCHA required",
+            "approval_scope": {"origin": "https://business.facebook.com", "captcha_value": "do-not-store"},
+        },
+    )
+    resumed = client.post(
+        f"/authenticated-site-collector/jobs/{job_id}/resume",
+        json={"resolution": "approved_same_session", "note": "User completed CAPTCHA in browser"},
+    )
+
+    assert saved.status_code == 200
+    assert created.status_code == 200
+    assert challenge.status_code == 200
+    assert challenge.json()["job"]["status"] == "action_required"
+    assert challenge.json()["job"]["challenge"]["approval_scope"]["captcha_value"] == "***MASKED***"
+    assert resumed.status_code == 200
+    assert resumed.json()["job"]["status"] == "queued"

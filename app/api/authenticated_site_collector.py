@@ -8,12 +8,15 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.services.authenticated_site_collector import (
+    CHALLENGE_KINDS,
+    RESUME_RESOLUTIONS,
     SITE_ENVIRONMENTS,
     build_collector_recipe_dry_run,
     collector_overview,
     create_collection_job,
     list_jobs,
     list_site_profiles,
+    mark_collection_job_action_required,
     normalize_recipe_extension,
     resume_collection_job,
     upsert_site_profile,
@@ -85,8 +88,18 @@ class CollectorJobIn(BaseModel):
 
 
 class CollectorResumeIn(BaseModel):
-    resolution: str = Field(default="completed", max_length=80)
+    resolution: str = Field(default="user_completed", max_length=80)
     note: str = Field(default="", max_length=1000)
+    responsibility_accepted: bool = False
+    physical_input_completed: bool = False
+
+
+class CollectorChallengeIn(BaseModel):
+    challenge_kind: str = Field(default="captcha", max_length=80)
+    page_url: str = Field(default="", max_length=2000)
+    message: str = Field(default="", max_length=1000)
+    evidence: list[str] = Field(default_factory=list)
+    approval_scope: dict[str, Any] = Field(default_factory=dict)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -101,7 +114,18 @@ def _user_id(context: TenantContext) -> str:
 async def api_collector_overview(
     context: TenantContext = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return await collector_overview(tenant_id=_tenant_id(context))
+    overview = await collector_overview(tenant_id=_tenant_id(context))
+    overview["challenge_contract"] = {
+        "auto_bypass_allowed": False,
+        "user_approved_automation_allowed": True,
+        "responsibility_acceptance_required": True,
+        "challenge_values_persisted": False,
+        "supported_challenge_kinds": sorted(CHALLENGE_KINDS),
+        "allowed_resume_resolutions": sorted(RESUME_RESOLUTIONS),
+        "resume_strategy": "same_work_key_after_user_intervention",
+        "physical_input_challenge_kinds": ["certificate", "identity_check", "otp"],
+    }
+    return overview
 
 
 @router.get("/site-profiles")
@@ -215,13 +239,41 @@ async def api_create_collector_job(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/jobs/{job_id}/challenge-action-required")
+async def api_mark_collector_challenge_action_required(
+    job_id: str,
+    body: CollectorChallengeIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    result = mark_collection_job_action_required(
+        job_id=job_id,
+        challenge_kind=body.challenge_kind,
+        page_url=body.page_url,
+        message=body.message,
+        evidence=body.evidence,
+        approval_scope=body.approval_scope,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="collector_job_not_found")
+    return result
+
+
 @router.post("/jobs/{job_id}/resume")
 async def api_resume_collector_job(
     job_id: str,
     body: CollectorResumeIn,
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
-    result = resume_collection_job(job_id=job_id, resolution=body.resolution, note=body.note)
+    try:
+        result = resume_collection_job(
+            job_id=job_id,
+            resolution=body.resolution,
+            note=body.note,
+            responsibility_accepted=body.responsibility_accepted,
+            physical_input_completed=body.physical_input_completed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not result:
         raise HTTPException(status_code=404, detail="collector_job_not_found")
     return result
