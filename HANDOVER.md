@@ -1,5 +1,34 @@
 # AADS HANDOVER
 
+## 2026-09-03 10:50 KST - FOOD Shinhan deploy completed; collection blocked by PC Agent/CDP state
+
+- Request:
+  - Deploy the approved Shinhan bank browser connector patch and continue Mia Shinhan real collection.
+- Deploy result:
+  - Commit pushed: `8b3080e049dc5bd90ca5641a57252003047e63aa`.
+  - Blue-green deploy switched active API from `:8102` to `:8100`.
+  - Active health after switch: `http://127.0.0.1:8100/api/v1/health` returned `status=ok`.
+  - Deployed active image: `aads-server:8b3080e049dc`, digest `sha256:f5207d677d66ebe13bfd247458df58f2ecbe8688408cb7176ea825a1d41cee2c`.
+  - Standby same-digest sync remained pending because the old `:8102` slot still had active streams during release retry windows.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `git diff --check -- app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_bank_browser_connector.py -q` passed: `110 passed in 96.38s`.
+  - Five-minute P0/P1 API monitoring after route switch stayed healthy; later direct health at 10:45 KST also returned `status=ok`.
+- Collection result:
+  - First deployed run reached Shinhan but returned `ACTION_REQUIRED / BANK_BROWSER_IDPW_RETRY_REQUIRED`; it detected a Fincert/YESKEY authentication iframe despite saved ID/PW credentials.
+  - Forced browser recreation run returned `FAILED / BANK_BROWSER_PC_AGENT_TIMEOUT`; diagnostic last stage was `login page`.
+  - After manually restoring Chrome CDP with `browser_launch`, a final retry returned `ACTION_REQUIRED / PC_AGENT_LOGIN_REQUIRED`; detailed cause was `AGENT_BUSY` while opening the bank browser session.
+  - Rows imported: `0`; collected rows: `0`; duplicate rows: `0`.
+- Stage evidence:
+  - The new deployed code changed the previous hard blocker: `shinhan_security_notice` now records `status=success`, `reason=no_blocking_notice_before_login_or_closed`.
+  - PC Agent `7f99c528-24d` / `DESKTOP-ICU55HK` is online, but CDP was observed down once (`CDP_NOT_READY` on port `9222`) and later recovered.
+  - Current PC browser health after recovery shows CDP ready, but the active page is a GO100 login tab, not the Shinhan tab.
+  - Bank auto-collect lock file contains stale PID `3531`; no matching collection process was present in `docker top`.
+- Next:
+  - Do not start another bank run until the stale lock/CDP ownership path is cleaned.
+  - Next patch target is PC Agent bank-session recovery: ensure CDP relaunch+navigate uses the requested bank work key, ignore unrelated GO100 tab focus, and clear stale bank locks safely when no matching process exists.
+
 ## 2026-09-03 10:12 KST - FOOD Shinhan security notice close-and-continue patch
 
 - Request:
