@@ -7,6 +7,7 @@ import pytest
 def collector_modules(tmp_path, monkeypatch):
     monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(tmp_path / "queue.json"))
     monkeypatch.setenv("AADS_AUTHENTICATED_SITE_PROFILES_PATH", str(tmp_path / "site_profiles.json"))
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("YEOLJEONG_FINANCE_DATABASE_URL", raising=False)
 
@@ -24,8 +25,18 @@ async def test_collector_overview_uses_project_defaults_without_database(collect
     overview = await collector.collector_overview(tenant_id="00000000-0000-0000-0000-000000000001")
 
     assert overview["demo"] is True
-    assert overview["totals"]["connected_sites"] >= 6
-    assert {item["project_key"] for item in overview["projects"]} >= {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS"}
+    assert overview["totals"]["connected_sites"] >= 9
+    assert {item["project_key"] for item in overview["projects"]} >= {
+        "AADS",
+        "KIS",
+        "GO100",
+        "SF",
+        "NTV2",
+        "NAS",
+        "STORE_ASSISTANT",
+        "MARKETING",
+        "BANKING",
+    }
 
 
 async def test_site_profile_upsert_is_available_without_database(collector_modules):
@@ -112,6 +123,52 @@ def test_collector_recipe_dry_run_maps_webview2_to_pc_agent(collector_modules):
     assert plan["runtime"] == "pc_agent"
     assert plan["saas_extension"]["project_key"] == "NTV2"
     assert plan["saas_extension"]["site_environment"] == "webview2"
+    assert plan["saas_extension"]["execution_runtime"] == "pc_agent"
+
+
+async def test_food_project_keys_and_challenge_policy_object_are_preserved(collector_modules):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    profile = await collector.upsert_site_profile(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "STORE_ASSISTANT",
+            "site_key": "baemin.owner",
+            "display_name": "Baemin owner portal",
+            "base_origin": "https://self.baemin.com/login",
+            "allowed_origins": ["https://self.baemin.com"],
+            "runtime": "webview2",
+            "data_categories": ["orders"],
+            "challenge_policy": {"mode": "user_intervention"},
+        },
+    )
+
+    assert profile["project_key"] == "STORE_ASSISTANT"
+    assert profile["challenge_policy"] == {"mode": "user_intervention"}
+    assert profile["metadata"]["runtime_contract"] == "windows_collector_v1"
+
+
+def test_windows_collector_maps_to_pc_agent_execution_runtime(collector_modules):
+    collector, _queue_module = collector_modules
+
+    plan = collector.build_collector_recipe_dry_run(
+        {
+            "recipe_id": "shinhan.easyview.collect",
+            "version": "v1",
+            "allowed_origins": ["https://bizbank.shinhan.com"],
+            "work_key_template": "banking shinhan mia",
+        },
+        target_url="https://bizbank.shinhan.com",
+        project_key="BANKING",
+        site_environment="windows_collector",
+    )
+
+    assert plan["runtime"] == "pc_agent"
+    assert plan["saas_extension"]["project_key"] == "BANKING"
+    assert plan["saas_extension"]["site_environment"] == "windows_collector"
+    assert plan["saas_extension"]["execution_runtime"] == "pc_agent"
 
 
 def test_collector_api_overview_uses_tenant_context(collector_modules):

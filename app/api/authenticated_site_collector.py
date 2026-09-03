@@ -34,7 +34,7 @@ class SiteProfileIn(BaseModel):
     runtime: str = Field(default="webview2", max_length=80)
     data_categories: list[str] = Field(default_factory=list)
     login_mode: str = Field(default="user_session", max_length=80)
-    challenge_policy: str = Field(default="user_intervention", max_length=80)
+    challenge_policy: str | dict[str, Any] = Field(default_factory=lambda: {"mode": "user_intervention"})
     retention_policy: dict[str, Any] = Field(default_factory=dict)
     account_count: int = Field(default=0, ge=0, le=100000)
     connected_account_count: int = Field(default=0, ge=0, le=100000)

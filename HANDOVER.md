@@ -1,5 +1,47 @@
 # AADS HANDOVER
 
+## 2026-09-03 17:15 KST - Authenticated Collector FOOD project/runtime contract
+
+- Request:
+  - Add `STORE_ASSISTANT`, `MARKETING`, `BANKING` project keys and WebView2/Windows Collector runtime contract, then commit/push/deploy and verify.
+- Change:
+  - `app/services/authenticated_site_collector.py`: added FOOD SaaS project keys, `windows_collector` site environment, Windows local runtime contract metadata, and `webview2/windows_collector -> pc_agent` execution runtime mapping.
+  - `app/api/authenticated_site_collector.py`: accepts object-form `challenge_policy` such as `{"mode":"user_intervention"}`.
+  - `migrations/147_authenticated_site_collector.sql`: fresh-install schema updated for the new project/runtime contract.
+  - `migrations/149_authenticated_collector_project_runtime_contract.sql`: idempotently replaces existing DB check constraints for deployed systems.
+  - `tests/unit/test_authenticated_site_collector.py`: regression tests for FOOD project keys, object challenge policy, and Windows Collector runtime mapping.
+  - Dashboard `/authenticated-collector`: project filter labels include `STORE_ASSISTANT`, `MARKETING`, `BANKING`; runtime labels include `windows_collector` and `pc_agent`.
+- Verification before commit:
+  - Applied `migrations/149_authenticated_collector_project_runtime_contract.sql` to production PostgreSQL; constraints now allow the three project keys and `windows_collector`.
+  - `.venv-playwright/bin/pytest -q tests/unit/test_authenticated_site_collector.py`: 7 passed.
+  - `.venv-playwright/bin/pytest -q tests/unit/test_authenticated_site_collector.py tests/unit/test_browser_task_policy.py`: 39 passed.
+  - Dashboard `npm run lint -- src/app/authenticated-collector/page.tsx src/lib/api.ts`: 0 errors, existing `no-explicit-any` warnings in `src/lib/api.ts`.
+- Pending:
+  - Selective commit/push, blue-green API deploy, dashboard deploy, API smoke, and authenticated collector profile upserts for store/marketing/banking.
+
+## 2026-09-03 14:31 KST - 신한/IBK 은행 수집 대상 엄격 필터 및 미아점 실수집 재검증
+
+- Request:
+  - 신한 전용 work key에서 YESKEY/금융인증서 흐름을 닫고 ID/PW 로그인으로 강제 재시도한 뒤, 실제 저장과 `imported_rows > 0`까지 확인.
+  - 신한은행은 현재 미아점만 데이터가 있으므로 중화점/다른 사업자는 브라우저 시도 자체를 하지 않아야 함.
+- Real collection result after `4b56b4d1` deploy:
+  - Command: `docker exec aads-server python3 scripts/yeoljeong_auto_collect.py --bank-only --services shinhan_business --business-id biz-mia --branch branch-gangbuk-mia --bank-account-id a7354484-aafe-4bcf-a865-0c0330e01574 --browser-agent-id 7f99c528-24d --browser-preferred-port 9222 --bank-browser-work-key yeoljeong-bank-shinhan-individual-1b49c1c79be26318 --force-recreate-bank-browser --bank-browser-timeout-seconds 240 --attempt-timeout-seconds 420`
+  - Result: `ATTEMPT_TIMEOUT`, `imported_rows=0`, `app/data/yeoljeong_finance/transactions.json` remained empty (`len=0`).
+  - Stage logs showed progress through `shinhan_browser_session`, `shinhan_security_program_check`, `shinhan_security_notice`, `shinhan_simple_query_page`.
+  - The patched YESKEY reset path improved the later retry: `shinhan_idpw_reset_after_certificate` reached `status=success`, `idpw_login_panel_selected=1`, but the attempt timeout expired before final ID/PW login success and data extraction.
+- Additional issue found:
+  - `pc_agent_collection_queue.json` still contained queued `biz-junghwa` Shinhan work because `_bank_account_is_collectable()` allowed Shinhan/IBK browser bank accounts when no matching platform credential row existed.
+  - This violates the CEO rule that accounts without real credential data must not open a browser.
+- Change:
+  - `scripts/yeoljeong_auto_collect.py`: for `shinhan_business`/`ibk_business`, collectable now requires a matching `platform_accounts` row with `collection_mode=bank-quick-service`, matching business/branch/account mask, `auto_sync != false`, and all required encrypted credential fields.
+  - `tests/unit/test_yeoljeong_auto_collect.py`: added regression tests for no matching platform credentials and incomplete platform credentials.
+- Verification:
+  - `python3 -m py_compile scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_auto_collect.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_auto_collect.py::test_drain_bank_queue_cancels_non_collectable_account_before_browser tests/unit/test_yeoljeong_auto_collect.py::test_shinhan_bank_account_without_matching_platform_credentials_is_not_collectable tests/unit/test_yeoljeong_auto_collect.py::test_shinhan_bank_account_requires_complete_platform_credentials` passed: 3 tests.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_auto_collect.py -k "bank and collectable"` passed: 2 tests, 45 deselected.
+- Pending:
+  - Commit/push this filter patch, blue-green deploy, then rerun Mia-only Shinhan collection with a longer attempt timeout and verify `transactions.json len > 0` and `imported_rows > 0`.
+
 ## 2026-09-03 14:01 KST - 신한 YESKEY reset 실패 시 work key force-recreate 재획득
 
 - Request:
@@ -10402,3 +10444,34 @@
   - Submitted `runner-affd8e53` for full AI routing implementation/review.
   - Submitted dependent `runner-f6293c0b` for Google route disable verification after `runner-affd8e53`.
   - Do not commit/push/deploy this direct patch while those runners are still modifying the same functional area; reconcile with runner output first.
+## 2026-09-03 14:53 KST - Authenticated Site Collector runner failure recovery
+
+- CEO request:
+  - Investigate and directly fix `runner-94ff96d1` failure for the login-required site collection SaaS MVP.
+- Root cause:
+  - Pipeline Runner stopped at `approval_commit_failed`.
+  - Runner status showed `branch=DETACHED`, `head_sha=4b56b4d15ef15f1e5e10253b81ead574eeba5a74`, and pre-commit import failure for `app.api.authenticated_site_collector`.
+  - The dashboard scaffold existed in `/root/aads/aads-dashboard`, but the backend API/service modules were missing from the main server worktree, so the route could not be imported or served.
+- Server changes:
+  - Added `app/api/authenticated_site_collector.py` with product-facing `/api/v1/authenticated-site-collector/*` routes.
+  - Added `app/services/authenticated_site_collector.py` with SaaS site profile normalization, offline fallback profiles for AADS/KIS/GO100/SF/NTV2/NAS/CUSTOM, `pc_agent_collection_queue` integration, and same-work-key resume handling.
+  - Registered the router in `app/main.py`.
+  - Added `migrations/147_authenticated_site_collector.sql` for `authenticated_site_profiles` plus additive `browser_recipes` SaaS extension columns.
+  - Added `tests/unit/test_authenticated_site_collector.py`.
+- Dashboard changes:
+  - Preserved the existing `/authenticated-collector` scaffold in `/root/aads/aads-dashboard`.
+  - Adjusted `src/app/authenticated-collector/page.tsx` to use type-only collector imports from `src/lib/api.ts`.
+- Documentation:
+  - Added `docs/plans/AUTHENTICATED_SITE_COLLECTOR_SAAS_MVP.md`.
+  - Updated `docs/ARCHITECTURE-INDEX.md`.
+  - Extended `reports/20260903_logged_in_site_collection_platform_plan.md` with SaaS user workflow, implementation files, pricing direction, and remaining rollout steps.
+- Verification:
+  - `python3 -m py_compile app/api/authenticated_site_collector.py app/services/authenticated_site_collector.py app/main.py` passed on host.
+  - `docker run --rm --env-file /root/aads/aads-server/.env -e PYTHONPATH=/app -v /root/aads/aads-server:/app:ro -w /app --entrypoint python aads-server:4b56b4d15ef1 -m pytest tests/unit/test_authenticated_site_collector.py -q` passed 4/4.
+  - `docker exec aads-server python -m pytest /app/tests/unit/test_browser_task_policy.py /app/tests/unit/test_pc_agent_collection_queue.py -q` passed 37/37.
+  - `docker run ... -c "import app.api.authenticated_site_collector; import app.services.authenticated_site_collector"` passed.
+  - FastAPI TestClient smoke for `/api/v1/authenticated-site-collector/overview` returned HTTP 200 with demo fallback profiles.
+  - `/root/aads/aads-dashboard`: `npx tsc --noEmit --pretty false --incremental false` passed.
+  - `/root/aads/aads-dashboard`: targeted `npx eslint src/app/authenticated-collector/page.tsx src/lib/api.ts src/components/Sidebar.tsx` returned 0 errors and existing warnings in `src/lib/api.ts`.
+- Deployment:
+  - Not deployed in this recovery step. Blue-green release still requires clean committed release worktree and five-minute P0/P1 monitoring.

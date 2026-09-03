@@ -23,9 +23,21 @@ SITE_PROFILE_PATH = Path(
     os.getenv("AADS_AUTHENTICATED_SITE_PROFILES_PATH", str(DATA_DIR / "site_profiles.json"))
 )
 
-PROJECT_KEYS = {"AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CUSTOM"}
+PROJECT_KEYS = {
+    "AADS",
+    "KIS",
+    "GO100",
+    "SF",
+    "NTV2",
+    "NAS",
+    "STORE_ASSISTANT",
+    "MARKETING",
+    "BANKING",
+    "CUSTOM",
+}
 SITE_ENVIRONMENTS = {
     "webview2",
+    "windows_collector",
     "chrome_extension",
     "chrome_cdp",
     "playwright_server",
@@ -37,6 +49,7 @@ LOGIN_MODES = {"user_session", "agent_vault", "manual_export", "official_api", "
 CHALLENGE_POLICIES = {"user_intervention", "manual_export", "deny", "none"}
 VERSION_STATUSES = {"draft", "active", "archived"}
 ACTIVE_JOB_STATUSES = {"queued", "running", "action_required"}
+LOCAL_WINDOWS_SITE_ENVIRONMENTS = {"webview2", "windows_collector"}
 
 DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
     {
@@ -120,6 +133,58 @@ DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
         "metadata": {"sample": True, "tenant_isolation": "required"},
     },
     {
+        "project_key": "STORE_ASSISTANT",
+        "site_key": "baemin.owner",
+        "display_name": "Baemin owner portal",
+        "base_origin": "https://self.baemin.com/login",
+        "allowed_origins": ["https://self.baemin.com"],
+        "runtime": "webview2",
+        "data_categories": ["orders", "reviews", "settlements", "ads"],
+        "login_mode": "user_session",
+        "challenge_policy": "user_intervention",
+        "retention_policy": {"days": 365, "artifact_scope": "store_assistant_ops"},
+        "account_count": 0,
+        "connected_account_count": 0,
+        "enabled": True,
+        "metadata": {"sample": True, "runtime_contract": "windows_collector_v1"},
+    },
+    {
+        "project_key": "MARKETING",
+        "site_key": "meta.business",
+        "display_name": "Meta Business",
+        "base_origin": "https://business.facebook.com",
+        "allowed_origins": ["https://business.facebook.com", "https://www.facebook.com"],
+        "runtime": "webview2",
+        "data_categories": ["ads", "campaigns", "insights"],
+        "login_mode": "user_session",
+        "challenge_policy": "user_intervention",
+        "retention_policy": {"days": 365, "artifact_scope": "marketing_ops"},
+        "account_count": 0,
+        "connected_account_count": 0,
+        "enabled": True,
+        "metadata": {"sample": True, "runtime_contract": "windows_collector_v1"},
+    },
+    {
+        "project_key": "BANKING",
+        "site_key": "shinhan.easyview",
+        "display_name": "Shinhan easy inquiry",
+        "base_origin": "https://bizbank.shinhan.com",
+        "allowed_origins": ["https://bizbank.shinhan.com", "https://bank.shinhan.com"],
+        "runtime": "windows_collector",
+        "data_categories": ["transactions", "balances", "statements"],
+        "login_mode": "user_session",
+        "challenge_policy": "user_intervention",
+        "retention_policy": {"days": 1825, "artifact_scope": "banking_audit"},
+        "account_count": 0,
+        "connected_account_count": 0,
+        "enabled": True,
+        "metadata": {
+            "sample": True,
+            "runtime_contract": "windows_collector_v1",
+            "requires_local_security_programs": True,
+        },
+    },
+    {
         "project_key": "NAS",
         "site_key": "nas.file_processing",
         "display_name": "NAS file processing portal",
@@ -180,9 +245,23 @@ def _normalize_enum(value: Any, allowed: set[str], default: str) -> str:
     return text if text in allowed else default
 
 
+def _normalize_challenge_policy(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        policy = {str(key)[:80]: val for key, val in value.items() if str(key).strip()}
+        mode = _normalize_enum(policy.get("mode"), CHALLENGE_POLICIES, "user_intervention")
+        return {**policy, "mode": mode}
+    mode = _normalize_enum(value, CHALLENGE_POLICIES, "user_intervention")
+    return {"mode": mode}
+
+
 def _normalize_project_key(value: Any) -> str:
     text = _clean_text(value, default="CUSTOM", max_length=40).upper()
     return text if text in PROJECT_KEYS else "CUSTOM"
+
+
+def resolve_collector_execution_runtime(site_environment: Any) -> str:
+    runtime = _normalize_enum(site_environment, SITE_ENVIRONMENTS, "webview2")
+    return "pc_agent" if runtime in LOCAL_WINDOWS_SITE_ENVIRONMENTS else runtime
 
 
 def _normalize_site_key(value: Any, *, fallback: str) -> str:
@@ -205,6 +284,9 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
     if not base_origin and allowed_origins:
         base_origin = allowed_origins[0]
     runtime = _normalize_enum(payload.get("runtime") or payload.get("site_environment"), SITE_ENVIRONMENTS, "webview2")
+    metadata = _json_dict(payload.get("metadata"))
+    if runtime in LOCAL_WINDOWS_SITE_ENVIRONMENTS and "runtime_contract" not in metadata:
+        metadata["runtime_contract"] = "windows_collector_v1"
     return {
         "id": _clean_text(payload.get("id"), default=str(uuid.uuid4()), max_length=80),
         "project_key": project_key,
@@ -220,15 +302,13 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
             if _clean_text(value, max_length=80)
         ][:30],
         "login_mode": _normalize_enum(payload.get("login_mode"), LOGIN_MODES, "user_session"),
-        "challenge_policy": _normalize_enum(
-            payload.get("challenge_policy"), CHALLENGE_POLICIES, "user_intervention"
-        ),
+        "challenge_policy": _normalize_challenge_policy(payload.get("challenge_policy")),
         "retention_policy": _json_dict(payload.get("retention_policy")),
         "account_count": int(payload.get("account_count") or 0),
         "connected_account_count": int(payload.get("connected_account_count") or 0),
         "last_collected_at": _clean_text(payload.get("last_collected_at"), max_length=80),
         "enabled": bool(payload.get("enabled", True)),
-        "metadata": _json_dict(payload.get("metadata")),
+        "metadata": metadata,
         "created_at": _clean_text(payload.get("created_at"), default=_now_text(), max_length=80),
         "updated_at": _clean_text(payload.get("updated_at"), default=_now_text(), max_length=80),
     }
@@ -237,10 +317,12 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
 def normalize_recipe_extension(payload: dict[str, Any]) -> dict[str, Any]:
     project_key = _normalize_project_key(payload.get("project_key"))
     runtime = _normalize_enum(payload.get("site_environment") or payload.get("runtime"), SITE_ENVIRONMENTS, "webview2")
+    execution_runtime = resolve_collector_execution_runtime(runtime)
     version_status = _normalize_enum(payload.get("version_status"), VERSION_STATUSES, "draft")
     return {
         "project_key": project_key,
         "site_environment": runtime,
+        "execution_runtime": execution_runtime,
         "record_types": [
             _clean_text(value, max_length=80)
             for value in _json_list(payload.get("record_types"))
@@ -286,24 +368,29 @@ async def _fetch_db_profiles(tenant_id: str, project_key: str | None = None) -> 
         except RuntimeError:
             pool = await init_pool()
         args: list[Any] = [uuid.UUID(str(tenant_id))]
-        where = ["tenant_id = $1"]
+        where = ["p.tenant_id = $1"]
         if project_key:
             args.append(_normalize_project_key(project_key))
-            where.append(f"project_key = ${len(args)}")
+            where.append(f"p.project_key = ${len(args)}")
         async with pool.acquire() as conn:
             exists = await conn.fetchval("SELECT to_regclass('public.authenticated_site_profiles')")
             if not exists:
                 return None
             rows = await conn.fetch(
                 f"""
-                SELECT id::text, project_key, site_key, display_name, base_origin,
-                       allowed_origins, runtime, data_categories, login_mode,
-                       challenge_policy, retention_policy, account_count,
-                       connected_account_count, last_collected_at, enabled,
-                       metadata, created_at, updated_at
-                  FROM authenticated_site_profiles
+                SELECT p.id::text, p.project_key, p.site_key, p.display_name, p.base_origin,
+                       p.allowed_origins, p.runtime, p.data_categories, p.login_mode,
+                       p.challenge_policy, p.retention_policy,
+                       count(a.id) FILTER (WHERE a.enabled) AS account_count,
+                       count(a.id) FILTER (WHERE a.enabled AND a.login_status = 'connected') AS connected_account_count,
+                       max(a.last_collected_at) AS last_collected_at,
+                       p.enabled, p.metadata, p.created_at, p.updated_at
+                  FROM authenticated_site_profiles p
+                  LEFT JOIN authenticated_site_accounts a
+                    ON a.site_profile_id = p.id AND a.tenant_id = p.tenant_id
                  WHERE {' AND '.join(where)}
-                 ORDER BY project_key, display_name, site_key
+                 GROUP BY p.id
+                 ORDER BY p.project_key, p.display_name, p.site_key
                 """,
                 *args,
             )
@@ -316,7 +403,7 @@ def _row_to_profile(row: Any) -> dict[str, Any]:
     item = dict(row)
     for key in ("allowed_origins", "data_categories"):
         item[key] = _json_list(item.get(key))
-    for key in ("retention_policy", "metadata"):
+    for key in ("challenge_policy", "retention_policy", "metadata"):
         item[key] = _json_dict(item.get(key))
     for key in ("last_collected_at", "created_at", "updated_at"):
         if item.get(key):
@@ -378,13 +465,12 @@ async def _upsert_db_profile(*, tenant_id: str, user_id: str, profile: dict[str,
                 INSERT INTO authenticated_site_profiles (
                     tenant_id, project_key, site_key, display_name, base_origin,
                     allowed_origins, runtime, data_categories, login_mode,
-                    challenge_policy, retention_policy, account_count,
-                    connected_account_count, enabled, metadata, created_by,
+                    challenge_policy, retention_policy, enabled, metadata, created_by,
                     updated_at
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9,
-                    $10, $11::jsonb, $12, $13, $14, $15::jsonb, $16,
+                    $10::jsonb, $11::jsonb, $12, $13::jsonb, $14,
                     NOW()
                 )
                 ON CONFLICT (tenant_id, project_key, site_key) DO UPDATE
@@ -396,8 +482,6 @@ async def _upsert_db_profile(*, tenant_id: str, user_id: str, profile: dict[str,
                        login_mode = EXCLUDED.login_mode,
                        challenge_policy = EXCLUDED.challenge_policy,
                        retention_policy = EXCLUDED.retention_policy,
-                       account_count = EXCLUDED.account_count,
-                       connected_account_count = EXCLUDED.connected_account_count,
                        enabled = EXCLUDED.enabled,
                        metadata = EXCLUDED.metadata,
                        updated_at = NOW()
@@ -412,14 +496,28 @@ async def _upsert_db_profile(*, tenant_id: str, user_id: str, profile: dict[str,
                 profile["runtime"],
                 json.dumps(profile["data_categories"], ensure_ascii=False),
                 profile["login_mode"],
-                profile["challenge_policy"],
+                json.dumps(profile["challenge_policy"], ensure_ascii=False),
                 json.dumps(profile["retention_policy"], ensure_ascii=False),
-                profile["account_count"],
-                profile["connected_account_count"],
                 profile["enabled"],
                 json.dumps(profile["metadata"], ensure_ascii=False),
                 user_id,
             )
+            audit_exists = await conn.fetchval("SELECT to_regclass('public.authenticated_collector_audit_log')")
+            if audit_exists:
+                await conn.execute(
+                    """
+                    INSERT INTO authenticated_collector_audit_log
+                        (tenant_id, actor_user_id, action, resource_type, resource_id, details)
+                    VALUES ($1, $2, 'site_profile.upsert', 'site_profile', $3, $4::jsonb)
+                    """,
+                    uuid.UUID(str(tenant_id)),
+                    user_id,
+                    str(row["id"]),
+                    json.dumps(
+                        {"project_key": profile["project_key"], "site_key": profile["site_key"]},
+                        ensure_ascii=False,
+                    ),
+                )
     except Exception:
         return None
     return _row_to_profile(row)
@@ -515,7 +613,7 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
             "business_id": project_key,
             "branch": profile["display_name"],
             "work_key": work_key,
-            "runtime": profile["runtime"],
+            "runtime": resolve_collector_execution_runtime(profile["runtime"]),
             "priority": int(payload.get("priority") or 50),
             "latest_only": bool(payload.get("latest_only", True)),
             "payload": {
@@ -523,6 +621,7 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
                 "recipe_id": recipe_id,
                 "recipe_version": recipe_version,
                 "site_environment": profile["runtime"],
+                "execution_runtime": resolve_collector_execution_runtime(profile["runtime"]),
                 "allowed_origins": profile["allowed_origins"],
                 "challenge_policy": profile["challenge_policy"],
                 "created_by": user_id,
@@ -561,7 +660,7 @@ def build_collector_recipe_dry_run(
         **recipe,
         "resource_policy": {
             **_json_dict(recipe.get("resource_policy")),
-            "runtime": "pc_agent" if extension["site_environment"] == "webview2" else extension["site_environment"],
+            "runtime": extension["execution_runtime"],
         },
     }
     plan = build_recipe_dry_run_plan(base_recipe, target_url=target_url)
