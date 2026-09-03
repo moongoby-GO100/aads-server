@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-03 11:21 KST - PC Agent 업무별 브라우저 창 위치 고정 + 신한 포커스 가드
+
+- Request:
+  - CEO 지시: PC Agent 브라우저 업무별 위치 분리, 신한은행 자동수집 중 GO100/다른 탭 포커스 간섭 방지, 배포 후 테스트.
+- Changes:
+  - `pc_agent/commands/browser_auto.py`: `browser_launch`에 `window_position`, `window_size`, `window_layout_policy`를 받아 Chrome `--window-position`, `--window-size` 인자로 전달하고 결과/로그에 남김.
+  - `app/browser_bridge/service.py`: 모든 `work_key` 기반 Browser Bridge 세션 생성 시 글로벌 창 배치 정책을 자동 주입.
+    - `yeoljeong-bank-*`: 좌측 상단 `0,0`, `1280x960`, `bank_dedicated_left`.
+    - `yeoljeong-delivery-*`: 우측 상단 `1320,0`, `1200x920`, `delivery_right`.
+    - `go100-*`, `kis-*`, `ntv2-*`, 기타 기본 work session도 별도 위치 정책 적용.
+  - `app/services/yeoljeong_bank_browser_connector.py`: 신한 자동수집 진단에 `browser_window_*`, `browser_focus_policy`, `shinhan_browser_focus_guard` 단계 로그 추가. OS 전경창이 다른 사이트여도 신한은 CDP target URL 기준으로 선택했는지 확인 가능.
+- Verification:
+  - `python3 -m py_compile pc_agent/commands/browser_auto.py app/browser_bridge/service.py app/services/yeoljeong_bank_browser_connector.py` passed.
+  - `docker exec aads-server-green python -m pytest tests/unit/test_cdp_session_manager.py tests/unit/test_browser_bridge.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed: 141/141.
+  - Local `.venv-playwright` run passed the same code path except 2 pre-existing active API fallback URL expectation failures caused by current local port ordering; container test passed the same suite.
+- Deployment:
+  - Pending at record time. Must commit selected files only, push, then run `deploy.sh bluegreen` from clean committed release SHA.
+
 ## 2026-09-03 11:02 KST - User project server execution routing gate
 
 - Request:

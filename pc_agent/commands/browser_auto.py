@@ -344,6 +344,59 @@ def _resolve_profile_dir(params: Dict[str, Any]) -> str:
     return os.path.join(root, f"isolated-{isolation_id}")
 
 
+def _coerce_window_pair(value: Any, *, first_key: str, second_key: str) -> tuple[int, int] | None:
+    if value is None or value == "":
+        return None
+    raw_first: Any = None
+    raw_second: Any = None
+    if isinstance(value, dict):
+        raw_first = value.get(first_key)
+        raw_second = value.get(second_key)
+    elif isinstance(value, (list, tuple)) and len(value) >= 2:
+        raw_first, raw_second = value[0], value[1]
+    else:
+        parts = [part.strip() for part in str(value).replace("x", ",").split(",", 1)]
+        if len(parts) == 2:
+            raw_first, raw_second = parts
+    try:
+        first = int(float(str(raw_first).strip()))
+        second = int(float(str(raw_second).strip()))
+    except Exception:
+        return None
+    return first, second
+
+
+def _browser_window_cli_args(params: Dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    args: list[str] = []
+    metadata: dict[str, str] = {}
+    position = _coerce_window_pair(params.get("window_position"), first_key="x", second_key="y")
+    if position is None and ("window_x" in params or "window_y" in params):
+        position = _coerce_window_pair(
+            {"x": params.get("window_x"), "y": params.get("window_y")},
+            first_key="x",
+            second_key="y",
+        )
+    if position is not None:
+        args.append(f"--window-position={position[0]},{position[1]}")
+        metadata["window_position"] = f"{position[0]},{position[1]}"
+
+    size = _coerce_window_pair(params.get("window_size"), first_key="width", second_key="height")
+    if size is None and ("window_width" in params or "window_height" in params):
+        size = _coerce_window_pair(
+            {"width": params.get("window_width"), "height": params.get("window_height")},
+            first_key="width",
+            second_key="height",
+        )
+    if size is not None and size[0] >= 320 and size[1] >= 240:
+        args.append(f"--window-size={size[0]},{size[1]}")
+        metadata["window_size"] = f"{size[0]},{size[1]}"
+
+    policy = str(params.get("window_layout_policy") or "").strip()
+    if policy:
+        metadata["window_layout_policy"] = policy[:80]
+    return args, metadata
+
+
 def _is_managed_profile_dir(profile_dir: str) -> bool:
     """Return true only for Chrome profiles created under the PC Agent profile root."""
     value = str(profile_dir or "").strip()
@@ -2076,6 +2129,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
     preferred = _coerce_port(params.get("preferred_port", params.get("port", CDP_PORT)), CDP_PORT)
     new_window = _as_bool(params.get("new_window", False), default=False)
     ready_timeout = float(params.get("ready_timeout_seconds", 15.0) or 15.0)
+    window_args, window_metadata = _browser_window_cli_args(params)
 
     try:
         os.makedirs(profile_dir, exist_ok=True)
@@ -2221,6 +2275,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                 "--no-first-run",
                 "--no-default-browser-check",
             ]
+            cmd.extend(window_args)
             if new_window:
                 cmd.append("--new-window")
             cmd.append(url)
@@ -2232,6 +2287,14 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
 
             CDPSessionManager.register(work_key, port, profile_dir, pid=int(proc.pid or 0))
             logger.info("Chrome CDP 시작 완료 (port=%d profile=%s work_key=%s)", port, profile_dir, work_key)
+            logger.info(
+                "browser_launch_window_layout work_key=%s port=%d position=%s size=%s policy=%s",
+                work_key,
+                port,
+                window_metadata.get("window_position", ""),
+                window_metadata.get("window_size", ""),
+                window_metadata.get("window_layout_policy", ""),
+            )
             return {
                 "status": "success",
                 "data": {
@@ -2240,6 +2303,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                     "user_data_dir": profile_dir,
                     "cdp_ready": True,
                     "websocket_debugger_url": ready.get("webSocketDebuggerUrl", ""),
+                    **window_metadata,
                 },
             }
 
@@ -2253,6 +2317,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                 "--no-first-run",
                 "--no-default-browser-check",
             ]
+            cmd.extend(window_args)
             if new_window:
                 cmd.append("--new-window")
             cmd.append(url)
@@ -2268,6 +2333,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
                         "user_data_dir": profile_dir,
                         "cdp_ready": True,
                         "websocket_debugger_url": ready.get("webSocketDebuggerUrl", ""),
+                        **window_metadata,
                     },
                 }
 

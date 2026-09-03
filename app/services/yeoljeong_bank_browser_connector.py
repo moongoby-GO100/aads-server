@@ -3552,6 +3552,10 @@ async def collect_bank_via_browser_session_async(
             )
             session_id_to_use = str(getattr(session, "session_id", "") or "")
             auto_opened_session = bool(session_id_to_use)
+            session_metadata = dict(getattr(getattr(session, "endpoint", None), "metadata", {}) or {})
+            for layout_key in ("window_position", "window_size", "window_layout_policy"):
+                if session_metadata.get(layout_key):
+                    safe_diagnostics[f"browser_{layout_key}"] = session_metadata.get(layout_key)
             safe_diagnostics["auto_open_browser"] = "1"
             safe_diagnostics["cdp_preflight_session_id"] = session_id_to_use
             safe_diagnostics["cdp_preflight"] = "ready"
@@ -3562,6 +3566,10 @@ async def collect_bank_via_browser_session_async(
                     status="success",
                     started_at=stage_started_at,
                     reason="auto_open_browser_ready",
+                    success_condition="dedicated_work_key_session_ready",
+                    browser_window_position=str(session_metadata.get("window_position") or ""),
+                    browser_window_size=str(session_metadata.get("window_size") or ""),
+                    browser_window_layout_policy=str(session_metadata.get("window_layout_policy") or ""),
                 )
         except Exception as exc:
             safe_diagnostics["auto_open_browser"] = "failed"
@@ -3593,6 +3601,10 @@ async def collect_bank_via_browser_session_async(
                     session_id_to_use = str(getattr(session, "session_id", "") or "")
                     auto_opened_session = bool(session_id_to_use)
                     if session_id_to_use:
+                        session_metadata = dict(getattr(getattr(session, "endpoint", None), "metadata", {}) or {})
+                        for layout_key in ("window_position", "window_size", "window_layout_policy"):
+                            if session_metadata.get(layout_key):
+                                safe_diagnostics[f"browser_{layout_key}"] = session_metadata.get(layout_key)
                         safe_diagnostics["browser_session_id"] = session_id_to_use
                         safe_diagnostics["auto_open_browser"] = "1"
                         safe_diagnostics["session_recovery"] = "recreated_same_work_key"
@@ -3604,6 +3616,10 @@ async def collect_bank_via_browser_session_async(
                                 status="success",
                                 started_at=recreate_started_at,
                                 reason="recreated_same_work_key",
+                                success_condition="dedicated_work_key_session_recreated",
+                                browser_window_position=str(session_metadata.get("window_position") or ""),
+                                browser_window_size=str(session_metadata.get("window_size") or ""),
+                                browser_window_layout_policy=str(session_metadata.get("window_layout_policy") or ""),
                             )
                 except Exception as retry_exc:
                     retry_error_code = str(getattr(retry_exc, "error_code", "") or "").strip()
@@ -3725,8 +3741,20 @@ async def collect_bank_via_browser_session_async(
         if matched_existing_page:
             safe_diagnostics["browser_tab_reused"] = "1"
         safe_diagnostics["browser_session_reuse_policy"] = "work_key_domain_first"
+        safe_diagnostics["browser_focus_policy"] = "cdp_target_by_portal_url_not_os_foreground"
         _disable_local_agent_auto_recovery(page)
         if shinhan_service:
+            _append_shinhan_stage_log(
+                shinhan_stage_logs,
+                stage="shinhan_browser_focus_guard",
+                status="success" if matched_existing_page or not initial_url or _portal_url_reusable(initial_url, portal_url) else "warning",
+                started_at=time.monotonic(),
+                reason="cdp_page_selected_by_requested_bank_host",
+                success_condition="selected_page_matches_bank_portal_or_new_page",
+                initial_url=initial_url[:120],
+                portal_url=portal_url[:120],
+                focus_policy="cdp_target_by_portal_url_not_os_foreground",
+            )
             security_check_started_at = time.monotonic()
             security_program_state = await _shinhan_security_program_runtime_state(page)
             safe_diagnostics["shinhan_security_program_state"] = security_program_state

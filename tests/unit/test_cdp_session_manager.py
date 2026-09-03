@@ -13,6 +13,7 @@ from browser_auto import (
     browser_navigate,
     browser_close_session,
     _bank_work_key_port_matches_url,
+    _browser_window_cli_args,
     _default_profile_root,
     _effective_port,
     _select_page_targets,
@@ -390,6 +391,24 @@ async def test_browser_eval_preserves_bank_target_url_hint(monkeypatch):
     assert result["status"] == "success"
     assert captured[0]["params"]["work_key"] == "yeoljeong-bank-shinhan-individual-abc"
     assert captured[0]["params"]["target_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+
+
+def test_browser_window_cli_args_accepts_position_and_size():
+    args, metadata = _browser_window_cli_args(
+        {
+            "window_position": {"x": 1320, "y": 0},
+            "window_size": [1200, 920],
+            "window_layout_policy": "delivery_right",
+        }
+    )
+
+    assert "--window-position=1320,0" in args
+    assert "--window-size=1200,920" in args
+    assert metadata == {
+        "window_position": "1320,0",
+        "window_size": "1200,920",
+        "window_layout_policy": "delivery_right",
+    }
 
 
 @pytest.mark.asyncio

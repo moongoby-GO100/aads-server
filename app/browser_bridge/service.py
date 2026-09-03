@@ -41,6 +41,53 @@ DEFAULT_WORK_SESSION_LABELS = {
     "ntv2-china-sourcing-admin": "NTV2 China sourcing admin",
     "ntv2-vvic-scrape": "NTV2 VVIC scrape",
 }
+DEFAULT_WORK_SESSION_WINDOW_LAYOUT = {
+    "window_position": {"x": 80, "y": 80},
+    "window_size": {"width": 1280, "height": 900},
+    "window_layout_policy": "default_work_session",
+}
+WORK_SESSION_WINDOW_LAYOUTS: tuple[tuple[str, dict[str, Any]], ...] = (
+    (
+        "yeoljeong-bank-",
+        {
+            "window_position": {"x": 0, "y": 0},
+            "window_size": {"width": 1280, "height": 960},
+            "window_layout_policy": "bank_dedicated_left",
+        },
+    ),
+    (
+        "yeoljeong-delivery-",
+        {
+            "window_position": {"x": 1320, "y": 0},
+            "window_size": {"width": 1200, "height": 920},
+            "window_layout_policy": "delivery_right",
+        },
+    ),
+    (
+        "go100-",
+        {
+            "window_position": {"x": 0, "y": 980},
+            "window_size": {"width": 1280, "height": 900},
+            "window_layout_policy": "go100_lower_left",
+        },
+    ),
+    (
+        "kis-",
+        {
+            "window_position": {"x": 1320, "y": 980},
+            "window_size": {"width": 1200, "height": 900},
+            "window_layout_policy": "kis_lower_right",
+        },
+    ),
+    (
+        "ntv2-",
+        {
+            "window_position": {"x": 0, "y": 80},
+            "window_size": {"width": 1280, "height": 900},
+            "window_layout_policy": "ntv2_left",
+        },
+    ),
+)
 LOCAL_AGENT_RECOVERABLE_ERROR_CODES = {"CDP_NOT_READY", "RUNTIME_EVALUATE_TIMEOUT", "STALE_TARGET", "COMMAND_TIMEOUT"}
 LOCAL_AGENT_JS_COMMANDS = {
     "browser_click",
@@ -72,6 +119,17 @@ def normalize_work_key(work_key: str) -> str:
 
 def default_work_session_label(work_key: str) -> str:
     return DEFAULT_WORK_SESSION_LABELS.get(work_key, f"Browser work session: {work_key}")
+
+
+def window_layout_for_work_key(work_key: str) -> dict[str, Any]:
+    normalized = str(work_key or "").strip().lower()
+    for prefix, layout in WORK_SESSION_WINDOW_LAYOUTS:
+        if normalized.startswith(prefix):
+            return {key: dict(value) if isinstance(value, dict) else value for key, value in layout.items()}
+    return {
+        key: dict(value) if isinstance(value, dict) else value
+        for key, value in DEFAULT_WORK_SESSION_WINDOW_LAYOUT.items()
+    }
 
 
 def looks_like_protected_label(label: str) -> bool:
@@ -566,6 +624,9 @@ class BrowserBridgeService:
             "isolated_profile": isolated_profile,
             "new_window": False,
         }
+        if normalized_work_key:
+            for layout_key, layout_value in window_layout_for_work_key(normalized_work_key).items():
+                launch_params.setdefault(layout_key, layout_value)
         if command_timeout_seconds is not None:
             launch_params["ready_timeout_seconds"] = max(
                 15.0,
@@ -884,6 +945,10 @@ class BrowserBridgeService:
             "last_url": url or "about:blank",
             "stale": False,
         }
+        for layout_key in ("window_position", "window_size", "window_layout_policy"):
+            value = data.get(layout_key) or launch_params.get(layout_key)
+            if value:
+                metadata[layout_key] = value
         if normalized_work_key:
             metadata["work_key"] = normalized_work_key
             metadata["protected"] = is_protected

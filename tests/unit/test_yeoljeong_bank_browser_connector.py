@@ -754,6 +754,11 @@ def test_collect_async_auto_opens_bank_work_session_when_enabled():
 
     mock_session = MagicMock()
     mock_session.session_id = "auto-session-001"
+    mock_session.endpoint.metadata = {
+        "window_position": {"x": 0, "y": 0},
+        "window_size": {"width": 1280, "height": 960},
+        "window_layout_policy": "bank_dedicated_left",
+    }
 
     with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
         bridge_inst = mock_bridge.return_value
@@ -777,6 +782,12 @@ def test_collect_async_auto_opens_bank_work_session_when_enabled():
     assert result["error_code"] == "BANK_BROWSER_OPERATOR_ACTION_REQUIRED"
     assert result["diagnostics"]["browser_session_id"] == "auto-session-001"
     assert result["diagnostics"]["auto_opened_session"] == "1"
+    assert result["diagnostics"]["browser_window_layout_policy"] == "bank_dedicated_left"
+    assert result["diagnostics"]["browser_focus_policy"] == "cdp_target_by_portal_url_not_os_foreground"
+    assert any(
+        item.get("stage") == "shinhan_browser_focus_guard"
+        for item in result["diagnostics"]["shinhan_stage_logs"]
+    )
     bridge_inst.ensure_work_session.assert_awaited_once()
     mock_page.goto.assert_not_called()
 

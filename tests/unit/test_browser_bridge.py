@@ -12,7 +12,7 @@ from app.browser_bridge import service as service_module
 from app.browser_bridge.models import BrowserEndpointKind
 from app.browser_bridge.registry import PairingManager, SessionRegistry
 from app.browser_bridge.security import BrowserBridgeSecurityError, validate_bridge_endpoint
-from app.browser_bridge.service import BrowserBridgeService
+from app.browser_bridge.service import BrowserBridgeService, window_layout_for_work_key
 from app.browser_bridge.storage_state import StorageStateManager
 
 
@@ -20,6 +20,17 @@ def test_validate_bridge_endpoint_allows_loopback_cdp() -> None:
     validate_bridge_endpoint(BrowserEndpointKind.CDP, "http://127.0.0.1:9222")
     validate_bridge_endpoint(BrowserEndpointKind.CDP, "ws://localhost:9222/devtools/browser/abc")
     validate_bridge_endpoint(BrowserEndpointKind.CDP, "http://[::1]:9222")
+
+
+def test_window_layout_for_work_key_separates_bank_and_delivery_windows() -> None:
+    bank = window_layout_for_work_key("yeoljeong-bank-shinhan-individual-abc")
+    delivery = window_layout_for_work_key("yeoljeong-delivery-baemin-biz-mia")
+
+    assert bank["window_position"] == {"x": 0, "y": 0}
+    assert bank["window_size"] == {"width": 1280, "height": 960}
+    assert bank["window_layout_policy"] == "bank_dedicated_left"
+    assert delivery["window_position"] == {"x": 1320, "y": 0}
+    assert delivery["window_layout_policy"] == "delivery_right"
 
 
 @pytest.mark.parametrize(
@@ -696,6 +707,7 @@ async def test_ensure_pc_agent_cdp_registers_local_agent_session(monkeypatch, tm
     assert captured_kwargs["params"]["work_key"] == "ntv2-china-sourcing-admin"
     assert captured_kwargs["params"]["isolation_id"] == "ntv2-china-sourcing-admin"
     assert captured_kwargs["params"]["new_window"] is False
+    assert captured_kwargs["params"]["window_layout_policy"] == "ntv2_left"
     assert captured_kwargs["params"]["ready_timeout_seconds"] == 40.0
     assert session.work_key == "ntv2-china-sourcing-admin"
 
@@ -742,9 +754,12 @@ async def test_ensure_pc_agent_cdp_falls_back_to_active_api_when_no_local_agent(
     assert active_calls[0]["command_type"] == "browser_launch"
     assert active_calls[0]["params"]["work_key"] == "yeoljeong-delivery-baemin-biz-junghwa-test"
     assert active_calls[0]["params"]["new_window"] is False
+    assert active_calls[0]["params"]["window_position"] == {"x": 1320, "y": 0}
+    assert active_calls[0]["params"]["window_layout_policy"] == "delivery_right"
     assert session.endpoint.kind == BrowserEndpointKind.LOCAL_AGENT
     assert session.endpoint.metadata["agent_id"] == "ceo-pc"
     assert session.endpoint.metadata["port"] == "9444"
+    assert session.endpoint.metadata["window_layout_policy"] == "delivery_right"
 
 
 @pytest.mark.asyncio
