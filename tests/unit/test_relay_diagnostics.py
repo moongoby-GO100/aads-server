@@ -187,3 +187,17 @@ def test_relay_tool_result_cancel_is_reclassified_to_session_scope() -> None:
     assert classified["error_type"] == "session_cancelled_mcp_tool_call"
     assert classified["cancel_scope"] == "session"
     assert "relay=claude" in classified["content"]
+
+
+def test_relay_tool_result_connection_closed_is_not_db_failure() -> None:
+    classified = _classify_relay_tool_result(
+        "Connection closed",
+        session_id="12345678-1234-1234-1234-123456789abc",
+        relay_name="claude",
+        tool_name="query_project_database",
+    )
+
+    assert classified["is_error"] is True
+    assert classified["error_type"] == "relay_transport_closed"
+    assert classified["cancel_scope"] == "relay"
+    assert "direct fallback" in classified["content"]

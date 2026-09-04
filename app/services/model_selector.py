@@ -3895,6 +3895,24 @@ def _classify_relay_tool_result(
                 f"(relay={relay_name}, session={(session_id or 'default')[:8]}, tool={tool_name or 'unknown'})"
             ),
         }
+    if (
+        "connection closed" in lowered
+        or "transport closed" in lowered
+        or "broken pipe" in lowered
+        or "connection reset" in lowered
+        or "mcp server disconnected" in lowered
+    ):
+        return {
+            "is_error": True,
+            "error_type": "relay_transport_closed",
+            "cancel_scope": "relay",
+            "raw_error": text[:500],
+            "content": (
+                "relay transport closed before MCP tool result "
+                f"(relay={relay_name}, session={(session_id or 'default')[:8]}, tool={tool_name or 'unknown'}). "
+                "DB/network status must be rechecked with direct fallback before reporting a project DB failure."
+            ),
+        }
     return {}
 
 

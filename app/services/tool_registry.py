@@ -3264,6 +3264,10 @@ class ToolRegistry:
     def get_tool(self, name: str) -> Dict[str, Any]:
         return _TOOLS.get(name, {})
 
+    def get_all_tools(self) -> Dict[str, Dict[str, Any]]:
+        """Return the raw registry mapping for tool-layer audits."""
+        return dict(_TOOLS)
+
     def get_tool_examples(self, name: str) -> List[Dict[str, Any]]:
         """도구의 input_examples 반환 (테스트/문서화용)."""
         return _TOOLS.get(name, {}).get("input_examples", [])

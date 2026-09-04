@@ -67,3 +67,12 @@ async def test_tool_layer_audit_fix_mode_logs_only(caplog: pytest.LogCaptureFixt
     assert result["fix"] is True
     assert result["fix_applied"] is False
     assert "tool_layer_audit_fix_requested" in caplog.text
+
+
+def test_tool_registry_exposes_audit_mapping():
+    from app.services.tool_registry import ToolRegistry
+
+    tools = ToolRegistry().get_all_tools()
+
+    assert "query_project_database" in tools
+    assert "run_remote_command" in tools
