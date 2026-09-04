@@ -656,15 +656,18 @@ async def _shinhan_security_program_runtime_state(page: Any) -> dict[str, str]:
         "ConvertTo-Json -Depth 4 -Compress"
     )
     try:
-        payload = await runner(
+        payload, busy_retries = await _run_browser_command_with_agent_busy_retry(
+            page,
             "powershell",
             {"command": command},
             command_timeout_seconds=20,
-            queue_wait_timeout_seconds=8,
+            queue_wait_timeout_seconds=12,
+            max_busy_retries=3,
         )
     except TypeError:
         try:
             payload = await runner("powershell", {"command": command})
+            busy_retries = 0
         except Exception as exc:
             return {"checked": "failed", **_safe_browser_error_fields(exc)}
     except Exception as exc:
@@ -691,6 +694,7 @@ async def _shinhan_security_program_runtime_state(page: Any) -> dict[str, str]:
         "inisafe_detected": "1" if has_inisafe else "0",
         "installed_match_count": str(installed_count)[:12],
         "running_match_count": str(running_count)[:12],
+        "agent_busy_retries": str(busy_retries)[:12],
     }
 
 

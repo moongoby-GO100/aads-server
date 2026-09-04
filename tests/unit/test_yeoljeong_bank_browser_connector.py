@@ -172,6 +172,25 @@ class _ShinhanAgentBusyThenIdpwPage(_ShinhanFincertThenIdpwPage):
         return await super().evaluate(expression, *args, **kwargs)
 
 
+class _ShinhanSecurityProgramBusyPage:
+    def __init__(self):
+        self.calls = 0
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        assert command_type == "powershell"
+        self.calls += 1
+        if self.calls == 1:
+            exc = RuntimeError("agent busy")
+            exc.error_code = "AGENT_BUSY"
+            raise exc
+        return {
+            "stdout": (
+                '{"installed":["VeraPort","AhnLab Safe Transaction"],'
+                '"running":["VeraPortService","AhnLabSafeTransactionService"]}'
+            )
+        }
+
+
 class _ShinhanPostIdpwFincertPage(_ChallengePage):
     def __init__(self):
         super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -540,6 +559,19 @@ def test_shinhan_idpw_reset_retries_agent_busy_and_forces_login_hash():
         "new_window": False,
         "ready_timeout_seconds": 20,
     }) in page.browser_commands
+
+
+def test_shinhan_security_program_check_retries_agent_busy():
+    page = _ShinhanSecurityProgramBusyPage()
+
+    result = _run(connector._shinhan_security_program_runtime_state(page))
+
+    assert page.calls == 2
+    assert result["checked"] == "1"
+    assert result["required_runtime_ready"] == "1"
+    assert result["veraport_detected"] == "1"
+    assert result["ahnlab_detected"] == "1"
+    assert result["agent_busy_retries"] == "1"
 
 
 def test_shinhan_keyboard_login_uses_native_mouse_and_keyboard_commands():
