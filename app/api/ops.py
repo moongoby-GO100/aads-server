@@ -15,10 +15,11 @@ from typing import Optional, List, Any, Dict
 import structlog
 import httpx
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 import asyncpg
+from app.auth import require_internal_admin
 from app.core.claude_md_merger import build_merged_claude_md, get_merged_claude_md_sha256
 from app.core.project_config import normalize_project_label
 from app.services.server_registry import get_server_config, get_server_host, resolve_server_id
@@ -414,6 +415,45 @@ KST = timezone(timedelta(hours=9))
 
 async def _get_conn():
     return await asyncpg.connect(DATABASE_URL, timeout=10)
+
+
+@router.get(
+    "/ops/deploy/status",
+    dependencies=[Depends(require_internal_admin)],
+    summary="공통 배포 관제 상태",
+)
+async def get_common_deploy_status():
+    """배포 queue/phase/시간/BG 동기화 및 stale runner 신호를 조회한다."""
+    from app.services.deploy_observability import get_deploy_status
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        return await get_deploy_status(conn)
+    except Exception as exc:
+        logger.error("ops_deploy_status_failed", error=str(exc))
+        return {
+            "generated_at": datetime.now(timezone.utc),
+            "schema_version": "deploy-observability-v1",
+            "degraded": True,
+            "degraded_reasons": ["database_query_failed"],
+            "error_summary": "deployment telemetry is temporarily unavailable",
+            "active_deployments": [],
+            "queued_deployments": [],
+            "recent_durations_per_project": [],
+            "phase_timeline": [],
+            "stale_zombie_signals": [],
+            "legacy_stale_candidates": [],
+            "bg_digest_sync": [],
+            "next_deploy_readiness": {
+                "ready": False,
+                "blockers": ["observability_unavailable"],
+                "next_queued_runner_job_id": None,
+            },
+        }
+    finally:
+        if conn is not None:
+            await conn.close()
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
