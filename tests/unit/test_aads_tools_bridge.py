@@ -84,3 +84,22 @@ async def test_mcp_bridge_preserves_global_scope_without_session_filter():
 
     assert captured["name"] == "pipeline_runner_status"
     assert captured["params"] == {"scope": "all"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_bridge_db_tool_returns_before_client_disconnect(monkeypatch):
+    """DB MCP 호출은 상위 30초 제한 전에 구조화된 timeout을 반환한다."""
+    import mcp_servers.aads_tools_bridge as bridge
+
+    async def slow_call_tool(name, params):
+        await bridge.asyncio.sleep(0.03)
+        return json.dumps({"ok": True})
+
+    monkeypatch.setattr(bridge, "_MCP_DB_TOOL_DEADLINE_SECONDS", 0.01)
+    monkeypatch.setattr(bridge, "_call_tool", slow_call_tool)
+
+    result = await bridge.call_tool("query_database", {"query": "SELECT 1"})
+
+    payload = json.loads(result[0].text)
+    assert payload["error_code"] == "mcp_db_tool_deadline"
+    assert payload["tool"] == "query_database"

@@ -20,11 +20,11 @@ def test_database_tools_use_database_timeout_bucket(monkeypatch):
 
     monkeypatch.setattr(tool_executor, "_TOOL_TIMEOUT", 20.0)
     monkeypatch.setattr(tool_executor, "_LONG_TOOL_TIMEOUT", 55.0)
-    monkeypatch.setattr(tool_executor, "_DATABASE_TOOL_TIMEOUT", 125.0)
+    monkeypatch.setattr(tool_executor, "_DATABASE_TOOL_TIMEOUT", 28.0)
 
-    assert tool_executor._timeout_for_tool("query_database") == 125.0
-    assert tool_executor._timeout_for_tool("query_db") == 125.0
-    assert tool_executor._timeout_for_tool("query_project_database") == 125.0
+    assert tool_executor._timeout_for_tool("query_database") == 28.0
+    assert tool_executor._timeout_for_tool("query_db") == 28.0
+    assert tool_executor._timeout_for_tool("query_project_database") == 28.0
     assert tool_executor._timeout_for_tool("run_remote_command") == 55.0
     assert tool_executor._timeout_for_tool("task_history") == 20.0
 
@@ -99,3 +99,27 @@ async def test_query_database_allows_created_at_column(monkeypatch):
 
     assert result == [{"created_at": "2026-09-04T00:00:00+09:00"}]
     assert "LIMIT 1" in pool.conn.query
+
+
+@pytest.mark.asyncio
+async def test_query_database_falls_back_to_direct_connection_when_pool_unavailable(monkeypatch):
+    from app.services import tool_executor
+    from app.services.tool_executor import ToolExecutor
+
+    captured = {}
+
+    async def fake_direct(clean_query, connect_timeout, statement_timeout):
+        captured["query"] = clean_query
+        captured["connect_timeout"] = connect_timeout
+        captured["statement_timeout"] = statement_timeout
+        return [{"ok": 1}]
+
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: (_ for _ in ()).throw(RuntimeError("pool missing")))
+    monkeypatch.setattr(tool_executor, "_fetch_internal_db_rows_direct", fake_direct)
+
+    result = await ToolExecutor()._query_database({"query": "SELECT 1", "limit": 1})
+
+    assert result == [{"ok": 1}]
+    assert captured["query"] == "SELECT 1 LIMIT 1"
+    assert captured["connect_timeout"] <= 4.0
+    assert captured["statement_timeout"] <= 22.0

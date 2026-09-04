@@ -139,6 +139,14 @@ _SESSION_BOUND_TOOLS = {
     "check_directive_status",
 }
 
+_DB_TOOLS = {
+    "query_database",
+    "query_db",
+    "query_project_database",
+    "list_project_databases",
+}
+_MCP_DB_TOOL_DEADLINE_SECONDS = float(os.getenv("AADS_MCP_DB_TOOL_DEADLINE_SECONDS", "28"))
+
 
 def _bind_aads_chat_session(name: str, params: dict) -> tuple[dict, str]:
     """Bind the MCP subprocess to the AADS chat tab that launched it."""
@@ -233,7 +241,29 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     """도구 호출 → execute_tool 실행 → 결과 반환. 모든 예외를 잡아 MCP 연결 보호."""
     logger.info(f"call_tool: {name} args={json.dumps(arguments, ensure_ascii=False)[:200]}")
     try:
-        result = await _call_tool(name, arguments)
+        if name in _DB_TOOLS:
+            result = await asyncio.wait_for(
+                _call_tool(name, arguments),
+                timeout=max(1.0, _MCP_DB_TOOL_DEADLINE_SECONDS),
+            )
+        else:
+            result = await _call_tool(name, arguments)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "call_tool DB deadline exceeded: tool=%s timeout_seconds=%.1f",
+            name,
+            _MCP_DB_TOOL_DEADLINE_SECONDS,
+        )
+        result = json.dumps(
+            {
+                "error": "DB MCP tool deadline exceeded before client disconnect",
+                "error_code": "mcp_db_tool_deadline",
+                "tool": name,
+                "timeout_seconds": _MCP_DB_TOOL_DEADLINE_SECONDS,
+                "hint": "쿼리 범위를 줄이거나 query_database timeout_policy를 확인하십시오.",
+            },
+            ensure_ascii=False,
+        )
     except asyncio.CancelledError:
         logger.warning(f"call_tool CANCELLED: {name}")
         result = json.dumps({"error": "cancelled", "tool": name}, ensure_ascii=False)

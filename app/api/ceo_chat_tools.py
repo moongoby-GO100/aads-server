@@ -2306,9 +2306,18 @@ async def tool_query_db(sql: str, dsn: str) -> str:
         return "[ERROR] 허용되지 않는 SQL 명령어가 포함되어 있습니다."
 
     try:
-        conn = await asyncpg.connect(dsn=dsn)
+        connect_timeout = float(os.getenv("AADS_LEGACY_QUERY_DB_CONNECT_TIMEOUT_SECONDS", "4"))
+        statement_timeout = float(os.getenv("AADS_LEGACY_QUERY_DB_STATEMENT_TIMEOUT_SECONDS", "22"))
+        conn = await asyncpg.connect(
+            dsn=dsn,
+            timeout=connect_timeout,
+            command_timeout=statement_timeout,
+        )
         try:
-            rows = await conn.fetch(sql_stripped)
+            async with conn.transaction():
+                await conn.execute("SET LOCAL default_transaction_read_only = on")
+                await conn.execute("SELECT set_config('statement_timeout', $1, true)", str(int(statement_timeout * 1000)))
+                rows = await conn.fetch(sql_stripped, timeout=statement_timeout)
             if not rows:
                 return "(결과 없음)"
             rows = list(rows[:_MAX_DB_ROWS])
@@ -2321,6 +2330,8 @@ async def tool_query_db(sql: str, dsn: str) -> str:
             return "\n".join(lines) + suffix
         finally:
             await conn.close()
+    except asyncio.TimeoutError:
+        return "[ERROR] DB 쿼리 시간 초과: MCP 30초 제한 전에 중단했습니다. 기간/조건을 줄여 다시 조회하십시오."
     except Exception as e:
         return f"[ERROR] DB 쿼리 실패: {e}"
 
