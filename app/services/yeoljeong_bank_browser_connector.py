@@ -57,6 +57,9 @@ except Exception:  # pragma: no cover - keeps standalone unit loading dependency
 
 logger = logging.getLogger(__name__)
 
+SHINHAN_IDPW_LOGIN_HASH = "210000000000"
+SHINHAN_ACCOUNT_QUERY_HASH = "210101000000"
+
 
 # ── Work-key generation ──────────────────────────────────────────────────────
 
@@ -100,6 +103,52 @@ def _safe_browser_error_fields(exc: Exception) -> dict[str, str]:
     if error_code:
         fields["error_code"] = error_code[:120]
     return fields
+
+
+def _is_agent_busy_error(exc: Exception) -> bool:
+    error_code = str(getattr(exc, "error_code", "") or "").strip().upper()
+    detail = getattr(exc, "detail", None)
+    detail_code = ""
+    if isinstance(detail, dict):
+        detail_code = str(detail.get("error_code") or "").strip().upper()
+    text = f"{error_code} {detail_code} {exc}".lower()
+    return "agent_busy" in text or "agent busy" in text or "queue wait timeout" in text
+
+
+async def _run_browser_command_with_agent_busy_retry(
+    page: Any,
+    command_type: str,
+    params: dict[str, Any] | None = None,
+    *,
+    command_timeout_seconds: float,
+    queue_wait_timeout_seconds: float,
+    max_busy_retries: int = 2,
+) -> tuple[dict[str, Any], int]:
+    """Run a PC Agent browser command, waiting through short financial lease contention."""
+    runner = getattr(page, "_run_browser_command", None)
+    if not callable(runner):
+        raise RuntimeError("pc_agent_command_unavailable")
+    attempts = max(1, int(max_busy_retries) + 1)
+    last_exc: Exception | None = None
+    for attempt_index in range(attempts):
+        try:
+            try:
+                payload = await runner(
+                    command_type,
+                    params or {},
+                    command_timeout_seconds=command_timeout_seconds,
+                    queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+                )
+            except TypeError:
+                payload = await runner(command_type, params or {})
+            return (payload if isinstance(payload, dict) else {}, attempt_index)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_agent_busy_error(exc) or attempt_index >= attempts - 1:
+                raise
+            await asyncio.sleep(min(8.0, 1.5 * (attempt_index + 1)))
+    assert last_exc is not None
+    raise last_exc
 
 
 def _append_shinhan_stage_log(
@@ -2765,13 +2814,16 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
     runner = getattr(page, "_run_browser_command", None)
     if callable(runner):
         try:
-            close_result = await runner(
+            close_result, busy_retries = await _run_browser_command_with_agent_busy_retry(
+                page,
                 "browser_close_tab",
                 {"url_pattern": "fincert|yeskey|cert", "keep_last": False},
                 command_timeout_seconds=10,
-                queue_wait_timeout_seconds=5,
+                queue_wait_timeout_seconds=15,
+                max_busy_retries=2,
             )
             result["certificate_tab_close_attempted"] = "1"
+            result["certificate_tab_close_busy_retries"] = str(busy_retries)
             close_payload = close_result if isinstance(close_result, dict) and "closed" in close_result else None
             if not isinstance(close_payload, dict) and isinstance(close_result, dict):
                 close_payload = close_result.get("data")
@@ -2788,17 +2840,24 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
         except Exception:
             result["certificate_tab_close_attempted"] = "failed"
         try:
-            launch_result = await runner(
+            idpw_url = portal_url
+            if portal_url and "#" not in portal_url:
+                idpw_url = f"{portal_url}#{SHINHAN_IDPW_LOGIN_HASH}"
+            launch_result, busy_retries = await _run_browser_command_with_agent_busy_retry(
+                page,
                 "browser_launch",
                 {
-                    "url": portal_url,
+                    "url": idpw_url,
                     "new_window": False,
                     "ready_timeout_seconds": 20,
                 },
                 command_timeout_seconds=35,
-                queue_wait_timeout_seconds=10,
+                queue_wait_timeout_seconds=25,
+                max_busy_retries=3,
             )
             result["work_key_relaunch_attempted"] = "1"
+            result["work_key_relaunch_busy_retries"] = str(busy_retries)
+            result["idpw_hash_target"] = SHINHAN_IDPW_LOGIN_HASH
             result["work_key_relaunch_status"] = str(
                 launch_result.get("status") if isinstance(launch_result, dict) else ""
             )[:40] or "success"
@@ -2813,14 +2872,88 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
             result["work_key_relaunch_attempted"] = "failed"
     if portal_url and hasattr(page, "goto"):
         try:
-            await page.goto(portal_url, wait_until="domcontentloaded", timeout=30000)
+            idpw_url = portal_url if "#" in portal_url else f"{portal_url}#{SHINHAN_IDPW_LOGIN_HASH}"
+            await page.goto(idpw_url, wait_until="domcontentloaded", timeout=30000)
             result["portal_reloaded_for_idpw"] = "1"
+            result["idpw_hash_forced"] = "1"
         except Exception:
             result["portal_reloaded_for_idpw"] = "failed"
         try:
             await page.wait_for_load_state("networkidle", timeout=3000)
         except Exception:
             pass
+    try:
+        forced = await _evaluate_page(
+            page,
+            """
+            (input) => {
+              const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+              const result = {
+                idpw_hash_forced: '0',
+                account_query_hash_prepared: '0',
+                idpw_panel_visible: '0',
+                idpw_login_panel_selected: '0'
+              };
+              try {
+                if (window.shbComm?.menu) {
+                  window.shbComm.menu.redirectUrl = input.accountQueryHash;
+                }
+              } catch (_) {}
+              try {
+                window.location.hash = input.idpwHash;
+                window.dispatchEvent(new HashChangeEvent('hashchange'));
+                result.idpw_hash_forced = '1';
+              } catch (_) {}
+              const textOf = (el) => String(
+                el?.innerText ||
+                el?.value ||
+                el?.getAttribute?.('title') ||
+                el?.getAttribute?.('aria-label') ||
+                ''
+              ).replace(/\\s+/g, ' ').trim();
+              const buttons = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit],span'));
+              const idpwTab = buttons
+                .filter((el) => visible(el) || /idlogin|login|idpw/i.test(String(el.id || el.name || '').toLowerCase()))
+                .map((el) => ({el, label: textOf(el).toLowerCase(), meta: String(el.id || el.name || '').toLowerCase()}))
+                .filter((item) => !/금융인증|공동인증|인증서|fincert|certificate/.test(`${item.label} ${item.meta}`))
+                .find((item) => /이용자\\s*id\\s*로그인|아이디\\s*로그인|id\\s*\\/\\s*pw|idpw|idlogin|login/.test(`${item.label} ${item.meta}`));
+              if (idpwTab) {
+                try { idpwTab.el.focus(); } catch (_) {}
+                try { idpwTab.el.click(); } catch (_) {}
+                try { idpwTab.el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); } catch (_) {}
+                result.idpw_login_panel_selected = '1';
+              }
+              const bodyText = String(document.body?.innerText || '').replace(/\\s+/g, ' ');
+              const loginInput = Array.from(document.querySelectorAll('input'))
+                .find((el) => /login|id|user|ibx_loginId/i.test(String(el.id || el.name || el.title || el.placeholder || '')));
+              const passwordInput = Array.from(document.querySelectorAll('input'))
+                .find((el) => String(el.type || '').toLowerCase() === 'password' || /비밀번호|password|scr_pwd/i.test(String(el.id || el.name || el.title || el.placeholder || '')));
+              if (/이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(bodyText) || (loginInput && passwordInput)) {
+                result.idpw_panel_visible = '1';
+                result.idpw_login_panel_selected = '1';
+              }
+              if (result.idpw_hash_forced === '1') {
+                result.account_query_hash_prepared = '1';
+              }
+              return result;
+            }
+            """,
+            {
+                "idpwHash": SHINHAN_IDPW_LOGIN_HASH,
+                "accountQueryHash": SHINHAN_ACCOUNT_QUERY_HASH,
+            },
+            timeout_ms=12000,
+        )
+        if isinstance(forced, dict):
+            for key in (
+                "idpw_hash_forced",
+                "account_query_hash_prepared",
+                "idpw_panel_visible",
+                "idpw_login_panel_selected",
+            ):
+                result[key] = "1" if str(forced.get(key) or "") == "1" else result.get(key, "0")
+    except Exception:
+        result["idpw_hash_forced"] = result.get("idpw_hash_forced", "failed")
     try:
         selected = await _evaluate_page(
             page,
@@ -2862,7 +2995,11 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
         result["idpw_login_panel_selected"] = "failed"
     result["idpw_reset_ready"] = "1" if (
         result.get("portal_reloaded_for_idpw") == "1"
-        and result.get("idpw_login_panel_selected") == "1"
+        and result.get("idpw_hash_forced") == "1"
+        and (
+            result.get("idpw_login_panel_selected") == "1"
+            or result.get("idpw_panel_visible") == "1"
+        )
     ) else "0"
     return result
 
@@ -4435,7 +4572,12 @@ async def collect_bank_via_browser_session_async(
                     certificate_tab_closed=reset_result.get("certificate_tab_closed", ""),
                     work_key_relaunch_attempted=reset_result.get("work_key_relaunch_attempted", ""),
                     work_key_relaunch_status=reset_result.get("work_key_relaunch_status", ""),
+                    work_key_relaunch_busy_retries=reset_result.get("work_key_relaunch_busy_retries", ""),
                     portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
+                    idpw_hash_forced=reset_result.get("idpw_hash_forced", ""),
+                    idpw_hash_target=reset_result.get("idpw_hash_target", ""),
+                    account_query_hash_prepared=reset_result.get("account_query_hash_prepared", ""),
+                    idpw_panel_visible=reset_result.get("idpw_panel_visible", ""),
                     idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
                 )
                 if reset_result.get("idpw_reset_ready") != "1" and browser_work_key:
@@ -4764,7 +4906,12 @@ async def collect_bank_via_browser_session_async(
                             certificate_tab_closed=reset_result.get("certificate_tab_closed", ""),
                             work_key_relaunch_attempted=reset_result.get("work_key_relaunch_attempted", ""),
                             work_key_relaunch_status=reset_result.get("work_key_relaunch_status", ""),
+                            work_key_relaunch_busy_retries=reset_result.get("work_key_relaunch_busy_retries", ""),
                             portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
+                            idpw_hash_forced=reset_result.get("idpw_hash_forced", ""),
+                            idpw_hash_target=reset_result.get("idpw_hash_target", ""),
+                            account_query_hash_prepared=reset_result.get("account_query_hash_prepared", ""),
+                            idpw_panel_visible=reset_result.get("idpw_panel_visible", ""),
                             idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
                         )
                         if reset_result.get("idpw_reset_ready") != "1" and browser_work_key:

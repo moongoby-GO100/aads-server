@@ -139,6 +139,39 @@ class _ShinhanFincertThenIdpwPage(_ChallengePage):
         return []
 
 
+class _ShinhanAgentBusyThenIdpwPage(_ShinhanFincertThenIdpwPage):
+    def __init__(self):
+        super().__init__()
+        self.launch_attempts = 0
+
+    async def _run_browser_command(self, command_type, params, **kwargs):
+        self.browser_commands.append((command_type, params))
+        if command_type == "browser_close_tab":
+            self.closed_certificate_tab = True
+            self.frames = []
+            return {"status": "success", "data": {"closed": 1, "remaining": 1}}
+        if command_type == "browser_launch":
+            self.launch_attempts += 1
+            if self.launch_attempts == 1:
+                exc = RuntimeError("agent busy")
+                exc.error_code = "AGENT_BUSY"
+                raise exc
+            self.url = params["url"]
+            self.frames = []
+            return {"status": "success", "data": {"cdp_ready": True, "navigated": True}}
+        return await super()._run_browser_command(command_type, params, **kwargs)
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if "idpwHash" in expression:
+            return {
+                "idpw_hash_forced": "1",
+                "account_query_hash_prepared": "1",
+                "idpw_panel_visible": "1",
+                "idpw_login_panel_selected": "1",
+            }
+        return await super().evaluate(expression, *args, **kwargs)
+
+
 class _ShinhanPostIdpwFincertPage(_ChallengePage):
     def __init__(self):
         super().__init__("https://bank.shinhan.com/rib/easy/index.jsp")
@@ -463,15 +496,50 @@ def test_collect_async_shinhan_saved_idpw_prefers_id_login_over_fincert():
     assert result["diagnostics"]["shinhan_idpw_login_reset"]["certificate_tab_closed"] == "1"
     assert result["diagnostics"]["shinhan_idpw_login_reset"]["work_key_relaunch_attempted"] == "1"
     assert result["diagnostics"]["shinhan_idpw_login_reset"]["idpw_reset_ready"] == "1"
-    assert ("browser_launch", {"url": "https://bank.shinhan.com/rib/easy/index.jsp", "new_window": False, "ready_timeout_seconds": 20}) in mock_page.browser_commands
+    assert ("browser_launch", {
+        "url": f"https://bank.shinhan.com/rib/easy/index.jsp#{connector.SHINHAN_IDPW_LOGIN_HASH}",
+        "new_window": False,
+        "ready_timeout_seconds": 20,
+    }) in mock_page.browser_commands
     assert any(
         item.get("stage") == "shinhan_idpw_reset_after_certificate"
         and item.get("status") == "success"
         for item in result["diagnostics"]["shinhan_stage_logs"]
     )
-    assert mock_page.goto_calls == ["https://bank.shinhan.com/rib/easy/index.jsp"]
+    assert mock_page.goto_calls == [
+        f"https://bank.shinhan.com/rib/easy/index.jsp#{connector.SHINHAN_IDPW_LOGIN_HASH}"
+    ]
     assert "bank-pass" not in str(result["diagnostics"])
     assert "4321" not in str(result["diagnostics"])
+
+
+def test_shinhan_idpw_reset_retries_agent_busy_and_forces_login_hash():
+    page = _ShinhanAgentBusyThenIdpwPage()
+
+    result = _run(
+        connector._prefer_shinhan_idpw_login_after_auth_challenge(
+            page,
+            "https://bank.shinhan.com/rib/easy/index.jsp",
+        )
+    )
+
+    assert result["certificate_tab_closed"] == "1"
+    assert result["work_key_relaunch_attempted"] == "1"
+    assert result["work_key_relaunch_busy_retries"] == "1"
+    assert result["idpw_hash_target"] == connector.SHINHAN_IDPW_LOGIN_HASH
+    assert result["idpw_hash_forced"] == "1"
+    assert result["account_query_hash_prepared"] == "1"
+    assert result["idpw_panel_visible"] == "1"
+    assert result["idpw_reset_ready"] == "1"
+    assert page.launch_attempts == 2
+    assert page.goto_calls == [
+        f"https://bank.shinhan.com/rib/easy/index.jsp#{connector.SHINHAN_IDPW_LOGIN_HASH}"
+    ]
+    assert ("browser_launch", {
+        "url": f"https://bank.shinhan.com/rib/easy/index.jsp#{connector.SHINHAN_IDPW_LOGIN_HASH}",
+        "new_window": False,
+        "ready_timeout_seconds": 20,
+    }) in page.browser_commands
 
 
 def test_shinhan_keyboard_login_uses_native_mouse_and_keyboard_commands():

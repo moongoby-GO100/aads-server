@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-09-04 11:05 KST - Shinhan financial lease contention and ID/PW hash reset P0
+
+- CEO request:
+  - During Shinhan bank collection, block delivery queue/Browser Bridge lease contention and strengthen the state machine as one patch: force ID/PW hash, re-confirm panel, wait/retry on `AGENT_BUSY`, deploy, and test.
+- Changes:
+  - `app/services/pc_agent_collection_queue.py`: if a `financial_exclusive|...` item is running for a PC Agent, non-financial queued work is not claimed on that same agent. This prevents delivery/browser_recipe queue drain from grabbing the same browser lane during bank collection.
+  - `app/services/yeoljeong_bank_browser_connector.py`: Shinhan certificate/YESKEY reset now relaunches the same work key at `#210000000000`, prepares the account-query redirect hash `210101000000`, records `idpw_hash_forced`/`account_query_hash_prepared`/panel visibility, and retries short `AGENT_BUSY` lease contention before failing.
+  - `tests/unit/test_pc_agent_collection_queue.py` and `tests/unit/test_yeoljeong_bank_browser_connector.py`: added regression coverage for same-agent financial queue blocking and Shinhan ID/PW reset retry/hash contract.
+- Verification before commit:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:b9723e3a6922 python -m pytest tests/unit/test_pc_agent_collection_queue.py tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed: 85 tests.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:b9723e3a6922 python -m pytest tests/unit/test_pc_agent_routing_leases.py -q` passed: 25 tests.
+  - `python3 -m py_compile app/services/pc_agent_collection_queue.py app/services/yeoljeong_bank_browser_connector.py` passed.
+- Pending:
+  - Selective commit/push, `deploy.sh bluegreen`, routed health, 5-minute P0/P1 monitoring, and live Mia Shinhan collection result verification.
+
 ## 2026-09-03 21:05 KST - Windows Collector financial exclusive runtime contract
 
 - CEO request:

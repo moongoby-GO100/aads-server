@@ -232,3 +232,101 @@ def test_running_item_with_lease_agent_id_is_not_recovered(tmp_path, monkeypatch
     assert claimed is None
     assert snapshot[0]["status"] == "running"
     assert snapshot[0]["lease_agent_id"] == "agent-still-working"
+
+
+def test_financial_running_item_blocks_delivery_claim_on_same_agent(tmp_path, monkeypatch):
+    queue_path = tmp_path / "queue.json"
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("YEOLJEONG_FINANCE_DATABASE_URL", raising=False)
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+    financial = queue_module.enqueue_collection_item(
+        {
+            "queue_type": "bank",
+            "site_key": "bank:shinhan_business",
+            "service": "shinhan_business",
+            "business_id": "biz-mia",
+            "branch": "미아점",
+            "work_key": "yeoljeong-bank-shinhan-mia",
+            "priority": 10,
+            "latest_only": False,
+            "payload": {
+                "project_key": "BANKING",
+                "bank_account_id": "acct-shinhan-mia",
+                "browser_agent_id": "agent-bank",
+            },
+        }
+    )
+    queue_module.enqueue_collection_item(
+        {
+            "queue_type": "delivery",
+            "site_key": "delivery:coupangeats",
+            "service": "coupangeats",
+            "business_id": "biz-mia",
+            "branch": "미아점",
+            "work_key": "yeoljeong-delivery-coupangeats-mia",
+            "priority": 20,
+            "latest_only": False,
+            "payload": {"services": ["coupangeats"], "browser_agent_id": "agent-bank"},
+        }
+    )
+    queue_module.complete_collection_item(financial["id"], status="queued")
+    first = queue_module.claim_next_collection_item(agent_id="agent-bank")
+    second = queue_module.claim_next_collection_item(agent_id="agent-bank")
+
+    assert first is not None
+    assert first["queue_type"] == "bank"
+    assert first["resource_key"].startswith("financial_exclusive|")
+    assert second is None
+
+
+def test_financial_running_item_allows_delivery_claim_on_other_agent(tmp_path, monkeypatch):
+    queue_path = tmp_path / "queue.json"
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("YEOLJEONG_FINANCE_DATABASE_URL", raising=False)
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+    queue_module.enqueue_collection_item(
+        {
+            "queue_type": "bank",
+            "site_key": "bank:shinhan_business",
+            "service": "shinhan_business",
+            "business_id": "biz-mia",
+            "branch": "미아점",
+            "work_key": "yeoljeong-bank-shinhan-mia",
+            "priority": 10,
+            "latest_only": False,
+            "payload": {
+                "project_key": "BANKING",
+                "bank_account_id": "acct-shinhan-mia",
+                "browser_agent_id": "agent-bank",
+            },
+        }
+    )
+    queue_module.enqueue_collection_item(
+        {
+            "queue_type": "delivery",
+            "site_key": "delivery:coupangeats",
+            "service": "coupangeats",
+            "business_id": "biz-mia",
+            "branch": "미아점",
+            "work_key": "yeoljeong-delivery-coupangeats-mia",
+            "priority": 20,
+            "latest_only": False,
+            "payload": {"services": ["coupangeats"], "browser_agent_id": "agent-other"},
+        }
+    )
+
+    first = queue_module.claim_next_collection_item(agent_id="agent-bank")
+    second = queue_module.claim_next_collection_item(agent_id="agent-other")
+
+    assert first is not None
+    assert first["queue_type"] == "bank"
+    assert second is not None
+    assert second["queue_type"] == "delivery"
