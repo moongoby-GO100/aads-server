@@ -160,6 +160,32 @@ LOCAL_BASE_ALIASES = {
     "/app/app/static/gallery": ["/app/app/static/gallery", "/root/aads/aads-server/app/static/gallery"],
 }
 
+PROJECT_FILE_HINTS = [
+    ("GO100", re.compile(r"^(GO100[-_]|GO100\b|#?\d+.*GO100|.*상한가|.*백억)", re.IGNORECASE)),
+    ("KIS", re.compile(r"^(KIS[-_]|KIS\b|.*자동매매)", re.IGNORECASE)),
+    ("SF", re.compile(r"^(SF[-_]|ShortFlow\b|.*shortflow|.*숏폼)", re.IGNORECASE)),
+    ("NTV2", re.compile(r"^(NTV2[-_]|NT[-_]|NewTalk\b|.*newtalk)", re.IGNORECASE)),
+]
+
+LEGACY_AADS_PROJECT_BASES = {
+    "GO100": {
+        "/app/docs": "/root/kis-autotrade-v4/docs",
+        "/app/reports": "/root/kis-autotrade-v4/reports",
+    },
+    "KIS": {
+        "/app/docs": "/root/kis-autotrade-v4/docs",
+        "/app/reports": "/root/kis-autotrade-v4/docs",
+    },
+    "SF": {
+        "/app/docs": "/data/shortflow/docs",
+        "/app/reports": "/data/shortflow/docs",
+    },
+    "NTV2": {
+        "/app/docs": "/srv/newtalk-v2/docs",
+        "/app/reports": "/srv/newtalk-v2/docs",
+    },
+}
+
 
 def _configured_base_paths(project: str) -> set[str]:
     config = SERVER_CONFIG.get(project) or {}
@@ -185,6 +211,62 @@ def _is_safe_relative_path(file_path: str) -> bool:
 def _candidate_local_bases(base_path: str) -> list[Path]:
     normalized = str(Path(base_path))
     return [Path(p) for p in LOCAL_BASE_ALIASES.get(normalized, [normalized])]
+
+
+def _basename(path: str) -> str:
+    return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _project_hint_from_file_path(file_path: str) -> Optional[str]:
+    name = _basename(file_path)
+    for project, pattern in PROJECT_FILE_HINTS:
+        if pattern.search(name):
+            return project
+    return None
+
+
+def _candidate_file_paths_for_base(base_path: str, file_path: str) -> list[str]:
+    normalized = file_path.replace("\\", "/").lstrip("/")
+    candidates = [normalized]
+    if normalized.startswith("docs/reports/"):
+        candidates.append(normalized.removeprefix("docs/"))
+        candidates.append(normalized.removeprefix("docs/reports/"))
+    if normalized.startswith("reports/"):
+        candidates.append(normalized.removeprefix("reports/"))
+    elif base_path.endswith("/docs") or base_path.endswith("/app/docs"):
+        candidates.append(f"reports/{normalized}")
+    return list(dict.fromkeys([item for item in candidates if item]))
+
+
+def _content_location_candidates(project: str, base_path: str, file_path: str) -> list[tuple[str, str, str]]:
+    normalized_project = project.strip()
+    normalized_base = str(Path(base_path))
+    normalized_file = file_path.replace("\\", "/").lstrip("/")
+    candidates: list[tuple[str, str, str]] = [(normalized_project, normalized_base, normalized_file)]
+
+    hinted_project = _project_hint_from_file_path(normalized_file)
+    if normalized_project == "AADS" and hinted_project and normalized_base in {"/app/docs", "/app/reports"}:
+        hinted_base = LEGACY_AADS_PROJECT_BASES.get(hinted_project, {}).get(normalized_base)
+        if hinted_base:
+            candidates.append((hinted_project, hinted_base, normalized_file))
+
+    projects = [normalized_project]
+    if hinted_project and hinted_project not in projects:
+        projects.append(hinted_project)
+
+    for candidate_project in projects:
+        for candidate_base in sorted(_configured_base_paths(candidate_project), key=len, reverse=True):
+            for candidate_file in _candidate_file_paths_for_base(candidate_base, normalized_file):
+                candidates.append((candidate_project, candidate_base, candidate_file))
+
+    deduped: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
 
 
 def _matches_path_filters(rel_path: str, *, include: list[str] | None, exclude: list[str] | None) -> bool:
@@ -223,6 +305,43 @@ def _resolve_local_file(project: str, base_path: str, file_path: str) -> Path:
             return candidate
 
     return first_candidate or (Path(normalized_base) / rel)
+
+
+async def _remote_file_exists(host: str, full_path: str) -> bool:
+    quoted_path = shlex.quote(full_path)
+    output = await _run_cmd(
+        ["ssh", "-o", "ConnectTimeout=5", host, f"test -f {quoted_path} && printf exists"],
+        timeout=8,
+    )
+    return output.strip() == "exists"
+
+
+async def _resolve_content_location(project: str, base_path: str, file_path: str) -> tuple[str, str, str, str]:
+    for candidate_project, candidate_base, candidate_file in _content_location_candidates(project, base_path, file_path):
+        if not _is_safe_relative_path(candidate_file):
+            continue
+        candidate_config = SERVER_CONFIG.get(candidate_project)
+        if not candidate_config:
+            continue
+        normalized_base = str(Path(candidate_base))
+        if normalized_base not in _configured_base_paths(candidate_project):
+            continue
+
+        host = candidate_config["host"]
+        full_path = f"{normalized_base.rstrip('/')}/{candidate_file}"
+        if host is None:
+            try:
+                local_path = _resolve_local_file(candidate_project, normalized_base, candidate_file)
+            except HTTPException:
+                continue
+            if local_path.exists() and local_path.is_file():
+                return candidate_project, normalized_base, candidate_file, str(local_path)
+        elif await _remote_file_exists(host, full_path):
+            return candidate_project, normalized_base, candidate_file, full_path
+
+    normalized_base = str(Path(base_path))
+    normalized_file = file_path.replace("\\", "/").lstrip("/")
+    return project, normalized_base, normalized_file, f"{normalized_base.rstrip('/')}/{normalized_file}"
 
 
 def _excel_bytes_to_csv_text(raw: bytes, filename: str) -> str:
@@ -691,7 +810,10 @@ async def get_doc_content(
     if not _is_safe_relative_path(file_path):
         raise HTTPException(400, "Invalid file path")
 
-    full_path = f"{base_path}/{file_path}"
+    project, base_path, file_path, full_path = await _resolve_content_location(project, base_path, file_path)
+    config = SERVER_CONFIG.get(project)
+    if not config:
+        raise HTTPException(400, f"Unknown project: {project}")
     host = config["host"]
 
     # 확장자 기반 바이너리 판별

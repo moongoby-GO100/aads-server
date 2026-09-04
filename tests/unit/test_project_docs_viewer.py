@@ -111,6 +111,54 @@ async def test_project_docs_content_blocks_sensitive_relative_paths(tmp_path, mo
     assert excinfo.value.status_code == 400
 
 
+@pytest.mark.asyncio
+async def test_project_docs_content_repairs_legacy_aads_go100_route(monkeypatch):
+    async def fake_run_cmd(cmd, timeout=10):
+        remote_cmd = cmd[-1]
+        if "test -f" in remote_cmd and "/root/kis-autotrade-v4/docs/reports/GO100-303.md" in remote_cmd:
+            return "exists"
+        if remote_cmd == "cat /root/kis-autotrade-v4/docs/reports/GO100-303.md":
+            return "# GO100 report"
+        return ""
+
+    monkeypatch.setattr(project_docs, "_run_cmd", fake_run_cmd)
+
+    response = await project_docs.get_doc_content(
+        project="AADS",
+        base_path="/app/docs",
+        file_path="reports/GO100-303.md",
+    )
+
+    assert response["project"] == "GO100"
+    assert response["file_path"] == "reports/GO100-303.md"
+    assert response["full_path"] == "/root/kis-autotrade-v4/docs/reports/GO100-303.md"
+    assert response["content"] == "# GO100 report"
+
+
+@pytest.mark.asyncio
+async def test_project_docs_content_falls_back_from_go100_reports_to_docs_reports(monkeypatch):
+    async def fake_run_cmd(cmd, timeout=10):
+        remote_cmd = cmd[-1]
+        if "test -f" in remote_cmd and "/root/kis-autotrade-v4/docs/reports/GO100-303.md" in remote_cmd:
+            return "exists"
+        if remote_cmd == "cat /root/kis-autotrade-v4/docs/reports/GO100-303.md":
+            return "# GO100 docs report"
+        return ""
+
+    monkeypatch.setattr(project_docs, "_run_cmd", fake_run_cmd)
+
+    response = await project_docs.get_doc_content(
+        project="GO100",
+        base_path="/root/kis-autotrade-v4/reports",
+        file_path="GO100-303.md",
+    )
+
+    assert response["project"] == "GO100"
+    assert response["file_path"] == "GO100-303.md"
+    assert response["full_path"] == "/root/kis-autotrade-v4/docs/reports/GO100-303.md"
+    assert response["content"] == "# GO100 docs report"
+
+
 def test_excel_bytes_to_csv_text_uses_all_sheets():
     wb = Workbook()
     ws = wb.active
