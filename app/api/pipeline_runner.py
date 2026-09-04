@@ -286,7 +286,7 @@ async def _find_active_file_conflict(
     # Cross-session: chat-direct dirty 파일 충돌 확인
     ledger_rows = await conn.fetch(
         """
-        SELECT session_id, file_path, source_tool, updated_at
+        SELECT session_id, file_path, source_tool, owner, task_id, updated_at
         FROM chat_workspace_change_ledger
         WHERE project = $1 AND status = 'dirty'
           AND updated_at > NOW() - INTERVAL '24 hours'
@@ -302,6 +302,8 @@ async def _find_active_file_conflict(
                 "phase": "editing",
                 "overlap": [ledger_file],
                 "source": "chat_workspace_change_ledger",
+                "owner": lrow["owner"],
+                "task_id": lrow["task_id"],
             }
     return None
 
@@ -1312,8 +1314,45 @@ async def get_job(
     }
     async with pool.acquire() as conn:
         health_probe = await _runner_health_probe(conn, row)
+        runner_events = []
+        if await conn.fetchval("SELECT to_regclass('public.pipeline_runner_events') IS NOT NULL"):
+            event_rows = await conn.fetch(
+                """
+                SELECT
+                    event_type,
+                    status,
+                    phase,
+                    COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
+                    COALESCE(NULLIF(size, ''), 'M') AS size,
+                    duration_ms,
+                    metadata,
+                    observed_at
+                FROM pipeline_runner_events
+                WHERE job_id = $1 AND tenant_id = $2::uuid
+                ORDER BY observed_at ASC, id ASC
+                LIMIT 300
+                """,
+                job_id,
+                _tenant_id(context),
+            )
+            for event in event_rows:
+                observed_at = event["observed_at"]
+                metadata = event["metadata"] or {}
+                runner_events.append(
+                    {
+                        "event_type": event["event_type"],
+                        "status": event["status"],
+                        "phase": event["phase"],
+                        "model": event["model_key"],
+                        "size": event["size"],
+                        "duration_ms": event["duration_ms"],
+                        "metadata": metadata if isinstance(metadata, dict) else {},
+                        "observed_at": observed_at.isoformat() if observed_at else None,
+                    }
+                )
     if health_probe:
         result["health_probe"] = health_probe
+    result["runner_events"] = runner_events
     return result
 
 

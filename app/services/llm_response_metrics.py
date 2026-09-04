@@ -51,6 +51,46 @@ async def _fetch_rows(conn: Any, sql: str, interval_value: timedelta, model: str
     return list(await conn.fetch(sql, interval_value, model))
 
 
+async def _fetch_optional_rows(conn: Any, sql: str, interval_value: timedelta, model: str) -> list[Any]:
+    try:
+        return list(await conn.fetch(sql, interval_value, model))
+    except Exception:
+        return []
+
+
+def _phase_metric_row(row: Any) -> dict[str, Any]:
+    model_key = str(row["model_key"] or "unknown")
+    provider = _classify_provider_from_model(model_key)
+    return {
+        "event_type": str(row["event_type"] or ""),
+        "model": model_key,
+        "provider": provider,
+        "provider_label": _display_name_for_provider(provider),
+        "calls": int(row["calls"] or 0),
+        "avg_duration_ms": _round_ms(row["avg_duration_ms"]),
+        "p50_duration_ms": _round_ms(row["p50_duration_ms"]),
+        "p95_duration_ms": _round_ms(row["p95_duration_ms"]),
+        "max_duration_ms": _round_ms(row["max_duration_ms"]),
+    }
+
+
+def _event_row(row: Any) -> dict[str, Any]:
+    observed_at = row["observed_at"]
+    metadata = row["metadata"] or {}
+    return {
+        "job_id": row["job_id"],
+        "project": row["project"],
+        "event_type": row["event_type"],
+        "status": row["status"],
+        "phase": row["phase"],
+        "model": row["model_key"],
+        "size": row["size"],
+        "duration_ms": row["duration_ms"],
+        "observed_at": observed_at.isoformat() if observed_at else None,
+        "metadata": metadata if isinstance(metadata, dict) else {},
+    }
+
+
 async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[str, Any]:
     """Aggregate measured LLM latency from chat, API usage, and CLI runner tables."""
     hours = max(1, min(int(hours or 24), 168))
@@ -152,6 +192,61 @@ async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[
         ORDER BY calls DESC, model_key ASC
     """
 
+    runner_phase_sql = """
+        SELECT
+            event_type,
+            COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
+            COUNT(*) AS calls,
+            AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms >= 0) AS avg_duration_ms,
+            percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)
+                FILTER (WHERE duration_ms IS NOT NULL AND duration_ms >= 0) AS p50_duration_ms,
+            percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)
+                FILTER (WHERE duration_ms IS NOT NULL AND duration_ms >= 0) AS p95_duration_ms,
+            MAX(duration_ms) FILTER (WHERE duration_ms IS NOT NULL AND duration_ms >= 0) AS max_duration_ms
+        FROM pipeline_runner_events
+        WHERE observed_at >= NOW() - ($1::interval)
+          AND event_type IN (
+              'model_attempt_started',
+              'cli_process_started',
+              'cli_first_stdout',
+              'cli_first_stderr',
+              'model_attempt_completed',
+              'actual_model_selected',
+              'model_attempt_skipped'
+          )
+          AND ($2::text = '' OR COALESCE(actual_model, model, '') ILIKE ('%' || $2::text || '%'))
+        GROUP BY event_type, model_key
+        ORDER BY calls DESC, event_type ASC, model_key ASC
+    """
+
+    recent_runner_events_sql = """
+        SELECT
+            job_id,
+            project,
+            event_type,
+            status,
+            phase,
+            COALESCE(NULLIF(actual_model, ''), NULLIF(model, ''), 'unknown') AS model_key,
+            COALESCE(NULLIF(size, ''), 'M') AS size,
+            duration_ms,
+            observed_at,
+            metadata
+        FROM pipeline_runner_events
+        WHERE observed_at >= NOW() - ($1::interval)
+          AND event_type IN (
+              'model_attempt_started',
+              'cli_process_started',
+              'cli_first_stdout',
+              'cli_first_stderr',
+              'model_attempt_completed',
+              'actual_model_selected',
+              'model_attempt_skipped'
+          )
+          AND ($2::text = '' OR COALESCE(actual_model, model, '') ILIKE ('%' || $2::text || '%'))
+        ORDER BY observed_at DESC
+        LIMIT 100
+    """
+
     pool = get_pool()
     async with pool.acquire() as conn:
         source_rows = {
@@ -160,6 +255,8 @@ async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[
             "background_llm": await _fetch_rows(conn, bg_sql, interval_value, model_filter),
             "runner_cli_total": await _fetch_rows(conn, runner_sql, interval_value, model_filter),
         }
+        runner_phase_rows = await _fetch_optional_rows(conn, runner_phase_sql, interval_value, model_filter)
+        recent_runner_event_rows = await _fetch_optional_rows(conn, recent_runner_events_sql, interval_value, model_filter)
 
     metrics: list[dict[str, Any]] = []
     by_source: dict[str, list[dict[str, Any]]] = {}
@@ -191,6 +288,9 @@ async def get_llm_response_metrics(*, hours: int = 24, model: str = "") -> dict[
             "oauth_llm_api": "oauth_usage_log.duration_ms",
             "background_llm": "bg_llm_usage_log.latency_ms",
             "runner_cli_total": "pipeline_jobs started_at/created_at -> completed_at/updated_at elapsed",
+            "runner_cli_phase_metrics": "pipeline_runner_events model_attempt/cli_process/first_output/completed events",
         },
+        "runner_cli_phase_metrics": [_phase_metric_row(row) for row in runner_phase_rows],
+        "recent_runner_cli_events": [_event_row(row) for row in recent_runner_event_rows],
         "metrics": by_source,
     }

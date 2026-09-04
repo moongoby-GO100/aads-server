@@ -10701,3 +10701,35 @@
   - Direct container DB-backed metrics smoke test returned 621 observations in the last 24h across all four metric sources.
 - Not completed:
   - Commit, push, blue/green deploy, routed health, and post-deploy API metric check are pending in this release cycle.
+
+## 2026-09-04 11:06 KST - CLI runner phase telemetry for response-speed tracing
+
+- CEO request:
+  - Execute the runner/chat speed tracing plan and confirm whether Claude/Codex CLI model load and response timing can be measured.
+- Server changes:
+  - `scripts/pipeline-runner.sh` and `scripts/pipeline-runner.sh.local`: added CLI process timing events on each model attempt:
+    - `cli_process_started`: process launch point with pid, runner kind, attempt, token slot, and workdir metadata.
+    - `cli_first_stdout`: first observable stdout delay from process launch.
+    - `cli_first_stderr`: first observable stderr delay from process launch.
+    - Existing `model_attempt_started` and `model_attempt_completed` remain the total attempt envelope.
+  - Codex retry attempts now record the same process-start/first-output telemetry instead of only the final attempt duration.
+  - First stdout/stderr duration is measured from the CLI process launch timestamp captured immediately after pid assignment, not from the broader model-attempt envelope.
+  - `app/services/llm_response_metrics.py`: `/api/v1/ops/llm-response-metrics` now returns `runner_cli_phase_metrics` and `recent_runner_cli_events` from `pipeline_runner_events`.
+  - `app/api/pipeline_runner.py`: `GET /pipeline/jobs/{job_id}` now includes `runner_events`, so one runner job can be traced without parsing shell logs.
+  - Unit tests updated to pin the new CLI telemetry events and response-metrics fields.
+- Measurement note:
+  - Exact internal "model load" time is not exposed by Claude/Codex CLI as a separate API event. AADS now measures the practical boundary: CLI process launch -> first observable stdout/stderr -> attempt completion. For non-streaming CLI modes, first stdout may be close to completion; stderr and process-start events still separate startup/auth/connect delays from total job duration.
+- Verification:
+  - `bash -n scripts/pipeline-runner.sh` passed.
+  - `bash -n scripts/pipeline-runner.sh.local` passed.
+  - `diff -u scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local` returned no differences.
+  - `python3 -m py_compile app/services/llm_response_metrics.py app/api/pipeline_runner.py` passed.
+  - `docker exec aads-server python3 -m py_compile app/services/llm_response_metrics.py app/api/pipeline_runner.py` passed.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_pipeline_runner_script_guards.py -q` passed 22/22.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_llm_response_metrics.py -q` passed 1/1.
+  - Source-mounted runtime verification against the current worktree passed: `docker run --rm --network aads_network -e DATABASE_URL=... -v /root/aads/aads-server:/app -w /app aads-server:741d9d55bd64 python3 -m pytest tests/unit/test_llm_response_metrics.py tests/unit/test_pipeline_runner_script_guards.py -q` passed 23/23.
+  - Source-mounted DB smoke test for `get_llm_response_metrics(hours=168)` returned `phase_metric_count=12` and `recent_event_count=100`.
+  - 2026-09-04 11:19 KST recheck after launch timestamp correction: source-mounted DB smoke returned `has_runner_cli_phase_metrics=true`, `has_recent_runner_cli_events=true`, `phase_metric_count=12`, and `recent_event_count=100`.
+  - DB check: `pipeline_runner_events` exists and currently contains 459 rows. New `cli_process_started`/`cli_first_*` events will appear from the next runner process execution after this patch is active.
+- Not completed:
+  - Not committed, pushed, or blue/green deployed in this turn because the repo already contains unrelated dirty changes, including existing edits in `app/api/pipeline_runner.py`. A clean release worktree or selective staging is required before deployment.

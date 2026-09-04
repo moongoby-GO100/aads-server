@@ -117,7 +117,11 @@ def test_pipeline_runner_records_telemetry_and_holds_review_outage():
     assert "record_runner_event()" in script
     assert "pipeline_runner_events" in script
     assert "model_attempt_started" in script
+    assert "cli_process_started" in script
+    assert "cli_first_stdout" in script
+    assert "cli_first_stderr" in script
     assert "model_attempt_completed" in script
+    assert "wait_runner_cli_process()" in script
     assert "REVIEW_API_UNAVAILABLE" in script
     assert "AI_REVIEW_HOLD" in script
     assert "FLAG+hold" in script

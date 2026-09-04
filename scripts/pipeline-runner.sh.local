@@ -213,6 +213,43 @@ record_runner_event() {
                WHERE job_id='${job_id}';" 2>/dev/null || true
 }
 
+wait_runner_cli_process() {
+    local job_id="$1" pid="$2" output_file="$3" err_file="$4" model="$5" actual_model="$6" size="$7"
+    local attempt_no="$8" total_attempts="$9" cycle_num="${10}" runner_kind="${11}" started_ms="${12}" retry_no="${13:-0}"
+    local first_stdout_ms="" first_stderr_ms="" now_ms elapsed_ms proc_stat
+
+    while true; do
+        proc_stat=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+        [[ -z "$proc_stat" || "$proc_stat" == *Z* ]] && break
+        if [[ -z "$first_stdout_ms" && -s "$output_file" ]]; then
+            now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+            elapsed_ms=$((now_ms - started_ms))
+            first_stdout_ms="$elapsed_ms"
+            record_runner_event "$job_id" "cli_first_stdout" "running" "claude_code_work" "$model" "$actual_model" "$size" "$elapsed_ms" "{\"attempt\":${attempt_no},\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"${runner_kind}\",\"pid\":${pid},\"retry\":${retry_no}}"
+        fi
+        if [[ -z "$first_stderr_ms" && -s "$err_file" ]]; then
+            now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+            elapsed_ms=$((now_ms - started_ms))
+            first_stderr_ms="$elapsed_ms"
+            record_runner_event "$job_id" "cli_first_stderr" "running" "claude_code_work" "$model" "$actual_model" "$size" "$elapsed_ms" "{\"attempt\":${attempt_no},\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"${runner_kind}\",\"pid\":${pid},\"retry\":${retry_no}}"
+        fi
+        sleep 1
+    done
+
+    if [[ -z "$first_stdout_ms" && -s "$output_file" ]]; then
+        now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+        elapsed_ms=$((now_ms - started_ms))
+        record_runner_event "$job_id" "cli_first_stdout" "running" "claude_code_work" "$model" "$actual_model" "$size" "$elapsed_ms" "{\"attempt\":${attempt_no},\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"${runner_kind}\",\"pid\":${pid},\"retry\":${retry_no},\"captured_after_exit\":true}"
+    fi
+    if [[ -z "$first_stderr_ms" && -s "$err_file" ]]; then
+        now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+        elapsed_ms=$((now_ms - started_ms))
+        record_runner_event "$job_id" "cli_first_stderr" "running" "claude_code_work" "$model" "$actual_model" "$size" "$elapsed_ms" "{\"attempt\":${attempt_no},\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"${runner_kind}\",\"pid\":${pid},\"retry\":${retry_no},\"captured_after_exit\":true}"
+    fi
+
+    wait "$pid"
+}
+
 get_job_status() {
     local _job_id="$1"
     [[ -z "$_job_id" ]] && { echo ""; return 0; }
@@ -1322,6 +1359,7 @@ ${safe_instruction}"
         local attempt_started_ms
         attempt_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
+        local runner_kind="claude_cli"
         if [[ "$current_model" == codex:* ]]; then
             local codex_disabled_until=""
             if codex_disabled_until=$(codex_auth_disabled_until); then
@@ -1346,6 +1384,7 @@ ${safe_instruction}"
                     ;;
             esac
             effective_model="codex:${codex_model_name}"
+            runner_kind="codex_cli"
             log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
             local codex_args=(exec --sandbox workspace-write --ephemeral -C "$workdir")
             # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
@@ -1356,6 +1395,7 @@ ${safe_instruction}"
         # LiteLLM Runner 분기 (litellm: 접두사)
         elif [[ "$current_model" == litellm:* ]]; then
             local llm_model_name="${current_model#litellm:}"
+            runner_kind="litellm_runner"
             log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
             # instruction을 temp file로 전달 (arg에 멀티라인/대용량 문자열 깨짐 방지)
             local instr_file="${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
@@ -1394,10 +1434,13 @@ ${safe_instruction}"
             local claude_pid=$!
         fi
 
+        local cli_started_ms
+        cli_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+        record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\",\"runner_kind\":\"${runner_kind}\",\"pid\":${claude_pid},\"workdir\":\"${workdir}\"}"
         # runner_pid 기록 (watchdog 프로세스 생존 확인용)
         db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
 
-        wait $claude_pid || exit_code=$?
+        wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
 
         # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)
         if [[ $exit_code -ne 0 && "$current_model" == codex:* ]]; then
@@ -1429,8 +1472,11 @@ ${safe_instruction}"
                 timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                     < /dev/null > "$output_file" 2> "$err_file" &
                 claude_pid=$!
+                local retry_started_ms
+                retry_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
+                record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"codex_cli\",\"pid\":${claude_pid},\"retry\":${_codex_retry},\"workdir\":\"${workdir}\"}"
                 db_update "UPDATE pipeline_jobs SET runner_pid=${claude_pid}, updated_at=NOW() WHERE job_id='${job_id}';"
-                wait $claude_pid || exit_code=$?
+                wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "codex_cli" "$retry_started_ms" "$_codex_retry" || exit_code=$?
             done
             if [[ $_codex_retry -ge 12 && $exit_code -ne 0 ]]; then
                 log "  CODEX_CONN_EXHAUSTED job=$job_id retries=12(60s) → next model"
