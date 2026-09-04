@@ -140,7 +140,7 @@ TRANSACTION_SOURCE_BY_SERVICE = {
 BANK_QUICK_SERVICE_CONFIG = {
     "shinhan_business": {
         "label": "신한은행 간편서비스",
-        "login_url": "https://bank.shinhan.com/rib/easy/index.jsp",
+        "login_url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
         "enrollment": "기업뱅킹에서 간편조회 허용 계좌 등록 후 간편서비스 계좌조회로 거래내역을 확인합니다.",
     },
     "ibk_business": {

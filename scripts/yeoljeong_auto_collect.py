@@ -272,7 +272,6 @@ def _bank_auto_collect_agent_id(payload: dict[str, Any] | None = None) -> str:
         or payload.get("pc_agent_id")
         or os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID")
         or os.getenv("YEOLJEONG_BANK_BROWSER_AGENT_ID")
-        or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID")
         or ""
     ).strip()
 

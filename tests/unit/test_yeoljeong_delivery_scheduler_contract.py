@@ -105,6 +105,31 @@ def test_bank_auto_collect_is_single_owner_and_locked():
     assert "bank_auto_collect_skip: already_running" in source
 
 
+def test_bank_auto_collect_does_not_fallback_to_delivery_pc_agent():
+    source = Path("app/main.py").read_text(encoding="utf-8")
+    bank_preference_block = source.split("def _bank_auto_collect_preferred_agent_id", 1)[1].split(
+        "async def _delivery_auto_collect_peer_agent", 1
+    )[0]
+
+    assert "YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID" in bank_preference_block
+    assert "YEOLJEONG_BANK_BROWSER_AGENT_ID" in bank_preference_block
+    assert "YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID" not in bank_preference_block
+
+
+def test_prod_compose_reserves_danharoo_main_for_bank_and_excludes_it_from_delivery():
+    source = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
+
+    assert "YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID=${YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID:-62405e70-e98}" in source
+    assert (
+        "YEOLJEONG_BANK_AUTO_COLLECT_EXCLUDED_AGENT_IDS="
+        "${YEOLJEONG_BANK_AUTO_COLLECT_EXCLUDED_AGENT_IDS:-7f99c528-24d,2e9379a1-fed}"
+    ) in source
+    assert (
+        "YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS="
+        "${YEOLJEONG_DELIVERY_AUTO_COLLECT_EXCLUDED_AGENT_IDS:-62405e70-e98,2e9379a1-fed}"
+    ) in source
+
+
 def test_delivery_auto_collect_is_single_active_slot_owner():
     source = Path("app/main.py").read_text(encoding="utf-8")
 

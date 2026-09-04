@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-05 06:27 KST - DANHAROO-MAIN bank-only PC reservation and Shinhan easyview hash entry
+
+- CEO request:
+  - Confirm whether Shinhan bank collection is actually running on `DANHAROO-MAIN`, reserve that PC for banking only, and make Shinhan business easy account inquiry open directly at `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`.
+- Findings:
+  - Runtime env still had `YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID=7f99c528-24d`, so automatic bank collection was not pinned to `DANHAROO-MAIN`.
+  - Some default Shinhan URLs still omitted `#210000000000`, so a run could enter the base easyview page first instead of the exact login hash.
+- Changes:
+  - `docker-compose.prod.yml`: reserves `62405e70-e98` (`DANHAROO-MAIN`) as the bank auto-collect default and excludes it from delivery auto-collect; excludes the delivery PC from bank auto-collect.
+  - `app/main.py` and `scripts/yeoljeong_auto_collect.py`: removed fallback from bank agent selection to `YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID`.
+  - `app/services/yeoljeong_bank_browser_connector.py`, `app/services/yeoljeong_finance_service.py`, and `app/static/apps/yeoljeong-finance/index.html`: changed Shinhan business easyview defaults to the exact hash login URL.
+  - Regression tests added for DANHAROO-MAIN bank reservation, delivery exclusion, no bank-to-delivery fallback, and existing financial-exclusive runtime contract.
+- Verification before commit:
+  - `python3 -m py_compile app/main.py app/services/yeoljeong_bank_browser_connector.py app/services/yeoljeong_finance_service.py scripts/yeoljeong_auto_collect.py` passed.
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_yeoljeong_delivery_scheduler_contract.py tests/unit/test_yeoljeong_auto_collect.py::test_bank_auto_collect_agent_does_not_fallback_to_delivery_agent tests/unit/test_authenticated_site_collector.py::test_banking_job_uses_financial_exclusive_runtime_contract tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_retries_idpw_after_post_login_fincert` passed: 14 tests.
+- Pending:
+  - Selective commit/push, `deploy.sh bluegreen`, runtime env smoke, and DANHAROO-MAIN Shinhan login-only test.
+
 ## 2026-09-04 18:40 KST - PC Agent blue/green known-device visibility
 
 - CEO request:

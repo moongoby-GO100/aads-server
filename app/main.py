@@ -1427,7 +1427,7 @@ async def lifespan(app: FastAPI):
             return str(
                 os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID")
                 or os.getenv("YEOLJEONG_BANK_BROWSER_AGENT_ID")
-                or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "")
+                or ""
             ).strip()
 
         async def _delivery_auto_collect_peer_agent(excluded_agent_ids: set[str] | None = None) -> dict:

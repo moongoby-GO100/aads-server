@@ -52,6 +52,14 @@ def test_payload_maps_browser_agent_to_delivery_pc_agent():
     assert argv[argv.index("--browser-agent-id") + 1] == "agent-food"
 
 
+def test_bank_auto_collect_agent_does_not_fallback_to_delivery_agent(monkeypatch):
+    monkeypatch.delenv("YEOLJEONG_BANK_AUTO_COLLECT_AGENT_ID", raising=False)
+    monkeypatch.delenv("YEOLJEONG_BANK_BROWSER_AGENT_ID", raising=False)
+    monkeypatch.setenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "delivery-agent")
+
+    assert auto_collect._bank_auto_collect_agent_id({}) == ""
+
+
 def test_payload_and_child_argv_preserve_baemin_full_backfill_options():
     args = auto_collect.build_parser().parse_args(
         [

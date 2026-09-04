@@ -4096,9 +4096,9 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
 # ── Async browser collector ──────────────────────────────────────────────────
 
 BANK_PORTAL_URLS: dict[str, str] = {
-    "shinhan_business": "https://bank.shinhan.com/rib/easy/index.jsp",
+    "shinhan_business": f"https://bank.shinhan.com/rib/easy/index.jsp#{SHINHAN_IDPW_LOGIN_HASH}",
     "ibk_business": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
-    "088": "https://bank.shinhan.com/rib/easy/index.jsp",
+    "088": f"https://bank.shinhan.com/rib/easy/index.jsp#{SHINHAN_IDPW_LOGIN_HASH}",
     "003": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
 }
 
