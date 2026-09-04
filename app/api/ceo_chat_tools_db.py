@@ -3,7 +3,7 @@ AADS-190: 프로젝트별 원격 DB 쿼리 도구.
 CEO 채팅에서 KIS/GO100/SF/NTV2 등 외부 프로젝트 DB에 SELECT 쿼리 실행.
 
 DB 매핑:
-- KIS: PostgreSQL 16 (contabo14, host.docker.internal:5432, kisautotrade)
+- KIS: PostgreSQL 16 (contabo14, 5.104.86.14:5432, kisautotrade)
 - GO100: KIS와 동일 DB (kisautotrade)
 - SF: MariaDB (cafe24_114, SSH 터널 → localhost:3306, autoda)
 - NTV2: MySQL 8.0 Docker (cafe24_114, SSH 터널 → localhost:3307, newtalk_v2)
@@ -51,9 +51,13 @@ _DEFAULT_DB_TYPE: Dict[str, str] = {
 }
 
 _DEFAULT_DB_ENDPOINT: Dict[str, Tuple[str, str]] = {
-    "KIS": ("host.docker.internal", "5432"),
+    "KIS": (get_server_host("contabo14"), "5432"),
     "SF": ("127.0.0.1", "3306"),
     "NTV2": ("127.0.0.1", "3307"),
+}
+
+_LEGACY_DB_HOST_ALIAS: Dict[str, str] = {
+    "211.188.51.113": get_server_host("contabo14"),
 }
 
 
@@ -230,6 +234,15 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
         host = default_host
     if not host:
         return None
+    normalized_host = _LEGACY_DB_HOST_ALIAS.get(host, host)
+    if normalized_host != host:
+        logger.warning(
+            "query_project_database: legacy DB host remapped | project=%s host=%s -> %s",
+            project,
+            host,
+            normalized_host,
+        )
+        host = normalized_host
     return {
         "host": host,
         "port": _env_value((f"{prefix}_DB_PORT",), default_port),
