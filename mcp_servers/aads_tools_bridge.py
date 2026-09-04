@@ -244,7 +244,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         if name in _DB_TOOLS:
             result = await asyncio.wait_for(
                 _call_tool(name, arguments),
-                timeout=max(1.0, _MCP_DB_TOOL_DEADLINE_SECONDS),
+                timeout=max(0.001, _MCP_DB_TOOL_DEADLINE_SECONDS),
             )
         else:
             result = await _call_tool(name, arguments)
