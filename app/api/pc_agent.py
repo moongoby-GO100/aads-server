@@ -1059,20 +1059,60 @@ def _merge_pc_agent_diagnostics_payload(
     )
     return merged
 
+
+def _dedupe_pc_agents(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate blue/green PC Agent rows by agent_id."""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        agent_id = str(agent.get("agent_id") or "").strip()
+        dedupe_key = agent_id or json.dumps(agent, sort_keys=True, default=str)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        merged.append(agent)
+    return merged
+
+
+def _merge_pc_agent_list_payload(
+    local_payload: dict[str, Any],
+    peer_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge blue/green PC Agent list payloads without losing active agents."""
+    if not isinstance(peer_payload, dict):
+        return local_payload
+    local_agents = local_payload.get("agents")
+    peer_agents = peer_payload.get("agents")
+    agents = _dedupe_pc_agents(
+        [
+            *(local_agents if isinstance(local_agents, list) else []),
+            *(peer_agents if isinstance(peer_agents, list) else []),
+        ]
+    )
+    online_count = sum(
+        1 for agent in agents if isinstance(agent, dict) and agent.get("status") == "online"
+    )
+    return {
+        "agents": agents,
+        "online_count": online_count,
+        "backend_source": "local+peer",
+        "peer_backend_source": peer_payload.get("backend_source", "peer"),
+        "reconnect_guidance": _top_level_reconnect_guidance(online_count),
+    }
+
 @router.get("/pc-agent/status")
 async def pc_agent_status(request: Request):
     """PC Agent 연결 상태 요약 조회."""
     await _flush_pending_reload_disconnects()
     local_payload = _local_pc_agent_status_payload()
-    if local_payload["online_count"] <= 0:
-        peer_payload = await _request_peer_fallback_json(
-            request=request,
-            method="GET",
-            path="/api/v1/pc-agent/status",
-        )
-        if peer_payload is not None:
-            return peer_payload
-    return local_payload
+    peer_payload = await _request_peer_fallback_json(
+        request=request,
+        method="GET",
+        path="/api/v1/pc-agent/status",
+    )
+    return _merge_pc_agent_list_payload(local_payload, peer_payload)
 
 
 def _filter_agents_by_owner(
@@ -1108,32 +1148,30 @@ async def list_agents(request: Request):
     elif requester_user_id or not is_internal_call:
         agents = _filter_agents_by_owner(agents, requester_user_id)
     online_count = sum(1 for agent in agents if agent.get("status") == "online")
-    if online_count <= 0:
-        peer_payload = await _request_peer_fallback_json(
-            request=request,
-            method="GET",
-            path="/api/v1/pc-agent/agents",
-            owner_user_id="" if is_admin_principal else requester_user_id,
-        )
-        if peer_payload is not None:
-            if is_admin_principal:
-                peer_payload = dict(peer_payload)
-                peer_payload["online_count"] = sum(
-                    1 for a in peer_payload.get("agents", []) if isinstance(a, dict) and a.get("status") == "online"
-                )
-            elif requester_user_id or not is_internal_call:
-                peer_agents = peer_payload.get("agents") or []
-                peer_payload = dict(peer_payload)
-                peer_payload["agents"] = _filter_agents_by_owner(peer_agents, requester_user_id)
-                peer_payload["online_count"] = sum(
-                    1 for a in peer_payload["agents"] if a.get("status") == "online"
-                )
-            return peer_payload
-    return {
+    local_payload = {
         "agents": agents,
         "online_count": online_count,
         "backend_source": "local",
     }
+    peer_payload = await _request_peer_fallback_json(
+        request=request,
+        method="GET",
+        path="/api/v1/pc-agent/agents",
+        owner_user_id="" if is_admin_principal else requester_user_id,
+    )
+    if peer_payload is None:
+        return local_payload
+    if is_admin_principal:
+        peer_payload = dict(peer_payload)
+        peer_payload["agents"] = _filter_agents_by_owner(
+            peer_payload.get("agents") or [],
+            requester_user_id,
+            include_all_agents=True,
+        )
+    elif requester_user_id or not is_internal_call:
+        peer_payload = dict(peer_payload)
+        peer_payload["agents"] = _filter_agents_by_owner(peer_payload.get("agents") or [], requester_user_id)
+    return _merge_pc_agent_list_payload(local_payload, peer_payload)
 
 
 @router.post("/pc-agent/graceful-shutdown")
