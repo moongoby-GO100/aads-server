@@ -1390,7 +1390,7 @@ class BrowserBridgeService:
                     detail = parsed_error.get("detail") if isinstance(parsed_error, dict) else None
                     if isinstance(detail, dict):
                         error_code = str(detail.get("error_code") or "")
-                        if error_code in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}:
+                        if error_code in {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT", "AGENT_BUSY", "LEASE_EXPIRED"}:
                             fallback_agent_id = ""
                             if (
                                 not agent_id

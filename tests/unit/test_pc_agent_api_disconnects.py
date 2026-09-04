@@ -391,6 +391,36 @@ async def test_pc_agent_health_uses_peer_fallback_when_local_backend_is_offline(
 
 
 @pytest.mark.asyncio
+async def test_pc_agent_diagnostics_merges_peer_online_agents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(
+        pc_agent.pc_agent_manager,
+        "list_agent_statuses",
+        Mock(return_value=[{"agent_id": "local-pc", "status": "online"}]),
+    )
+    monkeypatch.setattr(
+        pc_agent,
+        "_request_peer_fallback_json",
+        AsyncMock(
+            return_value={
+                "online_agents": [{"agent_id": "peer-pc", "status": "online"}],
+                "latest_launcher_status": [{"agent_id": "peer-pc", "status": {"worker_connected": True}}],
+                "latest_connection_events": [{"agent_id": "peer-pc", "event": "connected"}],
+                "backend_source": "peer",
+            }
+        ),
+    )
+
+    result = await pc_agent.pc_agent_diagnostics(_DummyRequest())
+
+    assert result["backend_source"] == "local+peer"
+    assert result["online_count"] == 2
+    assert [agent["agent_id"] for agent in result["online_agents"]] == ["local-pc", "peer-pc"]
+
+
+@pytest.mark.asyncio
 async def test_route_execute_uses_peer_fallback_on_local_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -417,6 +447,36 @@ async def test_route_execute_uses_peer_fallback_on_local_offline(
 
     assert result["status"] == "success"
     assert result["command_id"] == "peer-cmd-1"
+    assert result["backend_source"] == "peer"
+
+
+@pytest.mark.asyncio
+async def test_route_execute_uses_peer_fallback_on_local_agent_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pc_agent.pc_agent_manager,
+        "execute_routed_command",
+        AsyncMock(return_value={"status": "error", "error_code": "AGENT_BUSY", "message": "queue wait timeout"}),
+    )
+    monkeypatch.setattr(
+        pc_agent,
+        "_request_peer_fallback_json",
+        AsyncMock(
+            return_value={
+                "status": "success",
+                "command_id": "peer-cmd-busy",
+                "result": {"status": "success", "result": {"ok": True}},
+                "backend_source": "peer",
+            }
+        ),
+    )
+
+    request = pc_agent.RoutedCommandRequest(command_type="system_info", params={})
+    result = await pc_agent.route_execute_command(request, _internal_request())
+
+    assert result["status"] == "success"
+    assert result["command_id"] == "peer-cmd-busy"
     assert result["backend_source"] == "peer"
 
 

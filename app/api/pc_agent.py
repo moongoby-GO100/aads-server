@@ -27,7 +27,12 @@ PC_AGENT_SECRET = os.environ.get("PC_AGENT_SECRET", "")
 HEARTBEAT_INTERVAL = 30  # 초
 _PEER_FALLBACK_HEADER = "x-aads-pc-agent-peer-fallback"
 _PEER_OWNER_HEADER = "x-aads-pc-agent-owner-user-id"
-_PEER_RETRYABLE_ERROR_CODES = {"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"}
+_PEER_RETRYABLE_ERROR_CODES = {
+    "PC_AGENT_OFFLINE",
+    "NO_CAPABLE_AGENT",
+    "AGENT_BUSY",
+    "LEASE_EXPIRED",
+}
 _DEFAULT_BROWSER_WORK_KEY = os.environ.get("PC_AGENT_DEFAULT_BROWSER_WORK_KEY", "aads-ceo-browser").strip() or "aads-ceo-browser"
 
 # hot-reload 시 기존 WebSocket 연결 상태 보존
@@ -1014,6 +1019,46 @@ async def _peer_online_agents_snapshot() -> dict[str, Any] | None:
 
     return await asyncio.to_thread(_lookup)
 
+
+def _merge_pc_agent_diagnostics_payload(
+    local_payload: dict[str, Any],
+    peer_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge blue/green PC Agent diagnostics without duplicating agents."""
+    if not isinstance(peer_payload, dict):
+        return local_payload
+
+    merged = dict(local_payload)
+
+    def _merge_by_agent_id(key: str) -> None:
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for source in (local_payload.get(key), peer_payload.get(key)):
+            if not isinstance(source, list):
+                continue
+            for item in source:
+                if not isinstance(item, dict):
+                    continue
+                agent_id = str(item.get("agent_id") or "").strip()
+                dedupe_key = agent_id or json.dumps(item, sort_keys=True, default=str)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                items.append(item)
+        merged[key] = items
+
+    _merge_by_agent_id("online_agents")
+    _merge_by_agent_id("latest_launcher_status")
+    _merge_by_agent_id("latest_connection_events")
+    merged["backend_source"] = "local+peer"
+    merged["peer_backend_source"] = peer_payload.get("backend_source", "peer")
+    merged["online_count"] = sum(
+        1
+        for agent in merged.get("online_agents", [])
+        if isinstance(agent, dict) and agent.get("status") == "online"
+    )
+    return merged
+
 @router.get("/pc-agent/status")
 async def pc_agent_status(request: Request):
     """PC Agent 연결 상태 요약 조회."""
@@ -1596,8 +1641,9 @@ def _event_metadata_dict(value: Any) -> dict[str, Any]:
 
 
 @router.get("/pc-agent/diagnostics")
-async def pc_agent_diagnostics():
+async def pc_agent_diagnostics(request: Request):
     """Return online agent details and the latest launcher telemetry per node."""
+    await _flush_pending_reload_disconnects()
     launcher_rows: list[dict[str, Any]] = []
     connection_rows: list[dict[str, Any]] = []
     try:
@@ -1641,7 +1687,7 @@ async def pc_agent_diagnostics():
         ]
     except Exception as exc:
         logger.warning("pc_agent_diagnostics_query_failed: %s", exc)
-    return {
+    local_payload = {
         "online_agents": pc_agent_manager.list_agent_statuses(),
         "latest_launcher_status": launcher_rows,
         "latest_connection_events": connection_rows,
@@ -1649,7 +1695,14 @@ async def pc_agent_diagnostics():
             "agent_id": os.getenv("PC_AGENT_DEFAULT_AGENT_ID", "").strip(),
             "hostname": os.getenv("PC_AGENT_DEFAULT_HOSTNAME", "").strip(),
         },
+        "backend_source": "local",
     }
+    peer_payload = await _request_peer_fallback_json(
+        request=request,
+        method="GET",
+        path="/api/v1/pc-agent/diagnostics",
+    )
+    return _merge_pc_agent_diagnostics_payload(local_payload, peer_payload)
 
 
 @router.get("/pc-agent/disconnect-stats")

@@ -203,7 +203,12 @@ async def _fetch_pc_agent_statuses_from_api() -> list[dict[str, Any]]:
     return []
 
 
-_PC_ROUTE_FALLBACK_ERROR_CODES = frozenset({"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"})
+_PC_ROUTE_FALLBACK_ERROR_CODES = frozenset({
+    "PC_AGENT_OFFLINE",
+    "NO_CAPABLE_AGENT",
+    "AGENT_BUSY",
+    "LEASE_EXPIRED",
+})
 
 
 async def _route_pc_command_via_api(payload: dict[str, Any]) -> dict[str, Any] | None:
