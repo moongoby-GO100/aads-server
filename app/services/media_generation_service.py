@@ -934,14 +934,35 @@ class MediaGenerationService:
     ) -> Any:
         from app.api.ceo_chat_tools import _acquire_pw_context
 
-        ctx, err = await _acquire_pw_context(browser_session_id or "", "" if browser_session_id else work_key, target_url)
+        acquire_url = "about:blank" if work_key and target_url and not browser_session_id else target_url
+        ctx, err = await _acquire_pw_context(
+            browser_session_id or "",
+            "" if browser_session_id else work_key,
+            acquire_url,
+        )
         if err:
             raise RuntimeError(err)
         pages = getattr(ctx, "pages", [])
         page = pages[-1] if pages else await ctx.new_page()
         if target_url and hasattr(page, "goto"):
             goto_timeout_ms = int(float(os.getenv("AADS_GENSPARK_UI_GOTO_TIMEOUT_SECONDS", "25")) * 1000)
-            await page.goto(target_url, timeout=goto_timeout_ms, wait_until="domcontentloaded")
+            last_exc: Exception | None = None
+            for wait_until in ("domcontentloaded", "load"):
+                try:
+                    await page.goto(target_url, timeout=goto_timeout_ms, wait_until=wait_until)
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    try:
+                        if hasattr(page, "wait_for_timeout"):
+                            await page.wait_for_timeout(1000)
+                        else:
+                            await asyncio.sleep(1)
+                    except Exception:
+                        await asyncio.sleep(1)
+            if last_exc:
+                raise last_exc
         return page
 
     async def _read_genspark_page_text(self, page: Any) -> str:

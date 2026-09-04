@@ -470,6 +470,43 @@ async def test_process_genspark_ui_job_keeps_auth_gate_retryable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_acquire_genspark_page_separates_work_session_from_genspark_navigation(monkeypatch):
+    """Slow Genspark navigation must not make PC Agent work-session creation look stale."""
+    from app.api import ceo_chat_tools
+
+    class _FakePage:
+        def __init__(self):
+            self.gotos: list[tuple[str, str]] = []
+
+        async def goto(self, url, *, timeout, wait_until):
+            self.gotos.append((url, wait_until))
+            return None
+
+    class _FakeContext:
+        def __init__(self, page):
+            self.pages = [page]
+
+    page = _FakePage()
+    calls: list[tuple[str, str, str]] = []
+
+    async def fake_acquire(browser_session_id="", browser_work_key="", url="about:blank"):
+        calls.append((browser_session_id, browser_work_key, url))
+        return _FakeContext(page), None
+
+    monkeypatch.setattr(ceo_chat_tools, "_acquire_pw_context", fake_acquire)
+
+    svc = MediaGenerationService(settings_obj=_settings(), pool_provider=lambda: _Pool(_Conn()))
+    result = await svc._acquire_genspark_page(
+        work_key="genspark-agent-test",
+        target_url="https://www.genspark.ai/agents?id=test",
+    )
+
+    assert result is page
+    assert calls == [("", "genspark-agent-test", "about:blank")]
+    assert page.gotos == [("https://www.genspark.ai/agents?id=test", "domcontentloaded")]
+
+
+@pytest.mark.asyncio
 async def test_submit_prompt_to_genspark_clicks_secondary_submit_button():
     class _FakeKeyboard:
         def __init__(self):

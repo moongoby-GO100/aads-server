@@ -21,6 +21,7 @@ import base64
 import httpx
 import ipaddress
 import logging
+import os
 import re
 import shlex
 import socket
@@ -34,7 +35,9 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
-_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = 10
+_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = float(
+    os.getenv("AADS_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS", "45")
+)
 
 _AGENT_VAULT_API_LOGIN_TARGETS = {
     "go100.newtalk.kr": {
@@ -3749,7 +3752,7 @@ async def tool_browser_navigate(
         await page.goto(url, timeout=_BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
 
         # 로그인 폼 감지 + Vault 자동 로그인. 도메인 종류나 /login 직접 진입 여부와 무관하게 적용한다.
-        if tenant_id:
+        if dedicated_session and tenant_id:
             try:
                 _has_login_form = await page.evaluate("""() => {
                     const pwInput = document.querySelector("input[type='password']");
