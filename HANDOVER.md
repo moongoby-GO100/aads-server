@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-04 18:40 KST - PC Agent blue/green known-device visibility
+
+- CEO request:
+  - Continue the next step for `/ops/pc-agents`: total PC count should not disappear under blue/green routing, and currently connected PCs must be distinguished from recently seen offline PCs.
+- Changes:
+  - `app/api/pc_agent.py`: `/api/v1/pc-agent/agents` now appends recently seen PC Agent rows from `pc_agent_connection_events` as offline known-device placeholders, deduped behind live blue/green WebSocket rows. The response now includes `total_count`, `online_count`, `offline_count`, and `known_count`.
+  - `app/api/pc_agent.py`: PC Agent connect events now persist future `hostname`, `os_info`, `agent_name`, `tenant_id`, `version`, and `user_id` metadata so offline cards can show better labels after reconnection.
+  - `tests/unit/test_pc_agent_api_disconnects.py`: added regression coverage for appending known offline agents without duplicating online agents.
+  - `/root/aads/aads-dashboard/src/app/ops/pc-agents/page.tsx`: shows total/online/offline counters, renders offline known PCs with last event/reason, and limits command/stream selectors to online agents.
+- Verification before commit:
+  - `docker run --rm --env-file .env -v /root/aads/aads-server:/app -w /app aads-server:2150d90d3314 pytest tests/unit/test_pc_agent_api_disconnects.py` passed: 17 tests.
+  - `python3 -m compileall app/api/pc_agent.py tests/unit/test_pc_agent_api_disconnects.py` passed.
+  - `npm run build` in `/root/aads/aads-dashboard` passed.
+  - `npx eslint src/app/ops/pc-agents/page.tsx` returned 0 errors and 4 pre-existing warnings.
+- Pending:
+  - Selective commit/push for server and dashboard, then blue/green deployment and `/api/v1/pc-agent/agents` smoke check.
+
 ## 2026-09-04 18:15 KST - Shinhan easyview URL canonicalization and Windows Collector contract
 
 - CEO request:

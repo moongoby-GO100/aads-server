@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
@@ -146,6 +147,7 @@ async def test_flush_pending_reload_disconnects_records_stale_connections(monkey
 
 @pytest.mark.asyncio
 async def test_list_agents_returns_peer_snapshot_when_local_registry_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pc_agent, "_latest_known_pc_agents_from_events", AsyncMock(return_value=[]))
     monkeypatch.setattr(pc_agent.pc_agent_manager, "list_agent_statuses", Mock(return_value=[]))
     monkeypatch.setattr(
         pc_agent,
@@ -163,12 +165,13 @@ async def test_list_agents_returns_peer_snapshot_when_local_registry_empty(monke
 
     assert result["agents"][0]["agent_id"] == "oby-ceo"
     assert result["online_count"] == 1
-    assert result["backend_source"] == "peer"
+    assert result["backend_source"] == "local+peer"
 
 
 @pytest.mark.asyncio
 async def test_list_agents_hides_unowned_legacy_agents_for_regular_user(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent, "_latest_known_pc_agents_from_events", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         pc_agent.pc_agent_manager,
         "list_agent_statuses",
@@ -191,6 +194,7 @@ async def test_list_agents_hides_unowned_legacy_agents_for_regular_user(monkeypa
 @pytest.mark.asyncio
 async def test_list_agents_shows_legacy_agents_for_admin_principal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent, "_latest_known_pc_agents_from_events", AsyncMock(return_value=[]))
     monkeypatch.setattr(pc_agent, "ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setattr(
         pc_agent.pc_agent_manager,
@@ -208,6 +212,40 @@ async def test_list_agents_shows_legacy_agents_for_admin_principal(monkeypatch: 
 
     assert [agent["agent_id"] for agent in result["agents"]] == ["legacy-pc", "owned-pc"]
     assert result["online_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_agents_appends_known_offline_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(
+        pc_agent.pc_agent_manager,
+        "list_agent_statuses",
+        Mock(return_value=[{"agent_id": "online-pc", "status": "online", "is_online": True}]),
+    )
+    monkeypatch.setattr(pc_agent, "_request_peer_fallback_json", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        pc_agent,
+        "_latest_known_pc_agents_from_events",
+        AsyncMock(
+            return_value=[
+                {"agent_id": "online-pc", "status": "offline", "known_from_event_log": True},
+                {
+                    "agent_id": "offline-pc",
+                    "status": "offline",
+                    "is_online": False,
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                    "known_from_event_log": True,
+                },
+            ]
+        ),
+    )
+
+    result = await pc_agent.list_agents(_internal_request())
+
+    assert [agent["agent_id"] for agent in result["agents"]] == ["online-pc", "offline-pc"]
+    assert result["online_count"] == 1
+    assert result["offline_count"] == 1
+    assert result["total_count"] == 2
 
 
 def test_admin_access_allows_unowned_legacy_agent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,7 +392,7 @@ async def test_pc_agent_status_uses_peer_fallback_when_local_backend_is_offline(
 
     result = await pc_agent.pc_agent_status(_DummyRequest())
 
-    assert result["backend_source"] == "peer"
+    assert result["backend_source"] == "local+peer"
     assert result["agents"][0]["agent_id"] == "peer-pc"
 
 

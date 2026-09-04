@@ -11,7 +11,7 @@ import os
 import sys as _sys_reload
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -634,8 +634,17 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
         device_type = (msg.payload or {}).get("device_type", "pc")
         version = (msg.payload or {}).get("version", "")
         await _record_agent_event(
-            agent_id, "connected",
-            metadata={"device_type": device_type, "version": version, "user_id": owner_user_id or ""},
+            agent_id,
+            "connected",
+            metadata={
+                "device_type": device_type,
+                "version": version,
+                "user_id": owner_user_id or "",
+                "tenant_id": owner_tenant_id or "",
+                "hostname": (msg.payload or {}).get("hostname", ""),
+                "os_info": (msg.payload or {}).get("os_info", ""),
+                "agent_name": (msg.payload or {}).get("agent_name", ""),
+            },
         )
         pc_agent_manager.register_agent(
             agent_id,
@@ -1061,7 +1070,7 @@ def _merge_pc_agent_diagnostics_payload(
 
 
 def _dedupe_pc_agents(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Deduplicate blue/green PC Agent rows by agent_id."""
+    """Deduplicate PC Agent rows by agent_id, keeping live rows before known/offline rows."""
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     for agent in agents:
@@ -1076,13 +1085,48 @@ def _dedupe_pc_agents(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
+def _with_pc_agent_list_counts(payload: dict[str, Any]) -> dict[str, Any]:
+    agents = payload.get("agents")
+    normalized_agents = agents if isinstance(agents, list) else []
+    online_count = sum(
+        1
+        for agent in normalized_agents
+        if isinstance(agent, dict) and agent.get("status") == "online"
+    )
+    total_count = len([agent for agent in normalized_agents if isinstance(agent, dict)])
+    payload["agents"] = normalized_agents
+    payload["online_count"] = online_count
+    payload["offline_count"] = max(total_count - online_count, 0)
+    payload["total_count"] = total_count
+    payload["known_count"] = payload["offline_count"]
+    payload["reconnect_guidance"] = _top_level_reconnect_guidance(online_count)
+    return payload
+
+
+def _append_known_pc_agents(
+    payload: dict[str, Any],
+    known_agents: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    if known_agents:
+        agents = payload.get("agents")
+        payload = dict(payload)
+        payload["agents"] = _dedupe_pc_agents(
+            [
+                *(agents if isinstance(agents, list) else []),
+                *known_agents,
+            ]
+        )
+    return _with_pc_agent_list_counts(payload)
+
+
 def _merge_pc_agent_list_payload(
     local_payload: dict[str, Any],
     peer_payload: dict[str, Any] | None,
+    known_agents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Merge blue/green PC Agent list payloads without losing active agents."""
     if not isinstance(peer_payload, dict):
-        return local_payload
+        return _append_known_pc_agents(local_payload, known_agents)
     local_agents = local_payload.get("agents")
     peer_agents = peer_payload.get("agents")
     agents = _dedupe_pc_agents(
@@ -1094,13 +1138,118 @@ def _merge_pc_agent_list_payload(
     online_count = sum(
         1 for agent in agents if isinstance(agent, dict) and agent.get("status") == "online"
     )
-    return {
+    return _append_known_pc_agents({
         "agents": agents,
         "online_count": online_count,
         "backend_source": "local+peer",
         "peer_backend_source": peer_payload.get("backend_source", "peer"),
         "reconnect_guidance": _top_level_reconnect_guidance(online_count),
-    }
+    }, known_agents)
+
+
+def _latest_known_agent_label(agent_id: str, metadata: dict[str, Any]) -> str:
+    for key in ("agent_name", "hostname", "computer_name", "label"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return f"PC Agent {agent_id[:12]}"
+
+
+async def _latest_known_pc_agents_from_events(
+    requester_user_id: str,
+    *,
+    include_all_agents: bool,
+    known_since_days: int = 7,
+) -> list[dict[str, Any]]:
+    """Return recently seen PC agents that can be shown as offline placeholders.
+
+    Live WebSocket connections stay process-local, so blue/green can only show
+    connected agents by asking the peer process. This DB event snapshot fills the
+    second gap: devices that were seen recently but are not connected now.
+    """
+    if not include_all_agents and not requester_user_id:
+        return []
+
+    days = min(max(int(known_since_days or 7), 1), 90)
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH latest_event AS (
+                    SELECT DISTINCT ON (agent_id)
+                           agent_id, event, reason, metadata, created_at
+                      FROM pc_agent_connection_events
+                     WHERE created_at >= NOW() - make_interval(days => $1::int)
+                     ORDER BY agent_id, created_at DESC
+                ),
+                latest_identity AS (
+                    SELECT DISTINCT ON (agent_id)
+                           agent_id, metadata AS identity_metadata, created_at AS identity_at
+                      FROM pc_agent_connection_events
+                     WHERE created_at >= NOW() - make_interval(days => $1::int)
+                       AND metadata <> '{}'::jsonb
+                     ORDER BY agent_id, created_at DESC
+                )
+                SELECT le.agent_id,
+                       le.event,
+                       le.reason,
+                       le.metadata,
+                       le.created_at,
+                       li.identity_metadata,
+                       li.identity_at
+                  FROM latest_event le
+                  LEFT JOIN latest_identity li ON li.agent_id = le.agent_id
+                 ORDER BY le.created_at DESC
+                """,
+                days,
+            )
+    except Exception as exc:
+        logger.warning("pc_agent_known_agents_query_failed: %s", exc)
+        return []
+
+    known_agents: list[dict[str, Any]] = []
+    for row in rows:
+        agent_id = str(row["agent_id"] or "").strip()
+        if not agent_id:
+            continue
+        metadata = _event_metadata_dict(row["metadata"])
+        identity_metadata = _event_metadata_dict(row["identity_metadata"])
+        merged_metadata = {**metadata, **identity_metadata}
+        owner_user_id = str(merged_metadata.get("user_id") or "").strip()
+        if not include_all_agents and owner_user_id != requester_user_id:
+            continue
+        last_seen = row["created_at"]
+        heartbeat_age_seconds = None
+        try:
+            last_seen_utc = last_seen if last_seen.tzinfo else last_seen.replace(tzinfo=timezone.utc)
+            heartbeat_age_seconds = round((datetime.now(timezone.utc) - last_seen_utc).total_seconds(), 1)
+        except Exception:
+            heartbeat_age_seconds = None
+        known_agents.append(
+            {
+                "agent_id": agent_id,
+                "agent_name": _latest_known_agent_label(agent_id, merged_metadata),
+                "hostname": str(merged_metadata.get("hostname") or ""),
+                "os_info": str(merged_metadata.get("os_info") or ""),
+                "status": "offline",
+                "is_online": False,
+                "heartbeat_age_seconds": heartbeat_age_seconds,
+                "connected_at": None,
+                "last_heartbeat": last_seen.isoformat() if last_seen else None,
+                "last_seen": last_seen.isoformat() if last_seen else None,
+                "last_event": str(row["event"] or ""),
+                "last_disconnect_reason": str(row["reason"] or ""),
+                "version": str(merged_metadata.get("version") or ""),
+                "user_id": owner_user_id,
+                "known_from_event_log": True,
+                "reconnect_guidance": "Offline in live WebSocket registry; restart or reconnect the PC Agent if this PC should be online.",
+            }
+        )
+    return known_agents
+
 
 @router.get("/pc-agent/status")
 async def pc_agent_status(request: Request):
@@ -1131,7 +1280,11 @@ def _filter_agents_by_owner(
 
 
 @router.get("/pc-agent/agents")
-async def list_agents(request: Request):
+async def list_agents(
+    request: Request,
+    include_known: bool = True,
+    known_since_days: int = 7,
+):
     """연결된 에이전트 목록 조회.
 
     AADS-다중PC격리: 대시보드 등 일반 요청은 요청자(user_id) 소유 에이전트만 반환한다.
@@ -1153,6 +1306,15 @@ async def list_agents(request: Request):
         "online_count": online_count,
         "backend_source": "local",
     }
+    known_agents = (
+        await _latest_known_pc_agents_from_events(
+            requester_user_id,
+            include_all_agents=is_admin_principal or (is_internal_call and not requester_user_id),
+            known_since_days=known_since_days,
+        )
+        if include_known
+        else []
+    )
     peer_payload = await _request_peer_fallback_json(
         request=request,
         method="GET",
@@ -1160,7 +1322,7 @@ async def list_agents(request: Request):
         owner_user_id="" if is_admin_principal else requester_user_id,
     )
     if peer_payload is None:
-        return local_payload
+        return _merge_pc_agent_list_payload(local_payload, None, known_agents)
     if is_admin_principal:
         peer_payload = dict(peer_payload)
         peer_payload["agents"] = _filter_agents_by_owner(
@@ -1171,7 +1333,7 @@ async def list_agents(request: Request):
     elif requester_user_id or not is_internal_call:
         peer_payload = dict(peer_payload)
         peer_payload["agents"] = _filter_agents_by_owner(peer_payload.get("agents") or [], requester_user_id)
-    return _merge_pc_agent_list_payload(local_payload, peer_payload)
+    return _merge_pc_agent_list_payload(local_payload, peer_payload, known_agents)
 
 
 @router.post("/pc-agent/graceful-shutdown")
