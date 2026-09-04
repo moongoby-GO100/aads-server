@@ -1815,6 +1815,62 @@ def test_drain_bank_queue_cancels_non_collectable_account_before_browser(monkeyp
     assert completed[0][1]["result"]["browser_attempted"] is False
 
 
+def test_drain_bank_queue_defers_when_pc_security_program_not_ready(monkeypatch):
+    completed = []
+
+    monkeypatch.setattr(
+        auto_collect,
+        "claim_next_collection_item",
+        lambda agent_id="": {
+            "id": "queue-bank-mia",
+            "queue_type": "bank",
+            "service": "shinhan_business",
+            "business_id": "biz-mia",
+            "branch": "branch-gangbuk-mia",
+            "payload": {
+                "services": ["shinhan_business"],
+                "bank_only": True,
+                "bank_account_id": "bank-shinhan-mia",
+                "business_id": "biz-mia",
+                "branch": "branch-gangbuk-mia",
+                "required_browser_agent_id": "7f99c528-24d",
+            },
+        },
+    )
+    monkeypatch.setattr(auto_collect, "_bank_accounts_for_payload", lambda payload, user: [{"id": "bank-shinhan-mia"}])
+    monkeypatch.setattr(
+        auto_collect,
+        "_financial_security_program_preflight",
+        lambda payload, *, agent_id: {
+            "checked": "1",
+            "ready": False,
+            "error_code": "SHINHAN_SECURITY_PROGRAM_NOT_READY",
+            "ahnlab_detected": "0",
+            "veraport_detected": "1",
+        },
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "_run_collectors",
+        lambda payload, user, *, queue_only=False: pytest.fail("bank browser collection must not run"),
+    )
+    monkeypatch.setattr(
+        auto_collect,
+        "complete_collection_item",
+        lambda item_id, **kwargs: completed.append((item_id, kwargs)) or {"id": item_id, **kwargs},
+    )
+
+    result = auto_collect._run_global_collection_queue_once({"is_admin": True}, agent_id="7f99c528-24d")
+
+    assert result["claimed"] is True
+    assert result["status"] == "deferred"
+    assert result["error_code"] == "SHINHAN_SECURITY_PROGRAM_NOT_READY"
+    assert completed[0][0] == "queue-bank-mia"
+    assert completed[0][1]["status"] == "queued"
+    assert completed[0][1]["result"]["browser_attempted"] is False
+    assert completed[0][1]["result"]["security_program_preflight"]["ahnlab_detected"] == "0"
+
+
 def test_shinhan_bank_account_without_matching_platform_credentials_is_not_collectable(monkeypatch):
     monkeypatch.setattr(auto_collect, "_platform_accounts_for_bank_sync", lambda user, business_id=None: [])
 

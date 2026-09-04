@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -71,6 +73,132 @@ QUEUE_MIN_INTERVAL_BY_SERVICE = {
     "baemin": 1800,
 }
 
+FINANCIAL_SECURITY_PREFLIGHT_COOLDOWN_SECONDS = 300
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _pc_agent_route_execute_json(payload: dict[str, Any], timeout_seconds: float = 25.0) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    urls = [
+        str(os.getenv("AADS_PC_AGENT_ROUTE_EXECUTE_URL") or "").strip(),
+        "http://127.0.0.1:8080/api/v1/pc-agent/route-execute",
+        "http://aads-server:8080/api/v1/pc-agent/route-execute",
+        "http://aads-server-green:8080/api/v1/pc-agent/route-execute",
+    ]
+    seen: set[str] = set()
+    for url in [url for url in urls if url and not (url in seen or seen.add(url))]:
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=max(1.0, float(timeout_seconds or 1.0))) as response:
+                parsed = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                parsed = json.loads(exc.read().decode("utf-8", errors="ignore"))
+            except Exception:
+                continue
+            detail = parsed.get("detail") if isinstance(parsed, dict) else None
+            if isinstance(detail, dict):
+                return detail
+            if isinstance(parsed, dict):
+                return parsed
+            continue
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _extract_pc_agent_output(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("output", "stdout"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    for key in ("result", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            output = _extract_pc_agent_output(nested)
+            if output:
+                return output
+        elif isinstance(nested, str):
+            return nested
+    return ""
+
+
+def _financial_security_program_preflight(payload: dict[str, Any], *, agent_id: str) -> dict[str, Any]:
+    if not _env_bool("YEOLJEONG_BANK_SECURITY_PREFLIGHT_ENABLED", True):
+        return {"checked": "skipped", "ready": True, "reason": "disabled_by_env"}
+    if not agent_id:
+        return {
+            "checked": "failed",
+            "ready": False,
+            "error_code": "PC_AGENT_SECURITY_PREFLIGHT_AGENT_MISSING",
+            "reason": "agent_id_missing",
+        }
+    service = str(payload.get("service") or payload.get("services") or "").lower()
+    command = (
+        "$namePat='VeraPort|Veraport|TouchEn|nProtect|AhnLab|Safe Transaction|AnySign|"
+        "INISAFE|CrossWeb|Delfino|Wizvera|Xecure|VestCert|MagicLine|NOS|ObCross|IniClient'; "
+        "$paths='HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+        "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+        "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; "
+        "$installed=@(); foreach($p in $paths){$installed += Get-ItemProperty $p -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.DisplayName -match $namePat } | Select-Object -ExpandProperty DisplayName}; "
+        "$svcPat='Vera|Touch|nProtect|Ahn|SafeTransaction|AnySign|INISAFE|Cross|Delfino|Wiz|Xecure|Vest|MagicLine|NOS'; "
+        "$running=Get-Service -ErrorAction SilentlyContinue | Where-Object { "
+        "($_.Name -match $svcPat -or $_.DisplayName -match $svcPat) -and $_.Status -eq 'Running' } | "
+        "Select-Object -ExpandProperty Name; "
+        "[pscustomobject]@{installed=($installed|Sort-Object -Unique); running=($running|Sort-Object -Unique)} | "
+        "ConvertTo-Json -Depth 4 -Compress"
+    )
+    route_result = _pc_agent_route_execute_json(
+        {
+            "command_type": "powershell",
+            "agent_id": agent_id,
+            "job_type": "financial_exclusive",
+            "queue_if_busy": False,
+            "wait_for_turn": False,
+            "command_timeout_seconds": 25,
+            "params": {"command": command},
+        },
+        timeout_seconds=30,
+    )
+    output = _extract_pc_agent_output(route_result)
+    lower = output.lower()
+    has_veraport = "veraport" in lower
+    has_ahnlab = "ahnlab" in lower or "safetransaction" in lower or "safe transaction" in lower
+    has_keyboard = "touchen" in lower or "nprotect" in lower
+    has_inisafe = "inisafe" in lower or "crossweb" in lower
+    installed_count = sum(1 for token in ("veraport", "ahnlab", "touchen", "nprotect", "anysign", "inisafe") if token in lower)
+    running_count = len([token for token in ("safe", "ahn", "wiz", "vera", "touch", "nprotect", "inisafe", "nos") if token in lower])
+    ready = has_ahnlab and (has_veraport or "shinhan" not in service)
+    status = str(route_result.get("status") or "")
+    return {
+        "checked": "1" if output else "failed",
+        "ready": ready,
+        "route_status": status[:40],
+        "required_runtime_ready": "1" if ready else "0",
+        "veraport_detected": "1" if has_veraport else "0",
+        "ahnlab_detected": "1" if has_ahnlab else "0",
+        "keyboard_security_detected": "1" if has_keyboard else "0",
+        "inisafe_detected": "1" if has_inisafe else "0",
+        "installed_match_count": str(installed_count),
+        "running_match_count": str(running_count),
+        "error_code": "" if ready else "SHINHAN_SECURITY_PROGRAM_NOT_READY",
+        "reason": "pc_agent_security_program_preflight",
+    }
+
 
 def _empty_delivery_counts() -> dict[str, int]:
     return {kind: 0 for kind in DELIVERY_RECORD_TYPES}
@@ -91,6 +219,7 @@ BLOCKING_ERROR_CODES = {
     "PC_AGENT_SESSION_REQUIRED",
     "PORTAL_AUTH_CHALLENGE",
     "PORTAL_BLOCKED",
+    "SHINHAN_SECURITY_PROGRAM_NOT_READY",
 }
 RETRYABLE_ERROR_CODES = {
     "ATTEMPT_TIMEOUT",
@@ -1132,6 +1261,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
         payload["browser_agent_id"] = agent_id
         payload["pc_agent_id"] = agent_id
     if str(item.get("queue_type") or "") == "bank":
+        payload.setdefault("service", str(item.get("service") or ""))
         collectable_accounts = _bank_accounts_for_payload(payload, user)
         if not collectable_accounts:
             complete_collection_item(
@@ -1159,6 +1289,40 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
                 "status": "cancelled",
                 "error_code": "BANK_ACCOUNT_NOT_COLLECTABLE",
                 "message": "은행 자동수집 필수 데이터가 없는 계좌라 브라우저 접속 전 제외했습니다.",
+            }
+        security_preflight = _financial_security_program_preflight(payload, agent_id=agent_id)
+        if not security_preflight.get("ready"):
+            next_run_at = (
+                datetime.now(KST) + timedelta(seconds=FINANCIAL_SECURITY_PREFLIGHT_COOLDOWN_SECONDS)
+            ).isoformat(timespec="seconds")
+            complete_collection_item(
+                str(item["id"]),
+                status="queued",
+                result={
+                    "bank_account_id": str(payload.get("bank_account_id") or ""),
+                    "business_id": str(payload.get("business_id") or ""),
+                    "branch": str(payload.get("branch") or ""),
+                    "service": str(item.get("service") or ""),
+                    "browser_attempted": False,
+                    "security_program_preflight": security_preflight,
+                },
+                error_code=str(security_preflight.get("error_code") or "SHINHAN_SECURITY_PROGRAM_NOT_READY"),
+                message="PC 보안프로그램 실행 확인 실패로 은행 브라우저 접속 전 재시도 대기합니다.",
+                next_run_at=next_run_at,
+            )
+            return {
+                "global_queue": True,
+                "claimed": True,
+                "item": {
+                    "id": item.get("id"),
+                    "service": item.get("service"),
+                    "business_id": item.get("business_id"),
+                    "branch": item.get("branch"),
+                },
+                "status": "deferred",
+                "error_code": str(security_preflight.get("error_code") or "SHINHAN_SECURITY_PROGRAM_NOT_READY"),
+                "message": "PC 보안프로그램 실행 확인 실패로 은행 브라우저 접속 전 재시도 대기합니다.",
+                "security_program_preflight": security_preflight,
             }
     try:
         result = _run_collectors(payload, user, queue_only=False)

@@ -622,6 +622,8 @@ async def _shinhan_security_program_runtime_state(page: Any) -> dict[str, str]:
         return {"checked": "failed", **_safe_browser_error_fields(exc)}
 
     output = _extract_pc_agent_output(payload)
+    if not output.strip():
+        return {"checked": "0", "reason": "pc_agent_security_program_output_empty"}
     lower = output.lower()
     has_veraport = "veraport" in lower or "veraport" in output
     has_ahnlab = "ahnlab" in lower or "safetransaction" in lower or "safe transaction" in lower
@@ -4240,6 +4242,18 @@ async def collect_bank_via_browser_session_async(
                 installed_match_count=security_program_state.get("installed_match_count", ""),
                 running_match_count=security_program_state.get("running_match_count", ""),
             )
+            if not runtime_ready and checked != "0":
+                return {
+                    "status": "action_required",
+                    "error_code": "SHINHAN_SECURITY_PROGRAM_NOT_READY",
+                    "rows": [],
+                    "row_count": 0,
+                    "diagnostics": safe_diagnostics,
+                    "message": (
+                        "신한은행 보안프로그램 실행 상태가 확인되지 않아 로그인 시도를 중단했습니다. "
+                        "PC에서 AhnLab Safe Transaction과 VeraPort 실행 후 같은 은행 전용 세션으로 재시도하십시오."
+                    ),
+                }
 
         if portal_url:
             portal_stage_started_at = time.monotonic()
