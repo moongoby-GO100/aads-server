@@ -809,12 +809,20 @@ def test_collect_async_shinhan_reacquires_work_key_when_idpw_reset_fails():
         )
 
     assert bridge_inst.ensure_work_session.await_args.kwargs["force_recreate"] is True
+    assert bridge_inst.ensure_work_session.await_args.kwargs["url"].endswith(
+        f"#{connector.SHINHAN_IDPW_LOGIN_HASH}"
+    )
     assert result["diagnostics"]["browser_session_id"] == "fresh-shinhan"
     assert result["diagnostics"]["shinhan_idpw_reset_session_reacquired"] == "1"
+    assert "shinhan_idpw_login_reset_after_reacquire" in result["diagnostics"]
     assert mock_login.await_args.args[0] is recovered_page
     assert any(
         item.get("stage") == "shinhan_idpw_work_key_reacquire"
         and item.get("status") == "success"
+        for item in result["diagnostics"]["shinhan_stage_logs"]
+    )
+    assert any(
+        item.get("stage") == "shinhan_idpw_reset_after_reacquire"
         for item in result["diagnostics"]["shinhan_stage_logs"]
     )
     assert "bank-pass" not in str(result["diagnostics"])

@@ -3146,13 +3146,16 @@ async def _reacquire_shinhan_work_key_page(
     """Force-recreate the Shinhan work-key session and return a fresh page."""
     if not browser_work_key:
         return None, None, ""
+    target_url = portal_url or BANK_PORTAL_URLS["shinhan_business"]
+    if target_url and "#" not in target_url:
+        target_url = f"{target_url}#{SHINHAN_IDPW_LOGIN_HASH}"
     started_at = time.monotonic()
     try:
         session = await bridge.ensure_work_session(
             work_key=browser_work_key,
             label=f"{bank_name or '신한은행'} 간편조회",
             agent_id=str(browser_agent_id or ""),
-            url=portal_url or BANK_PORTAL_URLS["shinhan_business"],
+            url=target_url,
             preferred_port=browser_preferred_port,
             force_recreate=True,
             queue_wait_timeout_seconds=launch_queue_wait_seconds,
@@ -3172,6 +3175,7 @@ async def _reacquire_shinhan_work_key_page(
         safe_diagnostics["shinhan_idpw_reset_session_reacquire_reason"] = reason[:120]
         if initial_url:
             safe_diagnostics["shinhan_idpw_reset_reacquired_initial_url"] = initial_url[:120]
+        safe_diagnostics["shinhan_idpw_reset_reacquire_target_url"] = target_url[:120]
         _append_shinhan_stage_log(
             shinhan_stage_logs,
             stage="shinhan_idpw_work_key_reacquire",
@@ -3180,6 +3184,7 @@ async def _reacquire_shinhan_work_key_page(
             reason=reason[:120],
             success_condition="fresh_work_key_page_selected_after_certificate_reset_failure",
             initial_url=initial_url[:120],
+            target_url=target_url[:120],
             matched_existing_page="1" if matched_existing_page else "0",
         )
         return page, context, session_id
@@ -3197,6 +3202,50 @@ async def _reacquire_shinhan_work_key_page(
             failure_condition="force_recreate_same_work_key_failed",
         )
         return None, None, ""
+
+
+async def _retry_shinhan_idpw_reset_after_reacquire(
+    page: Any,
+    *,
+    portal_url: str,
+    shinhan_stage_logs: list[dict[str, str]],
+    safe_diagnostics: dict[str, Any],
+    reason: str,
+) -> dict[str, str]:
+    """Confirm the ID/PW panel after a forced work-key reacquire."""
+    reset_started_at = time.monotonic()
+    reset_result = await _prefer_shinhan_idpw_login_after_auth_challenge(page, portal_url)
+    safe_diagnostics["shinhan_idpw_login_reset_after_reacquire"] = reset_result
+    ready = reset_result.get("idpw_reset_ready") == "1"
+    snapshot: dict[str, str] = {}
+    if not ready:
+        snapshot = await _capture_shinhan_login_failure_diagnostics(page)
+        if snapshot:
+            safe_diagnostics["shinhan_idpw_reacquire_failure_snapshot"] = snapshot
+    _append_shinhan_stage_log(
+        shinhan_stage_logs,
+        stage="shinhan_idpw_reset_after_reacquire",
+        status="success" if ready else "failed",
+        started_at=reset_started_at,
+        error_code="" if ready else "SHINHAN_IDPW_REACQUIRE_RESET_NOT_CONFIRMED",
+        reason=reason[:120],
+        success_condition="reacquired_page_idpw_panel_selected" if ready else "",
+        failure_condition="reacquired_page_idpw_panel_not_confirmed" if not ready else "",
+        certificate_tab_close_attempted=reset_result.get("certificate_tab_close_attempted", ""),
+        certificate_tab_closed=reset_result.get("certificate_tab_closed", ""),
+        work_key_relaunch_attempted=reset_result.get("work_key_relaunch_attempted", ""),
+        work_key_relaunch_status=reset_result.get("work_key_relaunch_status", ""),
+        work_key_relaunch_busy_retries=reset_result.get("work_key_relaunch_busy_retries", ""),
+        portal_reloaded_for_idpw=reset_result.get("portal_reloaded_for_idpw", ""),
+        idpw_hash_forced=reset_result.get("idpw_hash_forced", ""),
+        idpw_hash_target=reset_result.get("idpw_hash_target", ""),
+        account_query_hash_prepared=reset_result.get("account_query_hash_prepared", ""),
+        idpw_panel_visible=reset_result.get("idpw_panel_visible", ""),
+        idpw_login_panel_selected=reset_result.get("idpw_login_panel_selected", ""),
+        screenshot_saved=snapshot.get("screenshot_saved", ""),
+        screenshot_path=snapshot.get("screenshot_path", ""),
+    )
+    return reset_result
 
 
 def _bank_session_recovery_plan(error_code: str = "") -> str:
@@ -4604,6 +4653,15 @@ async def collect_bank_via_browser_session_async(
                         pages = getattr(context, "pages", None)
                         if reacquired_session_id:
                             session_id_to_use = reacquired_session_id
+                        reacquire_reset = await _retry_shinhan_idpw_reset_after_reacquire(
+                            page,
+                            portal_url=portal_url,
+                            shinhan_stage_logs=shinhan_stage_logs,
+                            safe_diagnostics=safe_diagnostics,
+                            reason="before_idpw_step_reacquired_after_certificate_reset_failure",
+                        )
+                        if reacquire_reset.get("idpw_reset_ready") == "1":
+                            retry_shinhan_idpw_login = True
                 retry_shinhan_idpw_login = True
             else:
                 safe_diagnostics.update(auth_challenge)
@@ -4938,6 +4996,15 @@ async def collect_bank_via_browser_session_async(
                                 pages = getattr(context, "pages", None)
                                 if reacquired_session_id:
                                     session_id_to_use = reacquired_session_id
+                                reacquire_reset = await _retry_shinhan_idpw_reset_after_reacquire(
+                                    page,
+                                    portal_url=portal_url,
+                                    shinhan_stage_logs=shinhan_stage_logs,
+                                    safe_diagnostics=safe_diagnostics,
+                                    reason="after_idpw_step_reacquired_after_certificate_reset_failure",
+                                )
+                                if reacquire_reset.get("idpw_reset_ready") == "1":
+                                    retry_shinhan_idpw_login = True
                         retry_shinhan_idpw_login = True
                         continue
                     else:
