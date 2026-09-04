@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
@@ -163,6 +164,61 @@ async def test_list_agents_returns_peer_snapshot_when_local_registry_empty(monke
     assert result["agents"][0]["agent_id"] == "oby-ceo"
     assert result["online_count"] == 1
     assert result["backend_source"] == "peer"
+
+
+@pytest.mark.asyncio
+async def test_list_agents_hides_unowned_legacy_agents_for_regular_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(
+        pc_agent.pc_agent_manager,
+        "list_agent_statuses",
+        Mock(
+            return_value=[
+                {"agent_id": "legacy-pc", "status": "online", "user_id": ""},
+                {"agent_id": "owned-pc", "status": "online", "user_id": "user-1"},
+                {"agent_id": "other-pc", "status": "online", "user_id": "user-2"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(pc_agent, "verify_token", Mock(return_value={"sub": "user-1", "email": "user@example.com", "is_admin": False}))
+
+    result = await pc_agent.list_agents(_DummyRequest(headers={"Authorization": "Bearer user-token"}))
+
+    assert [agent["agent_id"] for agent in result["agents"]] == ["owned-pc"]
+    assert result["online_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_agents_shows_legacy_agents_for_admin_principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent, "ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setattr(
+        pc_agent.pc_agent_manager,
+        "list_agent_statuses",
+        Mock(
+            return_value=[
+                {"agent_id": "legacy-pc", "status": "online", "user_id": ""},
+                {"agent_id": "owned-pc", "status": "online", "user_id": "user-1"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(pc_agent, "verify_token", Mock(return_value={"sub": "admin", "email": "admin@example.com", "is_admin": True}))
+
+    result = await pc_agent.list_agents(_DummyRequest(headers={"Authorization": "Bearer admin-token"}))
+
+    assert [agent["agent_id"] for agent in result["agents"]] == ["legacy-pc", "owned-pc"]
+    assert result["online_count"] == 2
+
+
+def test_admin_access_allows_unowned_legacy_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "get_agent", Mock(return_value=SimpleNamespace(user_id="")))
+
+    pc_agent._assert_agent_access(
+        "legacy-pc",
+        "admin",
+        False,
+        allow_unowned_legacy_agent=True,
+    )
 
 
 @pytest.mark.asyncio
