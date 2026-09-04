@@ -69,6 +69,9 @@ FINANCIAL_DATA_CATEGORIES = {"transactions", "balances", "statements", "card_usa
 FINANCIAL_SITE_MARKERS = ("bank", "banking", "card", "shinhan")
 WINDOWS_COLLECTOR_CONTRACT_VERSION = "windows_collector_v1"
 FINANCIAL_EXCLUSIVE_JOB_TYPE = "financial_exclusive"
+SHINHAN_EASYVIEW_LOGIN_URL = "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+SHINHAN_EASYVIEW_ORIGIN = "https://bank.shinhan.com"
+SHINHAN_FORBIDDEN_LOGIN_ORIGINS = ["https://bizbank.shinhan.com"]
 
 DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
     {
@@ -187,8 +190,8 @@ DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
         "project_key": "BANKING",
         "site_key": "shinhan.easyview",
         "display_name": "Shinhan easy inquiry",
-        "base_origin": "https://bizbank.shinhan.com",
-        "allowed_origins": ["https://bizbank.shinhan.com", "https://bank.shinhan.com"],
+        "base_origin": SHINHAN_EASYVIEW_LOGIN_URL,
+        "allowed_origins": [SHINHAN_EASYVIEW_ORIGIN],
         "runtime": "windows_collector",
         "data_categories": ["transactions", "balances", "statements"],
         "login_mode": "user_session",
@@ -201,6 +204,9 @@ DEFAULT_SITE_PROFILES: list[dict[str, Any]] = [
             "sample": True,
             "runtime_contract": "windows_collector_v1",
             "requires_local_security_programs": True,
+            "entry_url": SHINHAN_EASYVIEW_LOGIN_URL,
+            "login_url": SHINHAN_EASYVIEW_LOGIN_URL,
+            "forbidden_login_origins": SHINHAN_FORBIDDEN_LOGIN_ORIGINS,
         },
     },
     {
@@ -325,11 +331,42 @@ def _is_financial_profile(profile: dict[str, Any]) -> bool:
     )
 
 
+def _is_shinhan_easyview_profile(profile: dict[str, Any]) -> bool:
+    project_key = _normalize_project_key(profile.get("project_key"))
+    site_key = str(profile.get("site_key") or "").strip().lower()
+    display_name = str(profile.get("display_name") or "").strip().lower()
+    return project_key in FINANCIAL_PROJECT_KEYS and (
+        site_key in {"shinhan.easyview", "shinhan_business", "shinhan-business"}
+        or ("shinhan" in site_key and "easy" in site_key)
+        or ("shinhan" in display_name and "easy" in display_name)
+    )
+
+
+def _apply_shinhan_easyview_runtime_defaults(profile: dict[str, Any]) -> None:
+    if not _is_shinhan_easyview_profile(profile):
+        return
+    profile["base_origin"] = SHINHAN_EASYVIEW_ORIGIN
+    profile["allowed_origins"] = [SHINHAN_EASYVIEW_ORIGIN]
+    metadata = _json_dict(profile.get("metadata"))
+    metadata.update(
+        {
+            "entry_url": SHINHAN_EASYVIEW_LOGIN_URL,
+            "login_url": SHINHAN_EASYVIEW_LOGIN_URL,
+            "required_url_hash": "210000000000",
+            "forbidden_login_origins": SHINHAN_FORBIDDEN_LOGIN_ORIGINS,
+            "requires_local_security_programs": True,
+            "runtime_contract": WINDOWS_COLLECTOR_CONTRACT_VERSION,
+        }
+    )
+    profile["metadata"] = metadata
+
+
 def collector_runtime_contract_for_profile(profile: dict[str, Any]) -> dict[str, Any]:
     runtime = _normalize_enum(profile.get("runtime") or profile.get("site_environment"), SITE_ENVIRONMENTS, "webview2")
     execution_runtime = resolve_collector_execution_runtime(runtime)
     financial = _is_financial_profile(profile)
     if financial:
+        metadata = _json_dict(profile.get("metadata"))
         return {
             "contract_version": WINDOWS_COLLECTOR_CONTRACT_VERSION,
             "execution_runtime": execution_runtime,
@@ -361,6 +398,12 @@ def collector_runtime_contract_for_profile(profile: dict[str, Any]) -> dict[str,
                     "transaction_capture",
                     "ledger_persist",
                 ],
+            },
+            "entry_url_policy": {
+                "entry_url": str(metadata.get("entry_url") or ""),
+                "required_url_hash": str(metadata.get("required_url_hash") or ""),
+                "forbidden_login_origins": _json_list(metadata.get("forbidden_login_origins")),
+                "same_work_key_required": True,
             },
         }
     return {
@@ -453,8 +496,11 @@ def normalize_site_profile(payload: dict[str, Any]) -> dict[str, Any]:
         "created_at": _clean_text(payload.get("created_at"), default=_now_text(), max_length=80),
         "updated_at": _clean_text(payload.get("updated_at"), default=_now_text(), max_length=80),
     }
+    _apply_shinhan_easyview_runtime_defaults(profile)
+    metadata = _json_dict(profile.get("metadata"))
     if "runtime_contract_detail" not in metadata:
         metadata["runtime_contract_detail"] = collector_runtime_contract_for_profile(profile)
+    profile["metadata"] = metadata
     return profile
 
 

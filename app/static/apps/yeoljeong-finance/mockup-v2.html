@@ -879,7 +879,7 @@
       return `<form class="auth-form integration-setup-form" data-search-form data-integration-setup-form>
         <div class="integration-setup-band"><h3>연동 설정 페이지</h3><p>사업자와 지점, 서비스 유형, 로그인/Vault 보관값, 계좌·가맹점번호, 수집 범위를 한 화면에서 등록하는 시안입니다.</p></div>
         <div class="integration-preset-strip">
-          <button type="button" class="active" data-integration-preset="shinhan" data-label="성신점 신한은행 빠른계좌조회" data-url="https://bizbank.shinhan.com"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
+          <button type="button" class="active" data-integration-preset="shinhan" data-label="성신점 신한은행 빠른계좌조회" data-url="https://bank.shinhan.com/rib/easy/index.jsp#210000000000"><b>신한 간편서비스</b><span>계좌거래·잔액 조회</span></button>
           <button type="button" data-integration-preset="ibk" data-label="성신점 IBK 빠른계좌조회" data-url="https://kiup.ibk.co.kr"><b>IBK 빠른서비스</b><span>계좌번호·계좌비번 기반</span></button>
           <button type="button" data-integration-preset="baemin" data-label="성신점 배달의민족 정산" data-url="https://self.baemin.com"><b>판매채널</b><span>주문·매출·정산·리뷰</span></button>
           <button type="button" data-integration-preset="supplier" data-label="성신점 매입처 수기증빙" data-url=""><b>매입·증빙</b><span>발주 프로그램·사진 OCR</span></button>
@@ -889,7 +889,7 @@
           ${authSelect("integration-business","소속 사업자",["열정국밥 주식회사","문라이트F&B","문고비 개인사업자"])}
           ${authSelect("integration-branch","대상 지점",["성신점","미아점","정화점","전체 지점"])}
           ${authField("integration-label","표시명","text","성신점 신한은행 빠른계좌조회","성신점 신한은행 빠른계좌조회")}
-          ${authField("integration-url","로그인/관리 URL","url","https://...","https://bizbank.shinhan.com",false)}
+          ${authField("integration-url","로그인/관리 URL","url","https://...","https://bank.shinhan.com/rib/easy/index.jsp#210000000000",false)}
           ${authField("integration-user","아이디/업로드 기준명","text","로그인 ID, 휴대폰번호 또는 매입처명","")}
           ${authField("integration-password","비밀번호","password","서버 Vault 암호화 저장","")}
           ${authField("integration-account","계좌/가맹점번호","text","숫자 또는 플랫폼 매장코드","")}

@@ -889,7 +889,7 @@ def test_upsert_financial_account_encrypts_api_secrets(tmp_path, monkeypatch):
         {
             "service": "shinhan_business",
             "label": "중화점 신한",
-            "login_url": "https://bizbank.shinhan.com/",
+            "login_url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
             "username": "bank-user",
             "api_key": "client-id",
             "client_secret": "client-secret",

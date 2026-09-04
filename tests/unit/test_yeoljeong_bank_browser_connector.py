@@ -62,6 +62,26 @@ class _PcAgentTabsChallengePage(_ChallengePage):
         }
 
 
+class _PcAgentTabsChallengeButIdpwReadyPage(_PcAgentTabsChallengePage):
+    def __init__(self):
+        super().__init__(
+            "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
+            "간편조회서비스 이용자ID 로그인 이용자ID를 입력해주세요.",
+        )
+
+    async def evaluate(self, expression, *args, **kwargs):
+        if expression == "window.location.href":
+            return self.url
+        if "idpwHash" in expression and "loginInput" in expression:
+            return {
+                "idpwHash": "1",
+                "loginInput": "1",
+                "passwordInput": "1",
+                "panelText": "1",
+            }
+        return self.text
+
+
 class _PcAgentNestedTabsChallengePage(_ChallengePage):
     async def _run_browser_command(self, command_type, params, **kwargs):
         assert command_type == "browser_tabs"
@@ -453,6 +473,15 @@ async def test_shinhan_fincert_iframe_is_detected_from_pc_agent_tabs():
     assert result["screen_requires_operator"] == "1"
     assert result["suggested_action"] == "complete_financial_certificate_then_retry_same_work_key"
     assert "password" not in result
+
+
+@pytest.mark.asyncio
+async def test_shinhan_idpw_ready_main_page_ignores_stale_fincert_tab():
+    page = _PcAgentTabsChallengeButIdpwReadyPage()
+
+    result = await connector._detect_shinhan_auth_challenge(page, [page])
+
+    assert result == {}
 
 
 @pytest.mark.asyncio

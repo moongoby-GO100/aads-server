@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-09-04 18:15 KST - Shinhan easyview URL canonicalization and Windows Collector contract
+
+- CEO request:
+  - Proceed with the next step: remove remaining `bizbank.shinhan.com` defaults, store/use `https://bank.shinhan.com/rib/easy/index.jsp#210000000000` for Shinhan business easy account inquiry, and keep the banking collector on the Windows Collector runtime contract.
+- Changes:
+  - `app/services/authenticated_site_collector.py`: added Shinhan easyview constants, canonicalizes `BANKING/shinhan.easyview` profiles to `https://bank.shinhan.com`, stores the exact hash login/entry URL in metadata, records `bizbank.shinhan.com` as a forbidden legacy origin, and exposes this in the financial runtime contract's `entry_url_policy`.
+  - `app/static/apps/yeoljeong-finance/index.html` and `mockup-v2.html`: changed Shinhan default login URL from `bizbank.shinhan.com` to `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`; the default collection mode is now `bank-quick-service`.
+  - `app/services/yeoljeong_bank_browser_connector.py`: kept the ID/PW-ready guard so a main page already on `#210000000000` ignores stale YESKEY/fincert tabs instead of cycling back into certificate handling.
+  - Tests updated to assert Windows Collector financial-exclusive execution, Shinhan entry URL policy, legacy `bizbank` canonicalization, and stale fincert-tab ignore behavior.
+- Verification before commit:
+  - `.venv-playwright/bin/python -m pytest -q tests/unit/test_authenticated_site_collector.py::test_windows_collector_maps_to_pc_agent_execution_runtime tests/unit/test_authenticated_site_collector.py::test_banking_job_uses_financial_exclusive_runtime_contract tests/unit/test_authenticated_site_collector.py::test_shinhan_easyview_profile_rejects_legacy_bizbank_origin tests/unit/test_authenticated_site_collector.py::test_otp_challenge_rejects_user_approved_automation_and_requires_physical_input tests/unit/test_pc_agent_routing_leases.py::test_bank_work_key_promotes_browser_bridge_route_to_financial_exclusive tests/unit/test_yeoljeong_bank_browser_connector.py::test_shinhan_idpw_ready_main_page_ignores_stale_fincert_tab tests/unit/test_yeoljeong_finance_service.py::test_upsert_financial_account_encrypts_api_secrets` passed: 7 tests.
+  - `git diff --check` for the touched files passed.
+- Pending:
+  - Selective commit/push, `deploy.sh bluegreen`, `/authenticated-collector` API smoke, and DANHAROO-MAIN Shinhan login-only retest.
+
 ## 2026-09-04 11:05 KST - Shinhan financial lease contention and ID/PW hash reset P0
 
 - CEO request:
@@ -10733,3 +10748,107 @@
   - DB check: `pipeline_runner_events` exists and currently contains 459 rows. New `cli_process_started`/`cli_first_*` events will appear from the next runner process execution after this patch is active.
 - Not completed:
   - Not committed, pushed, or blue/green deployed in this turn because the repo already contains unrelated dirty changes, including existing edits in `app/api/pipeline_runner.py`. A clean release worktree or selective staging is required before deployment.
+
+## 2026-09-04 11:39 KST - Shinhan bank preflight AGENT_BUSY retry
+
+- CEO request:
+  - Complete the P0 bank collection lane isolation and Shinhan state-machine hardening through deploy and live test.
+- Server changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: Shinhan security-program preflight now uses the same `AGENT_BUSY` wait/retry wrapper as the certificate-to-ID/PW reset path.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added coverage that the security-program check retries once after `AGENT_BUSY`, then reports VeraPort/AhnLab ready without exposing secrets.
+- Live observation before this patch:
+  - Deployed `741d9d55` correctly isolated the bank Browser Bridge work key and same-digest standby was restored, but a live Mia Shinhan run stopped at `SHINHAN_SECURITY_PROGRAM_NOT_READY` because the security preflight saw `AGENT_BUSY` before ID/PW login.
+- Verification:
+  - Source-mounted container test passed: `tests/unit/test_yeoljeong_bank_browser_connector.py` 79/79.
+  - Source-mounted container regression passed: `tests/unit/test_pc_agent_collection_queue.py` and `tests/unit/test_pc_agent_routing_leases.py` 32/32.
+- Not completed:
+  - This follow-up patch still needs selective commit, push, blue/green deploy, five-minute P0/P1 monitor, and another live Shinhan collection retry.
+
+## 2026-09-04 11:54 KST - Genspark UI fallback login timeout hardening
+
+- CEO request:
+  - Continue the Genspark UI image fallback next step quickly and fix the login automation stage that failed to complete within the time limit.
+- Server changes:
+  - `app/services/media_generation_service.py`: separated Browser Bridge work-session acquisition from Genspark URL navigation. Work sessions are now acquired at `about:blank`, then the target Genspark agent URL is navigated as a distinct step with a secondary `load` retry. This prevents slow Genspark navigation from being stored as `GENSPARK_PAGE_ACQUIRE_TIMEOUT`.
+  - `app/api/ceo_chat_tools.py`: increased Agent Vault browser login test timeout default from 10s to 45s via `AADS_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS`, and made dedicated-session Vault autologin scope explicit.
+  - `tests/unit/test_media_generation_service.py`: added regression coverage that Genspark work-session acquisition no longer navigates directly to the Genspark target URL.
+- Live observation before this patch:
+  - PC Agent `7f99c528-24d` was online with Browser Bridge capability.
+  - Agent Vault contained one active Genspark credential for tenant `2d701a8c-9596-4757-8588-faa4f7837112`.
+  - Test jobs `media-c3325f62eda0471e` and `media-fa9412b74b5e4f32` were queued for the two CEO-provided Genspark agent URLs.
+  - Direct container execution of `process_genspark_ui_job` on `media-c3325f62eda0471e` reproduced `GENSPARK_PAGE_ACQUIRE_TIMEOUT`.
+- Verification before deploy:
+  - `python3 -m py_compile app/services/media_generation_service.py app/api/ceo_chat_tools.py` passed.
+  - Temporary dependency-matched container test passed: `python -m pytest tests/unit/test_media_generation_service.py tests/unit/test_pc_agent_tool_exposure.py` 58/58.
+- Not completed:
+  - Selective commit, push, blue/green deploy, routed health, five-minute P0/P1 monitor, and post-deploy Genspark agent smoke test are pending in this release cycle.
+
+## 2026-09-04 12:57 KST - DB MCP 30s timeout guard
+
+- CEO request:
+  - Fix the recurring `DB MCP` failure where simple SELECT calls in the chat session failed after around 30 seconds, then deploy and report.
+- Server changes:
+  - `mcp_servers/aads_tools_bridge.py`: DB MCP tools now have an explicit 28s bridge deadline and return a structured `mcp_db_tool_deadline` payload before the MCP client disconnects.
+  - `app/services/tool_executor.py`: internal `query_database` default wrapper timeout is now 28s, statement timeout is bounded under that budget, and an unavailable/exhausted app DB pool falls back to one direct read-only connection.
+  - `app/api/ceo_chat_tools.py`: legacy `query_db` fallback now uses explicit connect/statement timeout and read-only transaction settings.
+  - `tests/unit/test_tool_executor_aliases.py`, `tests/unit/test_aads_tools_bridge.py`: added coverage for the new timeout bucket, direct fallback, and bridge deadline payload.
+- Verification before release:
+  - `python3 -m py_compile app/services/tool_executor.py app/api/ceo_chat_tools.py mcp_servers/aads_tools_bridge.py` passed on the host.
+  - `git diff --check` passed for the changed server files.
+- Not completed:
+  - Host pytest is blocked because `.venv/bin/python3.11` points to missing `/usr/local/bin/python3.11`; run the image/runtime test during release build and after deploy.
+  - This HANDOVER file already contains unrelated dirty entries, so it must not be included in the DB MCP fix commit unless those entries are intentionally released together.
+
+## 2026-09-04 12:53 KST - Project docs server-side fallback
+
+- CEO request:
+  - Separate dashboard/server dirty changes by task, add server-side fallback for document API links, deploy, and verify.
+- Server changes:
+  - `app/api/project_docs.py`: added conservative project-hint fallback for legacy `/docs` deep links that arrive as `project=AADS` with `/app/docs` or `/app/reports`, plus same-project fallback across configured document bases.
+  - `tests/unit/test_project_docs_viewer.py`: added regressions for observed GO100 legacy links and GO100 reports that physically live under `docs/reports`.
+- Dirty separation:
+  - Release scope: only `app/api/project_docs.py` and `tests/unit/test_project_docs_viewer.py`.
+  - Existing unrelated dirty files in AADS server/dashboard are preserved and must not be included in this release image.
+- Verification before deploy:
+  - `python3 -m py_compile app/api/project_docs.py` passed.
+  - Dependency-image test with local source mount passed: `tests/unit/test_project_docs_viewer.py` 8/8.
+  - Runtime direct function call opened legacy AADS GO100 link from `/root/kis-autotrade-v4/docs/reports/GO100-303-STRATEGY-CARD-FULL-SYNC-20260825.md`.
+- Not completed:
+  - Selective commit, push, blue/green API deploy, dashboard/API E2E, and five-minute P0/P1 monitoring are pending in this release cycle.
+
+## 2026-09-04 13:36 KST - DB MCP bridge deadline floor follow-up
+
+- CEO request:
+  - Complete the recommended fixes, deploy, and report the result.
+- Server follow-up:
+  - `mcp_servers/aads_tools_bridge.py`: lowered the bridge deadline safety floor from 1.0s to 0.001s so configured DB MCP deadlines, including regression-test short deadlines, are actually enforced.
+- Verification before release:
+  - `python3 -m py_compile mcp_servers/aads_tools_bridge.py` passed on the host.
+  - Dependency-image test with local source mount passed: `tests/unit/test_aads_tools_bridge.py tests/unit/test_tool_executor_aliases.py` 9/9.
+- Dirty separation:
+  - This HANDOVER file already contains unrelated uncommitted entries and must not be included in the release commit unless those entries are intentionally released together.
+- Not completed:
+  - Selective commit, push, API blue/green deploy, same-digest standby sync, routed health, and five-minute P0/P1 monitoring are pending.
+
+## 2026-09-04 13:56 KST - PC Agent peer diagnostics and two-PC isolation test
+
+- CEO request:
+  - Proceed with the recommended PC Agent action, confirm the two additional PC Agents excluding the CEO/Shinhan PC, and test them without overlap.
+- Release state observed:
+  - Active API is green `aads-server-green` on port 8102, image `aads-server:873235d268aa`.
+  - Backup blue `aads-server` on port 8100 is still image `aads-server:8181c1ef4d15`.
+  - Standby same-digest sync was not forced because old blue still had 3 active `chat_turn_executions` with live heartbeats.
+- PC Agent observation:
+  - Excluded default/Shinhan PC: `DESKTOP-ICU55HK (7f99c528-24d)`.
+  - Tested additional PCs: `DESKTOP-TNO85R8 (6f8d6047-093)` and `DANHAROO-MAIN (62405e70-e98)`.
+  - Active diagnostics returned all 3 online agents with `backend_source=local+peer`.
+- Isolation test:
+  - `system_info` succeeded on both additional PCs via peer route with separate command IDs.
+  - `browser_health` succeeded on `DESKTOP-TNO85R8` with `work_key=pc-agent-isolation-tno85r8`, port 9222.
+  - `DANHAROO-MAIN` initially returned `CDP_NOT_READY` on default port 9222, then `browser_launch` prepared port 9333 and `browser_health` succeeded with `work_key=pc-agent-isolation-danharoo`, port 9333.
+- Verification:
+  - Runtime tests in active container passed: `tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_routing_leases.py tests/unit/test_pc_agent_release_guards.py` = 49 passed, 1 skipped.
+  - Routed API health passed through nginx host header.
+  - Last 5 minute active logs had no `level=error`, `level=critical`, or traceback matches; warnings were unrelated MCP cancellation/Ollama embedding availability.
+- Not completed:
+  - Standby same-digest sync remains pending until the old blue chat executions drain, or until CEO explicitly approves terminating/interrupting those executions.

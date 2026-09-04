@@ -183,10 +183,10 @@ def test_windows_collector_maps_to_pc_agent_execution_runtime(collector_modules)
         {
             "recipe_id": "shinhan.easyview.collect",
             "version": "v1",
-            "allowed_origins": ["https://bizbank.shinhan.com"],
+            "allowed_origins": ["https://bank.shinhan.com"],
             "work_key_template": "banking shinhan mia",
         },
-        target_url="https://bizbank.shinhan.com",
+        target_url="https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
         project_key="BANKING",
         site_environment="windows_collector",
     )
@@ -198,6 +198,7 @@ def test_windows_collector_maps_to_pc_agent_execution_runtime(collector_modules)
     assert plan["saas_extension"]["runtime_contract"]["job_type"] == "financial_exclusive"
     assert plan["saas_extension"]["lease_policy"]["exclusive"] is True
     assert plan["saas_extension"]["success_contract"]["minimum_imported_rows"] == 1
+    assert plan["saas_extension"]["runtime_contract"]["entry_url_policy"]["same_work_key_required"] is True
 
 
 async def test_banking_job_uses_financial_exclusive_runtime_contract(collector_modules):
@@ -211,7 +212,7 @@ async def test_banking_job_uses_financial_exclusive_runtime_contract(collector_m
             "project_key": "BANKING",
             "site_key": "shinhan.easyview",
             "display_name": "Shinhan easy inquiry",
-            "base_origin": "https://bizbank.shinhan.com",
+            "base_origin": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
             "runtime": "windows_collector",
             "data_categories": ["transactions", "balances"],
         },
@@ -232,7 +233,38 @@ async def test_banking_job_uses_financial_exclusive_runtime_contract(collector_m
     assert created["job"]["runtime_contract"]["job_type"] == "financial_exclusive"
     assert created["job"]["lease_policy"]["scope"] == "pc_agent_interactive_browser_lane"
     assert created["job"]["success_contract"]["minimum_imported_rows"] == 1
+    assert created["job"]["runtime_contract"]["entry_url_policy"]["entry_url"] == (
+        "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+    )
+    assert created["job"]["runtime_contract"]["entry_url_policy"]["forbidden_login_origins"] == [
+        "https://bizbank.shinhan.com"
+    ]
     assert queued["resource_key"].startswith(f"financial_exclusive|{tenant_id}|")
+
+
+async def test_shinhan_easyview_profile_rejects_legacy_bizbank_origin(collector_modules):
+    collector, _queue_module = collector_modules
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+
+    profile = await collector.upsert_site_profile(
+        tenant_id=tenant_id,
+        user_id="ceo",
+        payload={
+            "project_key": "BANKING",
+            "site_key": "shinhan.easyview",
+            "display_name": "Shinhan easy inquiry",
+            "base_origin": "https://bizbank.shinhan.com",
+            "allowed_origins": ["https://bizbank.shinhan.com", "https://bank.shinhan.com"],
+            "runtime": "windows_collector",
+            "data_categories": ["transactions", "balances"],
+        },
+    )
+
+    assert profile["base_origin"] == "https://bank.shinhan.com"
+    assert profile["allowed_origins"] == ["https://bank.shinhan.com"]
+    assert profile["metadata"]["entry_url"] == "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+    assert profile["metadata"]["login_url"] == "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+    assert profile["metadata"]["forbidden_login_origins"] == ["https://bizbank.shinhan.com"]
 
 
 async def test_challenge_deny_policy_blocks_resume_automation(collector_modules):
@@ -340,7 +372,7 @@ async def test_otp_challenge_rejects_user_approved_automation_and_requires_physi
             "project_key": "BANKING",
             "site_key": "shinhan.easyview",
             "display_name": "Shinhan easy inquiry",
-            "base_origin": "https://bizbank.shinhan.com",
+            "base_origin": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
             "runtime": "windows_collector",
             "data_categories": ["transactions"],
             "challenge_policy": {"mode": "user_intervention", "user_approved_automation_allowed": True},
@@ -358,7 +390,7 @@ async def test_otp_challenge_rejects_user_approved_automation_and_requires_physi
     blocked = collector.mark_collection_job_action_required(
         job_id=created["job"]["id"],
         challenge_kind="otp",
-        page_url="https://bizbank.shinhan.com/login",
+        page_url="https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
     )
 
     with pytest.raises(ValueError, match="collector_user_approved_automation_not_allowed_for_challenge"):

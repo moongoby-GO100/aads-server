@@ -3032,6 +3032,47 @@ async def _visible_page_url(page: Any) -> str:
         return ""
 
 
+async def _shinhan_idpw_login_panel_ready(page: Any) -> bool:
+    """Return true when the main Shinhan page is already on the ID/PW login panel."""
+    try:
+        raw = await _evaluate_page(
+            page,
+            """
+            (() => {
+              const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+              const href = String(window.location.href || '');
+              const text = String(document.body?.innerText || '').replace(/\\s+/g, ' ');
+              const loginInput = Array.from(document.querySelectorAll('input'))
+                .find((el) => visible(el) && /login|id|user|ibx_loginId/i.test(String(el.id || el.name || el.title || el.placeholder || '')));
+              const passwordInput = Array.from(document.querySelectorAll('input'))
+                .find((el) => visible(el) && (String(el.type || '').toLowerCase() === 'password' || /비밀번호|password|scr_pwd/i.test(String(el.id || el.name || el.title || el.placeholder || ''))));
+              const panelText = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인|이용자ID를\\s*입력/i.test(text);
+              return {
+                idpwHash: href.includes('#210000000000') ? '1' : '0',
+                loginInput: loginInput ? '1' : '0',
+                passwordInput: passwordInput ? '1' : '0',
+                panelText: panelText ? '1' : '0'
+              };
+            })()
+            """,
+            timeout_ms=5000,
+        )
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    return (
+        str(raw.get("idpwHash") or "") == "1"
+        and (
+            str(raw.get("panelText") or "") == "1"
+            or (
+                str(raw.get("loginInput") or "") == "1"
+                and str(raw.get("passwordInput") or "") == "1"
+            )
+        )
+    )
+
+
 async def _detect_shinhan_auth_challenge(page: Any, pages: Any = None) -> dict[str, str]:
     """Detect certificate/identity UI from URLs, frames, and bounded page text.
 
@@ -3040,6 +3081,8 @@ async def _detect_shinhan_auth_challenge(page: Any, pages: Any = None) -> dict[s
     labels are inspected; certificate passwords and other secrets are never
     read or returned.
     """
+    if await _shinhan_idpw_login_panel_ready(page):
+        return {}
     urls: list[str] = []
     runner = getattr(page, "_run_browser_command", None)
     if callable(runner):

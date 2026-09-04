@@ -290,7 +290,7 @@ async def test_bank_work_key_promotes_browser_bridge_route_to_financial_exclusiv
         command_type="browser_launch",
         params={
             "work_key": "yeoljeong-bank-shinhan-mia",
-            "url": "https://bizbank.shinhan.com",
+            "url": "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
         },
         agent_id="icu55hk",
         job_type="browser_bridge_launch",
