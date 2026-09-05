@@ -4097,7 +4097,7 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
     """
     current_url = ""
     try:
-        current_url = str(await _evaluate_page(page, "window.location.href", timeout_ms=8000) or "")
+        current_url = str(await _evaluate_page(page, "window.location.href", timeout_ms=30000) or "")
     except Exception:
         current_url = ""
 
