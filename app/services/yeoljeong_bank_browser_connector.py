@@ -2815,6 +2815,11 @@ async def _try_shinhan_individual_login_step(
 async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url: str) -> dict[str, str]:
     """Reset a Shinhan certificate prompt back to the saved ID/PW login flow."""
     result: dict[str, str] = {"attempted": "1"}
+    try:
+        if await _close_shinhan_security_notice(page):
+            result["pre_reset_notice_closed"] = "1"
+    except Exception:
+        pass
     runner = getattr(page, "_run_browser_command", None)
     if callable(runner):
         try:
@@ -2892,12 +2897,65 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
             """
             (input) => {
               const visible = (el) => !!(el && !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+              const textOf = (el) => String(
+                el?.innerText ||
+                el?.value ||
+                el?.getAttribute?.('title') ||
+                el?.getAttribute?.('aria-label') ||
+                ''
+              ).replace(/\\s+/g, ' ').trim();
+              const click = (el) => {
+                if (!el) return false;
+                try { el.focus(); } catch (_) {}
+                try { el.click(); } catch (_) {}
+                try { el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); } catch (_) {}
+                return true;
+              };
+              const dismissBlockingDialog = () => {
+                const patterns = /인터넷뱅킹\\s*보안프로그램설치안내|이용자\\s*ID를\\s*입력|이용자ID를\\s*입력|비밀번호를\\s*입력|비밀번호\\s*최소자릿수|키보드\\s*입력\\s*검증|처음부터\\s*다시\\s*진행/i;
+                let dismissed = false;
+                for (let i = 0; i < 4; i += 1) {
+                  const dialogs = Array.from(document.querySelectorAll('.w2popup_window,.w2window,[role="dialog"],[id*="CO00038RP"]'))
+                    .filter((el) => visible(el) && patterns.test(textOf(el)));
+                  if (!dialogs.length) break;
+                  for (const dialog of dialogs) {
+                    const controls = Array.from(dialog.querySelectorAll('a,button,input[type=button],input[type=submit],span,div'))
+                      .filter((el) => visible(el))
+                      .map((el) => {
+                        const label = textOf(el);
+                        const meta = String(el.id || el.className || el.title || '');
+                        let score = 0;
+                        if (/확인/i.test(label)) score += 140;
+                        if (/닫기|close/i.test(label)) score += 110;
+                        if (/btnmakedpopupclose|w2window_close|_close\\b|layerClose/i.test(meta)) score += 130;
+                        if (/btnTotalClose/i.test(meta)) score -= 200;
+                        return {el, score};
+                      })
+                      .filter((item) => item.score > 0)
+                      .sort((a, b) => b.score - a.score);
+                    if (controls[0] && click(controls[0].el)) {
+                      dismissed = true;
+                      continue;
+                    }
+                    try {
+                      dialog.style.display = 'none';
+                      dialog.setAttribute('aria-hidden', 'true');
+                      dismissed = true;
+                    } catch (_) {}
+                  }
+                }
+                return dismissed;
+              };
               const result = {
                 idpw_hash_forced: '0',
                 account_query_hash_prepared: '0',
                 idpw_panel_visible: '0',
-                idpw_login_panel_selected: '0'
+                idpw_login_panel_selected: '0',
+                blocking_dialog_dismissed: '0'
               };
+              if (dismissBlockingDialog()) {
+                result.blocking_dialog_dismissed = '1';
+              }
               try {
                 if (window.shbComm?.menu) {
                   window.shbComm.menu.redirectUrl = input.accountQueryHash;
@@ -2908,13 +2966,6 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
                 window.dispatchEvent(new HashChangeEvent('hashchange'));
                 result.idpw_hash_forced = '1';
               } catch (_) {}
-              const textOf = (el) => String(
-                el?.innerText ||
-                el?.value ||
-                el?.getAttribute?.('title') ||
-                el?.getAttribute?.('aria-label') ||
-                ''
-              ).replace(/\\s+/g, ' ').trim();
               const buttons = Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit],span'));
               const idpwTab = buttons
                 .filter((el) => visible(el) || /idlogin|login|idpw/i.test(String(el.id || el.name || '').toLowerCase()))
@@ -2922,10 +2973,11 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
                 .filter((item) => !/금융인증|공동인증|인증서|fincert|certificate/.test(`${item.label} ${item.meta}`))
                 .find((item) => /이용자\\s*id\\s*로그인|아이디\\s*로그인|id\\s*\\/\\s*pw|idpw|idlogin|login/.test(`${item.label} ${item.meta}`));
               if (idpwTab) {
-                try { idpwTab.el.focus(); } catch (_) {}
-                try { idpwTab.el.click(); } catch (_) {}
-                try { idpwTab.el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window})); } catch (_) {}
+                click(idpwTab.el);
                 result.idpw_login_panel_selected = '1';
+              }
+              if (dismissBlockingDialog()) {
+                result.blocking_dialog_dismissed = '1';
               }
               const bodyText = String(document.body?.innerText || '').replace(/\\s+/g, ' ');
               const loginInput = Array.from(document.querySelectorAll('input'))
@@ -2954,10 +3006,16 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
                 "account_query_hash_prepared",
                 "idpw_panel_visible",
                 "idpw_login_panel_selected",
+                "blocking_dialog_dismissed",
             ):
                 result[key] = "1" if str(forced.get(key) or "") == "1" else result.get(key, "0")
     except Exception:
         result["idpw_hash_forced"] = result.get("idpw_hash_forced", "failed")
+    try:
+        if await _close_shinhan_security_notice(page):
+            result["post_reset_notice_closed"] = "1"
+    except Exception:
+        pass
     try:
         selected = await _evaluate_page(
             page,
@@ -2998,7 +3056,7 @@ async def _prefer_shinhan_idpw_login_after_auth_challenge(page: Any, portal_url:
     except Exception:
         result["idpw_login_panel_selected"] = "failed"
     result["idpw_reset_ready"] = "1" if (
-        result.get("portal_reloaded_for_idpw") == "1"
+        (result.get("portal_reloaded_for_idpw") == "1" or result.get("idpw_hash_forced") == "1")
         and result.get("idpw_hash_forced") == "1"
         and (
             result.get("idpw_login_panel_selected") == "1"
