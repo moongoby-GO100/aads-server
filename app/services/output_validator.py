@@ -134,6 +134,25 @@ _QUANTIFIED_CLAIM_PATTERN = re.compile(
 
 # ─── 보고서 품질 구조 검사 ───────────────────────────────────────────────────
 
+# ─── 가독성 구조 검사 패턴 (AADS 응답 구조 표준) ─────────────────────────────
+
+# 장문 응답에서 ## 섹션 헤딩이 하나도 없으면 구간 파악이 불가능하다.
+_SECTION_HEADING_PATTERN = re.compile(r'^\s{0,3}#{2,4}\s+\S', re.MULTILINE)
+_LONG_RESPONSE_HEADING_CHARS = 1500
+
+# 서두에 남은 도구 호출 경과 문구("확인하겠습니다", "병렬로 실측합니다").
+_PROGRESS_LEAD_PATTERN = re.compile(
+    r'(?:확인하겠습니다|실측하겠습니다|실측합니다|조회하겠습니다|조회합니다|'
+    r'병렬로\s*(?:실측|조회|확인|진행)|도구를?\s*(?:로드|호출)|'
+    r'먼저\s+[^\n]{0,40}(?:하겠습니다|합니다)|진행하겠습니다|시작합니다)'
+)
+
+# 결론 선행 여부: 서두에 판정 아이콘 또는 결론/요약/현황/답변 신호가 있어야 한다.
+_LEAD_CONCLUSION_PATTERN = re.compile(
+    r'(?:✅|❌|⚠️|결론|요약|판정|현황|답변|수행 내역|승인|반려)'
+)
+_LEAD_CONCLUSION_WINDOW = 240
+
 _REPORT_QUALITY_INTENTS = frozenset({
     "report",
     "audit",
@@ -510,7 +529,25 @@ def check_report_quality_structure(
     if has_quantified_claim and not has_source_tags and len(text) >= 500:
         structural_gaps.append("source_tags")
 
-    if len(structural_gaps) < 3:
+    # ── 가독성 구조 결함 (AADS 응답 구조 표준) ──────────────────────────────
+    # CEO가 "한 번에 파악하기 어렵다"고 지적한 3대 패턴을 검출한다.
+    readability_gaps: list[str] = []
+    if len(text) >= _LONG_RESPONSE_HEADING_CHARS and not _SECTION_HEADING_PATTERN.search(text):
+        readability_gaps.append("section_headings")
+    if len(text) >= 800 and _PROGRESS_LEAD_PATTERN.search(text[:400]):
+        readability_gaps.append("tool_progress_lead")
+    if len(text) >= 800 and not _LEAD_CONCLUSION_PATTERN.search(text[:_LEAD_CONCLUSION_WINDOW]):
+        readability_gaps.append("lead_conclusion")
+
+    # 기존 동작 유지: 내용 결함 3개 이상이면 그대로 차단.
+    # 신규: 내용 결함 1개 이상 + 가독성 결함 2개 이상이면 재작성 유도.
+    if len(structural_gaps) >= 3:
+        all_gaps = structural_gaps + readability_gaps
+        reason = "문제점·원인·권장안·검증/완료기준 중 필수 항목이 부족합니다."
+    elif structural_gaps and len(readability_gaps) >= 2:
+        all_gaps = structural_gaps + readability_gaps
+        reason = "응답 구조가 CEO 가독성 표준(결론 선행·섹션 헤딩·도구 경과 분리)을 벗어났습니다."
+    else:
         return None
 
     return ValidationResult(
@@ -518,12 +555,9 @@ def check_report_quality_structure(
         violation_type="REPORT_STRUCTURE_WEAK",
         message=(
             "보고서 핵심 구조 누락: "
-            + ", ".join(structural_gaps[:6])
+            + ", ".join(all_gaps[:8])
         ),
-        retry_prompt=_build_report_quality_retry_prompt(
-            structural_gaps,
-            "문제점·원인·권장안·검증/완료기준 중 필수 항목이 부족합니다.",
-        ),
+        retry_prompt=_build_report_quality_retry_prompt(all_gaps, reason),
     )
 
 
@@ -538,7 +572,10 @@ def _build_report_quality_retry_prompt(missing: list[str], reason: str) -> str:
         "3) 개선 권장안(우선순위 포함), 4) 검증 방법/완료기준, "
         "5) → 다음 단계. "
         "수치·날짜·커밋·상태값에는 [DB 조회], [코드 확인], [명령], [로그], [미측정] 같은 출처 태그를 붙이세요. "
-        "비교 항목이 3개 이상이면 마크다운 표를 사용하고, 확인하지 못한 값은 미검증으로 표시하세요."
+        "비교 항목이 3개 이상이면 마크다운 표를 사용하고, 확인하지 못한 값은 미검증으로 표시하세요. "
+        "[출력 구조 표준] 첫 줄은 판정 아이콘(✅/⚠️/❌)과 한 문장 결론, 둘째 줄은 핵심 근거 1개로 시작하세요. "
+        "\"확인하겠습니다\", \"실측합니다\", \"병렬로 조회합니다\" 같은 도구 진행 문구는 본문에서 제거하세요. "
+        "1,500자를 넘으면 `##` 섹션 헤딩으로 구간을 나누고, 3,000자를 넘으면 맨 위에 `## 요약` 불릿 3~5개를 두세요."
     )
 
 
