@@ -3085,7 +3085,7 @@ def _pc_agent_tabs_from_payload(payload: Any) -> list[dict[str, Any]]:
 
 async def _visible_page_url(page: Any) -> str:
     try:
-        return str(await _evaluate_page(page, "window.location.href", timeout_ms=30000) or "")
+        return str(await _evaluate_page(page, "window.location.href", timeout_ms=60000) or "")
     except Exception:
         return ""
 
@@ -4097,7 +4097,7 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
     """
     current_url = ""
     try:
-        current_url = str(await _evaluate_page(page, "window.location.href", timeout_ms=30000) or "")
+        current_url = str(await _evaluate_page(page, "window.location.href", timeout_ms=60000) or "")
     except Exception:
         current_url = ""
 
