@@ -3090,7 +3090,7 @@ async def _visible_page_url(page: Any) -> str:
         return ""
 
 
-async def _shinhan_idpw_login_panel_ready(page: Any) -> bool:
+async def _shinhan_idpw_login_panel_ready(page: Any, *, timeout_ms: int = 30000) -> bool:
     """Return true when the main Shinhan page is already on the ID/PW login panel."""
     try:
         raw = await _evaluate_page(
@@ -3113,7 +3113,7 @@ async def _shinhan_idpw_login_panel_ready(page: Any) -> bool:
               };
             })()
             """,
-            timeout_ms=5000,
+            timeout_ms=timeout_ms,
         )
     except Exception:
         return False
@@ -3152,6 +3152,14 @@ async def _detect_shinhan_auth_challenge(page: Any, pages: Any = None) -> dict[s
                 command_timeout_seconds=10,
             )
             for tab in _pc_agent_tabs_from_payload(tabs_payload):
+                # Chrome keeps detached/background iframe targets alive in
+                # the CDP target list (e.g. a YESKEY fincert target opened
+                # days earlier).  Only real top-level pages may raise an
+                # operator certificate challenge; live iframes of the
+                # current page are still inspected through candidate.frames.
+                tab_type = str(tab.get("type") or "page").strip().lower()
+                if tab_type and tab_type != "page":
+                    continue
                 for key in ("url", "title"):
                     value = str(tab.get(key) or "").strip().lower()
                     if value:

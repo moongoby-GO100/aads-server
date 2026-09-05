@@ -54,6 +54,12 @@ from app.services.pc_agent_collection_queue import (  # noqa: E402
 KST = timezone(timedelta(hours=9))
 DEFAULT_SERVICES = ("coupangeats", "yogiyo", "ddangyo", "baemin")
 DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
+# Korean bank portals run AhnLab/VeraPort keyboard-security modules on the
+# collector PC, so one CDP evaluate round trip regularly needs 20-35s and a
+# full ID/PW login + account query needs several minutes.  The previous 90s
+# budget always expired mid-login and surfaced as a false
+# "SHINHAN_FINCERT_TIMEOUT_BUT_IDPW_CONFIGURED" result.
+BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS = 600
 QUEUE_PRIORITY_BY_SERVICE = {
     "bank": 10,
     "shinhan_business": 10,
@@ -312,7 +318,10 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
         "bank_browser_work_key": str(getattr(args, "bank_browser_work_key", "") or ""),
         "bank_account_id": str(getattr(args, "bank_account_id", "") or ""),
-        "bank_browser_timeout_seconds": int(getattr(args, "bank_browser_timeout_seconds", 90) or 90),
+        "bank_browser_timeout_seconds": int(
+            getattr(args, "bank_browser_timeout_seconds", BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS)
+            or BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS
+        ),
         "force_recreate_bank_browser": bool(getattr(args, "force_recreate_bank_browser", False)),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
         "approved_input": str(getattr(args, "approved_input", "") or ""),
@@ -666,7 +675,9 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
             "browser_agent_id": str(payload.get("browser_agent_id") or ""),
             "browser_preferred_port": payload.get("browser_preferred_port") or None,
             "browser_work_key": str(payload.get("bank_browser_work_key") or payload.get("browser_work_key") or ""),
-            "browser_timeout_seconds": int(payload.get("bank_browser_timeout_seconds") or 90),
+            "browser_timeout_seconds": int(
+                payload.get("bank_browser_timeout_seconds") or BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS
+            ),
             "force_recreate_browser": bool(payload.get("force_recreate_bank_browser")),
         }
         try:
@@ -1417,7 +1428,7 @@ def _child_collect_argv(payload: dict[str, Any]) -> list[str]:
     for key, flag, default in (
         ("max_orders", "--max-orders", 300),
         ("max_reviews", "--max-reviews", 300),
-        ("bank_browser_timeout_seconds", "--bank-browser-timeout-seconds", 90),
+        ("bank_browser_timeout_seconds", "--bank-browser-timeout-seconds", BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS),
     ):
         value = int(payload.get(key) or 0)
         if value and value != default:
@@ -1808,7 +1819,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--browser-session-id", default="", help="Optional PC Agent browser session id.")
     parser.add_argument("--browser-agent-id", default="", help="Optional PC Agent id for bank browser auto-open.")
     parser.add_argument("--browser-preferred-port", type=int, default=None, help="Optional preferred CDP port for bank browser auto-open.")
-    parser.add_argument("--bank-browser-timeout-seconds", type=int, default=_env_int("YEOLJEONG_BANK_BROWSER_TIMEOUT_SECONDS", 90), help="Bank browser automation timeout per account.")
+    parser.add_argument("--bank-browser-timeout-seconds", type=int, default=_env_int("YEOLJEONG_BANK_BROWSER_TIMEOUT_SECONDS", BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS), help="Bank browser automation timeout per account.")
     parser.add_argument("--storage-state-path", default="", help="Optional Playwright storage state path.")
     parser.add_argument(
         "--force-recreate-sessions",
