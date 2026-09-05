@@ -176,7 +176,7 @@ def _financial_security_program_preflight(payload: dict[str, Any], *, agent_id: 
     )
     output = _extract_pc_agent_output(route_result)
     lower = output.lower()
-    has_veraport = "veraport" in lower
+    has_veraport = "veraport" in lower or "wizvera" in lower
     has_ahnlab = "ahnlab" in lower or "safetransaction" in lower or "safe transaction" in lower
     has_keyboard = "touchen" in lower or "nprotect" in lower
     has_inisafe = "inisafe" in lower or "crossweb" in lower
