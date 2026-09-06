@@ -1,6 +1,6 @@
 """
 AADS-186A: 도구 실행기 — Anthropic Tool Use API 도구 실행.
-일반 도구 20초, DB 도구 28초, 장시간 도구 55초, 브라우저 도구 210초 타임아웃.
+일반 도구 20초, DB 도구 125초, 장시간 도구 55초, 브라우저 도구 210초 타임아웃.
 신규 워크플로우 도구: inspect_service, get_all_service_status, generate_directive
 """
 from __future__ import annotations
@@ -149,7 +149,7 @@ _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
-_DATABASE_TOOL_TIMEOUT = float(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS", "28"))
+_DATABASE_TOOL_TIMEOUT = max(float(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS", "125")), 125.0)
 _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내로 응답 보장
 _BROWSER_TOOL_TIMEOUT = 210.0  # Browser Bridge CDP/PC Agent 명령(최대 180s) + 여유
 _BROWSER_TOOLS = frozenset({

@@ -29,6 +29,23 @@ def test_database_tools_use_database_timeout_bucket(monkeypatch):
     assert tool_executor._timeout_for_tool("task_history") == 20.0
 
 
+def test_default_database_tool_timeout_covers_project_db_policy():
+    from app.services import tool_executor
+
+    assert tool_executor._DATABASE_TOOL_TIMEOUT >= 125.0
+
+
+def test_query_database_internal_timeouts_leave_wrapper_headroom(monkeypatch):
+    from app.services import tool_executor
+
+    monkeypatch.setattr(tool_executor, "_DATABASE_TOOL_TIMEOUT", 125.0)
+    monkeypatch.setenv("AADS_QUERY_DATABASE_STATEMENT_TIMEOUT_SECONDS", "130")
+    monkeypatch.setenv("AADS_QUERY_DATABASE_ACQUIRE_TIMEOUT_SECONDS", "130")
+
+    assert tool_executor._bounded_db_statement_timeout() == 119.0
+    assert tool_executor._bounded_db_acquire_timeout() == 4.0
+
+
 @pytest.mark.asyncio
 async def test_tool_executor_timeout_payload_identifies_wrapper_layer(monkeypatch):
     from app.services import tool_executor
