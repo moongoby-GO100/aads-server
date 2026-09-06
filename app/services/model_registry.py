@@ -129,6 +129,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "claude-haiku": (_decimal(1.0), _decimal(5.0)),
     "claude-sonnet-5": (_decimal(3.0), _decimal(15.0)),
     "claude-fable-5": (_decimal(10.0), _decimal(50.0)),
+    "claude-fable-5-1": (_decimal(10.0), _decimal(50.0)),
     "gemini-flash": (_decimal(0.075), _decimal(0.3)),
     "gemini-flash-lite": (_decimal(0.01), _decimal(0.04)),
     "gemini-pro": (_decimal(1.25), _decimal(5.0)),
@@ -210,6 +211,7 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
 _THINKING_MODELS = {
     "claude-sonnet-5",
     "claude-fable-5",
+    "claude-fable-5-1",
     "gemini-pro",
     "gemini-flash",
     "gemini-3-flash-preview",
@@ -233,6 +235,7 @@ _THINKING_MODELS = {
 _VISION_MODELS = {
     "claude-sonnet-5",
     "claude-fable-5",
+    "claude-fable-5-1",
     "gpt-4o",
     "gpt-4o-mini",
     "gemini-2.5-flash-image",
@@ -250,6 +253,7 @@ _CODING_MODELS = {
     "claude-haiku",
     "claude-sonnet-5",
     "claude-fable-5",
+    "claude-fable-5-1",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5.4",
@@ -275,6 +279,7 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-haiku": "Claude Haiku",
     "claude-sonnet-5": "Claude Sonnet 5",
     "claude-fable-5": "Claude Fable 5",
+    "claude-fable-5-1": "Claude Fable 5.1",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
@@ -297,6 +302,7 @@ _DISPLAY_NAME_OVERRIDES = {
 _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
     "anthropic": (
         "claude-fable-5",
+        "claude-fable-5-1",
         "claude-opus",
         "claude-opus-46",
         "claude-sonnet",
