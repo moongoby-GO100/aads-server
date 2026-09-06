@@ -477,40 +477,7 @@ class AgentOrchestrator:
 
 # ─── 에이전트 팀 ──────────────────────────────────────────────────────────────
 
-import time as _time
-
-_role_prompt_cache: Dict[str, str] = {}
-_role_prompt_cache_ts: float = 0.0
-_ROLE_CACHE_TTL = 300  # 5분
-
-
-async def _load_role_prompts() -> Dict[str, str]:
-    global _role_prompt_cache, _role_prompt_cache_ts
-    if _role_prompt_cache and (_time.time() - _role_prompt_cache_ts) < _ROLE_CACHE_TTL:
-        return {**_ROLE_PROMPTS, **_role_prompt_cache}
-    try:
-        from app.core.db_pool import get_pool
-
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT slug, content FROM prompt_assets WHERE layer_id = 3 AND enabled = TRUE"
-            )
-            for row in rows:
-                slug = row["slug"]
-                # "project-role-aads-developer" → "developer", "role-developer" → "developer"
-                parts = slug.split("-")
-                role_key = parts[-1] if len(parts) >= 2 else slug
-                _role_prompt_cache[role_key] = row["content"][:2000]
-            _role_prompt_cache_ts = _time.time()
-    except Exception as e:
-        import logging
-
-        logging.getLogger(__name__).warning(f"role_prompt_load_failed: {e}")
-    return {**_ROLE_PROMPTS, **_role_prompt_cache}
-
-
-# 역할별 기본 시스템 프롬프트
+# DB를 사용할 수 없을 때만 사용하는 역할별 기본 시스템 프롬프트.
 _ROLE_PROMPTS: Dict[str, str] = {
     "researcher": (
         "당신은 시스템 조사/분석 전문 에이전트입니다. "
@@ -541,34 +508,57 @@ _ROLE_PROMPTS: Dict[str, str] = {
     ),
 }
 
-import time as _time
-
-_role_prompt_cache: Dict[str, str] = {}
-_role_prompt_cache_ts: float = 0.0
-_ROLE_CACHE_TTL = 300  # 5분
+_role_prompt_cache: Optional[Dict[str, str]] = None
+_role_prompt_cache_ts = 0.0
+_ROLE_PROMPT_CACHE_TTL_SECONDS = 300
 
 
 async def _load_role_prompts() -> Dict[str, str]:
-    """DB(prompt_assets, layer_id=3)에서 L3 역할 프롬프트를 로드하여 _ROLE_PROMPTS와 병합."""
+    """활성 L3 에셋을 role_scope별로 로드하고 5분간 캐시한다."""
     global _role_prompt_cache, _role_prompt_cache_ts
-    if _role_prompt_cache and (_time.time() - _role_prompt_cache_ts) < _ROLE_CACHE_TTL:
+    now = time.monotonic()
+    if (
+        _role_prompt_cache is not None
+        and now - _role_prompt_cache_ts < _ROLE_PROMPT_CACHE_TTL_SECONDS
+    ):
         return {**_ROLE_PROMPTS, **_role_prompt_cache}
+
     try:
         from app.core.db_pool import get_pool
+
         pool = get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT slug, content FROM prompt_assets WHERE layer_id = 3 AND enabled = TRUE"
+                """
+                SELECT slug, content, role_scope
+                FROM prompt_assets
+                WHERE layer_id = 3
+                  AND enabled = TRUE
+                  AND role_scope IS NOT NULL
+                  AND array_length(role_scope, 1) IS NOT NULL
+                ORDER BY priority ASC, slug ASC
+                """
             )
-            for row in rows:
-                slug = row['slug']
-                # "project-role-aads-developer" → "developer", "role-developer" → "developer"
-                parts = slug.split('-')
-                role_key = parts[-1] if len(parts) >= 2 else slug
-                _role_prompt_cache[role_key] = row['content'][:2000]
-            _role_prompt_cache_ts = _time.time()
+
+        prompts_by_role: Dict[str, List[str]] = {}
+        for row in rows:
+            content = str(row["content"] or "").strip()
+            if not content:
+                continue
+            for role_key in row["role_scope"] or []:
+                normalized_role = str(role_key).strip()
+                if normalized_role and normalized_role != "*":
+                    prompts_by_role.setdefault(normalized_role, []).append(content)
+
+        _role_prompt_cache = {
+            role_key: "\n\n".join(contents)
+            for role_key, contents in prompts_by_role.items()
+        }
+        _role_prompt_cache_ts = time.monotonic()
     except Exception as e:
-        logger.warning(f"role_prompt_load_failed: {e}")
+        logger.warning("role_prompt_load_failed: %s", e)
+        return dict(_ROLE_PROMPTS)
+
     return {**_ROLE_PROMPTS, **_role_prompt_cache}
 
 
@@ -649,6 +639,7 @@ class AgentTeam:
         # 단계별 DAG 구성: 각 단계의 모든 태스크는 이전 단계 완료 후 실행
         prev_phase_ids: List[str] = []
         all_task_ids: List[List[str]] = []
+        role_prompts = await _load_role_prompts()
 
         for phase_idx, phase in enumerate(self._phases):
             phase_task_ids = []
@@ -656,9 +647,9 @@ class AgentTeam:
                 task_id = f"p{phase_idx}_{phase['name']}_{task_idx}"
                 role = task_def.get("role", "general")
                 model = task_def.get("model", phase["model"])
-                role_prompts = await _load_role_prompts()
                 system_prompt = task_def.get(
                     "system_prompt",
+                    role_prompts.get(role, _ROLE_PROMPTS["general"]),
                 )
 
                 node = TaskNode(
