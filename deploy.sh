@@ -25,6 +25,9 @@ DEPLOY_START_EPOCH=$(date +%s)
 DEPLOY_GENERATION_FILE="${COMPOSE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 RELEASE_CONTEXT_DIR=""
+DEPLOY_RUN_ID=""
+DEPLOY_CURRENT_PHASE="initializing"
+DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
 mkdir -p "${COMPOSE_DIR}/logs"
 
 cleanup_release_context() {
@@ -101,6 +104,145 @@ sql_escape() {
     printf "%s" "${1:-}" | sed "s/'/''/g"
 }
 
+deploy_db_exec() {
+    local sql="$1"
+    docker exec aads-postgres psql -U aads -d aads -qAtc "$sql" 2>/dev/null || true
+}
+
+deploy_db_available() {
+    docker inspect aads-postgres --format '{{.State.Running}}' 2>/dev/null | grep -q true
+}
+
+deploy_observe_init() {
+    if [[ -n "${DEPLOY_RUN_ID:-}" ]] || ! deploy_db_available; then
+        return 0
+    fi
+    local release_sql current_slot_sql candidate_slot_sql run_id
+    release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
+    current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
+    candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
+    run_id="$(
+        deploy_db_exec "
+            INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
+                                    current_slot, candidate_slot, created_at, updated_at)
+            VALUES('AADS', '$release_sql', 'running', 'initializing', NOW(),
+                   '$current_slot_sql', NULLIF('$candidate_slot_sql', ''), NOW(), NOW())
+            RETURNING id;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+        DEPLOY_RUN_ID="$run_id"
+        echo "[deploy.sh] deploy_run_id=${DEPLOY_RUN_ID}"
+    fi
+}
+
+deploy_estimated_remaining_ms() {
+    local elapsed_ms="$1"
+    local estimate
+    estimate="$(
+        deploy_db_exec "
+            SELECT GREATEST(0, COALESCE(p50_duration_ms, 0) - ${elapsed_ms})::bigint
+            FROM deploy_recent_durations
+            WHERE project='AADS'
+            LIMIT 1;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$estimate" =~ ^[0-9]+$ ]]; then
+        echo "$estimate"
+    else
+        echo "NULL"
+    fi
+}
+
+deploy_observe_update() {
+    local status="${1:-running}"
+    local phase="${2:-$DEPLOY_CURRENT_PHASE}"
+    local err="${3:-}"
+    deploy_observe_init
+    if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
+        return 0
+    fi
+    local elapsed_ms estimate_ms status_sql phase_sql err_sql current_slot_sql candidate_slot_sql image_sql standby_sql
+    elapsed_ms=$((($(date +%s) - DEPLOY_START_EPOCH) * 1000))
+    estimate_ms="$(deploy_estimated_remaining_ms "$elapsed_ms")"
+    status_sql="$(sql_escape "$status")"
+    phase_sql="$(sql_escape "$phase")"
+    err_sql="$(sql_escape "$err")"
+    current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
+    candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
+    image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-$ACTIVE_CONTAINER}" --format '{{.Image}}' 2>/dev/null || true)")"
+    standby_sql="$(sql_escape "$(docker inspect "${OLD_CONTAINER:-}" --format '{{.Image}}' 2>/dev/null || true)")"
+    deploy_db_exec "
+        UPDATE deploy_runs
+        SET status='$status_sql',
+            phase='$phase_sql',
+            updated_at=NOW(),
+            phase_completed_at=CASE
+                WHEN '$status_sql' IN ('success', 'completed', 'failed', 'blocked') THEN NOW()
+                ELSE phase_completed_at
+            END,
+            duration_ms=${elapsed_ms},
+            estimated_remaining_ms=${estimate_ms},
+            current_slot='$current_slot_sql',
+            candidate_slot=NULLIF('$candidate_slot_sql', ''),
+            image_digest=NULLIF('$image_sql', ''),
+            standby_digest=NULLIF('$standby_sql', ''),
+            error_summary=NULLIF('$err_sql', '')
+        WHERE id=${DEPLOY_RUN_ID};
+    " >/dev/null
+}
+
+deploy_phase_start() {
+    DEPLOY_CURRENT_PHASE="${1:-unknown}"
+    DEPLOY_PHASE_START_EPOCH="$(date +%s)"
+    deploy_observe_update "${2:-running}" "$DEPLOY_CURRENT_PHASE" ""
+    echo "[deploy.sh] ▶ phase=${DEPLOY_CURRENT_PHASE}"
+}
+
+deploy_phase_end() {
+    local phase="${1:-$DEPLOY_CURRENT_PHASE}"
+    local status="${2:-success}"
+    local err="${3:-}"
+    deploy_observe_init
+    if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
+        return 0
+    fi
+    local duration_ms phase_sql status_sql err_sql current_slot_sql candidate_slot_sql image_sql standby_sql
+    duration_ms=$((($(date +%s) - DEPLOY_PHASE_START_EPOCH) * 1000))
+    phase_sql="$(sql_escape "$phase")"
+    status_sql="$(sql_escape "$status")"
+    err_sql="$(sql_escape "$err")"
+    current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
+    candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
+    image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-$ACTIVE_CONTAINER}" --format '{{.Image}}' 2>/dev/null || true)")"
+    standby_sql="$(sql_escape "$(docker inspect "${OLD_CONTAINER:-}" --format '{{.Image}}' 2>/dev/null || true)")"
+    deploy_db_exec "
+        INSERT INTO deploy_phase_events(deploy_run_id, phase, status, phase_started_at,
+                                        phase_completed_at, duration_ms, current_slot,
+                                        candidate_slot, image_digest, standby_digest,
+                                        error_summary)
+        VALUES(${DEPLOY_RUN_ID}, '$phase_sql', '$status_sql',
+               to_timestamp(${DEPLOY_PHASE_START_EPOCH}), NOW(), ${duration_ms},
+               '$current_slot_sql', NULLIF('$candidate_slot_sql', ''),
+               NULLIF('$image_sql', ''), NULLIF('$standby_sql', ''),
+               NULLIF('$(sql_escape "$err")', ''));
+    " >/dev/null
+    if [[ "$status" != "success" ]]; then
+        deploy_observe_update "$status" "$phase" "$err"
+    fi
+}
+
+report_dirty_release_exclusions() {
+    local tracked_dirty untracked_dirty
+    tracked_dirty="$(git -C "$COMPOSE_DIR" status --porcelain | awk 'substr($0, 1, 2) != "??" {c++} END {print c+0}')"
+    untracked_dirty="$(git -C "$COMPOSE_DIR" status --porcelain | awk 'substr($0, 1, 2) == "??" {c++} END {print c+0}')"
+    if [[ "${tracked_dirty:-0}" != "0" || "${untracked_dirty:-0}" != "0" ]]; then
+        echo "[deploy.sh] ⚠️ release image excludes uncommitted worktree changes: tracked=${tracked_dirty:-0}, untracked=${untracked_dirty:-0}"
+        git -C "$COMPOSE_DIR" status --porcelain | sed 's/^/[deploy.sh]   excluded: /' | head -80 || true
+        audit_control "release-context" "$COMPOSE_DIR" "warning" "excluded dirty files tracked=${tracked_dirty:-0} untracked=${untracked_dirty:-0}"
+    fi
+}
+
 audit_control() {
     local action="${1:-unknown}"
     local target="${2:-unknown}"
@@ -174,6 +316,7 @@ deploy_error_trap() {
     local line_no="${1:-unknown}"
     local command="${2:-unknown}"
     stop_downtime_monitor
+    deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
     record_deploy "failed" "$MODE" "unexpected error exit=${exit_code} line=${line_no}: ${command:0:300}"
 }
 
@@ -380,6 +523,8 @@ release_nginx_switch_lock() {
 DEPLOY_GENERATION="${DEPLOY_START_EPOCH}-$$-$(git -C "$COMPOSE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 printf '%s\n' "$DEPLOY_GENERATION" > "$DEPLOY_GENERATION_FILE"
 audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mode=$MODE"
+deploy_phase_start "preflight" "running"
+report_dirty_release_exclusions
 
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {
@@ -680,6 +825,7 @@ if [[ "$MODE" == "code" || "$MODE" == "reload" || "$MODE" == "build" ]]; then
 fi
 
 echo "[deploy.sh] requested_mode=${REQUESTED_MODE} effective_mode=${MODE} at $(date '+%Y-%m-%d %H:%M:%S')"
+deploy_phase_end "preflight" "success" ""
 
 if [[ "$MODE" == "code" ]]; then
     MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-60}"
@@ -693,6 +839,7 @@ if [[ -x "${COMPOSE_DIR}/scripts/apply-bg-port-firewall.sh" ]]; then
 fi
 
 # ── Phase 0: 의존 컨테이너 상태 확인 + 복구 ──
+deploy_phase_start "dependency_check" "running"
 echo "[deploy.sh] Phase 0: dependency check..."
 for DEP in aads-postgres aads-redis aads-socket-proxy aads-litellm; do
     DEP_STATUS=$(docker inspect "$DEP" --format '{{.State.Status}}' 2>/dev/null)
@@ -709,6 +856,7 @@ if ! /usr/bin/python3 -c "import aiohttp" >/dev/null 2>&1; then
     echo "[deploy.sh] ⚠️ host aiohttp missing — installing for claude-relay..."
     /usr/bin/python3 -m pip install aiohttp >/dev/null
 fi
+deploy_phase_end "dependency_check" "success" ""
 
 echo "[deploy.sh] Phase 0: pre-deploy cleanup..."
 docker exec -i aads-postgres psql -U aads -d aads -q <<'SQL' 2>/dev/null || echo "[deploy.sh] WARN: pre-deploy cleanup skipped"
@@ -783,6 +931,7 @@ WHERE intent IN ('bg_partial', 'interrupted')
 SQL
 
 # ── Phase 0.5: 코드 검증 (구문 + import) — 실패 시 배포 차단 ──
+deploy_phase_start "code_validation" "running"
 echo "[deploy.sh] Phase 0.5: Python syntax + import validation..."
 set +e
 VALIDATION_RESULT=$(docker exec "$ACTIVE_CONTAINER" python3 -c "
@@ -815,10 +964,12 @@ if [[ "$VALIDATION_EXIT" -ne 0 ]] || echo "$VALIDATION_RESULT" | head -1 | grep 
     echo "[deploy.sh] ❌ Phase 0.5: 코드 검증 실패 — 배포 차단"
     echo "$VALIDATION_RESULT"
     notify "❌ 배포 차단: 코드 검증 실패\n${VALIDATION_RESULT}"
+    deploy_phase_end "code_validation" "blocked" "Phase 0.5 validation failed: ${VALIDATION_RESULT:0:500}"
     record_deploy "blocked" "$MODE" "Phase 0.5 validation failed: ${VALIDATION_RESULT:0:500}"
     exit 1
 fi
 echo "[deploy.sh] Phase 0.5: ✅ 코드 검증 통과"
+deploy_phase_end "code_validation" "success" ""
 
 # ── Phase 1: 배포 실행 ──
 record_deploy "started" "$MODE" ""
@@ -922,6 +1073,7 @@ case "$MODE" in
         fi
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
+        deploy_phase_start "target_slot_drain" "running"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
             local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800}"
@@ -941,15 +1093,18 @@ case "$MODE" in
                 echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 잔존 — 100% 무중단 원칙상 배포 차단"
                 echo "[deploy.sh]    긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
                 notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+                deploy_phase_end "target_slot_drain" "blocked" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
                 record_deploy "blocked" "$MODE" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
                 exit 1
             fi
         elif [[ "$TARGET_STREAMS" != "0" ]]; then
             echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
         fi
+        deploy_phase_end "target_slot_drain" "success" "active_streams=${TARGET_STREAMS}"
 
         # ① release image 1회 빌드 + 새 컨테이너 시작
         cd "$COMPOSE_DIR"
+        deploy_phase_start "build_candidate_image" "running"
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
         build_release_image
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
@@ -958,11 +1113,14 @@ case "$MODE" in
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: ${NEW_CONTAINER} memory limit mismatch"
+            deploy_phase_end "build_candidate_image" "failed" "${NEW_CONTAINER} memory limit mismatch"
             record_deploy "failed" "$MODE" "${NEW_CONTAINER} memory limit mismatch"
             exit 1
         fi
+        deploy_phase_end "build_candidate_image" "success" ""
 
         # ② 새 컨테이너 헬스체크
+        deploy_phase_start "candidate_health" "running"
         BG_HEALTH_MAX_WAIT="${AADS_DEPLOY_BG_HEALTH_MAX_WAIT:-150}"
         echo "[deploy.sh] ② ${NEW_CONTAINER} 헬스체크 (최대 ${BG_HEALTH_MAX_WAIT}초)..."
         BG_ELAPSED=0
@@ -983,11 +1141,14 @@ case "$MODE" in
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: ${NEW_CONTAINER} 헬스체크 통과 못함"
+            deploy_phase_end "candidate_health" "failed" "${NEW_CONTAINER} health check failed"
             record_deploy "failed" "$MODE" "${NEW_CONTAINER} health check failed"
             exit 1
         fi
+        deploy_phase_end "candidate_health" "success" "elapsed=${BG_ELAPSED}s"
 
         # P1: 전환 전 현재 슬롯 활성 스트림 drain 대기 (최대 60초)
+        deploy_phase_start "active_slot_drain" "running"
         ACTIVE_STREAMS="$(stream_count_for_port "$CURRENT_PORT")"
         if [[ "$ACTIVE_STREAMS" =~ ^[0-9]+$ ]] && [[ "$ACTIVE_STREAMS" -gt 0 ]]; then
             echo "[deploy.sh] ⏳ 현재 슬롯 :${CURRENT_PORT} 활성 스트림 ${ACTIVE_STREAMS}건 — 최대 60초 대기"
@@ -1006,8 +1167,10 @@ case "$MODE" in
                 echo "[deploy.sh] ⚠️ ${ACTIVE_STREAMS}건 스트림 아직 활성 — nginx graceful reload로 전환 진행 (기존 worker가 스트림 유지)"
             fi
         fi
+        deploy_phase_end "active_slot_drain" "success" "active_streams=${ACTIVE_STREAMS:-unknown}"
 
         # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)
+        deploy_phase_start "nginx_cutover" "verifying"
         echo "[deploy.sh] ③ upstream 전환: :${CURRENT_PORT} → :${NEW_PORT}"
         acquire_nginx_switch_lock
         cp "$UPSTREAM_CONF" "${UPSTREAM_CONF}.pre_deploy"
@@ -1021,6 +1184,7 @@ case "$MODE" in
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: nginx 설정 오류"
+            deploy_phase_end "nginx_cutover" "failed" "nginx config test failed during upstream switch"
             record_deploy "failed" "$MODE" "nginx config test failed during upstream switch"
             exit 1
         fi
@@ -1031,6 +1195,7 @@ case "$MODE" in
             nginx_config_test >/dev/null 2>&1 && nginx_reload >/dev/null 2>&1 || true
             audit_control "nginx-switch" "${CURRENT_PORT}->${NEW_PORT}" "failed" "reload failed; configuration rolled back"
             notify "❌ Blue-Green 실패: nginx reload 오류 — 복원 완료"
+            deploy_phase_end "nginx_cutover" "failed" "nginx reload failed during upstream switch"
             record_deploy "failed" "$MODE" "nginx reload failed during upstream switch"
             exit 1
         fi
@@ -1042,17 +1207,20 @@ case "$MODE" in
             && curl -sf -H "Host: ${DOWNTIME_PROBE_HOST}" "http://127.0.0.1/api/v1/health" >/dev/null 2>&1; then
             echo "[deploy.sh] ④ ✅ 전환 검증 성공"
             audit_control "nginx-switch" "${OLD_CONTAINER}:${OLD_PORT}->${NEW_CONTAINER}:${NEW_PORT}" "success" "direct and nginx-routed health verified"
+            deploy_phase_end "nginx_cutover" "success" "direct and nginx-routed health verified"
         else
             echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             nginx_reload
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
+            deploy_phase_end "nginx_cutover" "failed" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"
             record_deploy "failed" "$MODE" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"
             exit 1
         fi
 
         # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
+        deploy_phase_start "standby_same_digest_sync" "syncing_standby"
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화"
         echo "$NEW_PORT" > /root/aads/aads-server/.active_port
         echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
@@ -1061,9 +1229,11 @@ case "$MODE" in
         release_nginx_switch_lock
         if ! sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION"; then
             notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
+            deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
             record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
             exit 1
         fi
+        deploy_phase_end "standby_same_digest_sync" "success" ""
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green active 전환 + standby same-digest 동기화 완료: :${NEW_PORT} 활성"
@@ -1077,6 +1247,7 @@ case "$MODE" in
 esac
 
 # ── Phase 2: Health Check ──
+deploy_phase_start "post_switch_health" "verifying"
 echo "[deploy.sh] Phase 2: Health check (최대 ${MAX_WAIT}초)..."
 elapsed=0
 HEALTH_OK=false
@@ -1097,12 +1268,15 @@ if [[ "$HEALTH_OK" != "true" ]]; then
         echo "[deploy.sh] active API 직접 재시작은 SSE 끊김 원인이므로 생략"
     fi
     notify "❌ 배포 실패 + 롤백 시도 (mode=${MODE})"
+    deploy_phase_end "post_switch_health" "failed" "Phase 2 health check failed: ${HEALTH_URL}"
     record_deploy "failed" "$MODE" "Phase 2 health check failed: ${HEALTH_URL}"
     exit 1
 fi
+deploy_phase_end "post_switch_health" "success" "elapsed=${elapsed}s"
 
 # ── Phase 2.5: E2E 게이트 ──
 if [[ "${RUN_E2E:-false}" == "true" ]]; then
+    deploy_phase_start "e2e_gate" "verifying"
     echo "[deploy.sh] Phase 2.5: E2E 게이트 실행..."
     E2E_RESULT=$(curl -sf -m 30 "http://localhost:${TARGET_PORT:-8100}/api/v1/chat/sessions" 2>/dev/null || echo "FAIL")
     E2E_CODE=$(curl -so /dev/null -w "%{http_code}" -m 30 "http://localhost:${TARGET_PORT:-8100}/api/v1/chat/sessions" 2>/dev/null || echo "0")
@@ -1111,9 +1285,11 @@ if [[ "${RUN_E2E:-false}" == "true" ]]; then
     else
         echo "[deploy.sh] ⚠️ Phase 2.5: E2E 응답 이상 (HTTP $E2E_CODE) — 배포 계속"
     fi
+    deploy_phase_end "e2e_gate" "success" "http=${E2E_CODE}"
 fi
 
 # ── Phase 3: DB 스키마 검증 ──
+deploy_phase_start "db_schema_check" "verifying"
 echo "[deploy.sh] Phase 3: DB 스키마 검증..."
 SCHEMA_RESULT=$(docker exec aads-postgres psql -U aads -d aads -t -A -c "
   SELECT string_agg(column_name, ',') FROM information_schema.columns
@@ -1142,8 +1318,10 @@ else
         echo "[deploy.sh] Phase 3: ✅ 필수 컬럼 정상"
     fi
 fi
+deploy_phase_end "db_schema_check" "success" ""
 
 # ── Phase 4: 채팅 기능 테스트 (SELECT으로 DB+테이블 접근 확인) ──
+deploy_phase_start "chat_table_check" "verifying"
 echo "[deploy.sh] Phase 4: 채팅 기능 테스트..."
 # INSERT 없이 SELECT로 chat_messages 테이블 접근 가능 여부만 확인
 # (INSERT 방식은 _deploy_test_ 메시지가 CEO 세션에 누출되는 버그 유발)
@@ -1160,11 +1338,14 @@ else
         echo "[deploy.sh] active API 직접 재시작은 SSE 끊김 원인이므로 생략"
     fi
     notify "❌ 채팅 기능 테스트 실패 + 롤백 (mode=${MODE}): ${CHAT_TEST:0:200}"
+    deploy_phase_end "chat_table_check" "failed" "Phase 4 chat table check failed: ${CHAT_TEST:0:500}"
     record_deploy "failed" "$MODE" "Phase 4 chat table check failed: ${CHAT_TEST:0:500}"
     exit 1
 fi
+deploy_phase_end "chat_table_check" "success" ""
 
 # ── Phase 5: LLM 연결 테스트 (Agent SDK 또는 Gemini 가용성) ──
+deploy_phase_start "llm_health_check" "verifying"
 echo "[deploy.sh] Phase 5: LLM 연결 테스트..."
 LLM_TEST=$(curl -sf "${HEALTH_URL}" 2>/dev/null | python3 -c "
 import sys, json
@@ -1181,8 +1362,10 @@ else
     echo "[deploy.sh] ⚠️ Phase 5: LLM 상태 확인 불가 (채팅은 가능하나 AI 응답 지연 가능)"
     notify "⚠️ LLM 상태 확인 불가 — 채팅 가능하나 AI 응답 지연 가능"
 fi
+deploy_phase_end "llm_health_check" "success" "result=${LLM_TEST}"
 
 # ── Phase 6: 프론트엔드 QA (non-blocking) ──
+deploy_phase_start "frontend_qa" "verifying"
 echo "[deploy.sh] Phase 6: 프론트엔드 QA 검사..."
 FRONTEND_QA_STATUS="skipped"
 CHANGED_FILES=$(git -C "$COMPOSE_DIR" diff HEAD~1 --name-only 2>/dev/null || echo "")
@@ -1219,9 +1402,35 @@ except:
 else
     echo "[deploy.sh] Phase 6: 프론트 변경 없음 — QA 스킵"
 fi
+deploy_phase_end "frontend_qa" "success" "frontend_qa=${FRONTEND_QA_STATUS}"
+
+# ── Phase 7: P0/P1 모니터링 게이트 ──
+deploy_phase_start "p0p1_monitoring" "verifying"
+MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"
+MONITOR_INTERVAL="${AADS_DEPLOY_P0P1_MONITOR_INTERVAL:-30}"
+MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-level=(error|critical)|Traceback|CRITICAL}"
+MONITOR_SINCE="$(date --iso-8601=seconds)"
+MONITOR_ELAPSED=0
+echo "[deploy.sh] Phase 7: P0/P1 모니터링 (${MONITOR_SECONDS}초, since=${MONITOR_SINCE})..."
+while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
+    sleep "$MONITOR_INTERVAL"
+    MONITOR_ELAPSED=$((MONITOR_ELAPSED + MONITOR_INTERVAL))
+    MONITOR_HITS="$(docker logs "$ACTIVE_CONTAINER" --since "$MONITOR_SINCE" 2>&1 | grep -E "$MONITOR_PATTERN" | tail -20 || true)"
+    if [[ -n "$MONITOR_HITS" ]]; then
+        echo "[deploy.sh] ❌ Phase 7: P0/P1 의심 로그 감지"
+        echo "$MONITOR_HITS"
+        notify "❌ 배포 후 P0/P1 모니터링 실패: ${MONITOR_HITS:0:300}"
+        deploy_phase_end "p0p1_monitoring" "failed" "P0/P1 monitor hit: ${MONITOR_HITS:0:500}"
+        record_deploy "failed" "$MODE" "Phase 7 P0/P1 monitor hit: ${MONITOR_HITS:0:500}"
+        exit 1
+    fi
+    echo "[deploy.sh] Phase 7: monitoring ${MONITOR_ELAPSED}/${MONITOR_SECONDS}초 이상 없음"
+done
+deploy_phase_end "p0p1_monitoring" "success" "seconds=${MONITOR_SECONDS}"
 
 echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"
 stop_downtime_monitor
+deploy_observe_update "success" "completed" ""
 record_deploy "success" "$MODE" ""
 exit 0

@@ -15,6 +15,7 @@ assert _SPEC and _SPEC.loader
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 get_deploy_status = _MODULE.get_deploy_status
+DEPLOY_SCRIPT = Path(__file__).parents[2] / "deploy.sh"
 
 
 class FakeConnection:
@@ -88,3 +89,25 @@ def test_go100_zombie_blocks_next_deploy_without_mutation():
     assert signal["requires_ceo_approval"] is True
     assert result["next_deploy_readiness"]["ready"] is False
     assert "runner_reconciliation_required" in result["next_deploy_readiness"]["blockers"]
+
+
+def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
+    script = DEPLOY_SCRIPT.read_text()
+
+    assert "deploy_phase_start \"build_candidate_image\"" in script
+    assert "deploy_phase_start \"candidate_health\"" in script
+    assert "deploy_phase_start \"nginx_cutover\" \"verifying\"" in script
+    assert "deploy_phase_start \"standby_same_digest_sync\" \"syncing_standby\"" in script
+    assert "deploy_phase_start \"p0p1_monitoring\" \"verifying\"" in script
+    assert "INSERT INTO deploy_phase_events" in script
+    assert "UPDATE deploy_runs" in script
+    assert "release image excludes uncommitted worktree changes" in script
+
+
+def test_deploy_script_keeps_five_minute_monitoring_default():
+    script = DEPLOY_SCRIPT.read_text()
+
+    assert 'MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"' in script
+    assert "docker logs \"$ACTIVE_CONTAINER\" --since \"$MONITOR_SINCE\"" in script
+    assert "record_deploy \"success\"" in script
+    assert script.index("deploy_phase_start \"p0p1_monitoring\"") < script.index("record_deploy \"success\"")
