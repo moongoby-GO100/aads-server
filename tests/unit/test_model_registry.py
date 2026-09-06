@@ -66,6 +66,35 @@ def test_build_registry_snapshots_registers_openai_astra_template():
     assert astra_row["capabilities"]["reasoning_effort"] == ["low", "medium", "high", "xhigh", "max"]
 
 
+def test_build_registry_snapshots_registers_codex_astra_template():
+    now = datetime.now(timezone.utc)
+    model_rows, _ = model_registry.build_registry_snapshots(
+        [
+            {
+                "id": 3,
+                "provider": "codex",
+                "key_name": "CODEX_CHATGPT_OAUTH",
+                "priority": 1,
+                "is_active": True,
+                "rate_limited_until": None,
+                "last_used_at": now,
+                "last_verified_at": now,
+            }
+        ]
+    )
+
+    astra_row = next(row for row in model_rows if row["provider"] == "codex" and row["model_id"] == "gpt-6-astra")
+    assert astra_row["display_name"] == "GPT-6 Astra (Codex CLI)"
+    assert astra_row["metadata"]["execution_backend"] == "codex_cli"
+    assert astra_row["execution_model_id"] == "gpt-6-astra"
+    assert astra_row["supports_tools"] is True
+    assert astra_row["supports_thinking"] is True
+    assert astra_row["supports_vision"] is True
+    assert astra_row["supports_coding"] is True
+    assert astra_row["capabilities"]["codex_cli"] is True
+    assert astra_row["capabilities"]["chatgpt_credits"] is True
+
+
 def test_build_registry_snapshots_registers_deepseek_v4_and_alias_metadata():
     now = datetime.now(timezone.utc)
     model_rows, provider_rows = model_registry.build_registry_snapshots(

@@ -515,6 +515,8 @@ def _display_name_for(model_id: str) -> str:
 
 
 def _display_name_for_provider(provider: str, model_id: str) -> str:
+    if provider == "codex" and model_id == "gpt-6-astra":
+        return "GPT-6 Astra (Codex CLI)"
     override = _DISPLAY_NAME_OVERRIDES.get(model_id)
     if override:
         return override
