@@ -150,6 +150,8 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "reconcile_inactive_target_recovery_executions \"$NEW_CONTAINER\"" in script
     assert "COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'" in script
     assert "AND COALESCE(m.is_hidden, false) = true" in script
+    assert "WHERE ph.execution_id = chat_turn_executions.id" in script
+    assert "AND COALESCE(ph.is_hidden, FALSE) = TRUE" in script
     assert "AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000" in script
     assert "FROM deploy_history" in script
     assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180" in script

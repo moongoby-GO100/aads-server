@@ -708,6 +708,16 @@ stream_count_for_port() {
                       lease_expires_at IS NULL
                       OR lease_expires_at > NOW()
                       OR heartbeat_at > NOW() - INTERVAL '60 seconds'
+                  )
+                  AND NOT (
+                      COALESCE(error_message, '') = 'recovery_auto_retry_scheduled'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM chat_messages ph
+                          WHERE ph.execution_id = chat_turn_executions.id
+                            AND ph.intent = 'streaming_placeholder'
+                            AND COALESCE(ph.is_hidden, FALSE) = TRUE
+                      )
                   );
             " 2>/dev/null | tr -d '[:space:]' || true
         )"
