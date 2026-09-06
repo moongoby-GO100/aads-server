@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 import asyncpg
 
 from app.core.project_config import PROJECT_MAP
+from app.services import quality_gate
 
 logger = logging.getLogger(__name__)
 
@@ -568,56 +569,76 @@ class PipelineCJob:
                     )
                     return
 
-                # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 review_hold 폴백)
+                # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 승인 대기 에스컬레이션)
                 self._log("ai_review", f"[{self.cycle}차] AI 검수 중...")
                 review = await self._ai_review_with_retry()
 
                 if review["verdict"] == "DELEGATED":
-                    # 재시도까지 모두 소진된 경우에만 미검증 diff로 간주해 승인 대기로 넘기지 않는다.
-                    self._log("review_hold", f"[{self.cycle}차] LLM 검수 {_MAX_REVIEW_PARSE_RETRIES}회 재시도 실패, 승인 보류")
+                    self._log(
+                        "awaiting_approval",
+                        f"[{self.cycle}차] LLM 검수 {_MAX_REVIEW_PARSE_RETRIES}회 재시도 실패, CEO 승인 대기로 에스컬레이션",
+                    )
                     diff_summary = self._format_diff_summary(self.git_diff)
                     output_text = self.result_output[-2000:] if self.result_output else "(출력 없음)"
-                    self.status = "review_hold"
+                    self.status = "awaiting_approval"
                     self.review_feedback = (
-                        "FLAG+HOLD: AI 리뷰 인프라 장애로 자동 승인/승인대기 차단 — "
+                        "DELEGATED: AI 리뷰 인프라 장애로 CEO 승인 대기 에스컬레이션 — "
                         f"{review.get('summary', '리뷰 실패')}"
                     )
                     await self._save_to_db()
-                    await self._flag_review_hold(review)
                     await self._post_to_chat(
-                        f"🟠 **[AI 리뷰 보류]** `{self.job_id}`\n"
-                        f"LLM 검수 호출 실패로 승인 대기에 올리지 않았습니다.\n"
-                        f"상태: **review_hold** / 정책: **FLAG+hold**\n\n"
+                        f"🟠 **[CEO 승인 필요]** `{self.job_id}`\n"
+                        f"LLM 검수 호출 실패로 CEO 승인 대기로 에스컬레이션했습니다.\n"
+                        f"상태: **awaiting_approval**\n\n"
                         f"**출력:**\n```\n{output_text}\n```\n\n"
                         f"**변경사항:**\n{diff_summary}"
                     )
                     await self._trigger_ai_reaction(
                         f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})의 "
-                        f"AI 자동 검수가 실패해 FLAG+hold 상태로 보류되었습니다. "
-                        f"이 작업은 승인 대기가 아니며 approve 호출 대상이 아닙니다.\n\n"
+                        f"AI 자동 검수가 실패해 CEO 승인 대기로 에스컬레이션되었습니다.\n\n"
                         f"## 원래 지시\n{self.instruction}\n\n"
                         f"## Claude Code 출력 (마지막 부분)\n{output_text}\n\n"
                         f"## 변경사항\n{diff_summary}\n\n"
                         f"## 필요한 조치\n"
-                        f"1. 리뷰 인프라 복구 여부를 확인하세요.\n"
-                        f"2. 동일 산출물을 재검수하거나 작업을 재제출하세요.\n"
-                        f"3. 검증 없는 승인/배포는 금지입니다."
+                        f"산출물을 직접 검토한 뒤 승인 또는 반려해주세요."
                     )
                     return
 
                 if review["verdict"] == "PASS":
-                    self._log("review_pass", f"[{self.cycle}차] 검수 통과: {review['summary']}")
-                    self.review_feedback = f"PASS: {review['summary']}"
-
-                    # 채팅방에 검수 통과 보고
-                    diff_summary = self._format_diff_summary(self.git_diff)
-                    await self._post_to_chat(
-                        f"✅ **[{self.cycle}차 검수 통과]** `{self.job_id}`\n"
-                        f"판정: **PASS**\n"
-                        f"요약: {review['summary']}\n\n"
-                        f"**변경사항:**\n{diff_summary}"
+                    quality = quality_gate.evaluate(
+                        self.git_diff,
+                        self.instruction,
+                        self.result_output,
                     )
-                    break
+                    issue_text = ", ".join(quality.issues) or "이슈 없음"
+
+                    if quality.grade == "F":
+                        review = {
+                            "verdict": "FAIL",
+                            "feedback": f"QUALITY_F: {issue_text}",
+                        }
+                    else:
+                        self._log(
+                            "review_pass",
+                            f"[{self.cycle}차] 검수 통과: {review['summary']} "
+                            f"(quality={quality.grade}/{quality.score})",
+                        )
+                        self.review_feedback = f"PASS: {review['summary']}"
+                        if quality.grade == "C":
+                            self.review_feedback += (
+                                f" | QUALITY_C 경고 ({quality.score}): {issue_text}"
+                            )
+
+                        # 채팅방에 검수 통과 보고
+                        diff_summary = self._format_diff_summary(self.git_diff)
+                        await self._post_to_chat(
+                            f"✅ **[{self.cycle}차 검수 통과]** `{self.job_id}`\n"
+                            f"판정: **PASS**\n"
+                            f"요약: {review['summary']}\n"
+                            f"정적 품질: **{quality.grade}** ({quality.score})\n\n"
+                            f"**변경사항:**\n{diff_summary}"
+                        )
+                        break
 
                 # 검수 실패 → 채팅방에 기록 후 재지시
                 self.review_feedback = f"FAIL: {review['feedback']}"
