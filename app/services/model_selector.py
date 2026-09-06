@@ -1353,10 +1353,9 @@ async def _stream_pc_ollama_provider(
 def _fallback_for_unavailable_model_legacy(model: str, available_models: set[str]) -> str:
     groups = [
         [candidate for candidate in ("claude-sonnet", "claude-haiku", "claude-opus", "claude-opus-46") if candidate in available_models],
-        [candidate for candidate in ("gemini-2.5-flash", "gemini-flash", "gemini-3-flash-preview", "gemini-2.5-pro") if candidate in available_models],
-        [candidate for candidate in ("gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5") if candidate in available_models],
+        [candidate for candidate in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5") if candidate in available_models],
         [candidate for candidate in ("qwen-turbo", "qwen-flash", "qwen-plus", "qwen-max") if candidate in available_models],
-        [candidate for candidate in ("deepseek-v4-flash", "deepseek-chat", "groq-compound", "minimax-m2.7", "kimi-latest") if candidate in available_models],
+        [candidate for candidate in ("groq-compound", "minimax-m2.7", "kimi-latest") if candidate in available_models],
     ]
     for candidates in groups:
         if candidates:
@@ -1418,12 +1417,14 @@ async def _configured_llm_fallback_candidates(
         logger.debug("configured_llm_fallback_lookup_failed: model=%s error=%s", model, exc)
         return []
 
+    excluded_provider_set = {str(provider).strip().lower() for provider in (excluded_providers or set())}
+    excluded_provider_set.update({"deepseek", "gemini", "google"})
     excluded = {str(model or "").strip(), _canonical_deepseek_model_id(str(model or "").strip())}
     candidates: list[str] = []
     seen: set[str] = set()
     for row in rows:
         provider = str(row["provider"] or "").strip().lower()
-        if excluded_providers and provider in excluded_providers:
+        if provider in excluded_provider_set:
             continue
         pref_model = str(row["model_id"] or "").strip()
         registry_model = str(row["registry_model_id"] or "").strip()
@@ -1919,12 +1920,6 @@ async def call_stream(
                 _secondary_available,
                 excluded_providers={"codex", "anthropic"},
             )
-            if not _secondary_candidates:
-                _secondary_candidates = [
-                    candidate
-                    for candidate in ("gemini-3.1-pro-preview", "gemini-2.5-flash", "deepseek-v4-flash", "deepseek-chat")
-                    if _is_model_runtime_available(candidate, _secondary_available)
-                ]
             for _sfb in _secondary_candidates:
                 try:
                     yield {

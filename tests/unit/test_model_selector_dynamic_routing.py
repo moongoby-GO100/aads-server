@@ -911,7 +911,7 @@ async def test_call_stream_falls_back_immediately_when_gpt_56_relay_is_busy(monk
 
 
 @pytest.mark.asyncio
-async def test_call_stream_uses_deepseek_when_gpt_56_claude_and_gemini_fail(monkeypatch):
+async def test_call_stream_stops_before_gemini_deepseek_when_gpt_56_and_claude_fail(monkeypatch):
     calls = []
 
     async def _fake_get_db_key(*_args, **_kwargs):
@@ -950,9 +950,6 @@ async def test_call_stream_uses_deepseek_when_gpt_56_claude_and_gemini_fail(monk
 
     async def _fake_litellm_stream(model, system_prompt, messages, tools=None, session_id=None):
         calls.append(("litellm", model))
-        if model == "gemini-3.1-pro-preview":
-            yield {"type": "error", "content": "RESOURCE_EXHAUSTED"}
-            return
         yield {"type": "delta", "content": "fallback ok"}
         yield {
             "type": "done",
@@ -984,11 +981,10 @@ async def test_call_stream_uses_deepseek_when_gpt_56_claude_and_gemini_fail(monk
         ("codex", "gpt-5.6-sol"),
         ("claude", "claude-fable-5-1"),
         ("claude", "claude-opus"),
-        ("litellm", "gemini-3.1-pro-preview"),
-        ("litellm", "deepseek-v4-flash"),
     ]
-    assert events[-1]["type"] == "done"
-    assert events[-1]["model"] == "deepseek-v4-flash"
+    assert ("litellm", "gemini-3.1-pro-preview") not in calls
+    assert ("litellm", "deepseek-v4-flash") not in calls
+    assert events[-1]["type"] == "error"
 
 
 @pytest.mark.asyncio

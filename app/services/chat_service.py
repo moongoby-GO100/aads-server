@@ -11310,17 +11310,28 @@ async def send_message_stream(
         input_tokens = 0
         output_tokens = 0
         tools_called: list = []  # 구조화된 tool_events 리스트 (프론트 UI 복원용)
+        _base_stream_model = str(model_override or intent_result.model or "").strip()
+        if _base_stream_model.startswith(("claude-", "claude_")):
+            _missing_done_fallback_models = ["gpt-5.6-sol", "gpt-5.6-terra"]
+        elif _base_stream_model.startswith("codex:") or _base_stream_model.startswith("gpt-"):
+            _missing_done_fallback_models = ["claude-fable-5-1", "claude-opus"]
+        else:
+            _missing_done_fallback_models = ["claude-fable-5-1", "gpt-5.6-sol"]
 
         # ── LLM 스트림 호출 + 즉시 재시도 (AADS-003: 최대 3회, 에러 유형별 백오프) ──
         for _stream_attempt in range(3):
             _stream_error = False
+            _stream_done_seen = False
+            _attempt_model_override = model_override
+            if _stream_attempt > 0 and _stream_attempt - 1 < len(_missing_done_fallback_models):
+                _attempt_model_override = _missing_done_fallback_models[_stream_attempt - 1]
             try:
                 async for event in call_stream(
                     intent_result=intent_result,
                     system_prompt=system_prompt,
                     messages=messages,
                     tools=tools_for_api,
-                    model_override=model_override,
+                    model_override=_attempt_model_override,
                     session_id=session_id,
                     tenant_id=resolved_tenant_id,
                 ):
@@ -11365,6 +11376,7 @@ async def send_message_stream(
                     elif etype == "yellow_limit":
                         yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
                     elif etype == "done":
+                        _stream_done_seen = True
                         _done_display_model = event.get("model", intent_result.model)
                         _done_actual_model = event.get("actual_model") or _done_display_model
                         model_used = _done_display_model
@@ -11440,6 +11452,57 @@ async def send_message_stream(
                         return
                 else:
                     # async for 정상 완료 (break 없이) → 성공
+                    if not _stream_done_seen:
+                        _reason = (
+                            "missing_done_event_stream_closed:"
+                            f"attempt={_stream_attempt + 1};"
+                            f"model={_attempt_model_override or intent_result.model};"
+                            f"partial_len={len(full_response)}"
+                        )
+                        logger.warning(
+                            "stream_missing_done_retry session=%s attempt=%s/3 model=%s partial_len=%s",
+                            session_id[:8],
+                            _stream_attempt + 1,
+                            _attempt_model_override or intent_result.model,
+                            len(full_response),
+                        )
+                        if _stream_attempt < 2:
+                            if full_response:
+                                _preserved_message = await _save_interrupted_partial_message(
+                                    session_id,
+                                    full_response,
+                                    reason=_reason,
+                                    execution_id=_execution_id_str,
+                                )
+                                if _preserved_message:
+                                    yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
+                                yield f"data: {json.dumps({'type': 'stream_reset', 'reason': 'missing_done_retry'})}\n\n"
+                                full_response = ""
+                                thinking_summary = ""
+                                tools_called = []
+                            yield f"data: {json.dumps({'type': 'retry_progress', 'attempt': _stream_attempt + 2, 'max_attempts': 3, 'content': '완료 신호 미수신으로 동급 모델에 재시도합니다.'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                            _stream_error = True
+                            continue
+                        if full_response.strip():
+                            await _save_interrupted_partial_message(
+                                session_id=session_id,
+                                content=full_response,
+                                reason=_reason,
+                                execution_id=_execution_id_str,
+                            )
+                        if _execution_id_str:
+                            async with get_pool().acquire() as _conn:
+                                await _mark_execution_interrupted(
+                                    _conn,
+                                    session_id,
+                                    _execution_id_str,
+                                    _reason,
+                                    partial_content=full_response,
+                                    delete_empty_placeholder=False,
+                                )
+                        yield f"data: {json.dumps({'type': 'error', 'content': 'LLM 스트림이 완료 신호 없이 종료되어 완료 처리하지 않았습니다. 중간 응답은 보존했고 동급 모델 재시도도 실패했습니다.', 'recoverable': True, 'reason': 'missing_done_event', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        return
                     break  # retry 루프 탈출
             except Exception as _stream_exc:
                 # call_stream 자체 예외 (ConnectionError, TimeoutError 등)
