@@ -315,8 +315,12 @@ def _bind_tool_session_input(
 _INTENT_POLICY_CACHE_TTL_SECONDS = 300
 _INTENT_POLICY_CACHE: Dict[str, Any] = {"expires_at": 0.0, "policies": {}}
 _INTENT_POLICY_MODEL_ALIASES = {
+    "claude-fable-5-1": "claude-fable-5-1",
+    "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-5": "claude-fable-5",
     "claude-sonnet-4-6": "claude-sonnet",
     "claude-sonnet-4-5": "claude-sonnet",
+    "claude-sonnet-5": "claude-sonnet-5",
     "claude-haiku-4-5": "claude-haiku",
     "claude-haiku-4-5-20251001": "claude-haiku",
     "claude-opus-5": "claude-opus",
@@ -326,7 +330,17 @@ _INTENT_POLICY_MODEL_ALIASES = {
     "claude-opus-4-5": "claude-opus",
     "claude-opus-46": "claude-opus",
 }
-_INTENT_POLICY_CLAUDE_RANK = {"claude-haiku": 0, "claude-sonnet": 1, "claude-opus": 2}
+_INTENT_POLICY_CLAUDE_RANK = {
+    "claude-haiku": 0,
+    "claude-sonnet": 1,
+    "claude-sonnet-5": 2,
+    "claude-opus": 3,
+    "claude-fable-5": 4,
+    "claude-fable-5-1": 5,
+}
+_INTENT_POLICY_RANK_MODEL = {
+    rank: model for model, rank in _INTENT_POLICY_CLAUDE_RANK.items()
+}
 _HAIKU_FALLBACK_INTENTS = {"greeting", "casual"}
 _SONNET_INTENTS = {
     "search", "url_read", "browser", "task_query",
@@ -473,17 +487,18 @@ def _resolve_intent_policy_cascade_model(current_model: str, policy: Optional[Di
 
     if target_rank is None or target_rank >= current_rank:
         return None
-    if target_rank == _INTENT_POLICY_CLAUDE_RANK["claude-haiku"]:
-        return "claude-haiku"
-    if target_rank == _INTENT_POLICY_CLAUDE_RANK["claude-sonnet"]:
-        return "claude-sonnet"
-    return None
+    return _INTENT_POLICY_RANK_MODEL.get(target_rank)
 
 
 def _resolve_legacy_intent_cascade_model(current_model: str, intent: str) -> Optional[str]:
-    if intent in _HAIKU_FALLBACK_INTENTS and current_model in ("claude-sonnet", "claude-opus"):
+    if intent in _HAIKU_FALLBACK_INTENTS and current_model in (
+        "claude-sonnet",
+        "claude-opus",
+        "claude-fable-5",
+        "claude-fable-5-1",
+    ):
         return "claude-haiku"
-    if intent in _SONNET_INTENTS and current_model == "claude-opus":
+    if intent in _SONNET_INTENTS and current_model in ("claude-opus", "claude-fable-5", "claude-fable-5-1"):
         return "claude-sonnet"
     return None
 
@@ -662,6 +677,9 @@ _COST_MAP = {
     "claude-opus-46":         (5.0,  25.0),   # Opus 4.6 실제 가격
     "claude-sonnet":          (3.0,  15.0),
     "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격
+    "claude-sonnet-5":        (3.0,  15.0),
+    "claude-fable-5":         (10.0, 50.0),
+    "claude-fable-5-1":       (10.0, 50.0),
     "gemini-flash":           (0.075, 0.3),
     "gemini-flash-lite":      (0.01,  0.04),
     "gemini-pro":             (1.25,  5.0),
@@ -749,16 +767,30 @@ _COST_MAP = {
 # LiteLLM alias → Anthropic model ID
 _ANTHROPIC_MODEL_ID = {
     "claude-sonnet": "claude-sonnet-4-6",
+    "claude-sonnet-5": "claude-sonnet-5",
     "claude-opus":   "claude-opus-5",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku":  "claude-haiku-4-5-20251001",
+    "claude-fable-5": "claude-fable-5",
+    "claude-fable-5-1": "claude-fable-5-1",
+    "claude-fable-5.1": "claude-fable-5-1",
 }
 
 _ANTHROPIC_FAMILY_ALIASES = (
+    ("claude-fable", "claude-fable-5-1"),
     ("claude-opus", "claude-opus"),
+    ("claude-sonnet-5", "claude-sonnet-5"),
     ("claude-sonnet", "claude-sonnet"),
     ("claude-haiku", "claude-haiku"),
 )
+
+_ANTHROPIC_THINKING_ALIASES = {
+    "claude-fable-5",
+    "claude-fable-5-1",
+    "claude-opus",
+    "claude-sonnet",
+    "claude-sonnet-5",
+}
 
 
 def _to_anthropic_runtime_alias(model: str) -> str:
@@ -774,6 +806,17 @@ def _to_anthropic_runtime_alias(model: str) -> str:
         if model_id.startswith(prefix):
             return alias
     return model_id
+
+
+def _is_anthropic_thinking_alias(model: str) -> bool:
+    return _to_anthropic_runtime_alias(model) in _ANTHROPIC_THINKING_ALIASES
+
+
+def _drop_tool_choice_for_thinking(api_kwargs: Dict[str, Any], thinking_config: Optional[Dict[str, Any]]) -> bool:
+    if thinking_config and "tool_choice" in api_kwargs:
+        del api_kwargs["tool_choice"]
+        return True
+    return False
 
 # Gemini 모델 (LiteLLM 경유) — 대시보드 ModelSelector id와 동기화 필수 (누락 시 Claude로 폴백됨)
 _GEMINI_MODELS = {
@@ -1843,12 +1886,18 @@ async def call_stream(
     if not _ACCOUNT_SLOTS:
         _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]
     _MODEL_DOWNGRADE = {
+        "claude-fable-5-1": ["claude-fable-5-1", "claude-fable-5", "claude-opus", "claude-sonnet"],
+        "claude-fable-5": ["claude-fable-5", "claude-opus", "claude-sonnet"],
         "claude-opus": ["claude-opus"],
+        "claude-sonnet-5": ["claude-sonnet-5", "claude-sonnet"],
         "claude-sonnet": ["claude-sonnet"],
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
+        "claude-fable-5-1": ["claude-opus", "gpt-5.6-sol", "gemini-3.1-pro-preview"],
+        "claude-fable-5": ["claude-opus", "gpt-5.6-sol", "gemini-3.1-pro-preview"],
         "claude-opus": ["gpt-5.5", "gemini-3.1-pro-preview"],
+        "claude-sonnet-5": ["claude-sonnet", "deepseek-v4-flash", "gemini-2.5-flash"],
         "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
         "claude-haiku": ["gpt-5.4-mini", "deepseek-v4-flash", "gemini-3.1-flash-lite-preview"],
     }
@@ -4201,7 +4250,7 @@ async def _stream_anthropic(
     use_thinking = (
         _EXTENDED_THINKING_ENABLED
         and intent_result.use_extended_thinking
-        and model_alias in ("claude-opus", "claude-sonnet")
+        and _is_anthropic_thinking_alias(model_alias)
     )
     max_tokens = _MAX_TOKENS_CLAUDE_THINKING if use_thinking else _MAX_TOKENS_CLAUDE
 
@@ -4343,8 +4392,7 @@ async def _stream_anthropic(
                 "anthropic-beta": ",".join(_betas),
             }
         # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
-        if thinking_config and "tool_choice" in api_kwargs:
-            del api_kwargs["tool_choice"]
+        _drop_tool_choice_for_thinking(api_kwargs, thinking_config)
 
         # 디버그: API 호출 전 payload 요약 로깅
         _n_msgs = len(api_kwargs.get("messages", []))
@@ -4469,8 +4517,7 @@ async def _stream_anthropic(
                 full_text = ""
                 yield {"type": "delta", "content": ""}  # 프론트 스트림 리셋 신호
                 api_kwargs["tool_choice"] = {"type": "any"}
-                if "thinking" in api_kwargs:
-                    del api_kwargs["tool_choice"]  # thinking과 tool_choice=any 비호환
+                _drop_tool_choice_for_thinking(api_kwargs, thinking_config)
                 _turn += 1
                 continue  # while 루프 재시도
             break  # 정상 종료

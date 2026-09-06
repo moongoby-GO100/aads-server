@@ -397,8 +397,21 @@ _ANTHROPIC_RUNTIME_MODEL_IDS = {
     "claude-opus": "claude-opus-5",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-sonnet-5": "claude-sonnet-5",
+    "claude-fable-5": "claude-fable-5",
+    "claude-fable-5-1": "claude-fable-5-1",
 }
 _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
+    "claude-fable-5-1": (
+        "claude-fable-5.1",
+        "claude-fable-latest",
+    ),
+    "claude-fable-5": (
+        "claude-fable-5",
+    ),
+    "claude-sonnet-5": (
+        "claude-sonnet-5",
+    ),
     "claude-sonnet": (
         "claude-sonnet-4-6",
         "claude-sonnet-4-5",

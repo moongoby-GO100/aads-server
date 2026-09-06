@@ -108,6 +108,16 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     ]
     assert claude_row["execution_model_id"] == "claude-sonnet-4-6"
 
+    fable_row = next(row for row in model_rows if row["provider"] == "anthropic" and row["model_id"] == "claude-fable-5-1")
+    assert fable_row["execution_backend"] == "claude_cli_relay"
+    assert fable_row["execution_model_id"] == "claude-fable-5-1"
+    assert fable_row["metadata"]["accepted_aliases"] == [
+        "claude-fable-5.1",
+        "claude-fable-latest",
+    ]
+    assert fable_row["supports_thinking"] is True
+    assert fable_row["supports_tools"] is True
+
 
 def test_build_registry_snapshots_marks_unknown_provider_for_review():
     _, provider_rows = model_registry.build_registry_snapshots(

@@ -14,7 +14,36 @@ def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
     assert model_selector._to_anthropic_runtime_alias("claude-opus-4-8") == "claude-opus"
     assert model_selector._to_anthropic_runtime_alias("claude-sonnet-4-6") == "claude-sonnet"
     assert model_selector._to_anthropic_runtime_alias("claude-haiku-4-5-20251001") == "claude-haiku"
+    assert model_selector._to_anthropic_runtime_alias("claude-fable-5") == "claude-fable-5"
+    assert model_selector._to_anthropic_runtime_alias("claude-fable-5-1") == "claude-fable-5-1"
+    assert model_selector._to_anthropic_runtime_alias("claude-fable-5.1") == "claude-fable-5-1"
+    assert model_selector._to_anthropic_runtime_alias("claude-fable-latest") == "claude-fable-5-1"
     assert model_selector._to_anthropic_runtime_alias("gpt-5.5") == "gpt-5.5"
+
+
+def test_fable_5_1_uses_thinking_guard_and_drops_tool_choice():
+    api_kwargs = {"tool_choice": {"type": "any"}}
+
+    assert model_selector._is_anthropic_thinking_alias("claude-fable-5-1")
+    assert model_selector._drop_tool_choice_for_thinking(
+        api_kwargs,
+        {"type": "adaptive", "display": "summarized"},
+    )
+    assert "tool_choice" not in api_kwargs
+
+
+def test_fable_5_1_can_cascade_down_to_allowed_claude_rank():
+    assert (
+        model_selector._resolve_intent_policy_cascade_model(
+            "claude-fable-5-1",
+            {"cascade_downgrade": True, "allowed_models": ["claude-opus"]},
+        )
+        == "claude-opus"
+    )
+    assert (
+        model_selector._resolve_legacy_intent_cascade_model("claude-fable-5-1", "search")
+        == "claude-sonnet"
+    )
 
 
 def test_cli_result_preserves_runtime_model_for_actual_model_audit():
