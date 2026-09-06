@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>오비스 자비스 초월형 통합 운영·자동진화 아키텍처 보고서</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --paper: #ffffff;
+      --ink: #172033;
+      --muted: #687386;
+      --line: #dfe5ee;
+      --navy: #17324d;
+      --blue: #2563eb;
+      --green: #148044;
+      --amber: #b45309;
+      --red: #b42318;
+      --violet: #6d28d9;
+      --teal: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      line-height: 1.62;
+      letter-spacing: 0;
+    }
+    .wrap { max-width: 1240px; margin: 0 auto; padding: 32px 22px 64px; }
+    header, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    header { padding: 36px; }
+    section { padding: 28px; margin-top: 18px; }
+    .eyebrow {
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    h1 { margin: 8px 0 12px; font-size: 34px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 0 0 16px; font-size: 23px; letter-spacing: 0; }
+    h3 { margin: 22px 0 8px; font-size: 17px; letter-spacing: 0; }
+    p { margin: 8px 0; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .lead { max-width: 980px; color: var(--muted); font-size: 16px; }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfe;
+      min-height: 86px;
+    }
+    .metric strong { display: block; font-size: 24px; line-height: 1.1; color: var(--navy); }
+    .metric span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 14px; }
+    th, td { border: 1px solid var(--line); padding: 10px 11px; vertical-align: top; text-align: left; }
+    th { background: #f1f5f9; color: #334155; font-weight: 800; }
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #eef2f7;
+      color: #0f172a;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    pre {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: #0f172a;
+      color: #dbeafe;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .card h3 { margin-top: 0; }
+    .status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .ok { color: var(--green); background: #ecfdf3; border-color: #bbf7d0; }
+    .warn { color: var(--amber); background: #fff7ed; border-color: #fed7aa; }
+    .bad { color: var(--red); background: #fef2f2; border-color: #fecaca; }
+    .todo { color: var(--blue); background: #eff6ff; border-color: #bfdbfe; }
+    .future { color: var(--violet); background: #f5f3ff; border-color: #ddd6fe; }
+    .note, .risk, .decision {
+      padding: 14px 16px;
+      border-radius: 8px;
+      margin: 12px 0;
+      border-left: 4px solid;
+    }
+    .note { background: #eff6ff; border-left-color: var(--blue); }
+    .risk { background: #fff7ed; border-left-color: var(--amber); }
+    .decision { background: #ecfdf5; border-left-color: var(--green); }
+    .source { color: var(--muted); font-size: 12px; }
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .toc a {
+      display: block;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    ul { margin: 8px 0 8px 22px; padding: 0; }
+    li { margin: 6px 0; }
+    .timeline { counter-reset: step; }
+    .step {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 14px;
+      border-top: 1px solid var(--line);
+      padding: 14px 0;
+    }
+    .step:first-child { border-top: 0; }
+    .phase { font-weight: 900; color: var(--navy); }
+    @media (max-width: 920px) {
+      .meta, .grid, .grid3, .toc { grid-template-columns: 1fr; }
+      header, section { padding: 20px; }
+      h1 { font-size: 26px; }
+      table { display: block; overflow-x: auto; white-space: nowrap; }
+      .step { grid-template-columns: 1fr; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">OHVIS Control Plane Research Report</div>
+      <h1>오비스 자비스 초월형 통합 운영·자동진화 아키텍처 보고서</h1>
+      <p class="lead">
+        2026-09-06 14:25 KST 기준 AADS 코드, DB, 컨테이너, 러너 상태를 실측하고,
+        2026년 기준 최신 에이전트 오케스트레이션 기술과 연구 패턴을 반영해 작성한 실행 기획서다.
+        목표는 CEO가 오비스 한 곳에만 지시하면 모든 프로젝트와 신규 프로젝트의 작업, 검증, 보고, 알림,
+        컨텍스트 유지, 비용 통제가 자동으로 돌아가는 단일 지휘 시스템을 만드는 것이다.
+      </p>
+      <div class="meta">
+        <div class="metric"><strong>67,808+</strong><span>핵심 프로젝트 memory_facts 합계 [DB 조회]</span></div>
+        <div class="metric"><strong>0</strong><span>현재 runner_active [DB 조회]</span></div>
+        <div class="metric"><strong>2</strong><span>pipeline 대기 이슈: awaiting_approval 1, review_hold 1 [DB 조회]</span></div>
+        <div class="metric"><strong>44ms</strong><span>AADS API health 응답 시간 [curl 실측]</span></div>
+      </div>
+      <nav class="toc">
+        <a href="#summary">1. 결론</a>
+        <a href="#current">2. 현재 실측</a>
+        <a href="#requirements">3. CEO 요구 재정의</a>
+        <a href="#research">4. 최신 기술 조사</a>
+        <a href="#architecture">5. 목표 아키텍처</a>
+        <a href="#context">6. 컨텍스트 격리</a>
+        <a href="#realtime">7. 실시간 보고</a>
+        <a href="#speed">8. 속도 개선</a>
+        <a href="#cost">9. AI 사용 제한 운영</a>
+        <a href="#evolution">10. 자동진화</a>
+        <a href="#roadmap">11. 구현 로드맵</a>
+        <a href="#appendix">12. 근거</a>
+      </nav>
+    </header>
+
+    <section id="summary">
+      <h2>1. 결론</h2>
+      <div class="decision">
+        오비스를 "자비스보다 뛰어난 완벽한 AI 비서"에 가깝게 만들 핵심은 더 많은 외부 앱을 붙이는 것이 아니라,
+        AADS 내부에 <strong>OHVIS Control Plane</strong>을 세우는 것이다. Control Plane은 CEO 지시를 단일 접점으로 받고,
+        프로젝트별 격리 컨텍스트를 유지하면서 필요한 순간에만 전 프로젝트 전략 요약을 호출하고, 러너·세션·알림·승인·비용·품질을 하나의 원장으로 통제한다.
+      </div>
+      <table>
+        <thead>
+          <tr><th>질문</th><th>판정</th><th>설계 답</th><th>완료 기준</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>모든 프로젝트를 동시에 컨트롤 가능한가?</td>
+            <td><span class="status warn">조건부 가능</span></td>
+            <td>프로젝트별 worktree, runner slot, dependency graph, owner lease를 Control Plane에서 관리한다.</td>
+            <td>전 프로젝트 job board에서 queued/running/blocked/done을 5초 이내 조회하고, 같은 파일 충돌을 자동 차단한다.</td>
+          </tr>
+          <tr>
+            <td>프로젝트별 맥락이 유지되나?</td>
+            <td><span class="status warn">부분 가능</span></td>
+            <td>일반 세션은 sealed context, CEO 통합 세션은 project briefs만 주입한다. 원문 메모리 전면 공유는 금지한다.</td>
+            <td>GO100 세션에는 GO100 원문만, CEO 세션에는 전 프로젝트 요약 capsule만 노출된다.</td>
+          </tr>
+          <tr>
+            <td>실시간 보고는 어떻게 되나?</td>
+            <td><span class="status todo">신규 필요</span></td>
+            <td>채팅 내부 Task Center, Web Push, SSE timeline, approval card로 보고한다. 텔레그램은 폴백만 남긴다.</td>
+            <td>오비스 앱을 열면 진행중/승인필요/완료/장애를 한 화면에서 본다.</td>
+          </tr>
+          <tr>
+            <td>응답 속도 문제는 해결되나?</td>
+            <td><span class="status warn">체감 해결 가능</span></td>
+            <td>즉답과 심층작업을 분리한다. 1~3초 안에 접수·계획·진행 링크를 주고, 긴 작업은 백그라운드로 돌린다.</td>
+            <td>p50 첫 응답 3초 이하, p95 첫 응답 8초 이하, 심층작업 상태는 10초마다 갱신한다.</td>
+          </tr>
+          <tr>
+            <td>AI 사용 제한을 효율화할 수 있나?</td>
+            <td><span class="status ok">가능</span></td>
+            <td>모델 계층화, prompt cache, RAG capsule, 중복 job dedup, batch/off-peak, BYOK, quota ledger를 적용한다.</td>
+            <td>작업별 예상 비용, 실제 비용, 모델 폴백, cache hit가 task 원장에 기록된다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="current">
+      <h2>2. 현재 오비스 시스템 실측</h2>
+      <table>
+        <thead>
+          <tr><th>영역</th><th>현재값</th><th>판정</th><th>근거</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>AADS API</td><td>HTTP 200, 0.044초</td><td><span class="status ok">정상</span></td><td><code>curl http://127.0.0.1:8102/health</code> [명령 실측]</td></tr>
+          <tr><td>컨테이너</td><td>server, dashboard, postgres, redis, litellm, searxng healthy</td><td><span class="status ok">정상</span></td><td><code>docker ps</code> [명령 실측]</td></tr>
+          <tr><td>디스크</td><td>156G / 193G, 81%</td><td><span class="status warn">경고</span></td><td><code>df -h /</code> [명령 실측]</td></tr>
+          <tr><td>메모리</td><td>23Gi 중 3.5Gi 사용, 19Gi available</td><td><span class="status ok">여유</span></td><td><code>free -h</code> [명령 실측]</td></tr>
+          <tr><td>최근 7일 세션</td><td>9건</td><td><span class="status ok">운영 중</span></td><td><code>chat_sessions</code> [DB 조회]</td></tr>
+          <tr><td>최근 7일 메시지</td><td>2,753건</td><td><span class="status ok">운영 중</span></td><td><code>chat_messages</code> [DB 조회]</td></tr>
+          <tr><td>최근 7일 assistant 품질</td><td>652건 평균 0.750</td><td><span class="status warn">목표 미달</span></td><td><code>chat_messages.quality_score</code> [DB 조회]</td></tr>
+          <tr><td>러너 상태</td><td>active 0, awaiting_approval 1, review_hold 1</td><td><span class="status warn">루프 끊김</span></td><td><code>pipeline_jobs</code> [DB 조회]</td></tr>
+          <tr><td>OHVIS tasks</td><td>done 239, running 2, error 1</td><td><span class="status warn">부분 정상</span></td><td><code>ohvis_tasks</code> [DB 조회]</td></tr>
+          <tr><td>웹푸시</td><td>enabled subscription 4건</td><td><span class="status ok">기반 있음</span></td><td><code>app_push_subscriptions</code> [DB 조회]</td></tr>
+          <tr><td>프롬프트 자산</td><td>L1 12, L2 9, L3 94, L4 11, L5 14</td><td><span class="status ok">기반 있음</span></td><td><code>prompt_assets</code> [DB 조회]</td></tr>
+          <tr><td>최신 CEO provenance</td><td>workspace CEO, role CEO, 31,227 chars</td><td><span class="status ok">적용됨</span></td><td><code>compiled_prompt_provenance</code> [DB 조회]</td></tr>
+        </tbody>
+      </table>
+
+      <h3>핵심 프로젝트 메모리 분포</h3>
+      <table>
+        <thead>
+          <tr><th>프로젝트</th><th>memory_facts</th><th>현재 의미</th><th>Control Plane 처리</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GO100</td><td>34,480</td><td>가장 많은 운영 맥락 보유</td><td>CEO 세션에는 최신 요약 5~10개만, GO100 세션에는 원문 검색 허용</td></tr>
+          <tr><td>AADS</td><td>17,601</td><td>오비스 본체 변경 이력</td><td>전역 운영 규칙과 충돌 가능성이 높아 우선 주입</td></tr>
+          <tr><td>NTV2</td><td>7,746</td><td>서비스/스크래핑/플랫폼 이력</td><td>프로젝트 작업 시 격리 유지</td></tr>
+          <tr><td>CEO</td><td>3,251</td><td>통합지시·전략·선호</td><td>오케스트레이터 개인 기억으로 항상 주입</td></tr>
+          <tr><td>KIS</td><td>2,980</td><td>자동매매 운영 이력</td><td>금융 고위험 정책 적용</td></tr>
+          <tr><td>NAS</td><td>306</td><td>이미지 처리 운영 이력</td><td>저빈도 프로젝트 capsule 관리</td></tr>
+          <tr><td>SF</td><td>224</td><td>ShortFlow 운영 이력</td><td>저빈도 프로젝트 capsule 관리</td></tr>
+        </tbody>
+      </table>
+
+      <div class="risk">
+        이전 응답의 “ohvis_tasks running 143건”은 현재 실측과 다르다. 2026-09-06 14:25 KST 재조회 기준 running은 2건이다.
+        최신사항 미반영의 주 원인은 모델 추론 문제가 아니라, 보고 직전 재조회와 실측값 갱신이 응답 계약으로 강제되지 않았기 때문이다.
+      </div>
+    </section>
+
+    <section id="requirements">
+      <h2>3. CEO 요구를 시스템 요구사항으로 재정의</h2>
+      <table>
+        <thead>
+          <tr><th>CEO 표현</th><th>제품 요구사항</th><th>기술 요구사항</th><th>금지해야 할 방식</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>오비스 하나에만 지시</td>
+            <td>단일 명령창, 단일 알림함, 단일 승인함</td>
+            <td>모든 도구·러너·서버를 <code>Control Plane API</code> 뒤로 통합</td>
+            <td>텔레그램, 별도 앱, 별도 대시보드를 필수 경로로 두는 것</td>
+          </tr>
+          <tr>
+            <td>각 프로젝트/세션 독립 유지</td>
+            <td>작업 맥락이 섞이지 않는 세션 UX</td>
+            <td><code>sealed session</code>, <code>project capsule</code>, <code>orchestrator digest</code> 3계층 메모리</td>
+            <td>전 프로젝트 원문 메모리를 모든 세션에 주입</td>
+          </tr>
+          <tr>
+            <td>전 프로젝트 통합 관리</td>
+            <td>CEO 세션에서 전체 현황·장애·우선순위 파악</td>
+            <td>project registry, health registry, job registry, context registry</td>
+            <td>project=CEO만 보고 실제 프로젝트 최신 변경을 모르는 구조</td>
+          </tr>
+          <tr>
+            <td>빠른 작업속도</td>
+            <td>첫 반응은 빠르고, 긴 작업은 백그라운드</td>
+            <td>Immediate layer, queue scheduler, parallel_group, dependency DAG</td>
+            <td>한 응답 스트림에 모든 조회/수정/검증을 묶는 구조</td>
+          </tr>
+          <tr>
+            <td>정확한 목표달성</td>
+            <td>완료/미완료/리스크를 분리 보고</td>
+            <td>acceptance criteria, test evidence, deploy evidence, source provenance</td>
+            <td>검증 없이 완료라고 말하는 것</td>
+          </tr>
+          <tr>
+            <td>지속 진화</td>
+            <td>실패가 다음 응답·러너 정책에 반영</td>
+            <td>Reflexion memory, eval replay, prompt asset promotion, policy A/B</td>
+            <td>반성문은 저장하지만 실제 라우팅/검증에 연결하지 않는 것</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="research">
+      <h2>4. 최신 기술 조사와 오비스 적용 판단</h2>
+      <table>
+        <thead>
+          <tr><th>기술/연구</th><th>핵심 패턴</th><th>오비스 적용</th><th>근거</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>OpenAI Agents SDK</td>
+            <td>handoff, guardrail, tracing, resumable approval</td>
+            <td>오비스 역할별 PM/Developer/QA/Ops를 handoff 가능한 agent role로 모델링</td>
+            <td><a href="https://developers.openai.com/api/docs/guides/agents">OpenAI Agents SDK docs</a> [공식문서, 2026-09-06 조회]</td>
+          </tr>
+          <tr>
+            <td>MCP 2026-07-28</td>
+            <td>tools/resources/prompts, progress, cancellation, tasks, explicit consent</td>
+            <td>오비스 내부 도구를 MCP-compatible registry로 표준화하되 외부 앱은 필수화하지 않음</td>
+            <td><a href="https://modelcontextprotocol.io/specification/2026-07-28">MCP Specification</a> [공식문서, 2026-09-06 조회]</td>
+          </tr>
+          <tr>
+            <td>LangGraph</td>
+            <td>durable execution, streaming, human-in-the-loop, persistence</td>
+            <td>러너 장기 작업을 graph checkpoint로 표현해 재시작·중단·승인 후 재개 가능하게 설계</td>
+            <td><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph Overview</a>, <a href="https://docs.langchain.com/oss/python/langgraph/persistence">Persistence</a> [공식문서, 2026-09-06 조회]</td>
+          </tr>
+          <tr>
+            <td>CrewAI</td>
+            <td>role-based crews, flows, memory, observability, HITL</td>
+            <td>역할 기반 작업팀 개념은 유지하되, 오비스는 더 낮은 레벨의 정책·락·검증 원장을 직접 통제</td>
+            <td><a href="https://docs.crewai.com/">CrewAI Docs</a> [공식문서, 2026-09-06 조회]</td>
+          </tr>
+          <tr>
+            <td>Pydantic AI</td>
+            <td>typed agent loop, structured outputs, model swap</td>
+            <td>러너 리뷰·최종보고·승인요청을 Pydantic schema로 강제해 parser failure를 줄임</td>
+            <td><a href="https://pydantic.dev/docs/ai/overview/">Pydantic AI Docs</a> [공식문서, 2026-09-06 조회]</td>
+          </tr>
+          <tr>
+            <td>AutoGen</td>
+            <td>conversational multi-agent runtime</td>
+            <td>대화형 협업 개념은 참고하되, 현재는 maintenance mode 이슈가 있어 신규 핵심 의존성으로는 부적합</td>
+            <td><a href="https://microsoft.github.io/autogen/stable//index.html">AutoGen Docs</a>, <a href="https://github.com/microsoft/autogen">GitHub</a> [공식/소스, 2026-09-06 조회]</td>
+          </tr>
+          <tr>
+            <td>Reflexion</td>
+            <td>가중치 학습 없이 언어 피드백을 episodic memory로 저장</td>
+            <td>CEO 지적·검증 실패·리뷰 실패를 반성문이 아니라 실행 정책으로 승격</td>
+            <td><a href="https://arxiv.org/abs/2303.11366">arXiv:2303.11366</a> [논문, 2023-03-20]</td>
+          </tr>
+          <tr>
+            <td>Voyager</td>
+            <td>automatic curriculum, skill library, execution feedback, self-verification</td>
+            <td>오비스가 프로젝트별 반복 작업을 skill로 저장하고 성공률이 높은 절차를 자동 재사용</td>
+            <td><a href="https://arxiv.org/abs/2305.16291">arXiv:2305.16291</a> [논문, 2023-05-25]</td>
+          </tr>
+          <tr>
+            <td>Generative Agents</td>
+            <td>observation, memory, reflection, planning</td>
+            <td>오비스의 daily sleep-time 정제와 project memory capsule 설계의 이론적 기반</td>
+            <td><a href="https://arxiv.org/abs/2304.03442">arXiv:2304.03442</a> [논문, 2023-04-07]</td>
+          </tr>
+          <tr>
+            <td>Self-Refine</td>
+            <td>feedback → refine 반복으로 출력 품질 향상</td>
+            <td>최종보고 전 자체 검수, 누락 항목 재작성, 형식 위반 자동 보정에 적용</td>
+            <td><a href="https://arxiv.org/abs/2303.17651">arXiv:2303.17651</a> [논문, 2023-03-30]</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="note">
+        기술 선택 결론: 오비스는 외부 프레임워크로 갈아타는 방식보다, 현재 AADS의 FastAPI/PostgreSQL/Redis/Pipeline Runner 구조 위에
+        LangGraph식 durable state, Agents SDK식 role handoff와 guardrail, MCP식 tool registry, Reflexion/Voyager식 자동진화 루프를
+        내부 아키텍처 원칙으로 흡수하는 편이 가장 빠르고 안전하다.
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2>5. 목표 아키텍처: OHVIS Control Plane</h2>
+      <pre>CEO
+  |
+  v
+OHVIS App / Chat
+  - 명령 입력
+  - 실시간 작업 센터
+  - 승인/반려 카드
+  - 완료 보고서와 알림함
+  |
+  v
+Command Gateway
+  - intent 분류
+  - project/session scope 판정
+  - 위험도 판정
+  - idempotency_key 생성
+  - 즉답 생성
+  |
+  +--> Context Control Plane
+  |     - sealed session memory
+  |     - project capsule
+  |     - CEO orchestrator digest
+  |     - provenance/evidence registry
+  |
+  +--> Work Control Plane
+  |     - pipeline runner submit/status/approve
+  |     - direct XS tool execution
+  |     - dependency DAG
+  |     - worktree/lock/owner lease
+  |
+  +--> Report Control Plane
+  |     - SSE step events
+  |     - task cards
+  |     - web push
+  |     - daily/weekly brief
+  |
+  +--> Evolution Control Plane
+        - quality score
+        - error pattern mining
+        - reflexion memory
+        - eval replay
+        - prompt asset promotion</pre>
+
+      <h3>Control Plane의 핵심 테이블/서비스</h3>
+      <table>
+        <thead>
+          <tr><th>구성요소</th><th>현재 존재</th><th>부족한 점</th><th>개선 설계</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>pipeline_jobs</code></td><td>있음</td><td>완료 루프와 리뷰 파서 장애가 남아 있음</td><td>review schema 강제, parser fallback, approval SLA, routed health 증거 저장</td></tr>
+          <tr><td><code>ohvis_tasks</code></td><td>있음</td><td>작업 카드가 CEO UX의 중심이 아님</td><td>Task Center의 단일 원장으로 승격</td></tr>
+          <tr><td><code>memory_facts</code></td><td>있음</td><td>CEO 통합과 일반 세션의 범위 정책이 분리되지 않음</td><td>scope policy + project capsule + source confidence</td></tr>
+          <tr><td><code>compiled_prompt_provenance</code></td><td>있음</td><td>응답 본문과 provenance 불일치 자동 감지가 약함</td><td>final response validator가 provenance mismatch를 차단</td></tr>
+          <tr><td><code>app_push_subscriptions</code></td><td>있음</td><td>텔레그램 의존 보고가 잔존</td><td>오비스 앱 웹푸시 primary, 텔레그램 fallback</td></tr>
+          <tr><td><code>cost_tracking</code>/<code>task_cost_log</code></td><td>있음</td><td>9월 비용 $0 기록 등 계측 공백</td><td>모든 LLM/tool/runner 호출을 usage ledger에 강제 기록</td></tr>
+        </tbody>
+      </table>
+
+      <h3>프로젝트 및 신규 프로젝트 온보딩</h3>
+      <table>
+        <thead>
+          <tr><th>단계</th><th>자동 수집</th><th>CEO 확인</th><th>산출물</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1. 등록</td><td>repo path, server, DB, deploy script, health URL</td><td>프로젝트명/위험등급</td><td><code>project_registry</code></td></tr>
+          <tr><td>2. 스캔</td><td>AGENTS.md, README, compose, tests, env contract</td><td>금지/승인 정책</td><td><code>project_capsule</code></td></tr>
+          <tr><td>3. 연결</td><td>runner route, SSH/MCP tool route, DB route</td><td>배포 허용 범위</td><td><code>execution_profile</code></td></tr>
+          <tr><td>4. 검증</td><td>health, smoke test, git status, deploy dry-run</td><td>초기 운영 승인</td><td>운영 readiness report</td></tr>
+          <tr><td>5. 운영</td><td>daily state, active jobs, cost, incidents</td><td>P0/P1 승인</td><td>오비스 Task Center</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="context">
+      <h2>6. 컨텍스트 격리와 공유: 섞이지 않게 전체를 아는 방식</h2>
+      <div class="decision">
+        CEO 통합 세션은 전 프로젝트를 알아야 한다. 하지만 일반 프로젝트 세션까지 전 프로젝트 원문을 공유하면 다음 작업 지시가 섞인다.
+        해결책은 "공유"가 아니라 "권한 있는 요약 접근"이다.
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>계층</th><th>내용</th><th>접근 주체</th><th>주입 방식</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Sealed Session Memory</td>
+            <td>해당 세션의 원문 대화, pending TODO, reply_to, 작업 흐름</td>
+            <td>해당 세션만</td>
+            <td>항상 우선. 다른 세션 원문은 기본 차단.</td>
+          </tr>
+          <tr>
+            <td>Project Capsule</td>
+            <td>프로젝트별 최신 변경, 운영 규칙, active incident, deploy contract</td>
+            <td>해당 프로젝트 세션 + CEO</td>
+            <td>요약 capsule만 주입. 필요 시 원문 근거를 도구로 조회.</td>
+          </tr>
+          <tr>
+            <td>Orchestrator Digest</td>
+            <td>전 프로젝트 상태, 우선순위, 병렬 작업, 승인 필요, 리스크</td>
+            <td>CEO 통합 세션</td>
+            <td>전 프로젝트 요약을 고르게 주입. 원문 혼입 방지.</td>
+          </tr>
+          <tr>
+            <td>Global Governance</td>
+            <td>L1 운영 원칙, 보안, 완료 계약, 비용 정책</td>
+            <td>전 세션</td>
+            <td>항상 주입. 프로젝트별 지시보다 우선.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>현재 코드와 개선 방향</h3>
+      <table>
+        <thead>
+          <tr><th>파일</th><th>현재 확인</th><th>개선 필요</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>app/services/workspace_preloader.py</code></td>
+            <td>CEO 오케스트레이터 스코프가 AADS/KIS/GO100/SF/NTV2/NAS를 포함하도록 구현되어 있음 [코드 확인]</td>
+            <td>project별 capsule freshness, capsule 생성 시각, 누락 프로젝트 경고를 추가해야 함</td>
+          </tr>
+          <tr>
+            <td><code>app/services/auto_rag.py</code></td>
+            <td><code>project = $3</code> 필터로 해당 프로젝트 fact만 검색 [코드 확인]</td>
+            <td>CEO 세션에서는 raw global search가 아니라 orchestrator capsule search로 확장</td>
+          </tr>
+          <tr>
+            <td><code>app/core/memory_recall.py</code></td>
+            <td>프로젝트별/공통 메모리 조립 구조 보유 [코드 확인]</td>
+            <td>역할별 context budget과 source confidence를 응답에 노출</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <pre>Context retrieval policy
+
+if session.project == "CEO":
+    inject(GlobalGovernance)
+    inject(CEOSealedSession)
+    inject(OrchestratorDigest(projects=["AADS","GO100","KIS","SF","NTV2","NAS"]))
+    inject(ProjectCapsules(top_k_per_project=2))
+    allow_raw_project_lookup_only_when_user_names_project()
+else:
+    inject(GlobalGovernance)
+    inject(SessionSealedMemory(session_id))
+    inject(ProjectCapsule(project=session.project))
+    block_cross_project_raw_memory()
+</pre>
+    </section>
+
+    <section id="realtime">
+      <h2>7. 오비스 앱 중심 실시간 보고 체계</h2>
+      <div class="decision">
+        오비스 앱이 활성화되면 텔레그램은 필수 경로가 아니다. 텔레그램은 앱 푸시 실패, CEO 장기 미접속, P0 장애 같은 비상 폴백만 담당해야 한다.
+      </div>
+      <table>
+        <thead>
+          <tr><th>보고 채널</th><th>역할</th><th>현재 상태</th><th>목표 상태</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>오비스 채팅</td><td>명령/답변 중심</td><td>사용 중</td><td>모든 지시의 유일한 입력 창구</td></tr>
+          <tr><td>Task Center</td><td>진행중/승인/완료/장애</td><td>부분 구현 필요</td><td>채팅 우측 또는 하단 고정 패널</td></tr>
+          <tr><td>SSE timeline</td><td>초 단위 진행 업데이트</td><td>스트리밍 기반 있음</td><td>질문별 step event 표준화</td></tr>
+          <tr><td>Web Push</td><td>앱 밖 알림</td><td>구독 4건</td><td>Primary 알림 채널</td></tr>
+          <tr><td>텔레그램</td><td>비상 폴백</td><td>여러 코드 경로에 잔존</td><td>사용자 설정에서 fallback only</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Task Card 표준</h3>
+      <pre>{
+  "task_id": "ohvis-task-uuid",
+  "project": "GO100",
+  "session_id": "sealed-session-uuid",
+  "title": "실매매 차트 신호 불일치 복구",
+  "status": "running | awaiting_approval | blocked | done | failed",
+  "priority": "P0 | P1 | P2 | P3",
+  "owner": "OHVIS",
+  "runner_job_id": "runner-xxxx",
+  "progress": {
+    "current_step": "검증",
+    "done": 4,
+    "total": 6,
+    "last_event_at": "2026-09-06T14:25:00+09:00"
+  },
+  "evidence": ["git diff", "test output", "health check", "screenshot"],
+  "next_action": "CEO approval required"
+}</pre>
+
+      <h3>중간보고 기준</h3>
+      <table>
+        <thead>
+          <tr><th>상황</th><th>보고 주기</th><th>보고 내용</th><th>채널</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>P0/P1 작업</td><td>상태 변경 즉시 + 5분마다</td><td>진행률, 차단 원인, 다음 조치</td><td>Task Center + Web Push</td></tr>
+          <tr><td>배포</td><td>각 게이트 통과 시</td><td>candidate health, cutover, routed health, standby sync, 5분 모니터링</td><td>Task Center + 채팅 최종보고</td></tr>
+          <tr><td>승인 필요</td><td>즉시</td><td>diff 요약, 영향 범위, 롤백 방법, 승인 버튼</td><td>Approval Card + Web Push</td></tr>
+          <tr><td>장기 연구/보고서</td><td>10~15분마다 또는 주요 단계 종료 시</td><td>수집 완료, 분석 완료, 문서 생성, 검증</td><td>Task Center</td></tr>
+          <tr><td>장애/중단</td><td>즉시</td><td>원인 후보, 자동 복구 여부, CEO 필요 조치</td><td>Web Push + fallback Telegram</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="speed">
+      <h2>8. 응답 속도와 작업 속도 개선</h2>
+      <table>
+        <thead>
+          <tr><th>문제</th><th>현재 원인</th><th>해결책</th><th>목표 수치</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>첫 응답 지연</td><td>도구 조회와 최종보고가 한 스트림에 묶임</td><td>Immediate Response Layer 도입</td><td>p50 3초 이하, p95 8초 이하</td></tr>
+          <tr><td>장문 보고 중단</td><td>브라우저/스트림/컨텍스트 한계</td><td>Report job artifact로 백그라운드 생성 후 링크 보고</td><td>중단 시 자동 재개 1회 이상</td></tr>
+          <tr><td>파일/DB 전수조사 느림</td><td>순차 도구 호출</td><td>독립 read/query는 병렬, 수정은 dependency DAG</td><td>동일 조사 30~60% 단축 [목표]</td></tr>
+          <tr><td>러너 완료 지연</td><td>review parser failure, approval 루프 병목</td><td>structured review schema + 재검수 endpoint + 승인 카드</td><td>review_hold 0건 유지</td></tr>
+          <tr><td>맥락 구성 지연</td><td>매 턴 대형 prompt 조립</td><td>hot digest cache + project capsule cache</td><td>context build 500ms 이하 [목표]</td></tr>
+        </tbody>
+      </table>
+
+      <h3>작업 분기 정책</h3>
+      <table>
+        <thead>
+          <tr><th>작업 유형</th><th>처리 방식</th><th>모델/도구</th><th>CEO 체감</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>단순 조회</td><td>채팅 직접 실행</td><td>DB/health/read-only tool</td><td>즉시 보고</td></tr>
+          <tr><td>단일 파일 XS 수정</td><td>채팅 직접 수정 + 테스트</td><td>apply_patch + local test</td><td>한 번에 완료 보고</td></tr>
+          <tr><td>다중 파일/60초 이상</td><td>Pipeline Runner</td><td>parallel_group + depends_on_key</td><td>job_id와 진행상황 보고</td></tr>
+          <tr><td>전수 분석/연구</td><td>Background report job</td><td>검색/DB/코드 병렬 + artifact</td><td>중간보고 후 HTML/PDF 링크</td></tr>
+          <tr><td>배포/재시작</td><td>승인 게이트</td><td>bluegreen + health + rollback</td><td>승인 카드로 단순화</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="cost">
+      <h2>9. 제한된 AI 사용량을 효율적으로 쓰는 운영법</h2>
+      <div class="risk">
+        현재 비용 계측은 불완전하다. <code>cost_tracking</code> 9월 합계가 $0으로 나오고,
+        <code>task_cost_log</code>도 9월 $0이며, 반면 <code>chat_messages.cost</code>는 단위 해석이 불명확한 큰 값이 누적되어 있다.
+        따라서 첫 개선은 비용 절감 자체가 아니라 usage ledger 신뢰성 복구다.
+      </div>
+      <table>
+        <thead>
+          <tr><th>정책</th><th>상세</th><th>효과</th><th>검증 기준</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>모델 계층화</td><td>XS/S는 저비용·빠른 모델, M/L은 코딩 모델, XL/P0 설계만 최고 모델</td><td>품질 유지하며 쿼터 소모 감소</td><td>작업별 actual_model과 quality_score 비교</td></tr>
+          <tr><td>Context capsule</td><td>원문 1만 건 주입 대신 프로젝트 요약/최신 변경/리스크만 주입</td><td>토큰 감소, 맥락 혼입 감소</td><td>prompt chars, cache hit, 재질문률</td></tr>
+          <tr><td>Prompt caching</td><td>L1/L2/L3/L4/L5 고정 프롬프트와 project capsule 캐시</td><td>반복 세션 비용 감소</td><td>cache hit ratio 80% 이상</td></tr>
+          <tr><td>중복 작업 dedup</td><td>instruction_hash + target files + project로 중복 제출 차단</td><td>러너 낭비 방지</td><td>중복 job reuse 건수</td></tr>
+          <tr><td>Batch/off-peak</td><td>긴 연구·문서·정리 작업은 낮은 우선순위 큐로 실행</td><td>CEO 실시간 응답 쿼터 보호</td><td>P0 응답 SLA 영향 0건</td></tr>
+          <tr><td>BYOK/로컬 모델</td><td>사용자 키와 PC 로컬 모델을 프로젝트별로 선택</td><td>오비스 공용 한도 보호</td><td>provider별 비용 분리</td></tr>
+          <tr><td>Quality gate</td><td>싼 모델 결과를 무조건 채택하지 않고 validator/eval로 차단</td><td>비용 절감으로 품질 훼손 방지</td><td>반려율, 재작업률, CEO 교정률</td></tr>
+        </tbody>
+      </table>
+
+      <h3>예산 라우팅 규칙</h3>
+      <pre>if task.priority in ["P0", "P1"] and task.risk == "high":
+    use(best_available_model)
+    require(evidence)
+elif task.size in ["XS", "S"]:
+    use(fast_low_cost_model)
+    require(output_validator)
+elif task.type == "report" and deadline_not_immediate:
+    use(batch_or_offpeak)
+    create(artifact)
+else:
+    use(balanced_model)
+    track(cost, tokens, latency, quality)</pre>
+    </section>
+
+    <section id="evolution">
+      <h2>10. 오비스 자동진화 시스템</h2>
+      <p>
+        자비스를 능가한다는 목표는 “사람처럼 말하는 것”이 아니라 “실패를 시스템적으로 줄이고, 성공한 절차를 재사용하며,
+        CEO가 직접 교정한 사항을 다음 실행 정책으로 반영하는 것”이다.
+      </p>
+      <table>
+        <thead>
+          <tr><th>루프</th><th>입력</th><th>처리</th><th>출력</th><th>검증</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Observation</td><td>채팅, 러너 로그, DB, health, deploy, 화면 캡처</td><td>사실 추출</td><td>memory_facts</td><td>source/evidence 필수</td></tr>
+          <tr><td>Reflection</td><td>실패, CEO 지적, validator reject</td><td>원인 분류 + 재발 방지 문장 생성</td><td>error_pattern, correction directive</td><td>다음 응답에서 실제 적용 여부</td></tr>
+          <tr><td>Skill Promotion</td><td>성공한 작업 절차</td><td>절차 템플릿화</td><td>project skill library</td><td>재사용 성공률</td></tr>
+          <tr><td>Eval Replay</td><td>과거 실패 질문/작업</td><td>새 프롬프트/모델로 재실행</td><td>score diff</td><td>품질 0.80 이상</td></tr>
+          <tr><td>Policy Promotion</td><td>검증 통과한 개선</td><td>prompt_assets/L1~L5 승격</td><td>compiled prompt provenance</td><td>applied_assets 확인</td></tr>
+          <tr><td>Autonomy Calibration</td><td>작업 위험도/성공률/비용</td><td>자동 승인 범위 계산</td><td>autonomy policy</td><td>무단 고위험 작업 0건</td></tr>
+        </tbody>
+      </table>
+
+      <h3>자동진화 품질 지표</h3>
+      <table>
+        <thead>
+          <tr><th>지표</th><th>현재/기준</th><th>목표</th><th>측정 위치</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>assistant quality_score</td><td>최근 7일 평균 0.750</td><td>0.850 이상</td><td><code>chat_messages.quality_score</code></td></tr>
+          <tr><td>runner_response quality</td><td>최근 7일 평균 0.678</td><td>0.820 이상</td><td><code>chat_messages.intent='runner_response'</code></td></tr>
+          <tr><td>review_hold</td><td>1건</td><td>0건 유지</td><td><code>pipeline_jobs</code></td></tr>
+          <tr><td>latest fact 반영률</td><td>미측정</td><td>CEO 세션 95% 이상</td><td>response-source audit</td></tr>
+          <tr><td>검증 없는 완료 보고</td><td>미측정</td><td>0건</td><td>completion contract validator</td></tr>
+          <tr><td>비용 원장 누락</td><td>존재</td><td>0건</td><td>usage ledger reconciliation</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="roadmap">
+      <h2>11. 구현 로드맵</h2>
+      <div class="timeline">
+        <div class="step">
+          <div class="phase">P0 / 1~2일</div>
+          <div>
+            <strong>Control Plane 원장 복구</strong>
+            <ul>
+              <li>pipeline review parser를 structured schema로 교체하고 <code>review_hold</code> 자동 재검수 루프를 추가한다.</li>
+              <li><code>ohvis_tasks</code>와 <code>pipeline_jobs</code>를 하나의 Task Center view로 통합한다.</li>
+              <li>보고 직전 DB/health/git 상태 재조회 계약을 validator로 강제한다.</li>
+              <li>텔레그램 primary 경로를 중단하고, 오비스 앱 Web Push primary + 텔레그램 fallback 정책으로 바꾼다.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">P1 / 3~7일</div>
+          <div>
+            <strong>컨텍스트 격리·오케스트레이션</strong>
+            <ul>
+              <li>CEO 세션용 <code>orchestrator_digest</code>와 프로젝트별 <code>project_capsule</code> 생성기를 만든다.</li>
+              <li><code>auto_rag</code>를 CEO 모드에서 capsule-first search로 확장하고, 일반 세션 raw cross-project search는 차단한다.</li>
+              <li>새 프로젝트 등록 wizard를 만들고 repo/server/db/deploy/health 정보를 표준 registry에 저장한다.</li>
+              <li>parallel_group, depends_on_key, target_files 충돌 감지를 UI에서 보이게 한다.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">P2 / 2~3주</div>
+          <div>
+            <strong>즉답·심층작업 분리</strong>
+            <ul>
+              <li>Immediate Response Layer를 추가해 복잡 작업도 1~3초 안에 접수·계획을 응답한다.</li>
+              <li>Deep Work Layer는 artifact 생성, 코드 수정, 검증, 배포를 background task로 실행한다.</li>
+              <li>질문별 <code>turn_sequence</code>, <code>reply_to_id</code>, <code>synthesis_group</code>로 결과 귀속 문제를 해결한다.</li>
+              <li>Task Center에서 오래된 질문 결과가 업데이트되면 현재 하단에는 알림 chip만 표시한다.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">P3 / 1개월</div>
+          <div>
+            <strong>자동진화·비용 최적화</strong>
+            <ul>
+              <li>실패 사례를 eval replay 세트로 자동 승격하고, 프롬프트 변경 전후 품질을 비교한다.</li>
+              <li>성공 절차를 skill library에 저장해 유사 작업에서 재사용한다.</li>
+              <li>usage ledger를 정규화해 모델/도구/러너 비용, latency, token, cache hit를 단일 집계한다.</li>
+              <li>P3 저위험 문서/조회 작업은 자동 승인, P2 이상 또는 배포/금융/개인정보는 승인 게이트를 유지한다.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="step">
+          <div class="phase">P4 / 2개월+</div>
+          <div>
+            <strong>자율 운영 고도화</strong>
+            <ul>
+              <li>프로젝트별 목표/KPI를 오비스가 추적하고, 지연·비용·품질 저하를 사전 경고한다.</li>
+              <li>일일/주간 CEO brief를 자동 생성하되, CEO가 오비스 앱 안에서 승인·재지시·보류까지 처리한다.</li>
+              <li>외부 앱은 선택적 connector일 뿐, 오비스 내부 task/notification/report가 기본 운영 채널이 된다.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <h3>즉시 생성할 지시서 초안</h3>
+      <pre>&gt;&gt;&gt;DIRECTIVE_START
+TASK_ID: AADS-OHVIS-CONTROL-PLANE-P0-20260906
+TITLE: 오비스 단일 지휘 Control Plane P0 구축
+PRIORITY: P0-CRITICAL
+SIZE: L
+DESCRIPTION:
+1. pipeline_jobs와 ohvis_tasks를 통합한 Task Center API/view를 구현한다.
+2. review_hold/parser failure를 structured schema 기반으로 복구하고, 재검수/승인 카드 흐름을 안정화한다.
+3. 오비스 앱 Web Push를 primary 보고 채널로 전환하고 텔레그램은 fallback only 설정으로 격하한다.
+4. 완료 보고 직전 DB/health/git/provenance 재조회 validator를 추가한다.
+5. 테스트: API health, pipeline status, task center query, web push dry-run, review parser unit test.
+&gt;&gt;&gt;DIRECTIVE_END</pre>
+
+      <pre>&gt;&gt;&gt;DIRECTIVE_START
+TASK_ID: AADS-OHVIS-CONTEXT-ISOLATION-P1-20260906
+TITLE: CEO 통합 세션 전 프로젝트 인지와 일반 세션 격리 동시 달성
+PRIORITY: P1-HIGH
+SIZE: M
+DESCRIPTION:
+1. project_capsule과 orchestrator_digest 생성기를 추가한다.
+2. workspace_preloader/auto_rag/memory_recall이 CEO 세션에서는 capsule-first, 일반 세션에서는 sealed project-only로 작동하게 한다.
+3. 응답 provenance에 사용된 capsule, project scope, raw lookup 여부를 기록한다.
+4. 테스트: CEO 세션은 AADS/GO100/KIS/SF/NTV2/NAS capsule을 확인하고, GO100 일반 세션은 타 프로젝트 raw memory가 주입되지 않음을 검증한다.
+&gt;&gt;&gt;DIRECTIVE_END</pre>
+    </section>
+
+    <section id="appendix">
+      <h2>12. 근거와 검증 메모</h2>
+      <h3>내부 실측 명령</h3>
+      <table>
+        <thead>
+          <tr><th>목적</th><th>명령/쿼리</th><th>주요 결과</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>KST 시각</td><td><code>date '+%Y-%m-%d %H:%M:%S %Z'</code></td><td>2026-09-06 14:24:39 KST</td></tr>
+          <tr><td>컨테이너</td><td><code>docker ps</code></td><td>AADS server/dashboard/postgres/redis/litellm/searxng healthy</td></tr>
+          <tr><td>API health</td><td><code>curl -w '%{http_code} %{time_total}' /health</code></td><td>200, 0.044123초</td></tr>
+          <tr><td>메모리 분포</td><td><code>SELECT project, count(*) FROM memory_facts GROUP BY project</code></td><td>GO100 34,480, AADS 17,601, NTV2 7,746, CEO 3,251</td></tr>
+          <tr><td>러너 상태</td><td><code>SELECT status, count(*) FROM pipeline_jobs GROUP BY status</code></td><td>rejected_done 628, awaiting_approval 1, review_hold 1</td></tr>
+          <tr><td>OHVIS 작업</td><td><code>SELECT status, count(*) FROM ohvis_tasks GROUP BY status</code></td><td>done 239, running 2, error 1</td></tr>
+          <tr><td>품질</td><td><code>chat_messages.quality_score</code></td><td>최근 7일 assistant 652건 평균 0.750</td></tr>
+          <tr><td>프롬프트 provenance</td><td><code>compiled_prompt_provenance</code></td><td>CEO 세션 role CEO, 31,227 chars</td></tr>
+        </tbody>
+      </table>
+
+      <h3>외부 기술 근거</h3>
+      <table>
+        <thead>
+          <tr><th>출처</th><th>날짜/조회</th><th>오비스 반영 포인트</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><a href="https://developers.openai.com/api/docs/guides/agents">OpenAI Agents SDK</a></td><td>2026-09-06 조회</td><td>agent loop, handoff, guardrails, tracing, approval 흐름</td></tr>
+          <tr><td><a href="https://modelcontextprotocol.io/specification/2026-07-28">MCP Specification 2026-07-28</a></td><td>2026-09-06 조회</td><td>tools/resources/prompts 표준화, tasks, progress, cancellation, consent</td></tr>
+          <tr><td><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph Overview</a></td><td>2026-09-06 조회</td><td>durable execution, streaming, HITL, deterministic+agentic graph</td></tr>
+          <tr><td><a href="https://docs.langchain.com/oss/python/langgraph/persistence">LangGraph Persistence</a></td><td>2026-09-06 조회</td><td>thread checkpoint와 long-term store 분리</td></tr>
+          <tr><td><a href="https://docs.crewai.com/">CrewAI Docs</a></td><td>2026-09-06 조회</td><td>role crews, flows, memory, observability</td></tr>
+          <tr><td><a href="https://pydantic.dev/docs/ai/overview/">Pydantic AI</a></td><td>2026-09-06 조회</td><td>typed agent loop, structured output, model swap</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2303.11366">Reflexion</a></td><td>2023-03-20</td><td>언어 피드백 기반 자기개선</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2305.16291">Voyager</a></td><td>2023-05-25</td><td>automatic curriculum, skill library, self-verification</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2304.03442">Generative Agents</a></td><td>2023-04-07</td><td>observation, memory, reflection, planning</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2303.17651">Self-Refine</a></td><td>2023-03-30</td><td>feedback/refine 반복과 최종보고 품질 보정</td></tr>
+        </tbody>
+      </table>
+
+      <h3>남은 미검증</h3>
+      <ul>
+        <li>이 보고서는 문서 작성 작업이며 배포는 수행하지 않았다.</li>
+        <li>오비스 앱 화면 캡처는 이번 작업 범위에 포함하지 않았다. 문서 접근은 정적 파일 존재와 HTML 구조 검사로 검증한다.</li>
+        <li>비용 수치는 원장 불일치가 있어 확정값으로 쓰지 않았다. usage ledger 복구 후 재산정해야 한다.</li>
+        <li>타 서버 211/114의 현재 상태는 이번 문서 생성 중 재조회하지 않았다. Control Plane 구현 전에는 프로젝트별 별도 health 재조회가 필요하다.</li>
+      </ul>
+    </section>
+  </div>
+</body>
+</html>
