@@ -57,7 +57,7 @@ async def test_auto_rag_filters_messages_already_in_current_history(monkeypatch)
     async def _fake_facts(_query_emb, _project):
         return []
 
-    async def _fake_messages(_query_emb, _session_id):
+    async def _fake_messages(_query_emb, _session_id, _project=None):
         return [
             {"msg_id": "current-msg", "similarity": 0.99, "text": "중복", "source": "대화"},
             {"msg_id": "past-msg", "similarity": 0.88, "text": "과거", "source": "대화"},
