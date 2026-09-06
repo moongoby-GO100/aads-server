@@ -77,6 +77,20 @@ def _normalize_project(project: Optional[str]) -> Optional[str]:
     return normalize_project_label(project)
 
 
+# CEO 통합지시 워크스페이스("[CEO] 통합지시" 등) — 전 프로젝트 조회 대상
+_CEO_ORCHESTRATOR_PROJECTS = ["AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO"]
+_ORCHESTRATOR_PER_PROJECT_LIMIT = 5
+_ORCHESTRATOR_TOTAL_LIMIT = 35
+
+
+def _is_ceo_orchestrator(project_id: Optional[str]) -> bool:
+    """CEO 통합지시 워크스페이스 여부 판별 (project_id는 workspace_name 정규화 결과).
+    일반 프로젝트 세션은 격리 유지, CEO/통합 워크스페이스만 전 프로젝트 조회로 확장."""
+    if not project_id:
+        return False
+    return "CEO" in project_id.upper() or "통합" in project_id
+
+
 def _truncate(text: str, char_limit: int) -> str:
     """텍스트를 char_limit 이내로 자르되 줄 단위로 끊기."""
     if len(text) <= char_limit:
@@ -217,11 +231,36 @@ async def _build_preferences(project_id: Optional[str] = None) -> tuple[str, lis
     """섹션 2: CEO 운영 원칙/선호 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
         _conf = _CONFIDENCE.get("ceo_preference", 0.2)
+        orchestrator = _is_ceo_orchestrator(project_id)
         async with _get_pool().acquire() as conn:
-            if project_id:
+            if orchestrator:
                 rows = await conn.fetch(
                     """
-                    SELECT id, key, value FROM ai_observations
+                    WITH ranked AS (
+                        SELECT id, key, value, project,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY COALESCE(NULLIF(project, ''), 'COMMON')
+                                   ORDER BY
+                                       CASE WHEN category IN ('compaction_directive','ceo_directive') THEN 0 ELSE 1 END,
+                                       (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
+                               ) AS rn
+                        FROM ai_observations
+                        WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
+                          AND confidence >= $2
+                          AND (project = ANY($1::text[]) OR project IS NULL OR project = '')
+                    )
+                    SELECT id, key, value, project FROM ranked
+                    WHERE rn <= $3
+                    ORDER BY rn, project
+                    LIMIT $4
+                    """,
+                    _CEO_ORCHESTRATOR_PROJECTS, _conf,
+                    _ORCHESTRATOR_PER_PROJECT_LIMIT, _ORCHESTRATOR_TOTAL_LIMIT,
+                )
+            elif project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, key, value, project FROM ai_observations
                     WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
                       AND confidence >= $2
                       AND (project IS NULL OR project = '' OR project = $1)
@@ -236,7 +275,7 @@ async def _build_preferences(project_id: Optional[str] = None) -> tuple[str, lis
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT id, key, value FROM ai_observations
+                    SELECT id, key, value, project FROM ai_observations
                     WHERE category IN ('ceo_preference', 'decision', 'ceo_correction', 'compaction_directive', 'ceo_directive')
                       AND confidence >= $1
                     ORDER BY
@@ -249,7 +288,10 @@ async def _build_preferences(project_id: Optional[str] = None) -> tuple[str, lis
             if not rows:
                 return "", []
             used_ids = [r["id"] for r in rows]
-            lines = [f"- {r['value']}" for r in rows]
+            if orchestrator:
+                lines = [f"- [{r['project'] or 'COMMON'}] {r['value']}" for r in rows]
+            else:
+                lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["preferences"]), used_ids
     except Exception as e:
@@ -261,12 +303,35 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, l
     """섹션 3: 도구 사용 전략 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
         _conf = _CONFIDENCE.get("tool_strategy", 0.3)
+        orchestrator = _is_ceo_orchestrator(project_id)
         async with _get_pool().acquire() as conn:
-            # #22: 프로젝트 필터링 통일 — 항상 (project = $1 OR project IS NULL)
-            if project_id:
+            if orchestrator:
                 rows = await conn.fetch(
                     """
-                    SELECT id, key, value FROM ai_observations
+                    WITH ranked AS (
+                        SELECT id, key, value, project,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY COALESCE(NULLIF(project, ''), 'COMMON')
+                                   ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
+                               ) AS rn
+                        FROM ai_observations
+                        WHERE category IN ('project_pattern', 'tool_strategy')
+                          AND confidence >= $2
+                          AND (project = ANY($1::text[]) OR project IS NULL)
+                    )
+                    SELECT id, key, value, project FROM ranked
+                    WHERE rn <= $3
+                    ORDER BY rn, project
+                    LIMIT $4
+                    """,
+                    _CEO_ORCHESTRATOR_PROJECTS, _conf,
+                    _ORCHESTRATOR_PER_PROJECT_LIMIT, _ORCHESTRATOR_TOTAL_LIMIT,
+                )
+            # #22: 프로젝트 필터링 통일 — 항상 (project = $1 OR project IS NULL)
+            elif project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, key, value, project FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
                       AND confidence >= $2
                       AND (project IS NULL OR project = $1)
@@ -280,7 +345,7 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, l
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT id, key, value FROM ai_observations
+                    SELECT id, key, value, project FROM ai_observations
                     WHERE category IN ('project_pattern', 'tool_strategy')
                       AND confidence >= $1
                     ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
@@ -299,7 +364,10 @@ async def _build_tool_strategy(project_id: Optional[str] = None) -> tuple[str, l
                     _seen_vals.add(_vkey)
                     _deduped.append(r)
             used_ids = [r["id"] for r in _deduped]
-            lines = [f"- {r['value']}" for r in _deduped]
+            if orchestrator:
+                lines = [f"- [{r['project'] or 'COMMON'}] {r['value']}" for r in _deduped]
+            else:
+                lines = [f"- {r['value']}" for r in _deduped]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["tool_strategy"]), used_ids
     except Exception as e:
@@ -311,11 +379,32 @@ async def _build_active_directives(project_id: Optional[str] = None) -> str:
     """섹션 4: 활성 Directive (directive_lifecycle pending/running).
     #22: 프로젝트 필터 통일 — project = $1 OR project IS NULL."""
     try:
+        orchestrator = _is_ceo_orchestrator(project_id)
         async with _get_pool().acquire() as conn:
-            if project_id:
+            if orchestrator:
                 rows = await conn.fetch(
                     """
-                    SELECT task_id, title, status, priority
+                    WITH ranked AS (
+                        SELECT task_id, title, status, priority, project,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY COALESCE(NULLIF(project, ''), 'COMMON')
+                                   ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, created_at DESC
+                               ) AS rn
+                        FROM directive_lifecycle
+                        WHERE status IN ('pending', 'running', 'queued')
+                          AND (project = ANY($1::text[]) OR project IS NULL)
+                    )
+                    SELECT task_id, title, status, priority, project FROM ranked
+                    WHERE rn <= $2
+                    ORDER BY rn, project
+                    LIMIT $3
+                    """,
+                    _CEO_ORCHESTRATOR_PROJECTS, _ORCHESTRATOR_PER_PROJECT_LIMIT, _ORCHESTRATOR_TOTAL_LIMIT,
+                )
+            elif project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT task_id, title, status, priority, project
                     FROM directive_lifecycle
                     WHERE status IN ('pending', 'running', 'queued')
                       AND (project IS NULL OR project = $1)
@@ -329,7 +418,7 @@ async def _build_active_directives(project_id: Optional[str] = None) -> str:
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT task_id, title, status, priority
+                    SELECT task_id, title, status, priority, project
                     FROM directive_lifecycle
                     WHERE status IN ('pending', 'running', 'queued')
                     ORDER BY
@@ -344,7 +433,8 @@ async def _build_active_directives(project_id: Optional[str] = None) -> str:
             for r in rows:
                 priority = r.get("priority") or ""
                 status_icon = "🔄" if r["status"] == "running" else "⏳"
-                lines.append(f"- {status_icon} [{r['task_id']}] {r['title']} ({priority})")
+                tag = f"[{r['project']}] " if orchestrator and r.get("project") else ""
+                lines.append(f"- {status_icon} {tag}[{r['task_id']}] {r['title']} ({priority})")
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["directives"])
     except Exception as e:
@@ -356,12 +446,35 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
     """섹션 5: 이전 작업 발견 사항 — 해당 프로젝트 + 공통(project IS NULL)."""
     try:
         _conf = _CONFIDENCE.get("discovery", 0.4)
+        orchestrator = _is_ceo_orchestrator(project_id)
         async with _get_pool().acquire() as conn:
-            # #22: 프로젝트 필터 통일
-            if project_id:
+            if orchestrator:
                 rows = await conn.fetch(
                     """
-                    SELECT id, key, value FROM ai_observations
+                    WITH ranked AS (
+                        SELECT id, key, value, project,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY COALESCE(NULLIF(project, ''), 'COMMON')
+                                   ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
+                               ) AS rn
+                        FROM ai_observations
+                        WHERE category IN ('learning', 'recurring_issue', 'discovery')
+                          AND confidence >= $2
+                          AND (project = ANY($1::text[]) OR project IS NULL)
+                    )
+                    SELECT id, key, value, project FROM ranked
+                    WHERE rn <= $3
+                    ORDER BY rn, project
+                    LIMIT $4
+                    """,
+                    _CEO_ORCHESTRATOR_PROJECTS, _conf,
+                    _ORCHESTRATOR_PER_PROJECT_LIMIT, _ORCHESTRATOR_TOTAL_LIMIT,
+                )
+            # #22: 프로젝트 필터 통일
+            elif project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, key, value, project FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
                       AND confidence >= $2
                       AND (project IS NULL OR project = $1)
@@ -375,7 +488,7 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT id, key, value FROM ai_observations
+                    SELECT id, key, value, project FROM ai_observations
                     WHERE category IN ('learning', 'recurring_issue', 'discovery')
                       AND confidence >= $1
                     ORDER BY (confidence * EXP(-0.1 * EXTRACT(EPOCH FROM (NOW() - COALESCE(updated_at, created_at))) / 86400)) DESC
@@ -386,7 +499,10 @@ async def _build_discoveries(project_id: Optional[str] = None) -> tuple[str, lis
             if not rows:
                 return "", []
             used_ids = [r["id"] for r in rows]
-            lines = [f"- {r['value']}" for r in rows]
+            if orchestrator:
+                lines = [f"- [{r['project'] or 'COMMON'}] {r['value']}" for r in rows]
+            else:
+                lines = [f"- {r['value']}" for r in rows]
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["discoveries"]), used_ids
     except Exception as e:
@@ -570,11 +686,32 @@ async def _build_learned_memory(project_id: Optional[str] = None) -> str:
     CEO 선호 + 프로젝트 패턴 + 결정 이력을 해당 프로젝트 + 공통(project IS NULL) 범위로 주입.
     """
     try:
+        orchestrator = _is_ceo_orchestrator(project_id)
         async with _get_pool().acquire() as conn:
-            if project_id:
+            if orchestrator:
                 rows = await conn.fetch(
                     """
-                    SELECT category, key, value FROM ai_meta_memory
+                    WITH ranked AS (
+                        SELECT category, key, value, project,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY COALESCE(NULLIF(project, ''), 'COMMON')
+                                   ORDER BY confidence DESC
+                               ) AS rn
+                        FROM ai_meta_memory
+                        WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
+                          AND (project = ANY($1::text[]) OR project IS NULL OR project = '')
+                    )
+                    SELECT category, key, value, project FROM ranked
+                    WHERE rn <= $2
+                    ORDER BY rn, project
+                    LIMIT $3
+                    """,
+                    _CEO_ORCHESTRATOR_PROJECTS, _ORCHESTRATOR_PER_PROJECT_LIMIT, _ORCHESTRATOR_TOTAL_LIMIT,
+                )
+            elif project_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT category, key, value, project FROM ai_meta_memory
                     WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
                       AND (project IS NULL OR project = '' OR project = $1)
                     ORDER BY
@@ -587,7 +724,7 @@ async def _build_learned_memory(project_id: Optional[str] = None) -> str:
             else:
                 rows = await conn.fetch(
                     """
-                    SELECT category, key, value FROM ai_meta_memory
+                    SELECT category, key, value, project FROM ai_meta_memory
                     WHERE category IN ('ceo_preference', 'project_pattern', 'known_issue', 'decision_history', 'prompt_optimization')
                     ORDER BY confidence DESC
                     LIMIT 15
@@ -608,7 +745,8 @@ async def _build_learned_memory(project_id: Optional[str] = None) -> str:
                     val_str = val.get("summary") or val.get("description") or _json.dumps(val, ensure_ascii=False)
                 else:
                     val_str = str(val)
-                lines.append(f"- [{r['category']}] {r['key']}: {val_str[:100]}")
+                tag = f"[{r['project']}]" if orchestrator and r.get("project") else f"[{r['category']}]"
+                lines.append(f"- {tag} {r['key']}: {val_str[:100]}")
             text = "\n".join(lines)
             return _truncate(text, _BUDGET["learned_memory"])
     except Exception as e:
