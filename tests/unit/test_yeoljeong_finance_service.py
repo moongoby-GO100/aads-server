@@ -89,6 +89,65 @@ def test_normalize_wrong_portal_result_drops_collected_records():
     }
 
 
+def test_normalize_delivery_collection_result_rejects_empty_sales_shells():
+    result = service._normalize_delivery_collection_result(
+        "yogiyo",
+        {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "empty-sale",
+                        "service": "yogiyo",
+                        "record_type": "sales",
+                        "order_id": "",
+                        "gross_amount": 0,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+                "ads": [],
+            },
+            "diagnostics": {},
+        },
+    )
+
+    assert result["status"] == "portal_action_required"
+    assert result["error_code"] == "PORTAL_EMPTY_RECORDS_REJECTED"
+    assert result["records"]["sales"] == []
+    assert result["diagnostics"]["invalid_record_rejected_counts"]["sales"] == 1
+
+
+def test_normalize_delivery_collection_result_keeps_meaningful_sales():
+    result = service._normalize_delivery_collection_result(
+        "baemin",
+        {
+            "status": "succeeded",
+            "error_code": "",
+            "records": {
+                "sales": [
+                    {
+                        "id": "sale-1",
+                        "service": "baemin",
+                        "record_type": "sales",
+                        "order_id": "B123",
+                        "gross_amount": 12000,
+                    }
+                ],
+                "settlements": [],
+                "reviews": [],
+                "ads": [],
+            },
+            "diagnostics": {},
+        },
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["records"]["sales"][0]["id"] == "sale-1"
+    assert "invalid_record_rejected_counts" not in result.get("diagnostics", {})
+
+
 def valid_employment_contract(**overrides):
     payload = {
         "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",

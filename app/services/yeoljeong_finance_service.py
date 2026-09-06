@@ -187,6 +187,12 @@ DELIVERY_LEDGER_TABLES = (
     "yeoljeong_delivery_collection_status",
 )
 DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
+DELIVERY_DATA_LEDGER_NAMES = {
+    "delivery_sales",
+    "delivery_settlements",
+    "delivery_reviews",
+    "delivery_ads",
+}
 
 
 def _delivery_empty_counts() -> dict[str, int]:
@@ -195,6 +201,81 @@ def _delivery_empty_counts() -> dict[str, int]:
 
 def _delivery_empty_record_lists() -> dict[str, list[dict[str, Any]]]:
     return {kind: [] for kind in DELIVERY_RECORD_TYPES}
+
+
+def _delivery_record_kind_from_ledger_name(name: str) -> str:
+    if name.startswith("delivery_"):
+        return name.removeprefix("delivery_")
+    return name
+
+
+def _delivery_int_value(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = re.sub(r"[^0-9.-]", "", str(value or ""))
+    if not text or text in {"-", ".", "-."}:
+        return 0
+    try:
+        return int(round(float(text)))
+    except ValueError:
+        return 0
+
+
+def _delivery_record_has_text(record: dict[str, Any], *fields: str) -> bool:
+    return any(str(record.get(field) or "").strip() for field in fields)
+
+
+def _delivery_record_is_meaningful(kind: str, record: dict[str, Any]) -> bool:
+    """Reject placeholder rows parsed from portal chrome or empty tables."""
+    normalized_kind = _delivery_record_kind_from_ledger_name(str(kind or ""))
+    if normalized_kind == "sales":
+        return _delivery_int_value(record.get("gross_amount")) > 0 and _delivery_record_has_text(
+            record,
+            "order_id",
+            "order_no",
+            "source_id",
+        )
+    if normalized_kind == "settlements":
+        amount = max(
+            _delivery_int_value(record.get("settlement_amount")),
+            _delivery_int_value(record.get("sales_amount")),
+        )
+        return amount > 0 and _delivery_record_has_text(record, "settlement_id", "order_id", "order_no", "source_id")
+    if normalized_kind == "reviews":
+        return bool(str(record.get("review_text") or "").strip()) or _delivery_int_value(record.get("rating")) > 0
+    if normalized_kind == "ads":
+        return _delivery_record_has_text(record, "campaign_name", "ad_product") or max(
+            _delivery_int_value(record.get("cost_amount")),
+            _delivery_int_value(record.get("impressions")),
+            _delivery_int_value(record.get("clicks")),
+            _delivery_int_value(record.get("orders")),
+            _delivery_int_value(record.get("sales_amount")),
+        ) > 0
+    return True
+
+
+def _delivery_filter_meaningful_records(
+    records: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
+    filtered = _delivery_empty_record_lists()
+    rejected = _delivery_empty_counts()
+    if not isinstance(records, dict):
+        return filtered, rejected
+    for kind in DELIVERY_RECORD_TYPES:
+        rows = records.get(kind) or []
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                rejected[kind] += 1
+                continue
+            if _delivery_record_is_meaningful(kind, row):
+                filtered[kind].append(row)
+            else:
+                rejected[kind] += 1
+    return filtered, rejected
 JSON_LEDGER_FILES = (
     "employee_join_requests",
     "onboarding_documents",
@@ -645,6 +726,8 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
 
     table = DB_LEDGER_TABLE_BY_NAME.get(name)
     if not table:
+        return False
+    if name in DELIVERY_DATA_LEDGER_NAMES and not _delivery_record_is_meaningful(name, record):
         return False
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
@@ -8345,6 +8428,23 @@ def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) 
         result = {**result}
         result["error_code"] = f"{service.upper()}_SECURITY_BLOCKED"
         result["message"] = f"{label} 포털이 서버 자동접속을 보안 정책으로 차단했습니다. PC 인증 세션 또는 정산 CSV 업로드가 필요합니다."
+    filtered_records, rejected_counts = _delivery_filter_meaningful_records(result.get("records"))
+    rejected_total = sum(rejected_counts.values())
+    if rejected_total:
+        diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+        result = {**result, "records": filtered_records}
+        result["diagnostics"] = {
+            **diagnostics,
+            "invalid_record_rejected_counts": rejected_counts,
+        }
+        if not any(filtered_records.values()):
+            label = _delivery_platform_label(service)
+            result["status"] = "portal_action_required"
+            result["error_code"] = "PORTAL_EMPTY_RECORDS_REJECTED"
+            result["message"] = (
+                f"{label} 포털에서 금액·주문번호 없는 빈 데이터만 감지되어 저장을 차단했습니다. "
+                "조회 기간, 포털 메뉴, 엑셀/CSV 원본을 확인한 뒤 다시 수집해야 합니다."
+            )
     return result
 
 
@@ -8825,6 +8925,7 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
     business_id, branch = _normalize_delivery_scope(payload.get("business_id"), payload.get("branch"))
     source_text = str(payload.get("source_text") or payload.get("sourceText") or "")
     parsed = parse_portal_export(service, record_type, source_text, business_id, branch)
+    parsed_records, rejected_counts = _delivery_filter_meaningful_records(parsed.get("records"))
     ledger_names = {kind: f"delivery_{kind}" for kind in DELIVERY_RECORD_TYPES}
     ledger_name = ledger_names[record_type]
     existing_rows = _read(ledger_name)
@@ -8832,7 +8933,7 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
     imported: list[dict[str, Any]] = []
     duplicate_rows = 0
     now = _now()
-    for record in parsed.get("records", {}).get(record_type) or []:
+    for record in parsed_records.get(record_type) or []:
         record["source_file"] = Path(str(payload.get("filename") or "pc-browser-copy.html")).name
         record["collection_mode"] = "pc-browser-parse"
         record["created_at"] = record.get("created_at") or now
@@ -8849,6 +8950,17 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
     counts = _delivery_empty_counts()
     counts[record_type] = len(imported)
     run_id = str(uuid4())
+    status = parsed.get("status") or "failed"
+    error_code = parsed.get("error_code") or ""
+    message = parsed.get("message") or "PC에서 로그인 후 복사/저장한 배민 화면 데이터를 파싱해 반영했습니다."
+    rejected_total = sum(rejected_counts.values())
+    if rejected_total and not imported:
+        status = "portal_action_required"
+        error_code = "PORTAL_EMPTY_RECORDS_REJECTED"
+        message = (
+            f"{_delivery_platform_label(service)} 포털에서 금액·식별자 없는 빈 데이터만 감지되어 저장을 차단했습니다. "
+            "원본 파일 또는 복사 화면을 확인한 뒤 다시 반영해야 합니다."
+        )
     statuses.insert(
         0,
         {
@@ -8858,16 +8970,17 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
             "branch": branch,
             "date_from": str(payload.get("date_from") or ""),
             "date_to": str(payload.get("date_to") or ""),
-            "status": parsed.get("status") or "failed",
+            "status": status,
             "counts": counts,
-            "error_code": parsed.get("error_code") or "",
+            "error_code": error_code,
             "diagnostics": {
                 **(parsed.get("diagnostics") or {}),
                 "collection_mode": "pc-browser-parse",
                 "record_type": record_type,
                 "duplicate_rows": duplicate_rows,
+                "invalid_record_rejected_counts": rejected_counts,
             },
-            "message": parsed.get("message") or "PC에서 로그인 후 복사/저장한 배민 화면 데이터를 파싱해 반영했습니다.",
+            "message": message,
             "started_at": now,
             "finished_at": now,
             "created_at": now,
@@ -8886,14 +8999,14 @@ def import_delivery_portal_text(payload: dict[str, Any], user: dict[str, Any]) -
         "summary": [
             {
                 "service": service,
-                "status": parsed.get("status") or "failed",
-                "portal_status": parsed.get("status") or "failed",
-                "error_code": parsed.get("error_code") or "",
+                "status": status,
+                "portal_status": status,
+                "error_code": error_code,
                 "counts": counts,
                 "run_id": run_id,
                 "collection_mode": "pc-browser-parse",
-                "message": parsed.get("message") or "PC 브라우저 파싱 반영 완료",
-                "portal_message": parsed.get("message") or "PC 브라우저 파싱 반영 완료",
+                "message": message,
+                "portal_message": message,
             }
         ],
         "records": records,
