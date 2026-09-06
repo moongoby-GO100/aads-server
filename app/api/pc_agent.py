@@ -1400,7 +1400,27 @@ async def route_execute_command(req: RoutedCommandRequest, request: Request):
             effective_command_timeout_seconds = min(effective_command_timeout_seconds, param_timeout)
     params["command_timeout_seconds"] = effective_command_timeout_seconds
     if req.command_type.strip().lower() == "browser_eval" and "evaluate_timeout_seconds" not in params:
-        params["evaluate_timeout_seconds"] = max(1.0, min(60.0, effective_command_timeout_seconds - 0.5))
+        route_hints = " ".join(
+            str(value or "").lower()
+            for value in (
+                req.job_type,
+                params.get("job_type"),
+                params.get("work_key"),
+                params.get("browser_work_key"),
+                params.get("label"),
+                params.get("url"),
+                params.get("target_url"),
+            )
+        )
+        financial_eval = any(
+            marker in route_hints
+            for marker in ("financial_exclusive", "bank", "banking", "shinhan", "yeoljeong-bank")
+        )
+        max_eval_timeout_seconds = 300.0 if financial_eval else 60.0
+        params["evaluate_timeout_seconds"] = max(
+            1.0,
+            min(max_eval_timeout_seconds, effective_command_timeout_seconds - 0.5),
+        )
 
     result = await pc_agent_manager.execute_routed_command(
         command_type=req.command_type,

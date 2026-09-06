@@ -543,6 +543,34 @@ async def test_route_execute_browser_eval_allows_long_bank_evaluation_timeout(
 
 
 @pytest.mark.asyncio
+async def test_route_execute_browser_eval_extends_financial_evaluation_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_execute_routed_command(**kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "command_id": "cmd-bank-browser-eval"}
+
+    monkeypatch.setattr(pc_agent.pc_agent_manager, "execute_routed_command", fake_execute_routed_command)
+
+    request = pc_agent.RoutedCommandRequest(
+        command_type="browser_eval",
+        params={
+            "expression": "document.body.innerText",
+            "work_key": "yeoljeong-bank-shinhan-mia",
+        },
+        job_type="financial_exclusive",
+        command_timeout_seconds=180,
+    )
+    result = await pc_agent.route_execute_command(request, _internal_request())
+
+    assert result["status"] == "success"
+    assert captured["command_timeout_seconds"] == 180
+    assert captured["params"]["evaluate_timeout_seconds"] == 179.5
+
+
+@pytest.mark.asyncio
 async def test_execute_browser_command_adds_default_work_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
