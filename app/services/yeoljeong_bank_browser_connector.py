@@ -2247,18 +2247,18 @@ async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
               const loggedInMarker = () => {
                 const currentText = authText();
                 const currentUrl = authUrl();
+                const stillLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText);
+                if (/#210101/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
+                  return 'post_login_url';
+                }
                 const hasFinancialCertificate = !!Array.from(document.querySelectorAll('iframe')).find((frame) => {
                   const src = String(frame.src || '').toLowerCase();
                   return src.includes('fincert') || src.includes('yeskey');
                 });
                 if (hasFinancialCertificate) return '';
-                const stillLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText);
                 if (/로그아웃/i.test(currentText)) return 'post_login_text';
                 if (!stillLoginPanel && /거래내역\\s*(조회|다운로드)|조회결과|출금가능금액|계좌잔액/i.test(currentText)) {
                   return 'post_login_text';
-                }
-                if (/#210101/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
-                  return 'post_login_url';
                 }
                 return '';
               };
@@ -2465,20 +2465,20 @@ async def _try_shinhan_individual_login_step(
 		              const loggedInMarker = () => {
 		                const currentText = authText();
 		                const currentUrl = authUrl();
+		                const stillLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText);
+		                if (/#210101/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
+		                  return 'post_login_url';
+		                }
 		                const hasFinancialCertificate = !!Array.from(document.querySelectorAll('iframe')).find((frame) => {
 		                  const src = String(frame.src || '').toLowerCase();
 		                  return src.includes('fincert') || src.includes('yeskey');
 		                });
 		                if (hasFinancialCertificate) return '';
-		                const stillLoginPanel = /이용자\\s*ID\\s*로그인|이용자ID\\s*로그인|아이디\\s*로그인/i.test(currentText);
 		                if (/로그아웃/i.test(currentText)) {
 		                  return 'post_login_text';
 		                }
 		                if (!stillLoginPanel && /거래내역\\s*(조회|다운로드)|조회결과|출금가능금액|계좌잔액/i.test(currentText)) {
 		                  return 'post_login_text';
-		                }
-		                if (/#210101/.test(currentUrl) && !/login/i.test(currentUrl) && !stillLoginPanel) {
-		                  return 'post_login_url';
 		                }
 		                return '';
 		              };
