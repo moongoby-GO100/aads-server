@@ -195,6 +195,43 @@ async def complete_task(
     return ok
 
 
+async def mark_stale_running_tasks(stale_hours: int = 24) -> int:
+    """status='running'인데 updated_at이 stale_hours 이상 지난 좀비 작업을 'stale'로 마킹.
+
+    러너/에이전트 프로세스가 죽거나 서버 재시작으로 완료 보고 없이 끊긴 작업이
+    'running'에 영구 고정되어 활성 작업 슬롯(_MAX_CONCURRENT_TASKS)을 막는 것을 방지한다.
+    """
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE ohvis_tasks
+                SET status = 'stale', updated_at = NOW()
+                WHERE status = 'running'
+                  AND updated_at < NOW() - ($1 || ' hours')::interval
+                RETURNING id, session_id, title
+                """,
+                str(stale_hours),
+            )
+            for row in rows:
+                if not row["session_id"]:
+                    continue
+                try:
+                    await _save_task_card(conn, str(row["session_id"]), str(row["id"]), {
+                        "title": row["title"], "status": "stale",
+                    })
+                except Exception:
+                    pass
+            if rows:
+                logger.warning("ohvis_tasks_marked_stale: count=%d threshold_hours=%d", len(rows), stale_hours)
+            return len(rows)
+    except Exception as e:
+        logger.warning("ohvis_tasks_mark_stale_failed: %s", e)
+        return 0
+
+
 async def find_task_by_runner(runner_job_id: str) -> Optional[str]:
     """runner_job_id로 기존 task_id 조회."""
     try:

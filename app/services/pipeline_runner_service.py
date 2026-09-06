@@ -51,6 +51,7 @@ def _get_timeout_for_job(job: "PipelineCJob") -> int:
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
 _REVIEW_MODEL = "claude-sonnet-4-6"
+_MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 review_hold 에스컬레이션
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
 # CEO 지시: 크기별 Claude 모델 분기 — XL=Opus, L/M=Sonnet, S/XS=Haiku (2026-04-14)
@@ -567,13 +568,13 @@ class PipelineCJob:
                     )
                     return
 
-                # AI 검수
+                # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 review_hold 폴백)
                 self._log("ai_review", f"[{self.cycle}차] AI 검수 중...")
-                review = await self._ai_review()
+                review = await self._ai_review_with_retry()
 
                 if review["verdict"] == "DELEGATED":
-                    # LLM 검수 실패는 미검증 diff이므로 승인 대기로 넘기지 않는다.
-                    self._log("review_hold", f"[{self.cycle}차] LLM 검수 실패, 승인 보류")
+                    # 재시도까지 모두 소진된 경우에만 미검증 diff로 간주해 승인 대기로 넘기지 않는다.
+                    self._log("review_hold", f"[{self.cycle}차] LLM 검수 {_MAX_REVIEW_PARSE_RETRIES}회 재시도 실패, 승인 보류")
                     diff_summary = self._format_diff_summary(self.git_diff)
                     output_text = self.result_output[-2000:] if self.result_output else "(출력 없음)"
                     self.status = "review_hold"
@@ -582,6 +583,7 @@ class PipelineCJob:
                         f"{review.get('summary', '리뷰 실패')}"
                     )
                     await self._save_to_db()
+                    await self._flag_review_hold(review)
                     await self._post_to_chat(
                         f"🟠 **[AI 리뷰 보류]** `{self.job_id}`\n"
                         f"LLM 검수 호출 실패로 승인 대기에 올리지 않았습니다.\n"
@@ -1539,6 +1541,51 @@ class PipelineCJob:
                 "feedback": "",
                 "parse_error": str(e),
             }
+
+    async def _ai_review_with_retry(self) -> dict:
+        """AI 검수를 최대 _MAX_REVIEW_PARSE_RETRIES회 시도.
+
+        LLM 호출/JSON 파싱이 계속 실패(DELEGATED)해도 첫 실패에 바로 review_hold로
+        넘기지 않고, 지수 백오프로 재시도한 뒤에만 호출부가 review_hold를 판단하게 한다.
+        """
+        review = {"verdict": "DELEGATED", "summary": "검수 미실행", "feedback": ""}
+        for attempt in range(1, _MAX_REVIEW_PARSE_RETRIES + 1):
+            review = await self._ai_review()
+            if review["verdict"] != "DELEGATED":
+                return review
+            self._log(
+                "review_retry",
+                f"[{self.cycle}차] AI 검수 실패 ({attempt}/{_MAX_REVIEW_PARSE_RETRIES}) — {review.get('summary', '')}",
+            )
+            if attempt < _MAX_REVIEW_PARSE_RETRIES:
+                await asyncio.sleep(3 * attempt)
+        return review
+
+    async def _flag_review_hold(self, review: dict) -> None:
+        """review_hold 전이 시 review_flag_category/review_needs_retry/error_detail을 기록.
+
+        migration 141 및 /pipeline/jobs/{job_id}/retry-review 엔드포인트가 이 컬럼들로
+        보류 작업을 식별/재검수하므로, 메인 검수 루프에서도 반드시 채워야 review_hold가
+        재검수 없이 영구 대기 상태로 남지 않는다.
+        """
+        try:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE pipeline_jobs
+                    SET review_flag_category = 'REVIEW_PARSER_FAILURE',
+                        review_needs_retry = TRUE,
+                        error_detail = $2,
+                        updated_at = NOW()
+                    WHERE job_id = $1
+                    """,
+                    self.job_id,
+                    f"review_failed: {_MAX_REVIEW_PARSE_RETRIES}회 재시도 소진 — {review.get('summary', 'REVIEW_PARSER_FAILURE')}"[:500],
+                )
+        except Exception as e:
+            logger.warning(f"flag_review_hold_failed job={self.job_id}: {e}")
 
     # ─── 최종 검증 ──────────────────────────────────────────────────────────
 

@@ -2951,6 +2951,23 @@ async def lifespan(app: FastAPI):
 
     _startup_asyncio.create_task(_periodic_orphan_claude_reaper())
 
+    # ohvis_tasks 좀비(running 24h+) 주기적 정리 — P0: 러너 완료 루프 복구
+    async def _periodic_ohvis_stale_task_cleanup():
+        import asyncio as _stale_asyncio
+        await _stale_asyncio.sleep(60)
+        stale_hours = int(os.getenv("OHVIS_TASK_STALE_HOURS", "24"))
+        while True:
+            try:
+                from app.services.ohvis_task_manager import mark_stale_running_tasks
+                marked = await mark_stale_running_tasks(stale_hours=stale_hours)
+                if marked:
+                    logger.info(f"ohvis_stale_task_cleanup: marked={marked} threshold_hours={stale_hours}")
+            except Exception as _e:
+                logger.warning(f"ohvis_stale_task_cleanup_failed: {_e}")
+            await _stale_asyncio.sleep(1800)
+
+    _startup_asyncio.create_task(_periodic_ohvis_stale_task_cleanup())
+
     # Claude Max 사용량 폴러 시작
     try:
         from app.services.oauth_usage_tracker import ensure_claude_max_poller_running
