@@ -13,10 +13,19 @@ ACTIVE_STATUSES = ("running", "verifying", "syncing_standby")
 QUEUED_STATUSES = ("queued", "awaiting_approval")
 TERMINAL_PIPELINE_STATUSES = ("done", "error", "cancelled", "rejected_done")
 PROJECTS = ("AADS", "GO100", "KIS", "SF", "NTV2", "NAS")
+DEPLOY_STALL_SECONDS = 600
 
 
 def _dict_rows(rows: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
+
+
+def _seconds_since(value: Any, now: datetime) -> int | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return max(0, int((now - value.astimezone(timezone.utc)).total_seconds()))
 
 
 async def _table_exists(conn: Any, name: str) -> bool:
@@ -40,6 +49,22 @@ async def _load_deploy_runs(conn: Any) -> tuple[list[dict[str, Any]], list[dict[
     active = [dict(row) for row in rows if row["status"] in ACTIVE_STATUSES]
     queued = [dict(row) for row in rows if row["status"] in QUEUED_STATUSES]
     return active, queued
+
+
+def _annotate_active_runs(active: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    for row in active:
+        heartbeat_age = _seconds_since(row.get("last_heartbeat_at") or row.get("updated_at"), now)
+        phase_age = _seconds_since(row.get("phase_started_at"), now)
+        row["heartbeat_age_seconds"] = heartbeat_age
+        row["phase_elapsed_seconds"] = phase_age
+        row["stalled"] = bool(
+            heartbeat_age is not None and heartbeat_age >= DEPLOY_STALL_SECONDS
+        )
+        if row["stalled"]:
+            row["signal"] = "deploy_phase_stalled"
+            row["reconcile_action"] = "review_process_and_bg_digest"
+            row["requires_ceo_approval"] = True
+    return active
 
 
 async def _load_recent_durations(conn: Any) -> list[dict[str, Any]]:
@@ -173,6 +198,7 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
 
     if has_runs:
         active, queued = await _load_deploy_runs(conn)
+        active = _annotate_active_runs(active, now)
         response["active_deployments"] = active
         response["queued_deployments"] = queued
         response["recent_durations_per_project"] = await _load_recent_durations(conn)
@@ -211,6 +237,8 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
     blockers = []
     if response["active_deployments"]:
         blockers.append("deployment_in_progress")
+    if any(item.get("stalled") for item in response["active_deployments"]):
+        blockers.append("deployment_phase_stalled")
     if response["stale_zombie_signals"]:
         blockers.append("runner_reconciliation_required")
     if any(item.get("bg_sync_status") == "mismatch" for item in response["active_deployments"]):

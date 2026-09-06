@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS deploy_runs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS deploy_pid INTEGER;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS deploy_generation TEXT;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_deploy_runs_project_runner_job
     ON deploy_runs (project, runner_job_id)
     WHERE runner_job_id IS NOT NULL;

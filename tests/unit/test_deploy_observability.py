@@ -91,6 +91,41 @@ def test_go100_zombie_blocks_next_deploy_without_mutation():
     assert "runner_reconciliation_required" in result["next_deploy_readiness"]["blockers"]
 
 
+def test_stalled_active_deploy_is_visible_blocker():
+    now = datetime.now(timezone.utc)
+    old = now.replace(year=now.year - 1)
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "pipeline_jobs"},
+        {
+            "FROM deploy_runs dr": [{
+                "id": 7,
+                "project": "AADS",
+                "release_sha": "deadbeef",
+                "status": "syncing_standby",
+                "phase": "standby_same_digest_sync",
+                "phase_started_at": old,
+                "last_heartbeat_at": old,
+                "updated_at": old,
+                "image_digest": "sha256:a",
+                "standby_digest": "sha256:b",
+                "bg_sync_status": "mismatch",
+            }],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "FROM pipeline_jobs": [],
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    active = result["active_deployments"][0]
+    assert active["stalled"] is True
+    assert active["signal"] == "deploy_phase_stalled"
+    assert "deployment_phase_stalled" in result["next_deploy_readiness"]["blockers"]
+
+
 def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     script = DEPLOY_SCRIPT.read_text()
 
@@ -102,6 +137,10 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "INSERT INTO deploy_phase_events" in script
     assert "UPDATE deploy_runs" in script
     assert "release image excludes uncommitted worktree changes" in script
+    assert "last_heartbeat_at=NOW()" in script
+    assert "deploy_signal_trap TERM" in script
+    assert "ensure_deploy_observability_schema" in script
+    assert "migrations/150_deploy_observability_v1.sql" in script
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():

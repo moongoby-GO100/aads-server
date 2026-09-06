@@ -113,20 +113,35 @@ deploy_db_available() {
     docker inspect aads-postgres --format '{{.State.Running}}' 2>/dev/null | grep -q true
 }
 
+ensure_deploy_observability_schema() {
+    if ! deploy_db_available; then
+        echo "[deploy.sh] ❌ PostgreSQL is not running; cannot verify deployment observability schema"
+        return 1
+    fi
+    if ! docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q \
+        < "${COMPOSE_DIR}/migrations/150_deploy_observability_v1.sql" >/dev/null; then
+        echo "[deploy.sh] ❌ deployment observability schema migration failed"
+        return 1
+    fi
+}
+
 deploy_observe_init() {
     if [[ -n "${DEPLOY_RUN_ID:-}" ]] || ! deploy_db_available; then
         return 0
     fi
-    local release_sql current_slot_sql candidate_slot_sql run_id
+    local release_sql current_slot_sql candidate_slot_sql generation_sql run_id
     release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
     current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
     candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
+    generation_sql="$(sql_escape "${DEPLOY_GENERATION:-}")"
     run_id="$(
         deploy_db_exec "
             INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
-                                    current_slot, candidate_slot, created_at, updated_at)
+                                    current_slot, candidate_slot, deploy_pid, deploy_generation,
+                                    last_heartbeat_at, created_at, updated_at)
             VALUES('AADS', '$release_sql', 'running', 'initializing', NOW(),
-                   '$current_slot_sql', NULLIF('$candidate_slot_sql', ''), NOW(), NOW())
+                   '$current_slot_sql', NULLIF('$candidate_slot_sql', ''), $$,
+                   NULLIF('$generation_sql', ''), NOW(), NOW(), NOW())
             RETURNING id;
         " | tail -1 | tr -d '[:space:]'
     )"
@@ -177,6 +192,7 @@ deploy_observe_update() {
         SET status='$status_sql',
             phase='$phase_sql',
             updated_at=NOW(),
+            last_heartbeat_at=NOW(),
             phase_completed_at=CASE
                 WHEN '$status_sql' IN ('success', 'completed', 'failed', 'blocked') THEN NOW()
                 ELSE phase_completed_at
@@ -190,6 +206,17 @@ deploy_observe_update() {
             error_summary=NULLIF('$err_sql', '')
         WHERE id=${DEPLOY_RUN_ID};
     " >/dev/null
+}
+
+deploy_signal_trap() {
+    local signal_name="${1:-TERM}"
+    stop_downtime_monitor
+    deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "deploy interrupted by ${signal_name}"
+    deploy_observe_update "failed" "$DEPLOY_CURRENT_PHASE" "deploy interrupted by ${signal_name}"
+    record_deploy "failed" "$MODE" "deploy interrupted by ${signal_name}"
+    cleanup_release_context
+    rm -f "${LOCKFILE:-/tmp/aads-deploy.lock}" 2>/dev/null || true
+    exit 143
 }
 
 deploy_phase_start() {
@@ -321,6 +348,9 @@ deploy_error_trap() {
 }
 
 trap 'deploy_error_trap "$LINENO" "$BASH_COMMAND"' ERR
+trap 'deploy_signal_trap TERM' TERM
+trap 'deploy_signal_trap INT' INT
+trap 'deploy_signal_trap HUP' HUP
 
 get_active_port() {
     local port=""
@@ -523,6 +553,7 @@ release_nginx_switch_lock() {
 DEPLOY_GENERATION="${DEPLOY_START_EPOCH}-$$-$(git -C "$COMPOSE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 printf '%s\n' "$DEPLOY_GENERATION" > "$DEPLOY_GENERATION_FILE"
 audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mode=$MODE"
+ensure_deploy_observability_schema
 deploy_phase_start "preflight" "running"
 report_dirty_release_exclusions
 
@@ -754,6 +785,8 @@ sync_standby_slot_after_drain() {
             else
                 zero_seen=0
             fi
+            deploy_observe_update "syncing_standby" "standby_same_digest_sync" \
+                "active_streams=${active:-unknown}; elapsed=${elapsed}s; max=${drain_max}s"
             echo "[deploy.sh] standby sync wait ${old_container}:${old_port} active streams=${active}; wait 30s"
             sleep 30
             elapsed=$((elapsed + 30))
@@ -1415,6 +1448,8 @@ echo "[deploy.sh] Phase 7: P0/P1 모니터링 (${MONITOR_SECONDS}초, since=${MO
 while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
     sleep "$MONITOR_INTERVAL"
     MONITOR_ELAPSED=$((MONITOR_ELAPSED + MONITOR_INTERVAL))
+    deploy_observe_update "verifying" "p0p1_monitoring" \
+        "elapsed=${MONITOR_ELAPSED}s; max=${MONITOR_SECONDS}s"
     MONITOR_HITS="$(docker logs "$ACTIVE_CONTAINER" --since "$MONITOR_SINCE" 2>&1 | grep -E "$MONITOR_PATTERN" | tail -20 || true)"
     if [[ -n "$MONITOR_HITS" ]]; then
         echo "[deploy.sh] ❌ Phase 7: P0/P1 의심 로그 감지"
