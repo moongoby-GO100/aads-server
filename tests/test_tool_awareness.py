@@ -166,6 +166,14 @@ def test_tool_executor_timeout_updated():
     assert "_TOOL_TIMEOUT = 20.0" in src, "타임아웃 20초 업데이트 미확인"
 
 
+def test_get_all_service_status_uses_go100_public_health_route():
+    """GO100 상태 집계는 차단될 수 있는 직접 포트 대신 공개 nginx 헬스 경로를 사용해야 한다."""
+    src = _read("app/services/tool_executor.py")
+    assert '"GO100": "https://go100.newtalk.kr/go100-api/health"' in src
+    assert '"GO100": f"http://{contabo14_host}:8002/health"' not in src
+    assert '"url": url' in src
+
+
 # ─── 5. intent_router.py — 신규 인텐트 확인 ──────────────────────────────────
 
 def test_intent_router_new_intents_in_map():
