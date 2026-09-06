@@ -541,6 +541,36 @@ _ROLE_PROMPTS: Dict[str, str] = {
     ),
 }
 
+import time as _time
+
+_role_prompt_cache: Dict[str, str] = {}
+_role_prompt_cache_ts: float = 0.0
+_ROLE_CACHE_TTL = 300  # 5분
+
+
+async def _load_role_prompts() -> Dict[str, str]:
+    """DB(prompt_assets, layer_id=3)에서 L3 역할 프롬프트를 로드하여 _ROLE_PROMPTS와 병합."""
+    global _role_prompt_cache, _role_prompt_cache_ts
+    if _role_prompt_cache and (_time.time() - _role_prompt_cache_ts) < _ROLE_CACHE_TTL:
+        return {**_ROLE_PROMPTS, **_role_prompt_cache}
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT slug, content FROM prompt_assets WHERE layer_id = 3 AND enabled = TRUE"
+            )
+            for row in rows:
+                slug = row['slug']
+                # "project-role-aads-developer" → "developer", "role-developer" → "developer"
+                parts = slug.split('-')
+                role_key = parts[-1] if len(parts) >= 2 else slug
+                _role_prompt_cache[role_key] = row['content'][:2000]
+            _role_prompt_cache_ts = _time.time()
+    except Exception as e:
+        logger.warning(f"role_prompt_load_failed: {e}")
+    return {**_ROLE_PROMPTS, **_role_prompt_cache}
+
 
 class AgentTeam:
     """
@@ -626,9 +656,9 @@ class AgentTeam:
                 task_id = f"p{phase_idx}_{phase['name']}_{task_idx}"
                 role = task_def.get("role", "general")
                 model = task_def.get("model", phase["model"])
+                role_prompts = await _load_role_prompts()
                 system_prompt = task_def.get(
                     "system_prompt",
-                    (await _load_role_prompts()).get(role, _ROLE_PROMPTS["general"]),
                 )
 
                 node = TaskNode(
@@ -739,6 +769,7 @@ async def run_parallel_with_sharing(
         max_concurrent=max_concurrent,
         cost_limit_usd=cost_limit_usd,
     )
+    role_prompts = await _load_role_prompts()
     for i, task_def in enumerate(tasks):
         node = TaskNode(
             id=f"parallel_{i}",
@@ -747,9 +778,7 @@ async def run_parallel_with_sharing(
             model=task_def.get("model", "sonnet"),
             system_prompt=task_def.get(
                 "system_prompt",
-                (await _load_role_prompts()).get(
-                    task_def.get("role", "general"), _ROLE_PROMPTS["general"]
-                ),
+                role_prompts.get(task_def.get("role", "general"), _ROLE_PROMPTS["general"]),
             ),
         )
         orch.add_task(node)
