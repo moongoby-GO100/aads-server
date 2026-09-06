@@ -1120,6 +1120,8 @@ case "$MODE" in
                     echo "[deploy.sh] ✅ target slot drain 완료 (${local_target_elapsed}초)"
                     break
                 fi
+                deploy_observe_update "running" "target_slot_drain" \
+                    "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s; max=${local_target_drain_max}s"
                 echo "[deploy.sh]   target drain 대기중... active=${TARGET_STREAMS} (${local_target_elapsed}/${local_target_drain_max}초)"
             done
             if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]]; then

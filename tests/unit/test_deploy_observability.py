@@ -141,6 +141,7 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "deploy_signal_trap TERM" in script
     assert "ensure_deploy_observability_schema" in script
     assert "migrations/150_deploy_observability_v1.sql" in script
+    assert "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s" in script
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():
