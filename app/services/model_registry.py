@@ -434,6 +434,12 @@ _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
         "claude-3-haiku-20240307",
     ),
 }
+_MODEL_CANONICAL_ALIASES: dict[str, str] = {
+    alias: canonical
+    for canonical, aliases in _MODEL_ACCEPTED_ALIASES.items()
+    for alias in aliases
+    if alias != canonical
+}
 
 _DISCOVERY_REQUIREMENTS = {
     "anthropic": "x-api-key required for Models API; OAuth auth token supports runtime only",
@@ -502,7 +508,10 @@ def _display_name_for_provider(provider: str, model_id: str) -> str:
 
 
 def _canonical_model_id(model_id: str) -> str:
-    return _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id, model_id)
+    return _MODEL_CANONICAL_ALIASES.get(
+        model_id,
+        _DEEPSEEK_COMPATIBILITY_ALIASES.get(model_id, model_id),
+    )
 
 
 def _runtime_model_id(provider: str, model_id: str) -> str:
@@ -1210,6 +1219,8 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
             )
 
             for alias_id in _MODEL_ACCEPTED_ALIASES.get(template.model_id, ()):
+                if alias_id == template.model_id:
+                    continue
                 alias_template = _build_template(provider, alias_id)
                 alias_metadata = dict(metadata)
                 alias_metadata["alias_of"] = template.model_id
@@ -1227,18 +1238,18 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                         "supports_coding": template.supports_coding,
                         "input_cost": template.input_cost,
                         "output_cost": template.output_cost,
-                        "is_active": has_runtime_models,
+                        "is_active": False,
                         "activation_source": activation_source,
                         "linked_key_name": linked_key_name,
                         "metadata": alias_metadata,
-                        "execution_model_id": alias_template.execution_model_id or alias_id,
+                        "execution_model_id": template.execution_model_id or template.model_id,
                         "discovery_source": "accepted_alias",
                         "verification_status": "verified" if has_runtime_models else "unknown",
                         "last_verified_at": state.get("last_verified_at"),
                         "capabilities": _model_capabilities(provider, alias_id),
                         "pricing": _pricing_for(alias_id),
-                        "is_selectable": has_runtime_models,
-                        "is_executable": has_runtime_models,
+                        "is_selectable": False,
+                        "is_executable": False,
                     }
                 )
 

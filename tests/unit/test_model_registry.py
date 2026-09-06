@@ -118,6 +118,19 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
     assert fable_row["supports_thinking"] is True
     assert fable_row["supports_tools"] is True
 
+    fable_alias_rows = [
+        row
+        for row in model_rows
+        if row["provider"] == "anthropic"
+        and row["model_id"] in {"claude-fable-5.1", "claude-fable-latest"}
+    ]
+    assert {row["model_id"] for row in fable_alias_rows} == {"claude-fable-5.1", "claude-fable-latest"}
+    assert all(row["metadata"]["alias_of"] == "claude-fable-5-1" for row in fable_alias_rows)
+    assert all(row["execution_model_id"] == "claude-fable-5-1" for row in fable_alias_rows)
+    assert all(row["is_active"] is False for row in fable_alias_rows)
+    assert all(row["is_selectable"] is False for row in fable_alias_rows)
+    assert all(row["is_executable"] is False for row in fable_alias_rows)
+
 
 def test_build_registry_snapshots_marks_unknown_provider_for_review():
     _, provider_rows = model_registry.build_registry_snapshots(
