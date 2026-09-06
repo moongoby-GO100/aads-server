@@ -618,6 +618,12 @@ def _is_shinhan_blocking_security_notice(notice_state: dict[str, str]) -> bool:
 def _extract_pc_agent_output(payload: Any) -> str:
     if isinstance(payload, str):
         return payload
+    if isinstance(payload, list):
+        for item in payload:
+            output = _extract_pc_agent_output(item)
+            if output:
+                return output
+        return ""
     if not isinstance(payload, dict):
         return ""
     for key in ("output", "stdout"):
@@ -674,6 +680,24 @@ async def _shinhan_security_program_runtime_state(page: Any) -> dict[str, str]:
         return {"checked": "failed", **_safe_browser_error_fields(exc)}
 
     output = _extract_pc_agent_output(payload)
+    if not output.strip():
+        fallback_command = (
+            "Get-Process AnySign4PCLauncher,VeraPort,INISAFE,Delfino -ErrorAction SilentlyContinue | "
+            "Select-Object ProcessName,Id | ConvertTo-Json -Compress"
+        )
+        try:
+            fallback_payload, fallback_busy_retries = await _run_browser_command_with_agent_busy_retry(
+                page,
+                "powershell",
+                {"command": fallback_command},
+                command_timeout_seconds=15,
+                queue_wait_timeout_seconds=10,
+                max_busy_retries=2,
+            )
+            output = _extract_pc_agent_output(fallback_payload)
+            busy_retries += fallback_busy_retries
+        except Exception:
+            output = ""
     if not output.strip():
         return {"checked": "0", "reason": "pc_agent_security_program_output_empty"}
     lower = output.lower()
