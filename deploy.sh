@@ -615,6 +615,50 @@ stream_count_for_port() {
     ) || echo "unknown"
 }
 
+reconcile_inactive_target_recovery_executions() {
+    local target_container="$1"
+    if [[ -z "$target_container" ]] || ! deploy_db_available; then
+        return 0
+    fi
+    local target_sql reconciled
+    target_sql="$(sql_escape "$target_container")"
+    reconciled="$(
+        deploy_db_exec "
+            WITH candidates AS (
+                SELECT te.id
+                FROM chat_turn_executions te
+                WHERE te.owner_instance = '$target_sql'
+                  AND te.status IN ('running', 'retrying')
+                  AND te.completed_at IS NULL
+                  AND COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM chat_messages m
+                      WHERE m.execution_id = te.id
+                        AND m.intent = 'streaming_placeholder'
+                        AND COALESCE(m.is_hidden, false) = true
+                  )
+            ),
+            updated AS (
+                UPDATE chat_turn_executions te
+                SET status = 'cancelled',
+                    completed_at = NOW(),
+                    updated_at = NOW(),
+                    lease_expires_at = NOW(),
+                    error_message = 'inactive target slot recovery reconciled before deploy'
+                FROM candidates c
+                WHERE te.id = c.id
+                RETURNING te.id
+            )
+            SELECT count(*) FROM updated;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$reconciled" =~ ^[0-9]+$ ]] && [[ "$reconciled" -gt 0 ]]; then
+        echo "[deploy.sh] reconciled inactive target recovery executions: container=${target_container}, count=${reconciled}"
+        audit_control "target-slot-recovery-reconcile" "$target_container" "success" "cancelled_hidden_recovery=${reconciled}"
+    fi
+}
+
 wait_port_health() {
     local port="$1"
     local max_wait="${2:-60}"
@@ -1106,6 +1150,7 @@ case "$MODE" in
         fi
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
+        reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         deploy_phase_start "target_slot_drain" "running"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then

@@ -142,6 +142,9 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "ensure_deploy_observability_schema" in script
     assert "migrations/150_deploy_observability_v1.sql" in script
     assert "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s" in script
+    assert "reconcile_inactive_target_recovery_executions \"$NEW_CONTAINER\"" in script
+    assert "COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'" in script
+    assert "AND COALESCE(m.is_hidden, false) = true" in script
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():
