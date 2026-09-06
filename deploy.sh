@@ -113,6 +113,67 @@ deploy_db_available() {
     docker inspect aads-postgres --format '{{.State.Running}}' 2>/dev/null | grep -q true
 }
 
+reconcile_stale_deploy_runs() {
+    if ! deploy_db_available; then
+        return 0
+    fi
+    local stale_after_minutes rows
+    stale_after_minutes="${AADS_DEPLOY_STALE_AFTER_MINUTES:-15}"
+    if [[ ! "$stale_after_minutes" =~ ^[0-9]+$ ]] || [[ "$stale_after_minutes" -lt 5 ]]; then
+        stale_after_minutes="15"
+    fi
+    rows="$(
+        deploy_db_exec "
+            SELECT id, COALESCE(deploy_pid, 0)::int,
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(last_heartbeat_at, updated_at)))::bigint
+            FROM deploy_runs
+            WHERE status IN ('running', 'verifying', 'syncing_standby')
+              AND COALESCE(last_heartbeat_at, updated_at) < NOW() - (${stale_after_minutes} || ' minutes')::interval
+            ORDER BY id;
+        "
+    )"
+    if [[ -z "${rows//[[:space:]]/}" ]]; then
+        return 0
+    fi
+    local run_id run_pid heartbeat_age detail detail_sql
+    while IFS='|' read -r run_id run_pid heartbeat_age; do
+        [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+        run_pid="${run_pid:-0}"
+        if [[ "$run_pid" =~ ^[0-9]+$ ]] && [[ "$run_pid" -gt 1 ]] && kill -0 "$run_pid" 2>/dev/null; then
+            audit_control "deploy-run-reconcile" "deploy_runs:${run_id}" "kept" "pid=${run_pid} still alive"
+            continue
+        fi
+        detail="stale deploy reconciled before new deploy: pid=${run_pid:-unknown} heartbeat_age=${heartbeat_age:-unknown}s"
+        detail_sql="$(sql_escape "$detail")"
+        deploy_db_exec "
+            WITH updated AS (
+                UPDATE deploy_runs
+                SET status='failed',
+                    phase_completed_at=NOW(),
+                    updated_at=NOW(),
+                    last_heartbeat_at=NOW(),
+                    error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), '$detail_sql')
+                WHERE id=${run_id}
+                  AND status IN ('running', 'verifying', 'syncing_standby')
+                RETURNING id, phase, phase_started_at, current_slot, candidate_slot, image_digest, standby_digest
+            )
+            INSERT INTO deploy_phase_events(deploy_run_id, phase, status, phase_started_at,
+                                            phase_completed_at, duration_ms, current_slot,
+                                            candidate_slot, image_digest, standby_digest,
+                                            error_summary, metadata)
+            SELECT id, COALESCE(phase, 'unknown'), 'failed',
+                   COALESCE(phase_started_at, NOW()), NOW(),
+                   GREATEST(0, EXTRACT(EPOCH FROM (NOW() - COALESCE(phase_started_at, NOW())))::bigint * 1000),
+                   current_slot, candidate_slot, image_digest, standby_digest,
+                   '$detail_sql',
+                   jsonb_build_object('reconciled_by', 'deploy.sh', 'deploy_pid', ${run_pid:-0}, 'heartbeat_age_seconds', ${heartbeat_age:-0})
+            FROM updated;
+        " >/dev/null
+        audit_control "deploy-run-reconcile" "deploy_runs:${run_id}" "failed" "$detail"
+        echo "[deploy.sh] stale deploy run reconciled: id=${run_id}, pid=${run_pid:-unknown}, heartbeat_age=${heartbeat_age:-unknown}s"
+    done <<< "$rows"
+}
+
 ensure_deploy_observability_schema() {
     if ! deploy_db_available; then
         echo "[deploy.sh] ❌ PostgreSQL is not running; cannot verify deployment observability schema"
@@ -587,6 +648,7 @@ DEPLOY_GENERATION="${DEPLOY_START_EPOCH}-$$-$(git -C "$COMPOSE_DIR" rev-parse --
 printf '%s\n' "$DEPLOY_GENERATION" > "$DEPLOY_GENERATION_FILE"
 audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mode=$MODE"
 ensure_deploy_observability_schema
+reconcile_stale_deploy_runs
 deploy_phase_start "preflight" "running"
 if ! enforce_release_worktree_gate; then
     deploy_phase_end "preflight" "blocked" "dirty worktree blocks release"
@@ -843,7 +905,7 @@ sync_standby_slot_after_drain() {
         # background task. The caller releases the nginx lock before entering it.
         # Existing nginx workers may still hold SSE/WebSocket streams on the old
         # slot, so require a short grace period plus consecutive zero samples.
-        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-30}"
+        local min_wait="${AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10}"
         if [[ "$min_wait" != "0" ]]; then
             echo "[deploy.sh] standby sync grace wait ${old_container}:${old_port} ${min_wait}s"
             sleep "$min_wait"
@@ -861,7 +923,7 @@ sync_standby_slot_after_drain() {
         reconcile_inactive_target_recovery_executions "$old_container"
 
         local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300}"
-        local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-15}"
+        local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
         local active="0"
         local zero_seen=0
@@ -869,13 +931,13 @@ sync_standby_slot_after_drain() {
             drain_max="300"
         fi
         if [[ ! "$drain_interval" =~ ^[0-9]+$ ]] || [[ "$drain_interval" -lt 5 ]]; then
-            drain_interval="15"
+            drain_interval="5"
         fi
         while [[ $elapsed -lt $drain_max ]]; do
             active="$(stream_count_for_port "$old_port")"
             if [[ "$active" == "0" || -z "$active" ]]; then
                 zero_seen=$((zero_seen + 1))
-                if [[ "$zero_seen" -ge "${AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-2}" ]]; then
+                if [[ "$zero_seen" -ge "${AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1}" ]]; then
                     break
                 fi
             else
@@ -907,9 +969,9 @@ sync_standby_slot_after_drain() {
         echo "[deploy.sh] standby sync: starting ${old_container}:${old_port} from release image ${AADS_RELEASE_SHA}"
         cd "$COMPOSE_DIR"
         if [[ "$old_container" == "aads-server-green" ]]; then
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --no-build --no-deps "$old_container"
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --force-recreate --no-build --no-deps "$old_container"
         else
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --no-build --no-deps "$old_container"
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --force-recreate --no-build --no-deps "$old_container"
         fi
         if ! verify_container_memory_limit "$old_container"; then
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "memory limit mismatch"
@@ -1247,7 +1309,7 @@ case "$MODE" in
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
         build_release_image
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
-        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps "$NEW_CONTAINER"
+        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --force-recreate --no-build --no-deps "$NEW_CONTAINER"
         if ! verify_container_memory_limit "$NEW_CONTAINER"; then
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true

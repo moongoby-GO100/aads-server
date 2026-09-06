@@ -19,6 +19,8 @@ grep -q 'image: aads-server:${AADS_RELEASE_SHA:-local}' "$compose_file" \
     || fail "expected exactly two API slots using the same image tag"
 grep -q -- '--no-build --no-deps' "$deploy_file" \
     || fail "slot starts must use --no-build"
+grep -q -- '--force-recreate --no-build --no-deps' "$deploy_file" \
+    || fail "slot starts must force recreate from the release-SHA image"
 grep -q 'release_nginx_switch_lock' "$deploy_file" \
     || fail "nginx cutover lock must be explicitly released"
 grep -q 'active/standby image digest mismatch' "$deploy_file" \
@@ -31,6 +33,8 @@ grep -q 'AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE' "$deploy_file" \
     || fail "dirty worktree override must be explicit and auditable"
 grep -q 'AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300' "$deploy_file" \
     || fail "standby sync must have a bounded default timeout"
+grep -q 'reconcile_stale_deploy_runs' "$deploy_file" \
+    || fail "stale deployment run reconciliation is missing"
 grep -q 'AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180' "$deploy_file" \
     || fail "target slot drain must have a bounded default timeout"
 api_sections="$(

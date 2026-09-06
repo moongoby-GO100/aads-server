@@ -152,6 +152,12 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "FROM deploy_history" in script
     assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300" in script
+    assert "AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10" in script
+    assert "AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5" in script
+    assert "AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1" in script
+    assert "--force-recreate --no-build --no-deps" in script
+    assert "reconcile_stale_deploy_runs" in script
+    assert "stale deploy reconciled before new deploy" in script
     assert "reconcile_inactive_target_recovery_executions \"$old_container\"" in script
 
 
