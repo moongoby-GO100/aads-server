@@ -25,6 +25,14 @@ grep -q 'active/standby image digest mismatch' "$deploy_file" \
     || fail "same-image digest verification is missing"
 grep -q 'git -C "$COMPOSE_DIR" archive --format=tar HEAD' "$deploy_file" \
     || fail "API image must be built from an isolated committed release context"
+grep -q 'enforce_release_worktree_gate' "$deploy_file" \
+    || fail "dirty worktree release gate is missing"
+grep -q 'AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE' "$deploy_file" \
+    || fail "dirty worktree override must be explicit and auditable"
+grep -q 'AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300' "$deploy_file" \
+    || fail "standby sync must have a bounded default timeout"
+grep -q 'AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180' "$deploy_file" \
+    || fail "target slot drain must have a bounded default timeout"
 api_sections="$(
     awk '
       /^  aads-server:$/ {in_api=1}

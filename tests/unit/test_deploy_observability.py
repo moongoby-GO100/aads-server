@@ -137,6 +137,9 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "INSERT INTO deploy_phase_events" in script
     assert "UPDATE deploy_runs" in script
     assert "release image excludes uncommitted worktree changes" in script
+    assert "enforce_release_worktree_gate" in script
+    assert "dirty worktree blocks release" in script
+    assert "AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE" in script
     assert "last_heartbeat_at=NOW()" in script
     assert "deploy_signal_trap TERM" in script
     assert "ensure_deploy_observability_schema" in script
@@ -145,6 +148,11 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "reconcile_inactive_target_recovery_executions \"$NEW_CONTAINER\"" in script
     assert "COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'" in script
     assert "AND COALESCE(m.is_hidden, false) = true" in script
+    assert "AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000" in script
+    assert "FROM deploy_history" in script
+    assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180" in script
+    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300" in script
+    assert "reconcile_inactive_target_recovery_executions \"$old_container\"" in script
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():

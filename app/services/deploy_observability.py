@@ -71,7 +71,8 @@ async def _load_recent_durations(conn: Any) -> list[dict[str, Any]]:
     return _dict_rows(await conn.fetch(
         """
         SELECT project, sample_count, avg_duration_ms, p50_duration_ms,
-               p90_duration_ms, last_completed_at
+               p90_duration_ms, last_completed_at,
+               COALESCE(source, 'deploy_runs') AS source
         FROM deploy_recent_durations
         ORDER BY project
         """

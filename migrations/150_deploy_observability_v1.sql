@@ -63,18 +63,52 @@ CREATE INDEX IF NOT EXISTS idx_deploy_phase_events_run_time
     ON deploy_phase_events (deploy_run_id, phase_started_at, id);
 
 CREATE OR REPLACE VIEW deploy_recent_durations AS
-SELECT
+WITH deploy_run_samples AS (
+    SELECT
+        project,
+        COUNT(*)::INTEGER AS sample_count,
+        ROUND(AVG(duration_ms))::BIGINT AS avg_duration_ms,
+        ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::BIGINT AS p50_duration_ms,
+        ROUND(percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_ms))::BIGINT AS p90_duration_ms,
+        MAX(phase_completed_at) AS last_completed_at,
+        'deploy_runs'::TEXT AS source,
+        1 AS source_rank
+    FROM deploy_runs
+    WHERE status IN ('completed', 'success')
+      AND duration_ms IS NOT NULL
+      AND phase_completed_at >= NOW() - INTERVAL '90 days'
+    GROUP BY project
+),
+legacy_samples AS (
+    SELECT
+        project,
+        COUNT(*)::INTEGER AS sample_count,
+        ROUND(AVG(duration_s) * 1000)::BIGINT AS avg_duration_ms,
+        ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_s) * 1000)::BIGINT AS p50_duration_ms,
+        ROUND(percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_s) * 1000)::BIGINT AS p90_duration_ms,
+        MAX(COALESCE(finished_at, created_at)) AS last_completed_at,
+        'deploy_history'::TEXT AS source,
+        2 AS source_rank
+    FROM deploy_history
+    WHERE status = 'success'
+      AND duration_s IS NOT NULL
+      AND created_at >= NOW() - INTERVAL '90 days'
+    GROUP BY project
+)
+SELECT DISTINCT ON (project)
     project,
-    COUNT(*)::INTEGER AS sample_count,
-    ROUND(AVG(duration_ms))::BIGINT AS avg_duration_ms,
-    ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::BIGINT AS p50_duration_ms,
-    ROUND(percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_ms))::BIGINT AS p90_duration_ms,
-    MAX(phase_completed_at) AS last_completed_at
-FROM deploy_runs
-WHERE status IN ('completed', 'success')
-  AND duration_ms IS NOT NULL
-  AND phase_completed_at >= NOW() - INTERVAL '90 days'
-GROUP BY project;
+    sample_count,
+    avg_duration_ms,
+    p50_duration_ms,
+    p90_duration_ms,
+    last_completed_at,
+    source
+FROM (
+    SELECT * FROM deploy_run_samples
+    UNION ALL
+    SELECT * FROM legacy_samples
+) samples
+ORDER BY project, source_rank;
 
 COMMENT ON TABLE deploy_runs IS 'Cross-project release status, queue, timing, and blue/green digest state';
 COMMENT ON TABLE deploy_phase_events IS 'Append-only deployment phase timeline';

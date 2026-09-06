@@ -153,13 +153,27 @@ deploy_observe_init() {
 
 deploy_estimated_remaining_ms() {
     local elapsed_ms="$1"
+    local default_estimate_ms="${AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000}"
     local estimate
+    if [[ ! "$default_estimate_ms" =~ ^[0-9]+$ ]]; then
+        default_estimate_ms="600000"
+    fi
     estimate="$(
         deploy_db_exec "
-            SELECT GREATEST(0, COALESCE(p50_duration_ms, 0) - ${elapsed_ms})::bigint
-            FROM deploy_recent_durations
-            WHERE project='AADS'
-            LIMIT 1;
+            WITH estimates AS (
+                SELECT p50_duration_ms
+                FROM deploy_recent_durations
+                WHERE project='AADS'
+                UNION ALL
+                SELECT ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_s) * 1000)::bigint
+                FROM deploy_history
+                WHERE project='AADS'
+                  AND status='success'
+                  AND duration_s IS NOT NULL
+                  AND created_at >= NOW() - INTERVAL '90 days'
+                HAVING COUNT(*) > 0
+            )
+            SELECT GREATEST(0, COALESCE((SELECT p50_duration_ms FROM estimates LIMIT 1), ${default_estimate_ms}) - ${elapsed_ms})::bigint;
         " | tail -1 | tr -d '[:space:]'
     )"
     if [[ "$estimate" =~ ^[0-9]+$ ]]; then
@@ -268,6 +282,25 @@ report_dirty_release_exclusions() {
         git -C "$COMPOSE_DIR" status --porcelain | sed 's/^/[deploy.sh]   excluded: /' | head -80 || true
         audit_control "release-context" "$COMPOSE_DIR" "warning" "excluded dirty files tracked=${tracked_dirty:-0} untracked=${untracked_dirty:-0}"
     fi
+}
+
+enforce_release_worktree_gate() {
+    local dirty_count
+    dirty_count="$(git -C "$COMPOSE_DIR" status --porcelain | wc -l | tr -d '[:space:]' || echo 0)"
+    if [[ "${dirty_count:-0}" == "0" ]]; then
+        return 0
+    fi
+    report_dirty_release_exclusions
+    if [[ "${AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE:-false}" == "true" ]]; then
+        echo "[deploy.sh] ⚠️ dirty worktree override accepted: AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true"
+        echo "[deploy.sh]    Only committed HEAD=${AADS_RELEASE_SHA} is archived into the release image."
+        audit_control "release-context" "$COMPOSE_DIR" "override" "dirty archive override count=${dirty_count}"
+        return 0
+    fi
+    echo "[deploy.sh] ❌ dirty worktree detected; release blocked before build."
+    echo "[deploy.sh]    Commit/stash/split unrelated files, or explicitly set AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true after confirming dirty files must be excluded."
+    audit_control "release-context" "$COMPOSE_DIR" "blocked" "dirty worktree count=${dirty_count}"
+    return 1
 }
 
 audit_control() {
@@ -555,7 +588,11 @@ printf '%s\n' "$DEPLOY_GENERATION" > "$DEPLOY_GENERATION_FILE"
 audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mode=$MODE"
 ensure_deploy_observability_schema
 deploy_phase_start "preflight" "running"
-report_dirty_release_exclusions
+if ! enforce_release_worktree_gate; then
+    deploy_phase_end "preflight" "blocked" "dirty worktree blocks release"
+    record_deploy "blocked" "$MODE" "dirty worktree blocks release"
+    exit 1
+fi
 
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {
@@ -814,11 +851,19 @@ sync_standby_slot_after_drain() {
             audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "stale generation or slot became active"
             return 0
         fi
+        reconcile_inactive_target_recovery_executions "$old_container"
 
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300}"
+        local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-15}"
         local elapsed=0
         local active="0"
         local zero_seen=0
+        if [[ ! "$drain_max" =~ ^[0-9]+$ ]]; then
+            drain_max="300"
+        fi
+        if [[ ! "$drain_interval" =~ ^[0-9]+$ ]] || [[ "$drain_interval" -lt 5 ]]; then
+            drain_interval="15"
+        fi
         while [[ $elapsed -lt $drain_max ]]; do
             active="$(stream_count_for_port "$old_port")"
             if [[ "$active" == "0" || -z "$active" ]]; then
@@ -831,9 +876,9 @@ sync_standby_slot_after_drain() {
             fi
             deploy_observe_update "syncing_standby" "standby_same_digest_sync" \
                 "active_streams=${active:-unknown}; elapsed=${elapsed}s; max=${drain_max}s"
-            echo "[deploy.sh] standby sync wait ${old_container}:${old_port} active streams=${active}; wait 30s"
-            sleep 30
-            elapsed=$((elapsed + 30))
+            echo "[deploy.sh] standby sync wait ${old_container}:${old_port} active streams=${active}; wait ${drain_interval}s"
+            sleep "$drain_interval"
+            elapsed=$((elapsed + drain_interval))
         done
 
         if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
@@ -1154,12 +1199,19 @@ case "$MODE" in
         deploy_phase_start "target_slot_drain" "running"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
-            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800}"
+            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
+            local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
             local_target_elapsed=0
+            if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
+                local_target_drain_max="180"
+            fi
+            if [[ ! "$local_target_drain_interval" =~ ^[0-9]+$ ]] || [[ "$local_target_drain_interval" -lt 5 ]]; then
+                local_target_drain_interval="10"
+            fi
             echo "[deploy.sh] ⏳ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 — 재빌드 전 drain 대기 (최대 ${local_target_drain_max}초)"
             while [[ "$local_target_elapsed" -lt "$local_target_drain_max" ]]; do
-                sleep 30
-                local_target_elapsed=$((local_target_elapsed + 30))
+                sleep "$local_target_drain_interval"
+                local_target_elapsed=$((local_target_elapsed + local_target_drain_interval))
                 TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
                 if [[ "$TARGET_STREAMS" == "0" || -z "$TARGET_STREAMS" ]]; then
                     echo "[deploy.sh] ✅ target slot drain 완료 (${local_target_elapsed}초)"
