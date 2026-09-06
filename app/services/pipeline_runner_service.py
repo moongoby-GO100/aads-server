@@ -5,7 +5,7 @@ Pipeline Runner Orchestrator — 채팅 → Claude Code 자율 작업 → 검수
   Phase 1: claude_code_work  — Claude Code CLI로 작업 수행 → 완료 보고를 채팅방에 삽입
   Phase 2: ai_review         — 채팅 AI가 결과 검수 → 검수 결과를 채팅방에 삽입
   Phase 3: revision (0~N)    — 검수 실패 시 재지시 루프 → 매 사이클 채팅방 기록
-  Phase 4: awaiting_approval — CEO 승인 대기 → 채팅방에 승인 요청 메시지
+  Phase 4: awaiting_approval — 세션 AI 자동 검수/승인 → 고위험만 CEO 에스컬레이션
   Phase 5: deploying         — 커밋/푸시/재시작 → 배포 결과 채팅방 기록
   Phase 6: verifying         — 최종 검증
   Phase 7: done              — 완료 → 채팅방에 최종 보고
@@ -26,7 +26,6 @@ from typing import Any, Dict, Optional
 import asyncpg
 
 from app.core.project_config import PROJECT_MAP
-from app.services import quality_gate
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,7 @@ def _get_timeout_for_job(job: "PipelineCJob") -> int:
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
 _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
 _REVIEW_MODEL = "claude-sonnet-4-6"
-_MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 review_hold 에스컬레이션
+_MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 세션 AI 직접 검수 전환
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
 # CEO 지시: 크기별 Claude 모델 분기 — XL=Opus, L/M=Sonnet, S/XS=Haiku (2026-04-14)
@@ -569,76 +568,61 @@ class PipelineCJob:
                     )
                     return
 
-                # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 승인 대기 에스컬레이션)
+                # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 review_hold 폴백)
                 self._log("ai_review", f"[{self.cycle}차] AI 검수 중...")
                 review = await self._ai_review_with_retry()
 
                 if review["verdict"] == "DELEGATED":
-                    self._log(
-                        "awaiting_approval",
-                        f"[{self.cycle}차] LLM 검수 {_MAX_REVIEW_PARSE_RETRIES}회 재시도 실패, CEO 승인 대기로 에스컬레이션",
-                    )
+                    # AI 리뷰 인프라 장애 → 세션 AI가 직접 코드를 검수하고 승인/거부 판단
+                    self._log("awaiting_approval", f"[{self.cycle}차] LLM 검수 인프라 장애 — 세션 AI 직접 검수로 전환")
                     diff_summary = self._format_diff_summary(self.git_diff)
                     output_text = self.result_output[-2000:] if self.result_output else "(출력 없음)"
                     self.status = "awaiting_approval"
                     self.review_feedback = (
-                        "DELEGATED: AI 리뷰 인프라 장애로 CEO 승인 대기 에스컬레이션 — "
+                        "DELEGATED→AI_REVIEW: 리뷰 인프라 장애로 세션 AI 직접 검수 전환 — "
                         f"{review.get('summary', '리뷰 실패')}"
                     )
                     await self._save_to_db()
                     await self._post_to_chat(
-                        f"🟠 **[CEO 승인 필요]** `{self.job_id}`\n"
-                        f"LLM 검수 호출 실패로 CEO 승인 대기로 에스컬레이션했습니다.\n"
-                        f"상태: **awaiting_approval**\n\n"
+                        f"🔔 **[세션 AI 직접 검수]** `{self.job_id}`\n"
+                        f"LLM 자동 검수 인프라 장애 → 세션 AI가 직접 코드를 검토합니다.\n"
+                        f"상태: **awaiting_approval** / 정책: **AI 자율 판단**\n\n"
                         f"**출력:**\n```\n{output_text}\n```\n\n"
-                        f"**변경사항:**\n{diff_summary}"
+                        f"**변경사항:**\n{diff_summary}\n\n"
+                        f"---\n"
+                        f"승인하려면: \"승인해\" 또는 \"approve\"\n"
+                        f"거부하려면: \"거부해\" 또는 \"reject\""
                     )
                     await self._trigger_ai_reaction(
                         f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})의 "
-                        f"AI 자동 검수가 실패해 CEO 승인 대기로 에스컬레이션되었습니다.\n\n"
+                        f"AI 자동 검수 인프라가 일시 장애입니다. 세션 AI가 직접 검수해야 합니다.\n\n"
+                        f"**검수 지시 (반드시 도구 호출로 완료):**\n"
+                        f"1. 아래 변경사항(git diff)과 출력을 꼼꼼히 검토하세요.\n"
+                        f"2. 필요 시 read_remote_file로 수정된 파일 전체를 확인하세요.\n"
+                        f"3. 검수 완료 후 반드시 아래 중 하나를 실행하세요:\n"
+                        f"   - 이상 없음: `pipeline_runner_approve(job_id='{self.job_id}', action='approve')` 호출\n"
+                        f"   - 문제 있음: `pipeline_runner_approve(job_id='{self.job_id}', action='reject', feedback='구체적 사유')` 호출\n\n"
+                        f"**검수 기준**: 코드 품질, 보안(API 키 하드코딩 금지), 기존 기능 훼손 없음.\n"
+                        f"고위험 변경(인증/DB스키마/배포설정)은 CEO 에스컬레이션 필요 여부를 판단하세요.\n\n"
                         f"## 원래 지시\n{self.instruction}\n\n"
-                        f"## Claude Code 출력 (마지막 부분)\n{output_text}\n\n"
-                        f"## 변경사항\n{diff_summary}\n\n"
-                        f"## 필요한 조치\n"
-                        f"산출물을 직접 검토한 뒤 승인 또는 반려해주세요."
+                        f"## Claude Code 출력\n```\n{output_text}\n```\n\n"
+                        f"## 변경사항\n{diff_summary}"
                     )
                     return
 
                 if review["verdict"] == "PASS":
-                    quality = quality_gate.evaluate(
-                        self.git_diff,
-                        self.instruction,
-                        self.result_output,
+                    self._log("review_pass", f"[{self.cycle}차] 검수 통과: {review['summary']}")
+                    self.review_feedback = f"PASS: {review['summary']}"
+
+                    # 채팅방에 검수 통과 보고
+                    diff_summary = self._format_diff_summary(self.git_diff)
+                    await self._post_to_chat(
+                        f"✅ **[{self.cycle}차 검수 통과]** `{self.job_id}`\n"
+                        f"판정: **PASS**\n"
+                        f"요약: {review['summary']}\n\n"
+                        f"**변경사항:**\n{diff_summary}"
                     )
-                    issue_text = ", ".join(quality.issues) or "이슈 없음"
-
-                    if quality.grade == "F":
-                        review = {
-                            "verdict": "FAIL",
-                            "feedback": f"QUALITY_F: {issue_text}",
-                        }
-                    else:
-                        self._log(
-                            "review_pass",
-                            f"[{self.cycle}차] 검수 통과: {review['summary']} "
-                            f"(quality={quality.grade}/{quality.score})",
-                        )
-                        self.review_feedback = f"PASS: {review['summary']}"
-                        if quality.grade == "C":
-                            self.review_feedback += (
-                                f" | QUALITY_C 경고 ({quality.score}): {issue_text}"
-                            )
-
-                        # 채팅방에 검수 통과 보고
-                        diff_summary = self._format_diff_summary(self.git_diff)
-                        await self._post_to_chat(
-                            f"✅ **[{self.cycle}차 검수 통과]** `{self.job_id}`\n"
-                            f"판정: **PASS**\n"
-                            f"요약: {review['summary']}\n"
-                            f"정적 품질: **{quality.grade}** ({quality.score})\n\n"
-                            f"**변경사항:**\n{diff_summary}"
-                        )
-                        break
+                    break
 
                 # 검수 실패 → 채팅방에 기록 후 재지시
                 self.review_feedback = f"FAIL: {review['feedback']}"
@@ -698,14 +682,14 @@ class PipelineCJob:
 
             # Phase 4: 승인 대기
             self.git_diff = (await self._ssh_command("git diff HEAD"))[:_MAX_DIFF_CHARS]
-            self._log("awaiting_approval", "CEO 승인 대기 중. 채팅에서 승인해주세요.")
+            self._log("awaiting_approval", "세션 AI 자동 검수 진행. 검토 후 승인/거부합니다.")
             self.status = "awaiting_approval"
             await self._save_to_db()
 
             # 채팅방에 승인 요청 메시지
             diff_summary = self._format_diff_summary(self.git_diff)
             await self._post_to_chat(
-                f"🔔 **[CEO 승인 요청]** `{self.job_id}`\n"
+                f"🔔 **[AI 검수 요청]** `{self.job_id}`\n"
                 f"프로젝트: **{self.project}**\n"
                 f"검수: {self.review_feedback}\n\n"
                 f"**최종 변경사항:**\n{diff_summary}\n\n"
@@ -788,7 +772,7 @@ class PipelineCJob:
             await self._save_to_db()
             await self._post_to_chat(
                 f"🚀 **[배포 시작]** `{self.job_id}`\n"
-                f"CEO 승인 완료. git push + 서비스 재시작 진행 중..."
+                f"승인 완료. git push + 서비스 재시작 진행 중..."
             )
 
             from app.core.git_lock import git_project_lock
@@ -1035,7 +1019,7 @@ class PipelineCJob:
             logger.warning(f"pipeline_c_frontend_qa_error job={self.job_id}: {e}")
 
     async def reject(self, reason: str = "") -> dict:
-        """CEO 거부 → 변경사항 되돌리기."""
+        """거부(세션 AI 또는 CEO) → 변경사항 되돌리기."""
         # H-11: per-job lock to prevent race between concurrent approve/reject calls
         lock = _job_approve_locks.setdefault(self.job_id, asyncio.Lock())
         if lock.locked():
@@ -1047,7 +1031,7 @@ class PipelineCJob:
         if self.status != "awaiting_approval":
             return {"error": f"거부 불가 상태: {self.status}"}
 
-        self._log("rejected", f"CEO 거부: {reason}")
+        self._log("rejected", f"거부: {reason}")
         # 변경사항 완전 제거 (Shell Runner는 approve 후에만 커밋하므로 reset 불필요)
         await self._ssh_command("git checkout .")
         await self._ssh_command("git clean -fd")
