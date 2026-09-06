@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,7 +14,10 @@ ACTIVE_STATUSES = ("running", "verifying", "syncing_standby")
 QUEUED_STATUSES = ("queued", "awaiting_approval")
 TERMINAL_PIPELINE_STATUSES = ("done", "error", "cancelled", "rejected_done")
 PROJECTS = ("AADS", "GO100", "KIS", "SF", "NTV2", "NAS")
-DEPLOY_STALL_SECONDS = 600
+DEPLOY_STALL_SECONDS = max(
+    120,
+    int(os.getenv("AADS_DEPLOY_STATUS_STALL_SECONDS", "300") or "300"),
+)
 
 
 def _dict_rows(rows: Any) -> list[dict[str, Any]]:
@@ -60,10 +64,11 @@ def _annotate_active_runs(active: list[dict[str, Any]], now: datetime) -> list[d
         row["stalled"] = bool(
             heartbeat_age is not None and heartbeat_age >= DEPLOY_STALL_SECONDS
         )
+        row["effective_status"] = "stalled" if row["stalled"] else row.get("status")
         if row["stalled"]:
             row["signal"] = "deploy_phase_stalled"
-            row["reconcile_action"] = "review_process_and_bg_digest"
-            row["requires_ceo_approval"] = True
+            row["reconcile_action"] = "deploy_sh_reconcile_before_next_release"
+            row["requires_ceo_approval"] = False
     return active
 
 
@@ -236,10 +241,16 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         response["degraded_reasons"].append("pipeline_jobs_unavailable")
 
     blockers = []
-    if response["active_deployments"]:
+    live_active_deployments = [
+        item for item in response["active_deployments"] if not item.get("stalled")
+    ]
+    stalled_active_deployments = [
+        item for item in response["active_deployments"] if item.get("stalled")
+    ]
+    if live_active_deployments:
         blockers.append("deployment_in_progress")
-    if any(item.get("stalled") for item in response["active_deployments"]):
-        blockers.append("deployment_phase_stalled")
+    if stalled_active_deployments:
+        blockers.append("deployment_reconciliation_required")
     if response["stale_zombie_signals"]:
         blockers.append("runner_reconciliation_required")
     if any(item.get("bg_sync_status") == "mismatch" for item in response["active_deployments"]):

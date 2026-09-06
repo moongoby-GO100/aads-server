@@ -11311,3 +11311,22 @@
   - DB now contains `codex/gpt-6-astra` with `execution_backend=codex_cli`, `is_active=true`, `is_selectable=true`, `is_executable=true`.
 - Not completed at this handover point:
   - Commit, push, blue/green deploy, and post-deploy running-process verification are still required for the Python code path.
+
+## 2026-09-07 08:20 KST — No-loss deploy observability heartbeat hardening
+- CEO request:
+  - Re-check whether the no-loss deployment recommendations were actually reflected, fix any remaining gap, deploy to production, and report.
+- Findings before action:
+  - `/ops/deploy/status` and the dashboard common deployment card existed, but `deploy_runs` could retain a dead run as `running` until the stale threshold elapsed.
+  - Recent example: deploy run 44 had no live `deploy.sh bluegreen` process, while the DB still showed `status=running` / `phase=build_candidate_image`.
+  - Backend and green slots were both healthy and same digest, so the problem was observability/reconciliation accuracy rather than active traffic health.
+- Changes prepared:
+  - `deploy.sh`: added per-phase DB heartbeat updates every 15 seconds during long build/drain/monitor phases; lowered stale deploy reconciliation default from 15 minutes to 5 minutes; enabled BuildKit by default and labels release images with `org.opencontainers.image.revision=$AADS_RELEASE_SHA`.
+  - `app/services/deploy_observability.py`: reduced API stale classification threshold to 300 seconds and separates stalled deploy runs from live `deployment_in_progress` blockers via `deployment_reconciliation_required`.
+  - `tests/unit/test_deploy_observability.py`: restored existing deploy observability tests and added regression coverage for stalled deploy readiness plus heartbeat/BuildKit script assertions.
+- Verification:
+  - `python3 -m py_compile app/services/deploy_observability.py`: passed.
+  - `bash -n deploy.sh`: passed.
+  - `bash scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server`: passed.
+  - `pytest -q tests/unit/test_deploy_observability.py`: 5 passed, 1 existing pytest config warning.
+- Not completed at this handover point:
+  - Commit, push, blue/green deploy, post-deploy `/health`, same-digest, `/ops/deploy/status`, and 5-minute P0/P1 monitoring verification remain required.

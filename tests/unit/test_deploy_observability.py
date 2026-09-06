@@ -91,7 +91,7 @@ def test_go100_zombie_blocks_next_deploy_without_mutation():
     assert "runner_reconciliation_required" in result["next_deploy_readiness"]["blockers"]
 
 
-def test_stalled_active_deploy_is_visible_blocker():
+def test_stalled_active_deploy_requires_reconciliation_not_live_deploy_blocker():
     now = datetime.now(timezone.utc)
     old = now.replace(year=now.year - 1)
     conn = FakeConnection(
@@ -121,9 +121,13 @@ def test_stalled_active_deploy_is_visible_blocker():
     result = asyncio.run(get_deploy_status(conn))
 
     active = result["active_deployments"][0]
+    blockers = result["next_deploy_readiness"]["blockers"]
     assert active["stalled"] is True
+    assert active["effective_status"] == "stalled"
     assert active["signal"] == "deploy_phase_stalled"
-    assert "deployment_phase_stalled" in result["next_deploy_readiness"]["blockers"]
+    assert active["reconcile_action"] == "deploy_sh_reconcile_before_next_release"
+    assert "deployment_reconciliation_required" in blockers
+    assert "deployment_in_progress" not in blockers
 
 
 def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
@@ -143,6 +147,10 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "AADS_DEPLOY_DIRTY_OVERRIDE_REASON" in script
     assert "dirty worktree override requires" in script
     assert "last_heartbeat_at=NOW()" in script
+    assert "start_deploy_heartbeat" in script
+    assert "AADS_DEPLOY_HEARTBEAT_SECONDS:-15" in script
+    assert "DOCKER_BUILDKIT=\"${DOCKER_BUILDKIT:-1}\" docker build" in script
+    assert "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" in script
     assert "deploy_signal_trap TERM" in script
     assert "ensure_deploy_observability_schema" in script
     assert "migrations/150_deploy_observability_v1.sql" in script

@@ -28,6 +28,7 @@ RELEASE_CONTEXT_DIR=""
 DEPLOY_RUN_ID=""
 DEPLOY_CURRENT_PHASE="initializing"
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
+DEPLOY_HEARTBEAT_PID=""
 mkdir -p "${COMPOSE_DIR}/logs"
 
 cleanup_release_context() {
@@ -44,7 +45,10 @@ build_release_image() {
     RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
     git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
     echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA})"
-    docker build --tag "aads-server:${AADS_RELEASE_SHA}" "$RELEASE_CONTEXT_DIR"
+    DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+        --label "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" \
+        --tag "aads-server:${AADS_RELEASE_SHA}" \
+        "$RELEASE_CONTEXT_DIR"
     cleanup_release_context
 }
 
@@ -118,9 +122,9 @@ reconcile_stale_deploy_runs() {
         return 0
     fi
     local stale_after_minutes rows
-    stale_after_minutes="${AADS_DEPLOY_STALE_AFTER_MINUTES:-15}"
-    if [[ ! "$stale_after_minutes" =~ ^[0-9]+$ ]] || [[ "$stale_after_minutes" -lt 5 ]]; then
-        stale_after_minutes="15"
+    stale_after_minutes="${AADS_DEPLOY_STALE_AFTER_MINUTES:-5}"
+    if [[ ! "$stale_after_minutes" =~ ^[0-9]+$ ]] || [[ "$stale_after_minutes" -lt 2 ]]; then
+        stale_after_minutes="5"
     fi
     rows="$(
         deploy_db_exec "
@@ -283,8 +287,55 @@ deploy_observe_update() {
     " >/dev/null
 }
 
+stop_deploy_heartbeat() {
+    if [[ -n "${DEPLOY_HEARTBEAT_PID:-}" ]]; then
+        kill "$DEPLOY_HEARTBEAT_PID" >/dev/null 2>&1 || true
+        wait "$DEPLOY_HEARTBEAT_PID" >/dev/null 2>&1 || true
+        DEPLOY_HEARTBEAT_PID=""
+    fi
+}
+
+start_deploy_heartbeat() {
+    stop_deploy_heartbeat
+    if [[ -z "${DEPLOY_RUN_ID:-}" ]] || ! deploy_db_available; then
+        return 0
+    fi
+    local phase="${1:-$DEPLOY_CURRENT_PHASE}"
+    local status="${2:-running}"
+    local interval="${AADS_DEPLOY_HEARTBEAT_SECONDS:-15}"
+    if [[ ! "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -lt 5 ]]; then
+        interval="15"
+    fi
+    local run_id="$DEPLOY_RUN_ID"
+    local start_epoch="$DEPLOY_START_EPOCH"
+    local phase_sql status_sql
+    phase_sql="$(sql_escape "$phase")"
+    status_sql="$(sql_escape "$status")"
+    (
+        while true; do
+            sleep "$interval"
+            local elapsed_ms estimate_ms
+            elapsed_ms=$((($(date +%s) - start_epoch) * 1000))
+            estimate_ms="$(deploy_estimated_remaining_ms "$elapsed_ms")"
+            deploy_db_exec "
+                UPDATE deploy_runs
+                SET status='$status_sql',
+                    phase='$phase_sql',
+                    updated_at=NOW(),
+                    last_heartbeat_at=NOW(),
+                    duration_ms=${elapsed_ms},
+                    estimated_remaining_ms=${estimate_ms}
+                WHERE id=${run_id}
+                  AND status NOT IN ('success', 'completed', 'failed', 'blocked');
+            " >/dev/null
+        done
+    ) &
+    DEPLOY_HEARTBEAT_PID=$!
+}
+
 deploy_signal_trap() {
     local signal_name="${1:-TERM}"
+    stop_deploy_heartbeat
     stop_downtime_monitor
     deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "deploy interrupted by ${signal_name}"
     deploy_observe_update "failed" "$DEPLOY_CURRENT_PHASE" "deploy interrupted by ${signal_name}"
@@ -298,6 +349,7 @@ deploy_phase_start() {
     DEPLOY_CURRENT_PHASE="${1:-unknown}"
     DEPLOY_PHASE_START_EPOCH="$(date +%s)"
     deploy_observe_update "${2:-running}" "$DEPLOY_CURRENT_PHASE" ""
+    start_deploy_heartbeat "$DEPLOY_CURRENT_PHASE" "${2:-running}"
     echo "[deploy.sh] ▶ phase=${DEPLOY_CURRENT_PHASE}"
 }
 
@@ -305,6 +357,7 @@ deploy_phase_end() {
     local phase="${1:-$DEPLOY_CURRENT_PHASE}"
     local status="${2:-success}"
     local err="${3:-}"
+    stop_deploy_heartbeat
     deploy_observe_init
     if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
         return 0
@@ -619,6 +672,7 @@ if [ -f "$LOCKFILE" ]; then
 fi
 echo $$ > "$LOCKFILE"
 cleanup_deploy() {
+    stop_deploy_heartbeat
     stop_downtime_monitor
     cleanup_release_context
     rm -f "$LOCKFILE"
