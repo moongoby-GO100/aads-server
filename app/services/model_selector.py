@@ -703,6 +703,7 @@ _COST_MAP = {
     "o3":                    (2.0,    8.0),
     "o3-mini":               (1.10,   4.40),
     "o3-pro":                (20.0,  80.0),
+    "gpt-6-astra":           (10.0,  50.0),
     # Codex CLI (ChatGPT Plus OAuth)
     "gpt-5.4":               (2.50,  15.0),
     "gpt-5.4-mini":          (0.75,   4.50),
@@ -858,8 +859,11 @@ _GEMINI_THINKING_MODELS = {
 
 # Groq 모델 (LiteLLM 경유, 무료)
 _GROQ_MODELS = {"groq-qwen3-32b", "groq-kimi-k2", "groq-llama4-scout", "groq-llama-70b", "groq-llama-8b", "groq-gpt-oss-120b", "groq-compound"}
-# OpenAI 모델 (LiteLLM 경유)
-_OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
+# OpenAI 모델 (LiteLLM/OpenAI-compatible 경유)
+_OPENAI_MODELS = {"gpt-6-astra", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
+_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
+_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra"}
+_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
 _CODEX_MODELS = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
@@ -1227,6 +1231,7 @@ async def _stream_direct_openai_provider(
     if not base_url or not api_key:
         yield {"type": "error", "content": f"direct provider route unavailable: provider={provider}"}
         return
+    had_error = False
     async for event in _stream_litellm_openai(
         request_model,
         system_prompt,
@@ -1238,7 +1243,29 @@ async def _stream_direct_openai_provider(
         display_model=display_model,
         cost_model=display_model,
     ):
+        if event.get("type") == "error":
+            had_error = True
+            logger.warning(
+                "direct_provider_fallback: provider=%s model=%s error=%s",
+                provider,
+                display_model,
+                str(event.get("content") or "")[:160],
+            )
+            break
         yield event
+    if provider == "openai" and had_error:
+        yield {
+            "type": "delta",
+            "content": f"\n\n[{display_model} 실행 불가 → Codex CLI gpt-5.6-sol 전환]\n\n",
+        }
+        async for fallback_event in _stream_codex_relay(
+            "gpt-5.6-sol",
+            system_prompt,
+            messages,
+            tools=tools,
+            session_id=session_id,
+        ):
+            yield fallback_event
 
 
 async def _stream_pc_ollama_provider(
@@ -2596,8 +2623,8 @@ async def _stream_litellm_openai(
     input_tokens = 0
     output_tokens = 0
 
-    # Thinking 모델: reasoning_effort=low로 사고 토큰 절감 + max_tokens 확대
-    is_thinking = model in _GEMINI_THINKING_MODELS
+    # Thinking/reasoning 모델: reasoning_effort=low로 사고 토큰 절감 + max_tokens 확대
+    is_thinking = model in _GEMINI_THINKING_MODELS or model in _OPENAI_REASONING_MODELS
     # 모델별 max_tokens 제한 (제공사 한도 초과 방지)
     _MODEL_MAX_TOKENS = {
         "deepseek-v4-flash": 8192, "deepseek-v4-pro": 8192,
@@ -2608,6 +2635,7 @@ async def _stream_litellm_openai(
         "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-k2.6": 8192, "kimi-latest": 8192,
         "kimi-128k": 8192, "kimi-8k": 8192,
         "minimax-m2.7": 16384, "minimax-m2.5": 16384,
+        "gpt-6-astra": 128000,
     }
     _default_max = _MAX_TOKENS_GEMINI_THINKING if is_thinking else _MAX_TOKENS_GEMINI
     max_tokens = _MODEL_MAX_TOKENS.get(model, _default_max)
@@ -2625,6 +2653,15 @@ async def _stream_litellm_openai(
     # OAI tools 변환 (한 번만)
     _oai_tools: List[Dict[str, Any]] = []
     if tools:
+        if model in _OPENAI_RESPONSES_TOOL_REQUIRED_MODELS:
+            yield {
+                "type": "error",
+                "content": (
+                    f"{model} tool calling requires the OpenAI Responses API; "
+                    "the current AADS chat path is Chat Completions based."
+                ),
+            }
+            return
         for t in tools:
             if t.get("input_schema"):
                 _oai_tools.append({
@@ -2654,9 +2691,10 @@ async def _stream_litellm_openai(
                     "messages": loop_msgs,
                     "max_tokens": max_tokens,
                     "stream": True,
-                    "temperature": _ctx_temperature.get(0.2),
                     **extra_params,
                 }
+                if model not in _OPENAI_NO_CUSTOM_SAMPLING_MODELS:
+                    req_body["temperature"] = _ctx_temperature.get(0.2)
                 if _oai_tools:
                     req_body["tools"] = _oai_tools
 

@@ -152,9 +152,10 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "o3": (_decimal(2.0), _decimal(8.0)),
     "o3-mini": (_decimal(1.1), _decimal(4.4)),
     "o3-pro": (_decimal(20.0), _decimal(80.0)),
-    "gpt-5.6-sol": (_decimal(5.0), _decimal(30.0)),
-    "gpt-5.6-terra": (_decimal(2.5), _decimal(15.0)),
-    "gpt-5.6-luna": (_decimal(1.0), _decimal(6.0)),
+    "gpt-6-astra": (_decimal(10.0), _decimal(50.0)),
+    "gpt-5.6-sol": (_decimal(4.0), _decimal(20.0)),
+    "gpt-5.6-terra": (_decimal(2.0), _decimal(12.0)),
+    "gpt-5.6-luna": (_decimal(0.2), _decimal(1.2)),
     "gpt-5.5": (_decimal(2.0), _decimal(12.0)),
     "gpt-5.4": (_decimal(2.5), _decimal(15.0)),
     "gpt-5.4-mini": (_decimal(0.75), _decimal(4.5)),
@@ -227,6 +228,7 @@ _THINKING_MODELS = {
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    "gpt-6-astra",
     "o3",
     "o3-mini",
     "o3-pro",
@@ -238,6 +240,7 @@ _VISION_MODELS = {
     "claude-fable-5-1",
     "gpt-4o",
     "gpt-4o-mini",
+    "gpt-6-astra",
     "gemini-2.5-flash-image",
     "qwen-vl-max",
     "qwen-vl-plus",
@@ -259,6 +262,7 @@ _CODING_MODELS = {
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.3-codex",
+    "gpt-6-astra",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -280,6 +284,7 @@ _DISPLAY_NAME_OVERRIDES = {
     "claude-sonnet-5": "Claude Sonnet 5",
     "claude-fable-5": "Claude Fable 5",
     "claude-fable-5-1": "Claude Fable 5.1",
+    "gpt-6-astra": "GPT-6 Astra",
     "gpt-5.4": "GPT-5.4 (Codex CLI)",
     "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
@@ -333,7 +338,19 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "groq-gpt-oss-120b",
         "groq-compound",
     ),
-    "openai": ("gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"),
+    "openai": (
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-5",
+        "gpt-5-mini",
+        "o3",
+        "o3-mini",
+        "o3-pro",
+    ),
     "codex": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
@@ -498,10 +515,11 @@ def _display_name_for(model_id: str) -> str:
 
 
 def _display_name_for_provider(provider: str, model_id: str) -> str:
+    override = _DISPLAY_NAME_OVERRIDES.get(model_id)
+    if override:
+        return override
     if provider == "codex":
-        override = _DISPLAY_NAME_OVERRIDES.get(model_id)
-        if override:
-            return override
+        return _display_name_for(model_id)
     if provider == "openai" and model_id.startswith("gpt-"):
         return f"GPT-{model_id[4:].replace('-', ' ')}"
     return _display_name_for(model_id)
@@ -604,13 +622,30 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
 
 
 def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {
+    capabilities = {
         "tools": _supports_tools_for(provider),
         "thinking": model_id in _THINKING_MODELS or _category_for(model_id) == "reasoning",
         "vision": model_id in _VISION_MODELS or _category_for(model_id) == "vision",
         "coding": model_id in _CODING_MODELS or _category_for(model_id) == "coding" or provider in {"anthropic", "codex"},
         "raw_generation_methods": (raw or {}).get("supportedGenerationMethods", []),
     }
+    if provider == "openai" and model_id == "gpt-6-astra":
+        capabilities.update(
+            {
+                "computer_use": True,
+                "file_search": True,
+                "web_search": True,
+                "responses_api_required_for_tools": True,
+                "reasoning_effort": ["low", "medium", "high", "xhigh", "max"],
+                "max_output_tokens": 128000,
+                "context_window": 1050000,
+                "knowledge_cutoff": "2026-04-30",
+                "supports_custom_temperature": False,
+                "supports_custom_top_p": False,
+                "supports_logprobs": False,
+            }
+        )
+    return capabilities
 
 
 def _pricing_for(model_id: str) -> dict[str, str]:
@@ -895,12 +930,13 @@ async def _get_anthropic_models_api_key_and_runtime_state() -> tuple[str, bool]:
 
 
 async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    # [INTENTIONALLY_DISABLED] OpenAI 계열 전체 비활성 — API 키 미등록 상태가 아니라 의도적으로 미사용.
-    # 향후 OpenAI 계열(gpt-5, o3 등) 도입 시 이 주석 제거 후 DB에 API 키 등록 필요.
-    # 재활성 절차: 1) llm_provider_keys 테이블에 openai API 키 등록 → 2) sync 트리거 → 3) is_active=true 확인
     api_key = await _get_first_provider_key("openai")
+    key_source = "db"
     if not api_key:
-        return [], {"status": "skipped", "error": "intentionally_disabled_no_key"}
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        key_source = "env"
+    if not api_key:
+        return [], {"status": "skipped", "error": "missing_key"}
     async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
         response = await client.get(
             "https://api.openai.com/v1/models",
@@ -913,7 +949,7 @@ async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         model_id = str(item.get("id") or "").strip()
         if model_id:
             rows.append({"model_id": model_id, "display_name": _display_name_for_provider("openai", model_id), "raw": item})
-    return rows, {"status": "ok", "count": len(rows)}
+    return rows, {"status": "ok", "count": len(rows), "key_source": key_source}
 
 
 async def _fetch_anthropic_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:

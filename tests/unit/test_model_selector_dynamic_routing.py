@@ -39,6 +39,14 @@ def test_fable_5_1_override_aliases_are_canonicalized():
     assert get_model_for_override("anthropic:claude-fable-5-1") == "claude-fable-5-1"
 
 
+def test_gpt_6_astra_is_registered_with_openai_runtime_guards():
+    assert "gpt-6-astra" in model_selector._OPENAI_MODELS
+    assert "gpt-6-astra" in model_selector._OPENAI_REASONING_MODELS
+    assert "gpt-6-astra" in model_selector._OPENAI_NO_CUSTOM_SAMPLING_MODELS
+    assert "gpt-6-astra" in model_selector._OPENAI_RESPONSES_TOOL_REQUIRED_MODELS
+    assert model_selector._COST_MAP["gpt-6-astra"] == (10.0, 50.0)
+
+
 def test_fable_5_1_can_cascade_down_to_allowed_claude_rank():
     assert (
         model_selector._resolve_intent_policy_cascade_model(
