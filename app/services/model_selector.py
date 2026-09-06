@@ -866,8 +866,9 @@ _OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra"}
 _OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_MODELS = {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
 _CODEX_MODEL_DISPLAY = {
+    "gpt-6-astra": "GPT-6 Astra (Codex CLI)",
     "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
     "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
     "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
@@ -877,6 +878,8 @@ _CODEX_MODEL_DISPLAY = {
     "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
 }
 _CODEX_MODEL_ALIASES = {
+    "codex:gpt-6-astra": "gpt-6-astra",
+    "gpt-6 astra (codex cli)": "gpt-6-astra",
     "codex:gpt-5.6-sol": "gpt-5.6-sol",
     "gpt-5.6 sol (codex cli)": "gpt-5.6-sol",
     "codex:gpt-5.6-terra": "gpt-5.6-terra",

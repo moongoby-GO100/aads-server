@@ -11120,3 +11120,132 @@
   - DB verification: selectable Fable rows are `{claude-fable-5, claude-fable-5-1}` and alias visible count is `0`.
 - Not completed:
   - Server/dashboard source changes are not yet deployed until the target-file commits are pushed and blue/green deploys run from committed HEAD.
+
+## 2026-09-06 16:36 KST — OHVIS Objective Control Loop Phase 3 research report
+- CEO request:
+  - 추가 조사: 목표와 실행계획 수립 후 결과, 완료, 큰 목표/세부 목표 진행관리, 시간축 다음 단계 판단, 자동 진행 구조가 필요한지 검토하고 보고.
+- Report created:
+  - `app/static/reports/ohvis-objective-control-loop-phase3-20260906.html`
+  - Route verified with `curl -I http://127.0.0.1:8100/static/reports/ohvis-objective-control-loop-phase3-20260906.html`: `HTTP/1.1 200 OK`, `content-length: 20735`.
+- Evidence used:
+  - DB read-only checks at `2026-09-06 16:33:29 KST`.
+  - `project_plans`: approved 1, draft 3.
+  - `ohvis_loops`: active 4, completed 7, paused 2, cancelled 5.
+  - `ohvis_tasks`: done 239, running 4, error 1.
+  - `pipeline_jobs`: awaiting_approval 1, review_hold 1, rejected_done 628, cancelled 3.
+  - `memory_facts`: GO100 34,497; AADS 17,647; NTV2 7,746; CEO 3,301; KIS 2,980; NAS 306.
+  - information_schema did not show dedicated `goals`, `objectives`, or `milestones` tables.
+- External references summarized in the report:
+  - Temporal durable execution/workflow execution, LangGraph persistence/time-travel, OpenAI Agents SDK handoffs/guardrails/tracing, ReAct, Tree of Thoughts, Reflexion, Voyager, and 2026 Verbal Reinforcement Learning survey.
+- Verification:
+  - Static HTML route: pass.
+  - File size: `20735` bytes.
+  - Secret pattern scan on the report file for `PASSWORD|SECRET|TOKEN|API_KEY|BEGIN RSA|PRIVATE KEY|sk-...`: no matches.
+- Git/deploy:
+  - No commit, push, or deployment performed for this report-only change.
+  - Report file remains untracked until CEO requests commit.
+
+## 2026-09-06 16:49 KST — FOOD delivery revenue empty-shell quarantine
+- CEO request:
+  - Continue the interrupted delivery revenue import remediation, immediately apply the next actions, and report results.
+- Findings before action:
+  - Active empty-shell rows were present in `yeoljeong_delivery_sales` (baemin 9, coupangeats 921, yogiyo 2,167), `yeoljeong_delivery_settlements` (baemin 46, coupangeats 921, ddangyo 21, yogiyo 1,896), and `yeoljeong_delivery_reviews` (baemin 1,808, coupangeats 935, ddangyo 99, yogiyo 2,160).
+  - `pc_agent_collection_queue` had no active rows. A separate `yeoljeong_auto_collect.py --drain-global-queue` process was already running for PC Agent `7f99c528-24d`.
+- Changes prepared:
+  - `app/services/yeoljeong_finance_service.py`: added delivery record quality gates for sales, settlements, reviews, and ads. Empty placeholder rows are filtered from collection results, manual portal text imports, and final DB upserts.
+  - `tests/unit/test_yeoljeong_finance_service.py`: added regression coverage for rejecting empty sales shells while preserving meaningful sales rows.
+  - `migrations/153_yeoljeong_delivery_empty_shell_quarantine.sql`: added reversible DB quarantine migration. It backs up invalid rows into `yeoljeong_delivery_quality_quarantine`, then soft-hides them with `deleted_at`.
+- DB action:
+  - Applied `migrations/153_yeoljeong_delivery_empty_shell_quarantine.sql` to `aads-postgres`.
+  - Post-apply verification showed 0 active invalid rows for sales, settlements, and reviews. Quarantine table contains the backed-up rows by ledger/service.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py`: passed.
+  - `git diff --check -- app/services/yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_service.py`: passed.
+  - Local pytest with system Python failed because `fastapi` is not installed. `.venv` pytest also failed because pytest is not installed there.
+  - Isolated local assertions with dependency stubs passed: empty sales shells become `PORTAL_EMPTY_RECORDS_REJECTED`; valid baemin sales remain `succeeded`.
+- Operational state:
+  - AADS health check at 16:47 KST was `HEALTHY`; DB latency 113ms; disk usage 93%.
+  - The running global queue collector reached baemin auth success at 16:42 KST but logged `BAEMIN_ORDER_HISTORY_NO_ROWS` at 16:45 KST and had not finalized in DB at this handover time.
+- Not completed:
+  - No commit, push, or blue/green deploy performed in this chat turn.
+  - New quality-gate code is prepared locally but not deployed to running API slots yet.
+
+## 2026-09-06 17:21 KST — FOOD Shinhan bank long eval timeout fix
+- CEO request:
+  - Continue the Shinhan corporate easy-account collection work on DANHAROO-MAIN and complete the bank-only automation path.
+- Findings before action:
+  - DANHAROO-MAIN was online as PC Agent `62405e70-e98`.
+  - Shinhan was opened on the correct corporate easy-account URL: `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`.
+  - Security program preflight passed with AhnLab, VeraPort, INISAFE, and keyboard security detected.
+  - Collection failed at `shinhan_flow_step` with `TimeoutError`; `transactions.json` remained empty (`[]`).
+  - Server logs showed `/api/v1/pc-agent/route-execute` returning `504` while bank browser eval was running.
+- Changes prepared:
+  - `app/api/pc_agent.py`: keep the default browser eval cap at 60s for general work, but allow financial/bank/Shinhan route hints to inherit the command timeout up to 300s.
+  - `tests/unit/test_pc_agent_api_disconnects.py`: added regression coverage proving bank/financial eval receives a long `evaluate_timeout_seconds` while the existing non-financial cap remains 60s.
+- Verification:
+  - `python3 -m compileall app/api/pc_agent.py tests/unit/test_pc_agent_api_disconnects.py`: passed.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -e DATABASE_URL=sqlite:///tmp/test.db -v /root/aads/aads-server:/app -w /app aads-server:63d05fcb9054 pytest tests/unit/test_pc_agent_api_disconnects.py::test_route_execute_browser_eval_allows_long_bank_evaluation_timeout tests/unit/test_pc_agent_api_disconnects.py::test_route_execute_browser_eval_extends_financial_evaluation_timeout -q`: 2 passed.
+- Not completed at this handover point:
+  - Commit, push, blue/green deploy, and post-deploy Shinhan re-collection are still required before completion can be claimed.
+
+## 2026-09-07 06:12 KST — OpenAI GPT-6 Astra registry gap fix
+- CEO request:
+  - Check why the newly released GPT-6 Astra model was not automatically reflected, add it to AADS model catalog if available, re-check all model status, and report.
+- Official OpenAI verification:
+  - `gpt-6-astra` confirmed in official OpenAI model docs and pricing.
+  - Capabilities recorded: reasoning effort low/medium/high/xhigh/max, text input/output, image input, functions, web search, file search, computer use, 1.05M context window, 128K max output, Apr 30 2026 knowledge cutoff.
+- Root cause:
+  - The AADS registry uses DB key state for provider runtime activation, while the OpenAI key existed in runtime env but the `llm_api_keys` OpenAI row was inactive.
+  - Static OpenAI templates did not include `gpt-6-astra`, so discovery gaps were not covered by template fallback.
+- Changes prepared:
+  - `app/services/model_registry.py`: added GPT-6 Astra template/capability/pricing metadata and official GPT-5.6 API pricing updates; OpenAI discovery now falls back to `OPENAI_API_KEY` env without storing or exposing the secret.
+  - `app/services/model_selector.py`: added GPT-6 Astra to OpenAI runtime/cost maps and guards for no custom sampling plus Responses-API-required tool use.
+  - Tests added in `tests/unit/test_model_registry.py` and `tests/unit/test_model_selector_dynamic_routing.py`.
+- Verification:
+  - Host `python3 -m py_compile app/services/model_registry.py app/services/model_selector.py`: passed.
+  - Target-file `git diff --check -- app/services/model_registry.py app/services/model_selector.py tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py`: passed.
+  - Full local pytest not runnable because system Python lacks `structlog`; `.venv` lacks `pytest`.
+  - Current container tests pass on pre-deploy image, but do not include this host patch until a release image is built.
+- Runtime caveat:
+  - Direct OpenAI inference with `gpt-6-astra` currently returns 429 `credit_balance_exhausted`; therefore it must be shown as registered but not operational until billing/credit is fixed.
+- Not completed at this handover point:
+  - Commit, push, blue/green deploy, DB sync with patched code, API/UI verification, and post-deploy model status report remain required.
+
+## 2026-09-07 06:50 KST — GPT-6 Astra registry fix deployed with caveat
+- Commit/push:
+  - Committed and pushed `d173c84c6d61bfdde2d7fe3e2571de870109795c` (`Add GPT-6 Astra model registry support`) to `origin/main`.
+  - Commit includes `app/services/model_registry.py`, `app/services/model_selector.py`, `tests/unit/test_model_registry.py`, and `tests/unit/test_model_selector_dynamic_routing.py`.
+- Deployment:
+  - Blue/green release image `aads-server:d173c84c6d61` is running on both `aads-server:8100` and `aads-server-green:8102`.
+  - Both containers report the same digest: `sha256:21698f54aca95138e6537b32308e82ee7839fbdaaa6a0f2dcf262560fd794289`.
+  - Nginx active upstream is `8100` / `aads-server`; direct and routed `/api/v1/health` checks returned `status=ok`.
+  - `deploy_runs` row 36 remains `failed` because the chat execution received TERM during `standby_same_digest_sync`, after nginx cutover success. Manual verification confirmed both slots are healthy and same-digest, but the deploy script did not record the final `p0p1_monitoring` success phase.
+- Post-deploy registry state:
+  - Startup registry sync ran with patched code and reported `models_synced=284`.
+  - DB now contains `openai/gpt-6-astra` with display name `GPT-6 Astra`, input cost `10.000000`, output cost `50.000000`, and `responses_api_required_for_tools=true`.
+  - OpenAI provider has 128 catalog rows, but 0 selectable/executable rows because DB key `OPENAI_API_KEY` is inactive and a live Responses API call returned 429 `credit_balance_exhausted`.
+- Verification:
+  - `docker exec aads-server python -m pytest tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py`: 44 passed.
+  - `docker exec aads-server python -m py_compile app/services/model_registry.py app/services/model_selector.py`: passed.
+  - Target-file `git diff --check`: passed.
+  - `chat_messages` table access returned `CHAT_OK` with 51,753 rows.
+  - Manual P0/P1 log scan after `2026-09-07T06:44:33+09:00` found no deploy-script monitor pattern hits on active or standby logs.
+- Remaining caveat:
+  - Do not enable GPT-6 Astra as a selectable/executable chat model until OpenAI billing/credit is restored and a live Responses API inference check returns 200.
+
+## 2026-09-07 06:56 KST — GPT-6 Astra Codex CLI catalog follow-up
+- CEO request:
+  - Confirm whether GPT-6 Astra was also reflected in the Codex CLI model path.
+- Finding:
+  - Official Codex docs list `codex -m gpt-6-astra`, but AADS had only the `openai/gpt-6-astra` row.
+  - `codex/gpt-6-astra` was missing from `llm_models`, `_CODEX_MODELS`, Codex display names, and Codex alias normalization.
+- Changes prepared:
+  - `app/services/model_selector.py`: added `gpt-6-astra` to Codex CLI model allowlist/display/alias handling.
+  - `app/services/model_registry.py`: added Astra to the Codex provider static template and Codex-specific capabilities.
+  - `migrations/154_codex_cli_gpt6_astra.sql`: registers `codex/gpt-6-astra` as active/selectable/executable and adds non-default route preferences for `llm`, `runner_llm`, and `code_exec`.
+  - `tests/unit/test_model_selector_dynamic_routing.py`: added Codex CLI assertions for Astra.
+- DB action:
+  - Applied `migrations/154_codex_cli_gpt6_astra.sql` after removing the nonexistent `llm_models.is_default` column from the migration.
+  - DB now contains `codex/gpt-6-astra` with `execution_backend=codex_cli`, `is_active=true`, `is_selectable=true`, `is_executable=true`.
+- Not completed at this handover point:
+  - Commit, push, blue/green deploy, and post-deploy running-process verification are still required for the Python code path.

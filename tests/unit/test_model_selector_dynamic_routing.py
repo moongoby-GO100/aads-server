@@ -41,6 +41,9 @@ def test_fable_5_1_override_aliases_are_canonicalized():
 
 def test_gpt_6_astra_is_registered_with_openai_runtime_guards():
     assert "gpt-6-astra" in model_selector._OPENAI_MODELS
+    assert "gpt-6-astra" in model_selector._CODEX_MODELS
+    assert model_selector._canonical_codex_model_id("codex:gpt-6-astra") == "gpt-6-astra"
+    assert model_selector._CODEX_MODEL_DISPLAY["gpt-6-astra"] == "GPT-6 Astra (Codex CLI)"
     assert "gpt-6-astra" in model_selector._OPENAI_REASONING_MODELS
     assert "gpt-6-astra" in model_selector._OPENAI_NO_CUSTOM_SAMPLING_MODELS
     assert "gpt-6-astra" in model_selector._OPENAI_RESPONSES_TOOL_REQUIRED_MODELS

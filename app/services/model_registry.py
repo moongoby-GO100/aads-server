@@ -351,7 +351,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "o3-mini",
         "o3-pro",
     ),
-    "codex": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "codex": ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"),
     "openrouter": (
         "openrouter-grok-4-fast",
@@ -629,13 +629,12 @@ def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None
         "coding": model_id in _CODING_MODELS or _category_for(model_id) == "coding" or provider in {"anthropic", "codex"},
         "raw_generation_methods": (raw or {}).get("supportedGenerationMethods", []),
     }
-    if provider == "openai" and model_id == "gpt-6-astra":
+    if provider in {"openai", "codex"} and model_id == "gpt-6-astra":
         capabilities.update(
             {
                 "computer_use": True,
                 "file_search": True,
                 "web_search": True,
-                "responses_api_required_for_tools": True,
                 "reasoning_effort": ["low", "medium", "high", "xhigh", "max"],
                 "max_output_tokens": 128000,
                 "context_window": 1050000,
@@ -645,6 +644,10 @@ def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None
                 "supports_logprobs": False,
             }
         )
+        if provider == "openai":
+            capabilities["responses_api_required_for_tools"] = True
+        if provider == "codex":
+            capabilities.update({"codex_cli": True, "chatgpt_credits": True})
     return capabilities
 
 
