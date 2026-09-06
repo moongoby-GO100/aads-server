@@ -3153,7 +3153,7 @@ def test_collect_bank_account_browser_forwards_saved_bank_quick_credentials(tmp_
             "business_id": "biz-mia",
             "branch": "열정국밥_미아점",
             "collection_mode": "bank-quick-service",
-            "login_url": "https://bank.shinhan.com/rib/easy/index.jsp",
+            "login_url": "https://bizbank.shinhan.com/",
         },
         ADMIN_USER,
     )
@@ -3190,7 +3190,7 @@ def test_collect_bank_account_browser_forwards_saved_bank_quick_credentials(tmp_
     assert kwargs["account_password"] == "4321"
     assert kwargs["business_registration_no"] == "1234567890"
     assert kwargs["business_entity_type"] == "individual"
-    assert kwargs["portal_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+    assert kwargs["portal_url"] == "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
     assert kwargs["browser_work_key"].startswith("yeoljeong-bank-shinhan-individual-")
     assert account["id"] not in kwargs["browser_work_key"]
 

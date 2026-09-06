@@ -150,6 +150,17 @@ BANK_QUICK_SERVICE_CONFIG = {
     },
 }
 
+
+def _normalize_bank_quick_login_url(service: str, login_url: Any) -> str:
+    """Keep Shinhan quick-service runs on the corporate simple-account page."""
+    configured = BANK_QUICK_SERVICE_CONFIG.get(service, {})
+    fallback = str(configured.get("login_url") or "").strip()
+    raw = str(login_url or "").strip()
+    if service == "shinhan_business":
+        if not raw or "bizbank.shinhan.com" in raw or "bank.shinhan.com/rib/easy/index.jsp" in raw:
+            return fallback
+    return raw or fallback
+
 DEFAULT_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("식자재", ("쌀", "백미", "고춧가루", "소스", "김치", "대파", "양파", "고기", "식자재")),
     ("배달앱", ("배민", "배달의민족", "요기요", "쿠팡이츠", "정산")),
@@ -3271,7 +3282,10 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
         {
             "service": service,
             "label": payload.get("label") or CONNECTOR_LABELS.get(service, service),
-            "login_url": payload.get("login_url") or bank_quick_config.get("login_url") or "",
+            "login_url": _normalize_bank_quick_login_url(
+                service,
+                payload.get("login_url") or bank_quick_config.get("login_url") or "",
+            ),
             "username": username,
             "business_id": business_id,
             "branch": branch,
@@ -5536,7 +5550,7 @@ def _bank_quick_credentials_for_account(
     credentials: dict[str, str] = {
         "quick_account_configured": "1",
         "login_username": str(selected.get("username") or "").strip(),
-        "portal_url": str(selected.get("login_url") or BANK_QUICK_SERVICE_CONFIG.get(service_code, {}).get("login_url") or "").strip(),
+        "portal_url": _normalize_bank_quick_login_url(service_code, selected.get("login_url")),
     }
     for plaintext_field, encrypted_field in (
         ("login_password", "password_enc"),
