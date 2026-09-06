@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -93,6 +94,15 @@ def test_build_registry_snapshots_registers_codex_astra_template():
     assert astra_row["supports_coding"] is True
     assert astra_row["capabilities"]["codex_cli"] is True
     assert astra_row["capabilities"]["chatgpt_credits"] is True
+
+
+def test_codex_astra_migration_adds_runner_model_config_cycle():
+    sql = Path("migrations/155_runner_model_config_gpt6_astra.sql").read_text()
+
+    assert "runner_model_config" in sql
+    assert "'codex:gpt-6-astra'" in sql
+    assert "size = 'XL'" in sql
+    assert "'claude-fable-5-1', 'codex:gpt-6-astra'" in sql
 
 
 def test_build_registry_snapshots_registers_deepseek_v4_and_alias_metadata():
