@@ -347,6 +347,44 @@ async def notify_chat_response_complete(
         return {"sent": 0, "failed": 1, "error": str(exc)[:300]}
 
 
+async def notify_pipeline_job_complete(
+    *,
+    session_id: Optional[str],
+    job_id: str,
+    project: str,
+    status: str,
+) -> dict[str, Any]:
+    """Best-effort web push when a pipeline_runner job reaches done/error (Phase 7)."""
+    try:
+        if not session_id:
+            return {"sent": 0, "failed": 0, "skipped": "no_session_id"}
+        await ensure_push_schema()
+        sid = uuid.UUID(str(session_id))
+        async with get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT tenant_id::text, user_id FROM chat_sessions WHERE id = $1",
+                sid,
+            )
+        if not row or not row["user_id"]:
+            return {"sent": 0, "failed": 0, "skipped": "session_user_missing"}
+        payload = {
+            "title": "러너 완료",
+            "body": f"{project} {job_id} — {status}"[:240],
+            "url": f"/chat#{sid}",
+            "tag": f"pipeline-job-{job_id}",
+            "actions": [{"action": "open-chat", "title": "확인"}],
+            "data": {"job_id": job_id, "project": project, "status": status},
+        }
+        return await send_web_push_to_user(
+            tenant_id=row["tenant_id"],
+            user_id=str(row["user_id"]),
+            payload=payload,
+        )
+    except Exception as exc:
+        logger.warning("pipeline_job_push_notify_failed job=%s error=%s", str(job_id)[:40], exc)
+        return {"sent": 0, "failed": 1, "error": str(exc)[:300]}
+
+
 async def notify_managed_browser_task(
     *,
     tenant_id: Optional[str],

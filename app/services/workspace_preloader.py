@@ -37,6 +37,18 @@ _CORE_PROJECTS = [
 _PER_PROJECT_STRATEGIC = 2
 _PER_PROJECT_FACTS = 2
 
+# Phase 1-3: CEO 세션 프로젝트별 최근 7일 핵심 변경 요약 (프로젝트당 500자, 전체 3000자 이내)
+_DIGEST_CATEGORIES = [
+    "feature_change",
+    "architecture_decision",
+    "error_resolution",
+    "ceo_instruction",
+]
+_DIGEST_LOOKBACK_DAYS = 7
+_DIGEST_TOP_N = 5
+_DIGEST_CHAR_BUDGET_PER_PROJECT = 500
+_DIGEST_CHAR_BUDGET_TOTAL = 3000
+
 
 def is_orchestrator_workspace(project: Optional[str]) -> bool:
     return bool(project) and project.strip().upper() in _ORCHESTRATOR_WORKSPACES
@@ -80,12 +92,19 @@ async def build_workspace_preload(
         scope = _scope_projects(project)
         budget = _PRELOAD_TOKEN_BUDGET_ORCHESTRATOR if orchestrator else _PRELOAD_TOKEN_BUDGET
 
-        strategic_changes, recent_facts, last_summary, predicted_interests, error_warnings = await asyncio.gather(
+        digest_coro = (
+            _get_project_change_digest() if orchestrator else _empty_str()
+        )
+        (
+            strategic_changes, recent_facts, last_summary, predicted_interests,
+            error_warnings, project_digest,
+        ) = await asyncio.gather(
             _get_strategic_project_changes(scope, orchestrator),
             _get_recent_facts(scope, orchestrator),
             _get_last_session_summary(scope, session_id),
             get_predicted_interests(),
             _get_error_pattern_warnings(scope, orchestrator),  # P2: 에러 패턴 자동 경고
+            digest_coro,  # Phase 1-3: 프로젝트별 최근 7일 핵심 변경 요약 (CEO 전용)
             return_exceptions=True,
         )
 
@@ -105,6 +124,13 @@ async def build_workspace_preload(
             t = estimate_tokens(strategic_changes)
             if total + t <= budget:
                 parts.append(strategic_changes)
+                total += t
+
+        # Phase 1-3: 프로젝트별 최근 7일 핵심 변경 요약 (CEO 전용, 기존 항목과 별도 예산)
+        if isinstance(project_digest, str) and project_digest:
+            t = estimate_tokens(project_digest)
+            if total + t <= budget:
+                parts.append(project_digest)
                 total += t
 
         # 최근 사실 (최대 10건)
@@ -222,6 +248,84 @@ async def _get_strategic_project_changes(scope: list[str], orchestrator: bool) -
             return title + "\n" + "\n".join(lines)
     except Exception as e:
         logger.debug("workspace_preload_strategic_changes_error", error=str(e))
+        return ""
+
+
+async def _empty_str() -> str:
+    return ""
+
+
+async def _get_project_change_digest() -> str:
+    """Phase 1-3: CEO 통합지시 세션용 — 6개 핵심 프로젝트별 최근 7일 핵심 변경 상위 5건.
+
+    프로젝트당 500자, 전체 3000자 이내로 압축해 CEO가 전 프로젝트 최신 동향을
+    한눈에 파악하도록 한다. 기존 _get_strategic_project_changes/_get_recent_facts와
+    달리 category=ceo_instruction/error_resolution까지 포함한 별도 요약이다.
+    """
+    try:
+        from app.core.db_pool import get_pool
+        pool = get_pool()
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT project, category, subject, created_at
+                FROM (
+                    SELECT project, category, subject, created_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY project
+                               ORDER BY created_at DESC
+                           ) AS rn
+                    FROM memory_facts
+                    WHERE project = ANY($1::text[])
+                      AND category = ANY($2::text[])
+                      AND superseded_by IS NULL
+                      AND created_at >= NOW() - INTERVAL '{_DIGEST_LOOKBACK_DAYS} days'
+                ) ranked
+                WHERE rn <= $3
+                ORDER BY project, created_at DESC
+                """,
+                _CORE_PROJECTS, _DIGEST_CATEGORIES, _DIGEST_TOP_N,
+            )
+            if not rows:
+                return ""
+
+            labels = {
+                "feature_change": "기능",
+                "architecture_decision": "구조",
+                "error_resolution": "에러해결",
+                "ceo_instruction": "지시",
+            }
+
+            by_project: dict[str, list] = {}
+            for r in rows:
+                by_project.setdefault(r["project"], []).append(r)
+
+            project_blocks = []
+            for proj in _CORE_PROJECTS:
+                proj_rows = by_project.get(proj)
+                if not proj_rows:
+                    continue
+                lines = []
+                for r in proj_rows:
+                    ts = r["created_at"].strftime("%m/%d") if r["created_at"] else ""
+                    label = labels.get(r["category"], r["category"])
+                    lines.append(f"  - [{ts}][{label}] {r['subject']}")
+                block = f"[{proj}]\n" + "\n".join(lines)
+                if len(block) > _DIGEST_CHAR_BUDGET_PER_PROJECT:
+                    block = block[:_DIGEST_CHAR_BUDGET_PER_PROJECT - 1] + "…"
+                project_blocks.append(block)
+
+            if not project_blocks:
+                return ""
+
+            content = "\n".join(project_blocks)
+            if len(content) > _DIGEST_CHAR_BUDGET_TOTAL:
+                content = content[:_DIGEST_CHAR_BUDGET_TOTAL - 1] + "…"
+
+            return "## 최근 7일 프로젝트별 핵심 변경 요약:\n" + content
+    except Exception as e:
+        logger.debug("workspace_preload_project_digest_error", error=str(e))
         return ""
 
 

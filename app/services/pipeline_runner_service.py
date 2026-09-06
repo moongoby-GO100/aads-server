@@ -375,6 +375,19 @@ class PipelineCJob:
         except Exception as e:
             logger.warning(f"pipeline_c_chat_post_error job={self.job_id}: {e}")
 
+    async def _notify_push_status(self, status: str) -> None:
+        """done/error 전이 시 웹푸시 발송 (best-effort, 실패해도 흐름 차단 안 함)."""
+        try:
+            from app.services.push_notifications import notify_pipeline_job_complete
+            await notify_pipeline_job_complete(
+                session_id=self.chat_session_id,
+                job_id=self.job_id,
+                project=self.project,
+                status=status,
+            )
+        except Exception as exc:
+            logger.warning(f"pipeline_c_push_notify_error job={self.job_id}: {exc}")
+
     async def _trigger_ai_reaction(self, message: str) -> None:
         """채팅 AI가 결과를 확인하고 자동으로 반응하도록 트리거."""
         if not self.chat_session_id:
@@ -525,6 +538,7 @@ class PipelineCJob:
                     f"Claude Code 실행 실패: {work_result['error'][:500]}"
                 )
                 await self._save_to_db()
+                await self._notify_push_status("error")
                 # 채팅 AI에게 에러 조치 트리거 — CEO가 채팅방에서 바로 확인+지시 가능
                 await self._trigger_ai_reaction(
                     f"[시스템] Pipeline Runner 작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
@@ -566,6 +580,7 @@ class PipelineCJob:
                         f"변경사항 없이 실행 결과를 저장했습니다.\n\n"
                         f"```\n{self.result_output[-2000:]}\n```"
                     )
+                    await self._notify_push_status("done")
                     return
 
                 # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 review_hold 폴백)
@@ -658,6 +673,7 @@ class PipelineCJob:
                         f"Claude Code 재실행 실패: {work_result['error'][:500]}"
                     )
                     await self._save_to_db()
+                    await self._notify_push_status("error")
                     await self._trigger_ai_reaction(
                         f"[시스템] Pipeline Runner 재작업 `{self.job_id}` (프로젝트: {self.project})이 실패했습니다.\n"
                         f"오류: {work_result['error'][:300]}\n\n"
@@ -722,6 +738,7 @@ class PipelineCJob:
                 f"❌ **[Pipeline Runner 예외]** `{self.job_id}`\n{str(e)[:500]}"
             )
             await self._save_to_db()
+            await self._notify_push_status("error")
 
             # ★ AI 자동 반응 트리거: 에러 발생 시 AI가 원인 분석 및 대안 제시
             await self._trigger_ai_reaction(
@@ -764,6 +781,7 @@ class PipelineCJob:
                     await self._post_to_chat(
                         f"⚠️ **[배포 잠금 실패]** `{self.job_id}` — {_holder}가 배포 중입니다."
                     )
+                    await self._notify_push_status("error")
                     return {"error": self.error_msg}
 
             # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
@@ -786,6 +804,7 @@ class PipelineCJob:
                 self.status = "error"
                 await self._save_to_db()
                 await self._post_to_chat(f"❌ **[배포 실패]** `{self.job_id}`\ngit push 실패: {_push_err}")
+                await self._notify_push_status("error")
                 return {"status": "error", "error": str(_push_err)}
 
             # 서비스 재시작
@@ -830,6 +849,7 @@ class PipelineCJob:
                     f"에러: {verify.get('errors', '없음')[:200] or '없음'}\n\n"
                     f"**결과: {verify['summary']}**"
                 )
+                await self._notify_push_status("done")
                 # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
                 await self._run_frontend_qa_if_needed()
 
@@ -866,6 +886,7 @@ class PipelineCJob:
                 f"에러: {verify.get('errors', '없음')[:200] or '없음'}\n\n"
                 f"**결과: {verify['summary']}**"
             )
+            await self._notify_push_status("done")
 
             # AADS-1864: 매니저 AI에 QA 자동 보고
             try:
@@ -904,6 +925,7 @@ class PipelineCJob:
                 f"❌ **[배포 오류]** `{self.job_id}`\n{str(e)[:500]}"
             )
             await self._save_to_db()
+            await self._notify_push_status("error")
             await self._trigger_ai_reaction(
                 f"[시스템] Pipeline Runner 배포 작업 `{self.job_id}` (프로젝트: {self.project})에서 오류가 발생했습니다.\n"
                 f"오류: {str(e)[:300]}\n\n"
