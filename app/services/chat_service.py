@@ -2325,6 +2325,17 @@ def _looks_like_incomplete_progress_tail(text: str) -> bool:
     )
 
 
+_PROGRESS_STRIP_RE = re.compile(
+    r'^(?:(?:확인하겠습니다|실측하겠습니다|실측합니다|조회하겠습니다|조회합니다|'
+    r'진행하겠습니다|시작합니다|'
+    r'병렬로\s*(?:실측|조회|확인|진행|수집)\w*|'
+    r'도구를?\s*(?:로드|호출)\w*|'
+    r'먼저\s+[^\n]{0,60}(?:하겠습니다|합니다))'
+    r'[.。]?\s*)+',
+    re.MULTILINE,
+)
+
+
 def _clean_assistant_final_content(content: str) -> str:
     clean_content = content or ""
     if clean_content:
@@ -2335,6 +2346,7 @@ def _clean_assistant_final_content(content: str) -> str:
         clean_content = re.sub(r'<invoke\s+name=[^>]*>.*', '', clean_content, flags=re.DOTALL)
         clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
         clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
+        clean_content = _PROGRESS_STRIP_RE.sub('', clean_content)
         clean_content = clean_content.strip()
     return clean_content
 
