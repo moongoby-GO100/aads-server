@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-09-07 08:08 KST - GPT-6 Astra Codex CLI runner cycle 반영
+
+- Request:
+  - Verify whether GPT-6 Astra is reflected in Codex CLI and apply it directly to AADS runner model usage.
+- Findings:
+  - Official OpenAI Codex docs list `codex -m gpt-6-astra`.
+  - Local Codex CLI is `0.153.4`, which includes the September 2026 Astra catalog updates.
+  - Runtime smoke test passed: `codex exec -m gpt-6-astra "Print exactly AADS_ASTRA_SMOKE_OK"` returned the requested marker and reported 3,226 tokens.
+- Changes:
+  - Applied DB update to all `runner_model_config` size rows.
+  - `XL` now starts with `claude-fable-5-1` then `codex:gpt-6-astra`, preserving same-grade fallback before older Codex/Claude models.
+  - Added `migrations/155_runner_model_config_gpt6_astra.sql` so the DB state is reproducible.
+  - Added a static regression test in `tests/unit/test_model_registry.py`.
+- Verification:
+  - `docker exec aads-server python -m pytest tests/unit/test_model_registry.py tests/unit/test_model_selector_dynamic_routing.py -q` passed: 44 tests.
+  - `curl http://127.0.0.1:8100/health` returned `status=ok`.
+  - DB SELECT confirmed `codex:gpt-6-astra` is present in XS/S/M/L/XL/AI_REVIEW.
+- Commit:
+  - `92d2731d fix(runner): include Astra in model cycles` pushed to `origin/main`.
+- Deployment:
+  - API redeploy not required for runtime behavior because the active change is DB configuration plus migration/test source. Existing API containers stayed healthy.
+
 ## 2026-09-07 07:32 KST - OHVIS Phase 0/1/2 인프라 복구·품질게이트·목표원장 main 반영 (origin/main 6bcfe216)
 - 상세: `docs/handover/20260907_0732_ohvis_phase012_infra_recovery.md`
 - 핵심: pipeline_runner_service DELEGATED→awaiting_approval 에스컬레이션, quality_gate.py 정적 품질게이트, agent_orchestrator L3 역할 DB 동적 로드, memory_recall CEO 통합 교차 주입, goal_planner + goals/milestones 목표 원장.
