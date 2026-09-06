@@ -5842,6 +5842,7 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
     """
     task = _active_bg_tasks.get(session_id)
     state = _streaming_state.get(session_id, {})
+    sid = uuid.UUID(session_id)
     result = {
         "stopped": False,
         "content": state.get("content", ""),
@@ -5851,82 +5852,162 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
     _execution_id = state.get("execution_id")
     _execution_uuid = uuid.UUID(str(_execution_id)) if _execution_id else None
 
-    if task and not task.done():
-        # BUG-2 FIX: 부분 응답을 DB에 저장 (유실 방지)
-        partial_content = result["content"]
-        if partial_content.strip():
-            try:
-                pool = get_pool()
-                sid = uuid.UUID(session_id)
-                stopped_content = partial_content.strip() + "\n\n_(응답이 중지되었습니다)_"
-                async with pool.acquire() as conn:
-                    _assistant_message_id = existing = None
-                    if _execution_uuid:
-                        existing = await conn.fetchval(
-                            "SELECT id FROM chat_messages WHERE execution_id = $1 ORDER BY created_at DESC LIMIT 1",
-                            _execution_uuid,
-                        )
-                    else:
-                        existing = await conn.fetchval(
-                            "SELECT id FROM chat_messages WHERE session_id = $1 AND intent = 'streaming_placeholder' ORDER BY created_at DESC LIMIT 1",
-                            sid,
-                        )
-                    if existing:
-                        _assistant_message_id = existing
-                        await conn.execute(
-                            "UPDATE chat_messages SET content = $1, intent = NULL, model_used = 'stopped', execution_id = COALESCE(execution_id, $3) WHERE id = $2",
-                            stopped_content, existing, _execution_uuid,
-                        )
-                    else:
-                        _assistant_message_id = await conn.fetchval(
-                            """INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent)
-                               VALUES ($1, $2, 'assistant', $3, 'stopped', NULL)
-                               RETURNING id""",
-                            sid, _execution_uuid, stopped_content,
-                        )
-                        await conn.execute(
-                            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                            sid,
-                        )
-                    if _execution_uuid:
-                        _stop_diagnostics = _build_interruption_diagnostics(
-                            reason="stopped by user",
-                            category="user_action",
-                            partial_content=partial_content,
-                            placeholder_id=str(_assistant_message_id) if _assistant_message_id else None,
-                        )
-                        await conn.execute(
-                            """
-                            UPDATE chat_turn_executions
-                            SET status = 'interrupted',
-                                interrupt_category = 'user_action',
-                                interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $3::jsonb,
-                                assistant_message_id = COALESCE(assistant_message_id, $2),
-                                actual_model = COALESCE(actual_model, 'stopped'),
-                                error_message = 'stopped by user',
-                                completed_at = NOW(),
-                                updated_at = NOW()
-                            WHERE id = $1
-                            """,
-                            _execution_uuid,
-                            _assistant_message_id,
-                            json.dumps(_stop_diagnostics, ensure_ascii=False),
-                        )
-                        await conn.execute(
-                            """
-                            UPDATE chat_sessions
-                            SET current_execution_id = NULL,
-                                updated_at = NOW()
-                            WHERE id = $1
-                              AND current_execution_id = $2
-                            """,
-                            sid,
-                            _execution_uuid,
-                        )
-                logger.info(f"stop_partial_saved session={session_id[:8]} len={len(partial_content)}")
-            except Exception as save_err:
-                logger.warning(f"stop_partial_save_failed session={session_id[:8]}: {save_err}")
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            if not _execution_uuid:
+                _execution_uuid = await conn.fetchval(
+                    """
+                    SELECT current_execution_id
+                    FROM chat_sessions
+                    WHERE id = $1
+                      AND current_execution_id IS NOT NULL
+                    """,
+                    sid,
+                )
+            if not _execution_uuid:
+                _execution_uuid = await conn.fetchval(
+                    """
+                    SELECT id
+                    FROM chat_turn_executions
+                    WHERE session_id = $1
+                      AND status IN ('running', 'retrying')
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    sid,
+                )
+            if _execution_uuid and not isinstance(_execution_uuid, uuid.UUID):
+                _execution_uuid = uuid.UUID(str(_execution_uuid))
 
+            partial_content = _strip_streaming_progress_markers(result["content"] or "").strip()
+            existing = None
+            if _execution_uuid:
+                existing = await conn.fetchval(
+                    """
+                    SELECT id
+                    FROM chat_messages
+                    WHERE execution_id = $1
+                      AND role = 'assistant'
+                    ORDER BY
+                      CASE WHEN intent = 'streaming_placeholder' THEN 0 ELSE 1 END,
+                      created_at DESC
+                    LIMIT 1
+                    """,
+                    _execution_uuid,
+                )
+            if not existing:
+                existing = await conn.fetchval(
+                    """
+                    SELECT id
+                    FROM chat_messages
+                    WHERE session_id = $1
+                      AND role = 'assistant'
+                      AND intent = 'streaming_placeholder'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    sid,
+                )
+            if not partial_content and existing:
+                partial_content = await conn.fetchval(
+                    "SELECT content FROM chat_messages WHERE id = $1",
+                    existing,
+                ) or ""
+                partial_content = _strip_streaming_progress_markers(partial_content).strip()
+
+            stopped_content = (
+                partial_content + "\n\n_(응답이 중지되었습니다)_"
+                if partial_content
+                else "응답 생성을 중지했습니다. 생성된 내용이 아직 없습니다."
+            )
+            _assistant_message_id = existing
+            if existing:
+                await conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET content = $1,
+                        intent = NULL,
+                        model_used = 'stopped',
+                        execution_id = COALESCE(execution_id, $3),
+                        edited_at = NOW()
+                    WHERE id = $2
+                    """,
+                    stopped_content,
+                    existing,
+                    _execution_uuid,
+                )
+            elif _execution_uuid or task:
+                _assistant_message_id = await conn.fetchval(
+                    """
+                    INSERT INTO chat_messages (session_id, execution_id, role, content, model_used, intent)
+                    VALUES ($1, $2, 'assistant', $3, 'stopped', NULL)
+                    RETURNING id
+                    """,
+                    sid,
+                    _execution_uuid,
+                    stopped_content,
+                )
+                await conn.execute(
+                    "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                    sid,
+                )
+
+            if _execution_uuid:
+                _stop_diagnostics = _build_interruption_diagnostics(
+                    reason="stopped by user",
+                    category="user_action",
+                    partial_content=partial_content,
+                    placeholder_id=str(_assistant_message_id) if _assistant_message_id else None,
+                )
+                await conn.execute(
+                    """
+                    UPDATE chat_turn_executions
+                    SET status = 'interrupted',
+                        interrupt_category = 'user_action',
+                        interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $3::jsonb,
+                        assistant_message_id = COALESCE(assistant_message_id, $2),
+                        actual_model = COALESCE(actual_model, 'stopped'),
+                        error_message = 'stopped by user',
+                        completed_at = NOW(),
+                        heartbeat_at = NOW(),
+                        lease_expires_at = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                      AND status IN ('running', 'retrying', 'interrupted')
+                    """,
+                    _execution_uuid,
+                    _assistant_message_id,
+                    json.dumps(_stop_diagnostics, ensure_ascii=False),
+                )
+                await conn.execute(
+                    """
+                    UPDATE chat_sessions
+                    SET current_execution_id = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                      AND current_execution_id = $2
+                    """,
+                    sid,
+                    _execution_uuid,
+                )
+            result["content"] = partial_content
+            result["stopped"] = bool(task and not task.done()) or bool(_execution_uuid) or bool(_assistant_message_id)
+            if isinstance(state, dict) and result["stopped"]:
+                state["saw_done_event"] = True
+                state["_terminal_execution_closed"] = True
+                state["_producer_incomplete_exit"] = "user_stop_requested"
+            logger.info(
+                "stop_state_saved session=%s execution=%s content_len=%s message=%s",
+                session_id[:8],
+                str(_execution_uuid or "")[:8],
+                len(partial_content),
+                str(_assistant_message_id or "")[:8],
+            )
+    except Exception as save_err:
+        logger.warning(f"stop_partial_save_failed session={session_id[:8]}: {save_err}")
+
+    if task and not task.done():
         # 태스크 취소
         task.cancel()
         try:
@@ -5940,12 +6021,11 @@ async def stop_session_streaming(session_id: str) -> Dict[str, Any]:
         # placeholder가 이미 최종 응답으로 교체되었으므로 삭제 불필요
         # (위에서 intent=NULL로 변경했으므로 _delete_streaming_placeholder는 아무것도 안 함)
         result["stopped"] = True
-        logger.info(f"session_streaming_stopped session={session_id[:8]} content_len={len(partial_content)} tools={result['tool_count']}")
+        logger.info(f"session_streaming_stopped session={session_id[:8]} content_len={len(result['content'])} tools={result['tool_count']}")
     else:
         # 이미 완료되었거나 존재하지 않음
         _active_bg_tasks.pop(session_id, None)
         _streaming_state.pop(session_id, None)
-        result["stopped"] = False
 
     try:
         from app.core.interrupt_queue import set_streaming as _set_interrupt_streaming

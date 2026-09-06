@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-07 07:32 KST - Chat stop button backend stop hardening
+- CEO request:
+  - Apply the recommended chat reliability improvements and fix the response bubble bottom stop button not working.
+- Finding:
+  - The `/chat/sessions/{session_id}/stop` service only treated an in-memory active background task as stoppable.
+  - If the frontend saw an active stream but the backend state only had `chat_sessions.current_execution_id` / `chat_turn_executions` state, the API could return `stopped=false` and leave the UI/DB state ambiguous.
+- Change:
+  - `app/services/chat_service.py`: resolves the active execution from memory, `chat_sessions.current_execution_id`, or the latest running/retrying execution.
+  - `app/services/chat_service.py`: writes a visible `model_used='stopped'` assistant message even when no tokens have been generated yet.
+  - `app/services/chat_service.py`: closes the execution as `interrupt_category='user_action'`, clears `current_execution_id`, releases the lease fields, and marks the in-memory stream as terminal so producer cleanup does not rewrite the stopped message as a generic interrupted partial.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py app/routers/chat.py` passed.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_chat_service.py -k stop_session_streaming` passed: 1 selected test.
+  - `git diff --check -- app/services/chat_service.py` passed.
+- Deployment:
+  - Not deployed in this entry. Recent DB check showed active chat executions, so API blue/green should be run after the active streams drain or via a clean release window.
+
 ## 2026-09-07 07:16 KST - GO100 all-service status false DOWN fix
 - CEO request:
   - Proceed with the recommended P1 fix for `get_all_service_status` reporting GO100 as DOWN while direct GO100 health checks were healthy.
