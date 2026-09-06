@@ -51,7 +51,7 @@ class TemporalController:
     async def _check_goal(self, conn, goal_id: str, project: str) -> None:
         milestones = await conn.fetch(
             "SELECT id, title, status, due_date FROM milestones "
-            "WHERE goal_id = $1 ORDER BY seq",
+            "WHERE goal_id = $1 ORDER BY sequence_order",
             goal_id,
         )
         if not milestones:
@@ -60,7 +60,7 @@ class TemporalController:
         current = None
         next_pending = None
         for m in milestones:
-            if m["status"] == "active":
+            if m["status"] == "in_progress":
                 current = m
             elif m["status"] == "pending" and next_pending is None:
                 next_pending = m
@@ -68,7 +68,7 @@ class TemporalController:
         if not current:
             if next_pending:
                 await conn.execute(
-                    "UPDATE milestones SET status = 'active', started_at = NOW() WHERE id = $1",
+                    "UPDATE milestones SET status = 'in_progress', started_at = NOW() WHERE id = $1",
                     next_pending["id"],
                 )
                 logger.info("milestone_auto_started goal=%s milestone=%s", goal_id, next_pending["id"])
@@ -109,7 +109,7 @@ class TemporalController:
 
             if next_pending:
                 await conn.execute(
-                    "UPDATE milestones SET status = 'active', started_at = NOW() WHERE id = $1",
+                    "UPDATE milestones SET status = 'in_progress', started_at = NOW() WHERE id = $1",
                     next_pending["id"],
                 )
                 logger.info("milestone_auto_advanced goal=%s next=%s", goal_id, next_pending["id"])
@@ -132,7 +132,7 @@ class TemporalController:
             rows = await conn.fetch(
                 "SELECT m.id, m.title, m.due_date, g.project, g.title as goal_title "
                 "FROM milestones m JOIN goals g ON m.goal_id = g.id "
-                "WHERE m.status = 'active' AND m.due_date IS NOT NULL AND m.due_date < $1",
+                "WHERE m.status = 'in_progress' AND m.due_date IS NOT NULL AND m.due_date < $1",
                 now,
             )
             return [dict(r) for r in rows]
