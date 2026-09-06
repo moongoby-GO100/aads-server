@@ -1,5 +1,114 @@
 # AADS HANDOVER
 
+## 2026-09-06 16:25 KST - Fable 5.1 explicit selection persistence and no silent Opus downgrade
+- CEO request:
+  - Verify and fix the issue where selecting Fable 5.1 in chat did not persist into DB execution and work ran on Opus instead; apply all recommended improvements.
+- Findings:
+  - DB confirmed Fable canonical rows are active: `claude-fable-5` and `claude-fable-5-1`; compatibility aliases `claude-fable-5.1` and `claude-fable-latest` are inactive/non-selectable alias rows.
+  - Recent Fable session `8bf0405a-1f22-4ad9-bb09-6e0fce8c6339` had multiple turns where user `model_used` and `chat_turn_executions.requested_model` were saved as `claude-opus-5`, matching CEO's report.
+  - Root cause 1: dashboard model select used React state plus `modelRef.current`; selecting a model and immediately sending could use the previous ref value.
+  - Root cause 2: `intent_router.get_model_for_override()` did not canonicalize Fable 5.1 accepted aliases or `anthropic:`-qualified IDs.
+  - Root cause 3: explicit Claude model selections could still use the Claude downgrade/same-grade fallback chain, allowing Fable failures to continue on Opus.
+- Changes:
+  - `app/services/intent_router.py`: canonicalizes `claude-fable-5.1`, `claude-fable-latest`, and `anthropic:claude-fable-5-1` to `claude-fable-5-1`.
+  - `app/services/model_selector.py`: treats explicitly selected active registry models as routable and prevents explicit Claude selections from silently downgrading to Opus or other same-grade models.
+  - `tests/unit/test_model_selector_dynamic_routing.py`: added regression tests for Fable override canonicalization and no-silent-Opus downgrade behavior.
+- Verification:
+  - `python3 -m py_compile app/services/intent_router.py app/services/model_selector.py` passed.
+  - Local `pytest -q tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_model_registry.py` could not run because local Python lacks `structlog`; use container/bind-mounted verification before release.
+  - DB Fable row verification passed: canonical rows selectable/executable, accepted alias rows hidden.
+- Deployment:
+  - Pending at this note. Commit selected server files, push, run `deploy.sh bluegreen`, then verify container tests and route health.
+
+## 2026-09-06 16:16 KST - OHVIS Objective Control Loop verified report
+
+- CEO request:
+  - Correct the previous unsupported "DB 실측" reporting and re-check the goal/planning/execution/result/completion/next-step control loop with actual tools only.
+- Changes:
+  - `app/static/reports/ohvis-objective-control-loop-20260906.html`: added a verified HTML report focused on Strategic Objective Ledger, Milestone State Machine, execution/evidence/decision chains, project registry, context boundaries, and self-evolution loop design.
+- Verification:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: 2026-09-06 16:16:21 KST.
+  - `docker ps --format ...`: AADS server, dashboard, Postgres, Redis, LiteLLM, and SearxNG containers reported running; AADS server/dashboard/Postgres/Redis/LiteLLM/SearxNG showed healthy where healthchecks exist.
+  - PostgreSQL SELECT checks:
+    - `memory_facts`: 70,770 rows.
+    - `pipeline_jobs`: awaiting_approval 1, cancelled 2, rejected_done 628, review_hold 1.
+    - `ohvis_tasks`: done 239, error 1, running 3.
+    - `ohvis_loops`: active 4, cancelled 5, completed 7, paused 2.
+    - `project_plans`: approved 1, draft 3.
+    - goal/objective/milestone table-name search returned no matching goal ledger tables.
+  - Code checks:
+    - `migrations/012_project_plans.sql`: project plan schema stores PRD, architecture, phase_plan, and status but no objective lifecycle fields.
+    - `migrations/20260727_create_loop_tables.sql`: loop schema stores interval, max_iterations, success_condition, and iteration state.
+    - `app/services/loop_executor.py`: loop iterations can write status to chat and complete on `goal_reached`, but they are loop-scoped rather than enterprise objective-scoped.
+    - `app/services/agent_orchestrator.py`: role prompts are hardcoded to six base roles.
+  - Report safety check:
+    - `rg -n "PASSWORD|SECRET|TOKEN|KEY|aads2026|KisAuto|sbxhr|hLge" app/static/reports/ohvis-objective-control-loop-20260906.html` returned no matches.
+    - `wc -c app/static/reports/ohvis-objective-control-loop-20260906.html`: 20,702 bytes.
+- Pending:
+  - No commit, push, or deploy performed for this report.
+  - Browser screenshot not captured; this is a static HTML artifact and can be visually captured if requested.
+
+## 2026-09-06 14:25 KST - OHVIS Control Plane research report
+
+- CEO request:
+  - Based on today's discussion, produce a detailed research/planning/technical/architecture HTML report for making OHVIS the single AI assistant that can orchestrate every current and future project while preserving project/session isolation, speed, stability, reporting, notifications, and continuous self-improvement.
+- Changes:
+  - `app/static/reports/ohvis-jarvis-beyond-control-plane-20260906.html`: added an 854-line HTML report covering current AADS/OHVIS measurements, latest agent-orchestration research, Control Plane architecture, context isolation policy, realtime reporting, speed/cost strategy, automatic evolution loops, and P0/P1 directive drafts.
+- Verification:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: 2026-09-06 14:24:39 KST.
+  - `docker ps`: AADS server/dashboard/postgres/redis/litellm/searxng containers reported healthy.
+  - `curl http://127.0.0.1:8102/health`: HTTP 200 in 0.044123s.
+  - PostgreSQL read-only checks: `memory_facts`, `pipeline_jobs`, `ohvis_tasks`, `chat_messages`, `compiled_prompt_provenance`, `prompt_assets`, and `app_push_subscriptions` queried for report facts.
+  - `wc -l app/static/reports/ohvis-jarvis-beyond-control-plane-20260906.html`: 854 lines.
+- Pending:
+  - No commit, push, or deployment performed for this report in this turn.
+  - Runtime web screenshot not captured; report is a static HTML artifact and needs browser capture only if CEO asks for visual confirmation.
+
+## 2026-09-06 11:21 KST - Claude Fable 5.1 tool_choice/thinking guard
+
+- CEO request:
+  - Audit forced `tool_choice` usage in AADS and prevent Fable 5.1 errors when selected from the chat UI.
+- Findings:
+  - `model_registry.py` already exposed `claude-fable-5-1`, but `model_selector.py` did not map Fable aliases into the Anthropic runtime table.
+  - `_stream_anthropic()` enabled Extended Thinking only for `claude-opus` and `claude-sonnet`, so a Fable 5.1 request could keep `tool_choice={"type":"any"}` and hit the Anthropic Thinking/tool_choice incompatibility.
+- Changes:
+  - `app/services/model_selector.py`: added Fable 5/5.1 and Sonnet 5 Anthropic runtime aliases, cost entries, Claude rank handling, CLI relay downgrade/fallback sequences, and a shared `_drop_tool_choice_for_thinking()` guard used by both first-call and empty-response retry paths.
+  - `app/services/model_registry.py`: added Fable/Sonnet runtime model IDs and accepted aliases so model sync metadata remains executable and searchable.
+  - `tests/unit/test_model_selector_dynamic_routing.py` and `tests/unit/test_model_registry.py`: added regression tests for Fable 5.1 alias normalization, thinking guard removal of `tool_choice`, cascade downgrade, and registry execution metadata.
+- Verification:
+  - `python3 -m py_compile app/services/model_selector.py app/services/model_registry.py` passed on host.
+  - `docker exec aads-server python -m py_compile app/services/model_selector.py app/services/model_registry.py` passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_model_registry.py -q` passed: 37 tests.
+  - Host pytest collection still fails because the host Python environment is missing `structlog`; container test is the valid service-runtime check.
+- Pending:
+  - Selective commit/push and clean-release blue/green deployment. Existing unrelated dirty files remain in the worktree and must not be included.
+
+## 2026-09-06 10:49 KST - AADS zero-defect deploy telemetry and stale sync hardening
+
+- CEO request:
+  - Immediately harden the AADS deployment system toward a zero-defect release process and identify deployment time reduction opportunities.
+- Findings:
+  - A previous `deploy.sh bluegreen` process was stale for more than one day without `/tmp/aads-deploy.lock` ownership.
+  - Active API slot `aads-server` was on image `5d7e3bbd318c`, while standby `aads-server-green` was still on `a9fb4f14eed5`; same-digest standby certification was therefore incomplete.
+  - `deploy_runs`/`deploy_phase_events` existed but the runtime DB had not yet received the new heartbeat columns, so deploy observability could silently degrade.
+- Changes:
+  - `deploy.sh`: applies `migrations/150_deploy_observability_v1.sql` before the first telemetry write, records deploy PID/generation/heartbeat, marks SIGTERM/INT/HUP interruption as failed, and heartbeats long standby-sync and P0/P1 monitoring loops.
+  - `app/services/deploy_observability.py`: annotates active deploys with heartbeat age, phase elapsed time, and stalled-deploy blockers after 600 seconds without heartbeat.
+  - `migrations/150_deploy_observability_v1.sql`: adds idempotent `deploy_pid`, `deploy_generation`, and `last_heartbeat_at` columns for deploy ownership/reconciliation.
+  - `tests/unit/test_deploy_observability.py`: covers stalled active deploy blockers and deploy script telemetry/migration contracts.
+- Verification before commit:
+  - `bash -n deploy.sh` passed.
+  - `pytest tests/unit/test_deploy_observability.py -q` passed: 5 tests.
+  - `python3 -m py_compile app/services/deploy_observability.py` passed.
+  - `git diff --check -- deploy.sh app/services/deploy_observability.py migrations/150_deploy_observability_v1.sql tests/unit/test_deploy_observability.py` passed.
+  - `scripts/verify-bluegreen-release-contract.sh .` passed.
+  - Runtime DB migration applied successfully and `deploy_pid`, `deploy_generation`, `last_heartbeat_at` columns were verified in `information_schema`.
+- Operational action:
+  - Stale `deploy_runs.id=1` was marked `failed/stale_process_reconciled`.
+  - Stale `deploy.sh` PID `1834991` was terminated after confirming it had no deploy lock ownership and no child process.
+- Pending:
+  - Selective commit/push, clean-release blue/green deploy, same-digest standby verification, routed health, and 5-minute P0/P1 monitoring.
+
 ## 2026-09-05 06:27 KST - DANHAROO-MAIN bank-only PC reservation and Shinhan easyview hash entry
 
 - CEO request:
@@ -10888,22 +10997,126 @@
 - Not completed:
   - Standby same-digest sync remains pending until the old blue chat executions drain, or until CEO explicitly approves terminating/interrupting those executions.
 
-## 2026-09-06 16:00 KST - No-loss deploy gate follow-up
+## 2026-09-06 02:06 KST — 신한 자동수집 P0 (ee3463f2)
+- 원인1 확정: _shinhan_idpw_login_panel_ready CDP eval 예산 5s → AhnLab/VeraPort PC 실제 왕복 20~35s → 가드가 항상 False → 금융인증서 분기로 오진입. 30s로 상향.
+- 원인2 확정: browser_tabs 목록의 detached YESKEY fincert iframe target(2026-08-20 생성)이 살아 있어 인증서 챌린지 오탐. type!=page 타깃 제외.
+- 원인3 확정: bank browser timeout 기본 90s → 로그인 도중 만료 → SHINHAN_FINCERT_TIMEOUT_BUT_IDPW_CONFIGURED 오분류. 600s로 상향.
+- 데이터 정정: platform_accounts 미아점 login_url bizbank.shinhan.com → bank.shinhan.com/rib/easy/index.jsp#210000000000.
+- 검증: 3회 실행. 인증서 오탐/세션 재생성 루프 소멸, simple_query_page success, 실제 로그인 flow 진입 확인.
+- 미해결: shinhan_flow_step TimeoutError (130~166s) → INSUFFICIENT_PORTAL_SIGNAL, imported_rows=0. MAX_EVAL_TIMEOUT 300s로 올려도 동일 → PC Agent/Bridge 단계 타임아웃 의심.
+- 배포: ee3463f2 push 완료, 이미지 배포는 미완(현재 슬롯 aads-server:64a5b3f174d7).
 
+## 2026-09-06 09:36 KST — DB MCP timeout wrapper alignment
 - CEO request:
-  - Continue the next action for the no-loss deployment system, reduce deployment delay, and ensure future edits are either included in the deployed SHA or explicitly blocked.
-- Findings:
-  - `deploy_runs.id=16` blocked at `target_slot_drain` because inactive target slot `aads-server:8100` still reported two recovery placeholder executions: sessions `9102c970` and `bf6f097c`.
-  - The dirty release gate existed, but `AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true` could still let a dirty working tree pass without a reason, creating ambiguity in completion reports.
+  - Stabilize DB MCP failures reported as 30s connection failures, apply recommended fix, deploy, and report verified status.
+- Root cause:
+  - `query_project_database` driver policy allowed PostgreSQL query/acquire up to 115s, but `ToolExecutor` classified DB tools into a 28s wrapper bucket. This could cancel DB tools before the DB-layer timeout diagnostics were returned.
 - Changes:
-  - `app/api/ops.py`: excludes hidden `recovery_auto_retry_scheduled` streaming placeholders from slot-local active-stream counts so inactive recovery placeholders do not block candidate/standby drain as live streams.
-  - `deploy.sh`: requires `AADS_DEPLOY_DIRTY_OVERRIDE_REASON` when dirty archive override is used, making excluded dirty-file releases explicit and auditable.
-  - `tests/unit/test_deploy_observability.py`: added static regression checks for the dirty override reason gate.
+  - `app/services/tool_executor.py`: raised the default DB tool wrapper timeout to 125s and clamped lower environment overrides to the same minimum, matching the existing project DB timeout policy.
+  - `tests/unit/test_tool_executor_aliases.py`: added regression coverage that the default DB wrapper timeout covers project DB policy and that internal `query_database` statement/acquire timeouts leave wrapper headroom.
+- Verification before deployment:
+  - `docker run --rm --env-file .env --network aads_network -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server:64a5b3f174d7 -m pytest tests/unit/test_tool_executor_aliases.py -q` passed: 7 tests.
+  - `docker exec aads-server python -m py_compile app/services/tool_executor.py app/api/ceo_chat_tools_db.py app/api/ceo_chat_tools.py` passed.
+  - Existing live container `ToolExecutor.query_database` 3 SELECT smoke passed without timeout: `SELECT 1`, `SELECT NOW()`, `SELECT COUNT(*) FROM chat_sessions`.
+- Pending:
+  - Selective commit/push, clean-worktree `deploy.sh bluegreen`, post-deploy 3 SELECT smoke, same-digest check, and 5-minute P0/P1 monitoring.
+
+## 2026-09-06 10:30 KST — AADS deploy observability/hardening direct patch
+- CEO request:
+  - Immediately harden deployment against uncommitted-change loss, build a stricter release system, deploy, and report options to shorten release time.
+- Changes prepared:
+  - `deploy.sh`: writes `deploy_runs`/`deploy_phase_events` phase telemetry for preflight, dependency check, validation, target drain, candidate build, candidate health, active drain, nginx cutover, standby same-digest sync, post health, DB/chat/LLM checks, frontend QA, and P0/P1 monitoring.
+  - `deploy.sh`: prints/audits uncommitted worktree files excluded from the release image so dirty files cannot be silently mistaken as deployed.
+  - `deploy.sh`: adds default 300s P0/P1 post-release monitor before `record_deploy success`.
+  - `tests/unit/test_deploy_observability.py`: adds static regressions for phase telemetry, dirty exclusion logging, and five-minute monitoring gate.
 - Verification before commit:
-  - `python3 -m py_compile app/api/ops.py` passed.
-  - `bash -n deploy.sh` passed.
-  - `python3 -m pytest tests/unit/test_deploy_observability.py -q` passed: 5 tests.
-  - `scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server` passed.
-  - `git diff --check -- deploy.sh app/api/ops.py tests/unit/test_deploy_observability.py` passed.
-- Deployment note:
-  - Release must be built from the committed SHA; unrelated dirty worktree files remain excluded and must not be reported as deployed.
+  - `bash -n deploy.sh`: pass.
+  - `scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server`: pass.
+  - `python3 -m pytest tests/unit/test_deploy_observability.py -q`: 4 passed, 1 warning.
+- Note:
+  - Existing unrelated dirty changes in `HANDOVER.md`, `app/api/llm_report.py`, `app/core/local_embedding_bridge.py`, `app/services/deploy_lock.py`, `docker-compose.yml`, and runtime/report files remain intentionally uncommitted unless separately reviewed.
+
+## 2026-09-06 12:31 KST — FOOD Shinhan business easy-view collection follow-up
+- CEO request:
+  - Continue the previous interrupted Shinhan business easy-account collection task, deploy, run on `DANHAROO-MAIN`, and report results.
+- Changes:
+  - Corrected runtime data URLs in `app/data/yeoljeong_finance/platform_accounts.json` and `app/data/yeoljeong_finance/settings.json` from legacy `https://bizbank.shinhan.com/` to `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`.
+  - `app/services/yeoljeong_bank_browser_connector.py`: added list traversal to PC Agent output extraction and fallback `Get-Process AnySign4PCLauncher,VeraPort,INISAFE,Delfino` check when the longer Shinhan security-program PowerShell probe returns empty output.
+- Git:
+  - Committed and pushed `fb06fbc5 fix: harden shinhan security program preflight`.
+  - Current `origin/main` later advanced to `95308d70`; it contains `fb06fbc5`.
+- Deployment:
+  - Ran `deploy.sh bluegreen` for prior `dbb36deb66e8`; candidate green became healthy and nginx routed to green.
+  - Standby same-digest sync did not finish because old blue `aads-server:8100` still had 2 active streams (`e8a62756`, `bf6f097c`). The deploy process was stopped without restarting containers.
+  - Current containers: `aads-server-green` image `aads-server:dbb36deb66e8` healthy, old `aads-server` image `aads-server:695a5dd4bc45` healthy. New `fb06fbc5/95308d70` code is pushed but not deployed.
+- Test result:
+  - `DANHAROO-MAIN` (`62405e70-e98`) online.
+  - Security program direct check succeeded: AnySign4PCLauncher, VeraPort, and Delfino processes were visible.
+  - Bank work key `yeoljeong-bank-shinhan-mia` opened `https://bank.shinhan.com/rib/easy/index.jsp#210000000000` successfully on CDP port 9333.
+  - Browser stage logs showed Shinhan page transition to `#210101000001` and `shinhan_data_collection` success with `row_count=2`, but service-level collection returned `BANK_BROWSER_PC_AGENT_TIMEOUT` and imported 0 rows.
+  - CDP tabs still showed an embedded `4user.yeskey.or.kr/fincert` iframe; the current state machine did not fully remove/ignore that iframe before timeout.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py`: pass.
+  - `docker exec aads-server-green pytest tests/unit/test_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py -q`: 185 passed.
+  - Routed health `https://aads.newtalk.kr/api/v1/health`: ok.
+- Not completed:
+  - Shinhan automatic collection is not complete: parsed browser rows were observed, but persistence/imported_rows stayed 0.
+  - New code is not deployed due active-stream target drain; do not report same-digest or release certification complete.
+  - Remaining P0: deploy new `origin/main` after old blue streams drain, then fix the state machine to treat `#210101...` + parsed rows as terminal success and prevent non-queue delivery sync from running during bank-only mode.
+
+## 2026-09-06 12:42 KST — AADS no-loss deployment gate P0 hardening
+- CEO request:
+  - Confirm dependencies for the recommended no-loss deployment controls, implement them without missing release changes, deploy, and report remaining process issues.
+- Changes prepared:
+  - `deploy.sh`: changed dirty worktree handling from warning-only to fail-closed preflight. Dirty deployments now require explicit `AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true`, and the audit log records the override.
+  - `deploy.sh`: added ETA fallback from `deploy_history` 90-day median when the new `deploy_runs` duration view has no successful samples.
+  - `deploy.sh`: shortened target slot drain default from 1,800s to 180s and standby same-digest sync default from 1,800s to 300s, with shorter heartbeat intervals.
+  - `scripts/verify-bluegreen-release-contract.sh`: made dirty-gate and bounded-standby-sync checks part of the release contract verifier.
+  - `migrations/150_deploy_observability_v1.sql`: updated `deploy_recent_durations` so dashboard/API duration cards can fall back to legacy `deploy_history` samples and expose the source.
+  - `app/services/deploy_observability.py`: includes duration sample source in the read-only deploy status response.
+- Dependency/operational observation:
+  - At change time, deploy run `9` for release `95308d707a91` was already in progress and had cut over from `:8102` to `:8100`.
+  - The in-progress deploy was waiting at `standby_same_digest_sync` because old slot `aads-server-green:8102` still owned active chat executions, including this chat session. Starting another blue/green deploy before those streams drain would risk interrupting live responses.
+- Required verification before deployment:
+  - `bash -n deploy.sh`
+  - `scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server`
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q < migrations/150_deploy_observability_v1.sql`
+  - `SELECT * FROM deploy_recent_durations WHERE project='AADS'`
+  - `deploy.sh bluegreen` after the active deploy lock is released and old-slot active streams are clear or explicitly excluded by policy.
+
+## 2026-09-06 15:15 KST — AADS no-loss deployment gate P0 follow-up
+- CEO request:
+  - Immediately apply the remaining recommended controls, deploy them to production, and report whether edits are reliably included in the deployed release.
+- Changes prepared:
+  - `deploy.sh`: added stale `deploy_runs` reconciliation before a new release run. Rows in `running`/`verifying`/`syncing_standby` with stale heartbeat and dead deploy PID are marked `failed` and recorded in `deploy_phase_events` so old phantom deployments cannot keep the dashboard blocked.
+  - `deploy.sh`: added `--force-recreate --no-build --no-deps` to both candidate and standby slot starts so each slot is recreated from the same already-built release-SHA image.
+  - `deploy.sh`: shortened idle standby certification defaults from 30s grace + 15s poll + 2 zero samples to 10s grace + 5s poll + 1 zero sample while preserving active-stream drain checks, ownership checks, direct health, digest match, and five-minute P0/P1 monitoring.
+  - `scripts/verify-bluegreen-release-contract.sh`: added static release-contract checks for force-recreate slot starts and stale deployment reconciliation.
+  - `tests/unit/test_deploy_observability.py`: added regression assertions for stale run reconciliation, force-recreate slot starts, and shortened standby sync defaults.
+- Deployment rule:
+  - Build remains SHA-only from `git archive HEAD`; existing unrelated dirty worktree files must not be silently included in production images.
+
+## 2026-09-06 15:36 KST — Fable 5.1 selector canonicalization
+- CEO request:
+  - Fix the chat model selector issue where choosing Fable 5.1 could flip to Fable Latest, and verify the admin runner model selector duplication.
+- Immediate DB action:
+  - `llm_models`: kept only `claude-fable-5` and `claude-fable-5-1` selectable for Anthropic Fable rows.
+  - `llm_models`: marked `claude-fable-5.1` and `claude-fable-latest` as inactive, non-selectable, non-executable compatibility aliases with `alias_of='claude-fable-5-1'`.
+  - `runner_model_config`: replaced stored `claude-fable-5.1` entries in `XL` and `AI_REVIEW` with canonical `claude-fable-5-1`.
+  - `chat_model_preferences`: inserted/updated hidden preferences for `anthropic:claude-fable-5.1` and `anthropic:claude-fable-latest`.
+- Code changes prepared:
+  - `app/services/model_registry.py`: accepted alias rows are no longer generated as selectable/executable runtime models, and canonical alias resolution includes Anthropic accepted aliases.
+  - `tests/unit/test_model_registry.py`: added Fable alias regression assertions.
+  - `aads-dashboard/src/app/chat/page.tsx`: alias rows now map to `alias_of` instead of overriding canonical selector IDs.
+  - `aads-dashboard/src/app/settings/page.tsx`: runner add-model dropdown filters out accepted alias rows and requires `is_selectable=true`.
+- Verification:
+  - Host Python compile passed for `app/services/model_registry.py` and `app/services/model_selector.py`.
+  - Added follow-up regression fix in `app/services/model_selector.py` so Anthropic accepted aliases such as `claude-fable-5.1` and `claude-fable-latest` normalize to canonical `claude-fable-5-1`.
+  - Added follow-up regression fix in `app/services/model_registry.py` so generated registry snapshot rows expose `execution_backend` and `execution_base_url` consistently with metadata.
+  - One-off verification container using current host source: `docker run --rm -v /root/aads/aads-server:/app -w /app --entrypoint python aads-server:7ecee261ab2a -m pytest tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_model_registry.py -q` passed with 39 tests.
+  - Dashboard `npx eslint src/app/chat/page.tsx src/app/settings/page.tsx`: 0 errors, existing warnings only.
+  - Dashboard `npx tsc --noEmit --pretty false`: pass.
+  - Dashboard `npm run build`: pass.
+  - DB verification: selectable Fable rows are `{claude-fable-5, claude-fable-5-1}` and alias visible count is `0`.
+- Not completed:
+  - Server/dashboard source changes are not yet deployed until the target-file commits are pushed and blue/green deploys run from committed HEAD.

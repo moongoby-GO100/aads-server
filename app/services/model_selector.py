@@ -776,6 +776,11 @@ _ANTHROPIC_MODEL_ID = {
     "claude-fable-5.1": "claude-fable-5-1",
 }
 
+_ANTHROPIC_ACCEPTED_ALIAS_CANONICAL = {
+    "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-latest": "claude-fable-5-1",
+}
+
 _ANTHROPIC_FAMILY_ALIASES = (
     ("claude-fable", "claude-fable-5-1"),
     ("claude-opus", "claude-opus"),
@@ -797,6 +802,8 @@ def _to_anthropic_runtime_alias(model: str) -> str:
     model_id = str(model or "").strip()
     if not model_id:
         return model_id
+    if model_id in _ANTHROPIC_ACCEPTED_ALIAS_CANONICAL:
+        return _ANTHROPIC_ACCEPTED_ALIAS_CANONICAL[model_id]
     if model_id in _ANTHROPIC_MODEL_ID:
         return model_id
     for alias, sdk_model in _ANTHROPIC_MODEL_ID.items():
@@ -1681,7 +1688,8 @@ async def call_stream(
     # ── Dynamic Model Cascading (shadow/primary governance routing) ─────────
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
-    if not _effective_override and not _model_locked and not _db_default_applied:
+    _explicit_model_requested = bool(_effective_override) or bool(_model_locked)
+    if not _explicit_model_requested and not _db_default_applied:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
             current_model=model,
@@ -1710,7 +1718,12 @@ async def call_stream(
 
     runtime_available_models = await get_available_model_ids()
     registered_row = resolved_row or await _get_registered_model_row(model, provider=_qualified_provider)
-    if runtime_available_models and not _is_model_runtime_available(model, runtime_available_models):
+    _explicit_registered_runtime = bool(
+        _explicit_model_requested
+        and registered_row
+        and (registered_row.get("is_active") or registered_row.get("is_executable"))
+    )
+    if runtime_available_models and not _explicit_registered_runtime and not _is_model_runtime_available(model, runtime_available_models):
         fallback_model = await _fallback_for_unavailable_model(
             model,
             runtime_available_models,
@@ -1894,12 +1907,12 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-fable-5-1": ["claude-opus", "gpt-5.6-sol", "gemini-3.1-pro-preview"],
-        "claude-fable-5": ["claude-opus", "gpt-5.6-sol", "gemini-3.1-pro-preview"],
-        "claude-opus": ["gpt-5.5", "gemini-3.1-pro-preview"],
-        "claude-sonnet-5": ["claude-sonnet", "deepseek-v4-flash", "gemini-2.5-flash"],
-        "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
-        "claude-haiku": ["gpt-5.4-mini", "deepseek-v4-flash", "gemini-3.1-flash-lite-preview"],
+        "claude-fable-5-1": ["claude-opus", "gpt-5.6-sol"],
+        "claude-fable-5": ["claude-opus", "gpt-5.6-sol"],
+        "claude-opus": ["gpt-5.5"],
+        "claude-sonnet-5": ["claude-sonnet", "gpt-5.5"],
+        "claude-sonnet": ["gpt-5.5"],
+        "claude-haiku": ["gpt-5.4-mini"],
     }
     _GEMINI_SAMEGRADE = {
         "gemini-3.1-pro-preview": "claude-opus",
@@ -1916,7 +1929,7 @@ async def call_stream(
 
     if route_backend == "claude_cli_relay" or (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
         _original_model = model
-        _downgrade = _MODEL_DOWNGRADE.get(model, [model])
+        _downgrade = [model] if _explicit_model_requested else _MODEL_DOWNGRADE.get(model, [model])
         _fb_seq = []  # [(model, slot), ...]
         # 쿨다운 스마트 정렬: 사용 가능 슬롯 먼저, 쿨다운 슬롯 뒤로
         _avail = [
@@ -2048,7 +2061,7 @@ async def call_stream(
         except Exception as _log_err:
             logger.warning(f"error_log insert failed: {_log_err}")
 
-        _samegrade_list = _SAMEGRADE_FALLBACK.get(_original_model, ["gemini-2.5-flash"])
+        _samegrade_list = [] if _explicit_model_requested else _SAMEGRADE_FALLBACK.get(_original_model, ["gemini-2.5-flash"])
         _samegrade_success = False
         for _sg_model in _samegrade_list:
             try:

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from app.services import model_selector
-from app.services.intent_router import IntentResult
+from app.services.intent_router import IntentResult, get_model_for_override
 
 
 def test_anthropic_registry_model_ids_are_normalized_to_runtime_aliases():
@@ -30,6 +30,13 @@ def test_fable_5_1_uses_thinking_guard_and_drops_tool_choice():
         {"type": "adaptive", "display": "summarized"},
     )
     assert "tool_choice" not in api_kwargs
+
+
+def test_fable_5_1_override_aliases_are_canonicalized():
+    assert get_model_for_override("claude-fable-5-1") == "claude-fable-5-1"
+    assert get_model_for_override("claude-fable-5.1") == "claude-fable-5-1"
+    assert get_model_for_override("claude-fable-latest") == "claude-fable-5-1"
+    assert get_model_for_override("anthropic:claude-fable-5-1") == "claude-fable-5-1"
 
 
 def test_fable_5_1_can_cascade_down_to_allowed_claude_rank():
@@ -110,6 +117,66 @@ async def _collect_claude_route(monkeypatch, *, intent: str, model: str, use_too
     ]
 
     return routed_models, events
+
+
+@pytest.mark.asyncio
+async def test_explicit_fable_5_1_does_not_silently_downgrade_to_opus(monkeypatch):
+    routed_models: list[str] = []
+
+    async def _fake_get_db_key(*_args, **_kwargs):
+        return ""
+
+    async def _fake_available_models():
+        return {"claude-fable-5-1", "claude-opus", "claude-sonnet"}
+
+    async def _fake_registry_row(model_id: str, provider=None):
+        if model_id in {"claude-fable-5-1", "claude-fable-5.1", "claude-fable-latest"}:
+            return {
+                "provider": "anthropic",
+                "model_id": "claude-fable-5-1",
+                "is_active": True,
+                "is_executable": True,
+                "metadata": {"execution_backend": "claude_cli_relay"},
+                "execution_model_id": "claude-fable-5-1",
+            }
+        return None
+
+    async def _fake_claude_slots():
+        return {}
+
+    async def _fake_cli_stream(target_model, *_args, **_kwargs):
+        routed_models.append(target_model)
+        yield {"type": "error", "content": "forced test failure"}
+
+    async def _fake_agent_sdk(target_model, *_args, **_kwargs):
+        routed_models.append(target_model)
+        yield {"type": "error", "content": "forced sdk failure"}
+
+    async def _fake_litellm(target_model, *_args, **_kwargs):
+        routed_models.append(target_model)
+        yield {"type": "error", "content": "forced litellm failure"}
+
+    monkeypatch.setattr(model_selector, "_get_db_key", _fake_get_db_key)
+    monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
+    monkeypatch.setattr(model_selector, "_get_registered_model_row", _fake_registry_row)
+    monkeypatch.setattr(model_selector, "_get_claude_slot_records", _fake_claude_slots)
+    monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
+    monkeypatch.setattr(model_selector, "_stream_agent_sdk", _fake_agent_sdk)
+    monkeypatch.setattr(model_selector, "_stream_litellm", _fake_litellm)
+
+    events = [
+        event
+        async for event in model_selector.call_stream(
+            IntentResult(intent="cto_strategy", model="claude-opus", use_tools=True, tool_group="all"),
+            "system prompt",
+            [{"role": "user", "content": "명시 선택 모델 확인"}],
+            model_override="claude-fable-5.1",
+        )
+    ]
+
+    assert "claude-fable-5-1" in routed_models
+    assert "claude-opus" not in routed_models
+    assert events[-1]["type"] == "error"
 
 
 @pytest.mark.asyncio

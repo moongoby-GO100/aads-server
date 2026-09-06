@@ -887,6 +887,9 @@ def get_model_for_override(model_override: str) -> str:
     """
     model_override = (model_override or "").strip()
     lowered = model_override.lower()
+    if lowered.startswith("anthropic:"):
+        model_override = model_override.split(":", 1)[1].strip()
+        lowered = model_override.lower()
     if lowered.startswith("codex:"):
         return model_override.split(":", 1)[1].strip()
     codex_display_aliases = {
@@ -937,5 +940,9 @@ def get_model_for_override(model_override: str) -> str:
         "claude-2.1":                 "claude-sonnet",
         "claude-opus-4-5":            "claude-opus",
         "claude-sonnet-4-5":          "claude-sonnet",
+        "claude-fable-5":             "claude-fable-5",
+        "claude-fable-5-1":           "claude-fable-5-1",
+        "claude-fable-5.1":           "claude-fable-5-1",
+        "claude-fable-latest":        "claude-fable-5-1",
     }
     return mapping.get(model_override, model_override)
