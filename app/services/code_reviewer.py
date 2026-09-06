@@ -6,6 +6,7 @@ Developer(Claude Sonnet)와 다른 모델로 에코챔버 방지.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _REVIEW_MODEL = "qwen-turbo"
 _REVIEW_MODEL_FALLBACK = _REVIEW_MODEL  # DB 조회 실패 시 기본값
+_REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSER_FAILURE 대신 재시도 후 폴백
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
@@ -420,9 +422,16 @@ async def review_code_diff(
         review_models = await _get_review_models()
         used_model = review_models[0] if review_models else _REVIEW_MODEL_FALLBACK
 
-        # 모델 목록 순서대로 시도 (CEO 설정 우선순위)
+        # P0: 응답 실패(예외/빈 응답)와 JSON 파싱 실패를 하나의 재시도 루프로 묶어
+        # 모델 목록을 순환하며 최대 _REVIEW_PARSE_MAX_ATTEMPTS회까지 시도한다.
+        # 단일 모델만 설정된 경우(운영 기본값)에도 같은 모델을 재호출한다 —
+        # LLM이 가끔 비-JSON 텍스트를 반환해도 첫 실패에 바로 review_hold로
+        # 보내지 않기 위함.
         result_text = None
-        for model in review_models:
+        details = None
+        parse_fail_count = 0
+        for attempt_no in range(1, _REVIEW_PARSE_MAX_ATTEMPTS + 1):
+            model = review_models[(attempt_no - 1) % len(review_models)] if review_models else _REVIEW_MODEL_FALLBACK
             try:
                 result_text = await call_llm_with_fallback(
                     prompt=prompt,
@@ -430,12 +439,26 @@ async def review_code_diff(
                     system=_REVIEW_SYSTEM_PROMPT,
                     max_tokens=1024,
                 )
-                if result_text:
-                    used_model = model
-                    break
             except Exception as model_err:
-                logger.warning("review_model_failed: model=%s error=%s", model, str(model_err)[:60])
+                logger.warning("review_model_failed: model=%s attempt=%s/%s error=%s",
+                               model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, str(model_err)[:60])
+                result_text = None
+
+            if not result_text:
                 continue
+
+            used_model = model
+            details = _parse_review_json(result_text)
+            if details is not None:
+                break
+
+            parse_fail_count += 1
+            logger.warning(
+                "code_reviewer_json_parse_failed: job_id=%s model=%s attempt=%s/%s preview=%r",
+                job_id, model, attempt_no, _REVIEW_PARSE_MAX_ATTEMPTS, (result_text or "")[:200]
+            )
+            if attempt_no < _REVIEW_PARSE_MAX_ATTEMPTS:
+                await asyncio.sleep(2 * attempt_no)
 
         if not result_text:
             logger.warning(f"code_reviewer_no_response: job_id={job_id}")
@@ -462,24 +485,24 @@ async def review_code_diff(
             )
             return verdict
 
-        # JSON 파싱 — 다단계 강건 파서 사용
-        details = _parse_review_json(result_text)
+        # 재시도 루프에서 이미 파싱을 시도했으므로, 모두 실패한 경우에만 여기 도달한다.
         if details is None:
             logger.warning(
-                "code_reviewer_json_parse_failed: job_id=%s model=%s preview=%r",
-                job_id, used_model, (result_text or "")[:200]
+                "code_reviewer_json_parse_failed: job_id=%s model=%s attempts=%s preview=%r",
+                job_id, used_model, parse_fail_count, (result_text or "")[:200]
             )
             verdict_obj = _build_review_verdict(
                 verdict="FLAG",
                 score=0.5,
-                summary="리뷰 응답 파싱 실패 — 승인 보류 필요",
+                summary=f"리뷰 응답 파싱 실패 ({parse_fail_count}회 재시도) — 승인 보류 필요",
                 issues=[
-                    "LLM 리뷰 응답이 유효한 JSON이 아닙니다.",
+                    f"LLM 리뷰 응답이 {parse_fail_count}회 연속 유효한 JSON이 아니었습니다.",
                     "코드 품질을 검증하지 못했으므로 승인 대기로 넘기면 안 됩니다.",
                 ],
                 feedback={
                     "raw_preview": (result_text or "")[:500],
-                    "summary": "리뷰 응답 파싱 실패 — 승인 보류 필요",
+                    "summary": f"리뷰 응답 파싱 실패 ({parse_fail_count}회 재시도) — 승인 보류 필요",
+                    "parse_attempts": parse_fail_count,
                 },
                 flag_category="REVIEW_PARSER_FAILURE",
                 failure_stage="review_json_parse",
