@@ -8,6 +8,7 @@
   - Official OpenAI Codex docs list `codex -m gpt-6-astra`.
   - Local Codex CLI is `0.153.4`, which includes the September 2026 Astra catalog updates.
   - Runtime smoke test passed: `codex exec -m gpt-6-astra "Print exactly AADS_ASTRA_SMOKE_OK"` returned the requested marker and reported 3,226 tokens.
+  - Claude Code CLI is `2.1.258`; `claude -p --model claude-fable-5-1` smoke test returned `AADS_FABLE_SMOKE_OK`.
 - Changes:
   - Applied DB update to all `runner_model_config` size rows.
   - `XL` now starts with `claude-fable-5-1` then `codex:gpt-6-astra`, preserving same-grade fallback before older Codex/Claude models.
