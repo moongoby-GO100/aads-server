@@ -675,6 +675,13 @@ reconcile_inactive_target_recovery_executions() {
                         AND m.intent = 'streaming_placeholder'
                         AND COALESCE(m.is_hidden, false) = true
                   )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM chat_messages m2
+                      WHERE m2.execution_id = te.id
+                        AND m2.role = 'assistant'
+                        AND length(COALESCE(m2.content, '')) > 500
+                  )
             ),
             updated AS (
                 UPDATE chat_turn_executions te

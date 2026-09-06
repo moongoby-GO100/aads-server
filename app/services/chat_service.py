@@ -39,7 +39,7 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 ).strip() or "aads"
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
-_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "5")))
+_EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "8")))
 _execution_owner_epochs: Dict[str, int] = {}
 
 _RESUME_FAIL_SUFFIX = "⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
@@ -211,6 +211,10 @@ _INTERRUPT_REASON_CATEGORIES = {
         "connection closed",
         "connection reset",
         "connectionreset",
+    ),
+    "llm_provider_error": (
+        "all llm providers failed",
+        "litellm",
     ),
 }
 
