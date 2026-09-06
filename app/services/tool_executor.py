@@ -2904,7 +2904,7 @@ class ToolExecutor:
         services = {
             "AADS": f"{_AADS_API_BASE}/api/v1/ops/health-check",
             "KIS":  f"http://{contabo14_host}:8082/health",
-            "GO100": f"http://{contabo14_host}:8002/health",
+            "GO100": "https://go100.newtalk.kr/go100-api/health",
             "SF":   f"http://{cafe24_host}:7916/health",
             "NTV2": f"http://{cafe24_host}:8080/health",
             "NAS":  f"http://{cafe24_host}/health",
@@ -2918,7 +2918,7 @@ class ToolExecutor:
                     r = await c.get(url)
                     elapsed = round((time.monotonic() - start) * 1000)
                     status = "✅ UP" if r.status_code < 400 else f"⚠️ {r.status_code}"
-                    result = {"service": name, "status": status, "response_ms": elapsed}
+                    result = {"service": name, "status": status, "response_ms": elapsed, "url": url}
                     if include_details:
                         try:
                             result["detail"] = r.json()
@@ -2927,7 +2927,7 @@ class ToolExecutor:
                     return result
             except Exception as e:
                 elapsed = round((time.monotonic() - start) * 1000)
-                return {"service": name, "status": "❌ DOWN", "response_ms": elapsed, "error": str(e)[:100]}
+                return {"service": name, "status": "❌ DOWN", "response_ms": elapsed, "url": url, "error": str(e)[:100]}
 
         tasks = [check_one(name, url) for name, url in services.items()]
         results = await asyncio.gather(*tasks, return_exceptions=False)

@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-09-07 07:16 KST - GO100 all-service status false DOWN fix
+- CEO request:
+  - Proceed with the recommended P1 fix for `get_all_service_status` reporting GO100 as DOWN while direct GO100 health checks were healthy.
+- Findings:
+  - `curl http://5.104.86.14:8002/health` from the AADS host returned connection failure/HTTP 000 because the direct backend port is not externally reachable.
+  - `curl https://go100.newtalk.kr/go100-api/health` returned HTTP 200 with GO100 health JSON.
+  - `ssh root@5.104.86.14 systemctl is-active go100` returned `active`.
+- Changes:
+  - `app/services/tool_executor.py`: changed the GO100 all-service health URL from the direct `contabo14:8002` backend port to the public nginx health route `https://go100.newtalk.kr/go100-api/health`.
+  - `app/services/tool_executor.py`: included the checked URL in each service status result so future false positives can be traced to the exact endpoint.
+  - `tests/test_tool_awareness.py`: added a source-level regression test locking GO100 status aggregation to the public nginx route.
+- Verification:
+  - Pending in this note: run py_compile, targeted pytest, and post-deploy `get_all_service_status` check.
+- Deployment:
+  - Pending at this note. Use AADS blue/green deployment only after commit and push from a clean release worktree.
+
 ## 2026-09-06 16:25 KST - Fable 5.1 explicit selection persistence and no silent Opus downgrade
 - CEO request:
   - Verify and fix the issue where selecting Fable 5.1 in chat did not persist into DB execution and work ran on Opus instead; apply all recommended improvements.
