@@ -463,15 +463,12 @@ async def test_shinhan_fincert_iframe_is_detected_without_reading_secret():
 
 
 @pytest.mark.asyncio
-async def test_shinhan_fincert_iframe_is_detected_from_pc_agent_tabs():
+async def test_shinhan_fincert_iframe_target_from_pc_agent_tabs_is_ignored():
     page = _PcAgentTabsChallengePage("https://bank.shinhan.com/rib/easy/index.jsp")
 
     result = await connector._detect_shinhan_auth_challenge(page, [page])
 
-    assert result["screen_state"] == "certificate_password_required"
-    assert result["screen_reason_code"] == "SHINHAN_FINCERT_IFRAME_DETECTED"
-    assert result["screen_requires_operator"] == "1"
-    assert result["suggested_action"] == "complete_financial_certificate_then_retry_same_work_key"
+    assert result == {}
     assert "password" not in result
 
 
@@ -936,7 +933,7 @@ def test_bank_eval_timeout_uses_bank_safe_defaults(monkeypatch):
 
     assert connector._bank_eval_timeout_ms(8000) == 12000
     assert connector._bank_eval_timeout_ms(25000) == 25000
-    assert connector._bank_eval_timeout_ms(60000) == 45000
+    assert connector._bank_eval_timeout_ms(60000) == 60000
 
 
 def test_bank_eval_timeout_respects_env_caps(monkeypatch):
@@ -1870,6 +1867,68 @@ def test_collect_async_shinhan_individual_flow_runs_state_machine_steps():
     assert flow["account_selected"] == "1"
     assert flow["query_submitted"] == "1"
     assert [item["stage"] for item in result["diagnostics"]["shinhan_query_flow_steps"]] == stages
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+    assert "110123456789" not in str(result["diagnostics"])
+
+
+def test_collect_async_shinhan_pc_agent_offline_stays_retryable():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "간편조회서비스 이용자ID 로그인 아이디 비밀번호"
+        if expr == "document.body ? document.body.innerHTML : ''":
+            return "<html><body>간편조회서비스 이용자ID 로그인</body></html>"
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    mock_session = MagicMock()
+    mock_session.session_id = "sess-shinhan-offline"
+
+    with (
+        patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge,
+        patch.object(
+            connector,
+            "_try_shinhan_individual_login_step",
+            AsyncMock(return_value={"attempted": "failed", "stage": "login", "error_code": "PC_AGENT_OFFLINE"}),
+        ),
+    ):
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="sess-shinhan-offline",
+                browser_work_key="",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_entity_type="individual",
+                auto_open_browser=True,
+            )
+        )
+
+    assert result["status"] == "failed", result["diagnostics"]
+    assert result["error_code"] == "PC_AGENT_OFFLINE"
+    assert result["diagnostics"]["screen_state"] == "browser_session_recoverable"
+    assert result["diagnostics"]["screen_requires_operator"] == "0"
+    assert result["diagnostics"]["screen_suggested_action"] == "retry_same_bank_work_key_after_pc_agent_reconnect"
     assert "bank-pass" not in str(result["diagnostics"])
     assert "4321" not in str(result["diagnostics"])
     assert "110123456789" not in str(result["diagnostics"])

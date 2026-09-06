@@ -3394,6 +3394,7 @@ _BANK_SESSION_RECOVERABLE_ERROR_CODES = {
     "BANK_BROWSER_SESSION_NOT_FOUND",
     "CDP_NOT_READY",
     "COMMAND_TIMEOUT",
+    "PC_AGENT_OFFLINE",
     "PC_AGENT_SESSION_NOT_FOUND",
     "RUNTIME_EVALUATE_TIMEOUT",
     "STALE_TARGET",
@@ -4959,6 +4960,9 @@ async def collect_bank_via_browser_session_async(
                             password=str(login_password or ""),
                         )
                         if step_result.get("attempted") != "1":
+                            returned_error = str(step_result.get("error_code") or "").strip().upper()
+                            if returned_error in _BANK_SESSION_RECOVERABLE_ERROR_CODES:
+                                raise _ShinhanResumeSignal(returned_error)
                             step_result = await _try_prepare_shinhan_query_flow(
                                 page,
                                 flow_mode=shinhan_flow_mode,
@@ -5520,6 +5524,44 @@ async def collect_bank_via_browser_session_async(
             or safe_diagnostics.get("screen_state") in actionable_states
             or (auto_open_browser and (parse_diag["table_count"] == 0 or parse_diag["parse_failure"]))
         ):
+            flow_error_code = ""
+            if isinstance(shinhan_flow_result, dict):
+                flow_error_code = str(shinhan_flow_result.get("error_code") or "").strip().upper()
+            step_error_codes = {
+                str(step.get("error_code") or "").strip().upper()
+                for step in safe_diagnostics.get("shinhan_query_flow_steps", [])
+                if isinstance(step, dict)
+            }
+            retryable_session_errors = {
+                "CDP_NOT_READY",
+                "COMMAND_TIMEOUT",
+                "PC_AGENT_OFFLINE",
+                "PC_AGENT_SESSION_NOT_FOUND",
+                "RUNTIME_EVALUATE_TIMEOUT",
+                "STALE_TARGET",
+            }
+            observed_retryable_session_error = flow_error_code if flow_error_code in retryable_session_errors else ""
+            if not observed_retryable_session_error:
+                observed_retryable_session_error = next(
+                    (code for code in sorted(step_error_codes) if code in retryable_session_errors),
+                    "",
+                )
+            if observed_retryable_session_error:
+                safe_diagnostics["screen_reason_code"] = observed_retryable_session_error
+                safe_diagnostics["screen_state"] = "browser_session_recoverable"
+                safe_diagnostics["screen_requires_operator"] = "0"
+                safe_diagnostics["screen_suggested_action"] = "retry_same_bank_work_key_after_pc_agent_reconnect"
+                return {
+                    "status": "failed",
+                    "error_code": observed_retryable_session_error,
+                    "rows": [],
+                    "row_count": 0,
+                    "diagnostics": safe_diagnostics,
+                    "message": (
+                        f"{bank_name or '은행'} 브라우저 세션이 수집 중 끊겼습니다. "
+                        "PC Agent 재연결 후 같은 은행 work key로 자동 재시도하십시오."
+                    ),
+                }
             if safe_diagnostics.get("screen_state") in {
                 "captcha_required",
                 "otp_required",
