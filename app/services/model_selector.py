@@ -630,6 +630,8 @@ async def _resolve_governed_intent_model(
     if db_primary:
         if db_model:
             return db_model, db_reason
+        if intent_policy:
+            return None, None
         return legacy_model, legacy_reason if legacy_model else None
 
     diff_summary = _summarize_intent_resolution_diff(legacy_result, db_result)
@@ -1884,6 +1886,37 @@ async def call_stream(
                         return
                 except Exception as _cfb_exc:
                     logger.warning(f"codex_fb_exc: {model}→{_cfb}: {_cfb_exc}")
+            _secondary_available = await get_available_model_ids()
+            _secondary_candidates = await _configured_llm_fallback_candidates(
+                model,
+                _secondary_available,
+                excluded_providers={"codex", "anthropic"},
+            )
+            if not _secondary_candidates:
+                _secondary_candidates = [
+                    candidate
+                    for candidate in ("gemini-3.1-pro-preview", "gemini-2.5-flash", "deepseek-v4-flash", "deepseek-chat")
+                    if _is_model_runtime_available(candidate, _secondary_available)
+                ]
+            for _sfb in _secondary_candidates:
+                try:
+                    yield {
+                        "type": "model_fallback",
+                        "content": f"⚠️ {model} 장애 — {_sfb}로 전환합니다.",
+                        "from_model": model,
+                        "to_model": _sfb,
+                    }
+                    _sfb_err = False
+                    async for ev in _stream_litellm(_sfb, system_prompt, messages, tools=tools, session_id=session_id):
+                        if isinstance(ev, dict) and ev.get("type") == "error":
+                            _sfb_err = True
+                            logger.warning(f"codex_secondary_fb_failed: {model}→{_sfb}: {ev.get('content', '')[:80]}")
+                            break
+                        yield ev
+                    if not _sfb_err:
+                        return
+                except Exception as _sfb_exc:
+                    logger.warning(f"codex_secondary_fb_exc: {model}→{_sfb}: {_sfb_exc}")
             yield {"type": "error", "content": _codex_error_content}
             return
 

@@ -53,6 +53,38 @@ def test_fable_5_1_can_cascade_down_to_allowed_claude_rank():
     )
 
 
+@pytest.mark.asyncio
+async def test_db_primary_policy_no_change_blocks_legacy_fable_downgrade(monkeypatch):
+    async def _db_primary_enabled(_flag_key: str, default: bool = False):
+        return True
+
+    async def _fake_policies():
+        return {
+            "casual": {
+                "default_model": "codex:gpt-5.5",
+                "cascade_downgrade": False,
+                "allowed_models": ["claude-fable-5-1", "claude-sonnet", "claude-haiku"],
+            },
+            "search": {
+                "default_model": "claude-sonnet",
+                "cascade_downgrade": False,
+                "allowed_models": ["claude-fable-5-1", "claude-sonnet"],
+            },
+        }
+
+    monkeypatch.setattr(model_selector, "_load_intent_policies", _fake_policies)
+    monkeypatch.setattr("app.core.feature_flags.get_flag", _db_primary_enabled)
+
+    assert await model_selector._resolve_governed_intent_model(
+        intent="casual",
+        current_model="claude-fable-5-1",
+    ) == (None, None)
+    assert await model_selector._resolve_governed_intent_model(
+        intent="search",
+        current_model="claude-fable-5-1",
+    ) == (None, None)
+
+
 def test_cli_result_preserves_runtime_model_for_actual_model_audit():
     events = model_selector._map_cli_event(
         {
@@ -817,7 +849,7 @@ async def test_call_stream_falls_back_immediately_when_gpt_56_relay_is_busy(monk
         return ""
 
     async def _fake_available_models():
-        return {"gpt-5.6-sol", "claude-opus"}
+        return {"gpt-5.6-sol", "claude-fable-5-1", "claude-opus"}
 
     async def _fake_registered_models(active_only=False):
         return [
@@ -864,10 +896,10 @@ async def test_call_stream_falls_back_immediately_when_gpt_56_relay_is_busy(monk
         )
     ]
 
-    assert calls == [("codex", "gpt-5.6-sol"), ("claude", "claude-opus")]
-    assert any("claude-opus" in event.get("content", "") for event in events)
+    assert calls == [("codex", "gpt-5.6-sol"), ("claude", "claude-fable-5-1")]
+    assert any("claude-fable-5-1" in event.get("content", "") for event in events)
     assert events[-1]["type"] == "done"
-    assert events[-1]["model"] == "claude-opus"
+    assert events[-1]["model"] == "claude-fable-5-1"
 
 
 @pytest.mark.asyncio
@@ -880,6 +912,7 @@ async def test_call_stream_uses_deepseek_when_gpt_56_claude_and_gemini_fail(monk
     async def _fake_available_models():
         return {
             "gpt-5.6-sol",
+            "claude-fable-5-1",
             "claude-opus",
             "gemini-3.1-pro-preview",
             "deepseek-v4-flash",
@@ -941,6 +974,7 @@ async def test_call_stream_uses_deepseek_when_gpt_56_claude_and_gemini_fail(monk
 
     assert calls == [
         ("codex", "gpt-5.6-sol"),
+        ("claude", "claude-fable-5-1"),
         ("claude", "claude-opus"),
         ("litellm", "gemini-3.1-pro-preview"),
         ("litellm", "deepseek-v4-flash"),
