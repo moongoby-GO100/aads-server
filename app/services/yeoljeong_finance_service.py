@@ -5288,9 +5288,12 @@ def _reset_shinhan_timeout_probe_to_idpw(
     close_payload = {
         "command_type": "browser_close_tab",
         "agent_id": browser_agent_id,
-        "job_type": "bank_collection",
+        "job_type": "financial_exclusive",
         "required_capabilities": ["interactive_browser"],
-        "queue_if_busy": False,
+        "queue_if_busy": True,
+        "wait_for_turn": True,
+        "queue_wait_timeout_seconds": min(45.0, max(10.0, timeout_seconds / 4.0)),
+        "lease_ttl_seconds": 90,
         "command_timeout_seconds": 15,
         "params": {
             "work_key": browser_work_key,
@@ -5298,7 +5301,7 @@ def _reset_shinhan_timeout_probe_to_idpw(
             "keep_last": False,
         },
     }
-    close_result = _pc_agent_route_execute_json(close_payload, timeout_seconds=min(20.0, max(6.0, timeout_seconds)))
+    close_result = _pc_agent_route_execute_json(close_payload, timeout_seconds=min(75.0, max(25.0, timeout_seconds / 2.0)))
     diagnostics["certificate_tab_close_status"] = str(close_result.get("status") or "")[:40]
     close_tabs = _bank_browser_tabs_from_route_result(close_result)
     if close_tabs:
@@ -5324,13 +5327,16 @@ def _reset_shinhan_timeout_probe_to_idpw(
         {
             "command_type": "browser_launch",
             "agent_id": browser_agent_id,
-            "job_type": "bank_collection",
+            "job_type": "financial_exclusive",
             "required_capabilities": ["interactive_browser"],
-            "queue_if_busy": False,
+            "queue_if_busy": True,
+            "wait_for_turn": True,
+            "queue_wait_timeout_seconds": min(60.0, max(15.0, timeout_seconds / 3.0)),
+            "lease_ttl_seconds": 120,
             "command_timeout_seconds": 35,
             "params": launch_params,
         },
-        timeout_seconds=min(40.0, max(10.0, timeout_seconds)),
+        timeout_seconds=min(110.0, max(55.0, timeout_seconds / 2.0)),
     )
     diagnostics["work_key_relaunch_status"] = str(launch_result.get("status") or "")[:40]
     launch_result_block = launch_result.get("result") if isinstance(launch_result.get("result"), dict) else {}
@@ -5360,16 +5366,19 @@ def _probe_bank_browser_timeout_state(
         {
             "command_type": "browser_tabs",
             "agent_id": browser_agent_id,
-            "job_type": "bank_collection",
+            "job_type": "financial_exclusive",
             "required_capabilities": ["interactive_browser"],
-            "queue_if_busy": False,
+            "queue_if_busy": True,
+            "wait_for_turn": True,
+            "queue_wait_timeout_seconds": min(45.0, max(10.0, float(timeout_seconds or 20.0) / 4.0)),
+            "lease_ttl_seconds": 90,
             "command_timeout_seconds": min(20.0, max(5.0, float(timeout_seconds or 20.0))),
             "params": {
                 "work_key": browser_work_key,
                 "timeout": min(20.0, max(5.0, float(timeout_seconds or 20.0))),
             },
         },
-        timeout_seconds=min(25.0, max(6.0, float(timeout_seconds or 25.0))),
+        timeout_seconds=min(75.0, max(25.0, float(timeout_seconds or 25.0) / 2.0)),
     )
     tabs = _bank_browser_tabs_from_route_result(route_result)
     tab_text = " ".join(
