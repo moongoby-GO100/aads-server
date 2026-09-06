@@ -1841,18 +1841,17 @@ async def call_stream(
                 return
             _CODEX_FB = {
                 "gpt-5.6-sol": [
+                    "claude-fable-5-1",
                     "claude-opus",
-                    "gemini-3.1-pro-preview",
-                    "deepseek-v4-flash",
                 ],
-                "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
-                "gpt-5.4": ["claude-sonnet", "gemini-2.5-flash"],
-                "gpt-5.4-mini": ["claude-haiku", "gemini-3.1-flash-lite-preview"],
+                "gpt-5.5": ["claude-fable-5-1", "claude-opus"],
+                "gpt-5.4": ["claude-sonnet", "claude-opus"],
+                "gpt-5.4-mini": ["claude-haiku", "claude-sonnet"],
             }
             _configured_cfb = await _configured_llm_fallback_candidates(
                 model,
                 await get_available_model_ids(),
-                excluded_providers={"codex"},
+                excluded_providers={"codex", "deepseek", "gemini", "google"},
             )
             _codex_fb_candidates = _configured_cfb or _CODEX_FB.get(model, [])
             for _cfb in _codex_fb_candidates:
@@ -1907,9 +1906,9 @@ async def call_stream(
         "claude-haiku": ["claude-haiku"],
     }
     _SAMEGRADE_FALLBACK = {
-        "claude-fable-5-1": ["claude-opus", "gpt-5.6-sol"],
-        "claude-fable-5": ["claude-opus", "gpt-5.6-sol"],
-        "claude-opus": ["gpt-5.5"],
+        "claude-fable-5-1": ["gpt-5.6-sol", "claude-opus"],
+        "claude-fable-5": ["gpt-5.6-sol", "claude-opus"],
+        "claude-opus": ["gpt-5.6-sol"],
         "claude-sonnet-5": ["claude-sonnet", "gpt-5.5"],
         "claude-sonnet": ["gpt-5.5"],
         "claude-haiku": ["gpt-5.4-mini"],
@@ -2061,7 +2060,7 @@ async def call_stream(
         except Exception as _log_err:
             logger.warning(f"error_log insert failed: {_log_err}")
 
-        _samegrade_list = [] if _explicit_model_requested else _SAMEGRADE_FALLBACK.get(_original_model, ["gemini-2.5-flash"])
+        _samegrade_list = [] if _explicit_model_requested else _SAMEGRADE_FALLBACK.get(_original_model, [])
         _samegrade_success = False
         for _sg_model in _samegrade_list:
             try:
@@ -2120,7 +2119,7 @@ async def call_stream(
                 yield event
         return
 
-    # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Gemini Flash 폴백)
+    # Groq / DeepSeek 모델 → LiteLLM 경유 (OpenAI 호환, 실패 시 Codex CLI 폴백)
     if model in _GROQ_MODELS or model in _DEEPSEEK_MODELS:
         _had_error = False
         _request_model = _litellm_deepseek_model_id(model) if model in _DEEPSEEK_MODELS else model
@@ -2135,124 +2134,128 @@ async def call_stream(
         ):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"litellm_fallback: {model} failed, falling back to gemini-2.5-flash")
+                logger.warning(f"litellm_fallback: {model} failed, falling back to gpt-5.6-sol")
                 break
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
+            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
         return
 
-    # OpenRouter 모델 → LiteLLM 경유 (openrouter/ prefix 붙여서 전달, 실패 시 Gemini Flash 폴백)
+    # OpenRouter 모델 → LiteLLM 경유 (openrouter/ prefix 붙여서 전달, 실패 시 Codex CLI 폴백)
     if model in _OPENROUTER_MODELS:
         _or_model = model
         _had_error = False
         async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gemini-2.5-flash")
+                logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gpt-5.6-sol")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
+            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
         return
 
-    # Alibaba/Qwen 모델 → LiteLLM 경유 (DashScope, 실패 시 Gemini Flash 폴백)
+    # Alibaba/Qwen 모델 → LiteLLM 경유 (DashScope, 실패 시 Codex CLI 폴백)
     if model in _ALIBABA_MODELS:
         _had_error = False
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"alibaba_fallback: {model} failed, falling back to gemini-2.5-flash")
+                logger.warning(f"alibaba_fallback: {model} failed, falling back to gpt-5.6-sol")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
+            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
         return
 
 
-    # Kimi / MiniMax 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
+    # Kimi / MiniMax 모델 → LiteLLM 경유 (실패 시 Codex CLI 폴백)
     if model in _KIMI_MODELS or model in _MINIMAX_MODELS:
         _had_error = False
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gemini-2.5-flash")
+                logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gpt-5.6-sol")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
+            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
         return
 
-    # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Gemini Flash 폴백)
+    # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Claude Fable 폴백)
     if route_backend == "codex_cli" or model in _CODEX_MODELS:
         _had_error = False
         async for event in _stream_codex_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"codex_fallback: {model} failed, falling back to gemini-2.5-flash")
+                logger.warning(f"codex_fallback: {model} failed, falling back to claude-fable-5-1")
                 break
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} (Codex) 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            yield {"type": "delta", "content": f"\n\n[{model} (Codex) 오류 → Claude Fable 5.1 전환]\n\n"}
+            _fallback_intent = IntentResult(
+                intent=intent_result.intent,
+                model="claude-fable-5-1",
+                use_tools=intent_result.use_tools,
+                tool_group=intent_result.tool_group,
+            )
+            async for event in _stream_anthropic(_fallback_intent, "claude-fable-5-1", system_prompt, messages, tools, session_id=session_id):
                 yield event
         return
 
-    # Antigravity CLI 모델 → Relay /antigravity-stream 경유 (Google Pro OAuth, 실패 시 Gemini Flash 폴백)
+    # Antigravity CLI 모델 → Relay /antigravity-stream 경유 (Google Pro OAuth, 실패 시 Codex CLI 폴백)
     if model in _ANTIGRAVITY_MODELS:
         _had_error = False
         async for event in _stream_antigravity_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"antigravity_fallback: {model} failed, falling back to gemini-2.5-flash")
+                logger.warning(f"antigravity_fallback: {model} failed, falling back to gpt-5.6-sol")
                 break
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
+            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
         return
 
-    # OpenAI 모델 → LiteLLM 경유 (실패 시 Gemini Flash 폴백)
+    # OpenAI 모델 → LiteLLM 경유 (실패 시 Codex CLI 폴백)
     if model in _OPENAI_MODELS:
         _had_error = False
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"openai_fallback: {model} failed, falling back to gemini-2.5-flash")
+                logger.warning(f"openai_fallback: {model} failed, falling back to gpt-5.6-sol")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Gemini Flash 전환]\n\n"}
-            async for event in _stream_litellm("gemini-2.5-flash", system_prompt, messages, tools=tools, session_id=session_id):
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
+            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event

@@ -25,7 +25,7 @@ from app.core.project_config import normalize_project_label, resolve_project, ge
 logger = logging.getLogger(__name__)
 
 _AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
-_AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-turbo", "gemini-flash-lite"}
+_AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-turbo"}
 
 # Blue/Green API processes share the same DB.  A process-local task map cannot
 # prevent the other slot from reclaiming or finalising the same execution, so
@@ -5181,10 +5181,10 @@ async def with_background_completion(
 
                 if not _retried:
                     _FALLBACK_CHAIN_429 = {
-                        "claude-opus": ["gpt-5.5", "gemini-3.1-pro-preview"],
-                        "gpt-5.5": ["claude-opus", "gemini-3.1-pro-preview"],
-                        "claude-sonnet": ["deepseek-v4-flash", "gemini-2.5-flash"],
-                        "claude-haiku": ["gpt-5.4-mini", "gemini-3.1-flash-lite-preview"],
+                        "claude-opus": ["claude-sonnet", "gpt-5.5"],
+                        "gpt-5.5": ["claude-opus", "claude-sonnet"],
+                        "claude-sonnet": ["claude-haiku", "claude-opus"],
+                        "claude-haiku": ["claude-sonnet", "gpt-5.4-mini"],
                     }
                     for _fb_model in _FALLBACK_CHAIN_429.get(_original_model, []):
                         try:

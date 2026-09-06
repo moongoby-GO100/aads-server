@@ -2,7 +2,7 @@
 중앙 Anthropic 클라이언트 팩토리 + LiteLLM/DashScope 폴백.
 
 OAuth 토큰으로 Anthropic API 직접 호출.
-Claude 실패 시 Gemini 2.5 Flash (LiteLLM 경유)로 자동 폴백.
+Claude 실패 시 qwen3-235b/LiteLLM 체인으로 자동 폴백.
 비Claude 모델(qwen-turbo 등)은 DashScope API 직접 또는 LiteLLM 프록시로 라우팅.
 백그라운드 시스템(self_evaluator, fact_extractor, compaction 등)에서 사용.
 """
@@ -26,11 +26,7 @@ from app.core.auth_provider import (
 
 logger = logging.getLogger(__name__)
 
-_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
-# AADS P0(2026-07-26): Gemini prepaid 크레딧 고갈로 429 RESOURCE_EXHAUSTED 반복 발생.
-# 폴백 체인에서 기본 제외하고 qwen3-235b를 다음 순위로 사용한다.
-# 크레딧 충전 후 되살리려면 .env 에 LLM_GEMINI_FALLBACK_ENABLED=1 설정.
-_GEMINI_FALLBACK_ENABLED = os.getenv("LLM_GEMINI_FALLBACK_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+# AADS(2026-09-06): Gemini/DeepSeek 폴백 제거 — CLI 모델(Claude)로 대체 (CEO 지시)
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_API_KEY = os.getenv("ALIBABA_API_KEY", "")
 # AADS-LOOP P0(2026-07-30): Claude OAuth 토큰 만료(401) + Gemini 크레딧 고갈 +
@@ -225,7 +221,7 @@ async def call_llm_with_fallback(
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Claude 호출 + 실패 시 Gemini 폴백. 백그라운드 평가/추출용.
+    """Claude 호출 + 실패 시 qwen/LiteLLM 폴백. 백그라운드 평가/추출용.
 
     비Claude 모델(qwen-turbo 등) 지정 시 DashScope/LiteLLM으로 직접 라우팅.
 
@@ -236,7 +232,7 @@ async def call_llm_with_fallback(
     0순위: 사용자 본인 API 키 (BYOK, user_id 제공 시)
     1순위: Claude moong76@gmail (slot:naver, PRIMARY)
     2순위: Claude moongoby@gmail (slot:gmail, FALLBACK)
-    3순위: Gemini 2.5 Flash (LiteLLM 경유)
+    3순위: qwen3-235b (DashScope)
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
@@ -258,12 +254,6 @@ async def call_llm_with_fallback(
             return await _call_litellm(prompt, model, max_tokens, system)
         except Exception as e:
             logger.warning("litellm_bg_error: model=%s error=%s", model, str(e)[:80])
-            # 실패 시 Gemini 폴백 — 기본 비활성(크레딧 고갈 429 반복 차단)
-            if _GEMINI_FALLBACK_ENABLED:
-                try:
-                    return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
-                except Exception as e2:
-                    logger.warning("litellm_bg_gemini_fallback_error: %s", str(e2)[:80])
             for _fb_model in _BG_FALLBACK_MODELS:
                 if _fb_model == model:
                     continue
@@ -399,22 +389,16 @@ async def call_llm_with_fallback(
                 str(last_error)[:160],
             )
 
-    # 3순위: Gemini 2.5 Flash (LiteLLM 경유)
     _lc = get_litellm_config()
-    if _GEMINI_FALLBACK_ENABLED and _lc["key"]:
-        try:
-            return await _call_litellm(prompt, _GEMINI_FALLBACK_MODEL, max_tokens, system)
-        except Exception as e:
-            logger.warning("gemini_bg_fallback_error: %s", str(e)[:80])
 
-    # 4순위: qwen3-235b (DashScope)
+    # 3순위: qwen3-235b (DashScope)
     if _DASHSCOPE_API_KEY:
         try:
             return await _call_dashscope(prompt, "qwen3-235b", max_tokens, system)
         except Exception as e:
             logger.warning("qwen3_235b_fallback_error: %s", str(e)[:80])
 
-    # 5순위(최종): LiteLLM 저비용 체인 — Claude OAuth 만료/Gemini 고갈 시 가용성 유지
+    # 4순위(최종): LiteLLM 저비용 체인 — Claude OAuth 만료 시 가용성 유지
     if _lc.get("key"):
         for _fb_model in _BG_FALLBACK_MODELS:
             try:
@@ -427,7 +411,7 @@ async def call_llm_with_fallback(
                     "bg_llm_last_resort_error: model=%s error=%s", _fb_model, str(e)[:80]
                 )
 
-    logger.error("all_bg_llm_failed: claude+gemini+qwen3+litellm_chain exhausted")
+    logger.error("all_bg_llm_failed: claude+qwen3+litellm_chain exhausted")
     return None
 
 
