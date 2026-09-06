@@ -353,9 +353,17 @@ enforce_release_worktree_gate() {
     fi
     report_dirty_release_exclusions
     if [[ "${AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE:-false}" == "true" ]]; then
+        local override_reason="${AADS_DEPLOY_DIRTY_OVERRIDE_REASON:-}"
+        if [[ -z "${override_reason//[[:space:]]/}" ]]; then
+            echo "[deploy.sh] ❌ dirty worktree override requires AADS_DEPLOY_DIRTY_OVERRIDE_REASON."
+            echo "[deploy.sh]    This prevents silent 'saved but not deployed' releases from dirty worktrees."
+            audit_control "release-context" "$COMPOSE_DIR" "blocked" "dirty override missing reason count=${dirty_count}"
+            return 1
+        fi
         echo "[deploy.sh] ⚠️ dirty worktree override accepted: AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true"
+        echo "[deploy.sh]    override reason: ${override_reason}"
         echo "[deploy.sh]    Only committed HEAD=${AADS_RELEASE_SHA} is archived into the release image."
-        audit_control "release-context" "$COMPOSE_DIR" "override" "dirty archive override count=${dirty_count}"
+        audit_control "release-context" "$COMPOSE_DIR" "override" "dirty archive override count=${dirty_count}; reason=${override_reason}"
         return 0
     fi
     echo "[deploy.sh] ❌ dirty worktree detected; release blocked before build."

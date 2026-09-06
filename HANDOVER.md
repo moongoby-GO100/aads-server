@@ -10887,3 +10887,23 @@
   - Last 5 minute active logs had no `level=error`, `level=critical`, or traceback matches; warnings were unrelated MCP cancellation/Ollama embedding availability.
 - Not completed:
   - Standby same-digest sync remains pending until the old blue chat executions drain, or until CEO explicitly approves terminating/interrupting those executions.
+
+## 2026-09-06 16:00 KST - No-loss deploy gate follow-up
+
+- CEO request:
+  - Continue the next action for the no-loss deployment system, reduce deployment delay, and ensure future edits are either included in the deployed SHA or explicitly blocked.
+- Findings:
+  - `deploy_runs.id=16` blocked at `target_slot_drain` because inactive target slot `aads-server:8100` still reported two recovery placeholder executions: sessions `9102c970` and `bf6f097c`.
+  - The dirty release gate existed, but `AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE=true` could still let a dirty working tree pass without a reason, creating ambiguity in completion reports.
+- Changes:
+  - `app/api/ops.py`: excludes hidden `recovery_auto_retry_scheduled` streaming placeholders from slot-local active-stream counts so inactive recovery placeholders do not block candidate/standby drain as live streams.
+  - `deploy.sh`: requires `AADS_DEPLOY_DIRTY_OVERRIDE_REASON` when dirty archive override is used, making excluded dirty-file releases explicit and auditable.
+  - `tests/unit/test_deploy_observability.py`: added static regression checks for the dirty override reason gate.
+- Verification before commit:
+  - `python3 -m py_compile app/api/ops.py` passed.
+  - `bash -n deploy.sh` passed.
+  - `python3 -m pytest tests/unit/test_deploy_observability.py -q` passed: 5 tests.
+  - `scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server` passed.
+  - `git diff --check -- deploy.sh app/api/ops.py tests/unit/test_deploy_observability.py` passed.
+- Deployment note:
+  - Release must be built from the committed SHA; unrelated dirty worktree files remain excluded and must not be reported as deployed.

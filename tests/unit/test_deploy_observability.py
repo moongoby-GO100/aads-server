@@ -140,6 +140,8 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "enforce_release_worktree_gate" in script
     assert "dirty worktree blocks release" in script
     assert "AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE" in script
+    assert "AADS_DEPLOY_DIRTY_OVERRIDE_REASON" in script
+    assert "dirty worktree override requires" in script
     assert "last_heartbeat_at=NOW()" in script
     assert "deploy_signal_trap TERM" in script
     assert "ensure_deploy_observability_schema" in script
