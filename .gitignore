@@ -70,12 +70,16 @@ app/data/yeoljeong_finance/contracts.json
 app/data/yeoljeong_finance/.delivery_sync.lock
 app/data/yeoljeong_finance/delivery_*.json
 app/data/yeoljeong_finance/delivery_auth_challenges/
+app/data/yeoljeong_finance/browser_collection_stage_logs.jsonl
+app/data/yeoljeong_finance/shinhan_login_diagnostics/
 app/data/yeoljeong_finance/bank_accounts.json
 app/data/yeoljeong_finance/employee_join_requests.json
 app/data/yeoljeong_finance/onboarding_documents.json
 app/data/yeoljeong_finance/pc_agent_collection_queue.json
 app/data/yeoljeong_finance/settings.json
 app/data/yeoljeong_finance/uploads/
+card310_entry_pause_mode
+card310_entry_paused_exit_only,
 nginx-aads-upstream.conf
 nginx-aads-upstream.conf.dashboard.bak
 

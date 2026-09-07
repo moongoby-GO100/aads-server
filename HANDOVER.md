@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-09-07 17:35 KST - Legacy API health routing cleanup
+
+- Request:
+  - CEO asked to apply the recommended follow-up after API deployment verification: clean up legacy `/api/health` routing and separate dirty runtime artifacts.
+- Changes:
+  - `nginx-aads-safe-api-failover.conf`: added exact `location = /api/health` to route legacy health probes to blue/green `aads_api/api/v1/health` instead of the retired standalone `127.0.0.1:8001` path.
+  - `.gitignore`: ignored newly generated Yeoljeong browser stage logs, Shinhan diagnostics directory, and accidental card310 runtime marker files so they do not keep reappearing as untracked commit candidates.
+  - `tests/unit/test_nginx_aads_health_routes.py`: pinned the legacy health route contract.
+- Verification:
+  - `python3 -m pytest -q tests/unit/test_nginx_aads_health_routes.py tests/unit/test_yeoljeong_finance_nginx.py`: passed, 2 tests.
+  - `git diff --check -- .gitignore nginx-aads-safe-api-failover.conf tests/unit/test_nginx_aads_health_routes.py HANDOVER.md`: passed.
+  - Runtime include applied to `/etc/nginx/conf.d/aads-safe-api-failover.inc` after backup at `/tmp/aads-safe-api-failover.inc.bak-20260907-1735`.
+  - `docker exec aads-nginx nginx -t`: passed with pre-existing deprecation/protocol warnings only.
+  - `docker exec aads-nginx nginx -s reload`: completed.
+  - External `https://aads.newtalk.kr/api/health`: HTTP 200.
+  - External `https://aads.newtalk.kr/api/v1/health`: HTTP 200.
+  - Direct slot health `127.0.0.1:8100` and `127.0.0.1:8102`: HTTP 200.
+- Notes:
+  - Existing tracked dirty runtime files are not reverted here; they must remain separate from this release unless the owner explicitly approves cleanup.
+
 ## 2026-09-07 16:43 KST - Ops deploy queue response wording fix
 
 - Request:
