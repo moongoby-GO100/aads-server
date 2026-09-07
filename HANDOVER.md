@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-09-07 12:47 KST - Runner preservation gates applied to AADS and GO100
+
+- Request:
+  - Apply the recommended runner safeguards immediately and also apply them to GO100.
+- Changes:
+  - `app/services/code_reviewer.py`: added pre-LLM preservation/scope hard gates for excessive deletions, deleted public functions/classes/API routers, and out-of-scope file changes when instruction paths are explicit.
+  - `app/services/pipeline_runner_service.py`: added STEP 0 existing-implementation survey requirements and expanded fallback `_ai_review` criteria for scope/preservation.
+  - `scripts/pipeline-runner.sh` and `scripts/pipeline-runner.sh.local`: require STEP 0 survey in runner prompts and show diff stat plus deleted symbols before CEO approval.
+  - GO100 contabo14 `/root/scripts/pipeline-runner.sh`: applied the STEP 0 runner prompt block and verified shell syntax.
+- Verification:
+  - `python3 -m py_compile app/services/code_reviewer.py app/services/pipeline_runner_service.py` passed.
+  - `bash -n scripts/pipeline-runner.sh` and `bash -n scripts/pipeline-runner.sh.local` passed.
+  - `pytest tests/unit/test_pipeline_runner_script_guards.py` passed: 22 tests.
+  - GO100 `bash -n /root/scripts/pipeline-runner.sh` passed and `grep "STEP 0 기존 구현 조사"` matched line 1352.
+- Git:
+  - `a91d60f8 fix(runner): add review preservation gates` is in `origin/main`.
+  - `86057225 fix(runner): require preservation survey in runner prompts` is in `origin/main`.
+- Deployment:
+  - AADS API release `86057225cb7e` queued as deploy_run 76.
+  - Pending: deploy_run 72 is still in `standby_same_digest_sync`; run 76 will start after active streams drain, then routed health, same-digest standby, and five-minute P0/P1 monitoring must be verified before reporting API deployment complete.
+
 ## 2026-09-07 12:18 KST - Chat stream interruption lease cleanup guard
 
 - Request:
