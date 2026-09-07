@@ -45,11 +45,16 @@ cleanup_release_context() {
 }
 
 build_release_image() {
+    local build_max_wait
+    build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-1200}"
+    if [[ ! "$build_max_wait" =~ ^[0-9]+$ ]] || [[ "$build_max_wait" -lt 300 ]]; then
+        build_max_wait="1200"
+    fi
     cleanup_release_context
     RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
     git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
-    echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA})"
-    DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+    echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA}, build_timeout=${build_max_wait}s)"
+    timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --label "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" \
         --tag "aads-server:${AADS_RELEASE_SHA}" \
         "$RELEASE_CONTEXT_DIR"
