@@ -11,18 +11,21 @@ set -euo pipefail
 
 REQUESTED_MODE="${1:-bluegreen}"
 MODE="$REQUESTED_MODE"
-COMPOSE_DIR="/root/aads/aads-server"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_DIR="${AADS_DEPLOY_SOURCE_DIR:-$SCRIPT_DIR}"
+STATE_DIR="${AADS_DEPLOY_STATE_DIR:-/root/aads/aads-server}"
 export AADS_RELEASE_SHA="${AADS_RELEASE_SHA:-$(git -C "$COMPOSE_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
+export AADS_RUNTIME_ENV_FILE="${AADS_RUNTIME_ENV_FILE:-${STATE_DIR}/.env}"
 HEALTH_URL="http://localhost:8100/api/v1/health"
 MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-30}"
 INTERVAL=2
 UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
-ACTIVE_CONTAINER_FILE="${COMPOSE_DIR}/.active_container"
-ACTIVE_PORT_FILE="${COMPOSE_DIR}/.active_port"
+ACTIVE_CONTAINER_FILE="${STATE_DIR}/.active_container"
+ACTIVE_PORT_FILE="${STATE_DIR}/.active_port"
 API_MEMORY_BYTES="${AADS_API_MEMORY_BYTES:-3221225472}"
 API_MEMORY_SWAP_BYTES="${AADS_API_MEMORY_SWAP_BYTES:-5368709120}"
 DEPLOY_START_EPOCH=$(date +%s)
-DEPLOY_GENERATION_FILE="${COMPOSE_DIR}/.deploy_generation"
+DEPLOY_GENERATION_FILE="${STATE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 RELEASE_CONTEXT_DIR=""
 DEPLOY_RUN_ID=""
@@ -30,7 +33,7 @@ DEPLOY_CURRENT_PHASE="initializing"
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
 DEPLOY_HEARTBEAT_PID=""
 DEPLOY_QUEUE_WORKER_LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
-mkdir -p "${COMPOSE_DIR}/logs"
+mkdir -p "${STATE_DIR}/logs"
 
 cleanup_release_context() {
     case "${RELEASE_CONTEXT_DIR:-}" in
@@ -63,7 +66,7 @@ fi
 # ── 다운타임 자동 측정 (2026-08-20 Blue/Green 동시 다운 인시던트 재발 방지) ──
 # nginx를 통한 실제 사용자 경로를 1초 주기로 폴링해 실패 구간을 누적한다.
 # 해상도는 프로브 응답시간 + 1초(대략 ±4초). 게이트가 아니라 계측 용도다.
-DOWNTIME_FILE="${COMPOSE_DIR}/.deploy_downtime"
+DOWNTIME_FILE="${STATE_DIR}/.deploy_downtime"
 DOWNTIME_PROBE_URL="${DOWNTIME_PROBE_URL:-http://127.0.0.1/api/v1/health}"
 DOWNTIME_PROBE_HOST="${DOWNTIME_PROBE_HOST:-aads.newtalk.kr}"
 DOWNTIME_MONITOR_PID=""
@@ -509,7 +512,7 @@ start_deploy_queue_worker() {
         rm -f "$DEPLOY_QUEUE_WORKER_LOCKFILE" 2>/dev/null || true
     fi
     local log_file
-    log_file="${COMPOSE_DIR}/logs/deploy-queue-worker-$(date +%Y%m%d-%H%M%S).log"
+    log_file="${STATE_DIR}/logs/deploy-queue-worker-$(date +%Y%m%d-%H%M%S).log"
     (
         env AADS_DEPLOY_QUEUE_WORKER=true bash "$COMPOSE_DIR/deploy.sh" "$MODE"
     ) >"$log_file" 2>&1 &
@@ -1204,7 +1207,7 @@ restart_old_slot_after_drain() {
         docker exec "$old_container" supervisorctl restart aads-api >/dev/null 2>&1 || true
         docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         audit_control "standby-restart" "${old_container}:${old_port}" "success" "drained standby restarted"
-    ) >> "${COMPOSE_DIR}/logs/standby-sync.log" 2>&1 &
+    ) >> "${STATE_DIR}/logs/standby-sync.log" 2>&1 &
     disown
 }
 
@@ -1309,7 +1312,7 @@ sync_standby_slot_after_drain() {
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "health failed after rebuild"
             return 1
         fi
-    } 2>&1 | tee -a "${COMPOSE_DIR}/logs/standby-sync.log"
+    } 2>&1 | tee -a "${STATE_DIR}/logs/standby-sync.log"
     return "${PIPESTATUS[0]}"
 }
 
@@ -1736,8 +1739,8 @@ case "$MODE" in
         # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
         deploy_phase_start "standby_same_digest_sync" "syncing_standby"
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화"
-        echo "$NEW_PORT" > /root/aads/aads-server/.active_port
-        echo "$NEW_CONTAINER" > /root/aads/aads-server/.active_container
+        echo "$NEW_PORT" > "$ACTIVE_PORT_FILE"
+        echo "$NEW_CONTAINER" > "$ACTIVE_CONTAINER_FILE"
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         release_nginx_switch_lock

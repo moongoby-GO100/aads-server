@@ -98,7 +98,7 @@ services:
       # Host-only API port. Public traffic must enter through nginx :443.
       - "127.0.0.1:8100:8080"
     env_file:
-      - .env
+      - ${AADS_RUNTIME_ENV_FILE:-.env}
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
@@ -192,7 +192,7 @@ services:
       # Host-only API port. Public traffic must enter through nginx :443.
       - "127.0.0.1:8102:8080"
     env_file:
-      - .env
+      - ${AADS_RUNTIME_ENV_FILE:-.env}
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
