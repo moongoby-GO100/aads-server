@@ -1262,6 +1262,9 @@ sync_standby_slot_after_drain() {
             return 0
         fi
         reconcile_inactive_target_recovery_executions "$old_container"
+        echo "[deploy.sh] standby sync pre-drain graceful shutdown trigger on inactive slot :${old_port}"
+        curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
+            -H "Content-Type: application/json" 2>/dev/null || true
 
         local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"

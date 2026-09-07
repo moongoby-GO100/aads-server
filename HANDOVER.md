@@ -25,6 +25,7 @@
   - Apply the deploy queue recommendation immediately and apply it to GO100 as well.
 - AADS changes:
   - `deploy.sh` now supersedes older `queued_for_deploy` rows when a newer release actually passes dirty preflight and starts, preventing stale queued SHAs from deploying after a later release.
+  - `deploy.sh` now sends the inactive standby slot a graceful shutdown request before passive stream polling, reducing standby sync wait when old SSE/PC-Agent streams linger.
 - GO100 changes:
   - contabo14 `/root/kis-autotrade-v4/scripts/deploy.sh` now uses `/tmp/go100-deploy.lock`, queues concurrent requests in `/tmp/go100-deploy-queue.jsonl`, and waits via a worker instead of overlapping deployments.
   - GO100 commits pushed to `origin/main`: `01ea440c4`, `cbb11eaee`, `3119782f6`.
