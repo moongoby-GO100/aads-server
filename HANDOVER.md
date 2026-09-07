@@ -12347,3 +12347,23 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `rg` confirmed no direct `gpt-5.6-sol` fallback call/log remains in `app/services/model_selector.py`.
 - Not performed:
   - Commit, push, and deploy are still pending. Previous commit attempt was blocked by the repository auth/chat core-file pre-commit gate requiring explicit `ALLOW_AUTH_COMMIT=1`.
+
+## 2026-09-08 08:29 KST — IBK Junghwa bank collection queue correction
+- CEO request:
+  - Hold Shinhan after password lockout and switch the bank collection priority to IBK. Start with Junghwa, then Sungshin, then Eonni Naengmyeon after success.
+- Findings:
+  - Junghwa has four active IBK bank account rows in `bank_accounts.json` / `yeoljeong_bank_accounts`; only one has a masked account ending in `4014`.
+  - Current IBK credential material is incomplete. The collector returns `credential_required/MISSING_CREDENTIALS` before opening the bank browser because login password, full account number, account password, and business registration number are missing.
+  - The previous IBK queue row was superseded by a Shinhan row because all bank jobs shared `financial_exclusive|global|<agent>` as the `latest_only` resource key.
+- Change implemented:
+  - Updated `app/services/pc_agent_collection_queue.py` so financial exclusive queue keys include service and bank account identity: `financial_exclusive|tenant|agent|service|account`.
+  - Kept the `financial_exclusive|` prefix, so bank jobs still block delivery jobs on the protected PC Agent lane.
+  - Added `test_bank_latest_only_is_scoped_by_service_and_account` to prevent IBK and Shinhan from superseding each other.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_collection_queue.py -q`: 9 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_auto_collect.py -q`: 51 passed.
+  - Direct module smoke test confirmed IBK and Shinhan queue rows remain queued with different resource keys.
+  - Container service smoke test for Junghwa IBK account `a91c0c71-b776-4edf-90e7-b2c827b6d7e0` returned `credential_required/MISSING_CREDENTIALS`.
+- Not performed:
+  - Real IBK bank login / transaction collection was not attempted because required credentials are not present.
+  - Commit, push, and deploy are pending after this handover update.

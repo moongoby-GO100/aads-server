@@ -20,6 +20,7 @@ ALLOWED_QUEUE_TYPES = {"delivery", "bank", "financial", "browser_recipe"}
 FINANCIAL_QUEUE_PROJECTS = {"BANKING"}
 FINANCIAL_QUEUE_TYPES = {"bank", "financial"}
 FINANCIAL_RESOURCE_KEY = "financial_exclusive"
+_RESOURCE_KEY_SAFE_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
 
 
 def _now() -> datetime:
@@ -68,6 +69,14 @@ def _clean_key(value: Any, fallback: str = "") -> str:
     return text if text else fallback
 
 
+def _resource_key_part(value: Any, fallback: str = "") -> str:
+    text = _clean_key(value, fallback).strip()
+    if not text:
+        return fallback
+    cleaned = "".join(ch if ch in _RESOURCE_KEY_SAFE_CHARS else "-" for ch in text)
+    return cleaned[:96] or fallback
+
+
 def build_resource_key(item: dict[str, Any]) -> str:
     payload = _json_dict(item.get("payload"))
     project_key = str(payload.get("project_key") or item.get("business_id") or "").strip().upper()
@@ -89,7 +98,17 @@ def build_resource_key(item: dict[str, Any]) -> str:
             payload.get("required_browser_agent_id"),
             _clean_key(payload.get("browser_agent_id"), _clean_key(payload.get("pc_agent_id"), "default")),
         )
-        return f"{FINANCIAL_RESOURCE_KEY}|{tenant}|{agent_hint}"
+        account_hint = _clean_key(payload.get("bank_account_id"), _clean_key(item.get("work_key"), "account"))
+        service_hint = _clean_key(item.get("service"), _clean_key(payload.get("service"), _clean_key(item.get("site_key"), "bank")))
+        return "|".join(
+            [
+                FINANCIAL_RESOURCE_KEY,
+                _resource_key_part(tenant, "global"),
+                _resource_key_part(agent_hint, "default"),
+                _resource_key_part(service_hint, "bank"),
+                _resource_key_part(account_hint, "account"),
+            ]
+        )
     site_key = _clean_key(item.get("site_key"), _clean_key(item.get("service"), "site"))
     work_key = _clean_key(item.get("work_key"), site_key)
     runtime = _clean_key(item.get("runtime"), "pc_agent")

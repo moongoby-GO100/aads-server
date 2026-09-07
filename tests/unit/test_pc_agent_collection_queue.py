@@ -45,6 +45,59 @@ def test_global_queue_latest_only_supersedes_same_resource(tmp_path, monkeypatch
     assert snapshot[0]["payload"]["date_to"] == "2026-08-28"
 
 
+def test_bank_latest_only_is_scoped_by_service_and_account(tmp_path, monkeypatch):
+    queue_path = tmp_path / "queue.json"
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("YEOLJEONG_FINANCE_DATABASE_URL", raising=False)
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+    ibk = queue_module.enqueue_collection_item(
+        {
+            "queue_type": "bank",
+            "site_key": "bank:ibk_business",
+            "service": "ibk_business",
+            "business_id": "biz-junghwa",
+            "branch": "branch-junghwa",
+            "work_key": "yeoljeong-bank-ibk-junghwa",
+            "priority": 10,
+            "latest_only": True,
+            "payload": {
+                "project_key": "BANKING",
+                "bank_account_id": "acct-ibk-junghwa",
+                "browser_agent_id": "agent-bank",
+            },
+        }
+    )
+    shinhan = queue_module.enqueue_collection_item(
+        {
+            "queue_type": "bank",
+            "site_key": "bank:shinhan_business",
+            "service": "shinhan_business",
+            "business_id": "biz-junghwa",
+            "branch": "branch-junghwa",
+            "work_key": "yeoljeong-bank-shinhan-junghwa",
+            "priority": 10,
+            "latest_only": True,
+            "payload": {
+                "project_key": "BANKING",
+                "bank_account_id": "acct-shinhan-junghwa",
+                "browser_agent_id": "agent-bank",
+            },
+        }
+    )
+
+    snapshot = queue_module.queue_snapshot()
+
+    assert len(snapshot) == 2
+    assert ibk["resource_key"] != shinhan["resource_key"]
+    assert ibk["resource_key"].startswith("financial_exclusive|")
+    assert shinhan["resource_key"].startswith("financial_exclusive|")
+    assert {row["status"] for row in snapshot} == {"queued"}
+
+
 def test_global_queue_preserves_action_required_until_next_run(tmp_path, monkeypatch):
     queue_path = tmp_path / "queue.json"
     monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
