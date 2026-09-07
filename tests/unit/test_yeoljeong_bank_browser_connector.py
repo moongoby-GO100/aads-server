@@ -1934,6 +1934,88 @@ def test_collect_async_shinhan_pc_agent_offline_stays_retryable():
     assert "110123456789" not in str(result["diagnostics"])
 
 
+def test_collect_async_shinhan_recreates_work_key_after_recoverable_flow_error():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    step = {"value": "query"}
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+        if "querySelectorAll('table')" in expr:
+            if step["value"] == "done":
+                return [
+                    [
+                        ["거래일자", "적요", "입금금액", "출금금액", "거래후잔액"],
+                        ["2026.08.24", "카드정산", "120,000", "", "500,000"],
+                    ]
+                ]
+            return []
+        if "document.body.innerText" in expr:
+            return "거래일자 입금금액" if step["value"] == "done" else "간편조회서비스 계좌조회"
+        if "shinhanQueryFlow" in expr and args:
+            step["value"] = "done"
+            return {
+                "attempted": "1",
+                "mode": "individual_simple",
+                "stage": "account_query",
+                "account_selected": "1",
+                "account_secret": "1",
+                "date_from": "1",
+                "date_to": "1",
+                "query_submitted": "1",
+            }
+        return []
+
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+    recovered_session = MagicMock()
+    recovered_session.session_id = "sess-shinhan-recovered"
+
+    with (
+        patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge,
+        patch.object(
+            connector,
+            "_try_shinhan_individual_login_step",
+            AsyncMock(return_value={"attempted": "failed", "stage": "login", "error_code": "PC_AGENT_OFFLINE"}),
+        ),
+    ):
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.ensure_work_session = AsyncMock(return_value=recovered_session)
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-shinhan-individual-test",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_entity_type="individual",
+                auto_open_browser=True,
+                browser_agent_id="62405e70-e98",
+            )
+        )
+
+    assert result["status"] == "collected", result["diagnostics"]
+    assert result["row_count"] == 1
+    assert bridge_inst.ensure_work_session.await_args.kwargs["force_recreate"] is True
+    assert result["diagnostics"]["session_recovery"] == "recreated_same_work_key_after_recoverable_error"
+    assert result["diagnostics"]["session_recovery_error"] == "PC_AGENT_OFFLINE"
+    assert result["diagnostics"]["browser_session_id"] == "sess-shinhan-recovered"
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+    assert "110123456789" not in str(result["diagnostics"])
+
+
 def test_collect_async_shinhan_individual_flow_confirms_notice_before_account_query():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
     step = {"value": "login"}

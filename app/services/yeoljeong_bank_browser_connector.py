@@ -5024,7 +5024,7 @@ async def collect_bank_via_browser_session_async(
                                 agent_id=str(browser_agent_id or ""),
                                 url=portal_url or BANK_PORTAL_URLS["shinhan_business"],
                                 preferred_port=browser_preferred_port,
-                                force_recreate=False,
+                                force_recreate=True,
                                 queue_wait_timeout_seconds=launch_queue_wait_seconds,
                                 command_timeout_seconds=launch_timeout_seconds,
                             )
@@ -5037,7 +5037,7 @@ async def collect_bank_via_browser_session_async(
                             _disable_local_agent_auto_recovery(page)
                             safe_diagnostics["browser_session_id"] = session_id_to_use
                             safe_diagnostics["cdp_preflight_session_id"] = session_id_to_use
-                            safe_diagnostics["session_recovery"] = "reacquired_same_work_key"
+                            safe_diagnostics["session_recovery"] = "recreated_same_work_key_after_recoverable_error"
                             safe_diagnostics["session_recovery_error"] = recovery_code
                             continue
                         except Exception as resume_exc:

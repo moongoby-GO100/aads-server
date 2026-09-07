@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-07 11:52 KST - Shinhan work-key recovery force recreate
+
+- Request:
+  - Complete Shinhan Bank simple-account transaction auto-collection and report verified results.
+- Findings:
+  - Real DANHAROO-MAIN runs reached Shinhan portal/session/security checks and account-query page navigation, but the transaction ledger was still absent.
+  - The latest failure path was `PC_AGENT_OFFLINE` during account selection followed by `INSUFFICIENT_PORTAL_SIGNAL`, while DANHAROO-MAIN itself was online.
+  - The root recoverable path reacquired the same work-key with `force_recreate=False`, so a stale or cross-routed browser session could be reused.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: changed Shinhan account-selection recoverable recovery to force-recreate the same bank work-key and record `recreated_same_work_key_after_recoverable_error`.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added regression coverage proving `PC_AGENT_OFFLINE` during Shinhan flow recreates the work-key and then continues to collect rows without leaking secrets.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py::test_collect_async_shinhan_recreates_work_key_after_recoverable_flow_error -q` passed: 1 test.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_auth_challenge_orchestrator.py -q` passed: 3 tests.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed: 83 tests.
+- Deployment:
+  - Pending: selected commit/push, wait for existing run 62 (`ee2a5c79`) to finish standby sync, then blue/green deploy the new SHA and rerun DANHAROO-MAIN Shinhan bank-only collection.
+
 ## 2026-09-07 10:46 KST - Pipeline Runner remote script auto-sync
 
 - Request:
