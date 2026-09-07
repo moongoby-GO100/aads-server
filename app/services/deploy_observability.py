@@ -172,6 +172,27 @@ def _apply_release_metadata(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _apply_deploy_time_aliases(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    terminal_statuses = {"completed", "success", "failed", "error", "blocked", "superseded", "cancelled"}
+    for row in rows:
+        row.setdefault(
+            "started_at",
+            row.get("requested_at")
+            or row.get("created_at")
+            or row.get("phase_started_at")
+            or row.get("updated_at"),
+        )
+        status = str(row.get("status") or "").lower()
+        row.setdefault(
+            "completed_at",
+            (
+                row.get("phase_completed_at")
+                or row.get("updated_at")
+            ) if status in terminal_statuses else None,
+        )
+    return rows
+
+
 async def _table_exists(conn: Any, name: str) -> bool:
     return bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{name}"))
 
@@ -288,8 +309,8 @@ async def _load_deploy_runs(conn: Any) -> tuple[list[dict[str, Any]], list[dict[
         """,
         list(ACTIVE_STATUSES + QUEUED_STATUSES),
     )
-    active = _apply_release_metadata([dict(row) for row in rows if row["status"] in ACTIVE_STATUSES])
-    queued = _apply_release_metadata([dict(row) for row in rows if row["status"] in QUEUED_STATUSES])
+    active = _apply_deploy_time_aliases(_apply_release_metadata([dict(row) for row in rows if row["status"] in ACTIVE_STATUSES]))
+    queued = _apply_deploy_time_aliases(_apply_release_metadata([dict(row) for row in rows if row["status"] in QUEUED_STATUSES]))
     return active, queued
 
 
@@ -307,7 +328,7 @@ async def _load_recent_completed_deployments(conn: Any) -> list[dict[str, Any]]:
         LIMIT 12
         """
     ))
-    return _apply_release_metadata(rows)
+    return _apply_deploy_time_aliases(_apply_release_metadata(rows))
 
 
 def _annotate_active_runs(active: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:

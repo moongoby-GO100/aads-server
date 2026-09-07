@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.modules.setdefault(
     "structlog",
-    SimpleNamespace(get_logger=lambda: SimpleNamespace(warning=lambda *args, **kwargs: None)),
+    SimpleNamespace(get_logger=lambda *args, **kwargs: SimpleNamespace(warning=lambda *args, **kwargs: None)),
 )
 _MODULE_PATH = Path(__file__).parents[2] / "app/services/deploy_observability.py"
 _SPEC = importlib.util.spec_from_file_location("deploy_observability_under_test", _MODULE_PATH)
@@ -124,11 +124,50 @@ def test_stalled_active_deploy_requires_reconciliation_not_live_deploy_blocker()
     active = result["active_deployments"][0]
     blockers = result["next_deploy_readiness"]["blockers"]
     assert active["stalled"] is True
+    assert active["started_at"] == old
+    assert active["completed_at"] is None
     assert active["effective_status"] == "stalled"
     assert active["signal"] == "deploy_phase_stalled"
     assert active["reconcile_action"] == "deploy_sh_reconcile_before_next_release"
     assert "deployment_reconciliation_required" in blockers
     assert "deployment_in_progress" not in blockers
+
+
+def test_recent_completed_deployments_include_display_times():
+    now = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "pipeline_jobs"},
+        {
+            "FROM deploy_runs dr": [{
+                "id": 9,
+                "project": "AADS",
+                "release_sha": "deadbeef",
+                "status": "success",
+                "phase": "completed",
+                "requested_at": now,
+                "created_at": now,
+                "phase_started_at": now,
+                "phase_completed_at": now,
+                "updated_at": now,
+                "image_digest": "sha256:a",
+                "standby_digest": "sha256:a",
+                "request_payload": {"title": "release title", "changed_files": ["deploy.sh"]},
+                "bg_sync_status": "synced",
+            }],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "FROM pipeline_jobs": [],
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    completed = result["recent_completed_deployments"][0]
+    assert completed["started_at"] == now
+    assert completed["completed_at"] == now
+    assert completed["release_title"] == "release title"
 
 
 def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
