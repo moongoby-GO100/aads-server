@@ -73,6 +73,13 @@ RECONNECT_DELAY = 5  # 초
 MAX_RECONNECT_DELAY = 30  # 초 — 지수 백오프 상한 (60→30으로 단축)
 MAX_RECONNECT_DURATION = 300  # 초 — 5분 연속 재연결 실패 시 프로세스 종료 → launcher가 재시작
 AUTO_UPDATE_INTERVAL = 600  # 초 — 10분마다 서버 버전 확인 (v1.0.38: 300→600 빈도 절감)
+AGENT_MUTEX_NAME = os.getenv("AADS_PC_AGENT_MUTEX_NAME", "KakaoBotAgent_SingleInstance_v2")
+WATCHDOG_TASK_NAME = os.getenv("AADS_PC_AGENT_WATCHDOG_TASK_NAME", "KakaoBotWatchdog")
+LEGACY_RUN_VALUE_NAME = os.getenv("AADS_PC_AGENT_LEGACY_RUN_VALUE_NAME", "KakaoBot")
+LEGACY_STARTUP_CMD_NAME = os.getenv(
+    "AADS_PC_AGENT_LEGACY_STARTUP_CMD_NAME",
+    "AADS-PC-Agent-Watchdog.cmd",
+)
 
 
 def _hidden_subprocess_kwargs() -> dict[str, int]:
@@ -102,7 +109,7 @@ def _acquire_single_instance() -> bool:
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
-        _win_mutex = kernel32.CreateMutexW(None, True, "KakaoBotAgent_SingleInstance_v2")
+        _win_mutex = kernel32.CreateMutexW(None, True, AGENT_MUTEX_NAME)
         last_err = kernel32.GetLastError()
         if last_err == 183:  # ERROR_ALREADY_EXISTS = 다른 프로세스가 이미 실행 중
             logger.warning("이미 실행 중인 에이전트 (다른 프로세스) — 이 인스턴스 종료")
@@ -286,7 +293,7 @@ class PCAgent:
         if sys.platform == "win32":
             try:
                 result = subprocess.run(
-                    ["schtasks", "/Query", "/TN", "KakaoBotWatchdog", "/FO", "LIST"],
+                    ["schtasks", "/Query", "/TN", WATCHDOG_TASK_NAME, "/FO", "LIST"],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -308,7 +315,7 @@ class PCAgent:
                     r"Software\Microsoft\Windows\CurrentVersion\Run",
                 )
                 try:
-                    value, _ = winreg.QueryValueEx(key, "KakaoBot")
+                    value, _ = winreg.QueryValueEx(key, LEGACY_RUN_VALUE_NAME)
                     legacy_registry_present = bool(str(value).strip())
                 finally:
                     winreg.CloseKey(key)
@@ -319,7 +326,7 @@ class PCAgent:
             if "error" not in startup:
                 startup_cmd = (
                     Path(os.environ.get("APPDATA", ""))
-                    / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+                    / f"Microsoft/Windows/Start Menu/Programs/Startup/{LEGACY_STARTUP_CMD_NAME}"
                 )
                 legacy_startup_cmd_present = startup_cmd.exists()
                 startup = {

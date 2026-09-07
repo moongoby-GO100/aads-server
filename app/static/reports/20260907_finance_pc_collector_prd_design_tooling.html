@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>금융정보 자동수집 PC설치형 에이전트 PRD·설계·목업·Tool 셋업</title>
+<style>
+  :root {
+    --bg: #f5f7fb;
+    --paper: #ffffff;
+    --ink: #17202a;
+    --muted: #667085;
+    --line: #d9e0ea;
+    --nav: #223047;
+    --blue: #1f6feb;
+    --green: #16833a;
+    --amber: #b7791f;
+    --red: #c24136;
+    --panel: #eef4ff;
+    --soft: #f8fafc;
+    --mono: #0f172a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    font-size: 15px;
+    line-height: 1.68;
+  }
+  .wrap { max-width: 1220px; margin: 0 auto; padding: 28px 20px 84px; }
+  header {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px 26px;
+    box-shadow: 0 10px 24px rgba(16, 24, 40, 0.06);
+  }
+  h1 { margin: 0 0 8px; font-size: 29px; line-height: 1.32; letter-spacing: 0; }
+  h2 { margin: 38px 0 12px; font-size: 21px; line-height: 1.35; border-left: 5px solid var(--blue); padding-left: 12px; }
+  h3 { margin: 24px 0 8px; font-size: 16px; color: var(--nav); }
+  p { margin: 8px 0; }
+  a { color: var(--blue); text-decoration: none; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; background: var(--paper); font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #edf2f7; color: #1f2937; font-weight: 800; white-space: nowrap; }
+  code { background: #f1f5f9; border: 1px solid #d8e0eb; border-radius: 4px; color: #0f3f8f; padding: 1px 5px; font-size: 12.5px; }
+  pre { background: var(--mono); color: #d7e0ea; border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+  ul, ol { margin: 8px 0 8px 20px; padding: 0; }
+  li { margin: 4px 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+  .meta span { background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; color: var(--muted); font-size: 12.5px; }
+  .lead { color: #344054; font-size: 16px; }
+  .note { border: 1px solid var(--line); border-left: 5px solid var(--blue); background: var(--paper); border-radius: 8px; padding: 14px 16px; margin: 14px 0; }
+  .note.ok { border-left-color: var(--green); }
+  .note.warn { border-left-color: var(--amber); }
+  .note.err { border-left-color: var(--red); }
+  .tag { display: inline-block; border-radius: 5px; padding: 1px 8px; color: #fff; font-size: 12px; font-weight: 800; white-space: nowrap; }
+  .p0 { background: var(--red); }
+  .p1 { background: var(--amber); }
+  .p2 { background: var(--blue); }
+  .oktag { background: var(--green); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 14px 0; }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-height: 112px; }
+  .card .k { color: var(--muted); font-size: 12.5px; }
+  .card .v { font-size: 23px; font-weight: 850; margin-top: 4px; color: #101828; }
+  .card .n { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .flow { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; }
+  .mock-shell { background: #dfe6ef; border: 1px solid #bcc8d8; border-radius: 8px; overflow: hidden; margin: 14px 0 22px; }
+  .mock-top { background: #1f2937; color: #fff; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #ef4444; display: inline-block; }
+  .dot.y { background: #f59e0b; }
+  .dot.g { background: #22c55e; }
+  .mock-body { display: grid; grid-template-columns: 230px 1fr; min-height: 430px; background: #f8fafc; }
+  .mock-side { background: #263449; color: #d7e0ea; padding: 16px 12px; }
+  .mock-side div { padding: 10px 12px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
+  .mock-side .active { background: #1f6feb; color: #fff; }
+  .mock-main { padding: 18px; }
+  .mock-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+  .mock-metric { background: #fff; border: 1px solid #d9e0ea; border-radius: 8px; padding: 12px; min-height: 82px; }
+  .mock-metric b { display: block; font-size: 18px; margin-top: 5px; }
+  .mock-panel { background: #fff; border: 1px solid #d9e0ea; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .mock-status { display: grid; grid-template-columns: 160px 1fr 120px; gap: 8px; padding: 8px 0; border-bottom: 1px solid #edf2f7; font-size: 13px; }
+  .mock-btn { display: inline-block; background: #1f6feb; color: #fff; border-radius: 6px; padding: 8px 12px; margin-right: 6px; font-weight: 700; font-size: 13px; }
+  .mock-btn.ghost { background: #eef4ff; color: #1f4da0; border: 1px solid #c9d8f4; }
+  .swim { display: grid; grid-template-columns: repeat(6, minmax(160px, 1fr)); gap: 8px; overflow-x: auto; margin: 14px 0; }
+  .swim div { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-height: 110px; font-size: 13px; }
+  .small { color: var(--muted); font-size: 12.5px; }
+  .footer { margin-top: 50px; border-top: 1px solid var(--line); padding-top: 16px; color: var(--muted); font-size: 12.5px; }
+  @media (max-width: 780px) {
+    .mock-body { grid-template-columns: 1fr; }
+    .mock-side { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .mock-row { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>금융정보 자동수집 PC설치형 에이전트<br>PRD · 기술설계 · 화면목업 · Tool 셋업 계획서</h1>
+  <p class="lead">
+    LangGraph와 LangSmith 기반 실행 하네스/LLMOps를 붙인 Windows 설치형 금융 수집 에이전트 구축안입니다.
+    1차 목표는 신한은행 기업 간편계좌조회 로그인, 거래내역 파싱, 엑셀 다운로드, 서버 업로드, DB화, 실시간 감시와 주기 업데이트입니다.
+  </p>
+  <div class="meta">
+    <span>문서 버전: v1.1</span>
+    <span>최종 갱신: 2026-09-07 19:36 KST</span>
+    <span>작성 범위: 1. 설계/PRD 2. 화면 목업 3. Tool 셋업 + 4단계 패키징 착수 현황</span>
+    <span>구축 상태: 신한 전용 EXE 빌드 타깃 구현 중</span>
+    <span>대상 PC: DANHAROO-MAIN 우선</span>
+    <span>신한 URL: 기업 간편계좌조회 직접 진입</span>
+  </div>
+</header>
+
+<h2>1. CEO 승인 요청 결론</h2>
+<div class="note warn">
+  <b>권장안은 "Windows 전용 Collector + 서버 관제/저장 + LangGraph 상태머신 + LangSmith LLMOps" 구조입니다.</b>
+  서버 headless 브라우저로 은행을 뚫는 방식이 아니라, 보안프로그램이 설치된 Windows PC에서 전용 Collector가 실제 브라우저를 조작하고,
+  AADS 서버는 큐, 저장, 감사로그, 재시도 정책, LLMOps 진단을 담당합니다.
+</div>
+
+<h3>1.1 v1.1 진행상황 업데이트</h3>
+<table>
+  <tr><th>항목</th><th>v1.0 상태</th><th>v1.1 업데이트</th><th>남은 완료 조건</th></tr>
+  <tr>
+    <td>승인 상태</td>
+    <td>1~3단계 승인 요청</td>
+    <td>CEO 승인 후 4단계 구축 착수</td>
+    <td>기능점검/LLMOps 시연 승인 후 진행</td>
+  </tr>
+  <tr>
+    <td>신한 전용 EXE</td>
+    <td>별도 설치파일 없음</td>
+    <td><code>shinhan_collector_launcher.py</code>, <code>build_shinhan_collector_exe.py</code>, <code>build_shinhan_collector_exe.bat</code> 추가</td>
+    <td>DANHAROO-MAIN 또는 Windows 빌드 PC에서 <code>AADS-Shinhan-Collector-Setup.exe</code> 실제 생성</td>
+  </tr>
+  <tr>
+    <td>PC 충돌 격리</td>
+    <td>범용 Agent와 같은 mutex/watchdog 이름 사용</td>
+    <td>앱명, 설치폴더, 런처 mutex, Agent mutex, watchdog task를 환경변수로 분리</td>
+    <td>동일 PC에서 범용 Agent와 신한 Collector 동시 실행 검증</td>
+  </tr>
+  <tr>
+    <td>수집 완료</td>
+    <td>설계/하네스 중심</td>
+    <td>패키징 계약과 은행 전용 capability 등록 경로 보강</td>
+    <td>신한 로그인 성공, 거래 파싱/엑셀 다운로드, 서버 업로드, DB/원장 저장 1건 이상</td>
+  </tr>
+</table>
+
+<table>
+  <tr><th>승인 항목</th><th>결정안</th><th>이유</th><th>승인 후 다음 작업</th></tr>
+  <tr>
+    <td>수집 실행 방식</td>
+    <td>Windows 설치형 전용 Collector</td>
+    <td>신한 기업 간편계좌는 AhnLab/VeraPort/INISAFE/Delfino 등 로컬 보안프로그램 상태와 브라우저 세션이 핵심입니다.</td>
+    <td><code>pc_agent/commands/bank_collector.py</code> 신규 구현</td>
+  </tr>
+  <tr>
+    <td>오케스트레이션</td>
+    <td>LangGraph 상태 그래프</td>
+    <td>로그인, 인증분기, 조회, 다운로드, 업로드, 재시도, 사람 승인 게이트가 있는 장기 상태 업무입니다.</td>
+    <td>신한 전용 graph/checkpoint/store 구현</td>
+  </tr>
+  <tr>
+    <td>LLMOps</td>
+    <td>LangSmith trace/eval/monitoring</td>
+    <td>수집 실패 원인을 단계별 trace로 남기고, 시연 때 오류 분류와 자동 진단을 보여줄 수 있습니다.</td>
+    <td>trace schema, eval dataset, dashboard 연결</td>
+  </tr>
+  <tr>
+    <td>1차 범위</td>
+    <td>신한은행 기업 간편계좌조회 단일 은행</td>
+    <td>한 은행에서 보안/브라우저/저장 계약을 완성한 뒤 IBK, 국민, 하나, 우리, 농협, 카드사로 확장해야 재작업이 적습니다.</td>
+    <td>신한 성공 후 bank adapter interface 확정</td>
+  </tr>
+</table>
+
+<h2>2. 현재 구현 상태와 부족한 점</h2>
+<div class="grid">
+  <div class="card"><div class="k">PC Agent 기반</div><div class="v">있음</div><div class="n"><code>pc_agent/agent.py</code>, <code>pc_agent/commands/browser_auto.py</code></div></div>
+  <div class="card"><div class="k">금융 전용 lease</div><div class="v">일부</div><div class="n"><code>financial_exclusive</code> 리소스 키 존재</div></div>
+  <div class="card"><div class="k">신한 URL 정규화</div><div class="v">일부</div><div class="n"><code>bank.shinhan.com/rib/easy/index.jsp#210000000000</code></div></div>
+  <div class="card"><div class="k">신한 전용 EXE 타깃</div><div class="v">진행</div><div class="n">PyInstaller entrypoint/build script 추가, Windows 실빌드 대기</div></div>
+</div>
+
+<table>
+  <tr><th>영역</th><th>확인된 구현</th><th>부족한 점</th><th>우선순위</th></tr>
+  <tr>
+    <td>Windows Agent</td>
+    <td>설치/실행/명령 처리/브라우저 자동화 명령 기반 존재</td>
+    <td>신한 전용 entrypoint/build script는 추가됐고, 실제 Windows EXE 산출·설치 검증은 남음</td>
+    <td><span class="tag p0">P0</span></td>
+  </tr>
+  <tr>
+    <td>신한 상태머신</td>
+    <td>보안프로그램 체크, 금융인증 iframe 감지, ID/PW hash 전환, 계좌조회 hash 감지 일부 구현</td>
+    <td>로그인 성공, 파싱 성공, 저장 성공을 하나의 완료 트랜잭션으로 묶는 보증이 약함</td>
+    <td><span class="tag p0">P0</span></td>
+  </tr>
+  <tr>
+    <td>큐 격리</td>
+    <td><code>bank_only</code>, <code>browser_agent_id</code>, <code>financial_exclusive</code> 개념 존재</td>
+    <td>배달 큐와 은행 큐가 로그/브라우저 work key에서 섞일 여지가 남음</td>
+    <td><span class="tag p0">P0</span></td>
+  </tr>
+  <tr>
+    <td>DB화</td>
+    <td><code>record_bank_transactions()</code> 저장 함수와 파일 원장 기반 존재</td>
+    <td>업로드 ACK, 중복 제거, 원장 row count 검증, 원본 파일 보존 계약 필요</td>
+    <td><span class="tag p0">P0</span></td>
+  </tr>
+  <tr>
+    <td>LLMOps</td>
+    <td>AADS 내 LangGraph/하네스 관련 기존 코드와 테스트 일부 존재</td>
+    <td>은행 수집 graph trace, 실패 분류 eval, 비용/지연 dashboard 미구성</td>
+    <td><span class="tag p1">P1</span></td>
+  </tr>
+</table>
+
+<h2>3. PRD</h2>
+<h3>3.1 제품 목표</h3>
+<table>
+  <tr><th>항목</th><th>내용</th></tr>
+  <tr><td>제품명</td><td>AADS Finance Windows Collector</td></tr>
+  <tr><td>1차 대상</td><td>신한은행 기업 간편계좌조회, 열정국밥 미아점/중화점/법인 계좌 순차 적용</td></tr>
+  <tr><td>주요 사용자</td><td>CEO, 회계 담당자, 운영 관리자</td></tr>
+  <tr><td>핵심 가치</td><td>은행 거래내역을 매일 수동 엑셀 다운로드하지 않고 자동 수집, DB화, 이상 감시, 매출/매입/급여/세무 자료와 연결</td></tr>
+  <tr><td>완료 기준</td><td>신한 로그인 성공, 계좌조회 화면 진입, 거래내역 파싱 또는 엑셀 다운로드, 서버 업로드 ACK, DB/원장 저장 1건 이상 또는 무거래 확정 상태</td></tr>
+  <tr><td>확장 기준</td><td>신한 adapter가 안정화된 뒤 IBK/국민/하나/우리/농협/카드사 adapter를 같은 인터페이스로 추가</td></tr>
+</table>
+
+<h3>3.2 사용자 시나리오</h3>
+<table>
+  <tr><th>시나리오</th><th>사용자 행동</th><th>시스템 행동</th><th>성공 기준</th></tr>
+  <tr>
+    <td>첫 설치</td>
+    <td>DANHAROO-MAIN에 Collector 설치 후 AADS와 페어링</td>
+    <td>장치 등록, 보안프로그램/Chrome/다운로드 폴더 preflight 실행</td>
+    <td>대시보드에 "은행 전용 PC 준비 완료" 표시</td>
+  </tr>
+  <tr>
+    <td>신한 계좌 등록</td>
+    <td>사업자/지점/계좌/로그인 방식/수집 시간 설정</td>
+    <td>URL 정규화, 시크릿 저장, 테스트 큐 생성</td>
+    <td>저장 ID/PW는 화면에 재노출되지 않고 vault reference만 저장</td>
+  </tr>
+  <tr>
+    <td>수동 1회 테스트</td>
+    <td>"신한 로그인 테스트" 실행</td>
+    <td>전용 Chrome profile로 신한 기업 간편계좌 URL 진입, 로그인 성공까지 수행</td>
+    <td>URL hash <code>#210101...</code> 또는 계좌조회 화면 marker 확인</td>
+  </tr>
+  <tr>
+    <td>거래 수집</td>
+    <td>"오늘 거래 가져오기" 또는 스케줄 실행</td>
+    <td>조회기간 설정, 거래 테이블 파싱, 엑셀 다운로드, 서버 업로드</td>
+    <td>DB row count 증가 또는 no-records 증거 저장</td>
+  </tr>
+  <tr>
+    <td>장애 복구</td>
+    <td>오류 카드에서 재시도 또는 조치 확인</td>
+    <td>보안프로그램 미실행, 인증창, 세션만료, CDP timeout을 분류하고 다음 행동 제시</td>
+    <td>같은 오류가 3회 반복되면 사람 확인 큐로 전환</td>
+  </tr>
+</table>
+
+<h3>3.3 기능 요구사항</h3>
+<table>
+  <tr><th>ID</th><th>요구사항</th><th>수용 기준</th><th>우선순위</th></tr>
+  <tr><td>FR-001</td><td>DANHAROO-MAIN을 은행 전용 Collector PC로 등록한다.</td><td>은행 큐는 지정 agent_id 외 다른 PC로 fallback하지 않는다.</td><td>P0</td></tr>
+  <tr><td>FR-002</td><td>수집 전 보안프로그램 실행 여부를 점검한다.</td><td>AhnLab/VeraPort/INISAFE/Delfino 상태 snapshot을 서버에 업로드한다.</td><td>P0</td></tr>
+  <tr><td>FR-003</td><td>신한 기업 간편계좌 URL로 직접 진입한다.</td><td><code>bizbank.shinhan.com</code> 또는 홈 URL이면 실행 차단 후 정규 URL로 재생성한다.</td><td>P0</td></tr>
+  <tr><td>FR-004</td><td>금융인증 iframe 감지 시 ID/PW 계좌조회 hash로 전환한다.</td><td>ID/PW 패널 확인 전에는 로그인 시도를 하지 않는다.</td><td>P0</td></tr>
+  <tr><td>FR-005</td><td>계좌조회 페이지 진입을 로그인 성공으로 판정한다.</td><td>URL hash, 계좌조회 DOM marker, stage log 중 2개 이상 일치한다.</td><td>P0</td></tr>
+  <tr><td>FR-006</td><td>거래내역을 DOM 파싱과 엑셀 다운로드 두 경로로 확보한다.</td><td>DOM rows와 엑셀 rows checksum을 비교하거나, 한쪽 실패 시 다른 쪽 결과를 저장한다.</td><td>P0</td></tr>
+  <tr><td>FR-007</td><td>서버 업로드 후 DB화한다.</td><td>서버가 import_count, duplicate_count, ledger_count, raw_file_hash를 반환한다.</td><td>P0</td></tr>
+  <tr><td>FR-008</td><td>실시간 감시와 주기 업데이트를 제공한다.</td><td>스케줄, 마지막 성공, 마지막 실패, 다음 실행, 장애 조치가 dashboard에 표시된다.</td><td>P1</td></tr>
+  <tr><td>FR-009</td><td>LLMOps 진단 trace를 남긴다.</td><td>각 수집 run이 LangSmith trace_id 또는 self-hosted trace_id와 연결된다.</td><td>P1</td></tr>
+  <tr><td>FR-010</td><td>은행/카드사 확장을 위한 adapter interface를 제공한다.</td><td>신규 기관 추가 시 상태머신 node와 selector map만 추가하면 된다.</td><td>P2</td></tr>
+</table>
+
+<h3>3.4 비기능 요구사항</h3>
+<table>
+  <tr><th>항목</th><th>기준</th><th>검증 방법</th></tr>
+  <tr><td>보안</td><td>원문 ID/PW/계좌비밀번호/인증서 정보는 로그와 trace에 저장하지 않는다.</td><td>secret redaction 테스트, 로그 샘플 grep</td></tr>
+  <tr><td>감사성</td><td>수집 run별 URL, 단계, 오류코드, screenshot artifact, raw file hash를 남긴다.</td><td>run detail 화면과 DB row 확인</td></tr>
+  <tr><td>복구성</td><td>PC Agent 끊김, Chrome CDP timeout, 세션만료는 재시도/재생성 정책으로 복구한다.</td><td>강제 disconnect/timeout 시뮬레이션</td></tr>
+  <tr><td>격리</td><td>은행 수집 중 배달 큐와 같은 브라우저 레인을 공유하지 않는다.</td><td>동시 큐 claim 테스트</td></tr>
+  <tr><td>운영 안정성</td><td>Collector 업데이트는 서버 API 무중단 배포와 분리한다.</td><td>버전 handshake, rollback package 테스트</td></tr>
+  <tr><td>관찰성</td><td>latency, failure_code, retry_count, imported_rows, no_records를 dashboard와 trace에 노출한다.</td><td>LangSmith 또는 local trace dashboard 확인</td></tr>
+</table>
+
+<h2>4. 기술 설계</h2>
+<h3>4.1 기술스택</h3>
+<table>
+  <tr><th>레이어</th><th>권장 기술</th><th>선정 이유</th></tr>
+  <tr><td>Windows Collector</td><td>Python 3.12, Playwright/CDP, pywin32, psutil, PyInstaller</td><td>기존 PC Agent Python 코드 재사용, Windows 프로세스/창/보안프로그램 점검 가능</td></tr>
+  <tr><td>State Machine</td><td>LangGraph <code>StateGraph</code>, checkpoint store</td><td>장기 실행, 재시도, 분기, 휴먼 게이트, 상태 복구에 적합</td></tr>
+  <tr><td>LLMOps</td><td>LangSmith tracing/evaluation/monitoring, 또는 비용/보안 이슈 시 self-hosted trace mirror 병행</td><td>실패 trace, eval dataset, 비용/지연 관측과 시연에 적합</td></tr>
+  <tr><td>서버</td><td>FastAPI, PostgreSQL, async job queue, existing AADS PC Agent API</td><td>현재 AADS 구조와 맞고 운영 배포 체계 재사용 가능</td></tr>
+  <tr><td>저장</td><td>PostgreSQL <code>finance_bank_transactions</code>, raw file object storage, checksum ledger</td><td>중복 제거, 원본 증빙, 회계 시스템 연결을 위해 필요</td></tr>
+  <tr><td>보안</td><td>OS credential vault 또는 AADS encrypted secret reference, mTLS/token pairing</td><td>민감정보 평문 저장 방지</td></tr>
+  <tr><td>패키징</td><td>Windows Service + Tray UI + signed installer</td><td>PC 재부팅 후 자동복구, 현장 담당자 상태 확인, 업데이트 관리</td></tr>
+</table>
+
+<h3>4.2 전체 아키텍처</h3>
+<div class="flow">
+<pre>CEO / 회계 담당자
+  |
+  v
+AADS Finance Dashboard
+  - 계좌 등록, 테스트 실행, 상태 확인, 장애 조치
+  - run detail, trace, screenshot, import result
+  |
+  v
+AADS API / Scheduler / Queue
+  - bank-only job 생성
+  - required_agent_id = DANHAROO-MAIN
+  - financial_exclusive lease
+  - 저장 API / DB / raw artifact 관리
+  |
+  v
+LangGraph Collector Harness
+  preflight -> open_portal -> auth_route -> login
+  -> account_query -> parse_dom -> download_excel
+  -> upload -> reconcile -> monitor
+  |
+  v
+DANHAROO-MAIN Windows Collector
+  - 신한 전용 Chrome profile/CDP port
+  - 보안프로그램 runtime check
+  - 실제 브라우저 자동화
+  - raw xlsx/json/screenshot 업로드
+  |
+  v
+Shinhan Bank Business Easy Account Inquiry
+  https://bank.shinhan.com/rib/easy/index.jsp#210000000000</pre>
+</div>
+
+<h3>4.3 LangGraph 상태 그래프</h3>
+<div class="swim">
+  <div><b>01 Preflight</b><br>PC online, security programs, Chrome profile lock, network reachability</div>
+  <div><b>02 Open</b><br>신한 기업 간편계좌 URL 직접 진입, legacy URL 차단</div>
+  <div><b>03 Auth Route</b><br>금융인증 iframe이면 ID/PW hash 강제 전환</div>
+  <div><b>04 Login</b><br>저장 ID/PW 입력, 키보드 보안 검증, submit</div>
+  <div><b>05 Query</b><br>계좌 선택, 계좌비밀번호, 기간, 조회 버튼</div>
+  <div><b>06 Persist</b><br>DOM/Excel 파싱, 서버 업로드, DB화, reconcile</div>
+</div>
+
+<pre>State keys:
+  run_id, account_id, business_id, branch_id, required_agent_id
+  portal_url, current_url, screen_marker, auth_challenge_type
+  security_snapshot, browser_session_id, cdp_port, work_key
+  login_attempts, retry_budget, rows_parsed, excel_file_hash
+  imported_rows, duplicate_rows, ledger_count, terminal_status
+
+Terminal statuses:
+  SUCCESS_IMPORTED
+  SUCCESS_NO_RECORDS_VERIFIED
+  ACTION_REQUIRED_SECURITY_PROGRAM
+  ACTION_REQUIRED_HUMAN_AUTH
+  RETRYABLE_BROWSER_TIMEOUT
+  FAILED_CONTRACT_VIOLATION</pre>
+
+<h3>4.4 저장 모델</h3>
+<table>
+  <tr><th>테이블/파일</th><th>용도</th><th>핵심 필드</th></tr>
+  <tr><td><code>finance_bank_collection_runs</code></td><td>수집 run header</td><td>run_id, account_id, agent_id, started_at, finished_at, terminal_status, trace_id</td></tr>
+  <tr><td><code>finance_bank_collection_steps</code></td><td>단계별 감사로그</td><td>run_id, step, status, elapsed_ms, error_code, safe_metadata</td></tr>
+  <tr><td><code>finance_bank_transactions</code></td><td>정규화 거래 원장</td><td>occurred_at, amount_in, amount_out, balance, counterparty, memo, dedupe_hash</td></tr>
+  <tr><td><code>finance_bank_raw_artifacts</code></td><td>원본 증빙</td><td>run_id, artifact_type, file_hash, storage_path, row_count</td></tr>
+  <tr><td><code>pc_agent_financial_leases</code></td><td>PC/브라우저 레인 잠금</td><td>agent_id, lease_key, owner_run_id, expires_at, heartbeat_at</td></tr>
+</table>
+
+<h2>5. 화면 목업</h2>
+<h3>5.1 운영 대시보드</h3>
+<div class="mock-shell">
+  <div class="mock-top"><span class="dot"></span><span class="dot y"></span><span class="dot g"></span><b>AADS Finance Collector</b><span class="small">DANHAROO-MAIN 은행 전용</span></div>
+  <div class="mock-body">
+    <div class="mock-side">
+      <div class="active">은행 수집 현황</div>
+      <div>계좌 설정</div>
+      <div>수집 이력</div>
+      <div>오류 조치</div>
+      <div>LLMOps 진단</div>
+      <div>Collector 설정</div>
+    </div>
+    <div class="mock-main">
+      <div class="mock-row">
+        <div class="mock-metric">PC 상태<b>온라인</b><span class="small">DANHAROO-MAIN</span></div>
+        <div class="mock-metric">보안프로그램<b>정상</b><span class="small">AhnLab/VeraPort/INISAFE</span></div>
+        <div class="mock-metric">마지막 수집<b>미완료</b><span class="small">저장 0건</span></div>
+        <div class="mock-metric">다음 실행<b>08:10 KST</b><span class="small">매일 주기 실행</span></div>
+      </div>
+      <div class="mock-panel">
+        <b>신한은행 기업 간편계좌조회</b>
+        <div class="mock-status"><span>URL 진입</span><span>https://bank.shinhan.com/rib/easy/index.jsp#210000000000</span><span>성공</span></div>
+        <div class="mock-status"><span>로그인</span><span>ID/PW 패널 확인 후 제출</span><span>대기</span></div>
+        <div class="mock-status"><span>거래 조회</span><span>계좌/기간/조회 버튼</span><span>대기</span></div>
+        <div class="mock-status"><span>DB 저장</span><span>import_count, duplicate_count, ledger_count</span><span>대기</span></div>
+      </div>
+      <div>
+        <span class="mock-btn">신한 로그인 테스트</span>
+        <span class="mock-btn">오늘 거래 가져오기</span>
+        <span class="mock-btn ghost">오류 조치 보기</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3>5.2 계좌 설정 화면</h3>
+<table>
+  <tr><th>섹션</th><th>필드</th><th>동작</th></tr>
+  <tr><td>사업자/지점</td><td>법인/개인사업자, 지점, 담당자</td><td>계좌별 회계 귀속을 명확히 함</td></tr>
+  <tr><td>은행</td><td>은행명, 기관코드, 기업/개인 구분, 로그인 URL</td><td>신한은 기업 간편계좌 URL로 자동 정규화</td></tr>
+  <tr><td>인증</td><td>ID/PW vault reference, 계좌비밀번호 reference</td><td>원문 secret은 저장/표시하지 않음</td></tr>
+  <tr><td>수집</td><td>일별/시간별 스케줄, 기간 기본값, 다운로드 허용</td><td>운영 시간과 은행 점검 시간을 피해서 실행</td></tr>
+  <tr><td>전용 PC</td><td>required_agent_id, 전용 profile, 재시도 예산</td><td>DANHAROO-MAIN 외 fallback 금지</td></tr>
+</table>
+
+<h3>5.3 오류 조치 화면</h3>
+<table>
+  <tr><th>오류 코드</th><th>화면 문구</th><th>사용자 조치</th><th>자동 복구</th></tr>
+  <tr><td><code>SHINHAN_SECURITY_PROGRAM_NOT_READY</code></td><td>보안프로그램이 실행되지 않았습니다.</td><td>PC에서 보안프로그램 실행 후 재시도</td><td>30초 간격 3회 재점검</td></tr>
+  <tr><td><code>SHINHAN_FINCERT_IFRAME_DETECTED</code></td><td>금융인증 화면이 열렸습니다.</td><td>필요 시 물리 인증 승인</td><td>ID/PW hash 전환 1회</td></tr>
+  <tr><td><code>RETRYABLE_BROWSER_TIMEOUT</code></td><td>브라우저 응답이 지연되었습니다.</td><td>PC 상태 확인</td><td>전용 profile 재생성 후 재시도</td></tr>
+  <tr><td><code>FAILED_CONTRACT_VIOLATION</code></td><td>수집 결과 저장 확인에 실패했습니다.</td><td>관리자 확인</td><td>raw artifact 기준 재업로드</td></tr>
+</table>
+
+<h2>6. Tool 셋업 및 연동 계획</h2>
+<table>
+  <tr><th>구분</th><th>셋업 항목</th><th>실행 내용</th><th>완료 기준</th></tr>
+  <tr>
+    <td>Windows PC</td>
+    <td>Collector installer</td>
+    <td>기존 PC Agent 기반에 신한 전용 런처, 별도 설치폴더, 별도 mutex/watchdog, 은행 전용 capability 추가</td>
+    <td>Windows에서 <code>dist\AADS-Shinhan-Collector-Setup.exe</code> 생성 후 재부팅 자동 연결, 버전/heartbeat 표시</td>
+  </tr>
+  <tr>
+    <td>브라우저</td>
+    <td>Chrome CDP 전용 profile</td>
+    <td><code>.aads-finance-collector/shinhan</code> profile과 은행 전용 포트 범위 사용</td>
+    <td>일반 Chrome/배달 Chrome과 탭/쿠키/포트 분리</td>
+  </tr>
+  <tr>
+    <td>보안프로그램</td>
+    <td>AhnLab/VeraPort/INISAFE/Delfino preflight</td>
+    <td>process/service/registry/file signal을 통합해 runtime snapshot 생성</td>
+    <td>수집 전 readiness true/false와 근거 표시</td>
+  </tr>
+  <tr>
+    <td>서버 API</td>
+    <td>job/step/artifact/import endpoint</td>
+    <td>수집 요청, 단계 로그, 파일 업로드, DB import, ACK API 구성</td>
+    <td>run_id 하나로 trace와 원장 조회 가능</td>
+  </tr>
+  <tr>
+    <td>LangGraph</td>
+    <td>collector graph/checkpoint</td>
+    <td>노드별 상태 전이, 재시도, human-action-required interrupt 구성</td>
+    <td>중단 후 같은 run_id로 resume 가능</td>
+  </tr>
+  <tr>
+    <td>LangSmith</td>
+    <td>tracing/eval/dashboard</td>
+    <td>수집 run trace, 실패코드 eval dataset, regression test trace 저장</td>
+    <td>LLMOps 진단 화면에서 실패 원인/비용/지연 확인</td>
+  </tr>
+  <tr>
+    <td>확장 Adapter</td>
+    <td>bank adapter SDK</td>
+    <td>신한 성공 후 IBK/국민/하나/우리/농협/카드사별 selector/state map 추가</td>
+    <td>신규 기관 추가 시 공통 저장/관제 재사용</td>
+  </tr>
+</table>
+
+<h3>6.1 환경변수 초안</h3>
+<pre>AADS_FINANCE_COLLECTOR_ENABLED=true
+AADS_FINANCE_COLLECTOR_AGENT_ID=62405e70-e98
+AADS_FINANCE_COLLECTOR_MODE=bank_only
+AADS_FINANCE_COLLECTOR_RESOURCE_KEY=financial_exclusive
+AADS_FINANCE_COLLECTOR_PROFILE_ROOT=%LOCALAPPDATA%\\AADS\\FinanceCollector
+AADS_FINANCE_COLLECTOR_CDP_PORT_START=9333
+AADS_FINANCE_COLLECTOR_CDP_PORT_END=9399
+AADS_FINANCE_COLLECTOR_UPLOAD_ENDPOINT=https://aads-server/api/v1/finance/bank-collections
+LANGSMITH_TRACING=true
+LANGSMITH_PROJECT=aads-finance-collector</pre>
+
+<h3>6.2 Tool 목록</h3>
+<table>
+  <tr><th>Tool</th><th>위치</th><th>설명</th><th>현재 상태</th></tr>
+  <tr><td><code>shinhan_collector_launcher</code></td><td>Windows Collector</td><td>신한 전용 설치폴더, mutex, watchdog, node_role, capability 설정</td><td>구현</td></tr>
+  <tr><td><code>build_shinhan_collector_exe</code></td><td>Windows Build PC</td><td>PyInstaller로 신한 전용 설치 EXE 생성</td><td>구현, Windows 실빌드 대기</td></tr>
+  <tr><td><code>shinhan_preflight</code></td><td>Windows Collector</td><td>PC/보안프로그램/브라우저 profile readiness 확인</td><td>기존 기반 있음</td></tr>
+  <tr><td><code>shinhan_open</code></td><td>Windows Collector</td><td>기업 간편계좌 URL 직접 진입, legacy URL 차단</td><td>기존 기반 있음</td></tr>
+  <tr><td><code>shinhan_login</code></td><td>Windows Collector</td><td>ID/PW 패널 선택, 로그인 제출, 성공 marker 확인</td><td>기존 기반 있음</td></tr>
+  <tr><td><code>shinhan_collect_transactions</code></td><td>Windows Collector</td><td>기간 설정, 조회, DOM 파싱, 엑셀 다운로드</td><td>미완</td></tr>
+  <tr><td><code>upload_bank_artifact</code></td><td>Server API</td><td>xlsx/json/png/log artifact 업로드</td><td>설계</td></tr>
+  <tr><td><code>record_bank_transactions</code></td><td>Server API</td><td>정규화 거래 저장, 중복 제거, ACK 반환</td><td>기존 기반 있음</td></tr>
+  <tr><td><code>diagnose_collection_failure</code></td><td>LangGraph/LLM</td><td>trace와 단계 로그를 읽어 오류 원인/조치 제안</td><td>설계</td></tr>
+</table>
+
+<h2>7. 구축 전 승인 게이트</h2>
+<table>
+  <tr><th>게이트</th><th>승인 내용</th><th>승인 없이는 하지 않을 일</th></tr>
+  <tr><td>G1 설계 승인</td><td>Windows 전용 Collector + LangGraph/LangSmith 구조 승인</td><td>코드 구현/패키징 시작 금지</td></tr>
+  <tr><td>G2 보안 승인</td><td>시크릿 저장 방식, 로그 redaction, 인증서/OTP 사람 개입 정책 승인</td><td>민감정보 처리 코드 변경 금지</td></tr>
+  <tr><td>G3 운영 승인</td><td>DANHAROO-MAIN 은행 전용 점유 시간, 배달 큐 pause 정책 승인</td><td>실제 PC 브라우저 강제 정리/재시작 금지</td></tr>
+  <tr><td>G4 확장 승인</td><td>신한 성공 후 타 은행/카드사 adapter 로드맵 승인</td><td>타 은행 동시 구현 착수 금지</td></tr>
+</table>
+
+<h2>8. 구현 단계 계획</h2>
+<table>
+  <tr><th>단계</th><th>범위</th><th>산출물</th><th>완료 기준</th></tr>
+  <tr>
+    <td>Phase 1</td>
+    <td>신한 Windows Collector 골격</td>
+    <td><code>pc_agent/shinhan_collector_launcher.py</code>, <code>pc_agent/build_shinhan_collector_exe.py</code>, 전용 profile/lease, preflight</td>
+    <td>신한 전용 EXE 생성, 보안프로그램 readiness와 신한 URL 진입 성공</td>
+  </tr>
+  <tr>
+    <td>Phase 2</td>
+    <td>로그인 상태머신</td>
+    <td>LangGraph node, ID/PW hash 전환, 인증분기 처리</td>
+    <td>계좌조회 hash 또는 DOM marker로 로그인 성공 판정</td>
+  </tr>
+  <tr>
+    <td>Phase 3</td>
+    <td>거래 조회/엑셀 다운로드</td>
+    <td>기간 설정, 조회 제출, DOM parser, XLSX parser</td>
+    <td>rows_parsed 또는 verified no-records</td>
+  </tr>
+  <tr>
+    <td>Phase 4</td>
+    <td>서버 업로드/DB화</td>
+    <td>artifact upload, transaction import, dedupe, reconciliation</td>
+    <td>DB row count 증가 또는 no-record terminal 저장</td>
+  </tr>
+  <tr>
+    <td>Phase 5</td>
+    <td>운영 관제/LLMOps 진단</td>
+    <td>dashboard, LangSmith trace/eval, 장애 조치 화면</td>
+    <td>수집 run replay와 오류 진단 시연 가능</td>
+  </tr>
+  <tr>
+    <td>Phase 6</td>
+    <td>타 은행/카드사 확장</td>
+    <td>adapter interface, selector registry, 기관별 프로필</td>
+    <td>신규 기관 추가 시 공통 저장/관제 재사용</td>
+  </tr>
+</table>
+
+<h2>9. 검증 기준</h2>
+<table>
+  <tr><th>검증</th><th>성공 조건</th><th>증거</th></tr>
+  <tr><td>설치 검증</td><td>Windows Collector service online, AADS pairing 완료</td><td>agent heartbeat, version, machine_id</td></tr>
+  <tr><td>보안 검증</td><td>필수 보안프로그램 running signal 확보</td><td>preflight snapshot</td></tr>
+  <tr><td>URL 검증</td><td>신한 기업 간편계좌 URL 직접 진입</td><td>screenshot, current_url, title</td></tr>
+  <tr><td>로그인 검증</td><td>계좌조회 화면 hash/DOM marker 확인</td><td>stage log <code>shinhan_login_success</code></td></tr>
+  <tr><td>수집 검증</td><td>DOM 또는 XLSX 거래 rows 확보</td><td>row_count, raw_file_hash</td></tr>
+  <tr><td>저장 검증</td><td>DB/원장에 1건 이상 저장 또는 no-records terminal 저장</td><td>import_count, ledger_count, duplicate_count</td></tr>
+  <tr><td>회귀 검증</td><td>배달 큐가 은행 레인을 침범하지 않음</td><td>financial_exclusive lease test</td></tr>
+  <tr><td>LLMOps 검증</td><td>trace에서 각 node 입력/출력/오류 분류 확인</td><td>LangSmith trace URL 또는 local trace row</td></tr>
+</table>
+
+<h2>10. 리스크와 대안</h2>
+<table>
+  <tr><th>리스크</th><th>영향</th><th>대안</th></tr>
+  <tr><td>은행 보안정책 변경</td><td>selector/hash/iframe 분기 실패</td><td>상태머신 selector registry와 screenshot 기반 실패 진단으로 빠른 패치</td></tr>
+  <tr><td>인증서/OTP 등 사람 확인 필요</td><td>완전 무인 수집 차단</td><td>human-action-required interrupt로 전환하고 승인 후 resume</td></tr>
+  <tr><td>PC Agent disconnect</td><td>실행 중 세션 손실</td><td>checkpoint 기반 resume, 전용 profile reacquire, run retry budget 적용</td></tr>
+  <tr><td>민감정보 로그 유출</td><td>보안 사고</td><td>trace/log redaction, secret reference만 저장, 테스트로 secret pattern 차단</td></tr>
+  <tr><td>LangSmith 외부 trace 정책</td><td>금융 로그 외부 전송 우려</td><td>민감 필드 제거 후 전송, 또는 self-hosted/local trace mirror 우선 운영</td></tr>
+</table>
+
+<h2>11. 근거와 참고 문서</h2>
+<table>
+  <tr><th>출처</th><th>확인 내용</th><th>URL/경로</th></tr>
+  <tr>
+    <td>LangGraph 공식 문서</td>
+    <td>장기 실행, 상태 보존, streaming, human-in-the-loop, persistence가 핵심 기능으로 제시됨.</td>
+    <td><a href="https://docs.langchain.com/oss/python/langgraph/overview">docs.langchain.com/oss/python/langgraph/overview</a></td>
+  </tr>
+  <tr>
+    <td>LangSmith 공식 문서</td>
+    <td>trace, evaluation, monitoring, automation, feedback/annotation, failure diagnosis를 제공.</td>
+    <td><a href="https://docs.langchain.com/langsmith/observability">docs.langchain.com/langsmith/observability</a></td>
+  </tr>
+  <tr>
+    <td>LangSmith graph evaluation 공식 문서</td>
+    <td>LangGraph graph는 다중 LLM call과 상태 의존 분기가 있어 graph/node 단위 evaluation이 필요.</td>
+    <td><a href="https://docs.langchain.com/langsmith/evaluate-graph">docs.langchain.com/langsmith/evaluate-graph</a></td>
+  </tr>
+  <tr>
+    <td>AADS 코드 확인</td>
+    <td>PC Agent, 신한 커넥터, 금융 전용 lease, 자동수집 스크립트, 저장 함수 기반 존재.</td>
+    <td><code>pc_agent/</code>, <code>app/services/yeoljeong_bank_browser_connector.py</code>, <code>scripts/yeoljeong_auto_collect.py</code>, <code>app/services/yeoljeong_finance_service.py</code></td>
+  </tr>
+  <tr>
+    <td>AADS 런타임 파일 확인</td>
+    <td>현재 <code>transactions.json</code>은 2 bytes로 저장 거래 0건.</td>
+    <td><code>app/data/yeoljeong_finance/transactions.json</code></td>
+  </tr>
+</table>
+
+<h2>12. 버전 및 진행상황</h2>
+<table>
+  <tr><th>프로세스</th><th>상태</th><th>v1.1 기준 진행상황</th></tr>
+  <tr><td>1. 설계/기술스택/PRD</td><td><span class="tag oktag">작성 완료</span></td><td>목표, 사용자 시나리오, 기능/비기능 요구사항, 기술스택, 상태 그래프, 저장 모델</td></tr>
+  <tr><td>2. 화면 목업</td><td><span class="tag oktag">작성 완료</span></td><td>운영 대시보드, 계좌 설정, 오류 조치 화면 구조</td></tr>
+  <tr><td>3. Tool 셋업 및 연동</td><td><span class="tag oktag">작성 완료</span></td><td>Windows Collector tools, 서버 API, LangGraph, LangSmith, 환경변수 초안</td></tr>
+  <tr><td>4. 구축</td><td><span class="tag p2">진행 중</span></td><td>신한 전용 EXE 진입점/빌드 스크립트, 별도 설치 identity, mutex/watchdog 격리 구현</td></tr>
+  <tr><td>5. 기능점검</td><td><span class="tag p1">대기</span></td><td>단위 테스트 후 Windows 실빌드, DANHAROO-MAIN 설치, 로그인/거래저장 E2E 순서로 진행 필요</td></tr>
+  <tr><td>6. LLMOps 진단 시연</td><td><span class="tag p1">대기</span></td><td>trace/eval dashboard 연결 후 시연</td></tr>
+</table>
+
+<div class="footer">
+  본 문서는 v1.1 진행상황 반영본입니다. 1~3단계 승인 후 4단계 구축은 신한 전용 Windows Collector 패키징 타깃까지 착수했습니다.
+  실제 <code>AADS-Shinhan-Collector-Setup.exe</code> 산출, Windows 설치, 실은행 로그인/거래 저장 E2E는 다음 검증 단계로 남아 있습니다.
+</div>
+
+</div>
+</body>
+</html>

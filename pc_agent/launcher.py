@@ -19,9 +19,20 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # 경로 상수
 # ---------------------------------------------------------------------------
+APP_NAME = os.getenv("AADS_PC_AGENT_APP_NAME", "KakaoBot")
+APP_TITLE = os.getenv("AADS_PC_AGENT_APP_TITLE", f"{APP_NAME} PC Agent")
+APP_SLUG = os.getenv("AADS_PC_AGENT_APP_SLUG", APP_NAME)
+LAUNCHER_MUTEX_NAME = os.getenv("AADS_PC_AGENT_LAUNCHER_MUTEX_NAME", "KakaoBotSaaS_SingleInstance_v1")
+WATCHDOG_TASK_NAME = os.getenv("AADS_PC_AGENT_WATCHDOG_TASK_NAME", "KakaoBotWatchdog")
+WATCHDOG_SCRIPT_NAME = os.getenv("AADS_PC_AGENT_WATCHDOG_SCRIPT_NAME", "aads_pc_agent_watchdog.vbs")
+LEGACY_RUN_VALUE_NAME = os.getenv("AADS_PC_AGENT_LEGACY_RUN_VALUE_NAME", "KakaoBot")
+LEGACY_STARTUP_CMD_NAME = os.getenv(
+    "AADS_PC_AGENT_LEGACY_STARTUP_CMD_NAME",
+    "AADS-PC-Agent-Watchdog.cmd",
+)
 INSTALL_DIR = Path(os.environ.get(
     "KAKAOBOT_INSTALL_DIR",
-    os.path.join(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"), "KakaoBot"),
+    os.path.join(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"), APP_SLUG),
 ))
 CONFIG_PATH = INSTALL_DIR / "config.json"
 AGENT_DIR = INSTALL_DIR / "agent"
@@ -31,6 +42,7 @@ VERSION_FILE = AGENT_DIR / "VERSION"
 DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/pc-agent/ws"
 HTTP_BASE = "https://aads.newtalk.kr"
 CRASH_COUNT_FILE = INSTALL_DIR / ".crash_count"
+LAUNCH_COUNT_FILE = INSTALL_DIR / ".launcher_start_count"
 MAX_CRASHES_BEFORE_REDOWNLOAD = 3
 MAX_REDOWNLOADS_PER_HOUR = 3
 SELF_UPDATE_EXIT_CODE = 42
@@ -160,7 +172,7 @@ def ask_token_gui() -> str | None:
     token_result: list[str | None] = [None]
 
     root = tk.Tk()
-    root.title("KakaoBot 설정")
+    root.title(f"{APP_NAME} 설정")
     root.geometry("420x200")
     root.resizable(False, False)
     # 화면 중앙
@@ -372,7 +384,7 @@ def _startup_registration_status() -> dict:
             r"Software\Microsoft\Windows\CurrentVersion\Run",
         )
         try:
-            value, _ = winreg.QueryValueEx(key, "KakaoBot")
+            value, _ = winreg.QueryValueEx(key, LEGACY_RUN_VALUE_NAME)
             legacy_registry_present = bool(str(value).strip())
         finally:
             winreg.CloseKey(key)
@@ -383,7 +395,7 @@ def _startup_registration_status() -> dict:
 
     startup_cmd = (
         Path(os.environ.get("APPDATA", ""))
-        / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+        / f"Microsoft/Windows/Start Menu/Programs/Startup/{LEGACY_STARTUP_CMD_NAME}"
     )
     legacy_startup_cmd_present = startup_cmd.exists()
     return {
@@ -399,7 +411,7 @@ def _watchdog_task_status() -> dict:
         return {"registered": False, "platform": sys.platform}
     try:
         result = subprocess.run(
-            ["schtasks", "/Query", "/TN", "KakaoBotWatchdog", "/FO", "LIST"],
+            ["schtasks", "/Query", "/TN", WATCHDOG_TASK_NAME, "/FO", "LIST"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -476,7 +488,7 @@ def register_startup() -> None:
             0, winreg.KEY_SET_VALUE,
         )
         try:
-            winreg.DeleteValue(key, "KakaoBot")
+            winreg.DeleteValue(key, LEGACY_RUN_VALUE_NAME)
             logger.info("구형 HKCU Run 자동실행 제거 완료")
         except FileNotFoundError:
             pass
@@ -485,7 +497,7 @@ def register_startup() -> None:
 
         startup_cmd = (
             Path(os.environ.get("APPDATA", ""))
-            / "Microsoft/Windows/Start Menu/Programs/Startup/AADS-PC-Agent-Watchdog.cmd"
+            / f"Microsoft/Windows/Start Menu/Programs/Startup/{LEGACY_STARTUP_CMD_NAME}"
         )
         if startup_cmd.exists():
             startup_cmd.unlink()
@@ -498,7 +510,14 @@ def _build_hidden_watchdog_vbs(exe_path: str) -> str:
     """Create a console-free watchdog that starts one launcher instance only."""
     escaped_path = exe_path.replace('"', '""')
     process_name = Path(exe_path).name.replace("'", "''")
-    watchdog_path = str(INSTALL_DIR / "aads_pc_agent_watchdog.vbs").replace('"', '""')
+    watchdog_path = str(INSTALL_DIR / WATCHDOG_SCRIPT_NAME).replace('"', '""')
+    startup_cmd = (
+        r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+        + "\\"
+        + LEGACY_STARTUP_CMD_NAME.replace('"', '""')
+    )
+    task_name = WATCHDOG_TASK_NAME.replace('"', '""')
+    run_value_name = LEGACY_RUN_VALUE_NAME.replace('"', '""')
     return (
         "Option Explicit\n"
         "Dim shell, service, processes, agentExe, watchdogPath, startupCmd, taskCommand, fso\n"
@@ -507,11 +526,11 @@ def _build_hidden_watchdog_vbs(exe_path: str) -> str:
         'Set shell = CreateObject("WScript.Shell")\n'
         'Set service = GetObject("winmgmts:\\\\.\\root\\cimv2")\n\n'
         'Set fso = CreateObject("Scripting.FileSystemObject")\n'
-        'startupCmd = shell.ExpandEnvironmentStrings("%APPDATA%") & "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\AADS-PC-Agent-Watchdog.cmd"\n'
-        'taskCommand = "schtasks.exe /Create /TN KakaoBotWatchdog /TR " & Chr(34) & "wscript.exe " & watchdogPath & Chr(34) & " /SC ONLOGON /DELAY 0000:30 /RL LIMITED /F"\n\n'
+        f'startupCmd = shell.ExpandEnvironmentStrings("{startup_cmd}")\n'
+        f'taskCommand = "schtasks.exe /Create /TN {task_name} /TR " & Chr(34) & "wscript.exe " & watchdogPath & Chr(34) & " /SC ONLOGON /DELAY 0000:30 /RL LIMITED /F"\n\n'
         "Sub EnforceSingleStartup\n"
         "  On Error Resume Next\n"
-        '  shell.RegDelete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\KakaoBot"\n'
+        f'  shell.RegDelete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\{run_value_name}"\n'
         "  If fso.FileExists(startupCmd) Then fso.DeleteFile startupCmd, True\n"
         "  shell.Run taskCommand, 0, True\n"
         "  Err.Clear\n"
@@ -544,7 +563,7 @@ def register_watchdog_task() -> None:
             logger.info("개발 실행에서는 Windows watchdog 작업 등록을 생략")
             return
 
-        watchdog_path = INSTALL_DIR / "aads_pc_agent_watchdog.vbs"
+        watchdog_path = INSTALL_DIR / WATCHDOG_SCRIPT_NAME
         watchdog_path.write_text(
             _build_hidden_watchdog_vbs(sys.executable),
             encoding="utf-8-sig",
@@ -552,7 +571,7 @@ def register_watchdog_task() -> None:
         task_command = f'wscript.exe "{watchdog_path}"'
         result = subprocess.run(
             ["schtasks", "/Create",
-             "/TN", "KakaoBotWatchdog",
+             "/TN", WATCHDOG_TASK_NAME,
              "/TR", task_command,
              "/SC", "ONLOGON", "/DELAY", "0000:30",
              "/RL", "LIMITED",
@@ -573,8 +592,8 @@ def disable_watchdog_for_user_exit() -> None:
     if sys.platform != "win32":
         return
     for args in (
-        ["schtasks", "/End", "/TN", "KakaoBotWatchdog"],
-        ["schtasks", "/Delete", "/TN", "KakaoBotWatchdog", "/F"],
+        ["schtasks", "/End", "/TN", WATCHDOG_TASK_NAME],
+        ["schtasks", "/Delete", "/TN", WATCHDOG_TASK_NAME, "/F"],
     ):
         try:
             subprocess.run(
@@ -607,7 +626,9 @@ def run_agent(cfg: dict):
     os.environ["AADS_SERVER_URL"] = cfg.get("server_url", DEFAULT_SERVER_URL)
     os.environ["AADS_AGENT_TOKEN"] = cfg.get("agent_token", "")
     os.environ["KAKAOBOT_INSTALL_DIR"] = str(INSTALL_DIR)
-    os.environ["AADS_PC_AGENT_NODE_ROLE"] = str(cfg.get("node_role") or "interactive")
+    os.environ["AADS_PC_AGENT_NODE_ROLE"] = str(
+        cfg.get("node_role") or os.getenv("AADS_PC_AGENT_NODE_ROLE") or "interactive"
+    )
 
     # agent_id 영속화 — 재시작마다 새 UUID 생성하면 서버에 좀비 연결 누적
     import uuid as _uuid
@@ -717,16 +738,16 @@ def run_agent(cfg: dict):
 # ---------------------------------------------------------------------------
 def main() -> None:
     """런처 메인 진입점."""
-    logger.info("=== KakaoBot 런처 시작 ===")
+    logger.info("=== %s 런처 시작 ===", APP_NAME)
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
     # 단일 인스턴스 보장 — Windows named mutex
     if sys.platform == "win32":
         try:
             import ctypes
-            _mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "KakaoBotSaaS_SingleInstance_v1")
+            _mutex = ctypes.windll.kernel32.CreateMutexW(None, True, LAUNCHER_MUTEX_NAME)
             if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-                logger.warning("이미 실행 중인 KakaoBot이 있습니다 — 종료")
+                logger.warning("이미 실행 중인 %s가 있습니다 — 종료", APP_NAME)
                 sys.exit(0)
         except Exception as _mx_err:
             logger.debug("뮤텍스 생성 실패 (무시): %s", _mx_err)
@@ -748,9 +769,15 @@ def main() -> None:
             cfg = {
                 "server_url": DEFAULT_SERVER_URL,
                 "agent_token": token,
+                "node_role": os.getenv("AADS_PC_AGENT_NODE_ROLE", "interactive"),
                 "setup_method": "manual_token",
             }
             save_config(cfg)
+
+    default_node_role = os.getenv("AADS_PC_AGENT_NODE_ROLE", "").strip()
+    if default_node_role and not cfg.get("node_role"):
+        cfg["node_role"] = default_node_role
+        save_config(cfg)
 
     # 매 실행마다 시작프로그램 등록 보장 (idempotent)
     register_startup()
@@ -803,7 +830,7 @@ def main() -> None:
                 import tkinter as _tk
                 from tkinter import messagebox as _mb
                 _r = _tk.Tk(); _r.withdraw()
-                _mb.showerror("KakaoBot", "에이전트 실행 실패.\n에이전트 코드를 다운로드할 수 없습니다.")
+                _mb.showerror(APP_NAME, "에이전트 실행 실패.\n에이전트 코드를 다운로드할 수 없습니다.")
                 _r.destroy()
             except Exception:
                 pass
@@ -815,7 +842,7 @@ def main() -> None:
             import tkinter as _tk2
             from tkinter import messagebox as _mb2
             _r2 = _tk2.Tk(); _r2.withdraw()
-            _mb2.showinfo("KakaoBot", "설치 완료! 에이전트가 실행 중입니다.\n시스템 트레이에서 상태를 확인하세요.")
+            _mb2.showinfo(APP_NAME, "설치 완료! 에이전트가 실행 중입니다.\n시스템 트레이에서 상태를 확인하세요.")
             _r2.destroy()
         except Exception:
             pass

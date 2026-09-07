@@ -16,13 +16,16 @@ from typing import Callable
 
 logger = logging.getLogger("tray")
 
-_EXIT_TITLE = "KakaoBot 종료"
+APP_NAME = os.getenv("AADS_PC_AGENT_APP_NAME", "KakaoBot")
+APP_TITLE = os.getenv("AADS_PC_AGENT_APP_TITLE", f"{APP_NAME} PC Agent")
+
+_EXIT_TITLE = f"{APP_NAME} 종료"
 _EXIT_MESSAGE = (
     "에이전트를 완전히 종료합니다.\n"
     "PC Agent 연결이 끊어집니다.\n\n"
     "정말 종료하시겠습니까?"
 )
-_SETTINGS_TITLE = "KakaoBot PC Agent 설정"
+_SETTINGS_TITLE = f"{APP_TITLE} 설정"
 _MASKED = "••••••••••••"
 
 _COLORS = {
@@ -258,7 +261,7 @@ def create_tray(
 
     def on_status(icon, item):
         try:
-            icon.notify(_status_text(), "KakaoBot 상태")
+            icon.notify(_status_text(), f"{APP_NAME} 상태")
         except Exception:
             pass
 
@@ -268,7 +271,7 @@ def create_tray(
         state = "ON" if auto_reply_enabled else "OFF"
         logger.info("카카오 자동응답: %s", state)
         try:
-            icon.notify(f"자동응답: {state}", "KakaoBot")
+            icon.notify(f"자동응답: {state}", APP_NAME)
         except Exception:
             pass
         icon.update_menu()
@@ -286,7 +289,7 @@ def create_tray(
             args=(cfg,),
             kwargs={"on_reconnect": lambda: request_reconnect(icon)},
             daemon=True,
-            name="KakaoBotSettings",
+            name=f"{APP_NAME}Settings",
         ).start()
 
     def request_reconnect(icon=None):
@@ -295,14 +298,14 @@ def create_tray(
             on_reconnect()
         try:
             if icon:
-                icon.notify("재연결을 요청했습니다.", "KakaoBot")
+                icon.notify("재연결을 요청했습니다.", APP_NAME)
         except Exception:
             pass
 
     def on_hide(icon, item):
         logger.info("트레이 숨기기 — 에이전트 실행 유지")
         try:
-            icon.notify("트레이를 숨겼습니다. 에이전트는 계속 실행 중입니다.", "KakaoBot")
+            icon.notify("트레이를 숨겼습니다. 에이전트는 계속 실행 중입니다.", APP_NAME)
         except Exception:
             pass
         icon.visible = False
@@ -325,7 +328,7 @@ def create_tray(
         return f"자동응답 {'ON ✓' if auto_reply_enabled else 'OFF'}"
 
     menu = pystray.Menu(
-        Item(f"KakaoBot v{version}", on_status, enabled=False),
+        Item(f"{APP_NAME} v{version}", on_status, enabled=False),
         Item(_status_text, on_status),
         pystray.Menu.SEPARATOR,
         Item(auto_reply_text, on_toggle_auto),
@@ -338,9 +341,9 @@ def create_tray(
     )
 
     icon = pystray.Icon(
-        name="KakaoBot",
+        name=APP_NAME,
         icon=_make_icon(_COLORS[get_status()]),
-        title=f"KakaoBot PC Agent v{version}",
+        title=f"{APP_TITLE} v{version}",
         menu=menu,
     )
 
