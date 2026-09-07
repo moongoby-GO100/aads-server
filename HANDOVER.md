@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 2026-09-07 16:09 KST - Stale retrying cleanup SQL parameter fix
+
+- Request:
+  - CEO reported repeated chat response interruptions and asked to immediately apply the recommended fixes, verify disappeared chat UI functions, and report remaining interruption causes.
+- Root cause:
+  - `cleanup_overlong_running_executions()` retrying cleanup SQL referenced `$1` and `$3` while passing three parameters, leaving `$2` unused.
+  - PostgreSQL could not infer the unused `$2` type, producing `stale_placeholder_cleanup_loop_failed: could not determine data type of parameter $2`; retrying/running placeholders could remain uncleared.
+- Changes:
+  - `app/services/chat_service.py`: changed the retrying hard-cap parameter from `$3::int` to `$2::int` and removed the unused argument.
+- Verification:
+  - Pending in this checkpoint: `python3 -m py_compile app/services/chat_service.py`, focused diff check, commit/push, and blue/green deploy after the currently running API deploy run completes.
+
 ## 2026-09-07 15:27 KST - Prod compose auxiliary env-file fix
 
 - Request:
