@@ -137,6 +137,8 @@ services:
       - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
       - /root/aads/data/chromadb:/root/aads/data/chromadb:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
+      - /root/aads/aads-server/docs:/app/docs:ro
+      - /root/aads/aads-server/reports:/app/reports:ro
       - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
       - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro
@@ -231,6 +233,8 @@ services:
       - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
       - /root/aads/data/chromadb:/root/aads/data/chromadb:rw
       - /root/aads/aads-server/supervisord.conf:/app/supervisord.conf:ro
+      - /root/aads/aads-server/docs:/app/docs:ro
+      - /root/aads/aads-server/reports:/app/reports:ro
       - /root/aads/aads-docs/docs:/root/aads/aads-docs/docs:ro
       - /root/aads/aads-docs/reports:/root/aads/aads-docs/reports:ro
       - /root/aads/aads-dashboard/docs:/root/aads/aads-dashboard/docs:ro

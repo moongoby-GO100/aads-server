@@ -59,6 +59,16 @@ def test_bluegreen_deploy_builds_once_and_starts_without_build():
     assert compose.count("image: aads-server:${AADS_RELEASE_SHA:-local}") == 2
 
 
+def test_bluegreen_api_slots_mount_live_project_docs_readonly():
+    compose = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
+    blue = compose.split("  aads-server:", 1)[1].split("  aads-server-green:", 1)[0]
+    green = compose.split("  aads-server-green:", 1)[1].split("  yeoljeong-finance:", 1)[0]
+
+    for service in (blue, green):
+        assert "/root/aads/aads-server/docs:/app/docs:ro" in service
+        assert "/root/aads/aads-server/reports:/app/reports:ro" in service
+
+
 def test_placeholder_repair_uses_the_actual_assistant_execution_unique_index():
     router = Path("app/routers/chat.py").read_text(encoding="utf-8")
     helper = router.split("async def _ensure_running_placeholder_anchor", 1)[1].split(
