@@ -12,6 +12,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.services.yeoljeong_bank_collector_harness import (
+    run_shinhan_windows_collector_harness,
+)
 from app.services import yeoljeong_finance_service as svc
 
 router = APIRouter(prefix="/yeoljeong-finance", tags=["yeoljeong-finance"])
@@ -154,6 +157,29 @@ class SyncPayload(BaseModel):
     allowServerHeadlessFallback: bool = False
     auto_open_bank_browser: bool = True
     skip_financial_accounts: bool = False
+
+
+class ShinhanWindowsCollectorPayload(BaseModel):
+    business_id: str = "biz-mia"
+    branch: str = "열정국밥_미아점"
+    date_from: str = ""
+    date_to: str = ""
+    bank_account_id: str = ""
+    browser_agent_id: str = ""
+    pc_agent_id: str = ""
+    browser_session_id: str = ""
+    browser_preferred_port: int | None = None
+    bank_browser_work_key: str = ""
+    bank_browser_timeout_seconds: int = Field(default=600, ge=600, le=3600)
+    attempt_timeout_seconds: int = Field(default=900, ge=600, le=7200)
+    force_recreate_bank_browser: bool = True
+    auto_open_bank_browser: bool = True
+    close_portal_browser_on_complete: bool = False
+    operator_approved: bool = False
+    approved_input: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    queue_only: bool = False
+    dry_run: bool = False
+    skip_security_preflight: bool = False
 
 
 def _run_delivery_sync_background(payload: dict[str, Any], current_user: dict[str, Any]) -> None:
@@ -702,6 +728,22 @@ async def collect_bank_account_transactions(
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     return await run_in_threadpool(svc.collect_bank_account_transactions, account_id, payload.model_dump(), current_user)
+
+
+@router.post("/bank-collector/shinhan-easyview/run")
+async def run_shinhan_windows_collector(
+    payload: ShinhanWindowsCollectorPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    body = payload.model_dump()
+    return await run_in_threadpool(
+        run_shinhan_windows_collector_harness,
+        body,
+        current_user,
+        queue_only=bool(body.pop("queue_only", False)),
+        dry_run=bool(body.pop("dry_run", False)),
+        skip_security_preflight=bool(body.pop("skip_security_preflight", False)),
+    )
 
 
 @router.get("/bank-transactions")
