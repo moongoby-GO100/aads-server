@@ -21,12 +21,21 @@ def test_database_tools_use_database_timeout_bucket(monkeypatch):
     monkeypatch.setattr(tool_executor, "_TOOL_TIMEOUT", 20.0)
     monkeypatch.setattr(tool_executor, "_LONG_TOOL_TIMEOUT", 55.0)
     monkeypatch.setattr(tool_executor, "_DATABASE_TOOL_TIMEOUT", 28.0)
+    monkeypatch.setattr(tool_executor, "_BROWSER_TOOL_TIMEOUT", 210.0)
 
     assert tool_executor._timeout_for_tool("query_database") == 28.0
     assert tool_executor._timeout_for_tool("query_db") == 28.0
     assert tool_executor._timeout_for_tool("query_project_database") == 28.0
     assert tool_executor._timeout_for_tool("run_remote_command") == 55.0
+    assert tool_executor._timeout_for_tool("capture_screenshot") == 210.0
     assert tool_executor._timeout_for_tool("task_history") == 20.0
+
+
+def test_capture_screenshot_is_browser_tool_not_long_pc_agent_bucket():
+    from app.services import tool_executor
+
+    assert "capture_screenshot" in tool_executor._BROWSER_TOOLS
+    assert "capture_screenshot" not in tool_executor._LONG_TOOLS
 
 
 def test_default_database_tool_timeout_covers_project_db_policy():

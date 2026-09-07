@@ -238,7 +238,12 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_navigate",
-        "description": "Playwright 브라우저로 URL 이동. 허용 도메인: *.newtalk.kr, github.com, localhost.\n이동 후 browser_snapshot으로 페이지 확인.\n예: browser_navigate(url='https://aads.newtalk.kr/')",
+        "description": (
+            "Playwright 브라우저로 URL 이동. 일반 사이트 접속/렌더링 검증의 1순위 도구입니다. "
+            "PC Agent는 Windows 앱, 로컬 파일/프로세스, CEO PC에 이미 열린 로그인 세션 조작이 필요한 경우에만 사용합니다.\n"
+            "허용 도메인: *.newtalk.kr, github.com, localhost.\n"
+            "이동 후 browser_snapshot으로 페이지 확인.\n예: browser_navigate(url='https://aads.newtalk.kr/')"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1634,8 +1639,9 @@ TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "capture_screenshot",
         "description": (
-            "URL 스크린샷을 캡처하여 이미지 URL 반환. 채팅 내 인라인 표시용.\n"
-            "browser_screenshot과 달리 독립 캡처→이미지 파일 저장→URL 반환.\n"
+            "URL 스크린샷을 캡처하여 이미지 URL 반환. 일반 사이트 화면 캡처의 1순위 도구입니다.\n"
+            "browser_screenshot과 달리 독립 캡처→이미지 파일 저장→URL 반환. "
+            "PC Agent는 Windows/로컬 브라우저 세션이 명시적으로 필요한 경우에만 사용합니다.\n"
             "예: capture_screenshot(url='https://aads.newtalk.kr/')"
         ),
         "input_schema": {

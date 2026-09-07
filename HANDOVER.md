@@ -1,5 +1,25 @@
 # AADS HANDOVER
 
+## 2026-09-07 13:52 KST - Browser verification routing policy pinned
+
+- Request:
+  - CEO 지적: 일반 사이트 확인/검증은 PC Agent가 아니라 Playwright/browser 도구를 써야 하는데 단순 확인에 PC Agent를 사용했다.
+  - Previous response was only a policy explanation and missed final completion conditions, so this follow-up applies the rule in code, prompt seed, DB migration, and tests.
+- Root cause:
+  - `global-e2e-verification-contract` required screen evidence but did not explicitly gate general website verification away from PC Agent.
+  - `capture_screenshot` was classified in `_LONG_TOOLS`, so it inherited the 55s long-tool wrapper instead of the browser tool timeout bucket.
+- Changes:
+  - `app/services/tool_executor.py`: moved `capture_screenshot` into `_BROWSER_TOOLS` and removed it from `_LONG_TOOLS`.
+  - `app/api/ceo_chat_tools.py`: clarified that general site navigation/capture uses Playwright/browser tools first; PC Agent is only for Windows/local browser session cases.
+  - `scripts/seed_prompt_assets.py` and `migrations/161_browser_verification_tool_routing_policy.sql`: pinned the L1 E2E routing rule for future seeds and live DB application.
+  - `tests/unit/test_tool_executor_aliases.py`, `tests/unit/test_pc_agent_tool_exposure.py`: added regressions for timeout bucket and tool description policy.
+- Verification:
+  - `python3 -m py_compile app/services/tool_executor.py app/api/ceo_chat_tools.py scripts/seed_prompt_assets.py` passed.
+  - `git diff --check` passed for the selected files.
+  - `docker exec aads-server python3 -m pytest tests/unit/test_tool_executor_aliases.py tests/unit/test_pc_agent_tool_exposure.py -q` passed: 30 tests.
+  - `migrations/161_browser_verification_tool_routing_policy.sql` applied to production DB: `UPDATE 1`.
+  - DB readback confirmed `global-e2e-verification-contract` contains the general-site Playwright-first and PC-Agent-local-only rules.
+
 ## 2026-09-07 13:52 KST — Goal Guard/Harness 검수 피드백 반영 (AADS-GOAL-GUARD-HARNESS-S-20260907)
 
 - 검수 지적 4건 대응 (RESULT: `docs/reports/20260907_AADS_GOAL_GUARD_HARNESS_RESULT.md`)

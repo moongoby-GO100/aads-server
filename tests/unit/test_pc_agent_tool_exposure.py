@@ -32,6 +32,19 @@ def test_ceo_chat_tools_exposes_pc_and_device_execute() -> None:
     assert {"pc_execute", "device_execute"} <= names
 
 
+def test_general_site_capture_schema_prefers_playwright_over_pc_agent() -> None:
+    tools = {tool["name"]: tool for tool in ceo_chat_tools.TOOL_DEFINITIONS}
+
+    browser_description = tools["browser_navigate"]["description"]
+    capture_description = tools["capture_screenshot"]["description"]
+
+    assert "일반 사이트" in browser_description
+    assert "1순위" in browser_description
+    assert "PC Agent" in browser_description
+    assert "일반 사이트 화면 캡처의 1순위" in capture_description
+    assert "Windows/로컬 브라우저 세션" in capture_description
+
+
 @pytest.mark.asyncio
 async def test_ceo_chat_tools_pc_execute_delegates_to_tool_executor(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_dispatch(self, name: str, params: dict[str, object]):  # noqa: ANN001

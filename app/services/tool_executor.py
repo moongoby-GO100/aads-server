@@ -156,6 +156,7 @@ _BROWSER_TOOLS = frozenset({
     "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
     "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
+    "capture_screenshot",
 })
 _DATABASE_TOOLS = frozenset({
     "query_database",
@@ -265,7 +266,7 @@ async def _route_pc_command_via_api(payload: dict[str, Any]) -> dict[str, Any] |
 _LONG_TOOLS = frozenset({
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
-    "capture_screenshot", "run_remote_command", "write_remote_file", "patch_remote_file",
+    "run_remote_command", "write_remote_file", "patch_remote_file",
     "pc_execute", "device_command", "execute_sandbox", "visual_qa_test", "fact_check_multiple",
     "generate_image", "edit_image", "generate_video", "video_download",
     "local_model_install_test", "generate_music", "generate_three_d_asset",
