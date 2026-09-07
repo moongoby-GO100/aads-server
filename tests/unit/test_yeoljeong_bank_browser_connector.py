@@ -321,6 +321,9 @@ class _ShinhanRecoveredIdpwPage(_ChallengePage):
         self.frames = []
 
     async def _run_browser_command(self, command_type, params, **kwargs):
+        if command_type == "browser_launch":
+            self.url = params["url"]
+            return {"status": "success", "data": {"cdp_ready": True, "navigated": True}}
         if command_type == "browser_tabs":
             return {
                 "status": "success",
@@ -339,9 +342,21 @@ class _ShinhanRecoveredIdpwPage(_ChallengePage):
     async def wait_for_load_state(self, *args, **kwargs):
         return None
 
+    async def goto(self, url, **kwargs):
+        self.url = url
+
     async def evaluate(self, expression, *args, **kwargs):
         if expression == "window.location.href":
             return self.url
+        if "idpwHash" in expression:
+            return {
+                "idpw_hash_forced": "1",
+                "account_query_hash_prepared": "1",
+                "idpw_panel_visible": "1",
+                "idpw_login_panel_selected": "1",
+            }
+        if "idpw|idlogin" in expression:
+            return {"selected": "1"}
         if "querySelectorAll('table')" in expression:
             return []
         if "document.body" in expression:
