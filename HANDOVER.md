@@ -11922,7 +11922,7 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `app/services/pipeline_runner_service.py`: after AADS runner approval, git push remains synchronous, then the release SHA is registered in `deploy_runs` through `enqueue_deploy_request()` and the runner returns with phase `deploy_queued`.
   - `scripts/start_aads_deploy_queue_worker.sh`: new launcher that claims the latest auto-start queued AADS release from DB, creates a detached clean git worktree at that SHA, and runs `deploy.sh bluegreen` from that clean source tree.
   - `deploy.sh`: `start_deploy_queue_worker()` now prefers the clean-worktree launcher before falling back to in-place worker execution.
-  - Follow-up hardening: the launcher now creates the clean worktree synchronously before detaching the long-running deploy process, avoiding partial checkout if the caller shell exits.
+  - Follow-up hardening: the launcher now creates the clean worktree synchronously before detaching the long-running deploy process, then uses `setsid -f` when available so Codex/runner parent process cleanup cannot kill the queue worker.
 - Verification before release:
   - `python3 -m py_compile app/services/pipeline_runner_service.py`: passed.
   - `bash -n deploy.sh`: passed.

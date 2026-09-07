@@ -62,8 +62,9 @@ cleanup_failed_worktree() {
 git -C "$REPO_DIR" worktree add --detach "$worktree" "$latest_sha"
 
 export MODE STATE_DIR REPO_DIR LOCKFILE latest_sha worktree
-nohup bash -c '
+WORKER_BODY='
     set -euo pipefail
+    echo "$$" > "$LOCKFILE"
     cleanup() {
         git -C "$REPO_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
         rm -f "$LOCKFILE" 2>/dev/null || true
@@ -78,7 +79,14 @@ nohup bash -c '
         AADS_RELEASE_SHA="$latest_sha" \
         bash "$worktree/deploy.sh" "$MODE"
     echo "[$(date --iso-8601=seconds)] deploy queue worker done sha=${latest_sha}"
-' >"$log_file" 2>&1 < /dev/null &
+'
 
-echo $! > "$LOCKFILE"
-echo "deploy queue worker started: pid=$!, sha=${latest_sha}, trigger=${TRIGGER}, log=${log_file}"
+if command -v setsid >/dev/null 2>&1; then
+    setsid -f bash -c "$WORKER_BODY" >"$log_file" 2>&1 < /dev/null
+else
+    nohup bash -c "$WORKER_BODY" >"$log_file" 2>&1 < /dev/null &
+fi
+
+sleep 0.2
+worker_pid="$(cat "$LOCKFILE" 2>/dev/null || echo unknown)"
+echo "deploy queue worker started: pid=${worker_pid}, sha=${latest_sha}, trigger=${TRIGGER}, log=${log_file}"
