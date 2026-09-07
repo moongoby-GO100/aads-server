@@ -11977,3 +11977,29 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Remaining before completion:
   - Commit/push only `app/services/pipeline_runner_service.py`, `deploy.sh`, `scripts/start_aads_deploy_queue_worker.sh`, and this HANDOVER entry.
   - Run or queue blue/green release from the pushed SHA, then verify `/api/v1/health`, deploy DB run status, container image digest, and five-minute P0/P1 monitoring.
+
+## 2026-09-07 23:06 KST — Docker build P1 runtime/lock release certification
+- CEO request:
+  - Implement `docs/reports/20260907_docker_build_p1_design_prd.md` and report the result.
+- Change released:
+  - Release SHA `2aa7392e2c73` (`feat(deploy): optimize docker runtime build`) was committed and pushed to `main`.
+  - `Dockerfile` now uses dependency lock files and a runtime wheelhouse path, installs only runtime dependencies in the default image, removes dev extras from the release image, and keeps Playwright browser installation behind `INSTALL_PLAYWRIGHT=true`.
+  - `pyproject.toml`, `requirements.runtime.lock`, `requirements.dev.lock`, `requirements.visual.in`, and `requirements.visual.lock` pin the runtime/dev/visual dependency sets.
+  - `deploy.sh` now enforces lock freshness, bounded git-archive release context, runtime image size limit, Docker retention dry-run visibility, configurable build target/profile/build args, and stale deploy-run reconciliation.
+  - `scripts/compile_requirements.sh` and `scripts/prune_aads_images.sh` were added for lock generation and safe old-image retention.
+  - Unit coverage was added/updated in `tests/unit/test_deploy_build_guards.py` and `tests/unit/test_deploy_observability.py`.
+  - `docs/reports/20260907_docker_build_p1_design_prd.md` now contains the implementation and certification result.
+- Verification:
+  - `python3 -m pytest tests/unit/test_deploy_build_guards.py tests/unit/test_deploy_observability.py -q`: 10 passed, 1 known pytest config warning.
+  - `bash scripts/prune_aads_images.sh --dry-run`: preserved the three recent success tags and identified only `aads-server:0c812055011a` as a removable old candidate.
+  - Runtime image `aads-server:2aa7392e2c73` size: 752,231,072 bytes, below the deploy guard limit.
+  - Active import smoke in deployed container: `from app.main import app` passed.
+  - Runtime Playwright split smoke: `importlib.util.find_spec('playwright') is not None` returned `False` in the default runtime image.
+  - Blue/green run `136` built one release image, passed candidate health, switched nginx to `aads-server:8100`, and both API slots now run the same digest `sha256:ac45d2203c6619cd2e847c24f6628085256e20305e2e66ada1a75bc5282f15d1`.
+  - Manual post-TERM certification was recorded after routed health passed 30/30 checks from `2026-09-07 22:59:54 KST` to `23:04:55 KST` and both API logs had 0 P0/P1 pattern hits.
+  - `deploy_runs.id=136` is `success/completed`; original `standby_same_digest_sync` TERM failure event is preserved and a `manual_post_term_certification` success event was added.
+- Deployment notes:
+  - The deploy script received `TERM` after nginx cutover while standby sync was recreating the inactive slot. Independent checks confirmed same-digest healthy slots and clean 5-minute monitoring before manual certification.
+  - No active API direct restart and no full compose-stack deploy were performed.
+- Remaining risk:
+  - The main worktree still contains unrelated dirty files from other tasks. They were excluded from release `2aa7392e2c73`.
