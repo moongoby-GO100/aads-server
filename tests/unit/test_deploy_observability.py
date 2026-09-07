@@ -17,6 +17,7 @@ _SPEC.loader.exec_module(_MODULE)
 get_deploy_status = _MODULE.get_deploy_status
 DEPLOY_SCRIPT = Path(__file__).parents[2] / "deploy.sh"
 DOCKERFILE = Path(__file__).parents[2] / "Dockerfile"
+OPS_API = Path(__file__).parents[2] / "app/api/ops.py"
 
 
 class FakeConnection:
@@ -254,3 +255,13 @@ def test_dockerfile_keeps_runtime_image_bounded():
     assert "requirements.runtime.lock" in dockerfile
     assert 'if [ "$INSTALL_PLAYWRIGHT" = "true" ]' in dockerfile
     assert dockerfile.count("playwright install chromium --with-deps") == 1
+
+
+def test_ops_deploy_request_kicks_worker_and_returns_followup_state():
+    api = OPS_API.read_text()
+
+    assert "async def _start_aads_deploy_queue_worker" in api
+    assert "start_aads_deploy_queue_worker.sh" in api
+    assert "worker_start" in api
+    assert "ops_api_request" in api
+    assert '"/api/v1/ops/deploy/status"' in api

@@ -439,6 +439,59 @@ class DeployQueueRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+async def _start_aads_deploy_queue_worker(trigger: str) -> Dict[str, Any]:
+    """Best-effort queue worker kick that returns quickly to the chat/API caller."""
+    launcher_candidates = (
+        Path("/root/aads/aads-server/scripts/start_aads_deploy_queue_worker.sh"),
+        Path("/app/scripts/start_aads_deploy_queue_worker.sh"),
+    )
+    launcher = next((path for path in launcher_candidates if path.exists()), None)
+    if launcher is None:
+        return {
+            "started": False,
+            "status": "launcher_unavailable",
+            "detail": "start_aads_deploy_queue_worker.sh not found",
+        }
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            str(launcher),
+            "bluegreen",
+            trigger,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8)
+    except asyncio.TimeoutError:
+        return {
+            "started": True,
+            "status": "start_timeout_assumed_background",
+            "detail": "worker launcher did not return within 8s; check /ops/deploy/status",
+        }
+    except Exception as exc:
+        logger.warning("ops_deploy_worker_start_failed", error=str(exc))
+        return {
+            "started": False,
+            "status": "start_failed",
+            "detail": str(exc)[:300],
+        }
+
+    output = (stdout or b"").decode("utf-8", errors="replace").strip()
+    error = (stderr or b"").decode("utf-8", errors="replace").strip()
+    started = proc.returncode == 0 and (
+        "started" in output.lower()
+        or "already running" in output.lower()
+        or "deploy queue empty" in output.lower()
+    )
+    return {
+        "started": started,
+        "status": "started" if started else "start_failed",
+        "returncode": proc.returncode,
+        "detail": (output or error)[-500:],
+    }
+
+
 @router.get(
     "/ops/deploy/status",
     dependencies=[Depends(require_internal_admin)],
@@ -506,6 +559,21 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             auto_start=req.auto_start,
             metadata=req.metadata,
         )
+        worker_start: Dict[str, Any] = {
+            "started": False,
+            "status": "not_requested",
+            "detail": "auto_start=false",
+        }
+        if req.auto_start:
+            project_key = str(row.get("project") or req.project or "").upper()
+            if project_key == "AADS":
+                worker_start = await _start_aads_deploy_queue_worker("ops_api_request")
+            else:
+                worker_start = {
+                    "started": False,
+                    "status": "external_project_queue_only",
+                    "detail": f"{project_key} deploy worker is owned by its project runner/deploy script",
+                }
         return {
             "status": "queued",
             "deploy_run_id": row.get("id"),
@@ -514,6 +582,7 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             "phase": row.get("phase"),
             "queue_position": row.get("queue_position"),
             "deduplicated": row.get("deduplicated", False),
+            "worker_start": worker_start,
             "next_check": "/api/v1/ops/deploy/status",
         }
     except HTTPException:
