@@ -169,6 +169,10 @@ async def _archive_competing_stream_placeholder(
 
 _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-5.6-sol": 1500,
+    "codex:gpt-5.6-sol": 1500,
+    "gpt-6-astra": 1500,
+    "codex:gpt-6-astra": 1500,
+    "claude-fable-5-1": 1200,
     "claude-opus-5": 1200,
     "claude-opus-4-6": 900,
     "claude-haiku": 900,
@@ -181,7 +185,6 @@ _INTERRUPT_REASON_CATEGORIES = {
     "user_action": ("stopped by user",),
     "superseded": ("superseded", "newer"),
     "auto_recovery": ("recovery_auto_retry", "auto-settled"),
-    "process_interrupt": ("resume_claimed_by", "CancelledError"),
     "final_save_missing": ("final_save_missing",),
     "stale_empty": ("stale empty execution",),
     "resume_no_response": ("resume_no_meaningful_response",),
@@ -199,6 +202,7 @@ _INTERRUPT_REASON_CATEGORIES = {
         "client disconnected",
         "client_disconnect",
     ),
+    "process_interrupt": ("resume_claimed_by", "CancelledError"),
     "resume_cancelled": (
         "resume_task_cancelled",
         "asyncio.exceptions.cancellederror",
@@ -2636,47 +2640,64 @@ async def cleanup_overlong_running_executions(
     # overlong guard (status IN ('running','retrying') overlaps with status='retrying').
     _already_interrupted = {row["execution_id"] for row in rows}
 
-    # P1: stale retrying 정리 — resume task 실패 후 retrying 상태로 300초+ 잔류하는 실행을 자동 정리
+    # P1: stale retrying 정리 — resume task 실패 후 retrying 상태로 300초+ 잔류하는 실행을 자동 정리.
+    # The first query runs inside its own connection scope. Reusing the closed
+    # connection from the overlong pass made the cleanup loop fail silently and
+    # left the UI showing old turns as still waiting.
     _retrying_timeout = min(max(timeout // 4, 120), 300)
-    retrying_rows = await conn.fetch(
-        """
-        SELECT te.id::text AS execution_id,
-               te.session_id::text AS session_id,
-               COALESCE(te.assistant_message_id, (
-                   SELECT id FROM chat_messages
-                   WHERE execution_id = te.id AND intent = 'streaming_placeholder'
-                   ORDER BY COALESCE(edited_at, created_at) DESC LIMIT 1
-               ))::text AS assistant_message_id,
-               '' AS partial_content,
-               EXTRACT(EPOCH FROM (NOW() - COALESCE(te.updated_at, te.started_at)))::int AS age_seconds
-        FROM chat_turn_executions te
-        WHERE te.status = 'retrying'
-          AND te.completed_at IS NULL
-          AND COALESCE(te.updated_at, te.started_at) < NOW() - ($1::int * INTERVAL '1 second')
-        ORDER BY COALESCE(te.updated_at, te.started_at) ASC
-        """,
-        _retrying_timeout,
-    )
     retrying_closed = 0
-    for row in retrying_rows:
-        session_id = row["session_id"]
-        execution_id = row["execution_id"]
-        if execution_id in _already_interrupted:
-            continue
-        await _mark_execution_interrupted(
-            conn,
-            session_id,
-            execution_id,
-            f"stale_retrying_cleanup_after_{row['age_seconds']}s",
-            partial_content="",
-            placeholder_id=row["assistant_message_id"],
-            delete_empty_placeholder=True,
+    async with get_pool().acquire() as retry_conn:
+        retrying_rows = await retry_conn.fetch(
+            """
+            SELECT te.id::text AS execution_id,
+                   te.session_id::text AS session_id,
+                   COALESCE(te.assistant_message_id, (
+                       SELECT id FROM chat_messages
+                       WHERE execution_id = te.id AND intent = 'streaming_placeholder'
+                       ORDER BY COALESCE(edited_at, created_at) DESC LIMIT 1
+                   ))::text AS assistant_message_id,
+                   COALESCE(ph.content, am.content, '') AS partial_content,
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.updated_at, te.started_at)))::int AS age_seconds
+            FROM chat_turn_executions te
+            LEFT JOIN chat_messages am
+              ON am.id = te.assistant_message_id
+            LEFT JOIN LATERAL (
+                SELECT id, content, created_at, edited_at
+                FROM chat_messages
+                WHERE execution_id = te.id
+                  AND intent = 'streaming_placeholder'
+                ORDER BY COALESCE(edited_at, created_at) DESC
+                LIMIT 1
+            ) ph ON TRUE
+            WHERE te.status = 'retrying'
+              AND te.completed_at IS NULL
+              AND COALESCE(te.updated_at, te.started_at) < NOW() - ($1::int * INTERVAL '1 second')
+            ORDER BY COALESCE(te.updated_at, te.started_at) ASC
+            """,
+            _retrying_timeout,
         )
-        retrying_closed += 1
-        logger.warning(
-            "stale_retrying_execution_cleaned session=%s execution=%s age=%ss",
-            session_id[:8], execution_id[:8], row["age_seconds"],
-        )
+        for row in retrying_rows:
+            session_id = row["session_id"]
+            execution_id = row["execution_id"]
+            if execution_id in _already_interrupted:
+                continue
+            partial_content = row["partial_content"] or ""
+            await _mark_execution_interrupted(
+                retry_conn,
+                session_id,
+                execution_id,
+                f"stale_retrying_cleanup_after_{row['age_seconds']}s",
+                partial_content=partial_content,
+                placeholder_id=row["assistant_message_id"],
+                delete_empty_placeholder=not bool(
+                    _strip_streaming_progress_markers(partial_content).strip()
+                ),
+            )
+            retrying_closed += 1
+            logger.warning(
+                "stale_retrying_execution_cleaned session=%s execution=%s age=%ss",
+                session_id[:8], execution_id[:8], row["age_seconds"],
+            )
 
     return {
         "scanned": len(rows),
