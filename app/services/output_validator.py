@@ -208,6 +208,31 @@ _REPORT_REQUIRED_GROUPS: dict[str, tuple[str, ...]] = {
 _REPORT_MIN_STRUCTURE_CHARS = 280
 _STATUS_REPORT_MIN_STRUCTURE_CHARS = 180
 
+# ─── CEO 8섹션 응답 플로우 (AADS-CRF v2.0, 2026-09-08) ────────────────────────
+# CEO 지시: 질문/지시 파악 → 목표 → 계획 → 실행순서 → 결과 → 검증 → 리스크 → 다음
+# 재시도 폭증(응답 끊김)을 막기 위해 "완전 일치"가 아니라 "커버리지 하한"만 강제한다.
+_CEO_FLOW_GROUPS: dict[str, tuple[str, ...]] = {
+    "brief": (
+        "지시 확인", "지시 파악", "지시 정리", "요청 확인", "요청 파악", "요청 정리",
+        "질문 확인", "질문 파악", "요청 요약", "지시 요약", "요청 범위", "지시 범위",
+    ),
+    "goal": ("목표", "목적", "완료 기준", "완료기준", "성공 기준", "성공기준"),
+    "plan": ("계획", "플랜", "접근", "전략", "수행 계획", "조치 계획", "진행 방식"),
+    "steps": (
+        "실행순서", "실행 순서", "수행 내역", "조치 내역", "작업 내역",
+        "작업 순서", "진행 순서", "실행 단계", "단계",
+    ),
+    "result": ("결과", "완료", "반영", "적용", "미완료", "처리됨", "해소"),
+    "verify": ("검증", "테스트", "확인 결과", "health", "build", "lint", "py_compile"),
+    "risk": ("리스크", "문제", "위험", "한계", "주의", "미완료", "이상 항목"),
+    "next": ("다음 단계", "→ 다음", "권장 조치", "→ 권장", "후속 조치"),
+}
+
+# 8섹션 플로우 검사 적용 최소 길이 (짧은 확인 답변은 대상 아님)
+_CEO_FLOW_MIN_CHARS = 900
+# 8개 중 최소 몇 개가 본문에 드러나야 하는지 (보수적 하한)
+_CEO_FLOW_MIN_COVERAGE = 5
+
 _DETAILED_RESPONSE_TRIGGERS: tuple[str, ...] = (
     "문제점",
     "개선안",
@@ -475,6 +500,21 @@ def validate_response(
     return _OK
 
 
+def evaluate_ceo_flow_coverage(response_text: str) -> list[str]:
+    """CEO 8섹션 응답 플로우 중 본문에서 확인되지 않는 섹션 키를 반환한다.
+
+    반환값이 비어 있으면 8섹션이 모두 감지된 것이다.
+    UI(응답 개요 8칩)와 동일한 기준을 쓰기 위해 백엔드에서도 공개 함수로 노출한다.
+    """
+    text = (response_text or "")
+    lowered = text.lower()
+    missing: list[str] = []
+    for name, keywords in _CEO_FLOW_GROUPS.items():
+        if not any(keyword.lower() in lowered for keyword in keywords):
+            missing.append(name)
+    return missing
+
+
 def check_report_quality_structure(
     response_text: str,
     intent: str = "",
@@ -539,13 +579,28 @@ def check_report_quality_structure(
     if len(text) >= 800 and not _LEAD_CONCLUSION_PATTERN.search(text[:_LEAD_CONCLUSION_WINDOW]):
         readability_gaps.append("lead_conclusion")
 
+    # ── CEO 8섹션 응답 플로우 커버리지 (AADS-CRF v2.0) ──────────────────────
+    flow_missing = evaluate_ceo_flow_coverage(text)
+    flow_gaps: list[str] = []
+    if (
+        len(text) >= _CEO_FLOW_MIN_CHARS
+        and (len(_CEO_FLOW_GROUPS) - len(flow_missing)) < _CEO_FLOW_MIN_COVERAGE
+    ):
+        flow_gaps = [f"flow_{name}" for name in flow_missing]
+
     # 임계치 완화 (2026-09-06): structural 2개 이상 또는 readability 2개 이상이면 재작성.
     if len(structural_gaps) >= 2:
-        all_gaps = structural_gaps + readability_gaps
+        all_gaps = structural_gaps + readability_gaps + flow_gaps
         reason = "문제점·원인·권장안·검증/완료기준 중 필수 항목이 부족합니다."
     elif len(readability_gaps) >= 2:
-        all_gaps = readability_gaps + structural_gaps
+        all_gaps = readability_gaps + structural_gaps + flow_gaps
         reason = "응답 구조가 CEO 가독성 표준(결론 선행·섹션 헤딩·도구 경과 분리)을 벗어났습니다."
+    elif flow_gaps:
+        all_gaps = flow_gaps + structural_gaps + readability_gaps
+        reason = (
+            "CEO 8섹션 응답 플로우(지시파악→목표→계획→실행순서→결과→검증→리스크→다음) "
+            "커버리지가 하한 미만입니다."
+        )
     else:
         return None
 
@@ -569,11 +624,16 @@ def _build_report_quality_retry_prompt(missing: list[str], reason: str) -> str:
         "[필수 구조] "
         "첫 줄: 판정 아이콘(✅/⚠️/❌) + 한 문장 결론. "
         "둘째 줄: 핵심 근거 1개(수치 + [출처] 태그). "
-        "본문 필수 섹션: "
-        "1) ## 문제점/리스크, 2) ## 원인/근거(도구·DB·코드 출처), "
-        "3) ## 개선 권장안(P0/P1/P2 우선순위 + 기대효과), "
-        "4) ## 검증 방법/완료기준, "
-        "5) → 다음 단계: 즉시 실행 가능한 액션 1~3개. "
+        "본문은 CEO 8섹션 응답 플로우를 ## 헤딩으로 순서대로 작성: "
+        "1) ## 지시 파악 — 요청을 어떻게 이해했는지 1~2줄, "
+        "2) ## 목표 — 이번 응답의 완료 기준, "
+        "3) ## 계획 — 어떤 방식으로 처리했는지, "
+        "4) ## 실행순서 — 실제 수행 단계(표 또는 번호 목록), "
+        "5) ## 결과 — 완료/미완료 구분, "
+        "6) ## 검증 — 실행한 명령·도구와 결과(✅/❌), "
+        "7) ## 리스크 — 없으면 '없음'으로 명시, "
+        "8) → 다음 단계: 즉시 실행 가능한 액션 1~3개. "
+        "간단 조회·인사 응답에는 이 8섹션을 강제하지 않습니다. "
         "[서식 규칙] "
         "비교 항목 3개 이상은 마크다운 표 필수. "
         "수치·날짜·상태값에 [DB 조회]/[코드 확인]/[로그]/[미측정] 출처 태그 필수. "
