@@ -216,6 +216,9 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "--no-build --no-deps --force-recreate" in script
     assert "reconcile_stale_deploy_runs" in script
     assert "stale deploy reconciled before new deploy" in script
+    assert "auto_start" in script
+    assert "'committed', 'pushed', TRUE" in script
+    assert "COALESCE(request_source, 'deploy.sh_lock_busy')" in script
     assert "reconcile_inactive_target_recovery_executions \"$old_container\"" in script
     assert "queued_for_deploy" in script
     assert "queue_pending_deploy_request" in script

@@ -461,6 +461,18 @@ queue_pending_deploy_request() {
                 ORDER BY id DESC
                 LIMIT 1
             ),
+            refreshed_existing AS (
+                UPDATE deploy_runs
+                   SET auto_start=TRUE,
+                       requested_at=COALESCE(requested_at, NOW()),
+                       last_heartbeat_at=NOW(),
+                       updated_at=NOW(),
+                       request_source=COALESCE(request_source, 'deploy.sh_lock_busy'),
+                       requested_by=COALESCE(requested_by, 'deploy.sh'),
+                       error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), '$queue_reason_sql')
+                 WHERE id IN (SELECT id FROM existing)
+                 RETURNING id
+            ),
             active_same_release AS (
                 SELECT id
                 FROM deploy_runs
@@ -473,14 +485,20 @@ queue_pending_deploy_request() {
             inserted AS (
                 INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
                                         deploy_pid, last_heartbeat_at, queue_position,
-                                        error_summary, created_at, updated_at)
+                                        error_summary, requested_by, request_source,
+                                        commit_status, push_status, auto_start,
+                                        requested_at, created_at, updated_at)
                 SELECT 'AADS', '$release_sql', 'queued', 'queued_for_deploy', NOW(),
-                       $$, NOW(), 1, '$queue_reason_sql', NOW(), NOW()
+                       $$, NOW(), 1, '$queue_reason_sql', 'deploy.sh', 'deploy.sh_lock_busy',
+                       'committed', 'pushed', TRUE,
+                       NOW(), NOW(), NOW()
                 WHERE NOT EXISTS (SELECT 1 FROM existing)
                   AND NOT EXISTS (SELECT 1 FROM active_same_release)
                 RETURNING id
             )
             SELECT id FROM inserted
+            UNION ALL
+            SELECT id FROM refreshed_existing
             UNION ALL
             SELECT id FROM active_same_release
             UNION ALL
