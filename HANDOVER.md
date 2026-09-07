@@ -11411,3 +11411,45 @@
   - `pytest -q tests/unit/test_deploy_observability.py`: 5 passed, 1 existing pytest config warning.
 - Not completed at this handover point:
   - Commit, push, blue/green deploy, post-deploy `/health`, same-digest, `/ops/deploy/status`, and 5-minute P0/P1 monitoring verification remain required.
+
+## 2026-09-07 10:20 KST — OHVIS harness/LangGraph/LangChain/LangSmith/LLM Wiki/Hermes/Skill Find report verification
+- CEO request:
+  - Collect and explain current materials for OHVIS harness, LangGraph, LangChain, LangSmith, LLM Wiki, Hermes, and Skill Find; audit what is implemented vs missing; provide detailed improvement planning.
+- Document updated:
+  - `docs/reports/20260907_ohvis_harness_llmwiki_hermes_skillfind_verified_report.md`
+- Verification basis:
+  - Read `/root/aads/AGENTS.md` and repo `AGENTS.md`.
+  - Fetched current official/primary sources for OpenAI Skills, LangChain, LangGraph, LangSmith, OpenWiki, Hermes Agent/Skills, and LLM-Wiki research.
+  - Re-measured Docker, import availability, route counts, and PostgreSQL counts for `ohvis_tasks`, `ohvis_loops`, `memory_facts`, `prompt_assets`, `kg_entities`, `kg_relations`, and `ai_observations`.
+- Findings:
+  - OHVIS has LangGraph, LangChain Core/provider/MCP adapter, Langfuse, importable LangSmith package, task/loop ledgers, memory facts, knowledge graph, and three repo-local skills.
+  - Dedicated `wiki_*`, `skill_*`, `hermes_*`, `trace_*`, and `eval_*` tables are absent; live API route dump shows `skill=0` and `wiki=0`, so Skill Find and LLM Wiki are still productization gaps.
+- Not completed:
+  - Code implementation, commit, push, and deploy were not performed for this report-only task.
+
+## 2026-09-07 10:34 KST — OHVIS Harness / Skill Find / LLM Wiki / Hermes foundation implementation
+- CEO request:
+  - Immediately implement the OHVIS harness, LangGraph/LangChain/LangSmith-compatible, LLM Wiki, Hermes pattern, and Skill Find improvements from the verified report.
+- Changes prepared:
+  - `app/services/ohvis_harness.py`: added a read-oriented OHVIS harness registry that reports module availability, DB foundation readiness, component gaps, risk policies, repository `SKILL.md` discovery, project-aware Skill Find, LLM Wiki/memory search fallback, and Hermes-style closed-loop recommendations.
+  - `app/api/ohvis_harness.py`: added `/api/v1/ohvis/harness/status`, `/policies`, `/skill-find`, `/wiki/search`, and `/hermes/recommend`.
+  - `app/main.py`: registered the OHVIS harness router.
+  - `migrations/158_ohvis_harness_skill_wiki_foundation.sql`: added additive foundation tables for skill library/version/run tracking, wiki sources/pages/links/error book, and LangSmith-compatible harness traces.
+  - `tests/unit/test_ohvis_harness.py`: added unit coverage for Skill Find matching, Hermes guardrail recommendations, repository skill scanning, and destructive/deploy risk policies.
+- DB action:
+  - Applied `migrations/158_ohvis_harness_skill_wiki_foundation.sql` directly with `psql -v ON_ERROR_STOP=1`; 8 additive foundation tables exist and 9 default `ops_skill_library` rows were seeded.
+- Deployment note:
+  - This is not yet committed, pushed, or deployed. Existing unrelated dirty files must remain preserved and this implementation should be committed/deployed as a selected-file release only.
+
+## 2026-09-07 10:47 KST — OHVIS harness deployment and bounded wiki backfill follow-up
+- CEO request:
+  - Deploy the OHVIS harness/Skill Find/LLM Wiki/Hermes foundation and report whether existing data is retroactively applied.
+- Additional change prepared:
+  - `migrations/159_ohvis_wiki_memory_backfill.sql`: bounded, idempotent backfill from high-value active `memory_facts` into `ohvis_wiki_pages`.
+  - `docs/reports/20260907_ohvis_harness_llmwiki_hermes_skillfind_verified_report.md`: added implementation/deployment addendum and retroactive data policy.
+- Retroactive data policy:
+  - Existing memory is immediately usable through `/api/v1/ohvis/harness/wiki/search` fallback to `memory_facts`.
+  - The new wiki table is not a full 1:1 copy of all memory facts; the first pass promotes selected high-value project facts only.
+  - Full corpus compilation should run later as a background wiki compiler to avoid deploy-time DB load and low-quality duplicate pages.
+- Required before completion:
+  - Apply migrations 158 and 159, verify table/row counts, commit selected files, push, run `deploy.sh bluegreen`, API smoke, external health, same-digest standby, and 5-minute P0/P1 monitoring.
