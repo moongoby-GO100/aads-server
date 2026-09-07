@@ -1282,9 +1282,9 @@ sync_standby_slot_after_drain() {
         echo "[deploy.sh] standby sync: starting ${old_container}:${old_port} from release image ${AADS_RELEASE_SHA}"
         cd "$COMPOSE_DIR"
         if [[ "$old_container" == "aads-server-green" ]]; then
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --force-recreate --no-build --no-deps "$old_container"
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --no-build --no-deps --force-recreate "$old_container"
         else
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --force-recreate --no-build --no-deps "$old_container"
+            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --no-build --no-deps --force-recreate "$old_container"
         fi
         if ! verify_container_memory_limit "$old_container"; then
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "memory limit mismatch"
@@ -1622,7 +1622,7 @@ case "$MODE" in
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
         build_release_image
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
-        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --force-recreate --no-build --no-deps "$NEW_CONTAINER"
+        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps --force-recreate "$NEW_CONTAINER"
         if ! verify_container_memory_limit "$NEW_CONTAINER"; then
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true

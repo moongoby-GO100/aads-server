@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-07 12:18 KST - Chat stream interruption lease cleanup guard
+
+- Request:
+  - Stop recurring chat response interruptions immediately, deploy the fix, and report whether other interruption causes remain.
+- Findings:
+  - Recent logs showed repeated `active_stream_hard_timeout_after_1500s`, `interrupted_auto_resume_cancelled`, and `chat_execution_interrupt_skipped_valid_lease` for the same executions.
+  - The inactive Blue/Green slot could still run stale cleanup and recovery maintenance loops while the active slot held a valid DB execution lease.
+  - `cleanup_overlong_running_executions()` counted a skipped valid remote lease as a closed execution, which repeatedly consumed cleanup/retry cycles and kept the chat bubble in an interrupted/recovery loop.
+- Changes:
+  - `app/services/chat_service.py`: disabled mutating chat cleanup on inactive API slots and deferred overlong/retrying cleanup when another slot has a valid execution lease.
+  - `deploy.sh`: aligned Blue/Green candidate and standby starts to the release contract string `up -d --no-build --no-deps --force-recreate`.
+- Verification:
+  - `.venv/bin/python -m py_compile app/services/chat_service.py` passed.
+  - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -e DATABASE_URL=postgresql://aads:aads@aads-postgres:5432/aads -v /root/aads/aads-server:/app -w /app aads-server:3ea508cd04c6 python -m pytest -q tests/unit/test_chat_service.py::test_cleanup_stale_streaming_placeholders_promotes_message_and_interrupts_execution tests/unit/test_chat_service.py::test_cleanup_stale_streaming_placeholders_skips_live_session tests/unit/test_chat_service.py::test_cleanup_overlong_running_executions_closes_live_task tests/unit/test_execution_lease_contract.py` passed: 8 tests.
+- Deployment:
+  - Pending in this entry: selected commit, push, Blue/Green deploy, same-digest standby verification, and five-minute P0/P1 monitoring.
+
 ## 2026-09-07 11:52 KST - Shinhan work-key recovery force recreate
 
 - Request:

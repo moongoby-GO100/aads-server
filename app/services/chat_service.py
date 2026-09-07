@@ -2515,6 +2515,16 @@ async def cleanup_overlong_running_executions(
     guard uses execution started_at so a long-running background task cannot
     keep the chat UI in a permanent "generating" state.
     """
+    if not _is_local_active_api_slot():
+        return {
+            "scanned": 0,
+            "closed": 0,
+            "cancelled_active": 0,
+            "retrying_cleaned": 0,
+            "timeout_sec": 0,
+            "inactive_slot_skipped": 1,
+        }
+
     timeout = (
         timeout_sec
         if timeout_sec is not None
@@ -2533,6 +2543,9 @@ async def cleanup_overlong_running_executions(
                    COALESCE(ph.content, am.content, '') AS partial_content,
                    te.actual_model,
                    te.requested_model,
+                   te.owner_instance,
+                   te.owner_epoch,
+                   (te.lease_expires_at IS NOT NULL AND te.lease_expires_at > NOW()) AS lease_valid,
                    EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS age_seconds,
                    EXTRACT(EPOCH FROM (
                        NOW() - GREATEST(
@@ -2565,15 +2578,33 @@ async def cleanup_overlong_running_executions(
         cancelled_active = 0
         interrupted_execution_ids: set[str] = set()
         for row in rows:
-            model_name = row["actual_model"] or row["requested_model"] or ""
+            row_data = _row_to_dict(row)
+            model_name = row_data.get("actual_model") or row_data.get("requested_model") or ""
             row_timeout = _MODEL_TIMEOUT_OVERRIDES.get(model_name, timeout)
-            if int(row["age_seconds"] or 0) < row_timeout:
+            if int(row_data.get("age_seconds") or 0) < row_timeout:
                 continue
-            session_id = row["session_id"]
-            execution_id = row["execution_id"]
+            session_id = row_data["session_id"]
+            execution_id = row_data["execution_id"]
+            if (
+                row_data.get("lease_valid")
+                and row_data.get("owner_instance")
+                and row_data.get("owner_instance") != _EXECUTION_OWNER_INSTANCE
+            ):
+                logger.info(
+                    "overlong_running_execution_deferred_remote_lease session=%s execution=%s owner=%s epoch=%s",
+                    session_id[:8],
+                    execution_id[:8],
+                    str(row_data.get("owner_instance"))[:80],
+                    row_data.get("owner_epoch"),
+                )
+                continue
             state = _streaming_state.get(session_id) or {}
-            partial_content = state.get("content") or row["partial_content"] or ""
-            idle_seconds = int(row["idle_seconds"] or 0)
+            partial_content = state.get("content") or row_data.get("partial_content") or ""
+            idle_seconds = int(
+                row_data["idle_seconds"]
+                if row_data.get("idle_seconds") is not None
+                else row_timeout + 1
+            )
             state_last_event_at = float(state.get("last_event_at") or state.get("updated_at") or 0)
             state_idle_seconds = int(_bg_time.monotonic() - state_last_event_at) if state_last_event_at else None
             effective_idle_seconds = (
@@ -2589,16 +2620,16 @@ async def cleanup_overlong_running_executions(
                     "overlong_running_execution_deferred_active session=%s execution=%s age=%ss idle=%ss content_len=%s",
                     session_id[:8],
                     execution_id[:8],
-                    int(row["age_seconds"] or 0),
+                    int(row_data.get("age_seconds") or 0),
                     effective_idle_seconds,
                     len(_strip_streaming_progress_markers(partial_content or "")),
                 )
                 continue
-            placeholder_id = row["assistant_message_id"]
+            placeholder_id = row_data.get("assistant_message_id")
             reason = _stream_interrupt_diagnostic_reason(
                 f"active_stream_hard_timeout_after_{row_timeout}s",
                 state,
-                age_seconds=int(row["age_seconds"] or 0),
+                age_seconds=int(row_data.get("age_seconds") or 0),
                 timeout_sec=row_timeout,
             )
 
@@ -2660,6 +2691,9 @@ async def cleanup_overlong_running_executions(
                    ))::text AS assistant_message_id,
                    COALESCE(ph.content, am.content, '') AS partial_content,
                    te.retry_count,
+                   te.owner_instance,
+                   te.owner_epoch,
+                   (te.lease_expires_at IS NOT NULL AND te.lease_expires_at > NOW()) AS lease_valid,
                    EXTRACT(EPOCH FROM (NOW() - COALESCE(te.updated_at, te.started_at)))::int AS age_seconds,
                    EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS started_age_seconds
             FROM chat_turn_executions te
@@ -2687,22 +2721,36 @@ async def cleanup_overlong_running_executions(
             _EXECUTION_RESUME_MAX_ATTEMPTS,
         )
         for row in retrying_rows:
-            session_id = row["session_id"]
-            execution_id = row["execution_id"]
+            row_data = _row_to_dict(row)
+            session_id = row_data["session_id"]
+            execution_id = row_data["execution_id"]
             if execution_id in _already_interrupted:
                 continue
-            partial_content = row["partial_content"] or ""
+            if (
+                row_data.get("lease_valid")
+                and row_data.get("owner_instance")
+                and row_data.get("owner_instance") != _EXECUTION_OWNER_INSTANCE
+            ):
+                logger.info(
+                    "stale_retrying_execution_deferred_remote_lease session=%s execution=%s owner=%s epoch=%s",
+                    session_id[:8],
+                    execution_id[:8],
+                    str(row_data.get("owner_instance"))[:80],
+                    row_data.get("owner_epoch"),
+                )
+                continue
+            partial_content = row_data.get("partial_content") or ""
             await _mark_execution_interrupted(
                 retry_conn,
                 session_id,
                 execution_id,
                 (
-                    f"stale_retrying_hard_cap_after_{row['retry_count']}_attempts"
-                    if int(row["retry_count"] or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS
-                    else f"stale_retrying_cleanup_after_{row['age_seconds']}s_started_{row['started_age_seconds']}s"
+                    f"stale_retrying_hard_cap_after_{row_data.get('retry_count')}_attempts"
+                    if int(row_data.get("retry_count") or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS
+                    else f"stale_retrying_cleanup_after_{row_data.get('age_seconds')}s_started_{row_data.get('started_age_seconds')}s"
                 ),
                 partial_content=partial_content,
-                placeholder_id=row["assistant_message_id"],
+                placeholder_id=row_data.get("assistant_message_id"),
                 delete_empty_placeholder=not bool(
                     _strip_streaming_progress_markers(partial_content).strip()
                 ),
@@ -2710,7 +2758,7 @@ async def cleanup_overlong_running_executions(
             retrying_closed += 1
             logger.warning(
                 "stale_retrying_execution_cleaned session=%s execution=%s age=%ss",
-                session_id[:8], execution_id[:8], row["age_seconds"],
+                session_id[:8], execution_id[:8], row_data.get("age_seconds"),
             )
 
     return {
@@ -2726,6 +2774,15 @@ async def cleanup_stale_streaming_placeholders(
     *,
     timeout_sec: Optional[int] = None,
 ) -> Dict[str, int]:
+    if not _is_local_active_api_slot():
+        return {
+            "scanned": 0,
+            "cleaned": 0,
+            "hidden": 0,
+            "stale_lease_cleaned": 0,
+            "inactive_slot_skipped": 1,
+        }
+
     timeout = (
         timeout_sec
         if timeout_sec is not None
