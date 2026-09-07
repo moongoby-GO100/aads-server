@@ -543,6 +543,13 @@ start_deploy_queue_worker() {
         fi
         rm -f "$DEPLOY_QUEUE_WORKER_LOCKFILE" 2>/dev/null || true
     fi
+    local launcher
+    launcher="${STATE_DIR}/scripts/start_aads_deploy_queue_worker.sh"
+    if [[ -x "$launcher" ]]; then
+        bash "$launcher" "$MODE" "$trigger"
+        return 0
+    fi
+
     local log_file
     log_file="${STATE_DIR}/logs/deploy-queue-worker-$(date +%Y%m%d-%H%M%S).log"
     (

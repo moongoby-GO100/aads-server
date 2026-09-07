@@ -11910,3 +11910,22 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `deploy.sh`: export `COMPOSE_PROJECT_NAME=aads-server` by default, with `AADS_COMPOSE_PROJECT_NAME` override support. This lets clean release worktrees manage the existing blue/green containers instead of creating a separate temporary compose project.
 - Verification before release:
   - Pending: `bash -n deploy.sh`, release contract verifier, commit/push, then `deploy.sh bluegreen` from clean release SHA.
+
+## 2026-09-07 15:36 KST — Ops deploy queue async handoff hardening
+- CEO request:
+  - Move commit/push/deploy flow into ops-managed DB automation where possible, reduce chat response waiting time, and ensure modified code is not lost before production rollout.
+- Finding:
+  - `deploy_runs`/`deploy_phase_events`, `/api/v1/ops/deploy/requests`, and `deploy.sh` queue handling already existed, but `PipelineCJob.approve()` still called the AADS blue/green deploy path synchronously after push.
+  - That left the chat/runner response tied to long phases such as image build, standby same-digest sync, and five-minute P0/P1 monitoring.
+  - The existing queue worker could also start from the dirty canonical repo when invoked by a busy deploy, causing valid queued releases to fail the dirty-worktree gate.
+- Change prepared:
+  - `app/services/pipeline_runner_service.py`: after AADS runner approval, git push remains synchronous, then the release SHA is registered in `deploy_runs` through `enqueue_deploy_request()` and the runner returns with phase `deploy_queued`.
+  - `scripts/start_aads_deploy_queue_worker.sh`: new launcher that claims the latest auto-start queued AADS release from DB, creates a detached clean git worktree at that SHA, and runs `deploy.sh bluegreen` from that clean source tree.
+  - `deploy.sh`: `start_deploy_queue_worker()` now prefers the clean-worktree launcher before falling back to in-place worker execution.
+- Verification before release:
+  - `python3 -m py_compile app/services/pipeline_runner_service.py`: passed.
+  - `bash -n deploy.sh`: passed.
+  - `bash -n scripts/start_aads_deploy_queue_worker.sh`: passed.
+- Remaining before completion:
+  - Commit/push only `app/services/pipeline_runner_service.py`, `deploy.sh`, `scripts/start_aads_deploy_queue_worker.sh`, and this HANDOVER entry.
+  - Run or queue blue/green release from the pushed SHA, then verify `/api/v1/health`, deploy DB run status, container image digest, and five-minute P0/P1 monitoring.

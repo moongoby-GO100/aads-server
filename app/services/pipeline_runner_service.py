@@ -6,9 +6,9 @@ Pipeline Runner Orchestrator — 채팅 → Claude Code 자율 작업 → 검수
   Phase 2: ai_review         — 채팅 AI가 결과 검수 → 검수 결과를 채팅방에 삽입
   Phase 3: revision (0~N)    — 검수 실패 시 재지시 루프 → 매 사이클 채팅방 기록
   Phase 4: awaiting_approval — 세션 AI 자동 검수/승인 → 고위험만 CEO 에스컬레이션
-  Phase 5: deploying         — 커밋/푸시/재시작 → 배포 결과 채팅방 기록
-  Phase 6: verifying         — 최종 검증
-  Phase 7: done              — 완료 → 채팅방에 최종 보고
+  Phase 5: deploying         — 커밋/푸시 → ops 배포 큐 등록
+  Phase 6: verifying         — 최종 검증 또는 배포 큐 상태 확인
+  Phase 7: done              — 작업 완료 → 실제 배포는 ops 원장에서 추적
 """
 import asyncio
 import base64
@@ -189,6 +189,49 @@ async def _debounced_aads_restart(job: "PipelineCJob"):
     job._log("aads_restart_exec", "디바운스 완료 — 재시작 실행")
     await job._ssh_command("bash /root/aads/aads-server/deploy.sh bluegreen")
     return True
+
+
+async def _queue_aads_deploy_after_push(job: "PipelineCJob", release_sha: str) -> dict:
+    """Register an AADS deploy in the ops DB and start the queue worker.
+
+    Pipeline approval should not hold the chat stream for the full blue/green
+    rollout. The deploy worker owns rollout/certification; this job only proves
+    commit+push completed and returns the deploy_run_id for follow-up status.
+    """
+    from app.core.db_pool import get_pool
+    from app.services.deploy_observability import enqueue_deploy_request
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await enqueue_deploy_request(
+            conn,
+            project="AADS",
+            release_sha=release_sha,
+            runner_job_id=job.job_id,
+            requested_by="pipeline_runner",
+            request_source="pipeline_runner_approve",
+            commit_status="committed",
+            push_status="pushed",
+            auto_start=True,
+            metadata={
+                "chat_session_id": job.chat_session_id,
+                "runner_job_id": job.job_id,
+                "phase": "deploy_queued",
+            },
+        )
+
+    worker = await job._ssh_command(
+        "bash /root/aads/aads-server/scripts/start_aads_deploy_queue_worker.sh bluegreen pipeline_runner_approve",
+        timeout=20,
+        retries=1,
+    )
+    return {
+        "deploy_run_id": row.get("id"),
+        "release_sha": row.get("release_sha"),
+        "queue_position": row.get("queue_position"),
+        "deduplicated": row.get("deduplicated", False),
+        "worker": worker.strip()[-500:],
+    }
 
 # H-11: job_id별 approve/reject 동시 호출 방지 락
 _job_approve_locks: Dict[str, asyncio.Lock] = {}
@@ -804,28 +847,33 @@ class PipelineCJob:
             return {"error": f"승인 불가 상태: {self.status}"}
 
         self.status = "running"
+        _release_deploy_lock = None
         try:
             # ★ Redis deploy lock — 프로젝트당 1건만 배포 허용
-            from app.services.deploy_lock import acquire_deploy_lock, release_deploy_lock
-            _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
-            if not _deploy_lock["acquired"]:
-                _holder = _deploy_lock.get("holder", "unknown")
-                for _dl_retry in range(3):
-                    self._log("deploy_lock_wait", f"배포 잠금 대기 ({_dl_retry+1}/3): holder={_holder}")
-                    await asyncio.sleep(min(30 * (_dl_retry + 1), 90))
-                    _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
-                    if _deploy_lock["acquired"]:
-                        break
-                else:
-                    self._log("deploy_lock_fail", f"배포 잠금 획득 실패: holder={_holder}")
-                    self.status = "error"
-                    self.error_msg = f"deploy_lock_fail: {_holder}가 배포 중"
-                    await self._save_to_db()
-                    await self._post_to_chat(
-                        f"⚠️ **[배포 잠금 실패]** `{self.job_id}` — {_holder}가 배포 중입니다."
-                    )
-                    await self._notify_push_status("error")
-                    return {"error": self.error_msg}
+            # AADS blue/green is serialized by deploy_runs + deploy.sh flock.
+            # Do not wait here; queue it in ops after push so chat can return.
+            if self.project != "AADS":
+                from app.services.deploy_lock import acquire_deploy_lock, release_deploy_lock
+                _release_deploy_lock = release_deploy_lock
+                _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
+                if not _deploy_lock["acquired"]:
+                    _holder = _deploy_lock.get("holder", "unknown")
+                    for _dl_retry in range(3):
+                        self._log("deploy_lock_wait", f"배포 잠금 대기 ({_dl_retry+1}/3): holder={_holder}")
+                        await asyncio.sleep(min(30 * (_dl_retry + 1), 90))
+                        _deploy_lock = acquire_deploy_lock(self.project, self.job_id, timeout=600)
+                        if _deploy_lock["acquired"]:
+                            break
+                    else:
+                        self._log("deploy_lock_fail", f"배포 잠금 획득 실패: holder={_holder}")
+                        self.status = "error"
+                        self.error_msg = f"deploy_lock_fail: {_holder}가 배포 중"
+                        await self._save_to_db()
+                        await self._post_to_chat(
+                            f"⚠️ **[배포 잠금 실패]** `{self.job_id}` — {_holder}가 배포 중입니다."
+                        )
+                        await self._notify_push_status("error")
+                        return {"error": self.error_msg}
 
             # Phase 5: 푸시 (commit은 Runner가 작업 완료 시 이미 수행)
             # cross-process flock으로 Chat-Direct git 작업과 충돌 방지
@@ -848,7 +896,45 @@ class PipelineCJob:
                 await self._save_to_db()
                 await self._post_to_chat(f"❌ **[배포 실패]** `{self.job_id}`\ngit push 실패: {_push_err}")
                 await self._notify_push_status("error")
+                if _release_deploy_lock:
+                    _release_deploy_lock(self.project, self.job_id)
                 return {"status": "error", "error": str(_push_err)}
+
+            if self.project == "AADS":
+                release_sha = (await self._ssh_command("git rev-parse --short=12 HEAD", timeout=10, retries=1)).strip()
+                if not release_sha or release_sha.startswith("[ERROR"):
+                    self.status = "error"
+                    self.error_msg = f"release_sha 확인 실패: {release_sha}"
+                    await self._save_to_db()
+                    await self._post_to_chat(f"❌ **[배포 큐 등록 실패]** `{self.job_id}`\n{self.error_msg}")
+                    await self._notify_push_status("error")
+                    return {"status": "error", "error": self.error_msg}
+
+                queue_result = await _queue_aads_deploy_after_push(self, release_sha)
+                self.phase = "deploy_queued"
+                self.status = "done"
+                self.review_feedback = (
+                    f"AADS deploy queued: deploy_run_id={queue_result.get('deploy_run_id')} "
+                    f"release_sha={queue_result.get('release_sha')}"
+                )
+                await self._save_to_db()
+                await self._post_to_chat(
+                    f"✅ **[Pipeline Runner 완료 — 배포 큐 등록]** `{self.job_id}`\n"
+                    f"커밋/푸시 완료 후 AADS blue-green 배포를 ops 큐에 등록했습니다.\n"
+                    f"- deploy_run_id: `{queue_result.get('deploy_run_id')}`\n"
+                    f"- release_sha: `{queue_result.get('release_sha')}`\n"
+                    f"- queue_position: `{queue_result.get('queue_position')}`\n"
+                    f"- deduplicated: `{queue_result.get('deduplicated')}`\n\n"
+                    f"배포 완료 인증은 `/api/v1/ops/deploy/status`와 push 알림으로 이어서 확인합니다."
+                )
+                await self._notify_push_status("done")
+                return {
+                    "status": "done",
+                    "phase": "deploy_queued",
+                    "deploy_run_id": queue_result.get("deploy_run_id"),
+                    "release_sha": queue_result.get("release_sha"),
+                    "worker": queue_result.get("worker"),
+                }
 
             # 서비스 재시작
             restart_cmd = _RESTART_CMD.get(self.project, "")
@@ -896,7 +982,8 @@ class PipelineCJob:
                 # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
                 await self._run_frontend_qa_if_needed()
 
-                release_deploy_lock(self.project, self.job_id)
+                if _release_deploy_lock:
+                    _release_deploy_lock(self.project, self.job_id)
                 return {
                     "status": "done",
                     "summary": verify["summary"],
@@ -950,7 +1037,8 @@ class PipelineCJob:
             # ★ AADS 프론트엔드(dashboard) 배포 후 QA 자동 실행
             await self._run_frontend_qa_if_needed()
 
-            release_deploy_lock(self.project, self.job_id)
+            if _release_deploy_lock:
+                _release_deploy_lock(self.project, self.job_id)
             return {
                 "status": "done",
                 "summary": verify["summary"],
@@ -974,7 +1062,8 @@ class PipelineCJob:
                 f"오류: {str(e)[:300]}\n\n"
                 f"CEO에게 오류 원인과 해결 방안을 간단히 보고해주세요."
             )
-            release_deploy_lock(self.project, self.job_id)
+            if _release_deploy_lock:
+                _release_deploy_lock(self.project, self.job_id)
             return {"error": str(e)}
 
     async def _run_frontend_qa_if_needed(self):
