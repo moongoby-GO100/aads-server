@@ -11479,3 +11479,10 @@
 - Remaining follow-up:
   - Add deploy-ledger HUP resilience/nohup-safe completion handling so run status stays successful after same-digest sync.
   - Continue post-deploy monitoring of `chat_turn_executions` for `running/retrying/interrupted` counts and verify stale retrying cleanup closes new cases automatically.
+$a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops only, no code change)
+- CEO request: "디스크 정리 우선 진행하고, 다음 단계 진행해".
+- Disk: root usage 93% -> 79% (193G total, 42G free). Removed old aads-server images (6 earlier + 3259a57fd5b6 after bluegreen), 3 dangling worktree volumes, 88MB build cache. Kept aads-server:1211edde5097 as rollback image; build cache 24.7GB kept (38/44 active).
+- Goals: goal_task_links 0 -> 8 via /api/v1/goals/{id}/link (AADS 5, GO100 3). AADS goal "채팅 시스템 안정화" milestones 3/3 auto-completed and goal auto-transitioned to completed. Unique index uq_goal_task_links_goal_task confirmed (duplicate index dropped).
+- Auto-link code (_auto_link_job_to_goal, pipeline_runner_service.py:492) is deployed in aads-server:7c2df6c42bbc; E2E on a fresh runner submission is still unverified (no goal_auto_linked log yet). goal_task_links.status stayed awaiting_approval for runner-6c44beff after job error — _update_linked_goal_state does not map error status (follow-up).
+- GO100 runner-6c44beff (GO100-360 P0) approved 11:25 KST but push failed non-fast-forward (worktree base d8aa3397f, origin/main moved 4 commits); child runner-b22be2d6 orphan-cancelled. Runner has no auto-rebase on push_fail (systemic follow-up).
+- Follow-up: set a new AADS goal (previous one completed), verify goal_auto_linked log on next runner, run docker builder prune --all right after next image build.
