@@ -327,10 +327,21 @@ async def _ensure_running_placeholder_anchor(
               AND status IN ('running', 'retrying')
               AND completed_at IS NULL
         )
-        ON CONFLICT (execution_id)
-          WHERE role = 'assistant'
-            AND execution_id IS NOT NULL
-        DO NOTHING
+        ON CONFLICT (session_id)
+          WHERE intent = 'streaming_placeholder'
+        DO UPDATE
+        SET execution_id = EXCLUDED.execution_id,
+            role = 'assistant',
+            content = CASE
+                WHEN LENGTH(COALESCE(EXCLUDED.content, '')) > LENGTH(COALESCE(chat_messages.content, ''))
+                THEN EXCLUDED.content
+                ELSE chat_messages.content
+            END,
+            model_used = 'streaming',
+            tools_called = EXCLUDED.tools_called,
+            is_hidden = FALSE,
+            edited_at = NOW()
+        WHERE chat_messages.role = 'assistant'
         RETURNING id, content, tools_called, (xmax = 0) AS is_new
         """,
         session_id,

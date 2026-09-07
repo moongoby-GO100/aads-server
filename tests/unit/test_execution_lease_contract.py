@@ -66,7 +66,9 @@ def test_placeholder_repair_uses_the_actual_assistant_execution_unique_index():
     )[0]
 
     assert "AND role = 'assistant'" in helper
-    assert "ON CONFLICT (execution_id)" in helper
-    assert "WHERE role = 'assistant'" in helper
-    assert "DO NOTHING" in helper
+    assert "ON CONFLICT (session_id)" in helper
+    assert "WHERE intent = 'streaming_placeholder'" in helper
+    assert "DO UPDATE" in helper
+    assert "SET execution_id = EXCLUDED.execution_id" in helper
+    assert "WHERE chat_messages.role = 'assistant'" in helper
     assert "interrupted_partial" in helper

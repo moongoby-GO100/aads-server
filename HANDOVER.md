@@ -11791,3 +11791,21 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `compile_task_policy`는 아직 러너 지시서 생성 경로에 주입되지 않았다(목표 생성 시 trace 증거로만 기록). 러너 프롬프트 주입은 후속 작업.
   - 동일 TASK_ID로 러너 인스턴스가 2개 기동되어 같은 파일을 동시에 편집했다. 최종 산출물은 단일 경로로 통합했으나, 러너 중복 기동 자체는 별도 조사 필요.
   - 워크트리의 `tests/unit/test_execution_lease_contract.py` 등 무관한 dirty 파일은 건드리지 않았고 커밋에서 제외했다.
+
+## 2026-09-07 14:45 KST — Chat last-response placeholder conflict hotfix
+- CEO request:
+  - Register the AADS blue/green deployment through the operations queue, then report only after completion; after runner review, take corrective action.
+- Deployment finding:
+  - Release `a879222ed631` reached active cutover and same-digest standby sync, but deploy run `94` was interrupted by TERM during the required five-minute P0/P1 monitoring phase.
+  - Manual post-deploy monitoring then detected repeated `/api/v1/chat/sessions/{session_id}/last-response` HTTP 500 errors for session `8bf0405a-1f22-4ad9-bb09-6e0fce8c6339`.
+  - Root cause: `_ensure_running_placeholder_anchor()` handled the execution-level assistant unique index but did not handle the session-level `idx_one_placeholder_per_session` partial unique index.
+- Change prepared:
+  - `app/routers/chat.py`: change the placeholder repair insert to `ON CONFLICT (session_id) WHERE intent = 'streaming_placeholder' DO UPDATE`, reusing the existing session placeholder and attaching it to the live execution instead of raising `UniqueViolationError`.
+  - `tests/unit/test_execution_lease_contract.py`: update the static contract test so this session-level conflict handling cannot regress.
+- Verification before commit:
+  - `pytest -q tests/unit/test_execution_lease_contract.py`: 6 passed, 1 existing pytest config warning.
+  - `python3 -m py_compile app/routers/chat.py`: passed.
+  - `git diff --check -- app/routers/chat.py tests/unit/test_execution_lease_contract.py`: passed.
+- Remaining before completion:
+  - Commit/push only `app/routers/chat.py`, `tests/unit/test_execution_lease_contract.py`, and this HANDOVER entry.
+  - Run `deploy.sh bluegreen` from a clean release SHA and complete the full five-minute P0/P1 monitoring gate.
