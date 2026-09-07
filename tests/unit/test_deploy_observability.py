@@ -171,6 +171,11 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "reconcile_stale_deploy_runs" in script
     assert "stale deploy reconciled before new deploy" in script
     assert "reconcile_inactive_target_recovery_executions \"$old_container\"" in script
+    assert "queued_for_deploy" in script
+    assert "queue_pending_deploy_request" in script
+    assert "start_deploy_queue_worker \"lock_busy\"" in script
+    assert "claim_latest_queued_deploy_request" in script
+    assert "superseded_by_newer_deploy" in script
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():

@@ -11504,3 +11504,23 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Auto-link code (_auto_link_job_to_goal, pipeline_runner_service.py:492) is deployed in aads-server:7c2df6c42bbc; E2E on a fresh runner submission is still unverified (no goal_auto_linked log yet). goal_task_links.status stayed awaiting_approval for runner-6c44beff after job error — _update_linked_goal_state does not map error status (follow-up).
 - GO100 runner-6c44beff (GO100-360 P0) approved 11:25 KST but push failed non-fast-forward (worktree base d8aa3397f, origin/main moved 4 commits); child runner-b22be2d6 orphan-cancelled. Runner has no auto-rebase on push_fail (systemic follow-up).
 - Follow-up: set a new AADS goal (previous one completed), verify goal_auto_linked log on next runner, run docker builder prune --all right after next image build.
+
+## 2026-09-07 11:58 KST — No-loss deploy queue gate follow-up
+- CEO request:
+  - When a blue/green deploy is still in standby same-digest sync, do not let a new deploy collide with the active release. Queue the new deploy, run only the latest queued SHA after sync completes, apply the same policy to GO100, and report deployment status.
+- AADS changes prepared:
+  - `deploy.sh` now records a live-lock reentrant deploy request as `deploy_runs.status='queued', phase='queued_for_deploy'` instead of terminal `blocked`.
+  - A single `/tmp/aads-deploy-queue-worker.lock` worker waits for the current `/tmp/aads-deploy.lock` holder to finish, then claims the newest queued SHA and marks older queued rows `superseded_by_newer_deploy`.
+  - The queue worker re-reads local `HEAD` after the active deploy lock clears, so a newer committed release can supersede an older pending request before deployment starts.
+  - Successful deploy completion now checks for queued deploy requests and starts a queue worker if needed.
+- GO100 action:
+  - Submitted `runner-27298506` with dependency on `runner-c5a5404c` to apply the same queued deploy gate to `/root/kis-autotrade-v4/scripts/deploy.sh` after active GO100 P0 work finishes. Direct GO100 editing was not safe because the remote repo is detached with `HANDOVER.md` unmerged and active GO100 runners are running.
+- Verification before commit:
+  - `bash -n deploy.sh`: passed.
+  - `python3 -m pytest -q tests/unit/test_deploy_observability.py`: 5 passed, 1 existing pytest config warning.
+  - `git diff --check -- deploy.sh tests/unit/test_deploy_observability.py`: passed.
+- Operational state captured:
+  - `deploy_runs.id=62` was still `syncing_standby` for release `ee2a5c79ea5b` with live deploy PID `1509699`.
+  - `deploy_runs.id=63` had already queued release `76aaaa2ff2f1` behind PID `1509699`; after this new commit, the next deploy request should supersede that row with the new release SHA.
+- Remaining before completion:
+  - Commit/push this selected-file AADS change, trigger `deploy.sh bluegreen`, verify queued/superseded behavior, health, same-digest standby, and P0/P1 monitoring.

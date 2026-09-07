@@ -29,6 +29,7 @@ DEPLOY_RUN_ID=""
 DEPLOY_CURRENT_PHASE="initializing"
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
 DEPLOY_HEARTBEAT_PID=""
+DEPLOY_QUEUE_WORKER_LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
 mkdir -p "${COMPOSE_DIR}/logs"
 
 cleanup_release_context() {
@@ -285,6 +286,218 @@ deploy_observe_update() {
             error_summary=NULLIF('$err_sql', '')
         WHERE id=${DEPLOY_RUN_ID};
     " >/dev/null
+}
+
+deploy_queue_count() {
+    if ! deploy_db_available; then
+        echo 0
+        return 0
+    fi
+    local count
+    count="$(
+        deploy_db_exec "
+            SELECT COUNT(*)::int
+            FROM deploy_runs
+            WHERE project='AADS'
+              AND status='queued'
+              AND phase='queued_for_deploy';
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$count" =~ ^[0-9]+$ ]]; then
+        echo "$count"
+    else
+        echo 0
+    fi
+}
+
+queue_pending_deploy_request() {
+    local lock_pid="${1:-unknown}"
+    if ! deploy_db_available; then
+        echo "[deploy.sh] ⚠️ deploy queue unavailable: PostgreSQL is not running"
+        return 0
+    fi
+    ensure_deploy_observability_schema || return 0
+    local release_sql lock_pid_sql queue_reason_sql run_id
+    release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
+    lock_pid_sql="$(sql_escape "$lock_pid")"
+    queue_reason_sql="$(sql_escape "queued because active blue-green deploy is still syncing standby; active_pid=${lock_pid}")"
+    run_id="$(
+        deploy_db_exec "
+            WITH superseded AS (
+                UPDATE deploy_runs
+                SET status='superseded',
+                    phase='superseded_by_newer_deploy',
+                    phase_completed_at=NOW(),
+                    updated_at=NOW(),
+                    error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), 'superseded by newer queued release $release_sql')
+                WHERE project='AADS'
+                  AND status='queued'
+                  AND phase='queued_for_deploy'
+                  AND release_sha IS DISTINCT FROM '$release_sql'
+            ),
+            existing AS (
+                SELECT id
+                FROM deploy_runs
+                WHERE project='AADS'
+                  AND release_sha='$release_sql'
+                  AND status='queued'
+                  AND phase='queued_for_deploy'
+                ORDER BY id DESC
+                LIMIT 1
+            ),
+            inserted AS (
+                INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
+                                        deploy_pid, last_heartbeat_at, queue_position,
+                                        error_summary, created_at, updated_at)
+                SELECT 'AADS', '$release_sql', 'queued', 'queued_for_deploy', NOW(),
+                       $$, NOW(), 1, '$queue_reason_sql', NOW(), NOW()
+                WHERE NOT EXISTS (SELECT 1 FROM existing)
+                RETURNING id
+            )
+            SELECT id FROM inserted
+            UNION ALL
+            SELECT id FROM existing
+            LIMIT 1;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    echo "[deploy.sh] queued_for_deploy: release=${AADS_RELEASE_SHA}, active_pid=${lock_pid}, queue_run_id=${run_id:-unknown}"
+    audit_control "deploy-queue" "deploy_runs:${run_id:-unknown}" "queued" "release=${AADS_RELEASE_SHA}; active_pid=${lock_pid_sql}"
+}
+
+wait_for_active_deploy_lock() {
+    local max_wait="${AADS_DEPLOY_QUEUE_MAX_WAIT_SECONDS:-5400}"
+    local interval="${AADS_DEPLOY_QUEUE_POLL_SECONDS:-15}"
+    local waited=0
+    if [[ ! "$max_wait" =~ ^[0-9]+$ ]] || [[ "$max_wait" -lt 60 ]]; then
+        max_wait=5400
+    fi
+    if [[ ! "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -lt 5 ]]; then
+        interval=15
+    fi
+    while [[ -f "${LOCKFILE:-/tmp/aads-deploy.lock}" ]]; do
+        local lock_pid
+        lock_pid="$(cat "${LOCKFILE:-/tmp/aads-deploy.lock}" 2>/dev/null || echo "")"
+        if [[ -z "$lock_pid" ]] || ! kill -0 "$lock_pid" 2>/dev/null; then
+            rm -f "${LOCKFILE:-/tmp/aads-deploy.lock}" 2>/dev/null || true
+            return 0
+        fi
+        if [[ "$waited" -ge "$max_wait" ]]; then
+            echo "[deploy.sh] ❌ queued deploy wait timeout: active_pid=${lock_pid}, waited=${waited}s"
+            deploy_db_exec "
+                UPDATE deploy_runs
+                SET status='failed',
+                    phase='queued_for_deploy_timeout',
+                    phase_completed_at=NOW(),
+                    updated_at=NOW(),
+                    error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), 'queued deploy wait timeout after ${waited}s')
+                WHERE project='AADS'
+                  AND status='queued'
+                  AND phase='queued_for_deploy';
+            " >/dev/null
+            return 1
+        fi
+        deploy_db_exec "
+            UPDATE deploy_runs
+            SET updated_at=NOW(),
+                last_heartbeat_at=NOW(),
+                duration_ms=GREATEST(0, EXTRACT(EPOCH FROM (NOW() - COALESCE(phase_started_at, created_at)))::bigint * 1000),
+                estimated_remaining_ms=GREATEST(0, (${max_wait} - ${waited}) * 1000),
+                error_summary='waiting for active deploy PID=${lock_pid} to finish'
+            WHERE project='AADS'
+              AND status='queued'
+              AND phase='queued_for_deploy';
+        " >/dev/null
+        echo "[deploy.sh] queued deploy waiting: active_pid=${lock_pid}, waited=${waited}/${max_wait}s"
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+}
+
+claim_latest_queued_deploy_request() {
+    if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" != "true" ]] || ! deploy_db_available; then
+        return 0
+    fi
+    local latest_sha run_id
+    latest_sha="$(
+        deploy_db_exec "
+            SELECT release_sha
+            FROM deploy_runs
+            WHERE project='AADS'
+              AND status='queued'
+              AND phase='queued_for_deploy'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ -z "${latest_sha:-}" ]]; then
+        echo "[deploy.sh] queue worker found no queued deployment"
+        exit 0
+    fi
+    if [[ "$latest_sha" != "${AADS_RELEASE_SHA:-unknown}" ]]; then
+        echo "[deploy.sh] ❌ latest queued release (${latest_sha}) does not match local HEAD (${AADS_RELEASE_SHA:-unknown}); leaving queue intact"
+        exit 1
+    fi
+    run_id="$(
+        deploy_db_exec "
+            WITH latest AS (
+                SELECT id
+                FROM deploy_runs
+                WHERE project='AADS'
+                  AND status='queued'
+                  AND phase='queued_for_deploy'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ),
+            superseded AS (
+                UPDATE deploy_runs
+                SET status='superseded',
+                    phase='superseded_by_newer_deploy',
+                    phase_completed_at=NOW(),
+                    updated_at=NOW()
+                WHERE project='AADS'
+                  AND status='queued'
+                  AND phase='queued_for_deploy'
+                  AND id NOT IN (SELECT id FROM latest)
+            )
+            UPDATE deploy_runs
+            SET status='running',
+                phase='preflight',
+                phase_started_at=NOW(),
+                deploy_pid=$$,
+                last_heartbeat_at=NOW(),
+                updated_at=NOW(),
+                error_summary=NULL
+            WHERE id IN (SELECT id FROM latest)
+            RETURNING id;
+        " | tail -1 | tr -d '[:space:]'
+    )"
+    if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+        DEPLOY_RUN_ID="$run_id"
+        echo "[deploy.sh] claimed queued deploy_run_id=${DEPLOY_RUN_ID}"
+    fi
+}
+
+start_deploy_queue_worker() {
+    local trigger="${1:-manual}"
+    if [[ "$(deploy_queue_count)" == "0" ]]; then
+        return 0
+    fi
+    if [[ -f "$DEPLOY_QUEUE_WORKER_LOCKFILE" ]]; then
+        local worker_pid
+        worker_pid="$(cat "$DEPLOY_QUEUE_WORKER_LOCKFILE" 2>/dev/null || echo "")"
+        if [[ -n "$worker_pid" ]] && kill -0 "$worker_pid" 2>/dev/null; then
+            echo "[deploy.sh] deploy queue worker already running (PID=${worker_pid})"
+            return 0
+        fi
+        rm -f "$DEPLOY_QUEUE_WORKER_LOCKFILE" 2>/dev/null || true
+    fi
+    local log_file
+    log_file="${COMPOSE_DIR}/logs/deploy-queue-worker-$(date +%Y%m%d-%H%M%S).log"
+    (
+        env AADS_DEPLOY_QUEUE_WORKER=true bash "$COMPOSE_DIR/deploy.sh" "$MODE"
+    ) >"$log_file" 2>&1 &
+    echo $! > "$DEPLOY_QUEUE_WORKER_LOCKFILE"
+    echo "[deploy.sh] deploy queue worker started: PID=$!, trigger=${trigger}, log=${log_file}"
 }
 
 stop_deploy_heartbeat() {
@@ -662,9 +875,19 @@ LOCKFILE="/tmp/aads-deploy.lock"
 if [ -f "$LOCKFILE" ]; then
     LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
     if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
-        echo "[deploy.sh] ❌ 배포 이미 진행 중 (PID=$LOCK_PID). 중복 호출 차단."
-        record_deploy "blocked" "$MODE" "deploy already running PID=${LOCK_PID}"
-        exit 1
+        if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
+            echo "[deploy.sh] deploy queue worker waiting for active deploy PID=${LOCK_PID}"
+            if ! wait_for_active_deploy_lock; then
+                record_deploy "failed" "$MODE" "queued deploy wait timeout"
+                exit 1
+            fi
+            AADS_RELEASE_SHA="$(git -C "$COMPOSE_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+        else
+            echo "[deploy.sh] 배포 진행 중 (PID=$LOCK_PID). 새 요청은 queued_for_deploy로 보류합니다."
+            queue_pending_deploy_request "$LOCK_PID"
+            start_deploy_queue_worker "lock_busy"
+            exit 0
+        fi
     else
         echo "[deploy.sh] ⚠️ stale lockfile 제거 (PID=$LOCK_PID 종료됨)"
         rm -f "$LOCKFILE"
@@ -711,6 +934,7 @@ printf '%s\n' "$DEPLOY_GENERATION" > "$DEPLOY_GENERATION_FILE"
 audit_control "deploy-generation" "$ACTIVE_CONTAINER:$ACTIVE_PORT" "started" "mode=$MODE"
 ensure_deploy_observability_schema
 reconcile_stale_deploy_runs
+claim_latest_queued_deploy_request
 deploy_phase_start "preflight" "running"
 if ! enforce_release_worktree_gate; then
     deploy_phase_end "preflight" "blocked" "dirty worktree blocks release"
@@ -1708,4 +1932,5 @@ notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${
 stop_downtime_monitor
 deploy_observe_update "success" "completed" ""
 record_deploy "success" "$MODE" ""
+start_deploy_queue_worker "post_success"
 exit 0
