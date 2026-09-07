@@ -648,6 +648,8 @@ async def lifespan(app: FastAPI):
                     get_active_bg_tasks as _get_active_bg_tasks,
                     _has_meaningful_partial_content as _has_meaningful_partial_content_watchdog,
                     _strip_streaming_progress_markers as _strip_streaming_progress_markers_watchdog,
+                    _EXECUTION_LEASE_SECONDS as _execution_lease_seconds_watchdog,
+                    _EXECUTION_OWNER_INSTANCE as _execution_owner_instance_watchdog,
                 )
                 import asyncio as _watchdog_asyncio
 
@@ -662,6 +664,7 @@ async def lifespan(app: FastAPI):
                         SELECT te.id,
                                te.session_id,
                                te.requested_model,
+                               te.owner_epoch,
                                te.retry_count,
                                te.error_message,
                                te.status AS execution_status,
@@ -816,10 +819,19 @@ async def lifespan(app: FastAPI):
                             SET status = 'retrying',
                                 retry_count = retry_count + 1,
                                 completed_at = NULL,
+                                owner_instance = $2,
+                                owner_epoch = owner_epoch + 1,
+                                heartbeat_at = NOW(),
+                                lease_expires_at = NOW() + ($3::int * INTERVAL '1 second'),
                                 updated_at = NOW(),
-                                interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb)
+                                interruption_diagnostics = (
+                                    COALESCE(interruption_diagnostics, '{}'::jsonb)
+                                    - 'watchdog_settled_without_retry'
+                                    - 'auto_resume_scheduled'
+                                )
                                     || jsonb_build_object(
                                         'watchdog_auto_retry_scheduled', TRUE,
+                                        'auto_resume_scheduled', TRUE,
                                         'watchdog_retry_source', CASE
                                             WHEN status = 'interrupted' THEN 'stranded_interrupted'
                                             ELSE 'stale_running'
@@ -833,6 +845,11 @@ async def lifespan(app: FastAPI):
                                     ELSE 'watchdog_auto_retry_scheduled policy=20m+10m_or_45m+20m'
                                 END
                             WHERE id = ANY($1::uuid[])
+                              AND (
+                                owner_instance IS NULL
+                                OR lease_expires_at IS NULL
+                                OR lease_expires_at <= NOW()
+                              )
                               AND (
                                 (
                                   status IN ('running', 'retrying')
@@ -877,11 +894,14 @@ async def lifespan(app: FastAPI):
                                   )
                                 )
                               )
-                            RETURNING id
+                            RETURNING id, owner_epoch
                             """,
                             _retry_ids,
+                            _execution_owner_instance_watchdog,
+                            _execution_lease_seconds_watchdog,
                         )
-                    _claimed_ids = {r["id"] for r in _retry_claimed}
+                    _claimed_epochs = {r["id"]: r["owner_epoch"] for r in _retry_claimed}
+                    _claimed_ids = set(_claimed_epochs)
                     for row in _retry_rows:
                         if row["id"] not in _claimed_ids:
                             continue
@@ -932,6 +952,7 @@ async def lifespan(app: FastAPI):
                                 row["workspace_name"] or "CEO",
                                 execution_id=_eid,
                                 requested_model=row["requested_model"],
+                                owner_epoch=_claimed_epochs.get(row["id"]),
                             )
                         )
 

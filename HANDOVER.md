@@ -11848,3 +11848,18 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Remaining before completion:
   - Commit/push only `app/routers/chat.py`, `tests/unit/test_execution_lease_contract.py`, and this HANDOVER entry.
   - Run `deploy.sh bluegreen` from a clean release SHA and complete the full five-minute P0/P1 monitoring gate.
+
+## 2026-09-07 15:04 KST — Chat watchdog retry lease hardening
+- CEO request:
+  - Immediately apply the recommended response-interruption fixes, restore chat features that appeared and then disappeared on screen, deploy, and report.
+- Findings:
+  - Session `7fb5f50a-9fe7-4a29-9333-9c023125aa6e` had repeated interrupted assistant messages with substantial partial content, including watchdog diagnostics that simultaneously recorded `watchdog_auto_retry_scheduled=true` and `auto_resume_scheduled=false`.
+  - The stale execution watchdog marked rows as retrying without atomically taking the execution lease, so a resume task could skip on a valid remote lease while the DB/UI still showed a retry path.
+- Change prepared:
+  - `app/main.py`: watchdog auto-retry now sets `owner_instance`, increments `owner_epoch`, heartbeats the lease, clears stale settled flags, and passes the claimed epoch to `_resume_single_stream`.
+  - `app/main.py`: watchdog retry claims now require an expired or absent lease, preventing false retry scheduling over another active owner.
+- Verification before release:
+  - `python3 -m py_compile app/main.py`: passed.
+  - `git diff --check -- app/main.py`: passed.
+- Remaining before completion:
+  - Commit/push this HANDOVER entry and `app/main.py`, then run `deploy.sh bluegreen` and complete health plus P0/P1 monitoring.
