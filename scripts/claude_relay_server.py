@@ -1464,6 +1464,10 @@ async def handle_stream(request):
 
 
 _CODEX_MODEL_MAP = {
+    "gpt-6-astra": "gpt-6-astra",
+    "gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6-luna": "gpt-5.6-luna",
     "gpt-5.5": "gpt-5.5",
     "gpt-5": "gpt-5.4", "gpt-5-mini": "gpt-5.4-mini",
     "gpt-5.4": "gpt-5.4", "gpt-5.4-mini": "gpt-5.4-mini",
@@ -1594,7 +1598,14 @@ async def handle_codex_stream(request):
     session_id = body.get("session_id", "")
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
-    codex_model = _CODEX_MODEL_MAP.get(model, "gpt-5.5")
+    codex_model = _CODEX_MODEL_MAP.get(model)
+    if not codex_model:
+        normalized_model = str(model or "").strip()
+        if normalized_model.startswith("gpt-"):
+            codex_model = normalized_model
+            logger.warning("codex_model_unmapped_passthrough: requested=%s", normalized_model)
+        else:
+            codex_model = "gpt-5.5"
     codex_project = _normalize_codex_project(body.get("project", "AADS"))
     prompt = messages_text
     if system_prompt:

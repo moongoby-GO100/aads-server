@@ -134,6 +134,15 @@ def test_codex_relay_cwd_falls_back_to_default(tmp_path, monkeypatch) -> None:
     assert relay._resolve_codex_cwd("KIS") == str(tmp_path)
 
 
+def test_codex_relay_preserves_current_codex_model_ids() -> None:
+    relay = _load_claude_relay_module()
+
+    assert relay._CODEX_MODEL_MAP["gpt-6-astra"] == "gpt-6-astra"
+    assert relay._CODEX_MODEL_MAP["gpt-5.6-sol"] == "gpt-5.6-sol"
+    assert relay._CODEX_MODEL_MAP["gpt-5.6-terra"] == "gpt-5.6-terra"
+    assert relay._CODEX_MODEL_MAP["gpt-5.6-luna"] == "gpt-5.6-luna"
+
+
 def test_codex_command_execution_is_not_emitted_as_bash_tool() -> None:
     relay = _load_claude_relay_module()
 

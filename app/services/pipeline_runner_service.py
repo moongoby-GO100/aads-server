@@ -72,7 +72,7 @@ _LITELLM_FALLBACK_MODELS = {
 }
 
 # Codex CLI 가용 모델 (Codex catalog, 2026-04-28)
-_CODEX_AVAILABLE_MODELS = {"default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_CODEX_AVAILABLE_MODELS = {"default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 _TERMINAL_JOB_STATUSES = {
     "done",
     "error",
@@ -80,6 +80,12 @@ _TERMINAL_JOB_STATUSES = {
     "rejected_done",
     "review_hold",
 }
+
+
+def _is_codex_model_allowed(model: str) -> bool:
+    """Allow DB-configured current Codex GPT model ids without silently downgrading."""
+    value = (model or "").strip()
+    return value in _CODEX_AVAILABLE_MODELS or value.startswith("gpt-")
 
 
 def _normalize_claude_cli_model(model: str) -> str:
@@ -349,8 +355,8 @@ class PipelineCJob:
         # Codex 모델 유효성 검증 — 미지원 모델은 gpt-5.5로 폴백
         if worker_model and worker_model.startswith("codex:"):
             codex_name = worker_model.split(":", 1)[1]
-            if codex_name not in _CODEX_AVAILABLE_MODELS:
-                logger.warning(f"Codex model '{codex_name}' not available, fallback to gpt-5.5")
+            if not _is_codex_model_allowed(codex_name):
+                logger.warning("Codex model '%s' is not a GPT model id, fallback to gpt-5.5", codex_name)
                 worker_model = "codex:gpt-5.5"
         self.worker_model = worker_model
         # AADS-211: 병렬 실행 그룹
@@ -1464,7 +1470,7 @@ class PipelineCJob:
     async def _run_codex_cli(self, instruction: str, override_model: str = "") -> dict:
         """Codex CLI 실행. ChatGPT Plus OAuth 기반."""
         codex_model = override_model or "gpt-5.5"
-        if codex_model not in _CODEX_AVAILABLE_MODELS:
+        if not _is_codex_model_allowed(codex_model):
             logger.warning("pipeline_c_codex_invalid_model job=%s model=%s -> gpt-5.5", self.job_id, codex_model)
             codex_model = "gpt-5.5"
 

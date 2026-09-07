@@ -390,6 +390,50 @@ async def _get_default_llm_model_from_db() -> Optional[str]:
     return None
 
 
+async def _get_codex_cli_fallback_model_from_db() -> str:
+    """Return the configured Codex fallback model instead of hard-coding a runtime downgrade."""
+    configured_models: list[str] = []
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT provider, model_id
+                FROM model_routing_preferences
+                WHERE route_key = ANY($1::text[])
+                  AND provider = 'codex'
+                  AND is_default = TRUE
+                  AND is_enabled = TRUE
+                ORDER BY CASE route_key
+                    WHEN 'runner_llm' THEN 1
+                    WHEN 'llm' THEN 2
+                    WHEN 'code_exec' THEN 3
+                    ELSE 9
+                  END,
+                  display_order ASC
+                """,
+                ["runner_llm", "llm", "code_exec"],
+            )
+        configured_models.extend(str(row["model_id"] or "").strip() for row in rows)
+    except Exception as e:
+        logger.warning("codex_fallback_db_lookup_failed: %s", e)
+
+    configured_models.append(str(await _get_default_llm_model_from_db() or "").strip())
+    for configured in configured_models:
+        value = configured
+        if value.startswith("codex:"):
+            value = value.split(":", 1)[1].strip()
+        if value in _CODEX_MODELS:
+            return value
+
+    legacy_model = os.getenv("AADS_CODEX_LEGACY_FALLBACK_MODEL", "gpt-5.5").strip()
+    return legacy_model if legacy_model in _CODEX_MODELS else "gpt-5.5"
+
+
 _AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
 
 
@@ -1257,12 +1301,13 @@ async def _stream_direct_openai_provider(
             break
         yield event
     if provider == "openai" and had_error:
+        fallback_model = await _get_codex_cli_fallback_model_from_db()
         yield {
             "type": "delta",
-            "content": f"\n\n[{display_model} 실행 불가 → Codex CLI gpt-5.6-sol 전환]\n\n",
+            "content": f"\n\n[{display_model} 실행 불가 → Codex CLI {fallback_model} 전환]\n\n",
         }
         async for fallback_event in _stream_codex_relay(
-            "gpt-5.6-sol",
+            fallback_model,
             system_prompt,
             messages,
             tools=tools,
@@ -2192,12 +2237,13 @@ async def call_stream(
         ):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"litellm_fallback: {model} failed, falling back to gpt-5.6-sol")
+                logger.warning(f"litellm_fallback: {model} failed, falling back to configured Codex model")
                 break
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
-            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -2210,14 +2256,15 @@ async def call_stream(
         async for event in _stream_litellm_openai(_or_model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to gpt-5.6-sol")
+                logger.warning(f"openrouter_fallback: {model} ({_or_model}) failed, falling back to configured Codex model")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
-            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -2229,14 +2276,15 @@ async def call_stream(
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"alibaba_fallback: {model} failed, falling back to gpt-5.6-sol")
+                logger.warning(f"alibaba_fallback: {model} failed, falling back to configured Codex model")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
-            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -2249,14 +2297,15 @@ async def call_stream(
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to gpt-5.6-sol")
+                logger.warning(f"kimi_minimax_fallback: {model} failed, falling back to configured Codex model")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
-            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -2289,12 +2338,13 @@ async def call_stream(
         async for event in _stream_antigravity_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"antigravity_fallback: {model} failed, falling back to gpt-5.6-sol")
+                logger.warning(f"antigravity_fallback: {model} failed, falling back to configured Codex model")
                 break
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
-            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
@@ -2306,14 +2356,15 @@ async def call_stream(
         async for event in _stream_litellm_openai(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"openai_fallback: {model} failed, falling back to gpt-5.6-sol")
+                logger.warning(f"openai_fallback: {model} failed, falling back to configured Codex model")
                 break
             if event.get("type") in ("done", "model_info"):
                 event = {**event, "model": model}
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI gpt-5.6-sol 전환]\n\n"}
-            async for event in _stream_codex_relay("gpt-5.6-sol", system_prompt, messages, tools=tools, session_id=session_id):
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
                 if event.get("type") in ("done", "model_info"):
                     event = {**event, "model": model}
                 yield event
