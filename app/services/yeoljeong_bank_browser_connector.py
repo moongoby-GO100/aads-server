@@ -2249,13 +2249,14 @@ async def _try_prepare_shinhan_query_flow(
 
 async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
     """Observe whether Shinhan moved past ID/PW login without reading secrets."""
-    try:
-        raw = await _evaluate_page(
-            page,
-            """
-            async () => {
-              const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-              const startedAt = performance.now();
+    started_at = time.monotonic()
+
+    async def _probe() -> dict[str, str]:
+        try:
+            raw = await _evaluate_page(
+                page,
+                """
+            () => {
               const authText = () => String(document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
               const authUrl = () => String(window.location.href || '');
               const loginErrorMarker = () => {
@@ -2286,40 +2287,53 @@ async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
                 }
                 return '';
               };
-              let reason = '';
-              let success = '0';
-              for (let i = 0; i < 90; i += 1) {
-                await sleep(500);
-                reason = loginErrorMarker();
-                if (reason) break;
-                reason = loggedInMarker();
-                if (reason) {
-                  success = '1';
-                  break;
-                }
-              }
+              const errorReason = loginErrorMarker();
+              const successReason = errorReason ? '' : loggedInMarker();
               return {
-                login_success: success,
-                login_success_reason: reason,
-                login_elapsed_ms: String(Math.round(performance.now() - startedAt))
+                login_success: successReason ? '1' : '0',
+                login_success_reason: successReason || errorReason || ''
               };
             }
             """,
-            timeout_ms=55000,
-            await_promise=True,
-        )
-    except Exception as exc:
+                timeout_ms=8000,
+            )
+        except Exception as exc:
+            return {
+                "login_success": "0",
+                "error_code": str(
+                    _safe_browser_error_fields(exc).get("error_code") or "LOGIN_MARKER_WAIT_FAILED"
+                )[:120],
+            }
+        if not isinstance(raw, dict):
+            return {"login_success": "0", "error_code": "LOGIN_MARKER_WAIT_BAD_PAYLOAD"}
         return {
-            "login_success": "0",
-            "error_code": str(_safe_browser_error_fields(exc).get("error_code") or "LOGIN_MARKER_WAIT_FAILED")[:120],
+            "login_success": "1" if str(raw.get("login_success") or "") == "1" else "0",
+            "login_success_reason": str(raw.get("login_success_reason") or "")[:120],
+            "login_elapsed_ms": str(raw.get("login_elapsed_ms") or "")[:12],
+            "error_code": str(raw.get("error_code") or "")[:120],
         }
-    if not isinstance(raw, dict):
-        return {"login_success": "0", "error_code": "LOGIN_MARKER_WAIT_BAD_PAYLOAD"}
-    return {
-        "login_success": "1" if str(raw.get("login_success") or "") == "1" else "0",
-        "login_success_reason": str(raw.get("login_success_reason") or "")[:120],
-        "login_elapsed_ms": str(raw.get("login_elapsed_ms") or "")[:12],
+
+    last_error_code = ""
+    for _ in range(90):
+        marker = await _probe()
+        reason = str(marker.get("login_success_reason") or "")
+        if marker.get("login_success") == "1" or reason:
+            marker["login_elapsed_ms"] = marker.get("login_elapsed_ms") or str(
+                round((time.monotonic() - started_at) * 1000)
+            )
+            return marker
+        if marker.get("error_code"):
+            last_error_code = str(marker.get("error_code") or "")[:120]
+        await asyncio.sleep(0.5)
+
+    result = {
+        "login_success": "0",
+        "login_success_reason": "",
+        "login_elapsed_ms": str(round((time.monotonic() - started_at) * 1000)),
     }
+    if last_error_code:
+        result["error_code"] = last_error_code
+    return result
 
 
 def _shinhan_login_diagnostic_dir() -> Path:
@@ -2763,19 +2777,10 @@ async def _try_shinhan_individual_login_step(
 	              let loginSuccess = '0';
 	              let loginSuccessReason = '';
 	              if (submitted) {
-	                for (let i = 0; i < 90; i += 1) {
-	                  await sleep(500);
-	                  const loginErrorReason = loginErrorMarker();
-	                  if (loginErrorReason) {
-	                    loginSuccessReason = loginErrorReason;
-	                    break;
-	                  }
-	                  loginSuccessReason = loggedInMarker();
-	                  if (loginSuccessReason) {
-	                    loginSuccess = '1';
-	                    break;
-	                  }
-	                }
+	                await sleep(800);
+	                const loginErrorReason = loginErrorMarker();
+	                loginSuccessReason = loginErrorReason || loggedInMarker();
+	                loginSuccess = loginErrorReason ? '0' : (loginSuccessReason ? '1' : '0');
 	              }
 	              return {
 	                attempted: '1',
@@ -2793,7 +2798,7 @@ async def _try_shinhan_individual_login_step(
 	            }
 	            """,
             {"username": username, "password": password},
-            timeout_ms=60000,
+            timeout_ms=25000,
             await_promise=True,
         )
     except Exception as exc:
@@ -2833,6 +2838,19 @@ async def _try_shinhan_individual_login_step(
                 result[key] = value[:12]
         else:
             result[key] = "1" if value == "1" else "0"
+    if (
+        result.get("login_submitted") == "1"
+        and result.get("login_success") != "1"
+        and not result.get("login_success_reason")
+    ):
+        marker = await _wait_shinhan_post_login_marker(page)
+        result["login_success"] = "1" if marker.get("login_success") == "1" else "0"
+        if marker.get("login_success_reason"):
+            result["login_success_reason"] = str(marker.get("login_success_reason") or "")[:120]
+        if marker.get("login_elapsed_ms"):
+            result["login_elapsed_ms"] = str(marker.get("login_elapsed_ms") or "")[:12]
+        if marker.get("error_code"):
+            result["error_code"] = str(marker.get("error_code") or "")[:120]
     return result
 
 

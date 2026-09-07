@@ -32,7 +32,7 @@
   - The run then failed before transaction parsing with `LOGIN_SUCCESS_NOT_OBSERVED` / `TimeoutError`; no `bank_transactions.json` rows were stored at that point.
   - Static/nonblocking Shinhan security-program notice text could be treated as a login error marker too early.
 - Changes:
-  - `app/services/yeoljeong_bank_browser_connector.py`: removed static security-program notice text from immediate login-error matching and extended Shinhan post-login marker waits to 45 seconds.
+  - `app/services/yeoljeong_bank_browser_connector.py`: removed static security-program notice text from immediate login-error matching, split login submit from long post-login observation, and moved Shinhan success-marker waits to short Python-side DOM probes for up to 45 seconds.
   - `scripts/yeoljeong_auto_collect.py`: classified `LOGIN_SUCCESS_NOT_OBSERVED`, `PC_AGENT_OFFLINE`, and `TIMEOUTERROR` as retryable bank-session recreation causes.
   - Added regression coverage in Shinhan browser connector and auto-collect tests.
 - Verification:

@@ -2371,11 +2371,19 @@ def test_shinhan_idpw_login_does_not_fail_fast_on_static_security_program_notice
         "_try_shinhan_individual_keyboard_login_step",
         AsyncMock(return_value={"attempted": "0"}),
     )
+    marker_wait = AsyncMock(
+        return_value={
+            "login_success": "0",
+            "login_success_reason": "",
+            "login_elapsed_ms": "45000",
+        }
+    )
+    monkeypatch.setattr(connector, "_wait_shinhan_post_login_marker", marker_wait)
 
     async def evaluate(expr, *args, **kwargs):
         assert "보안프로그램.*설치" not in expr
-        assert "for (let i = 0; i < 90" in expr
-        assert int(kwargs.get("timeout") or 0) >= 60000
+        assert "for (let i = 0; i < 90" not in expr
+        assert int(kwargs.get("timeout") or 0) >= 25000
         return {
             "attempted": "1",
             "stage": "login",
@@ -2404,6 +2412,7 @@ def test_shinhan_idpw_login_does_not_fail_fast_on_static_security_program_notice
     assert result["login_success"] == "0"
     assert result.get("login_success_reason", "") == ""
     assert result["login_elapsed_ms"] == "45000"
+    marker_wait.assert_awaited_once()
     assert "bank-pass" not in str(result)
 
 
