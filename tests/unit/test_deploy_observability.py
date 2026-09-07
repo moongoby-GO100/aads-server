@@ -162,8 +162,8 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "AND COALESCE(ph.is_hidden, FALSE) = TRUE" in script
     assert "AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000" in script
     assert "FROM deploy_history" in script
-    assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180" in script
-    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300" in script
+    assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800" in script
+    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5" in script
     assert "AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1" in script

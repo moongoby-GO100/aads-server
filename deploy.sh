@@ -994,7 +994,7 @@ sync_standby_slot_after_drain() {
         fi
         reconcile_inactive_target_recovery_executions "$old_container"
 
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300}"
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
         local active="0"
@@ -1340,7 +1340,7 @@ case "$MODE" in
         deploy_phase_start "target_slot_drain" "running"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
-            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
+            local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800}"
             local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
             local_target_elapsed=0
             if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
