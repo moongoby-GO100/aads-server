@@ -18,6 +18,7 @@ get_deploy_status = _MODULE.get_deploy_status
 DEPLOY_SCRIPT = Path(__file__).parents[2] / "deploy.sh"
 DOCKERFILE = Path(__file__).parents[2] / "Dockerfile"
 OPS_API = Path(__file__).parents[2] / "app/api/ops.py"
+STREAM_CLASSIFIER = Path(__file__).parents[2] / "scripts/classify_deploy_streams.py"
 
 
 class FakeConnection:
@@ -232,6 +233,31 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "superseded_by_newer_deploy" in script
     assert "active_same_release" in script
     assert "no duplicate queue created" in script
+
+
+def test_stream_classifier_excludes_hidden_recovery_retry_from_live_count():
+    spec = importlib.util.spec_from_file_location("stream_classifier_under_test", STREAM_CLASSIFIER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    result = module.summarize([
+        {
+            "id": "exec-1",
+            "status": "retrying",
+            "error_message": "recovery_auto_retry_scheduled",
+            "lease_active": True,
+            "heartbeat_age_seconds": 1,
+            "hidden_placeholder_count": 1,
+            "visible_placeholder_count": 0,
+            "assistant_content_chars": 0,
+        }
+    ])
+
+    assert result["live_count"] == 0
+    assert result["classes"] == {"stale_recovery_retry": 1}
+    assert result["stale_cancel_candidates"] == ["exec-1"]
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():

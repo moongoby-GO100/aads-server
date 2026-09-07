@@ -59,6 +59,14 @@ def classify_stream(row: dict[str, Any], policy: StreamPolicy | None = None) -> 
     error_message = str(row.get("error_message") or "")
     owner_epoch_missing = row.get("owner_epoch") is None
 
+    if (
+        error_message == "recovery_auto_retry_scheduled"
+        and hidden_placeholders > 0
+        and visible_placeholders == 0
+        and assistant_chars == 0
+    ):
+        return "stale_recovery_retry"
+
     if lease_active or heartbeat_fresh:
         if assistant_chars > 0 or visible_placeholders > 0:
             return "live_user_stream"
