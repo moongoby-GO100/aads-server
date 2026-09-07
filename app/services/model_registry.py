@@ -124,6 +124,7 @@ def _json_default(value: Any) -> str:
 
 _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "claude-opus": (_decimal(5.0), _decimal(25.0)),
+    "claude-opus-5": (_decimal(5.0), _decimal(25.0)),
     "claude-opus-46": (_decimal(5.0), _decimal(25.0)),
     "claude-sonnet": (_decimal(3.0), _decimal(15.0)),
     "claude-haiku": (_decimal(1.0), _decimal(5.0)),
@@ -251,6 +252,7 @@ _VISION_MODELS = {
 
 _CODING_MODELS = {
     "claude-opus",
+    "claude-opus-5",
     "claude-opus-46",
     "claude-sonnet",
     "claude-haiku",
@@ -278,6 +280,7 @@ _CODING_MODELS = {
 
 _DISPLAY_NAME_OVERRIDES = {
     "claude-opus": "Claude Opus",
+    "claude-opus-5": "Claude Opus 5 (Claude CLI)",
     "claude-opus-46": "Claude Opus 4.6",
     "claude-sonnet": "Claude Sonnet",
     "claude-haiku": "Claude Haiku",
@@ -309,6 +312,7 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "claude-fable-5",
         "claude-fable-5-1",
         "claude-opus",
+        "claude-opus-5",
         "claude-opus-46",
         "claude-sonnet",
         "claude-sonnet-5",
@@ -412,6 +416,7 @@ _DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
 _ANTHROPIC_RUNTIME_MODEL_IDS = {
     "claude-sonnet": "claude-sonnet-4-6",
     "claude-opus": "claude-opus-5",
+    "claude-opus-5": "claude-opus-5",
     "claude-opus-46": "claude-opus-4-6",
     "claude-haiku": "claude-haiku-4-5-20251001",
     "claude-sonnet-5": "claude-sonnet-5",
@@ -437,7 +442,6 @@ _MODEL_ACCEPTED_ALIASES: dict[str, tuple[str, ...]] = {
         "claude-2.1",
     ),
     "claude-opus": (
-        "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-8",
         "claude-opus-4-5",

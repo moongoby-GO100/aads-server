@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-07 15:00 KST - Claude Opus 5 runner settings visibility
+
+- Request:
+  - CEO reported that `https://aads.newtalk.kr/settings` runner model settings did not show the Claude CLI Opus 5 model name and asked to reflect it.
+- Root cause:
+  - `runner_model_config` already contained `claude-opus-5` for all sizes, but `llm_models(provider='anthropic', model_id='claude-opus-5')` was stored as a hidden accepted alias of `claude-opus`.
+  - The settings page loads addable runner models from `/llm-models?active_only=true` and filters out rows with `metadata.alias_of`, so the exact `claude-opus-5` option was hidden.
+- Changes:
+  - `app/services/model_registry.py`: promoted `claude-opus-5` into the Anthropic template catalog as a first-class selectable Claude CLI model while preserving `claude-opus` compatibility routing to the same runtime model.
+  - `migrations/162_promote_claude_opus5_runner_model.sql`: idempotently promotes the DB row to `Claude Opus 5 (Claude CLI)`, clears alias metadata, enables `is_active/is_selectable/is_executable`, and pins `llm`/`runner_llm` routing preferences.
+- Verification:
+  - `python3 -m py_compile app/services/model_registry.py` passed.
+  - Migration applied to production DB: `INSERT 0 1`, `INSERT 0 2`.
+  - DB readback confirmed `claude-opus-5` is active/selectable/executable with `execution_backend=claude_cli_relay` and no `alias_of`.
+  - DB readback confirmed all runner sizes `XS/S/M/L/XL/AI_REVIEW` contain `claude-opus-5`.
+- Pending:
+  - Commit/push/deploy is in progress. AADS deploy run `102` is already running at `build_candidate_image`, so a second blue/green deployment must wait or queue after the active run completes.
+
 ## 2026-09-07 14:56 KST - Pipeline Runner deploy worktree restore guard
 
 - Request:
