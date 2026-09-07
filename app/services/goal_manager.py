@@ -12,6 +12,10 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+_DONE_TASK_STATUSES = {"completed", "done", "approved", "deployed"}
+_FAILED_TASK_STATUSES = {"failed", "error", "cancelled", "rejected_done"}
+
+
 class GoalStateMachine:
 
     async def _pool(self):
@@ -31,8 +35,11 @@ class GoalStateMachine:
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO goals (id, project, title, priority, description, parent_goal_id, status)
-                VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, 'draft')
+                INSERT INTO goals (
+                    id, project, title, priority, description, success_criteria,
+                    parent_goal_id, status
+                )
+                VALUES ($1::uuid, $2, $3, $4, $5, $5, $6::uuid, 'draft')
                 """,
                 goal_id, project, title, priority,
                 success_criteria, parent_goal_id,
@@ -98,33 +105,98 @@ class GoalStateMachine:
         pool = await self._pool()
         link_id = str(uuid.uuid4())
         async with pool.acquire() as conn:
+            if milestone_id is None:
+                milestone_row = await conn.fetchrow(
+                    """
+                    SELECT id FROM milestones
+                    WHERE goal_id = $1::uuid AND status IN ('in_progress', 'pending')
+                    ORDER BY CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,
+                             sequence_order
+                    LIMIT 1
+                    """,
+                    goal_id,
+                )
+                milestone_id = str(milestone_row["id"]) if milestone_row else None
+
+            current_status = "pending"
+            if task_type == "pipeline_job":
+                job = await conn.fetchrow(
+                    "SELECT status FROM pipeline_jobs WHERE job_id = $1",
+                    task_id,
+                )
+                if job:
+                    current_status = self._normalize_task_status(job["status"])
+
             await conn.execute(
                 """
                 INSERT INTO goal_task_links (id, goal_id, milestone_id, task_type, task_id)
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5)
-                ON CONFLICT (goal_id, task_type, task_id) DO NOTHING
+                ON CONFLICT (goal_id, task_type, task_id)
+                DO UPDATE SET milestone_id = COALESCE(EXCLUDED.milestone_id, goal_task_links.milestone_id)
                 """,
                 link_id, goal_id,
                 milestone_id,
                 task_type, task_id,
             )
-        return {"link_id": link_id}
+            await conn.execute(
+                """
+                UPDATE goal_task_links
+                SET status = $4
+                WHERE goal_id = $1::uuid AND task_type = $2 AND task_id = $3
+                """,
+                goal_id, task_type, task_id, current_status,
+            )
+        if milestone_id:
+            await self.check_milestone_completion(milestone_id)
+        return {"link_id": link_id, "milestone_id": milestone_id, "status": current_status}
 
     async def update_task_status(self, task_type: str, task_id: str, status: str) -> dict[str, Any]:
         pool = await self._pool()
+        normalized = self._normalize_task_status(status)
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE goal_task_links SET status = $3 WHERE task_type = $1 AND task_id = $2",
-                task_type, task_id, status,
+                task_type, task_id, normalized,
             )
             links = await conn.fetch(
-                "SELECT DISTINCT milestone_id FROM goal_task_links WHERE task_type = $1 AND task_id = $2 AND milestone_id IS NOT NULL",
+                """
+                SELECT DISTINCT milestone_id, goal_id
+                FROM goal_task_links
+                WHERE task_type = $1 AND task_id = $2
+                """,
                 task_type, task_id,
             )
             results = []
             for link in links:
-                r = await self.check_milestone_completion(str(link["milestone_id"]))
-                results.append(r)
+                if normalized == "failed" and link["milestone_id"]:
+                    await conn.execute(
+                        """
+                        UPDATE milestones
+                        SET status = 'blocked', updated_at = NOW()
+                        WHERE id = $1::uuid AND status IN ('pending', 'in_progress')
+                        """,
+                        str(link["milestone_id"]),
+                    )
+                    if link["goal_id"]:
+                        await conn.execute(
+                            """
+                            UPDATE goals
+                            SET status = 'blocked', updated_at = NOW()
+                            WHERE id = $1::uuid AND status IN ('draft', 'active')
+                            """,
+                            str(link["goal_id"]),
+                        )
+                    results.append({
+                        "milestone_id": str(link["milestone_id"]),
+                        "completed": False,
+                        "status": "blocked",
+                    })
+                elif link["milestone_id"]:
+                    r = await self.check_milestone_completion(str(link["milestone_id"]))
+                    results.append(r)
+                elif link["goal_id"]:
+                    r = await self.advance_goal(str(link["goal_id"]))
+                    results.append(r)
         return {"updated": len(results), "milestones_checked": results}
 
     async def check_milestone_completion(self, milestone_id: str) -> dict[str, Any]:
@@ -138,23 +210,58 @@ class GoalStateMachine:
                 return {"milestone_id": milestone_id, "completed": False, "reason": "no_linked_tasks"}
 
             all_done = all(
-                link["status"] in ("completed", "done") for link in links
+                link["status"] in _DONE_TASK_STATUSES for link in links
             )
 
             if not all_done:
                 for link in links:
-                    if link["status"] in ("completed", "done"):
+                    if link["status"] in _DONE_TASK_STATUSES:
                         continue
+                    if link["status"] in _FAILED_TASK_STATUSES:
+                        await conn.execute(
+                            """
+                            UPDATE milestones
+                            SET status = 'blocked', updated_at = NOW()
+                            WHERE id = $1::uuid AND status IN ('pending', 'in_progress')
+                            """,
+                            milestone_id,
+                        )
+                        return {
+                            "milestone_id": milestone_id,
+                            "completed": False,
+                            "status": "blocked",
+                            "reason": "linked_task_failed",
+                        }
                     if link["task_type"] == "pipeline_job":
                         row = await conn.fetchrow(
                             "SELECT status FROM pipeline_jobs WHERE job_id = $1",
                             link["task_id"],
                         )
-                        if row and row["status"] in ("done", "approved"):
+                        normalized = self._normalize_task_status(row["status"]) if row else "pending"
+                        if normalized == "completed":
                             await conn.execute(
                                 "UPDATE goal_task_links SET status = 'completed' WHERE milestone_id = $1::uuid AND task_id = $2",
                                 milestone_id, link["task_id"],
                             )
+                        elif normalized == "failed":
+                            await conn.execute(
+                                "UPDATE goal_task_links SET status = 'failed' WHERE milestone_id = $1::uuid AND task_id = $2",
+                                milestone_id, link["task_id"],
+                            )
+                            await conn.execute(
+                                """
+                                UPDATE milestones
+                                SET status = 'blocked', updated_at = NOW()
+                                WHERE id = $1::uuid AND status IN ('pending', 'in_progress')
+                                """,
+                                milestone_id,
+                            )
+                            return {
+                                "milestone_id": milestone_id,
+                                "completed": False,
+                                "status": "blocked",
+                                "reason": "pipeline_job_failed",
+                            }
                         else:
                             all_done = False
                             break
@@ -180,6 +287,82 @@ class GoalStateMachine:
                     await self._advance_after_milestone(str(ms["goal_id"]), milestone_id)
 
             return {"milestone_id": milestone_id, "completed": all_done}
+
+    async def advance_goal(self, goal_id: str) -> dict[str, Any]:
+        """Advance one goal along the goal -> milestone -> task timeline."""
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            goal = await conn.fetchrow(
+                "SELECT id, status FROM goals WHERE id = $1::uuid",
+                goal_id,
+            )
+            if not goal:
+                return {"error": "goal_not_found"}
+            if goal["status"] in ("completed", "blocked", "cancelled"):
+                return {"goal_id": goal_id, "status": goal["status"], "advanced": False}
+
+            current = await conn.fetchrow(
+                """
+                SELECT id FROM milestones
+                WHERE goal_id = $1::uuid AND status = 'in_progress'
+                ORDER BY sequence_order
+                LIMIT 1
+                """,
+                goal_id,
+            )
+            if current:
+                checked = await self.check_milestone_completion(str(current["id"]))
+                await self._update_goal_progress(goal_id)
+                return {"goal_id": goal_id, "advanced": checked.get("completed", False), "current": checked}
+
+            pending = await conn.fetchrow(
+                """
+                SELECT id FROM milestones
+                WHERE goal_id = $1::uuid AND status = 'pending'
+                ORDER BY sequence_order
+                LIMIT 1
+                """,
+                goal_id,
+            )
+            if pending:
+                if goal["status"] == "draft":
+                    await conn.execute(
+                        "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1::uuid",
+                        goal_id,
+                    )
+                await conn.execute(
+                    """
+                    UPDATE milestones
+                    SET status = 'in_progress', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+                    WHERE id = $1::uuid
+                    """,
+                    str(pending["id"]),
+                )
+                await self._update_goal_progress(goal_id)
+                return {
+                    "goal_id": goal_id,
+                    "advanced": True,
+                    "started_milestone_id": str(pending["id"]),
+                }
+
+            await self._update_goal_progress(goal_id)
+            status = await conn.fetchval("SELECT status FROM goals WHERE id = $1::uuid", goal_id)
+            return {"goal_id": goal_id, "status": status, "advanced": status == "completed"}
+
+    async def advance_active_goals(self, project: Optional[str] = None) -> dict[str, Any]:
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            if project:
+                rows = await conn.fetch(
+                    "SELECT id FROM goals WHERE project = $1 AND status IN ('draft', 'active') ORDER BY created_at",
+                    project,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT id FROM goals WHERE status IN ('draft', 'active') ORDER BY project, created_at"
+                )
+        results = [await self.advance_goal(str(row["id"])) for row in rows]
+        return {"checked": len(results), "results": results}
 
     async def _advance_after_milestone(self, goal_id: str, completed_milestone_id: str) -> None:
         pool = await self._pool()
@@ -241,7 +424,7 @@ class GoalStateMachine:
                     )
                     if next_goal:
                         await conn.execute(
-                            "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1",
+                        "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1",
                             next_goal["id"],
                         )
                         logger.info("goal_auto_activated: %s (after %s completed)", next_goal["id"], goal_id)
@@ -270,7 +453,11 @@ class GoalStateMachine:
         pool = await self._pool()
         async with pool.acquire() as conn:
             goal = await conn.fetchrow(
-                "SELECT id, project, title, priority, status, description, progress, created_at, completed_at FROM goals WHERE id = $1::uuid",
+                """
+                SELECT id, project, title, priority, status, description,
+                       success_criteria, progress, created_at, completed_at
+                FROM goals WHERE id = $1::uuid
+                """,
                 goal_id,
             )
             if not goal:
@@ -305,7 +492,8 @@ class GoalStateMachine:
                 "title": goal["title"],
                 "priority": goal["priority"],
                 "status": goal["status"],
-                "success_criteria": goal["description"],
+                "description": goal["description"],
+                "success_criteria": goal["success_criteria"] or goal["description"],
                 "progress": float(goal["progress"]) if goal["progress"] else (completed / total if total > 0 else 0),
                 "milestones_total": total,
                 "milestones_completed": completed,
@@ -332,7 +520,7 @@ class GoalStateMachine:
                 rows = await conn.fetch(
                     """SELECT id, project, title, priority, status, progress, created_at, completed_at
                        FROM goals WHERE project = $1 ORDER BY
-                       CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'completed' THEN 3 ELSE 9 END,
+                       CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC""",
                     project,
                 )
@@ -340,7 +528,7 @@ class GoalStateMachine:
                 rows = await conn.fetch(
                     """SELECT id, project, title, priority, status, progress, created_at, completed_at
                        FROM goals ORDER BY
-                       CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'completed' THEN 3 ELSE 9 END,
+                       CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC"""
                 )
         return [
@@ -359,7 +547,7 @@ class GoalStateMachine:
 
     async def update_goal(self, goal_id: str, **kwargs) -> dict[str, Any]:
         pool = await self._pool()
-        allowed = {"title", "priority", "description", "status", "deadline"}
+        allowed = {"title", "priority", "description", "success_criteria", "status", "deadline"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not updates:
             return {"error": "no_valid_fields"}
@@ -369,6 +557,14 @@ class GoalStateMachine:
         async with pool.acquire() as conn:
             await conn.execute(sql, goal_id, *updates.values())
         return {"goal_id": goal_id, "updated": list(updates.keys())}
+
+    def _normalize_task_status(self, status: str) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in _DONE_TASK_STATUSES:
+            return "completed"
+        if normalized in _FAILED_TASK_STATUSES:
+            return "failed"
+        return normalized or "pending"
 
 
 goal_state_machine = GoalStateMachine()

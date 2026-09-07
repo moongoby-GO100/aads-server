@@ -1,11 +1,13 @@
-"""GoalPlanner — CEO 자연어 목표를 마일스톤으로 분해하고 러너와 연결.
+"""GoalPlanner facade for the Goal Control Loop.
 
-목표 원장(goals) → 마일스톤(milestones) → 작업 연결(goal_task_links) → 완료 판정 → 자동 전진.
+This module keeps the older planner import path while delegating writes and
+timeline advancement to GoalStateMachine, the single source of truth.
 """
+from __future__ import annotations
+
 import logging
-import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,18 +17,11 @@ class MilestoneSpec:
     title: str
     description: str = ""
     sequence: int = 0
+    completion_criteria: str = ""
+    auto_advance: bool = True
 
 
 class GoalPlanner:
-    def __init__(self):
-        self._pool = None
-
-    async def _get_pool(self):
-        if not self._pool:
-            from app.core.db_pool import get_pool
-            self._pool = get_pool()
-        return self._pool
-
     async def create_goal(
         self,
         title: str,
@@ -36,135 +31,122 @@ class GoalPlanner:
         parent_goal_id: Optional[str] = None,
         deadline: Optional[str] = None,
     ) -> str:
-        pool = await self._get_pool()
-        goal_id = str(uuid.uuid4())
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO goals (id, title, description, project, priority, parent_goal_id, deadline)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)""",
-                goal_id, title, description, project, priority, parent_goal_id, deadline,
-            )
-        logger.info(f"goal_created: {goal_id} title={title} project={project}")
-        return goal_id
+        from app.services.goal_manager import goal_state_machine
 
-    async def add_milestones(self, goal_id: str, milestones: List[MilestoneSpec]) -> List[str]:
-        pool = await self._get_pool()
-        ids = []
-        async with pool.acquire() as conn:
-            for ms in milestones:
-                ms_id = str(uuid.uuid4())
-                await conn.execute(
-                    """INSERT INTO milestones (id, goal_id, title, description, sequence_order)
-                       VALUES ($1, $2, $3, $4, $5)""",
-                    ms_id, goal_id, ms.title, ms.description, ms.sequence,
-                )
-                ids.append(ms_id)
+        result = await goal_state_machine.create_goal(
+            project=project,
+            title=title,
+            priority=priority,
+            success_criteria=description,
+            parent_goal_id=parent_goal_id,
+        )
+        if deadline:
+            await goal_state_machine.update_goal(result["goal_id"], deadline=deadline)
+        logger.info("goal_created: %s title=%s project=%s", result["goal_id"], title, project)
+        return result["goal_id"]
+
+    async def add_milestones(self, goal_id: str, milestones: list[MilestoneSpec]) -> list[str]:
+        from app.services.goal_manager import goal_state_machine
+
+        ids: list[str] = []
+        for ms in milestones:
+            result = await goal_state_machine.add_milestone(
+                goal_id=goal_id,
+                title=ms.title,
+                sequence=ms.sequence,
+                completion_criteria=ms.completion_criteria or ms.description,
+                auto_advance=ms.auto_advance,
+            )
+            ids.append(result["milestone_id"])
         return ids
 
-    async def link_task(self, milestone_id: str, task_type: str, task_id: str) -> None:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO goal_task_links (milestone_id, task_type, task_id)
-                   VALUES ($1, $2, $3)""",
-                milestone_id, task_type, task_id,
-            )
+    async def create_plan(
+        self,
+        title: str,
+        milestones: list[MilestoneSpec],
+        description: str = "",
+        project: str = "AADS",
+        priority: str = "P2",
+        activate: bool = False,
+    ) -> dict[str, Any]:
+        from app.services.goal_manager import goal_state_machine
+
+        goal_id = await self.create_goal(
+            title=title,
+            description=description,
+            project=project,
+            priority=priority,
+        )
+        milestone_ids = await self.add_milestones(goal_id, milestones)
+        status: dict[str, Any] | None = None
+        if activate:
+            status = await goal_state_machine.activate_goal(goal_id)
+        return {
+            "goal_id": goal_id,
+            "milestone_ids": milestone_ids,
+            "status": status["status"] if status else "draft",
+        }
+
+    async def link_task(
+        self,
+        milestone_id: str,
+        task_type: str,
+        task_id: str,
+        goal_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        from app.services.goal_manager import goal_state_machine
+
+        if goal_id is None:
+            goal_id = await self._goal_id_for_milestone(milestone_id)
+        if not goal_id:
+            return {"error": "milestone_not_found"}
+        return await goal_state_machine.link_task(
+            goal_id=goal_id,
+            milestone_id=milestone_id,
+            task_type=task_type,
+            task_id=task_id,
+        )
 
     async def check_milestone_completion(self, milestone_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            total = await conn.fetchval(
-                "SELECT count(*) FROM goal_task_links WHERE milestone_id = $1", milestone_id
-            )
-            done = await conn.fetchval(
-                "SELECT count(*) FROM goal_task_links WHERE milestone_id = $1 AND status = 'completed'",
-                milestone_id,
-            )
-            return total > 0 and total == done
+        from app.services.goal_manager import goal_state_machine
+
+        result = await goal_state_machine.check_milestone_completion(milestone_id)
+        return bool(result.get("completed"))
 
     async def advance_goal(self, goal_id: str) -> Optional[str]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            current = await conn.fetchrow(
-                """SELECT id, sequence_order FROM milestones
-                   WHERE goal_id = $1 AND status = 'in_progress'
-                   ORDER BY sequence_order LIMIT 1""",
-                goal_id,
-            )
-            if not current:
-                first = await conn.fetchrow(
-                    """SELECT id FROM milestones
-                       WHERE goal_id = $1 AND status = 'pending'
-                       ORDER BY sequence_order LIMIT 1""",
-                    goal_id,
-                )
-                if first:
-                    await conn.execute(
-                        "UPDATE milestones SET status = 'in_progress', updated_at = NOW() WHERE id = $1",
-                        first["id"],
-                    )
-                    return first["id"]
-                return None
+        from app.services.goal_manager import goal_state_machine
 
-            if await self.check_milestone_completion(current["id"]):
-                await conn.execute(
-                    "UPDATE milestones SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1",
-                    current["id"],
-                )
-                next_ms = await conn.fetchrow(
-                    """SELECT id, auto_advance FROM milestones
-                       WHERE goal_id = $1 AND sequence_order > $2 AND status = 'pending'
-                       ORDER BY sequence_order LIMIT 1""",
-                    goal_id, current["sequence_order"],
-                )
-                if next_ms and next_ms["auto_advance"]:
-                    await conn.execute(
-                        "UPDATE milestones SET status = 'in_progress', updated_at = NOW() WHERE id = $1",
-                        next_ms["id"],
-                    )
-                    await self._update_goal_progress(goal_id)
-                    return next_ms["id"]
-                else:
-                    remaining = await conn.fetchval(
-                        "SELECT count(*) FROM milestones WHERE goal_id = $1 AND status != 'completed'",
-                        goal_id,
-                    )
-                    if remaining == 0:
-                        await conn.execute(
-                            """UPDATE goals SET status = 'completed', progress = 1.0,
-                               completed_at = NOW(), updated_at = NOW() WHERE id = $1""",
-                            goal_id,
-                        )
-            return None
+        before = await goal_state_machine.get_goal_status(goal_id)
+        result = await goal_state_machine.advance_goal(goal_id)
+        if "started_milestone_id" in result:
+            return str(result["started_milestone_id"])
+        after = await goal_state_machine.get_goal_status(goal_id)
+        before_current = self._current_milestone_id(before)
+        after_current = self._current_milestone_id(after)
+        if after_current and after_current != before_current:
+            return after_current
+        return None
 
-    async def _update_goal_progress(self, goal_id: str) -> None:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            total = await conn.fetchval(
-                "SELECT count(*) FROM milestones WHERE goal_id = $1", goal_id
-            )
-            done = await conn.fetchval(
-                "SELECT count(*) FROM milestones WHERE goal_id = $1 AND status = 'completed'",
-                goal_id,
-            )
-            if total > 0:
-                await conn.execute(
-                    "UPDATE goals SET progress = $2, updated_at = NOW() WHERE id = $1",
-                    goal_id, round(done / total, 2),
-                )
+    async def get_goal_status(self, goal_id: str) -> dict[str, Any]:
+        from app.services.goal_manager import goal_state_machine
 
-    async def get_goal_status(self, goal_id: str) -> Dict[str, Any]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            goal = await conn.fetchrow("SELECT * FROM goals WHERE id = $1", goal_id)
-            ms_list = await conn.fetch(
-                "SELECT * FROM milestones WHERE goal_id = $1 ORDER BY sequence_order",
-                goal_id,
+        return await goal_state_machine.get_goal_status(goal_id)
+
+    async def _goal_id_for_milestone(self, milestone_id: str) -> Optional[str]:
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT goal_id::text FROM milestones WHERE id = $1::uuid",
+                milestone_id,
             )
-            return {
-                "goal": dict(goal) if goal else None,
-                "milestones": [dict(m) for m in ms_list],
-            }
+        return str(value) if value else None
+
+    def _current_milestone_id(self, status: dict[str, Any]) -> Optional[str]:
+        for milestone in status.get("milestones", []) if status else []:
+            if milestone.get("status") == "in_progress":
+                return str(milestone.get("id"))
+        return None
 
 
 goal_planner = GoalPlanner()

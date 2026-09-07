@@ -131,24 +131,12 @@ _RESTART_CMD: Dict[str, str] = {
     "AADS":  "bash /root/aads/aads-server/deploy.sh bluegreen",  # Blue-Green 무중단 배포
 }
 
-async def _update_linked_goal_state(job_id: str) -> None:
-    """Best-effort goal advancement after a pipeline job reaches done."""
+async def _update_linked_goal_state(job_id: str, status: str = "done") -> None:
+    """Best-effort goal advancement after a linked pipeline job reaches a terminal state."""
     try:
-        from app.core.db_pool import get_pool
         from app.services.goal_manager import goal_state_machine
 
-        async with get_pool().acquire() as conn:
-            milestone_ids = await conn.fetch(
-                """
-                SELECT DISTINCT milestone_id
-                FROM goal_task_links
-                WHERE task_type='pipeline_job' AND task_id=$1
-                  AND milestone_id IS NOT NULL
-                """,
-                job_id,
-            )
-        for row in milestone_ids:
-            await goal_state_machine.check_milestone_completion(str(row["milestone_id"]))
+        await goal_state_machine.update_task_status("pipeline_job", job_id, status)
     except Exception as exc:
         logger.warning("goal_completion_check_failed job=%s: %s", job_id, exc)
 
@@ -1766,8 +1754,8 @@ class PipelineCJob:
                     await emit_task_completed(self.job_id, self.status, self.review_feedback or self.error_msg or "")
                 except Exception:
                     pass
-            if self.status == "done":
-                await _update_linked_goal_state(self.job_id)
+            if self.status in _TERMINAL_JOB_STATUSES:
+                await _update_linked_goal_state(self.job_id, self.status)
         except Exception as e:
             logger.error(f"pipeline_c_save_db_error job={self.job_id}: {e}")
 

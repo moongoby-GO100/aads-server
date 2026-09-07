@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-09-07 09:48 KST - Goal Control Loop advance/runtime alignment
+
+- Request:
+  - Continue the interrupted Goals implementation and make goal setting able to progress until final goal completion.
+- Findings:
+  - `goals`, `milestones`, and `goal_task_links` exist, but only AADS has milestones; GO100/KIS/SF/NTV2 had goal rows without milestones and NAS was missing.
+  - `goal_task_links` lacked the unique index required by `ON CONFLICT (goal_id, task_type, task_id)`.
+  - Pipeline completion only advanced linked goals on `done`, so `error/cancelled/rejected_done` did not update linked milestones.
+- Changes:
+  - `app/services/goal_manager.py`: added explicit goal advance, active-goal advance, terminal task normalization, blocked-state handling, and success_criteria read/write alignment.
+  - `app/routers/goals.py`: added create-with-milestones, `/goals/{goal_id}/advance`, `/goals/advance`, and `/goals/task-status`.
+  - `app/services/goal_planner.py`: converted to a facade over `GoalStateMachine` so planner and runtime share one database contract.
+  - `app/services/pipeline_runner_service.py`: updates linked goal state for all terminal pipeline statuses.
+  - `migrations/157_goal_control_loop_dedup_and_advance.sql`: added idempotent task-link unique index and milestone status/order index.
+  - `tests/unit/test_goal_control_loop_static.py`: added regression coverage for API, service, runner hook, and migration contract.
+- Verification:
+  - `python3 -m py_compile app/services/goal_manager.py app/services/goal_planner.py app/routers/goals.py app/services/pipeline_runner_service.py` passed.
+  - `pytest tests/unit/test_goal_control_loop_static.py -q` passed: 4 tests.
+  - Operational DB migration 157 applied successfully.
+- Deployment:
+  - Pending in this entry: selected commit/push and blue/green release verification.
+
 ## 2026-09-07 09:44 KST - Chat interruption recovery hardening
 
 - Request:
