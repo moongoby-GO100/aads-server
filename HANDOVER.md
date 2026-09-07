@@ -11525,3 +11525,18 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `deploy_runs.id=63` had already queued release `76aaaa2ff2f1` behind PID `1509699`; after this new commit, the next deploy request should supersede that row with the new release SHA.
 - Remaining before completion:
   - Commit/push this selected-file AADS change, trigger `deploy.sh bluegreen`, verify queued/superseded behavior, health, same-digest standby, and P0/P1 monitoring.
+
+## 2026-09-07 12:02 KST — Shinhan simple-account timeout recovery follow-up
+- CEO request:
+  - Complete Shinhan Bank simple-account transaction auto-collection and report the result.
+- Finding:
+  - The active container can decrypt the Mia Shinhan quick-service account secrets, but the live collection stopped before ledger write with `TimeoutError` followed by `INSUFFICIENT_PORTAL_SIGNAL`.
+  - The plain Python/Playwright `TimeoutError` carried no `error_code`, so it did not enter the existing recoverable browser-session branch.
+- Change prepared:
+  - `app/services/yeoljeong_bank_browser_connector.py`: classify plain `TimeoutError` / class-name `TimeoutError` as recoverable so Shinhan individual flow recreates the same bank work-key session instead of falling through to operator-required.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added a regression test proving a plain timeout triggers `force_recreate=True` and resumes collection without leaking saved bank secrets into diagnostics.
+- Verification before commit:
+  - `.venv-playwright/bin/python -m py_compile app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py`: passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -k 'shinhan and (recoverable or pc_agent_offline or recreates_work_key or plain_timeout)' -q`: 3 passed.
+- Remaining before completion:
+  - Commit/push selected files, deploy with `deploy.sh bluegreen` after the active deploy queue clears, then rerun Mia Shinhan collection in the active container and verify `bank_transactions` ledger rows.

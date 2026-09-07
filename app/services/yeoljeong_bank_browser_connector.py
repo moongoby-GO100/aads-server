@@ -3438,6 +3438,8 @@ def _bank_session_error_code(exc: Exception) -> str:
 
 
 def _is_bank_session_recoverable_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError) or exc.__class__.__name__.lower() == "timeouterror":
+        return True
     code = _bank_session_error_code(exc)
     if code in _BANK_SESSION_RECOVERABLE_ERROR_CODES:
         return True
