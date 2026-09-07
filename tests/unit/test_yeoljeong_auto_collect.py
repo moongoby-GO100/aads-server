@@ -863,6 +863,32 @@ def test_completion_state_blocks_on_bank_browser_session_required():
     assert state["blocking_codes"] == ["BANK_BROWSER_SESSION_REQUIRED"]
 
 
+def test_completion_state_treats_shinhan_session_errors_as_retryable_recreate():
+    summary = {
+        "bank_collections": [
+            {
+                "service": "shinhan_business",
+                "status": "failed",
+                "error_code": "LOGIN_SUCCESS_NOT_OBSERVED",
+                "counts": {"transactions": 0},
+            },
+            {
+                "service": "shinhan_business",
+                "status": "failed",
+                "error_code": "PC_AGENT_OFFLINE",
+                "counts": {"transactions": 0},
+            },
+        ],
+    }
+
+    state = auto_collect._completion_state(summary)
+
+    assert state["complete"] is False
+    assert state["blocked"] is False
+    assert state["retryable_codes"] == ["LOGIN_SUCCESS_NOT_OBSERVED", "PC_AGENT_OFFLINE"]
+    assert auto_collect._should_force_recreate_bank_browser(state) is True
+
+
 def test_completion_state_blocks_on_bank_browser_operator_action_required():
     summary = {
         "summary": [

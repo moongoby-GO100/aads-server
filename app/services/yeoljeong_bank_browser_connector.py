@@ -2263,7 +2263,7 @@ async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
                 if (/이용자\\s*ID를\\s*입력|이용자ID를\\s*입력|비밀번호를\\s*입력|비밀번호\\s*최소자릿수|키보드\\s*입력\\s*검증|처음부터\\s*다시\\s*진행/i.test(currentText)) {
                   return 'login_input_rejected';
                 }
-                if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)|보안프로그램.*설치/i.test(currentText)) {
+                if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)/i.test(currentText)) {
                   return 'login_error_or_security_notice';
                 }
                 return '';
@@ -2288,7 +2288,7 @@ async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
               };
               let reason = '';
               let success = '0';
-              for (let i = 0; i < 60; i += 1) {
+              for (let i = 0; i < 90; i += 1) {
                 await sleep(500);
                 reason = loginErrorMarker();
                 if (reason) break;
@@ -2305,7 +2305,7 @@ async def _wait_shinhan_post_login_marker(page: Any) -> dict[str, str]:
               };
             }
             """,
-            timeout_ms=35000,
+            timeout_ms=55000,
             await_promise=True,
         )
     except Exception as exc:
@@ -2481,7 +2481,7 @@ async def _try_shinhan_individual_login_step(
 		                if (/이용자\\s*ID를\\s*입력|이용자ID를\\s*입력|비밀번호를\\s*입력|비밀번호\\s*최소자릿수|키보드\\s*입력\\s*검증|처음부터\\s*다시\\s*진행/i.test(currentText)) {
 		                  return 'login_input_rejected';
 		                }
-		                if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)|보안프로그램.*설치/i.test(currentText)) {
+		                if (/비밀번호.*(불일치|오류|틀)|로그인.*(실패|오류)/i.test(currentText)) {
 		                  return 'login_error_or_security_notice';
 		                }
 		                return '';
@@ -2763,7 +2763,7 @@ async def _try_shinhan_individual_login_step(
 	              let loginSuccess = '0';
 	              let loginSuccessReason = '';
 	              if (submitted) {
-	                for (let i = 0; i < 30; i += 1) {
+	                for (let i = 0; i < 90; i += 1) {
 	                  await sleep(500);
 	                  const loginErrorReason = loginErrorMarker();
 	                  if (loginErrorReason) {
@@ -2793,7 +2793,7 @@ async def _try_shinhan_individual_login_step(
 	            }
 	            """,
             {"username": username, "password": password},
-            timeout_ms=25000,
+            timeout_ms=60000,
             await_promise=True,
         )
     except Exception as exc:

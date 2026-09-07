@@ -2358,6 +2358,55 @@ def test_shinhan_individual_login_does_not_treat_id_required_notice_as_success(m
     assert "bank-pass" not in str(result)
 
 
+def test_shinhan_idpw_login_does_not_fail_fast_on_static_security_program_notice(monkeypatch):
+    page = AsyncMock()
+
+    monkeypatch.setattr(
+        connector,
+        "_close_shinhan_security_notice",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        connector,
+        "_try_shinhan_individual_keyboard_login_step",
+        AsyncMock(return_value={"attempted": "0"}),
+    )
+
+    async def evaluate(expr, *args, **kwargs):
+        assert "보안프로그램.*설치" not in expr
+        assert "for (let i = 0; i < 90" in expr
+        assert int(kwargs.get("timeout") or 0) >= 60000
+        return {
+            "attempted": "1",
+            "stage": "login",
+            "username": "1",
+            "login_secret": "1",
+            "transkey_secret": "1",
+            "navigation_clicked": "1",
+            "websquare_triggered": "1",
+            "login_submitted": "1",
+            "login_success": "0",
+            "login_success_reason": "",
+            "login_elapsed_ms": "45000",
+        }
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    result = _run(
+        connector._try_shinhan_individual_login_step(
+            page,
+            username="bank-user",
+            password="bank-pass",
+        )
+    )
+
+    assert result["login_submitted"] == "1"
+    assert result["login_success"] == "0"
+    assert result.get("login_success_reason", "") == ""
+    assert result["login_elapsed_ms"] == "45000"
+    assert "bank-pass" not in str(result)
+
+
 def test_shinhan_flow_stage_logs_are_secret_free_and_granular():
     logs = []
 

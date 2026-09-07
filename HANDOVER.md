@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-07 10:06 KST - Shinhan simple account auto-collection retry hardening
+
+- Request:
+  - Complete automated Shinhan simple-account transaction collection for Yeoljeong Finance and report verified results.
+- Findings:
+  - Browser stage logs show Shinhan portal, security-program check, ID/PW input, and login submit reached successfully.
+  - The run then failed before transaction parsing with `LOGIN_SUCCESS_NOT_OBSERVED` / `TimeoutError`; no `bank_transactions.json` rows were stored at that point.
+  - Static/nonblocking Shinhan security-program notice text could be treated as a login error marker too early.
+- Changes:
+  - `app/services/yeoljeong_bank_browser_connector.py`: removed static security-program notice text from immediate login-error matching and extended Shinhan post-login marker waits to 45 seconds.
+  - `scripts/yeoljeong_auto_collect.py`: classified `LOGIN_SUCCESS_NOT_OBSERVED`, `PC_AGENT_OFFLINE`, and `TIMEOUTERROR` as retryable bank-session recreation causes.
+  - Added regression coverage in Shinhan browser connector and auto-collect tests.
+- Verification:
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:45a22648eb55 pytest tests/unit/test_yeoljeong_bank_browser_connector.py -q` passed: 82 tests.
+  - `docker run --rm -v /root/aads/aads-server:/app -w /app aads-server:45a22648eb55 pytest tests/unit/test_yeoljeong_auto_collect.py::test_completion_state_treats_shinhan_session_errors_as_retryable_recreate tests/unit/test_yeoljeong_auto_collect.py::test_timeout_result_is_retryable tests/unit/test_yeoljeong_auto_collect.py::test_run_sync_with_timeout_marks_attempt_timeout -q` passed: 3 tests.
+- Deployment:
+  - Pending in this entry: commit, push, blue/green same-digest release, then DANHAROO-MAIN Shinhan bank-only real collection verification.
+
 ## 2026-09-07 09:48 KST - Goal Control Loop advance/runtime alignment
 
 - Request:
