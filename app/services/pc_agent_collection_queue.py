@@ -108,14 +108,14 @@ def _financial_resource_agent_hint(value: Any) -> str:
 def _financial_running_blocks_agent(row: dict[str, Any], *, agent_id: str) -> bool:
     if row.get("status") != "running" or not _is_financial_resource_key(row.get("resource_key")):
         return False
-    lease_agent_id = _clean_key(row.get("lease_agent_id"))
-    resource_agent = _financial_resource_agent_hint(row.get("resource_key"))
-    if not agent_id:
-        return lease_agent_id == "" or resource_agent in {"", "default"}
-    return (
-        lease_agent_id in {"", agent_id}
-        or resource_agent in {"", "default", agent_id}
-    )
+    return True
+
+
+def _queued_financial_blocks_delivery(row: dict[str, Any], *, now_value: datetime) -> bool:
+    if row.get("status") != "queued" or not _is_financial_resource_key(row.get("resource_key")):
+        return False
+    next_run_at = _parse_dt(row.get("next_run_at")) or now_value
+    return next_run_at <= now_value
 
 
 def build_job_key(item: dict[str, Any]) -> str:
@@ -438,11 +438,15 @@ def claim_next_collection_item(*, agent_id: str = "", now: datetime | None = Non
         _financial_running_blocks_agent(row, agent_id=agent_id)
         for row in rows
     )
+    queued_financial_blocks = any(
+        _queued_financial_blocks_delivery(row, now_value=now_value)
+        for row in rows
+    )
     due: list[dict[str, Any]] = []
     for row in rows:
         if row["status"] != "queued" or row["resource_key"] in running_resources:
             continue
-        if financial_running_blocks and not _is_financial_resource_key(row.get("resource_key")):
+        if (financial_running_blocks or queued_financial_blocks) and not _is_financial_resource_key(row.get("resource_key")):
             continue
         payload = _json_dict(row.get("payload"))
         required_agent_id = _clean_key(
@@ -544,12 +548,14 @@ async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any
                           AND financial_active.resource_key LIKE 'financial_exclusive|%'
                           AND q.resource_key <> financial_active.resource_key
                           AND q.resource_key NOT LIKE 'financial_exclusive|%'
-                          AND (
-                              COALESCE(financial_active.lease_agent_id, '') = ''
-                              OR COALESCE(financial_active.lease_agent_id, '') = $2
-                              OR financial_active.resource_key LIKE ('financial_exclusive|%|' || $2)
-                              OR financial_active.resource_key LIKE 'financial_exclusive|%|default'
-                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pc_agent_collection_queue financial_queued
+                        WHERE financial_queued.status = 'queued'
+                          AND financial_queued.next_run_at <= $1
+                          AND financial_queued.resource_key LIKE 'financial_exclusive|%'
+                          AND q.resource_key NOT LIKE 'financial_exclusive|%'
                    )
                  ORDER BY q.priority ASC, q.next_run_at ASC, q.created_at ASC
                  LIMIT 1

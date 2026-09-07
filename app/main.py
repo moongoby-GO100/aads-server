@@ -1891,6 +1891,7 @@ async def lifespan(app: FastAPI):
         async def _run_pc_agent_global_collection_queue(reason: str = "pc_agent_global_queue_drain"):
             try:
                 from app.services.pc_agent_manager import pc_agent_manager
+                from app.services.pc_agent_collection_queue import FINANCIAL_RESOURCE_KEY, queue_snapshot
                 import asyncio
                 import json
                 import subprocess
@@ -1906,8 +1907,49 @@ async def lifespan(app: FastAPI):
                     )
                     return
 
-                preferred_agent_id = os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "").strip()
-                excluded_agent_ids = _delivery_auto_collect_excluded_agent_ids()
+                due_financial_agent_id = ""
+                try:
+                    now_kst = datetime.now(KST)
+                    for item in queue_snapshot(100):
+                        if str(item.get("status") or "") != "queued":
+                            continue
+                        if not str(item.get("resource_key") or "").startswith(f"{FINANCIAL_RESOURCE_KEY}|"):
+                            continue
+                        next_run_at = _delivery_auto_collect_parse_time(item.get("next_run_at")) or now_kst
+                        if next_run_at > now_kst:
+                            continue
+                        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                        due_financial_agent_id = str(
+                            payload.get("required_browser_agent_id")
+                            or payload.get("browser_agent_id")
+                            or payload.get("pc_agent_id")
+                            or ""
+                        ).strip()
+                        if not due_financial_agent_id:
+                            resource_parts = str(item.get("resource_key") or "").split("|")
+                            if resource_parts and resource_parts[-1] not in {"", "default"}:
+                                due_financial_agent_id = resource_parts[-1].strip()
+                        if due_financial_agent_id:
+                            logger.info(
+                                "pc_agent_global_collection_queue_financial_priority reason=%s agent_id=%s item_id=%s",
+                                reason,
+                                due_financial_agent_id,
+                                item.get("id"),
+                            )
+                        break
+                except Exception as exc:
+                    logger.warning(
+                        "pc_agent_global_collection_queue_financial_priority_check_failed reason=%s err=%s",
+                        reason,
+                        exc,
+                    )
+
+                preferred_agent_id = due_financial_agent_id or os.getenv("YEOLJEONG_DELIVERY_AUTO_COLLECT_AGENT_ID", "").strip()
+                excluded_agent_ids = (
+                    _bank_auto_collect_excluded_agent_ids()
+                    if due_financial_agent_id
+                    else _delivery_auto_collect_excluded_agent_ids()
+                )
                 wait_result = await pc_agent_manager.wait_for_agent_online(
                     agent_id=preferred_agent_id,
                     timeout=30,
