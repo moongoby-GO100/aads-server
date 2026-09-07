@@ -1349,6 +1349,13 @@ run_job() {
 
 위 규칙을 위반하면 작업이 거부됩니다.
 
+[STEP 0 기존 구현 조사 — 코드 수정 전 필수]
+- 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인하세요.
+- 각 항목을 [유지 | 수정 | 신규 | 삭제(사유 필수)]로 분류해 RESULT에 기록하세요.
+- 기존 구현을 새 구현으로 통째 대체하지 말고 필요한 개선분만 반영하세요.
+- 삭제가 필요하면 삭제 대상, 호출처 영향, 롤백 방법을 RESULT에 명시하세요.
+- 지시서에 명시되지 않은 파일을 변경해야 하면 변경 전 사유를 RESULT에 명시하세요.
+
 ${safe_instruction}"
 
         if [[ $attempt -eq 0 ]]; then
@@ -1863,6 +1870,16 @@ ${output:0:1500}
     record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "$job_model" "" "$job_size" "" "{\"commit_hash\":\"${approval_commit_sha}\",\"review_verdict\":\"${review_verdict}\"}"
 
     local diff_summary="${git_diff:0:3000}"
+    local approval_diff_stat=""
+    approval_diff_stat=$(git -C "$worktree_dir" show --stat --oneline --no-renames "$approval_commit_sha" 2>/dev/null | head -40 || true)
+    local approval_deleted_symbols=""
+    approval_deleted_symbols=$(printf '%s\n' "$git_diff" \
+        | grep -E '^-([[:space:]]*)(async[[:space:]]+def|def|class)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*|^-([[:space:]]*)@router\.[A-Za-z_]+' \
+        | sed 's/^-//' \
+        | head -30 || true)
+    if [[ -z "$approval_deleted_symbols" ]]; then
+        approval_deleted_symbols="없음"
+    fi
     local review_badge=""
     if [[ "$review_verdict" == "APPROVE" && "$review_needs_retry" == "true" ]]; then
         # 서버가 인프라 장애를 fail-open APPROVE로 반환한 경우 — '통과'로 표기하면 CEO 오판 유발
@@ -1889,6 +1906,13 @@ ${output:0:1500}
     post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — ${review_badge}
 
 **작업**: ${instruction:0:200}
+**Diff stat / 삭제 심볼**:
+\`\`\`
+${approval_diff_stat:0:2000}
+
+deleted_symbols:
+${approval_deleted_symbols:0:1000}
+\`\`\`
 **변경사항**:
 \`\`\`diff
 ${diff_summary}
