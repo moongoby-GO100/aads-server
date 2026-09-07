@@ -9344,6 +9344,17 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
         return 0
     async with get_pool().acquire() as conn:
         async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE chat_deferred_reactions
+                SET status = 'failed',
+                    error_message = COALESCE(error_message, 'deferred reaction retry budget exhausted'),
+                    lease_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE status = 'pending'
+                  AND attempts >= 8
+                """
+            )
             rows = await conn.fetch(
                 """
                 WITH candidates AS (
@@ -9385,7 +9396,11 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 await conn.execute(
                     """
                     UPDATE chat_deferred_reactions
-                    SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL, updated_at = NOW()
+                    SET status = 'pending',
+                        attempts = GREATEST(attempts - 1, 0),
+                        claimed_by = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = NOW()
                     WHERE id = $1 AND claimed_by = $2
                     """,
                     uuid.UUID(row["id"]),
@@ -9404,7 +9419,11 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 await conn.execute(
                     """
                     UPDATE chat_deferred_reactions
-                    SET status = 'pending', claimed_by = NULL, lease_expires_at = NULL, updated_at = NOW()
+                    SET status = 'pending',
+                        attempts = GREATEST(attempts - 1, 0),
+                        claimed_by = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = NOW()
                     WHERE id = $1 AND claimed_by = $2
                     """,
                     uuid.UUID(row["id"]),

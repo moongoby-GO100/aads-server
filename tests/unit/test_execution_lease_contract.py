@@ -32,6 +32,22 @@ def test_inactive_slot_uses_durable_reaction_handoff():
     assert "_periodic_deferred_reaction_handoff" in main
 
 
+def test_deferred_reaction_claim_skips_exhausted_attempts():
+    service = Path("app/services/chat_service.py").read_text(encoding="utf-8")
+    handler = service.split("async def _process_deferred_reactions_once", 1)[1].split(
+        "async def _consume_next_reaction", 1
+    )[0]
+    claim_query = service.split("WITH candidates AS (", 1)[1].split(
+        "UPDATE chat_deferred_reactions q", 1
+    )[0]
+
+    assert "deferred reaction retry budget exhausted" in service
+    assert "AND attempts >= 8" in service
+    assert "WHERE attempts < 8" in claim_query
+    assert "ORDER BY created_at" in claim_query
+    assert handler.count("attempts = GREATEST(attempts - 1, 0)") >= 2
+
+
 def test_bluegreen_deploy_builds_once_and_starts_without_build():
     deploy = Path("deploy.sh").read_text(encoding="utf-8")
     compose = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
