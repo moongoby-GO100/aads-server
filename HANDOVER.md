@@ -12383,4 +12383,18 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - v1.2 changes: Shinhan hold, IBK first, rollout order `Junghwa -> Sungshin -> Eonni Naengmyeon`, current DB/table status, and missing IBK required credential fields.
 - Not performed:
   - Real IBK bank portal login was not attempted because the collector stops before browser launch when login password, full account number, account password, and business registration number are missing.
-  - Commit, push, deploy, and Windows EXE generation were not performed in this evidence-refresh step.
+  - Deploy and Windows EXE generation were not performed in this evidence-refresh step.
+
+## 2026-09-08 08:42 KST — IBK legacy URL normalization fix
+- Finding:
+  - `BANK_QUICK_SERVICE_CONFIG` and the browser connector had the corrected IBK URL `https://kiup.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1010/PQCS101000_i.jsp`.
+  - Existing platform account rows still contained the old `mybank.ibk.co.kr/.../PQCS102000...` URL, and `_normalize_bank_quick_login_url()` did not override legacy IBK URLs before passing `portal_url` to the connector.
+- Change implemented:
+  - Updated `app/services/yeoljeong_finance_service.py` so `ibk_business` normalizes empty, `mybank.ibk.co.kr`, or `PQCS102000` URLs to the corrected `kiup...PQCS101000` quick-service URL.
+  - Added `test_ibk_quick_service_normalizes_legacy_quick_lookup_url` in `tests/unit/test_yeoljeong_finance_service.py`.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py::test_ibk_quick_service_normalizes_legacy_quick_lookup_url tests/unit/test_yeoljeong_finance_service.py::test_upsert_bank_quick_service_encrypts_required_lookup_values -q`: 2 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_collection_queue.py tests/unit/test_yeoljeong_auto_collect.py -q`: 60 passed.
+  - `git diff --check` for touched files: passed.
+- Not performed:
+  - Deploy is still pending. The code fix is committed/pushed separately from production rollout.

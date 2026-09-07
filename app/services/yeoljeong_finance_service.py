@@ -159,6 +159,9 @@ def _normalize_bank_quick_login_url(service: str, login_url: Any) -> str:
     if service == "shinhan_business":
         if not raw or "bizbank.shinhan.com" in raw or "bank.shinhan.com/rib/easy/index.jsp" in raw:
             return fallback
+    if service == "ibk_business":
+        if not raw or "mybank.ibk.co.kr" in raw or "PQCS102000" in raw:
+            return fallback
     return raw or fallback
 
 DEFAULT_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (

@@ -1046,6 +1046,46 @@ def test_upsert_bank_quick_service_encrypts_required_lookup_values(tmp_path, mon
     assert "business_registration_no" not in saved
 
 
+def test_ibk_quick_service_normalizes_legacy_quick_lookup_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: value.removeprefix("encrypted:"))
+
+    service.upsert_account(
+        {
+            "service": "ibk_business",
+            "label": "중화점 IBK 빠른조회",
+            "username": "quick-user",
+            "password": "login-secret",
+            "login_url": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+            "account_no": "12345678901234",
+            "account_password": "4321",
+            "business_registration_no": "7108604499",
+            "business_id": "biz-junghwa",
+            "branch": "중화점",
+            "collection_mode": "bank-quick-service",
+        },
+        {"email": "owner@example.com", "is_admin": True},
+    )
+    account = {
+        "id": "acct-ibk",
+        "bank_code": "003",
+        "bank_name": "IBK기업은행",
+        "institution_code": "ibk_business",
+        "branch_id": "branch-junghwa",
+    }
+
+    credentials = service._bank_quick_credentials_for_account(
+        account,
+        business_id="biz-junghwa",
+        branch_id="branch-junghwa",
+    )
+
+    assert credentials["portal_url"] == service.BANK_QUICK_SERVICE_CONFIG["ibk_business"]["login_url"]
+    assert "kiup.ibk.co.kr" in credentials["portal_url"]
+    assert "PQCS101000" in credentials["portal_url"]
+
+
 def test_upsert_bank_quick_service_requires_account_password_and_business_no(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
