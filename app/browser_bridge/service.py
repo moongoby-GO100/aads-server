@@ -998,8 +998,15 @@ class BrowserBridgeService:
         """
         normalized_work_key = normalize_work_key(work_key)
         is_protected = normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label)
+        requested_agent_id = str(agent_id or "").strip()
         existing = None if force_recreate else self.sessions.find_by_work_key(normalized_work_key)
-        if existing and self._session_reusable(existing) and self._work_session_url_usable(existing, url):
+        existing_agent_matches = self._work_session_agent_matches(existing, requested_agent_id) if existing else True
+        if (
+            existing
+            and existing_agent_matches
+            and self._session_reusable(existing)
+            and self._work_session_url_usable(existing, url)
+        ):
             existing.mark_used()
             if is_protected and not existing.protected:
                 existing.protected = True
@@ -1013,14 +1020,22 @@ class BrowserBridgeService:
 
         stale_existing = self.sessions.find_by_work_key(normalized_work_key) if force_recreate else existing
         if stale_existing:
+            stale_reason = (
+                "agent_mismatch"
+                if not existing_agent_matches
+                else "force_recreate"
+                if force_recreate
+                else "stale_or_expired"
+            )
             logger.warning(
-                "browser_bridge_work_session_recreate work_key=%s old_session_id=%s reason=stale_or_expired",
+                "browser_bridge_work_session_recreate work_key=%s old_session_id=%s reason=%s",
                 normalized_work_key,
                 stale_existing.session_id,
+                stale_reason,
             )
             self.sessions.retire_session(
                 stale_existing.session_id,
-                stale_reason="force_recreate" if force_recreate else "stale_or_expired",
+                stale_reason=stale_reason,
                 clear_work_key=True,
                 clear_lease=True,
             )
@@ -1048,6 +1063,15 @@ class BrowserBridgeService:
             is_protected,
         )
         return session
+
+    @staticmethod
+    def _work_session_agent_matches(session: BrowserBridgeSession, requested_agent_id: str) -> bool:
+        requested = str(requested_agent_id or "").strip()
+        if not requested:
+            return True
+        metadata = dict(session.endpoint.metadata or {})
+        existing = str(metadata.get("agent_id") or "").strip()
+        return bool(existing and existing == requested)
 
     @staticmethod
     def _work_session_url_usable(session: BrowserBridgeSession, requested_url: str) -> bool:
