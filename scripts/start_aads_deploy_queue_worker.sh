@@ -55,7 +55,13 @@ fi
 log_file="${LOG_DIR}/deploy-queue-worker-$(date +%Y%m%d-%H%M%S)-${latest_sha}.log"
 worktree="/tmp/aads-deploy-worker-${latest_sha}-$$"
 
-export MODE TRIGGER STATE_DIR REPO_DIR LOCKFILE latest_sha worktree
+cleanup_failed_worktree() {
+    git -C "$REPO_DIR" worktree remove --force --force "$worktree" >/dev/null 2>&1 || true
+}
+
+git -C "$REPO_DIR" worktree add --detach "$worktree" "$latest_sha"
+
+export MODE STATE_DIR REPO_DIR LOCKFILE latest_sha worktree
 nohup bash -c '
     set -euo pipefail
     cleanup() {
@@ -64,8 +70,7 @@ nohup bash -c '
     }
     trap cleanup EXIT
 
-    echo "[$(date --iso-8601=seconds)] deploy queue worker start trigger=${TRIGGER} sha=${latest_sha}"
-    git -C "$REPO_DIR" worktree add --detach "$worktree" "$latest_sha"
+    echo "[$(date --iso-8601=seconds)] deploy queue worker start sha=${latest_sha}"
     env \
         AADS_DEPLOY_QUEUE_WORKER=true \
         AADS_DEPLOY_SOURCE_DIR="$worktree" \
