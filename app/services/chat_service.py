@@ -2563,6 +2563,7 @@ async def cleanup_overlong_running_executions(
 
         closed = 0
         cancelled_active = 0
+        interrupted_execution_ids: set[str] = set()
         for row in rows:
             model_name = row["actual_model"] or row["requested_model"] or ""
             row_timeout = _MODEL_TIMEOUT_OVERRIDES.get(model_name, timeout)
@@ -2620,6 +2621,7 @@ async def cleanup_overlong_running_executions(
                 ),
             )
             closed += 1
+            interrupted_execution_ids.add(execution_id)
             logger.warning(
                 "overlong_running_execution_interrupted session=%s execution=%s reason=%s",
                 session_id[:8],
@@ -2638,7 +2640,7 @@ async def cleanup_overlong_running_executions(
     # Track execution_ids already interrupted above so the stale_retrying pass
     # does not double-process retrying executions that were also caught by the
     # overlong guard (status IN ('running','retrying') overlaps with status='retrying').
-    _already_interrupted = {row["execution_id"] for row in rows}
+    _already_interrupted = interrupted_execution_ids
 
     # P1: stale retrying 정리 — resume task 실패 후 retrying 상태로 300초+ 잔류하는 실행을 자동 정리.
     # The first query runs inside its own connection scope. Reusing the closed
@@ -2657,7 +2659,9 @@ async def cleanup_overlong_running_executions(
                        ORDER BY COALESCE(edited_at, created_at) DESC LIMIT 1
                    ))::text AS assistant_message_id,
                    COALESCE(ph.content, am.content, '') AS partial_content,
-                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.updated_at, te.started_at)))::int AS age_seconds
+                   te.retry_count,
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.updated_at, te.started_at)))::int AS age_seconds,
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS started_age_seconds
             FROM chat_turn_executions te
             LEFT JOIN chat_messages am
               ON am.id = te.assistant_message_id
@@ -2671,10 +2675,16 @@ async def cleanup_overlong_running_executions(
             ) ph ON TRUE
             WHERE te.status = 'retrying'
               AND te.completed_at IS NULL
-              AND COALESCE(te.updated_at, te.started_at) < NOW() - ($1::int * INTERVAL '1 second')
+              AND (
+                    COALESCE(te.updated_at, te.started_at) < NOW() - ($1::int * INTERVAL '1 second')
+                 OR COALESCE(te.started_at, te.created_at) < NOW() - ($2::int * INTERVAL '1 second')
+                 OR te.retry_count >= $3::int
+              )
             ORDER BY COALESCE(te.updated_at, te.started_at) ASC
             """,
             _retrying_timeout,
+            query_timeout,
+            _EXECUTION_RESUME_MAX_ATTEMPTS,
         )
         for row in retrying_rows:
             session_id = row["session_id"]
@@ -2686,7 +2696,11 @@ async def cleanup_overlong_running_executions(
                 retry_conn,
                 session_id,
                 execution_id,
-                f"stale_retrying_cleanup_after_{row['age_seconds']}s",
+                (
+                    f"stale_retrying_hard_cap_after_{row['retry_count']}_attempts"
+                    if int(row["retry_count"] or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS
+                    else f"stale_retrying_cleanup_after_{row['age_seconds']}s_started_{row['started_age_seconds']}s"
+                ),
                 partial_content=partial_content,
                 placeholder_id=row["assistant_message_id"],
                 delete_empty_placeholder=not bool(
