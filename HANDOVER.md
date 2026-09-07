@@ -1,5 +1,37 @@
 # AADS HANDOVER
 
+## 2026-09-07 13:32 KST - Goal Guard/Harness minimal reinforcement (AADS-GOAL-GUARD-HARNESS-S-20260907)
+
+- Request:
+  - Make in-flight goals/runners self-audit that they preserve the existing implementation, and leave the evidence in `ohvis_harness_traces`. Reuse `GoalStateMachine`, `app/routers/goals.py`, the runner STEP 0 checklist, and the code_reviewer preservation gates; additive patch only.
+- Preservation audit (STEP 0):
+  - `app/services/goal_manager.py` `GoalStateMachine` — modify (added `_trace`/`_trace_policy` and trace calls only; every existing method, SQL statement, and return shape kept).
+  - `app/routers/goals.py` — keep (all 10 endpoints unchanged; traces are recorded in the service layer).
+  - `app/services/ohvis_harness.py` `RISK_POLICIES` / `_table_exists` — keep and reuse from the new modules.
+  - `app/services/pipeline_runner_service.py` `_VERIFICATION_CHECKLIST_TEMPLATE` — keep; its STEP 0 and validation wording is reused verbatim by the policy compiler and pinned by a drift test.
+  - `app/services/code_reviewer.py` `_precheck_preservation_gate` — keep; its thresholds are mirrored as `no_broad_replacement` rules.
+  - `app/services/task_policy_compiler.py`, `app/services/ohvis_harness_trace.py`, `tests/unit/test_task_policy_compiler.py`, `tests/unit/test_ohvis_harness_trace.py` — new.
+  - `migrations/160_goal_seed_chat_stability_and_ohvis_followup.sql` — new (idempotent seed; no goal/milestone is marked complete).
+  - Deletions: none. `git diff app/services/goal_manager.py` is +181 / -5, so the preservation hard gate is not triggered.
+- Changes:
+  - `app/services/task_policy_compiler.py`: compiles a policy dict/checklist from project/intent/risk_tier/goal_title — existing-implementation survey, preservation classification, no-broad-replacement rules, target validation, evidence requirements, rollback notes, plus `render_policy_markdown()` for prompt/RESULT embedding.
+  - `app/services/ohvis_harness_trace.py`: non-fatal `record_trace()` / `record_goal_trace()` writers for `ohvis_harness_traces`. A missing table logs one warning and is then skipped; pool and insert failures return `False` and never propagate.
+  - `app/services/goal_manager.py`: concise traces at `create_goal` (plus a compiled-policy trace), `activate_goal` (success and rejection), `add_milestone`, `link_task`, `update_task_status`, `advance_goal` (all four outcomes), and `advance_active_goals`. Every trace runs through a guarded helper, so goal state transitions are unchanged when tracing fails.
+  - `migrations/160_...sql`: seeds the active goal `채팅 시스템 안정화 및 응답 가독성 개선` with 4 milestones and the draft follow-up `오비스 자율 오케스트레이션 완성`.
+  - `tests/unit/test_goal_control_loop_static.py`: added coverage for the trace wiring and the seed migration's idempotency.
+- Verification:
+  - `python3 -m py_compile app/services/goal_manager.py app/services/task_policy_compiler.py app/services/ohvis_harness_trace.py` passed; `git diff --check` clean.
+  - `docker run --rm --network aads_network -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=... aads-server:e3c7851dc328 python3 -m pytest tests/unit/test_task_policy_compiler.py tests/unit/test_ohvis_harness_trace.py tests/unit/test_goal_control_loop_static.py tests/unit/test_ohvis_harness.py tests/unit/test_tools_and_pipeline.py -q` passed: 87 tests.
+  - Migration 160 re-run on the live DB was a no-op for already-seeded rows; goals 6→8, milestones 18→22, goal_task_links 20 unchanged.
+  - Live `advance_active_goals('AADS')` from the patched code returned `checked=2 advanced=0` (behavior unchanged) and wrote `ohvis_harness_traces` rows: `goals_advance_sweep` and `goal_advance` — table count 0 → 6.
+  - `create_goal` was exercised against a stubbed pool (no production write) and emitted `goal_create` plus `goal_policy` with the 24-item compiled checklist in metadata.
+  - API smoke: `GET https://aads.newtalk.kr/api/v1/goals?project=AADS` with `X-Monitor-Key` returned HTTP 200 showing the active goal and the draft follow-up.
+- Gaps / not done:
+  - Not deployed. The change is committed only; the running API slots still serve the previous image, so traces are written only when the patched code runs (verified via one-off containers).
+  - Browser E2E was not run — this task has no UI surface; API + DB verification was used instead.
+  - `task_policy_compiler` is not yet called from `pipeline_runner_service`; runner prompts still use their own checklist template. Wiring it there is the next step and needs its own review.
+  - Traces record `project=None` for `add_milestone`/`link_task`/`update_task_status` because those paths do not look the project up; add it only if a query cost is acceptable.
+
 ## 2026-09-07 13:12 KST - Chat hard-timeout meaningful partial guard
 
 - Request:
@@ -11659,3 +11691,26 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Remaining:
   - AADS worktree still has unrelated dirty Shinhan/OHVIS/report files. They were not touched or committed as part of runner sync.
   - Current GO100 runner failures are now separate push/dependency/action-required issues, not remote runner script drift.
+
+## 2026-09-07 13:35 KST — Goal Guard/Harness 최소 보강 (AADS-GOAL-GUARD-HARNESS-S-20260907)
+- 지시: 진행 중인 목표/러너가 기존 구현을 지키는지 스스로 감사하고, 증거를 `ohvis_harness_traces`에 남기게 한다. 기존 GoalStateMachine / `app/routers/goals.py` / 러너 STEP 0 체크리스트 / code_reviewer 보존 게이트는 재사용 필수.
+- STEP 0 기존 구현 조사(유지/수정/신규):
+  - 유지: `app/routers/goals.py` 12개 엔드포인트, `GoalStateMachine`의 상태 전이·완료 판정 로직, `pipeline_runner_service._update_linked_goal_state` / `_auto_link_job_to_goal`, `ohvis_harness.RISK_POLICIES`·`get_harness_status`, migrations 153/156/157/158. 삭제 0건.
+  - 수정: `app/services/goal_manager.py` — 기존 메서드 시그니처·반환값 유지, 비치명적 trace 호출만 추가. `tests/unit/test_goal_control_loop_static.py` — 기존 4개 테스트 유지, 2개 추가.
+  - 신규: `app/services/task_policy_compiler.py`, `app/services/ohvis_harness_trace.py`, `tests/unit/test_task_policy_compiler.py`, `tests/unit/test_ohvis_harness_trace.py`, `migrations/160_goal_seed_chat_stability_and_ohvis_followup.sql`.
+- 구현:
+  - `task_policy_compiler.compile_task_policy(project, intent, risk_tier, goal_title)` → 기존 구현 조사·보존 분류·통째 대체 금지·대상 검증·증거 요구사항·롤백 노트 체크리스트. 문구는 러너 `_VERIFICATION_CHECKLIST_TEMPLATE`와 code_reviewer 보존 게이트에서 그대로 재사용하고, 드리프트는 단위 테스트가 차단한다.
+  - `ohvis_harness_trace.record_trace/record_goal_trace` — 테이블 부재/풀 미초기화/INSERT 실패 시 warning 1회 후 `False` 반환, 예외 전파 없음.
+  - `goal_manager` 배선: `goal_create`(+`goal_policy`), `goal_activate`, `milestone_add`, `goal_task_link`, `goal_task_status`, `goal_advance`, `goals_advance_sweep`. 상태 전이 동작은 변경 없음.
+  - 시드(멱등): AADS `채팅 시스템 안정화 및 응답 가독성 개선`(active, 마일스톤 4, 1번만 in_progress) + `오비스 자율 오케스트레이션 완성`(draft, 마일스톤 없음 — draft 유지를 위해 의도적). 완료 처리 없음.
+- 검증:
+  - `python3 -m py_compile` (6개 파일) 통과, `git diff --check` 통과, 컨테이너 ruff `--select F821,F811` All checks passed.
+  - `pytest tests/unit/test_task_policy_compiler.py test_ohvis_harness_trace.py test_goal_control_loop_static.py test_ohvis_harness.py` → **23 passed**.
+  - 마이그레이션 2회 연속 적용 → goals 8 / milestones 22 유지(멱등 확인). DB before→after: goals 6→8, milestones 18→22, goal_task_links 20→20, `ohvis_harness_traces` 0→6.
+  - 실제 배선 확인: `advance_active_goals('AADS')` 실행 시 `goals_advance_sweep` 1건 + `goal_advance` 2건이 `ohvis_harness_traces`에 기록됨(목표 상태 변화 없음).
+  - API 스모크: `GET /api/v1/goals` + `X-Monitor-Key` → **HTTP 200**, 신규 AADS active 목표 노출.
+- 남은 격차:
+  - **미배포**. 운영 `aads-server` 컨테이너는 이미지 코드를 사용하므로, `deploy.sh bluegreen` 전까지 런타임 경로에서는 trace가 기록되지 않는다(검증은 컨테이너 내 별도 프로세스로 수행 후 컨테이너 파일을 이미지 상태로 원복함).
+  - `compile_task_policy`는 아직 러너 지시서 생성 경로에 주입되지 않았다(목표 생성 시 trace 증거로만 기록). 러너 프롬프트 주입은 후속 작업.
+  - 동일 TASK_ID로 러너 인스턴스가 2개 기동되어 같은 파일을 동시에 편집했다. 최종 산출물은 단일 경로로 통합했으나, 러너 중복 기동 자체는 별도 조사 필요.
+  - 워크트리의 `tests/unit/test_execution_lease_contract.py` 등 무관한 dirty 파일은 건드리지 않았고 커밋에서 제외했다.
