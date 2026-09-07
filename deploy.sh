@@ -345,6 +345,15 @@ queue_pending_deploy_request() {
                 ORDER BY id DESC
                 LIMIT 1
             ),
+            active_same_release AS (
+                SELECT id
+                FROM deploy_runs
+                WHERE project='AADS'
+                  AND release_sha='$release_sql'
+                  AND status IN ('running', 'verifying', 'syncing_standby')
+                ORDER BY id DESC
+                LIMIT 1
+            ),
             inserted AS (
                 INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
                                         deploy_pid, last_heartbeat_at, queue_position,
@@ -352,16 +361,24 @@ queue_pending_deploy_request() {
                 SELECT 'AADS', '$release_sql', 'queued', 'queued_for_deploy', NOW(),
                        $$, NOW(), 1, '$queue_reason_sql', NOW(), NOW()
                 WHERE NOT EXISTS (SELECT 1 FROM existing)
+                  AND NOT EXISTS (SELECT 1 FROM active_same_release)
                 RETURNING id
             )
             SELECT id FROM inserted
+            UNION ALL
+            SELECT id FROM active_same_release
             UNION ALL
             SELECT id FROM existing
             LIMIT 1;
         " | tail -1 | tr -d '[:space:]'
     )"
-    echo "[deploy.sh] queued_for_deploy: release=${AADS_RELEASE_SHA}, active_pid=${lock_pid}, queue_run_id=${run_id:-unknown}"
-    audit_control "deploy-queue" "deploy_runs:${run_id:-unknown}" "queued" "release=${AADS_RELEASE_SHA}; active_pid=${lock_pid_sql}"
+    if [[ "$(deploy_queue_count)" == "0" ]]; then
+        echo "[deploy.sh] deploy already running for release=${AADS_RELEASE_SHA}; no duplicate queue created (active_run_id=${run_id:-unknown})"
+        audit_control "deploy-queue" "deploy_runs:${run_id:-unknown}" "already_running" "release=${AADS_RELEASE_SHA}; active_pid=${lock_pid_sql}"
+    else
+        echo "[deploy.sh] queued_for_deploy: release=${AADS_RELEASE_SHA}, active_pid=${lock_pid}, queue_run_id=${run_id:-unknown}"
+        audit_control "deploy-queue" "deploy_runs:${run_id:-unknown}" "queued" "release=${AADS_RELEASE_SHA}; active_pid=${lock_pid_sql}"
+    fi
 }
 
 wait_for_active_deploy_lock() {

@@ -176,6 +176,8 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "start_deploy_queue_worker \"lock_busy\"" in script
     assert "claim_latest_queued_deploy_request" in script
     assert "superseded_by_newer_deploy" in script
+    assert "active_same_release" in script
+    assert "no duplicate queue created" in script
 
 
 def test_deploy_script_keeps_five_minute_monitoring_default():

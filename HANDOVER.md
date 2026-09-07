@@ -11513,6 +11513,7 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - A single `/tmp/aads-deploy-queue-worker.lock` worker waits for the current `/tmp/aads-deploy.lock` holder to finish, then claims the newest queued SHA and marks older queued rows `superseded_by_newer_deploy`.
   - The queue worker re-reads local `HEAD` after the active deploy lock clears, so a newer committed release can supersede an older pending request before deployment starts.
   - Successful deploy completion now checks for queued deploy requests and starts a queue worker if needed.
+  - Duplicate reentrant requests for the same release SHA are not queued again when that SHA is already running, verifying, or syncing standby.
 - GO100 action:
   - Submitted `runner-27298506` with dependency on `runner-c5a5404c` to apply the same queued deploy gate to `/root/kis-autotrade-v4/scripts/deploy.sh` after active GO100 P0 work finishes. Direct GO100 editing was not safe because the remote repo is detached with `HANDOVER.md` unmerged and active GO100 runners are running.
 - Verification before commit:
