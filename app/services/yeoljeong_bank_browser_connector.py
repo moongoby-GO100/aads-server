@@ -445,6 +445,8 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                   const bodyText = visibleText();
                   const noticePatterns = [
                     '인터넷뱅킹 보안프로그램설치안내',
+                    '일정시간 이상 서비스 이용 정보가 없습니다',
+                    '새로고침 후 이용하시기 바랍니다',
                     '키보드 입력 검증에 실패',
                     '거래를 처음부터 다시 진행',
                     '이용자ID를 입력해주세요',
@@ -497,7 +499,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                     .filter(visible)
                     .find((el) => {
                       const text = String(el.closest?.('.w2popup_window,.w2window,[role="dialog"],[id*="CO00038RP"]')?.innerText || '');
-                      return /보안프로그램설치안내|키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(text)
+                      return /보안프로그램설치안내|일정시간 이상 서비스 이용 정보|새로고침 후 이용|키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(text)
                         || /CO00038RP|btnmakedpopupclose/i.test(String(el.id || el.className || ''));
                     }) || null;
                   const all = exactClose ? [exactClose] : Array.from(document.querySelectorAll('a,button,input,span,div'));
@@ -512,7 +514,7 @@ async def _close_shinhan_security_notice(page: Any) -> bool:
                       if (label === '확인') score += 110;
                       if (label === '닫기') score += 90;
                       if (/보안프로그램설치안내/.test(String(el.closest?.('.w2popup_window,.w2window')?.innerText || ''))) score += 60;
-                      if (/키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
+                      if (/일정시간 이상 서비스 이용 정보|새로고침 후 이용|키보드 입력 검증|처음부터 다시 진행|이용자ID를 입력|비밀번호를 입력|비밀번호 최소자릿수/.test(String(el.closest?.('.w2popup_window,.w2window,[role="dialog"]')?.innerText || ''))) score += 60;
                       if (/btnTotalClose/i.test(meta)) score -= 200;
                       const rect = el.getBoundingClientRect();
                       if (rect.width <= 0 || rect.height <= 0) score = 0;
@@ -581,6 +583,7 @@ async def _shinhan_security_notice_state(page: Any) -> dict[str, str]:
                 ['SHINHAN_KEYBOARD_VERIFICATION_FAILED', /키보드 입력 검증에 실패|처음부터 다시 진행/],
                 ['SHINHAN_LOGIN_ID_REQUIRED', /이용자ID를 입력해주세요/],
                 ['SHINHAN_PASSWORD_REQUIRED', /비밀번호를 입력해주세요|비밀번호 최소자릿수/],
+                ['SHINHAN_IDLE_TIMEOUT_NOTICE', /일정시간 이상 서비스 이용 정보가 없습니다|새로고침 후 이용하시기 바랍니다/],
                 ['SHINHAN_SECURITY_PROGRAM_NOTICE', /인터넷뱅킹 보안프로그램설치안내/]
               ];
               const matched = notices.find(([, pattern]) => pattern.test(bodyText));
@@ -612,6 +615,7 @@ def _is_shinhan_blocking_security_notice(notice_state: dict[str, str]) -> bool:
     return str(notice_state.get("error_code") or "").strip().upper() in {
         "SHINHAN_SECURITY_PROGRAM_NOTICE",
         "SHINHAN_KEYBOARD_VERIFICATION_FAILED",
+        "SHINHAN_IDLE_TIMEOUT_NOTICE",
     }
 
 
@@ -4344,6 +4348,64 @@ async def collect_bank_via_browser_session_async(
         except Exception:
             pass
 
+    if (
+        not session_id_to_use
+        and not auto_open_browser
+        and browser_work_key
+        and browser_preferred_port
+    ):
+        stage_started_at = time.monotonic()
+        try:
+            from app.browser_bridge.service import get_browser_bridge_service
+
+            bridge = get_browser_bridge_service()
+            session_label = (
+                f"{bank_name or '신한은행'} 간편조회"
+                if shinhan_flow_mode == "individual_simple"
+                else f"{bank_name or '은행'} 기업페이지"
+            )
+            session = await bridge.ensure_work_session(
+                work_key=browser_work_key,
+                label=session_label,
+                agent_id=str(browser_agent_id or ""),
+                url=portal_url or "about:blank",
+                preferred_port=browser_preferred_port,
+                force_recreate=False,
+                queue_wait_timeout_seconds=launch_queue_wait_seconds,
+                command_timeout_seconds=launch_timeout_seconds,
+            )
+            session_id_to_use = str(getattr(session, "session_id", "") or "")
+            if session_id_to_use:
+                session_metadata = dict(getattr(getattr(session, "endpoint", None), "metadata", {}) or {})
+                for layout_key in ("window_position", "window_size", "window_layout_policy"):
+                    if session_metadata.get(layout_key):
+                        safe_diagnostics[f"browser_{layout_key}"] = session_metadata.get(layout_key)
+                safe_diagnostics["browser_session_id"] = session_id_to_use
+                safe_diagnostics["session_recovery"] = "reattached_existing_preferred_port"
+                safe_diagnostics["session_recovery_plan"] = "reuse_existing_cdp_port_same_work_key"
+                if shinhan_service:
+                    _append_shinhan_stage_log(
+                        shinhan_stage_logs,
+                        stage="shinhan_browser_session",
+                        status="success",
+                        started_at=stage_started_at,
+                        reason="reattached_existing_preferred_port",
+                        success_condition="existing_cdp_port_bound_to_work_key",
+                        browser_window_position=str(session_metadata.get("window_position") or ""),
+                        browser_window_size=str(session_metadata.get("window_size") or ""),
+                        browser_window_layout_policy=str(session_metadata.get("window_layout_policy") or ""),
+                    )
+        except Exception as exc:
+            exc_error_code = str(getattr(exc, "error_code", "") or "").strip()
+            safe_diagnostics["session_recovery"] = "failed"
+            safe_diagnostics["session_recovery_error"] = exc_error_code or "PC_AGENT_UNAVAILABLE"
+            safe_diagnostics["session_recovery_plan"] = _bank_session_recovery_plan(
+                exc_error_code or "PC_AGENT_UNAVAILABLE"
+            )
+            exc_detail = _safe_error_detail(getattr(exc, "detail", None))
+            if exc_detail:
+                safe_diagnostics["session_recovery_error_detail"] = exc_detail
+
     if not session_id_to_use and auto_open_browser and browser_work_key:
         stage_started_at = time.monotonic()
         try:
@@ -4575,19 +4637,36 @@ async def collect_bank_via_browser_session_async(
             safe_diagnostics["shinhan_security_program_state"] = security_program_state
             runtime_ready = str(security_program_state.get("required_runtime_ready") or "") == "1"
             checked = str(security_program_state.get("checked") or "")
+            security_check_error = str(security_program_state.get("error_code") or "").strip().upper()
+            security_check_transient = checked == "failed" and security_check_error in {
+                "AGENT_BUSY",
+                "CDP_NOT_READY",
+                "COMMAND_TIMEOUT",
+                "NO_CAPABLE_AGENT",
+                "PC_AGENT_OFFLINE",
+                "PC_AGENT_ROUTE_UNAVAILABLE",
+            }
+            if security_check_transient:
+                safe_diagnostics["shinhan_security_program_runtime_check_transient"] = "1"
             _append_shinhan_stage_log(
                 shinhan_stage_logs,
                 stage="shinhan_security_program_check",
-                status="success" if runtime_ready else "failed",
+                status="success" if runtime_ready else ("warning" if security_check_transient else "failed"),
                 started_at=security_check_started_at,
-                error_code="" if runtime_ready else "SHINHAN_SECURITY_PROGRAM_NOT_READY",
+                error_code="" if runtime_ready else (
+                    security_check_error if security_check_transient else "SHINHAN_SECURITY_PROGRAM_NOT_READY"
+                ),
                 reason=(
                     "pc_agent_registry_and_service_check"
                     if checked == "1"
                     else str(security_program_state.get("reason") or checked or "check_failed")
                 ),
                 success_condition="veraport_and_ahnlab_runtime_detected" if runtime_ready else "",
-                failure_condition="" if runtime_ready else "veraport_or_ahnlab_runtime_not_detected",
+                failure_condition="" if runtime_ready else (
+                    "security_program_check_transient_route_error"
+                    if security_check_transient
+                    else "veraport_or_ahnlab_runtime_not_detected"
+                ),
                 veraport_detected=security_program_state.get("veraport_detected", ""),
                 ahnlab_detected=security_program_state.get("ahnlab_detected", ""),
                 keyboard_security_detected=security_program_state.get("keyboard_security_detected", ""),
@@ -4595,7 +4674,7 @@ async def collect_bank_via_browser_session_async(
                 installed_match_count=security_program_state.get("installed_match_count", ""),
                 running_match_count=security_program_state.get("running_match_count", ""),
             )
-            if not runtime_ready and checked != "0":
+            if not runtime_ready and checked != "0" and not security_check_transient:
                 return {
                     "status": "action_required",
                     "error_code": "SHINHAN_SECURITY_PROGRAM_NOT_READY",

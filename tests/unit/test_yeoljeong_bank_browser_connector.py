@@ -1386,6 +1386,126 @@ def test_collect_async_auto_opens_bank_work_session_when_enabled():
     mock_page.goto.assert_not_called()
 
 
+def test_collect_async_reattaches_preferred_port_when_retry_disables_auto_open():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    mock_page = AsyncMock()
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "간편조회서비스 이용자ID 로그인"
+        return []
+
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+
+    mock_session = MagicMock()
+    mock_session.session_id = "reattached-session-001"
+    mock_session.endpoint.metadata = {
+        "agent_id": "shinhan-e98",
+        "port": "9222",
+        "window_layout_policy": "bank_dedicated_left",
+    }
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge:
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.find_by_work_key.return_value = None
+        bridge_inst.ensure_work_session = AsyncMock(return_value=mock_session)
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-shinhan-easyview",
+                browser_agent_id="shinhan-e98",
+                browser_preferred_port=9222,
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=False,
+            )
+        )
+
+    assert result["status"] in {"collected", "action_required"}
+    assert result["diagnostics"]["browser_session_id"] == "reattached-session-001"
+    assert result["diagnostics"]["session_recovery"] == "reattached_existing_preferred_port"
+    bridge_inst.ensure_work_session.assert_awaited_once()
+    call_kwargs = bridge_inst.ensure_work_session.await_args.kwargs
+    assert call_kwargs["agent_id"] == "shinhan-e98"
+    assert call_kwargs["preferred_port"] == 9222
+    assert call_kwargs["force_recreate"] is False
+    mock_page.goto.assert_not_called()
+
+
+def test_collect_async_treats_security_recheck_route_error_as_transient():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+
+    mock_page = AsyncMock()
+
+    async def evaluate(expr, *args):
+        if expr == "window.location.href":
+            return "https://bank.shinhan.com/rib/easy/index.jsp#210000000000"
+        if "querySelectorAll('table')" in expr:
+            return []
+        if "document.body.innerText" in expr:
+            return "간편조회서비스"
+        return []
+
+    mock_page.evaluate = AsyncMock(side_effect=evaluate)
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_load_state = AsyncMock()
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_page]
+
+    mock_session = MagicMock()
+    mock_session.session_id = "reattached-session-002"
+    mock_session.endpoint.metadata = {"agent_id": "shinhan-e98", "port": "9222"}
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge, patch.object(
+        connector,
+        "_shinhan_security_program_runtime_state",
+        AsyncMock(return_value={"checked": "failed", "error_code": "PC_AGENT_OFFLINE"}),
+    ):
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.find_by_work_key.return_value = None
+        bridge_inst.ensure_work_session = AsyncMock(return_value=mock_session)
+        bridge_inst.sessions.get.return_value = mock_session
+        bridge_inst._context_for_session = AsyncMock(return_value=mock_context)
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="",
+                browser_work_key="yeoljeong-bank-shinhan-easyview",
+                browser_agent_id="shinhan-e98",
+                browser_preferred_port=9222,
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=False,
+            )
+        )
+
+    assert result.get("error_code") != "SHINHAN_SECURITY_PROGRAM_NOT_READY"
+    assert result["diagnostics"]["shinhan_security_program_runtime_check_transient"] == "1"
+    security_logs = [
+        item
+        for item in result["diagnostics"]["shinhan_stage_logs"]
+        if item.get("stage") == "shinhan_security_program_check"
+    ]
+    assert security_logs[-1]["status"] == "warning"
+    assert security_logs[-1]["error_code"] == "PC_AGENT_OFFLINE"
+
+
 def test_collect_async_auto_open_reused_login_page_requires_operator_action():
     account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
 
@@ -2405,6 +2525,23 @@ def test_close_shinhan_security_notice_prefers_visible_popup_close():
 
     assert _run(connector._close_shinhan_security_notice(page)) is True
     assert page.evaluate.await_count == 2
+
+
+def test_close_shinhan_security_notice_handles_idle_timeout_popup():
+    page = AsyncMock()
+
+    async def evaluate(expr, *args, **kwargs):
+        if "noticePatterns" in expr:
+            assert "일정시간 이상 서비스 이용 정보가 없습니다" in expr
+            assert "새로고침 후 이용하시기 바랍니다" in expr
+            return {"closed": "1", "notice": "1", "notice_type": "일정시간 이상 서비스 이용 정보가 없습니다", "tag": "A"}
+        if "SHINHAN_IDLE_TIMEOUT_NOTICE" in expr:
+            return {"present": "0"}
+        return {"present": "0"}
+
+    page.evaluate = AsyncMock(side_effect=evaluate)
+
+    assert _run(connector._close_shinhan_security_notice(page)) is True
 
 
 def test_shinhan_keyboard_login_does_not_navigate_before_hidden_idpw_fill():

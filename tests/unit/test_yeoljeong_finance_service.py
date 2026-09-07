@@ -27,6 +27,7 @@ def isolate_yeoljeong_storage(tmp_path, monkeypatch):
 
     monkeypatch.setattr(service, "DATA_DIR", tmp_path)
     monkeypatch.setattr(service, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
+    monkeypatch.setenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", str(tmp_path / ".bank_auto_collect.lock"))
     monkeypatch.setattr(service, "_run_db", disable_db)
 
 
@@ -430,7 +431,12 @@ def test_collect_bank_timeout_retries_saved_shinhan_idpw_once(monkeypatch, tmp_p
         type(
             "_ConnectorModule",
             (),
-            {"collect_bank_via_browser_session_async": fake_collect_bank_via_browser_session_async},
+            {
+                "collect_bank_via_browser_session_async": fake_collect_bank_via_browser_session_async,
+                "bank_browser_work_key": lambda account_id, business_id, branch_id: "wk-bank",
+                "ibk_business_browser_work_key": lambda business_id, branch_id: "ibk-work-key",
+                "shinhan_individual_browser_work_key": lambda business_id, branch_id: "shinhan-individual-work-key",
+            },
         )(),
     )
     monkeypatch.setattr(
@@ -1331,6 +1337,7 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
                 "sales": [
                     {
                         "id": "sale-1",
+                        "order_id": "order-1",
                         "business_id": "biz-mia",
                         "branch": "열정국밥_미아점",
                         "service": "baemin",
@@ -1341,6 +1348,7 @@ def test_sync_delivery_upserts_records_and_status(tmp_path, monkeypatch):
                 "settlements": [
                     {
                         "id": "settlement-1",
+                        "settlement_id": "settlement-1",
                         "business_id": "biz-mia",
                         "branch": "열정국밥_미아점",
                         "service": "baemin",
@@ -1723,6 +1731,7 @@ def test_sync_full_backfill_claims_one_queued_window_and_enqueues_next_day(tmp_p
                 "sales": [
                     {
                         "id": "sale-1",
+                        "order_id": "order-1",
                         "business_id": "biz-mia",
                         "branch": "열정국밥_미아점",
                         "service": "baemin",
@@ -1734,7 +1743,17 @@ def test_sync_full_backfill_claims_one_queued_window_and_enqueues_next_day(tmp_p
                 ],
                 "settlements": [],
                 "reviews": [],
-                "ads": [{"id": "ad-1", "business_id": "biz-mia", "branch": "열정국밥_미아점", "service": "baemin", "record_type": "ads"}],
+                "ads": [
+                    {
+                        "id": "ad-1",
+                        "business_id": "biz-mia",
+                        "branch": "열정국밥_미아점",
+                        "service": "baemin",
+                        "record_type": "ads",
+                        "campaign_name": "우리가게클릭",
+                        "cost_amount": 1000,
+                    }
+                ],
             },
             "diagnostics": {"order_history_orders_saved": 1, "ads_backfill_ads_saved": 1},
         }
@@ -1815,6 +1834,7 @@ def test_sync_delivery_settles_stale_running_status_before_new_run(tmp_path, mon
                 "sales": [
                     {
                         "id": "sale-new",
+                        "order_id": "order-new",
                         "business_id": "biz-mia",
                         "branch": "열정국밥_미아점",
                         "service": "baemin",
@@ -2384,10 +2404,12 @@ def test_sync_delivery_upserts_only_incoming_delivery_records(tmp_path, monkeypa
                 "sales": [
                     {
                         "id": "new-sale",
+                        "order_id": "order-new",
                         "service": "baemin",
                         "business_id": "biz-junghwa",
                         "branch": "중화점",
                         "occurred_on": "2026-08-25",
+                        "gross_amount": 10000,
                     }
                 ],
                 "settlements": [],
