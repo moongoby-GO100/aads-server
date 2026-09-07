@@ -1,0 +1,4 @@
+# Optional browser/visual QA dependencies. Keep this separate from the runtime
+# lock so the production API image can omit browser automation by default.
+playwright>=1.48.0
+Pillow>=10.0.0

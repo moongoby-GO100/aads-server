@@ -27,6 +27,9 @@ ACTIVE_CONTAINER_FILE="${STATE_DIR}/.active_container"
 ACTIVE_PORT_FILE="${STATE_DIR}/.active_port"
 API_MEMORY_BYTES="${AADS_API_MEMORY_BYTES:-3221225472}"
 API_MEMORY_SWAP_BYTES="${AADS_API_MEMORY_SWAP_BYTES:-5368709120}"
+AADS_DOCKER_TARGET="${AADS_DOCKER_TARGET:-runtime}"
+AADS_IMAGE_PROFILE="${AADS_IMAGE_PROFILE:-runtime}"
+AADS_INSTALL_PLAYWRIGHT="${AADS_INSTALL_PLAYWRIGHT:-false}"
 DEPLOY_START_EPOCH=$(date +%s)
 DEPLOY_GENERATION_FILE="${STATE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
@@ -103,6 +106,61 @@ require_release_context_within_limit() {
     audit_control "release-context-size" "$RELEASE_CONTEXT_DIR" "success" "context_mb=${context_mb}; max_context_mb=${max_context_mb}"
 }
 
+require_dependency_lock_freshness() {
+    local missing=0 lock changed_pyproject changed_locks
+    for lock in requirements.runtime.lock requirements.dev.lock requirements.visual.lock; do
+        if [[ ! -s "${COMPOSE_DIR}/${lock}" ]]; then
+            echo "[deploy.sh] ❌ dependency lock missing or empty: ${lock}"
+            missing=1
+        fi
+    done
+    if [[ "$missing" != "0" ]]; then
+        audit_control "dependency-lock-freshness" "$COMPOSE_DIR" "blocked" "missing dependency lock"
+        return 1
+    fi
+
+    if git -C "$COMPOSE_DIR" rev-parse --verify HEAD^ >/dev/null 2>&1; then
+        changed_pyproject="$(git -C "$COMPOSE_DIR" diff --name-only HEAD^ HEAD -- pyproject.toml | tr -d '[:space:]' || true)"
+        changed_locks="$(git -C "$COMPOSE_DIR" diff --name-only HEAD^ HEAD -- \
+            requirements.runtime.lock requirements.dev.lock requirements.visual.lock | tr -d '[:space:]' || true)"
+        if [[ -n "$changed_pyproject" && -z "$changed_locks" ]]; then
+            echo "[deploy.sh] ❌ dependency lock freshness failed: pyproject.toml changed without lock update"
+            echo "[deploy.sh]    Run scripts/compile_requirements.sh and commit updated lock files."
+            audit_control "dependency-lock-freshness" "$COMPOSE_DIR" "blocked" "pyproject changed without lock update"
+            return 1
+        fi
+    fi
+    echo "[deploy.sh] ✅ dependency lock freshness verified"
+    audit_control "dependency-lock-freshness" "$COMPOSE_DIR" "success" "runtime/dev/visual locks present"
+}
+
+emit_release_context_manifest() {
+    local top_n="${AADS_DEPLOY_CONTEXT_MANIFEST_TOP_N:-20}"
+    if [[ ! "$top_n" =~ ^[0-9]+$ ]] || [[ "$top_n" -lt 1 ]]; then
+        top_n="20"
+    fi
+    echo "[deploy.sh] release context largest tracked files (top ${top_n}):"
+    find "$RELEASE_CONTEXT_DIR" -type f -printf '%s\t%P\n' 2>/dev/null \
+        | sort -nr \
+        | head -"$top_n" \
+        | awk '{mb=$1/1024/1024; sub(/^[^\t]*\t/, ""); printf("[deploy.sh]   %.2fMB\t%s\n", mb, $0)}' || true
+    audit_control "release-context-manifest" "$RELEASE_CONTEXT_DIR" "success" "top_n=${top_n}"
+}
+
+report_docker_retention_status() {
+    if ! docker info >/dev/null 2>&1; then
+        echo "[deploy.sh] ⚠️ Docker unavailable; retention status skipped"
+        return 0
+    fi
+    echo "[deploy.sh] Docker storage status:"
+    docker system df 2>/dev/null | sed 's/^/[deploy.sh]   /' || true
+    if [[ -x "${COMPOSE_DIR}/scripts/prune_aads_images.sh" ]]; then
+        "${COMPOSE_DIR}/scripts/prune_aads_images.sh" --dry-run 2>/dev/null \
+            | sed 's/^/[deploy.sh]   retention: /' \
+            | head -40 || true
+    fi
+}
+
 require_release_image_within_limit() {
     local max_image_gb max_image_bytes image_bytes
     max_image_gb="${AADS_DEPLOY_MAX_IMAGE_GB:-7}"
@@ -132,12 +190,18 @@ build_release_image() {
         build_max_wait="1200"
     fi
     require_build_disk_free
+    require_dependency_lock_freshness
+    report_docker_retention_status
     cleanup_release_context
     RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
     git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
     echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA}, build_timeout=${build_max_wait}s)"
+    emit_release_context_manifest
     require_release_context_within_limit
     timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+        --target "${AADS_DOCKER_TARGET}" \
+        --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
+        --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
         --label "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" \
         --tag "aads-server:${AADS_RELEASE_SHA}" \
         "$RELEASE_CONTEXT_DIR"

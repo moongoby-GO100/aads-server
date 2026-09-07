@@ -190,6 +190,8 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "start_deploy_heartbeat" in script
     assert "AADS_DEPLOY_HEARTBEAT_SECONDS:-15" in script
     assert "DOCKER_BUILDKIT=\"${DOCKER_BUILDKIT:-1}\" docker build" in script
+    assert "--target \"${AADS_DOCKER_TARGET}\"" in script
+    assert "--build-arg \"INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}\"" in script
     assert "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" in script
     assert "deploy_signal_trap TERM" in script
     assert "ensure_deploy_observability_schema" in script
@@ -244,5 +246,11 @@ def test_dockerfile_keeps_runtime_image_bounded():
     assert "syntax=docker/dockerfile" in dockerfile
     assert "type=cache,target=/root/.cache/pip" in dockerfile
     assert "type=cache,target=/var/cache/apt" in dockerfile
-    assert "rm -rf /root/.cargo /root/.rustup" in dockerfile
+    assert "FROM python:3.12-slim AS wheelhouse" in dockerfile
+    assert "FROM python:3.12-slim AS runtime" in dockerfile
+    assert "rustup.rs" not in dockerfile
+    assert "/root/.cargo" not in dockerfile
+    assert 'ARG INSTALL_PLAYWRIGHT=false' in dockerfile
+    assert "requirements.runtime.lock" in dockerfile
+    assert 'if [ "$INSTALL_PLAYWRIGHT" = "true" ]' in dockerfile
     assert dockerfile.count("playwright install chromium --with-deps") == 1
