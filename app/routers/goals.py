@@ -17,35 +17,31 @@ class GoalCreateRequest(BaseModel):
     parent_goal_id: Optional[str] = None
 
 
+class MilestoneCreateRequest(BaseModel):
+    title: str
+    sequence: int
+    completion_criteria: Optional[str] = None
+    auto_advance: bool = True
+
+
+class LinkTaskRequest(BaseModel):
+    milestone_id: Optional[str] = None
+    task_type: str
+    task_id: str
+
+
+class GoalUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    priority: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    deadline: Optional[str] = None
+
+
 @router.get("/goals")
 async def list_goals(project: Optional[str] = Query(None)):
-    from app.core.db_pool import get_pool
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        if project:
-            rows = await conn.fetch(
-                """
-                SELECT id, project, title, priority, status, created_at, completed_at
-                FROM goals WHERE project = $1 ORDER BY created_at DESC
-                """,
-                project,
-            )
-        else:
-            rows = await conn.fetch(
-                "SELECT id, project, title, priority, status, created_at, completed_at FROM goals ORDER BY created_at DESC"
-            )
-    return [
-        {
-            "goal_id": str(r["id"]),
-            "project": r["project"],
-            "title": r["title"],
-            "priority": r["priority"],
-            "status": r["status"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-            "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
-        }
-        for r in rows
-    ]
+    from app.services.goal_manager import goal_state_machine
+    return await goal_state_machine.list_goals(project)
 
 
 @router.post("/goals")
@@ -67,4 +63,56 @@ async def goal_status(goal_id: str):
     result = await goal_state_machine.get_goal_status(goal_id)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/goals/{goal_id}/activate")
+async def activate_goal(goal_id: str):
+    from app.services.goal_manager import goal_state_machine
+    result = await goal_state_machine.activate_goal(goal_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.post("/goals/{goal_id}/milestones")
+async def add_milestone(goal_id: str, req: MilestoneCreateRequest):
+    from app.services.goal_manager import goal_state_machine
+    result = await goal_state_machine.add_milestone(
+        goal_id=goal_id,
+        title=req.title,
+        sequence=req.sequence,
+        completion_criteria=req.completion_criteria,
+        auto_advance=req.auto_advance,
+    )
+    return result
+
+
+@router.post("/goals/{goal_id}/link-task")
+async def link_task(goal_id: str, req: LinkTaskRequest):
+    from app.services.goal_manager import goal_state_machine
+    result = await goal_state_machine.link_task(
+        goal_id=goal_id,
+        milestone_id=req.milestone_id,
+        task_type=req.task_type,
+        task_id=req.task_id,
+    )
+    return result
+
+
+@router.post("/goals/{goal_id}/check-completion")
+async def check_completion(goal_id: str):
+    from app.services.goal_manager import goal_state_machine
+    result = await goal_state_machine.check_goal_completion(goal_id)
+    return result
+
+
+@router.put("/goals/{goal_id}")
+async def update_goal(goal_id: str, req: GoalUpdateRequest):
+    from app.services.goal_manager import goal_state_machine
+    result = await goal_state_machine.update_goal(
+        goal_id, **req.model_dump(exclude_none=True),
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
     return result
