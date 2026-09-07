@@ -524,6 +524,8 @@ class PipelineCJob:
 
             # AADS-1864: 검증 체크리스트 자동 삽입
             enriched_instruction = _append_verification_checklist(self.instruction, self.project)
+            # 보존 정책 컴파일 결과를 실행 전 증거로 기록 (비치명적)
+            await self._trace_task_policy()
 
             # CEO 명시 지정: worker_model="litellm" 또는 "litellm:모델명" → LiteLLM Runner 직접 실행
             _wm = self.worker_model or ""
@@ -625,6 +627,8 @@ class PipelineCJob:
                 # AI 검수 (파서/인프라 실패 시 최대 _MAX_REVIEW_PARSE_RETRIES회 재시도 후 review_hold 폴백)
                 self._log("ai_review", f"[{self.cycle}차] AI 검수 중...")
                 review = await self._ai_review_with_retry()
+                # 기존 구현 보존 자기감사 증거 기록 (비치명적, 판정에는 영향 없음)
+                await self._trace_preservation_audit(review)
 
                 if review["verdict"] == "DELEGATED":
                     # AI 리뷰 인프라 장애 → 세션 AI가 직접 코드를 검수하고 승인/거부 판단
@@ -1534,6 +1538,112 @@ class PipelineCJob:
         self.actual_model = f"claude:{family}"
         self.model = _normalize_claude_cli_model(spec)
         return await self._run_claude_code(instruction, continue_session=False)
+
+    # ─── 기존 구현 보존 자기감사 trace ───────────────────────────────────────
+
+    async def _trace_runner(
+        self,
+        run_type: str,
+        *,
+        input_summary: str = "",
+        output_summary: str = "",
+        metadata: Optional[dict] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """러너 자기감사 증거를 ohvis_harness_traces에 남긴다 (비치명적).
+
+        trace 실패(테이블 없음/풀 미초기화/INSERT 실패)는 삼키며, 러너 진행에는
+        어떤 영향도 주지 않는다.
+        """
+        try:
+            from app.services.ohvis_harness_trace import record_trace
+
+            await record_trace(
+                graph_run_id=f"runner:{self.job_id}",
+                run_type=run_type,
+                project=self.project,
+                session_id=self.chat_session_id or None,
+                ohvis_task_id=getattr(self, "ohvis_task_id", None),
+                input_summary=input_summary,
+                output_summary=output_summary,
+                metadata={
+                    **(metadata or {}),
+                    "component": "pipeline_runner",
+                    "action": run_type,
+                    "job_id": self.job_id,
+                    "cycle": self.cycle,
+                },
+                error=error,
+            )
+        except Exception as exc:  # noqa: BLE001 — 추적은 비치명적
+            logger.debug("runner_trace_skipped run_type=%s: %s", run_type, str(exc)[:200])
+
+    async def _trace_task_policy(self) -> None:
+        """작업 시작 시 컴파일된 기존 구현 보존 정책을 증거로 남긴다 (비치명적)."""
+        try:
+            from app.services.task_policy_compiler import compile_task_policy
+
+            policy = compile_task_policy(
+                project=self.project,
+                intent=self.instruction,
+            )
+            await self._trace_runner(
+                "runner_policy",
+                input_summary=policy.get("summary") or self.instruction[:200],
+                output_summary=(
+                    f"risk_tier={policy.get('risk_tier')} "
+                    f"approval_required={policy.get('approval_required')} "
+                    f"checks={len(policy.get('checklist', []))}"
+                ),
+                metadata={"policy": policy},
+            )
+        except Exception as exc:  # noqa: BLE001 — 정책 추적도 비치명적
+            logger.debug("runner_policy_trace_skipped job=%s: %s", self.job_id, str(exc)[:200])
+
+    async def _trace_preservation_audit(self, review: dict) -> None:
+        """검수 직후 diff가 기존 구현을 지켰는지 자기감사하고 증거를 남긴다.
+
+        판정 기준은 새로 만들지 않고 `code_reviewer`의 보존 하드 게이트 헬퍼를
+        그대로 재사용한다 (해당 모듈은 수정하지 않는다).
+        """
+        try:
+            from app.services.code_reviewer import (
+                _diff_line_counts,
+                _extract_changed_files,
+                _extract_instruction_paths,
+            )
+
+            additions, deletions = _diff_line_counts(self.git_diff)
+            changed_files = _extract_changed_files(self.git_diff)
+            allowed_paths = _extract_instruction_paths(self.instruction)
+            out_of_scope = [
+                path for path in changed_files
+                if not any(path == allowed or path.startswith(f"{allowed}/") for allowed in allowed_paths)
+            ] if allowed_paths else []
+            deletion_ratio = round(deletions / additions, 3) if additions else None
+            heavy_deletion = (additions > 0 and deletions > additions * 0.5) or (additions == 0 and deletions > 0)
+
+            await self._trace_runner(
+                "runner_preservation_audit",
+                input_summary=f"[{self.cycle}차] {self.instruction[:200]}",
+                output_summary=(
+                    f"verdict={review.get('verdict')} +{additions}/-{deletions} "
+                    f"files={len(changed_files)} out_of_scope={len(out_of_scope)}"
+                ),
+                metadata={
+                    "verdict": review.get("verdict"),
+                    "review_summary": str(review.get("summary", ""))[:300],
+                    "additions": additions,
+                    "deletions": deletions,
+                    "deletion_ratio": deletion_ratio,
+                    "heavy_deletion": heavy_deletion,
+                    "changed_files": changed_files[:40],
+                    "allowed_paths": sorted(allowed_paths)[:40],
+                    "out_of_scope_files": out_of_scope[:20],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — 자기감사 실패가 러너를 막지 않는다
+            logger.debug("runner_preservation_trace_skipped job=%s: %s", self.job_id, str(exc)[:200])
 
     # ─── AI 검수 ────────────────────────────────────────────────────────────
 

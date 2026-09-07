@@ -108,35 +108,48 @@ async def record_trace(
     provider: str = "internal",
     trace_id: Optional[str] = None,
     span_id: Optional[str] = None,
+    conn: Any = None,
 ) -> bool:
-    """trace 1건을 기록한다. 성공하면 True, 실패/skip이면 False (예외 없음)."""
+    """trace 1건을 기록한다. 성공하면 True, 실패/skip이면 False (예외 없음).
+
+    `conn`이 주어지면 그 커넥션으로 바로 INSERT한다. 호출부가 이미 커넥션을
+    점유한 채(`async with pool.acquire()`) trace를 남길 때 중첩 acquire로 풀이
+    고갈되는 것을 막고, 호출부의 기존 제어 흐름을 그대로 유지하기 위한 경로다.
+    """
     if not graph_run_id:
         return False
+
+    async def _insert(target: Any) -> bool:
+        if not await _table_exists(target):
+            return False
+        await target.execute(
+            _INSERT_SQL,
+            str(graph_run_id)[:200],
+            (project or None),
+            _as_uuid_text(session_id),
+            _as_uuid_text(ohvis_task_id),
+            provider or "internal",
+            trace_id,
+            span_id,
+            run_type or "chain",
+            _clip(input_summary),
+            _clip(output_summary),
+            _as_json(tool_calls, "[]"),
+            int(latency_ms) if latency_ms is not None else None,
+            _clip(error, ERROR_LIMIT) if error else None,
+            _as_json(metadata, "{}"),
+        )
+        return True
+
     try:
+        if conn is not None:
+            return await _insert(conn)
+
         from app.core.db_pool import get_pool
 
         pool = get_pool()
-        async with pool.acquire() as conn:
-            if not await _table_exists(conn):
-                return False
-            await conn.execute(
-                _INSERT_SQL,
-                str(graph_run_id)[:200],
-                (project or None),
-                _as_uuid_text(session_id),
-                _as_uuid_text(ohvis_task_id),
-                provider or "internal",
-                trace_id,
-                span_id,
-                run_type or "chain",
-                _clip(input_summary),
-                _clip(output_summary),
-                _as_json(tool_calls, "[]"),
-                int(latency_ms) if latency_ms is not None else None,
-                _clip(error, ERROR_LIMIT) if error else None,
-                _as_json(metadata, "{}"),
-            )
-        return True
+        async with pool.acquire() as acquired:
+            return await _insert(acquired)
     except Exception as exc:  # noqa: BLE001 — trace는 절대 호출부를 깨뜨리지 않는다
         logger.warning("harness trace insert failed (non-fatal): %s", str(exc)[:200])
         return False
@@ -152,6 +165,7 @@ async def record_goal_trace(
     outcome: Any = None,
     detail: Optional[dict[str, Any]] = None,
     error: Optional[str] = None,
+    conn: Any = None,
 ) -> bool:
     """Goal Control Loop 전용 편의 래퍼 — 간결한 trace 1건을 남긴다."""
     metadata: dict[str, Any] = {"component": "goal_control_loop", "action": action}
@@ -182,4 +196,5 @@ async def record_goal_trace(
         output_summary=_clip(outcome) if outcome is not None else "",
         metadata=metadata,
         error=error,
+        conn=conn,
     )

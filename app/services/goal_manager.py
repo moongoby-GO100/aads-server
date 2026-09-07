@@ -35,16 +35,19 @@ class GoalStateMachine:
         goal_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         error: Optional[str] = None,
+        conn: Any = None,
     ) -> None:
         """Goal Control Loop 진행 증거를 ohvis_harness_traces에 남긴다.
 
         추적 실패(테이블 없음/풀 미초기화 등)는 무시하며 목표 상태 전이 동작은
-        절대 바뀌지 않는다.
+        절대 바뀌지 않는다. 호출부가 이미 커넥션을 점유 중이면 `conn`으로 넘겨
+        중첩 acquire 없이 기록한다.
         """
         try:
             from app.services.ohvis_harness_trace import record_trace
 
             await record_trace(
+                conn=conn,
                 graph_run_id=f"goal:{goal_id}" if goal_id else f"goal:{run_type}",
                 run_type=run_type,
                 project=project,
@@ -61,8 +64,21 @@ class GoalStateMachine:
         except Exception as exc:  # noqa: BLE001 — 추적은 비치명적
             logger.debug("goal_trace_skipped run_type=%s: %s", run_type, str(exc)[:200])
 
-    async def _trace_policy(self, goal_id: str, project: str, title: str) -> None:
-        """목표 생성 시 기존 구현 보존 정책 체크리스트를 증거로 남긴다 (비치명적)."""
+    async def _trace_policy(
+        self,
+        goal_id: str,
+        project: str,
+        title: str,
+        *,
+        stage: str = "create",
+        conn: Any = None,
+    ) -> None:
+        """기존 구현 보존 정책 체크리스트를 증거로 남긴다 (비치명적).
+
+        생성 시점뿐 아니라 **진행 중인 목표가 새 단계를 개시하는 시점**에도 남긴다.
+        마이그레이션/시드로 만들어진 목표는 `create_goal`을 거치지 않으므로,
+        개시 시점 기록이 없으면 진행 중 목표에는 자기감사 증거가 전혀 남지 않는다.
+        """
         try:
             from app.services.task_policy_compiler import compile_task_policy
 
@@ -77,11 +93,13 @@ class GoalStateMachine:
                 goal_id=goal_id,
                 input_summary=policy.get("summary") or title,
                 output_summary=(
+                    f"stage={stage} "
                     f"risk_tier={policy.get('risk_tier')} "
                     f"approval_required={policy.get('approval_required')} "
                     f"checks={len(policy.get('checklist', []))}"
                 ),
-                metadata={"policy": policy},
+                metadata={"stage": stage, "policy": policy},
+                conn=conn,
             )
         except Exception as exc:  # noqa: BLE001 — 정책 추적도 비치명적
             logger.debug("goal_policy_trace_skipped goal=%s: %s", goal_id, str(exc)[:200])
@@ -127,24 +145,30 @@ class GoalStateMachine:
         pool = await self._pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT project, status FROM goals WHERE id = $1::uuid", goal_id,
+                "SELECT project, title, status FROM goals WHERE id = $1::uuid", goal_id,
             )
-            rejection: Optional[str] = None
             if not row:
-                rejection = "goal_not_found"
-            elif row["status"] not in ("draft", "paused"):
+                await self._trace(
+                    "goal_activate",
+                    goal_id=goal_id,
+                    input_summary=f"activate goal {goal_id}",
+                    output_summary="rejected",
+                    error="goal_not_found",
+                    conn=conn,
+                )
+                return {"error": "goal_not_found"}
+            if row["status"] not in ("draft", "paused"):
                 rejection = f"cannot_activate_from_{row['status']}"
-        if rejection:
-            await self._trace(
-                "goal_activate",
-                project=row["project"] if row else None,
-                goal_id=goal_id,
-                input_summary=f"activate goal {goal_id}",
-                output_summary="rejected",
-                error=rejection,
-            )
-            return {"error": rejection}
-        async with pool.acquire() as conn:
+                await self._trace(
+                    "goal_activate",
+                    project=row["project"],
+                    goal_id=goal_id,
+                    input_summary=f"activate goal {goal_id}",
+                    output_summary="rejected",
+                    error=rejection,
+                    conn=conn,
+                )
+                return {"error": rejection}
             await conn.execute(
                 "UPDATE goals SET status = 'active', updated_at = NOW() WHERE id = $1::uuid",
                 goal_id,
@@ -163,12 +187,14 @@ class GoalStateMachine:
         logger.info("goal_activated: %s", goal_id)
         await self._trace(
             "goal_activate",
-            project=row["project"] if row else None,
+            project=row["project"],
             goal_id=goal_id,
             input_summary=f"activate goal {goal_id}",
             output_summary="status=active"
             + (f" first_milestone={first_ms['id']}" if first_ms else " first_milestone=none"),
         )
+        # 진행 개시 시점의 보존정책 자기감사 증거 (시드/마이그레이션 생성 목표 포함)
+        await self._trace_policy(goal_id, row["project"], row["title"], stage="activate")
         return {"goal_id": goal_id, "status": "active"}
 
     async def add_milestone(
@@ -421,7 +447,7 @@ class GoalStateMachine:
         pool = await self._pool()
         async with pool.acquire() as conn:
             goal = await conn.fetchrow(
-                "SELECT id, project, status FROM goals WHERE id = $1::uuid",
+                "SELECT id, project, title, status FROM goals WHERE id = $1::uuid",
                 goal_id,
             )
             if not goal:
@@ -429,6 +455,7 @@ class GoalStateMachine:
                     "goal_advance",
                     goal_id=goal_id,
                     input_summary=f"advance goal {goal_id}",
+                    conn=conn,
                     output_summary="skipped",
                     error="goal_not_found",
                 )
@@ -439,6 +466,7 @@ class GoalStateMachine:
                     project=goal["project"],
                     goal_id=goal_id,
                     input_summary=f"advance goal {goal_id}",
+                    conn=conn,
                     output_summary=f"advanced=False status={goal['status']}",
                 )
                 return {"goal_id": goal_id, "status": goal["status"], "advanced": False}
@@ -460,6 +488,7 @@ class GoalStateMachine:
                     project=goal["project"],
                     goal_id=goal_id,
                     input_summary=f"advance goal {goal_id}",
+                    conn=conn,
                     output_summary=(
                         f"advanced={bool(checked.get('completed'))} "
                         f"milestone={current['id']} state={checked.get('status') or 'in_progress'}"
@@ -497,8 +526,14 @@ class GoalStateMachine:
                     project=goal["project"],
                     goal_id=goal_id,
                     input_summary=f"advance goal {goal_id}",
+                    conn=conn,
                     output_summary=f"advanced=True started_milestone={pending['id']}",
                     metadata={"started_milestone_id": str(pending["id"])},
+                )
+                # 새 단계를 개시하는 진행 중 목표에도 보존정책 증거를 남긴다
+                await self._trace_policy(
+                    goal_id, goal["project"], goal["title"],
+                    stage="advance", conn=conn,
                 )
                 return {
                     "goal_id": goal_id,
@@ -514,6 +549,7 @@ class GoalStateMachine:
                 goal_id=goal_id,
                 input_summary=f"advance goal {goal_id}",
                 output_summary=f"advanced={status == 'completed'} status={status} no_open_milestone",
+                conn=conn,
             )
             return {"goal_id": goal_id, "status": status, "advanced": status == "completed"}
 

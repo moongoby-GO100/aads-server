@@ -148,6 +148,37 @@ def test_record_trace_sanitizes_ids_and_clips_summaries(monkeypatch) -> None:
     assert args[13].startswith("{")
 
 
+def test_record_trace_reuses_caller_connection_without_touching_pool(monkeypatch) -> None:
+    """호출부가 커넥션을 점유한 채 남기는 trace는 중첩 acquire를 하지 않는다."""
+    caller_conn = FakeConn(table_exists=True)
+
+    def _boom():
+        raise AssertionError("conn이 주어지면 pool을 acquire하면 안 된다")
+
+    import app.core.db_pool as db_pool
+    monkeypatch.setattr(db_pool, "get_pool", _boom)
+
+    ok = asyncio.run(
+        record_trace(
+            graph_run_id="goal:held",
+            run_type="goal_activate",
+            project="AADS",
+            conn=caller_conn,
+        )
+    )
+
+    assert ok is True
+    assert len(caller_conn.executed) == 1
+    assert caller_conn.executed[0][1][7] == "goal_activate"
+
+
+def test_record_trace_with_caller_connection_is_still_non_fatal(monkeypatch) -> None:
+    caller_conn = FakeConn(table_exists=True, raise_on_execute=True)
+    _patch_pool(monkeypatch, None, error=RuntimeError("pool 미초기화"))
+
+    assert asyncio.run(record_trace(graph_run_id="goal:held", conn=caller_conn)) is False
+
+
 def test_record_goal_trace_builds_goal_scoped_run_id(monkeypatch) -> None:
     conn = FakeConn(table_exists=True)
     _patch_pool(monkeypatch, conn)

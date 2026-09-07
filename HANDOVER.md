@@ -1,5 +1,40 @@
 # AADS HANDOVER
 
+## 2026-09-07 13:52 KST — Goal Guard/Harness 검수 피드백 반영 (AADS-GOAL-GUARD-HARNESS-S-20260907)
+
+- 검수 지적 4건 대응 (RESULT: `docs/reports/20260907_AADS_GOAL_GUARD_HARNESS_RESULT.md`)
+  1. **추적 기록 누락 → 보강**: `_trace_policy()`가 `create_goal`에서만 호출돼, migration 160 시드로
+     만들어진 활성 목표처럼 `create_goal`을 거치지 않은 **진행 중 목표에는 보존정책 증거가 0건**이었다.
+     `activate_goal` 성공 시점과 `advance_goal`의 새 마일스톤 개시 시점에 `stage=activate|advance`로 기록.
+     지시서 Purpose의 "**러너**" 측 증거도 1차에 없었으므로 `runner_policy`(실행 전 정책 컴파일) +
+     `runner_preservation_audit`(검수 직후 diff 자기감사) 2종을 러너에 추가.
+  2. **`app/services/chat_service.py` 범위 이탈 → 오탐**: 동일 TASK_ID 러너 3개(`runner-66037bf2` error,
+     `runner-c7d0a8e1` cancelled/동일파일충돌, `runner-808c968a` running)가 같은 워크트리를 공유해
+     `git diff HEAD`에 타 작업 변경분이 섞였다. 해당 변경은 별도 커밋 `c6794939`(자체 테스트 포함)
+     소유물이라 되돌리지 않고 본 작업 커밋에서 제외 + RESULT에 사유 명시로 처리.
+  3. **기존 구현 대체 → 원복**: 1차가 `activate_goal`을 `rejection` 변수 + `pool.acquire()` 2회로
+     재구조화해 상태검사와 UPDATE 사이에 TOCTOU 창을 만들었다. 원래의 커넥션 1개·조기 return 구조로
+     되돌리고 trace만 끼워 넣었다. 이를 위해 `record_trace(conn=...)`를 추가해 호출부가 점유한
+     커넥션을 재사용(중첩 acquire 제거)한다. 기존 pool 경로·반환 계약은 그대로다.
+  4. **RESULT 기존 구현 조사표 누락 → 작성**: 1차 커밋분 + 본 수정분 조사표를 RESULT §2에 표로 작성.
+     **삭제 항목 0건**, 범위 밖 변경 사유는 RESULT §3에 명시.
+- 변경 파일: `app/services/goal_manager.py`(+`title` 컬럼/정책 trace, 삭제 0),
+  `app/services/ohvis_harness_trace.py`(`conn` 인자, 기존 계약 유지),
+  `app/services/pipeline_runner_service.py`(신규 메서드 3종 + 호출 2줄, 기존 메서드 0건 수정),
+  테스트 2파일(기존 테스트 유지, 5건 추가). `code_reviewer.py`·`goals.py`·`task_policy_compiler.py`는
+  **미변경**(헬퍼 재사용만).
+- 검증: py_compile 통과, `git diff --check` 통과, pytest **92 passed**
+  (`test_ohvis_harness_trace`, `test_goal_control_loop_static`, `test_task_policy_compiler`,
+  `test_ohvis_harness`, `test_tools_and_pipeline`).
+  실 DB에서 `goal_policy stage=advance risk_tier=write checks=25`, `goal_activate rejected`(보유 커넥션 경로),
+  `runner_preservation_audit verdict=FAIL +2/-1 out_of_scope=1`(→ `chat_service.py` 정확 탐지) 기록 확인.
+  `ohvis_harness_traces` 6→8, goals/milestones/goal_task_links 카운트 변화 없음, 목표 상태 전이 0건.
+  러너 검증용 trace 2행은 삭제 완료.
+- 남은 격차: **미배포**(`deploy.sh bluegreen` 전까지 런타임 경로 미적용). `compile_task_policy`의
+  러너 **프롬프트 주입**은 여전히 미연결(모든 러너 동작에 영향 → 별도 지시서 필요).
+  동일 TASK_ID 러너 중복 기동 미해결. 워크트리의 병행 작업 dirty 파일
+  (`tool_executor.py`, `tool_registry.py`, `test_deploy_safe.py`)은 건드리지 않고 커밋에서 제외.
+
 ## 2026-09-07 13:45 KST - Deploy wait async handoff and GO100 queue registration
 
 - Request:
