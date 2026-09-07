@@ -11863,3 +11863,14 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `git diff --check -- app/main.py`: passed.
 - Remaining before completion:
   - Commit/push this HANDOVER entry and `app/main.py`, then run `deploy.sh bluegreen` and complete health plus P0/P1 monitoring.
+
+## 2026-09-07 15:25 KST — Blue/green clean worktree compose project fix
+- CEO request:
+  - Queue and execute the AADS production blue/green deployment automatically, then report after completion.
+- Finding:
+  - Clean release worktree deploy `110` built image `aads-server:ede868ecadfd`, then failed starting standby `aads-server-green` with Docker name conflict.
+  - Root cause: Docker Compose derived a temporary project name from `/tmp/aads-server-release-*`, while the existing production containers are labelled with compose project `aads-server`.
+- Change prepared:
+  - `deploy.sh`: export `COMPOSE_PROJECT_NAME=aads-server` by default, with `AADS_COMPOSE_PROJECT_NAME` override support. This lets clean release worktrees manage the existing blue/green containers instead of creating a separate temporary compose project.
+- Verification before release:
+  - Pending: `bash -n deploy.sh`, release contract verifier, commit/push, then `deploy.sh bluegreen` from clean release SHA.
