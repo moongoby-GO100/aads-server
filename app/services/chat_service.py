@@ -2711,7 +2711,6 @@ async def cleanup_overlong_running_executions(
               AND te.completed_at IS NULL
               AND (
                     COALESCE(te.updated_at, te.started_at) < NOW() - ($1::int * INTERVAL '1 second')
-                 OR COALESCE(te.started_at, te.created_at) < NOW() - ($2::int * INTERVAL '1 second')
                  OR te.retry_count >= $3::int
               )
             ORDER BY COALESCE(te.updated_at, te.started_at) ASC
