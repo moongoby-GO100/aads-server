@@ -21,6 +21,7 @@ def test_classifies_challenges_without_solving_them():
     assert classify_portal_state("https://portal.test/login", "로그인").state == "login_required"
     assert classify_portal_state("https://portal.test", "인증서 비밀번호").state == "certificate_password_required"
     assert classify_portal_state("https://portal.test", "본인인증").state == "identity_check_required"
+    assert classify_portal_state("https://portal.test", "일정시간 이상 서비스 이용 정보가 없습니다").state == "session_expired"
     assert classify_portal_state("https://portal.test", "조회된 거래내역이 없습니다").state == "no_records"
     assert classify_portal_state("https://portal.test", "거래일자 입금금액 출금금액").state == "transaction_table"
 

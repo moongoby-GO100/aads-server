@@ -5540,17 +5540,32 @@ async def collect_bank_via_browser_session_async(
                 "RUNTIME_EVALUATE_TIMEOUT",
                 "STALE_TARGET",
             }
+            retryable_screen_reason_codes = {
+                "SESSION_EXPIRED",
+                "SHINHAN_SESSION_EXPIRED",
+                "PORTAL_SESSION_EXPIRED",
+            }
             observed_retryable_session_error = flow_error_code if flow_error_code in retryable_session_errors else ""
             if not observed_retryable_session_error:
                 observed_retryable_session_error = next(
                     (code for code in sorted(step_error_codes) if code in retryable_session_errors),
                     "",
                 )
+            screen_reason_code = str(safe_diagnostics.get("screen_reason_code") or "").strip().upper()
+            if not observed_retryable_session_error and (
+                safe_diagnostics.get("screen_state") == "session_expired"
+                or screen_reason_code in retryable_screen_reason_codes
+            ):
+                observed_retryable_session_error = screen_reason_code or "SESSION_EXPIRED"
             if observed_retryable_session_error:
                 safe_diagnostics["screen_reason_code"] = observed_retryable_session_error
                 safe_diagnostics["screen_state"] = "browser_session_recoverable"
                 safe_diagnostics["screen_requires_operator"] = "0"
-                safe_diagnostics["screen_suggested_action"] = "retry_same_bank_work_key_after_pc_agent_reconnect"
+                safe_diagnostics["screen_suggested_action"] = (
+                    "refresh_and_retry_same_bank_work_key"
+                    if observed_retryable_session_error in retryable_screen_reason_codes
+                    else "retry_same_bank_work_key_after_pc_agent_reconnect"
+                )
                 return {
                     "status": "failed",
                     "error_code": observed_retryable_session_error,
@@ -5558,8 +5573,8 @@ async def collect_bank_via_browser_session_async(
                     "row_count": 0,
                     "diagnostics": safe_diagnostics,
                     "message": (
-                        f"{bank_name or '은행'} 브라우저 세션이 수집 중 끊겼습니다. "
-                        "PC Agent 재연결 후 같은 은행 work key로 자동 재시도하십시오."
+                        f"{bank_name or '은행'} 브라우저 세션이 수집 중 만료되거나 끊겼습니다. "
+                        "같은 은행 work key를 새로고침한 뒤 자동 재시도하십시오."
                     ),
                 }
             if safe_diagnostics.get("screen_state") in {
