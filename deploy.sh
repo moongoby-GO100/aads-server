@@ -220,6 +220,30 @@ deploy_observe_init() {
     fi
 }
 
+supersede_older_queued_deploy_requests() {
+    if ! deploy_db_available; then
+        return 0
+    fi
+    local release_sql reason_sql current_run_id
+    release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
+    reason_sql="$(sql_escape "superseded by started release ${AADS_RELEASE_SHA:-unknown}")"
+    current_run_id="${DEPLOY_RUN_ID:-0}"
+    [[ "$current_run_id" =~ ^[0-9]+$ ]] || current_run_id="0"
+    deploy_db_exec "
+        UPDATE deploy_runs
+        SET status='superseded',
+            phase='superseded_by_started_deploy',
+            phase_completed_at=NOW(),
+            updated_at=NOW(),
+            error_summary=CONCAT_WS('; ', NULLIF(error_summary, ''), '$reason_sql')
+        WHERE project='AADS'
+          AND status='queued'
+          AND phase='queued_for_deploy'
+          AND release_sha IS DISTINCT FROM '$release_sql'
+          AND id <> ${current_run_id};
+    " >/dev/null
+}
+
 deploy_estimated_remaining_ms() {
     local elapsed_ms="$1"
     local default_estimate_ms="${AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000}"
@@ -961,6 +985,7 @@ if ! enforce_release_worktree_gate; then
     record_deploy "blocked" "$MODE" "dirty worktree blocks release"
     exit 1
 fi
+supersede_older_queued_deploy_requests
 
 # 텔레그램 알림 (환경변수 있으면 발송)
 notify() {

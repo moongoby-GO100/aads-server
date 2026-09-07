@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-07 12:55 KST - AADS/GO100 deploy queue no-loss gate follow-up
+
+- Request:
+  - Apply the deploy queue recommendation immediately and apply it to GO100 as well.
+- AADS changes:
+  - `deploy.sh` now supersedes older `queued_for_deploy` rows when a newer release actually passes dirty preflight and starts, preventing stale queued SHAs from deploying after a later release.
+- GO100 changes:
+  - contabo14 `/root/kis-autotrade-v4/scripts/deploy.sh` now uses `/tmp/go100-deploy.lock`, queues concurrent requests in `/tmp/go100-deploy-queue.jsonl`, and waits via a worker instead of overlapping deployments.
+  - GO100 commits pushed to `origin/main`: `01ea440c4`, `cbb11eaee`, `3119782f6`.
+- Verification:
+  - AADS `bash -n deploy.sh` passed.
+  - GO100 `bash -n scripts/deploy.sh` passed.
+  - GO100 deploy completed: backend `/health` OK, public `/auth/login` HTTP 200, active frontend green:3001, standby blue:3000 synchronized with BUILD_ID `363LYn20hWXSWFxKgMzf6`.
+- Remaining risk:
+  - AADS latest API release still needs a clean-worktree blue/green deployment and five-minute P0/P1 monitoring.
+  - GO100 has unrelated dirty files from separate work (`backend/app/routers/go100/data_status_router.py`, `frontend/src/app/(protected)/go100/strategies/[id]/operations/page.tsx`, `frontend/src/go100/api/cardTradesApi.ts`); these were not modified here.
+
 ## 2026-09-07 12:47 KST - Runner preservation gates applied to AADS and GO100
 
 - Request:
