@@ -2318,10 +2318,17 @@ class ToolExecutor:
             dry_run = dry_run_input.strip().lower() not in {"false", "0", "no"}
         else:
             dry_run = True if dry_run_input is None else bool(dry_run_input)
+        explicit_async_mode = "async_mode" in inp or "background" in inp
+        wait_for_completion = _coerce_bool(
+            inp.get("wait_for_completion", False),
+            default=False,
+        )
         async_mode = _coerce_bool(
             inp.get("async_mode", inp.get("background", False)),
             default=False,
         )
+        if mode == "bluegreen" and not dry_run and not explicit_async_mode and not wait_for_completion:
+            async_mode = True
 
         service = str(inp.get("service") or "").strip()
         block_reason = self._deploy_safe_block_reason(f"{mode} {service}")
@@ -2356,6 +2363,7 @@ class ToolExecutor:
             "mode": mode,
             "dry_run": dry_run,
             "async_mode": async_mode,
+            "wait_for_completion": wait_for_completion,
             "command": command,
             "description": description,
             "health_check_command": _DEPLOY_SAFE_HEALTH_COMMAND,

@@ -17,7 +17,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncpg
 from app.auth import require_internal_admin
 from app.core.claude_md_merger import build_merged_claude_md, get_merged_claude_md_sha256
@@ -427,6 +427,18 @@ async def _get_conn():
     return await asyncpg.connect(DATABASE_URL, timeout=10)
 
 
+class DeployQueueRequest(BaseModel):
+    project: str = "AADS"
+    release_sha: Optional[str] = None
+    runner_job_id: Optional[str] = None
+    requested_by: Optional[str] = None
+    request_source: str = "ops_api"
+    commit_status: str = "committed"
+    push_status: str = "pushed"
+    auto_start: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 @router.get(
     "/ops/deploy/status",
     dependencies=[Depends(require_internal_admin)],
@@ -461,6 +473,55 @@ async def get_common_deploy_status():
                 "next_queued_runner_job_id": None,
             },
         }
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+@router.post(
+    "/ops/deploy/requests",
+    dependencies=[Depends(require_internal_admin)],
+    summary="배포 요청을 ops DB 큐에 등록",
+)
+async def create_common_deploy_request(req: DeployQueueRequest):
+    """커밋/푸시가 끝난 release SHA를 배포 큐에 등록하고 즉시 반환한다."""
+    from app.services.deploy_observability import enqueue_deploy_request
+
+    conn = None
+    try:
+        release_sha = (req.release_sha or os.getenv("AADS_RELEASE_SHA") or "").strip()
+        if not release_sha:
+            raise HTTPException(status_code=400, detail="release_sha is required")
+        conn = await _get_conn()
+        row = await enqueue_deploy_request(
+            conn,
+            project=normalize_project_label(req.project),
+            release_sha=release_sha,
+            runner_job_id=req.runner_job_id,
+            requested_by=req.requested_by or "ops_api",
+            request_source=req.request_source,
+            commit_status=req.commit_status,
+            push_status=req.push_status,
+            auto_start=req.auto_start,
+            metadata=req.metadata,
+        )
+        return {
+            "status": "queued",
+            "deploy_run_id": row.get("id"),
+            "project": row.get("project"),
+            "release_sha": row.get("release_sha"),
+            "phase": row.get("phase"),
+            "queue_position": row.get("queue_position"),
+            "deduplicated": row.get("deduplicated", False),
+            "next_check": "/api/v1/ops/deploy/status",
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("ops_deploy_request_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="deployment request queue failed") from exc
     finally:
         if conn is not None:
             await conn.close()

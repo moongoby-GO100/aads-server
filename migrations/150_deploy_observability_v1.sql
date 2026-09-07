@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS deploy_runs (
 ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS deploy_pid INTEGER;
 ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS deploy_generation TEXT;
 ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS requested_by TEXT;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS request_source TEXT;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS commit_status TEXT;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS push_status TEXT;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS auto_start BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS request_payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE deploy_runs ADD COLUMN IF NOT EXISTS requested_at TIMESTAMPTZ;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_deploy_runs_project_runner_job
     ON deploy_runs (project, runner_job_id)

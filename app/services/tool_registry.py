@@ -896,7 +896,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "async_mode": {
                     "type": "boolean",
-                    "description": "true면 사전 health 확인 후 배포를 백그라운드로 시작하고 즉시 반환",
+                    "description": "true면 사전 health 확인 후 배포를 백그라운드로 시작하고 즉시 반환. bluegreen 실배포는 기본 async",
+                    "default": True,
+                },
+                "wait_for_completion": {
+                    "type": "boolean",
+                    "description": "true면 bluegreen 실배포도 완료/후속 health까지 기다림",
                     "default": False,
                 },
                 "service": {
@@ -910,6 +915,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"mode": "reload"},
             {"mode": "bluegreen", "dry_run": False},
             {"mode": "bluegreen", "dry_run": False, "async_mode": True},
+            {"mode": "bluegreen", "dry_run": False, "wait_for_completion": True},
             {"mode": "restart-single", "service": "litellm"},
         ],
     },

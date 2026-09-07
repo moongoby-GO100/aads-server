@@ -11455,7 +11455,10 @@ async def send_message_stream(
                 _auto_system += (
                     "\n[Runner모드] 도구: submit→status→approve. "
                     "프로젝트: KIS/GO100(211), SF/NTV2(114), AADS(68). "
-                    "미지정 시 확인 필수. 승인 시 diff 먼저 확인 후 보고."
+                    "미지정 시 확인 필수. 승인 시 diff 먼저 확인 후 보고. "
+                    "배포/검증처럼 장시간 걸리는 단계는 ops DB 큐 또는 async deploy로 등록하고 "
+                    "job_id/deploy_run_id/상태 확인 경로를 보고한 뒤 응답을 완료한다. "
+                    "사용자가 명시적으로 완료까지 대기하라고 지시한 경우에만 반복 폴링한다."
                 )
             from app.services.autonomous_executor import AutonomousExecutor
             auto_exec = AutonomousExecutor(max_iterations=60, cost_limit=10.0)

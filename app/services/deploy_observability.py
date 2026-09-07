@@ -1,8 +1,10 @@
-"""Read-only aggregation for common deployment observability."""
+"""Aggregation and queue helpers for common deployment observability."""
 
 from __future__ import annotations
 
 import os
+import re
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +20,23 @@ DEPLOY_STALL_SECONDS = max(
     120,
     int(os.getenv("AADS_DEPLOY_STATUS_STALL_SECONDS", "300") or "300"),
 )
+_RELEASE_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+def _normalize_project(project: str) -> str:
+    value = (project or "").strip().upper()
+    if value not in PROJECTS:
+        raise ValueError(f"unsupported project: {project}")
+    return value
+
+
+def _normalize_release_sha(release_sha: str) -> str:
+    value = (release_sha or "").strip()
+    if not value:
+        raise ValueError("release_sha is required")
+    if not _RELEASE_SHA_RE.match(value):
+        raise ValueError("release_sha must be a 7-40 character git SHA")
+    return value.lower()
 
 
 def _dict_rows(rows: Any) -> list[dict[str, Any]]:
@@ -34,6 +53,104 @@ def _seconds_since(value: Any, now: datetime) -> int | None:
 
 async def _table_exists(conn: Any, name: str) -> bool:
     return bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{name}"))
+
+
+async def enqueue_deploy_request(
+    conn: Any,
+    *,
+    project: str,
+    release_sha: str,
+    runner_job_id: str | None = None,
+    requested_by: str = "ops",
+    request_source: str = "ops_api",
+    commit_status: str = "committed",
+    push_status: str = "pushed",
+    auto_start: bool = True,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue a deploy in the ops DB without blocking the caller for the rollout."""
+    project_key = _normalize_project(project)
+    release = _normalize_release_sha(release_sha)
+    source = (request_source or "ops_api").strip()[:80]
+    actor = (requested_by or "ops").strip()[:120]
+    commit_state = (commit_status or "committed").strip()[:40]
+    push_state = (push_status or "pushed").strip()[:40]
+    payload = dict(metadata or {})
+
+    async with conn.transaction():
+        existing = await conn.fetchrow(
+            """
+            SELECT *
+              FROM deploy_runs
+             WHERE project = $1
+               AND release_sha = $2
+               AND status IN ('queued', 'awaiting_approval', 'running', 'verifying', 'syncing_standby')
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+             FOR UPDATE
+            """,
+            project_key,
+            release,
+        )
+        if existing:
+            return {**dict(existing), "deduplicated": True}
+
+        await conn.execute(
+            """
+            UPDATE deploy_runs
+               SET status = 'superseded',
+                   phase = 'superseded_by_newer_deploy_request',
+                   phase_completed_at = NOW(),
+                   updated_at = NOW(),
+                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $3)
+             WHERE project = $1
+               AND status = 'queued'
+               AND phase = 'queued_for_deploy'
+               AND release_sha IS DISTINCT FROM $2
+            """,
+            project_key,
+            release,
+            f"superseded by newer queued release {release}",
+        )
+
+        queue_position = await conn.fetchval(
+            """
+            SELECT COALESCE(MAX(queue_position), 0) + 1
+              FROM deploy_runs
+             WHERE project = $1
+               AND status = 'queued'
+               AND phase = 'queued_for_deploy'
+            """,
+            project_key,
+        )
+        row = await conn.fetchrow(
+            """
+            INSERT INTO deploy_runs(
+                project, release_sha, runner_job_id, status, phase, phase_started_at,
+                queue_position, error_summary, requested_by, request_source,
+                commit_status, push_status, auto_start, request_payload,
+                requested_at, last_heartbeat_at, created_at, updated_at
+            )
+            VALUES(
+                $1, $2, NULLIF($3, ''), 'queued', 'queued_for_deploy', NOW(),
+                $4, 'queued by ops deploy request API', $5, $6,
+                $7, $8, $9, $10::jsonb,
+                NOW(), NOW(), NOW(), NOW()
+            )
+            RETURNING *
+            """,
+            project_key,
+            release,
+            (runner_job_id or "").strip(),
+            int(queue_position or 1),
+            actor,
+            source,
+            commit_state,
+            push_state,
+            bool(auto_start),
+            json.dumps(payload, ensure_ascii=False, default=str),
+        )
+    return {**dict(row), "deduplicated": False}
 
 
 async def _load_deploy_runs(conn: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
