@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-09-07 15:26 KST - Clean release compose env-file gate
+
+- Request:
+  - Continue the approved AADS deploy queue flow after runner/deploy review.
+  - The clean release deploy reached image build but failed starting the candidate slot.
+- Root cause:
+  - `deploy.sh` uses `COMPOSE_DIR` as the clean release worktree, but `docker compose` was invoked without `--env-file`.
+  - In a release worktree there is intentionally no `.env`, so candidate `up --no-build` failed before health/cutover.
+- Changes:
+  - `deploy.sh`: added `COMPOSE_ENV_ARGS=("--env-file" "$AADS_RUNTIME_ENV_FILE")` and applied it to API compose calls, including candidate start and standby sync.
+  - `scripts/verify-bluegreen-release-contract.sh`: added a release contract check requiring compose to use the runtime env file from `STATE_DIR`.
+- Verification:
+  - `bash -n deploy.sh` passed.
+  - `bash scripts/verify-bluegreen-release-contract.sh /root/aads/aads-server` passed.
+  - `docker compose --env-file /root/aads/aads-server/.env -f /tmp/aads-server-release-ede868ec.85KzLG/docker-compose.prod.yml config --services` passed.
+  - `git diff --check -- deploy.sh scripts/verify-bluegreen-release-contract.sh` passed.
+- Pending:
+  - Commit/push/deploy pending at this checkpoint.
+
 ## 2026-09-07 15:00 KST - Claude Opus 5 runner settings visibility
 
 - Request:

@@ -17,6 +17,8 @@ STATE_DIR="${AADS_DEPLOY_STATE_DIR:-/root/aads/aads-server}"
 export COMPOSE_PROJECT_NAME="${AADS_COMPOSE_PROJECT_NAME:-aads-server}"
 export AADS_RELEASE_SHA="${AADS_RELEASE_SHA:-$(git -C "$COMPOSE_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
 export AADS_RUNTIME_ENV_FILE="${AADS_RUNTIME_ENV_FILE:-${STATE_DIR}/.env}"
+export AADS_LITELLM_ENV_FILE="${AADS_LITELLM_ENV_FILE:-${STATE_DIR}/.env.litellm}"
+COMPOSE_ENV_ARGS=("--env-file" "$AADS_RUNTIME_ENV_FILE")
 HEALTH_URL="http://localhost:8100/api/v1/health"
 MAX_WAIT="${AADS_DEPLOY_MAX_WAIT:-30}"
 INTERVAL=2
@@ -1349,9 +1351,9 @@ sync_standby_slot_after_drain() {
         echo "[deploy.sh] standby sync: starting ${old_container}:${old_port} from release image ${AADS_RELEASE_SHA}"
         cd "$COMPOSE_DIR"
         if [[ "$old_container" == "aads-server-green" ]]; then
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --no-build --no-deps --force-recreate "$old_container"
+            docker compose "${COMPOSE_ENV_ARGS[@]}" -f "${COMPOSE_DIR}/docker-compose.prod.yml" --profile green up -d --no-build --no-deps --force-recreate "$old_container"
         else
-            docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --no-build --no-deps --force-recreate "$old_container"
+            docker compose "${COMPOSE_ENV_ARGS[@]}" -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --no-build --no-deps --force-recreate "$old_container"
         fi
         if ! verify_container_memory_limit "$old_container"; then
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "memory limit mismatch"
@@ -1416,7 +1418,7 @@ for DEP in aads-postgres aads-redis aads-socket-proxy aads-litellm; do
     DEP_STATUS=$(docker inspect "$DEP" --format '{{.State.Status}}' 2>/dev/null)
     if [[ "$DEP_STATUS" != "running" ]]; then
         echo "[deploy.sh] ⚠️ ${DEP} 상태: ${DEP_STATUS:-없음} — 복구 중..."
-        docker start "$DEP" 2>/dev/null || (cd "$COMPOSE_DIR" && docker compose up -d --no-deps "$DEP")
+        docker start "$DEP" 2>/dev/null || (cd "$COMPOSE_DIR" && docker compose "${COMPOSE_ENV_ARGS[@]}" up -d --no-deps "$DEP")
         sleep 3
         notify "⚠️ 배포 전 ${DEP} 복구 실행 (이전 상태: ${DEP_STATUS:-없음})"
     fi
@@ -1612,7 +1614,7 @@ case "$MODE" in
         echo "[deploy.sh] Phase 1: docker compose up -d --build --no-deps aads-server"
         PG_ID_BEFORE=$(docker inspect aads-postgres --format '{{.Id}}' 2>/dev/null || echo "N/A")
         cd "$COMPOSE_DIR"
-        docker compose up -d --build --no-deps aads-server
+        docker compose "${COMPOSE_ENV_ARGS[@]}" up -d --build --no-deps aads-server
         PG_ID_AFTER=$(docker inspect aads-postgres --format '{{.Id}}' 2>/dev/null || echo "N/A")
         if [[ "$PG_ID_BEFORE" != "$PG_ID_AFTER" ]]; then
             notify "⚠️ CRITICAL: postgres 컨테이너 ID 변경됨!"
@@ -1689,7 +1691,7 @@ case "$MODE" in
         echo "[deploy.sh] ① release image 1회 빌드 (${AADS_RELEASE_SHA})..."
         build_release_image
         echo "[deploy.sh] ① ${NEW_CONTAINER} --no-build 시작..."
-        docker compose $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps --force-recreate "$NEW_CONTAINER"
+        docker compose "${COMPOSE_ENV_ARGS[@]}" $COMPOSE_FILE $PROFILE_CMD up -d --no-build --no-deps --force-recreate "$NEW_CONTAINER"
         if ! verify_container_memory_limit "$NEW_CONTAINER"; then
             docker stop "$NEW_CONTAINER" 2>/dev/null || true
             docker rm "$NEW_CONTAINER" 2>/dev/null || true
