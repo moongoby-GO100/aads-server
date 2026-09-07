@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 import re
 import json
+import subprocess
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -21,6 +24,30 @@ DEPLOY_STALL_SECONDS = max(
     int(os.getenv("AADS_DEPLOY_STATUS_STALL_SECONDS", "300") or "300"),
 )
 _RELEASE_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+PROJECT_REPO_PATHS = {
+    "AADS": (
+        os.getenv("AADS_SERVER_REPO_PATH", ""),
+        "/app",
+        "/root/aads/aads-server",
+    ),
+    "GO100": (
+        os.getenv("GO100_REPO_PATH", ""),
+        "/root/kis-autotrade-v4",
+    ),
+    "KIS": (
+        os.getenv("KIS_REPO_PATH", ""),
+        "/root/kis-autotrade-v4",
+    ),
+    "SF": (
+        os.getenv("SF_REPO_PATH", ""),
+        "/data/shortflow",
+    ),
+    "NTV2": (
+        os.getenv("NTV2_REPO_PATH", ""),
+        "/var/www/newtalk",
+    ),
+}
 
 
 def _normalize_project(project: str) -> str:
@@ -49,6 +76,100 @@ def _seconds_since(value: Any, now: datetime) -> int | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return max(0, int((now - value.astimezone(timezone.utc)).total_seconds()))
+
+
+def _coerce_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _payload_release_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    payload = _coerce_payload(row.get("request_payload"))
+    title = (
+        payload.get("title")
+        or payload.get("summary")
+        or payload.get("reason")
+        or payload.get("description")
+        or ""
+    )
+    changed_files = payload.get("changed_files") or payload.get("files") or []
+    if isinstance(changed_files, str):
+        changed_files = [changed_files]
+    if not isinstance(changed_files, list):
+        changed_files = []
+    normalized_files = [str(item) for item in changed_files if str(item or "").strip()]
+    return {
+        "release_title": str(title).strip()[:180] or None,
+        "release_summary": str(title).strip()[:240] or None,
+        "changed_files": normalized_files[:12],
+        "changed_file_count": len(normalized_files),
+    }
+
+
+def _repo_paths_for_project(project: str) -> tuple[str, ...]:
+    raw_paths = PROJECT_REPO_PATHS.get((project or "").upper(), ())
+    paths: list[str] = []
+    for raw in raw_paths:
+        if raw and raw not in paths:
+            paths.append(raw)
+    return tuple(paths)
+
+
+def _git_output(repo: str, args: list[str]) -> str | None:
+    path = Path(repo)
+    if not path.exists():
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    return completed.stdout.strip()
+
+
+@lru_cache(maxsize=256)
+def _git_release_metadata(project: str, release_sha: str) -> dict[str, Any]:
+    sha = (release_sha or "").strip()
+    if not sha:
+        return {}
+    for repo in _repo_paths_for_project(project):
+        if _git_output(repo, ["cat-file", "-e", f"{sha}^{{commit}}"]) is None:
+            continue
+        title = _git_output(repo, ["log", "-1", "--pretty=%s", sha]) or ""
+        body = _git_output(repo, ["log", "-1", "--pretty=%b", sha]) or ""
+        files_raw = _git_output(repo, ["diff-tree", "--no-commit-id", "--name-only", "-r", sha]) or ""
+        files = [line.strip() for line in files_raw.splitlines() if line.strip()]
+        return {
+            "release_title": title[:180] or None,
+            "release_summary": (body.splitlines()[0].strip() if body.strip() else title)[:240] or None,
+            "changed_files": files[:12],
+            "changed_file_count": len(files),
+        }
+    return {}
+
+
+def _apply_release_metadata(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for row in rows:
+        payload_meta = _payload_release_metadata(row)
+        git_meta = _git_release_metadata(
+            str(row.get("project") or ""),
+            str(row.get("release_sha") or ""),
+        )
+        merged = {**payload_meta, **{k: v for k, v in git_meta.items() if v not in (None, "", [])}}
+        row.update(merged)
+    return rows
 
 
 async def _table_exists(conn: Any, name: str) -> bool:
@@ -167,9 +288,26 @@ async def _load_deploy_runs(conn: Any) -> tuple[list[dict[str, Any]], list[dict[
         """,
         list(ACTIVE_STATUSES + QUEUED_STATUSES),
     )
-    active = [dict(row) for row in rows if row["status"] in ACTIVE_STATUSES]
-    queued = [dict(row) for row in rows if row["status"] in QUEUED_STATUSES]
+    active = _apply_release_metadata([dict(row) for row in rows if row["status"] in ACTIVE_STATUSES])
+    queued = _apply_release_metadata([dict(row) for row in rows if row["status"] in QUEUED_STATUSES])
     return active, queued
+
+
+async def _load_recent_completed_deployments(conn: Any) -> list[dict[str, Any]]:
+    rows = _dict_rows(await conn.fetch(
+        """
+        SELECT dr.*,
+               CASE WHEN dr.image_digest IS NOT NULL
+                         AND dr.image_digest = dr.standby_digest THEN 'synced'
+                    WHEN dr.standby_digest IS NULL THEN 'unknown'
+                    ELSE 'mismatch' END AS bg_sync_status
+        FROM deploy_runs dr
+        WHERE dr.status IN ('completed', 'success')
+        ORDER BY COALESCE(dr.phase_completed_at, dr.updated_at, dr.created_at) DESC, dr.id DESC
+        LIMIT 12
+        """
+    ))
+    return _apply_release_metadata(rows)
 
 
 def _annotate_active_runs(active: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
@@ -307,6 +445,7 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         "degraded_reasons": [],
         "active_deployments": [],
         "queued_deployments": [],
+        "recent_completed_deployments": [],
         "recent_durations_per_project": [],
         "phase_timeline": [],
         "stale_zombie_signals": [],
@@ -324,6 +463,7 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         active = _annotate_active_runs(active, now)
         response["active_deployments"] = active
         response["queued_deployments"] = queued
+        response["recent_completed_deployments"] = await _load_recent_completed_deployments(conn)
         response["recent_durations_per_project"] = await _load_recent_durations(conn)
         response["phase_timeline"] = await _load_phase_timeline(conn)
         response["bg_digest_sync"] = [
