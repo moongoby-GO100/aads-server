@@ -11,20 +11,24 @@ DEADLINE=$(( $(date +%s) + MAX_MINUTES * 60 ))
 echo "[retry] start $(date '+%F %T %Z') max=${MAX_MINUTES}m interval=${INTERVAL}s" | tee -a "$LOG"
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-    OUT="$(bash /root/aads/aads-server/deploy.sh bluegreen 2>&1)"
-    echo "$OUT" >> "$LOG"
+    RUN_LOG="$(mktemp /tmp/aads-deploy-retry-run.XXXXXX.log)"
+    bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tee "$RUN_LOG" | tee -a "$LOG"
+    DEPLOY_STATUS=${PIPESTATUS[0]}
 
-    if echo "$OUT" | grep -q "활성 스트림"; then
+    if grep -q "활성 스트림" "$RUN_LOG"; then
         echo "[retry] $(date '+%T') target slot busy — wait ${INTERVAL}s" | tee -a "$LOG"
+        rm -f "$RUN_LOG"
         sleep "$INTERVAL"
         continue
     fi
 
-    if echo "$OUT" | grep -qE "배포 완료|deploy completed|✅ Blue-Green"; then
+    if [ "$DEPLOY_STATUS" -eq 0 ] && grep -qE "배포 완료|deploy completed|✅ Blue-Green" "$RUN_LOG"; then
         echo "[retry] $(date '+%T') deploy SUCCESS" | tee -a "$LOG"
+        rm -f "$RUN_LOG"
         exit 0
     fi
 
+    rm -f "$RUN_LOG"
     echo "[retry] $(date '+%T') deploy stopped for another reason — see $LOG" | tee -a "$LOG"
     exit 1
 done
