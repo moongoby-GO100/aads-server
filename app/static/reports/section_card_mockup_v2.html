@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS CEO 8섹션 응답 플로우 — 섹션카드 목업 v2.0</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242734;
+    --border: #2e3142;
+    --text: #e4e6ef;
+    --text-dim: #8b8fa3;
+    --accent: #6c8cff;
+    --accent-dim: rgba(108,140,255,.12);
+    --green: #34d399;
+    --green-dim: rgba(52,211,153,.12);
+    --amber: #fbbf24;
+    --amber-dim: rgba(251,191,36,.12);
+    --red: #f87171;
+    --red-dim: rgba(248,113,113,.12);
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Pretendard', 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text);
+    line-height: 1.6; padding: 0;
+  }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #1e2235 0%, #141625 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 32px 24px 28px;
+    text-align: center;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+  .header .sub { color: var(--text-dim); font-size: 13px; }
+  .header .badge {
+    display: inline-block; margin-top: 10px;
+    background: var(--accent-dim); color: var(--accent);
+    font-size: 11px; font-weight: 600; padding: 4px 12px;
+    border-radius: 20px; letter-spacing: 0.3px;
+  }
+
+  /* Layout */
+  .container { max-width: 820px; margin: 0 auto; padding: 24px 16px 80px; }
+  .section-title {
+    font-size: 15px; font-weight: 700; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1.5px;
+    margin: 32px 0 16px; padding-left: 4px;
+  }
+
+  /* ─── AS-IS ─── */
+  .asis-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; margin-bottom: 8px;
+    position: relative; opacity: .7;
+  }
+  .asis-box::after {
+    content: 'AS-IS'; position: absolute; top: 12px; right: 14px;
+    background: var(--red-dim); color: var(--red);
+    font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 4px; letter-spacing: 0.5px;
+  }
+  .asis-box p {
+    font-size: 13px; color: var(--text-dim); line-height: 1.9;
+    white-space: pre-line;
+  }
+  .asis-box .strike { text-decoration: line-through; opacity: .5; }
+
+  /* Comparison arrow */
+  .arrow-down {
+    text-align: center; padding: 12px 0; color: var(--accent); font-size: 28px;
+  }
+
+  /* ─── TO-BE: Chip Bar ─── */
+  .chip-bar {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 14px 16px; margin-bottom: 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius);
+    position: relative;
+  }
+  .chip-bar::after {
+    content: 'TO-BE'; position: absolute; top: -9px; right: 14px;
+    background: var(--green-dim); color: var(--green);
+    font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 4px; letter-spacing: 0.5px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 12px; border-radius: 20px; cursor: pointer;
+    font-size: 12px; font-weight: 600;
+    transition: all .2s;
+    border: 1px solid transparent;
+  }
+  .chip .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%;
+    font-size: 10px; font-weight: 700;
+  }
+  .chip.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(108,140,255,.25); }
+  .chip.active .num { background: var(--accent); color: #fff; }
+  .chip.done { background: var(--green-dim); color: var(--green); }
+  .chip.done .num { background: var(--green); color: #fff; }
+  .chip.warn { background: var(--amber-dim); color: var(--amber); }
+  .chip.warn .num { background: var(--amber); color: #1a1d27; }
+  .chip.inactive { background: var(--surface2); color: var(--text-dim); }
+  .chip.inactive .num { background: var(--border); color: var(--text-dim); }
+  .chip:hover { transform: translateY(-1px); filter: brightness(1.15); }
+
+  /* ─── Section Cards ─── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 10px;
+    overflow: hidden; transition: all .25s;
+  }
+  .card:hover { border-color: rgba(108,140,255,.3); }
+  .card.expanded { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
+  .card-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; cursor: pointer;
+    user-select: none;
+  }
+  .card-num {
+    flex-shrink: 0; width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; font-size: 13px; font-weight: 700;
+  }
+  .card-num.s1 { background: var(--accent-dim); color: var(--accent); }
+  .card-num.s2 { background: rgba(139,92,246,.12); color: #a78bfa; }
+  .card-num.s3 { background: rgba(59,130,246,.12); color: #60a5fa; }
+  .card-num.s4 { background: rgba(6,182,212,.12); color: #22d3ee; }
+  .card-num.s5 { background: var(--green-dim); color: var(--green); }
+  .card-num.s6 { background: rgba(52,211,153,.12); color: #6ee7b7; }
+  .card-num.s7 { background: var(--amber-dim); color: var(--amber); }
+  .card-num.s8 { background: rgba(244,114,182,.12); color: #f472b6; }
+  .card-title { flex: 1; font-size: 14px; font-weight: 600; }
+  .card-badge {
+    font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 4px; letter-spacing: 0.3px; flex-shrink: 0;
+  }
+  .badge-done { background: var(--green-dim); color: var(--green); }
+  .badge-warn { background: var(--amber-dim); color: var(--amber); }
+  .badge-risk { background: var(--red-dim); color: var(--red); }
+  .badge-info { background: var(--accent-dim); color: var(--accent); }
+  .card-chevron {
+    flex-shrink: 0; width: 20px; text-align: center;
+    color: var(--text-dim); font-size: 12px;
+    transition: transform .2s;
+  }
+  .card.expanded .card-chevron { transform: rotate(180deg); }
+  .card-body {
+    max-height: 0; overflow: hidden;
+    transition: max-height .3s ease, padding .3s;
+  }
+  .card.expanded .card-body { max-height: 600px; padding: 0 16px 16px; }
+  .card-body-inner {
+    font-size: 13px; color: var(--text-dim); line-height: 1.75;
+    border-top: 1px solid var(--border); padding-top: 12px;
+  }
+  .card-body-inner strong { color: var(--text); }
+  .card-body-inner code {
+    background: var(--surface2); padding: 1px 6px;
+    border-radius: 4px; font-size: 12px; color: var(--accent);
+  }
+  .card-body-inner table {
+    width: 100%; border-collapse: collapse; margin: 8px 0;
+    font-size: 12px;
+  }
+  .card-body-inner th {
+    text-align: left; padding: 6px 10px;
+    background: var(--surface2); color: var(--text-dim);
+    font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+  .card-body-inner td {
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+  }
+  .card-body-inner .tag-ok { color: var(--green); }
+  .card-body-inner .tag-warn { color: var(--amber); }
+  .card-body-inner .tag-fail { color: var(--red); }
+
+  /* Action buttons inside cards */
+  .card-actions {
+    display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;
+  }
+  .card-actions button {
+    background: var(--surface2); color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 12px; font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: all .15s;
+  }
+  .card-actions button:hover {
+    background: var(--accent-dim); color: var(--accent);
+    border-color: rgba(108,140,255,.3);
+  }
+
+  /* ─── Mobile View ─── */
+  .mobile-frame {
+    max-width: 390px; margin: 0 auto;
+    border: 2px solid var(--border); border-radius: 24px;
+    overflow: hidden; background: var(--bg);
+  }
+  .mobile-notch {
+    height: 28px; background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mobile-notch-pill {
+    width: 80px; height: 6px; background: var(--border);
+    border-radius: 3px;
+  }
+  .mobile-content { padding: 12px; max-height: 600px; overflow-y: auto; }
+  .mobile-content .chip-bar { padding: 10px 12px; }
+  .mobile-content .chip { font-size: 11px; padding: 4px 10px; }
+  .mobile-content .card-head { padding: 12px 14px; }
+  .mobile-content .card-title { font-size: 13px; }
+
+  /* ─── Spec Table ─── */
+  .spec-table {
+    width: 100%; border-collapse: collapse;
+    margin: 16px 0; font-size: 13px;
+  }
+  .spec-table th {
+    text-align: left; padding: 10px 14px;
+    background: var(--surface2); color: var(--text-dim);
+    font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+  .spec-table td {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  .spec-table tr:hover td { background: rgba(108,140,255,.04); }
+
+  /* ─── Footer ─── */
+  .footer {
+    text-align: center; padding: 32px 16px;
+    color: var(--text-dim); font-size: 11px;
+    border-top: 1px solid var(--border); margin-top: 32px;
+  }
+
+  @media (max-width: 480px) {
+    .container { padding: 16px 10px 60px; }
+    .header { padding: 24px 16px 20px; }
+    .header h1 { font-size: 18px; }
+    .chip { font-size: 11px; padding: 4px 9px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>CEO 8섹션 응답 플로우</h1>
+  <div class="sub">AADS-CRF v2.0 — 섹션카드 목업</div>
+  <div class="badge">Section Card Mockup</div>
+</div>
+
+<div class="container">
+
+  <!-- ━━━ 1. AS-IS vs TO-BE ━━━ -->
+  <div class="section-title">1 — AS-IS vs TO-BE</div>
+
+  <div class="asis-box">
+    <p><span class="strike">확인하겠습니다. 먼저 루트 지침과 현재 KST를 실측합니다.</span>
+<span class="strike">프리플라이트 확인 중... git status 조회 중...</span>
+<span class="strike">DB 컬럼명이 달라 1차 집계 실패. 스키마를 재조회합니다.</span>
+현재 서버 HEAD와 컨테이너 이미지 SHA가 다릅니다...
+커밋 완료했지만 배포는 아직입니다...
+<span class="strike">최종 확인 중입니다...</span>
+→ 다음 단계: 승인 주시면 배포하겠습니다.</p>
+  </div>
+
+  <div class="arrow-down">⬇</div>
+
+  <div class="chip-bar">
+    <span class="chip done"><span class="num">1</span>지시파악</span>
+    <span class="chip done"><span class="num">2</span>목표</span>
+    <span class="chip done"><span class="num">3</span>계획</span>
+    <span class="chip done"><span class="num">4</span>실행순서</span>
+    <span class="chip active"><span class="num">5</span>결과</span>
+    <span class="chip active"><span class="num">6</span>검증</span>
+    <span class="chip warn"><span class="num">7</span>리스크</span>
+    <span class="chip inactive"><span class="num">8</span>다음</span>
+  </div>
+
+  <!-- ━━━ 2. Section Cards ━━━ -->
+  <div class="section-title">2 — 8개 섹션카드 (데스크톱)</div>
+
+  <!-- Card 1: 지시 파악 -->
+  <div class="card expanded" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s1">1</div>
+      <div class="card-title">지시 파악</div>
+      <span class="card-badge badge-done">완료</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      CEO 요청: 응답 끊김 P0 조치 + 화면에서 사라진 기능 복구 + 배포까지 완료 보고.<br>
+      <strong>범위</strong>: 채팅 완료 시그널 보강, 대시보드 7칩 렌더링 확인, 배포 이미지 정합성.<br>
+      <strong>범위 제외</strong>: 무관 dirty 파일, GO100 러너 작업.
+    </div></div>
+  </div>
+
+  <!-- Card 2: 목표 -->
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s2">2</div>
+      <div class="card-title">목표</div>
+      <span class="card-badge badge-done">완료</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      <strong>완료 기준 3가지:</strong>
+      <table>
+        <tr><th>기준</th><th>측정</th></tr>
+        <tr><td>응답 중단율 ≤ 15%</td><td>24h 측정</td></tr>
+        <tr><td>7칩 운영 화면 렌더링</td><td>캡처 / API 폴백</td></tr>
+        <tr><td>API·대시보드 양 슬롯 healthy</td><td>health-check 200</td></tr>
+      </table>
+    </div></div>
+  </div>
+
+  <!-- Card 3: 계획 -->
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s3">3</div>
+      <div class="card-title">계획</div>
+      <span class="card-badge badge-info">직접수정</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      3계층 동시 적용. 프롬프트를 주 방어선으로, 백엔드 검증기는 하한선만 담당.
+      <table>
+        <tr><th>계층</th><th>역할</th><th>강도</th></tr>
+        <tr><td>L1 프롬프트</td><td>8섹션 순서 지시</td><td>주 방어선</td></tr>
+        <tr><td>백엔드 validator</td><td>커버리지 5/8 미만만 재작성</td><td>보수적 하한</td></tr>
+        <tr><td>프론트 칩</td><td>누락 시각화 + 섹션 점프</td><td>확인 경로</td></tr>
+      </table>
+    </div></div>
+  </div>
+
+  <!-- Card 4: 실행순서 -->
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s4">4</div>
+      <div class="card-title">실행순서</div>
+      <span class="card-badge badge-done">7단계</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      <table>
+        <tr><th>#</th><th>단계</th><th>대상</th><th>결과</th></tr>
+        <tr><td>1</td><td>8섹션 상수 추가</td><td><code>output_validator.py</code></td><td class="tag-ok">✅</td></tr>
+        <tr><td>2</td><td>재시도 프롬프트 교체</td><td>동일 파일</td><td class="tag-ok">✅</td></tr>
+        <tr><td>3</td><td>L1 에셋 UPSERT</td><td><code>prompt_assets</code></td><td class="tag-ok">✅</td></tr>
+        <tr><td>4</td><td>칩 7→8 확장</td><td><code>chat/page.tsx</code></td><td class="tag-ok">✅</td></tr>
+        <tr><td>5</td><td>문서 v2.0 작성</td><td><code>docs/</code></td><td class="tag-ok">✅</td></tr>
+        <tr><td>6</td><td>섹션카드 목업</td><td><code>static/reports/</code></td><td class="tag-ok">✅</td></tr>
+        <tr><td>7</td><td>커밋·배포</td><td>양 저장소</td><td class="tag-ok">✅</td></tr>
+      </table>
+    </div></div>
+  </div>
+
+  <!-- Card 5: 결과 — 기본 펼침 -->
+  <div class="card expanded" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s5">5</div>
+      <div class="card-title">결과</div>
+      <span class="card-badge badge-done">커밋·배포 완료</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      <table>
+        <tr><th>대상</th><th>변경</th><th>상태</th></tr>
+        <tr><td><code>output_validator.py</code></td><td>8섹션 검증 함수</td><td class="tag-ok">커밋 9f8edcd9</td></tr>
+        <tr><td><code>prompt_assets</code></td><td>L1 에셋 1,208자</td><td class="tag-ok">DB 반영</td></tr>
+        <tr><td><code>chat/page.tsx</code></td><td>칩 8개 확장</td><td class="tag-ok">커밋 ef8f825</td></tr>
+      </table>
+      <div class="card-actions">
+        <button>📄 PRD v2.0 열기</button>
+        <button>📄 기술문서 v2.0 열기</button>
+        <button>🖼️ 스크린샷 보기</button>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- Card 6: 검증 — 기본 펼침 -->
+  <div class="card expanded" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s6">6</div>
+      <div class="card-title">검증</div>
+      <span class="card-badge badge-done">6/7 통과</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      <span class="tag-ok">✅</span> <code>ast.parse</code> 구문 검사 통과<br>
+      <span class="tag-ok">✅</span> <code>evaluate_ceo_flow_coverage()</code> 정상 동작 확인<br>
+      <span class="tag-ok">✅</span> <code>compiled_prompt_provenance</code>에 에셋 적용 확인<br>
+      <span class="tag-ok">✅</span> 배포 번들에 칩 문자열 존재 확인<br>
+      <span class="tag-ok">✅</span> 대시보드 양 슬롯 healthy<br>
+      <span class="tag-ok">✅</span> health-check 200<br>
+      <span class="tag-warn">⚠️</span> 브라우저 E2E 미실행 — API 검증으로 대체
+    </div></div>
+  </div>
+
+  <!-- Card 7: 리스크 -->
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s7">7</div>
+      <div class="card-title">리스크</div>
+      <span class="card-badge badge-warn">2건</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      <table>
+        <tr><th>리스크</th><th>대응</th></tr>
+        <tr><td class="tag-warn">검증 강화 → 재시도 폭증</td><td>커버리지 하한 5/8 + 900자 이상만 적용</td></tr>
+        <tr><td class="tag-warn">HANDOVER.md 미커밋</td><td>다음 정리 커밋 시 포함</td></tr>
+      </table>
+    </div></div>
+  </div>
+
+  <!-- Card 8: 다음 -->
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-head">
+      <div class="card-num s8">8</div>
+      <div class="card-title">다음 단계</div>
+      <span class="card-badge badge-info">3건</span>
+      <div class="card-chevron">▼</div>
+    </div>
+    <div class="card-body"><div class="card-body-inner">
+      <strong>→ 1.</strong> 24h 회귀 측정 — 중단율 15.1% 대비 악화 확인<br>
+      <strong>→ 2.</strong> 섹션카드 실제 컴포넌트화 — 목업을 ChatBubble에 적용<br>
+      <strong>→ 3.</strong> HANDOVER.md 정리 커밋
+      <div class="card-actions">
+        <button>▶ 1번 즉시 실행</button>
+        <button>▶ 2번 착수</button>
+        <button>📋 TODO 등록</button>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ━━━ 3. Mobile View ━━━ -->
+  <div class="section-title">3 — 모바일 뷰 (390px)</div>
+
+  <div class="mobile-frame">
+    <div class="mobile-notch"><div class="mobile-notch-pill"></div></div>
+    <div class="mobile-content">
+      <div class="chip-bar" style="margin-bottom:12px">
+        <span class="chip done" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">1</span>지시파악</span>
+        <span class="chip done" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">2</span>목표</span>
+        <span class="chip done" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">3</span>계획</span>
+        <span class="chip done" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">4</span>실행</span>
+        <span class="chip active" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">5</span>결과</span>
+        <span class="chip active" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">6</span>검증</span>
+        <span class="chip warn" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">7</span>리스크</span>
+        <span class="chip inactive" style="font-size:11px;padding:4px 9px"><span class="num" style="width:16px;height:16px;font-size:9px">8</span>다음</span>
+      </div>
+
+      <!-- Mobile card: 결과 expanded -->
+      <div class="card expanded" onclick="this.classList.toggle('expanded')" style="margin-bottom:8px">
+        <div class="card-head" style="padding:10px 12px">
+          <div class="card-num s5" style="width:24px;height:24px;font-size:11px;border-radius:6px">5</div>
+          <div class="card-title" style="font-size:13px">결과</div>
+          <span class="card-badge badge-done" style="font-size:9px">완료</span>
+          <div class="card-chevron" style="font-size:11px">▼</div>
+        </div>
+        <div class="card-body"><div class="card-body-inner" style="font-size:12px">
+          <span class="tag-ok">✅</span> <code>output_validator.py</code> 커밋 완료<br>
+          <span class="tag-ok">✅</span> <code>prompt_assets</code> DB 반영<br>
+          <span class="tag-ok">✅</span> <code>page.tsx</code> 배포 완료<br>
+          <div class="card-actions" style="margin-top:8px">
+            <button style="font-size:10px;padding:4px 10px">📄 문서</button>
+            <button style="font-size:10px;padding:4px 10px">🖼️ 캡처</button>
+          </div>
+        </div></div>
+      </div>
+
+      <!-- Mobile card: 검증 expanded -->
+      <div class="card expanded" onclick="this.classList.toggle('expanded')" style="margin-bottom:8px">
+        <div class="card-head" style="padding:10px 12px">
+          <div class="card-num s6" style="width:24px;height:24px;font-size:11px;border-radius:6px">6</div>
+          <div class="card-title" style="font-size:13px">검증</div>
+          <span class="card-badge badge-done" style="font-size:9px">6/7</span>
+          <div class="card-chevron" style="font-size:11px">▼</div>
+        </div>
+        <div class="card-body"><div class="card-body-inner" style="font-size:12px">
+          <span class="tag-ok">✅</span> 구문·기능·에셋·번들·슬롯·헬스<br>
+          <span class="tag-warn">⚠️</span> 브라우저 E2E → API 대체
+        </div></div>
+      </div>
+
+      <!-- Mobile card: 리스크 collapsed -->
+      <div class="card" onclick="this.classList.toggle('expanded')" style="margin-bottom:8px">
+        <div class="card-head" style="padding:10px 12px">
+          <div class="card-num s7" style="width:24px;height:24px;font-size:11px;border-radius:6px">7</div>
+          <div class="card-title" style="font-size:13px">리스크</div>
+          <span class="card-badge badge-warn" style="font-size:9px">2건</span>
+          <div class="card-chevron" style="font-size:11px">▼</div>
+        </div>
+        <div class="card-body"><div class="card-body-inner" style="font-size:12px">
+          <span class="tag-warn">⚠️</span> 재시도 폭증 주의<br>
+          <span class="tag-warn">⚠️</span> HANDOVER 미커밋
+        </div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ━━━ 4. 디자인 스펙 ━━━ -->
+  <div class="section-title">4 — 디자인 스펙</div>
+
+  <table class="spec-table">
+    <tr><th>항목</th><th>값</th><th>비고</th></tr>
+    <tr><td>기본 펼침 카드</td><td>1(지시파악), 5(결과), 6(검증)</td><td>CEO가 가장 먼저 확인</td></tr>
+    <tr><td>칩 클릭</td><td>해당 카드로 스크롤 이동</td><td>smooth scroll</td></tr>
+    <tr><td>카드 클릭</td><td>접기/펼치기 토글</td><td>300ms ease</td></tr>
+    <tr><td>상태 배지</td><td>완료(초록) / 경고(주황) / 실패(빨강) / 정보(파랑)</td><td>4색 시스템</td></tr>
+    <tr><td>산출물 버튼</td><td>카드 하단 인라인</td><td>문서·이미지·링크 즉시 열기</td></tr>
+    <tr><td>모바일 터치</td><td>44px 최소 터치 영역</td><td>한 손 조작 우선</td></tr>
+    <tr><td>다크/라이트</td><td>CSS 변수 전환</td><td>시스템 설정 자동 감지</td></tr>
+  </table>
+
+  <div class="section-title">5 — 칩 상태 범례</div>
+
+  <table class="spec-table">
+    <tr><th>칩 스타일</th><th>의미</th><th>예시</th></tr>
+    <tr><td><span class="chip done" style="display:inline-flex"><span class="num">✓</span>완료</span></td><td>섹션 내용 확인됨</td><td>지시파악, 목표, 계획</td></tr>
+    <tr><td><span class="chip active" style="display:inline-flex"><span class="num">→</span>활성</span></td><td>현재 보고 중인 섹션</td><td>결과, 검증</td></tr>
+    <tr><td><span class="chip warn" style="display:inline-flex"><span class="num">!</span>주의</span></td><td>이상 항목 포함</td><td>리스크</td></tr>
+    <tr><td><span class="chip inactive" style="display:inline-flex"><span class="num">-</span>대기</span></td><td>아직 내용 없음</td><td>다음 단계</td></tr>
+  </table>
+
+</div>
+
+<div class="footer">
+  AADS-CRF v2.0 · CEO 8-Section Response Flow · Section Card Mockup<br>
+  Generated 2026-09-08 · aads.newtalk.kr
+</div>
+
+</body>
+</html>

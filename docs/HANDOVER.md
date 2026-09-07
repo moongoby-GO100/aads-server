@@ -601,3 +601,27 @@
 - 조치: `app/services/chat_service.py`에서 heartbeat도 25초 간격으로 DB 중간 저장해 blue-green 배포 중 `updated_at`이 오래돼 보이는 문제를 줄였다. 메모리 streaming state의 orphan 완료 판정도 도구 진행 시 180초, 일반 실행 90초로 늘려 완료 신호가 먼저 나가지 않게 했다.
 - 검증: 운영 컨테이너 소스에서 `recovery_grace`, heartbeat 저장, orphan threshold 반영을 확인했다. `python3 -m py_compile app/routers/chat.py app/services/chat_service.py tests/unit/test_tools_and_pipeline.py` 성공. 운영 이미지 의존성 + bind mount 기준 `pytest tests/unit/test_chat_service.py tests/unit/test_tools_and_pipeline.py -q` 결과 135 passed, 1 warning.
 - 배포/커밋: 서버 코드 커밋 `6a69660f fix: prevent premature completion during tool execution`이 생성됐다. 본 HANDOVER와 회귀 테스트 기대값 보정은 후속 커밋으로 정리한다. 대시보드는 `d42481a88d90 fix(chat): require final message before completion ui`까지 배포됐으나 원격 push가 아직 남아 있어 후속 단계에서 정리한다.
+
+---
+
+## [2026-09-08 KST] AADS-CRF v2.0 — CEO 8섹션 응답 플로우 (완료)
+
+CEO 지시: "기획문서, 기술문서, 아키텍처 버전업 + 즉시 구현 적용 + 섹션카드 목업 UI"
+
+**8섹션**: 지시파악 → 목표 → 계획 → 실행순서 → 결과 → 검증 → 리스크 → 다음
+
+| 레이어 | 변경 | 커밋 |
+|---|---|---|
+| L1 프롬프트 | `prompt_assets` slug `global-ceo-8section-response-flow` (layer 1, priority 23) UPSERT — 141→142행 | DB (배포 불필요) |
+| 백엔드 | `app/services/output_validator.py` — `_CEO_FLOW_GROUPS`, `evaluate_ceo_flow_coverage()`, 재시도 프롬프트 8섹션화 | aads-server `9f8edcd9` |
+| 프론트 | `src/app/chat/page.tsx` — 응답 개요 7칩 → 8칩 (`지시파악`, `실행순서` 추가) | aads-dashboard `ef8f825` |
+| 문서 | PRD v2.0, 기술문서 v2.0, ARCHITECTURE-INDEX §9 | aads-server `9f8edcd9` |
+| 목업 | `app/static/reports/20260908_response_section_card_mockup.html` | aads-server `9f8edcd9` / dashboard `3f9e30b` |
+
+**배포**: aads-server hot-reload(85 모듈), aads-dashboard blue/green → `aads-dashboard:ef8f825a60f4` 양 슬롯 healthy.
+**검증**: `compiled_prompt_provenance.applied_assets`에 신규 slug 확인(1,208자), 배포 번들에 `지시파악` 문자열 확인.
+
+**중요 운영 함정 (신규 발견)**
+MCP 원격 쓰기 도구(`write_remote_file`/`patch_remote_file`)는 **활성 API 컨테이너 내부**(`aads-server-green:/app`)에
+기록되며 호스트 저장소에 자동 반영되지 않는다. 반드시 `docker cp <container>:/app/... /root/aads/aads-server/...`로
+전파한 뒤 커밋해야 한다. 또한 컨테이너 `/app/docs`는 read-only이므로 `scripts/`에 쓴 뒤 전파해야 한다.

@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS 섹션카드 목업 v3.1 — 운영 폰트 동기화</title>
+<style>
+  :root {
+    --ct-bg: #0f0f0f;
+    --ct-surface: #1a1a2e;
+    --ct-surface2: rgba(255,255,255,0.03);
+    --ct-border: rgba(255,255,255,0.08);
+    --ct-text: #e2e8f0;
+    --ct-text2: #94a3b8;
+    --ct-accent: #6366f1;
+    --ct-accent-soft: rgba(99,102,241,0.10);
+    --ct-success: #22c55e;
+    --ct-warn: #f59e0b;
+    --ct-error: #ef4444;
+    --ct-mobile-font-size: 19px;
+    --ct-mobile-code-font-size: 17px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--ct-bg);
+    color: var(--ct-text);
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 20px;
+    min-height: 100vh;
+  }
+
+  .page-header {
+    max-width: 800px;
+    margin: 0 auto 32px;
+    text-align: center;
+  }
+  .page-header h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ct-text);
+    margin-bottom: 6px;
+  }
+  .page-header p {
+    font-size: 12px;
+    color: var(--ct-text2);
+  }
+
+  /* === 비교 섹션 === */
+  .compare-wrap {
+    max-width: 800px;
+    margin: 0 auto 40px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .compare-card {
+    background: var(--ct-surface);
+    border: 1px solid var(--ct-border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .compare-card h3 {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+  }
+  .compare-card.old h3 { color: var(--ct-error); }
+  .compare-card.new h3 { color: var(--ct-success); }
+  .compare-card .sample {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--ct-text2);
+  }
+  .compare-card .sample .progress-line {
+    color: rgba(255,255,255,0.25);
+    font-style: italic;
+    font-size: 11px;
+  }
+
+  /* === 메인 버블 === */
+  .bubble-wrap {
+    max-width: 800px;
+    margin: 0 auto 40px;
+  }
+  .bubble-label {
+    font-size: 11px;
+    color: var(--ct-text2);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .bubble {
+    background: var(--ct-surface);
+    border: 1px solid var(--ct-border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  /* 판정 헤더 */
+  .verdict-bar {
+    padding: 14px 18px 12px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.6;
+    border-bottom: 1px solid var(--ct-border);
+  }
+  .verdict-bar .sub {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--ct-text2);
+    margin-top: 2px;
+  }
+  .verdict-bar .sub .src {
+    color: var(--ct-accent);
+    font-size: 11px;
+  }
+
+  /* 칩 바 */
+  .chip-bar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--ct-border);
+    background: var(--ct-surface2);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 1px solid var(--ct-border);
+    background: transparent;
+    color: var(--ct-text2);
+  }
+  .chip:hover {
+    background: var(--ct-accent-soft);
+    border-color: var(--ct-accent);
+    color: var(--ct-text);
+  }
+  .chip.active {
+    background: var(--ct-accent-soft);
+    border-color: var(--ct-accent);
+    color: var(--ct-accent);
+  }
+  .chip .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .chip .num.n1 { background: rgba(99,102,241,0.15); color: #818cf8; }
+  .chip .num.n2 { background: rgba(14,165,233,0.15); color: #38bdf8; }
+  .chip .num.n3 { background: rgba(168,85,247,0.15); color: #c084fc; }
+  .chip .num.n4 { background: rgba(34,197,94,0.15); color: #4ade80; }
+  .chip .num.n5 { background: rgba(245,158,11,0.15); color: #fbbf24; }
+  .chip .num.n6 { background: rgba(6,182,212,0.15); color: #22d3ee; }
+  .chip .num.n7 { background: rgba(239,68,68,0.15); color: #f87171; }
+  .chip .num.n8 { background: rgba(236,72,153,0.15); color: #f472b6; }
+
+  /* 본문 영역 */
+  .body-content {
+    padding: 16px 18px 18px;
+  }
+
+  /* 섹션 구분 */
+  .section {
+    padding: 12px 0;
+  }
+  .section + .section {
+    border-top: 1px dashed rgba(255,255,255,0.06);
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .section-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ct-text);
+    letter-spacing: 0.3px;
+  }
+  .section-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 10px;
+    line-height: 1.4;
+  }
+  .badge-done { background: rgba(34,197,94,0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.2); }
+  .badge-warn { background: rgba(245,158,11,0.12); color: #f59e0b; border: 1px solid rgba(245,158,11,0.2); }
+  .badge-fail { background: rgba(239,68,68,0.12); color: #ef4444; border: 1px solid rgba(239,68,68,0.2); }
+  .badge-info { background: rgba(99,102,241,0.10); color: #818cf8; border: 1px solid rgba(99,102,241,0.2); }
+
+  .section-body {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ct-text);
+  }
+  .section-body .muted {
+    color: var(--ct-text2);
+  }
+
+  /* 표 */
+  .s-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin: 6px 0;
+  }
+  .s-table th {
+    padding: 6px 10px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    color: #c4b5fd;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    letter-spacing: 0.3px;
+  }
+  .s-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: var(--ct-text);
+    vertical-align: top;
+  }
+  .s-table tr:last-child td { border-bottom: none; }
+
+  /* 코드 인라인 */
+  code {
+    font-size: 12px;
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: #c4b5fd;
+  }
+
+  /* 다음 단계 */
+  .next-actions {
+    margin-top: 4px;
+    padding: 10px 14px;
+    background: rgba(99,102,241,0.06);
+    border-radius: 8px;
+    border-left: 3px solid var(--ct-accent);
+  }
+  .next-actions .label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ct-accent);
+    margin-bottom: 4px;
+  }
+  .next-actions .item {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ct-text);
+    padding: 2px 0;
+  }
+
+  /* 메타 푸터 */
+  .bubble-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 18px 10px;
+    border-top: 1px solid var(--ct-border);
+    font-size: 10px;
+    color: var(--ct-text2);
+  }
+  .bubble-footer .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(34,197,94,0.10);
+    color: #22c55e;
+    border: 1px solid rgba(34,197,94,0.20);
+  }
+
+  /* === 모바일 === */
+  @media (max-width: 768px) {
+    body {
+      padding: 12px;
+      font-size: var(--ct-mobile-font-size, 19px);
+      line-height: 1.75;
+    }
+    .compare-wrap { grid-template-columns: 1fr; }
+    .page-header h1 { font-size: 16px; }
+    .verdict-bar { font-size: var(--ct-mobile-font-size, 19px); padding: 12px 14px 10px; }
+    .verdict-bar .sub { font-size: 14px; }
+    .chip-bar { padding: 8px 14px; gap: 5px; }
+    .chip { font-size: 12px; padding: 4px 10px; min-height: 32px; }
+    .chip .num { width: 18px; height: 18px; font-size: 11px; }
+    .body-content { padding: 12px 14px 16px; }
+    .section-body { font-size: var(--ct-mobile-font-size, 19px); line-height: 1.75; }
+    .section-title { font-size: 14px; }
+    .s-table { font-size: 14px; }
+    .s-table th { font-size: 13px; }
+    .s-table td { padding: 8px 10px; }
+    .next-actions .item { font-size: var(--ct-mobile-font-size, 19px); }
+    code { font-size: var(--ct-mobile-code-font-size, 17px); }
+    .bubble-footer { font-size: 12px; }
+  }
+
+  /* === 스펙 비교 표 === */
+  .spec-section {
+    max-width: 800px;
+    margin: 0 auto 32px;
+  }
+  .spec-section h2 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ct-text);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--ct-border);
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== 헤더 ===== -->
+<div class="page-header">
+  <h1>섹션카드 목업 v3.1 — 운영 폰트 동기화</h1>
+  <p>운영 채팅창 폰트 토큰(데스크톱 14px/1.6, 모바일 19px/1.75) 완전 일치 · 단일 버블 통합 리포트형</p>
+</div>
+
+<!-- ===== AS-IS vs TO-BE ===== -->
+<div class="compare-wrap">
+  <div class="compare-card old">
+    <h3>❌ AS-IS — 나열식</h3>
+    <div class="sample">
+      <div class="progress-line">프리플라이트 확인과 대상 코드 실측을 병렬로 진행합니다.</div>
+      <div class="progress-line">현재 git 상태 기준으로는...</div>
+      <div class="progress-line">DB 재조회 결과 현재도 running/retrying이...</div>
+      <div style="margin-top: 8px;">확인상 active API 슬롯은 green(8102)이고 resume owner도 green으로...</div>
+      <div style="margin-top: 4px;">핵심 원인이 하나 좁혀졌습니다. 최근 중단 오류는...</div>
+      <div style="margin-top: 4px; color: var(--ct-text2); font-size: 11px;">→ 진행 과정과 결론이 뒤섞여 핵심을 찾기 어려움</div>
+    </div>
+  </div>
+  <div class="compare-card new">
+    <h3>✅ TO-BE — 8섹션 구조</h3>
+    <div class="sample">
+      <div style="color: var(--ct-success); font-weight: 700;">✅ P0 3건 패치 완료, hot reload 적용됨</div>
+      <div style="margin-top: 4px;">① 지시파악 → ② 목표 → ③ 계획 → ④ 실행순서</div>
+      <div style="margin-top: 2px;">→ ⑤ 결과 → ⑥ 검증 → ⑦ 리스크 → ⑧ 다음</div>
+      <div style="margin-top: 8px; color: var(--ct-text2); font-size: 11px;">→ 칩 클릭으로 원하는 섹션 즉시 이동</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 실제 버블 시뮬레이션 ===== -->
+<div class="bubble-wrap">
+  <div class="bubble-label">실제 채팅 버블 시뮬레이션</div>
+  <div class="bubble">
+
+    <!-- 판정 헤더 -->
+    <div class="verdict-bar">
+      ✅ P0 3건 패치 완료 — 응답 중단율 19.6% → 4.2%로 개선
+      <div class="sub">7일간 중단 172건 분석, 3가지 근본 원인 식별·패치·검증 완료 <span class="src">[DB 조회, 09:41 KST]</span></div>
+    </div>
+
+    <!-- 칩 바 -->
+    <div class="chip-bar">
+      <span class="chip active"><span class="num n1">1</span> 지시파악</span>
+      <span class="chip"><span class="num n2">2</span> 목표</span>
+      <span class="chip"><span class="num n3">3</span> 계획</span>
+      <span class="chip"><span class="num n4">4</span> 실행순서</span>
+      <span class="chip"><span class="num n5">5</span> 결과</span>
+      <span class="chip"><span class="num n6">6</span> 검증</span>
+      <span class="chip"><span class="num n7">7</span> 리스크</span>
+      <span class="chip"><span class="num n8">8</span> 다음</span>
+    </div>
+
+    <!-- 본문 -->
+    <div class="body-content">
+
+      <!-- 1. 지시 파악 -->
+      <div class="section" id="s1">
+        <div class="section-head">
+          <span class="section-num n1" style="background:rgba(99,102,241,0.15);color:#818cf8;">1</span>
+          <span class="section-title">지시 파악</span>
+        </div>
+        <div class="section-body">
+          응답 끊김 현상이 지속적으로 발생하고 있어, 원인을 파악하고 즉시 조치 후 결과 보고 요청.
+          <span class="muted">추가로 다른 끊김 원인이 있는지 전수 분석 포함.</span>
+        </div>
+      </div>
+
+      <!-- 2. 목표 -->
+      <div class="section" id="s2">
+        <div class="section-head">
+          <span class="section-num n2" style="background:rgba(14,165,233,0.15);color:#38bdf8;">2</span>
+          <span class="section-title">목표</span>
+          <span class="section-badge badge-done">완료</span>
+        </div>
+        <div class="section-body">
+          응답 중단율을 19.6%에서 5% 이하로 낮추고, 재발 방지 로직을 적용하여 CEO 체감 끊김을 해소한다.
+        </div>
+      </div>
+
+      <!-- 3. 계획 -->
+      <div class="section" id="s3">
+        <div class="section-head">
+          <span class="section-num n3" style="background:rgba(168,85,247,0.15);color:#c084fc;">3</span>
+          <span class="section-title">계획</span>
+        </div>
+        <div class="section-body">
+          직접 수정 (XS, 3파일). 중단 분류별 DB 분석 → 원인 3건 식별 → 패치 → hot reload → 24h 모니터링.
+        </div>
+      </div>
+
+      <!-- 4. 실행순서 -->
+      <div class="section" id="s4">
+        <div class="section-head">
+          <span class="section-num n4" style="background:rgba(34,197,94,0.15);color:#4ade80;">4</span>
+          <span class="section-title">실행순서</span>
+        </div>
+        <div class="section-body">
+          <table class="s-table">
+            <thead><tr><th>#</th><th>단계</th><th>대상</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>7일간 중단 172건 분류 분석</td><td><code>chat_turn_executions</code></td></tr>
+              <tr><td>2</td><td>배포 취소 가드 추가</td><td><code>chat_service.py:4210</code></td></tr>
+              <tr><td>3</td><td>resume 한도 5→8 상향</td><td><code>chat_service.py:4580</code></td></tr>
+              <tr><td>4</td><td>LLM 오류 분류기 보강</td><td><code>llm_error_classifier.py</code></td></tr>
+              <tr><td>5</td><td>hot reload 적용</td><td><code>reload-api.sh</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 5. 결과 -->
+      <div class="section" id="s5">
+        <div class="section-head">
+          <span class="section-num n5" style="background:rgba(245,158,11,0.15);color:#fbbf24;">5</span>
+          <span class="section-title">결과</span>
+          <span class="section-badge badge-done">완료</span>
+        </div>
+        <div class="section-body">
+          <table class="s-table">
+            <thead><tr><th>항목</th><th>Before</th><th>After</th><th>상태</th></tr></thead>
+            <tbody>
+              <tr><td>응답 중단율</td><td>19.6%</td><td>4.2%</td><td>✅</td></tr>
+              <tr><td>배포 취소 가드</td><td>미적용</td><td>적용</td><td>✅</td></tr>
+              <tr><td>resume 한도</td><td>5회</td><td>8회</td><td>✅</td></tr>
+              <tr><td>커밋·푸시</td><td>—</td><td><code>fb5dd10</code></td><td>✅</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 6. 검증 -->
+      <div class="section" id="s6">
+        <div class="section-head">
+          <span class="section-num n6" style="background:rgba(6,182,212,0.15);color:#22d3ee;">6</span>
+          <span class="section-title">검증</span>
+        </div>
+        <div class="section-body">
+          ✅ <code>python3 -m py_compile chat_service.py</code> 통과<br>
+          ✅ health-check HTTP 200 정상<br>
+          ✅ 패치 후 1시간 내 중단 0건 <span class="muted">[DB 조회]</span><br>
+          ⚠️ 브라우저 E2E 미실행, API 검증으로 대체
+        </div>
+      </div>
+
+      <!-- 7. 리스크 -->
+      <div class="section" id="s7">
+        <div class="section-head">
+          <span class="section-num n7" style="background:rgba(239,68,68,0.15);color:#f87171;">7</span>
+          <span class="section-title">리스크</span>
+          <span class="section-badge badge-warn">주의 1건</span>
+        </div>
+        <div class="section-body">
+          ⚠️ hot reload로 적용되어 컨테이너 재생성 시 이미지에 미포함. 정식 배포 필요.
+        </div>
+      </div>
+
+      <!-- 8. 다음 -->
+      <div class="section" id="s8">
+        <div class="section-head">
+          <span class="section-num n8" style="background:rgba(236,72,153,0.15);color:#f472b6;">8</span>
+          <span class="section-title">다음</span>
+        </div>
+        <div class="next-actions">
+          <div class="label">→ 다음 단계</div>
+          <div class="item">1. 24h 회귀 측정 — 중단율 5% 이하 유지 확인</div>
+          <div class="item">2. 정식 배포 — bluegreen 배포로 이미지에 고정</div>
+          <div class="item">3. watchdog 재시도 플래그 정리 — 동시 플래그 0건 보장</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 푸터 -->
+    <div class="bubble-footer">
+      <span class="status-pill">✅ 완료</span>
+      <span>claude-opus-5 · 09:41 KST · 3,284자</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 폰트 스펙 비교표 ===== -->
+<div class="spec-section">
+  <h2>폰트 스펙 비교 — 운영 vs v3.0 vs v3.1</h2>
+  <table class="s-table" style="background: var(--ct-surface); border-radius: 8px; overflow: hidden;">
+    <thead>
+      <tr><th>영역</th><th>운영 채팅창</th><th>v3.0</th><th>v3.1 (이 목업)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>본문</td><td>14px / 1.6</td><td style="color:#ef4444;">13.5px / 1.7</td><td style="color:#22c55e;">14px / 1.6 ✅</td></tr>
+      <tr><td>모바일 본문</td><td>19px / 1.75 (가변)</td><td style="color:#ef4444;">14px 고정</td><td style="color:#22c55e;">19px / 1.75 (CSS var) ✅</td></tr>
+      <tr><td>폰트 패밀리</td><td>Arial, Helvetica</td><td style="color:#ef4444;">Pretendard</td><td style="color:#22c55e;">Arial, Helvetica ✅</td></tr>
+      <tr><td>표 본문</td><td>12px</td><td style="color:#ef4444;">12.5px</td><td style="color:#22c55e;">12px ✅</td></tr>
+      <tr><td>표 헤더</td><td>11px / 600</td><td style="color:#ef4444;">11.5px</td><td style="color:#22c55e;">11px / 600 ✅</td></tr>
+      <tr><td>칩(뱃지)</td><td>10–11px</td><td style="color:#ef4444;">11px</td><td style="color:#22c55e;">11px ✅</td></tr>
+      <tr><td>코드 인라인</td><td>12px</td><td>12px</td><td style="color:#22c55e;">12px ✅</td></tr>
+      <tr><td>메타/타임</td><td>10–11px</td><td style="color:#ef4444;">9–10px</td><td style="color:#22c55e;">10–11px ✅</td></tr>
+      <tr><td>모바일 코드</td><td>17px (var)</td><td style="color:#ef4444;">12px</td><td style="color:#22c55e;">17px (CSS var) ✅</td></tr>
+      <tr><td>A-/A+ 조절</td><td>17–24px 범위</td><td style="color:#ef4444;">미지원</td><td style="color:#22c55e;">CSS var 연동 가능 ✅</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ===== 디자인 원칙 ===== -->
+<div class="spec-section">
+  <h2>디자인 원칙</h2>
+  <table class="s-table" style="background: var(--ct-surface); border-radius: 8px; overflow: hidden;">
+    <thead><tr><th>원칙</th><th>적용</th></tr></thead>
+    <tbody>
+      <tr><td>하나의 버블, 하나의 보고서</td><td>외곽 테두리 1개만. 8섹션은 내부 단락으로 점선 구분</td></tr>
+      <tr><td>판정 → 근거 → 상세 순</td><td>첫 줄에 아이콘+결론, 둘째 줄에 핵심 수치+출처</td></tr>
+      <tr><td>칩 = 내비게이션</td><td>클릭 시 해당 섹션으로 스크롤 이동 (구현 시)</td></tr>
+      <tr><td>운영 폰트와 완전 일치</td><td>데스크톱 14px/1.6, 모바일 19px/1.75, Arial 계열</td></tr>
+      <tr><td>모바일 우선 터치</td><td>칩 32px 높이, 표 8px 패딩, 본문 19px</td></tr>
+      <tr><td>가독성 > 장식</td><td>카드 테두리 제거, 점선만으로 구분, 스크롤 40% 감소</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 칩 클릭 인터랙션 (데모) -->
+<script>
+document.querySelectorAll('.chip').forEach((chip, i) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    const target = document.getElementById('s' + (i + 1));
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+});
+</script>
+
+</body>
+</html>

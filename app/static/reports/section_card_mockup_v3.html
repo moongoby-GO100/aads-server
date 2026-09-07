@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AADS CEO 8섹션 응답 — 목업 v3 (통합 리포트형)</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bubble: #1a1d27;
+    --border: #262937;
+    --text: #e2e4ed;
+    --dim: #7b7f94;
+    --accent: #6c8cff;
+    --green: #34d399;
+    --amber: #f5b041;
+    --red: #f87171;
+    --chip-bg: rgba(108,140,255,.08);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Pretendard', 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+  }
+
+  .page-header {
+    text-align: center; padding: 28px 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+  .page-header p { color: var(--dim); font-size: 12px; margin-top: 4px; }
+
+  .container { max-width: 760px; margin: 0 auto; padding: 20px 16px 80px; }
+
+  .label {
+    font-size: 13px; font-weight: 700; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 1.2px;
+    margin: 28px 0 12px; padding-left: 2px;
+  }
+
+  /* ━━ v2 AS-IS ━━ */
+  .asis {
+    background: var(--bubble); border-radius: 14px;
+    padding: 18px 20px; margin-bottom: 6px;
+    border-left: 3px solid var(--red); opacity: .65;
+  }
+  .asis p { font-size: 12px; color: var(--dim); line-height: 1.8; }
+  .asis .tag { color: var(--red); font-size: 10px; font-weight: 700; }
+
+  .divider { text-align: center; color: var(--accent); padding: 8px 0; font-size: 20px; }
+
+  /* ━━ v3 TO-BE: 통합 리포트형 ━━ */
+  .bubble {
+    background: var(--bubble); border-radius: 16px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  /* 칩 바 — 상단에 얇게 */
+  .chip-strip {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(108,140,255,.03);
+  }
+  .chip {
+    font-size: 11px; font-weight: 600; padding: 3px 10px;
+    border-radius: 14px; cursor: pointer;
+    transition: all .15s; border: none; background: none;
+    color: var(--dim);
+  }
+  .chip.on { background: var(--chip-bg); color: var(--accent); }
+  .chip.ok { background: rgba(52,211,153,.08); color: var(--green); }
+  .chip.warn { background: rgba(245,176,65,.08); color: var(--amber); }
+  .chip:hover { filter: brightness(1.2); }
+
+  /* 보고 본문 */
+  .report { padding: 18px 20px 22px; font-size: 13.5px; }
+
+  /* 섹션 — 카드가 아닌 단락 구분 */
+  .sec { margin-bottom: 16px; }
+  .sec:last-child { margin-bottom: 0; }
+  .sec-head {
+    display: flex; align-items: center; gap: 7px;
+    margin-bottom: 6px;
+    cursor: pointer;
+  }
+  .sec-num {
+    font-size: 10px; font-weight: 800; color: var(--accent);
+    width: 18px; height: 18px; display: inline-flex;
+    align-items: center; justify-content: center;
+    border-radius: 5px; background: var(--chip-bg);
+    flex-shrink: 0;
+  }
+  .sec-title {
+    font-size: 13px; font-weight: 700; color: var(--text);
+  }
+  .sec-badge {
+    font-size: 9px; font-weight: 700; padding: 1px 6px;
+    border-radius: 3px; margin-left: auto;
+  }
+  .b-ok { background: rgba(52,211,153,.1); color: var(--green); }
+  .b-warn { background: rgba(245,176,65,.1); color: var(--amber); }
+  .b-info { background: var(--chip-bg); color: var(--accent); }
+
+  .sec-body { color: var(--dim); font-size: 13px; padding-left: 25px; }
+  .sec-body strong { color: var(--text); font-weight: 600; }
+  .sec-body code {
+    background: rgba(108,140,255,.08); color: var(--accent);
+    padding: 0 5px; border-radius: 3px; font-size: 12px;
+  }
+
+  /* 구분선 — 카드 테두리 대신 얇은 점선 */
+  .sep {
+    border: none; border-top: 1px dashed var(--border);
+    margin: 14px 0 14px 25px;
+  }
+
+  /* 테이블 — 컴팩트 */
+  .sec-body table {
+    width: 100%; border-collapse: collapse;
+    margin: 6px 0; font-size: 12px;
+  }
+  .sec-body th {
+    text-align: left; padding: 5px 8px;
+    color: var(--dim); font-weight: 600; font-size: 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sec-body td {
+    padding: 5px 8px; border-bottom: 1px solid rgba(38,41,55,.6);
+  }
+  .t-ok { color: var(--green); }
+  .t-warn { color: var(--amber); }
+  .t-fail { color: var(--red); }
+
+  /* 다음 단계 — 액션 라인 */
+  .action-line {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 0; font-size: 12.5px;
+  }
+  .action-line .arrow { color: var(--accent); font-weight: 700; }
+  .action-btn {
+    background: var(--chip-bg); color: var(--accent);
+    border: none; border-radius: 6px;
+    padding: 3px 10px; font-size: 11px; font-weight: 600;
+    cursor: pointer; margin-left: auto;
+  }
+  .action-btn:hover { filter: brightness(1.3); }
+
+  /* 판정 헤더 */
+  .verdict {
+    font-size: 14px; font-weight: 700; margin-bottom: 4px;
+  }
+  .verdict-sub { font-size: 12px; color: var(--dim); margin-bottom: 14px; }
+
+  /* ━━ 모바일 프레임 ━━ */
+  .mob-frame {
+    max-width: 375px; margin: 0 auto;
+    border: 2px solid var(--border); border-radius: 22px;
+    overflow: hidden; background: var(--bg);
+  }
+  .mob-bar {
+    height: 24px; background: var(--bubble);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mob-pill { width: 70px; height: 5px; background: var(--border); border-radius: 3px; }
+  .mob-inner { padding: 10px; }
+  .mob-inner .bubble { font-size: 12px; }
+  .mob-inner .report { padding: 14px 14px 16px; font-size: 12.5px; }
+  .mob-inner .chip { font-size: 10px; padding: 2px 8px; }
+  .mob-inner .sec-body { font-size: 12px; }
+  .mob-inner .sec-title { font-size: 12px; }
+
+  /* 스펙 */
+  .spec { margin: 16px 0; font-size: 12px; }
+  .spec th { text-align: left; padding: 6px 10px; background: var(--bubble); color: var(--dim); font-weight: 600; border-bottom: 1px solid var(--border); }
+  .spec td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+
+  .footer {
+    text-align: center; padding: 28px 16px; color: var(--dim);
+    font-size: 10px; border-top: 1px solid var(--border); margin-top: 28px;
+  }
+
+  @media (max-width: 480px) {
+    .container { padding: 12px 8px 60px; }
+    .report { padding: 14px 14px; }
+    .chip { font-size: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>CEO 8섹션 응답 — 통합 리포트형</h1>
+  <p>AADS-CRF v3.0 · 카드 분리 → 단일 보고서 흐름으로 개선</p>
+</div>
+
+<div class="container">
+
+  <!-- ── 비교 ── -->
+  <div class="label">v2 (기존) — 카드 과다 분리</div>
+  <div class="asis">
+    <p><span class="tag">AS-IS</span> 8개 카드가 각각 테두리·배경·그림자를 가져서 시선이 분산됨.<br>
+    카드마다 접기/펼치기 → 클릭 피로. 짧은 보고서도 스크롤이 길어짐.<br>
+    핵심(결과·검증)까지 도달하는 데 3~4번 스크롤 필요.</p>
+  </div>
+
+  <div class="divider">⬇</div>
+
+  <!-- ── v3 데스크톱 ── -->
+  <div class="label">v3 (개선) — 하나의 보고서, 얇은 섹션 구분</div>
+
+  <div class="bubble">
+    <!-- 칩 스트립 -->
+    <div class="chip-strip">
+      <button class="chip ok">지시파악</button>
+      <button class="chip ok">목표</button>
+      <button class="chip ok">계획</button>
+      <button class="chip ok">실행순서</button>
+      <button class="chip on">결과</button>
+      <button class="chip on">검증</button>
+      <button class="chip warn">리스크</button>
+      <button class="chip">다음</button>
+    </div>
+
+    <!-- 보고 본문 -->
+    <div class="report">
+
+      <!-- 판정 헤더 -->
+      <div class="verdict">✅ 8섹션 응답 플로우 구현·배포 완료</div>
+      <div class="verdict-sub">프롬프트 에셋 + 백엔드 validator + 프론트 8칩, 양 슬롯 healthy [실측, 05:05 KST]</div>
+
+      <!-- 1. 지시파악 -->
+      <div class="sec" id="s1">
+        <div class="sec-head">
+          <span class="sec-num">1</span>
+          <span class="sec-title">지시 파악</span>
+        </div>
+        <div class="sec-body">
+          기획·기술·아키텍처 문서 <strong>v2.0 버전업</strong>, 8섹션 응답 플로우 <strong>즉시 구현·배포</strong>, 섹션카드 목업 UI 작성.<br>
+          범위 제외: 무관 dirty 파일, 러너 구조 변경.
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 2. 목표 -->
+      <div class="sec" id="s2">
+        <div class="sec-head">
+          <span class="sec-num">2</span>
+          <span class="sec-title">목표</span>
+        </div>
+        <div class="sec-body">
+          보고형 응답이 8섹션 순서로 생성될 것 · 칩이 8섹션과 1:1 매칭 · 응답 끊김 악화 없을 것.
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 3. 계획 -->
+      <div class="sec" id="s3">
+        <div class="sec-head">
+          <span class="sec-num">3</span>
+          <span class="sec-title">계획</span>
+          <span class="sec-badge b-info">직접수정</span>
+        </div>
+        <div class="sec-body">
+          L1 프롬프트(주 방어선) + 백엔드 validator(보수적 하한) + 프론트 칩(확인 경로) 3계층 동시 적용.
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 4. 실행순서 -->
+      <div class="sec" id="s4">
+        <div class="sec-head">
+          <span class="sec-num">4</span>
+          <span class="sec-title">실행순서</span>
+          <span class="sec-badge b-ok">7단계 완료</span>
+        </div>
+        <div class="sec-body">
+          <table>
+            <tr><th>#</th><th>단계</th><th>대상</th><th></th></tr>
+            <tr><td>1</td><td>8섹션 상수·검증 함수</td><td><code>output_validator.py</code></td><td class="t-ok">✅</td></tr>
+            <tr><td>2</td><td>재시도 프롬프트 교체</td><td>동일</td><td class="t-ok">✅</td></tr>
+            <tr><td>3</td><td>L1 에셋 UPSERT</td><td><code>prompt_assets</code></td><td class="t-ok">✅</td></tr>
+            <tr><td>4</td><td>칩 8개 확장</td><td><code>page.tsx</code></td><td class="t-ok">✅</td></tr>
+            <tr><td>5</td><td>문서 v2.0</td><td><code>docs/</code></td><td class="t-ok">✅</td></tr>
+            <tr><td>6</td><td>목업 HTML</td><td><code>static/reports/</code></td><td class="t-ok">✅</td></tr>
+            <tr><td>7</td><td>커밋·배포</td><td>양 저장소</td><td class="t-ok">✅</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 5. 결과 -->
+      <div class="sec" id="s5">
+        <div class="sec-head">
+          <span class="sec-num">5</span>
+          <span class="sec-title">결과</span>
+          <span class="sec-badge b-ok">배포 완료</span>
+        </div>
+        <div class="sec-body">
+          <table>
+            <tr><th>대상</th><th>변경</th><th>커밋</th></tr>
+            <tr><td><code>output_validator.py</code></td><td>8섹션 검증</td><td><code>9f8edcd9</code></td></tr>
+            <tr><td><code>prompt_assets</code></td><td>L1 에셋 1,208자</td><td>DB UPSERT</td></tr>
+            <tr><td><code>page.tsx</code></td><td>칩 8개</td><td><code>ef8f825</code></td></tr>
+          </table>
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 6. 검증 -->
+      <div class="sec" id="s6">
+        <div class="sec-head">
+          <span class="sec-num">6</span>
+          <span class="sec-title">검증</span>
+          <span class="sec-badge b-ok">6/7</span>
+        </div>
+        <div class="sec-body">
+          <span class="t-ok">✅</span> 구문 검사 · 검증 함수 · 에셋 적용 · 번들 · 양 슬롯 healthy · health-check 200<br>
+          <span class="t-warn">⚠️</span> 브라우저 E2E 미실행 → API 검증 대체
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 7. 리스크 -->
+      <div class="sec" id="s7">
+        <div class="sec-head">
+          <span class="sec-num">7</span>
+          <span class="sec-title">리스크</span>
+          <span class="sec-badge b-warn">2건</span>
+        </div>
+        <div class="sec-body">
+          <span class="t-warn">⚠</span> 검증 강화 → 재시도 증가 가능 (커버리지 하한 5/8로 보수 적용)<br>
+          <span class="t-warn">⚠</span> HANDOVER.md 미커밋 (다음 정리 커밋에 포함)
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 8. 다음 -->
+      <div class="sec" id="s8">
+        <div class="sec-head">
+          <span class="sec-num">8</span>
+          <span class="sec-title">다음 단계</span>
+        </div>
+        <div class="sec-body">
+          <div class="action-line">
+            <span class="arrow">→</span>
+            <span>24h 회귀 측정 — 중단율 확인</span>
+            <button class="action-btn">실행</button>
+          </div>
+          <div class="action-line">
+            <span class="arrow">→</span>
+            <span>섹션카드 ChatBubble 실제 적용</span>
+            <button class="action-btn">착수</button>
+          </div>
+          <div class="action-line">
+            <span class="arrow">→</span>
+            <span>HANDOVER 정리 커밋</span>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /report -->
+  </div><!-- /bubble -->
+
+  <!-- ── 모바일 ── -->
+  <div class="label">모바일 뷰 (375px)</div>
+
+  <div class="mob-frame">
+    <div class="mob-bar"><div class="mob-pill"></div></div>
+    <div class="mob-inner">
+      <div class="bubble">
+        <div class="chip-strip">
+          <button class="chip ok" style="font-size:10px;padding:2px 7px">지시파악</button>
+          <button class="chip ok" style="font-size:10px;padding:2px 7px">목표</button>
+          <button class="chip ok" style="font-size:10px;padding:2px 7px">계획</button>
+          <button class="chip ok" style="font-size:10px;padding:2px 7px">실행</button>
+          <button class="chip on" style="font-size:10px;padding:2px 7px">결과</button>
+          <button class="chip on" style="font-size:10px;padding:2px 7px">검증</button>
+          <button class="chip warn" style="font-size:10px;padding:2px 7px">리스크</button>
+          <button class="chip" style="font-size:10px;padding:2px 7px">다음</button>
+        </div>
+        <div class="report">
+          <div class="verdict" style="font-size:13px">✅ 8섹션 플로우 구현·배포 완료</div>
+          <div class="verdict-sub" style="font-size:11px">양 슬롯 healthy [05:05 KST]</div>
+
+          <div class="sec">
+            <div class="sec-head"><span class="sec-num">5</span><span class="sec-title">결과</span><span class="sec-badge b-ok">완료</span></div>
+            <div class="sec-body">
+              <code>output_validator.py</code> → <code>9f8edcd9</code><br>
+              <code>prompt_assets</code> → DB 반영<br>
+              <code>page.tsx</code> → <code>ef8f825</code>
+            </div>
+          </div>
+          <hr class="sep">
+          <div class="sec">
+            <div class="sec-head"><span class="sec-num">6</span><span class="sec-title">검증</span><span class="sec-badge b-ok">6/7</span></div>
+            <div class="sec-body">
+              <span class="t-ok">✅</span> 구문·함수·에셋·번들·슬롯·헬스<br>
+              <span class="t-warn">⚠️</span> E2E → API 대체
+            </div>
+          </div>
+          <hr class="sep">
+          <div class="sec">
+            <div class="sec-head"><span class="sec-num">8</span><span class="sec-title">다음</span></div>
+            <div class="sec-body" style="font-size:11px">
+              <div class="action-line"><span class="arrow">→</span> 24h 회귀 측정</div>
+              <div class="action-line"><span class="arrow">→</span> ChatBubble 실적용</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 디자인 변경점 ── -->
+  <div class="label">v2 → v3 변경점</div>
+
+  <table class="spec" style="width:100%;border-collapse:collapse">
+    <tr><th>항목</th><th>v2 (기존)</th><th>v3 (개선)</th></tr>
+    <tr><td>섹션 구분</td><td>개별 카드 (테두리+배경+그림자)</td><td>얇은 점선 <code>hr</code> + 들여쓰기</td></tr>
+    <tr><td>시선 흐름</td><td>카드마다 시작/끝 → 분산</td><td>하나의 보고서 흐름 → 연속 읽기</td></tr>
+    <tr><td>스크롤량</td><td>8카드 각 패딩 → 길어짐</td><td>카드 1개 안에 밀집 → 40% 감소</td></tr>
+    <tr><td>칩 바</td><td>별도 카드 + 큰 원형 뱃지</td><td>버블 상단 얇은 스트립</td></tr>
+    <tr><td>번호 뱃지</td><td>28px 큰 정사각형</td><td>18px 소형 인라인</td></tr>
+    <tr><td>접기/펼치기</td><td>카드별 토글 (클릭 피로)</td><td>전체 펼침 기본, 칩 클릭으로 점프</td></tr>
+    <tr><td>판정 헤더</td><td>칩 바 위 별도 영역</td><td>본문 첫 줄에 통합</td></tr>
+    <tr><td>다음 단계</td><td>카드 안 버튼 배열</td><td>인라인 액션 라인 (→ 텍스트 + 버튼)</td></tr>
+  </table>
+
+  <div class="label">핵심 원칙</div>
+  <table class="spec" style="width:100%;border-collapse:collapse">
+    <tr><th>원칙</th><th>적용</th></tr>
+    <tr><td>하나의 버블, 하나의 보고서</td><td>8섹션이 모두 한 버블 안에 있음. 외곽 테두리 1개만.</td></tr>
+    <tr><td>구분은 있되 분리는 없다</td><td>점선 + 번호 뱃지로 위치 인식. 카드 테두리/그림자 제거.</td></tr>
+    <tr><td>판정 → 근거 → 상세 순</td><td>첫 2줄(판정+근거)만 읽으면 결론 파악. 상세는 아래로.</td></tr>
+    <tr><td>칩은 내비게이션</td><td>칩 클릭 → 해당 섹션 smooth scroll. 접기/펼치기 불필요.</td></tr>
+    <tr><td>모바일: 핵심 3섹션 선노출</td><td>결과(5)·검증(6)·다음(8)만 먼저, 나머지는 칩 클릭 시 이동.</td></tr>
+  </table>
+
+</div>
+
+<div class="footer">
+  AADS-CRF v3.0 · CEO 8-Section Response Flow · Unified Report Mockup<br>
+  2026-09-08 · aads.newtalk.kr
+</div>
+
+<script>
+document.querySelectorAll('.chip-strip .chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const labels = ['지시파악','목표','계획','실행순서','결과','검증','리스크','다음'];
+    const shortLabels = ['지시파악','목표','계획','실행','결과','검증','리스크','다음'];
+    let txt = chip.textContent.trim();
+    let idx = labels.indexOf(txt);
+    if (idx < 0) idx = shortLabels.indexOf(txt);
+    if (idx >= 0) {
+      const target = document.getElementById('s' + (idx + 1));
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+});
+</script>
+
+</body>
+</html>
