@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AADS Release Control + LLMOps Mockup</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #18202a;
+      --muted: #647184;
+      --line: #d9dee7;
+      --green: #16845b;
+      --blue: #2563eb;
+      --amber: #b66b00;
+      --red: #bf2f2f;
+      --slate: #253044;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(360px, 460px);
+    }
+    .chat {
+      padding: 24px;
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .artifact {
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .title { font-size: 18px; font-weight: 700; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tab {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      padding: 7px 10px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .tab.active {
+      background: var(--slate);
+      color: #fff;
+      border-color: var(--slate);
+    }
+    .body {
+      padding: 16px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      min-height: 68px;
+    }
+    .metric .label { color: var(--muted); font-size: 12px; }
+    .metric .value { font-size: 20px; font-weight: 750; margin-top: 4px; }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fff;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 7px 0;
+      font-size: 13px;
+    }
+    .row span:first-child { color: var(--muted); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid currentColor;
+    }
+    .running { color: var(--blue); }
+    .queued { color: var(--amber); }
+    .ok { color: var(--green); }
+    .blocked { color: var(--red); }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    h2 { font-size: 15px; margin: 0 0 10px; }
+    p { color: var(--muted); line-height: 1.55; margin: 0; }
+    .message {
+      max-width: 760px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+    .message.user { align-self: flex-end; background: #eef4ff; }
+    .progress {
+      height: 8px;
+      border-radius: 999px;
+      background: #e7ebf2;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .progress > div { height: 100%; width: 62%; background: var(--blue); }
+    .file-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .file {
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      border-radius: 6px;
+      padding: 5px 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 860px) {
+      .shell { grid-template-columns: 1fr; }
+      .artifact { min-height: 680px; }
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="chat">
+      <div>
+        <h1>AADS 채팅</h1>
+        <p>코드 수정 완료 후 배포는 Ops DB 큐에 등록되고, 채팅은 deploy_run_id와 다음 확인 경로를 즉시 반환합니다.</p>
+      </div>
+      <div class="message user">권장안 반영하고 배포까지 진행해</div>
+      <div class="message">
+        <strong>배포 요청 등록 완료</strong>
+        <p>deploy_run_id=129, release_sha=9db39738, phase=queued_for_deploy. 완료 인증은 오른쪽 배포 탭에서 이어서 확인합니다.</p>
+      </div>
+    </section>
+
+    <aside class="artifact">
+      <div class="bar">
+        <div class="title">아티팩트</div>
+        <div class="tabs">
+          <button class="tab">보고서</button>
+          <button class="tab">작업</button>
+          <button class="tab active">배포</button>
+          <button class="tab">LLMOps</button>
+        </div>
+      </div>
+
+      <div class="body">
+        <section class="summary">
+          <div class="metric"><div class="label">진행중</div><div class="value">1</div></div>
+          <div class="metric"><div class="label">대기</div><div class="value">2</div></div>
+          <div class="metric"><div class="label">차단</div><div class="value">0</div></div>
+          <div class="metric"><div class="label">최근 인증</div><div class="value">12분 전</div></div>
+        </section>
+
+        <section class="card">
+          <h2>현재 배포</h2>
+          <div class="row"><span>프로젝트</span><strong>AADS</strong></div>
+          <div class="row"><span>phase</span><span class="badge running">standby_same_digest_sync</span></div>
+          <div class="row"><span>경과시간</span><strong>06:42</strong></div>
+          <div class="row"><span>예상잔여</span><strong>02:10</strong></div>
+          <div class="row"><span>release SHA</span><strong>9db39738</strong></div>
+          <div class="progress"><div></div></div>
+        </section>
+
+        <section class="card">
+          <h2>이번 배포 반영 내용</h2>
+          <div class="row"><span>기능</span><strong>채팅 아티팩트 배포 관제</strong></div>
+          <div class="row"><span>수정</span><strong>phase, 경과시간, 예상잔여시간, 변경요약 표시</strong></div>
+          <div class="row"><span>검증</span><span class="badge ok">build + health</span></div>
+          <div class="file-list">
+            <span class="file">src/app/chat/ChatArtifactPanel.tsx</span>
+            <span class="file">app/api/ops.py</span>
+            <span class="file">app/services/deploy_observability.py</span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>LLMOps Trace</h2>
+          <div class="row"><span>graph_run_id</span><strong>lg-aads-20260907-001</strong></div>
+          <div class="row"><span>trace</span><span class="badge queued">internal + LangSmith-compatible</span></div>
+          <div class="row"><span>tool_calls</span><strong>14</strong></div>
+          <div class="row"><span>error book</span><span class="badge ok">재발 방지 기록 후보</span></div>
+        </section>
+
+        <section class="card">
+          <h2>승인 대기</h2>
+          <div class="row"><span>P0 구축개선</span><span class="badge blocked">CEO 승인 필요</span></div>
+          <p>승인 후 Runner 배포 완료 대기 제거, Ops queue worker, 최신 SHA supersede, same-digest 완료 게이트를 구현합니다.</p>
+        </section>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>
