@@ -921,6 +921,32 @@ fi
 
 # ── 배포 중복 호출 방지 (lockfile) ──
 LOCKFILE="/tmp/aads-deploy.lock"
+DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"
+DEPLOY_LOCK_HELD=false
+exec 7>"$DEPLOY_FLOCKFILE"
+if ! flock -n 7; then
+    LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "unknown")
+    if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
+        echo "[deploy.sh] deploy queue worker waiting for active deploy PID=${LOCK_PID}"
+        if ! wait_for_active_deploy_lock; then
+            record_deploy "failed" "$MODE" "queued deploy wait timeout"
+            exit 1
+        fi
+        if ! flock -w 60 7; then
+            record_deploy "failed" "$MODE" "deploy flock acquisition failed after queue wait"
+            exit 1
+        fi
+        DEPLOY_LOCK_HELD=true
+        AADS_RELEASE_SHA="$(git -C "$COMPOSE_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+    else
+        echo "[deploy.sh] 배포 진행 중 (PID=$LOCK_PID). 새 요청은 queued_for_deploy로 보류합니다."
+        queue_pending_deploy_request "$LOCK_PID"
+        start_deploy_queue_worker "flock_busy"
+        exit 0
+    fi
+else
+    DEPLOY_LOCK_HELD=true
+fi
 if [ -f "$LOCKFILE" ]; then
     LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
     if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
@@ -948,6 +974,10 @@ cleanup_deploy() {
     stop_downtime_monitor
     cleanup_release_context
     rm -f "$LOCKFILE"
+    if [[ "${DEPLOY_LOCK_HELD:-false}" == "true" ]]; then
+        flock -u 7 >/dev/null 2>&1 || true
+        DEPLOY_LOCK_HELD=false
+    fi
 }
 trap cleanup_deploy EXIT
 

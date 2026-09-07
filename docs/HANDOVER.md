@@ -519,7 +519,7 @@
 
 - 요청: 다음 단계 조치, 커밋/푸시/배포 과정을 ops DB로 관리·자동화할 수 있는지 확인, 채팅 응답 대기시간 단축과 수정 코드 누락 없는 운영 반영 방안 보고.
 - 조치: `deploy_runs`를 공통 ops 배포 원장으로 확장해 `requested_by`, `request_source`, `commit_status`, `push_status`, `auto_start`, `request_payload`, `requested_at` 컬럼을 추가했다. `/api/v1/ops/deploy/requests` POST API를 추가해 커밋·푸시된 release SHA를 `queued_for_deploy`로 등록하고 즉시 반환한다.
-- 조치: `deploy_safe` 도구는 blue-green 실배포에서 `async_mode`를 기본값으로 적용하도록 보강했다. 사용자가 `wait_for_completion=true`를 명시한 경우에만 기존처럼 완료까지 대기한다. Runner 모드 프롬프트도 장시간 배포/검증은 ops 큐 또는 async deploy로 등록한 뒤 job/deploy_run id와 상태 확인 경로를 보고하도록 강화했다. `deploy.sh`에는 `AADS_DEPLOY_BUILD_MAX_WAIT` 기본 1,200초 timeout을 추가해 Docker build 무응답이 큐를 영구 점유하지 않도록 했다.
+- 조치: `deploy_safe` 도구는 blue-green 실배포에서 `async_mode`를 기본값으로 적용하도록 보강했다. 사용자가 `wait_for_completion=true`를 명시한 경우에만 기존처럼 완료까지 대기한다. Runner 모드 프롬프트도 장시간 배포/검증은 ops 큐 또는 async deploy로 등록한 뒤 job/deploy_run id와 상태 확인 경로를 보고하도록 강화했다. `deploy.sh`에는 `AADS_DEPLOY_BUILD_MAX_WAIT` 기본 1,200초 timeout과 `/tmp/aads-deploy.flock` 진입 락을 추가해 Docker build 무응답/동시 시작이 큐를 영구 점유하지 않도록 했다.
 - 검증: `python3 -m py_compile app/services/deploy_observability.py app/api/ops.py app/services/tool_executor.py app/services/tool_registry.py app/services/chat_service.py` 성공. `git diff --check` 대상 파일 통과. 운영 DB에 `migrations/161_ops_deploy_request_queue.sql` 적용 성공. `deploy_runs` 큐 insert는 트랜잭션 rollback으로 `AADS|abcdef123456|queued|queued_for_deploy|committed|pushed|t` 확인.
 - 남은 이슈: 운영 컨테이너는 배포 전에는 신규 API import가 불가하다. 커밋/푸시 후 clean release worktree 기반 blue-green 배포와 `/api/v1/ops/deploy/status`, health, 컨테이너 same-image 상태를 다시 검증해야 한다.
 

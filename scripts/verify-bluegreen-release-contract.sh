@@ -37,6 +37,8 @@ grep -q 'reconcile_stale_deploy_runs' "$deploy_file" \
     || fail "stale deployment run reconciliation is missing"
 grep -q 'AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800' "$deploy_file" \
     || fail "target slot drain must have a bounded default timeout"
+grep -q 'DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"' "$deploy_file" \
+    || fail "deploy entry flock is missing"
 api_sections="$(
     awk '
       /^  aads-server:$/ {in_api=1}
