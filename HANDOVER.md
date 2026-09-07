@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-07 15:27 KST - Prod compose auxiliary env-file fix
+
+- Request:
+  - Finish the Claude Opus 5 settings deployment after the clean release candidate start failed.
+- Root cause:
+  - The previous deploy fix added `--env-file` and `AADS_RUNTIME_ENV_FILE`, but `docker-compose.prod.yml` still referenced `.env` for auxiliary services and `.env.litellm` directly for LiteLLM.
+  - A clean release worktree intentionally has no secret env files, so compose parsing can still fail before candidate health/cutover.
+- Changes:
+  - `docker-compose.prod.yml`: changed remaining `.env` env_file references to `${AADS_RUNTIME_ENV_FILE:-.env}` and `.env.litellm` to `${AADS_LITELLM_ENV_FILE:-.env.litellm}`.
+  - `deploy.sh`: confirmed the current line exporting `AADS_LITELLM_ENV_FILE` is part of the release-worktree env contract.
+- Verification:
+  - `bash -n deploy.sh` passed.
+  - `git diff --check -- deploy.sh docker-compose.prod.yml` passed.
+  - `env AADS_RELEASE_SHA=bede43fa AADS_RUNTIME_ENV_FILE=/root/aads/aads-server/.env AADS_LITELLM_ENV_FILE=/root/aads/aads-server/.env.litellm docker compose -f docker-compose.prod.yml --profile green config` passed.
+- Pending:
+  - Commit/push and a new clean blue/green deploy are required because deploy run `111` started from the previous SHA before this compose fix.
+
 ## 2026-09-07 15:26 KST - Clean release compose env-file gate
 
 - Request:

@@ -283,7 +283,7 @@ services:
     ports:
       - "127.0.0.1:8110:8080"
     env_file:
-      - .env
+      - ${AADS_RUNTIME_ENV_FILE:-.env}
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
@@ -333,7 +333,7 @@ services:
     restart: on-failure
     stop_grace_period: 30s
     env_file:
-      - .env
+      - ${AADS_RUNTIME_ENV_FILE:-.env}
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
@@ -390,7 +390,7 @@ services:
     ports:
       - "4000:4000"
     env_file:
-      - .env.litellm
+      - ${AADS_LITELLM_ENV_FILE:-.env.litellm}
     environment:
       - DISABLE_SCHEMA_UPDATE=true
       - DISABLE_SPEND_LOGS=true
