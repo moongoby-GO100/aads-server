@@ -47,20 +47,101 @@ cleanup_release_context() {
     RELEASE_CONTEXT_DIR=""
 }
 
+build_disk_check_path() {
+    if [[ -d "${AADS_DEPLOY_DISK_CHECK_PATH:-}" ]]; then
+        echo "$AADS_DEPLOY_DISK_CHECK_PATH"
+    elif [[ -d /var/lib/docker ]]; then
+        echo "/var/lib/docker"
+    else
+        echo "/"
+    fi
+}
+
+require_build_disk_free() {
+    local check_path min_free_gb min_free_kb avail_kb
+    check_path="$(build_disk_check_path)"
+    min_free_gb="${AADS_DEPLOY_MIN_FREE_GB:-20}"
+    if [[ ! "$min_free_gb" =~ ^[0-9]+$ ]] || [[ "$min_free_gb" -lt 1 ]]; then
+        min_free_gb="20"
+    fi
+    min_free_kb=$((min_free_gb * 1024 * 1024))
+    avail_kb="$(df -Pk "$check_path" | awk 'NR == 2 {print $4}')"
+    if [[ ! "$avail_kb" =~ ^[0-9]+$ ]]; then
+        echo "[deploy.sh] ❌ cannot read available disk for ${check_path}"
+        audit_control "build-disk-preflight" "$check_path" "failed" "available_kb=unknown"
+        return 1
+    fi
+    if [[ "$avail_kb" -lt "$min_free_kb" ]]; then
+        echo "[deploy.sh] ❌ build disk preflight failed: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB"
+        echo "[deploy.sh]    Free Docker space before retrying; this avoids slow builds that fail during image export."
+        audit_control "build-disk-preflight" "$check_path" "blocked" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ build disk preflight: ${check_path} available=$((avail_kb / 1024))MB, required=$((min_free_kb / 1024))MB"
+    audit_control "build-disk-preflight" "$check_path" "success" "available_kb=${avail_kb}; required_kb=${min_free_kb}"
+}
+
+require_release_context_within_limit() {
+    local max_context_mb context_mb
+    max_context_mb="${AADS_DEPLOY_MAX_RELEASE_CONTEXT_MB:-1024}"
+    if [[ ! "$max_context_mb" =~ ^[0-9]+$ ]] || [[ "$max_context_mb" -lt 128 ]]; then
+        max_context_mb="1024"
+    fi
+    context_mb="$(du -sm "$RELEASE_CONTEXT_DIR" | awk '{print $1}')"
+    if [[ ! "$context_mb" =~ ^[0-9]+$ ]]; then
+        echo "[deploy.sh] ❌ cannot measure release context size: ${RELEASE_CONTEXT_DIR}"
+        audit_control "release-context-size" "$RELEASE_CONTEXT_DIR" "failed" "context_mb=unknown"
+        return 1
+    fi
+    if [[ "$context_mb" -gt "$max_context_mb" ]]; then
+        echo "[deploy.sh] ❌ release context too large: ${context_mb}MB > ${max_context_mb}MB"
+        echo "[deploy.sh]    Move generated media/reports/caches out of tracked release files before deploying."
+        audit_control "release-context-size" "$RELEASE_CONTEXT_DIR" "blocked" "context_mb=${context_mb}; max_context_mb=${max_context_mb}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ release context size: ${context_mb}MB <= ${max_context_mb}MB"
+    audit_control "release-context-size" "$RELEASE_CONTEXT_DIR" "success" "context_mb=${context_mb}; max_context_mb=${max_context_mb}"
+}
+
+require_release_image_within_limit() {
+    local max_image_gb max_image_bytes image_bytes
+    max_image_gb="${AADS_DEPLOY_MAX_IMAGE_GB:-7}"
+    if [[ ! "$max_image_gb" =~ ^[0-9]+$ ]] || [[ "$max_image_gb" -lt 1 ]]; then
+        max_image_gb="7"
+    fi
+    max_image_bytes=$((max_image_gb * 1024 * 1024 * 1024))
+    image_bytes="$(docker image inspect "aads-server:${AADS_RELEASE_SHA}" --format '{{.Size}}' 2>/dev/null || echo 0)"
+    if [[ ! "$image_bytes" =~ ^[0-9]+$ ]] || [[ "$image_bytes" -le 0 ]]; then
+        echo "[deploy.sh] ❌ cannot inspect release image size: aads-server:${AADS_RELEASE_SHA}"
+        audit_control "release-image-size" "aads-server:${AADS_RELEASE_SHA}" "failed" "image_bytes=unknown"
+        return 1
+    fi
+    if [[ "$image_bytes" -gt "$max_image_bytes" ]]; then
+        echo "[deploy.sh] ❌ release image too large: $((image_bytes / 1024 / 1024))MB > $((max_image_bytes / 1024 / 1024))MB"
+        audit_control "release-image-size" "aads-server:${AADS_RELEASE_SHA}" "blocked" "image_bytes=${image_bytes}; max_image_bytes=${max_image_bytes}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ release image size: $((image_bytes / 1024 / 1024))MB <= $((max_image_bytes / 1024 / 1024))MB"
+    audit_control "release-image-size" "aads-server:${AADS_RELEASE_SHA}" "success" "image_bytes=${image_bytes}; max_image_bytes=${max_image_bytes}"
+}
+
 build_release_image() {
     local build_max_wait
     build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-1200}"
     if [[ ! "$build_max_wait" =~ ^[0-9]+$ ]] || [[ "$build_max_wait" -lt 300 ]]; then
         build_max_wait="1200"
     fi
+    require_build_disk_free
     cleanup_release_context
     RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
     git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
     echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA}, build_timeout=${build_max_wait}s)"
+    require_release_context_within_limit
     timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --label "org.opencontainers.image.revision=${AADS_RELEASE_SHA}" \
         --tag "aads-server:${AADS_RELEASE_SHA}" \
         "$RELEASE_CONTEXT_DIR"
+    require_release_image_within_limit
     cleanup_release_context
 }
 

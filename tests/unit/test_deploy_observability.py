@@ -16,6 +16,7 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 get_deploy_status = _MODULE.get_deploy_status
 DEPLOY_SCRIPT = Path(__file__).parents[2] / "deploy.sh"
+DOCKERFILE = Path(__file__).parents[2] / "Dockerfile"
 
 
 class FakeConnection:
@@ -167,6 +168,12 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5" in script
     assert "AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1" in script
+    assert "AADS_DEPLOY_MIN_FREE_GB:-20" in script
+    assert "AADS_DEPLOY_MAX_RELEASE_CONTEXT_MB:-1024" in script
+    assert "AADS_DEPLOY_MAX_IMAGE_GB:-7" in script
+    assert "build disk preflight failed" in script
+    assert "release context too large" in script
+    assert "release image too large" in script
     assert "--no-build --no-deps --force-recreate" in script
     assert "reconcile_stale_deploy_runs" in script
     assert "stale deploy reconciled before new deploy" in script
@@ -187,3 +194,13 @@ def test_deploy_script_keeps_five_minute_monitoring_default():
     assert "docker logs \"$ACTIVE_CONTAINER\" --since \"$MONITOR_SINCE\"" in script
     assert "record_deploy \"success\"" in script
     assert script.index("deploy_phase_start \"p0p1_monitoring\"") < script.index("record_deploy \"success\"")
+
+
+def test_dockerfile_keeps_runtime_image_bounded():
+    dockerfile = DOCKERFILE.read_text()
+
+    assert "syntax=docker/dockerfile" in dockerfile
+    assert "type=cache,target=/root/.cache/pip" in dockerfile
+    assert "type=cache,target=/var/cache/apt" in dockerfile
+    assert "rm -rf /root/.cargo /root/.rustup" in dockerfile
+    assert dockerfile.count("playwright install chromium --with-deps") == 1
