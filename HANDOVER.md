@@ -10,10 +10,11 @@
   - `cleanup_overlong_running_executions()` counted a skipped valid remote lease as a closed execution, which repeatedly consumed cleanup/retry cycles and kept the chat bubble in an interrupted/recovery loop.
 - Changes:
   - `app/services/chat_service.py`: disabled mutating chat cleanup on inactive API slots and deferred overlong/retrying cleanup when another slot has a valid execution lease.
-  - `deploy.sh`: aligned Blue/Green candidate and standby starts to the release contract string `up -d --no-build --no-deps --force-recreate`.
+  - `deploy.sh`, `scripts/verify-bluegreen-release-contract.sh`, `tests/unit/test_deploy_observability.py`: aligned Blue/Green candidate and standby starts plus static contract checks to `up -d --no-build --no-deps --force-recreate`.
 - Verification:
   - `.venv/bin/python -m py_compile app/services/chat_service.py` passed.
   - `docker run --rm -e JWT_SECRET_KEY=test-secret-for-unit-tests -e DATABASE_URL=postgresql://aads:aads@aads-postgres:5432/aads -v /root/aads/aads-server:/app -w /app aads-server:3ea508cd04c6 python -m pytest -q tests/unit/test_chat_service.py::test_cleanup_stale_streaming_placeholders_promotes_message_and_interrupts_execution tests/unit/test_chat_service.py::test_cleanup_stale_streaming_placeholders_skips_live_session tests/unit/test_chat_service.py::test_cleanup_overlong_running_executions_closes_live_task tests/unit/test_execution_lease_contract.py` passed: 8 tests.
+  - Deployment contract verifier initially failed due to the old `--force-recreate --no-build --no-deps` order check; verifier and observability test were updated to the canonical no-build order.
 - Deployment:
   - Pending in this entry: selected commit, push, Blue/Green deploy, same-digest standby verification, and five-minute P0/P1 monitoring.
 
@@ -11558,3 +11559,20 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_bank_browser_connector.py -k 'shinhan and (recoverable or pc_agent_offline or recreates_work_key or plain_timeout)' -q`: 3 passed.
 - Remaining before completion:
   - Commit/push selected files, deploy with `deploy.sh bluegreen` after the active deploy queue clears, then rerun Mia Shinhan collection in the active container and verify `bank_transactions` ledger rows.
+
+## 2026-09-07 12:18 KST — Shinhan bank queue timeout floor follow-up
+- CEO request:
+  - Complete Shinhan Bank simple-account transaction auto-collection; completion means at least one real row written to `bank_transactions.json` or the DB ledger, not just login/query success.
+- Finding:
+  - The active API slot was still behind the latest Shinhan recovery commits.
+  - Recent Shinhan queue payloads used `bank_browser_timeout_seconds=60`, while the module default and operational reality require 600 seconds for Korean bank security modules and ID/PW/account query flow.
+  - With 60 seconds, the PC reached the correct Shinhan corporate simple-account URL and security preflight, but the child process cut off before query/result persistence.
+- Change prepared:
+  - `scripts/yeoljeong_auto_collect.py`: added a bank browser timeout floor (`BANK_BROWSER_MIN_TIMEOUT_SECONDS=600`) and applied it to CLI payloads, global bank queue payloads, and direct bank collection payloads.
+  - `tests/unit/test_yeoljeong_auto_collect.py`: added regression coverage proving a 60-second Shinhan/bank-only input is normalized to the 600-second floor and queued bank jobs preserve that floor.
+- Verification before commit:
+  - `python3 -m py_compile scripts/yeoljeong_auto_collect.py`: passed.
+  - `git diff --check -- scripts/yeoljeong_auto_collect.py tests/unit/test_yeoljeong_auto_collect.py`: passed.
+  - Bind-mounted container focused tests: 5 passed (`test_bank_browser_timeout_has_shinhan_safe_minimum`, `test_global_bank_queue_item_collects_only_its_bank_account`, the two financial queue lock tests, and Shinhan plain-timeout recovery).
+- Remaining before completion:
+  - Commit/push the selected files, deploy current `HEAD` with `deploy.sh bluegreen`, enqueue/run Mia Shinhan on DANHAROO-MAIN with `bank_only`, `browser_agent_id=62405e70-e98`, `force_recreate_bank_browser`, and 600-second timeout, then verify `bank_transactions.json` has at least one row.

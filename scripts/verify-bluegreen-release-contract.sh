@@ -19,7 +19,7 @@ grep -q 'image: aads-server:${AADS_RELEASE_SHA:-local}' "$compose_file" \
     || fail "expected exactly two API slots using the same image tag"
 grep -q -- '--no-build --no-deps' "$deploy_file" \
     || fail "slot starts must use --no-build"
-grep -q -- '--force-recreate --no-build --no-deps' "$deploy_file" \
+grep -q -- '--no-build --no-deps --force-recreate' "$deploy_file" \
     || fail "slot starts must force recreate from the release-SHA image"
 grep -q 'release_nginx_switch_lock' "$deploy_file" \
     || fail "nginx cutover lock must be explicitly released"
