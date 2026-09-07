@@ -11453,3 +11453,29 @@
   - Full corpus compilation should run later as a background wiki compiler to avoid deploy-time DB load and low-quality duplicate pages.
 - Required before completion:
   - Apply migrations 158 and 159, verify table/row counts, commit selected files, push, run `deploy.sh bluegreen`, API smoke, external health, same-digest standby, and 5-minute P0/P1 monitoring.
+
+## 2026-09-07 11:24 KST — Chat interruption cleanup and response controls production follow-up
+- CEO request:
+  - Implement and deploy all P1/P2 chat response-control recommendations, re-check the continuing response interruption issue, apply improvements, and report.
+- Changes already committed/pushed in selected-file scope:
+  - Server: `d08638df fix(chat): stabilize interruption cleanup` changed `app/services/chat_service.py`.
+    - Fixed stale retrying cleanup connection lifetime.
+    - Preserved partial response content when retrying/running executions are force-closed.
+    - Adjusted interruption classification so client disconnect and process-interrupt cases are easier to distinguish.
+  - Dashboard: `c2ef0c8 fix(chat): improve response controls` changed `src/app/chat/page.tsx`.
+    - Added immediate stop-button feedback/duplicate-click protection.
+    - Improved response overview chip highlighting/scroll alignment and artifact-open affordance.
+- Deployment status:
+  - Dashboard blue/green deploy completed earlier with both slots on `aads-dashboard:c2ef0c8a0965` and `/login` HTTP 200 on ports 3100/3101.
+  - API blue/green run 61 cut over routing to `aads-server-green:8102` and synchronized standby `aads-server:8100`; both containers now run `aads-server:7c2df6c42bbc` with the same Docker image digest `sha256:f913859bad5b932b32979a9e4d0b39afecf489bfa6a17d106b7430d13cd26d6e`.
+  - `deploy_runs.id=61` was marked `failed` because the deploy shell received HUP after same-digest standby sync; operational state is healthy/same-digest, but the deploy ledger status needs follow-up hardening so successful state is not recorded as failed after post-sync HUP.
+- Operational correction:
+  - One old inactive-slot retry loop (`chat_turn_executions.id=4c46c8e3-dd2b-4dad-b68b-513e42b1b36c`, session `15782f6e`, title `파동엔진 관리자`) repeatedly revived after DB status updates and blocked standby drain.
+  - The old container was then replaced by standby sync; partial placeholder content was preserved.
+- Verification captured:
+  - `/api/v1/health` routed path returned HTTP 200 after cutover.
+  - Direct API ports 8100 and 8102 returned HTTP 200 after standby sync.
+  - Both API containers reported Docker health `healthy` and the same image digest.
+- Remaining follow-up:
+  - Add deploy-ledger HUP resilience/nohup-safe completion handling so run status stays successful after same-digest sync.
+  - Continue post-deploy monitoring of `chat_turn_executions` for `running/retrying/interrupted` counts and verify stale retrying cleanup closes new cases automatically.
