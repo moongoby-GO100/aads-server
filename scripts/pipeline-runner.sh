@@ -1863,6 +1863,16 @@ ${output:0:1500}
     record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "$job_model" "" "$job_size" "" "{\"commit_hash\":\"${approval_commit_sha}\",\"review_verdict\":\"${review_verdict}\"}"
 
     local diff_summary="${git_diff:0:3000}"
+    local approval_diff_stat=""
+    approval_diff_stat=$(git -C "$worktree_dir" show --stat --oneline --no-renames "$approval_commit_sha" 2>/dev/null | head -40 || true)
+    local approval_deleted_symbols=""
+    approval_deleted_symbols=$(printf '%s\n' "$git_diff" \
+        | grep -E '^-([[:space:]]*)(async[[:space:]]+def|def|class)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*|^-([[:space:]]*)@router\.[A-Za-z_]+' \
+        | sed 's/^-//' \
+        | head -30 || true)
+    if [[ -z "$approval_deleted_symbols" ]]; then
+        approval_deleted_symbols="없음"
+    fi
     local review_badge=""
     if [[ "$review_verdict" == "APPROVE" && "$review_needs_retry" == "true" ]]; then
         # 서버가 인프라 장애를 fail-open APPROVE로 반환한 경우 — '통과'로 표기하면 CEO 오판 유발
@@ -1889,6 +1899,13 @@ ${output:0:1500}
     post_to_chat "$session_id" "🔔 [Pipeline Runner] 작업 완료 — ${review_badge}
 
 **작업**: ${instruction:0:200}
+**Diff stat / 삭제 심볼**:
+\`\`\`
+${approval_diff_stat:0:2000}
+
+deleted_symbols:
+${approval_deleted_symbols:0:1000}
+\`\`\`
 **변경사항**:
 \`\`\`diff
 ${diff_summary}

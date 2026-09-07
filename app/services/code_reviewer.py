@@ -22,6 +22,15 @@ _REVIEW_PARSE_MAX_ATTEMPTS = 3  # P0: JSON 파싱 실패 시 즉시 REVIEW_PARSE
 
 _DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
+_PATH_TOKEN_RE = re.compile(
+    r"(?:^|[\s`'\"(])"
+    r"((?:app|scripts|migrations|docs|tests|src|components|pages|lib|services|api|utils|config|public)/"
+    r"[A-Za-z0-9._/\-]+)"
+)
+_DELETED_SYMBOL_RE = re.compile(
+    r"^-\s*((?:async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
+    re.MULTILINE,
+)
 
 
 def _parse_review_json(raw: str) -> Optional[dict]:
@@ -228,6 +237,12 @@ Developer와 완전히 독립된 컨텍스트에서 평가합니다.
 - REQUEST_CHANGES (0.4~0.69): 수정 필요, 구체적 피드백 제공
 - FLAG (0.4 미만): 심각한 문제, CEO 경고 필요
 
+## 보존 하드 게이트
+- 기존 함수/클래스/API 라우터 삭제가 있으면 preservation 0.2 이하, FLAG로 판정
+- 삭제 라인이 추가 라인의 50%를 초과하면 preservation 0.3 이하, REQUEST_CHANGES 이상으로 차단
+- 지시서에 명시된 파일 경로 밖 변경이 있으면 scope_compliance 0.3 이하로 판정
+- 위 항목은 기능이 동작해 보여도 "기존 구현 조사·분류표와 삭제 사유"가 없으면 승인 금지
+
 ## 응답 형식 (JSON만, 추가 설명 금지):
 {
   "verdict": "APPROVE" | "REQUEST_CHANGES" | "FLAG",
@@ -326,6 +341,95 @@ def _precheck_review_input(diff: str) -> Optional[ReviewVerdict]:
     )
 
 
+def _extract_changed_files(diff: str) -> list[str]:
+    files: list[str] = []
+    for match in re.finditer(r"^diff --git a/(.+?) b/(.+)$", diff or "", re.MULTILINE):
+        candidate = match.group(2).strip()
+        if candidate and candidate not in files:
+            files.append(candidate)
+    return files
+
+
+def _extract_instruction_paths(instruction: str) -> set[str]:
+    paths: set[str] = set()
+    for match in _PATH_TOKEN_RE.finditer(instruction or ""):
+        path = match.group(1).strip().rstrip(".,:;)")
+        if path:
+            paths.add(path)
+    return paths
+
+
+def _diff_line_counts(diff: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for line in (diff or "").splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return additions, deletions
+
+
+def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Optional[list]) -> Optional[ReviewVerdict]:
+    additions, deletions = _diff_line_counts(diff)
+    issues: list[str] = []
+    feedback: dict[str, object] = {
+        "summary": "기존 구현 보존 하드 게이트",
+        "additions": additions,
+        "deletions": deletions,
+    }
+
+    if additions > 0 and deletions > additions * 0.5:
+        issues.append(
+            f"삭제 라인({deletions})이 추가 라인({additions})의 50%를 초과했습니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
+        )
+    elif additions == 0 and deletions > 0:
+        issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
+
+    symbol_matches = _DELETED_SYMBOL_RE.findall(diff or "")
+    if symbol_matches:
+        feedback["deleted_symbols"] = symbol_matches[:20]
+        issues.append(
+            "삭제된 public 함수/클래스/API 라우터가 감지되었습니다: "
+            + ", ".join(symbol_matches[:10])
+        )
+
+    allowed_paths = _extract_instruction_paths(instruction)
+    changed_paths = [str(path) for path in (files_changed or _extract_changed_files(diff))]
+    if allowed_paths and changed_paths:
+        out_of_scope = [
+            path for path in changed_paths
+            if not any(path == allowed or path.startswith(f"{allowed}/") for allowed in allowed_paths)
+        ]
+        if out_of_scope:
+            feedback["allowed_paths"] = sorted(allowed_paths)
+            feedback["out_of_scope_files"] = out_of_scope[:20]
+            issues.append(
+                "지시서에 명시되지 않은 파일 변경이 감지되었습니다: "
+                + ", ".join(out_of_scope[:10])
+            )
+
+    if not issues:
+        return None
+
+    feedback["scope_compliance"] = 0.3
+    feedback["preservation"] = 0.2
+    feedback["issues"] = issues
+    return _build_review_verdict(
+        verdict="FLAG" if symbol_matches else "REQUEST_CHANGES",
+        score=0.3 if symbol_matches else 0.39,
+        summary="기존 구현 보존/범위 하드 게이트 차단",
+        issues=issues,
+        feedback=feedback,
+        flag_category="PRESERVATION_HARD_GATE",
+        failure_stage="pre_llm_preservation_gate",
+        needs_retry=False,
+        model_used="precheck",
+    )
+
+
 async def _save_review_result(
     *,
     job_id: str,
@@ -399,6 +503,18 @@ async def review_code_diff(
                 cost=0.0,
             )
         return precheck
+
+    preservation_precheck = _precheck_preservation_gate(diff, instruction, files_changed)
+    if preservation_precheck is not None:
+        await _save_review_result(
+            job_id=job_id,
+            project=project,
+            verdict=preservation_precheck,
+            diff_size=len(diff or ""),
+            model_used="precheck",
+            cost=0.0,
+        )
+        return preservation_precheck
 
     # diff 크기 제한 (10KB)
     truncated_diff = diff[:10000]

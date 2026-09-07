@@ -1559,6 +1559,9 @@ class PipelineCJob:
 1. 원래 지시 사항이 정확히 반영됐는가?
 2. 명백한 버그가 새로 생기지 않았는가?
 3. 변경사항이 없으면 FAIL (작업 미수행)
+4. 변경이 지시 범위를 벗어나지 않았는가? 지시서에 명시된 파일 밖 변경은 FAIL
+5. 기존 구현을 불필요하게 삭제/대체하지 않았는가? 함수/클래스/API 삭제나 삭제 라인 과다는 FAIL
+6. RESULT에 기존 구현 조사표([유지|수정|신규|삭제])와 삭제 사유가 있는가? 누락 시 FAIL
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{"verdict": "PASS 또는 FAIL", "summary": "한줄 요약", "feedback": "수정이 필요한 구체적 내용 (PASS면 빈 문자열)"}}"""
@@ -1854,6 +1857,13 @@ async def _find_recent_session(project: str) -> str:
 
 _VERIFICATION_CHECKLIST_TEMPLATE = """
 
+## STEP 0 기존 구현 조사 (코드 수정 전 필수)
+- [ ] 대상 파일의 기존 함수/클래스/엔드포인트/스케줄러/DB 접점 목록을 먼저 확인
+- [ ] 각 항목을 [유지 | 수정 | 신규 | 삭제(사유 필수)]로 분류
+- [ ] 기존 구현을 새 구현으로 통째 대체하지 않고 필요한 개선분만 반영
+- [ ] 삭제가 필요하면 삭제 대상, 호출처 영향, 롤백 방법을 RESULT에 명시
+- [ ] 지시서에 명시되지 않은 파일을 변경해야 하면 변경 전 사유를 RESULT에 명시
+
 ## 검증 체크리스트 (완료 필수 조건)
 - [ ] 구현 목표: (무엇을 구현했는지 1줄 요약)
 - [ ] 검증 방법: (curl 명령 또는 URL 또는 UI 셀렉터)
@@ -1875,6 +1885,8 @@ RESULT 파일에 위 체크리스트 항목별 실행 결과를 반드시 포함
 
 def _append_verification_checklist(instruction: str, project: str) -> str:
     """지시서 끝에 검증 체크리스트 자동 append (AADS-1864)."""
+    if "STEP 0 기존 구현 조사" not in instruction and "검증 체크리스트" in instruction:
+        return instruction.rstrip() + "\n" + _VERIFICATION_CHECKLIST_TEMPLATE.split("## 검증 체크리스트", 1)[0].rstrip() + "\n"
     if "검증 체크리스트" in instruction:
         return instruction  # 이미 포함된 경우 중복 방지
     return instruction.rstrip() + _VERIFICATION_CHECKLIST_TEMPLATE
