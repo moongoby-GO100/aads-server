@@ -514,6 +514,22 @@ verify_isolated_job_worktree() {
     [[ -n "$common_dir" ]]
 }
 
+ensure_approved_job_worktree() {
+    local job_id="$1" worktree_dir="$2" main_workdir="$3" expected_sha="$4"
+    if verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
+        return 0
+    fi
+    [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+    git -C "$main_workdir" cat-file -e "${expected_sha}^{commit}" 2>/dev/null || return 1
+    if [[ -e "$worktree_dir" ]]; then
+        git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
+    fi
+    git -C "$main_workdir" worktree add --detach "$worktree_dir" "$expected_sha" >/dev/null 2>&1 || return 1
+    verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir" || return 1
+    log "  WORKTREE_RESTORED_FOR_DEPLOY: $worktree_dir sha=$expected_sha"
+    return 0
+}
+
 commit_job_worktree_for_approval() {
     local job_id="$1" session_id="$2" worktree_dir="$3" main_workdir="$4" instruction="$5"
     if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
@@ -2029,14 +2045,14 @@ deploy_job() {
         return 1
     fi
 
-    if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
-        _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "BLOCK: 승인/배포 push 거부 — isolated runner worktree가 아님 (${worktree_dir})"
+    local expected_sha current_sha
+    expected_sha=$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || expected_sha=""
+    if ! ensure_approved_job_worktree "$job_id" "$worktree_dir" "$main_workdir" "$expected_sha"; then
+        _fail_job "$job_id" "$session_id" "deploy_worktree_not_isolated" "BLOCK: 승인/배포 push 거부 — isolated runner worktree 복구/검증 실패 (${worktree_dir})"
         _release_deploy_lock "$project" "$job_id"
         return 1
     fi
 
-    local expected_sha current_sha
-    expected_sha=$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]') || expected_sha=""
     current_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
     if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ || "$current_sha" != "$expected_sha" ]]; then
         _fail_job "$job_id" "$session_id" "deploy_commit_sha_mismatch" "BLOCK: 승인 commit SHA가 비어 있거나 runner worktree HEAD와 불일치 (expected=${expected_sha:-empty}, head=${current_sha:-empty})"

@@ -43,8 +43,12 @@ def test_pipeline_runner_pushes_only_from_verified_isolated_worktree():
     script = _runner_script()
 
     assert "verify_isolated_job_worktree()" in script
+    assert "ensure_approved_job_worktree()" in script
+    assert 'git -C "$main_workdir" worktree add --detach "$worktree_dir" "$expected_sha"' in script
+    assert "WORKTREE_RESTORED_FOR_DEPLOY" in script
     assert "deploy_worktree_not_isolated" in script
     assert "deploy_commit_sha_mismatch" in script
+    assert script.index("ensure_approved_job_worktree") < script.index("deploy_commit_sha_mismatch")
     assert 'git -C "$worktree_dir" push origin "${current_sha}:refs/heads/main"' in script
     assert 'cd "$main_workdir"\n                echo "$diff_content" | git apply' not in script
     assert 'git -C /root/aads/aads-dashboard push' not in script

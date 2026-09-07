@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-09-07 14:56 KST - Pipeline Runner deploy worktree restore guard
+
+- Request:
+  - CEO approved AADS operational deploy queue handling and asked to check the runner before proceeding.
+  - `runner-808c968a` deploy failed closed with `deploy_worktree_not_isolated` even though the approved commit existed.
+- Root cause:
+  - Approved jobs store `commit_hash`, but `deploy_job()` required `/tmp/aads-wt-${job_id}` to still exist.
+  - If the runner worktree is cleaned between `awaiting_approval` and deploy claim, deploy cannot reconstruct the approved isolated state and fails before push/deploy.
+- Changes:
+  - `scripts/pipeline-runner.sh`: added `ensure_approved_job_worktree()` to restore the isolated deploy worktree from the DB `commit_hash` when it is missing, then re-run the existing isolated-worktree verification before push.
+  - `scripts/pipeline-runner.sh.local`: synced the local runner template.
+  - `tests/unit/test_pipeline_runner_worktree_policy.py`: pinned the restore-before-push contract.
+- Verification:
+  - `bash -n scripts/pipeline-runner.sh` passed.
+  - `bash -n scripts/pipeline-runner.sh.local` passed.
+  - `python3 -m pytest tests/unit/test_pipeline_runner_worktree_policy.py -q` passed: 7 tests.
+  - `docker exec aads-server python -m pytest /app/tests/unit/test_pipeline_runner_worktree_policy.py -q` passed: 7 tests.
+- Pending:
+  - Commit/push/deploy still pending at this checkpoint.
+  - `runner-808c968a` remains `error/error` until the fixed runner is deployed and the job is retried or a new deploy queue job is submitted.
+
 ## 2026-09-07 13:52 KST - Browser verification routing policy pinned
 
 - Request:
