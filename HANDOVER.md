@@ -12367,3 +12367,20 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Not performed:
   - Real IBK bank login / transaction collection was not attempted because required credentials are not present.
   - Commit, push, and deploy are pending after this handover update.
+
+## 2026-09-08 08:35 KST — IBK Junghwa evidence refresh and PRD v1.2 update
+- CEO/system correction:
+  - Previous status wording used "DB 조회"/"실측" labels too loosely. Re-ran actual tools before reporting.
+  - Shinhan remains on hold because of the bank password lockout. IBK is now the active first bank target.
+- Verified with tools:
+  - `date '+%Y-%m-%d %H:%M:%S %Z'`: `2026-09-08 08:35:44 KST`.
+  - `query_database` confirmed public tables include `yeoljeong_bank_accounts`, `yeoljeong_bank_transactions`, `pc_agent_collection_queue`, and `pc_agent_connection_events`.
+  - `query_database` against `yeoljeong_bank_accounts` returned four active Junghwa IBK account rows, with one masked account ending `4014`.
+  - `query_database` against `yeoljeong_bank_transactions` returned `total_transactions=0`.
+  - `docker exec aads-server python -c ... collect_bank_account_transactions('a91c0c71-b776-4edf-90e7-b2c827b6d7e0', ...)` returned `credential_required / MISSING_CREDENTIALS`.
+- Document update:
+  - Updated `app/static/reports/20260907_finance_pc_collector_prd_design_tooling.html` from v1.1 to v1.2.
+  - v1.2 changes: Shinhan hold, IBK first, rollout order `Junghwa -> Sungshin -> Eonni Naengmyeon`, current DB/table status, and missing IBK required credential fields.
+- Not performed:
+  - Real IBK bank portal login was not attempted because the collector stops before browser launch when login password, full account number, account password, and business registration number are missing.
+  - Commit, push, deploy, and Windows EXE generation were not performed in this evidence-refresh step.

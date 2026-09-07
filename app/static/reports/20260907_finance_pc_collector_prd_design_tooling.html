@@ -102,15 +102,16 @@
   <h1>금융정보 자동수집 PC설치형 에이전트<br>PRD · 기술설계 · 화면목업 · Tool 셋업 계획서</h1>
   <p class="lead">
     LangGraph와 LangSmith 기반 실행 하네스/LLMOps를 붙인 Windows 설치형 금융 수집 에이전트 구축안입니다.
-    1차 목표는 신한은행 기업 간편계좌조회 로그인, 거래내역 파싱, 엑셀 다운로드, 서버 업로드, DB화, 실시간 감시와 주기 업데이트입니다.
+    1차 목표는 은행 빠른계좌조회 로그인/조회, 거래내역 파싱, 엑셀 다운로드, 서버 업로드, DB화, 실시간 감시와 주기 업데이트입니다.
+    신한은행은 비밀번호 5회 오류 차단 해제 전까지 보류하고, IBK기업은행 빠른조회서비스를 우선 구축 대상으로 전환합니다.
   </p>
   <div class="meta">
-    <span>문서 버전: v1.1</span>
-    <span>최종 갱신: 2026-09-07 19:36 KST</span>
-    <span>작성 범위: 1. 설계/PRD 2. 화면 목업 3. Tool 셋업 + 4단계 패키징 착수 현황</span>
-    <span>구축 상태: 신한 전용 EXE 빌드 타깃 구현 중</span>
-    <span>대상 PC: DANHAROO-MAIN 우선</span>
-    <span>신한 URL: 기업 간편계좌조회 직접 진입</span>
+    <span>문서 버전: v1.2</span>
+    <span>최종 갱신: 2026-09-08 08:35 KST</span>
+    <span>작성 범위: 1. 설계/PRD 2. 화면 목업 3. Tool 셋업 + 4단계 IBK 우선 전환 현황</span>
+    <span>구축 상태: 통합 Finance Collector EXE 빌드 타깃 구현, IBK 실수집은 자격값 대기</span>
+    <span>대상 PC: 은행 전용 Windows PC Agent 레인</span>
+    <span>IBK URL: 기업은행 빠른조회서비스 직접 진입</span>
   </div>
 </header>
 
@@ -121,9 +122,9 @@
   AADS 서버는 큐, 저장, 감사로그, 재시도 정책, LLMOps 진단을 담당합니다.
 </div>
 
-<h3>1.1 v1.1 진행상황 업데이트</h3>
+<h3>1.1 v1.2 진행상황 업데이트</h3>
 <table>
-  <tr><th>항목</th><th>v1.0 상태</th><th>v1.1 업데이트</th><th>남은 완료 조건</th></tr>
+  <tr><th>항목</th><th>v1.1 상태</th><th>v1.2 업데이트</th><th>남은 완료 조건</th></tr>
   <tr>
     <td>승인 상태</td>
     <td>1~3단계 승인 요청</td>
@@ -131,10 +132,16 @@
     <td>기능점검/LLMOps 시연 승인 후 진행</td>
   </tr>
   <tr>
-    <td>신한 전용 EXE</td>
-    <td>별도 설치파일 없음</td>
-    <td><code>shinhan_collector_launcher.py</code>, <code>build_shinhan_collector_exe.py</code>, <code>build_shinhan_collector_exe.bat</code> 추가</td>
-    <td>DANHAROO-MAIN 또는 Windows 빌드 PC에서 <code>AADS-Shinhan-Collector-Setup.exe</code> 실제 생성</td>
+    <td>은행 우선순위</td>
+    <td>신한+IBK 동시 진행</td>
+    <td>신한은 비밀번호 5회 오류 차단으로 보류, IBK 중화점부터 우선 진행</td>
+    <td>신한 비밀번호 재설정 후 재등록, IBK 중화점 성공 후 성신여대점과 언니냉면 순차 진행</td>
+  </tr>
+  <tr>
+    <td>통합 Finance Collector EXE</td>
+    <td>신한 전용 빌드 타깃 중심</td>
+    <td>신한+IBK 통합 EXE 빌더 커밋 반영, IBK 빠른조회 URL은 <code>kiup.ibk.co.kr</code> 기준으로 정정</td>
+    <td>Windows 빌드 PC에서 실제 설치 파일 생성, 은행 전용 PC Agent 레인에서 실행 검증</td>
   </tr>
   <tr>
     <td>PC 충돌 격리</td>
@@ -146,7 +153,42 @@
     <td>수집 완료</td>
     <td>설계/하네스 중심</td>
     <td>패키징 계약과 은행 전용 capability 등록 경로 보강</td>
-    <td>신한 로그인 성공, 거래 파싱/엑셀 다운로드, 서버 업로드, DB/원장 저장 1건 이상</td>
+    <td>IBK 중화점 거래 파싱/엑셀 다운로드, 서버 업로드, DB/원장 저장 1건 이상 또는 무거래 확정 상태</td>
+  </tr>
+</table>
+
+<h3>1.2 IBK 중화점 현재 진행상황</h3>
+<table>
+  <tr><th>항목</th><th>확인값</th><th>판정</th><th>다음 조치</th></tr>
+  <tr>
+    <td>대상 순서</td>
+    <td>중화점 우선, 성공 후 성신여대점, 언니냉면 순</td>
+    <td>확정</td>
+    <td>IBK 중화점 완료 전 다음 지점 실행 금지</td>
+  </tr>
+  <tr>
+    <td>중화점 IBK 계좌</td>
+    <td>DB 기준 active IBK 계좌 4건, 마스킹 계좌 <code>**********4014</code> 1건 확인</td>
+    <td>계좌 후보 있음</td>
+    <td>중복 계좌 정리와 대표 수집 계좌 확정</td>
+  </tr>
+  <tr>
+    <td>필수 자격값</td>
+    <td>저장된 로그인 ID는 있음, 로그인 비밀번호/전체 계좌번호/계좌비밀번호/사업자번호 복호화 값 없음</td>
+    <td>수집 차단</td>
+    <td>Vault에 IBK 빠른조회 필수값 등록</td>
+  </tr>
+  <tr>
+    <td>거래 DB</td>
+    <td><code>yeoljeong_bank_transactions</code> 존재, 현재 거래 row <code>0건</code></td>
+    <td>저장 대상 준비, 실데이터 없음</td>
+    <td>IBK 화면/엑셀 필드 확인 후 부족 컬럼만 추가</td>
+  </tr>
+  <tr>
+    <td>운영 컨테이너 검증</td>
+    <td><code>collect_bank_account_transactions(a91c0c71...)</code> 호출 결과 <code>MISSING_CREDENTIALS</code></td>
+    <td>은행 접속 전 안전 차단 정상</td>
+    <td>자격값 등록 후 같은 계좌로 재실행</td>
   </tr>
 </table>
 
@@ -155,8 +197,8 @@
   <tr>
     <td>수집 실행 방식</td>
     <td>Windows 설치형 전용 Collector</td>
-    <td>신한 기업 간편계좌는 AhnLab/VeraPort/INISAFE/Delfino 등 로컬 보안프로그램 상태와 브라우저 세션이 핵심입니다.</td>
-    <td><code>pc_agent/commands/bank_collector.py</code> 신규 구현</td>
+    <td>신한/IBK 모두 은행 사이트 보안정책과 브라우저 세션 상태가 핵심입니다. IBK는 빠른조회서비스 필수값이 먼저 충족돼야 합니다.</td>
+    <td>통합 Finance Collector EXE 빌드 후 은행별 adapter 실행</td>
   </tr>
   <tr>
     <td>오케스트레이션</td>
@@ -172,9 +214,9 @@
   </tr>
   <tr>
     <td>1차 범위</td>
-    <td>신한은행 기업 간편계좌 + IBK기업은행 빠른조회서비스 (2개 은행 동시)</td>
-    <td>IBK는 ID/PW·보안프로그램 불필요(계좌번호+4자리비밀번호+사업자번호만). 신한 보안/브라우저 계약 완성 후 국민, 하나, 우리, 농협, 카드사로 확장.</td>
-    <td>신한·IBK adapter 동시 구현, bank adapter interface 확정</td>
+    <td>IBK기업은행 빠른조회서비스 우선, 신한은행은 재등록 후 재개</td>
+    <td>신한은 비밀번호 차단 상태입니다. IBK는 계좌번호, 계좌비밀번호, 사업자번호 기반 빠른조회로 먼저 성공 경로를 확정합니다.</td>
+    <td>중화점 IBK → 성신여대점 IBK → 언니냉면 IBK 순차 적용</td>
   </tr>
 </table>
 
@@ -183,7 +225,7 @@
   <div class="card"><div class="k">PC Agent 기반</div><div class="v">있음</div><div class="n"><code>pc_agent/agent.py</code>, <code>pc_agent/commands/browser_auto.py</code></div></div>
   <div class="card"><div class="k">금융 전용 lease</div><div class="v">일부</div><div class="n"><code>financial_exclusive</code> 리소스 키 존재</div></div>
   <div class="card"><div class="k">신한 URL 정규화</div><div class="v">일부</div><div class="n"><code>bank.shinhan.com/rib/easy/index.jsp#210000000000</code></div></div>
-  <div class="card"><div class="k">신한 전용 EXE 타깃</div><div class="v">진행</div><div class="n">PyInstaller entrypoint/build script 추가, Windows 실빌드 대기</div></div>
+  <div class="card"><div class="k">통합 EXE 타깃</div><div class="v">진행</div><div class="n">신한+IBK PyInstaller 빌드 타깃 추가, Windows 실빌드 대기</div></div>
 </div>
 
 <table>
@@ -225,11 +267,11 @@
 <table>
   <tr><th>항목</th><th>내용</th></tr>
   <tr><td>제품명</td><td>AADS Finance Windows Collector</td></tr>
-  <tr><td>1차 대상</td><td>신한은행 기업 간편계좌 + <strong>IBK기업은행 빠른조회서비스</strong> (동시 진행), 열정국밥 미아점/중화점/법인 계좌 순��� 적용</td></tr>
+  <tr><td>1차 대상</td><td><strong>IBK기업은행 빠른조회서비스</strong> 중화점 우선 적용. 성공 후 성신여대점, 언니냉면 순차 적용. 신한은행 기업 간편계좌는 비밀번호 차단 해제와 재등록 후 재개.</td></tr>
   <tr><td>주요 사용자</td><td>CEO, 회계 담당자, 운영 관리자</td></tr>
   <tr><td>핵심 가치</td><td>은행 거래내역을 매일 수동 엑셀 다운로드하지 않고 자동 수집, DB화, 이상 감시, 매출/매입/급여/세무 자료와 연결</td></tr>
-  <tr><td>완료 기준</td><td>신한 로그인 성공, 계좌조회 화면 진입, 거래내역 파싱 또는 엑셀 다운로드, 서버 업로드 ACK, DB/원장 저장 1건 이상 또는 무거래 확정 상태</td></tr>
-  <tr><td>확장 기준</td><td>신한·IBK adapter 안정화 뒤 국민/하나/우리/농협/카드사 adapter를 같은 ��터페이스로 추가</td></tr>
+  <tr><td>완료 기준</td><td>IBK 중화점 빠른조회 화면 진입, 거래내역 파싱 또는 엑셀 다운로드, 서버 업로드 ACK, DB/원장 저장 1건 이상 또는 무거래 확정 상태</td></tr>
+  <tr><td>확장 기준</td><td>IBK adapter 안정화 뒤 신한 재개, 국민/하나/우리/농협/카드사 adapter를 같은 인터페이스로 추가</td></tr>
 </table>
 
 <h3>3.2 사용자 시나리오</h3>
