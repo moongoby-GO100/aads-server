@@ -1064,6 +1064,12 @@ async def submit_job(
     if req.worker_model and not req.worker_model_reason:
         msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
+    # Goal auto-link (best-effort): 프로젝트 활성 목표 마일스톤에 연결 (runner는 외부 프로세스라 API 제출 시점에 수행)
+    try:
+        from app.services.pipeline_runner_service import _auto_link_job_to_goal
+        await _auto_link_job_to_goal(job_id, req.project)
+    except Exception as exc:
+        logger.warning("pipeline_runner.goal_auto_link_fail", job_id=job_id, error=str(exc))
     return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
 
 
@@ -1401,6 +1407,12 @@ async def notify_completion(job_id: str):
                 promoted_job_id = await promote_next_queued(conn, project)
         except Exception as e:
             logger.warning("pipeline_runner.promote_fail", project=project, error=str(e))
+        if status == "done":
+            try:
+                from app.services.pipeline_runner_service import _update_linked_goal_state
+                await _update_linked_goal_state(job_id, "done")
+            except Exception as exc:
+                logger.warning("pipeline_runner.goal_state_update_fail", job_id=job_id, error=str(exc))
 
     session_id = row["chat_session_id"]
     if not session_id or not _UUID_RE.match(session_id):
@@ -2019,6 +2031,11 @@ async def submit_batch(
                     # P2-2: LISTEN/NOTIFY
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
 
+                    try:
+                        from app.services.pipeline_runner_service import _auto_link_job_to_goal
+                        await _auto_link_job_to_goal(job_id, req.project)
+                    except Exception as exc:
+                        logger.warning("pipeline_runner.goal_auto_link_fail", job_id=job_id, error=str(exc))
                     for path in item_target_files:
                         batch_file_owner.setdefault(path, job_id)
 
