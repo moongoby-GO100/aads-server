@@ -47,8 +47,8 @@ if errorlevel 1 (
 echo [OK] 패키지 설치 완료
 echo.
 
-:: 4. 바탕화면 바로가기
-echo [4/4] 바탕화면 바로가기 생성 중...
+:: 4. 바로가기 및 자동실행 등록
+echo [4/4] 바로가기 및 자동실행 등록 중...
 set "SCRIPT_DIR=%~dp0"
 set "DESKTOP=%USERPROFILE%\Desktop"
 powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%DESKTOP%\AADS PC Agent.lnk'); $sc.TargetPath = '%SCRIPT_DIR%run.bat'; $sc.WorkingDirectory = '%SCRIPT_DIR%'; $sc.Description = 'AADS PC Agent'; $sc.Save()"
@@ -56,6 +56,18 @@ if errorlevel 1 (
     echo [경고] 바로가기 생성 실패 - run.bat을 직접 실행하세요
 ) else (
     echo [OK] 바탕화면에 "AADS PC Agent" 바로가기 생성
+)
+set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+if not exist "%STARTUP%" mkdir "%STARTUP%"
+(
+    echo @echo off
+    echo cd /d "%SCRIPT_DIR%"
+    echo start "" "%SCRIPT_DIR%run.bat"
+) > "%STARTUP%\AADS-PC-Agent-Autostart.cmd"
+if errorlevel 1 (
+    echo [경고] 자동실행 등록 실패 - 로그온 후 직접 실행이 필요할 수 있습니다
+) else (
+    echo [OK] Windows 로그온 자동실행 등록
 )
 echo.
 

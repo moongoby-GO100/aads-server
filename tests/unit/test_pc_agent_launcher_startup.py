@@ -60,18 +60,64 @@ class PcAgentLauncherStartupTest(TestCase):
             return SimpleNamespace(returncode=0, stderr="")
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            source_exe = Path(temp_dir) / "Downloads" / "AADS-PC-Agent-Setup-1.0.53--ticket-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEFGH.exe"
+            source_exe.parent.mkdir()
+            source_exe.write_bytes(b"launcher")
             with mock.patch.object(launcher.sys, "platform", "win32"), \
                  mock.patch.object(launcher.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
                  mock.patch.object(launcher.sys, "frozen", True, create=True), \
-                 mock.patch.object(launcher.sys, "executable", r"C:\AADS-PC-Agent-Setup-1.0.53.exe"), \
+                 mock.patch.object(launcher.sys, "executable", str(source_exe)), \
                  mock.patch.object(launcher.subprocess, "run", side_effect=fake_run), \
                  mock.patch.object(launcher, "INSTALL_DIR", Path(temp_dir)):
                 launcher.register_watchdog_task()
+                watchdog_script = Path(temp_dir) / launcher.WATCHDOG_SCRIPT_NAME
+                script = watchdog_script.read_text(encoding="utf-8-sig")
+                self.assertIn(str(Path(temp_dir) / launcher.STABLE_LAUNCHER_EXE_NAME), script)
+                self.assertNotIn("--ticket-", script)
+                self.assertTrue((Path(temp_dir) / launcher.STABLE_LAUNCHER_EXE_NAME).exists())
 
         command, kwargs = calls[0]
         self.assertEqual(command[command.index("/SC") + 1], "ONLOGON")
         self.assertEqual(command[command.index("/RL") + 1], "LIMITED")
         self.assertEqual(kwargs["creationflags"], 0x08000000)
+
+    def test_stable_launcher_path_falls_back_when_source_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_source = Path(temp_dir) / "Downloads" / "missing-ticket-launcher.exe"
+            with mock.patch.object(launcher.sys, "frozen", True, create=True), \
+                 mock.patch.object(launcher.sys, "executable", str(missing_source)), \
+                 mock.patch.object(launcher, "INSTALL_DIR", Path(temp_dir)):
+                self.assertEqual(launcher._ensure_stable_launcher_exe(), str(missing_source))
+
+    def test_watchdog_task_failure_writes_startup_fallback(self) -> None:
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args, **kwargs):  # noqa: ANN001
+            calls.append((args, kwargs))
+            return SimpleNamespace(returncode=1, stderr="access denied")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_exe = Path(temp_dir) / "Downloads" / "AADS-PC-Agent-Setup-1.0.70.exe"
+            source_exe.parent.mkdir()
+            source_exe.write_bytes(b"launcher")
+            appdata = Path(temp_dir) / "Roaming"
+            with mock.patch.dict(launcher.os.environ, {"APPDATA": str(appdata)}), \
+                 mock.patch.object(launcher.sys, "platform", "win32"), \
+                 mock.patch.object(launcher.sys, "frozen", True, create=True), \
+                 mock.patch.object(launcher.sys, "executable", str(source_exe)), \
+                 mock.patch.object(launcher.subprocess, "run", side_effect=fake_run), \
+                 mock.patch.object(launcher, "INSTALL_DIR", Path(temp_dir)):
+                launcher.register_watchdog_task()
+
+                fallback = (
+                    appdata
+                    / "Microsoft/Windows/Start Menu/Programs/Startup"
+                    / launcher.FALLBACK_STARTUP_CMD_NAME
+                )
+                self.assertTrue(fallback.exists())
+                self.assertIn(str(Path(temp_dir) / launcher.STABLE_LAUNCHER_EXE_NAME), fallback.read_text())
+
+        self.assertTrue(calls)
 
     def test_status_queries_are_console_free(self) -> None:
         launcher_calls: list[dict] = []

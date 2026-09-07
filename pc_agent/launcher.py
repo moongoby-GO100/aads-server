@@ -31,6 +31,11 @@ LEGACY_STARTUP_CMD_NAME = os.getenv(
     "AADS_PC_AGENT_LEGACY_STARTUP_CMD_NAME",
     "AADS-PC-Agent-Watchdog.cmd",
 )
+FALLBACK_STARTUP_CMD_NAME = os.getenv(
+    "AADS_PC_AGENT_FALLBACK_STARTUP_CMD_NAME",
+    "AADS-PC-Agent-Autostart.cmd",
+)
+STABLE_LAUNCHER_EXE_NAME = os.getenv("AADS_PC_AGENT_STABLE_EXE_NAME", "AADS-PC-Agent.exe")
 INSTALL_DIR = Path(os.environ.get(
     "KAKAOBOT_INSTALL_DIR",
     os.path.join(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"), APP_SLUG),
@@ -68,6 +73,56 @@ def _hidden_subprocess_kwargs() -> dict[str, int]:
     if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def _stable_launcher_exe_path() -> Path:
+    return INSTALL_DIR / STABLE_LAUNCHER_EXE_NAME
+
+
+def _fallback_startup_cmd_path() -> Path:
+    return (
+        Path(os.environ.get("APPDATA", ""))
+        / f"Microsoft/Windows/Start Menu/Programs/Startup/{FALLBACK_STARTUP_CMD_NAME}"
+    )
+
+
+def _ensure_stable_launcher_exe() -> str:
+    """Copy the one-file launcher to a stable install path for Windows autostart.
+
+    The downloaded EXE can live under Downloads and may include a one-time ticket
+    in its filename. A scheduled task that points there is fragile after reboot,
+    cleanup, browser download renames, or a user moving the file.
+    """
+    current_raw = str(getattr(sys, "executable", "") or sys.argv[0] or "").strip()
+    if not current_raw:
+        return current_raw
+    current = Path(current_raw)
+    if not getattr(sys, "frozen", False):
+        return str(current)
+
+    stable = _stable_launcher_exe_path()
+    try:
+        stable.parent.mkdir(parents=True, exist_ok=True)
+        if current.resolve(strict=False) == stable.resolve(strict=False):
+            return str(stable)
+        should_copy = True
+        if stable.exists() and current.exists():
+            try:
+                should_copy = current.stat().st_size != stable.stat().st_size
+            except OSError:
+                should_copy = True
+        if should_copy and current.exists():
+            shutil.copy2(current, stable)
+            logger.info("안정 자동실행 런처 복사 완료: %s", stable)
+        elif stable.exists():
+            logger.debug("안정 자동실행 런처 기존 파일 사용: %s", stable)
+        else:
+            logger.warning("현재 런처 파일을 찾을 수 없어 자동실행 경로를 원본으로 사용: %s", current)
+            return str(current)
+        return str(stable)
+    except Exception as exc:
+        logger.warning("안정 자동실행 런처 준비 실패, 원본 경로 사용: %s", exc)
+        return str(current)
 
 
 def _bundled_agent_source_dir() -> Path | None:
@@ -446,12 +501,17 @@ def _startup_registration_status() -> dict:
         Path(os.environ.get("APPDATA", ""))
         / f"Microsoft/Windows/Start Menu/Programs/Startup/{LEGACY_STARTUP_CMD_NAME}"
     )
+    fallback_startup_cmd = _fallback_startup_cmd_path()
     legacy_startup_cmd_present = startup_cmd.exists()
+    fallback_startup_cmd_present = fallback_startup_cmd.exists()
+    watchdog = _watchdog_task_status()
     return {
-        "registered": not legacy_registry_present and not legacy_startup_cmd_present,
-        "mode": "scheduled_task_hidden",
+        "registered": bool(watchdog.get("registered")) or fallback_startup_cmd_present,
+        "mode": "scheduled_task_hidden" if watchdog.get("registered") else "startup_folder_fallback",
+        "watchdog_task_registered": bool(watchdog.get("registered")),
         "legacy_registry_present": legacy_registry_present,
         "legacy_startup_cmd_present": legacy_startup_cmd_present,
+        "fallback_startup_cmd_present": fallback_startup_cmd_present,
     }
 
 
@@ -603,6 +663,24 @@ def _build_hidden_watchdog_vbs(exe_path: str) -> str:
     )
 
 
+def _write_startup_folder_fallback(exe_path: str) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        startup_cmd = _fallback_startup_cmd_path()
+        startup_cmd.parent.mkdir(parents=True, exist_ok=True)
+        startup_cmd.write_text(
+            '@echo off\r\n'
+            f'start "" "{exe_path}"\r\n',
+            encoding="utf-8",
+        )
+        logger.info("Startup fallback 등록 완료: %s", startup_cmd)
+        return True
+    except Exception as exc:
+        logger.warning("Startup fallback 등록 실패: %s", exc)
+        return False
+
+
 def register_watchdog_task() -> None:
     """로그온 시 콘솔 없는 단일 watchdog을 실행한다."""
     if sys.platform != "win32":
@@ -613,8 +691,9 @@ def register_watchdog_task() -> None:
             return
 
         watchdog_path = INSTALL_DIR / WATCHDOG_SCRIPT_NAME
+        launcher_exe = _ensure_stable_launcher_exe()
         watchdog_path.write_text(
-            _build_hidden_watchdog_vbs(sys.executable),
+            _build_hidden_watchdog_vbs(launcher_exe),
             encoding="utf-8-sig",
         )
         task_command = f'wscript.exe "{watchdog_path}"'
@@ -632,8 +711,13 @@ def register_watchdog_task() -> None:
             logger.info("Task Scheduler 숨김 watchdog 등록 완료 (로그온 후 30초)")
         else:
             logger.warning("Task Scheduler watchdog 등록 실패: %s", result.stderr.strip())
+            _write_startup_folder_fallback(launcher_exe)
     except Exception as e:
         logger.warning("Task Scheduler watchdog 등록 실패: %s", e)
+        try:
+            _write_startup_folder_fallback(_ensure_stable_launcher_exe())
+        except Exception:
+            pass
 
 
 def disable_watchdog_for_user_exit() -> None:
@@ -790,6 +874,9 @@ def main() -> None:
     logger.info("=== %s 런처 시작 ===", APP_NAME)
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     bootstrap_bundled_agent_if_needed()
+    launcher_started_at = time.time()
+    launcher_start_count = _increment_launcher_start_count()
+    worker_restart_count = 0
 
     # 단일 인스턴스 보장 — Windows named mutex
     if sys.platform == "win32":
@@ -932,13 +1019,25 @@ def main() -> None:
     UPDATE_INTERVAL = 3600  # 1시간마다 업데이트 확인
     RECONNECT_WATCHDOG_TIMEOUT = 120  # 120초 이상 미연결 시 강제 재시작
     WORKER_ACTIVITY_TIMEOUT = 120  # 트레이만 살아 있고 WebSocket worker가 멈춘 상태 감지
+    LAUNCHER_STATUS_INTERVAL = 60  # 서버 진단용 watchdog/startup telemetry 업로드
     last_update_check = time.time()
+    last_launcher_status = 0.0
     disconnected_since = None
     _set_crash_count(0)  # 정상 시작 시 크래시 카운터 리셋
 
     try:
         while True:
             proc_ref[0] = proc  # tray가 항상 최신 에이전트 인스턴스를 참조
+            if time.time() - last_launcher_status > LAUNCHER_STATUS_INTERVAL:
+                last_launcher_status = time.time()
+                _send_launcher_status(
+                    cfg,
+                    launcher_started_at=launcher_started_at,
+                    launcher_start_count=launcher_start_count,
+                    worker_restart_count=worker_restart_count,
+                    proc=proc,
+                    disconnected_since=disconnected_since,
+                )
             if reconnect_requested.is_set() and not stop_requested.is_set():
                 reconnect_requested.clear()
                 logger.info("수동 재연결 요청 처리 — 에이전트 재시작")
