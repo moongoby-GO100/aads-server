@@ -51,6 +51,8 @@ class PcAgentLauncherStartupTest(TestCase):
         self.assertIn("shell.Run Chr(34) & agentExe & Chr(34), 0, False", script)
         self.assertIn("/SC ONLOGON", script)
         self.assertNotIn("/SC MINUTE", script)
+        self.assertNotIn("DeleteFile startupCmd", script)
+        self.assertNotIn("startupCmd", script)
 
     def test_watchdog_task_is_logon_only_and_console_free(self) -> None:
         calls: list[tuple[list[str], dict]] = []
@@ -63,7 +65,9 @@ class PcAgentLauncherStartupTest(TestCase):
             source_exe = Path(temp_dir) / "Downloads" / "AADS-PC-Agent-Setup-1.0.53--ticket-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEFGH.exe"
             source_exe.parent.mkdir()
             source_exe.write_bytes(b"launcher")
-            with mock.patch.object(launcher.sys, "platform", "win32"), \
+            appdata = Path(temp_dir) / "Roaming"
+            with mock.patch.dict(launcher.os.environ, {"APPDATA": str(appdata)}), \
+                 mock.patch.object(launcher.sys, "platform", "win32"), \
                  mock.patch.object(launcher.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
                  mock.patch.object(launcher.sys, "frozen", True, create=True), \
                  mock.patch.object(launcher.sys, "executable", str(source_exe)), \
@@ -116,6 +120,7 @@ class PcAgentLauncherStartupTest(TestCase):
                 )
                 self.assertTrue(fallback.exists())
                 self.assertIn(str(Path(temp_dir) / launcher.STABLE_LAUNCHER_EXE_NAME), fallback.read_text())
+                self.assertNotIn("--ticket-", fallback.read_text())
 
         self.assertTrue(calls)
 

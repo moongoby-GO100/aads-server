@@ -620,27 +620,19 @@ def _build_hidden_watchdog_vbs(exe_path: str) -> str:
     escaped_path = exe_path.replace('"', '""')
     process_name = Path(exe_path).name.replace("'", "''")
     watchdog_path = str(INSTALL_DIR / WATCHDOG_SCRIPT_NAME).replace('"', '""')
-    startup_cmd = (
-        r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-        + "\\"
-        + LEGACY_STARTUP_CMD_NAME.replace('"', '""')
-    )
     task_name = WATCHDOG_TASK_NAME.replace('"', '""')
     run_value_name = LEGACY_RUN_VALUE_NAME.replace('"', '""')
     return (
         "Option Explicit\n"
-        "Dim shell, service, processes, agentExe, watchdogPath, startupCmd, taskCommand, fso\n"
+        "Dim shell, service, processes, agentExe, watchdogPath, taskCommand\n"
         f'agentExe = "{escaped_path}"\n'
         f'watchdogPath = "{watchdog_path}"\n'
         'Set shell = CreateObject("WScript.Shell")\n'
         'Set service = GetObject("winmgmts:\\\\.\\root\\cimv2")\n\n'
-        'Set fso = CreateObject("Scripting.FileSystemObject")\n'
-        f'startupCmd = shell.ExpandEnvironmentStrings("{startup_cmd}")\n'
-        f'taskCommand = "schtasks.exe /Create /TN {task_name} /TR " & Chr(34) & "wscript.exe " & watchdogPath & Chr(34) & " /SC ONLOGON /DELAY 0000:30 /RL LIMITED /F"\n\n'
+        f'taskCommand = "schtasks.exe /Create /TN {task_name} /TR " & Chr(34) & "wscript.exe " & Chr(34) & Chr(34) & watchdogPath & Chr(34) & Chr(34) & Chr(34) & " /SC ONLOGON /DELAY 0000:30 /RL LIMITED /F"\n\n'
         "Sub EnforceSingleStartup\n"
         "  On Error Resume Next\n"
         f'  shell.RegDelete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\{run_value_name}"\n'
-        "  If fso.FileExists(startupCmd) Then fso.DeleteFile startupCmd, True\n"
         "  shell.Run taskCommand, 0, True\n"
         "  Err.Clear\n"
         "  On Error GoTo 0\n"
@@ -696,6 +688,7 @@ def register_watchdog_task() -> None:
             _build_hidden_watchdog_vbs(launcher_exe),
             encoding="utf-8-sig",
         )
+        _write_startup_folder_fallback(launcher_exe)
         task_command = f'wscript.exe "{watchdog_path}"'
         result = subprocess.run(
             ["schtasks", "/Create",
