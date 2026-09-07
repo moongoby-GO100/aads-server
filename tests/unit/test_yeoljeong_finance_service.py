@@ -367,14 +367,10 @@ def test_collect_bank_timeout_uses_browser_tab_probe(monkeypatch):
 def test_collect_bank_timeout_retries_saved_shinhan_idpw_once(monkeypatch, tmp_path):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     calls = {"count": 0}
+    collect_calls = []
 
-    def fake_run(coro):
-        close = getattr(coro, "close", None)
-        if callable(close):
-            close()
-        calls["count"] += 1
-        if calls["count"] == 1:
-            raise TimeoutError
+    async def fake_collect_bank_via_browser_session_async(*args, **kwargs):
+        collect_calls.append(kwargs)
         return {
             "status": "collected",
             "rows": [
@@ -389,6 +385,15 @@ def test_collect_bank_timeout_retries_saved_shinhan_idpw_once(monkeypatch, tmp_p
             "diagnostics": {},
             "message": "ok",
         }
+
+    def fake_run(coro):
+        close = getattr(coro, "close", None)
+        calls["count"] += 1
+        if calls["count"] == 1:
+            if callable(close):
+                close()
+            raise TimeoutError
+        return __import__("asyncio").run(coro)
 
     monkeypatch.setattr(service, "_run_bank_browser_async", fake_run)
     monkeypatch.setattr(
@@ -418,6 +423,15 @@ def test_collect_bank_timeout_retries_saved_shinhan_idpw_once(monkeypatch, tmp_p
             "account_password": "1234",
             "business_registration_no": "1234567890",
         },
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "app.services.yeoljeong_bank_browser_connector",
+        type(
+            "_ConnectorModule",
+            (),
+            {"collect_bank_via_browser_session_async": fake_collect_bank_via_browser_session_async},
+        )(),
     )
     monkeypatch.setattr(
         service,
@@ -454,9 +468,30 @@ def test_collect_bank_timeout_retries_saved_shinhan_idpw_once(monkeypatch, tmp_p
     )
 
     assert calls["count"] == 2
+    assert collect_calls == [
+        {
+            "browser_session_id": "",
+            "browser_work_key": "wk-bank",
+            "date_from": "2026-07-28",
+            "date_to": "2026-08-28",
+            "portal_url": "",
+            "auto_open_browser": False,
+            "browser_agent_id": "agent-bank",
+            "browser_preferred_port": None,
+            "force_recreate_browser": False,
+            "login_username": "saved-user",
+            "login_password": "saved-pass",
+            "account_no": "110123456789",
+            "account_password": "1234",
+            "business_registration_no": "1234567890",
+            "business_entity_type": "individual",
+            "browser_timeout_seconds": 180,
+        }
+    ]
     assert result["collection"]["status"] == "completed"
     assert result["collection"]["imported_rows"] == 1
     assert result["collection"]["diagnostics"]["shinhan_idpw_retry_after_timeout"] == "1"
+    assert result["collection"]["diagnostics"]["shinhan_idpw_retry_session_policy"] == "reuse_existing_work_key"
 
 
 def test_import_transaction_csv_applies_business_scope(tmp_path, monkeypatch):

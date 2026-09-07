@@ -5824,15 +5824,15 @@ def _collect_bank_via_browser(
                     _with_bank_browser_timeout(
                         lambda: collect_bank_via_browser_session_async(
                             account,
-                            browser_session_id="",
+                            browser_session_id=browser_session_id,
                             browser_work_key=browser_work_key_val,
                             date_from=date_from,
                             date_to=date_to,
                             portal_url=str(payload.get("portal_url") or bank_credentials.get("portal_url") or ""),
-                            auto_open_browser=True,
+                            auto_open_browser=False,
                             browser_agent_id=browser_agent_id_val,
                             browser_preferred_port=browser_preferred_port,
-                            force_recreate_browser=True,
+                            force_recreate_browser=False,
                             login_username=str(bank_credentials.get("login_username") or ""),
                             login_password=str(bank_credentials.get("login_password") or ""),
                             account_no=str(bank_credentials.get("account_no") or ""),
@@ -5848,6 +5848,7 @@ def _collect_bank_via_browser(
                 if isinstance(retry_diag, dict):
                     retry_diag["shinhan_idpw_retry_after_timeout"] = "1"
                     retry_diag["previous_timeout_error_code"] = "BANK_BROWSER_IDPW_RETRY_REQUIRED"
+                    retry_diag["shinhan_idpw_retry_session_policy"] = "reuse_existing_work_key"
             except TimeoutError:
                 browser_result = timeout_probe_result
                 diagnostics = browser_result.setdefault("diagnostics", {})

@@ -61,6 +61,14 @@ class TestCDPSessionManager:
         assert CDPSessionManager.normalize_work_key("") == "general"
         assert CDPSessionManager.normalize_work_key("  ") == "general"
 
+    def test_default_profile_root_uses_install_dir_on_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("KAKAOBOT_INSTALL_DIR", r"C:\Users\me\AppData\Local\AADSShinhanCollector")
+
+        assert _default_profile_root().replace("\\", "/") == (
+            r"C:\Users\me\AppData\Local\AADSShinhanCollector/cdp-profile".replace("\\", "/")
+        )
+
     def test_effective_port_uses_general_session_without_work_key(self):
         CDPSessionManager.register("general", 9333, "/tmp/general")
         assert _effective_port({}) == 9333

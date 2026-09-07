@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -67,6 +68,54 @@ def _hidden_subprocess_kwargs() -> dict[str, int]:
     if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def _bundled_agent_source_dir() -> Path | None:
+    """Return the PyInstaller data directory when bundled agent files exist."""
+    bundle_root = Path(str(getattr(sys, "_MEIPASS", "")))
+    if not bundle_root:
+        return None
+    if not (bundle_root / "agent.py").exists():
+        return None
+    if not (bundle_root / "commands").is_dir():
+        return None
+    return bundle_root
+
+
+def _copy_bundled_agent_files(src: Path) -> None:
+    """Install bundled worker files into the mutable agent directory."""
+    AGENT_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("agent.py", "updater.py", "tray.py", "VERSION", "__init__.py"):
+        source = src / name
+        if source.exists():
+            shutil.copy2(source, AGENT_DIR / name)
+    commands_source = src / "commands"
+    if commands_source.is_dir():
+        commands_target = AGENT_DIR / "commands"
+        if commands_target.exists():
+            shutil.rmtree(commands_target)
+        shutil.copytree(commands_source, commands_target)
+
+
+def bootstrap_bundled_agent_if_needed() -> bool:
+    """Sync installs from files embedded in the EXE.
+
+    The launcher still keeps the normal server updater path. This bootstrap is
+    needed for product-specific EXE installs and upgrades so the mutable worker
+    directory cannot keep an older generic PC Agent command implementation.
+    """
+    if not getattr(sys, "frozen", False):
+        return False
+    source_dir = _bundled_agent_source_dir()
+    if source_dir is None:
+        return False
+    try:
+        _copy_bundled_agent_files(source_dir)
+        logger.info("번들 에이전트 파일 bootstrap 완료: %s", AGENT_DIR)
+        return True
+    except Exception as exc:
+        logger.warning("번들 에이전트 파일 bootstrap 실패: %s", exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +197,7 @@ def load_config() -> dict | None:
     """config.json 로드. 없으면 None."""
     if CONFIG_PATH.exists():
         try:
-            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         except Exception:
             logger.warning("config.json 파싱 실패, 재설정 필요")
     return None
@@ -740,6 +789,7 @@ def main() -> None:
     """런처 메인 진입점."""
     logger.info("=== %s 런처 시작 ===", APP_NAME)
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    bootstrap_bundled_agent_if_needed()
 
     # 단일 인스턴스 보장 — Windows named mutex
     if sys.platform == "win32":

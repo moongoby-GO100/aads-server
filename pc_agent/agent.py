@@ -145,7 +145,7 @@ def _get_persistent_agent_id() -> str:
     """config.json에서 영속 agent_id를 읽거나, 없으면 생성하여 저장."""
     # 1) config.json에서 읽기 (최우선)
     try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         if cfg.get("agent_id"):
             agent_id = cfg["agent_id"]
             os.environ["AADS_AGENT_ID"] = agent_id
@@ -158,7 +158,7 @@ def _get_persistent_agent_id() -> str:
     try:
         cfg = {}
         if CONFIG_PATH.exists():
-            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         cfg["agent_id"] = new_id
         CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("새 agent_id 생성+저장: %s", new_id)
@@ -174,7 +174,7 @@ def _is_truthy(value: str) -> bool:
 
 def _read_agent_config() -> dict[str, Any]:
     try:
-        value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        value = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}

@@ -28,6 +28,7 @@ def build_command() -> list[str]:
         sys.executable,
         "-m",
         "PyInstaller",
+        "--noconfirm",
         "--onefile",
         "--windowed",
         "--name",

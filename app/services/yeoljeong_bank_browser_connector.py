@@ -3401,6 +3401,8 @@ async def _retry_shinhan_idpw_reset_after_reacquire(
 
 def _bank_session_recovery_plan(error_code: str = "") -> str:
     code = str(error_code or "").strip().upper()
+    if code in {"BANK_BROWSER_IDPW_RETRY_REQUIRED", "LOGIN_SUCCESS_NOT_OBSERVED"}:
+        return "reuse_existing_browser_session_then_retry_saved_idpw"
     if code in {"CDP_NOT_READY", "PC_AGENT_SESSION_NOT_FOUND", "BANK_BROWSER_SESSION_NOT_FOUND"}:
         return "reuse_work_key_then_recreate_same_profile_once"
     if code in {"PC_AGENT_UNAVAILABLE", "PC_AGENT_REQUIRED", "PC_AGENT_LOGIN_REQUIRED"}:
@@ -3409,13 +3411,20 @@ def _bank_session_recovery_plan(error_code: str = "") -> str:
 
 
 _BANK_SESSION_RECOVERABLE_ERROR_CODES = {
+    "BANK_BROWSER_IDPW_RETRY_REQUIRED",
     "BANK_BROWSER_SESSION_NOT_FOUND",
     "CDP_NOT_READY",
     "COMMAND_TIMEOUT",
+    "LOGIN_SUCCESS_NOT_OBSERVED",
     "PC_AGENT_OFFLINE",
     "PC_AGENT_SESSION_NOT_FOUND",
     "RUNTIME_EVALUATE_TIMEOUT",
     "STALE_TARGET",
+}
+
+_SHINHAN_SAME_SESSION_RETRY_CODES = {
+    "BANK_BROWSER_IDPW_RETRY_REQUIRED",
+    "LOGIN_SUCCESS_NOT_OBSERVED",
 }
 
 
@@ -4694,17 +4703,20 @@ async def collect_bank_via_browser_session_async(
                     and _is_bank_session_recoverable_error(exc)
                 ):
                     recovery_code = _bank_session_error_code(exc) or "BANK_BROWSER_PAGE_ERROR"
+                    same_session_retry = recovery_code in _SHINHAN_SAME_SESSION_RETRY_CODES and bool(
+                        session_id_to_use
+                    )
                     recovered = await collect_bank_via_browser_session_async(
                         account,
-                        browser_session_id="",
+                        browser_session_id=session_id_to_use if same_session_retry else "",
                         browser_work_key=browser_work_key,
                         date_from=date_from,
                         date_to=date_to,
                         portal_url=portal_url,
-                        auto_open_browser=True,
+                        auto_open_browser=not same_session_retry,
                         browser_agent_id=browser_agent_id,
                         browser_preferred_port=browser_preferred_port,
-                        force_recreate_browser=True,
+                        force_recreate_browser=not same_session_retry,
                         login_username=login_username,
                         login_password=login_password,
                         account_no=account_no,
@@ -4717,7 +4729,11 @@ async def collect_bank_via_browser_session_async(
                     recovered_diag = recovered.setdefault("diagnostics", {})
                     if isinstance(recovered_diag, dict):
                         recovered_diag.setdefault("previous_browser_session_id", session_id_to_use)
-                        recovered_diag["session_recovery"] = "recreated_after_page_error"
+                        recovered_diag["session_recovery"] = (
+                            "retried_same_session_after_login_marker_timeout"
+                            if same_session_retry
+                            else "recreated_after_page_error"
+                        )
                         recovered_diag["session_recovery_error"] = recovery_code
                         recovered_diag["session_recovery_plan"] = _bank_session_recovery_plan(recovery_code)
                     return recovered
@@ -5668,17 +5684,18 @@ async def collect_bank_via_browser_session_async(
             and _is_bank_session_recoverable_error(exc)
         ):
             recovery_code = _bank_session_error_code(exc) or exc_error_code or "BANK_BROWSER_SESSION_ERROR"
+            same_session_retry = recovery_code in _SHINHAN_SAME_SESSION_RETRY_CODES and bool(session_id_to_use)
             recovered = await collect_bank_via_browser_session_async(
                 account,
-                browser_session_id="",
+                browser_session_id=session_id_to_use if same_session_retry else "",
                 browser_work_key=browser_work_key,
                 date_from=date_from,
                 date_to=date_to,
                 portal_url=portal_url,
-                auto_open_browser=True,
+                auto_open_browser=not same_session_retry,
                 browser_agent_id=browser_agent_id,
                 browser_preferred_port=browser_preferred_port,
-                force_recreate_browser=True,
+                force_recreate_browser=not same_session_retry,
                 login_username=login_username,
                 login_password=login_password,
                 account_no=account_no,
@@ -5691,7 +5708,11 @@ async def collect_bank_via_browser_session_async(
             recovered_diag = recovered.setdefault("diagnostics", {})
             if isinstance(recovered_diag, dict):
                 recovered_diag.setdefault("previous_browser_session_id", session_id_to_use)
-                recovered_diag["session_recovery"] = "recreated_after_runtime_error"
+                recovered_diag["session_recovery"] = (
+                    "retried_same_session_after_login_marker_timeout"
+                    if same_session_retry
+                    else "recreated_after_runtime_error"
+                )
                 recovered_diag["session_recovery_error"] = recovery_code
                 recovered_diag["session_recovery_plan"] = _bank_session_recovery_plan(recovery_code)
             return recovered

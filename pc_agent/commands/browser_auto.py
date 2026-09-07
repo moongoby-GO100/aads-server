@@ -324,6 +324,9 @@ async def _wait_cdp_ready(port: int, timeout_seconds: float) -> Dict[str, Any] |
 
 def _default_profile_root() -> str:
     if sys.platform == "win32":
+        install_dir = str(os.environ.get("KAKAOBOT_INSTALL_DIR") or "").strip()
+        if install_dir:
+            return os.path.join(install_dir, "cdp-profile")
         return os.path.join(
             os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
             "KakaoBot",

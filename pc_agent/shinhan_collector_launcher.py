@@ -19,38 +19,28 @@ def _default_local_appdata() -> str:
 
 def configure_shinhan_collector_environment() -> None:
     """Set bank-only defaults before importing the shared launcher module."""
-    os.environ.setdefault(
-        "KAKAOBOT_INSTALL_DIR",
-        os.path.join(_default_local_appdata(), "AADSShinhanCollector"),
+    # Product identity must override an inherited generic PC Agent environment.
+    os.environ["KAKAOBOT_INSTALL_DIR"] = os.path.join(
+        _default_local_appdata(), "AADSShinhanCollector"
     )
-    os.environ.setdefault("AADS_PC_AGENT_APP_NAME", "AADS Shinhan Collector")
-    os.environ.setdefault("AADS_PC_AGENT_APP_TITLE", "AADS Shinhan Collector")
-    os.environ.setdefault("AADS_PC_AGENT_APP_SLUG", "AADSShinhanCollector")
-    os.environ.setdefault(
-        "AADS_PC_AGENT_LAUNCHER_MUTEX_NAME",
-        "AADSShinhanCollector_Launcher_SingleInstance_v1",
+    os.environ["AADS_PC_AGENT_APP_NAME"] = "AADS Shinhan Collector"
+    os.environ["AADS_PC_AGENT_APP_TITLE"] = "AADS Shinhan Collector"
+    os.environ["AADS_PC_AGENT_APP_SLUG"] = "AADSShinhanCollector"
+    os.environ["AADS_PC_AGENT_LAUNCHER_MUTEX_NAME"] = (
+        "AADSShinhanCollector_Launcher_SingleInstance_v1"
     )
-    os.environ.setdefault(
-        "AADS_PC_AGENT_MUTEX_NAME",
-        "AADSShinhanCollector_Agent_SingleInstance_v1",
+    os.environ["AADS_PC_AGENT_MUTEX_NAME"] = (
+        "AADSShinhanCollector_Agent_SingleInstance_v1"
     )
-    os.environ.setdefault(
-        "AADS_PC_AGENT_WATCHDOG_TASK_NAME",
-        "AADSShinhanCollectorWatchdog",
+    os.environ["AADS_PC_AGENT_WATCHDOG_TASK_NAME"] = "AADSShinhanCollectorWatchdog"
+    os.environ["AADS_PC_AGENT_WATCHDOG_SCRIPT_NAME"] = (
+        "aads_shinhan_collector_watchdog.vbs"
     )
-    os.environ.setdefault(
-        "AADS_PC_AGENT_WATCHDOG_SCRIPT_NAME",
-        "aads_shinhan_collector_watchdog.vbs",
+    os.environ["AADS_PC_AGENT_LEGACY_RUN_VALUE_NAME"] = "AADSShinhanCollector"
+    os.environ["AADS_PC_AGENT_LEGACY_STARTUP_CMD_NAME"] = (
+        "AADS-Shinhan-Collector-Watchdog.cmd"
     )
-    os.environ.setdefault(
-        "AADS_PC_AGENT_LEGACY_RUN_VALUE_NAME",
-        "AADSShinhanCollector",
-    )
-    os.environ.setdefault(
-        "AADS_PC_AGENT_LEGACY_STARTUP_CMD_NAME",
-        "AADS-Shinhan-Collector-Watchdog.cmd",
-    )
-    os.environ.setdefault("AADS_PC_AGENT_NODE_ROLE", "bank_collector")
+    os.environ["AADS_PC_AGENT_NODE_ROLE"] = "bank_collector"
 
     capabilities = {
         "bank_collector",
