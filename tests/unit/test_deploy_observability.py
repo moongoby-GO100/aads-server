@@ -199,14 +199,15 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "migrations/150_deploy_observability_v1.sql" in script
     assert "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s" in script
     assert "reconcile_inactive_target_recovery_executions \"$NEW_CONTAINER\"" in script
-    assert "COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'" in script
-    assert "AND COALESCE(m.is_hidden, false) = true" in script
-    assert "WHERE ph.execution_id = chat_turn_executions.id" in script
-    assert "AND COALESCE(ph.is_hidden, FALSE) = TRUE" in script
+    assert "scripts/classify_deploy_streams.py" in script
+    assert "--mode live-count" in script
+    assert "--mode reconcile" in script
+    assert "AADS_DEPLOY_STALE_STREAM_APPLY:-false" in script
+    assert "AADS_DEPLOY_STALE_HEARTBEAT_TTL_SECONDS:-90" in script
     assert "AADS_DEPLOY_DEFAULT_ESTIMATE_MS:-600000" in script
     assert "FROM deploy_history" in script
     assert "AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800" in script
-    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800" in script
+    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_MIN_WAIT:-10" in script
     assert "AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5" in script
     assert "AADS_DEPLOY_STANDBY_ZERO_SAMPLES:-1" in script
@@ -223,6 +224,7 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "'committed', 'pushed', TRUE" in script
     assert "COALESCE(request_source, 'deploy.sh_lock_busy')" in script
     assert "reconcile_inactive_target_recovery_executions \"$old_container\"" in script
+    assert "DEPLOY_PHASE_METADATA_JSON" in script
     assert "queued_for_deploy" in script
     assert "queue_pending_deploy_request" in script
     assert "start_deploy_queue_worker \"lock_busy\"" in script

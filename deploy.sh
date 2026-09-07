@@ -39,6 +39,9 @@ DEPLOY_CURRENT_PHASE="initializing"
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
 DEPLOY_HEARTBEAT_PID=""
 DEPLOY_QUEUE_WORKER_LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
+DEPLOY_STREAM_CLASSIFIER="${COMPOSE_DIR}/scripts/classify_deploy_streams.py"
+DEPLOY_PHASE_METADATA_JSON=""
+LAST_STREAM_RECONCILE_JSON=""
 mkdir -p "${STATE_DIR}/logs"
 
 cleanup_release_context() {
@@ -797,7 +800,7 @@ deploy_phase_end() {
     if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
         return 0
     fi
-    local duration_ms phase_sql status_sql err_sql current_slot_sql candidate_slot_sql image_sql standby_sql
+    local duration_ms phase_sql status_sql err_sql current_slot_sql candidate_slot_sql image_sql standby_sql metadata_expr
     duration_ms=$((($(date +%s) - DEPLOY_PHASE_START_EPOCH) * 1000))
     phase_sql="$(sql_escape "$phase")"
     status_sql="$(sql_escape "$status")"
@@ -806,17 +809,23 @@ deploy_phase_end() {
     candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
     image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-$ACTIVE_CONTAINER}" --format '{{.Image}}' 2>/dev/null || true)")"
     standby_sql="$(sql_escape "$(docker inspect "${OLD_CONTAINER:-}" --format '{{.Image}}' 2>/dev/null || true)")"
+    if [[ -n "${DEPLOY_PHASE_METADATA_JSON:-}" ]]; then
+        metadata_expr="NULLIF('$(sql_escape "$DEPLOY_PHASE_METADATA_JSON")', '')::jsonb"
+    else
+        metadata_expr="NULL"
+    fi
     deploy_db_exec "
         INSERT INTO deploy_phase_events(deploy_run_id, phase, status, phase_started_at,
                                         phase_completed_at, duration_ms, current_slot,
                                         candidate_slot, image_digest, standby_digest,
-                                        error_summary)
+                                        error_summary, metadata)
         VALUES(${DEPLOY_RUN_ID}, '$phase_sql', '$status_sql',
                to_timestamp(${DEPLOY_PHASE_START_EPOCH}), NOW(), ${duration_ms},
                '$current_slot_sql', NULLIF('$candidate_slot_sql', ''),
                NULLIF('$image_sql', ''), NULLIF('$standby_sql', ''),
-               NULLIF('$(sql_escape "$err")', ''));
+               NULLIF('$(sql_escape "$err")', ''), ${metadata_expr});
     " >/dev/null
+    DEPLOY_PHASE_METADATA_JSON=""
     if [[ "$status" != "success" ]]; then
         deploy_observe_update "$status" "$phase" "$err"
     fi
@@ -1228,6 +1237,18 @@ stream_count_for_port() {
     local db_count
     container="$(container_for_port "$port")"
     if [[ -n "$container" ]] && docker inspect aads-postgres --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+        if [[ -x "$DEPLOY_STREAM_CLASSIFIER" ]]; then
+            db_count="$(
+                python3 "$DEPLOY_STREAM_CLASSIFIER" \
+                    --owner-instance "$container" \
+                    --ttl-seconds "${AADS_DEPLOY_STALE_HEARTBEAT_TTL_SECONDS:-90}" \
+                    --mode live-count 2>/dev/null | tr -d '[:space:]' || true
+            )"
+            if [[ "$db_count" =~ ^[0-9]+$ ]]; then
+                echo "$db_count"
+                return 0
+            fi
+        fi
         db_count="$(
             docker exec aads-postgres psql -U aads -d aads -Atc "
                 SELECT count(*)::int
@@ -1263,54 +1284,67 @@ stream_count_for_port() {
     ) || echo "unknown"
 }
 
+set_deploy_stream_phase_metadata() {
+    local owner_instance="$1"
+    local port="$2"
+    local live_count="$3"
+    local elapsed="$4"
+    local max_wait="$5"
+    local reconcile_json="${LAST_STREAM_RECONCILE_JSON:-}"
+    DEPLOY_PHASE_METADATA_JSON="$(
+        python3 -c '
+import json
+import sys
+
+owner, port, live_count, elapsed, max_wait = sys.argv[1:6]
+raw = sys.stdin.read().strip()
+reconcile = {}
+if raw:
+    try:
+        reconcile = json.loads(raw)
+    except Exception:
+        reconcile = {"parse_error": True, "raw": raw[:500]}
+metadata = {
+    "stream_samples": [{
+        "owner_instance": owner,
+        "port": int(port) if port.isdigit() else port,
+        "live": int(live_count) if live_count.isdigit() else live_count,
+        "elapsed_seconds": int(elapsed) if elapsed.isdigit() else elapsed,
+        "max_wait_seconds": int(max_wait) if max_wait.isdigit() else max_wait,
+    }],
+    "reconcile": {
+        "applied": bool(reconcile.get("applied", False)),
+        "cancelled_count": int(reconcile.get("cancelled_count") or 0),
+        "classes": reconcile.get("classes", {}),
+        "stale_candidate_count": len(reconcile.get("stale_cancel_candidates", [])),
+    },
+}
+print(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
+' "$owner_instance" "$port" "${live_count:-unknown}" "${elapsed:-0}" "${max_wait:-0}" <<< "$reconcile_json" 2>/dev/null || true
+    )"
+}
+
 reconcile_inactive_target_recovery_executions() {
     local target_container="$1"
     if [[ -z "$target_container" ]] || ! deploy_db_available; then
         return 0
     fi
-    local target_sql reconciled
-    target_sql="$(sql_escape "$target_container")"
-    reconciled="$(
-        deploy_db_exec "
-            WITH candidates AS (
-                SELECT te.id
-                FROM chat_turn_executions te
-                WHERE te.owner_instance = '$target_sql'
-                  AND te.status IN ('running', 'retrying')
-                  AND te.completed_at IS NULL
-                  AND COALESCE(te.error_message, '') = 'recovery_auto_retry_scheduled'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM chat_messages m
-                      WHERE m.execution_id = te.id
-                        AND m.intent = 'streaming_placeholder'
-                        AND COALESCE(m.is_hidden, false) = true
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM chat_messages m2
-                      WHERE m2.execution_id = te.id
-                        AND m2.role = 'assistant'
-                        AND length(COALESCE(m2.content, '')) > 500
-                  )
-            ),
-            updated AS (
-                UPDATE chat_turn_executions te
-                SET status = 'cancelled',
-                    completed_at = NOW(),
-                    updated_at = NOW(),
-                    lease_expires_at = NOW(),
-                    error_message = 'inactive target slot recovery reconciled before deploy'
-                FROM candidates c
-                WHERE te.id = c.id
-                RETURNING te.id
-            )
-            SELECT count(*) FROM updated;
-        " | tail -1 | tr -d '[:space:]'
-    )"
-    if [[ "$reconciled" =~ ^[0-9]+$ ]] && [[ "$reconciled" -gt 0 ]]; then
-        echo "[deploy.sh] reconciled inactive target recovery executions: container=${target_container}, count=${reconciled}"
-        audit_control "target-slot-recovery-reconcile" "$target_container" "success" "cancelled_hidden_recovery=${reconciled}"
+    LAST_STREAM_RECONCILE_JSON=""
+    if [[ -x "$DEPLOY_STREAM_CLASSIFIER" ]]; then
+        local apply_flag=()
+        if [[ "${AADS_DEPLOY_STALE_STREAM_APPLY:-false}" == "true" ]]; then
+            apply_flag=(--apply)
+        fi
+        LAST_STREAM_RECONCILE_JSON="$(
+            python3 "$DEPLOY_STREAM_CLASSIFIER" \
+                --owner-instance "$target_container" \
+                --ttl-seconds "${AADS_DEPLOY_STALE_HEARTBEAT_TTL_SECONDS:-90}" \
+                --mode reconcile "${apply_flag[@]}" 2>/dev/null || true
+        )"
+        if [[ -n "$LAST_STREAM_RECONCILE_JSON" ]]; then
+            echo "[deploy.sh] stream reconcile ${target_container}: ${LAST_STREAM_RECONCILE_JSON}"
+            audit_control "stream-reconcile" "$target_container" "success" "${LAST_STREAM_RECONCILE_JSON:0:500}"
+        fi
     fi
 }
 
@@ -1474,7 +1508,7 @@ sync_standby_slot_after_drain() {
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
 
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800}"
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
         local active="0"
@@ -1503,11 +1537,13 @@ sync_standby_slot_after_drain() {
         done
 
         if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
+            set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-unknown}" "$elapsed" "$drain_max"
             echo "[deploy.sh] standby sync ERROR: ${old_container}:${old_port} still has active streams=${active}"
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             audit_control "standby-sync" "${old_container}:${old_port}" "failed" "drain timeout active=${active}"
             return 1
         fi
+        set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-0}" "$elapsed" "$drain_max"
 
         if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
             audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "ownership changed after drain"
@@ -1816,8 +1852,8 @@ case "$MODE" in
         fi
         echo "[deploy.sh] 현재: :${CURRENT_PORT} → 전환 대상: :${NEW_PORT} (${NEW_CONTAINER})"
 
-        reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         deploy_phase_start "target_slot_drain" "running"
+        reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
         if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
             local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800}"
@@ -1853,6 +1889,7 @@ case "$MODE" in
         elif [[ "$TARGET_STREAMS" != "0" ]]; then
             echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
         fi
+        set_deploy_stream_phase_metadata "$NEW_CONTAINER" "$NEW_PORT" "${TARGET_STREAMS:-unknown}" "${local_target_elapsed:-0}" "${local_target_drain_max:-0}"
         deploy_phase_end "target_slot_drain" "success" "active_streams=${TARGET_STREAMS}"
 
         # ① release image 1회 빌드 + 새 컨테이너 시작
@@ -1920,6 +1957,7 @@ case "$MODE" in
                 echo "[deploy.sh] ⚠️ ${ACTIVE_STREAMS}건 스트림 아직 활성 — nginx graceful reload로 전환 진행 (기존 worker가 스트림 유지)"
             fi
         fi
+        set_deploy_stream_phase_metadata "$ACTIVE_CONTAINER" "$CURRENT_PORT" "${ACTIVE_STREAMS:-unknown}" "${DRAIN_ELAPSED:-0}" "60"
         deploy_phase_end "active_slot_drain" "success" "active_streams=${ACTIVE_STREAMS:-unknown}"
 
         # ③ upstream 전환 (aads-upstream.conf에서 backup 키워드 조작)
