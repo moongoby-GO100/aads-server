@@ -1,5 +1,20 @@
 # AADS HANDOVER
 
+## 2026-09-07 16:43 KST - Ops deploy queue response wording fix
+
+- Request:
+  - CEO asked to move commit/push/deploy into ops DB automation, shorten chat response waits, and ensure code changes reach production without being missed.
+- Context:
+  - The ops deploy queue path is already on `origin/main`: Pipeline Runner pushes the release SHA, inserts `deploy_runs.status='queued'/phase='queued_for_deploy'`, and starts `scripts/start_aads_deploy_queue_worker.sh` from a clean release worktree.
+  - Runtime deploy run `125` is rolling out `e4795e1bcb16` and reached `p0p1_monitoring` at this checkpoint.
+- Change:
+  - `app/services/pipeline_runner_service.py`: changed the approval chat message from "git push + service restart" to "git push then ops deploy queue registration" so the UI reflects the async deploy handoff instead of implying a blocking restart.
+- Verification:
+  - `python3 -m py_compile app/services/pipeline_runner_service.py` passed.
+  - `git diff --check` passed before this entry.
+- Pending:
+  - Commit/push this wording fix, queue/deploy the new release SHA, and verify deploy certification after P0/P1 monitoring.
+
 ## 2026-09-07 16:09 KST - Stale retrying cleanup SQL parameter fix
 
 - Request:

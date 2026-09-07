@@ -881,7 +881,7 @@ class PipelineCJob:
             await self._save_to_db()
             await self._post_to_chat(
                 f"🚀 **[배포 시작]** `{self.job_id}`\n"
-                f"승인 완료. git push + 서비스 재시작 진행 중..."
+                f"승인 완료. git push 후 ops 배포 큐에 등록합니다..."
             )
 
             from app.core.git_lock import git_project_lock
