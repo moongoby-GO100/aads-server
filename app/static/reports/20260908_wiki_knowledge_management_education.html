@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wiki/지식화 최신 기술 교육자료 - AADS/OHVIS</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5b6472;
+      --line: #d9dee7;
+      --paper: #f7f8fb;
+      --panel: #ffffff;
+      --navy: #20304a;
+      --green: #13795b;
+      --red: #a33a32;
+      --amber: #9a6700;
+      --blue: #2563a9;
+      --violet: #6d4ea2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.65;
+    }
+    header {
+      background: #111827;
+      color: #fff;
+      padding: 40px 28px 28px;
+      border-bottom: 5px solid #2f855a;
+    }
+    header .wrap, main {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 34px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 42px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--line);
+      font-size: 25px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 26px 0 10px;
+      font-size: 19px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0 12px; }
+    main { padding: 28px; }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .meta div, .note, .callout, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    header .meta div {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .label {
+      display: block;
+      color: #cbd5e1;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .value { font-weight: 700; }
+    .lead {
+      max-width: 960px;
+      color: #d7dee9;
+      font-size: 17px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card h3 { margin-top: 0; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--blue);
+      margin-right: 6px;
+    }
+    .tag.ok { background: var(--green); }
+    .tag.warn { background: var(--amber); }
+    .tag.gap { background: var(--red); }
+    .tag.partial { background: var(--violet); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 22px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #edf1f7;
+      font-weight: 800;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      background: #eef2f7;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow-x: auto;
+      background: #101827;
+      color: #edf2f7;
+      padding: 16px;
+      border-radius: 8px;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+    .callout {
+      border-left: 5px solid var(--green);
+      margin: 18px 0;
+    }
+    .warning { border-left-color: var(--amber); }
+    .danger { border-left-color: var(--red); }
+    .toc a {
+      display: block;
+      color: var(--blue);
+      text-decoration: none;
+      padding: 4px 0;
+    }
+    .small { color: var(--muted); font-size: 13px; }
+    .diagram {
+      white-space: pre;
+      overflow-x: auto;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      line-height: 1.35;
+    }
+    a { color: #1d4f91; }
+    @media (max-width: 820px) {
+      .meta, .grid, .grid.three { grid-template-columns: 1fr; }
+      header, main { padding-left: 18px; padding-right: 18px; }
+      h1 { font-size: 28px; }
+      table { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Wiki 등 지식화 최신 기술 교육자료</h1>
+      <p class="lead">CEO가 AI 바이브코딩, 운영 자동화, 장기 기억, 문서 지식화, 에이전트 검수 체계를 판단할 수 있도록 최신 기술과 AADS/OHVIS 적용 상태를 함께 정리한 교육자료입니다.</p>
+      <div class="meta">
+        <div><span class="label">작성 기준</span><span class="value">2026-09-08 04:47 KST</span></div>
+        <div><span class="label">대상</span><span class="value">AADS / OHVIS / 6개 프로젝트</span></div>
+        <div><span class="label">핵심 주제</span><span class="value">LLM Wiki, RAG, GraphRAG, MCP, Eval, Ops</span></div>
+        <div><span class="label">작성 목적</span><span class="value">CEO 교육 + 적용 로드맵</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="callout">
+      <h2 id="summary">핵심 결론</h2>
+      <p>2026년 지식화의 정답은 하나의 위키나 하나의 벡터DB가 아닙니다. 실무 최적 구조는 <strong>원문 보존 + 근거 청크 + LLM Wiki + 지식그래프 + 벡터/키워드 검색 + 평가/보안 게이트</strong>를 결합하는 방식입니다.</p>
+      <p>AADS/OHVIS는 이미 <code>memory_facts</code>, <code>ohvis_wiki_pages</code>, <code>kg_entities</code>, <code>kg_relations</code>, pgvector 임베딩, Auto-RAG 기반이 있습니다. 다음 단계는 이 기반을 "읽을 수 있는 위키", "검증 가능한 출처", "실행 가능한 스킬", "실패를 줄이는 Error Book"으로 닫는 것입니다.</p>
+    </section>
+
+    <section>
+      <h2 id="toc">목차</h2>
+      <div class="toc grid three">
+        <div class="card">
+          <a href="#terms">1. 핵심 용어</a>
+          <a href="#landscape">2. 최신 기술 지도</a>
+          <a href="#routing">3. 지식 검색 라우팅</a>
+        </div>
+        <div class="card">
+          <a href="#pipeline">4. 지식화 파이프라인</a>
+          <a href="#aads">5. AADS/OHVIS 적용 상태</a>
+          <a href="#examples">6. 실전 예시</a>
+        </div>
+        <div class="card">
+          <a href="#roadmap">7. 권장 로드맵</a>
+          <a href="#metrics">8. 검증 지표</a>
+          <a href="#sources">9. 출처</a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="terms">1. 핵심 용어</h2>
+      <table>
+        <thead><tr><th>용어</th><th>쉽게 말하면</th><th>CEO가 기억할 판단 기준</th></tr></thead>
+        <tbody>
+          <tr><td>지식화</td><td>문서, 대화, 로그, 코드, 검색 결과를 재사용 가능한 사실·절차·판단 규칙으로 바꾸는 작업</td><td>"저장했다"가 아니라 "다음 실행 품질이 좋아졌는가"로 판단합니다.</td></tr>
+          <tr><td>RAG</td><td>질문이 들어올 때 관련 문서 조각을 찾아 LLM에 넣는 방식</td><td>빠르고 단순하지만, 매번 다시 조립하므로 장기 누적 지식에는 약합니다.</td></tr>
+          <tr><td>Hybrid Search</td><td>키워드 검색, 벡터 검색, 메타데이터 필터를 같이 쓰는 방식</td><td>운영 시스템은 벡터 검색만 쓰면 위험합니다. 프로젝트·날짜·권한 필터가 필수입니다.</td></tr>
+          <tr><td>GraphRAG</td><td>문서 안의 사람·파일·시스템·원인·결과 관계를 그래프로 만들고 탐색하는 RAG</td><td>"왜 반복되는가", "무엇과 연결됐는가" 같은 질문에 강합니다.</td></tr>
+          <tr><td>LLM Wiki</td><td>LLM이 원문을 읽고 지속적인 위키 페이지와 링크로 컴파일하는 방식</td><td>반복 질문·장기 프로젝트·경영 판단에 유리하지만, 자동 갱신과 출처 검증이 없으면 썩습니다.</td></tr>
+          <tr><td>Temporal Knowledge Graph</td><td>사실이 언제 유효했고 언제 폐기됐는지 시간까지 가진 지식그래프</td><td>운영 지식은 "예전에는 맞았지만 지금은 틀림"이 많으므로 시간성이 중요합니다.</td></tr>
+          <tr><td>Context Engineering</td><td>모델에게 넣을 지시·문서·메모리·도구 결과를 상황별로 설계하는 기술</td><td>프롬프트보다 넓은 개념입니다. 좋은 답은 좋은 컨텍스트 컴파일에서 나옵니다.</td></tr>
+          <tr><td>MCP</td><td>AI 앱이 외부 도구와 자료를 표준 방식으로 연결하는 프로토콜</td><td>도구 연결은 MCP로 표준화하되, 권한·감사는 AADS DB 정책으로 통제해야 합니다.</td></tr>
+          <tr><td>Eval</td><td>검색·답변·인용·정책 준수 품질을 반복 측정하는 테스트 체계</td><td>지식화의 성공은 "느낌"이 아니라 정확도, 인용률, 최신성, 재발률로 봐야 합니다.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="landscape">2. 최신 기술 지도</h2>
+      <div class="grid">
+        <div class="card">
+          <h3><span class="tag ok">기본</span>Vector RAG</h3>
+          <p>문서를 청크로 자르고 임베딩해 벡터DB에서 의미적으로 가까운 조각을 찾습니다. OpenAI Retrieval 문서는 vector store가 semantic search의 인덱스 역할을 하며, semantic search가 키워드가 거의 겹치지 않아도 의미상 가까운 결과를 찾을 수 있다고 설명합니다.</p>
+          <p><strong>잘 맞는 경우:</strong> FAQ, 정책 문서, 단일 사실 찾기, 문서량이 많고 자주 바뀌는 경우.</p>
+          <p><strong>주의:</strong> 유사한 문서가 최신 문서라는 보장은 없습니다. 반드시 <code>project</code>, <code>source_type</code>, <code>published_at</code>, <code>sensitivity</code> 필터가 필요합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag ok">실무 필수</span>Hybrid Search</h3>
+          <p>BM25/키워드 검색, 벡터 검색, SQL exact lookup, 권한/날짜/프로젝트 필터를 조합합니다. 운영 지식에서는 "GO100", "#310", "deploy_runs id=130"처럼 정확히 일치해야 하는 질의가 많으므로 벡터만으로는 부족합니다.</p>
+          <p><strong>AADS 권장:</strong> 정확한 ID·날짜·상태는 SQL, 넓은 의미 검색은 벡터, 원인·영향은 그래프, 최신 외부 사실은 웹/공식문서로 분리합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag partial">관계형 지식</span>GraphRAG</h3>
+          <p>Microsoft GraphRAG는 그래프 커뮤니티 리포트와 local/global search를 사용합니다. 넓은 데이터셋의 주제 요약이나 여러 사건의 관계 파악에 강합니다.</p>
+          <p><strong>잘 맞는 질문:</strong> "최근 채팅 장애가 반복된 공통 원인은?", "GO100 주문 차단과 #310 전략카드는 어떤 관계인가?"</p>
+          <p><strong>주의:</strong> 단일 사실 조회에는 과할 수 있습니다. GraphRAG는 모든 질문의 기본값이 아니라 관계형·다중 hop 질문에 써야 합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag partial">경량 그래프</span>LightRAG</h3>
+          <p>LightRAG는 그래프 구조와 벡터 표현을 함께 사용하며, 저수준/고수준 검색을 결합하는 dual-level retrieval을 제안합니다. 대형 GraphRAG보다 가볍고 증분 업데이트 관점이 강합니다.</p>
+          <p><strong>AADS 적용:</strong> 매일 쌓이는 채팅, HANDOVER, 러너 결과를 빠르게 그래프/벡터에 반영하는 구조에 적합합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag ok">장기 지식</span>LLM Wiki / OpenWiki</h3>
+          <p>Karpathy의 LLM Wiki는 raw document를 매번 검색하는 대신 LLM이 지속적인 Markdown wiki를 만들고 유지하는 패턴입니다. LangChain OpenWiki는 코드베이스나 개인 지식용 Markdown wiki를 작성·유지하는 CLI로 등장했습니다.</p>
+          <p><strong>장점:</strong> 반복 설명 감소, 프로젝트 온보딩 개선, cross-reference 유지, 사람이 검수 가능.</p>
+          <p><strong>한계:</strong> 자동 생성 위키는 틀릴 수 있습니다. claims, source manifest, stale policy, reviewer gate가 필요합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag ok">시간성</span>Temporal KG / Graphiti</h3>
+          <p>Zep Graphiti는 대화, 비즈니스 데이터, 문서를 temporal context graph로 만들고, 사실이 바뀌면 오래된 사실을 무효화합니다. vector, full-text, graph traversal을 결합하는 점이 중요합니다.</p>
+          <p><strong>AADS 적용:</strong> 서버명, 배포 슬롯, runner 상태, CEO 결정처럼 시간에 따라 바뀌는 운영 지식에 반드시 필요합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag ok">연결 표준</span>MCP</h3>
+          <p>2026-07-28 MCP 사양은 LLM 앱과 외부 데이터·도구를 표준 방식으로 연결합니다. Resources, Prompts, Tools 개념이 있어 wiki page, runbook, DB 조회, 브라우저, 파일 읽기 도구를 같은 표면으로 노출할 수 있습니다.</p>
+          <p><strong>AADS 적용:</strong> 모든 프로젝트 도구를 MCP-like schema로 통일하고, active_project와 승인 정책을 강제해야 합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag ok">검증</span>RAG/Eval/Trace</h3>
+          <p>LangSmith RAG 평가와 OpenAI Evals는 정답 정확도뿐 아니라 groundedness, retrieval relevance, grader 기준을 분리해 측정합니다.</p>
+          <p><strong>AADS 적용:</strong> "좋은 답변"을 수동 감으로 보지 말고, 검색 근거 적합도와 답변 인용 충실도를 각각 측정해야 합니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag warn">보안</span>OWASP / NIST</h3>
+          <p>OWASP LLM Top 10 2025는 prompt injection, sensitive information disclosure, data/model poisoning, excessive agency, vector/embedding weaknesses를 주요 위험으로 제시합니다. NIST AI RMF는 AI 시스템의 설계·개발·사용·평가 전 생명주기 리스크 관리를 강조합니다.</p>
+          <p><strong>AADS 적용:</strong> 외부 문서 ingestion 전 sanitizer, secret scan, trust score, 권한 필터, destructive action gate가 필수입니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="routing">3. 지식 검색 라우팅: 무엇을 언제 써야 하는가</h2>
+      <table>
+        <thead><tr><th>질문 유형</th><th>1순위</th><th>2순위</th><th>예시</th><th>잘못된 선택</th></tr></thead>
+        <tbody>
+          <tr><td>정확한 현재 상태</td><td>SQL/DB 조회</td><td>로그/헬스체크</td><td>"지금 running 작업 몇 개입니까?"</td><td>과거 위키나 벡터 검색으로 답변</td></tr>
+          <tr><td>파일/코드 위치</td><td>코드 검색</td><td>OpenWiki/문서</td><td>"chat_service에서 최종응답 저장 위치는?"</td><td>문서만 믿고 코드 미확인</td></tr>
+          <tr><td>반복 장애 원인</td><td>Temporal KG</td><td>GraphRAG + 로그</td><td>"왜 채팅 응답 사라짐이 반복됩니까?"</td><td>최근 로그 1개만 보고 단정</td></tr>
+          <tr><td>넓은 주제 교육</td><td>LLM Wiki</td><td>GraphRAG/공식문서</td><td>"지식화 최신기술 교육자료 만들어줘"</td><td>벡터 top-k 조각만 붙여 요약</td></tr>
+          <tr><td>단일 사실 찾기</td><td>Hybrid RAG</td><td>OpenAI/File Search류</td><td>"이 API가 metadata filtering 지원합니까?"</td><td>그래프 구축부터 시작</td></tr>
+          <tr><td>외부 최신 정보</td><td>공식문서/웹 검색</td><td>팩트체크</td><td>"2026 MCP 최신 사양은?"</td><td>학습 지식으로 최신 단정</td></tr>
+          <tr><td>운영 절차 실행</td><td>Skill/Runbook</td><td>MCP Tool</td><td>"AADS bluegreen 배포해"</td><td>일반 챗봇 답변만 생성</td></tr>
+        </tbody>
+      </table>
+      <div class="diagram">권장 라우터
+
+User Question
+  |
+  +-- ID/status/current metric? ----> SQL exact lookup + log
+  |
+  +-- Code/file behavior? ----------> rg/code read + OpenWiki pointer
+  |
+  +-- Cross-document synthesis? ----> LLM Wiki + source manifest
+  |
+  +-- Cause/effect/timeline? -------> Temporal KG / GraphRAG
+  |
+  +-- Long-tail document fact? -----> Hybrid RAG
+  |
+  +-- Latest external fact? --------> Official docs/web + date
+  |
+  +-- Action requested? ------------> Skill + approval gate + trace</div>
+    </section>
+
+    <section>
+      <h2 id="pipeline">4. 효과적이고 효율적인 지식화 파이프라인</h2>
+      <table>
+        <thead><tr><th>단계</th><th>해야 할 일</th><th>효율화 포인트</th><th>검수 기준</th></tr></thead>
+        <tbody>
+          <tr><td>1. 수집</td><td>채팅, 파일, 커밋, 로그, DB row, 외부 URL, PDF, 이미지 OCR을 원문으로 보존</td><td>중복 URL/파일 hash로 재수집 방지</td><td>source_uri, checksum, accessed_at 존재</td></tr>
+          <tr><td>2. 정화</td><td>HTML 노이즈 제거, prompt injection 제거, secret scan, PII 라벨링</td><td>수집 직후 자동 sanitizer 적용</td><td>위험 문구·시크릿 미포함</td></tr>
+          <tr><td>3. 분해</td><td>문서를 evidence chunk, fact 후보, entity, relation으로 분해</td><td>구조화 문서는 heading 기반, 코드는 symbol 기반 chunk</td><td>chunk가 너무 작거나 크지 않음</td></tr>
+          <tr><td>4. 색인</td><td>BM25, vector, graph edge, SQL metadata를 모두 구축</td><td>query type별 색인 선택</td><td>project/date/sensitivity 필터 가능</td></tr>
+          <tr><td>5. 컴파일</td><td>LLM Wiki page, summary, source manifest, 관련 링크를 생성</td><td>변경된 source만 증분 컴파일</td><td>claim마다 출처 연결</td></tr>
+          <tr><td>6. 승격</td><td>fact -> lesson -> procedure -> policy -> skill로 승격</td><td>반복 성공/실패만 승격해 노이즈 억제</td><td>confidence, reviewer, evidence_level 존재</td></tr>
+          <tr><td>7. 적용</td><td>프롬프트, runbook, tool policy, UI, 코드 개선에 반영</td><td>skill search로 필요한 것만 로딩</td><td>compiled_prompt_provenance 또는 trace로 확인</td></tr>
+          <tr><td>8. 평가</td><td>retrieval recall, groundedness, citation coverage, stale rate 측정</td><td>대표 질문 세트 자동 회귀</td><td>기준 미달 시 자동 개선 후보 생성</td></tr>
+        </tbody>
+      </table>
+
+      <h3>권장 메타데이터</h3>
+      <pre><code>{
+  "project": "AADS",
+  "domain": "chat|deploy|runner|finance|design|security",
+  "knowledge_type": "source|evidence|fact|decision|procedure|policy|skill|error_book",
+  "source_uri": "docs/reports/... or https://official-doc",
+  "source_hash": "sha256:...",
+  "trust_level": "db_verified|official|primary_research|vendor|community|unknown",
+  "sensitivity": "public|internal|confidential|secret",
+  "freshness": "static|versioned|volatile|real_time",
+  "valid_from": "2026-09-08T04:47:00+09:00",
+  "valid_to": null,
+  "confidence": 0.82,
+  "evidence_level": "observed|source_backed|tested|deployed|ceo_approved",
+  "supersedes": [],
+  "related_entities": ["aads-server", "memory_facts", "ohvis_wiki_pages"]
+}</code></pre>
+    </section>
+
+    <section>
+      <h2 id="aads">5. 현재 AADS/OHVIS 적용 상태</h2>
+      <p>다음 값은 2026-09-08 04:47 KST 전후 실제 DB 조회와 코드/마이그레이션 확인 기준입니다.</p>
+      <table>
+        <thead><tr><th>구성요소</th><th>현재 상태</th><th>실측/근거</th><th>판정</th></tr></thead>
+        <tbody>
+          <tr><td>장기 사실 저장소</td><td><code>memory_facts</code> 운영</td><td>71,715건 [DB 조회]</td><td><span class="tag ok">적용됨</span></td></tr>
+          <tr><td>LLM Wiki 페이지</td><td><code>ohvis_wiki_pages</code> 존재</td><td>1,693건 [DB 조회]</td><td><span class="tag partial">부분 적용</span></td></tr>
+          <tr><td>지식그래프 엔티티</td><td><code>kg_entities</code> 존재</td><td>143건 [DB 조회]</td><td><span class="tag partial">부분 적용</span></td></tr>
+          <tr><td>지식그래프 관계</td><td><code>kg_relations</code> 존재</td><td>627건 [DB 조회]</td><td><span class="tag partial">부분 적용</span></td></tr>
+          <tr><td>AI 관찰/교훈</td><td><code>ai_observations</code>, <code>ai_meta_memory</code></td><td>830건 / 992건 [DB 조회]</td><td><span class="tag ok">적용됨</span></td></tr>
+          <tr><td>산출물 저장</td><td><code>chat_artifacts</code></td><td>31,911건 [DB 조회]</td><td><span class="tag ok">적용됨</span></td></tr>
+          <tr><td>임베딩</td><td>pgvector 768차원, HNSW 인덱스, local/Ollama 우선 route</td><td><code>migrations/029</code>, <code>031</code>, <code>145</code>, <code>146</code>, <code>chat_embedding_service.py</code> [코드 확인]</td><td><span class="tag ok">적용됨</span></td></tr>
+          <tr><td>Auto-RAG</td><td>메시지 기반 시맨틱 검색</td><td><code>app/services/auto_rag.py</code> [코드 확인]</td><td><span class="tag ok">적용됨</span></td></tr>
+          <tr><td>Wiki 검색 fallback</td><td>wiki page 우선, 없으면 memory_facts fallback</td><td><code>app/services/ohvis_harness.py</code> [코드 확인]</td><td><span class="tag partial">부분 적용</span></td></tr>
+          <tr><td>Error Book</td><td><code>ohvis_wiki_error_book</code> 테이블 설계 존재</td><td><code>migrations/158_ohvis_harness_skill_wiki_foundation.sql</code> [코드 확인]</td><td><span class="tag partial">기반 있음</span></td></tr>
+          <tr><td>Skill Library</td><td><code>ops_skill_library</code> 설계/시드 존재</td><td><code>migrations/158</code> [코드 확인]</td><td><span class="tag partial">기반 있음</span></td></tr>
+          <tr><td>지식 Eval</td><td>전용 retrieval eval/groundedness eval은 미확인</td><td>이번 범위에서 전용 eval 테이블/자동 평가 루프 확인 못 함 [미검증]</td><td><span class="tag gap">보강 필요</span></td></tr>
+          <tr><td>공개 접근</td><td>정적 보고서는 repo에 추가되나 public dashboard ingress 반영은 별도 배포 필요</td><td>이전 static 보고서도 public /static 404 기록 있음 [HANDOVER 확인]</td><td><span class="tag warn">배포 별도</span></td></tr>
+        </tbody>
+      </table>
+
+      <h3>AADS에 맞는 목표 구조</h3>
+      <div class="diagram">AADS/OHVIS Knowledge OS
+
+Sources
+  chat_messages | HANDOVER | git diff | deploy logs | DB rows | docs | web official sources
+    |
+    v
+Ingestion Gate
+  dedupe | sanitizer | secret scan | trust score | sensitivity label
+    |
+    v
+Evidence Layer
+  source snapshot | evidence chunk | source manifest | checksum
+    |
+    +-- SQL exact index
+    +-- BM25/full-text index
+    +-- pgvector semantic index
+    +-- temporal knowledge graph
+    +-- LLM Wiki pages and links
+    |
+    v
+Context Compiler
+  active_project | role | intent | risk | freshness | provenance
+    |
+    v
+Action Layer
+  answer | directive | skill | runner job | code change | deploy | alert
+    |
+    v
+Eval and Promotion
+  groundedness | citation coverage | stale detection | error book | policy update</div>
+    </section>
+
+    <section>
+      <h2 id="examples">6. 실전 예시</h2>
+      <h3>예시 1. CEO 질문: "GO100 #310이 왜 매수 안 됐나?"</h3>
+      <table>
+        <thead><tr><th>단계</th><th>좋은 처리</th><th>나쁜 처리</th></tr></thead>
+        <tbody>
+          <tr><td>현재 상태</td><td>GO100 DB에서 주문, 캘린더, 신호, gate 상태를 조회</td><td>과거 기억으로 "조건 미충족 같습니다"라고 단정</td></tr>
+          <tr><td>관련 지식</td><td>#310 wiki page, 최근 HANDOVER, 전략카드 결정, error book 검색</td><td>종목코드만 보고 전략 이름/조건 누락</td></tr>
+          <tr><td>관계 분석</td><td>전략카드 -> 진입조건 -> 주문게이트 -> 브로커세션 -> 실제 주문 로그 그래프 탐색</td><td>로그 한 줄만 보고 원인 확정</td></tr>
+          <tr><td>보고</td><td>종목명(코드), 수치, 차단 gate, 미검증 항목, 즉시 조치 분리</td><td>완료/정상 여부 미검증 보고</td></tr>
+        </tbody>
+      </table>
+
+      <h3>예시 2. CEO 질문: "채팅 최종응답이 왜 사라졌나?"</h3>
+      <table>
+        <thead><tr><th>검색 계층</th><th>확인 내용</th><th>결과물</th></tr></thead>
+        <tbody>
+          <tr><td>SQL</td><td><code>chat_turn_executions</code>, <code>chat_messages</code>, current_execution_id 상태</td><td>실제 중단/완료/partial 저장 여부</td></tr>
+          <tr><td>코드</td><td><code>chat_service.py</code>, SSE done event, completion token 처리</td><td>재현 가능한 원인 위치</td></tr>
+          <tr><td>위키</td><td>과거 채팅 장애 문서, HANDOVER, Error Book</td><td>반복 패턴과 이전 조치</td></tr>
+          <tr><td>그래프</td><td>배포, 메모리, 스트리밍, stale cleanup 사이 관계</td><td>재발 방지 우선순위</td></tr>
+          <tr><td>Eval</td><td>응답 보존 회귀 테스트, UI/API 폴백 검증</td><td>완료 판정 근거</td></tr>
+        </tbody>
+      </table>
+
+      <h3>예시 3. 교육자료를 지식화하는 방식</h3>
+      <pre><code>1. HTML/Markdown 보고서를 source로 저장
+2. 각 장을 evidence chunk로 분해
+3. 핵심 claim을 memory_facts로 승격
+4. "Wiki/지식화" wiki page를 생성 또는 갱신
+5. RAG, GraphRAG, MCP, Eval, Security page와 양방향 링크
+6. 이 교육자료의 출처와 작성 시각을 source manifest로 연결
+7. 이후 CEO가 "지식화 뭐가 좋나"라고 물으면 wiki page 우선 검색</code></pre>
+    </section>
+
+    <section>
+      <h2 id="roadmap">7. AADS/OHVIS 권장 로드맵</h2>
+      <table>
+        <thead><tr><th>우선순위</th><th>작업</th><th>기대 효과</th><th>완료 기준</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>Knowledge Source Manifest 확정</td><td>출처 없는 기억과 검증된 지식을 분리</td><td>모든 report/wiki/fact에 source_uri, hash, trust_level, accessed_at 기록</td></tr>
+          <tr><td>P0</td><td>지식 검색 라우터 도입</td><td>DB/코드/위키/그래프/벡터/웹을 질문 유형별로 선택</td><td>대표 질문 30개에서 잘못된 검색 계층 사용률 5% 이하</td></tr>
+          <tr><td>P0</td><td>Error Book 운영화</td><td>반복 실패를 자동 예방 지식으로 승격</td><td>동일 error_key 재발 시 이전 예방책 자동 노출</td></tr>
+          <tr><td>P1</td><td>LLM Wiki page/link API</td><td>CEO와 에이전트가 위키를 search/read/follow 가능</td><td><code>/api/v1/wiki/search</code>, <code>/read</code>, <code>/links</code> 검증</td></tr>
+          <tr><td>P1</td><td>Temporal KG 확장</td><td>유효기간이 지난 운영 사실 오답 방지</td><td>valid_from, valid_to, invalidated_by_event_id 지원</td></tr>
+          <tr><td>P1</td><td>RAG Eval 자동화</td><td>검색 품질을 숫자로 검수</td><td>retrieval recall, citation support, groundedness 대시보드</td></tr>
+          <tr><td>P1</td><td>Skill 승격 루프</td><td>반복 업무를 runbook/skill로 자동 재사용</td><td>trace -> wiki -> skill proposal -> approval -> versioned skill</td></tr>
+          <tr><td>P2</td><td>OpenWiki류 repo documentation 자동 갱신</td><td>코딩 에이전트가 매번 repo를 전수 재탐색하지 않음</td><td>PR/merge 전 wiki diff 생성 및 AGENTS.md pointer 반영</td></tr>
+          <tr><td>P2</td><td>외부 SaaS 관측 연동 옵션</td><td>LangSmith/Langfuse 계열 trace/eval 활용</td><td>내부 trace schema와 외부 export adapter 분리</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="metrics">8. 검증 지표와 CEO 완료 판정법</h2>
+      <table>
+        <thead><tr><th>지표</th><th>의미</th><th>권장 기준</th><th>왜 중요한가</th></tr></thead>
+        <tbody>
+          <tr><td>Source Coverage</td><td>답변 claim 중 출처가 붙은 비율</td><td>운영 보고 90% 이상</td><td>근거 없는 단정 방지</td></tr>
+          <tr><td>Retrieval Recall</td><td>정답에 필요한 근거를 검색했는가</td><td>핵심 질문 세트 85% 이상</td><td>좋은 생성보다 좋은 검색이 먼저</td></tr>
+          <tr><td>Citation Support</td><td>인용한 출처가 해당 claim을 실제로 지지하는가</td><td>중요 보고 95% 이상</td><td>출처 장식 방지</td></tr>
+          <tr><td>Stale Fact Rate</td><td>폐기된 사실이 답변에 섞인 비율</td><td>고위험 운영 0%</td><td>날짜·상태가 바뀌는 시스템에서 치명적</td></tr>
+          <tr><td>Query Cost</td><td>질문당 토큰/도구 비용</td><td>질문 유형별 budget 설정</td><td>위키가 항상 RAG보다 싸지는 않음</td></tr>
+          <tr><td>Time To Answer</td><td>CEO가 답을 받기까지 걸린 시간</td><td>상태조회 3초, 분석형은 단계 보고</td><td>운영 의사결정 속도</td></tr>
+          <tr><td>Repeat Error Rate</td><td>같은 오류가 다시 발생한 비율</td><td>error_book 등록 후 감소 추세</td><td>지식화가 실제 행동을 바꿨는지 확인</td></tr>
+          <tr><td>Promotion Precision</td><td>승격한 기억이 실제로 유용한 비율</td><td>저품질 memory 자동 강등</td><td>기억이 많을수록 노이즈 관리가 중요</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warning">
+        <h3>CEO가 보고 받을 때 확인할 5문장</h3>
+        <p>1. 이 답변의 원문 출처는 어디입니까?</p>
+        <p>2. 현재 상태 수치는 DB/로그에서 방금 조회했습니까?</p>
+        <p>3. 이 지식은 어느 프로젝트와 어느 시점까지 유효합니까?</p>
+        <p>4. 이 결론에 반대되는 과거 지식이나 충돌 사실은 없습니까?</p>
+        <p>5. 다음번 같은 질문에서 더 빨라지도록 wiki/fact/skill/error book에 무엇을 남겼습니까?</p>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="implementation">9. 구현 설계 초안</h2>
+      <h3>권장 테이블 확장</h3>
+      <pre><code>knowledge_source_manifests
+  id, project, source_uri, source_type, title, sha256,
+  publisher, published_at, accessed_at, trust_level,
+  sensitivity, license, raw_snapshot_uri, metadata
+
+knowledge_evidence_chunks
+  id, source_id, project, domain, heading_path,
+  chunk_text, token_count, embedding, bm25_text,
+  entity_ids, relation_ids, created_at
+
+knowledge_claims
+  id, project, claim_text, source_chunk_ids,
+  confidence, evidence_level, valid_from, valid_to,
+  superseded_by, reviewer, created_at
+
+knowledge_retrieval_evals
+  id, query, expected_source_ids, retrieved_source_ids,
+  answer_id, retrieval_recall, citation_support,
+  groundedness, latency_ms, cost_usd, created_at</code></pre>
+
+      <h3>Context Compiler 의사코드</h3>
+      <pre><code>def compile_context(question, project, intent, risk):
+    if asks_current_state(question):
+        return sql_lookup(project, question) + recent_logs(project)
+
+    if asks_code_behavior(question):
+        return code_search(question) + wiki_pointer(project, "code")
+
+    if asks_relationship_or_root_cause(question):
+        return temporal_graph_search(project, question) + error_book(project)
+
+    if asks_broad_education_or_strategy(question):
+        return wiki_search(project, question) + official_sources(question)
+
+    if asks_external_latest(question):
+        return official_web_search(question, accessed_at_kst=now())
+
+    return hybrid_rag(project, question, filters={
+        "project": project,
+        "sensitivity": allowed_for_user(),
+        "valid_at": now()
+    })</code></pre>
+    </section>
+
+    <section>
+      <h2 id="risks">10. 리스크와 금지사항</h2>
+      <table>
+        <thead><tr><th>리스크</th><th>증상</th><th>예방책</th></tr></thead>
+        <tbody>
+          <tr><td>출처 없는 위키</td><td>위키가 그럴듯하지만 검증 불가</td><td>claim별 source_ids와 checksum 강제</td></tr>
+          <tr><td>오래된 사실 회상</td><td>이미 바뀐 서버/정책/가격을 현재처럼 답함</td><td>valid_to, stale_after, 재조회 정책</td></tr>
+          <tr><td>프로젝트 오염</td><td>GO100 지식을 KIS에 적용</td><td>active_project와 scope 필터 강제</td></tr>
+          <tr><td>Prompt Injection</td><td>외부 문서 지시문이 시스템 지시를 덮음</td><td>문서 지시와 사용자 지시 분리, sanitizer, OWASP 테스트</td></tr>
+          <tr><td>Vector Poisoning</td><td>악성/낡은 chunk가 높은 유사도로 검색됨</td><td>trust_level, source allowlist, embedding rebuild audit</td></tr>
+          <tr><td>과도한 자동화</td><td>AI가 승인 없이 파일/DB/배포/금융 조작</td><td>risk_tier별 HITL, destructive block, audit ledger</td></tr>
+          <tr><td>비용 폭주</td><td>모든 질문에 wiki 전체/그래프 전체를 넣음</td><td>query router, context budget, progressive disclosure</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="sources">11. 조사 출처</h2>
+      <table>
+        <thead><tr><th>출처</th><th>날짜/접근</th><th>교육자료에 반영한 내용</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f">Karpathy, LLM Wiki</a></td><td>2026-04-02 / 2026-09-08 접근</td><td>지속적 Markdown wiki, 누적 합성, cross-reference, contradiction 관리</td></tr>
+          <tr><td><a href="https://docs.langchain.com/oss/openwiki/overview">LangChain OpenWiki Docs</a></td><td>2026-09-08 접근</td><td>코드베이스/개인지식용 agent-readable wiki, durable context</td></tr>
+          <tr><td><a href="https://www.langchain.com/blog/openwiki-0-2-adds-okf-support">LangChain OpenWiki 0.2 OKF</a></td><td>2026-07-16 / 2026-09-08 접근</td><td>front matter, index.md, logs.md, agent-friendly wiki conventions</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2605.25480">LLM-Wiki: Self-Evolving Agent-Native Retrieval</a></td><td>2026-05-25 / 2026-09-08 접근</td><td>wiki page, bidirectional link, search/read/follow tools, Error Book, multi-hop 성능</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2605.18490">Vector RAG vs LLM-Compiled Wiki</a></td><td>2026-05-18 / 2026-09-08 접근</td><td>RAG와 wiki의 장단점, 비용/인용/조직화 trade-off</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2606.14275">WikiKV</a></td><td>2026-06-12 / 2026-09-08 접근</td><td>path-indexed hierarchical wiki storage, schema evolution, budgeted navigation</td></tr>
+          <tr><td><a href="https://arxiv.org/html/2608.27454">WikiSkill</a></td><td>2026-08-27 / 2026-09-08 접근</td><td>raw trace -> wiki -> skill layer, gating/rollback 기반 skill evolution</td></tr>
+          <tr><td><a href="https://microsoft.github.io/graphrag/query/global_search/">Microsoft GraphRAG Global Search</a></td><td>2026-09-08 접근</td><td>community reports, map-reduce 기반 global search</td></tr>
+          <tr><td><a href="https://arxiv.org/abs/2410.05779">LightRAG</a></td><td>2024-10-08 / 2026-09-08 접근</td><td>graph + vector, dual-level retrieval, incremental update</td></tr>
+          <tr><td><a href="https://www.getzep.com/platform/graphiti/">Zep Graphiti</a></td><td>2026-09-08 접근</td><td>temporal context graph, old fact invalidation, vector/full-text/graph combined retrieval</td></tr>
+          <tr><td><a href="https://modelcontextprotocol.io/specification/2026-07-28">MCP Specification 2026-07-28</a></td><td>2026-07-28 / 2026-09-08 접근</td><td>LLM 앱과 context/tools 통합 표준, resources/prompts/tools</td></tr>
+          <tr><td><a href="https://developers.openai.com/api/docs/guides/retrieval">OpenAI Retrieval</a></td><td>2026-09-08 접근</td><td>semantic search, vector stores, attribute filtering</td></tr>
+          <tr><td><a href="https://developers.openai.com/api/docs/guides/evals">OpenAI Evals</a></td><td>2026-09-08 접근</td><td>data source config, testing criteria, graders 기반 평가</td></tr>
+          <tr><td><a href="https://docs.langchain.com/oss/python/deepagents/retrieval">LangChain Retrieval</a></td><td>2026-09-08 접근</td><td>2-step RAG, agentic RAG, hybrid RAG, retrieval validation</td></tr>
+          <tr><td><a href="https://docs.langchain.com/langsmith/evaluate-rag-tutorial">LangSmith RAG Evaluation</a></td><td>2026-09-08 접근</td><td>groundedness, retrieval relevance 평가</td></tr>
+          <tr><td><a href="https://genai.owasp.org/llm-top-10/">OWASP Top 10 for LLM Applications 2025</a></td><td>2026-09-08 접근</td><td>prompt injection, poisoning, excessive agency, vector weakness 등 보안 리스크</td></tr>
+          <tr><td><a href="https://www.nist.gov/itl/ai-risk-management-framework">NIST AI RMF</a></td><td>2026-09-08 접근</td><td>AI 시스템 설계·개발·사용·평가 생명주기 리스크 관리</td></tr>
+          <tr><td>내부 코드/DB</td><td>2026-09-08 04:47 KST</td><td><code>memory_facts</code>, <code>ohvis_wiki_pages</code>, <code>kg_entities</code>, <code>kg_relations</code>, <code>chat_embedding_service.py</code>, <code>auto_rag.py</code>, <code>migrations/158</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer class="small">
+      <p>문서 상태: 교육자료 1차본. 운영 코드 변경 없음. 배포/공개 라우팅은 별도 승인 및 blue-green 절차 필요.</p>
+    </footer>
+  </main>
+</body>
+</html>

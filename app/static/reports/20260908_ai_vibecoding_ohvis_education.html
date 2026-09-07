@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 바이브코딩 핵심 교육자료 - Hermes Gate, Harness, LangGraph, LangChain, LangSmith, Ops</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5d6675;
+      --line: #d9dee7;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --nav: #101827;
+      --blue: #1d5fd1;
+      --teal: #087f8c;
+      --green: #147d43;
+      --amber: #a85d00;
+      --red: #b42318;
+      --violet: #6a45b8;
+      --code: #0b1220;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      line-height: 1.6;
+    }
+
+    header {
+      background: linear-gradient(135deg, #101827 0%, #19314f 60%, #0b5e6b 100%);
+      color: #fff;
+      padding: 44px 28px 36px;
+    }
+
+    header .wrap,
+    main {
+      width: min(1160px, calc(100% - 36px));
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: #c8e4f2;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 980px;
+      font-size: clamp(30px, 4vw, 54px);
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 920px;
+      margin: 18px 0 0;
+      color: #e7eff7;
+      font-size: 18px;
+    }
+
+    main {
+      padding: 28px 0 64px;
+    }
+
+    nav.toc {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      margin: 0 0 22px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.94);
+      backdrop-filter: blur(8px);
+      border-radius: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    nav.toc a {
+      color: #24324a;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      text-decoration: none;
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 24px;
+      margin: 18px 0;
+      box-shadow: 0 8px 18px rgba(16, 24, 39, 0.04);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 26px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .metric,
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 14px;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .metric span,
+    .small,
+    figcaption {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .ok { color: var(--green); font-weight: 800; }
+    .partial { color: var(--amber); font-weight: 800; }
+    .no { color: var(--red); font-weight: 800; }
+    .info { color: var(--blue); font-weight: 800; }
+    .violet { color: var(--violet); font-weight: 800; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 18px;
+      font-size: 14px;
+      background: #fff;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 11px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef3f8;
+      text-align: left;
+      font-weight: 800;
+    }
+
+    code,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      background: #eef2f7;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
+
+    pre {
+      overflow: auto;
+      background: var(--code);
+      color: #e7edf6;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 2px 4px 2px 0;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #eef2f7;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+
+    .flow div {
+      min-height: 74px;
+      padding: 11px;
+      border-radius: 8px;
+      border: 1px solid #c9d5e4;
+      background: #f8fbff;
+      font-size: 13px;
+    }
+
+    .flow b {
+      display: block;
+      margin-bottom: 4px;
+      color: #1d3557;
+    }
+
+    .source-list li {
+      margin-bottom: 7px;
+    }
+
+    @media (max-width: 900px) {
+      .grid,
+      .two,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      section {
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">CEO 교육자료 v1.0 / AADS-OHVIS</p>
+      <h1>AI 바이브코딩에 반드시 필요한 6개 운영 개념</h1>
+      <p class="lead">
+        Hermes Gate, Harness, LangGraph, LangChain, LangSmith, Ops를 CEO 의사결정 언어로 풀어 쓴 교육자료입니다.
+        각 장에는 개념, 실전 예시, 현재 OHVIS 적용 현황, 미흡점, 검수 문장을 함께 정리했습니다.
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="목차">
+      <a href="#summary">요약</a>
+      <a href="#map">전체 지도</a>
+      <a href="#hermes-gate">Hermes Gate</a>
+      <a href="#harness">Harness</a>
+      <a href="#langgraph">LangGraph</a>
+      <a href="#langchain">LangChain</a>
+      <a href="#langsmith">LangSmith</a>
+      <a href="#ops">Ops</a>
+      <a href="#vibe">바이브코딩 적용법</a>
+      <a href="#sources">근거</a>
+    </nav>
+
+    <section id="summary">
+      <h2>1. 요약</h2>
+      <p>
+        바이브코딩은 "AI에게 자연어로 코딩을 맡기는 방식"입니다. 하지만 운영 서비스에서는 말만 잘하는 AI보다
+        <b>무엇을 해도 되는지 막는 게이트</b>, <b>실행을 기록하고 재개하는 하네스</b>, <b>상태 흐름을 관리하는 그래프</b>,
+        <b>도구 호출 표준</b>, <b>관측과 평가</b>, <b>배포/장애 운영 체계</b>가 더 중요합니다.
+      </p>
+
+      <div class="grid">
+        <div class="metric">
+          <b>9개</b>
+          <span>운영 DB `ops_skill_library` enabled skill [DB 조회, 2026-09-08 04:16 KST]</span>
+        </div>
+        <div class="metric">
+          <b>39건</b>
+          <span>`ohvis_harness_traces` 실행 trace [DB 조회, 2026-09-08 04:16 KST]</span>
+        </div>
+        <div class="metric">
+          <b>1,693건</b>
+          <span>`ohvis_wiki_pages` 지식 페이지 [DB 조회, 2026-09-08 04:16 KST]</span>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>개념</th>
+            <th>한 줄 정의</th>
+            <th>OHVIS 현재 판정</th>
+            <th>CEO가 봐야 할 핵심</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Hermes Gate</td>
+            <td>스킬 자동학습과 위험 행동 앞에 세우는 승인/차단 문</td>
+            <td><span class="partial">부분 적용</span>: risk policy와 recommendation API 존재, 외부 Hermes Agent는 미탑재</td>
+            <td>자동학습보다 승인 정책이 먼저다</td>
+          </tr>
+          <tr>
+            <td>Harness</td>
+            <td>모델, 프롬프트, 도구, 상태, trace, 검증을 감싸는 실행 장치</td>
+            <td><span class="ok">기반 적용</span>: `ohvis_harness.py`, API, DB foundation 존재</td>
+            <td>작업마다 run id와 증거가 남아야 한다</td>
+          </tr>
+          <tr>
+            <td>LangGraph</td>
+            <td>여러 단계 AI 작업을 그래프로 연결하고 중단 후 재개하게 하는 런타임</td>
+            <td><span class="partial">부분 적용</span>: `StateGraph` 8개 노드, PM interrupt 확인</td>
+            <td>승인 대기, 재시도, 배포 모니터링을 같은 흐름으로 묶어야 한다</td>
+          </tr>
+          <tr>
+            <td>LangChain</td>
+            <td>LLM, tool, message, middleware를 표준 방식으로 연결하는 계층</td>
+            <td><span class="partial">부분 적용</span>: core/provider/MCP adapter 있음, full `langchain` import는 운영 컨테이너에서 False</td>
+            <td>도구 권한과 모델 라우팅을 표준화해야 한다</td>
+          </tr>
+          <tr>
+            <td>LangSmith</td>
+            <td>LLM 실행 trace, 품질 평가, 비용/지연 관측 플랫폼</td>
+            <td><span class="partial">호환 기반 적용</span>: `langsmith` import 가능, 내부 trace 테이블 존재, 외부 SaaS 전송은 opt-in</td>
+            <td>실패 trace를 평가 데이터로 바꿔 재발을 줄여야 한다</td>
+          </tr>
+          <tr>
+            <td>Ops</td>
+            <td>코드가 실제 서비스에서 안전하게 돌아가게 하는 배포/모니터링/롤백 체계</td>
+            <td><span class="ok">적용 중</span>: blue/green, deploy_runs, deploy_phase_events, runner queue 원칙 존재</td>
+            <td>완료 보고는 배포와 헬스, 모니터링 근거까지 있어야 한다</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="map">
+      <h2>2. 전체 지도: AI 바이브코딩 운영 체계</h2>
+      <p>
+        CEO가 "이 기능 만들어줘"라고 말하면 AI가 코드를 쓰는 것만으로는 부족합니다. 운영 수준에서는 아래 6단계가
+        한 번의 작업 단위로 묶여야 합니다.
+      </p>
+
+      <div class="flow" aria-label="AI 운영 흐름">
+        <div><b>1. 요청</b>자연어 지시, 목표, 금지사항, 완료조건</div>
+        <div><b>2. Gate</b>읽기/쓰기/배포/금융/인증/파괴 위험 분류</div>
+        <div><b>3. Harness</b>run id, 프롬프트, 도구, 비용, 검증 계약 생성</div>
+        <div><b>4. Graph</b>PM -> 개발 -> QA -> Judge -> Ops 상태 전이</div>
+        <div><b>5. Trace</b>tool call, 오류, 비용, 산출물, 평가 기록</div>
+        <div><b>6. Ops</b>커밋, 푸시, 배포, 헬스, 롤백, HANDOVER</div>
+      </div>
+
+      <h3>CEO 관점의 핵심 질문</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>질문</th>
+            <th>나쁜 답</th>
+            <th>좋은 답</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>AI가 알아서 해도 되는가?</td>
+            <td>"모델이 똑똑하니까 됩니다."</td>
+            <td>"read는 자동, write/deploy/financial/auth는 승인 필요, destructive는 차단입니다."</td>
+          </tr>
+          <tr>
+            <td>중간에 끊기면 어떻게 되는가?</td>
+            <td>"다시 물어보면 됩니다."</td>
+            <td>"graph_run_id/checkpoint/trace/task 상태로 이어서 재개합니다."</td>
+          </tr>
+          <tr>
+            <td>완료됐다는 걸 어떻게 믿는가?</td>
+            <td>"AI가 완료라고 했습니다."</td>
+            <td>"변경 파일, 테스트, DB 상태, 배포 상태, 화면/API 검증, HANDOVER가 있습니다."</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="hermes-gate">
+      <h2>3. Hermes Gate</h2>
+      <p>
+        Hermes Gate는 여기서 <b>Hermes식 self-improving agent 패턴에 붙는 승인 게이트</b>로 설명합니다.
+        Hermes Agent 계열은 작업 경험을 스킬로 만들고, 그 스킬을 다음 작업에 재사용하는 방향입니다. 이때 위험한 점은
+        "AI가 배운 절차"가 곧바로 파일쓰기, 배포, 금융주문, 로그인 자동화에 연결될 수 있다는 것입니다.
+      </p>
+      <p>
+        따라서 Hermes Gate의 본질은 "AI가 학습한 것을 실행하기 전에 위험도를 분류하고, 필요한 경우 사람 승인을 받는 장치"입니다.
+      </p>
+
+      <h3>위험도 게이트 예시</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>위험 tier</th>
+            <th>예시</th>
+            <th>권장 결정</th>
+            <th>CEO 승인 필요</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag">read</span></td>
+            <td>파일 읽기, SELECT DB 조회, 헬스체크, wiki 검색</td>
+            <td>allow</td>
+            <td>보통 불필요</td>
+          </tr>
+          <tr>
+            <td><span class="tag">write</span></td>
+            <td>파일 patch, 문서 갱신, 비파괴 DB upsert</td>
+            <td>approve</td>
+            <td>필요</td>
+          </tr>
+          <tr>
+            <td><span class="tag">deploy</span></td>
+            <td>blue/green 배포, nginx cutover, standby sync</td>
+            <td>approve</td>
+            <td>필요</td>
+          </tr>
+          <tr>
+            <td><span class="tag">auth</span></td>
+            <td>로그인, CAPTCHA, OTP, Credential Vault</td>
+            <td>respond/approve</td>
+            <td>필요</td>
+          </tr>
+          <tr>
+            <td><span class="tag">financial</span></td>
+            <td>주문 제출, 브로커 조작, 송금</td>
+            <td>approve</td>
+            <td>필수</td>
+          </tr>
+          <tr>
+            <td><span class="tag">destructive</span></td>
+            <td>DROP, TRUNCATE, force push, shutdown</td>
+            <td>reject</td>
+            <td>승인해도 차단</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>실전 예시</h3>
+      <pre><code>CEO: "GO100 장초반 전략이 왜 진입을 안 했는지 확인하고 고쳐줘."
+
+Gate 판정:
+1. DB/로그 조회: read -> 자동 수행 가능
+2. 코드 수정: write -> 변경 파일과 롤백 가능성 확인 후 진행
+3. 실제 주문 로직 변경 또는 주문 실행: financial -> CEO 명시 승인 전 차단
+4. 배포: deploy -> blue/green 계약과 승인 필요</code></pre>
+
+      <h3>OHVIS 적용 현황</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>항목</th>
+            <th>적용 상태</th>
+            <th>근거</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Risk policy registry</td>
+            <td><span class="ok">적용</span></td>
+            <td>`app/services/ohvis_harness.py`의 `RISK_POLICIES`가 read/write/deploy/auth/financial/destructive를 정의</td>
+          </tr>
+          <tr>
+            <td>Hermes recommend endpoint</td>
+            <td><span class="ok">적용</span></td>
+            <td>`POST /api/v1/ohvis/harness/hermes/recommend`가 recall -> select_skill -> execute_with_gate -> learn 흐름 반환</td>
+          </tr>
+          <tr>
+            <td>스킬 승인/버전 DB</td>
+            <td><span class="partial">기반 적용</span></td>
+            <td>`ops_skill_library`, `ops_skill_versions`, `ops_skill_runs` 테이블 존재. enabled skill 9개 [DB 조회]</td>
+          </tr>
+          <tr>
+            <td>외부 Hermes Agent 런타임</td>
+            <td><span class="no">미탑재</span></td>
+            <td>현재 구현은 Hermes 패턴 흡수이며 외부 런타임에 배포/DB/금융 권한을 주지 않는 guardrail을 둠</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <b>CEO 검수 문장</b>
+        <p>"이 작업의 risk tier를 무엇으로 분류했는지, 승인 없이 실행한 tool이 있는지, destructive 작업은 차단됐는지 보고해라."</p>
+      </div>
+    </section>
+
+    <section id="harness">
+      <h2>4. Harness</h2>
+      <p>
+        하네스는 모델의 안전벨트와 계기판입니다. 모델이 답을 만드는 것만 보면 "그럴듯한 문장"만 보입니다.
+        하네스가 있으면 어떤 프롬프트와 어떤 도구로, 어떤 상태에서, 어떤 비용과 오류를 내며 실행했는지 남습니다.
+      </p>
+
+      <h3>하네스가 포함해야 할 것</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>구성요소</th>
+            <th>역할</th>
+            <th>OHVIS 예시</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Run ID</td>
+            <td>작업 1건을 끝까지 추적하는 고유 ID</td>
+            <td>`graph_run_id`, `session_id`, `ohvis_task_id`, `pipeline_jobs` 연결 목표</td>
+          </tr>
+          <tr>
+            <td>Prompt contract</td>
+            <td>L1~L5 규칙, 프로젝트, 역할, intent를 확정</td>
+            <td>`prompt_assets`, active_project, CEO 통합지시 레이어</td>
+          </tr>
+          <tr>
+            <td>Tool policy</td>
+            <td>사용 가능한 도구와 승인 필요 도구를 분리</td>
+            <td>`RISK_POLICIES`, AADS MCP tools, Runner submit/status</td>
+          </tr>
+          <tr>
+            <td>State</td>
+            <td>진행 중/대기/승인/실패/완료 상태 저장</td>
+            <td>`ohvis_tasks` 총 296건, running 44건 [DB 조회]</td>
+          </tr>
+          <tr>
+            <td>Trace</td>
+            <td>입력, 출력, tool call, latency, error 기록</td>
+            <td>`ohvis_harness_traces` 39건 [DB 조회]</td>
+          </tr>
+          <tr>
+            <td>Knowledge</td>
+            <td>과거 결정/장애/성공사례를 다음 실행에 재사용</td>
+            <td>`ohvis_wiki_pages` 1,693건, `memory_facts` 기반 fallback</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>실전 예시</h3>
+      <pre><code>좋지 않은 바이브코딩:
+"채팅 최종응답이 사라져. 고쳐줘."
+
+하네스 있는 바이브코딩:
+"채팅 최종응답 사라짐을 재현하고,
+chat_turn_executions, SSE stream, final message persist, UI render filter를 분리해 trace로 남겨라.
+수정 후에는 API fallback과 화면 캡처 근거를 보고해라."</code></pre>
+
+      <h3>OHVIS 적용 현황</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>파일/테이블</th>
+            <th>의미</th>
+            <th>판정</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>`app/services/ohvis_harness.py`</td>
+            <td>하네스 상태, skill search, wiki search, Hermes recommendation을 하나의 API 계약으로 노출</td>
+            <td><span class="ok">적용</span></td>
+          </tr>
+          <tr>
+            <td>`app/api/ohvis_harness.py`</td>
+            <td>`/status`, `/policies`, `/skill-find`, `/wiki/search`, `/hermes/recommend` 라우트 제공</td>
+            <td><span class="ok">적용</span></td>
+          </tr>
+          <tr>
+            <td>`migrations/158_ohvis_harness_skill_wiki_foundation.sql`</td>
+            <td>skill, wiki, error book, trace foundation 테이블 생성 및 seed</td>
+            <td><span class="ok">적용</span></td>
+          </tr>
+          <tr>
+            <td>`app/services/ohvis_harness_trace.py`</td>
+            <td>trace 실패가 본 작업을 깨지 않도록 비치명적 기록 helper 제공</td>
+            <td><span class="ok">적용</span></td>
+          </tr>
+          <tr>
+            <td>전체 실행 강제성</td>
+            <td>모든 chat/task/runner/deploy가 아직 하나의 run id로 강제 연결되지는 않음</td>
+            <td><span class="partial">보강 필요</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="langgraph">
+      <h2>5. LangGraph</h2>
+      <p>
+        LangGraph는 AI 작업을 "순서 있는 그래프"로 만드는 도구입니다. 일반 챗봇은 한 번 답하고 끝나지만,
+        운영 AI는 요구사항 정리, 설계, 개발, 테스트, 검수, 배포, 모니터링, 승인 대기를 오갑니다. 이 흐름은 선형 채팅보다 그래프가 맞습니다.
+      </p>
+
+      <h3>쉬운 비유</h3>
+      <p>
+        LangGraph는 공장 생산라인의 컨베이어와 검사대입니다. PM이 요구사항을 정리하고, 개발자가 만들고, QA가 테스트하고,
+        Judge가 승인/반려하며, DevOps가 배포 준비를 합니다. 실패하면 다시 개발자로 돌려보낼 수 있습니다.
+      </p>
+
+      <h3>OHVIS 그래프 구조</h3>
+      <pre><code>START
+  -> pm_requirements
+  -> supervisor
+  -> architect 또는 developer
+  -> qa
+  -> judge
+  -> devops
+  -> END
+
+fail이면 judge -> developer 재작업
+researcher는 supervisor에서 온디맨드 호출</code></pre>
+
+      <table>
+        <thead>
+          <tr>
+            <th>LangGraph 기능</th>
+            <th>무엇을 해결하나</th>
+            <th>OHVIS 적용</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>StateGraph</td>
+            <td>작업 단계를 노드와 엣지로 연결</td>
+            <td><span class="ok">`app/graph/builder.py`에서 Native `StateGraph` 사용</span></td>
+          </tr>
+          <tr>
+            <td>Conditional edge</td>
+            <td>성공/실패/승인 여부에 따라 다음 단계 변경</td>
+            <td><span class="ok">route_after_pm/supervisor/developer/qa/judge/devops 사용</span></td>
+          </tr>
+          <tr>
+            <td>Interrupt</td>
+            <td>사람 승인을 받고 같은 상태에서 재개</td>
+            <td><span class="partial">`app/agents/pm.py`에서 `interrupt()` 사용. 전체 tool HITL 표준화는 보강 필요</span></td>
+          </tr>
+          <tr>
+            <td>Checkpoint</td>
+            <td>서버 재시작/중단 후 상태 복구</td>
+            <td><span class="partial">`compile_graph(checkpointer=None)` 인자 존재. 운영 전체 강제 적용은 보강 필요</span></td>
+          </tr>
+          <tr>
+            <td>Persistence</td>
+            <td>thread-scoped memory와 long-term memory 분리</td>
+            <td><span class="partial">DB/메모리 기반은 있으나 graph run과 완전 결합 전</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>CEO 지시 예시</h3>
+      <pre><code>"이 작업은 LangGraph 흐름으로 PM 요구사항 -> Developer 수정 -> QA 테스트 -> Judge 검수 -> Ops 배포대기까지 나누고,
+각 단계 상태와 실패 시 재시도 경로를 보고해라."</code></pre>
+    </section>
+
+    <section id="langchain">
+      <h2>6. LangChain</h2>
+      <p>
+        LangChain은 모델과 도구를 연결하는 표준 계층입니다. CEO 관점에서는 "AI가 어떤 도구를 어떤 형식으로 호출하는지",
+        "OpenAI/Anthropic/Gemini 같은 모델을 어떻게 바꾸는지", "고위험 tool 호출 전에 어떤 middleware가 끼어드는지"를 다루는 층입니다.
+      </p>
+
+      <h3>LangChain을 쓰는 이유</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>문제</th>
+            <th>LangChain 계층이 주는 해법</th>
+            <th>OHVIS 예시</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>모델마다 메시지 형식이 다름</td>
+            <td>HumanMessage, AIMessage, SystemMessage 같은 공통 형식</td>
+            <td>agent 파일들이 `langchain_core.messages` 사용</td>
+          </tr>
+          <tr>
+            <td>도구 호출 schema가 제각각임</td>
+            <td>tool interface와 agent runner 표준화</td>
+            <td>`langchain-mcp-adapters` 의존성, MCP tool lazy loading 패턴</td>
+          </tr>
+          <tr>
+            <td>모델 교체와 fallback이 어려움</td>
+            <td>provider package로 OpenAI/Anthropic/Google 연결</td>
+            <td>`langchain-openai`, `langchain-anthropic`, `langchain-google-genai` 의존성</td>
+          </tr>
+          <tr>
+            <td>위험 tool 승인 정책이 흩어짐</td>
+            <td>middleware로 approve/edit/reject/respond를 통일</td>
+            <td>OHVIS는 정책 registry는 있으나 runtime middleware 일괄 강제는 보강 필요</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>운영 컨테이너 import 확인</h3>
+      <pre><code>{'langgraph': True,
+ 'langchain_core': True,
+ 'langchain_mcp_adapters': True,
+ 'langsmith': True,
+ 'langfuse': True,
+ 'langchain': False}</code></pre>
+      <p class="small">
+        의미: OHVIS 운영 컨테이너에는 LangChain Core/Provider/MCP adapter 계열이 적용되어 있습니다.
+        다만 `langchain` 메타 패키지 전체가 import 가능한 상태는 아니므로, "LangChain 전체 도입 완료"가 아니라
+        "LangChain Core/Provider/MCP 기반 부분 도입"이라고 보고하는 것이 정확합니다.
+      </p>
+
+      <h3>CEO 지시 예시</h3>
+      <pre><code>"이 에이전트는 active_project별 tool allowlist와 risk middleware를 먼저 구성하고,
+읽기 도구와 쓰기/배포/금융 도구를 분리해 LangChain-style tool contract로 보고해라."</code></pre>
+    </section>
+
+    <section id="langsmith">
+      <h2>7. LangSmith</h2>
+      <p>
+        LangSmith는 AI가 실제로 무엇을 했는지 보는 관측/평가 시스템입니다. 일반 로그가 "에러가 났다"를 보여준다면,
+        LangSmith식 trace는 "어떤 프롬프트, 어떤 도구, 어떤 모델 출력 때문에 에러가 났는지"를 보여줍니다.
+      </p>
+
+      <h3>LangSmith가 필요한 순간</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>상황</th>
+            <th>LangSmith식으로 남겨야 할 것</th>
+            <th>재발 방지 연결</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>최종응답이 사라짐</td>
+            <td>stream event, persisted final message, UI render filter, tool wait span</td>
+            <td>동일 trace를 eval case로 저장해 회귀 테스트</td>
+          </tr>
+          <tr>
+            <td>러너가 승인 대기에서 멈춤</td>
+            <td>job status, reviewer result, approval payload, elapsed time</td>
+            <td>stale detector와 알림 기준 개선</td>
+          </tr>
+          <tr>
+            <td>배포가 된 줄 알았는데 운영에 없음</td>
+            <td>commit SHA, pushed SHA, deploy_run_id, image digest, routed health</td>
+            <td>완료 보고 gate를 deploy certification 이후로 이동</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>OHVIS 적용 현황</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>항목</th>
+            <th>상태</th>
+            <th>근거</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>LangSmith package</td>
+            <td><span class="ok">운영 컨테이너 import 가능</span></td>
+            <td>`docker exec aads-server python3 -c ...` 결과 `langsmith=True`</td>
+          </tr>
+          <tr>
+            <td>Langfuse 관측</td>
+            <td><span class="ok">기존 적용</span></td>
+            <td>`app/core/langfuse_config.py`가 trace 생성과 LiteLLM callback 설정을 graceful degradation 방식으로 구현</td>
+          </tr>
+          <tr>
+            <td>LangSmith-compatible 내부 trace</td>
+            <td><span class="ok">기반 적용</span></td>
+            <td>`ohvis_harness_traces` 39건 [DB 조회]</td>
+          </tr>
+          <tr>
+            <td>외부 LangSmith SaaS 전송</td>
+            <td><span class="partial">opt-in/미확정</span></td>
+            <td>현재 교육자료 기준으로 외부 전송 활성 설정은 확인하지 않음. 데이터 반출 리스크 때문에 기본 off가 적절</td>
+          </tr>
+          <tr>
+            <td>Trace -> Dataset -> Eval -> 개선 PR</td>
+            <td><span class="partial">보강 필요</span></td>
+            <td>실패 trace를 자동 평가셋으로 승격하는 제품 루프는 아직 완전 폐쇄되지 않음</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>CEO 지시 예시</h3>
+      <pre><code>"이번 장애 trace를 단순 로그가 아니라 eval case로 저장해라.
+다음 배포부터 같은 증상이 재현되면 배포 인증이 실패하도록 gate를 걸어라."</code></pre>
+    </section>
+
+    <section id="ops">
+      <h2>8. Ops</h2>
+      <p>
+        Ops는 "만든 코드가 운영 서비스에 안전하게 반영되는 전체 과정"입니다. 바이브코딩의 가장 큰 실패는
+        코드 생성까지는 빠른데, 커밋/푸시/배포/검증/롤백/문서기록이 빠져서 실제 서비스가 불안정해지는 것입니다.
+      </p>
+
+      <h3>AADS/OHVIS Ops 핵심 규칙</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>규칙</th>
+            <th>뜻</th>
+            <th>CEO 검수 포인트</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Blue/Green 기본</td>
+            <td>새 슬롯 후보를 먼저 띄우고 헬스 통과 후 라우팅 전환</td>
+            <td>`deploy.sh bluegreen` 사용 여부</td>
+          </tr>
+          <tr>
+            <td>One image per release SHA</td>
+            <td>한 커밋 SHA당 이미지 한 번만 빌드</td>
+            <td>이미지 SHA와 Git SHA 일치 여부</td>
+          </tr>
+          <tr>
+            <td>Candidate health before lock</td>
+            <td>nginx lock은 라우팅 직전 짧게만 잡음</td>
+            <td>build/install 중 lock 점유 금지</td>
+          </tr>
+          <tr>
+            <td>Same-digest standby</td>
+            <td>active/standby 슬롯이 같은 이미지 digest를 가져야 함</td>
+            <td>대기 슬롯 동기화 검증</td>
+          </tr>
+          <tr>
+            <td>Rollback on routed-health failure</td>
+            <td>전환 후 외부 헬스가 실패하면 즉시 이전 라우팅 복구</td>
+            <td>rollback path 존재 여부</td>
+          </tr>
+          <tr>
+            <td>5분 P0/P1 monitoring</td>
+            <td>전환 직후만 보고 완료가 아니라 5분 모니터링 뒤 인증</td>
+            <td>완료 보고 시점이 인증 이후인지 확인</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>운영 DB 현재 상태</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>항목</th>
+            <th>실측값</th>
+            <th>해석</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>`deploy_runs` 총계</td>
+            <td>135건 [DB 조회]</td>
+            <td>배포 원장 기반은 운영 중</td>
+          </tr>
+          <tr>
+            <td>`deploy_runs.verifying`</td>
+            <td>1건 [DB 조회]</td>
+            <td>검증 중 배포가 있어 완료 판정은 상태 재조회 필요</td>
+          </tr>
+          <tr>
+            <td>`ohvis_tasks.running`</td>
+            <td>44건 [DB 조회]</td>
+            <td>running 누적은 실제 실행 중인지 stale인지 주기 점검 필요</td>
+          </tr>
+          <tr>
+            <td>`ohvis_tasks.error`</td>
+            <td>1건 [DB 조회]</td>
+            <td>오류 수는 낮지만 running 정합성 확인이 더 중요</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>좋은 완료 보고 예시</h3>
+      <pre><code>수행:
+- 변경 파일: app/services/chat_service.py, tests/unit/test_chat_final_message.py
+- 커밋: abc1234, 푸시: origin/main 반영
+- 배포: deploy_run_id=136, blue/green certified
+
+검증:
+- py_compile 통과
+- pytest 12개 통과
+- /api/v1/health 200
+- 채팅 화면 캡처에서 final message 유지 확인
+- 5분 P0/P1 모니터링 신규 오류 0건
+
+미완료:
+- 모바일 push 음성안내 E2E는 실제 디바이스 승인 후 별도 확인 필요</code></pre>
+    </section>
+
+    <section id="vibe">
+      <h2>9. CEO 바이브코딩 실전 지시법</h2>
+      <p>
+        아래처럼 지시하면 AI가 "그럴듯한 코드"를 넘어 운영 가능한 작업으로 움직입니다.
+      </p>
+
+      <h3>기본 템플릿</h3>
+      <pre><code>목표:
+- 무엇을 만들거나 고칠지 한 문장으로 말한다.
+
+범위:
+- 건드려도 되는 파일/화면/서비스를 지정한다.
+- 건드리면 안 되는 영역을 지정한다.
+
+게이트:
+- read/write/deploy/auth/financial/destructive 중 위험도를 먼저 분류하라고 한다.
+
+검증:
+- 코드 테스트, DB 조회, API 헬스, 화면 캡처, 로그 확인 중 무엇을 해야 하는지 지정한다.
+
+완료보고:
+- 변경 파일, 커밋/푸시, 배포 여부, HANDOVER, 미완료 항목을 분리해서 보고하라고 한다.</code></pre>
+
+      <h3>상황별 지시 예시</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>상황</th>
+            <th>권장 지시문</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>채팅 응답 사라짐</td>
+            <td>"SSE, DB final message persist, UI render, session resume을 분리해 원인을 실측하고, 재발 방지 테스트까지 추가해라."</td>
+          </tr>
+          <tr>
+            <td>GO100 매매 점검</td>
+            <td>"먼저 read-only로 DB/로그/보유종목명을 확인하고, 주문 실행이나 금융 변경은 승인 전 차단해라."</td>
+          </tr>
+          <tr>
+            <td>로그인 사이트 수집</td>
+            <td>"CAPTCHA/OTP 우회 금지, Agent Vault 사용 결과, 같은 work_key 재개 여부, 수집 dry-run 결과를 보고해라."</td>
+          </tr>
+          <tr>
+            <td>배포 요청</td>
+            <td>"커밋/푸시 후 deploy_runs에 큐 등록하고, blue/green candidate health, routed health, same-digest, 5분 모니터링까지 확인해라."</td>
+          </tr>
+          <tr>
+            <td>AI 반복 실패 개선</td>
+            <td>"실패 trace를 error book과 eval case로 승격하고, 수정된 skill을 다음 실행 전에 replay 검증해라."</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>CEO가 외워야 할 6문장</h3>
+      <ol>
+        <li>위험도를 먼저 분류해라.</li>
+        <li>읽기와 쓰기, 배포, 금융, 인증을 분리해라.</li>
+        <li>작업 run id와 trace를 남겨라.</li>
+        <li>중단되면 같은 상태에서 재개되게 해라.</li>
+        <li>완료 보고는 코드가 아니라 검증 근거로 해라.</li>
+        <li>반복 실패는 스킬/위키/오류북으로 승격해라.</li>
+      </ol>
+    </section>
+
+    <section id="current">
+      <h2>10. 현재 OHVIS 적용 요약</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>분야</th>
+            <th>확인된 적용</th>
+            <th>남은 개선</th>
+            <th>우선순위</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Hermes Gate</td>
+            <td>Risk policy, skill registry, Hermes recommendation endpoint</td>
+            <td>스킬 자동 개선 후보 -> 승인 -> replay 검증 -> 적용까지 완전 자동화</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td>Harness</td>
+            <td>OHVIS harness API, trace helper, wiki/skill foundation</td>
+            <td>모든 chat/task/runner/deploy에 graph_run_id 강제 전파</td>
+            <td>P0/P1</td>
+          </tr>
+          <tr>
+            <td>LangGraph</td>
+            <td>Native StateGraph, 8개 agent node, interrupt 기반 승인</td>
+            <td>checkpoint/resume을 장시간 runner와 배포 큐에 일괄 적용</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td>LangChain</td>
+            <td>Core messages, provider packages, MCP adapter</td>
+            <td>create_agent 스타일 factory와 middleware 기반 tool approval 통합</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td>LangSmith</td>
+            <td>langsmith import 가능, Langfuse, internal trace table</td>
+            <td>trace -> eval dataset -> regression gate 자동화</td>
+            <td>P1</td>
+          </tr>
+          <tr>
+            <td>Ops</td>
+            <td>Blue/green release rule, deploy_runs, phase events, runner queue 방향</td>
+            <td>검증 중/실패/차단 상태를 CEO 화면과 push/음성 안내에 더 명확히 연결</td>
+            <td>P0</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="sources">
+      <h2>11. 근거와 출처</h2>
+      <h3>내부 근거</h3>
+      <ul class="source-list">
+        <li>`/root/aads/AGENTS.md`: AADS blue/green release contract와 completion 기준.</li>
+        <li>`/root/aads/aads-server/AGENTS.md`: API release 기본 계약과 금지사항.</li>
+        <li>`CLAUDE.md`: AADS 기술 스택, 보안, Docker, 커밋, 품질 규칙.</li>
+        <li>`pyproject.toml`: LangGraph, LangChain provider, MCP adapter, Langfuse 등 의존성 선언.</li>
+        <li>`app/graph/builder.py`: Native LangGraph `StateGraph` 기반 8개 agent node 흐름.</li>
+        <li>`app/agents/pm.py`: LangGraph `interrupt()` 기반 PM 승인 대기 예시.</li>
+        <li>`app/services/ohvis_harness.py`: risk policy, skill find, wiki search, Hermes recommendation 구현.</li>
+        <li>`app/api/ohvis_harness.py`: OHVIS harness API route 구현.</li>
+        <li>`app/services/ohvis_harness_trace.py`: non-fatal trace writer 구현.</li>
+        <li>`migrations/158_ohvis_harness_skill_wiki_foundation.sql`: skill/wiki/error book/trace 테이블과 seed.</li>
+        <li>운영 DB 조회, 2026-09-08 04:16 KST: `ops_skill_library=9`, `ohvis_harness_traces=39`, `ohvis_wiki_pages=1693`, `ohvis_tasks=296`, `deploy_runs=135`.</li>
+        <li>운영 컨테이너 import 확인: `langgraph=True`, `langchain_core=True`, `langchain_mcp_adapters=True`, `langsmith=True`, `langfuse=True`, `langchain=False`.</li>
+      </ul>
+
+      <h3>외부 1차 근거</h3>
+      <ul class="source-list">
+        <li>LangGraph 공식 문서: <a href="https://docs.langchain.com/oss/python/langgraph/overview">https://docs.langchain.com/oss/python/langgraph/overview</a></li>
+        <li>LangGraph persistence 공식 문서: <a href="https://docs.langchain.com/oss/python/langgraph/persistence">https://docs.langchain.com/oss/python/langgraph/persistence</a></li>
+        <li>LangGraph interrupts 공식 문서: <a href="https://docs.langchain.com/oss/python/langgraph/interrupts">https://docs.langchain.com/oss/python/langgraph/interrupts</a></li>
+        <li>LangChain 공식 문서: <a href="https://docs.langchain.com/oss/python/langchain/overview">https://docs.langchain.com/oss/python/langchain/overview</a></li>
+        <li>LangSmith observability 공식 문서: <a href="https://docs.langchain.com/langsmith/observability">https://docs.langchain.com/langsmith/observability</a></li>
+        <li>LangSmith evaluation 공식 문서: <a href="https://docs.langchain.com/langsmith/evaluation">https://docs.langchain.com/langsmith/evaluation</a></li>
+        <li>NousResearch Hermes Agent GitHub: <a href="https://github.com/nousresearch/hermes-agent">https://github.com/nousresearch/hermes-agent</a></li>
+        <li>Hermes Skills 공식 문서: <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/skills">https://hermes-agent.nousresearch.com/docs/user-guide/features/skills</a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

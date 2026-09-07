@@ -1,5 +1,96 @@
 # AADS HANDOVER
 
+## 2026-09-08 05:34 KST - Multi-agent operations education HTML
+
+- CEO request:
+  - Research current multi-agent operations technologies and research papers, then create and report a detailed HTML education material.
+- Change prepared:
+  - `app/static/reports/20260908_multi_agent_ops_education.html`: added a Korean CEO education document covering multi-agent definitions, orchestration patterns, production harness requirements, current research findings, AADS/OHVIS application status, failure modes, recommended roadmap, and CEO review checklist.
+- Evidence used:
+  - Read `/root/aads/AGENTS.md` and repository `AGENTS.md` before editing.
+  - Reviewed internal implementation evidence in `pyproject.toml`, `app/graph/builder.py`, `app/api/pipeline_runner.py`, `app/api/ohvis_harness.py`, `app/services/ohvis_harness.py`, `app/services/agent_state_builder.py`, and `docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md`.
+  - Queried production DB counts at `2026-09-08 05:34 KST`: `memory_facts=67991`, `ohvis_wiki_pages=1693`, `ohvis_harness_traces=40`, `kg_entities=143`, `ohvis_wiki_links=0`, `ohvis_wiki_sources=0`, `ohvis_wiki_error_book=0`, active pipeline jobs=1 (`runner-b30a382d`, GO100, no conflict with this AADS documentation file).
+  - Checked current external sources including Anthropic multi-agent research system, Anthropic effective agents, Anthropic long-running harnesses, OpenAI Agents SDK/tracing/guardrails official docs, LangChain multi-agent docs, LangSmith observability docs, Magentic-One, Multi-Agent Collaboration Mechanisms survey, STORM state management, CAID asynchronous SWE agents, MultiAgentBench, CooperBench, ChainSWE, SWE-Together, OWASP Agentic AI threats, and OpenTelemetry GenAI semantic conventions.
+- Verification:
+  - `wc -c app/static/reports/20260908_multi_agent_ops_education.html`: 41,843 bytes.
+  - HTML parser passed with `html_parser_ok`.
+  - Source-link spot check confirmed OpenAI official docs, 2025/2026 arXiv papers, and refreshed DB counts are present.
+  - `git diff --check -- HANDOVER.md app/static/reports/20260908_multi_agent_ops_education.html`: passed.
+- Not performed:
+  - No runtime code change, DB write/migration, commit, push, deployment, or public dashboard routing change in this checkpoint.
+
+## 2026-09-08 04:47 KST - Wiki knowledge management education HTML
+
+- CEO request:
+  - Research the latest technologies and effective methods for wiki-style knowledge management/knowledgeization, create a detailed education material as HTML, and report the result.
+- Change prepared:
+  - `app/static/reports/20260908_wiki_knowledge_management_education.html`: added a Korean CEO education document covering LLM Wiki, OpenWiki, RAG, Hybrid Search, GraphRAG, LightRAG, Temporal Knowledge Graph, MCP, RAG/Eval, OWASP/NIST governance, AADS/OHVIS application status, implementation roadmap, metrics, and practical examples.
+- Evidence used:
+  - Read `/root/aads/AGENTS.md` and repository `AGENTS.md` before editing.
+  - Reviewed local knowledge implementation evidence in `docs/reports/20260518_AADS_KNOWLEDGE_WISDOM_EVOLUTION_RESEARCH.md`, `docs/reports/20260728_OHVIS_KNOWLEDGE_CONTEXT_EVOLUTION_REPORT.md`, `docs/reports/20260907_ohvis_harness_langgraph_langchain_langsmith_llmwiki_plan.md`, `docs/reports/20260907_ohvis_harness_llmwiki_hermes_skillfind_verified_report.md`, `app/core/knowledge_graph.py`, `app/services/chat_embedding_service.py`, `app/services/auto_rag.py`, `app/services/ohvis_harness.py`, and `migrations/158_ohvis_harness_skill_wiki_foundation.sql`.
+  - Queried production DB counts: `memory_facts=71715`, `ohvis_wiki_pages=1693`, `kg_entities=143`, `kg_relations=627`, `ai_observations=830`, `ai_meta_memory=992`, `chat_artifacts=31911`.
+  - Checked current external sources including Karpathy LLM Wiki, LangChain OpenWiki/OpenWiki OKF, LLM-Wiki/WikiKV/WikiSkill papers, Microsoft GraphRAG, LightRAG, Zep Graphiti, MCP 2026-07-28 spec, OpenAI Retrieval/Evals, LangChain Retrieval/LangSmith RAG eval, OWASP LLM Top 10 2025, and NIST AI RMF.
+- Verification:
+  - `wc -c app/static/reports/20260908_wiki_knowledge_management_education.html`: 38,133 bytes.
+  - `python3 -c "from html.parser import HTMLParser; ..."`: passed with `html_parser_ok`.
+  - `python3 -m py_compile app/core/knowledge_graph.py app/services/chat_embedding_service.py app/services/auto_rag.py app/services/ohvis_harness.py`: passed.
+  - `rg` spot-check confirmed key sections and source links are present.
+  - `git diff --check -- app/static/reports/20260908_wiki_knowledge_management_education.html`: passed.
+- Not performed:
+  - No runtime code change, DB migration/write, commit, push, deployment, or public dashboard routing change in this checkpoint.
+
+## 2026-09-08 04:16 KST - AI vibecoding OHVIS education HTML
+
+- CEO request:
+  - Prepare detailed education material as an HTML file for Hermes Gate, Harness, LangGraph, LangChain, LangSmith, and Ops, including practical examples and the current OHVIS/AADS application status.
+- Change prepared:
+  - `app/static/reports/20260908_ai_vibecoding_ohvis_education.html`: added a Korean CEO education document covering definitions, practical vibe-coding prompts, risk gates, harness run/trace contracts, LangGraph flow, LangChain tool layer, LangSmith-style observability, AADS Ops release rules, OHVIS application status, and internal/external source references.
+- Evidence used:
+  - Read `/root/aads/AGENTS.md`, repository `AGENTS.md`, `CLAUDE.md`, `pyproject.toml`, `app/services/ohvis_harness.py`, `app/api/ohvis_harness.py`, `app/services/ohvis_harness_trace.py`, `app/graph/builder.py`, `app/agents/pm.py`, `app/core/langfuse_config.py`, and `migrations/158_ohvis_harness_skill_wiki_foundation.sql`.
+  - Queried production DB counts: `ops_skill_library=9`, `ohvis_harness_traces=39`, `ohvis_wiki_pages=1693`, `ohvis_tasks=296`, `deploy_runs=135`.
+  - Verified runtime imports in `aads-server`: `langgraph=True`, `langchain_core=True`, `langchain_mcp_adapters=True`, `langsmith=True`, `langfuse=True`, `langchain=False`.
+- Verification:
+  - `wc -c app/static/reports/20260908_ai_vibecoding_ohvis_education.html`: 39,522 bytes.
+  - `python3 -c "from html.parser import HTMLParser; ..."`: passed with `html_parser_ok`.
+  - `docker exec aads-server test -f /app/app/static/reports/20260908_ai_vibecoding_ohvis_education.html`: passed.
+  - `docker exec aads-server curl -I -s http://127.0.0.1:8080/static/reports/20260908_ai_vibecoding_ohvis_education.html`: HTTP 200, `content-length: 39522`.
+  - `git diff --check -- HANDOVER.md app/static/reports/20260908_ai_vibecoding_ohvis_education.html`: passed.
+- Not performed:
+  - No runtime code change, DB migration, commit, push, or deployment in this checkpoint.
+  - Public `https://aads.newtalk.kr/static/reports/20260908_ai_vibecoding_ohvis_education.html` returned HTTP 404 because public `/static` is currently owned by the Next.js dashboard ingress; internal FastAPI static serving is verified.
+
+## 2026-09-07 18:56 KST - LangGraph/LangSmith LLMOps release system phase 1-4 approval pack
+
+- CEO request:
+  - Review whether the LangGraph/LangSmith-based harness and basic LLMOps deployment system are built, then proceed with phases 1-4 first: design, PRD, screen mockup, and tool setup/integration. Implementation improvements are to start only after approval.
+- Change prepared:
+  - `docs/reports/20260907_langgraph_langsmith_llmops_phase1_4_approval_pack.md`: added the approval package covering target architecture, PRD, screen mockup reference, tool setup/integration status, queue/ops DB handoff design, success metrics, and approval gates.
+  - `app/static/reports/20260907_langgraph_llmops_release_control_mockup.html`: added a static mockup for the chat artifact deploy/LLMOps view showing queued deployment, phase/ETA, applied-change summary, trace, and approval queue sections.
+- Verification:
+  - Read `/root/aads/AGENTS.md` and repository `AGENTS.md` before editing.
+  - Confirmed both deliverables exist and have non-empty sizes: approval pack 9,429 bytes, mockup 7,519 bytes.
+  - Reviewed the approval pack content and verified that phases 1-4 are marked complete while P0 construction is explicitly gated on CEO approval.
+  - Updated the chat session TODO: approval pack item `eb03ae4f-cb70-4378-a4b8-aa2760b8564d` completed; P0 construction item `2402fc81-184a-48a5-a8dd-38e50285df9f` remains pending.
+- Not performed:
+  - No runtime code change, DB migration, commit, push, or deployment in this checkpoint. This was intentionally limited to approval-stage deliverables.
+
+## 2026-09-07 18:36 KST - Shinhan EasyView Windows Collector harness implementation
+
+- Request:
+  - CEO approved the next phase after the PRD/design/tooling plan and asked to implement immediately.
+- Changes:
+  - `app/services/yeoljeong_bank_collector_harness.py`: added the Shinhan EasyView Windows Collector server-side harness. It enforces the bank-only Shinhan service, the correct EasyView URL `https://bank.shinhan.com/rib/easy/index.jsp#210000000000`, the Windows PC Agent requirement, the `financial_exclusive` lease contract, security-program preflight, existing bank collector execution, completion verification, and non-fatal LLMOps trace recording.
+  - `scripts/yeoljeong_shinhan_windows_collector.py`: added a dedicated CLI entry point for the Windows Collector flow. It can run dry-run, queue-only, or direct collection with DANHAROO-MAIN/other PC Agent IDs.
+  - `app/api/yeoljeong_finance.py`: added `POST /api/v1/yeoljeong-finance/bank-collector/shinhan-easyview/run` so dashboard/ops tools can invoke the same harness.
+  - `tests/unit/test_yeoljeong_bank_collector_harness.py`: added regression tests for URL normalization, missing Windows Agent blocking, preflight/collection success, and queue-only completion contract.
+- Verification:
+  - `python3 -m compileall app/services/yeoljeong_bank_collector_harness.py scripts/yeoljeong_shinhan_windows_collector.py app/api/yeoljeong_finance.py`: passed.
+  - `python3 -m pytest tests/unit/test_yeoljeong_bank_collector_harness.py -q`: passed, 4 tests.
+  - `python3 scripts/yeoljeong_shinhan_windows_collector.py --browser-agent-id 62405e70-e98 --dry-run --skip-security-preflight`: passed and returned the Shinhan EasyView URL, `financial_exclusive` job type, and required PC Agent contract.
+- Not performed:
+  - No live Shinhan login or transaction collection in this checkpoint.
+  - No deployment in this checkpoint; the CEO request was implementation approval, not release deployment.
+
 ## 2026-09-07 17:35 KST - Legacy API health routing cleanup
 
 - Request:
@@ -11891,6 +11982,20 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - AADS worktree still has unrelated dirty Shinhan/OHVIS/report files. They were not touched or committed as part of runner sync.
   - Current GO100 runner failures are now separate push/dependency/action-required issues, not remote runner script drift.
 
+## 2026-09-07 18:11 KST — Finance PC Collector PRD/design/tooling approval plan
+- CEO request:
+  - For the proposed LangGraph/LangSmith-based PC-installed financial collection agent, prepare stages 1-3 first for approval: technical design/PRD, screen mockups, and tool setup/integration.
+  - First build target is Shinhan Bank business easy-account inquiry login, transaction parsing, Excel download, server upload, DB persistence, realtime monitoring, and scheduled refresh; other banks/cards are later expansion after Shinhan succeeds.
+- Change prepared:
+  - `app/static/reports/20260907_finance_pc_collector_prd_design_tooling.html`: added a CEO approval HTML document covering current implementation facts, gaps, PRD, technical stack, LangGraph state machine, LangSmith LLMOps plan, dashboard/account/error mockups, tool setup, environment variable draft, data model, risk controls, and approval gates.
+- Verification:
+  - Read `/root/aads/AGENTS.md` and `AGENTS.md` before editing.
+  - Checked existing implementation evidence in `pc_agent/`, `app/services/yeoljeong_bank_browser_connector.py`, `scripts/yeoljeong_auto_collect.py`, `app/services/yeoljeong_finance_service.py`, and current FOOD runtime files.
+  - Confirmed current ledger signal: `app/data/yeoljeong_finance/transactions.json` is 2 bytes, so live Shinhan transaction persistence remains incomplete and was documented as a gap.
+  - Official references checked: LangGraph overview, LangSmith observability, and LangSmith graph evaluation docs.
+- Not performed:
+  - No code implementation, no deployment, no live Shinhan login/collection test, no commit/push. The CEO asked to stop after stages 1-3 and get approval before proceeding.
+
 ## 2026-09-07 13:35 KST — Goal Guard/Harness 최소 보강 (AADS-GOAL-GUARD-HARNESS-S-20260907)
 - 지시: 진행 중인 목표/러너가 기존 구현을 지키는지 스스로 감사하고, 증거를 `ohvis_harness_traces`에 남기게 한다. 기존 GoalStateMachine / `app/routers/goals.py` / 러너 STEP 0 체크리스트 / code_reviewer 보존 게이트는 재사용 필수.
 - STEP 0 기존 구현 조사(유지/수정/신규):
@@ -11978,6 +12083,136 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - Commit/push only `app/services/pipeline_runner_service.py`, `deploy.sh`, `scripts/start_aads_deploy_queue_worker.sh`, and this HANDOVER entry.
   - Run or queue blue/green release from the pushed SHA, then verify `/api/v1/health`, deploy DB run status, container image digest, and five-minute P0/P1 monitoring.
 
+## 2026-09-07 17:11 KST — Shinhan Windows Collector planning report
+- CEO request:
+  - Write and report a detailed plan for completing Shinhan Bank business quick-account transaction collection as a Windows dedicated collector.
+- Change prepared:
+  - `app/static/reports/20260907_shinhan_windows_collector_plan.html`: added an HTML planning report covering current implementation evidence, observed blockers, target architecture, Windows collector modules, state machine, data model, rollout plan, validation criteria, and CEO decision points.
+- Verification:
+  - Source review only: `/root/aads/AGENTS.md`, `AGENTS.md`, Shinhan connector/service/auto-collect code, PC Agent browser command structure, and current FOOD runtime data/log files were inspected.
+  - Pending after file creation: HTML existence/size check and selected git diff review.
+- Not performed:
+  - No code deployment, no bank login attempt, no live collection run, no commit/push.
+
+## 2026-09-07 17:29 KST — Deploy artifact applied-change summary
+- CEO request:
+  - Show a short summary of what each deployment applied in the chat artifact deploy tab, including feature/change/file hints.
+- Change prepared:
+  - `app/services/deploy_observability.py`: `/ops/deploy/status` now enriches active, queued, and recent completed deploy rows with release title, summary, changed files, and changed file count from git metadata or request payload fallback.
+  - `app/api/ops.py`: degraded fallback response now includes `recent_completed_deployments`.
+  - `/root/aads/aads-dashboard/src/app/chat/ChatArtifactPanel.tsx`: deploy artifact tab now shows per-deploy applied content and recent completed deployment summaries.
+- Verification:
+  - `python3 -m py_compile app/services/deploy_observability.py app/api/ops.py`: passed.
+  - `/root/aads/aads-dashboard npm run lint -- src/app/chat/ChatArtifactPanel.tsx`: passed with existing warnings only.
+  - `/root/aads/aads-dashboard npm run build`: passed.
+- Pending:
+  - Commit, push, backend deploy, dashboard deploy, and operating API/UI verification.
+
+## 2026-09-07 18:47 KST — AADS Docker build preflight/image-size release certification
+- CEO request:
+  - Immediately continue the recommended action after the interrupted deployment response and report the real completion state.
+- Change released:
+  - Release SHA `19e4bc2f3f48` (`Optimize Docker build preflight and image size`) changed only `Dockerfile`, `deploy.sh`, and `tests/unit/test_deploy_observability.py`.
+  - `deploy.sh` now fails closed on low Docker free space, oversized release context, and oversized built image before/after the immutable release image build.
+  - `Dockerfile` removes Rust tooling from the final runtime layer and consolidates Playwright dependency installation.
+- Verification:
+  - Blue/green run `128` built `aads-server:19e4bc2f3f48`, routed traffic to `aads-server:8100`, and synchronized `aads-server-green:8102` to the same image digest `sha256:cb228c3563c1b63e1f790fd07d8e11d20298abe65651e1dabeab308e361fcc7b`.
+  - Direct health passed on `8100` and `8102`; external health passed on `https://aads.newtalk.kr/api/v1/health`.
+  - Manual post-TERM certification added `deploy_phase_events.id=490`; `deploy_runs.id=128` was updated to `success/completed` while preserving original failed event `id=489` (`deploy interrupted by TERM`).
+  - P0/P1 monitor pattern from `2026-09-07 18:40:07 KST` to `18:45:51 KST`: no `level=(error|critical)`, `Traceback`, or `CRITICAL` hits in active API logs.
+  - Disk after cleanup/release: `/` and `/var/lib/docker` have 33GB available, 84% used.
+- Remaining risk:
+  - First build still spends time in pip resolver backtracking because dependency ranges remain loose. Follow-up P1: introduce a pinned constraints/lock file for Docker builds.
+  - Current canonical worktree still contains unrelated dirty files, including prior HANDOVER/report/data changes; they were not included in release `19e4bc2f3f48`.
+
+## 2026-09-07 19:09 KST — AADS Docker build P1 design and PRD
+- CEO request:
+  - Write and report the design, technology stack, and PRD for the remaining Docker build P1 optimization.
+- Change prepared:
+  - `docs/reports/20260907_docker_build_p1_design_prd.md`: added the implementation-ready design/PRD for dependency locking, multi-stage wheelhouse builds, Playwright split, deploy preflight observability, Docker retention, rollout, rollback, and acceptance criteria.
+- Evidence used:
+  - `Dockerfile`, `deploy.sh`, `pyproject.toml`, `.dockerignore`, Docker image history, `docker system df`, and `deploy_runs`/`deploy_phase_events` were checked at 2026-09-07 19:09 KST.
+- Verification:
+  - Pending after document creation: file existence/size check and selected git diff review.
+- Not performed:
+  - No application code change, no commit, no push, no deployment.
+
+## 2026-09-07 19:19 KST — Shinhan Windows Collector harness deployment and live run test
+- CEO request:
+  - Deploy the Shinhan Windows Collector harness release and run it for verification.
+- Release state:
+  - Release SHA `ec2383bed46e` (`feat(finance): add shinhan windows collector harness`) was already committed and pushed before this handover entry.
+  - `deploy.sh bluegreen` run `130` built image `aads-server:ec2383bed46e`, switched active routing to `aads-server-green:8102`, and synchronized standby `aads-server:8100` to the same Docker image digest `sha256:fff7d1d7cef5a709f65f1ddcdfda177827c2881163f1507940678919a89255cd`.
+  - Direct health passed on both `8102` and `8100`; external root route returned HTTP 307 to login, which is expected for protected dashboard access.
+- Deploy certification caveat:
+  - DB `deploy_runs.id=130` remains `failed / p0p1_monitoring` because the chat execution HUP interrupted the deploy script during the five-minute monitor phase after all routing and same-digest standby gates had passed.
+  - Independent post-check found no `level=error`, `level=critical`, or `CRITICAL` lines, but active logs had one warning containing a `Traceback` string for `CancelledError: superseded_by_new_execution`. Because `deploy.sh` treats any `Traceback` as a P0/P1 monitor hit, this release should be considered physically deployed but not cleanly script-certified.
+- Runtime test:
+  - `pytest tests/unit/test_yeoljeong_bank_collector_harness.py -q`: 4 passed.
+  - Deployed container dry-run on both slots validated request normalization, Shinhan EasyView URL pinning, financial-exclusive lane, LangGraph harness loading, and skipped security preflight path.
+  - Live run on `DANHAROO-MAIN` (`agent_id=62405e70-e98`) for account `a7354484-aafe-4bcf-a865-0c0330e01574` passed PC Agent/security preflight and opened the Shinhan EasyView browser session, but ended with `ATTEMPT_TIMEOUT` after 600 seconds before transaction table import. Imported rows: 0.
+- Remaining risk:
+  - The deployment record should not be reported as fully certified unless either a fresh `deploy.sh bluegreen` monitor pass is recorded or a deliberate manual certification policy accepts the benign chat-cancel warning.
+  - Shinhan live collection still needs the post-login/account-query screen path to produce a transaction table or a verified no-records condition.
+
+## 2026-09-07 19:36 KST — Shinhan dedicated Windows Collector EXE packaging target
+- CEO request:
+  - Continue the next step, verify `20260907_finance_pc_collector_prd_design_tooling.html`, and update its version/progress status.
+- Change prepared:
+  - `pc_agent/shinhan_collector_launcher.py`: added a Shinhan-specific Windows Collector entrypoint that reuses the shared PC Agent launcher while isolating install directory, launcher mutex, worker mutex, watchdog task, legacy startup cleanup names, node role, and bank collector capabilities.
+  - `pc_agent/build_shinhan_collector_exe.py`: added a Windows-only PyInstaller build target for `dist/AADS-Shinhan-Collector-Setup.exe`.
+  - `pc_agent/build_shinhan_collector_exe.bat`: added a Windows build helper for DANHAROO-MAIN/build PC.
+  - `pc_agent/launcher.py`, `pc_agent/agent.py`, `pc_agent/tray.py`: added environment-variable overrides so the Shinhan Collector can run as a separate product without colliding with the generic PC Agent defaults.
+  - `tests/unit/test_shinhan_collector_packaging.py`: added regression coverage for bank-only runtime identity and PyInstaller command construction.
+  - `app/static/reports/20260907_finance_pc_collector_prd_design_tooling.html`: updated to document version `v1.1`, current 4-step implementation progress, new EXE packaging target, remaining Windows build/E2E completion criteria.
+- Verification:
+  - `python3 -m py_compile pc_agent/agent.py pc_agent/launcher.py pc_agent/tray.py pc_agent/shinhan_collector_launcher.py pc_agent/build_shinhan_collector_exe.py`: passed.
+  - Pending: run targeted pytest after completing doc syntax review.
+- Not performed:
+  - No Windows EXE was built on this Linux server; PyInstaller Windows EXE packaging must run on DANHAROO-MAIN or another Windows build PC.
+  - No commit, push, API deploy, or live Shinhan bank collection was performed yet for this packaging update.
+
+## 2026-09-07 19:47 KST — AADS docs click deep-link visibility fix
+- CEO request:
+  - Fix `/docs` document-list links so clicking a document opens it immediately instead of landing on a missing/unreadable document state.
+- Root cause:
+  - The dashboard generated deep links using API aliases such as `/app/docs` and `/app/reports`, but production API blue/green containers did not mount the local AADS repository `docs/` and `reports/` directories at those alias paths.
+  - Result: newly created local reports could have a valid dashboard URL while the active API container could not read the file, producing an auth-gated 401 before login and then a missing-file/404 style failure after login.
+- Change released:
+  - Release SHA `7c5a96faa831` (`fix(docs): mount live project docs in api slots`) adds read-only mounts for `/root/aads/aads-server/docs -> /app/docs` and `/root/aads/aads-server/reports -> /app/reports` on both `aads-server` and `aads-server-green`.
+  - `tests/unit/test_execution_lease_contract.py` now asserts both blue/green API slots keep the docs/reports mounts.
+- Verification:
+  - `python3 -m pytest tests/unit/test_execution_lease_contract.py -q`: 7 passed.
+  - `docker exec aads-server python -m pytest tests/unit/test_execution_lease_contract.py -q`: 7 passed.
+  - Active container `aads-server:8100` has `/app/docs` and `/app/reports` mounted read-only.
+  - Example requested report is visible inside the active container at `/app/docs/reports/20260907_ohvis_harness_langgraph_langchain_langsmith_llmwiki_plan.md`.
+  - Browser screenshot capture timed out after 120 seconds, so screen E2E is not certified; API/file/container fallback evidence is recorded instead.
+- Deploy state:
+  - Blue/green run `131` switched active routing to `aads-server:8100` and passed nginx-routed health at `2026-09-07 19:35:49 KST`.
+  - Run `131` completed physical standby same-digest sync for `aads-server` and `aads-server-green` with digest `sha256:7f17557330b51ae296c66c4b84cf374abb65e1ffad285b805a4cde4bc3171053`.
+  - The deploy script process received HUP after standby sync, so the DB run row was conditionally corrected to `success/completed` only after external health and a manual five-minute P0/P1 monitor passed at `2026-09-07 19:53 KST`.
+- Not performed:
+  - No direct active API restart.
+  - No full compose-stack deploy.
+  - No forced termination of the remaining inactive-slot chat stream.
+
+## 2026-09-07 22:14 KST — Shinhan Windows Collector live-run recovery follow-up
+- CEO request:
+  - Continue Shinhan bank auto-collection verification, immediately fix errors found during validation, and report after success/error handling.
+- Change prepared:
+  - `app/services/yeoljeong_bank_browser_connector.py`: reattaches an existing preferred CDP port/work-key session when ID/PW retry disables browser auto-open, treats transient PC Agent route failures during Shinhan security-program recheck as warnings instead of false `SHINHAN_SECURITY_PROGRAM_NOT_READY`, and closes Shinhan idle-timeout popups before continuing.
+  - `tests/unit/test_yeoljeong_bank_browser_connector.py`: added regressions for preferred-port reattachment, transient security recheck handling, and idle-timeout popup closing.
+  - `tests/unit/test_yeoljeong_finance_service.py`: aligned delivery fixtures with non-empty record guards and isolated the bank auto-collect lock per test.
+- Verification:
+  - `python3 -m py_compile app/services/yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_bank_browser_connector.py tests/unit/test_yeoljeong_finance_service.py`: passed.
+  - Deployed-container targeted test run: `184 passed in 12.89s`.
+  - Live Shinhan harness confirmed the previous `session_id_missing` retry bug was removed; stage log recorded `reattached_existing_preferred_port`.
+  - PC Agent registry confirmed `shinhan-e98` online with `bank_collector`, `financial_exclusive`, and `shinhan_easyview` capabilities.
+  - Shinhan failure screenshot confirmed the remaining blocker is account/service state: "service permission not granted" and "password entered incorrectly 5+ times" message shown by Shinhan.
+- Remaining risk:
+  - Do not run further automatic Shinhan login attempts until the Shinhan account password/permission lock is cleared by the operator.
+  - Code changes still need selected commit, push, and blue/green deploy certification after this handover update.
+
 ## 2026-09-07 23:06 KST — Docker build P1 runtime/lock release certification
 - CEO request:
   - Implement `docs/reports/20260907_docker_build_p1_design_prd.md` and report the result.
@@ -12003,3 +12238,112 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - No active API direct restart and no full compose-stack deploy were performed.
 - Remaining risk:
   - The main worktree still contains unrelated dirty files from other tasks. They were excluded from release `2aa7392e2c73`.
+
+## 2026-09-07 23:00 KST — AADS Docker build P1 implementation and release follow-up
+- CEO request:
+  - Implement `docs/reports/20260907_docker_build_p1_design_prd.md` and report the actual result.
+- Change released:
+  - Release SHA `2aa7392e2c73` (`feat(deploy): optimize docker runtime build`) was committed and pushed to `origin/main`.
+  - Docker runtime build now uses pinned `requirements.runtime.lock`, dev lock, and visual lock inputs, a multi-stage wheelhouse path, and `AADS_INSTALL_PLAYWRIGHT=false` as the default so Chromium browser binaries are not installed into the basic API image.
+  - `deploy.sh` now verifies dependency lock freshness, release context size, release image size, and retention dry-run output before/around the release build.
+  - `scripts/prune_aads_images.sh` was added and then hardened to preserve running images, all container-referenced images, recent successful release SHAs, and the current release SHA.
+- Verification:
+  - `python3 -m pytest tests/unit/test_deploy_build_guards.py tests/unit/test_deploy_observability.py -q`: passed before commit.
+  - Clean release-context `docker build --target runtime` smoke passed before deploy.
+  - Blue/green run `136` built `aads-server:2aa7392e2c73`, passed candidate health, nginx cutover, and routed health, but the deploy process received `TERM` during standby sync and DB row `deploy_runs.id=136` remains `failed / standby_same_digest_sync`.
+  - Manual post-TERM recovery started inactive `aads-server-green:8102` with `AADS_RELEASE_SHA=2aa7392e2c73` and `--no-build`; both API slots now run Docker image digest `sha256:ac45d2203c6619cd2e847c24f6628085256e20305e2e66ada1a75bc5282f15d1`.
+  - Direct health passed on `8100` and `8102`; external health passed on `https://aads.newtalk.kr/api/v1/health`.
+  - Manual P0/P1 monitoring from `2026-09-07T22:54:58+09:00` for 300 seconds found no `level=(error|critical)`, `Traceback`, or `CRITICAL` hits in active API logs.
+- Disk/retention:
+  - Safe prune removed old AADS image candidates and restored Docker preflight headroom above 20GB before deployment.
+  - Post-deploy filesystem check showed `/` and `/var/lib/docker` at 22GB free, 89% used.
+- Remaining risk:
+  - Physical deployment is healthy and same-digest, but script certification row for run `136` is not marked success because the process was interrupted by `TERM`; keep this distinction in future status reports unless a policy-approved manual certification update is applied.
+  - `HANDOVER.md` already contained unrelated dirty entries from other work; this entry was appended without reverting them.
+
+## 2026-09-08 04:20 KST — AADS API blue/green release 9bc830c97dd3 certification
+- CEO approval:
+  - Proceed with unused Docker image cleanup and AADS API blue/green redeploy after disk preflight headroom was insufficient for another safe build.
+- Release:
+  - Release SHA `9bc830c97dd3` (`docs: record docker p1 release certification`) was deployed with `deploy.sh bluegreen`.
+  - The build used the clean committed release SHA; unrelated dirty worktree files were excluded from the image.
+  - Docker image cleanup reclaimed 5.417GB before the release build.
+- Deployment result:
+  - `deploy_runs.id=137` is `success/completed`.
+  - Candidate health passed in 33 seconds.
+  - Nginx cutover switched active routing from `aads-server:8100` to `aads-server-green:8102` and post-switch routed health passed.
+  - Standby same-digest sync completed for `aads-server:8100`.
+  - Both API slots now run `aads-server:9bc830c97dd3` with Docker image digest `sha256:55032b2a68dec323462aef9a8d5e2579564e8852a6cf1fc26cd9455b5e99997d`.
+  - P0/P1 monitoring passed for 300 seconds and completed at `2026-09-08 04:20:21 KST`.
+- Verification:
+  - Direct active health `http://127.0.0.1:8102/api/v1/health`: `status=ok`.
+  - Direct standby health `http://127.0.0.1:8100/api/v1/health`: `status=ok`.
+  - External routed health `https://aads.newtalk.kr/api/v1/health`: `status=ok`.
+  - P0/P1 log pattern search on the active API for `level=(error|critical)|Traceback|CRITICAL` returned no hits.
+  - `deploy_phase_events` for run `137` has 0 failed phases.
+- Not performed:
+  - No active API direct restart.
+  - No full compose-stack deploy.
+  - No force push or destructive cleanup.
+- Remaining risk:
+  - Worktree still contains unrelated dirty files from prior tasks; this release used the clean committed SHA and did not include them.
+
+## 2026-09-08 04:49 KST — Deploy time P1 design and PRD
+- CEO request:
+  - Write and report the design/technical stack/PRD for additional full deployment time reduction after Dockerfile P1 tuning.
+- Document created:
+  - `docs/reports/20260908_deploy_time_p1_design_prd.md`
+- Scope:
+  - Focused on the post-Docker bottlenecks in `deploy.sh bluegreen`: `standby_same_digest_sync`, stream drain, stale `chat_turn_executions` lease classification, deploy queue reconciliation, and `deploy_phase_events.metadata` observability.
+  - Preserved the mandatory release contract: one image per release SHA, candidate health before nginx lock, same-digest standby, rollback on routed-health failure, and five-minute P0/P1 monitoring.
+- Measured baseline:
+  - Latest successful run `137`: `success/completed`, total `1,404s`.
+  - Run `137` top phases: `standby_same_digest_sync=678s`, `build_candidate_image=275s`, `p0p1_monitoring=309s`, `active_slot_drain=65s`.
+  - Recent five successful deployments: average `standby_same_digest_sync=571s`, average `build_candidate_image=517s`, average `active_slot_drain=65s`.
+  - Current API slots both healthy on `aads-server:9bc830c97dd3`.
+- Recommendation captured:
+  - Implement `AADS-DEPLOY-TIME-P1` as a medium-sized change: stale stream classifier, dry-run first, safe apply only for hidden stale placeholders/recovery retries, phase metadata recording, bounded standby wait, and tests.
+- Verification:
+  - Read-only DB checks against `deploy_runs`, `deploy_phase_events`, `chat_turn_executions`, and `chat_messages`.
+  - `wc -l docs/reports/20260908_deploy_time_p1_design_prd.md`: 396 lines.
+- Not performed:
+  - No code implementation, commit, push, or deploy was performed for this design-only request.
+- Remaining risk:
+  - Worktree still contains unrelated dirty files from prior tasks. This handover entry and the new PRD are uncommitted until CEO requests commit/push.
+
+## 2026-09-08 05:12 KST — Deploy time P1 stream reconcile implementation
+- CEO request:
+  - Proceed with the next step after `docs/reports/20260908_deploy_time_p1_design_prd.md`.
+- Change implemented:
+  - Added `scripts/classify_deploy_streams.py` to classify slot-owned `chat_turn_executions` as live, stale, orphan, or unknown for blue/green drain decisions.
+  - Updated `deploy.sh` so `stream_count_for_port` uses the classifier first and counts only live/fail-closed executions for deploy drain gates.
+  - Added dry-run/apply split via `AADS_DEPLOY_STALE_STREAM_APPLY=false` default. Automatic cancel only runs when explicitly enabled and only for stale candidates with no visible assistant content.
+  - Added deploy phase metadata support so target drain, active drain, and standby sync can record stream sample/reconcile summaries in `deploy_phase_events.metadata`.
+  - Reduced standby sync default max wait from 1,800s to 600s while preserving the five-minute P0/P1 monitoring requirement.
+- Verification:
+  - `bash -n deploy.sh`: passed.
+  - `python3 -m py_compile scripts/classify_deploy_streams.py`: passed.
+  - `python3 -m pytest tests/unit/test_deploy_stream_reconcile.py -q`: 5 passed.
+  - `python3 -m pytest tests/unit/test_deploy_observability.py tests/unit/test_deploy_build_guards.py -q`: 11 passed.
+  - `python3 scripts/classify_deploy_streams.py --owner-instance aads-server --mode live-count`: returned `3`.
+- Not performed yet:
+  - Commit, push, and blue/green deploy are pending at this handover point.
+- Remaining risk:
+  - The main worktree still contains unrelated dirty files from prior tasks. Commit only `deploy.sh`, `scripts/classify_deploy_streams.py`, the deploy tests, and this handover entry if releasing this change.
+
+## 2026-09-08 06:51 KST — Codex fallback model configuration correction
+- CEO question:
+  - Asked why `gpt-5.6-sol` was reflected as a fixed fallback when model selection should follow configuration.
+- Finding:
+  - The prior staged change correctly replaced direct fallback calls with a helper, but that helper still ended with a hard-coded `gpt-5.6-sol` emergency fallback.
+  - Production DB currently marks `codex/gpt-5.6-sol` as the default for `runner_llm`, `llm`, and `code_exec`, so future use of that model should be attributable to DB configuration, not direct fallback constants.
+- Correction prepared:
+  - Updated `app/services/model_selector.py` so Codex fallback selection reads enabled default Codex rows from `model_routing_preferences` in `runner_llm -> llm -> code_exec` order.
+  - Removed the direct `return "gpt-5.6-sol"` fallback from the helper. If DB/config lookup fails completely, the path now uses `AADS_CODEX_LEGACY_FALLBACK_MODEL` or the existing legacy `gpt-5.5` safety fallback.
+- Verification:
+  - `python3 -m py_compile app/services/model_selector.py app/services/pipeline_runner_service.py scripts/claude_relay_server.py`: passed.
+  - `bash -n scripts/pipeline-runner.sh`: passed.
+  - `bash -n scripts/pipeline-runner.sh.local`: passed.
+  - `rg` confirmed no direct `gpt-5.6-sol` fallback call/log remains in `app/services/model_selector.py`.
+- Not performed:
+  - Commit, push, and deploy are still pending. Previous commit attempt was blocked by the repository auth/chat core-file pre-commit gate requiring explicit `ALLOW_AUTH_COMMIT=1`.

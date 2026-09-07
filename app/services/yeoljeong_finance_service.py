@@ -145,7 +145,7 @@ BANK_QUICK_SERVICE_CONFIG = {
     },
     "ibk_business": {
         "label": "IBK기업은행 빠른서비스",
-        "login_url": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+        "login_url": "https://kiup.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1010/PQCS101000_i.jsp",
         "enrollment": "기업뱅킹의 빠른조회서비스 신청/해제에서 대상 계좌를 등록한 뒤 빠른조회로 거래내역을 확인합니다.",
     },
 }

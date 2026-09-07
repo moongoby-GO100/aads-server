@@ -4221,9 +4221,9 @@ async def _read_bank_portal_snapshot(page: Any) -> tuple[str, list[dict[str, Any
 
 BANK_PORTAL_URLS: dict[str, str] = {
     "shinhan_business": f"https://bank.shinhan.com/rib/easy/index.jsp#{SHINHAN_IDPW_LOGIN_HASH}",
-    "ibk_business": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+    "ibk_business": "https://kiup.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1010/PQCS101000_i.jsp",
     "088": f"https://bank.shinhan.com/rib/easy/index.jsp#{SHINHAN_IDPW_LOGIN_HASH}",
-    "003": "https://mybank.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1020/PQCS102000_i.jsp",
+    "003": "https://kiup.ibk.co.kr/uib/jsp/guest/qcs/qcs10/qcs1010/PQCS101000_i.jsp",
 }
 
 

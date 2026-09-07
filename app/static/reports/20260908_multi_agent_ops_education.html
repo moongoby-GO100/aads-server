@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>멀티 에이전트 운영 기술 교육자료 - AADS/OHVIS</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5b6472;
+      --paper: #f7f8fb;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --nav: #101827;
+      --blue: #205fa8;
+      --green: #13795b;
+      --amber: #9a6700;
+      --red: #a33a32;
+      --violet: #6d4ea2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", Arial, sans-serif;
+      line-height: 1.65;
+    }
+    header {
+      background: #111827;
+      color: #fff;
+      padding: 42px 28px 32px;
+      border-bottom: 5px solid #13795b;
+    }
+    header .wrap, main {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 36px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 42px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--line);
+      font-size: 25px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 26px 0 10px;
+      font-size: 19px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0 12px; }
+    a { color: #1d4f91; }
+    main { padding: 28px; }
+    .lead {
+      max-width: 980px;
+      color: #d7dee9;
+      font-size: 17px;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .meta div, .card, .callout {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    header .meta div {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+    .label {
+      display: block;
+      color: #cbd5e1;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .value { font-weight: 800; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card h3 { margin-top: 0; }
+    .callout {
+      border-left: 5px solid var(--green);
+      margin: 18px 0;
+    }
+    .warning { border-left-color: var(--amber); }
+    .danger { border-left-color: var(--red); }
+    .tag {
+      display: inline-block;
+      margin: 2px 5px 2px 0;
+      padding: 2px 8px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      background: var(--blue);
+    }
+    .tag.ok { background: var(--green); }
+    .tag.warn { background: var(--amber); }
+    .tag.gap { background: var(--red); }
+    .tag.partial { background: var(--violet); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 22px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #edf1f7;
+      font-weight: 800;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      background: #eef2f7;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      overflow-x: auto;
+      background: #101827;
+      color: #edf2f7;
+      padding: 16px;
+      border-radius: 8px;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+    .toc a {
+      display: block;
+      color: var(--blue);
+      text-decoration: none;
+      padding: 4px 0;
+    }
+    .small { color: var(--muted); font-size: 13px; }
+    .diagram {
+      white-space: pre;
+      overflow-x: auto;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      line-height: 1.35;
+    }
+    @media (max-width: 820px) {
+      .meta, .grid, .grid.three { grid-template-columns: 1fr; }
+      header, main { padding-left: 18px; padding-right: 18px; }
+      h1 { font-size: 28px; }
+      table { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>멀티 에이전트 운영 기술 교육자료</h1>
+      <p class="lead">AI 바이브코딩과 AADS/OHVIS 운영에서 여러 에이전트를 어떻게 나누고, 조율하고, 검증하고, 비용을 통제해야 하는지 CEO 관점에서 학습하기 위한 자료입니다.</p>
+      <div class="meta">
+        <div><span class="label">작성 기준</span><span class="value">2026-09-08 05:34 KST</span></div>
+        <div><span class="label">대상</span><span class="value">AADS / OHVIS / 6개 프로젝트</span></div>
+        <div><span class="label">주요 근거</span><span class="value">공식문서 + arXiv 논문 + 내부 DB</span></div>
+        <div><span class="label">작성 목적</span><span class="value">CEO 교육 + 운영 개선 판단</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="callout">
+      <h2 id="summary">핵심 결론</h2>
+      <p>멀티 에이전트는 "AI를 여러 개 띄우면 좋아진다"가 아닙니다. 효과가 나는 조건은 <strong>일을 독립 하위작업으로 나눌 수 있고, 각 에이전트의 권한과 산출물 계약이 명확하며, 추적/검증/중단/재개가 운영 시스템에 박혀 있을 때</strong>입니다.</p>
+      <p>AADS/OHVIS는 이미 LangGraph 8-agent 그래프, Pipeline Runner, 병렬 그룹, 작업 락, OHVIS Harness/Wiki API, 하네스 트레이스 테이블을 보유하고 있습니다. 다만 현재는 위키 링크/소스/Error Book 데이터가 비어 있어 지식화와 자동 검수 루프를 더 강하게 닫아야 합니다.</p>
+    </section>
+
+    <section>
+      <h2 id="toc">목차</h2>
+      <div class="toc grid three">
+        <div class="card">
+          <a href="#what">1. 멀티 에이전트란 무엇인가</a>
+          <a href="#patterns">2. 핵심 운영 패턴</a>
+          <a href="#research">3. 최신 연구와 자료</a>
+        </div>
+        <div class="card">
+          <a href="#ops-stack">4. 운영 스택</a>
+          <a href="#aads">5. AADS/OHVIS 적용 현황</a>
+          <a href="#examples">6. 실전 예시</a>
+        </div>
+        <div class="card">
+          <a href="#risks">7. 실패 패턴과 방지책</a>
+          <a href="#roadmap">8. 권장 로드맵</a>
+          <a href="#sources">9. 출처</a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="what">1. 멀티 에이전트란 무엇인가</h2>
+      <p>에이전트는 LLM이 도구, 메모리, 파일, 브라우저, DB, 코드 실행 등을 사용하면서 여러 단계로 목표를 달성하는 실행 단위입니다. 멀티 에이전트는 이 실행 단위를 여러 개로 나누어 한 명은 지휘하고, 다른 에이전트들은 조사, 구현, 검수, 배포, 문서화처럼 전문 역할을 맡는 구조입니다.</p>
+      <table>
+        <thead><tr><th>구분</th><th>설명</th><th>예시</th><th>CEO 판단 기준</th></tr></thead>
+        <tbody>
+          <tr><td>단일 에이전트</td><td>한 모델 루프가 전체 업무를 처리</td><td>파일 1개 수정, 짧은 로그 요약</td><td>빠르고 싸지만 긴 작업에서 맥락 소실 위험이 큼</td></tr>
+          <tr><td>워크플로</td><td>코드가 다음 단계를 고정</td><td>요구사항 정리 -> 구현 -> 테스트 -> 보고</td><td>예측성과 감사성이 높음</td></tr>
+          <tr><td>멀티 에이전트</td><td>여러 전문 에이전트가 분업</td><td>PM, 개발자, QA, Ops, Researcher</td><td>병렬성과 전문성은 높지만 조정 비용이 생김</td></tr>
+          <tr><td>하네스</td><td>에이전트를 감싸는 실행 장치</td><td>상태, 도구권한, 재시도, 체크포인트, 추적</td><td>하네스 없이는 운영 시스템이 아니라 데모에 가까움</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warning">
+        <h3>CEO가 기억해야 할 한 줄</h3>
+        <p>멀티 에이전트의 핵심은 "몇 개를 띄웠나"가 아니라 "누가 무엇을 책임지고, 언제 멈추며, 어떤 근거로 완료를 판정하는가"입니다.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="patterns">2. 핵심 운영 패턴</h2>
+      <div class="diagram">CEO 지시
+  |
+  v
+Orchestrator / Supervisor
+  |-- Research Agent: 최신자료, 코드 근거, DB 근거 수집
+  |-- Developer Agent: 제한된 worktree에서 코드/문서 변경
+  |-- QA Agent: 테스트, 린트, 화면/API 검증
+  |-- Reviewer/Judge: 완료 기준과 리스크 판정
+  |-- Ops Agent: 승인 후 배포, 헬스체크, 모니터링
+  |
+  v
+최종 보고: 변경 파일 + 검증 + 커밋/푸시/배포 상태 + 미완료 항목</div>
+      <table>
+        <thead><tr><th>패턴</th><th>작동 방식</th><th>좋은 경우</th><th>위험</th></tr></thead>
+        <tbody>
+          <tr><td>Orchestrator-Worker</td><td>중앙 지휘자가 하위 에이전트에게 작업을 분배하고 결과를 합침</td><td>조사, 분석, 보고서, 복수 프로젝트 상태 점검</td><td>지휘자 지시가 모호하면 하위 작업 중복과 누락이 발생</td></tr>
+          <tr><td>Supervisor</td><td>상위 에이전트가 전문 에이전트를 도구처럼 호출</td><td>최종 답변 소유자를 하나로 유지해야 할 때</td><td>중앙 병목과 비용 증가</td></tr>
+          <tr><td>Handoff</td><td>전문가에게 대화 주도권을 넘김</td><td>지원, 영업, 법무, 기술처럼 담당자 전환이 자연스러운 업무</td><td>인수인계 정보가 부족하면 맥락 손실</td></tr>
+          <tr><td>Swarm</td><td>에이전트들이 서로 다음 담당자에게 넘김</td><td>동적으로 문제가 바뀌는 상담/조사</td><td>누가 최종 책임자인지 흐려질 수 있음</td></tr>
+          <tr><td>Parallel Sectioning</td><td>독립 영역을 나누어 동시에 실행</td><td>여러 소스 조사, 다중 서버 헬스체크, 독립 파일 검토</td><td>공유 파일 수정에는 충돌 위험</td></tr>
+          <tr><td>Debate/Voting</td><td>여러 에이전트가 다른 관점으로 답하고 판정자가 선택</td><td>고위험 의사결정, 보안·법무·아키텍처 검토</td><td>토큰 비용이 빠르게 증가</td></tr>
+          <tr><td>Evaluator-Optimizer</td><td>생성자와 평가자가 반복하여 품질을 올림</td><td>문서, 코드, 프롬프트, 데이터 추출 품질 개선</td><td>평가기준이 약하면 자기만족 루프가 됨</td></tr>
+          <tr><td>Blackboard/Artifact</td><td>각 에이전트가 결과를 파일/DB/아티팩트에 쓰고 참조만 전달</td><td>긴 보고서, 코드 패치, 데이터 분석</td><td>아티팩트 스키마와 버전 관리가 없으면 오염됨</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="research">3. 최신 연구와 자료에서 확인된 사실</h2>
+      <table>
+        <thead><tr><th>자료</th><th>핵심 내용</th><th>운영 교훈</th><th>출처</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Anthropic multi-agent research system</td>
+            <td>복수 Claude 에이전트가 병렬 조사하는 구조. 내부 평가에서 단일 에이전트보다 90.2% 우수, 멀티 에이전트는 일반 채팅 대비 약 15배 토큰 사용.</td>
+            <td>조사형·탐색형 업무에는 강력하나, 비용 게이트와 하위작업 수 제한이 필수입니다.</td>
+            <td><a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic Engineering, 2025-06-13</a></td>
+          </tr>
+          <tr>
+            <td>Anthropic effective agents</td>
+            <td>성공한 에이전트 시스템은 복잡한 프레임워크보다 단순하고 조합 가능한 패턴에서 시작하며, 에이전트는 비용·지연을 성능과 교환합니다.</td>
+            <td>작은 작업은 단일 에이전트/정해진 워크플로로 처리하고, 복잡도가 실제로 필요할 때만 멀티 에이전트로 올려야 합니다.</td>
+            <td><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering, 2024-12-19</a></td>
+          </tr>
+          <tr>
+            <td>Anthropic long-running harnesses</td>
+            <td>장기 실행 에이전트는 initializer, progress log, 작은 단위 진행, 세션 종료 시 구조화된 인수인계가 필요합니다.</td>
+            <td>AADS의 HANDOVER, task ledger, clean worktree, 반복 검증은 장기 실행 하네스의 핵심입니다.</td>
+            <td><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">Anthropic Engineering, 2025-11-26</a></td>
+          </tr>
+          <tr>
+            <td>OpenAI Agents SDK</td>
+            <td>Agents SDK는 반복 tool loop와 handoff를 SDK가 관리하며, sessions, tracing, guardrails, resumable approval flow를 핵심 운영 프리미티브로 제공합니다.</td>
+            <td>AADS는 프레임워크가 달라도 같은 계약을 가져야 합니다. 전문 에이전트 호출, 승인 게이트, 세션, 추적이 최소 운영 단위입니다.</td>
+            <td><a href="https://developers.openai.com/api/docs/guides/agents">OpenAI Agents SDK Guide, 2026-09-08 접근</a></td>
+          </tr>
+          <tr>
+            <td>OpenAI tracing/observability</td>
+            <td>Agents SDK tracing은 run, model call, tool call, handoff, guardrail, custom span을 구조화해 기록합니다.</td>
+            <td>멀티 에이전트 완료 판정은 로그 문자열이 아니라 root trace와 하위 span으로 남겨야 합니다.</td>
+            <td><a href="https://developers.openai.com/api/docs/guides/agents/integrations-observability">OpenAI Integrations and observability, 2026-09-08 접근</a></td>
+          </tr>
+          <tr>
+            <td>OpenAI guardrails/human review</td>
+            <td>입력, 출력, tool guardrail과 human-in-the-loop approval로 실행을 계속할지, 멈출지, 재개할지 제어합니다.</td>
+            <td>금융, 배포, DB 변경, 민감 MCP/SSH 작업은 에이전트 판단만으로 실행하지 않고 승인 중단점을 둬야 합니다.</td>
+            <td><a href="https://developers.openai.com/api/docs/guides/agents/guardrails-approvals">OpenAI Guardrails and human review, 2026-09-08 접근</a></td>
+          </tr>
+          <tr>
+            <td>LangChain multi-agent docs</td>
+            <td>멀티 에이전트는 복잡한 워크플로를 전문 컴포넌트로 나누지만, 모든 복잡한 작업에 필요한 것은 아니라고 명시합니다.</td>
+            <td>CEO 지시의 복잡도와 병렬 가능성을 먼저 판정한 뒤 에이전트 수를 정해야 합니다.</td>
+            <td><a href="https://docs.langchain.com/oss/python/langchain/multi-agent">LangChain Docs, 2026 접근</a></td>
+          </tr>
+          <tr>
+            <td>LangSmith Observability</td>
+            <td>trace는 production agent가 무엇을 했는지 기록하는 핵심 데이터이며, 실패 디버깅과 평가 데이터셋 생성에 사용됩니다.</td>
+            <td>멀티 에이전트 운영은 로그만으로 부족합니다. 에이전트, 도구, 비용, latency, 산출물, 판정을 trace/span으로 묶어야 합니다.</td>
+            <td><a href="https://docs.langchain.com/langsmith/observability">LangSmith Docs, 2026 접근</a></td>
+          </tr>
+          <tr>
+            <td>Magentic-One</td>
+            <td>Microsoft AutoGen 기반의 일반 목적 멀티 에이전트 시스템. Orchestrator가 웹, 파일, 코드, 터미널 전문 에이전트를 지휘하고 GAIA, AssistantBench, WebArena에서 경쟁력 있는 결과를 보였습니다.</td>
+            <td>운영형 멀티 에이전트는 지휘자와 전문 도구 에이전트를 분리해야 하며, 벤치마크와 error analysis가 같이 필요합니다.</td>
+            <td><a href="https://arxiv.org/abs/2411.04468">arXiv 2411.04468, 2024-11-07</a></td>
+          </tr>
+          <tr>
+            <td>Multi-Agent Collaboration Mechanisms Survey</td>
+            <td>협업 메커니즘을 actors, types, structures, strategies, coordination protocols로 분류합니다.</td>
+            <td>AADS 작업 설계 시 "누가, 어떤 구조로, 어떤 프로토콜로, 어떤 산출물을 남기는가"를 지시서에 써야 합니다.</td>
+            <td><a href="https://arxiv.org/abs/2501.06322">arXiv 2501.06322, 2025-01-10</a></td>
+          </tr>
+          <tr>
+            <td>STORM state management</td>
+            <td>공유 워크스페이스에서 한 에이전트가 파일을 수정하면 다른 에이전트가 읽은 의존 컨텍스트가 여전히 유효한지 보장해야 한다고 봅니다.</td>
+            <td>멀티 에이전트 코딩은 파일 격리만으로 부족하며, 읽은 컨텍스트와 수정 파일의 상태 검증이 필요합니다.</td>
+            <td><a href="https://arxiv.org/abs/2605.20563">arXiv 2605.20563, 2026</a></td>
+          </tr>
+          <tr>
+            <td>CAID asynchronous SWE agents</td>
+            <td>중앙 위임, 비동기 실행, 격리 worktree, git commit/merge, 테스트 검증을 결합해 장기 소프트웨어 작업의 멀티 에이전트 협업을 안정화합니다.</td>
+            <td>AADS의 parallel_group과 depends_on은 반드시 worktree 격리, 병합 게이트, 실행 가능한 테스트와 함께 써야 합니다.</td>
+            <td><a href="https://arxiv.org/abs/2603.21489">arXiv 2603.21489, v2 2026-07-08</a></td>
+          </tr>
+          <tr>
+            <td>MultiAgentBench</td>
+            <td>다중 에이전트의 협력과 경쟁을 completion뿐 아니라 milestone 기반 KPI로 평가합니다.</td>
+            <td>단순 성공/실패만 보면 중간 조율 실패를 놓칩니다. 단계별 milestone과 개입 횟수를 품질 지표로 삼아야 합니다.</td>
+            <td><a href="https://arxiv.org/abs/2503.01935">arXiv 2503.01935, 2025-03-03</a></td>
+          </tr>
+          <tr>
+            <td>CooperBench</td>
+            <td>600개 이상 협업 코딩 작업에서 에이전트 협업은 각자 처리할 때보다 평균 30% 낮은 성공률을 보였습니다.</td>
+            <td>같은 코드 영역을 여러 에이전트가 동시에 수정하게 하면 실패합니다. 파일 단위 의존성, worktree 격리, merge gate가 필요합니다.</td>
+            <td><a href="https://arxiv.org/abs/2601.13295">arXiv 2601.13295, v2 2026-01-26</a></td>
+          </tr>
+          <tr>
+            <td>ChainSWE</td>
+            <td>연속·의존 버그 수정에서는 chain length가 길어질수록 성능이 최대 70% 하락했습니다.</td>
+            <td>장기 유지보수는 기억만 믿으면 안 됩니다. 각 단계마다 테스트, 문서, 상태 원장을 남겨야 합니다.</td>
+            <td><a href="https://arxiv.org/abs/2607.02606">arXiv 2607.02606, v2 2026-09-01</a></td>
+          </tr>
+          <tr>
+            <td>SWE-Together</td>
+            <td>11,260개 실제 세션에서 109개 검증 가능한 멀티턴 코딩 작업을 재구성해, 최종 정답뿐 아니라 사용자 개입 횟수도 평가합니다.</td>
+            <td>CEO와 AI의 상호작용은 단일 프롬프트가 아니라 반복 협업으로 평가해야 합니다.</td>
+            <td><a href="https://arxiv.org/abs/2606.29957">arXiv 2606.29957, 2026-06-29</a></td>
+          </tr>
+          <tr>
+            <td>OWASP Agentic AI Threats</td>
+            <td>자율 에이전트의 위협을 threat-model 기반으로 정리하고, 안전한 설계·배포 가이드를 제공합니다.</td>
+            <td>도구 권한, 데이터 유출, 프롬프트 인젝션, 과잉 행동, 공급망을 운영 게이트로 차단해야 합니다.</td>
+            <td><a href="https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/">OWASP ASI, 2025-02-17</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="ops-stack">4. 멀티 에이전트 운영 스택</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>1. 지시·분해 계층</h3>
+          <p>CEO 지시를 TASK_ID, 우선순위, 범위, 완료조건, 금지사항으로 바꿉니다. 좋은 분해는 "서로 다른 파일/서버/자료"처럼 독립성이 높은 단위로 나누는 것입니다.</p>
+        </div>
+        <div class="card">
+          <h3>2. 오케스트레이션 계층</h3>
+          <p>LangGraph, OpenAI Agents SDK, AutoGen, CrewAI 같은 런타임이 단계와 에이전트 호출을 관리합니다. 운영에서는 LLM 결정과 코드 결정의 혼합이 필요합니다.</p>
+        </div>
+        <div class="card">
+          <h3>3. 상태·체크포인트 계층</h3>
+          <p>중단, 재시작, 타임아웃, 승인 대기 후에도 이어가려면 run_id, checkpoint, owner lease, heartbeat, progress log가 필요합니다.</p>
+        </div>
+        <div class="card">
+          <h3>4. 도구·권한 계층</h3>
+          <p>MCP, 내부 tool registry, SSH, DB, Git, 브라우저, PC Agent를 에이전트가 사용합니다. 도구별 read/write/deploy/auth/financial/destructive 등급이 있어야 합니다.</p>
+        </div>
+        <div class="card">
+          <h3>5. 관측성 계층</h3>
+          <p>trace, span, tool call, token, cost, latency, retry, error, final artifact를 남깁니다. LangSmith, Langfuse, OpenTelemetry GenAI 규약이 여기에 해당합니다.</p>
+        </div>
+        <div class="card">
+          <h3>6. 검증·평가 계층</h3>
+          <p>테스트, lint, health, 화면 캡처, DB 전후 검증, LLM-as-judge, 사람 승인, 회귀 데이터셋을 연결합니다. 최종 상태 평가가 특히 중요합니다.</p>
+        </div>
+      </div>
+      <h3>운영 계약 예시</h3>
+      <pre><code>작업 입력:
+  project: AADS
+  priority: P1
+  target_files: ["app/api/pipeline_runner.py", "tests/unit/test_pipeline_runner_script_guards.py"]
+  risk_tier: write
+  parallel_group: "runner-ui-docs-20260908"
+
+오케스트레이터 판단:
+  - 같은 파일을 만지는 작업은 depends_on으로 직렬화
+  - 다른 문서/조회 작업은 parallel_group으로 병렬 허용
+  - 배포/DB/금융/인증은 승인 게이트에서 중단
+
+완료 조건:
+  - 변경 파일 목록 기록
+  - 테스트 통과
+  - HANDOVER 업데이트
+  - 커밋/푸시/배포 상태를 사실대로 보고</code></pre>
+    </section>
+
+    <section>
+      <h2 id="aads">5. AADS/OHVIS 적용 현황</h2>
+      <table>
+        <thead><tr><th>영역</th><th>현재 적용</th><th>실측 근거</th><th>판정</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>LangGraph 기반 그래프</td>
+            <td>PM, Supervisor, Architect, Developer, QA, Judge, DevOps, Researcher 8개 노드 구성</td>
+            <td><code>app/graph/builder.py</code> 코드 확인</td>
+            <td><span class="tag ok">적용됨</span></td>
+          </tr>
+          <tr>
+            <td>프레임워크 의존성</td>
+            <td><code>langgraph</code>, <code>langgraph-checkpoint</code>, <code>langchain-*</code>, <code>mcp</code>, <code>claude-agent-sdk</code>, <code>langfuse</code> 포함</td>
+            <td><code>pyproject.toml</code> 코드 확인</td>
+            <td><span class="tag ok">적용됨</span></td>
+          </tr>
+          <tr>
+            <td>Pipeline Runner</td>
+            <td>DB 큐, clean worktree, parallel_group, deploy preflight, AI review, 승인 대기 구조</td>
+            <td><code>docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md</code>, <code>app/api/pipeline_runner.py</code></td>
+            <td><span class="tag ok">적용됨</span></td>
+          </tr>
+          <tr>
+            <td>OHVIS Harness API</td>
+            <td>harness status, risk policies, skill-find, wiki search, Hermes recommend API 제공</td>
+            <td><code>app/api/ohvis_harness.py</code>, <code>app/services/ohvis_harness.py</code></td>
+            <td><span class="tag ok">적용됨</span></td>
+          </tr>
+          <tr>
+            <td>위험 정책</td>
+            <td>read/write/deploy/auth/financial/destructive 등급과 승인/거부 정책 존재</td>
+            <td><code>RISK_POLICIES</code> 코드 확인</td>
+            <td><span class="tag ok">적용됨</span></td>
+          </tr>
+          <tr>
+            <td>하네스 트레이스</td>
+            <td>테이블 존재, 40건 기록</td>
+            <td><code>ohvis_harness_traces=40</code> [DB 조회, 2026-09-08 05:34 KST]</td>
+            <td><span class="tag partial">부분 적용</span></td>
+          </tr>
+          <tr>
+            <td>장기 기억</td>
+            <td>memory_facts 유효 67,991건</td>
+            <td><code>memory_facts=67991</code> [DB 조회, 2026-09-08 05:34 KST]</td>
+            <td><span class="tag ok">적용됨</span></td>
+          </tr>
+          <tr>
+            <td>OHVIS Wiki</td>
+            <td>wiki page 1,693건, link/source/error book은 아직 0건</td>
+            <td><code>ohvis_wiki_pages=1693</code>, <code>ohvis_wiki_links=0</code>, <code>ohvis_wiki_sources=0</code>, <code>ohvis_wiki_error_book=0</code> [DB 조회, 2026-09-08 05:34 KST]</td>
+            <td><span class="tag partial">골격 적용, 데이터 보강 필요</span></td>
+          </tr>
+          <tr>
+            <td>지식그래프</td>
+            <td>엔티티 143건</td>
+            <td><code>kg_entities=143</code> [DB 조회, 2026-09-08 05:34 KST]</td>
+            <td><span class="tag partial">초기 적용</span></td>
+          </tr>
+          <tr>
+            <td>활성 Pipeline 작업</td>
+            <td>활성 작업 1건: GO100 러너 running. AADS 문서 작업 대상과는 충돌 없음</td>
+            <td><code>active_pipeline_jobs=1</code>, <code>project=GO100</code>, <code>runner-b30a382d</code> [DB 조회, 2026-09-08 05:34 KST]</td>
+            <td><span class="tag ok">AADS 직접 문서 충돌 낮음</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout warning">
+        <h3>현재 가장 큰 차이</h3>
+        <p>코드와 테이블은 이미 멀티 에이전트 운영을 지향하고 있지만, trace -> eval -> wiki/error book -> 개선 지시서로 이어지는 폐루프가 아직 약합니다. 즉 "실행"은 있으나 "실패가 다음 실행 품질을 자동으로 올리는 구조"는 더 보강해야 합니다.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="examples">6. 실전 예시</h2>
+      <h3>예시 A. 최신 시장/기술 조사</h3>
+      <table>
+        <thead><tr><th>역할</th><th>작업</th><th>산출물</th><th>검증</th></tr></thead>
+        <tbody>
+          <tr><td>Lead Researcher</td><td>질문을 4개 하위 주제로 분해</td><td>조사 계획</td><td>중복 없는 하위 질문</td></tr>
+          <tr><td>Source Agent</td><td>공식 문서와 논문 검색</td><td>출처 목록</td><td>URL, 날짜, 원문 확인</td></tr>
+          <tr><td>Comparison Agent</td><td>프레임워크 장단점 비교</td><td>비교표</td><td>같은 기준으로 비교</td></tr>
+          <tr><td>Synthesis Agent</td><td>CEO 의사결정용 요약 작성</td><td>보고서</td><td>근거 없는 수치 제거</td></tr>
+          <tr><td>Judge</td><td>출처·논리·누락 검수</td><td>승인/보류 판정</td><td>2개 이상 근거 또는 미검증 표기</td></tr>
+        </tbody>
+      </table>
+
+      <h3>예시 B. 코드 수정</h3>
+      <p>코드 수정은 조사와 다릅니다. CooperBench와 ChainSWE 계열 결과처럼 여러 에이전트가 같은 코드 영역을 만지면 조정 실패가 늘어납니다. 따라서 AADS에서는 다음 원칙이 맞습니다.</p>
+      <pre><code>좋은 분할:
+  - Agent 1: 원인 분석만 수행, 파일 수정 없음
+  - Agent 2: 단일 파일 패치 수행
+  - Agent 3: 테스트와 코드리뷰 수행
+  - Ops: 승인 후 배포만 수행
+
+나쁜 분할:
+  - Agent 1, 2, 3이 같은 파일을 동시에 수정
+  - 테스트 없이 각자 "완료" 보고
+  - worktree 격리 없이 main 작업트리에서 동시 작업
+  - 최종 책임자가 없이 결과를 합침</code></pre>
+
+      <h3>예시 C. AADS 배포</h3>
+      <table>
+        <thead><tr><th>단계</th><th>에이전트</th><th>중단 조건</th><th>완료 근거</th></tr></thead>
+        <tbody>
+          <tr><td>Preflight</td><td>Ops/QA</td><td>dirty 충돌, origin ahead/behind, 활성 stream</td><td>git status, runner status, health</td></tr>
+          <tr><td>Build</td><td>Ops</td><td>이미지 빌드 실패, context 비정상 증가</td><td>한 release SHA에 이미지 1개</td></tr>
+          <tr><td>Candidate</td><td>Ops</td><td>직접 health 실패</td><td>candidate slot health OK</td></tr>
+          <tr><td>Cutover</td><td>Ops</td><td>routed health 실패</td><td>nginx lock 내 route 전환, 즉시 health</td></tr>
+          <tr><td>Standby sync</td><td>Ops</td><td>digest 불일치</td><td>same digest standby</td></tr>
+          <tr><td>Monitoring</td><td>QA/Ops</td><td>5분 내 P0/P1 신규 오류</td><td>release certified</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="risks">7. 실패 패턴과 방지책</h2>
+      <table>
+        <thead><tr><th>실패 패턴</th><th>왜 생기는가</th><th>사용자 영향</th><th>방지책</th></tr></thead>
+        <tbody>
+          <tr><td>과잉 분산</td><td>간단한 작업에도 많은 하위 에이전트를 생성</td><td>비용 증가, 응답 지연</td><td>XS/S 작업은 단일 에이전트, M 이상만 분해</td></tr>
+          <tr><td>중복 조사</td><td>하위 지시가 모호함</td><td>같은 자료만 반복 수집</td><td>각 agent에 범위, 제외항목, 출력 포맷 지정</td></tr>
+          <tr><td>공유 파일 충돌</td><td>여러 에이전트가 같은 파일을 수정</td><td>회귀, 유실, merge 실패</td><td>target_files 기반 depends_on, clean worktree, diff 검수</td></tr>
+          <tr><td>끝났다고 착각</td><td>검증 없이 산출물만 보고</td><td>완료 보고와 실제 반영 불일치</td><td>테스트/health/화면/DB 기준 완료 계약</td></tr>
+          <tr><td>맥락 소실</td><td>장기 실행 중 compaction 또는 세션 전환</td><td>반복 질문, 이전 결정 무시</td><td>checkpoint, progress log, HANDOVER, artifact reference</td></tr>
+          <tr><td>도구 오용</td><td>도구 설명이 불명확하거나 권한 구분이 없음</td><td>잘못된 DB/SSH/Git 액션</td><td>도구별 예시, risk tier, approval gate, allowlist</td></tr>
+          <tr><td>관측 불가</td><td>trace/span 없이 로그만 존재</td><td>왜 실패했는지 복기 불가</td><td>agent_id, tool_call, cost, latency, error, artifact trace</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="roadmap">8. AADS/OHVIS 권장 로드맵</h2>
+      <table>
+        <thead><tr><th>우선순위</th><th>조치</th><th>기대효과</th><th>검증 기준</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>P0</td>
+            <td>멀티 에이전트 작업 지시서에 <code>target_files</code>, <code>parallel_group</code>, <code>depends_on</code>, <code>risk_tier</code>, <code>success_criteria</code>를 필수화</td>
+            <td>공유 코드 충돌과 완료 착각 감소</td>
+            <td>새 runner job의 대상 파일 추출률, 충돌 차단 로그, 승인 전 diff 기록</td>
+          </tr>
+          <tr>
+            <td>P0</td>
+            <td>trace schema를 OpenTelemetry/LangSmith 호환으로 정리하고, 하위 에이전트별 span을 저장</td>
+            <td>실패 원인 추적 가능</td>
+            <td>한 작업에서 root trace, agent span, tool span, error span이 모두 조회됨</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>OHVIS Wiki link/source/error_book 자동 적재</td>
+            <td>반복 실패와 반복 조사를 줄임</td>
+            <td>wiki_sources, wiki_links, wiki_error_book이 실제 실행 후 증가</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>작업 유형별 에이전트 수 예산표 도입</td>
+            <td>토큰 비용 통제</td>
+            <td>작업 size별 평균 cost, tool call, latency 추적</td>
+          </tr>
+          <tr>
+            <td>P1</td>
+            <td>Evaluator/Judge를 단순 리뷰가 아니라 최종 상태 평가로 전환</td>
+            <td>코드/DB/화면/배포 반영 불일치 감소</td>
+            <td>완료 보고가 테스트·DB·화면·헬스 중 필요한 근거를 포함</td>
+          </tr>
+          <tr>
+            <td>P2</td>
+            <td>멀티 에이전트 벤치셋 구축</td>
+            <td>모델·프롬프트·하네스 변경의 품질 영향 측정</td>
+            <td>대표 작업 20개 이상, 회귀 성공률과 비용 비교표</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>작업 유형별 추천 운영 방식</h3>
+      <table>
+        <thead><tr><th>작업 유형</th><th>추천 방식</th><th>에이전트 수</th><th>이유</th></tr></thead>
+        <tbody>
+          <tr><td>단일 파일 오타/문서 보강</td><td>단일 에이전트 직접 작업</td><td>1</td><td>멀티 에이전트 비용이 이득보다 큼</td></tr>
+          <tr><td>최신자료 조사/교육자료</td><td>Orchestrator + 병렬 Research + Judge</td><td>2~5</td><td>독립 소스 조사에 강함</td></tr>
+          <tr><td>코드 분석 후 작은 수정</td><td>분석 에이전트와 수정 에이전트 분리</td><td>2~3</td><td>수정 범위를 좁히고 검증 강화</td></tr>
+          <tr><td>공유 코드 대규모 리팩터링</td><td>Pipeline Runner + depends_on 직렬화</td><td>단계별 1~2</td><td>동시 수정은 실패 위험이 높음</td></tr>
+          <tr><td>배포/운영 변경</td><td>Ops workflow + 승인 게이트</td><td>1 Ops + 1 QA</td><td>예측 가능성과 롤백이 중요</td></tr>
+          <tr><td>금융/인증/개인정보</td><td>코드 기반 제어 + 사람 승인</td><td>최소화</td><td>자율성보다 안전성이 우선</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="ceo-checklist">CEO 검수 체크리스트</h2>
+      <table>
+        <thead><tr><th>질문</th><th>좋은 답</th><th>위험 신호</th></tr></thead>
+        <tbody>
+          <tr><td>왜 멀티 에이전트가 필요한가?</td><td>병렬 가능성, 전문성, 컨텍스트 초과, 도구 다양성이 근거로 제시됨</td><td>"많이 띄우면 빨라집니다" 같은 추상 답변</td></tr>
+          <tr><td>각 에이전트 책임은 무엇인가?</td><td>역할, 입력, 출력, 금지행동, 완료조건이 분리됨</td><td>모든 에이전트가 같은 일을 함</td></tr>
+          <tr><td>충돌 방지는 어떻게 하나?</td><td>target_files, depends_on, worktree, lock, merge gate가 있음</td><td>공유 main에서 직접 병렬 수정</td></tr>
+          <tr><td>실패하면 어디서 재개하나?</td><td>checkpoint, progress log, HANDOVER, task state가 있음</td><td>처음부터 다시 실행</td></tr>
+          <tr><td>비용은 어떻게 제한하나?</td><td>size별 agent count, tool call cap, token budget, stop rule이 있음</td><td>하위 에이전트 수 제한 없음</td></tr>
+          <tr><td>완료 판정은 무엇인가?</td><td>테스트, DB, API, 화면, health, trace, 문서기록 중 필요한 근거가 있음</td><td>모델이 "완료"라고 말한 것만 있음</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="sources">9. 출처와 내부 근거</h2>
+      <h3>외부 최신자료</h3>
+      <table>
+        <thead><tr><th>분류</th><th>자료</th><th>확인 내용</th></tr></thead>
+        <tbody>
+          <tr><td>공식문서</td><td><a href="https://developers.openai.com/api/docs/guides/agents">OpenAI Agents SDK Guide</a></td><td>Agents SDK와 Responses API 선택 기준, tool loop, handoffs, sessions, tracing, guardrails</td></tr>
+          <tr><td>공식문서</td><td><a href="https://developers.openai.com/api/docs/guides/agents/integrations-observability">OpenAI Integrations and observability</a></td><td>run, model call, tool call, handoff, guardrail, custom span tracing</td></tr>
+          <tr><td>공식문서</td><td><a href="https://developers.openai.com/api/docs/guides/agents/guardrails-approvals">OpenAI Guardrails and human review</a></td><td>input/output/tool guardrails, approval interruption, resumable state</td></tr>
+          <tr><td>공식문서</td><td><a href="https://developers.openai.com/api/docs/guides/agent-builder-safety">OpenAI Safety in building agents</a></td><td>MCP tool approvals, input guardrails, trace graders, evals, structured input isolation</td></tr>
+          <tr><td>공식문서</td><td><a href="https://docs.langchain.com/oss/python/langchain/multi-agent">LangChain Multi-agent</a></td><td>멀티 에이전트 사용 조건과 구조</td></tr>
+          <tr><td>공식문서</td><td><a href="https://docs.langchain.com/langsmith/observability">LangSmith Observability</a></td><td>trace 기반 production debugging, monitoring, eval dataset</td></tr>
+          <tr><td>공식자료</td><td><a href="https://www.anthropic.com/engineering/multi-agent-research-system">Anthropic multi-agent research system</a></td><td>90.2% 내부 평가 향상, 15배 토큰 비용, orchestrator-worker 구조, tracing 필요성</td></tr>
+          <tr><td>공식자료</td><td><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Building effective agents</a></td><td>워크플로와 에이전트 구분, 단순 패턴 우선, 비용/지연 tradeoff</td></tr>
+          <tr><td>공식자료</td><td><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">Anthropic long-running harnesses</a></td><td>initializer, progress log, incremental progress, structured handover</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2411.04468">Magentic-One, arXiv 2411.04468</a></td><td>Orchestrator 중심 generalist multi-agent architecture와 AutoGenBench</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2501.06322">Multi-Agent Collaboration Mechanisms, arXiv 2501.06322</a></td><td>actors, collaboration type, structure, strategy, coordination protocol 분류</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2605.20563">STORM, arXiv 2605.20563</a></td><td>공유 워크스페이스의 컨텍스트 유효성 검증과 상태 관리</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2603.21489">CAID, arXiv 2603.21489</a></td><td>중앙 위임, 비동기 실행, 격리 worktree, branch-and-merge, 테스트 기반 통합</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2503.01935">MultiAgentBench, arXiv 2503.01935</a></td><td>협력/경쟁형 멀티 에이전트를 milestone KPI로 평가</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2601.13295">CooperBench, arXiv 2601.13295</a></td><td>협업 코딩에서 평균 30% 성공률 하락, 조정 실패 원인</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2607.02606">ChainSWE, arXiv 2607.02606</a></td><td>연속 의존 버그 수정에서 chain length 증가 시 최대 70% 성능 하락</td></tr>
+          <tr><td>논문</td><td><a href="https://arxiv.org/abs/2606.29957">SWE-Together, arXiv 2606.29957</a></td><td>실제 사용자-에이전트 세션 기반 멀티턴 코딩 평가</td></tr>
+          <tr><td>보안</td><td><a href="https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/">OWASP Agentic AI Threats and Mitigations</a></td><td>자율 에이전트 위협 모델과 완화책</td></tr>
+          <tr><td>관측성</td><td><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI semantic conventions</a></td><td>GenAI 관측성 표준화 방향</td></tr>
+        </tbody>
+      </table>
+      <h3>내부 근거</h3>
+      <table>
+        <thead><tr><th>근거</th><th>확인 내용</th></tr></thead>
+        <tbody>
+          <tr><td><code>/root/aads/AGENTS.md</code>, <code>AGENTS.md</code></td><td>AADS blue/green release, clean SHA, standby digest, P0/P1 monitoring 규칙</td></tr>
+          <tr><td><code>pyproject.toml</code></td><td>LangGraph, LangChain, MCP, Langfuse, Claude Agent SDK 의존성 확인</td></tr>
+          <tr><td><code>app/graph/builder.py</code></td><td>8-agent native LangGraph StateGraph 구조 확인</td></tr>
+          <tr><td><code>app/api/ohvis_harness.py</code>, <code>app/services/ohvis_harness.py</code></td><td>OHVIS Harness, Skill Find, Wiki search, Hermes recommend, risk policies API 확인</td></tr>
+          <tr><td><code>docs/pipeline-runner/PIPELINE-RUNNER-ARCHITECTURE.md</code></td><td>clean worktree, parallel_group, deploy preflight, AI review, approval gate 확인</td></tr>
+          <tr><td>DB 조회</td><td><code>memory_facts=67991</code>, <code>ohvis_wiki_pages=1693</code>, <code>ohvis_harness_traces=40</code>, <code>kg_entities=143</code>, <code>wiki_links=0</code>, <code>wiki_sources=0</code>, <code>wiki_error_book=0</code>, <code>active_pipeline_jobs=1</code> at 2026-09-08 05:34 KST</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>
