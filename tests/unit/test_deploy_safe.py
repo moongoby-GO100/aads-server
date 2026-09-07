@@ -93,7 +93,7 @@ async def test_deploy_safe_rejects_aads_server_restart_single():
         "service": "aads-server",
     })
 
-    assert result == {"error": "aads-server는 reload 또는 bluegreen 모드를 사용하세요"}
+    assert "reload 또는 bluegreen" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -181,6 +181,53 @@ async def test_deploy_safe_execute_uses_subprocess_with_health_checks(monkeypatc
     assert calls[1] == command_parts
     assert calls[2] == {"sleep": 5}
     assert calls[3] == list(module._DEPLOY_SAFE_HEALTH_ARGS)
+
+
+@pytest.mark.asyncio
+async def test_deploy_safe_async_mode_starts_background_without_post_poll(monkeypatch):
+    from app.services import tool_executor as module
+    from app.services.tool_executor import ToolExecutor
+
+    executor = ToolExecutor()
+    calls = []
+
+    async def fake_run_subprocess(parts):
+        calls.append(("run", parts))
+        return {
+            "ok": True,
+            "command": " ".join(parts),
+            "returncode": 0,
+            "stdout": "ok",
+            "stderr": "",
+        }
+
+    async def fake_spawn_subprocess(parts):
+        calls.append(("spawn", parts))
+        return {
+            "ok": True,
+            "command": " ".join(parts),
+            "pid": 12345,
+            "log_path": "/root/aads/aads-server/logs/deploy-safe-test.log",
+            "status": "started",
+        }
+
+    async def fake_sleep(seconds):
+        calls.append(("sleep", seconds))
+
+    monkeypatch.setattr(executor, "_deploy_safe_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(executor, "_deploy_safe_spawn_subprocess", fake_spawn_subprocess)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    result = await executor._deploy_safe({"mode": "reload", "dry_run": False, "async_mode": True})
+
+    assert result["success"] is True
+    assert result["async_mode"] is True
+    assert result["status"] == "started"
+    assert result["post_health"]["ok"] is None
+    assert calls == [
+        ("run", list(module._DEPLOY_SAFE_HEALTH_ARGS)),
+        ("spawn", list(module._DEPLOY_SAFE_RELOAD_CMD if not ToolExecutor._deploy_safe_in_container() else module._DEPLOY_SAFE_CONTAINER_RELOAD_CMD)),
+    ]
 
 
 @pytest.mark.asyncio

@@ -2270,6 +2270,42 @@ class ToolExecutor:
             "stderr": (completed.stderr or "").strip(),
         }
 
+    async def _deploy_safe_spawn_subprocess(self, parts: list[str]) -> Dict[str, Any]:
+        command = self._deploy_safe_join_command(parts)
+        log_dir = "/root/aads/aads-server/logs"
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(
+                log_dir,
+                f"deploy-safe-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.log",
+            )
+            log_file = open(log_path, "a", encoding="utf-8")
+            proc = await asyncio.to_thread(
+                subprocess.Popen,
+                parts,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                shell=False,
+                start_new_session=True,
+            )
+            log_file.close()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "command": command,
+                "pid": None,
+                "log_path": "",
+                "error": str(exc),
+            }
+        return {
+            "ok": True,
+            "command": command,
+            "pid": proc.pid,
+            "log_path": log_path,
+            "status": "started",
+        }
+
     async def _deploy_safe(self, inp: Dict[str, Any]) -> Any:
         """AADS 무중단 배포 표준 도구 (reload/bluegreen/restart-single)."""
         mode = str(inp.get("mode") or "").strip().lower()
@@ -2281,6 +2317,10 @@ class ToolExecutor:
             dry_run = dry_run_input.strip().lower() not in {"false", "0", "no"}
         else:
             dry_run = True if dry_run_input is None else bool(dry_run_input)
+        async_mode = _coerce_bool(
+            inp.get("async_mode", inp.get("background", False)),
+            default=False,
+        )
 
         service = str(inp.get("service") or "").strip()
         block_reason = self._deploy_safe_block_reason(f"{mode} {service}")
@@ -2314,6 +2354,7 @@ class ToolExecutor:
         base = {
             "mode": mode,
             "dry_run": dry_run,
+            "async_mode": async_mode,
             "command": command,
             "description": description,
             "health_check_command": _DEPLOY_SAFE_HEALTH_COMMAND,
@@ -2330,6 +2371,30 @@ class ToolExecutor:
                 "error": "배포 전 health-check 실패",
                 "pre_health": pre_health,
             }
+
+        if async_mode:
+            started = await self._deploy_safe_spawn_subprocess(command_parts)
+            result = {
+                **base,
+                "success": bool(started.get("ok")),
+                "status": "started" if started.get("ok") else "start_failed",
+                "pre_health": pre_health,
+                "deploy_result": started,
+                "post_health": {
+                    "ok": None,
+                    "command": _DEPLOY_SAFE_HEALTH_COMMAND,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": "async_mode: post health must be checked by deploy status or a follow-up health_check",
+                },
+                "follow_up": (
+                    "배포는 백그라운드에서 진행 중입니다. "
+                    "deploy/status, health_check, docker ps로 완료를 재확인하세요."
+                ),
+            }
+            if not started.get("ok"):
+                result["error"] = "deploy_safe 비동기 시작 실패"
+            return result
 
         deploy_result = await self._deploy_safe_run_subprocess(command_parts)
         post_health = {"ok": False, "command": _DEPLOY_SAFE_HEALTH_COMMAND, "returncode": -1, "stdout": "", "stderr": "not checked"}

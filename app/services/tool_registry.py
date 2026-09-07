@@ -894,6 +894,11 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "true면 명령만 반환하고 실행하지 않음",
                     "default": True,
                 },
+                "async_mode": {
+                    "type": "boolean",
+                    "description": "true면 사전 health 확인 후 배포를 백그라운드로 시작하고 즉시 반환",
+                    "default": False,
+                },
                 "service": {
                     "type": "string",
                     "description": "restart-single 모드에서 재시작할 서비스명",
@@ -904,6 +909,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_examples": [
             {"mode": "reload"},
             {"mode": "bluegreen", "dry_run": False},
+            {"mode": "bluegreen", "dry_run": False, "async_mode": True},
             {"mode": "restart-single", "service": "litellm"},
         ],
     },

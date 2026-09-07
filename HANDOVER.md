@@ -1,5 +1,27 @@
 # AADS HANDOVER
 
+## 2026-09-07 13:45 KST - Deploy wait async handoff and GO100 queue registration
+
+- Request:
+  - Apply the recommended deploy queue/no-loss follow-up immediately, register the GO100 deployment in the queue, and analyze how to avoid AI chat/runner responses waiting until deployment completion.
+- GO100 action:
+  - Remote target: `contabo14:/root/kis-autotrade-v4`.
+  - `scripts/deploy.sh` now supports `--queue-only`, which writes a `queued_for_deploy` request without starting deployment. Existing lock-busy behavior still starts the queue worker.
+  - Manual queue registration executed: `bash scripts/deploy.sh --queue-only ceo_manual_queue_latest_20260907`.
+  - Queue evidence: `/tmp/go100-deploy-queue.jsonl` contains latest `release_sha=499507c283f0` with `status=queued_for_deploy`.
+  - Remote validation: `bash -n scripts/deploy.sh` passed; `bash scripts/go100_deploy_gate.sh --info` passed with `HEAD == origin/main` and clean worktree.
+- AADS action:
+  - `app/services/tool_executor.py`: added `deploy_safe` `async_mode` / `background` support. Non-dry-run async mode performs pre-health, starts the resolved deploy command via detached `subprocess.Popen`, returns immediately with pid/log path, and requires follow-up deploy status/health validation.
+  - `app/services/tool_registry.py`: exposed `async_mode` in the `deploy_safe` tool schema and examples.
+  - `tests/unit/test_deploy_safe.py`: added regression coverage proving async mode does not enter the post-health polling loop; relaxed a stale exact error string assertion.
+- Verification:
+  - `python3 -m py_compile app/services/tool_executor.py app/services/tool_registry.py` passed locally.
+  - `git diff --check -- app/services/tool_executor.py app/services/tool_registry.py tests/unit/test_deploy_safe.py` passed.
+  - `docker run --rm --network aads_network -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=postgresql://aads:aads@aads-postgres:5432/aads aads-server:e3c7851dc328 python3 -m pytest tests/unit/test_deploy_safe.py -q` passed: 13 tests.
+- Operational note:
+  - This fixes the AI-session path where `deploy_safe` held the response until deploy subprocess and post-health polling finished. Pipeline Runner approval already uses DB state handoff; its separate improvement is to report "deploy queued/running" immediately and let deploy observability produce the final completion notification instead of treating queue handoff as synchronous completion.
+  - Pending until this AADS commit is deployed: running API slots still use the previous image, so `deploy_safe async_mode` is not live until the next clean blue-green release.
+
 ## 2026-09-07 13:32 KST - Goal Guard/Harness minimal reinforcement (AADS-GOAL-GUARD-HARNESS-S-20260907)
 
 - Request:
