@@ -999,6 +999,30 @@ def test_resume_done_guard_rejects_graceful_stream_exit_without_done():
     assert chat_service._require_resume_done_event(True) is None
 
 
+def test_resume_retryable_accepts_incomplete_chunked_read():
+    err = RuntimeError("peer closed connection without sending complete message body (incomplete chunked read)")
+
+    assert chat_service._is_resume_retryable(err)
+    assert chat_service._classify_interruption_reason(str(err)) == "connection_error"
+
+
+def test_cross_provider_chat_fallback_chain_uses_claude_and_codex_peers():
+    assert chat_service._cross_provider_chat_fallback_chain("claude-fable-5-1")[:3] == [
+        "claude-fable-5-1",
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+    ]
+    assert chat_service._cross_provider_chat_fallback_chain("gpt-6-astra")[:3] == [
+        "gpt-6-astra",
+        "claude-fable-5-1",
+        "claude-opus-5",
+    ]
+    assert not any(
+        "gemini" in model or "deepseek" in model
+        for model in chat_service._cross_provider_chat_fallback_chain("qwen-turbo")
+    )
+
+
 def test_active_stream_hard_timeout_is_auto_resumable():
     assert chat_service._should_auto_resume_interrupted_reason(
         "active_stream_hard_timeout_after_2700s age=2826s idle=68s content_len=4092"

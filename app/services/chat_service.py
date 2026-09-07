@@ -215,6 +215,11 @@ _INTERRUPT_REASON_CATEGORIES = {
         "connection closed",
         "connection reset",
         "connectionreset",
+        "peer closed connection",
+        "incomplete chunked read",
+        "complete message body",
+        "remote protocol error",
+        "server disconnected",
     ),
     "llm_provider_error": (
         "all llm providers failed",
@@ -804,8 +809,35 @@ def _is_resume_retryable(error: BaseException) -> bool:
             "429", "rate", "overloaded", "529", "quota", "timeout", "502", "503", "504",
             "codex_relay_busy", "relay_semaphore_timeout",
             "connection closed", "connection reset", "connectionreset",
+            "peer closed connection", "incomplete chunked read", "complete message body",
+            "remote protocol error", "server disconnected", "readerror",
         ))
     )
+
+
+def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
+    """Return same-grade chat fallbacks with Claude and Codex as peer providers."""
+    base = str(base_model or "").strip()
+    normalized = base.lower()
+    if normalized.startswith(("claude-", "claude_")):
+        preferred = [base, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
+    elif normalized.startswith("codex:") or normalized.startswith("gpt-"):
+        preferred = [base, "claude-fable-5-1", "claude-opus-5", "claude-opus"]
+    else:
+        preferred = [base, "claude-fable-5-1", "gpt-6-astra", "gpt-5.6-sol"]
+
+    chain: List[str] = []
+    seen: set[str] = set()
+    for candidate in preferred:
+        model = str(candidate or "").strip()
+        key = model.lower()
+        if not model or key in seen:
+            continue
+        if any(blocked in key for blocked in ("gemini", "deepseek")):
+            continue
+        seen.add(key)
+        chain.append(model)
+    return chain
 
 
 def _require_resume_done_event(saw_done_event: bool, content_len: int = 0) -> None:
@@ -6713,6 +6745,8 @@ async def _resume_single_stream(
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
                 cost_usd = Decimal("0")
                 tools_called = []
+                _resume_model_chain = _cross_provider_chat_fallback_chain(_resume_model)
+                _resume_model_used = _resume_model_chain[0] if _resume_model_chain else _resume_model
 
                 for attempt in range(len(retry_delays) + 1):
                     _token_idx = 0
@@ -6720,14 +6754,27 @@ async def _resume_single_stream(
                     tools_called = []
                     cost_usd = Decimal("0")
                     _resume_saw_done_event = False
+                    _resume_model_attempt = (
+                        _resume_model_chain[min(attempt, len(_resume_model_chain) - 1)]
+                        if _resume_model_chain else _resume_model
+                    )
+                    _resume_model_used = _resume_model_attempt
 
                     try:
+                        logger.info(
+                            "resume_model_call session=%s execution=%s attempt=%s model=%s chain=%s",
+                            session_id[:8],
+                            str(_execution_uuid or "")[:8],
+                            attempt + 1,
+                            _resume_model_attempt,
+                            _resume_model_chain,
+                        )
                         async for event in call_stream(
                             intent_result=intent_result,
                             system_prompt=system_prompt,
                             messages=messages,
                             tools=tools_for_api,
-                            model_override=_resume_model,
+                            model_override=_resume_model_attempt,
                             session_id=session_id,
                         ):
                             etype = event.get("type", "")
@@ -6810,7 +6857,7 @@ async def _resume_single_stream(
                 session_id_str=session_id,
                 execution_id=_execution_uuid,
                 requested_model=requested_model or _resume_model,
-                model_used=_resume_model,
+                model_used=_resume_model_used,
                 cost=cost_usd,
                 tools_called=tools_called,
             )
@@ -9302,8 +9349,11 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 WITH candidates AS (
                     SELECT id
                     FROM chat_deferred_reactions
-                    WHERE status = 'pending'
-                       OR (status = 'claimed' AND lease_expires_at <= NOW())
+                    WHERE attempts < 8
+                      AND (
+                        status = 'pending'
+                        OR (status = 'claimed' AND lease_expires_at <= NOW())
+                      )
                     ORDER BY created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT $1
@@ -11535,12 +11585,7 @@ async def send_message_stream(
         output_tokens = 0
         tools_called: list = []  # 구조화된 tool_events 리스트 (프론트 UI 복원용)
         _base_stream_model = str(model_override or intent_result.model or "").strip()
-        if _base_stream_model.startswith(("claude-", "claude_")):
-            _missing_done_fallback_models = ["gpt-5.6-sol", "gpt-5.6-terra"]
-        elif _base_stream_model.startswith("codex:") or _base_stream_model.startswith("gpt-"):
-            _missing_done_fallback_models = ["claude-fable-5-1", "claude-opus"]
-        else:
-            _missing_done_fallback_models = ["claude-fable-5-1", "gpt-5.6-sol"]
+        _missing_done_fallback_models = _cross_provider_chat_fallback_chain(_base_stream_model)[1:3]
 
         # ── LLM 스트림 호출 + 즉시 재시도 (AADS-003: 최대 3회, 에러 유형별 백오프) ──
         for _stream_attempt in range(3):
