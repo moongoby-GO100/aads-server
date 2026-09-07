@@ -2529,12 +2529,20 @@ async def cleanup_overlong_running_executions(
                    COALESCE(ph.content, am.content, '') AS partial_content,
                    te.actual_model,
                    te.requested_model,
-                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS age_seconds
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(te.started_at, te.created_at)))::int AS age_seconds,
+                   EXTRACT(EPOCH FROM (
+                       NOW() - GREATEST(
+                           COALESCE(te.heartbeat_at, te.updated_at, te.created_at),
+                           COALESCE(te.updated_at, te.created_at),
+                           COALESCE(ph.edited_at, ph.created_at, te.updated_at, te.created_at),
+                           COALESCE(am.edited_at, am.created_at, te.updated_at, te.created_at)
+                       )
+                   ))::int AS idle_seconds
             FROM chat_turn_executions te
             LEFT JOIN chat_messages am
               ON am.id = te.assistant_message_id
             LEFT JOIN LATERAL (
-                SELECT id, content
+                SELECT id, content, created_at, edited_at
                 FROM chat_messages
                 WHERE execution_id = te.id
                   AND intent = 'streaming_placeholder'
@@ -2560,6 +2568,27 @@ async def cleanup_overlong_running_executions(
             execution_id = row["execution_id"]
             state = _streaming_state.get(session_id) or {}
             partial_content = state.get("content") or row["partial_content"] or ""
+            idle_seconds = int(row["idle_seconds"] or 0)
+            state_last_event_at = float(state.get("last_event_at") or state.get("updated_at") or 0)
+            state_idle_seconds = int(_bg_time.monotonic() - state_last_event_at) if state_last_event_at else None
+            effective_idle_seconds = (
+                min(idle_seconds, state_idle_seconds)
+                if state_idle_seconds is not None
+                else idle_seconds
+            )
+            if (
+                _has_meaningful_partial_content(partial_content)
+                and effective_idle_seconds < 300
+            ):
+                logger.info(
+                    "overlong_running_execution_deferred_active session=%s execution=%s age=%ss idle=%ss content_len=%s",
+                    session_id[:8],
+                    execution_id[:8],
+                    int(row["age_seconds"] or 0),
+                    effective_idle_seconds,
+                    len(_strip_streaming_progress_markers(partial_content or "")),
+                )
+                continue
             placeholder_id = row["assistant_message_id"]
             reason = _stream_interrupt_diagnostic_reason(
                 f"active_stream_hard_timeout_after_{row_timeout}s",
@@ -6273,6 +6302,26 @@ async def _resume_single_stream(
                         return
             await _wait_for_resume_slot_cooldown()
 
+            def _merge_resume_state(**updates: Any) -> Dict[str, Any]:
+                current = _streaming_state.get(session_id)
+                if not isinstance(current, dict):
+                    current = {
+                        "content": partial_content,
+                        "tool_count": 0,
+                        "last_tool": "",
+                        "last_save": _bg_time.monotonic(),
+                        "updated_at": _bg_time.monotonic(),
+                        "started_at": _started_at,
+                        "completed": False,
+                        "tool_events": [],
+                        "execution_id": execution_id,
+                        "owner_epoch": owner_epoch,
+                        "last_event_id": None,
+                    }
+                    _streaming_state[session_id] = current
+                current.update(updates)
+                return current
+
             if _execution_uuid:
                 async with pool.acquire() as conn:
                     if await _interrupt_execution_if_newer_user(
@@ -6588,29 +6637,27 @@ async def _resume_single_stream(
                             if etype == "delta":
                                 delta_content = event.get("content", "")
                                 full_response += delta_content
-                                _streaming_state[session_id] = {
-                                    **_streaming_state.get(session_id, {}),
-                                    "content": full_response,
-                                    "updated_at": _bg_time.monotonic(),
-                                    "started_at": _started_at,
-                                    "completed": False,
-                                }
+                                _merge_resume_state(
+                                    content=full_response,
+                                    updated_at=_bg_time.monotonic(),
+                                    started_at=_started_at,
+                                    completed=False,
+                                )
                                 # Redis Stream에 발행 → 프론트 stream-resume가 실시간 수신
                                 chunk = f'data: {json.dumps({"type": "delta", "content": delta_content})}\n\n'
                                 _entry_id = await _redis_stream.publish_token(_stream_id, chunk, _token_idx)
                                 if _entry_id:
-                                    _streaming_state[session_id]["last_event_id"] = _entry_id
+                                    _merge_resume_state(last_event_id=_entry_id)
                                 _token_idx += 1
                             elif etype == "tool_use":
                                 tools_called.append(event["tool_name"])
-                                _streaming_state[session_id] = {
-                                    **_streaming_state.get(session_id, {}),
-                                    "tool_count": len(tools_called),
-                                    "last_tool": event["tool_name"],
-                                    "updated_at": _bg_time.monotonic(),
-                                    "started_at": _started_at,
-                                    "completed": False,
-                                }
+                                _merge_resume_state(
+                                    tool_count=len(tools_called),
+                                    last_tool=event["tool_name"],
+                                    updated_at=_bg_time.monotonic(),
+                                    started_at=_started_at,
+                                    completed=False,
+                                )
                             elif etype == "done":
                                 _resume_saw_done_event = True
                                 cost_usd = Decimal(str(event.get("cost", "0")))
@@ -6677,7 +6724,7 @@ async def _resume_single_stream(
                 f"tools={len(tools_called)} cost=${cost_usd}"
             )
             _streaming_state[session_id] = {
-                **_streaming_state.get(session_id, {}),
+                **(_streaming_state.get(session_id) or {}),
                 "content": full_response,
                 "tool_count": len(tools_called),
                 "last_tool": tools_called[-1] if tools_called else "",

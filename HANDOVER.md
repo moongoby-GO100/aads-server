@@ -1,5 +1,23 @@
 # AADS HANDOVER
 
+## 2026-09-07 09:44 KST - Chat interruption recovery hardening
+
+- Request:
+  - Implement the remaining recommended chat fixes, deploy them, and verify whether recent response interruptions have another root cause.
+- Findings:
+  - Recent interruption rows include `watchdog_timeout`, `producer_incomplete`, `superseded`, and `resume_single_stream_error: '<session_id>'`.
+  - The overlong execution cleanup used execution age as a hard cutoff and could mark a long response interrupted even when a meaningful partial response had fresh DB/in-memory activity.
+  - Resume streaming could hit a session-id `KeyError` if `_streaming_state` was cleaned while the resume task was still publishing deltas or Redis event IDs.
+- Changes:
+  - `app/services/chat_service.py`: added DB/in-memory idle activity checks to defer overlong cleanup for meaningful partial responses updated within 300 seconds.
+  - `app/services/chat_service.py`: made resume state updates recreate `_streaming_state[session_id]` safely before writing deltas, tool status, and Redis event IDs.
+- Verification before release:
+  - `python3 -m py_compile app/services/chat_service.py` passed.
+  - `git diff --check -- app/services/chat_service.py` passed.
+  - Local import/pytest could not run because the local Python environments lack `structlog` / `pytest`; container verification is required after deploy.
+- Scope note:
+  - Existing unrelated dirty files in goals, pipeline runner, and yeoljeong finance areas were not included.
+
 ## 2026-09-07 08:08 KST - GPT-6 Astra Codex CLI runner cycle 반영
 
 - Request:
