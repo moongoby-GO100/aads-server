@@ -1,5 +1,24 @@
 # AADS HANDOVER
 
+## 2026-09-07 13:12 KST - Chat hard-timeout meaningful partial guard
+
+- Request:
+  - CEO reported recurring chat response cutoffs and requested immediate mitigation plus a result report.
+- Finding:
+  - After the earlier slot/lease cleanup fixes, a separate cutoff remained: `cleanup_overlong_running_executions()` still interrupted long-running chat turns once `started_at` exceeded the hard timeout and `idle_seconds` reached 300 seconds, even when the assistant placeholder already contained substantial partial content.
+  - Live example: `chat_turn_executions.a56075c2-6667-4049-81f8-af61b4442c39` was moved to `retrying` with `active_stream_hard_timeout_after_1500s age=3127s idle=301s content_len=9683`.
+- Changes:
+  - `app/services/chat_service.py`: meaningful partial responses now use `max(300, row_timeout)` as the active deferral grace instead of the fixed 300-second cutoff, preventing preserved long responses from being interrupted shortly after the hard age threshold.
+  - `tests/unit/test_chat_service.py`: added regression coverage for `age=3127s`, `idle=301s`, and substantial partial content to prove the watchdog defers instead of marking the turn interrupted.
+- Verification:
+  - `python3 -m py_compile app/services/chat_service.py` passed.
+  - `docker run --rm --network aads_network -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=postgresql://aads:aads@aads-postgres:5432/aads aads-server:6b75ae4ad7c9 python3 -m pytest tests/unit/test_chat_service.py -k 'cleanup_overlong_running_executions'` passed: 2 tests.
+  - `docker run --rm --network aads_network -v /root/aads/aads-server:/app -w /app -e JWT_SECRET_KEY=test-secret -e DATABASE_URL=postgresql://aads:aads@aads-postgres:5432/aads aads-server:6b75ae4ad7c9 python3 -m pytest tests/unit/test_chat_service.py tests/unit/test_execution_lease_contract.py tests/unit/test_stale_execution_watchdog_contract.py -k 'cleanup_overlong_running_executions or execution_lease or stale_execution_watchdog or retrying'` passed: 11 tests.
+  - Copied `app/services/chat_service.py` into both API slots and ran container-local hot reload on `aads-server` and `aads-server-green`; both succeeded with zero process restart.
+- Deployment:
+  - Hot reload is applied to both live API slots.
+  - Pending: commit/push this guard, then let the current Blue/Green queue build a clean immutable image for the latest SHA and complete same-digest standby plus five-minute P0/P1 monitoring.
+
 ## 2026-09-07 12:55 KST - AADS/GO100 deploy queue no-loss gate follow-up
 
 - Request:

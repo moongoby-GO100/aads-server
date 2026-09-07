@@ -2612,16 +2612,18 @@ async def cleanup_overlong_running_executions(
                 if state_idle_seconds is not None
                 else idle_seconds
             )
+            meaningful_idle_grace_sec = max(300, row_timeout)
             if (
                 _has_meaningful_partial_content(partial_content)
-                and effective_idle_seconds < 300
+                and effective_idle_seconds < meaningful_idle_grace_sec
             ):
                 logger.info(
-                    "overlong_running_execution_deferred_active session=%s execution=%s age=%ss idle=%ss content_len=%s",
+                    "overlong_running_execution_deferred_active session=%s execution=%s age=%ss idle=%ss grace=%ss content_len=%s",
                     session_id[:8],
                     execution_id[:8],
                     int(row_data.get("age_seconds") or 0),
                     effective_idle_seconds,
+                    meaningful_idle_grace_sec,
                     len(_strip_streaming_progress_markers(partial_content or "")),
                 )
                 continue

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 import uuid
 
 import pytest
@@ -874,6 +874,56 @@ async def test_cleanup_overlong_running_executions_closes_live_task():
         assert "content_len=16" in args[3]
         assert kwargs["partial_content"] == "메모리의 오래 걸린 부분 응답"
         assert kwargs["placeholder_id"] == message_id
+    finally:
+        chat_service._active_bg_tasks.pop(session_id, None)
+        chat_service._streaming_state.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_overlong_running_executions_defers_recent_meaningful_partial():
+    session_id = str(uuid.uuid4())
+    execution_id = str(uuid.uuid4())
+    message_id = str(uuid.uuid4())
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[
+        [
+            {
+                "execution_id": execution_id,
+                "session_id": session_id,
+                "assistant_message_id": message_id,
+                "partial_content": "충분히 긴 부분 응답입니다. " * 80,
+                "actual_model": None,
+                "requested_model": None,
+                "age_seconds": 3127,
+                "idle_seconds": 301,
+            }
+        ],
+        [],
+    ])
+    task = SimpleNamespace(
+        done=lambda: False,
+        cancel=Mock(),
+    )
+    chat_service._active_bg_tasks[session_id] = task
+    chat_service._streaming_state[session_id] = {
+        "content": "충분히 긴 부분 응답입니다. " * 80,
+        "completed": False,
+        "started_at": chat_service._bg_time.monotonic() - 3127,
+        "last_event_at": chat_service._bg_time.monotonic() - 301,
+    }
+
+    try:
+        with patch("app.services.chat_service.get_pool", return_value=_Pool(conn)), patch(
+            "app.services.chat_service._mark_execution_interrupted", new_callable=AsyncMock
+        ) as mark_interrupted:
+            result = await chat_service.cleanup_overlong_running_executions(timeout_sec=1500)
+
+        assert result["closed"] == 0
+        assert result["cancelled_active"] == 0
+        task.cancel.assert_not_called()
+        assert session_id in chat_service._active_bg_tasks
+        assert session_id in chat_service._streaming_state
+        mark_interrupted.assert_not_awaited()
     finally:
         chat_service._active_bg_tasks.pop(session_id, None)
         chat_service._streaming_state.pop(session_id, None)
