@@ -122,6 +122,22 @@ def test_until_complete_payload_collects_financial_accounts_by_default():
     assert payload["skip_financial_accounts"] is False
 
 
+def test_bank_browser_timeout_has_shinhan_safe_minimum():
+    args = auto_collect.build_parser().parse_args(
+        [
+            "--bank-only",
+            "--services",
+            "shinhan_business",
+            "--bank-browser-timeout-seconds",
+            "60",
+        ]
+    )
+
+    payload = auto_collect._payload(args)
+
+    assert payload["bank_browser_timeout_seconds"] == auto_collect.BANK_BROWSER_MIN_TIMEOUT_SECONDS
+
+
 def test_bank_only_skips_delivery_and_collects_bank_accounts(monkeypatch):
     calls = []
 
@@ -490,11 +506,16 @@ def test_global_bank_queue_item_collects_only_its_bank_account(monkeypatch):
             "date_from": "2026-08-28",
             "date_to": "2026-08-28",
             "bank_only": True,
+            "bank_browser_timeout_seconds": 60,
         },
         {"email": "system@aads.local", "is_admin": True},
     )
 
     assert [item["payload"]["bank_account_id"] for item in items] == ["bank-ibk", "bank-shinhan"]
+    assert all(
+        item["payload"]["bank_browser_timeout_seconds"] == auto_collect.BANK_BROWSER_MIN_TIMEOUT_SECONDS
+        for item in items
+    )
 
     calls = []
 

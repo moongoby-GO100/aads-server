@@ -60,6 +60,7 @@ DELIVERY_RECORD_TYPES = ("sales", "settlements", "reviews", "ads")
 # budget always expired mid-login and surfaced as a false
 # "SHINHAN_FINCERT_TIMEOUT_BUT_IDPW_CONFIGURED" result.
 BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS = 600
+BANK_BROWSER_MIN_TIMEOUT_SECONDS = 600
 QUEUE_PRIORITY_BY_SERVICE = {
     "bank": 10,
     "shinhan_business": 10,
@@ -87,6 +88,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+def _bank_browser_timeout_seconds(value: Any = None) -> int:
+    try:
+        parsed = int(value or BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        parsed = BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS
+    return max(BANK_BROWSER_MIN_TIMEOUT_SECONDS, parsed)
 
 
 def _pc_agent_route_execute_json(payload: dict[str, Any], timeout_seconds: float = 25.0) -> dict[str, Any]:
@@ -326,9 +335,8 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "browser_preferred_port": getattr(args, "browser_preferred_port", None),
         "bank_browser_work_key": str(getattr(args, "bank_browser_work_key", "") or ""),
         "bank_account_id": str(getattr(args, "bank_account_id", "") or ""),
-        "bank_browser_timeout_seconds": int(
+        "bank_browser_timeout_seconds": _bank_browser_timeout_seconds(
             getattr(args, "bank_browser_timeout_seconds", BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS)
-            or BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS
         ),
         "force_recreate_bank_browser": bool(getattr(args, "force_recreate_bank_browser", False)),
         "operator_approved": bool(getattr(args, "operator_approved", False)),
@@ -683,9 +691,7 @@ def _collect_bank_accounts(payload: dict[str, Any], user: dict[str, Any]) -> lis
             "browser_agent_id": str(payload.get("browser_agent_id") or ""),
             "browser_preferred_port": payload.get("browser_preferred_port") or None,
             "browser_work_key": str(payload.get("bank_browser_work_key") or payload.get("browser_work_key") or ""),
-            "browser_timeout_seconds": int(
-                payload.get("bank_browser_timeout_seconds") or BANK_BROWSER_DEFAULT_TIMEOUT_SECONDS
-            ),
+            "browser_timeout_seconds": _bank_browser_timeout_seconds(payload.get("bank_browser_timeout_seconds")),
             "force_recreate_browser": bool(payload.get("force_recreate_bank_browser")),
         }
         try:
@@ -1175,6 +1181,7 @@ def _global_bank_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> l
             "date_to": date_to,
             "skip_financial_accounts": False,
             "bank_browser_work_key": str(account.get("browser_work_key") or payload.get("bank_browser_work_key") or ""),
+            "bank_browser_timeout_seconds": _bank_browser_timeout_seconds(payload.get("bank_browser_timeout_seconds")),
             "sync_job_id": str(payload.get("sync_job_id") or f"pc-agent-global-bank-{date_to}"),
             "browser_agent_id": required_agent_id,
             "pc_agent_id": required_agent_id,

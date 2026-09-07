@@ -855,6 +855,64 @@ def test_collect_async_shinhan_reacquires_work_key_when_idpw_reset_fails():
     assert "4321" not in str(result["diagnostics"])
 
 
+def test_collect_async_shinhan_stops_when_reacquired_idpw_panel_is_not_ready():
+    account = {"id": "acct-1", "bank_name": "신한은행", "bank_code": "088", "institution_code": "shinhan_business"}
+    stale_page = _ShinhanResetFailPage()
+    recovered_page = _ShinhanResetFailPage()
+    stale_context = MagicMock()
+    stale_context.pages = [stale_page]
+    recovered_context = MagicMock()
+    recovered_context.pages = [recovered_page]
+    stale_session = MagicMock()
+    stale_session.session_id = "stale-shinhan"
+    recovered_session = MagicMock()
+    recovered_session.session_id = "fresh-shinhan"
+    mock_login = AsyncMock()
+
+    with patch("app.browser_bridge.service.get_browser_bridge_service") as mock_bridge, patch.object(
+        connector,
+        "_shinhan_security_program_runtime_state",
+        AsyncMock(return_value={"checked": "1", "required_runtime_ready": "1"}),
+    ), patch.object(
+        connector,
+        "_shinhan_security_notice_state",
+        AsyncMock(return_value={"present": "0"}),
+    ), patch.object(
+        connector,
+        "_try_shinhan_individual_login_step",
+        mock_login,
+    ):
+        bridge_inst = mock_bridge.return_value
+        bridge_inst.sessions.get.return_value = stale_session
+        bridge_inst.ensure_work_session = AsyncMock(return_value=recovered_session)
+        bridge_inst._context_for_session = AsyncMock(side_effect=[stale_context, recovered_context])
+
+        result = _run(
+            connector.collect_bank_via_browser_session_async(
+                account,
+                browser_session_id="stale-shinhan",
+                browser_work_key="yeoljeong-bank-shinhan-idpw",
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                auto_open_browser=True,
+                browser_agent_id="agent-bank",
+                login_username="bank-user",
+                login_password="bank-pass",
+                account_no="110123456789",
+                account_password="4321",
+                business_registration_no="1234567890",
+            )
+        )
+
+    assert result["status"] == "action_required"
+    assert result["error_code"] == "BANK_BROWSER_AUTH_CHALLENGE_DETECTED"
+    assert result["diagnostics"]["shinhan_idpw_login_retry_blocked"] == "idpw_reset_not_ready"
+    assert result["diagnostics"]["shinhan_idpw_reset_session_reacquired"] == "1"
+    assert mock_login.await_count == 0
+    assert "bank-pass" not in str(result["diagnostics"])
+    assert "4321" not in str(result["diagnostics"])
+
+
 @pytest.fixture(autouse=True)
 def isolate_storage(tmp_path, monkeypatch):
     def disable_db(coroutine):

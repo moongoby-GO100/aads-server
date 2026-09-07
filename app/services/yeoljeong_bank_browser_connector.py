@@ -4816,7 +4816,19 @@ async def collect_bank_via_browser_session_async(
                         )
                         if reacquire_reset.get("idpw_reset_ready") == "1":
                             retry_shinhan_idpw_login = True
-                retry_shinhan_idpw_login = True
+                else:
+                    retry_shinhan_idpw_login = reset_result.get("idpw_reset_ready") == "1"
+                if not retry_shinhan_idpw_login:
+                    safe_diagnostics.update(auth_challenge)
+                    safe_diagnostics["shinhan_idpw_login_retry_blocked"] = "idpw_reset_not_ready"
+                    return {
+                        "status": "action_required",
+                        "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+                        "rows": [],
+                        "row_count": 0,
+                        "diagnostics": safe_diagnostics,
+                        "message": "신한 금융인증/권한 확인 후 ID/PW 로그인 패널 복귀가 확인되지 않았습니다. 인증 창을 닫고 같은 work key로 재시도하십시오.",
+                    }
             else:
                 safe_diagnostics.update(auth_challenge)
                 return {
@@ -5162,7 +5174,20 @@ async def collect_bank_via_browser_session_async(
                                 )
                                 if reacquire_reset.get("idpw_reset_ready") == "1":
                                     retry_shinhan_idpw_login = True
-                        retry_shinhan_idpw_login = True
+                        else:
+                            retry_shinhan_idpw_login = reset_result.get("idpw_reset_ready") == "1"
+                        if not retry_shinhan_idpw_login:
+                            safe_diagnostics.update(auth_challenge)
+                            safe_diagnostics["shinhan_query_flow_steps"] = shinhan_steps
+                            safe_diagnostics["shinhan_idpw_login_retry_blocked"] = "idpw_reset_not_ready"
+                            return {
+                                "status": "action_required",
+                                "error_code": "BANK_BROWSER_AUTH_CHALLENGE_DETECTED",
+                                "rows": [],
+                                "row_count": 0,
+                                "diagnostics": safe_diagnostics,
+                                "message": "신한 금융인증/권한 확인 후 ID/PW 로그인 패널 복귀가 확인되지 않았습니다. 인증 창을 닫고 같은 work key로 재시도하십시오.",
+                            }
                         continue
                     else:
                         safe_diagnostics.update(auth_challenge)
