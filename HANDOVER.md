@@ -11576,3 +11576,24 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - Bind-mounted container focused tests: 5 passed (`test_bank_browser_timeout_has_shinhan_safe_minimum`, `test_global_bank_queue_item_collects_only_its_bank_account`, the two financial queue lock tests, and Shinhan plain-timeout recovery).
 - Remaining before completion:
   - Commit/push the selected files, deploy current `HEAD` with `deploy.sh bluegreen`, enqueue/run Mia Shinhan on DANHAROO-MAIN with `bank_only`, `browser_agent_id=62405e70-e98`, `force_recreate_bank_browser`, and 600-second timeout, then verify `bank_transactions.json` has at least one row.
+
+## 2026-09-07 12:23 KST — Pipeline Runner remote script auto-sync deployed
+- CEO request:
+  - Fix P0 remote Pipeline Runner script drift and make the synchronization automatic, then deploy and verify.
+- Implementation state:
+  - Remote sync implementation already exists in commit `e1d792b5 fix(runner): auto-sync remote runner scripts`.
+  - Tracked files: `scripts/sync_pipeline_runner_remote.sh`, `scripts/aads-pipeline-runner-sync.service`, `scripts/aads-pipeline-runner-sync.timer`, `tests/unit/test_pipeline_runner_remote_sync.py`.
+  - Canonical runner and local runner template hashes match: `6aa6cd15cdb05c73ab6d8e2d8783d7431159cb8a8c00cf9de85bc8ea4cb137e6`.
+- Deployment:
+  - Installed `aads-pipeline-runner-sync.service` and `aads-pipeline-runner-sync.timer` into `/etc/systemd/system`.
+  - Enabled and started `aads-pipeline-runner-sync.timer`; next run was scheduled for 12:27:14 KST after the manual 12:22 KST run.
+  - Ran `scripts/sync_pipeline_runner_remote.sh` against contabo14 and cafe24_114; both remote runner script hashes already matched the canonical hash, so no unnecessary remote service restart was performed.
+- Verification:
+  - `bash -n scripts/sync_pipeline_runner_remote.sh scripts/pipeline-runner.sh scripts/pipeline-runner.sh.local`: passed.
+  - `pytest -q tests/unit/test_pipeline_runner_remote_sync.py tests/unit/test_pipeline_runner_script_guards.py`: 25 passed, 1 existing pytest config warning.
+  - `journalctl -u aads-pipeline-runner-sync.service`: repeated 5-minute timer executions show `already synced` for contabo14 and cafe24_114 and `sync complete targets=2`.
+  - contabo14 `/root/scripts/pipeline-runner.sh` hash: `6aa6cd15cdb05c73ab6d8e2d8783d7431159cb8a8c00cf9de85bc8ea4cb137e6`; `aads-pipeline-runner.service` active/running.
+  - cafe24_114 `/root/scripts/pipeline-runner.sh` hash: `6aa6cd15cdb05c73ab6d8e2d8783d7431159cb8a8c00cf9de85bc8ea4cb137e6`; `aads-pipeline-litellm-runner.service` active/running.
+- Remaining:
+  - AADS worktree still has unrelated dirty Shinhan/OHVIS/report files. They were not touched or committed as part of runner sync.
+  - Current GO100 runner failures are now separate push/dependency/action-required issues, not remote runner script drift.
