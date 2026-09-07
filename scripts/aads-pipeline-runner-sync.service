@@ -1,0 +1,15 @@
+[Unit]
+Description=AADS Pipeline Runner remote script sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aads/aads-server
+ExecStart=/root/aads/aads-server/scripts/sync_pipeline_runner_remote.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-pipeline-runner-sync
+TimeoutStartSec=180
+

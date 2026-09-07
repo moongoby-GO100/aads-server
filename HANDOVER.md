@@ -1,5 +1,28 @@
 # AADS HANDOVER
 
+## 2026-09-07 10:46 KST - Pipeline Runner remote script auto-sync
+
+- Request:
+  - Apply the P0 fix for remote Pipeline Runner script drift, make future synchronization automatic, deploy, verify, and report prioritized improvements.
+- Findings:
+  - Canonical AADS runner script hash: `6aa6cd15cdb05c73ab6d8e2d8783d7431159cb8a8c00cf9de85bc8ea4cb137e6`.
+  - GO100/contabo14 remote runner was stale: `0d6ca93f8e32248eaedc1e55e91cc9710747d8c52efda9faacae5931dc95ba15`.
+  - SF/cafe24_114 remote runner was stale: `6f50137a1fbf27e8e86eab3dd40dcf36cd90977f6f3ee1eb99950aa135bdc2f0`.
+  - Remote service unit overwrite was intentionally not made the default because contabo14 currently runs a GO100-only unit; unit sync is available only through `AADS_RUNNER_SYNC_UNITS=1`.
+- Changes:
+  - `scripts/sync_pipeline_runner_remote.sh`: added canonical runner validation, SSH stdin isolation, remote hash comparison, remote `bash -n` validation, backup-before-install, idempotent restart-only-on-change behavior, and contabo14/cafe24_114 target coverage.
+  - `scripts/aads-pipeline-runner-sync.service` and `.timer`: added AADS-host systemd automation, running on boot and every 5 minutes.
+  - `tests/unit/test_pipeline_runner_remote_sync.py`: added static regression coverage for fail-closed sync, target coverage, timer cadence, and SSH stdin guard.
+- Verification:
+  - `bash -n scripts/sync_pipeline_runner_remote.sh` passed.
+  - `pytest -q tests/unit/test_pipeline_runner_remote_sync.py tests/unit/test_pipeline_runner_script_guards.py` passed: 25 tests.
+  - Dry-run confirmed both remote targets would be synchronized.
+  - Live sync installed the canonical script to contabo14 and cafe24_114, restarted only the remote runner services, and confirmed both stayed `active`.
+  - `aads-pipeline-runner-sync.timer` installed and enabled; immediate oneshot run completed with `sync complete targets=2`.
+- Deployment:
+  - Operational deployment completed on AADS host systemd plus remote runner hosts.
+  - Pending in this note: selected commit and push of the sync script/service/timer/test/HANDOVER files.
+
 ## 2026-09-07 10:06 KST - Shinhan simple account auto-collection retry hardening
 
 - Request:

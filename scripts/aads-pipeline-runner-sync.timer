@@ -1,0 +1,13 @@
+[Unit]
+Description=AADS Pipeline Runner remote script sync timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=aads-pipeline-runner-sync.service
+
+[Install]
+WantedBy=timers.target
+
