@@ -33,7 +33,7 @@ grep -q 'AADS_DEPLOY_ALLOW_DIRTY_ARCHIVE' "$deploy_file" \
     || fail "dirty worktree override must be explicit and auditable"
 grep -q -- '--env-file" "$AADS_RUNTIME_ENV_FILE"' "$deploy_file" \
     || fail "docker compose must use the runtime env file from STATE_DIR"
-grep -q 'AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-1800' "$deploy_file" \
+grep -Eq 'AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-[0-9]+' "$deploy_file" \
     || fail "standby sync must have a bounded default timeout"
 grep -q 'reconcile_stale_deploy_runs' "$deploy_file" \
     || fail "stale deployment run reconciliation is missing"

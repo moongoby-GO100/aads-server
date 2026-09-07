@@ -106,3 +106,10 @@ def test_deploy_script_uses_classifier_and_keeps_monitoring_contract():
     assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600" in deploy_script
     assert "DEPLOY_PHASE_METADATA_JSON" in deploy_script
     assert 'MONITOR_SECONDS="${AADS_DEPLOY_P0P1_MONITOR_SECONDS:-300}"' in deploy_script
+
+
+def test_release_contract_allows_bounded_standby_sync_timeout():
+    verifier = (Path(__file__).parents[2] / "scripts" / "verify-bluegreen-release-contract.sh").read_text()
+
+    assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-[0-9]+" in verifier
+    assert "standby sync must have a bounded default timeout" in verifier
