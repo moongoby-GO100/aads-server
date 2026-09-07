@@ -140,6 +140,30 @@ async def _update_linked_goal_state(job_id: str, status: str = "done") -> None:
     except Exception as exc:
         logger.warning("goal_completion_check_failed job=%s: %s", job_id, exc)
 
+
+async def _auto_link_job_to_goal(job_id: str, project: str) -> None:
+    """Auto-link a new pipeline job to the project's active goal's in-progress milestone."""
+    try:
+        from app.services.goal_manager import goal_state_machine
+        pool = await goal_state_machine._pool()
+        async with pool.acquire() as conn:
+            goal = await conn.fetchrow(
+                "SELECT id FROM goals WHERE project = $1 AND status = 'active' ORDER BY created_at LIMIT 1",
+                project,
+            )
+            if not goal:
+                return
+        await goal_state_machine.link_task(
+            goal_id=str(goal["id"]),
+            milestone_id=None,
+            task_type="pipeline_job",
+            task_id=job_id,
+        )
+        logger.info("goal_auto_linked: job=%s goal=%s project=%s", job_id, goal["id"], project)
+    except Exception as exc:
+        logger.warning("goal_auto_link_failed job=%s: %s", job_id, exc)
+
+
 # 활성 작업 저장 (메모리)
 _active_jobs: Dict[str, "PipelineCJob"] = {}
 
@@ -460,6 +484,12 @@ class PipelineCJob:
             try:
                 from app.services.task_logger import emit_task_started
                 await emit_task_started(self.job_id, self.project, self.instruction[:100], "pipeline_c", self.chat_session_id)
+            except Exception:
+                pass
+
+            # Goal auto-link: 프로젝트 활성 목표의 진행중 마일스톤에 자동 연결
+            try:
+                await _auto_link_job_to_goal(self.job_id, self.project)
             except Exception:
                 pass
 

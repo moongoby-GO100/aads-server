@@ -131,7 +131,7 @@ class GoalStateMachine:
                 """
                 INSERT INTO goal_task_links (id, goal_id, milestone_id, task_type, task_id)
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5)
-                ON CONFLICT (goal_id, task_type, task_id)
+                ON CONFLICT (goal_id, task_type, task_id) WHERE (goal_id IS NOT NULL)
                 DO UPDATE SET milestone_id = COALESCE(EXCLUDED.milestone_id, goal_task_links.milestone_id)
                 """,
                 link_id, goal_id,
