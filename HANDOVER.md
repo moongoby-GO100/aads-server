@@ -8,8 +8,10 @@
   - Recent logs showed repeated `active_stream_hard_timeout_after_1500s`, `interrupted_auto_resume_cancelled`, and `chat_execution_interrupt_skipped_valid_lease` for the same executions.
   - The inactive Blue/Green slot could still run stale cleanup and recovery maintenance loops while the active slot held a valid DB execution lease.
   - `cleanup_overlong_running_executions()` counted a skipped valid remote lease as a closed execution, which repeatedly consumed cleanup/retry cycles and kept the chat bubble in an interrupted/recovery loop.
+  - Resume task cancellation marked `updated_at` 90 seconds in the past, causing immediate stale retry cleanup instead of a clean reclaim by the active slot.
 - Changes:
   - `app/services/chat_service.py`: disabled mutating chat cleanup on inactive API slots and deferred overlong/retrying cleanup when another slot has a valid execution lease.
+  - `app/services/chat_service.py`: changed cancelled auto-resume tasks to release the DB lease and refresh `updated_at=NOW()` so the active scanner can reclaim without immediate stale interruption.
   - `deploy.sh`, `scripts/verify-bluegreen-release-contract.sh`, `tests/unit/test_deploy_observability.py`: aligned Blue/Green candidate and standby starts plus static contract checks to `up -d --no-build --no-deps --force-recreate`.
 - Verification:
   - `.venv/bin/python -m py_compile app/services/chat_service.py` passed.

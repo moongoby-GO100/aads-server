@@ -3438,7 +3438,11 @@ async def _schedule_interrupted_auto_resume(
                             """
                             UPDATE chat_turn_executions
                             SET error_message = $3,
-                                updated_at = NOW() - INTERVAL '90 seconds'
+                                interrupt_category = 'resume_cancelled',
+                                owner_instance = NULL,
+                                lease_expires_at = NULL,
+                                heartbeat_at = NULL,
+                                updated_at = NOW()
                             WHERE id = $1
                               AND session_id = $2
                               AND status = 'retrying'
