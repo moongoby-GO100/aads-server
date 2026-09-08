@@ -172,6 +172,101 @@ def test_recent_completed_deployments_include_display_times():
     assert completed["release_title"] == "release title"
 
 
+def test_project_deployments_include_projects_from_pipeline_history():
+    now = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "pipeline_jobs"},
+        {
+            "FROM deploy_runs dr": [],
+            "project_deploy_overview_latest_runs": [{
+                "project": "AADS",
+                "release_sha": "deadbeef",
+                "status": "success",
+                "phase": "completed",
+                "requested_at": now,
+                "created_at": now,
+                "phase_started_at": now,
+                "phase_completed_at": now,
+                "updated_at": now,
+                "duration_ms": 120000,
+            }],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "project_deploy_overview_latest_pipeline": [{
+                "project": "GO100",
+                "runner_job_id": "runner-go100",
+                "status": "error",
+                "phase": "review_failed",
+                "release_sha": "feedbee",
+                "created_at": now,
+                "started_at": now,
+                "completed_at": now,
+                "deployed_at": None,
+                "updated_at": now,
+            }],
+            "project_deploy_overview_latest_success_pipeline": [],
+            "FROM pipeline_jobs": [],
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    by_project = {item["project"]: item for item in result["project_deployments"]}
+    assert set(by_project) == {"AADS", "GO100", "KIS", "SF", "NTV2", "NAS"}
+    assert by_project["AADS"]["source"] == "deploy_runs"
+    assert by_project["GO100"]["source"] == "pipeline_jobs"
+    assert by_project["GO100"]["status"] == "error"
+    assert by_project["GO100"]["runner_job_id"] == "runner-go100"
+
+
+def test_component_deployments_include_manifest_metadata():
+    now = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "deploy_components"},
+        {
+            "FROM deploy_runs dr": [],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "component_deploy_overview_latest_components": [{
+                "component_id": 3,
+                "id": 11,
+                "project": "AADS",
+                "component": "dashboard",
+                "deploy_type": "dashboard_bluegreen",
+                "target_env": "production",
+                "release_sha": "cafebabe",
+                "status": "success",
+                "phase": "completed",
+                "started_at": now,
+                "completed_at": now,
+                "updated_at": now,
+                "duration_ms": 90000,
+                "health_url": "https://aads.newtalk.kr/login",
+                "route_url": "https://aads.newtalk.kr",
+                "image_digest": "sha256:a",
+                "standby_digest": "sha256:a",
+                "release_title": "dashboard deploy",
+                "release_summary": "dashboard deploy",
+                "changed_files": "[\"src/app/chat/ChatArtifactPanel.tsx\"]",
+                "changed_file_count": 1,
+                "source": "deploy_components",
+            }],
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    components = result["component_deployments"]
+    assert components[0]["project"] == "AADS"
+    assert components[0]["component"] == "dashboard"
+    assert components[0]["deploy_type"] == "dashboard_bluegreen"
+    assert components[0]["changed_files"] == ["src/app/chat/ChatArtifactPanel.tsx"]
+
+
 def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     script = DEPLOY_SCRIPT.read_text()
 
@@ -198,6 +293,8 @@ def test_deploy_script_records_phase_timeline_and_dirty_exclusions():
     assert "deploy_signal_trap TERM" in script
     assert "ensure_deploy_observability_schema" in script
     assert "migrations/150_deploy_observability_v1.sql" in script
+    assert "INSERT INTO deploy_components" in script
+    assert "UPDATE deploy_components" in script
     assert "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s" in script
     assert "reconcile_inactive_target_recovery_executions \"$NEW_CONTAINER\"" in script
     assert "scripts/classify_deploy_streams.py" in script

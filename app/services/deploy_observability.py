@@ -19,6 +19,8 @@ ACTIVE_STATUSES = ("running", "verifying", "syncing_standby")
 QUEUED_STATUSES = ("queued", "awaiting_approval")
 TERMINAL_PIPELINE_STATUSES = ("done", "error", "cancelled", "rejected_done")
 PROJECTS = ("AADS", "GO100", "KIS", "SF", "NTV2", "NAS")
+DEFAULT_COMPONENT = "api"
+DEFAULT_TARGET_ENV = "production"
 DEPLOY_STALL_SECONDS = max(
     120,
     int(os.getenv("AADS_DEPLOY_STATUS_STALL_SECONDS", "300") or "300"),
@@ -66,6 +68,31 @@ def _normalize_release_sha(release_sha: str) -> str:
     return value.lower()
 
 
+def _normalize_slug(value: str | None, *, default: str, field_name: str) -> str:
+    normalized = (value or default).strip().lower()
+    if not re.match(r"^[a-z0-9][a-z0-9_-]{0,79}$", normalized):
+        raise ValueError(f"{field_name} must be 1-80 chars: lowercase letters, numbers, '-' or '_'")
+    return normalized
+
+
+def _default_deploy_type(project: str, component: str) -> str:
+    if component in ("dashboard", "frontend"):
+        return "dashboard_bluegreen"
+    if component in ("docs", "static_docs"):
+        return "static_docs_publish"
+    if component in ("db", "migration"):
+        return "db_migration"
+    if component in ("config", "prompt"):
+        return "config_prompt_release"
+    if project in ("GO100", "KIS") and component == "backend":
+        return "backend_graceful_reload"
+    if project == "NTV2" and component == "app":
+        return "php_optimize_reload"
+    if component == "worker":
+        return "worker_restart"
+    return "api_bluegreen"
+
+
 def _dict_rows(rows: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
@@ -90,6 +117,23 @@ def _coerce_payload(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _coerce_string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if str(item or "").strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return [stripped]
+        return _coerce_string_list(parsed)
+    return []
+
+
 def _payload_release_metadata(row: dict[str, Any]) -> dict[str, Any]:
     payload = _coerce_payload(row.get("request_payload"))
     title = (
@@ -99,12 +143,7 @@ def _payload_release_metadata(row: dict[str, Any]) -> dict[str, Any]:
         or payload.get("description")
         or ""
     )
-    changed_files = payload.get("changed_files") or payload.get("files") or []
-    if isinstance(changed_files, str):
-        changed_files = [changed_files]
-    if not isinstance(changed_files, list):
-        changed_files = []
-    normalized_files = [str(item) for item in changed_files if str(item or "").strip()]
+    normalized_files = _coerce_string_list(payload.get("changed_files") or payload.get("files"))
     return {
         "release_title": str(title).strip()[:180] or None,
         "release_summary": str(title).strip()[:240] or None,
@@ -202,22 +241,46 @@ async def enqueue_deploy_request(
     *,
     project: str,
     release_sha: str,
+    component: str = DEFAULT_COMPONENT,
+    deploy_type: str | None = None,
+    target_env: str = DEFAULT_TARGET_ENV,
     runner_job_id: str | None = None,
     requested_by: str = "ops",
     request_source: str = "ops_api",
     commit_status: str = "committed",
     push_status: str = "pushed",
     auto_start: bool = True,
+    rollback_plan: str | None = None,
+    approval_policy: str = "auto_if_green",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Queue a deploy in the ops DB without blocking the caller for the rollout."""
     project_key = _normalize_project(project)
     release = _normalize_release_sha(release_sha)
+    component_key = _normalize_slug(component, default=DEFAULT_COMPONENT, field_name="component")
+    env_key = _normalize_slug(target_env, default=DEFAULT_TARGET_ENV, field_name="target_env")
+    deploy_type_key = _normalize_slug(
+        deploy_type or _default_deploy_type(project_key, component_key),
+        default=_default_deploy_type(project_key, component_key),
+        field_name="deploy_type",
+    )
     source = (request_source or "ops_api").strip()[:80]
     actor = (requested_by or "ops").strip()[:120]
     commit_state = (commit_status or "committed").strip()[:40]
     push_state = (push_status or "pushed").strip()[:40]
     payload = dict(metadata or {})
+    payload.setdefault("component", component_key)
+    payload.setdefault("deploy_type", deploy_type_key)
+    payload.setdefault("target_env", env_key)
+    release_title = (
+        str(payload.get("title") or payload.get("summary") or payload.get("reason") or "").strip()[:180]
+        or None
+    )
+    release_summary = (
+        str(payload.get("summary") or payload.get("description") or payload.get("title") or "").strip()[:240]
+        or None
+    )
+    normalized_files = _coerce_string_list(payload.get("changed_files") or payload.get("files"))
 
     async with conn.transaction():
         existing = await conn.fetchrow(
@@ -226,6 +289,8 @@ async def enqueue_deploy_request(
               FROM deploy_runs
              WHERE project = $1
                AND release_sha = $2
+               AND component = $3
+               AND target_env = $4
                AND status IN ('queued', 'awaiting_approval', 'running', 'verifying', 'syncing_standby')
              ORDER BY created_at DESC, id DESC
              LIMIT 1
@@ -233,6 +298,8 @@ async def enqueue_deploy_request(
             """,
             project_key,
             release,
+            component_key,
+            env_key,
         )
         if existing:
             return {**dict(existing), "deduplicated": True}
@@ -246,6 +313,8 @@ async def enqueue_deploy_request(
                    updated_at = NOW(),
                    error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $3)
              WHERE project = $1
+               AND component = $4
+               AND target_env = $5
                AND status = 'queued'
                AND phase = 'queued_for_deploy'
                AND release_sha IS DISTINCT FROM $2
@@ -253,6 +322,8 @@ async def enqueue_deploy_request(
             project_key,
             release,
             f"superseded by newer queued release {release}",
+            component_key,
+            env_key,
         )
 
         queue_position = await conn.fetchval(
@@ -260,28 +331,37 @@ async def enqueue_deploy_request(
             SELECT COALESCE(MAX(queue_position), 0) + 1
               FROM deploy_runs
              WHERE project = $1
+               AND component = $2
+               AND target_env = $3
                AND status = 'queued'
                AND phase = 'queued_for_deploy'
             """,
             project_key,
+            component_key,
+            env_key,
         )
         row = await conn.fetchrow(
             """
             INSERT INTO deploy_runs(
-                project, release_sha, runner_job_id, status, phase, phase_started_at,
+                project, component, deploy_type, target_env, release_sha, runner_job_id, status, phase, phase_started_at,
                 queue_position, error_summary, requested_by, request_source,
                 commit_status, push_status, auto_start, request_payload,
+                release_title, release_summary, rollback_plan, approval_policy,
                 requested_at, last_heartbeat_at, created_at, updated_at
             )
             VALUES(
-                $1, $2, NULLIF($3, ''), 'queued', 'queued_for_deploy', NOW(),
-                $4, 'queued by ops deploy request API', $5, $6,
-                $7, $8, $9, $10::jsonb,
+                $1, $2, $3, $4, $5, NULLIF($6, ''), 'queued', 'queued_for_deploy', NOW(),
+                $7, 'queued by ops deploy request API', $8, $9,
+                $10, $11, $12, $13::jsonb,
+                $14, $15, $16, $17,
                 NOW(), NOW(), NOW(), NOW()
             )
             RETURNING *
             """,
             project_key,
+            component_key,
+            deploy_type_key,
+            env_key,
             release,
             (runner_job_id or "").strip(),
             int(queue_position or 1),
@@ -291,6 +371,45 @@ async def enqueue_deploy_request(
             push_state,
             bool(auto_start),
             json.dumps(payload, ensure_ascii=False, default=str),
+            release_title,
+            release_summary,
+            (rollback_plan or payload.get("rollback_plan") or "")[:500] or None,
+            (approval_policy or "auto_if_green")[:80],
+        )
+        await conn.execute(
+            """
+            INSERT INTO deploy_components(
+                deploy_run_id, project, component, deploy_type, release_sha,
+                status, phase, started_at, metadata, created_at, updated_at
+            )
+            VALUES($1, $2, $3, $4, $5, 'queued', 'queued_for_deploy', NOW(), $6::jsonb, NOW(), NOW())
+            """,
+            row["id"],
+            project_key,
+            component_key,
+            deploy_type_key,
+            release,
+            json.dumps(payload, ensure_ascii=False, default=str),
+        )
+        await conn.execute(
+            """
+            INSERT INTO deploy_release_manifests(
+                deploy_run_id, project, component, target_env, release_sha,
+                title, summary, changed_files, tests, commits, risk_flags, created_at
+            )
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, NOW())
+            """,
+            row["id"],
+            project_key,
+            component_key,
+            env_key,
+            release,
+            release_title,
+            release_summary,
+            json.dumps(normalized_files, ensure_ascii=False),
+            json.dumps(payload.get("tests") if isinstance(payload.get("tests"), list) else [], ensure_ascii=False, default=str),
+            json.dumps(payload.get("commits") if isinstance(payload.get("commits"), list) else [], ensure_ascii=False, default=str),
+            json.dumps(payload.get("risk_flags") if isinstance(payload.get("risk_flags"), list) else [], ensure_ascii=False, default=str),
         )
     return {**dict(row), "deduplicated": False}
 
@@ -456,6 +575,244 @@ async def _load_runner_signals(conn: Any) -> tuple[list[dict[str, Any]], list[di
     return queue, signals
 
 
+async def _load_project_deployments(
+    conn: Any,
+    *,
+    has_runs: bool,
+    has_pipeline: bool,
+) -> list[dict[str, Any]]:
+    """Summarize every project, including projects that only have runner history."""
+    overview: dict[str, dict[str, Any]] = {
+        project: {
+            "project": project,
+            "status": "unknown",
+            "phase": None,
+            "release_sha": None,
+            "runner_job_id": None,
+            "started_at": None,
+            "completed_at": None,
+            "updated_at": None,
+            "last_deploy_at": None,
+            "last_success_sha": None,
+            "source": "none",
+            "has_deploy_run": False,
+            "has_pipeline_job": False,
+            "is_active": False,
+            "is_queued": False,
+        }
+        for project in PROJECTS
+    }
+
+    if has_runs:
+        rows = _dict_rows(await conn.fetch(
+            """
+            /* project_deploy_overview_latest_runs */
+            SELECT DISTINCT ON (upper(project))
+                   upper(project) AS project,
+                   status, phase, release_sha, requested_at, created_at,
+                   phase_started_at, phase_completed_at, updated_at,
+                   duration_ms, release_title, release_summary, request_payload
+              FROM deploy_runs
+             WHERE upper(project) = ANY($1::text[])
+             ORDER BY upper(project),
+                      COALESCE(updated_at, phase_completed_at, phase_started_at, created_at) DESC NULLS LAST,
+                      id DESC
+            """,
+            list(PROJECTS),
+        ))
+        for row in _apply_deploy_time_aliases(_apply_release_metadata(rows)):
+            project = str(row.get("project") or "").upper()
+            if project not in overview:
+                continue
+            status = str(row.get("status") or "")
+            overview[project].update({
+                "status": status or "unknown",
+                "phase": row.get("phase"),
+                "release_sha": row.get("release_sha"),
+                "started_at": row.get("started_at"),
+                "completed_at": row.get("completed_at"),
+                "updated_at": row.get("updated_at"),
+                "last_deploy_at": row.get("completed_at") or row.get("updated_at"),
+                "source": "deploy_runs",
+                "has_deploy_run": True,
+                "is_active": status in ACTIVE_STATUSES,
+                "is_queued": status in QUEUED_STATUSES,
+                "duration_ms": row.get("duration_ms"),
+                "release_title": row.get("release_title"),
+                "release_summary": row.get("release_summary"),
+                "changed_files": row.get("changed_files"),
+                "changed_file_count": row.get("changed_file_count"),
+            })
+
+    if has_pipeline:
+        latest_rows = _dict_rows(await conn.fetch(
+            """
+            /* project_deploy_overview_latest_pipeline */
+            SELECT DISTINCT ON (upper(project))
+                   upper(project) AS project,
+                   job_id AS runner_job_id,
+                   status, phase, commit_hash AS release_sha,
+                   created_at, started_at, completed_at, deployed_at, updated_at
+              FROM pipeline_jobs
+             WHERE upper(project) = ANY($1::text[])
+             ORDER BY upper(project),
+                      COALESCE(updated_at, completed_at, deployed_at, started_at, created_at) DESC NULLS LAST
+            """,
+            list(PROJECTS),
+        ))
+        for row in latest_rows:
+            project = str(row.get("project") or "").upper()
+            if project not in overview:
+                continue
+            current = overview[project]
+            current["has_pipeline_job"] = True
+            if current["is_active"] or current["is_queued"]:
+                current["runner_job_id"] = current.get("runner_job_id") or row.get("runner_job_id")
+                continue
+            status = str(row.get("status") or "")
+            current.update({
+                "status": status or current.get("status") or "unknown",
+                "phase": row.get("phase") or current.get("phase"),
+                "release_sha": row.get("release_sha") or current.get("release_sha"),
+                "runner_job_id": row.get("runner_job_id"),
+                "started_at": row.get("started_at") or current.get("started_at"),
+                "completed_at": row.get("completed_at") or row.get("deployed_at") or current.get("completed_at"),
+                "updated_at": row.get("updated_at") or current.get("updated_at"),
+                "last_deploy_at": row.get("deployed_at") or row.get("completed_at") or row.get("updated_at"),
+                "source": "pipeline_jobs",
+                "is_active": status in ACTIVE_STATUSES,
+                "is_queued": status in QUEUED_STATUSES or status in ("pending_ceo_approval", "review_hold"),
+            })
+
+        success_rows = _dict_rows(await conn.fetch(
+            """
+            /* project_deploy_overview_latest_success_pipeline */
+            SELECT DISTINCT ON (upper(project))
+                   upper(project) AS project,
+                   commit_hash AS release_sha,
+                   COALESCE(deployed_at, completed_at, updated_at, created_at) AS last_deploy_at
+              FROM pipeline_jobs
+             WHERE upper(project) = ANY($1::text[])
+               AND status = 'done'
+             ORDER BY upper(project),
+                      COALESCE(deployed_at, completed_at, updated_at, created_at) DESC NULLS LAST
+            """,
+            list(PROJECTS),
+        ))
+        for row in success_rows:
+            project = str(row.get("project") or "").upper()
+            if project in overview:
+                overview[project]["last_success_sha"] = row.get("release_sha")
+                if not overview[project].get("last_deploy_at"):
+                    overview[project]["last_deploy_at"] = row.get("last_deploy_at")
+
+    return [overview[project] for project in PROJECTS]
+
+
+async def _load_component_deployments(
+    conn: Any,
+    *,
+    has_components: bool,
+    has_runs: bool,
+) -> list[dict[str, Any]]:
+    """Return latest status per project/component, preferring the component ledger."""
+    if has_components:
+        rows = _dict_rows(await conn.fetch(
+            """
+            /* component_deploy_overview_latest_components */
+            SELECT DISTINCT ON (upper(dc.project), dc.component, COALESCE(dc.metadata->>'target_env', 'production'))
+                   dc.id AS component_id,
+                   dc.deploy_run_id AS id,
+                   upper(dc.project) AS project,
+                   dc.component,
+                   dc.deploy_type,
+                   COALESCE(dc.metadata->>'target_env', 'production') AS target_env,
+                   dc.release_sha,
+                   dc.status,
+                   dc.phase,
+                   dc.started_at,
+                   dc.completed_at,
+                   dc.updated_at,
+                   dc.duration_ms,
+                   dc.health_url,
+                   dc.route_url,
+                   dc.image_digest,
+                   dc.standby_digest,
+                   drm.title AS release_title,
+                   drm.summary AS release_summary,
+                   drm.changed_files,
+                   jsonb_array_length(COALESCE(drm.changed_files, '[]'::jsonb)) AS changed_file_count,
+                   'deploy_components' AS source
+              FROM deploy_components dc
+              LEFT JOIN deploy_release_manifests drm
+                ON drm.deploy_run_id = dc.deploy_run_id
+               AND drm.component = dc.component
+             WHERE upper(dc.project) = ANY($1::text[])
+             ORDER BY upper(dc.project), dc.component, COALESCE(dc.metadata->>'target_env', 'production'),
+                      COALESCE(dc.updated_at, dc.completed_at, dc.started_at, dc.created_at) DESC NULLS LAST,
+                      dc.id DESC
+            """,
+            list(PROJECTS),
+        ))
+        for row in rows:
+            row["changed_files"] = _coerce_string_list(row.get("changed_files"))
+            status = str(row.get("status") or "")
+            row["is_active"] = status in ACTIVE_STATUSES
+            row["is_queued"] = status in QUEUED_STATUSES
+        if rows:
+            return rows
+
+    if not has_runs:
+        return []
+
+    rows = _dict_rows(await conn.fetch(
+        """
+        /* component_deploy_overview_latest_runs */
+        SELECT DISTINCT ON (upper(project), COALESCE(component, 'api'), COALESCE(target_env, 'production'))
+               id,
+               upper(project) AS project,
+               COALESCE(component, 'api') AS component,
+               COALESCE(deploy_type, 'api_bluegreen') AS deploy_type,
+               COALESCE(target_env, 'production') AS target_env,
+               release_sha,
+               status,
+               phase,
+               requested_at,
+               phase_started_at AS started_at,
+               phase_completed_at AS completed_at,
+               updated_at,
+               duration_ms,
+               release_title,
+               release_summary,
+               CASE
+                   WHEN jsonb_typeof(request_payload->'changed_files') = 'array' THEN request_payload->'changed_files'
+                   WHEN jsonb_typeof(request_payload->'files') = 'array' THEN request_payload->'files'
+                   ELSE '[]'::jsonb
+               END AS changed_files,
+               jsonb_array_length(
+                   CASE
+                       WHEN jsonb_typeof(request_payload->'changed_files') = 'array' THEN request_payload->'changed_files'
+                       WHEN jsonb_typeof(request_payload->'files') = 'array' THEN request_payload->'files'
+                       ELSE '[]'::jsonb
+                   END
+               ) AS changed_file_count,
+               'deploy_runs' AS source
+          FROM deploy_runs
+         WHERE upper(project) = ANY($1::text[])
+         ORDER BY upper(project), COALESCE(component, 'api'), COALESCE(target_env, 'production'),
+                  COALESCE(updated_at, phase_completed_at, phase_started_at, created_at) DESC NULLS LAST,
+                  id DESC
+        """,
+        list(PROJECTS),
+    ))
+    for row in _apply_deploy_time_aliases(rows):
+        row["changed_files"] = _coerce_string_list(row.get("changed_files"))
+        status = str(row.get("status") or "")
+        row["is_active"] = status in ACTIVE_STATUSES
+        row["is_queued"] = status in QUEUED_STATUSES
+    return rows
+
+
 async def get_deploy_status(conn: Any) -> dict[str, Any]:
     """Return a stable response even while migration/data sources are unavailable."""
     now = datetime.now(timezone.utc)
@@ -472,12 +829,15 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         "stale_zombie_signals": [],
         "legacy_stale_candidates": [],
         "bg_digest_sync": [],
+        "project_deployments": [],
+        "component_deployments": [],
         "next_deploy_readiness": {"ready": True, "blockers": []},
     }
 
     has_runs = await _table_exists(conn, "deploy_runs")
     has_history = await _table_exists(conn, "deploy_history")
     has_pipeline = await _table_exists(conn, "pipeline_jobs")
+    has_components = await _table_exists(conn, "deploy_components")
 
     if has_runs:
         active, queued = await _load_deploy_runs(conn)
@@ -517,6 +877,17 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
     else:
         response["degraded"] = True
         response["degraded_reasons"].append("pipeline_jobs_unavailable")
+
+    response["project_deployments"] = await _load_project_deployments(
+        conn,
+        has_runs=has_runs,
+        has_pipeline=has_pipeline,
+    )
+    response["component_deployments"] = await _load_component_deployments(
+        conn,
+        has_components=has_components,
+        has_runs=has_runs,
+    )
 
     blockers = []
     live_active_deployments = [

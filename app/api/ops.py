@@ -430,12 +430,17 @@ async def _get_conn():
 class DeployQueueRequest(BaseModel):
     project: str = "AADS"
     release_sha: Optional[str] = None
+    component: str = "api"
+    deploy_type: Optional[str] = None
+    target_env: str = "production"
     runner_job_id: Optional[str] = None
     requested_by: Optional[str] = None
     request_source: str = "ops_api"
     commit_status: str = "committed"
     push_status: str = "pushed"
     auto_start: bool = True
+    rollback_plan: Optional[str] = None
+    approval_policy: str = "auto_if_green"
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -521,6 +526,8 @@ async def get_common_deploy_status():
             "stale_zombie_signals": [],
             "legacy_stale_candidates": [],
             "bg_digest_sync": [],
+            "project_deployments": [],
+            "component_deployments": [],
             "next_deploy_readiness": {
                 "ready": False,
                 "blockers": ["observability_unavailable"],
@@ -551,12 +558,17 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             conn,
             project=normalize_project_label(req.project),
             release_sha=release_sha,
+            component=req.component,
+            deploy_type=req.deploy_type,
+            target_env=req.target_env,
             runner_job_id=req.runner_job_id,
             requested_by=req.requested_by or "ops_api",
             request_source=req.request_source,
             commit_status=req.commit_status,
             push_status=req.push_status,
             auto_start=req.auto_start,
+            rollback_plan=req.rollback_plan,
+            approval_policy=req.approval_policy,
             metadata=req.metadata,
         )
         worker_start: Dict[str, Any] = {
@@ -578,6 +590,9 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             "status": "queued",
             "deploy_run_id": row.get("id"),
             "project": row.get("project"),
+            "component": row.get("component"),
+            "deploy_type": row.get("deploy_type"),
+            "target_env": row.get("target_env"),
             "release_sha": row.get("release_sha"),
             "phase": row.get("phase"),
             "queue_position": row.get("queue_position"),

@@ -1,5 +1,30 @@
 # AADS HANDOVER
 
+## 2026-09-08 08:52 KST - PC Agent reboot reconnect diagnosis and patch
+
+- CEO request:
+  - Explain why PCs are powered on but PC Agent does not reconnect to AADS after reboot/manual start, and take corrective action.
+- Production evidence:
+  - `pc_list_agents`: `online_count=0`; six known agents were offline.
+  - `/api/v1/pc-agent/agents` on ports `8100` and `8102`: both returned offline-only snapshots.
+  - `/api/v1/pc-agent/diagnostics`: default browser agent is `7f99c528-24d` / `DESKTOP-ICU55HK`; latest live registry had no online agents.
+  - `pc_agent_connection_events` latest rows showed `DESKTOP-TNO85R8` (`6f8d6047-093`), `DESKTOP-ICU55HK` (`7f99c528-24d`), and `DANHAROO-MAIN` (`62405e70-e98`) connected on PC Agent `1.0.70` and later disconnected with WebSocket `1005`.
+  - Recent `register_failed` rows contained `WebSocket is not connected. Need to call "accept" first.`, pointing to server WebSocket accept/replace timing during reconnect.
+- Change prepared:
+  - `app/api/pc_agent.py`: classify WebSocket `1005` as `abnormal_close`/warning instead of normal close, accept the new WebSocket before closing stale same-agent connections, and persist runtime heartbeat telemetry from PC Agent payloads as `heartbeat_status`.
+  - `pc_agent/agent.py`: include hostname, version, watchdog/startup/runtime telemetry in heartbeat payloads.
+  - `pc_agent/VERSION`: bumped to `1.0.71` so installed clients can detect a real update.
+  - `pc_agent/CHANGELOG`: added v1.0.71 reconnect diagnostics entry.
+  - `tests/unit/test_pc_agent_api_disconnects.py`: added coverage for 1005 classification and heartbeat telemetry recording.
+- Verification:
+  - `python3 -m py_compile app/api/pc_agent.py pc_agent/agent.py pc_agent/launcher.py tests/unit/test_pc_agent_api_disconnects.py`: passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_api_disconnects.py::test_code_1005_is_classified_as_abnormal_close tests/unit/test_pc_agent_api_disconnects.py::test_ws_pc_agent_records_runtime_heartbeat_status tests/unit/test_pc_agent_api_disconnects.py::test_ws_pc_agent_records_heartbeat_timeout_and_closes_socket tests/unit/test_pc_agent_api_disconnects.py::test_ws_pc_agent_records_disconnect_when_server_ping_fails`: 4 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_pc_agent_launcher_startup.py`: 9 passed.
+  - `git diff --check -- app/api/pc_agent.py pc_agent/agent.py pc_agent/VERSION pc_agent/CHANGELOG tests/unit/test_pc_agent_api_disconnects.py`: passed.
+- Not performed:
+  - Commit, push, blue/green deployment, and post-deploy PC reconnect verification are not done in this checkpoint.
+  - Full `tests/unit/test_pc_agent_api_disconnects.py tests/unit/test_pc_agent_launcher_startup.py` had one pre-existing environmental/mock failure: `test_list_agents_shows_legacy_agents_for_admin_principal` attempted live peer fallback and mixed known offline event-log agents.
+
 ## 2026-09-08 05:34 KST - Multi-agent operations education HTML
 
 - CEO request:
@@ -12398,3 +12423,25 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `git diff --check` for touched files: passed.
 - Not performed:
   - Deploy is still pending. The code fix is committed/pushed separately from production rollout.
+
+## 2026-09-08 08:45 KST — Unified deploy management Phase 1 implementation
+- CEO request:
+  - Approved the unified deployment management PRD and requested immediate implementation, commit, push, deployment queue registration, and result reporting.
+- Change implemented:
+  - Extended the deploy ops request contract with `component`, `deploy_type`, `target_env`, `rollback_plan`, and `approval_policy`.
+  - Added component-level deployment schema: `deploy_components`, `deploy_release_manifests`, and `deploy_locks`, plus new `deploy_runs` component metadata columns.
+  - Updated `deploy_observability.py` so `/api/v1/ops/deploy/status` returns both `project_deployments` and `component_deployments`.
+  - Updated `deploy.sh` so direct and queued AADS API deploys create and synchronize `deploy_components` rows with phase/status/digest/timing.
+  - Updated the chat artifact deploy tab and `/ops` page to show project/component deployment status and recent applied-change details.
+  - Updated `docs/reports/20260908_unified_deployment_management_prd.md` with the post-approval implementation state.
+- Verification:
+  - `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1 -q < migrations/162_unified_deploy_components.sql`: passed.
+  - DB schema SELECT confirmed `deploy_components`, `deploy_release_manifests`, and `deploy_locks` exist.
+  - DB column SELECT confirmed `component`, `deploy_type`, `target_env`, `release_title`, `release_summary`, `rollback_plan`, and `approval_policy` exist on `deploy_runs`.
+  - `python3 -m py_compile app/services/deploy_observability.py app/api/ops.py`: passed.
+  - `bash -n deploy.sh`: passed.
+  - `python3 -m pytest tests/unit/test_deploy_observability.py -q`: 11 passed.
+  - `npm run lint` in `/root/aads/aads-dashboard`: 0 errors, 313 pre-existing warnings.
+- Remaining scope:
+  - GO100/KIS/SF/NTV2/NAS remote deploy adapters still need project-specific implementation after this central DB/API/UI foundation is deployed.
+  - Commit, push, AADS API blue/green deploy, and dashboard deploy are being handled after this entry.

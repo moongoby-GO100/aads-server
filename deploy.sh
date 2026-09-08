@@ -372,6 +372,19 @@ deploy_observe_init() {
     )"
     if [[ "$run_id" =~ ^[0-9]+$ ]]; then
         DEPLOY_RUN_ID="$run_id"
+        deploy_db_exec "
+            INSERT INTO deploy_components(deploy_run_id, project, component, deploy_type, release_sha,
+                                          status, phase, started_at, metadata, created_at, updated_at)
+            SELECT ${DEPLOY_RUN_ID}, 'AADS', 'api', 'api_bluegreen', '$release_sql',
+                   'running', 'initializing', NOW(),
+                   jsonb_build_object('target_env', 'production', 'source', 'deploy.sh'),
+                   NOW(), NOW()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM deploy_components
+                WHERE deploy_run_id=${DEPLOY_RUN_ID}
+                  AND component='api'
+            );
+        " >/dev/null
         echo "[deploy.sh] deploy_run_id=${DEPLOY_RUN_ID}"
     fi
 }
@@ -468,6 +481,23 @@ deploy_observe_update() {
             standby_digest=NULLIF('$standby_sql', ''),
             error_summary=NULLIF('$err_sql', '')
         WHERE id=${DEPLOY_RUN_ID};
+
+        UPDATE deploy_components dc
+        SET status='$status_sql',
+            phase='$phase_sql',
+            updated_at=NOW(),
+            started_at=COALESCE(started_at, to_timestamp(${DEPLOY_START_EPOCH})),
+            completed_at=CASE
+                WHEN '$status_sql' IN ('success', 'completed', 'failed', 'blocked') THEN NOW()
+                ELSE completed_at
+            END,
+            duration_ms=${elapsed_ms},
+            image_digest=NULLIF('$image_sql', ''),
+            standby_digest=NULLIF('$standby_sql', ''),
+            error_summary=NULLIF('$err_sql', '')
+        FROM deploy_runs dr
+        WHERE dc.deploy_run_id=${DEPLOY_RUN_ID}
+          AND dr.id=dc.deploy_run_id;
     " >/dev/null
 }
 
@@ -691,6 +721,21 @@ claim_latest_queued_deploy_request() {
     )"
     if [[ "$run_id" =~ ^[0-9]+$ ]]; then
         DEPLOY_RUN_ID="$run_id"
+        deploy_db_exec "
+            INSERT INTO deploy_components(deploy_run_id, project, component, deploy_type, release_sha,
+                                          status, phase, started_at, metadata, created_at, updated_at)
+            SELECT ${DEPLOY_RUN_ID}, project, component, deploy_type, release_sha,
+                   'running', 'preflight', NOW(),
+                   jsonb_build_object('target_env', target_env, 'source', 'deploy_queue_worker'),
+                   NOW(), NOW()
+            FROM deploy_runs
+            WHERE id=${DEPLOY_RUN_ID}
+              AND NOT EXISTS (
+                  SELECT 1 FROM deploy_components
+                  WHERE deploy_run_id=${DEPLOY_RUN_ID}
+                    AND component=deploy_runs.component
+              );
+        " >/dev/null
         echo "[deploy.sh] claimed queued deploy_run_id=${DEPLOY_RUN_ID}"
     fi
 }
@@ -764,6 +809,15 @@ start_deploy_heartbeat() {
                     duration_ms=${elapsed_ms},
                     estimated_remaining_ms=${estimate_ms}
                 WHERE id=${run_id}
+                  AND status NOT IN ('success', 'completed', 'failed', 'blocked');
+
+                UPDATE deploy_components
+                SET status='$status_sql',
+                    phase='$phase_sql',
+                    updated_at=NOW(),
+                    started_at=COALESCE(started_at, to_timestamp(${start_epoch})),
+                    duration_ms=${elapsed_ms}
+                WHERE deploy_run_id=${run_id}
                   AND status NOT IN ('success', 'completed', 'failed', 'blocked');
             " >/dev/null
         done
