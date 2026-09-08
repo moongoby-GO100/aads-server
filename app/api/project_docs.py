@@ -44,8 +44,10 @@ SERVER_CONFIG = {
             {"base": "/root/aads/aads-docs/reports", "label": "공용 리포트", "exclude": ["ceo-documents/_index.json"]},
             {"base": "/root/aads/aads-dashboard/docs", "label": "대시보드 문서"},
             {"base": "/root/aads/aads-dashboard/reports", "label": "대시보드 리포트"},
+            {"base": "/root/aads/aads-dashboard/src", "label": "대시보드 소스"},
             {"base": "/root/aads/aads-core/docs", "label": "코어 문서"},
             {"base": "/root/aads/aads-core/reports", "label": "코어 리포트"},
+            {"base": "/app/app", "label": "서버 앱 소스"},
             {"base": "/app/app/static/docs", "label": "정적 문서"},
             {"base": "/app/app/static/reports", "label": "정적 리포트"},
             {"base": "/app/app/static/preview", "label": "프리뷰"},
@@ -148,10 +150,11 @@ LEGACY_OFFICE_EXTENSIONS = {".doc", ".xls", ".ppt"}
 SENSITIVE_PATH_MARKERS = (".env", "secrets", "credentials", "id_rsa")
 SENSITIVE_EXTENSIONS = {".key", ".pem"}
 AADS_APP_ROOT = "/app"
-AADS_APP_REL_PREFIXES = ("docs/", "reports/", "app/static/", "scripts/", "tests/")
+AADS_APP_REL_PREFIXES = ("docs/", "reports/", "app/", "migrations/", "scripts/", "tests/")
 
 LOCAL_BASE_ALIASES = {
     "/app": ["/app", "/root/aads/aads-server"],
+    "/app/app": ["/app/app", "/root/aads/aads-server/app"],
     "/app/docs": ["/app/docs", "/root/aads/aads-server/docs"],
     "/app/reports": ["/app/reports", "/root/aads/aads-server/reports"],
     "/app/app/static/docs": ["/app/app/static/docs", "/root/aads/aads-server/app/static/docs"],

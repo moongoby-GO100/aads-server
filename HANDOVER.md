@@ -12464,3 +12464,16 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Release notes:
   - Only PC Agent related files should be staged for this release. Existing finance data/runtime dirty files are unrelated and must remain untouched.
   - After blue/green deploy, verify `/api/v1/pc-agent/status`, `/api/v1/pc-agent/agents`, routed API health, container health, and five-minute P0/P1 logs before reporting completion.
+
+## 2026-09-08 09:42 KST — Chat document link preview API source-path expansion
+- CEO request:
+  - Fix chat file chips that copied paths instead of opening in the right artifact panel.
+- Change prepared:
+  - `app/api/project_docs.py`: added AADS dashboard source and server app source bases to the project-docs content API.
+  - `app/api/project_docs.py`: added `/app/app` local alias so dashboard links for `app/services/...` resolve to the server app package.
+  - `app/api/project_docs.py`: expanded the `/app` allowlist to include `app/` and `migrations/` while preserving sensitive path filtering.
+- Verification before release:
+  - `git diff --check -- app/api/project_docs.py`: passed.
+  - `python3 -m py_compile app/api/project_docs.py`: passed.
+- Release note:
+  - Commit and AADS API blue/green deploy are required before the new source-path bases are available in production.
