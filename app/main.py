@@ -2747,7 +2747,7 @@ async def lifespan(app: FastAPI):
                             owner_epoch=owner_epoch,
                         )
                     )
-                    def _on_resume_done(_t, _sid=sid, _eid=execution_id):
+                    def _on_resume_done(_t, _sid=sid, _eid=execution_id, _epoch=owner_epoch):
                         if _t.cancelled():
                             async def _sync_cancelled_status():
                                 try:
@@ -2772,6 +2772,7 @@ async def lifespan(app: FastAPI):
                                             partial_content=_partial,
                                             placeholder_id=_ph["id"] if _ph else None,
                                             delete_empty_placeholder=not bool(_strip_streaming_progress_markers_exec(_partial).strip()),
+                                            expected_owner_epoch=_epoch,
                                         )
                                 except Exception:
                                     pass
@@ -2803,6 +2804,7 @@ async def lifespan(app: FastAPI):
                                             partial_content=_partial,
                                             placeholder_id=_ph["id"] if _ph else None,
                                             delete_empty_placeholder=not bool(_strip_streaming_progress_markers_exec(_partial).strip()),
+                                            expected_owner_epoch=_epoch,
                                         )
                                 except Exception:
                                     pass

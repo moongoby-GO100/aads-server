@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-09-08 19:18 KST — Chat owner/recovery P0 v2 prepared in isolated worktree
+
+- Scope: AADS chat ownership/resume only. Worktree `/tmp/aads-chat-recovery.mfZ92G` was created from `origin/main`; the main checkout's finance runtime lock and unrelated report remain untouched.
+- Corrected the incomplete one-file patch in `1d6e97c5`: resume heartbeat now starts before semaphore admission; owner fencing and real model-call retry accounting are separate; terminal execution transition precedes message mutation; missing/empty `done` is boundedly retried; newest same-execution partials are checkpointed; DB-live executions defer/dedupe automatic reactions; startup callbacks forward owner epoch.
+- Evidence and release gates: `docs/reports/20260908_chat_interruption_owner_recovery_incident_v2.md`.
+- Pre-release validation: targeted chat/lease/retry suites 123 passed (including 11 new owner/recovery tests), Python compile passed, Ruff focused checks passed, and `git diff --check` passed.
+- Production baseline at 19:17 KST: six-hour status counts 77 completed / 31 interrupted / 6 retrying / 4 running; five `resume_exhausted` rows had retry count 0. These are baseline values, not proof of improvement.
+- Commit, push, Blue/Green rollout, same-digest standby synchronization, routed health, and five-minute P0/P1 monitoring must be recorded after they actually complete.
+
 ## 2026-09-08 — Android Agent install/reconnect P0/P1 hardening
 
 - Restored the host `android_agent/dist` read-only mount in the API service so the Android manifest and APK download routes can see built artifacts after Blue/Green releases.

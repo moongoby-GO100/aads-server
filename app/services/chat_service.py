@@ -40,7 +40,19 @@ _EXECUTION_OWNER_INSTANCE = os.getenv(
 _EXECUTION_LEASE_SECONDS = max(20, int(os.getenv("AADS_EXECUTION_LEASE_SECONDS", "45")))
 _EXECUTION_HEARTBEAT_SECONDS = max(2, int(os.getenv("AADS_EXECUTION_HEARTBEAT_SECONDS", "5")))
 _EXECUTION_RESUME_MAX_ATTEMPTS = max(1, int(os.getenv("AADS_EXECUTION_RESUME_MAX_ATTEMPTS", "8")))
+_RESUME_INCOMPLETE_STREAM_MAX_RETRIES = max(
+    0, int(os.getenv("AADS_RESUME_INCOMPLETE_STREAM_MAX_RETRIES", "2"))
+)
 _execution_owner_epochs: Dict[str, int] = {}
+
+
+class ResumeFencedOut(RuntimeError):
+    """The resume worker no longer owns the execution and must exit quietly."""
+
+
+class ResumeAttemptLimitExceeded(RuntimeError):
+    """The execution has consumed its actual model-call retry budget."""
+
 
 _RESUME_FAIL_SUFFIX = "⚠️ _서버 재시작 후 이어서 생성에 실패했습니다. 다시 질문해주세요._"
 _RESUME_FAIL_SUFFIX_ALT = "⚠️ _서버 재시작 후 응답 생성에 실패했습니다. 다시 질문해주세요._"
@@ -799,8 +811,15 @@ def _is_resume_retryable(error: BaseException) -> bool:
     """resume 경로에서 재시도 가능한 일시 오류인지 판별."""
     if isinstance(error, (_heartbeat_asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit)):
         return False
+    if isinstance(error, (ResumeFencedOut, ResumeAttemptLimitExceeded)):
+        return False
 
     err_text = str(error).lower()
+    if any(
+        token in err_text
+        for token in ("resume_stream_missing_done_event", "resume_no_meaningful_response")
+    ):
+        return True
     if isinstance(error, APIStatusError):
         if getattr(error, "status_code", None) in (408, 409, 429, 500, 502, 503, 504, 529):
             return True
@@ -813,8 +832,6 @@ def _is_resume_retryable(error: BaseException) -> bool:
             "connection closed", "connection reset", "connectionreset",
             "peer closed connection", "incomplete chunked read", "complete message body",
             "remote protocol error", "server disconnected", "readerror",
-            "resume_stream_missing_done_event",
-            "resume_stream_missing_done_event",
         ))
     )
 
@@ -845,13 +862,119 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
 
 
 def _require_resume_done_event(saw_done_event: bool, content_len: int = 0) -> None:
-    """Do not persist a recovered response unless its stream reached terminal done or has substantial content."""
+    """Require the stream protocol's terminal event regardless of content length."""
     if saw_done_event:
         return
-    if content_len >= 2000:
-        logger.warning("resume_done_missing_but_content_accepted len=%d", content_len)
-        return
+    logger.warning("resume_done_missing_rejected len=%d", content_len)
     raise RuntimeError("resume_stream_missing_done_event")
+
+
+def _newest_resume_partial(
+    session_id: str,
+    execution_id: Optional[str],
+    fallback_partial: str,
+) -> str:
+    """Return the newest meaningful partial belonging to this exact execution."""
+    fallback = fallback_partial or ""
+    state = _streaming_state.get(str(session_id))
+    if not isinstance(state, dict):
+        return fallback
+    if str(state.get("execution_id") or "") != str(execution_id or ""):
+        return fallback
+    live = _strip_streaming_progress_markers(state.get("content") or "")
+    if not _has_meaningful_partial_content(live):
+        return fallback
+    if len(live) <= len(_strip_streaming_progress_markers(fallback)):
+        return fallback
+    return live
+
+
+async def _checkpoint_resume_progress(
+    session_id: str,
+    content: str,
+    *,
+    execution_id: Optional[str] = None,
+) -> None:
+    """Persist meaningful resume progress behind the execution owner/epoch fence."""
+    if not _has_meaningful_partial_content(content or ""):
+        return
+    try:
+        await _save_interrupted_partial_message(
+            session_id,
+            content,
+            reason="resume_progress_checkpoint",
+            execution_id=execution_id,
+            continuing=True,
+        )
+    except Exception as checkpoint_err:
+        logger.info(
+            "resume_checkpoint_skipped session=%s execution=%s reason=%s",
+            str(session_id)[:8],
+            str(execution_id or "")[:8],
+            str(checkpoint_err)[:120],
+        )
+
+
+async def _claim_resume_model_attempt(
+    conn,
+    execution_id: uuid.UUID,
+    owner_epoch: Optional[int],
+) -> int:
+    """Atomically charge one actual model call, separating fencing from exhaustion."""
+    attempt_number = await conn.fetchval(
+        """
+        UPDATE chat_turn_executions
+        SET retry_count = retry_count + 1,
+            heartbeat_at = NOW(),
+            lease_expires_at = NOW() + ($4::int * INTERVAL '1 second'),
+            updated_at = NOW()
+        WHERE id = $1
+          AND owner_instance = $2
+          AND owner_epoch = $3
+          AND retry_count < $5
+          AND status IN ('running', 'retrying')
+        RETURNING retry_count
+        """,
+        execution_id,
+        _EXECUTION_OWNER_INSTANCE,
+        owner_epoch,
+        _EXECUTION_LEASE_SECONDS,
+        _EXECUTION_RESUME_MAX_ATTEMPTS,
+    )
+    if attempt_number is not None:
+        return int(attempt_number)
+
+    row = await conn.fetchrow(
+        """
+        SELECT retry_count, status, owner_instance, owner_epoch
+        FROM chat_turn_executions
+        WHERE id = $1
+        """,
+        execution_id,
+    )
+    if row is None:
+        raise ResumeFencedOut("resume_execution_row_missing")
+    if (
+        row["status"] not in ("running", "retrying")
+        or row["owner_instance"] != _EXECUTION_OWNER_INSTANCE
+        or int(row["owner_epoch"] or 0) != int(owner_epoch or 0)
+    ):
+        raise ResumeFencedOut(
+            "resume_attempt_fenced_out"
+            f" status={row['status']}"
+            f" owner={row['owner_instance']}"
+            f" owner_epoch={row['owner_epoch']}"
+            f" expected_epoch={owner_epoch}"
+        )
+    if int(row["retry_count"] or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
+        raise ResumeAttemptLimitExceeded("execution_resume_attempt_limit_exceeded")
+    raise ResumeFencedOut(
+        "resume_attempt_fenced_out"
+        f" status={row['status']}"
+        f" owner={row['owner_instance']}"
+        f" owner_epoch={row['owner_epoch']}"
+        f" expected_epoch={owner_epoch}"
+    )
 
 
 async def _wait_for_resume_slot_cooldown() -> None:
@@ -3461,7 +3584,7 @@ async def _schedule_interrupted_auto_resume(
     )
     _active_bg_tasks[session_id] = task
 
-    def _on_auto_resume_done(_task, _sid=session_id, _eid=execution_id):
+    def _on_auto_resume_done(_task, _sid=session_id, _eid=execution_id, _epoch=owner_epoch):
         if _task.cancelled():
             logger.warning("interrupted_auto_resume_cancelled session=%s execution=%s", _sid[:8], _eid[:8])
             async def _mark_cancelled_retry_for_reclaim() -> None:
@@ -3480,10 +3603,12 @@ async def _schedule_interrupted_auto_resume(
                               AND session_id = $2
                               AND status = 'retrying'
                               AND completed_at IS NULL
+                              AND ($4::bigint IS NULL OR owner_epoch = $4)
                             """,
                             uuid.UUID(str(_eid)),
                             uuid.UUID(str(_sid)),
                             f"interrupted_auto_resume_cancelled:{reason}"[:1000],
+                            int(_epoch) if _epoch is not None else None,
                         )
                         await _conn.execute(
                             """
@@ -3530,6 +3655,52 @@ async def _schedule_interrupted_auto_resume(
     return True
 
 
+async def _fetch_execution_fence_row(conn, eid: uuid.UUID) -> Optional[Dict[str, Any]]:
+    """Read the execution fence without assuming a production asyncpg adapter."""
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT status, owner_instance, owner_epoch, completed_at,
+                   (lease_expires_at IS NOT NULL AND lease_expires_at > NOW()) AS lease_valid
+            FROM chat_turn_executions
+            WHERE id = $1
+            """,
+            eid,
+        )
+    except Exception as fence_err:
+        logger.debug(
+            "execution_fence_row_unavailable execution=%s error=%s",
+            str(eid)[:8],
+            fence_err,
+        )
+        return None
+    if row is None:
+        return None
+    try:
+        status = row["status"]
+        owner_instance = row["owner_instance"]
+        owner_epoch = row["owner_epoch"]
+        completed_at = row["completed_at"]
+        lease_valid = row["lease_valid"]
+    except Exception:
+        return None
+    if not isinstance(status, (str, type(None))):
+        return None
+    if not isinstance(owner_instance, (str, type(None))):
+        return None
+    if isinstance(owner_epoch, bool) or not isinstance(owner_epoch, (int, type(None))):
+        return None
+    if not isinstance(lease_valid, (bool, type(None))):
+        return None
+    return {
+        "status": status,
+        "owner_instance": owner_instance,
+        "owner_epoch": owner_epoch,
+        "completed_at": completed_at,
+        "lease_valid": lease_valid,
+    }
+
+
 async def _mark_execution_interrupted(
     conn,
     session_id: str,
@@ -3557,59 +3728,47 @@ async def _mark_execution_interrupted(
             "new_execution",
         )
     )
-    lease_row = None
-    # Unit-test/migration adapters use lightweight connection doubles without
-    # the new columns. Production pool connections are asyncpg proxies.
-    if type(conn).__module__.startswith("asyncpg"):
-        lease_row = await conn.fetchrow(
-            """
-            SELECT owner_instance, owner_epoch, status,
-                   (lease_expires_at IS NOT NULL AND lease_expires_at > NOW()) AS lease_valid
-            FROM chat_turn_executions
-            WHERE id = $1
-            """,
-            eid,
-        )
     force_terminal = is_superseded_cancel or interrupt_category == "user_action"
-    if lease_row and lease_row.get("status") == "completed" and not force_terminal:
-        logger.warning(
-            "chat_execution_interrupt_skipped_completed session=%s execution=%s reason=%s",
-            str(session_id)[:8], str(execution_id)[:8], reason[:160],
-        )
-        return
-    if (
-        lease_row
-        and lease_row["lease_valid"]
-        and lease_row["owner_instance"]
-        and lease_row["owner_instance"] != _EXECUTION_OWNER_INSTANCE
-        and not force_terminal
-    ):
-        logger.warning(
-            "chat_execution_interrupt_skipped_valid_lease session=%s execution=%s owner=%s epoch=%s reason=%s",
-            str(session_id)[:8],
-            str(execution_id)[:8],
-            str(lease_row["owner_instance"])[:80],
-            lease_row["owner_epoch"],
-            reason[:160],
-        )
-        return
-    if (
-        lease_row
-        and lease_row["lease_valid"]
-        and lease_row["owner_instance"] == _EXECUTION_OWNER_INSTANCE
-        and expected_owner_epoch is not None
-        and int(lease_row["owner_epoch"] or 0) != int(expected_owner_epoch)
-        and not force_terminal
-    ):
-        logger.warning(
-            "chat_execution_interrupt_skipped_stale_epoch session=%s execution=%s epoch=%s expected_epoch=%s reason=%s",
-            str(session_id)[:8],
-            str(execution_id)[:8],
-            lease_row["owner_epoch"],
-            expected_owner_epoch,
-            reason[:160],
-        )
-        return
+    lease_row = await _fetch_execution_fence_row(conn, eid)
+    if lease_row is not None:
+        fence_status = str(lease_row.get("status") or "")
+        if fence_status not in ("running", "retrying"):
+            logger.warning(
+                "chat_execution_interrupt_skipped_terminal_status session=%s execution=%s status=%s reason=%s",
+                str(session_id)[:8],
+                str(execution_id)[:8],
+                fence_status or "unknown",
+                reason[:160],
+            )
+            return
+        if (
+            expected_owner_epoch is not None
+            and int(lease_row.get("owner_epoch") or 0) != int(expected_owner_epoch)
+        ):
+            logger.warning(
+                "chat_execution_interrupt_skipped_stale_epoch session=%s execution=%s epoch=%s expected_epoch=%s reason=%s",
+                str(session_id)[:8],
+                str(execution_id)[:8],
+                lease_row.get("owner_epoch"),
+                expected_owner_epoch,
+                reason[:160],
+            )
+            return
+        if (
+            lease_row.get("lease_valid")
+            and lease_row.get("owner_instance")
+            and lease_row.get("owner_instance") != _EXECUTION_OWNER_INSTANCE
+            and not force_terminal
+        ):
+            logger.warning(
+                "chat_execution_interrupt_skipped_valid_lease session=%s execution=%s owner=%s epoch=%s reason=%s",
+                str(session_id)[:8],
+                str(execution_id)[:8],
+                str(lease_row.get("owner_instance"))[:80],
+                lease_row.get("owner_epoch"),
+                reason[:160],
+            )
+            return
     logger.warning(
         "chat_execution_mark_interrupted session=%s execution=%s reason=%s partial_len=%s placeholder=%s delete_empty=%s superseded=%s",
         str(session_id)[:8],
@@ -3620,6 +3779,36 @@ async def _mark_execution_interrupted(
         bool(delete_empty_placeholder),
         is_superseded_cancel,
     )
+
+    claimed_terminal = await conn.fetchval(
+        """
+        UPDATE chat_turn_executions
+        SET status = 'interrupted',
+            error_message = $2,
+            interrupt_category = $3,
+            completed_at = COALESCE(completed_at, NOW()),
+            owner_instance = NULL,
+            lease_expires_at = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND status IN ('running', 'retrying')
+          AND ($4::bigint IS NULL OR owner_epoch = $4)
+        RETURNING id
+        """,
+        eid,
+        reason[:1000],
+        interrupt_category,
+        int(expected_owner_epoch) if expected_owner_epoch is not None else None,
+    )
+    if claimed_terminal is None:
+        logger.warning(
+            "chat_execution_interrupt_skipped_not_owner session=%s execution=%s expected_epoch=%s reason=%s",
+            str(session_id)[:8],
+            str(execution_id)[:8],
+            expected_owner_epoch,
+            reason[:160],
+        )
+        return
 
     if pid is None:
         pid = await conn.fetchval(
@@ -3817,25 +4006,16 @@ async def _mark_execution_interrupted(
         """
         UPDATE chat_turn_executions
         SET assistant_message_id = CASE
-                WHEN $4::boolean THEN $2
+                WHEN $3::boolean THEN $2
                 ELSE COALESCE($2, assistant_message_id)
             END,
-            status = 'interrupted',
-            error_message = $3,
-            interrupt_category = $5,
-            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $6::jsonb,
-            completed_at = COALESCE(completed_at, NOW()),
-            owner_instance = NULL,
-            lease_expires_at = NULL,
+            interruption_diagnostics = COALESCE(interruption_diagnostics, '{}'::jsonb) || $4::jsonb,
             updated_at = NOW()
         WHERE id = $1
-          AND status IN ('running', 'retrying')
         """,
         eid,
         assistant_message_id,
-        reason[:1000],
         bool(delete_empty_placeholder and assistant_message_id is None),
-        interrupt_category,
         json.dumps(interruption_quality_details, ensure_ascii=False),
     )
     await conn.execute(
@@ -6376,6 +6556,7 @@ async def _resume_single_stream(
     _execution_uuid = uuid.UUID(execution_id) if execution_id else None
     _stream_id = execution_id or session_id
     _resume_lease_stop = _heartbeat_asyncio.Event()
+    _resume_lease_lost = _heartbeat_asyncio.Event()
     _resume_lease_task: Optional[_heartbeat_asyncio.Task] = None
     partial_content = _strip_resume_fail_markers(_strip_streaming_progress_markers(partial_content or ""))
     if partial_content and not _has_meaningful_partial_content(partial_content):
@@ -6395,75 +6576,83 @@ async def _resume_single_stream(
     }
     if _resume_task is not None:
         _active_bg_tasks[session_id] = _resume_task
+
+    def _raise_if_fenced_out(stage: str) -> None:
+        if _resume_lease_lost.is_set():
+            raise ResumeFencedOut(f"resume_lease_lost_while_{stage}")
+
     try:
-        async with _RESUME_SEMAPHORE:
-            await _heartbeat_asyncio.sleep(0.5)
-            _current_execution_id.set(execution_id)
+        _current_execution_id.set(execution_id)
+        pool = get_pool()
+        sid = uuid.UUID(session_id)
 
-            pool = get_pool()
-            sid = uuid.UUID(session_id)
-            if not _is_local_active_api_slot():
-                logger.info(
-                    "resume_deferred_inactive_slot session=%s execution=%s owner=%s",
-                    session_id[:8],
-                    str(_execution_uuid or "")[:8],
-                    _EXECUTION_OWNER_INSTANCE,
-                )
-                if _execution_uuid:
-                    async with pool.acquire() as _inactive_conn:
-                        await _inactive_conn.execute(
-                            """
-                            UPDATE chat_turn_executions
-                            SET lease_expires_at = NOW(), updated_at = NOW() - INTERVAL '90 seconds'
-                            WHERE id = $1 AND owner_instance = $2
-                            """,
-                            _execution_uuid,
-                            _EXECUTION_OWNER_INSTANCE,
-                        )
-                return
-
-            if _execution_uuid and owner_epoch is None:
-                async with pool.acquire() as _lease_conn:
-                    owner_epoch = await _claim_execution_lease(
-                        _lease_conn,
+        if not _is_local_active_api_slot():
+            logger.info(
+                "resume_deferred_inactive_slot session=%s execution=%s owner=%s",
+                session_id[:8],
+                str(_execution_uuid or "")[:8],
+                _EXECUTION_OWNER_INSTANCE,
+            )
+            if _execution_uuid:
+                async with pool.acquire() as _inactive_conn:
+                    await _inactive_conn.execute(
+                        """
+                        UPDATE chat_turn_executions
+                        SET lease_expires_at = NOW(), updated_at = NOW() - INTERVAL '90 seconds'
+                        WHERE id = $1 AND owner_instance = $2
+                        """,
                         _execution_uuid,
-                        status="retrying",
+                        _EXECUTION_OWNER_INSTANCE,
                     )
-                if owner_epoch is None:
-                    logger.info(
-                        "resume_skipped_valid_remote_lease session=%s execution=%s",
-                        session_id[:8],
-                        str(_execution_uuid)[:8],
-                    )
-                    return
-                _streaming_state[session_id]["owner_epoch"] = owner_epoch
+            return
 
-            if _execution_uuid and owner_epoch is not None:
-                async def _resume_lease_pump() -> None:
-                    while not _resume_lease_stop.is_set():
-                        try:
-                            await _heartbeat_asyncio.wait_for(
-                                _resume_lease_stop.wait(),
-                                timeout=_EXECUTION_HEARTBEAT_SECONDS,
+        if _execution_uuid and owner_epoch is None:
+            async with pool.acquire() as _lease_conn:
+                owner_epoch = await _claim_execution_lease(
+                    _lease_conn,
+                    _execution_uuid,
+                    status="retrying",
+                )
+            if owner_epoch is None:
+                logger.info(
+                    "resume_skipped_valid_remote_lease session=%s execution=%s",
+                    session_id[:8],
+                    str(_execution_uuid)[:8],
+                )
+                return
+            _streaming_state[session_id]["owner_epoch"] = owner_epoch
+
+        if _execution_uuid and owner_epoch is not None:
+            async def _resume_lease_pump() -> None:
+                while not _resume_lease_stop.is_set():
+                    try:
+                        await _heartbeat_asyncio.wait_for(
+                            _resume_lease_stop.wait(),
+                            timeout=_EXECUTION_HEARTBEAT_SECONDS,
+                        )
+                        return
+                    except _heartbeat_asyncio.TimeoutError:
+                        async with get_pool().acquire() as _lease_heartbeat_conn:
+                            lease_ok = await _heartbeat_execution_lease(
+                                _lease_heartbeat_conn,
+                                _execution_uuid,
+                                owner_epoch,
                             )
+                        if not lease_ok:
+                            logger.warning(
+                                "resume_lease_lost session=%s execution=%s epoch=%s",
+                                session_id[:8],
+                                str(_execution_uuid)[:8],
+                                owner_epoch,
+                            )
+                            _resume_lease_lost.set()
                             return
-                        except _heartbeat_asyncio.TimeoutError:
-                            async with get_pool().acquire() as _lease_heartbeat_conn:
-                                lease_ok = await _heartbeat_execution_lease(
-                                    _lease_heartbeat_conn,
-                                    _execution_uuid,
-                                    owner_epoch,
-                                )
-                            if not lease_ok:
-                                logger.warning(
-                                    "resume_lease_lost session=%s execution=%s epoch=%s",
-                                    session_id[:8],
-                                    str(_execution_uuid)[:8],
-                                    owner_epoch,
-                                )
-                                return
 
-                _resume_lease_task = _heartbeat_asyncio.create_task(_resume_lease_pump())
+            _resume_lease_task = _heartbeat_asyncio.create_task(_resume_lease_pump())
+
+        async with _RESUME_SEMAPHORE:
+            _raise_if_fenced_out("queued_for_resume_slot")
+            await _heartbeat_asyncio.sleep(0.5)
 
             # Hard cap applies only to actual prior model starts. Scanner claims
             # and placeholder reconciliation do not consume the retry budget.
@@ -6479,6 +6668,7 @@ async def _resume_single_stream(
                         _active_bg_tasks.pop(session_id, None)
                         return
             await _wait_for_resume_slot_cooldown()
+            _raise_if_fenced_out("waiting_for_model_slot_cooldown")
 
             def _merge_resume_state(**updates: Any) -> Dict[str, Any]:
                 current = _streaming_state.get(session_id)
@@ -6748,6 +6938,14 @@ async def _resume_single_stream(
                 ):
                     partial_content = redis_content
                     logger.info(f"resume_redis_partial: session={session_id[:8]} upgraded partial to redis_len={len(redis_content)}")
+                elif redis_content and not partial_content and _execution_uuid:
+                    partial_content = redis_content
+                    logger.info(
+                        "resume_redis_partial_adopted_for_execution session=%s execution=%s redis_len=%s",
+                        session_id[:8],
+                        str(_execution_uuid)[:8],
+                        len(redis_content),
+                    )
                 elif redis_content and not partial_content:
                     logger.warning(
                         "resume_redis_partial_ignored_without_db_anchor: session=%s execution=%s redis_len=%s",
@@ -6756,70 +6954,9 @@ async def _resume_single_stream(
                         len(redis_content),
                     )
 
-                if _execution_uuid:
-                    async with pool.acquire() as _attempt_conn:
-                        attempt_number = await _attempt_conn.fetchval(
-                            """
-                            UPDATE chat_turn_executions
-                            SET retry_count = retry_count + 1,
-                                heartbeat_at = NOW(),
-                                lease_expires_at = NOW() + ($4::int * INTERVAL '1 second'),
-                                updated_at = NOW()
-                            WHERE id = $1
-                              AND owner_instance = $2
-                              AND owner_epoch = $3
-                              AND retry_count < $5
-                              AND status IN ('running', 'retrying')
-                            RETURNING retry_count
-                            """,
-                            _execution_uuid,
-                            _EXECUTION_OWNER_INSTANCE,
-                            owner_epoch,
-                            _EXECUTION_LEASE_SECONDS,
-                            _EXECUTION_RESUME_MAX_ATTEMPTS,
-                        )
-                    if attempt_number is None:
-                        _diag = None
-                        try:
-                            async with pool.acquire() as _diag_conn:
-                                _diag = await _diag_conn.fetchrow(
-                                    "SELECT status, owner_instance, owner_epoch, retry_count "
-                                    "FROM chat_turn_executions WHERE id = $1",
-                                    _execution_uuid,
-                                )
-                        except Exception:
-                            pass
-                        if _diag and _diag["status"] in ("completed", "interrupted"):
-                            logger.info(
-                                "resume_skipped_terminal_status session=%s execution=%s status=%s",
-                                session_id[:8], str(_execution_uuid)[:8], _diag["status"],
-                            )
-                            _streaming_state.pop(session_id, None)
-                            return
-                        if _diag and (
-                            _diag["owner_instance"] != _EXECUTION_OWNER_INSTANCE
-                            or int(_diag["owner_epoch"] or 0) != int(owner_epoch or 0)
-                        ):
-                            logger.info(
-                                "resume_fenced_out session=%s execution=%s epoch=%s/%s",
-                                session_id[:8], str(_execution_uuid)[:8],
-                                owner_epoch, _diag["owner_epoch"],
-                            )
-                            _streaming_state.pop(session_id, None)
-                            return
-                        if _diag and (_diag["retry_count"] or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
-                            raise RuntimeError("resume_retry_limit_exhausted")
-                        raise RuntimeError("resume_attempt_fence_or_limit_rejected")
-                    logger.info(
-                        "resume_model_attempt_started session=%s execution=%s attempt=%s model=%s",
-                        session_id[:8],
-                        str(_execution_uuid)[:8],
-                        attempt_number,
-                        _resume_model,
-                    )
-
                 retry_delays = [1, 2, 4, 8, 12]
                 _relay_503_count = 0
+                _incomplete_stream_count = 0
                 last_error: Optional[BaseException] = None
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
                 cost_usd = Decimal("0")
@@ -6839,6 +6976,22 @@ async def _resume_single_stream(
                     )
                     _resume_model_used = _resume_model_attempt
 
+                    _raise_if_fenced_out("between_model_attempts")
+                    if _execution_uuid:
+                        async with pool.acquire() as _attempt_conn:
+                            attempt_number = await _claim_resume_model_attempt(
+                                _attempt_conn,
+                                _execution_uuid,
+                                owner_epoch,
+                            )
+                        logger.info(
+                            "resume_model_attempt_started session=%s execution=%s attempt=%s model=%s",
+                            session_id[:8],
+                            str(_execution_uuid)[:8],
+                            attempt_number,
+                            _resume_model_attempt,
+                        )
+
                     try:
                         logger.info(
                             "resume_model_call session=%s execution=%s attempt=%s model=%s chain=%s",
@@ -6856,6 +7009,7 @@ async def _resume_single_stream(
                             model_override=_resume_model_attempt,
                             session_id=session_id,
                         ):
+                            _raise_if_fenced_out("streaming_model_response")
                             etype = event.get("type", "")
                             if etype == "delta":
                                 delta_content = event.get("content", "")
@@ -6888,11 +7042,46 @@ async def _resume_single_stream(
                                 raise RuntimeError(str(event.get("content") or "resume_stream_error"))
 
                         _require_resume_done_event(_resume_saw_done_event, len((full_response or "").strip()))
+                        if not _has_meaningful_partial_content(full_response):
+                            raise RuntimeError("resume_no_meaningful_response")
                         last_error = None
                         break
                     except Exception as stream_error:
                         last_error = stream_error
                         stream_error_text = str(stream_error).lower()
+                        is_incomplete_stream = any(
+                            token in stream_error_text
+                            for token in (
+                                "resume_stream_missing_done_event",
+                                "resume_no_meaningful_response",
+                            )
+                        )
+                        if is_incomplete_stream:
+                            if (
+                                _incomplete_stream_count >= _RESUME_INCOMPLETE_STREAM_MAX_RETRIES
+                                or attempt >= len(retry_delays)
+                            ):
+                                raise
+                            _incomplete_stream_count += 1
+                            logger.warning(
+                                "resume_incomplete_stream_retry session=%s execution=%s retry=%s/%s len=%s error=%s",
+                                session_id[:8],
+                                str(_execution_uuid or "")[:8],
+                                _incomplete_stream_count,
+                                _RESUME_INCOMPLETE_STREAM_MAX_RETRIES,
+                                len((full_response or "").strip()),
+                                stream_error,
+                            )
+                            await _checkpoint_resume_progress(
+                                session_id,
+                                full_response,
+                                execution_id=execution_id,
+                            )
+                            await _heartbeat_asyncio.sleep(retry_delays[attempt])
+                            _raise_if_fenced_out("waiting_to_retry_incomplete_stream")
+                            await _wait_for_resume_slot_cooldown()
+                            _raise_if_fenced_out("waiting_for_retry_slot_cooldown")
+                            continue
                         is_relay_503 = any(
                             token in stream_error_text
                             for token in ("codex_relay_busy", "relay_semaphore_timeout")
@@ -6919,13 +7108,12 @@ async def _resume_single_stream(
                             stream_error,
                         )
                         await _heartbeat_asyncio.sleep(delay)
+                        _raise_if_fenced_out("waiting_to_retry_model")
                         await _wait_for_resume_slot_cooldown()
+                        _raise_if_fenced_out("waiting_for_retry_slot_cooldown")
 
                 if last_error is not None:
                     raise last_error
-
-                if not _has_meaningful_partial_content(full_response):
-                    raise RuntimeError("resume_no_meaningful_response")
 
                 # 완료 마커 발행 → 프론트에서 resume_done 수신
                 await _redis_stream.mark_stream_done(_stream_id)
@@ -6956,16 +7144,25 @@ async def _resume_single_stream(
                 "completed": True,
             }
 
+    except ResumeFencedOut as fenced:
+        logger.warning(
+            "resume_worker_fenced_out session=%s execution=%s epoch=%s detail=%s",
+            session_id[:8],
+            str(_execution_uuid or "")[:8],
+            owner_epoch,
+            str(fenced)[:200],
+        )
+        state = _streaming_state.get(session_id)
+        if state and str(state.get("execution_id") or "") == str(execution_id or ""):
+            _streaming_state.pop(session_id, None)
     except Exception as e:
         logger.error(f"resume_single_stream_error: session={session_id[:8]} error={e}")
         try:
             async with get_pool().acquire() as c:
                 if _execution_uuid:
-                    _err_state = _streaming_state.get(session_id, {})
-                    _best_content = _err_state.get("content", "") or ""
-                    if len(_best_content) < len(partial_content):
-                        _best_content = partial_content
-                    _clean_partial = _strip_resume_fail_markers(_best_content)
+                    _clean_partial = _strip_resume_fail_markers(
+                        _newest_resume_partial(session_id, execution_id, partial_content)
+                    )
                     final = (
                         _clean_partial + "\n\n" + _RESUME_FAIL_SUFFIX
                         if _clean_partial
@@ -6982,11 +7179,9 @@ async def _resume_single_stream(
                         expected_owner_epoch=owner_epoch,
                     )
                 else:
-                    _err_state = _streaming_state.get(session_id, {})
-                    _best_content = _err_state.get("content", "") or ""
-                    if len(_best_content) < len(partial_content):
-                        _best_content = partial_content
-                    _clean_partial = _strip_resume_fail_markers(_best_content)
+                    _clean_partial = _strip_resume_fail_markers(
+                        _newest_resume_partial(session_id, execution_id, partial_content)
+                    )
                     final = (
                         _clean_partial + "\n\n" + _RESUME_FAIL_SUFFIX
                         if _clean_partial
@@ -9395,6 +9590,33 @@ _ai_reaction_queue: dict[str, list[str]] = {}  # session_id → 대기 메시지
 _AI_REACTION_MAX_QUEUE = 5
 
 
+async def _session_has_live_execution(session_id: str) -> bool:
+    """Check the DB lease so another API slot's live reply cannot be superseded."""
+    try:
+        async with get_pool().acquire() as conn:
+            live = await conn.fetchval(
+                """
+                SELECT TRUE
+                FROM chat_sessions s
+                JOIN chat_turn_executions te ON te.id = s.current_execution_id
+                WHERE s.id = $1
+                  AND te.status IN ('running', 'retrying')
+                  AND te.completed_at IS NULL
+                  AND te.lease_expires_at IS NOT NULL
+                  AND te.lease_expires_at > NOW()
+                """,
+                uuid.UUID(str(session_id)),
+            )
+        return live is True
+    except Exception as live_err:
+        logger.warning(
+            "live_execution_check_failed session=%s error=%s",
+            str(session_id)[:8],
+            str(live_err)[:160],
+        )
+        return False
+
+
 async def _enqueue_deferred_reaction(
     session_id: str,
     safe_message: str,
@@ -9402,6 +9624,26 @@ async def _enqueue_deferred_reaction(
 ) -> str:
     """Persist an automatic reaction so an inactive slot cannot strand it."""
     async with get_pool().acquire() as conn:
+        existing_id = await conn.fetchval(
+            """
+            SELECT id::text
+            FROM chat_deferred_reactions
+            WHERE session_id = $1
+              AND system_message = $2
+              AND status IN ('pending', 'claimed')
+            ORDER BY created_at
+            LIMIT 1
+            """,
+            uuid.UUID(str(session_id)),
+            safe_message,
+        )
+        if existing_id:
+            logger.info(
+                "deferred_reaction_deduped session=%s deferred=%s",
+                session_id[:8],
+                str(existing_id)[:8],
+            )
+            return str(existing_id)
         deferred_id = await conn.fetchval(
             """
             INSERT INTO chat_deferred_reactions (session_id, system_message, ohvis_task_id)
@@ -9496,6 +9738,7 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
             row["system_message"],
             row["ohvis_task_id"],
             _already_safe=True,
+            _from_deferred_queue=True,
         )
         if task is None:
             async with get_pool().acquire() as conn:
@@ -9594,6 +9837,7 @@ async def trigger_ai_reaction(
     system_message: str,
     ohvis_task_id: str = None,
     _already_safe: bool = False,
+    _from_deferred_queue: bool = False,
 ) -> Optional[_heartbeat_asyncio.Task]:
     """
     채팅방에 시스템 사용자 메시지를 삽입한 후 AI가 자동 반응하도록 트리거.
@@ -9635,6 +9879,16 @@ async def trigger_ai_reaction(
 
     if not _is_local_active_api_slot():
         await _enqueue_deferred_reaction(session_id, safe_message, ohvis_task_id)
+        return None
+
+    if await _session_has_live_execution(session_id):
+        if not _from_deferred_queue:
+            await _enqueue_deferred_reaction(session_id, safe_message, ohvis_task_id)
+        logger.info(
+            "trigger_ai_reaction_deferred_live_execution session=%s source=%s",
+            session_id[:8],
+            "deferred_queue" if _from_deferred_queue else "direct",
+        )
         return None
 
     # 🆕 CEO의 SSE 스트리밍(with_background_completion) 실행 중이면 큐잉 (CEO 작업 중단 금지)

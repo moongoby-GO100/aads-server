@@ -1295,6 +1295,7 @@ async def test_mark_execution_interrupted_creates_visible_diagnostic_notice_with
     message_id = uuid.uuid4()
     conn = AsyncMock()
     conn.fetchval = AsyncMock(side_effect=[
+        uuid.UUID(execution_id),  # atomic execution terminal claim
         None,  # no placeholder found
         None,  # no started_at measurement
         None,  # no existing interrupted assistant message
@@ -1335,8 +1336,10 @@ async def test_mark_execution_interrupted_skips_stale_same_owner_epoch():
 
         async def fetchrow(self, query, *args):
             return {
+                "status": "running",
                 "owner_instance": chat_service._EXECUTION_OWNER_INSTANCE,
                 "owner_epoch": 3,
+                "completed_at": None,
                 "lease_valid": True,
             }
 
@@ -1603,6 +1606,7 @@ async def test_interrupt_execution_for_newer_user_marks_terminal_and_clears_curr
     )
 
     executed_sql = [" ".join(call.args[0].split()) for call in conn.execute.await_args_list]
+    executed_sql.extend(" ".join(call.args[0].split()) for call in conn.fetchval.await_args_list)
     assert any(sql.startswith("DELETE FROM chat_messages WHERE id = $1") for sql in executed_sql)
     assert any("UPDATE chat_turn_executions" in sql and "status = 'interrupted'" in sql for sql in executed_sql)
     assert any("UPDATE chat_sessions" in sql and "current_execution_id = NULL" in sql for sql in executed_sql)
