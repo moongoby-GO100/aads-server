@@ -81,7 +81,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         if (ACTION_NETWORK_RESTORED.equals(action)) {
             if (client == null) {
                 Log.i(TAG, "Network restored — client missing, starting foreground client");
-                startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                startForegroundWithType(connectionForegroundType());
                 startClient();
                 startWatchdog();
             } else if (AgentStateStore.STATUS_DISCONNECTED.equals(currentStatus)) {
@@ -92,7 +92,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         }
         if (ACTION_WATCHDOG_RECONNECT.equals(action)) {
             if (client == null) {
-                startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                startForegroundWithType(connectionForegroundType());
                 startClient();
                 startWatchdog();
             } else {
@@ -101,7 +101,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             return START_STICKY;
         }
         if (ACTION_VOICE_WAKE_START.equals(action)) {
-            startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC | microphoneForegroundType());
+            startForegroundWithType(connectionForegroundType() | microphoneForegroundType());
             startClient();
             startWatchdog();
             startVoiceWake();
@@ -109,10 +109,10 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         }
         if (ACTION_VOICE_WAKE_STOP.equals(action)) {
             stopVoiceWake();
-            startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            startForegroundWithType(connectionForegroundType());
             return START_STICKY;
         }
-        startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        startForegroundWithType(connectionForegroundType());
         startClient();
         startWatchdog();
         if (VoiceWakeController.isEnabled(this)) {
@@ -219,7 +219,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         if (voiceWakeController == null) {
             voiceWakeController = new VoiceWakeController(this, this::broadcastState);
         }
-        startForegroundWithType(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC | microphoneForegroundType());
+        startForegroundWithType(connectionForegroundType() | microphoneForegroundType());
         voiceWakeController.start();
         activeCommand = "voice_wake";
         AgentStateStore.setActiveCommand(this, activeCommand);
@@ -287,7 +287,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
         try {
             if (alarmManager != null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
                 } else {
                     alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
                 }
@@ -303,7 +303,7 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
     }
 
     private void promoteForegroundTypeForCommand(String commandType) {
-        int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+        int type = connectionForegroundType();
         if ("camera".equals(commandType) || "camera_photo".equals(commandType)) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     && PermissionGate.has(this, android.Manifest.permission.CAMERA)) {
@@ -330,6 +330,13 @@ public final class AadsForegroundService extends Service implements AadsWebSocke
             return ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
         }
         return 0;
+    }
+
+    private int connectionForegroundType() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING;
+        }
+        return ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
     }
 
     private void startForegroundWithType(int type) {

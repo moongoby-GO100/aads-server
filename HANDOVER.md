@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-08 — Android Agent install/reconnect P0/P1 hardening
+
+- Restored the host `android_agent/dist` read-only mount in the API service so the Android manifest and APK download routes can see built artifacts after Blue/Green releases.
+- Android app version is now consistently `1.1.1` / code `6`; normal first launch starts the agent service and an unpaired boot can enter the existing auto-registration path.
+- Android 14+ connection service uses `remoteMessaging` instead of the time-limited `dataSync` type, with inexact idle-safe restart alarms that do not require exact-alarm privilege.
+- Device reconnect replacement is socket-fenced: a late close from an old WebSocket cannot unregister the new connection. Explicit commands for an offline agent no longer fall through to the only other connected device.
+- Fresh/standard download endpoints require their exact artifact instead of silently serving a different fallback APK.
+
 ## 2026-09-08 17:31 KST — Chat follow-up implemented; release 191 building
 
 - Commit `80c15d59a56a` pushed to origin/main with commit/push hooks; production main fast-forwarded without touching unrelated staged `docker-compose.yml` or finance/untracked work.

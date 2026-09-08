@@ -57,12 +57,10 @@ def _download_base_url() -> str:
     return public_base + "/api/v1/devices/android"
 
 
-def _find_android_apk(apk_name: str = ANDROID_APK_NAME) -> Path | None:
-    candidates = (
-        ANDROID_DIST_DIR / apk_name,
-        ANDROID_DIST_DIR / ANDROID_APK_NAME,
-        ANDROID_RELEASE_OUTPUT,
-    )
+def _find_android_apk(apk_name: str = ANDROID_APK_NAME, *, allow_fallback: bool = True) -> Path | None:
+    candidates = [ANDROID_DIST_DIR / apk_name]
+    if allow_fallback and apk_name == ANDROID_APK_NAME:
+        candidates.append(ANDROID_RELEASE_OUTPUT)
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
@@ -284,7 +282,7 @@ async def ws_device(
     except Exception:
         logger.exception("디바이스 %s WebSocket 오류", agent_id)
     finally:
-        device_manager.unregister_device(agent_id)
+        device_manager.unregister_device(agent_id, websocket)
 
 
 class CommandRequest(BaseModel):
@@ -371,7 +369,7 @@ async def device_capabilities(agent_id: str, current_user: dict = Depends(get_cu
 @router.get("/devices/android/manifest")
 async def android_agent_manifest():
     apk_path = _find_android_apk()
-    fresh_apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME)
+    fresh_apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME, allow_fallback=False)
     apk_available = apk_path is not None
     build_metadata = _android_build_metadata()
     source_count = 0
@@ -554,7 +552,7 @@ async def download_android_apk():
 
 @router.get("/devices/android/download-standard")
 async def download_android_standard_apk():
-    apk_path = _find_android_apk(ANDROID_STANDARD_APK_NAME)
+    apk_path = _find_android_apk(ANDROID_STANDARD_APK_NAME, allow_fallback=False)
     if apk_path is None:
         raise HTTPException(
             status_code=404,
@@ -569,7 +567,7 @@ async def download_android_standard_apk():
 
 @router.get("/devices/android/download-fresh")
 async def download_android_fresh_apk():
-    apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME)
+    apk_path = _find_android_apk(ANDROID_FRESH_APK_NAME, allow_fallback=False)
     if apk_path is None:
         raise HTTPException(
             status_code=404,

@@ -52,3 +52,26 @@ def test_android_device_status_goes_offline_when_heartbeat_is_stale() -> None:
     assert status is not None
     assert status["status"] == "offline"
     assert "foreground service" in status["reconnect_guidance"]
+
+
+def test_stale_socket_close_does_not_unregister_replacement_connection() -> None:
+    manager = DeviceManager()
+    old_socket = _DummyWebSocket()
+    replacement_socket = _DummyWebSocket()
+    manager.register_device("android-1", old_socket, "android")  # type: ignore[arg-type]
+    manager.register_device("android-1", replacement_socket, "android")  # type: ignore[arg-type]
+
+    manager.unregister_device("android-1", old_socket)  # type: ignore[arg-type]
+
+    assert manager.get_device("android-1") is not None
+    assert manager._devices["android-1"].websocket is replacement_socket  # type: ignore[attr-defined]
+
+
+async def test_explicit_missing_device_does_not_route_to_another_device() -> None:
+    manager = DeviceManager()
+    manager.register_device("android-online", _DummyWebSocket(), "android")  # type: ignore[arg-type]
+
+    result = await manager.send_command("android-offline", "battery", {})
+
+    assert result.status == "error"
+    assert "android-offline" in str(result.data)

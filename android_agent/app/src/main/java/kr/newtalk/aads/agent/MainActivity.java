@@ -75,6 +75,7 @@ public final class MainActivity extends Activity {
         setContentView(buildContent());
         loadPairingFields();
         applyPairingIntent(getIntent());
+        ensureAgentService();
         if (!applyWakeIntent(getIntent())) {
             openOhvisWeb(OHVIS_CHAT_URL, "launch");
         }
@@ -293,6 +294,10 @@ public final class MainActivity extends Activity {
 
     private void startAgentService(View view) {
         savePairing(view);
+        ensureAgentService();
+    }
+
+    private void ensureAgentService() {
         Intent intent = new Intent(this, AadsForegroundService.class);
         intent.setAction(AadsForegroundService.ACTION_START);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

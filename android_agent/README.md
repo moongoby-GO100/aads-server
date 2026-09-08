@@ -13,6 +13,7 @@ APK-oriented implementation under `android_agent/`.
 - Expired session route: OHVIS web auth redirects to login and returns to chat.
 - Min SDK: 26
 - Target SDK: 35
+- App version: 1.1.1 (version code 6)
 - Language: Java
 - WebSocket client: OkHttp
 
@@ -123,6 +124,11 @@ Runtime messages:
 - `heartbeat`: sent every 25 seconds; server heartbeat replies update the UI.
 - `command`: routed by `payload.command_type`.
 - `result`: returned with the same message `id`.
+
+The app starts the foreground connection service on first launch. On Android 14+
+the long-lived WebSocket uses the `remoteMessaging` foreground-service type so it
+is not treated as a time-limited bulk data-sync job. Boot and network recovery
+start or nudge the same service; an unpaired first run performs auto-registration.
 
 ## Commands
 

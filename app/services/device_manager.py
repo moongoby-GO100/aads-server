@@ -54,10 +54,21 @@ class DeviceManager:
         logger.info("디바이스 등록: %s (%s) user_id=%s", agent_id, device_type, device_info.user_id or "-")
         return device_info
 
-    def unregister_device(self, agent_id: str) -> None:
-        if agent_id in self._devices:
-            del self._devices[agent_id]
-            logger.info("디바이스 해제: %s", agent_id)
+    def unregister_device(self, agent_id: str, websocket: WebSocket | None = None) -> None:
+        """Remove only the connection that is actually closing.
+
+        A reconnect can register a replacement socket before the previous socket's
+        ``finally`` block runs.  Removing by agent_id alone would then discard the
+        healthy replacement and make the device disappear from the active registry.
+        """
+        conn = self._devices.get(agent_id)
+        if conn is None:
+            return
+        if websocket is not None and conn.websocket is not websocket:
+            logger.info("디바이스 구형 연결 해제 생략: %s", agent_id)
+            return
+        del self._devices[agent_id]
+        logger.info("디바이스 해제: %s", agent_id)
 
     def get_devices(self, device_type: str | None = None, owner_user_id: str = "") -> list[dict[str, Any]]:
         owner_user_id = str(owner_user_id or "").strip()
@@ -106,9 +117,10 @@ class DeviceManager:
         owner_user_id: str = "",
     ) -> CommandResponse:
         owner_user_id = str(owner_user_id or "").strip()
+        requested_agent_id = agent_id
         conn = self._devices.get(agent_id)
         if conn is None:
-            if len(self._devices) == 1:
+            if not requested_agent_id and len(self._devices) == 1:
                 conn = next(iter(self._devices.values()))
                 agent_id = conn.agent_id
             else:

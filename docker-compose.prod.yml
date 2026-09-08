@@ -133,6 +133,7 @@ services:
       - /root/aads/aads-server/.active_port:/app/.active_port:ro
       - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
       - /root/aads/aads-server/pc_agent:/app/pc_agent:rw
+      - /root/aads/aads-server/android_agent/dist:/app/android_agent/dist:ro
       - /root/aads/aads-server/scripts/claude_relay_secret.txt:/app/scripts/claude_relay_secret.txt:ro
       - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
       - /root/aads/data/chromadb:/root/aads/data/chromadb:rw
@@ -230,6 +231,7 @@ services:
       - /root/aads/aads-server/.active_port:/app/.active_port:ro
       - /root/aads/aads-server/mcp_servers:/app/mcp_servers:rw
       - /root/aads/aads-server/pc_agent:/app/pc_agent:rw
+      - /root/aads/aads-server/android_agent/dist:/app/android_agent/dist:ro
       - /root/aads/aads-server/scripts/claude_relay_secret.txt:/app/scripts/claude_relay_secret.txt:ro
       - /root/aads/aads-server/browser-bridge-state:/app/browser-bridge-state:rw
       - /root/aads/data/chromadb:/root/aads/data/chromadb:rw

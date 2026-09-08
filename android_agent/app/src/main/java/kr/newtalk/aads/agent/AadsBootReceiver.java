@@ -17,11 +17,6 @@ public final class AadsBootReceiver extends BroadcastReceiver {
                 && !"android.intent.action.QUICKBOOT_POWERON".equals(action)) {
             return;
         }
-        AgentConfig config = AgentPrefs.load(context);
-        if (!config.isPairingReady()) {
-            Log.i(TAG, "Pairing not ready, skip auto-start");
-            return;
-        }
         Log.i(TAG, "Boot completed — starting AADS Agent service");
         Intent serviceIntent = new Intent(context, AadsForegroundService.class);
         serviceIntent.setAction(AadsForegroundService.ACTION_START);

@@ -3,7 +3,7 @@ package kr.newtalk.aads.agent;
 final class AgentConfig {
     static final String DEFAULT_SERVER_URL = "wss://aads.newtalk.kr/api/v1/devices/ws";
     static final String DEVICE_TYPE = "android";
-    static final String VERSION = "1.1.0";
+    static final String VERSION = "1.1.1";
 
     final String serverUrl;
     final String agentId;
