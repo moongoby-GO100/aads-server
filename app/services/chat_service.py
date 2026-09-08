@@ -209,6 +209,8 @@ _INTERRUPT_REASON_CATEGORIES = {
     ),
     "resume_exhausted": (
         "resume_attempt_fence_or_limit_rejected",
+        "resume_retry_limit_exhausted",
+        "resume_retry_limit_exhausted",
         "execution_resume_attempt_limit_exceeded",
     ),
     "connection_error": (
@@ -811,6 +813,8 @@ def _is_resume_retryable(error: BaseException) -> bool:
             "connection closed", "connection reset", "connectionreset",
             "peer closed connection", "incomplete chunked read", "complete message body",
             "remote protocol error", "server disconnected", "readerror",
+            "resume_stream_missing_done_event",
+            "resume_stream_missing_done_event",
         ))
     )
 
@@ -844,7 +848,7 @@ def _require_resume_done_event(saw_done_event: bool, content_len: int = 0) -> No
     """Do not persist a recovered response unless its stream reached terminal done or has substantial content."""
     if saw_done_event:
         return
-    if content_len >= 500:
+    if content_len >= 2000:
         logger.warning("resume_done_missing_but_content_accepted len=%d", content_len)
         return
     raise RuntimeError("resume_stream_missing_done_event")
@@ -3559,7 +3563,7 @@ async def _mark_execution_interrupted(
     if type(conn).__module__.startswith("asyncpg"):
         lease_row = await conn.fetchrow(
             """
-            SELECT owner_instance, owner_epoch,
+            SELECT owner_instance, owner_epoch, status,
                    (lease_expires_at IS NOT NULL AND lease_expires_at > NOW()) AS lease_valid
             FROM chat_turn_executions
             WHERE id = $1
@@ -3567,6 +3571,12 @@ async def _mark_execution_interrupted(
             eid,
         )
     force_terminal = is_superseded_cancel or interrupt_category == "user_action"
+    if lease_row and lease_row.get("status") == "completed" and not force_terminal:
+        logger.warning(
+            "chat_execution_interrupt_skipped_completed session=%s execution=%s reason=%s",
+            str(session_id)[:8], str(execution_id)[:8], reason[:160],
+        )
+        return
     if (
         lease_row
         and lease_row["lease_valid"]
@@ -6769,6 +6779,36 @@ async def _resume_single_stream(
                             _EXECUTION_RESUME_MAX_ATTEMPTS,
                         )
                     if attempt_number is None:
+                        _diag = None
+                        try:
+                            async with pool.acquire() as _diag_conn:
+                                _diag = await _diag_conn.fetchrow(
+                                    "SELECT status, owner_instance, owner_epoch, retry_count "
+                                    "FROM chat_turn_executions WHERE id = $1",
+                                    _execution_uuid,
+                                )
+                        except Exception:
+                            pass
+                        if _diag and _diag["status"] in ("completed", "interrupted"):
+                            logger.info(
+                                "resume_skipped_terminal_status session=%s execution=%s status=%s",
+                                session_id[:8], str(_execution_uuid)[:8], _diag["status"],
+                            )
+                            _streaming_state.pop(session_id, None)
+                            return
+                        if _diag and (
+                            _diag["owner_instance"] != _EXECUTION_OWNER_INSTANCE
+                            or int(_diag["owner_epoch"] or 0) != int(owner_epoch or 0)
+                        ):
+                            logger.info(
+                                "resume_fenced_out session=%s execution=%s epoch=%s/%s",
+                                session_id[:8], str(_execution_uuid)[:8],
+                                owner_epoch, _diag["owner_epoch"],
+                            )
+                            _streaming_state.pop(session_id, None)
+                            return
+                        if _diag and (_diag["retry_count"] or 0) >= _EXECUTION_RESUME_MAX_ATTEMPTS:
+                            raise RuntimeError("resume_retry_limit_exhausted")
                         raise RuntimeError("resume_attempt_fence_or_limit_rejected")
                     logger.info(
                         "resume_model_attempt_started session=%s execution=%s attempt=%s model=%s",
@@ -6921,7 +6961,11 @@ async def _resume_single_stream(
         try:
             async with get_pool().acquire() as c:
                 if _execution_uuid:
-                    _clean_partial = _strip_resume_fail_markers(partial_content)
+                    _err_state = _streaming_state.get(session_id, {})
+                    _best_content = _err_state.get("content", "") or ""
+                    if len(_best_content) < len(partial_content):
+                        _best_content = partial_content
+                    _clean_partial = _strip_resume_fail_markers(_best_content)
                     final = (
                         _clean_partial + "\n\n" + _RESUME_FAIL_SUFFIX
                         if _clean_partial
@@ -6938,7 +6982,11 @@ async def _resume_single_stream(
                         expected_owner_epoch=owner_epoch,
                     )
                 else:
-                    _clean_partial = _strip_resume_fail_markers(partial_content)
+                    _err_state = _streaming_state.get(session_id, {})
+                    _best_content = _err_state.get("content", "") or ""
+                    if len(_best_content) < len(partial_content):
+                        _best_content = partial_content
+                    _clean_partial = _strip_resume_fail_markers(_best_content)
                     final = (
                         _clean_partial + "\n\n" + _RESUME_FAIL_SUFFIX
                         if _clean_partial
