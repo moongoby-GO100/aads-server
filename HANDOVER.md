@@ -12779,3 +12779,24 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `pipeline_jobs`에 동일 지시서의 중복 러너 `runner-5744f732`(queued, 08:02:35+09)가 있다. 신규 잡을 제출하지 않았으며, 동일 파일 동시 편집 위험이 있으니 취소를 권한다.
   - ledger `dirty` 적체 1,709건 — 커밋 시 정합화되지 않는 구조적 문제. 범위 밖이라 조작하지 않았다.
   - 상세: `docs/reports/20260909_llmops_status_e2e_followup.md`
+
+## 2026-09-09 — OHVIS LLMOps 상태 총계 2차 검증 (runner-5744f732)
+
+- 기준: `8bed9728`(= `origin/main`, 1차 `runner-0457960f` 작업이 커밋·푸시된 상태)에서 시작한 clean 워크트리 `/tmp/aads-wt-runner-5744f732`.
+- **1차 보고 정정 — 중복 러너 아님**: 1차 보고서가 `runner-5744f732`를 "중복 제출, 취소 권장"으로 남겼으나, `pipeline_jobs`상 `running`/pid 3430331은 이 세션 자신이고 1차 러너 `runner-0457960f`는 이미 종료했다. 두 러너가 동시에 돈 시점이 없어 동시 편집 위험이 없다. ledger id 27972 소유권 판단은 1차와 동일하게 재확인했고 **ledger 행은 조작하지 않았다.**
+- **신규 결함 발견·수정 — `_collect_status_counts()`의 인자 바인딩**:
+  - `build_status_count_specs()`가 만드는 전역(`project=None`) 집계 4개(`examples`/`experiments`/`scores`/`feedback`)는 `$1`을 쓰지 않는데, 수집기가 모든 쿼리에 무조건 `project`를 넘기고 있었다. asyncpg는 이때 `InterfaceError: the server expects 0 arguments for this query, 1 was passed`로 거절한다(운영 DB에서 실측 확인).
+  - 영향 ①: 합본 쿼리가 깨져 지표별 재시도로 내려가면 전역 스코프에서 저 4개 지표가 **동시에** 사라진다 — "한 지표의 실패가 나머지를 죽이지 않는다"는 1차 계약이 전역에서만 깨져 있었다. 영향 ②: `scores`/`feedback`만 남은 부분 적용 DB는 합본 쿼리에도 `$1`이 없어 **모든 집계가 사라진다**.
+  - 수정: `_project_args(sql, project)` 추가 — `$1`을 실제로 쓰는 쿼리에만 인자를 바인딩한다. 합본·지표별 두 경로 모두 적용. SQL 생성 로직과 스코프 semantics, 기존 응답 필드는 건드리지 않았다.
+- 회귀 테스트 3건 추가. 기존 degraded 테스트는 `project="AADS"`만 써서(그 경우 모든 spec에 `$1`이 있다) 이 결함을 못 잡았고 fake conn도 인자 개수를 검사하지 않았다 → asyncpg처럼 `$N` 개수를 검사하는 `ArityConn` 추가. **수정 전 동작을 주입하면 신규 테스트 2건이 실제로 실패함을 확인**(비어 있지 않은 테스트).
+- 테스트: `test_llmops_status_scope.py` + `test_ohvis_llmops.py` → `84 passed`(1차 81 + 신규 3). `test_ohvis_harness.py`·`test_ohvis_harness_trace.py`까지 → `96 passed`. `py_compile` 통과, pre-commit 게이트 규칙 `ruff check --select F821,F811` = All checks passed.
+- 운영 DB 실측(읽기 전용, 수정 코드 in-process 실행, 쓰기 없음): AADS = traces 1 / legacy 9 / datasets 4 / examples 2 / experiments 5 / **scores 30** / feedback 0. GO100 = 37 / 1 / 1 / 2 / **6** / 0. 전역 = 142 / 5 / 3 / 7 / **36** / 0. dataset 소유 4개 원장에서 AADS+GO100이 전역과 정확히 일치 — 누출도 이중 계상도 없다. `psql` 독립 조인으로 같은 수를 재확인했다.
+- 조인 키 실데이터 확인: `llmops_scores.source_trace_id`는 `llmops_traces.id`와 36/36 일치, `llmops_traces.trace_id`와는 0건 — `t.id::text = s.source_trace_id` 캐스팅 방향이 맞다.
+- 운영 API 읽기 전용 E2E(`scripts/verify_llmops_e2e.py --project AADS`, rc=1 / 3건 실패): `status_scoped`가 `status_global`과 **완전히 동일**(datasets 5 / examples 3 / experiments 7 / traces 142)하게 나온다 — 운영 이미지 `aads-server:582fb94fcfe1`에 수정이 미반영이라는 **수정 전 증거**다. 컨테이너 안에 `build_status_count_specs` 부재도 확인.
+- `/traces?project=AADS` 10건 vs status traces 1건 차이는 결함 아님 — 목록 API가 v2(1) + legacy `ohvis_harness_traces`(9)를 합치는 것이고 status는 `legacy_traces.total=9`로 분리 보고한다.
+- 1차 합성 픽스처 실재 확인(DB 조회만, 새로 만들지 않음): dataset `5f7920ab-185c-4422-ba6f-406ad6bf15d0`(`aads-llmops-e2e-verify`, AADS) / example `fad92cff-cccd-497f-9761-b9db04bb05b3` / experiment `aca76086-b44f-4118-8d56-e5413c5db2d2`(completed, 점수 6건) / trace `992cf936-ada0-45f8-8039-4674ba595a54`. `status='running'` 실험 수 0 — 파괴적 삭제 없음 재확인.
+- 이번 이터레이션은 `--write`를 **실행하지 않았다** (러너 권한이 파일 수정으로 한정, 운영 DB 행 추가는 범위 밖. 배포 전 이미지에서는 어차피 `scores` 키 부재로 실패). `/tmp/e2e_eval.py`는 이번에도 **실행·커밋·수정·삭제·재사용하지 않았다.**
+- 변경 파일: `app/services/llmops_store.py`, `tests/unit/test_llmops_status_scope.py`, `docs/reports/20260909_llmops_status_e2e_followup.md`, `HANDOVER.md`. `app/api/ohvis_llmops.py`는 2차에서도 변경 불필요. 대시보드·배포 스크립트·스키마·시크릿·옛 evaluator 채점 로직 미변경.
+- 비용: **측정하지 않음(unmeasured).** 외부 LLM Judge·LangSmith SaaS·유료 호출 없음.
+- 미해결: ①커밋/푸시/빌드/배포·GitHub URL·배포 SHA·deploy_run_id·5분 P0/P1 인증은 이 러너 권한 밖 — **"배포됨"으로 보고하지 않았다.** ②배포 후 `verify_llmops_e2e.py`가 rc=0인지 재검증, 이어서 `--write` 추가형 워크플로 확인. ③`/ops/evals` 신규 인증 브라우저 스크린샷 미확보(**브라우저 갭**) — 기존 `/root/aads/verification/llmops-20260909/`·`/tmp/aads-llmops-dashboard-final-release.log`는 이전 시점 산출물이라 새 근거로 쓰지 않았고, 대체 근거는 위 HTTP/API/DB 실측이다. ④ledger `dirty` 적체는 범위 밖이라 조작하지 않았다.
+- 상세: `docs/reports/20260909_llmops_status_e2e_followup.md` §8–13

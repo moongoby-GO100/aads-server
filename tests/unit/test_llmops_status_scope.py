@@ -295,6 +295,84 @@ def test_one_broken_metric_does_not_take_down_the_others(monkeypatch) -> None:
     assert len(conn.fetchval_queries) == 9
 
 
+class ArityConn(ScopeConn):
+    """asyncpg처럼 인자 개수를 검사하는 DB.
+
+    asyncpg는 쿼리의 `$N` 개수와 넘긴 인자 수가 다르면 InterfaceError를 낸다.
+    `ScopeConn`은 그 검사를 하지 않아서, 파라미터 없는 전역 집계 SQL에 project를
+    붙여 보내는 회귀를 잡지 못했다.
+    """
+
+    @staticmethod
+    def _check(query: str, args: tuple) -> None:
+        expected = len(set(re.findall(r"\$(\d+)", query)))
+        if expected != len(args):
+            raise RuntimeError(
+                f"the server expects {expected} arguments for this query, {len(args)} was passed"
+            )
+
+    async def fetchrow(self, query: str, *args):
+        self._check(query, args)
+        return await super().fetchrow(query, *args)
+
+    async def fetchval(self, query: str, *args):
+        if "information_schema.tables" in query:
+            return args[0] in self.present
+        self._check(query, args)
+        self.fetchval_queries.append((query, args))
+        return self.counts.get(_metric_of(query), 0)
+
+
+def _metric_of(sql: str) -> str:
+    """지표별 재시도 경로에서 어떤 지표를 세는 중인지 SQL로 되짚는다."""
+    for table, metric in (
+        (SCORE_TABLE, "scores"),
+        (FEEDBACK_TABLE, "feedback"),
+        (EXAMPLE_TABLE, "examples"),
+        (EXPERIMENT_TABLE, "experiments"),
+    ):
+        if table in sql:
+            return metric
+    return "datasets" if DATASET_TABLE in sql else "traces_total"
+
+
+def test_global_metrics_without_a_placeholder_are_called_with_no_argument() -> None:
+    """`$1`이 없는 SQL에 인자를 붙이면 asyncpg가 통째로 거절한다."""
+    bare = f"SELECT COUNT(*) FROM {SCORE_TABLE}"
+    assert llmops_store._project_args(bare, None) == ()
+    scoped = f"SELECT COUNT(*) FROM {TRACE_TABLE} WHERE ($1::text IS NULL OR project = $1)"
+    assert llmops_store._project_args(scoped, "AADS") == ("AADS",)
+    assert llmops_store._project_args(scoped, None) == (None,)
+
+
+def test_degraded_global_counts_survive_asyncpg_argument_checking(monkeypatch) -> None:
+    """합본이 깨진 전역 집계에서 scores/feedback이 인자 개수 때문에 사라지면 안 된다."""
+    conn = ArityConn(
+        ALL_TABLES,
+        {"scores": 36, "feedback": 2, "examples": 3, "experiments": 7, "traces_total": 133},
+        fetchrow_error=RuntimeError("combined boom"),
+    )
+    db = _status(conn, monkeypatch, project=None)["db"]
+
+    assert db["available"] is True
+    # 파라미터가 없는 네 지표가 전부 살아있어야 한다.
+    assert (db["scores"], db["feedback"]) == (36, 2)
+    assert (db["examples"], db["experiments"]) == (3, 7)
+    assert db["traces"]["total"] == 133
+
+
+def test_a_partially_migrated_global_db_with_no_scoped_table_still_counts(monkeypatch) -> None:
+    """scores/feedback만 남은 DB는 합본 쿼리에 `$1`이 하나도 없다."""
+    conn = ArityConn({SCORE_TABLE, FEEDBACK_TABLE}, {"scores": 36, "feedback": 2})
+    db = _status(conn, monkeypatch, project=None)["db"]
+
+    assert db["available"] is True and db["foundation_ready"] is False
+    assert (db["scores"], db["feedback"]) == (36, 2)
+    # 합본 쿼리 한 번으로 끝났고, 인자는 붙이지 않았다.
+    assert conn.fetchrow_queries[0][1] == ()
+    assert conn.fetchval_queries == []
+
+
 def test_status_is_unavailable_when_the_pool_is_down(monkeypatch) -> None:
     """DB 자체가 없으면 available=False + 사유. 0으로 채우면 안 된다."""
     from app.core import db_pool

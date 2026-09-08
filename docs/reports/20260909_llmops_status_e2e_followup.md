@@ -278,3 +278,198 @@ finance/runtime dirty 데이터·시크릿·스키마·옛 evaluator 채점 로�
    밖이라 조작하지 않았다. 별도 과제 필요.
 6. **합성 픽스처 정리 정책** — `aads-llmops-e2e-verify` dataset은 의도적으로 남긴다
    (추가만, 삭제 금지 원칙). `--write` 반복 실행은 실험을 계속 누적한다.
+
+---
+
+# 2차 이터레이션 (runner-5744f732, 2026-09-09 08:02~ KST)
+
+- 기준 커밋: `8bed972845c186313f7534fe358c9206a4c6b232` (= `origin/main`, 1차 이터레이션 `runner-0457960f`의 작업이 커밋·푸시 완료된 상태)
+- 워크트리: `/tmp/aads-wt-runner-5744f732` (시작 시 clean, `git diff origin/main HEAD` 비어 있음)
+
+## 8. 프리플라이트 재확인 — 중복 러너 아님 (1차 보고 §7-4 정정)
+
+1차 보고서는 `runner-5744f732`(queued)를 "같은 카드 중복 제출, 취소 권장"으로 남겼다.
+실제로는 **순차 후속 러너**다.
+
+| 근거 | 값 |
+| --- | --- |
+| `pipeline_jobs` 조회 | `runner-5744f732` = `running`, `claude_code_work`, `runner_pid` 3430331 |
+| 프로세스 확인 | pid 3430331/3430334 = **이 세션 자신** (`ps aux`) |
+| 1차 러너 | `runner-0457960f` — 작업을 `8bed9728`로 커밋 후 종료. 실행 중인 프로세스 없음 |
+| 동시 편집 위험 | 없음 — 두 러너가 동시에 돈 시점이 없다 |
+
+AADS 프로젝트에서 동시 실행 중인 다른 잡도 없다(그 시각 `running`은 GO100 `runner-9fa970a1` 뿐).
+ledger id 27972 소유권 판단은 1차와 동일하게 재확인했고, **ledger 행은 이번에도 조작하지 않았다.**
+
+## 9. 신규 결함 — 파라미터 없는 전역 집계가 degraded 경로에서 통째로 사라진다
+
+1차 수정본을 검증하다 `_collect_status_counts()`에서 남아 있는 결함을 찾았다.
+
+`build_status_count_specs()`가 만드는 SQL 중 **전역(`project=None`) 집계 4개**는
+`$1`을 아예 쓰지 않는다:
+
+```
+SELECT COUNT(*) FROM llmops_examples
+SELECT COUNT(*) FROM llmops_experiments
+SELECT COUNT(*) FROM llmops_scores
+SELECT COUNT(*) FROM llmops_feedback
+```
+
+그런데 수집기는 모든 쿼리에 무조건 `project`를 넘겼다(`conn.fetchval(sql, project)`).
+asyncpg는 인자 개수가 맞지 않으면 거절한다 — 운영 DB에서 실측 확인:
+
+```
+$ docker exec aads-server python3 -c "... conn.fetchval('SELECT COUNT(*) FROM llmops_scores', None)"
+no-param spec with arg -> ERROR: InterfaceError the server expects 0 arguments for this query, 1 was passed
+no-param spec without arg -> OK 36
+```
+
+영향 (둘 다 1차 수정이 명시적으로 방어하려던 시나리오다):
+
+1. **전역 degraded 경로** — 합본 쿼리가 어떤 이유로든 깨지면 지표별 재시도로 내려가는데,
+   위 4개가 전부 InterfaceError로 실패한다. "한 지표의 실패가 나머지를 죽이지 않는다"는
+   계약이 전역 스코프에서만 깨진다. `scores`/`feedback`/`examples`/`experiments`가 동시에 사라진다.
+2. **부분 적용 DB** — `traces`·`datasets`·legacy가 모두 없고 `scores`/`feedback`만 남은
+   DB에서는 합본 쿼리에도 `$1`이 하나도 없다. 합본이 먼저 InterfaceError로 죽고,
+   재시도도 같은 이유로 죽어 **모든 집계가 사라진다**.
+
+### 수정
+
+`app/services/llmops_store.py`에 `_project_args()`를 추가하고, 합본·지표별 두 경로 모두
+`$1`을 실제로 쓰는 쿼리에만 인자를 바인딩하게 했다.
+
+```python
+def _project_args(sql: str, project: Optional[str]) -> tuple[Any, ...]:
+    return (project,) if "$1" in sql else ()
+```
+
+`build_status_count_specs()`가 만드는 SQL과 스코프 semantics는 건드리지 않았다 —
+바인딩 지점만 고쳤으므로 기존 응답 필드·전역 semantics는 그대로다.
+
+### 회귀 테스트 (신규 3건)
+
+`tests/unit/test_llmops_status_scope.py`의 기존 degraded 테스트는 `project="AADS"`만
+써서(그 경우 모든 spec에 `$1`이 있다) 이 결함을 못 잡았고, fake `ScopeConn`도 인자
+개수를 검사하지 않았다. asyncpg처럼 `$N` 개수를 검사하는 `ArityConn`을 추가했다.
+
+| 테스트 | 잡는 것 |
+| --- | --- |
+| `test_global_metrics_without_a_placeholder_are_called_with_no_argument` | `_project_args()` 단위 계약 |
+| `test_degraded_global_counts_survive_asyncpg_argument_checking` | 전역 degraded 경로에서 4개 지표 생존 |
+| `test_a_partially_migrated_global_db_with_no_scoped_table_still_counts` | `$1`이 하나도 없는 합본 쿼리 |
+
+**비어 있지 않은 테스트임을 확인** — 수정 전 동작(`_project_args = lambda sql, p: (p,)`)을
+주입하면 뒤 2건이 실제로 실패한다:
+
+```
+FAILED test_degraded_global_counts_survive_asyncpg_argument_checking
+FAILED test_a_partially_migrated_global_db_with_no_scoped_table_still_counts
+E       KeyError: 'scores'
+WARNING  llmops status count scores unavailable: the server expects 0 arguments for this query, 1 was passed
+```
+
+## 10. 검증 결과 (2차)
+
+### 테스트
+
+```
+$ .venv/bin/python -m pytest tests/unit/test_llmops_status_scope.py tests/unit/test_ohvis_llmops.py -q
+84 passed in 1.25s          # 1차 81건 + 신규 3건
+
+$ .venv/bin/python -m pytest tests/unit/test_llmops_status_scope.py tests/unit/test_ohvis_llmops.py \
+    tests/unit/test_ohvis_harness.py tests/unit/test_ohvis_harness_trace.py -q
+96 passed in 1.24s
+```
+
+정적 검사: `py_compile` 통과. pre-commit 게이트 규칙(`ruff check --select F821,F811`)
+= `All checks passed`. 전체 ruff는 `UP045`(파일 전반의 `Optional[...]` 관용구, 기존 44건)가
+내 추가로 45건이 되었을 뿐 — 게이트 대상 아니고 주변 코드 스타일과 일치한다.
+
+### 운영 DB 실측 (읽기 전용, 수정 코드 in-process 실행)
+
+`db_pool.get_pool`만 실제 asyncpg 연결로 바꿔 `get_status()`를 직접 호출했다. 쓰기 없음.
+
+| project | traces | legacy_traces | datasets | examples | experiments | scores | feedback |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `AADS` | 1 | 9 | 4 | 2 | 5 | **30** | 0 |
+| `GO100` | 37 | — | 1 | 1 | 2 | **6** | 0 |
+| `None` (전역) | 142 | — | 5 | 3 | 7 | **36** | 0 |
+
+**분할 정합성**: dataset 소유 4개 원장에서 AADS + GO100 = 전역이 정확히 일치한다
+(datasets 4+1=5, examples 2+1=3, experiments 5+2=7, scores 30+6=36). 누출도 이중 계상도 없다.
+독립 검증으로 `psql`에서 같은 조인을 직접 돌려 동일한 수를 얻었다.
+
+조인 키도 실데이터로 확인했다 — `llmops_scores.source_trace_id`(text)는
+`llmops_traces.id`(uuid)와 36/36 일치하고 `llmops_traces.trace_id`와는 0건 일치다.
+즉 `t.id::text = s.source_trace_id` 캐스팅 방향이 맞다.
+
+### 운영 API 읽기 전용 E2E (배포 전 코드 대상)
+
+```
+$ AADS_MONITOR_KEY=… .venv/bin/python scripts/verify_llmops_e2e.py --project AADS
+  [PASS] status.available / status.project_echoed / status.no_scope_leak
+  [PASS] traces.scoped_to_project (10건) / candidates.reachable (2건)
+  [FAIL] status.project_scoped_flag:          scoped=None global=None
+  [FAIL] status.reports_scores_and_feedback:  scores=missing feedback=missing
+  [FAIL] status.scope_actually_narrows:       좁혀진 지표 없음
+  결과: 3건 실패   (rc=1)
+```
+
+`status_scoped`와 `status_global`이 **완전히 동일**(datasets 5 / examples 3 /
+experiments 7 / traces 142)하게 나온다 — 운영 이미지 `aads-server:582fb94fcfe1`에
+수정이 아직 없다는 **수정 전 증거**다. 컨테이너 안에 `build_status_count_specs`가
+존재하지 않음도 확인했다.
+
+`/traces?project=AADS`가 10건인데 status는 traces 1건인 차이는 결함이 아니다 —
+목록 API가 v2(1) + legacy `ohvis_harness_traces`(9)를 합쳐 보여주는 것이고,
+status는 `legacy_traces.total = 9`로 분리해 보고한다. DB에서 1/9 확인했다.
+
+### 1차 합성 픽스처 — 실재 확인 (DB 조회, 새로 만들지 않음)
+
+| 종류 | id | 확인 |
+| --- | --- | --- |
+| trace | `992cf936-ada0-45f8-8039-4674ba595a54` | project=AADS, status=error |
+| dataset | `5f7920ab-185c-4422-ba6f-406ad6bf15d0` | slug `aads-llmops-e2e-verify`, project=AADS |
+| example | `fad92cff-cccd-497f-9761-b9db04bb05b3` | dataset_id 일치, source_trace 일치 |
+| experiment | `aca76086-b44f-4118-8d56-e5413c5db2d2` | name `e2e-verify AADS`, status=completed, 점수 6건 |
+
+`status='running'` 실험 수 = **0** — 옛 `/tmp/e2e_eval.py`가 지웠을 대상이 애초에 없고,
+파괴적 삭제가 일어나지 않았음을 재확인했다. 이번 이터레이션은 `--write`를 **실행하지
+않았다**: 이 러너는 파일 수정만 허용되고, 운영 DB에 행을 추가하는 것은 그 범위 밖이다.
+또한 배포 전 이미지에서는 `status.reflects_the_new_fixture`가 `scores` 키 부재로
+어차피 실패한다. 배포 후 실행을 권한다.
+
+`/tmp/e2e_eval.py`는 이번에도 **실행·커밋·수정·삭제·재사용하지 않았다.**
+
+## 11. 2차 변경 파일
+
+| 경로 | 변경 |
+| --- | --- |
+| `app/services/llmops_store.py` | `_project_args()` 추가, 합본·지표별 두 경로의 인자 바인딩 수정 |
+| `tests/unit/test_llmops_status_scope.py` | `ArityConn` + 회귀 테스트 3건 추가 |
+| `docs/reports/20260909_llmops_status_e2e_followup.md` | 이 절 추가 |
+| `HANDOVER.md` | 추가 전용 |
+
+`app/api/ohvis_llmops.py`는 2차에서도 변경 불필요(이미 `project`를 스토어로 위임).
+대시보드·배포 스크립트·스키마·시크릿·옛 evaluator 채점 로직·`/tmp` 파일은 손대지 않았다.
+
+## 12. 2차 비용
+
+**측정하지 않음(unmeasured).** 외부 LLM Judge·LangSmith SaaS·유료 호출 없음.
+
+## 13. 2차 미해결 항목
+
+1. **커밋/푸시/빌드/배포, GitHub 커밋 URL, 배포 SHA, deploy_run_id, 5분 P0/P1 인증** —
+   이 러너 권한 밖. **"배포됨"이라고 보고하지 않는다.** 현재 운영 이미지는
+   `aads-server:582fb94fcfe1`이고 수정은 미반영이다.
+2. **배포 후 재검증** — `scripts/verify_llmops_e2e.py --project AADS`가 rc=0이 되어야 한다
+   (지금은 rc=1 / 3건 실패). 그 다음 `--write`로 추가형 워크플로를 재확인.
+3. **브라우저 스크린샷 미확보 (브라우저 갭 명시)** — `/ops/evals` 신규 인증 캡처를 얻지
+   못했다. 기존 `/root/aads/verification/llmops-20260909/`·
+   `/tmp/aads-llmops-dashboard-final-release.log`는 이전 시점 산출물이므로
+   **새 확인 근거로 쓰지 않는다.** 대체 근거는 위 HTTP/API/DB 실측이다.
+4. **1차 보고 §7-4 정정** — `runner-5744f732`는 중복이 아니라 순차 후속 러너다(§8).
+5. **ledger `dirty` 적체** — 커밋 시 정합화되지 않는 구조적 문제. 범위 밖이라
+   조작하지 않았다. 별도 과제 필요.
+6. **`aads-llmops-e2e-verify` 픽스처 정리 정책** — 의도적으로 남긴다(추가만, 삭제 금지).
+   `--write` 반복 실행은 실험을 계속 누적하므로 운영 기준이 필요하다.

@@ -1069,6 +1069,18 @@ def build_status_count_specs(
     return specs
 
 
+def _project_args(sql: str, project: Optional[str]) -> tuple[Any, ...]:
+    """`$1`을 실제로 쓰는 쿼리에만 project 인자를 넘긴다.
+
+    전역 집계 SQL 일부는 파라미터가 아예 없다 (`SELECT COUNT(*) FROM llmops_scores`).
+    asyncpg는 인자 개수가 맞지 않으면 InterfaceError("the server expects 0
+    arguments")를 던지므로, 그냥 project를 붙이면 지표별 재시도 경로에서
+    scores/feedback/examples/experiments가 통째로 사라진다. 합본 쿼리도 $1을 쓰는
+    지표가 하나도 없으면(부분 적용 DB) 같은 이유로 깨진다.
+    """
+    return (project,) if "$1" in sql else ()
+
+
 async def _collect_status_counts(
     conn: Any, specs: list[tuple[str, str]], project: Optional[str]
 ) -> dict[str, int]:
@@ -1082,7 +1094,7 @@ async def _collect_status_counts(
         return {}
     combined = "SELECT " + ", ".join(f"({sql}) AS {key}" for key, sql in specs)
     try:
-        row = await conn.fetchrow(combined, project)
+        row = await conn.fetchrow(combined, *_project_args(combined, project))
         if row is not None:
             return {key: int(row[key] or 0) for key, _ in specs}
     except Exception as exc:  # noqa: BLE001
@@ -1091,7 +1103,7 @@ async def _collect_status_counts(
     counts: dict[str, int] = {}
     for key, sql in specs:
         try:
-            counts[key] = int(await conn.fetchval(sql, project) or 0)
+            counts[key] = int(await conn.fetchval(sql, *_project_args(sql, project)) or 0)
         except Exception as exc:  # noqa: BLE001
             logger.warning("llmops status count %s unavailable: %s", key, str(exc)[:200])
     return counts
