@@ -3008,16 +3008,51 @@ async def lifespan(app: FastAPI):
                     _find_claude_child_pids,
                 )
                 active_count = len(_active_iterators)
+                async with db_pool.acquire() as _reaper_conn:
+                    db_active_count = int(
+                        await _reaper_conn.fetchval(
+                            """
+                            SELECT COUNT(*)
+                            FROM chat_turn_executions
+                            WHERE status IN ('running', 'retrying')
+                              AND completed_at IS NULL
+                              AND owner_instance = $1
+                              AND (lease_expires_at IS NULL OR lease_expires_at > NOW())
+                            """,
+                            os.getenv(
+                                "AADS_CONTAINER_NAME",
+                                os.getenv("HOSTNAME", "aads"),
+                            ),
+                        )
+                        or 0
+                    )
                 all_pids = set(_find_claude_child_pids())
-                if len(all_pids) > max(active_count + 1, 2):
+                if active_count or db_active_count:
+                    logger.debug(
+                        "orphan_claude_reaper_skip_active: iterators=%s db=%s pids=%s",
+                        active_count,
+                        db_active_count,
+                        len(all_pids),
+                    )
+                elif len(all_pids) > 2:
                     killed = cleanup_orphan_claude_processes()
                     if killed:
-                        logger.warning(f"orphan_claude_reaper: {killed}개 프로세스 정리 (활성={active_count})")
+                        logger.warning(
+                            "orphan_claude_reaper: %s개 프로세스 정리 (iterators=%s db=%s)",
+                            killed,
+                            active_count,
+                            db_active_count,
+                        )
             except Exception as _e:
                 logger.debug(f"orphan_claude_reaper_failed: {_e}")
             await _reaper_asyncio.sleep(120)
 
-    _startup_asyncio.create_task(_periodic_orphan_claude_reaper())
+    from app.services.agent_sdk_service import orphan_claude_reaper_enabled
+
+    if orphan_claude_reaper_enabled():
+        _startup_asyncio.create_task(_periodic_orphan_claude_reaper())
+    else:
+        logger.info("orphan_claude_reaper_disabled: explicit opt-in required")
 
     # ohvis_tasks 좀비(running 24h+) 주기적 정리 — P0: 러너 완료 루프 복구
     async def _periodic_ohvis_stale_task_cleanup():

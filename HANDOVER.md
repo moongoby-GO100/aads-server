@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-08 20:15 KST — Active-chat-safe Claude process reaper
+
+- `app/services/agent_sdk_service.py`: process-wide reaper now requires explicit opt-in and cleanup fails closed by default.
+- `app/main.py`: even when opted in, SIGTERM cleanup is skipped while the slot owns a live DB-leased chat or SDK iterator.
+- `tests/unit/test_agent_sdk_orphan_reaper.py`: default-off and no-signal behavior are regression-tested.
+- Operations record: `docs/operations/20260908_chat_orphan_reaper_interruption_fix.md`.
+- Release is not complete until API Blue/Green same-digest, routed health, and five-minute P0/P1 monitoring pass.
+
 ## 2026-09-08 19:45 KST — PC Agent default download fail-closed to EXE
 
 - Fixed the compatibility `/api/v1/kakao-bot/agent/download` route so every request without explicit `format=zip` returns or redirects to the versioned Windows EXE.

@@ -120,6 +120,22 @@ _BUILTIN_ALLOWED: List[str] = [
 _active_iterators: Dict[str, Any] = {}
 
 
+def orphan_claude_reaper_enabled() -> bool:
+    """Return whether the process-wide Claude CLI reaper is explicitly enabled.
+
+    The process scan cannot reliably distinguish chat-owned Claude CLI children
+    created by ``model_selector`` from true orphans. Automatic cleanup is
+    therefore fail-closed: stream-local cleanup remains active, but the
+    process-wide SIGTERM sweep requires explicit operator opt-in.
+    """
+    return os.getenv("AADS_ORPHAN_CLAUDE_REAPER_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _find_claude_child_pids() -> List[int]:
     """컨테이너 내 claude CLI 자식 프로세스 PID 목록."""
     pids = []
@@ -144,6 +160,9 @@ def _find_claude_child_pids() -> List[int]:
 
 def cleanup_orphan_claude_processes(exclude_pids: Optional[Set[int]] = None) -> int:
     """고아 claude CLI 프로세스를 정리. 정리한 프로세스 수 반환."""
+    if not orphan_claude_reaper_enabled():
+        logger.info("orphan_claude_reaper_skip: explicit opt-in is disabled")
+        return 0
     exclude = exclude_pids or set()
     killed = 0
     for pid in _find_claude_child_pids():
