@@ -10,6 +10,7 @@ COMPOSE_DIR="${AADS_COMPOSE_DIR:-/root/aads/aads-server}"
 UPSTREAM_CONF="${AADS_UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}"
 ACTIVE_PORT_FILE="${AADS_ACTIVE_PORT_FILE:-${COMPOSE_DIR}/.active_port}"
 ACTIVE_CONTAINER_FILE="${AADS_ACTIVE_CONTAINER_FILE:-${COMPOSE_DIR}/.active_container}"
+ACTIVE_SLOT_STATE_WRITER="${AADS_ACTIVE_SLOT_STATE_WRITER:-${COMPOSE_DIR}/scripts/aads_active_slot_state.sh}"
 STATE_DIR="${AADS_WATCHDOG_STATE_DIR:-/run/aads-api-watchdog}"
 FAIL_FILE="${STATE_DIR}/consecutive_failures"
 LOCK_FILE="${STATE_DIR}/watchdog.lock"
@@ -173,6 +174,18 @@ deploy_in_progress() {
     [[ -n "$deploy_pid" ]] && kill -0 "$deploy_pid" 2>/dev/null
 }
 
+write_active_slot_state() {
+    local port="$1"
+    local container="$2"
+    local detail="${3:-}"
+    if [[ ! -x "$ACTIVE_SLOT_STATE_WRITER" ]]; then
+        audit "active-slot-write" "${container}:${port}" "failed" "state writer unavailable: ${ACTIVE_SLOT_STATE_WRITER}"
+        return 1
+    fi
+    AADS_SLOT_STATE_LOCK_HELD=true "$ACTIVE_SLOT_STATE_WRITER" write \
+        "$port" "$container" "host-watchdog" "$detail"
+}
+
 switch_to_peer() {
     local old_port="$1"
     local new_port="$2"
@@ -220,8 +233,12 @@ switch_to_peer() {
         return 1
     fi
 
-    printf '%s\n' "$new_port" > "$ACTIVE_PORT_FILE"
-    printf '%s\n' "$new_container" > "$ACTIVE_CONTAINER_FILE"
+    if ! write_active_slot_state "$new_port" "$new_container" "watchdog failover after routed health"; then
+        cp -p "$backup_conf" "$UPSTREAM_CONF"
+        nginx_test >/dev/null 2>&1 && nginx_reload >/dev/null 2>&1 || true
+        audit "failover" "${new_container}:${new_port}" "failed" "marker authorization failed; nginx rolled back"
+        return 1
+    fi
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     audit "failover" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "two consecutive active-slot failures"
@@ -247,8 +264,10 @@ if slot_healthy "$active_port" "$active_container"; then
     if ! $DRY_RUN; then
         exec 9>"$NGINX_LOCK"
         if flock -w 2 9 && [[ "$(nginx_active_port || true)" == "$active_port" ]]; then
-            printf '%s\n' "$active_port" > "$ACTIVE_PORT_FILE"
-            printf '%s\n' "$active_container" > "$ACTIVE_CONTAINER_FILE"
+            if ! write_active_slot_state "$active_port" "$active_container" "healthy-route marker guard"; then
+                audit "active-slot-check" "${active_container}:${active_port}" "warning" "marker repair failed"
+                log "WARN active-slot marker authorization/repair failed"
+            fi
         fi
     fi
     log "OK active=${active_container}:${active_port}"

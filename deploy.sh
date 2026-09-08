@@ -25,6 +25,7 @@ INTERVAL=2
 UPSTREAM_CONF="/etc/nginx/conf.d/aads-upstream.conf"
 ACTIVE_CONTAINER_FILE="${STATE_DIR}/.active_container"
 ACTIVE_PORT_FILE="${STATE_DIR}/.active_port"
+ACTIVE_SLOT_STATE_WRITER="${COMPOSE_DIR}/scripts/aads_active_slot_state.sh"
 API_MEMORY_BYTES="${AADS_API_MEMORY_BYTES:-3221225472}"
 API_MEMORY_SWAP_BYTES="${AADS_API_MEMORY_SWAP_BYTES:-5368709120}"
 AADS_DOCKER_TARGET="${AADS_DOCKER_TARGET:-runtime}"
@@ -1024,11 +1025,15 @@ get_active_port() {
                 | head -1 || true)
         fi
     fi
-    if [[ "$upstream_port" == "8100" || "$upstream_port" == "8102" ]]; then
-        port="$upstream_port"
-        echo "$port" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
-    elif [[ -f "$ACTIVE_PORT_FILE" ]]; then
+    # Read the marker first so verify_active_slot can detect divergence. The
+    # previous implementation overwrote it from nginx before verification,
+    # which erased the evidence of an unauthorized or stale writer.
+    if [[ -f "$ACTIVE_PORT_FILE" ]]; then
         port=$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE" 2>/dev/null || true)
+    fi
+    if [[ "$port" != "8100" && "$port" != "8102" ]] \
+        && [[ "$upstream_port" == "8100" || "$upstream_port" == "8102" ]]; then
+        port="$upstream_port"
     fi
     if [[ "$port" != "8100" && "$port" != "8102" ]]; then
         port="8100"
@@ -1040,11 +1045,9 @@ get_active_container() {
     local container=""
     local port="${ACTIVE_PORT:-}"
     if [[ "$port" == "8100" ]]; then
-        echo "aads-server" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
         echo "aads-server"
         return 0
     elif [[ "$port" == "8102" ]]; then
-        echo "aads-server-green" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
         echo "aads-server-green"
         return 0
     fi
@@ -1059,12 +1062,29 @@ get_active_container() {
     # 실행 중인 컨테이너 자동 탐색 + 상태 파일 동기화
     for c in aads-server aads-server-green; do
         if docker inspect "$c" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-            echo "$c" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
             echo "$c"
             return 0
         fi
     done
     echo "aads-server"
+}
+
+write_active_slot_state() {
+    local port="$1"
+    local container="$2"
+    local actor="${3:-deploy.sh}"
+    local detail="${4:-}"
+    if [[ ! -x "$ACTIVE_SLOT_STATE_WRITER" ]]; then
+        echo "[deploy.sh] ❌ active-slot state writer unavailable: ${ACTIVE_SLOT_STATE_WRITER}"
+        audit_control "active-slot-write" "${container}:${port}" "failed" "state writer unavailable"
+        return 1
+    fi
+    if [[ "${NGINX_LOCK_HELD:-false}" == "true" ]]; then
+        AADS_SLOT_STATE_LOCK_HELD=true "$ACTIVE_SLOT_STATE_WRITER" write \
+            "$port" "$container" "$actor" "$detail"
+    else
+        "$ACTIVE_SLOT_STATE_WRITER" write "$port" "$container" "$actor" "$detail"
+    fi
 }
 
 
@@ -1148,12 +1168,9 @@ verify_active_slot "$ACTIVE_PORT"
 
 # Blue/green 컨테이너가 현재 active 슬롯을 읽어 background recovery 소유권을 판단한다.
 # Docker bind mount 대상 파일은 컨테이너 생성 전에 반드시 존재해야 한다.
-if [[ ! -f "$ACTIVE_PORT_FILE" ]]; then
-    echo "$ACTIVE_PORT" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
-fi
-if [[ ! -f "$ACTIVE_CONTAINER_FILE" ]]; then
-    echo "$ACTIVE_CONTAINER" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
-fi
+# All writes go through the audited, atomic writer and are checked against the
+# authoritative nginx route.
+write_active_slot_state "$ACTIVE_PORT" "$ACTIVE_CONTAINER" "deploy.sh" "preflight marker authorization"
 
 # ── 배포 중복 호출 방지 (lockfile) ──
 LOCKFILE="/tmp/aads-deploy.lock"
@@ -1463,8 +1480,7 @@ switch_api_upstream() {
         audit_control "nginx-switch" "${old_port}->${new_port}" "failed" "reload failed; configuration rolled back"
         return 1
     fi
-    echo "$new_port" > "$ACTIVE_PORT_FILE" 2>/dev/null || true
-    echo "$new_container" > "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true
+    write_active_slot_state "$new_port" "$new_container" "deploy.sh" "code mode nginx cutover"
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     audit_control "nginx-switch" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "code mode slot switch"
@@ -2067,8 +2083,7 @@ case "$MODE" in
         # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
         deploy_phase_start "standby_same_digest_sync" "syncing_standby"
         echo "[deploy.sh] ⑤ ${OLD_CONTAINER} standby 동기화"
-        echo "$NEW_PORT" > "$ACTIVE_PORT_FILE"
-        echo "$NEW_CONTAINER" > "$ACTIVE_CONTAINER_FILE"
+        write_active_slot_state "$NEW_PORT" "$NEW_CONTAINER" "deploy.sh" "bluegreen routed health passed"
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         release_nginx_switch_lock

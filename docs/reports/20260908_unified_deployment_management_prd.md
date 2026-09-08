@@ -687,3 +687,16 @@ Coordinator:
 | Ops 화면 | 공통 배포 관제에 component별 최신 배포 카드 추가 | `npm run lint` |
 
 남은 구축 범위는 GO100/KIS/SF/NTV2/NAS 원격 deploy adapter가 실제 중앙 worker에서 실행되는 단계다. 이번 반영은 그 adapter들이 중앙 원장에 안전하게 들어올 수 있는 DB/API/UI 기반을 먼저 완성한 것이다.
+
+## 23. P1 활성 슬롯 마커 감사 보강 상태
+
+| 항목 | 반영 상태 | 검증 |
+|---|---|---|
+| 단일 writer | `.active_port/.active_container`를 `scripts/aads_active_slot_state.sh`만 원자적으로 기록 | shell syntax + unit test |
+| writer 추적 | actor, UID, PID, PPID, 이전/신규 슬롯과 시각을 control audit JSONL에 기록 | audit log assertion |
+| 우회 쓰기 감지 | marker inode/size/nanosecond mtime fingerprint를 authorization sidecar와 비교 | same-value direct rewrite 재현 |
+| 자동 복구 | 15초 host watchdog이 nginx를 source of truth로 marker를 복구 | guard repair test |
+| fail-closed | nginx/marker 불일치를 배포 시작 시 덮어쓰지 않고 차단 | mismatched-route refusal test |
+| 수동 전환 안전성 | 공유 nginx lock, routed health, marker 승인 실패 시 nginx rollback | shell guard review |
+
+이 보강은 운영 라우팅의 source of truth를 nginx로 고정하며, 상태 마커는 실행 소유권 판단을 위한 감사 가능한 파생 상태로 취급한다.

@@ -63,6 +63,8 @@ playwright/.auth/
 # BG runtime markers
 .active_container
 .active_port
+.active_slot_authorization
+.active_*.tmp.*
 
 # Server-local task/runtime artifacts
 .tmp-*/

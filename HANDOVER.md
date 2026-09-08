@@ -12607,6 +12607,25 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - This release contains only unified-deployment control-plane files and this handover entry. Existing dirty files in the primary worktree remain untouched.
   - Push, `deploy.sh bluegreen`, routed health, same-digest standby verification, and five-minute P0/P1 monitoring must complete before the release is certified.
 
+## 2026-09-08 13:24 KST — Active-slot marker writer audit and fail-closed guard
+- CEO request:
+  - Continue after the unified deployment P0 release and directly close the remaining active-slot marker audit gap.
+- Root cause closed:
+  - `deploy.sh` previously copied nginx's active port into `.active_port` before `verify_active_slot`, hiding stale or unauthorized marker changes instead of reporting the divergence.
+  - `deploy.sh`, the host watchdog, and the emergency switch script wrote `.active_port` and `.active_container` independently with no durable writer identity or marker-pair authorization record.
+- Change implemented:
+  - Added `scripts/aads_active_slot_state.sh` as the only audited writer. It validates the nginx route, port/container pair, running container, and shared nginx lock; writes both markers atomically; stores a fingerprint authorization sidecar; and records actor/UID/PID/PPID/old/new state in `/var/log/aads-control-audit.jsonl`.
+  - `deploy.sh` no longer rewrites marker evidence while reading. Preflight now fails closed on a real nginx/marker mismatch, and legitimate preflight/cutover updates use the centralized writer.
+  - `scripts/aads_api_watchdog.sh` uses the same writer every 15 seconds as a guard. Direct same-value or different-value rewrites invalidate the fingerprint and are logged/repaired from authoritative nginx state while holding the cutover lock.
+  - `scripts/bluegreen_switch.sh` now takes the shared nginx lock, verifies routed health, uses the audited writer, and restores nginx if routed health or marker authorization fails.
+- Verification before release:
+  - `bash -n deploy.sh scripts/aads_active_slot_state.sh scripts/aads_api_watchdog.sh scripts/bluegreen_switch.sh`: passed.
+  - `pytest -q tests/unit/test_active_slot_state_guard.py tests/unit/test_deploy_adapters.py tests/unit/test_deploy_observability.py`: 27 passed.
+  - Regression covers authorized atomic writes, detection/repair of an untracked same-value rewrite, and refusal to write a slot that differs from nginx.
+  - `git diff --check`: passed.
+- Rollback:
+  - Revert this release commit and redeploy the prior certified SHA. The authorization sidecar is additive and can remain without affecting the older release.
+
 ## 2026-09-08 12:15 KST — PC Agent EXE default restoration and ZIP installer repair
 - CEO request:
   - Restore the previously working Windows EXE as the primary PC Agent installer and repair the ZIP `install.bat` fallback.
