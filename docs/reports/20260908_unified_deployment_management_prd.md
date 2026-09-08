@@ -700,3 +700,20 @@ Coordinator:
 | 수동 전환 안전성 | 공유 nginx lock, routed health, marker 승인 실패 시 nginx rollback | shell guard review |
 
 이 보강은 운영 라우팅의 source of truth를 nginx로 고정하며, 상태 마커는 실행 소유권 판단을 위한 감사 가능한 파생 상태로 취급한다.
+
+## 24. 원격/보조 컴포넌트 실제 실행 어댑터 구현
+
+- 구현 시각: 2026-09-08 16:41 KST
+- 실행 순서: FOOD 매장비서 → NTV2 → SF → NAS → AADS DB/config/prompt
+
+| 대상 | canonical 실행점 | 중앙 실행 계약 |
+|---|---|---|
+| FOOD/store-assistant | `scripts/deploy_food_store_assistant.sh` | 기존 AADS release 이미지를 재사용하고 단일 서비스만 `--no-build` 교체, 내·외부 health 실패 시 이전 이미지 복구 |
+| NTV2/frontend, app | `/srv/newtalk-v2/deploy.sh frontend|app` | `all` 금지, remote HEAD/dirty gate, 실행 후 localhost health |
+| SF/worker, dashboard, saas | `/data/shortflow/deploy.sh <component>` | 컴포넌트 allowlist, remote HEAD/dirty gate, 컨테이너/HTTP health |
+| NAS/backup | `/root/server114/nas_final_check_and_deploy.sh` | NAS 네트워크·SSH·대상 디렉터리·rsync dry-run을 중앙 phase로 기록 |
+| AADS/db, config, prompt | `scripts/deploy_release_assets.sh <mode>` | 이전 성공 SHA와 새 SHA 사이의 커밋된 SQL만 분류 적용, DROP/TRUNCATE 차단, 전후 DB/prompt count 검증 |
+
+공통 worker는 `scripts/unified_component_deploy_worker.py`이며 API 프로세스가 직접 SSH/배포하지 않는다. `/ops/deploy/requests`는 즉시 run ID를 반환하고, host `aads-deploy-drain.timer`가 DB lease를 취득해 실제 실행한다. 대상 host/path/command는 `app/services/deploy_adapters/targets.py`의 정적 allowlist만 사용하므로 request payload로 임의 명령을 주입할 수 없다.
+
+실측상 FOOD·NTV2 frontend·SF worker/dashboard health는 통과했다. NTV2 작업트리 4건과 SF 작업트리 24건은 dirty이므로 새 release 실행은 정리 전 fail-closed 된다. NAS는 `183.96.69.193:22`가 timeout이고 health aggregator가 `overall=partial`이므로 adapter 등록은 완료했지만 실제 NAS release certification은 연결 복구 후 가능하다.

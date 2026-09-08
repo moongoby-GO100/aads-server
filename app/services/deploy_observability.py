@@ -18,7 +18,7 @@ logger = structlog.get_logger()
 ACTIVE_STATUSES = ("running", "verifying", "syncing_standby")
 QUEUED_STATUSES = ("queued", "awaiting_approval")
 TERMINAL_PIPELINE_STATUSES = ("done", "error", "cancelled", "rejected_done")
-PROJECTS = ("AADS", "GO100", "KIS", "SF", "NTV2", "NAS")
+PROJECTS = ("AADS", "FOOD", "GO100", "KIS", "SF", "NTV2", "NAS")
 DEFAULT_COMPONENT = "api"
 DEFAULT_TARGET_ENV = "production"
 DEPLOY_STALL_SECONDS = max(
@@ -29,6 +29,11 @@ _RELEASE_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 PROJECT_REPO_PATHS = {
     "AADS": (
+        os.getenv("AADS_SERVER_REPO_PATH", ""),
+        "/app",
+        "/root/aads/aads-server",
+    ),
+    "FOOD": (
         os.getenv("AADS_SERVER_REPO_PATH", ""),
         "/app",
         "/root/aads/aads-server",
@@ -76,6 +81,8 @@ def _normalize_slug(value: str | None, *, default: str, field_name: str) -> str:
 
 
 def _default_deploy_type(project: str, component: str) -> str:
+    if project == "FOOD" and component in ("store-assistant", "store_assistant"):
+        return "docker_service_replace"
     if component in ("dashboard", "frontend"):
         return "dashboard_bluegreen"
     if component in ("docs", "static_docs"):

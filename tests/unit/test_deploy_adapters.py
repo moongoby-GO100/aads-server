@@ -32,6 +32,10 @@ DRAIN_SCRIPT = ROOT / "scripts/aads_deploy_drain.sh"
 DASHBOARD_WORKER = ROOT / "scripts/start_aads_dashboard_deploy_worker.sh"
 DASHBOARD_BODY = ROOT / "scripts/_aads_dashboard_deploy_run.sh"
 API_WORKER = ROOT / "scripts/start_aads_deploy_queue_worker.sh"
+UNIFIED_LAUNCHER = ROOT / "scripts/start_unified_component_deploy_worker.sh"
+UNIFIED_WORKER = ROOT / "scripts/unified_component_deploy_worker.py"
+FOOD_DEPLOY = ROOT / "scripts/deploy_food_store_assistant.sh"
+ASSET_DEPLOY = ROOT / "scripts/deploy_release_assets.sh"
 
 
 def _load(module_name: str, relative_path: str):
@@ -92,8 +96,13 @@ def test_registry_covers_aads_and_project_owned_targets():
     targets = set(coverage["targets"])
     assert {"AADS/api", "AADS/dashboard", "AADS/docs"}.issubset(targets)
     assert {"GO100/backend", "GO100/frontend"}.issubset(targets)
-    assert coverage["central_worker"] >= 3
-    assert coverage["project_runner"] >= 5
+    assert {
+        "FOOD/store-assistant", "NTV2/frontend", "NTV2/app",
+        "SF/worker", "SF/dashboard", "SF/saas", "NAS/backup",
+        "AADS/db", "AADS/config", "AADS/prompt",
+    }.issubset(targets)
+    assert coverage["central_worker"] >= 16
+    assert coverage["project_runner"] == 0
 
 
 def test_dashboard_adapter_is_central_worker_with_ledger_launcher():
@@ -127,28 +136,31 @@ def test_unknown_component_falls_back_without_faking_start():
         )
     )
     assert result.started is False
-    assert result.status == "external_project_queue_only"
+    assert result.status == "execution_target_not_registered"
 
 
-def test_project_runner_adapter_never_claims_started():
+def test_remote_adapter_is_owned_by_central_host_drain():
     adapter = registry.resolve_adapter("GO100", "frontend")
-    result = asyncio.run(
-        adapter.start(
-            SimpleNamespace(
-                project="GO100",
-                component="frontend",
-                deploy_type="dashboard_bluegreen",
-                release_sha="abc1234",
-                target_env="production",
-                deploy_run_id=2,
-                requested_by="test",
-                request_source="test",
-                metadata={},
-            )
-        )
-    )
-    assert result.started is False
+    assert adapter.ownership == "central_worker"
+    assert any("start_unified_component_deploy_worker.sh" in c for c in adapter.launcher_candidates)
     assert "deploy_frontend_blue_green.sh" in adapter.describe()["remote_command"]
+
+
+def test_execution_target_order_matches_approved_rollout_sequence():
+    targets = sys.modules["app.services.deploy_adapters.targets"].TARGETS
+    keys = [target.key for target in targets]
+    assert keys.index(("FOOD", "store-assistant")) < keys.index(("NTV2", "frontend"))
+    assert keys.index(("NTV2", "frontend")) < keys.index(("SF", "worker"))
+    assert keys.index(("SF", "worker")) < keys.index(("NAS", "backup"))
+    assert keys.index(("NAS", "backup")) < keys.index(("AADS", "db"))
+
+
+def test_all_execution_targets_are_allowlisted_without_payload_shell_fields():
+    for target in sys.modules["app.services.deploy_adapters.targets"].TARGETS:
+        assert target.executor in {"local", "ssh"}
+        assert target.command
+        assert all("{" not in token and "}" not in token or token == "{{.State.Running}}" for token in target.command)
+        assert ";" not in " ".join(target.command)
 
 
 # --------------------------------------------------------------------------
@@ -229,7 +241,38 @@ def test_drain_script_dispatches_api_and_dashboard():
     drain = DRAIN_SCRIPT.read_text()
     assert "start_aads_deploy_queue_worker.sh" in drain
     assert "start_aads_dashboard_deploy_worker.sh" in drain
+    assert "start_unified_component_deploy_worker.sh" in drain
     assert "queued_for_deploy" in drain
+    for target in ("FOOD/store-assistant", "NTV2/frontend", "SF/worker", "NAS/backup", "AADS/prompt"):
+        assert target in drain
+
+
+def test_unified_worker_enforces_sha_dirty_lease_and_health_contracts():
+    launcher = UNIFIED_LAUNCHER.read_text()
+    worker = UNIFIED_WORKER.read_text()
+    assert "deferred_to_host_drain" in launcher
+    assert "deploy_locks" in worker
+    assert "release SHA" in worker
+    assert "status" in worker and "--porcelain" in worker
+    assert "post-deploy health failed" in worker
+    assert "get_execution_target" in worker
+
+
+def test_food_deploy_reuses_release_image_and_only_replaces_food_service():
+    script = FOOD_DEPLOY.read_text()
+    assert 'IMAGE="aads-server:${RELEASE_SHA}"' in script
+    assert "docker compose" in script
+    assert "--no-deps --no-build yeoljeong-finance" in script
+    assert "fb.newtalk.kr/health/live" in script
+    assert "docker compose down" not in script
+
+
+def test_release_asset_worker_is_commit_scoped_and_destructive_sql_fails_closed():
+    script = ASSET_DEPLOY.read_text()
+    assert 'diff --name-only "$base_sha" "$RELEASE_SHA"' in script
+    assert "DROP|TRUNCATE" in script
+    assert "ON_ERROR_STOP=1" in script
+    assert "compiled_prompt_provenance" in script
 
 
 def test_ops_api_uses_adapter_registry_and_manual_controls():

@@ -214,7 +214,7 @@ def test_project_deployments_include_projects_from_pipeline_history():
     result = asyncio.run(get_deploy_status(conn))
 
     by_project = {item["project"]: item for item in result["project_deployments"]}
-    assert set(by_project) == {"AADS", "GO100", "KIS", "SF", "NTV2", "NAS"}
+    assert set(by_project) == {"AADS", "FOOD", "GO100", "KIS", "SF", "NTV2", "NAS"}
     assert by_project["AADS"]["source"] == "deploy_runs"
     assert by_project["GO100"]["source"] == "pipeline_jobs"
     assert by_project["GO100"]["status"] == "error"

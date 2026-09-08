@@ -11,6 +11,10 @@ from app.services.deploy_adapters.aads import (
 )
 from app.services.deploy_adapters.base import BaseDeployAdapter
 from app.services.deploy_adapters.external import (
+    AadsConfigAdapter,
+    AadsDatabaseAdapter,
+    AadsPromptAdapter,
+    FoodStoreAssistantAdapter,
     Go100BackendAdapter,
     Go100FrontendAdapter,
     KisBackendAdapter,
@@ -18,19 +22,27 @@ from app.services.deploy_adapters.external import (
     Ntv2AppAdapter,
     Ntv2FrontendAdapter,
     ProjectRunnerAdapter,
-    SfAdapter,
+    SfDashboardAdapter,
+    SfSaasAdapter,
+    SfWorkerAdapter,
 )
 
 _ADAPTER_CLASSES: tuple[type[BaseDeployAdapter], ...] = (
     AadsApiBlueGreenAdapter,
     AadsDashboardBlueGreenAdapter,
     AadsDocsPublishAdapter,
+    FoodStoreAssistantAdapter,
+    AadsDatabaseAdapter,
+    AadsConfigAdapter,
+    AadsPromptAdapter,
     Go100BackendAdapter,
     Go100FrontendAdapter,
     KisBackendAdapter,
     Ntv2FrontendAdapter,
     Ntv2AppAdapter,
-    SfAdapter,
+    SfWorkerAdapter,
+    SfDashboardAdapter,
+    SfSaasAdapter,
     NasAdapter,
 )
 

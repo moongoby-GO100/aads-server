@@ -12634,3 +12634,9 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `platform_accounts.json` still lacks encrypted IBK quick-service secrets for Junghwa; CEO must re-save the bank settings after this release because prior UI saves did not call the credential endpoint.
 - Release note:
   - Commit, push, AADS API blue/green deploy, routed health, and post-release bank credential save verification are still required after this entry.
+# 2026-09-08 — Unified deployment remote execution adapters
+
+- Added an allowlisted host execution registry for FOOD store-assistant, NTV2 frontend/app, SF worker/dashboard/saas, NAS backup verification, and AADS DB/config/prompt releases.
+- `scripts/aads_deploy_drain.sh` now dispatches queued rows by `project + component`; `scripts/unified_component_deploy_worker.py` owns DB lease heartbeat, remote SHA/dirty preflight, command timeout, health verification, phase events, and terminal duration.
+- FOOD reuses an existing `aads-server:<release_sha>` image and replaces only `yeoljeong-finance` with `--no-deps --no-build`; DB/config/prompt SQL is commit-range scoped and rejects DROP/TRUNCATE.
+- Verification: adapter/observability unit tests 29 passed; shell syntax, Python compile, and diff check passed. Runtime inventory: FOOD, NTV2 frontend, SF worker/dashboard health passed. NAS SSH remains externally unavailable (`183.96.69.193:22` timeout); remote dirty gates currently block NTV2 (4 paths) and SF (24 paths).

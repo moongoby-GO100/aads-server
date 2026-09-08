@@ -2,9 +2,8 @@
 # Unified deploy queue drain (host side).
 #
 # The API container can register deploy requests in deploy_runs but cannot run
-# the rollout (no docker CLI). This drain runs on the host — from the
-# aads-deploy-drain.timer systemd unit, or manually — and dispatches each queued
-# AADS component to its adapter worker.
+# the rollout (no docker/SSH authority). This drain runs on the host and
+# dispatches each queued project/component to an allowlisted adapter worker.
 #
 # Usage: aads_deploy_drain.sh [trigger]
 
@@ -15,6 +14,7 @@ TRIGGER="${1:-systemd_timer}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_WORKER="${SCRIPT_DIR}/start_aads_deploy_queue_worker.sh"
 DASHBOARD_WORKER="${SCRIPT_DIR}/start_aads_dashboard_deploy_worker.sh"
+UNIFIED_WORKER="${SCRIPT_DIR}/start_unified_component_deploy_worker.sh"
 
 if ! command -v docker >/dev/null 2>&1; then
     echo "drain skipped: docker CLI unavailable (host execution required)"
@@ -32,13 +32,12 @@ db_exec() {
 
 rows="$(
     db_exec "
-        SELECT DISTINCT ON (component) id, component, release_sha
+        SELECT DISTINCT ON (project, component) id, project, component, release_sha
           FROM deploy_runs
-         WHERE project='AADS'
-           AND status='queued'
+         WHERE status='queued'
            AND phase='queued_for_deploy'
            AND COALESCE(auto_start, FALSE) = TRUE
-         ORDER BY component, created_at DESC, id DESC;
+         ORDER BY project, component, created_at DESC, id DESC;
     "
 )"
 
@@ -48,24 +47,25 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
 fi
 
 dispatched=0
-while IFS='|' read -r run_id component release_sha; do
+while IFS='|' read -r run_id project component release_sha; do
     run_id="$(printf '%s' "${run_id:-}" | tr -d '[:space:]')"
+    project="$(printf '%s' "${project:-}" | tr -d '[:space:]')"
     component="$(printf '%s' "${component:-}" | tr -d '[:space:]')"
     release_sha="$(printf '%s' "${release_sha:-}" | tr -d '[:space:]')"
     [[ "$run_id" =~ ^[0-9]+$ ]] || continue
 
-    case "$component" in
-        api)
+    case "${project}/${component}" in
+        AADS/api)
             echo "[drain] AADS/api run=${run_id} sha=${release_sha}"
             bash "$API_WORKER" bluegreen "drain_${TRIGGER}" || echo "[drain] api worker exit=$?"
             dispatched=$((dispatched + 1))
             ;;
-        dashboard)
+        AADS/dashboard)
             echo "[drain] AADS/dashboard run=${run_id} sha=${release_sha}"
             bash "$DASHBOARD_WORKER" "$release_sha" "$run_id" "drain_${TRIGGER}" || echo "[drain] dashboard worker exit=$?"
             dispatched=$((dispatched + 1))
             ;;
-        docs)
+        AADS/docs)
             echo "[drain] AADS/docs run=${run_id} — bind-mounted, no rollout required; marking success"
             db_exec "
                 UPDATE deploy_runs
@@ -81,8 +81,13 @@ while IFS='|' read -r run_id component release_sha; do
             " >/dev/null
             dispatched=$((dispatched + 1))
             ;;
+        FOOD/store-assistant|NTV2/frontend|NTV2/app|SF/worker|SF/dashboard|SF/saas|NAS/backup|AADS/db|AADS/config|AADS/prompt|GO100/backend|GO100/frontend|KIS/backend)
+            echo "[drain] ${project}/${component} run=${run_id} sha=${release_sha}"
+            bash "$UNIFIED_WORKER" "$run_id" "drain_${TRIGGER}" || echo "[drain] unified worker exit=$?"
+            dispatched=$((dispatched + 1))
+            ;;
         *)
-            echo "[drain] skip unsupported component: ${component} (run=${run_id})"
+            echo "[drain] skip unsupported target: ${project}/${component} (run=${run_id})"
             ;;
     esac
 done <<< "$rows"
