@@ -571,24 +571,52 @@ async def create_common_deploy_request(req: DeployQueueRequest):
             approval_policy=req.approval_policy,
             metadata=req.metadata,
         )
+        from app.services.deploy_adapters import DeployRequest, resolve_adapter
+
+        project_key = str(row.get("project") or req.project or "").upper()
+        component_key = str(row.get("component") or req.component or "api")
+        adapter = resolve_adapter(project_key, component_key)
+        adapter_request = DeployRequest(
+            project=project_key,
+            component=component_key,
+            deploy_type=str(row.get("deploy_type") or req.deploy_type or ""),
+            release_sha=str(row.get("release_sha") or release_sha),
+            target_env=str(row.get("target_env") or req.target_env or "production"),
+            deploy_run_id=row.get("id"),
+            requested_by=req.requested_by or "ops_api",
+            request_source=req.request_source,
+            metadata=req.metadata or {},
+        )
+        preflight = await adapter.preflight(adapter_request)
+
         worker_start: Dict[str, Any] = {
             "started": False,
             "status": "not_requested",
             "detail": "auto_start=false",
+            "ownership": adapter.ownership,
         }
         if req.auto_start:
-            project_key = str(row.get("project") or req.project or "").upper()
-            if project_key == "AADS":
-                worker_start = await _start_aads_deploy_queue_worker("ops_api_request")
+            if preflight.ok:
+                worker_start = (await adapter.start(adapter_request)).as_dict()
+                if (
+                    worker_start.get("status") == "launcher_unavailable"
+                    and project_key == "AADS"
+                    and component_key == "api"
+                ):
+                    # legacy fallback path kept for host installs without the registry launcher
+                    worker_start = await _start_aads_deploy_queue_worker("ops_api_request")
             else:
                 worker_start = {
                     "started": False,
-                    "status": "external_project_queue_only",
-                    "detail": f"{project_key} deploy worker is owned by its project runner/deploy script",
+                    "status": "preflight_blocked",
+                    "detail": "; ".join(preflight.blockers)[:500],
+                    "ownership": adapter.ownership,
                 }
         return {
             "status": "queued",
             "deploy_run_id": row.get("id"),
+            "adapter": adapter.describe(),
+            "preflight": preflight.as_dict(),
             "project": row.get("project"),
             "component": row.get("component"),
             "deploy_type": row.get("deploy_type"),
@@ -607,6 +635,154 @@ async def create_common_deploy_request(req: DeployQueueRequest):
     except Exception as exc:
         logger.error("ops_deploy_request_failed", error=str(exc))
         raise HTTPException(status_code=500, detail="deployment request queue failed") from exc
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+class DeployControlRequest(BaseModel):
+    actor: str = "ops"
+    reason: str = ""
+    auto_start: bool = True
+
+
+class DeployReconcileRequest(BaseModel):
+    dry_run: bool = True
+    actor: str = "ops"
+
+
+@router.get(
+    "/ops/deploy/adapters",
+    dependencies=[Depends(require_internal_admin)],
+    summary="등록된 배포 어댑터 목록",
+)
+async def list_deploy_adapters():
+    """프로젝트/컴포넌트별 배포 어댑터와 실행 소유권을 반환한다."""
+    from app.services.deploy_adapters import list_adapters, registry_coverage
+
+    return {
+        "generated_at": datetime.now(timezone.utc),
+        "coverage": registry_coverage(),
+        "adapters": list_adapters(),
+    }
+
+
+@router.post(
+    "/ops/deploy/reconcile",
+    dependencies=[Depends(require_internal_admin)],
+    summary="stale 배포 run/lock 정리 (기본 dry-run)",
+)
+async def reconcile_deploy_runs(req: DeployReconcileRequest):
+    """heartbeat 끊긴 run, 오래된 queue, 만료 lock을 탐지하고 선택적으로 정리한다."""
+    from app.services.deploy_control import reconcile_deploy_state
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        return await reconcile_deploy_state(conn, dry_run=req.dry_run, actor=req.actor)
+    except Exception as exc:
+        logger.error("ops_deploy_reconcile_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="deploy reconcile failed") from exc
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+@router.post(
+    "/ops/deploy/{run_id}/cancel",
+    dependencies=[Depends(require_internal_admin)],
+    summary="대기 중인 배포 취소",
+)
+async def cancel_deploy_run_api(run_id: int, req: DeployControlRequest):
+    from app.services.deploy_control import cancel_deploy_run
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        result = await cancel_deploy_run(conn, run_id, actor=req.actor, reason=req.reason)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("ops_deploy_cancel_failed", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="deploy cancel failed") from exc
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+@router.post(
+    "/ops/deploy/{run_id}/approve",
+    dependencies=[Depends(require_internal_admin)],
+    summary="승인 대기 배포 승인",
+)
+async def approve_deploy_run_api(run_id: int, req: DeployControlRequest):
+    from app.services.deploy_control import approve_deploy_run
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        result = await approve_deploy_run(conn, run_id, actor=req.actor)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("ops_deploy_approve_failed", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="deploy approve failed") from exc
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+@router.post(
+    "/ops/deploy/{run_id}/retry",
+    dependencies=[Depends(require_internal_admin)],
+    summary="실패/차단 배포 재시도",
+)
+async def retry_deploy_run_api(run_id: int, req: DeployControlRequest):
+    from app.services.deploy_control import retry_deploy_run
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        result = await retry_deploy_run(conn, run_id, actor=req.actor, auto_start=req.auto_start)
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("ops_deploy_retry_failed", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="deploy retry failed") from exc
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+@router.get(
+    "/ops/deploy/{run_id}/logs",
+    dependencies=[Depends(require_internal_admin)],
+    summary="배포 run phase timeline + 로그",
+)
+async def get_deploy_run_logs_api(run_id: int, max_lines: int = 200):
+    from app.services.deploy_control import get_deploy_run_logs
+
+    conn = None
+    try:
+        conn = await _get_conn()
+        result = await get_deploy_run_logs(conn, run_id, max_lines=max(20, min(1000, max_lines)))
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("ops_deploy_logs_failed", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="deploy logs failed") from exc
     finally:
         if conn is not None:
             await conn.close()

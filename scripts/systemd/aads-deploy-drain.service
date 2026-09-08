@@ -1,0 +1,11 @@
+[Unit]
+Description=AADS unified deploy queue drain (host-side rollout dispatcher)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/aads/aads-server/scripts/aads_deploy_drain.sh systemd_timer
+TimeoutStartSec=120
+StandardOutput=append:/var/log/aads-deploy-drain.log
+StandardError=append:/var/log/aads-deploy-drain.log

@@ -16,6 +16,14 @@ LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
 LOG_DIR="${STATE_DIR}/logs"
 mkdir -p "$LOG_DIR"
 
+if ! command -v docker >/dev/null 2>&1; then
+    # Running inside the API container: the rollout needs docker on the host.
+    # Report honestly instead of printing "deploy queue empty" (which used to
+    # look like a successful start while nothing was ever deployed).
+    echo "deferred_to_host_drain: docker CLI unavailable here; host drain timer will claim the queued release"
+    exit 0
+fi
+
 db_exec() {
     docker exec aads-postgres psql -U aads -d aads -qAtc "$1" 2>/dev/null || true
 }

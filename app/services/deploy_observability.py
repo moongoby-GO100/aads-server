@@ -199,6 +199,44 @@ def _git_release_metadata(project: str, release_sha: str) -> dict[str, Any]:
     return {}
 
 
+def git_release_preflight(project: str, release_sha: str) -> dict[str, Any]:
+    """Inspect the local repo for a release SHA before handing it to an adapter.
+
+    Returns a dict that is safe to embed in API responses:
+    ``repo_path`` is ``None`` when the repository is not visible from this
+    process (e.g. the dashboard repo is not mounted into the API container),
+    which is a warning rather than a blocker.
+    """
+    sha = (release_sha or "").strip()
+    result: dict[str, Any] = {
+        "project": (project or "").upper(),
+        "release_sha": sha,
+        "repo_path": None,
+        "release_known": None,
+        "head_sha": None,
+        "dirty_files": [],
+        "unpushed_commits": None,
+    }
+    for repo in _repo_paths_for_project(project):
+        head = _git_output(repo, ["rev-parse", "--short=12", "HEAD"])
+        if head is None:
+            continue
+        result["repo_path"] = repo
+        result["head_sha"] = head
+        result["release_known"] = bool(
+            sha and _git_output(repo, ["cat-file", "-e", f"{sha}^{{commit}}"]) is not None
+        )
+        status_raw = _git_output(repo, ["status", "--porcelain"]) or ""
+        result["dirty_files"] = [
+            line.strip() for line in status_raw.splitlines() if line.strip()
+        ][:20]
+        ahead = _git_output(repo, ["rev-list", "--count", "@{upstream}..HEAD"])
+        if ahead is not None and ahead.isdigit():
+            result["unpushed_commits"] = int(ahead)
+        break
+    return result
+
+
 def _apply_release_metadata(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         payload_meta = _payload_release_metadata(row)

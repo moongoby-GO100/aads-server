@@ -12582,3 +12582,21 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `platform_accounts.json` still lacks encrypted IBK quick-service secrets for Junghwa; CEO must re-save the bank settings after this release because prior UI saves did not call the credential endpoint.
 - Release note:
   - Commit, push, AADS API blue/green deploy, routed health, and post-release bank credential save verification are still required after this entry.
+
+## 2026-09-08 12:04 KST — Unified deployment control plane P0 completion
+- CEO request:
+  - Complete the previously prepared P0 deploy adapter/control implementation directly, then commit, push, deploy, and report verified results.
+- Change implemented:
+  - Added the deploy adapter protocol and registry for AADS API/Dashboard/docs plus GO100, KIS, SF, NTV2, and NAS project-owned targets.
+  - Added AADS Dashboard first-class queue workers, host queue drain, and systemd timer/service definitions.
+  - Added admin APIs for adapter inventory, approval, cancel, retry, dry-run/apply reconciliation, and deployment log timelines.
+  - Added release-SHA preflight metadata and explicit execution ownership so remote adapters never report a deployment as started when only the central ledger row exists.
+  - Preserved the mandatory AADS API blue/green release path and the existing one-image/same-digest/routed-health/monitoring gates.
+- Verification before release:
+  - `python3 -m py_compile` for the changed API, control, adapter, and observability modules: passed.
+  - `bash -n` for the API/Dashboard queue workers and host drain: passed.
+  - `pytest -q tests/unit/test_deploy_adapters.py tests/unit/test_deploy_observability.py`: 24 passed, one pre-existing pytest configuration warning.
+  - `git diff --check`: passed.
+- Release scope:
+  - This release contains only unified-deployment control-plane files and this handover entry. Existing dirty files in the primary worktree remain untouched.
+  - Push, `deploy.sh bluegreen`, routed health, same-digest standby verification, and five-minute P0/P1 monitoring must complete before the release is certified.

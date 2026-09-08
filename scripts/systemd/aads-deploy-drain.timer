@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the AADS unified deploy queue drain every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=aads-deploy-drain.service
+
+[Install]
+WantedBy=timers.target
