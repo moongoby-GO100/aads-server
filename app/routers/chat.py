@@ -627,6 +627,10 @@ async def _settle_stale_execution_for_recovery(
     """Terminalize dead running executions so recovery APIs stop hiding final content."""
     if not execution_row or execution_row["status"] not in ("running", "retrying"):
         return None
+    # A remote producer is invisible to this process's task map. A live lease
+    # takes precedence over elapsed time (including the started-at hard cutoff).
+    if has_live_runtime or execution_row.get("lease_valid"):
+        return None
 
     _partial = execution_row["partial_content"] or ""
     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
@@ -1628,6 +1632,7 @@ async def get_streaming_status(
                        EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
                        (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
                        te.completed_at,
+                       (te.owner_instance IS NOT NULL AND te.lease_expires_at > NOW()) AS lease_valid,
                        am.id::text AS final_message_id,
                        am.intent AS final_message_intent,
                        COALESCE(am.is_hidden, FALSE) AS final_message_hidden,
@@ -1787,37 +1792,23 @@ async def get_streaming_status(
                     execution_row["status"] in ("running", "retrying")
                     and execution_row["assistant_model_used"] in ("interrupted", "stopped")
                 ):
-                    await conn.execute(
-                        """
-                        UPDATE chat_turn_executions
-                        SET status = 'interrupted',
-                            completed_at = COALESCE(completed_at, NOW()),
-                            updated_at = NOW(),
-                            error_message = COALESCE(error_message, 'assistant message already terminal'),
-                            interrupt_category = COALESCE(interrupt_category, 'assistant_terminal_reconcile')
-                        WHERE id = $1
-                          AND status IN ('running', 'retrying')
-                        """,
-                        UUID(execution_row["execution_id"]),
-                    )
-                    await conn.execute(
-                        """
-                        UPDATE chat_sessions
-                        SET current_execution_id = NULL,
-                            updated_at = NOW()
-                        WHERE id = $1
-                          AND current_execution_id = $2
-                        """,
-                        session_id,
-                        UUID(execution_row["execution_id"]),
-                    )
+                    # A saved interrupted partial is a message projection, not
+                    # proof that its producer has stopped. In-place relay retry
+                    # can still own this execution, including on the other slot.
+                    # Status polling must never revoke that owner's lease or
+                    # mutate its placeholder. Expired orphan recovery belongs
+                    # to the lease-fenced recovery worker, not this GET request.
+                    _producer_live = _has_live_runtime or bool(execution_row.get("lease_valid"))
                     _partial = execution_row["partial_content"] or ""
                     _tc, _lt = _extract_tool_progress(execution_row["tools_called"])
                     return await _finalize_streaming_status(session_id, {
-                        "is_streaming": False,
+                        "is_streaming": _producer_live,
                         "just_completed": False,
-                        **svc.stream_status_payload("needs_continuation", auto_resume_seconds=5),
+                        **svc.stream_status_payload(
+                            "recovering" if _producer_live else "needs_continuation"
+                        ),
                         "content_length": len(_partial),
+                        "partial_content": _partial,
                         "token_count": 0,
                         "tool_count": _tc,
                         "last_tool": _lt,
@@ -2439,6 +2430,7 @@ async def get_last_response(
                    EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
                    EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
                    (te.updated_at > NOW() - interval '5 minutes') AS updated_recently,
+                   (te.owner_instance IS NOT NULL AND te.lease_expires_at > NOW()) AS lease_valid,
                    pm.id::text AS placeholder_id,
                    CASE
                        WHEN te.status IN ('running', 'retrying') THEN COALESCE(pm.content, am.content)

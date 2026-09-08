@@ -1960,12 +1960,9 @@ def _has_meaningful_partial_content(content: str) -> bool:
 
 def _looks_terminal_interrupt_content(content: str) -> bool:
     """중단된 응답 버블이 메모리 상태에서 계속 streaming으로 노출되는 것을 막는다."""
-    content = str(content or "")
-    return (
-        "최신 지시를 우선 처리" in content
-        or "중단 처리되었습니다" in content
-        or "응답 생성이 중단" in content
-    )
+    # Diagnostic prose may quote these words while its producer is still alive.
+    # Only recognize the exact system-generated footer, never a substring.
+    return str(content or "").rstrip().endswith(_INTERRUPT_MARKER)
 
 
 def _current_asyncio_task_or_none():
@@ -3991,11 +3988,54 @@ async def _save_interrupted_partial_message(
     placeholder_id: Optional[str] = None,
     tokens_in: int = 0,
     tokens_out: int = 0,
+    continuing: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Persist a partial answer as a visible assistant bubble before a reset."""
     clean_partial = _strip_streaming_progress_markers(content or "")
     if not clean_partial or not _has_meaningful_partial_content(clean_partial):
         return None
+    if continuing:
+        # A retry belongs to the same live execution and assistant row. Promoting
+        # it to interrupted_partial makes the next interim UPSERT collide with
+        # idx_one_assistant_per_execution and used to let status polling kill it.
+        state = _streaming_state.get(str(session_id)) or {}
+        retry_eid = execution_id or state.get("execution_id")
+        epoch = state.get("owner_epoch")
+        if not retry_eid or str(retry_eid) != str(state.get("execution_id")) or epoch is None:
+            raise RuntimeError("retry_partial_execution_owner_missing")
+        async with get_pool().acquire() as conn:
+            saved = await conn.fetchrow(
+                """
+                WITH owned AS (
+                    SELECT id FROM chat_turn_executions
+                    WHERE id = $1 AND session_id = $2
+                      AND status IN ('running', 'retrying') AND completed_at IS NULL
+                      AND owner_instance = $3 AND owner_epoch = $4
+                      AND lease_expires_at > NOW()
+                    FOR UPDATE
+                )
+                UPDATE chat_messages m
+                SET content = $5, model_used = 'streaming',
+                    intent = 'streaming_placeholder', edited_at = NOW(),
+                    tokens_in = CASE WHEN $6 > 0 THEN $6 ELSE tokens_in END,
+                    tokens_out = CASE WHEN $7 > 0 THEN $7 ELSE tokens_out END
+                FROM owned
+                WHERE m.execution_id = owned.id AND m.session_id = $2
+                  AND m.role = 'assistant' AND m.intent = 'streaming_placeholder'
+                RETURNING m.id, m.created_at::text AS created_at_text
+                """,
+                uuid.UUID(str(retry_eid)), uuid.UUID(str(session_id)),
+                _EXECUTION_OWNER_INSTANCE, int(epoch), clean_partial,
+                int(tokens_in or 0), int(tokens_out or 0),
+            )
+        if not saved:
+            raise RuntimeError("retry_partial_execution_fence_rejected")
+        return {
+            "id": str(saved["id"]), "session_id": str(session_id),
+            "execution_id": str(retry_eid), "role": "assistant",
+            "content": clean_partial, "model_used": "streaming",
+            "intent": "streaming_placeholder", "created_at": saved["created_at_text"],
+        }
     if reason.startswith("llm_retry"):
         marker = "\n\n_(LLM 연결이 끊겨 여기까지 보존하고, 이어서 다시 생성합니다.)_"
         marker_key = "이어서 다시 생성합니다"
@@ -7016,14 +7056,10 @@ def get_streaming_status(session_id: str, acked_completion_token: Optional[str] 
                 logger.warning(f"streaming_state_expired session={session_id[:8]} age={_bg_time.monotonic() - _started:.0f}s")
                 is_completed = True
                 s["completed"] = True
-            elif _looks_terminal_interrupt_content(_content):
+            elif not _task_alive and _looks_terminal_interrupt_content(_content):
                 logger.info(f"streaming_state_terminal_interrupt_detected session={session_id[:8]}")
                 is_completed = True
                 s["completed"] = True
-                task = _active_bg_tasks.get(session_id)
-                current_task = _current_asyncio_task_or_none()
-                if task is not None and task is not current_task and not task.done():
-                    task.cancel()
 
         _execution_id = s.get("execution_id")
         _completion_token: Optional[str] = (_execution_id or session_id) if is_completed else None
@@ -11695,6 +11731,8 @@ async def send_message_stream(
                                     session_id,
                                     full_response,
                                     reason="llm_retry_error",
+                                    continuing=True,
+                                    execution_id=_execution_id_str,
                                     tokens_in=int(input_tokens or 0),
                                     tokens_out=int(output_tokens or 0),
                                 )
@@ -11763,6 +11801,7 @@ async def send_message_stream(
                                     full_response,
                                     reason=_reason,
                                     execution_id=_execution_id_str,
+                                    continuing=True,
                                 )
                                 if _preserved_message:
                                     yield f"data: {json.dumps({'type': 'partial_preserved', 'message': _preserved_message})}\n\n"
@@ -11804,6 +11843,8 @@ async def send_message_stream(
                             session_id,
                             full_response,
                             reason="llm_retry_exception",
+                            continuing=True,
+                            execution_id=_execution_id_str,
                             tokens_in=int(input_tokens or 0),
                             tokens_out=int(output_tokens or 0),
                         )

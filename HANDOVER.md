@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-09-08 15:57 KST — Chat relay retry P0 (release verification pending)
+
+- Incident: session `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`, execution `2effa29d-c76a-4731-b1b2-7e38467a1b0b`. DB saved 236 characters; final status `interrupted/assistant_terminal_reconcile`, retry_count=0. This does not mean no inline retry happened.
+- Logs: 15:12:50 KST relay tool transport closed; 15:12:51 missing-done inline retry began (155 characters). Partial save changed the live row to interrupted; next interim UPSERT collided with assistant uniqueness. Streaming-status then changed execution to interrupted; 15:13:04 producer lost its lease, auto-resume was skipped because the lease still looked valid. No new user instruction arrived until 15:48:36 KST; this incident was not a genuine supersede.
+- Fix: live retry saves the same streaming placeholder under an owner/epoch/lease fence. Status polling no longer terminates running/retrying executions from interrupted/stopped assistant metadata. Both status and last-response preserve live DB-owned execution past stale age thresholds. Diagnostic prose cannot cancel a live producer by mentioning interruption; orphan recognition uses the exact system footer.
+- Validation: isolated runtime-image Docker tests (dummy JWT key, no production credentials) passed **106 tests** across chat_service, stream completion, retry lifecycle, and status projection. Local venv dependency failures were bypassed with the disposable Docker test environment. Additional disposable PostgreSQL lifecycle verification pending.
+- Scope: backend chat only, no historical message rewrite or schema migration. Unrelated dirty files preserved. Commit/push and bluegreen rollout are pending at this entry; record actual certification separately. Rollback target: previous API image `aads-server:83775b2c0a37`.
+
+
 ## 2026-09-08 12:25 KST — LLMOps 검수 피드백 2차 (재확인 + 남은 구멍 보강)
 
 - 같은 지적 4건이 다시 왔다. **네 건 모두 12:15 항목(a7d36be7)에서 이미 처리**되어 있었고 운영 DB에서 재확인했다.
