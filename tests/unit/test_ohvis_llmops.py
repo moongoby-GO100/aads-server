@@ -721,11 +721,12 @@ def test_reconcile_migration_creates_the_index_promotion_conflicts_on() -> None:
 
 
 # upstream 정본. llmops_store가 저장/조회 계약을 혼자 소유하고,
-# evaluator/export는 그 위에 얹힌다.
+# evaluator/export/chat_hook은 그 위에 얹힌다 (chat_hook은 582fb94f에서 추가).
 CANONICAL_LLMOPS_MODULES = {
     "llmops_store.py",
     "llmops_evaluator.py",
     "llmops_export.py",
+    "llmops_chat_hook.py",
 }
 
 # 같은 역할로 만들어졌다가 폐기된 변형본들. 다시 살아나면 어느 쪽이 쓰이는지
@@ -820,6 +821,10 @@ class HarnessProbePool:
         if "information_schema.tables" in query:
             return args[0] in self.present
         return 0
+
+    async def fetchrow(self, query: str, *args):
+        # 상태 집계는 지표들을 별칭 붙인 합본 쿼리 한 방으로 센다.
+        return {name: 0 for name in re.findall(r"\bAS (\w+)", query)}
 
 
 def _llmops_component(present: set[str], monkeypatch) -> dict:

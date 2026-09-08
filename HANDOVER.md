@@ -12745,3 +12745,37 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - Run the focused project-docs unit tests and Python compile/diff checks.
   - Call the exact legacy `/project-docs/content` query and confirm it resolves to project `GO100`, 818 lines, and the GO100 remote path.
   - Deploy through `deploy.sh bluegreen`, verify routed health and same-digest standby, then complete the five-minute P0/P1 monitoring window.
+
+## 2026-09-09 — OHVIS LLMOps 상태 총계 프로젝트 스코프 + 안전한 E2E 검증기
+
+- 소유권 해소 (편집 전 프리플라이트):
+  - `chat_workspace_change_ledger` id 27972가 `app/services/llmops_store.py`를 세션 `7a1b186e`의 dirty로 들고 있었으나, 실질 충돌은 없었다. 워크트리·메인 체크아웃 모두 clean이고 파일 blob(`bb5baba08fb0d86d777d763e52fc5063ebfd83d0`)이 `origin/main`과 바이트 단위로 동일하다. 해당 세션의 작업은 `227e1d9a`로 커밋되었고 이후 `86571dae`·`40e7eb5e`가 같은 파일을 이어 수정했다.
+  - ledger가 커밋 시 정합화되지 않는다는 반례: 같은 세션의 id 28547(`llmops_chat_hook.py`)이 dirty로 남아 있으나 34분 뒤 `582fb94f`로 정상 커밋되었다. 전역 `dirty` 적체 1,709건.
+  - ledger 행은 조작하지 않았다.
+- 결함과 수정 — `app/services/llmops_store.py::get_status()`:
+  - `project` 인자가 SQL에서 무시되어 `?project=AADS`가 GO100·CEO·`project=NULL` 행까지 포함한 전역 총계를 돌려주고 있었다 (권한 없는 프로젝트 누출).
+  - `db.scores`/`db.feedback`이 응답에 아예 없어 대시보드가 항상 "미제공"이었다.
+  - `datasets` 존재가 `examples`/`experiments` 조회를 함께 게이트해, 부분 적용 DB에서 테이블 하나가 없으면 `db.available=false`로 전체 집계가 무너졌다.
+  - 수정: `build_status_count_specs()`가 relation이 갖춰진 지표만 파라미터화된 스칼라 서브쿼리로 조립한다. 소유는 정본 FK를 따라간다 — examples/experiments는 `dataset_id`→`datasets.project`, scores는 experiment/example/`source_trace_id` 세 경로 중 하나, feedback은 `trace_id`→`traces.project`. 소유를 증명할 수 없는 행은 세지 않는다.
+  - 계산 불가 지표는 0이 아니라 응답 키가 빠진다(UI가 "미제공"으로 렌더). `project=None` 전역 semantics는 그대로 보존. 기존 응답 필드 전부 유지, `db.project_scoped`만 추가.
+  - 집계는 합본 쿼리 1왕복. 실패 시 지표별로 나눠 세어, 한 지표의 실패가 나머지를 죽이지 않는다.
+  - `app/api/ohvis_llmops.py`는 이미 `project`를 스토어로 넘기고 있어 계약 조정 불필요 — 변경하지 않았다.
+- 실측 (읽기 전용, 운영 DB에 수정 코드 직접 실행): AADS = traces 1 / datasets 4 / examples 2 / experiments 5 / scores 30 / feedback 0. GO100 = 32 / 1 / 1 / 2 / 6 / 0. 전역 = 120 / 5 / 3 / 7 / 36 / 0. dataset 소유 4개 원장은 AADS+GO100이 전역과 정확히 일치 — 누출도 이중 계상도 없다.
+- `/tmp/e2e_eval.py` (저장소 밖, ledger 28661/28685 dirty, sha256 `734c856f…`):
+  - 읽기 전용 조사 결과 `DELETE FROM llmops_scores …` + `DELETE FROM llmops_experiments WHERE status='running'`로 실행 중 실험을 일괄 삭제하고, 하드코딩 UUID를 쓰며, rule evaluator를 거치지 않은 점수를 INSERT로 지어낸다.
+  - **실행·커밋·수정·삭제·재사용 모두 하지 않았다. 배포되지도 커밋되지도 않았다.** 파일과 ledger 기록 모두 그대로 두었다.
+  - 운영 역할을 `scripts/verify_llmops_e2e.py`(신규, 커밋 대상)로 대체했다. 기본 읽기 전용, `--write`일 때만 라벨 붙은 격리 합성 dataset `aads-llmops-e2e-verify`에 추가한다. 대상 trace는 `/candidates` API가 돌려준 실제 id이고, 점수는 정본 `POST /evals/run` rule evaluator가 낸다. DELETE·기존 행 UPDATE 없음. 인증은 기존 `AADS_MONITOR_KEY`/`AADS_API_TOKEN` env만 읽고 값을 출력하지 않는다.
+- E2E 실행 결과 (운영 API, 배포 전 코드 대상) — API가 실제 반환한 id만:
+  - trace `992cf936-ada0-45f8-8039-4674ba595a54` → dataset `5f7920ab-185c-4422-ba6f-406ad6bf15d0` (`aads-llmops-e2e-verify`, project=AADS) → example `fad92cff-cccd-497f-9761-b9db04bb05b3` → experiment `aca76086-b44f-4118-8d56-e5413c5db2d2` (evaluator=`rule`, 점수 6건, mean 0.7778).
+  - 재승격 멱등성 확인(2회차 example_id 동일). 파괴 없음 확인: experiments 6→7, scores 30→36 단조 증가, GO100 총계 불변.
+  - 배포 전이므로 `status.project_scoped_flag`·`status.reports_scores_and_feedback`·`status.scope_actually_narrows`·`status.reflects_the_new_fixture` 4건이 예상대로 실패했다 — 이것이 수정 전 증거다.
+- 테스트: `tests/unit/test_llmops_status_scope.py`(신규 17건) + `tests/unit/test_ohvis_llmops.py` → `81 passed`. `test_llmops_store_is_the_only_ledger_module`은 `5f5332f3` 아카이브 사본에서도 실패하는 기존 결함(582fb94f가 `llmops_chat_hook.py` 추가 후 정본 모듈 목록 미갱신)이라 함께 고쳤다. pre-commit ruff 게이트(F821/F811)·py_compile·컨테이너 이미지 import 검증 통과.
+- 대시보드: 운영 릴리스 `b6d7cf4b66d47be2f5853629c5379f1b32bba477` 유지. 이후 `9b933d3`은 HANDOVER 15줄 문서 변경뿐(git 확인)이므로 재빌드하지 않는다. 상태 UI는 이미 `db.scores`/`db.feedback` 또는 "미제공"을 렌더하므로 API 릴리스만으로 `/ops/evals`가 정확해진다.
+- 비용: **측정하지 않음(unmeasured).** 외부 LLM Judge·LangSmith SaaS·유료 호출 없음 — 내부 rule evaluator만 사용.
+- 미해결:
+  - 커밋/푸시/빌드/배포, GitHub 커밋 URL, 배포 SHA, deploy_run_id, 5분 P0/P1 인증 — 이 러너 권한 밖. **"배포됨"으로 보고하지 않았다.**
+  - 배포 후 `python3 scripts/verify_llmops_e2e.py --project AADS`가 rc=0이 되는지 재검증 필요.
+  - `/ops/evals` 신규 인증 브라우저 스크린샷 미확보(브라우저 갭). 기존 `/root/aads/verification/llmops-20260909/` 산출물은 이전 시점 것이므로 새 확인 근거로 쓰지 않는다.
+  - `pipeline_jobs`에 동일 지시서의 중복 러너 `runner-5744f732`(queued, 08:02:35+09)가 있다. 신규 잡을 제출하지 않았으며, 동일 파일 동시 편집 위험이 있으니 취소를 권한다.
+  - ledger `dirty` 적체 1,709건 — 커밋 시 정합화되지 않는 구조적 문제. 범위 밖이라 조작하지 않았다.
+  - 상세: `docs/reports/20260909_llmops_status_e2e_followup.md`

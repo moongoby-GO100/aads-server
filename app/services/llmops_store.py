@@ -944,8 +944,165 @@ async def find_promotion_candidates(
     return candidates[:limit]
 
 
+# ── status counts ───────────────────────────────────────────────────────────
+#
+# 집계는 두 가지를 동시에 지켜야 한다.
+#
+# 1. **프로젝트 격리.** `?project=AADS`로 물으면 AADS가 소유한 행만 세야 한다.
+#    project 컬럼이 없는 원장(examples/experiments/scores/feedback)은 소유
+#    관계를 따라가야 하며, 소유를 증명할 수 없는 행은 세지 않는다. 그래야
+#    다른 프로젝트(또는 project=NULL)의 행이 AADS 총계로 새지 않는다.
+# 2. **부분 적용 내성.** 163/164가 절반만 적용된 DB에서 없는 테이블 하나가
+#    나머지 집계 전부를 죽이면 안 된다. 각 지표는 자기가 필요한 relation이
+#    전부 있을 때만 계산되고, 없으면 0이 아니라 **키 자체가 빠진다**
+#    (대시보드는 키 부재를 "미제공"으로 표시한다 — 0과 구분되어야 한다).
+
+# project 인자는 항상 $1. NULL이면 전역(기존 semantics 그대로).
+_PROJECT_PREDICATE = "($1::text IS NULL OR {col} = $1)"
+
+
+def _owns(col: str) -> str:
+    return _PROJECT_PREDICATE.format(col=col)
+
+
+def _dataset_owned_count(table: str, scoped: bool) -> str:
+    """dataset을 통해 project를 소유하는 자식 테이블(examples/experiments) 집계."""
+    if not scoped:
+        # 전역 집계는 dataset 고아 행까지 포함한다 (기존 semantics 보존).
+        return f"SELECT COUNT(*) FROM {table}"
+    return (
+        f"SELECT COUNT(*) FROM {table} child "
+        f"JOIN {DATASET_TABLE} d ON d.id = child.dataset_id WHERE d.project = $1"
+    )
+
+
+def build_status_count_specs(
+    tables: dict[str, bool], project: Optional[str]
+) -> list[tuple[str, str]]:
+    """(지표 키, 스칼라 서브쿼리 SQL) 목록 — 계산 가능한 지표만 포함한다.
+
+    반환에 없는 키는 "그 지표는 이 DB에서 낼 수 없다"는 뜻이지 0이 아니다.
+    """
+    scoped = project is not None
+    has_dataset = bool(tables.get(DATASET_TABLE))
+    specs: list[tuple[str, str]] = []
+
+    if tables.get(TRACE_TABLE):
+        where = _owns("project")
+        specs += [
+            ("traces_total", f"SELECT COUNT(*) FROM {TRACE_TABLE} WHERE {where}"),
+            (
+                "traces_error",
+                f"SELECT COUNT(*) FROM {TRACE_TABLE} WHERE {where} AND status = 'error'",
+            ),
+            (
+                "traces_last_24h",
+                (
+                    f"SELECT COUNT(*) FROM {TRACE_TABLE} WHERE {where} "
+                    "AND created_at >= NOW() - INTERVAL '24 hours'"
+                ),
+            ),
+        ]
+
+    if tables.get(LEGACY_TRACE_TABLE):
+        specs.append(
+            (
+                "legacy_traces_total",
+                f"SELECT COUNT(*) FROM {LEGACY_TRACE_TABLE} WHERE {_owns('project')}",
+            )
+        )
+
+    if has_dataset:
+        specs.append(("datasets", f"SELECT COUNT(*) FROM {DATASET_TABLE} WHERE {_owns('project')}"))
+
+    for key, table in (("examples", EXAMPLE_TABLE), ("experiments", EXPERIMENT_TABLE)):
+        # project 스코프 집계는 dataset 원장이 있어야 소유를 증명할 수 있다.
+        if tables.get(table) and (has_dataset or not scoped):
+            specs.append((key, _dataset_owned_count(table, scoped)))
+
+    if tables.get(SCORE_TABLE):
+        if not scoped:
+            specs.append(("scores", f"SELECT COUNT(*) FROM {SCORE_TABLE}"))
+        else:
+            # score는 experiment / example / 원본 trace 중 어느 경로로든 소유가
+            # 증명되면 이 프로젝트 것이다. 사용할 수 있는 경로만 조립한다.
+            paths: list[str] = []
+            if has_dataset and tables.get(EXPERIMENT_TABLE):
+                paths.append(
+                    f"EXISTS (SELECT 1 FROM {EXPERIMENT_TABLE} x "
+                    f"JOIN {DATASET_TABLE} d ON d.id = x.dataset_id "
+                    "WHERE x.id = s.experiment_id AND d.project = $1)"
+                )
+            if has_dataset and tables.get(EXAMPLE_TABLE):
+                paths.append(
+                    f"EXISTS (SELECT 1 FROM {EXAMPLE_TABLE} e "
+                    f"JOIN {DATASET_TABLE} d ON d.id = e.dataset_id "
+                    "WHERE e.id = s.example_id AND d.project = $1)"
+                )
+            if tables.get(TRACE_TABLE):
+                paths.append(
+                    f"EXISTS (SELECT 1 FROM {TRACE_TABLE} t "
+                    "WHERE t.id::text = s.source_trace_id AND t.project = $1)"
+                )
+            if paths:
+                specs.append(
+                    ("scores", f"SELECT COUNT(*) FROM {SCORE_TABLE} s WHERE " + " OR ".join(paths))
+                )
+
+    if tables.get(FEEDBACK_TABLE):
+        if not scoped:
+            specs.append(("feedback", f"SELECT COUNT(*) FROM {FEEDBACK_TABLE}"))
+        elif tables.get(TRACE_TABLE):
+            # trace에 매달리지 않은 feedback(source_ref만 있는 행)은 소유를
+            # 증명할 수 없으므로 프로젝트 총계에서 뺀다.
+            specs.append(
+                (
+                    "feedback",
+                    (
+                        f"SELECT COUNT(*) FROM {FEEDBACK_TABLE} f WHERE EXISTS ("
+                        f"SELECT 1 FROM {TRACE_TABLE} t "
+                        "WHERE t.id::text = f.trace_id AND t.project = $1)"
+                    ),
+                )
+            )
+
+    return specs
+
+
+async def _collect_status_counts(
+    conn: Any, specs: list[tuple[str, str]], project: Optional[str]
+) -> dict[str, int]:
+    """지표들을 한 번의 왕복으로 센다. 실패하면 지표별로 다시 시도한다.
+
+    상태 엔드포인트는 대시보드가 주기적으로 호출하므로 정상 경로는 1왕복이다.
+    다만 한 지표의 실패가 나머지를 전부 못 쓰게 만들면 안 되므로, 합본 쿼리가
+    깨지면 지표별로 나눠 세고 실패한 것만 결과에서 뺀다.
+    """
+    if not specs:
+        return {}
+    combined = "SELECT " + ", ".join(f"({sql}) AS {key}" for key, sql in specs)
+    try:
+        row = await conn.fetchrow(combined, project)
+        if row is not None:
+            return {key: int(row[key] or 0) for key, _ in specs}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("llmops status combined count failed, degrading: %s", str(exc)[:200])
+
+    counts: dict[str, int] = {}
+    for key, sql in specs:
+        try:
+            counts[key] = int(await conn.fetchval(sql, project) or 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("llmops status count %s unavailable: %s", key, str(exc)[:200])
+    return counts
+
+
 async def get_status(project: Optional[str] = None) -> dict[str, Any]:
-    """LLMOps foundation 상태 — 테이블 적용 여부와 최근 집계."""
+    """LLMOps foundation 상태 — 테이블 적용 여부와 최근 집계.
+
+    `project`를 주면 모든 집계가 그 프로젝트 소유 행으로 좁혀진다.
+    `None`이면 기존과 같은 전역 집계다.
+    """
     from app.services.llmops_export import export_status
 
     status: dict[str, Any] = {
@@ -968,26 +1125,23 @@ async def get_status(project: Optional[str] = None) -> dict[str, Any]:
                 # 원장 8개가 전부 있어야 foundation_ready다. traces 하나만 보면
                 # 부분 적용된 DB가 정상으로 보인다 (ohvis_harness와 같은 판정).
                 "foundation_ready": all(tables.get(table) for table in LLMOPS_TABLES),
+                "project_scoped": project is not None,
             }
-            if tables.get(TRACE_TABLE):
-                db["traces"] = {
-                    "total": await conn.fetchval(f"SELECT COUNT(*) FROM {TRACE_TABLE}"),
-                    "error": await conn.fetchval(
-                        f"SELECT COUNT(*) FROM {TRACE_TABLE} WHERE status = 'error'"
-                    ),
-                    "last_24h": await conn.fetchval(
-                        f"SELECT COUNT(*) FROM {TRACE_TABLE} "
-                        "WHERE created_at >= NOW() - INTERVAL '24 hours'"
-                    ),
-                }
-            if tables.get(LEGACY_TRACE_TABLE):
-                db["legacy_traces"] = {
-                    "total": await conn.fetchval(f"SELECT COUNT(*) FROM {LEGACY_TRACE_TABLE}")
-                }
-            if tables.get(DATASET_TABLE):
-                db["datasets"] = await conn.fetchval(f"SELECT COUNT(*) FROM {DATASET_TABLE}")
-                db["examples"] = await conn.fetchval(f"SELECT COUNT(*) FROM {EXAMPLE_TABLE}")
-                db["experiments"] = await conn.fetchval(f"SELECT COUNT(*) FROM {EXPERIMENT_TABLE}")
+            counts = await _collect_status_counts(
+                conn, build_status_count_specs(tables, project), project
+            )
+            traces = {
+                field: counts[f"traces_{field}"]
+                for field in ("total", "error", "last_24h")
+                if f"traces_{field}" in counts
+            }
+            if traces:
+                db["traces"] = traces
+            if "legacy_traces_total" in counts:
+                db["legacy_traces"] = {"total": counts["legacy_traces_total"]}
+            for key in ("datasets", "examples", "experiments", "scores", "feedback"):
+                if key in counts:
+                    db[key] = counts[key]
             status["db"] = db
     except Exception as exc:  # noqa: BLE001
         status["db"] = {"available": False, "error": str(exc)[:200]}
