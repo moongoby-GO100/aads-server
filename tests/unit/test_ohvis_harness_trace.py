@@ -87,9 +87,10 @@ def test_record_trace_inserts_row_when_table_exists(monkeypatch) -> None:
     )
 
     assert ok is True
-    assert len(conn.executed) == 1
-    query, args = conn.executed[0]
-    assert f"INSERT INTO {TRACE_TABLE}" in query
+    # v1 기록 + LLMOps mirror가 같은 커넥션을 공유하므로 v1 INSERT만 골라 검증한다.
+    v1_inserts = [item for item in conn.executed if f"INSERT INTO {TRACE_TABLE}" in item[0]]
+    assert len(v1_inserts) == 1
+    query, args = v1_inserts[0]
     assert args[0] == "goal:abc"
     assert args[1] == "AADS"
     assert args[7] == "goal_advance"

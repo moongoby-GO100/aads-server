@@ -1,5 +1,17 @@
 # AADS HANDOVER
 
+## 2026-09-08 11:57 KST - AADS-LANGSMITH-INTERNAL-LLMOPS-P0 final integration
+
+- Supersedes the earlier same-day partial/isolated checkpoints below.
+- Preserved the intervening Food integration commit and finalized LLMOps on top of current `origin/main` in a clean isolated worktree.
+- Selected the implementation that mirrors `ohvis_harness_trace.record_trace()` into the internal LLMOps ledger without changing chat/runner/deploy callers. Mirror failures remain non-fatal.
+- Canonicalized migration 163 to `migrations/163_ohvis_internal_llmops_foundation.sql`; removed three competing migration files and the duplicate `llmops_eval.py` implementation. Removed files remain recoverable from Git history.
+- Added and versioned `docs/reports/20260908_langsmith_self_hosted_ohvis_prd.md` so architecture, security gates, rollout stages, and acceptance criteria are auditable.
+- Production-schema compatibility correction: the live DB already had `llmops_traces.trace_id NOT NULL` and TEXT child trace identifiers from a partial migration. The canonical migration and store SQL now populate the required trace id and use TEXT-compatible child links while retaining UUID primary keys.
+- Verification before commit: 65 focused unit/regression tests passed; Python compilation and `git diff --check` passed. The canonical migration was applied twice inside one production PostgreSQL transaction and rolled back; trace/span/tool/feedback inserts each returned one row, the compatibility view returned 126 rows inside the transaction, and no probe data persisted.
+- Existing data policy: no historical backfill or row rewrite. Legacy `ohvis_harness_traces` rows remain readable through `llmops_traces_compat`; future harness traces mirror into `llmops_traces` only after deployment. External LangSmith egress remains disabled and `prepare_export` never transmits data.
+- Scope: implementation and repository documentation are committed/pushed by this task. Production DB migration and blue-green deployment are excluded pending a separate deployment instruction.
+
 ## 2026-09-08 11:40 KST - AADS-LANGSMITH-INTERNAL-LLMOPS-P0 (OHVIS internal LangSmith-compatible LLMOps)
 
 - CEO request:

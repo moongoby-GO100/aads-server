@@ -434,7 +434,7 @@ async def get_harness_status(project: str | None = None) -> dict[str, Any]:
                 else "migration_pending"
             ),
             "evidence": [
-                "migrations/163_ohvis_internal_llmops_v1.sql",
+                "migrations/163_ohvis_internal_llmops_foundation.sql",
                 "/api/v1/ohvis/llmops/status",
                 "rule evaluator rule_v1",
             ],

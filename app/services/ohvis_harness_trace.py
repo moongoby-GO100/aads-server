@@ -44,20 +44,6 @@ def reset_table_cache() -> None:
     _table_present = None
 
 
-def _derive_trace_id(graph_run_id: str) -> str:
-    """Deterministic trace id for a graph run.
-
-    Imported lazily so that this module keeps working (and stays non-fatal)
-    even if the LLMOps layer is absent, e.g. on an older image.
-    """
-    try:
-        from app.services.llmops_store import trace_id_for_graph_run
-
-        return trace_id_for_graph_run(graph_run_id)
-    except Exception:  # noqa: BLE001 — trace ids must never break the caller
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ohvis:graph_run:{graph_run_id}"))
-
-
 def _clip(value: Any, limit: int = SUMMARY_LIMIT) -> str:
     text = "" if value is None else str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -133,11 +119,6 @@ async def record_trace(
     if not graph_run_id:
         return False
 
-    # Provenance: every row of one graph run resolves to the same trace id, so
-    # the LLMOps read path (`llmops_trace_unified`) can group legacy harness
-    # rows into a single trace without a coordination round-trip.
-    resolved_trace_id = trace_id or _derive_trace_id(graph_run_id)
-
     async def _insert(target: Any) -> bool:
         if not await _table_exists(target):
             return False
@@ -148,7 +129,7 @@ async def record_trace(
             _as_uuid_text(session_id),
             _as_uuid_text(ohvis_task_id),
             provider or "internal",
-            resolved_trace_id,
+            trace_id,
             span_id,
             run_type or "chain",
             _clip(input_summary),
@@ -160,15 +141,50 @@ async def record_trace(
         )
         return True
 
+    async def _mirror_to_llmops(target: Any) -> None:
+        """v1 trace를 v2 LLMOps 원장에도 남긴다 (AADS-LANGSMITH-INTERNAL-LLMOPS-P0).
+
+        이것이 provenance를 잇는 **유일한 스코프드 훅**이다. chat/runner/deploy
+        호출부는 손대지 않는다 — 이미 전부 record_trace를 거치기 때문이다.
+        마이그레이션 163 미적용이면 조용히 skip되고, 어떤 실패도 v1 기록 결과를
+        바꾸지 않는다.
+        """
+        try:
+            from app.services.llmops_store import record_trace as llmops_record_trace
+
+            await llmops_record_trace(
+                graph_run_id=graph_run_id,
+                project=project,
+                session_id=session_id,
+                ohvis_task_id=ohvis_task_id,
+                source=provider or "internal",
+                run_type=run_type or "chain",
+                input_summary=input_summary,
+                output_summary=output_summary,
+                latency_ms=latency_ms,
+                error=error,
+                external_trace_id=trace_id,
+                metadata={**(metadata or {}), "mirrored_from": TRACE_TABLE, "v1_span_id": span_id},
+                tool_calls=tool_calls,
+                conn=target,
+            )
+        except Exception as exc:  # noqa: BLE001 — mirror 실패가 v1 기록을 무효화하지 않는다
+            logger.debug("llmops mirror skipped (non-fatal): %s", str(exc)[:200])
+
+    async def _insert_and_mirror(target: Any) -> bool:
+        wrote = await _insert(target)
+        await _mirror_to_llmops(target)
+        return wrote
+
     try:
         if conn is not None:
-            return await _insert(conn)
+            return await _insert_and_mirror(conn)
 
         from app.core.db_pool import get_pool
 
         pool = get_pool()
         async with pool.acquire() as acquired:
-            return await _insert(acquired)
+            return await _insert_and_mirror(acquired)
     except Exception as exc:  # noqa: BLE001 — trace는 절대 호출부를 깨뜨리지 않는다
         logger.warning("harness trace insert failed (non-fatal): %s", str(exc)[:200])
         return False

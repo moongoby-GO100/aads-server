@@ -1,146 +1,107 @@
-"""External LangSmith export gate — disabled by default.
+"""공식 LangSmith external export 게이트 — 기본값 OFF.
 
-Policy (PRD FR-010, task item 5): nothing leaves AADS unless *all* of
-`LANGSMITH_TRACING`, `LANGSMITH_ENDPOINT`, `LANGSMITH_API_KEY` are set **and**
-the masking policy passes. The gate is fail-closed: any missing input, any
-unmasked secret, and the export is refused.
+정책 (PRD FR-010, 지시서 5항): 아래가 **모두** 참일 때만 외부 전송이 열린다.
 
-Secrets are never returned, logged, or serialized here — only booleans and the
-endpoint host.
+1. `LANGSMITH_TRACING`이 truthy
+2. `LANGSMITH_ENDPOINT`가 https:// 로 시작
+3. `LANGSMITH_API_KEY`가 존재
+4. 전송 페이로드가 마스킹 정책을 통과 (시크릿 잔재가 없음)
+
+하나라도 빠지면 `enabled=False`이고 어떤 원문도 밖으로 나가지 않는다. 이 모듈은
+키를 로그/응답에 절대 싣지 않고, 존재 여부만 보고한다.
 """
 from __future__ import annotations
 
 import os
 import re
 from typing import Any, Optional
-from urllib.parse import urlparse
 
-MASKING_POLICY_VERSION = "mask_v1"
-MASK = "«redacted»"
+from app.services.llmops_store import mask_secrets
 
-TRUTHY = {"1", "true", "yes", "on"}
+TRACING_ENV = "LANGSMITH_TRACING"
+ENDPOINT_ENV = "LANGSMITH_ENDPOINT"
+API_KEY_ENV = "LANGSMITH_API_KEY"
 
-# Patterns that must never leave the box. Ordered longest-prefix first so that a
-# provider key is not partially matched by the generic bearer rule.
-_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("anthropic_oauth", re.compile(r"sk-ant-oat\d{2}-[A-Za-z0-9_\-]{8,}")),
-    ("anthropic_api", re.compile(r"sk-ant-api\d{2}-[A-Za-z0-9_\-]{8,}")),
-    ("openai", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}")),
-    ("google", re.compile(r"AIza[0-9A-Za-z_\-]{30,}")),
-    ("langsmith", re.compile(r"lsv2_(?:pt|sk)_[A-Za-z0-9]{16,}")),
-    ("github", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
-    ("slack", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
-    ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
-    ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-\.]{16,}")),
-    ("pg_url", re.compile(r"postgres(?:ql)?://[^\s:@/]+:[^\s@]+@")),
-    ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
-    ("kr_phone", re.compile(r"\b01[016789][-\s]?\d{3,4}[-\s]?\d{4}\b")),
-    ("kr_rrn", re.compile(r"\b\d{6}[-\s]?[1-4]\d{6}\b")),
+_TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})
+
+# 마스킹 후에도 남아 있으면 전송을 막는 잔재 패턴
+_RESIDUAL_SECRET = re.compile(
+    r"(sk-ant-[A-Za-z0-9_\-]{8,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_\-]{20,}"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9\-]{10,})"
 )
 
 
-def mask_text(value: Any) -> str:
-    """Replace every known secret/PII shape with a redaction marker."""
-    text = "" if value is None else str(value)
-    for _name, pattern in _SECRET_PATTERNS:
-        text = pattern.sub(MASK, text)
-    return text
+def _env(name: str) -> str:
+    return (os.getenv(name) or "").strip()
 
 
-def find_secrets(value: Any) -> list[str]:
-    """Names of the secret patterns still present in `value` (empty == clean)."""
-    text = "" if value is None else str(value)
-    return [name for name, pattern in _SECRET_PATTERNS if pattern.search(text)]
+def is_tracing_enabled() -> bool:
+    return _env(TRACING_ENV).lower() in _TRUTHY
 
 
-def mask_trace(trace: dict[str, Any]) -> dict[str, Any]:
-    """Mask every free-text field of a trace payload before it can be exported."""
-    masked = dict(trace)
-    for field in ("input_summary", "output_summary", "error", "name"):
-        if masked.get(field) is not None:
-            masked[field] = mask_text(masked[field])
-    masked["masking_policy"] = MASKING_POLICY_VERSION
-    return masked
+def masking_passes(payload: Any) -> tuple[bool, Optional[str]]:
+    """마스킹 후 시크릿 잔재가 없는지 검사한다. (통과여부, 사유)."""
+    text = mask_secrets(str(payload))
+    match = _RESIDUAL_SECRET.search(text)
+    if match:
+        # 사유에도 시크릿을 싣지 않는다 — 패턴 종류만 보고한다.
+        return False, f"residual secret pattern ({match.group(0)[:6]}…) after masking"
+    return True, None
 
 
-def _env(name: str) -> Optional[str]:
-    value = (os.getenv(name) or "").strip()
-    return value or None
-
-
-def export_gate_status() -> dict[str, Any]:
-    """Whether external LangSmith export is permitted right now, and why not.
-
-    Never includes the API key. `endpoint_host` is the host only, so a
-    misconfiguration is diagnosable without leaking a full signed URL.
-    """
-    tracing_raw = _env("LANGSMITH_TRACING") or _env("LANGCHAIN_TRACING_V2")
-    tracing_on = (tracing_raw or "").lower() in TRUTHY
-    endpoint = _env("LANGSMITH_ENDPOINT")
-    api_key = _env("LANGSMITH_API_KEY")
-
-    blockers: list[str] = []
-    if not tracing_on:
-        blockers.append("LANGSMITH_TRACING_not_enabled")
-    if not endpoint:
-        blockers.append("LANGSMITH_ENDPOINT_missing")
-    if not api_key:
-        blockers.append("LANGSMITH_API_KEY_missing")
-
-    endpoint_host = None
-    if endpoint:
-        try:
-            endpoint_host = urlparse(endpoint).hostname
-        except ValueError:
-            blockers.append("LANGSMITH_ENDPOINT_unparseable")
-
+def export_status() -> dict[str, Any]:
+    """외부 export 게이트 상태. 키 값은 절대 포함하지 않는다."""
+    endpoint = _env(ENDPOINT_ENV)
+    checks = {
+        "tracing_flag": is_tracing_enabled(),
+        "endpoint_https": endpoint.startswith("https://"),
+        "api_key_present": bool(_env(API_KEY_ENV)),
+    }
+    blockers = [name for name, ok in checks.items() if not ok]
     return {
         "enabled": not blockers,
         "default": "disabled",
+        "checks": checks,
         "blockers": blockers,
-        "tracing_enabled": tracing_on,
-        "endpoint_configured": bool(endpoint),
-        "endpoint_host": endpoint_host,
-        "api_key_present": bool(api_key),
-        "masking_policy": MASKING_POLICY_VERSION,
+        # endpoint는 호스트만 노출한다 (경로에 토큰이 실릴 수 있음).
+        "endpoint_host": endpoint.split("/")[2] if endpoint.startswith("https://") and len(endpoint.split("/")) > 2 else None,
+        "note": "External LangSmith export stays off until env gate and masking policy both pass.",
     }
 
 
-def prepare_export(traces: list[dict[str, Any]]) -> dict[str, Any]:
-    """Mask and gate a batch. Returns what *would* be sent; never sends.
+def prepare_export(trace: dict[str, Any]) -> dict[str, Any]:
+    """trace 1건의 외부 전송 가능 여부를 판정하고 마스킹된 페이로드를 만든다.
 
-    Sending is deliberately not implemented until the CEO approves the data
-    policy — this keeps the gate auditable while guaranteeing zero egress.
+    실제 HTTP 전송은 하지 않는다. 게이트가 닫혀 있으면 payload 자체를 만들지
+    않으므로, 승인 전에는 원문이 메모리 밖으로도 나가지 않는다.
     """
-    gate = export_gate_status()
-    if not gate["enabled"]:
+    status = export_status()
+    if not status["enabled"]:
         return {
-            "exported": 0,
-            "blocked": True,
-            "reason": "export_gate_closed",
-            "gate": gate,
-            "payload": [],
+            "exported": False,
+            "reason": "export_disabled",
+            "blockers": status["blockers"],
         }
 
-    masked = [mask_trace(trace) for trace in traces]
-    leaked: list[str] = []
-    for trace in masked:
-        for field in ("input_summary", "output_summary", "error", "name"):
-            leaked.extend(find_secrets(trace.get(field)))
-    if leaked:
-        return {
-            "exported": 0,
-            "blocked": True,
-            "reason": "masking_policy_failed",
-            "leaked_patterns": sorted(set(leaked)),
-            "gate": gate,
-            "payload": [],
-        }
-
-    return {
-        "exported": 0,
-        "blocked": True,
-        "reason": "egress_not_implemented_pending_data_policy_approval",
-        "gate": gate,
-        "payload": masked,
+    payload = {
+        "id": trace.get("id"),
+        "name": trace.get("run_type") or "chain",
+        "run_type": trace.get("run_type") or "chain",
+        "project": trace.get("project"),
+        "status": trace.get("status"),
+        "inputs": {"summary": mask_secrets(str(trace.get("input_summary") or ""))},
+        "outputs": {"summary": mask_secrets(str(trace.get("output_summary") or ""))},
+        "error": mask_secrets(str(trace.get("error"))) if trace.get("error") else None,
+        "extra": {
+            "graph_run_id": trace.get("graph_run_id"),
+            "latency_ms": trace.get("latency_ms"),
+            "cost_usd": trace.get("cost_usd"),
+            "error_class": trace.get("error_class"),
+        },
     }
+
+    ok, reason = masking_passes(payload)
+    if not ok:
+        return {"exported": False, "reason": "masking_policy_failed", "detail": reason}
+
+    return {"exported": False, "reason": "ready_not_sent", "payload": payload}
