@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-08 16:43 KST — Chat slot-marker release queued (not certified)
+
+- Implementation commit `9c1f84966bcb` was committed with hooks and pushed to origin/main; production checkout fast-forwarded while preserving unrelated staged `docker-compose.yml` and finance/untracked changes.
+- Direct canonical invocation: `bash deploy.sh bluegreen` from clean `/root/aads/releases/chat-slot-marker-20260908`; log `/root/aads/aads-server/logs/chat-slot-marker-9c1f8496-deploy.log`.
+- Actual deploy record `180`: `queued/queued_for_deploy`, `auto_start=true`, `commit_status=committed`, `push_status=pushed`. It waits behind record `179` (`6ab3466f9aab`), which progressed from target drain to candidate build. The existing deploy queue worker is alive; no extra API restart or simultaneous cutover was attempted.
+- Live verification: public `/api/v1/health` HTTP 200/status=ok; this session's streaming-status HTTP 200, `is_streaming=true`, `stream_status=tool_running`, execution `a3f9e1fd-8869-4e9f-afb2-07b24e42c50b`; last-response HTTP 200. Both current API slots healthy but still different release images, so deployment is NOT certified.
+- Remaining mandatory checks after queue execution: candidate marker visibility, routed health, same-digest standby and standby marker visibility, five-minute P0/P1 logs, recovery actually reaching model calls/final saved responses. No production message cleanup or user-stop overrides. Do not report response interruptions eliminated before those checks.
+
 ## 2026-09-08 16:40 KST — Chat recovery blocked by stale Docker slot-marker mounts
 
 - Scope: continue the CEO-approved chat interruption fix and API blue/green rollout; preserve unrelated staged compose, finance, and dashboard changes using a clean release worktree.
