@@ -1,0 +1,10 @@
+{
+  "login": true,
+  "url": "https://aads.newtalk.kr/api/v1/files/download?path=%2Fapp%2Fapp%2Fstatic%2Freports%2F20260909_directive_review_rework_education.html&inline=1",
+  "download_status": 200,
+  "sha256": "f234b07a424caa08636e3a32ab9b8c4a357b706acfe6cb8da57f3b8e19b42017",
+  "download_matches": false,
+  "artifacts_status": 200,
+  "artifact_frame_chapters": 21,
+  "artifact_interaction": true
+}

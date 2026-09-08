@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="CEO를 위한 업무 지시·검수·재지시 멀티 에이전트 교육자료. 연구 근거, 대화형 흐름도, 파동엔진 사례, 구현 계약과 검증 기준.">
+<title>업무 지시·검수·재지시 멀티 에이전트 운영</title>
+<style>
+:root{--ink:#17222d;--muted:#53606c;--line:#ccd3da;--paper:#fff;--shade:#f3f5f7;--blue:#155c94;--green:#176544;--red:#a02f28;--orange:#895509}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:20px}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.85 system-ui,-apple-system,"Noto Sans KR","Malgun Gothic",sans-serif}a{color:var(--blue);text-underline-offset:3px;overflow-wrap:anywhere}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--blue);outline-offset:3px}.skip{position:absolute;top:-100px;background:white;padding:10px}.skip:focus{top:0}.layout{display:grid;grid-template-columns:250px minmax(0,980px);max-width:1330px;margin:auto;gap:48px;padding:36px 28px 90px}nav{position:sticky;top:20px;align-self:start;max-height:94vh;overflow:auto;border-right:1px solid var(--line);padding-right:20px;font-size:14px}nav strong{display:block;margin-bottom:16px}nav a{display:block;padding:5px 0;color:var(--muted);text-decoration:none}nav a:hover{text-decoration:underline}main{min-width:0}h1{font-size:clamp(30px,4vw,46px);line-height:1.4;letter-spacing:-1.2px;margin:12px 0 28px}h2{font-size:28px;line-height:1.5;margin:0 0 22px}h3{font-size:21px;margin:26px 0 10px}p{margin:12px 0 18px}section{border-top:1px solid var(--line);padding-top:36px;margin-top:48px}.lead{font-size:21px}.muted,.source,figcaption{font-size:14px;color:var(--muted)}.source{margin-top:8px}strong{font-weight:750}.notice{background:var(--shade);padding:18px 22px;margin:22px 0}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}.scroll{overflow-x:auto;max-width:100%}table{width:100%;border-collapse:collapse;font-size:15px;line-height:1.7;margin:16px 0 22px}th,td{padding:12px 14px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--shade);font-weight:750}td{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--shade);padding:20px;font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;border:1px solid var(--line)}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9em;overflow-wrap:anywhere}figure{margin:22px 0}svg{display:block;width:100%;height:auto}svg text{font-family:system-ui,"Malgun Gothic",sans-serif;fill:var(--ink);font-size:16px}.box{fill:#fff;stroke:#637585;stroke-width:1.5}.arrow{fill:none;stroke:#637585;stroke-width:2}.lab{background:var(--shade);padding:24px;border:1px solid var(--line)}label{display:block;font-weight:650;margin:12px 0 5px}button,select{font:inherit;font-size:15px;min-height:44px;padding:8px 14px;border:1px solid #6d7c89;background:#fff;color:var(--ink);cursor:pointer}button:hover{background:#e8edf2}button:disabled{opacity:.5;cursor:default}.buttons{display:flex;flex-wrap:wrap;gap:9px;margin:16px 0}input[type=range]{width:100%;min-height:36px;accent-color:var(--blue)}.states{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:20px 0}.state{border:1px solid var(--line);padding:10px;text-align:center;font-size:14px;background:white}.state.active{border:2px solid var(--blue);color:var(--blue);font-weight:800}.state.pass{border-color:var(--green);color:var(--green)}#simResult{min-height:90px}#simLog{max-height:290px;overflow:auto;font-size:14px;background:white;padding:16px 16px 16px 38px}details{border-bottom:1px solid var(--line);padding:15px 0}summary{cursor:pointer;font-weight:700;min-height:44px}ul,ol{padding-left:25px}.tag{font-size:13px;color:var(--muted)}.barrow{display:grid;grid-template-columns:85px 1fr 90px;align-items:center;gap:12px;margin:12px 0}.bar{height:24px;background:#7b8b98;min-width:2px}.bar.blue{background:var(--blue)}.bartrack{background:#e1e6eb}#calcResult{font-weight:700}.print{float:right}.refs li{margin-bottom:18px;font-size:15px}.quizResult{font-weight:700;color:var(--green)}@media(max-width:950px){.layout{display:block;padding:20px}nav{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line);padding-bottom:15px;margin-bottom:30px}nav details{border:0}.grid2{grid-template-columns:1fr}h2{font-size:25px}}@media(max-width:500px){body{font-size:16px}.layout{padding:14px}.lab{padding:14px}.states{grid-template-columns:repeat(2,1fr)}th,td{padding:9px}table{font-size:14px}.print{float:none}.barrow{grid-template-columns:65px 1fr 72px;font-size:13px}}@media print{nav,.print,.buttons,.no-print{display:none!important}.layout{display:block;padding:0;max-width:none}body{font-size:11pt;color:#000}h1{font-size:26pt}h2{font-size:19pt}section{margin-top:26px;padding-top:20px}a{color:inherit}pre,table{font-size:9pt}figure,tr,details{break-inside:avoid}.lab{background:#fff}#simLog{max-height:none}.notice{background:#f4f4f4}}
+h1,h2,h3,summary{word-break:keep-all;overflow-wrap:anywhere}
+@media(max-width:650px){figure{overflow-x:auto}figure svg{min-width:640px}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">본문 바로가기</a>
+<div class="layout">
+<nav aria-label="교육자료 목차"><strong>학습 목차</strong><details open><summary>전체 과정</summary>
+<a href="#overview">01. CEO가 이해할 핵심</a><a href="#terms">02. 기본 용어 사전</a><a href="#patterns">03. 운영 구조 비교</a><a href="#research">04. 논문과 최신 기술자료</a><a href="#architecture">05. 권장 전체 구조</a><a href="#roles">06. 역할·권한·책임</a><a href="#contract">07. 업무 지시 계약</a><a href="#documents">08. PRD와 문서 체계</a><a href="#state">09. 상태·승인·완료</a><a href="#simulation">10. 검수·재지시 체험</a><a href="#wave">11. 파동엔진 적용 사례</a><a href="#review">12. 검수와 재계획</a><a href="#reliability">13. 중단·중복·충돌 복구</a><a href="#memory">14. 지식·보안·문맥 전달</a><a href="#stack">15. 기술 선택</a><a href="#aads">16. AADS 코드 적용 현황</a><a href="#metrics">17. 비용·속도 그래프</a><a href="#roadmap">18. 실현 가능한 도입안</a><a href="#prompts">19. 복사해서 쓰는 지시문</a><a href="#exam">20. 실습·CEO 검수표</a><a href="#references">21. 출처·범위·한계</a>
+</details></nav>
+<main id="main">
+<button class="print" onclick="window.print()">인쇄 / PDF 저장</button>
+<h1>업무 지시·검수·재지시<br>멀티 에이전트 운영</h1>
+<p class="lead">CEO의 의도를 여러 AI가 나누어 수행하면서, 결과를 검증하고 필요한 부분만 다시 지시하는 시스템을 이해하고 설계하는 교육자료입니다.</p>
+<p><strong>권장안은 ‘하나의 업무 원장과 통제된 상태 전이 위에서 여러 전문 에이전트가 일하는 구조’입니다.</strong> 담당 AI의 완료 발언만으로 다음 단계가 열리지 않게 하고, 요구사항·산출물 버전·검증 근거가 일치할 때만 진행합니다. 아래 아키텍처와 파동엔진 예시는 교육용 제안이며 운영 구현 완료 보고가 아닙니다.</p>
+<div class="notice"><strong>읽는 순서</strong><p>처음에는 01 → 05 → 10 → 11장을 읽고 버튼을 눌러 보십시오. 구현을 지시할 때는 07~09·12~16·18~20장을 사용하십시오. 논문 결과는 해당 실험의 근거이며, AADS의 성능으로 환산하지 않습니다.</p></div>
+
+<section id="overview"><h2>01. CEO가 이해할 핵심</h2>
+<p>사람 조직에서 CEO가 “파동엔진을 공용 모듈로 만들라”고 지시하면 기획자가 요구사항을 정리하고, 설계자가 인터페이스를 정하며, 개발자가 구현하고, 검수자가 증거를 확인합니다. 누락이 있으면 기획으로, 구현 오류면 개발로, 정책 결정이 필요하면 CEO에게 돌아갑니다. 멀티 에이전트 오케스트레이션은 이 업무 흐름을 소프트웨어로 관리하는 일입니다.</p>
+<p>여러 AI가 같은 대화에 참여하는 것만으로 이 구조가 완성되지는 않습니다. 무엇을 맡겼는지, 어떤 버전을 검수했는지, 누가 승인했는지, 재작업이 원래 범위를 벗어나는지를 시스템이 보존해야 합니다. <strong>AI는 계획·생성·분석을 맡고, 서버는 권한·상태·중복 방지·완료 조건을 강제</strong>하도록 나누는 것이 이 자료의 설계 원칙입니다.</p>
+<table><thead><tr><th>CEO의 질문</th><th>시스템이 내놓아야 하는 답</th><th>필요한 증거</th></tr></thead><tbody>
+<tr><td>내 의도를 정확히 이해했나?</td><td>원문 → 요구사항 ID → 제외 범위가 연결됨</td><td>승인된 요구사항 버전과 추적표</td></tr>
+<tr><td>누가 무엇을 하고 있나?</td><td>담당·의존성·현재 단계·마지막 진행이 보임</td><td>작업 원장, heartbeat, 실행 이벤트</td></tr>
+<tr><td>틀리면 알아서 고치나?</td><td>실패 원인별 재작업, 한도 초과 시 중단</td><td>결함 보고와 새 시도 ID</td></tr>
+<tr><td>정말 끝났나?</td><td>산출물·검수·승인·운영 인증을 구분</td><td>해시가 연결된 테스트와 배포 원장</td></tr>
+</tbody></table>
+<p>추천 구조는 연구의 단일 결론이 아니라, SOP 기반 협업·실패 분류 연구·실제 하네스 운영 사례를 AADS 업무에 맞게 결합한 설계 판단입니다. <a href="#r1">[1]</a> <a href="#r3">[3]</a> <a href="#r7">[7]</a></p></section>
+
+<section id="terms"><h2>02. 기본 용어 사전</h2>
+<table><thead><tr><th>용어</th><th>쉬운 설명</th><th>이 업무에서의 예</th></tr></thead><tbody>
+<tr><td>Agent · 에이전트</td><td>목표와 도구를 받아 판단하고 행동하는 실행 주체</td><td>PRD 작성자, 구현 담당, 독립 검수자</td></tr>
+<tr><td>Orchestration · 오케스트레이션</td><td>누가 언제 무엇을 하고 결과를 어디로 넘길지 통제</td><td>검수 실패면 수정 작업 생성, 성공이면 승인 대기</td></tr>
+<tr><td>Workflow · 워크플로</td><td>정해진 절차와 조건 분기</td><td>설계 승인 전 구현 시작 금지</td></tr>
+<tr><td>Harness · 하네스</td><td>AI를 실제로 일하게 하는 실행 환경과 통제 장치</td><td>작업 폴더, 도구 권한, 타임아웃, 로그, 테스트</td></tr>
+<tr><td>Supervisor / Manager</td><td>업무를 분해하고 결과를 모으는 관리자 역할</td><td>파동 계산과 소비자 계약을 다른 담당에게 배정</td></tr>
+<tr><td>Handoff · 인계</td><td>다음 전문 역할로 진행 책임을 넘기는 방식</td><td>조사 결과와 문서를 설계 담당에게 인계</td></tr>
+<tr><td>Agents as tools</td><td>관리자가 전문 AI를 호출하고 답변 책임은 유지</td><td>CEO 창구는 하나로 유지하면서 검수 AI 호출</td></tr>
+<tr><td>Artifact · 산출물</td><td>검수 가능한 파일·데이터·보고서와 그 버전</td><td>PRD v2, 신호 스키마, 테스트 결과 JSON</td></tr>
+<tr><td>Task / Attempt / Run</td><td>업무 / 같은 업무의 시도 / 실행 기록</td><td>계약 작성 업무의 두 번째 수정 시도</td></tr>
+<tr><td>DAG</td><td>선행 작업이 있는 방향성 비순환 그래프</td><td>신호 스키마 확정 → 엔진과 카드 어댑터 병렬</td></tr>
+<tr><td>Gate · 게이트</td><td>증거·권한·조건을 확인하는 통과 지점</td><td>요구사항 누락이 있으면 설계 단계 종료 불가</td></tr>
+<tr><td>Evaluator / Judge</td><td>기준과 산출물을 대조하는 평가자</td><td>‘매매 판단 분리’ 위반 근거를 제출</td></tr>
+<tr><td>Rework / Replan</td><td>결과 수정 / 작업 계획 자체 수정</td><td>타임스탬프 버그 수정 / 누락된 데이터 정규화 작업 추가</td></tr>
+<tr><td>Checkpoint</td><td>중단 후 재개할 수 있는 상태 기록</td><td>검수 대기 지점부터 이어서 진행</td></tr>
+<tr><td>Lease / Fencing token</td><td>시간 제한 소유권 / 오래된 실행자를 막는 세대 번호</td><td>복구된 새 worker만 결과를 확정할 권한 보유</td></tr>
+<tr><td>Provenance / Lineage</td><td>결과가 어떤 입력과 변경에서 나왔는지의 계보</td><td>원 지시 → PRD → 코드 SHA → 테스트 → 승인</td></tr>
+<tr><td>Control plane / Execution plane</td><td>일의 통제 계층 / 실제 실행 계층</td><td>상태·승인은 DB 서비스, 작업은 격리된 Runner</td></tr>
+<tr><td>HITL · Human in the loop</td><td>사람의 판단을 절차 안에 넣는 것</td><td>매매 정책 변경이나 운영 전환 승인</td></tr>
+</tbody></table>
+<p class="source">용어의 구현 세부는 프레임워크마다 다릅니다. 특히 Task·Run·Handoff를 내부 DB 필드와 동일하다고 가정하지 말고 매핑을 작성해야 합니다. <a href="#r8">[8]</a> <a href="#r9">[9]</a> <a href="#r11">[11]</a> <a href="#r12">[12]</a></p></section>
+
+<section id="patterns"><h2>03. 어떤 운영 구조를 선택할 것인가</h2>
+<table><thead><tr><th>구조</th><th>적합한 업무</th><th>장점</th><th>한계·통제</th></tr></thead><tbody>
+<tr><td>단일 에이전트 + 도구</td><td>국소 오류·짧은 조사</td><td>문맥과 책임이 단순</td><td>독립 검수 부족 → 별도 검증 실행</td></tr>
+<tr><td>순차 파이프라인</td><td>요구사항 → 설계 → 구현</td><td>인수 조건이 명확</td><td>앞 단계 오류 전파 → 중간 게이트</td></tr>
+<tr><td>관리자 + 전문 작업자</td><td>여러 모듈을 다루는 프로젝트</td><td>전체 의도와 사용자 창구 유지</td><td>관리자 병목 → 원장과 요약 산출물</td></tr>
+<tr><td>병렬 분산·결과 취합</td><td>독립 자료 조사·독립 테스트</td><td>중첩 실행으로 대기 감소 가능</td><td>중복 조사·누락 → 범위 분할과 합류 조건</td></tr>
+<tr><td>생성자–평가자 반복</td><td>검수 기준이 있는 개선 작업</td><td>결함을 다음 시도에 반영</td><td>무한 수정·담합 → 독립 근거와 반복 한도</td></tr>
+<tr><td>동료 토론·다수결</td><td>설계 대안·위험 탐색</td><td>서로 다른 관점 수집</td><td>동일 오답 가능 → 결정의 근거로만 사용</td></tr>
+<tr><td>이벤트 기반 장기 업무</td><td>승인 대기·원격 실행·복구</td><td>채팅 연결과 작업 수명 분리</td><td>중복 이벤트·순서 역전 → 멱등 처리와 상태 버전</td></tr>
+</tbody></table>
+<p><strong>AADS 권장 조합:</strong> 바깥은 상태를 영속화한 업무 워크플로, 안쪽은 관리자–작업자, 품질 구간은 생성자–평가자 반복입니다. 서로 다른 파일이라도 같은 스키마·공용 함수·데이터를 바꾸면 의미상 충돌할 수 있으므로 통합 검수는 합친 결과에 대해 수행합니다. <a href="#r4">[4]</a> <a href="#r8">[8]</a> <a href="#r9">[9]</a></p></section>
+
+<section id="research"><h2>04. 논문과 최신 기술자료가 알려주는 것</h2>
+<p>학술 연구는 방법의 가능성과 실패 조건을, 공식 기술자료는 구현 수단을 보여줍니다. 두 종류 모두 ‘우리 시스템에서 효과가 입증됐다’는 뜻은 아닙니다. 다음 요약에는 결과 수치를 다른 실험과 섞은 순위표를 사용하지 않았습니다.</p>
+<table><thead><tr><th>자료·시점</th><th>핵심 내용</th><th>이번 설계에 반영</th><th>해석의 한계</th></tr></thead><tbody>
+<tr><td><a href="#r1">MetaGPT</a><br>2023 / 수정 2024</td><td>소프트웨어 조직의 역할과 SOP를 프롬프트·중간 산출물에 반영</td><td>PRD·설계·작업 지시·검수서를 표준 계약으로 연결</td><td>연구용 개발 과제 성과가 운영 신뢰성을 보증하지 않음</td></tr>
+<tr><td><a href="#r2">Reflexion</a><br>2023</td><td>실행 피드백을 언어적 기억으로 보존해 다음 시도를 개선</td><td>실패 원인·재현 증거·수정 원칙을 재지시 입력에 포함</td><td>가중치 학습과 다름. 잘못된 반성도 기억될 수 있음</td></tr>
+<tr><td><a href="#r3">MAST</a><br>2025</td><td>설계·에이전트 간 불일치·검수 관련 실패를 체계화</td><td>실패를 모델 오류·요구사항 오류·검증 오류로 분류</td><td>관측된 실패 분류이며 모든 장애의 완전한 목록은 아님</td></tr>
+<tr><td><a href="#r4">CooperBench</a><br>2026-01</td><td>같은 저장소에서 서로 다른 기능을 맡아도 협력·약속·문맥 이해가 실패할 수 있음</td><td>파일 소유권뿐 아니라 인터페이스 계약·통합 테스트 적용</td><td>특정 협업 코딩 실험. 모든 멀티 에이전트가 열등하다는 의미는 아님</td></tr>
+<tr><td><a href="#r5">MultiAgentBench</a><br>2025-03</td><td>완료 여부에 더해 중간 목표와 협업 방식 평가</td><td>요구사항 커버리지·인계 품질·재작업 원인도 측정</td><td>시나리오별 결과를 다른 업무의 보편적 순위로 쓰지 않음</td></tr>
+<tr><td><a href="#r6">Anthropic 연구 시스템</a><br>2025-06</td><td>관리자가 독립 조사 에이전트를 배정·통합하는 운영 사례</td><td>하위 업무의 목표·출력·도구·경계를 구체화</td><td>기업 내부 연구 평가. 공유 코드 편집에는 직접 일반화 불가</td></tr>
+<tr><td><a href="#r7">Anthropic 장기 개발 하네스</a><br>2026-03</td><td>기획자·생성자·평가자와 구조화된 인계 산출물 활용</td><td>역할 문맥 분리와 장기 실행의 재개 계약 설계</td><td>공식 엔지니어링 사례이며 독립 비교 실험과 구분</td></tr>
+</tbody></table>
+<h3>결과가 다른 연구를 함께 읽는 방법</h3>
+<p><strong>이 요청과 직접 연결되는 연구: VMAO.</strong> 계획 → 의존성에 따른 병렬 실행 → 전체 결과 검증 → 누락에 대한 재계획 → 종합이라는 순환 구조를 제시합니다. 완료된 결과를 보존하면서 부족한 질문을 재실행하거나 새 질문을 추가한다는 점이 ‘확인 후 재지시’에 해당합니다. 단, 시장 조사 답변을 대상으로 한 연구이므로 코드 통합·실매매·운영 배포의 안전성을 입증한 자료는 아닙니다. <a href="#r16">[16]</a></p>
+<p>논문의 자원 한도·개선 정체에 따른 종료는 답변 종합 시점의 결정입니다. 본 교육자료의 운영 설계에서는 이를 <strong>중단 사유</strong>로 기록하고, 필수 검사가 남아 있으면 ‘미완료’로 보고합니다. 또한 이전 결과를 재사용하기 전에 입력·계약 버전이 여전히 유효한지 검사하는 것은 AADS에 권장하는 추가 설계입니다. 높은 종합 평가만으로 필수 결함을 상쇄해서는 안 됩니다.</p>
+<p>독립된 여러 주제를 찾는 조사에서는 분업이 문맥 용량을 늘려 줍니다. 반면 공유 저장소의 기능들은 서로의 변경을 이해해야 하므로 조정 비용이 생깁니다. Anthropic의 조사 사례와 CooperBench의 협업 문제는 서로 모순이라기보다 <strong>분해 가능성·공유 상태·평가 대상이 다른 사례</strong>입니다. AADS에서는 같은 문제 묶음으로 단일 실행과 멀티 실행을 비교해야 도입 효과를 판단할 수 있습니다. <a href="#r4">[4]</a> <a href="#r6">[6]</a></p>
+<p>‘AI가 AI를 검수한다’는 것 자체도 정확성 보장은 아닙니다. MAST의 검증 실패 관점과 하네스 사례를 종합하면, 자연어 점수보다 먼저 실행 가능한 검사와 증거 접근을 제공해야 한다는 설계 판단을 내릴 수 있습니다. 통과 기준은 평가자가 작업 중 임의로 낮추지 못하게 버전으로 고정합니다. <a href="#r3">[3]</a> <a href="#r7">[7]</a></p></section>
+
+<section id="architecture"><h2>05. 권장 전체 구조</h2>
+<p class="source">좁은 화면에서는 도식을 좌우로 움직여 읽을 수 있습니다.</p>
+<figure><svg viewBox="0 0 940 500" role="img" aria-labelledby="archTitle archDesc"><title id="archTitle">지시·검수·재지시 폐루프 구조</title><desc id="archDesc">CEO 지시를 관리자와 업무 원장이 보존하고 설계, 개발, 검수를 진행한다. 결함은 재지시로 돌아가고 통과 산출물만 승인을 거쳐 운영 인증한다.</desc><defs><marker id="head" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0L7 3L0 6Z" fill="#637585"/></marker></defs>
+<rect class="box" x="335" y="15" width="270" height="65"/><text x="470" y="43" text-anchor="middle">CEO · 목표와 금지사항</text><text x="470" y="65" text-anchor="middle">승인은 특정 버전에 결합</text>
+<path class="arrow" marker-end="url(#head)" d="M470 80V112"/>
+<rect class="box" x="270" y="115" width="400" height="70"/><text x="470" y="143" text-anchor="middle">업무 관리자 + 영속 업무 원장</text><text x="470" y="167" text-anchor="middle">요구사항 · 상태 · 권한 · 증거 · 비용</text>
+<path class="arrow" marker-end="url(#head)" d="M340 185V220H145V244"/><path class="arrow" marker-end="url(#head)" d="M470 185V244"/><path class="arrow" marker-end="url(#head)" d="M600 185V220H790V244"/>
+<rect class="box" x="30" y="247" width="230" height="62"/><text x="145" y="274" text-anchor="middle">조사·설계</text><text x="145" y="296" text-anchor="middle">PRD / 계약 / 검증 계획</text>
+<rect class="box" x="355" y="247" width="230" height="62"/><text x="470" y="274" text-anchor="middle">구현 작업자</text><text x="470" y="296" text-anchor="middle">격리 작업 · 변경 산출물</text>
+<rect class="box" x="675" y="247" width="230" height="62"/><text x="790" y="274" text-anchor="middle">독립 검수자</text><text x="790" y="296" text-anchor="middle">원 요구사항 + 실행 증거</text>
+<path class="arrow" marker-end="url(#head)" d="M260 278H350"/><path class="arrow" marker-end="url(#head)" d="M585 278H670"/>
+<path class="arrow" marker-end="url(#head)" d="M790 309V345H470V313"/><text x="625" y="367" text-anchor="middle">실패: 결함 분류 → 수정 또는 재계획</text>
+<path class="arrow" marker-end="url(#head)" d="M900 309V430H710"/><text x="894" y="405" text-anchor="end">통과</text>
+<rect class="box" x="240" y="398" width="470" height="70"/><text x="475" y="426" text-anchor="middle">승인 → 배포 실행 → 운영 인증</text><text x="475" y="450" text-anchor="middle">시험한 버전 = 승인한 버전 = 배포한 버전</text>
+</svg><figcaption>설계 제안 도식. 위쪽 연결선은 관리 관계, 가운데 연결선은 산출물 의존 관계입니다. 모든 역할이 항상 동시 실행된다는 뜻은 아닙니다.</figcaption></figure>
+<p>업무 원장은 조직의 공식 장부와 같습니다. 대화창에 ‘수정 완료’가 보이더라도 원장에 산출물과 검증 근거가 없으면 다음 단계로 넘어가지 않습니다. 반대로 브라우저 연결이 끊겨도 원장과 실행 환경이 살아 있으면 업무는 유지되고, 다시 접속했을 때 같은 작업을 복원합니다.</p>
+<p>DB 트랜잭션은 상태 변경을 보호하고, 객체 저장소나 Git은 산출물을 보관하며, 실행 큐는 실제 작업을 처리합니다. 이벤트 알림은 상태 변화를 전달하는 수단이고, 최종 사실 확인은 원장을 기준으로 합니다. 이 분리는 특정 LLM 제품에 종속되지 않는 본 자료의 권장 설계입니다.</p></section>
+
+<section id="roles"><h2>06. 역할·권한·책임을 먼저 나눈다</h2>
+<table><thead><tr><th>역할</th><th>입력 → 출력</th><th>허용 권한</th><th>자기 판단으로 하면 안 되는 일</th></tr></thead><tbody>
+<tr><td>CEO / 승인자</td><td>검토 패키지 → 승인·반려·범위 수정</td><td>정책·목표·고위험 변경 결정</td><td>버전이 불명확한 일괄 승인</td></tr>
+<tr><td>PM / 업무 관리자</td><td>원 지시 → 요구사항·작업 그래프</td><td>승인 범위 내 배정·재계획</td><td>상위 목표 축소·승인 권한 대리 생성</td></tr>
+<tr><td>설계자</td><td>현행 근거 → PRD·ADR·인터페이스</td><td>대안 분석·계약 제안</td><td>문서 단계에서 운영 스키마 변경</td></tr>
+<tr><td>개발자</td><td>확정 계약 → 코드·자체 검사·변경 설명</td><td>할당 worktree·허용 파일 수정</td><td>테스트 기준을 낮추거나 배포 권한 확장</td></tr>
+<tr><td>검수자</td><td>원 지시·산출물 → 근거 포함 판정</td><td>읽기·테스트 실행·결함 제출</td><td>개발자 설명만으로 통과, 몰래 코드 수정</td></tr>
+<tr><td>통합 담당</td><td>각 분기 결과 → 합쳐진 검증 대상</td><td>허용된 병합·충돌 해결</td><td>병합 전 테스트를 병합 후 증거로 재사용</td></tr>
+<tr><td>Ops 실행자</td><td>유효 승인·릴리스 → 배포·관측 근거</td><td>정해진 배포·롤백 절차</td><td>미승인 이미지 교체·검증 생략</td></tr>
+</tbody></table>
+<p>역할 분리는 반드시 서로 다른 회사의 모델을 뜻하지 않습니다. 같은 모델이라도 별도 문맥·도구 권한·증거 접근·평가 기준을 부여할 수 있습니다. 다른 모델을 쓰면 관점이 달라질 수 있지만, 서로 독립적이거나 정답을 보장한다고 가정할 수 없습니다. 검수자는 개발자의 설명보다 원 요구사항과 실제 산출물을 먼저 봅니다.</p></section>
+
+<section id="contract"><h2>07. 업무 지시를 ‘계약’으로 만든다</h2>
+<p>“완벽하게 만들어”라는 지시는 검사하기 어렵습니다. “닫힌 봉만 입력받아 해당 시점까지의 정보로 시그널을 산출하고, 매매행동 필드를 출력하지 않으며, 같은 입력·버전에서 같은 결과를 재현하라”는 지시는 검사할 수 있습니다. 자유 형식의 CEO 지시는 유지하되, 하위 업무에는 정형 계약을 함께 전달합니다.</p>
+<h3>공통 업무 계약 예시</h3>
+<p class="tag">아래 식별자·경로·한도는 교육용 예시입니다. 실제 job_id가 아니며 실행 가능한 러너 요청 본문도 아닙니다.</p>
+<pre>{
+  "example_only": true,
+  "contract_version": "1.0",
+  "root_intent_id": "EXAMPLE-WAVE-INTENT",
+  "task_key": "EXAMPLE-SIGNAL-CONTRACT",
+  "parent_task_key": "EXAMPLE-WAVE-PROJECT",
+  "intent_version": 1,
+  "requirement_ids": ["W01", "W02", "W03", "W04"],
+  "objective": "공용 봉별 파동 시그널 계약 문서 작성",
+  "invariants": ["엔진은 매매 판단 금지", "미래 정보 사용 금지"],
+  "inputs": [{"artifact_ref": "현행분석-v1", "sha256": "실제 해시로 대체"}],
+  "depends_on": ["EXAMPLE-AUDIT"],
+  "allowed_paths": ["docs/wave/signal-contract.md"],
+  "forbidden_actions": ["운영 코드 변경", "DB 변경", "배포"],
+  "deliverables": ["시그널 스키마", "시각 의미", "오류·정정 정책"],
+  "acceptance": ["요구사항별 근거 연결", "비확정/확정 구분", "매매 필드 없음"],
+  "review_policy": {"independent_reviewer": true, "max_revisions": 2},
+  "approval_scope": "document_only",
+  "stop_conditions": ["원 요구사항 상충", "검증 데이터 부족", "한도 도달"]
+}</pre>
+<h3>상위 의도를 하위 작업에 보존하는 규칙</h3>
+<p>각 하위 업무는 <code>requirement_ids</code>로 상위 요구사항을 참조하고, <code>invariants</code>에는 절대 바뀌면 안 되는 조건을 반복 전달합니다. 새로운 제약이 발견되면 PM이 변경 제안을 만들고, 원 지시를 몰래 바꾸지 않습니다. 원문을 잘라 요약하는 과정에서 ‘전략카드에서 매매 판단’이 빠지면 엔진 안에 매수·매도 로직이 다시 들어갈 수 있습니다.</p>
+<p><strong>서버 검증 항목:</strong> 필수 필드·허용 경로·존재하는 의존 작업·순환 의존성·입력 버전·권한 범위를 검사합니다. LLM이 유효한 JSON을 만들었다고 해서 내용이 적절하거나 실행 권한이 부여되는 것은 아닙니다. 승인되지 않은 경로를 계약에 적어 넣어도 서버가 허용해서는 안 됩니다.</p></section>
+
+<section id="documents"><h2>08. PRD부터 검수까지 문서가 연결되는 방식</h2>
+<table><thead><tr><th>문서</th><th>답해야 하는 질문</th><th>파동엔진 예</th><th>다음 단계 조건</th></tr></thead><tbody>
+<tr><td>현행 분석 / Evidence</td><td>지금 어디에 무엇이 구현됐나?</td><td>봉 생성·시그널·전략 결합 지점과 파일 근거</td><td>모르는 항목을 미검증으로 표시</td></tr>
+<tr><td>PRD</td><td>누가 왜 쓰며 무엇이 완성인가?</td><td>카드·차트·백테스트가 같은 신호 의미를 공유</td><td>범위·비범위·수용 기준 합의</td></tr>
+<tr><td>ADR</td><td>왜 이 구조를 골랐나?</td><td>라이브러리·서비스 API·이벤트 방식 비교</td><td>대안과 전환 비용 기록</td></tr>
+<tr><td>계약 / Schema</td><td>무엇을 주고받는가?</td><td>봉 시각·확정 시각·버전·품질 플래그</td><td>생산자·소비자 공동 검수</td></tr>
+<tr><td>검증 계획</td><td>무엇으로 맞다고 판정하나?</td><td>미래 참조·repaint·재현성·정정 데이터 시험</td><td>정답 데이터와 실패 주입 준비</td></tr>
+<tr><td>작업 지시 / Work package</td><td>누가 어떤 범위를 바꾸나?</td><td>계산 모듈과 카드 어댑터를 분리 배정</td><td>의존성·소유 파일·검수자 지정</td></tr>
+<tr><td>검수서 / Defect report</td><td>무엇이 통과·실패·미검증인가?</td><td>W02의 available_at 조건 위반</td><td>판정마다 실제 증거 연결</td></tr>
+<tr><td>전환·롤백 계획</td><td>어떻게 안전하게 바꾸고 복귀하나?</td><td>병행 산출 비교 → 일부 소비자 → 전체</td><td>승인과 관측 기준 확보</td></tr>
+<tr><td>HANDOVER / 운영 기록</td><td>다음 담당자가 어디서 이어가나?</td><td>버전·테스트·미결정·실행 금지사항</td><td>원장·Git·운영 상태 일치</td></tr>
+</tbody></table>
+<p>문서의 양보다 연결성이 중요합니다. 작은 작업에서는 문서를 합칠 수 있지만 요구사항 추적표와 승인 대상 버전은 유지해야 합니다. 개발 후 PRD를 결과에 맞춰 수정해서 통과시키는 것을 막으려면 최초 승인본과 변경 이력을 별도로 보존합니다.</p></section>
+
+<section id="state"><h2>09. 상태·승인·완료를 분리한다</h2>
+<p>채팅창의 ‘완료’는 최소한 무엇이 완료됐는지 설명해야 합니다. 문서 제출, 코드 검수, 운영 반영은 다른 사건입니다. 아래 상태명은 AADS 전체의 현재 스키마가 아니라 권장 논리 모델입니다.</p>
+<table><thead><tr><th>상태</th><th>의미</th><th>전이 조건</th></tr></thead><tbody>
+<tr><td>DRAFT → READY</td><td>지시 작성 → 실행 준비</td><td>범위·입력·의존성·예산·권한 검사 통과</td></tr>
+<tr><td>RUNNING → SUBMITTED</td><td>작업 → 산출물 제출</td><td>산출물 저장·해시·실행 로그 확보</td></tr>
+<tr><td>REVIEWING → ACCEPTED</td><td>독립 검수 → 인수 통과</td><td>필수 기준 전부 통과, 필수 미검증 없음</td></tr>
+<tr><td>REVIEWING → REWORK</td><td>수정이 필요한 결함</td><td>실패 ID·증거·영향·새 시도 연결</td></tr>
+<tr><td>BLOCKED / AWAITING_APPROVAL</td><td>자료 부족 / 사람 승인 필요</td><td>입력 또는 유효 승인 도착 후 재개</td></tr>
+<tr><td>RELEASE_QUEUED → DEPLOYED</td><td>배포 요청 → 환경 반영</td><td>승인된 버전과 실제 이미지 일치</td></tr>
+<tr><td>DEPLOYED → CERTIFIED</td><td>반영 → 운영 검증 완료</td><td>헬스·필수 E2E·관측 기준 통과</td></tr>
+<tr><td>CANCELLED / FAILED</td><td>취소 / 종료된 실패</td><td>후속 작업은 새 시도로 연결, 실패 기록 유지</td></tr>
+</tbody></table>
+<p><strong>승인 토큰이 결합해야 할 것:</strong> 작업 ID, 요구사항 버전, 산출물 해시, 테스트 대상 SHA, 환경, 허용 행동, 만료·철회 상태입니다. 승인 후 코드가 바뀌면 이전 승인은 새 코드에 자동 적용되지 않습니다. 문서 승인과 운영 배포 승인의 범위도 다르게 기록합니다.</p>
+<p>A2A 문서는 종료된 Task를 다시 시작하지 않고 동일 문맥 안에서 새 Task로 후속 작업을 연결하는 수명 주기를 설명합니다. AADS 내부 재시도에는 별도의 Attempt 모델을 쓸 수 있으며, 외부 A2A Task와 1:1로 같다고 가정할 필요는 없습니다. <a href="#r12">[12]</a></p></section>
+
+<section id="simulation"><h2>10. 직접 눌러 보는 검수·재지시</h2>
+<p>개발자가 공용 시그널 모듈을 제출한 상황입니다. 검수 결과를 선택하고 진행하십시오. <strong>운영 API와 연결되지 않은 교육용 시뮬레이션</strong>이며, 승인·배포 버튼은 실제 시스템을 조작하지 않습니다. 재작업 한도는 예시 정책으로 두 번입니다.</p>
+<div class="lab">
+<label for="scenario">검수에서 발견된 상황</label><select id="scenario"><option value="pass">필수 검수 통과</option><option value="bug">신호 확정 시각 오류</option><option value="scope">매매 판단 분리 요구사항 누락</option><option value="unknown">테스트 데이터가 없어 판정 불가</option><option value="conflict">검수 의견이 서로 충돌</option></select>
+<div class="buttons"><button id="reviewBtn">검수 결과 적용</button><button id="fixBtn" disabled>수정·재제출 / 자료 보완</button><button id="approveBtn" disabled>이 버전 승인</button><button id="changeBtn" disabled>승인 후 내용 변경</button><button id="deployBtn" disabled>운영 검증 통과 처리</button><button id="resetBtn">처음부터</button></div>
+<div class="states" aria-label="작업 상태"><div class="state" data-stage="submitted">산출물 제출</div><div class="state" data-stage="rework">재작업</div><div class="state" data-stage="blocked">판단·자료 대기</div><div class="state" data-stage="accepted">검수 통과</div><div class="state" data-stage="approved">버전 승인</div><div class="state" data-stage="certified">운영 인증</div><div class="state" data-stage="escalated">한도 도달</div></div>
+<div id="simResult" role="status" aria-live="polite"></div><ol id="simLog" aria-label="진행 기록"></ol>
+</div>
+<p>핵심은 같은 ‘실패’라도 후속 행동이 다르다는 점입니다. 코드 오류는 해당 작업을 수정하고, 요구사항 누락은 계획을 고치며, 자료 부족은 대기하고, 정책 상충은 권한 있는 결정자에게 보냅니다. 재작업 한도 도달은 완료가 아닙니다.</p><noscript><p>JavaScript가 꺼져 있어 체험 기능이 비활성입니다. 같은 흐름은 09·12장의 상태표로 읽을 수 있습니다.</p></noscript></section>
+
+<section id="wave"><h2>11. 파동엔진 사례로 끝까지 따라가기</h2>
+<p><strong>보존할 CEO 의도:</strong> 파동엔진은 봉별 정제된 시그널을 발행하는 공용 엔진입니다. 전략카드가 그 정보를 받아 각자의 정책으로 매매 판단을 합니다. 엔진의 품질을 특정 전략의 수익률로만 최적화하면 다시 전략 종속 모듈이 되므로 두 층의 평가를 분리합니다. 이 장은 제공된 CEO 지시를 설계로 구체화한 예시이며 GO100 운영 코드의 현행 검증은 아닙니다.</p>
+<figure><svg viewBox="0 0 930 310" role="img" aria-labelledby="waveTitle"><title id="waveTitle">공용 파동신호와 다양한 소비자의 분리</title><rect class="box" x="15" y="108" width="195" height="75"/><text x="112" y="139" text-anchor="middle">봉 데이터</text><text x="112" y="165" text-anchor="middle">정규화·품질 검사</text><path class="arrow" marker-end="url(#head)" d="M210 145H273"/><rect class="box" x="280" y="97" width="280" height="98"/><text x="420" y="125" text-anchor="middle">글로벌 파동엔진</text><text x="420" y="152" text-anchor="middle">시그널·확정 시점·버전</text><text x="420" y="178" text-anchor="middle">매수·매도·비중 판단 없음</text><path class="arrow" marker-end="url(#head)" d="M560 145H622V48H673"/><path class="arrow" marker-end="url(#head)" d="M560 145H673"/><path class="arrow" marker-end="url(#head)" d="M560 145H622V251H673"/><rect class="box" x="680" y="15" width="230" height="65"/><text x="795" y="42" text-anchor="middle">전략카드 A / B / C</text><text x="795" y="67" text-anchor="middle">각자의 매매 정책</text><rect class="box" x="680" y="115" width="230" height="65"/><text x="795" y="143" text-anchor="middle">차트·알림</text><text x="795" y="166" text-anchor="middle">동일 신호 의미 사용</text><rect class="box" x="680" y="218" width="230" height="65"/><text x="795" y="246" text-anchor="middle">백테스트·연구</text><text x="795" y="270" text-anchor="middle">당시 이용 가능 정보 재현</text></svg><figcaption>교육용 권장 모듈 경계. 실제 주문과 위험관리 계층은 전략 소비자 이후의 별도 책임입니다.</figcaption></figure>
+<table><thead><tr><th>요구 ID</th><th>고정할 요구사항</th><th>담당 작업</th><th>인수 검증</th></tr></thead><tbody>
+<tr><td>W01</td><td>신호 생성과 매매 판단 분리</td><td>계약·계산 모듈·의존성 정리</td><td>출력에 action·주문 수량·비중 없음, 전략 모듈 역참조 없음</td></tr>
+<tr><td>W02</td><td>미래 정보 없이 봉별 판단</td><td>시간 계약·계산 알고리즘</td><td>t 시점 이후 데이터를 숨긴 실행과 비교</td></tr>
+<tr><td>W03</td><td>확정 시점과 잠정 신호 구분</td><td>확정 정책·정정 이벤트</td><td>과거 시점에서 아직 알 수 없던 pivot을 알았다고 기록하지 않음</td></tr>
+<tr><td>W04</td><td>동일 데이터·버전 재현</td><td>순수 계산·버전 관리</td><td>동일 입력의 정규화 결과 해시 일치</td></tr>
+<tr><td>W05</td><td>여러 소비자가 같은 의미 사용</td><td>계약 테스트·카드 어댑터</td><td>서로 다른 소비자에서 같은 신호 해석</td></tr>
+<tr><td>W06</td><td>정정·누락·중복 봉 처리</td><td>품질 플래그·리비전 정책</td><td>중복·역순·수정 봉 재생 후 명시된 결과 유지</td></tr>
+<tr><td>W07</td><td>안전한 전환·복귀</td><td>병행 비교·전환 계획</td><td>소비자별 버전 고정·복귀 리허설</td></tr>
+</tbody></table>
+<h3>‘정확한 시그널’의 검증 가능한 의미</h3>
+<p>미래 가격을 항상 맞히는 것을 의미하지 않습니다. 계산 정의가 고정되고, 입력이 올바르며, 미래 정보가 섞이지 않고, 같은 조건에서 재현되는 것을 먼저 보장해야 합니다. 이후에 신호의 예측 유용성을 별도 데이터로 평가할 수 있습니다. ‘봉마다 정확’이라는 표현도 모든 봉에서 새 이벤트를 억지로 만든다는 뜻으로 해석하면 안 됩니다. <code>no_signal</code>·<code>insufficient_data</code>·<code>provisional</code> 같은 상태를 정의할 수 있습니다.</p>
+<h3>놓치기 쉬운 시각 계약</h3>
+<p>예를 들어 어떤 봉의 저점을 확인하려면 이후 봉이 더 필요할 수 있습니다. 저점이 놓인 봉의 시각과 그 사실을 확정할 수 있게 된 시각은 다릅니다. 따라서 <code>bar_end</code>, <code>signal_at</code>, <code>confirmed_at</code>, <code>available_at</code>, <code>computed_at</code>의 의미를 문서화하고, 백테스트는 당시 <code>available_at</code>까지 도착한 정보만 사용해야 합니다.</p>
+<pre>교육용 시그널 계약 예시
+instrument_id, market, timeframe, bar_end
+wave_state, signal_type, status
+signal_at, confirmed_at, available_at, computed_at
+engine_version, parameter_version, input_revision
+quality_flags, signal_id, supersedes_signal_id
+
+별도 전략카드 책임
+진입 / 청산 / 주문 수량 / 자금 배분 / 위험 제한</pre>
+<h3>실제 하위 업무 분해</h3>
+<p>먼저 현행 분석을 끝내고 PRD·신호 계약을 확정합니다. 그 다음 계산 모듈과 소비자 어댑터, 독립 검증 데이터 준비는 계약을 공통 입력으로 병렬 배정할 수 있습니다. 합류 지점에서 엔진+어댑터를 함께 시험하고, 원 요구사항과 통합 결과를 검수한 뒤 전환 계획으로 넘어갑니다. 엔진 계약이 바뀌면 소비자와 통합 테스트도 영향 대상으로 표시해야 합니다.</p></section>
+
+<section id="review"><h2>12. 검수 결과를 재지시로 바꾸는 방법</h2>
+<h3>검수는 근거가 있는 판정이어야 한다</h3>
+<p>검수자는 필수 요구사항별로 <code>PASS / FAIL / NOT_VERIFIED / NOT_APPLICABLE</code>을 기록합니다. 필수 항목의 미검증은 통과가 아닙니다. 해당 없음은 근거와 승인 범위를 남겨야 하며, 개발자가 제출한 테스트만 보지 않고 원 지시에서 빠진 조건도 찾습니다.</p>
+<pre>{
+  "example_only": true,
+  "verdict": "FAIL",
+  "reviewed_artifact_hash": "검수한 파일의 실제 해시",
+  "rubric_version": "wave-acceptance-v1",
+  "findings": [{
+    "requirement_id": "W02",
+    "severity": "P1",
+    "category": "implementation_defect",
+    "expected": "available_at 이전에는 확정 신호를 제공하지 않음",
+    "actual": "과거 봉 시각으로 확정 신호가 소급 노출됨",
+    "evidence_ref": "재현 로그·입력 fixture·실패 assertion",
+    "affected_artifacts": ["시간 처리 모듈", "시그널 계약 테스트"],
+    "recommended_action": "확정 시각과 신호 발생 시각 분리"
+  }],
+  "not_verified": [],
+  "next_route": "REWORK"
+}</pre>
+<table><thead><tr><th>실패 유형</th><th>재지시 대상</th><th>유지할 것</th><th>다시 검증할 것</th></tr></thead><tbody>
+<tr><td>구현 오류</td><td>해당 작업의 새 시도</td><td>승인된 요구·계약</td><td>실패 재현 + 관련 회귀 + 통합 영향</td></tr>
+<tr><td>요구사항 누락</td><td>PM·설계자에게 계획 수정</td><td>CEO 원 의도</td><td>추적표·하위 작업 커버리지</td></tr>
+<tr><td>입력 데이터 부족</td><td>자료 확보 또는 질문 대기</td><td>실패가 아닌 미검증 상태</td><td>데이터 확보 후 해당 검사</td></tr>
+<tr><td>도구·네트워크 오류</td><td>실행 복구</td><td>이미 검증된 산출물</td><td>부작용 발생 여부·중복 방지</td></tr>
+<tr><td>검수자 의견 충돌</td><td>증거 대조·중재</td><td>기준 버전과 양측 의견</td><td>독립 재현, 정책 필요 시 사람 결정</td></tr>
+<tr><td>스코프·권한 초과</td><td>실행 중지·범위 재승인</td><td>기존 승인 경계</td><td>새 권한·새 산출물의 유효성</td></tr>
+</tbody></table>
+<h3>부분 재실행의 조건</h3>
+<p>실패한 노드만 무조건 다시 실행하면 안 됩니다. 어떤 입력 산출물이 바뀌었는지 보고 그 산출물을 소비한 하위 노드의 검증을 무효화해야 합니다. 반대로 입력 해시·계약·테스트 기준이 그대로인 독립 결과는 보존할 수 있습니다. 재작업 그래프는 ‘실패 노드 + 변경 영향이 있는 후속 노드’로 계산합니다.</p>
+<p><strong>중단 규칙:</strong> 같은 실패의 반복, 새 근거 없는 평가 반복, 재작업 한도·시간·비용 한도 도달, 권한 충돌은 종료 또는 에스컬레이션 사유입니다. 한도는 전체 트리 예산에도 적용해야 하며, 하위 에이전트를 새로 만드는 방식으로 초기화하면 안 됩니다. 한도 도달 뒤 자동 PASS나 자동 배포로 넘어가는 경로를 금지합니다.</p></section>
+
+<section id="reliability"><h2>13. 연결 끊김·중복 실행·충돌에서 복구하기</h2>
+<p>장기 업무의 실패는 LLM 추론만의 문제가 아닙니다. 작업을 실행한 뒤 응답만 유실되거나, 이전 worker가 뒤늦게 살아나거나, 두 실행자가 같은 작업을 가져갈 수 있습니다. 상태 영속화와 데이터 무결성 기술을 함께 설계해야 합니다.</p>
+<table><thead><tr><th>문제</th><th>기술</th><th>적용 방법</th><th>남는 한계</th></tr></thead><tbody>
+<tr><td>채팅·프로세스 중단</td><td>Checkpoint + 영속 원장</td><td>완료한 단계·입력 버전·미완료 행동을 저장</td><td>메모리 전용 저장은 프로세스 재시작에 취약</td></tr>
+<tr><td>같은 작업 중복 수신</td><td>Idempotency key + UNIQUE</td><td>업무·시도·행동 키를 서버가 생성하고 중복 차단</td><td>같은 키로 다른 입력 제출 시 충돌 반환 필요</td></tr>
+<tr><td>상태 저장과 큐 발행 사이 장애</td><td>Transactional Outbox</td><td>상태와 이벤트를 같은 트랜잭션에 기록, 별도 발행</td><td>발행은 중복될 수 있어 소비자 Inbox도 필요</td></tr>
+<tr><td>이전 worker가 늦게 결과 제출</td><td>Lease + owner epoch</td><td>현재 소유자·세대·임대 유효성 확인 후 확정</td><td>외부 시스템도 fencing 또는 멱등 계약을 받아야 함</td></tr>
+<tr><td>같은 파일·API 의미 충돌</td><td>Worktree + 소유 범위 + 통합 게이트</td><td>작업별 변경 격리, 공용 계약 변경은 순서 제어</td><td>worktree만으로 논리 충돌이 해결되지는 않음</td></tr>
+<tr><td>이벤트 순서 역전</td><td>State version / CAS</td><td>예상 이전 버전이 맞을 때만 상태 변경</td><td>충돌 시 재조회 후 재판정 필요</td></tr>
+<tr><td>외부 행동은 성공, 응답 유실</td><td>조회·재조정 / Reconciliation</td><td>외부 참조 ID로 실제 효과 확인 후 재시도 결정</td><td>확인 전 성공·실패 어느 쪽도 단정 불가</td></tr>
+</tbody></table>
+<p class="source">Checkpoint 개념은 LangGraph 공식 문서, DB 잠금은 PostgreSQL 공식 문서 참조. Outbox·Inbox·CAS·fencing의 조합은 본 자료의 권장 시스템 설계이며 특정 프레임워크가 자동 제공한다는 의미가 아닙니다. <a href="#r10">[10]</a> <a href="#r15">[15]</a></p>
+<h3>서버가 강제해야 하는 상태 갱신 예</h3>
+<pre>-- 교육용 의사 SQL: 실제 AADS 테이블·마이그레이션이 아님
+UPDATE task_attempts
+SET state = 'SUBMITTED', version = version + 1, artifact_hash = :hash
+WHERE attempt_id = :attempt
+  AND state = 'RUNNING'
+  AND version = :expected_version
+  AND owner_instance = :worker
+  AND owner_epoch = :epoch
+  AND lease_expires_at > CURRENT_TIMESTAMP;
+-- 변경 행이 1이 아니면 결과 확정 거부 후 원장 재조회.
+-- 산출물 메타데이터·상태 이벤트를 동일 트랜잭션에 기록.
+-- 외부 파일은 먼저 불변 객체로 저장하고 미참조 객체는 별도 정리.</pre>
+<p>이 DB 조건은 오래된 worker가 DB를 변경하지 못하도록 할 뿐, 이미 실행한 외부 행동을 취소하지는 못합니다. 배포·주문 같은 외부 효과는 대상 시스템의 멱등키·승인·참조 원장·보상 절차를 별도로 사용해야 합니다. 모든 환경에 대한 ‘Exactly-once 보장’으로 표현하지 않습니다.</p>
+<h3>안전한 재개 순서</h3>
+<ol><li>현재 작업 상태·유효 소유자·마지막 성공 이벤트를 읽습니다.</li><li>미완료 행동의 외부 효과가 있었는지 확인합니다.</li><li>산출물 해시와 요구사항 버전이 유지되는지 확인합니다.</li><li>새 owner epoch로 권한을 확보하고 필요한 행동만 재개합니다.</li><li>사용자 화면에는 보존된 결과와 재개 지점을 표시합니다.</li></ol>
+<p>LangGraph의 interrupt는 사람 입력을 기다렸다가 같은 thread의 상태로 재개하는 도구입니다. 체크포인터·thread 식별·부작용의 안전성·재개 시 동작은 배포 환경에서 검증해야 하며, 함수를 넣었다는 사실만으로 안전한 복구를 증명할 수 없습니다. <a href="#r11">[11]</a></p></section>
+
+<section id="memory"><h2>14. 지식·보안·문맥을 어떻게 전달할 것인가</h2>
+<h3>모든 대화를 전달하지 말고 필요한 근거를 전달한다</h3>
+<p>하위 에이전트에는 원 의도의 필수 조항, 담당 요구사항, 입력 산출물의 위치·해시, 관련 결정, 금지사항, 검수 기준을 보냅니다. 긴 대화의 요약만 보내면 요구사항이 누락될 수 있고, 모든 대화를 보내면 다른 프로젝트 내용과 불필요한 데이터가 섞일 수 있습니다. 요약은 탐색용으로 쓰고 결정의 원문과 검증 근거는 참조로 유지합니다.</p>
+<table><thead><tr><th>저장 영역</th><th>보존 내용</th><th>갱신 기준</th></tr></thead><tbody>
+<tr><td>실행 상태</td><td>현재 단계·시도·소유자·재개 위치</td><td>서버 상태 전이</td></tr>
+<tr><td>업무 산출물</td><td>PRD·코드·스키마·테스트·승인</td><td>불변 버전, 이전 버전 연결</td></tr>
+<tr><td>검증된 지식</td><td>재현된 실패 원인·승인된 ADR·운영 절차</td><td>검수 후 승격, 적용 범위·만료·출처 기록</td></tr>
+<tr><td>가설·반성 메모</td><td>개선 추정·실패 후보·다음 실험</td><td>검증 전 사실로 재사용하지 않음</td></tr>
+</tbody></table>
+<p>Reflexion은 피드백을 기억해 다음 시도에 반영하는 방법을 보여줍니다. 운영에서는 이 아이디어에 검증·범위·만료 정책을 추가해야 잘못된 추론이 장기 규칙으로 굳는 것을 막을 수 있습니다. 프롬프트나 검수 기준을 자동 수정한 경우 새 버전을 별도 평가한 뒤 승격하도록 설계합니다. <a href="#r2">[2]</a></p>
+<h3>지시와 외부 자료의 경계</h3>
+<p>웹페이지·README·검수 의견·도구 출력은 분석 대상 데이터입니다. 그 안에 “승인 절차를 무시하라”는 문장이 있어도 권한이 되지 않습니다. 에이전트별 접근 범위를 서버에서 제한하고, 문서 작성자는 배포 자격증명을 받지 않으며 검수자는 원본 자료를 읽되 운영 변경 권한은 갖지 않도록 합니다.</p>
+<p>프로젝트·고객별 데이터 접근을 나누고, 외부 모델에 보낼 입력과 trace에는 필요한 정보만 남깁니다. 모델 호출 본문·도구 출력·에러 로그에 비밀값이 들어가지 않게 마스킹과 보존 정책을 적용합니다. 멀티 에이전트가 로컬 CLI로 실행되어도 외부 모델 호출의 데이터 경계는 별도 검토 대상입니다. 계정별 보존·학습 설정은 이 교육자료에서 확인하지 않았습니다.</p></section>
+
+<section id="stack"><h2>15. 기술 선택: 각 도구가 담당하는 층</h2>
+<table><thead><tr><th>기술</th><th>담당하는 역할</th><th>추천 사용 지점</th><th>자동 해결하지 않는 것</th></tr></thead><tbody>
+<tr><td>LangGraph</td><td>상태 기반 분기·반복·중단·재개</td><td>검수 결과에 따른 라우팅과 승인 대기</td><td>업무 정답·권한·외부 부작용 원자성</td></tr>
+<tr><td>LangChain</td><td>모델·도구·메시지 등 애플리케이션 구성</td><td>기존 통합이 있는 에이전트 노드 구현</td><td>회사 전체 업무 원장과 완료 계약</td></tr>
+<tr><td>LangSmith / 평가·추적 계층</td><td>실행 관찰·데이터셋·평가</td><td>검수 품질·회귀·trace 비교</td><td>사업 승인이나 배포 권한의 대체</td></tr>
+<tr><td>OpenAI Agents SDK</td><td>전문 에이전트 호출·handoff 등 구성</td><td>관리자 책임 유지 또는 전문 역할로 인계</td><td>AADS의 업무 계약을 자동 해석·강제하는 일</td></tr>
+<tr><td>MCP</td><td>도구·리소스 접근 인터페이스</td><td>코드 읽기·검색·검증 도구 연결</td><td>프로젝트 전체 작업 배정·승인 원장</td></tr>
+<tr><td>A2A</td><td>독립 에이전트 서비스의 메시지·업무 수명 주기</td><td>팀·서버·제품 경계를 넘는 위임</td><td>클라이언트의 산출물 버전 계보와 업무 수용 판단</td></tr>
+<tr><td>기존 Pipeline Runner</td><td>장기 개발 실행·작업 격리·결과 수집</td><td>승인된 코드 업무의 실행 계층</td><td>모든 경로에서 같은 의미의 완료 상태</td></tr>
+<tr><td>PostgreSQL + 큐 + 산출물 저장소</td><td>원장·동시성·실행 전달·근거 보존</td><td>플랫폼의 통제 계층</td><td>AI가 생성한 내용의 타당성</td></tr>
+</tbody></table>
+<p class="source">제품 비교 근거: <a href="#r8">OpenAI 공식 문서 [8]</a>, <a href="#r9">LangGraph 패턴 [9]</a>, <a href="#r10">영속화 [10]</a>, <a href="#r12">A2A [12]</a>, <a href="#r13">MCP [13]</a>, <a href="#r14">LangSmith [14]</a>. 정확한 API와 지원 범위는 설치 버전에 맞춰 고정해야 합니다.</p>
+<p><strong>도입 판단:</strong> AADS에 이미 있는 Runner와 Native StateGraph를 활용하면서 업무 계약과 검증을 보강하는 경로를 먼저 권장합니다. A2A는 독립 서비스 간 상호운용이 필요해질 때 추가할 수 있습니다. 여러 프레임워크를 겹쳐 각자 재시도·상태를 관리하게 만들면 실제 책임자가 불명확해집니다. 상태 전이의 최종 소유자는 하나로 정하고 다른 실행기의 상태는 매핑합니다.</p></section>
+
+<section id="aads"><h2>16. AADS에서 실제 확인한 것과 추가 검증할 것</h2>
+<p>아래는 로컬 AADS 소스 확인 결과입니다. <strong>코드 존재와 운영 활성화·효과 검증을 분리</strong>했습니다. 조사 기준 소스는 <code>5f5332f3e168ad65889adf44cd57e1a1dee82871</code>이며 작업트리에 다른 세션 변경이 있으므로 릴리스 인증 근거로 사용하지 않습니다. GO100 코드는 이번 작업에서 조회·수정하지 않았습니다.</p>
+<table><thead><tr><th>대상</th><th>확인한 근거</th><th>판정</th><th>필요한 검증·보강</th></tr></thead><tbody>
+<tr><td>역할 분리 그래프</td><td><code>app/graph/builder.py</code><br>PM·Supervisor·Architect·Developer·QA·Judge·DevOps·Researcher 노드</td><td>구현 존재</td><td>현재 요청이 이 그래프를 실제 타는지는 별도 trace 확인</td></tr>
+<tr><td>의존성 준비 판정</td><td><code>agent_orchestrator.py:221</code><br><code>if dep in self.tasks</code>로 의존 대상을 필터링</td><td>보강 후보</td><td>누락 dependency가 무시될 수 있는 로컬 로직. 상위 입력 검증·재현 테스트 필요</td></tr>
+<tr><td>작업 완료 판정</td><td><code>agent_orchestrator.py:302</code><br>하위 결과의 <code>status == completed</code>로 노드 완료</td><td>실행 완료 근거</td><td>독립 인수 검수·배포 인증과 같은 의미로 표시하지 않기</td></tr>
+<tr><td>검수·재지시</td><td><code>pipeline_runner_service.py:676</code> 이후 검수, FAIL 피드백으로 revision 실행</td><td>구현 존재</td><td>구조화된 결함 ID·영향 산출물·기준 버전의 종단 연결 검증</td></tr>
+<tr><td>그래프 재시도 종료</td><td><code>app/graph/routing.py:55</code><br>특정 fail·development 분기에서 iteration 한도 뒤 devops 반환</td><td>게이트 검증 필요</td><td>DevOps 내부 차단·상태 전이까지 시험. 이 코드만으로 실제 오배포를 단정하지 않음</td></tr>
+<tr><td>Runner와 배포 상태 분리</td><td><code>pipeline_runner_service.py:920</code><br>deploy_queued와 done을 함께 기록, deploy_run_id 반환</td><td>코드로 확인</td><td>화면·보고에서 배포 큐 등록과 운영 인증을 구분</td></tr>
+<tr><td>OHVIS 작업 상태 API</td><td><code>app/api/ohvis_tasks.py:235</code><br>상태 업데이트 시 done/error의 completed_at 기록</td><td>상태 기록 구현</td><td>해당 경로에 인수·권한·배포 증거가 어떻게 결합되는지 추가 검증</td></tr>
+<tr><td>배포 운영 계약</td><td><code>/root/aads/AGENTS.md</code><br>불변 이미지·소유권 fencing·후보 헬스·관측 규칙</td><td>명시된 운영 규칙</td><td>규칙 존재와 실제 릴리스 준수는 배포별 원장·로그로 따로 확인</td></tr>
+</tbody></table>
+<p><strong>현재 판정:</strong> 처음부터 새 에이전트 조직을 만들 필요는 없습니다. 역할·검수·Runner 기반 위에 공통 요구사항 추적, 완료 의미 통합, 유효 승인, 부분 재실행 규칙을 강화하는 것이 실행 가능한 방향입니다. 표의 보강 후보는 운영 장애 확정이나 수정 완료를 의미하지 않습니다.</p>
+<p class="source">[내부 코드 확인, 2026-09-09 KST]. 운영 DB의 업무 성과·검수 통과율·비용은 이 자료에서 측정하지 않았습니다. 수치가 필요한 평가는 17·18장의 실험으로 확보해야 합니다.</p></section>
+
+<section id="metrics"><h2>17. 비용·속도·품질을 같이 본다</h2>
+<p>에이전트 수가 늘면 빨라질 수 있지만, 공통 준비·결과 취합·재작업 시간이 남습니다. 아래 그래프는 병렬화의 구조를 설명하는 계산 모델입니다. <strong>모든 입력은 가상 교육값이며 AADS 실측·예측·제품 벤치마크가 아닙니다.</strong></p>
+<div class="lab">
+<div class="grid2"><div><label for="workers">독립 작업 수: <output id="workersValue">4</output>개</label><input id="workers" type="range" min="1" max="8" value="4"><label for="duration">각 작업 시간: <output id="durationValue">10</output>분</label><input id="duration" type="range" min="2" max="30" value="10"></div><div><label for="overhead">분할·조정 추가 시간: <output id="overheadValue">8</output>분</label><input id="overhead" type="range" min="0" max="40" value="8"><label for="redo">병렬 통합 후 재작업: <output id="redoValue">5</output>분</label><input id="redo" type="range" min="0" max="40" value="5"></div></div>
+<div class="barrow"><span>순차</span><div class="bartrack"><div class="bar" id="seqBar"></div></div><output id="seqTime"></output></div><div class="barrow"><span>병렬</span><div class="bartrack"><div class="bar blue" id="parBar"></div></div><output id="parTime"></output></div><p id="calcResult" aria-live="polite"></p>
+<p class="source">공통 준비·검수 6분을 두 경우에 동일 적용한 단순 모델.<br>순차 = 6 + 작업 수 × 작업 시간. 병렬 = 6 + 작업 시간 + 분할·조정 시간 + 추가 재작업. 동일 길이·완전 독립 작업과 충분한 슬롯을 가정합니다. 실제 큐 대기·공유 자원·편차는 제외됩니다.</p>
+</div>
+<p>그래프의 작업 수를 늘려도 무조건 좋은 것은 아닙니다. 실제 실행에서는 가장 늦은 작업이 합류 시점을 결정하고, API 한도·공유 DB·통합 충돌 때문에 병렬 비용이 커질 수 있습니다. 순차에도 재작업이 생길 수 있으며 이 모델은 공통 비용과 병렬화의 추가 비용을 구분해 설명하기 위한 것입니다.</p>
+<table><thead><tr><th>지표</th><th>정의</th><th>수집 방법</th><th>현재 수치</th></tr></thead><tbody>
+<tr><td>업무 인수 성공률</td><td>독립 기준 통과 업무 / 평가 대상 업무</td><td>고정 평가 세트와 검수 원장</td><td>미측정</td></tr>
+<tr><td>허위 완료율</td><td>완료 보고했지만 필수 근거가 없는 업무 / 완료 보고 업무</td><td>보고·검증·배포 상태 대조</td><td>미측정</td></tr>
+<tr><td>요구사항 커버리지</td><td>증거가 연결된 필수 요구 / 전체 필수 요구</td><td>추적표와 artifact 연결</td><td>미측정</td></tr>
+<tr><td>재작업 횟수·원인</td><td>기능 오류·스코프 누락·인프라 실패별 반복</td><td>attempt·defect 원장</td><td>미측정</td></tr>
+<tr><td>완료 지연 p50/p95</td><td>요청부터 인수까지 경과, 승인 대기는 따로 표시</td><td>상태 이벤트 시각</td><td>미측정</td></tr>
+<tr><td>성공 업무당 비용</td><td>실패·재작업 포함 전체 비용 / 성공 업무</td><td>공급자 usage·과금과 도구·실행 비용</td><td>$ 미측정</td></tr>
+<tr><td>검수 품질</td><td>알려진 결함의 탐지와 정상 결과의 오반려</td><td>사람 검수 정답·실패 주입</td><td>미측정</td></tr>
+</tbody></table>
+<p>비용은 입력·출력·캐시·도구·모델별 단가와 실제 사용량을 분리해 기록합니다. 특정 모델 단가를 모든 모델에 곱한 값은 청구액이 아닙니다. 관리자와 재작업, 실패한 시도까지 합산해야 비용 효율을 비교할 수 있습니다. 분모가 0인 비율은 0%가 아니라 ‘해당 없음’으로 표시합니다.</p></section>
+
+<section id="roadmap"><h2>18. 실현 가능한 단계별 도입안</h2>
+<p>도입 범위는 AADS의 공통 오케스트레이션이며, 첫 실습 업무는 파동엔진의 <strong>문서·계약 작성</strong>으로 제한하는 것을 권장합니다. 운영 주문·배포 권한을 포함하기 전에 검수와 재지시가 제대로 작동하는지 확인할 수 있습니다. 아래 단계는 제안이며 아직 실행하거나 비용·기간을 산정한 계획이 아닙니다.</p>
+<table><thead><tr><th>단계·우선순위</th><th>구체적인 구현</th><th>산출물</th><th>완료 기준</th></tr></thead><tbody>
+<tr><td>기준선 · P0</td><td>현재 상태 의미·실패 분기·활성 경로 조사</td><td>As-is 상태표·경로 지도·평가 과제</td><td>done과 인증의 의미가 전 경로에서 설명됨</td></tr>
+<tr><td>업무 계약 · P0</td><td>요구사항·입력 해시·수용 기준·권한 검증</td><td>스키마·추적표·제출 validator</td><td>누락 dependency·순환·권한 초과 모두 차단</td></tr>
+<tr><td>검수·재작업 · P0</td><td>결함 보고 구조·판정 분기·전역 한도</td><td>독립 검수자·재지시 생성·중단 경로</td><td>미검증·한도 초과가 완료로 전이되지 않음</td></tr>
+<tr><td>영속화·복구 · P0</td><td>attempt·lease·event·outbox·승인 버전 결합</td><td>장애 주입 시험과 상태 복구</td><td>중복·역순·stale worker가 잘못된 확정을 못 함</td></tr>
+<tr><td>부분 병렬화 · P1</td><td>공용 계약 확정 뒤 독립 작업 fan-out</td><td>worktree·영향 그래프·통합 검사</td><td>병합 결과에 대한 새 검증 근거 확보</td></tr>
+<tr><td>CEO 업무 화면 · P1</td><td>원 지시·현재 단계·증거·미결정·승인 함께 표시</td><td>업무 상세와 복구 UI</td><td>재접속·만료·모바일에서 같은 상태 복원</td></tr>
+<tr><td>평가·최적화 · P1</td><td>단일/멀티 비교·사람 검수·비용 집계</td><td>평가 리포트·회귀 데이터셋</td><td>품질 하한 충족 후 비용·지연 개선 판단</td></tr>
+<tr><td>외부 상호운용 · P2</td><td>필요한 서비스만 A2A 어댑터 연결</td><td>프로토콜 매핑·권한·호환 시험</td><td>외부 completed가 내부 인증으로 자동 승격되지 않음</td></tr>
+</tbody></table>
+<h3>개발자가 설계할 최소 원장</h3>
+<pre>제안 논리 모델 — 실제 테이블명·마이그레이션은 현행 분석 후 결정
+intent_versions: 원 지시, 버전, 불변 조건, 승인 범위
+requirements: requirement_id, intent_version, acceptance_ref
+tasks: parent, dependencies, owner_role, state_version
+attempts: task, attempt_no, owner_epoch, lease, actual_usage
+artifacts: task, attempt, kind, hash, storage_ref, supersedes
+reviews: artifact_hash, rubric_version, reviewer, verdict, evidence
+approvals: approver, action, environment, artifact_hash, expiry, revoked
+events / outbox / inbox: event_id, aggregate_version, delivery state
+release_binding: release_sha, tested_sha, approval_ref, certification_ref</pre>
+<p>기존 테이블과 중복으로 만들지 말고 필요한 필드와 관계를 매핑해야 합니다. 마이그레이션에는 읽기 호환·백필·검증·롤백 계획이 필요합니다. 스키마와 작업 상태를 동시에 바꿀 때는 구버전 worker의 호환성과 늦게 도착한 이벤트 처리도 검사합니다.</p>
+<h3>CEO 화면의 사용자 흐름</h3>
+<p>첫 화면은 ‘내가 지시한 업무’ 목록이고, 상세를 열면 현재 단계·마지막 진행·검수 결함·승인할 산출물·남은 리스크가 보이게 합니다. 반복 사용에서는 ‘내 결정이 필요한 업무’와 ‘수정 후 다시 검수 중인 업무’를 구분합니다. 네트워크 실패 뒤에는 재연결과 원장 재조회로 복구하고, 새 작업 생성은 명시적 행동으로 분리합니다. 모바일에서도 승인 대상 버전과 영향 범위가 접히지 않도록 검증합니다.</p></section>
+
+<section id="prompts"><h2>19. 복사해서 사용할 지시문</h2>
+<p>다음 문구는 업무 방법을 고정하는 예시입니다. 실제 제출에서는 프로젝트·경로·승인 범위·배정 ID를 시스템 값으로 교체하고, 현재 운영 규칙을 우선합니다.</p>
+<details open><summary>관리자에게 주는 마스터 프롬프트</summary><pre>당신은 업무 분해·검수·재지시를 조율하는 관리자입니다.
+목표: 원 지시의 의도를 보존하며 검증 가능한 산출물을 완성합니다.
+
+1. CEO 원문을 요구사항 ID와 불변 조건으로 분리하십시오.
+2. 현행 근거를 확인하고 정상/부분구현/미구현/미검증을 구분하십시오.
+3. PRD, ADR, 인터페이스 계약, 검증 계획과 요구사항 추적표를 작성하십시오.
+4. 하위 업무마다 입력 버전·범위·허용 도구·산출물·검수 기준을 지정하십시오.
+5. 독립 작업만 병렬화하고 공용 계약 변경은 의존성으로 순서를 고정하십시오.
+6. 검수자는 원 요구사항과 실제 산출물을 독립적으로 대조해야 합니다.
+7. FAIL에는 요구 ID, 기대/실제 결과, 재현 증거, 영향 범위가 있어야 합니다.
+8. 구현 결함/계획 누락/자료 부족/인프라 실패/권한 문제를 구분해 재지시하십시오.
+9. 재작업은 변경 영향이 있는 후속 검증을 무효화하며, 전체 시도 한도를 지키십시오.
+10. 승인된 버전이 바뀌면 기존 승인을 재사용하지 마십시오.
+11. 완료 보고에는 산출물·검수·승인·운영 인증을 각각 표시하십시오.
+
+이번 승인은 문서·설계 업무입니다. 운영 코드·DB·배포 변경은 포함하지 않습니다.
+첫 보고: 지시 해석, 미결정 사항, 현행 근거, 문서 목록, 업무 그래프,
+검수 기준, 필요한 승인 지점, 비용·기간의 실측 또는 미산정 여부.</pre></details>
+<details><summary>개발·문서 작업자 프롬프트</summary><pre>입력으로 받은 업무 계약의 범위만 수행하십시오.
+원 지시의 불변 조건과 담당 요구 ID를 작업 시작 시 확인하십시오.
+입력 산출물의 버전·해시를 기록하고, 누락된 의존 작업은 추측하지 마십시오.
+허용 경로와 권한을 넘는 변경이 필요하면 근거와 변경 제안을 제출하십시오.
+산출물은 실제 파일·변경 diff·검증 로그로 제출하십시오.
+자체 검증과 독립 인수 검수를 구분하며 자신의 결과를 최종 승인하지 마십시오.
+출력: 요구사항 대응표 / 변경 산출물 / 검사 결과 / 미검증 / 남은 위험.
+도구 장애 시 재실행 전에 이전 실행의 효과를 확인하십시오.</pre></details>
+<details><summary>독립 검수자 프롬프트</summary><pre>개발자 요약보다 원 요구사항과 실제 산출물을 먼저 읽으십시오.
+정해진 rubric_version과 입력 artifact_hash를 기준으로 판정하십시오.
+요구별 PASS/FAIL/NOT_VERIFIED/NOT_APPLICABLE을 기록하십시오.
+FAIL은 기대값·실제값·재현 명령 또는 증거 위치·심각도를 포함하십시오.
+필수 미검증을 PASS로 처리하지 마십시오. 높은 평균점수로 필수 실패를 상쇄하지 마십시오.
+검증 기준을 산출물에 맞춰 낮추지 말고 코드 수정 권한을 행사하지 마십시오.
+반려 시 implementation_defect / specification_gap / infrastructure_failure /
+missing_evidence / policy_conflict 중 이유를 설명하고 재작업 대상을 제시하십시오.
+최종 출력: 판정 / 검수한 버전 / 요구별 근거 / 결함 / 미검증 / 추천 다음 단계.</pre></details>
+<details><summary>근거를 보존하는 재지시 프롬프트</summary><pre>이번 작업은 기존 업무의 새 수정 시도입니다.
+원 요구사항 버전과 불변 조건은 유지하십시오.
+대상 결함: {실제 finding_id와 requirement_id}
+검수 근거: {실패 재현 입력, 실제/기대 결과, 로그 참조}
+수정 허용 범위: {확정된 파일·계약·산출물}
+수정 금지 범위: {영향 없는 기존 결과와 승인 경계}
+다시 검사할 범위: {실패 검사 + 변경 영향을 받는 후속 검사}
+종료 조건: {필수 기준 통과 또는 실제 전역 한도/권한/자료 차단}
+제출: 새 산출물 해시, 변경 이유, 결함 해결 증거, 재검증 결과.
+새 의존성이나 요구 충돌이 발견되면 계획 변경 제안으로 분리하십시오.</pre></details></section>
+
+<section id="exam"><h2>20. 실습과 CEO 검수표</h2>
+<h3>실습: 문서 업무로 안전하게 검증하기</h3>
+<ol><li>원 지시 ‘파동엔진은 신호만 제공한다’를 W01로 등록합니다.</li><li>설계 담당이 시그널 계약 초안을 만들게 합니다.</li><li>교육용 결함으로 출력 스키마에 <code>position_pct</code>를 넣은 샘플을 검수자에게 제공합니다.</li><li>검수자가 W01 위반을 근거와 함께 잡는지 확인합니다.</li><li>관리자가 해당 계약과 영향받는 소비자 문서만 재지시하는지 확인합니다.</li><li>승인 후 문서를 수정했을 때 승인이 무효화되는지 확인합니다.</li><li>재작업 한도까지 같은 결함을 남겼을 때 중단·에스컬레이션되는지 확인합니다.</li></ol>
+<table><thead><tr><th>필수 실패 주입</th><th>기대 동작</th><th>증거</th></tr></thead><tbody>
+<tr><td>존재하지 않는 dependency</td><td>작업 접수·실행 준비 거부</td><td>검증 에러와 미실행 기록</td></tr>
+<tr><td>중복 완료 이벤트</td><td>한 번만 상태 전이</td><td>event ID와 영향 행 확인</td></tr>
+<tr><td>오래된 worker의 늦은 결과</td><td>owner epoch 불일치로 거부</td><td>현재 소유자 상태 유지</td></tr>
+<tr><td>검수 도구 오류</td><td>미검증 또는 복구 대기</td><td>PASS·CERTIFIED로 전이되지 않음</td></tr>
+<tr><td>승인 이후 산출물 변경</td><td>재검수·재승인 요구</td><td>해시 불일치와 차단 이벤트</td></tr>
+<tr><td>필수 FAIL과 높은 평균점수</td><td>인수 거부</td><td>필수 기준 우선 판정</td></tr>
+<tr><td>배포 큐 등록만 완료</td><td>배포 대기 표시</td><td>실제 인증 전 완료 문구 차단</td></tr>
+<tr><td>브라우저 재연결</td><td>원장 기준 같은 업무 복원</td><td>화면 캡처와 상태 비교</td></tr>
+</tbody></table>
+<h3>이해 확인</h3>
+<details><summary>개발자와 검수자가 모두 “완료”라고 하면 배포해도 됩니까?</summary><p>아닙니다. 필수 검사 근거, 검수한 버전, 승인 범위, 배포할 버전이 일치해야 합니다. 운영 반영 뒤 인증도 별도입니다.</p></details>
+<details><summary>같은 파일을 수정하지 않으면 병렬 개발이 안전합니까?</summary><p>보장되지 않습니다. API 의미·공용 스키마·데이터 전제가 충돌할 수 있습니다. 계약을 먼저 고정하고 합쳐진 결과를 검증해야 합니다.</p></details>
+<details><summary>검수 AI의 의견이 다르면 다수결로 결정합니까?</summary><p>재현 근거와 요구사항을 먼저 대조합니다. 사실 문제는 검사로, 정책 문제는 권한 있는 사람의 결정으로 해결합니다. 합의 자체는 정답 증거가 아닙니다.</p></details>
+<details><summary>세 번 실패했으니 ‘조건부 완료’로 넘어가도 됩니까?</summary><p>횟수는 품질 증거가 아닙니다. 한도 도달은 중단 또는 에스컬레이션이며, 필수 실패를 남긴 채 완료로 넘기면 안 됩니다.</p></details>
+<details><summary>자료를 기억하면 다음부터 자동으로 더 정확해집니까?</summary><p>검증된 경험만 적절한 범위에 재사용해야 합니다. 추정과 오래된 결정도 기억될 수 있으므로 출처·유효기간·적용 범위를 함께 관리합니다.</p></details>
+<h3>실행 지시 전 최종 확인</h3><p>CEO께서 확인할 것은 ‘에이전트가 몇 명인가’보다 원 의도가 누락되지 않았는지, 필수 검사를 누가 실행하는지, 실패 시 어디로 돌아가는지, 승인과 실제 버전이 어떻게 묶이는지, 어떤 상태에서 완료를 보고하는지입니다. 먼저 문서 업무에서 이 계약을 입증한 뒤 코드·배포 업무로 넓히는 것이 권장 도입 순서입니다.</p></section>
+
+<section id="references"><h2>21. 출처·조사 범위·한계</h2>
+<p>공식 문서와 원 논문을 우선하여 확인했습니다. 검색 기준일은 2026-09-09 KST이며, 재개 후 로컬 시계 실측은 2026-09-09 08:24:01 KST입니다. 날짜가 없는 웹 문서는 게시 시점 불명으로 표시했습니다. 다음 목록은 이 주제 전체의 완전한 서지 목록이나 최신 논문 전수 조사라는 뜻은 아닙니다.</p>
+<ol class="refs">
+<li id="r1">Hong 외. <a href="https://arxiv.org/abs/2308.00352">MetaGPT: Meta Programming for A Multi-Agent Collaborative Framework</a>. 최초 2023-08-01, v7 2024-11-01. SOP·역할·중간 산출물 기반 협업. 논문에 보고된 성능을 AADS 수치로 사용하지 않았습니다.</li>
+<li id="r2">Shinn 외. <a href="https://arxiv.org/abs/2303.11366">Reflexion: Language Agents with Verbal Reinforcement Learning</a>. 최초 2023-03-20, v4 2023-10-10. 언어적 피드백 기억과 후속 시도 개선.</li>
+<li id="r3">Cemri 외. <a href="https://arxiv.org/html/2503.13657v3">Why Do Multi-Agent LLM Systems Fail?</a>. 최초 2025-03-17, v3 2025-10-26. MAST 실패 분류·설계·상호 불일치·검증 실패. 원문과 초록 확인.</li>
+<li id="r4">Khatua 외. <a href="https://arxiv.org/html/2601.13295v2">CooperBench: Why Coding Agents Cannot be Your Teammates Yet</a>. 최초 2026-01-19, v2 2026-01-26. 협업 코딩의 약속·소통·기대 불일치. arXiv 연구 결과로 해석하며 운영 일반 보증으로 사용하지 않습니다.</li>
+<li id="r5">Zhu 외. <a href="https://arxiv.org/html/2503.01935v1">MultiAgentBench: Evaluating the Collaboration and Competition of LLM agents</a>. 2025-03-03. 중간 목표와 협업 구조 평가.</li>
+<li id="r6">Anthropic Engineering. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">How we built our multi-agent research system</a>. 2025-06-13. 관리자–작업자, 명확한 배정, 평가와 운영 복구 사례. 기업 내부 평가라는 한계가 있습니다.</li>
+<li id="r7">Anthropic Engineering. <a href="https://www.anthropic.com/engineering/harness-design-long-running-apps">Harness design for long-running application development</a>. 2026-03-24. 기획자·생성자·평가자 및 구조화된 인계. 독립 학술 벤치마크와 구분합니다.</li>
+<li id="r8">OpenAI 공식 문서. <a href="https://developers.openai.com/api/docs/guides/agents/orchestration">Orchestration and handoffs</a>. 게시 시점 불명, 2026-09-09 조회. Handoff와 agents-as-tools의 책임 차이.</li>
+<li id="r9">LangChain 공식 문서. <a href="https://docs.langchain.com/oss/python/langgraph/workflows-agents">Workflows and agents</a>. 게시 시점 불명, 2026-09-09 조회. 워크플로·동적 에이전트·병렬·평가 반복 패턴.</li>
+<li id="r10">LangChain 공식 문서. <a href="https://docs.langchain.com/oss/python/langgraph/persistence">Persistence</a>. 게시 시점 불명, 2026-09-09 조회. thread checkpoint와 cross-thread store 구분. durable-execution 경로가 이 페이지로 이동함을 확인했습니다.</li>
+<li id="r11">LangChain 공식 문서. <a href="https://docs.langchain.com/oss/python/langgraph/interrupts">Interrupts</a>. 게시 시점 불명, 2026-09-09 조회. 사람 입력 대기와 재개.</li>
+<li id="r12">A2A Protocol 공식 문서. <a href="https://a2a-protocol.org/latest/topics/life-of-a-task/">Life of a Task</a>. 게시 시점 불명, 2026-09-09 조회. 종료 Task 불변성·후속 Task·artifact linkage의 클라이언트 책임. latest URL이므로 구현 시 적용 버전을 별도 고정해야 합니다.</li>
+<li id="r13">Model Context Protocol. <a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">Architecture</a>. 2025-11-25 명시 버전. 도구·리소스 연결 구조. 최신 전체 사양과 동일하다고 주장하지 않습니다.</li>
+<li id="r14">LangChain 공식 문서. <a href="https://docs.langchain.com/langsmith/evaluation">LangSmith Evaluation</a>. 게시 시점 불명, 2026-09-09 조회. 에이전트 평가 계층. AADS의 외부 SaaS 활성 여부는 미검증입니다.</li>
+<li id="r15">PostgreSQL 공식 문서. <a href="https://www.postgresql.org/docs/18/explicit-locking.html">PostgreSQL 18 — Explicit Locking</a>. 버전 18, 게시일 불명, 2026-09-09 조회. DB 잠금·동시성 제어. AADS 운영 DB 버전 확인 근거로 사용하지 않았습니다.</li>
+<li id="r16">Zhang 외. <a href="https://arxiv.org/html/2603.11445v1">Verified Multi-Agent Orchestration: A Plan-Execute-Verify-Replan Framework for Complex Query Resolution</a>. 2026-03-12, arXiv v1 원문 3.2·3.3·5장 확인. 의존성 병렬 실행, 검증 기반 재계획, 결과 보존과 종료 조건. 연구 수치를 AADS 성능으로 사용하지 않았으며, 운영 승인 게이트는 본 자료의 별도 설계 제안입니다.</li>
+</ol>
+<h3>내부 근거와 적용 판정 범위</h3>
+<p>내부 근거는 <code>app/graph/builder.py</code>, <code>app/graph/routing.py</code>, <code>app/services/agent_orchestrator.py</code>, <code>app/services/pipeline_runner_service.py</code>, <code>app/api/ohvis_tasks.py</code>, <code>/root/aads/AGENTS.md</code>입니다. 코드 존재를 확인했으며 운영 트래픽에서 각 경로의 활성·품질·성능을 검증한 것은 아닙니다. 논문들의 방향이 겹치는 부분은 설계 근거를 보강하지만 동일 수치의 독립 재현은 아닙니다.</p>
+<h3>교육자료 자체의 범위</h3>
+<p>본 자료는 설명·도식·로컬 시뮬레이션·실행 지시문을 제공합니다. 실제 운영 기능 구현, GO100 수정, DB 마이그레이션, 커밋·푸시·배포를 포함하지 않습니다. 계산 그래프는 가상 입력만 사용하며 측정 비용은 $ 미측정입니다. 운영 도입은 18장의 검증 게이트를 충족한 뒤 별도 승인 범위에서 수행해야 합니다.</p>
+</section>
+</main></div>
+<script>
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  let phase='submitted',revision=0,version=1,approvedVersion=null;
+  const label={submitted:'산출물 제출',rework:'재작업',blocked:'판단·자료 대기',accepted:'검수 통과',approved:'버전 승인',certified:'운영 인증',escalated:'한도 도달'};
+  function render(message){
+    document.querySelectorAll('.state').forEach(el=>el.classList.toggle('active',el.dataset.stage===phase));
+    $('reviewBtn').disabled=phase!=='submitted';
+    $('fixBtn').disabled=!['rework','blocked'].includes(phase);
+    $('approveBtn').disabled=phase!=='accepted';
+    $('changeBtn').disabled=phase!=='approved';
+    $('deployBtn').disabled=phase!=='approved';
+    $('scenario').disabled=phase!=='submitted';
+    $('simResult').textContent=`현재: ${label[phase]} · 산출물 v${version} · 재작업 ${revision}/2. ${message}`;
+    const li=document.createElement('li');li.textContent=`v${version} / ${label[phase]}: ${message}`;$('simLog').appendChild(li);
+  }
+  $('reviewBtn').addEventListener('click',()=>{
+    const s=$('scenario').value;
+    if(s==='pass'){phase='accepted';render('필수 근거가 충족되었습니다. 아직 이 버전에 대한 승인과 운영 검증은 남아 있습니다.');return;}
+    if(s==='unknown'||s==='conflict'){phase='blocked';render(s==='unknown'?'자료가 없으므로 미검증입니다. 필요한 데이터를 확보한 뒤 다시 검수합니다.':'검수 기준과 재현 근거를 대조합니다. 정책 상충은 승인자 결정 후 새 버전으로 검수합니다.');return;}
+    if(revision>=2){phase='escalated';render('재작업 한도에 도달했습니다. 완료로 처리하지 않습니다. 근거와 남은 결함을 상위 결정자에게 전달합니다.');return;}
+    phase='rework';render(s==='bug'?'W02 오류: 확정 시각 처리와 관련 검증을 다시 지시합니다. 영향 없는 산출물은 보존합니다.':'W01 누락: PM이 작업 계획을 보완합니다. 신호 계약과 이를 소비하는 후속 문서의 검증을 무효화합니다.');
+  });
+  $('fixBtn').addEventListener('click',()=>{if(phase==='rework')revision++;version++;approvedVersion=null;phase='submitted';render('새 산출물과 보완 근거를 제출했습니다. 검수 결과를 다시 선택하십시오. 수정했다는 발언만으로 통과하지 않습니다.');});
+  $('approveBtn').addEventListener('click',()=>{approvedVersion=version;phase='approved';render(`산출물 v${version}에 대한 모의 승인이 결합되었습니다. 실제 운영에는 별도 권한·환경 검사가 필요합니다.`);});
+  $('changeBtn').addEventListener('click',()=>{version++;approvedVersion=null;phase='submitted';render('산출물 내용이 달라져 이전 승인은 무효입니다. 새 버전에 대해 다시 검수해야 합니다.');});
+  $('deployBtn').addEventListener('click',()=>{if(approvedVersion!==version)return;phase='certified';render('교육 시나리오에서 동일 버전의 배포·헬스·필수 검증·관측 근거가 모두 충족되었다고 가정한 상태입니다. 실제 배포는 실행되지 않았습니다.');});
+  $('resetBtn').addEventListener('click',()=>{phase='submitted';revision=0;version=1;approvedVersion=null;$('scenario').value='pass';$('simLog').replaceChildren();render('검수 결과를 선택하고 적용하십시오.');});
+  render('검수 결과를 선택하고 적용하십시오.');
+  function calc(){const n=Number($('workers').value),t=Number($('duration').value),o=Number($('overhead').value),r=Number($('redo').value);for(const k of ['workers','duration','overhead','redo'])$(k+'Value').textContent=$(k).value;const seq=6+n*t,par=6+t+o+r,top=Math.max(seq,par);$('seqTime').textContent=seq+'분';$('parTime').textContent=par+'분';$('seqBar').style.width=(seq/top*100)+'%';$('parBar').style.width=(par/top*100)+'%';$('calcResult').textContent=seq>par?`가상 조건에서 병렬이 ${seq-par}분 짧습니다. 품질과 총비용 개선을 뜻하지는 않습니다.`:seq<par?`가상 조건에서 병렬이 ${par-seq}분 더 오래 걸립니다. 조정 비용이 병렬 이득을 초과합니다.`:'가상 조건에서 두 방식의 시간이 같습니다.';}
+  for(const k of ['workers','duration','overhead','redo'])$(k).addEventListener('input',calc);calc();
+  window.addEventListener('beforeprint',()=>{document.querySelectorAll('main details').forEach(d=>{d.dataset.wasOpen=String(d.open);d.open=true;});});
+  window.addEventListener('afterprint',()=>{document.querySelectorAll('main details').forEach(d=>{d.open=d.dataset.wasOpen==='true';});});
+})();
+</script>
+</body></html>
