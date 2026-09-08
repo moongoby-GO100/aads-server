@@ -3315,6 +3315,7 @@ async def _acquire_pw_context(
     browser_session_id: str = "",
     browser_work_key: str = "",
     url: str = "about:blank",
+    prefer_headless: bool = False,
 ) -> Tuple[Any, Optional[str]]:
     """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지)."""
     from app.browser_bridge.aads_adapter import acquire_browser_context
@@ -3323,6 +3324,7 @@ async def _acquire_pw_context(
         browser_session_id=browser_session_id or None,
         browser_work_key=browser_work_key or None,
         url=url or "about:blank",
+        prefer_headless=prefer_headless,
     )
 
 
@@ -4069,8 +4071,16 @@ async def tool_capture_screenshot(
     blocked = _browser_domain_ok(url)
     if blocked:
         return blocked
-    capture_work_key = "" if tenant_id and not browser_session_id else browser_work_key
-    ctx, err = await _acquire_pw_context(browser_session_id, capture_work_key, url)
+    # Only an explicitly supplied bridge session/work key may use a Browser
+    # Bridge (including a LOCAL_AGENT).  Vault auto-login without one remains
+    # server-managed/headless even when another session is globally active.
+    capture_work_key = browser_work_key
+    ctx, err = await _acquire_pw_context(
+        browser_session_id,
+        capture_work_key,
+        url,
+        prefer_headless=not bool(browser_session_id or capture_work_key),
+    )
     if err:
         return err
     cleanup_work_key = capture_work_key if close_on_complete and capture_work_key and not browser_session_id else ""

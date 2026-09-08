@@ -414,7 +414,8 @@ def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None
     assert 'dedicated_session and "newtalk.kr" in url' not in navigate_source
     assert 'tenant_id and browser_work_key and "newtalk.kr" in url' not in capture_source
     assert "if dedicated_session and tenant_id:" in navigate_source
-    assert 'capture_work_key = "" if tenant_id and not browser_session_id else browser_work_key' in capture_source
+    assert "capture_work_key = browser_work_key" in capture_source
+    assert "prefer_headless=not bool(browser_session_id or capture_work_key)" in capture_source
     assert "if tenant_id:" in capture_source
 
 
@@ -431,6 +432,89 @@ def test_capture_screenshot_exposes_close_on_complete_cleanup() -> None:
     assert "close_work_session" in capture_source
     assert "close_tabs=True" in capture_source
     assert "close_on_complete=bool(inp.get(\"close_on_complete\", True))" in executor_source
+
+
+@pytest.mark.asyncio
+async def test_capture_screenshot_headless_only_without_explicit_bridge_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _FakePage:
+        url = "https://aads.newtalk.kr/"
+
+        async def goto(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        async def evaluate(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return False
+
+        async def wait_for_load_state(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        async def screenshot(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return b"png"
+
+        async def close(self):
+            return None
+
+    class _FakeContext:
+        async def new_page(self):
+            return _FakePage()
+
+    class _FakeProcess:
+        returncode = 0
+
+        async def communicate(self, _data):  # noqa: ANN001
+            return b"", b""
+
+    async def fake_acquire(
+        browser_session_id="",
+        browser_work_key="",
+        url="about:blank",
+        prefer_headless=False,
+    ):
+        calls.append(
+            {
+                "browser_session_id": browser_session_id,
+                "browser_work_key": browser_work_key,
+                "url": url,
+                "prefer_headless": prefer_headless,
+            }
+        )
+        return _FakeContext(), None
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        return _FakeProcess()
+
+    monkeypatch.setattr(ceo_chat_tools, "_acquire_pw_context", fake_acquire)
+    monkeypatch.setattr(
+        ceo_chat_tools.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    await ceo_chat_tools.tool_capture_screenshot("https://aads.newtalk.kr/", close_on_complete=False)
+    await ceo_chat_tools.tool_capture_screenshot(
+        "https://aads.newtalk.kr/",
+        tenant_id="tenant-1",
+        close_on_complete=False,
+    )
+    await ceo_chat_tools.tool_capture_screenshot(
+        "https://aads.newtalk.kr/",
+        browser_session_id="bb-explicit",
+        close_on_complete=False,
+    )
+    await ceo_chat_tools.tool_capture_screenshot(
+        "https://aads.newtalk.kr/",
+        browser_work_key="work-explicit",
+        close_on_complete=False,
+    )
+
+    assert [call["prefer_headless"] for call in calls] == [True, True, False, False]
+    assert calls[1]["browser_work_key"] == ""
+    assert calls[2]["browser_session_id"] == "bb-explicit"
+    assert calls[3]["browser_work_key"] == "work-explicit"
 
 
 @pytest.mark.asyncio

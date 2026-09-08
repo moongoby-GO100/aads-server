@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-08 — AADS-BROWSER-CAPTURE-ROUTING-P1-20260908
+
+- `capture_screenshot` now explicitly selects the server-managed Playwright headless context when neither `browser_session_id` nor `browser_work_key` is supplied. It cannot implicitly select a globally active LOCAL_AGENT/CDP Browser Bridge session.
+- Explicit `browser_session_id` and `browser_work_key` requests retain their existing Browser Bridge routing. Vault (`tenant_id`) captures follow the same rule: headless without an explicit bridge identifier, bridge only with one.
+- Added adapter regressions for active-session bypass and explicit identifier routing; retained the 210-second `capture_screenshot` browser timeout regression.
+- Verification: `python3 -m py_compile` passed for all changed Python files and `git diff --check` passed. The focused pytest invocation was attempted but collection is blocked in this worktree's system Python because `fastapi` and `asyncpg` are unavailable.
+
 ## 2026-09-08 12:15 KST — LLMOps 검수 피드백 반영 (DB 스키마 정합화 + harness 상태 판정)
 
 - 검수 지적 4건과 처리:

@@ -83,6 +83,55 @@ async def test_work_session_failure_uses_explicit_headless_fallback(monkeypatch)
     assert error is None
 
 
+@pytest.mark.asyncio
+async def test_url_only_browser_context_bypasses_active_local_agent(monkeypatch) -> None:
+    headless_context = object()
+
+    class FakeService:
+        async def _headless_fallback_context(self):
+            return headless_context
+
+        async def acquire_playwright_context(self, **_kwargs):
+            raise AssertionError("URL-only capture must not select the active Browser Bridge session")
+
+    monkeypatch.setattr(aads_adapter, "get_browser_bridge_service", FakeService)
+
+    context, error = await aads_adapter.acquire_browser_context(prefer_headless=True)
+
+    assert context is headless_context
+    assert error is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_browser_context_identifiers_keep_bridge_routing(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeService:
+        async def acquire_playwright_context(self, **kwargs):
+            calls.append(kwargs)
+            return object(), None
+
+        async def ensure_work_session(self, **_kwargs):
+            return SimpleNamespace(session_id="bb-work")
+
+    monkeypatch.setattr(aads_adapter, "get_browser_bridge_service", FakeService)
+
+    session_context, session_error = await aads_adapter.acquire_browser_context(
+        browser_session_id="bb-explicit",
+        prefer_headless=True,
+    )
+    work_context, work_error = await aads_adapter.acquire_browser_context(
+        browser_work_key="explicit-work",
+        prefer_headless=True,
+    )
+
+    assert session_context is not None
+    assert session_error is None
+    assert work_context is not None
+    assert work_error is None
+    assert calls == [{"session_id": "bb-explicit"}, {"session_id": "bb-work"}]
+
+
 def test_offline_local_agent_session_is_not_reused(monkeypatch) -> None:
     session = BrowserBridgeSession(
         session_id="bb-offline",

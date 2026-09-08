@@ -13,8 +13,16 @@ async def acquire_browser_context(
     browser_session_id: str | None = None,
     browser_work_key: str | None = None,
     url: str = "about:blank",
+    prefer_headless: bool = False,
 ) -> tuple[Any, Optional[str]]:
     service = get_browser_bridge_service()
+    # A URL-only capture is independent server work.  Do not let an unrelated
+    # active LOCAL_AGENT/CDP session become its implicit execution target.
+    if prefer_headless and not browser_session_id and not browser_work_key:
+        try:
+            return await service._headless_fallback_context(), None
+        except Exception as exc:
+            return None, f"[브라우저 도구 사용 불가] {exc}"
     if browser_work_key and not browser_session_id:
         try:
             session = await service.ensure_work_session(
