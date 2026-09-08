@@ -265,6 +265,20 @@ class BankAccountUpdatePayload(BaseModel):
     last_synced_at: str | None = None
 
 
+class BankAccountCredentialPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    login_id: str = ""
+    username: str = ""
+    login_password: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    account_no: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    account_password: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    business_registration_no: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    certificate_password: str = Field(default="", repr=False, json_schema_extra={"writeOnly": True})
+    auth_owner: str = ""
+    mfa_method: str = ""
+    credential_expires_at: str = ""
+
+
 class BankTransactionEntry(BaseModel):
     model_config = {"extra": "forbid"}
     id: str = ""
@@ -719,6 +733,20 @@ async def update_bank_account(
         current_user,
     )
     return {"bank_account": account}
+
+
+@router.post("/bank-accounts/{account_id}/credentials")
+async def save_bank_account_credentials(
+    account_id: str,
+    payload: BankAccountCredentialPayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await run_in_threadpool(
+        svc.save_bank_credentials,
+        account_id,
+        payload.model_dump(),
+        current_user,
+    )
 
 
 @router.post("/bank-accounts/{account_id}/collect")

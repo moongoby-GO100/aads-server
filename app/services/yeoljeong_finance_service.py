@@ -4532,6 +4532,11 @@ _BANK_ACCOUNT_PUBLIC_FIELDS = (
     "last_synced_at",
     "created_at",
     "updated_at",
+    # 은행 간편/빠른조회 인증정보 연결 메타 (비밀값은 platform_accounts에 암호화 저장)
+    "platform_account_id",
+    "credential_service",
+    "credential_username",
+    "credentials_registered_at",
 )
 # 어떤 경로로 들어와도 은행계좌 저장소에 남기면 안 되는 민감 키.
 _BANK_ACCOUNT_FORBIDDEN_FIELDS = frozenset(
@@ -4913,6 +4918,111 @@ def update_bank_account(account_id: str, payload: dict[str, Any], user: dict[str
     rows = [sanitized if str(row.get("id") or "") == str(account_id) else row for row in rows]
     _write_secure_file_rows(BANK_ACCOUNTS_LEDGER, rows)
     return _sanitize_bank_account(sanitized)
+
+
+BANK_CREDENTIAL_INPUT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("login_password", "password"),
+    ("account_no", "account_no"),
+    ("account_password", "account_password"),
+    ("business_registration_no", "business_registration_no"),
+    ("certificate_password", "certificate_password"),
+)
+
+
+def _branch_name_for_bank_account(branch_id: str) -> str:
+    """Resolve a bank-account branch_id into the branch name used by platform_accounts."""
+    branch_key = str(branch_id or "").strip()
+    if not branch_key:
+        return ""
+    canonical = CANONICAL_BRANCH_BY_ID.get(branch_key)
+    if isinstance(canonical, dict):
+        name = str(canonical.get("name") or "").strip()
+        if name:
+            return name
+    settings_data = _read_json_object("settings")
+    ui_settings = settings_data.get("ui_settings") if isinstance(settings_data.get("ui_settings"), dict) else {}
+    settings = _canonicalize_ui_settings(ui_settings)
+    branches = settings.get("branches") if isinstance(settings.get("branches"), list) else []
+    for item in branches:
+        if isinstance(item, dict) and str(item.get("id") or "").strip() == branch_key:
+            return str(item.get("name") or "").strip()
+    return ""
+
+
+def save_bank_credentials(account_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """Encrypt and persist bank quick-service credentials for a registered bank account.
+
+    Secrets are never written to the bank_accounts ledger.  They are encrypted with
+    ``_encrypt_secret`` on a linked ``platform_accounts`` row whose ``collection_mode``
+    is ``bank-quick-service`` so PC Agent browser automation can read them through
+    ``_bank_quick_credentials_for_account``.
+    """
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행 인증정보 등록 권한이 없습니다")
+    account_key = str(account_id or "").strip()
+    rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    account = _find_bank_account(rows, account_key)
+    if account is None:
+        raise HTTPException(status_code=404, detail="인증정보를 등록할 은행계좌를 찾지 못했습니다")
+    service_code = _bank_service_code_for_account(account)
+    if service_code not in BANK_QUICK_SERVICE_CONFIG:
+        raise HTTPException(status_code=400, detail="간편/빠른조회를 지원하지 않는 은행계좌입니다")
+
+    login_id = str(payload.get("login_id") or payload.get("username") or "").strip()
+    if not login_id:
+        raise HTTPException(status_code=400, detail="은행 로그인 아이디가 필요합니다")
+
+    business_id = str(account.get("business_id") or "").strip()
+    branch_id = str(account.get("branch_id") or "").strip()
+    quick_config = BANK_QUICK_SERVICE_CONFIG[service_code]
+
+    account_payload: dict[str, Any] = {
+        "service": service_code,
+        "username": login_id,
+        "business_id": business_id,
+        "branch": _branch_name_for_bank_account(branch_id),
+        "institution_code": service_code,
+        "collection_mode": "bank-quick-service",
+        "label": str(quick_config.get("label") or service_code),
+        "login_url": str(quick_config.get("login_url") or ""),
+        "category": "bank",
+        "auth_owner": str(payload.get("auth_owner") or "").strip(),
+        "mfa_method": str(payload.get("mfa_method") or "").strip(),
+        "credential_expires_at": str(payload.get("credential_expires_at") or "").strip(),
+    }
+    registered_fields: list[str] = []
+    for input_field, secret_field in BANK_CREDENTIAL_INPUT_FIELDS:
+        value = str(payload.get(input_field) or "").strip()
+        if value:
+            account_payload[secret_field] = value
+            registered_fields.append(input_field)
+
+    saved = upsert_account(account_payload, user)
+
+    now = _now()
+    rows = _read_file_rows(BANK_ACCOUNTS_LEDGER)
+    record = _find_bank_account(rows, account_key)
+    if record is None:
+        raise HTTPException(status_code=404, detail="인증정보를 등록할 은행계좌를 찾지 못했습니다")
+    record["platform_account_id"] = str(saved.get("id") or "")
+    record["credential_service"] = service_code
+    record["credential_username"] = login_id
+    record["credentials_registered_at"] = now
+    record["connection_type"] = "browser"
+    record["connector_type"] = "bank-quick-service"
+    if str(record.get("status") or "").strip() in {"", "needs_auth", "error"}:
+        record["status"] = "ready"
+    record["updated_at"] = now
+    sanitized = _sanitize_bank_account(record)
+    rows = [sanitized if str(row.get("id") or "") == account_key else row for row in rows]
+    _write_secure_file_rows(BANK_ACCOUNTS_LEDGER, rows)
+    return {
+        "ok": True,
+        "bank_account": sanitized,
+        "platform_account_id": str(saved.get("id") or ""),
+        "service": service_code,
+        "registered_fields": registered_fields,
+    }
 
 
 def _bank_transaction_matches_existing_transaction(bank_row: dict[str, Any], ledger_row: dict[str, Any]) -> bool:
