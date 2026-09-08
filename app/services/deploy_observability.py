@@ -356,7 +356,7 @@ async def enqueue_deploy_request(
                    phase = 'superseded_by_newer_deploy_request',
                    phase_completed_at = NOW(),
                    updated_at = NOW(),
-                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $3)
+                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $3::text)
              WHERE project = $1
                AND component = $4
                AND target_env = $5

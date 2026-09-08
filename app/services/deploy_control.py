@@ -88,7 +88,7 @@ async def cancel_deploy_run(
                    phase = 'cancelled_by_operator',
                    phase_completed_at = NOW(),
                    updated_at = NOW(),
-                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2)
+                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2::text)
              WHERE id = $1
             """,
             int(run_id),
@@ -139,7 +139,7 @@ async def approve_deploy_run(conn: Any, run_id: int, *, actor: str = "ceo") -> d
                    phase_started_at = NOW(),
                    updated_at = NOW(),
                    approval_policy = 'manual_approved',
-                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2)
+                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2::text)
              WHERE id = $1
             """,
             int(run_id),
@@ -316,7 +316,7 @@ async def reconcile_deploy_state(
                        phase_completed_at = NOW(),
                        updated_at = NOW(),
                        last_heartbeat_at = NOW(),
-                       error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2)
+                       error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2::text)
                  WHERE id = $1
                    AND status = ANY($3::text[])
                 """,

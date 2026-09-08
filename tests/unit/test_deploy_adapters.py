@@ -285,3 +285,10 @@ def test_ops_api_uses_adapter_registry_and_manual_controls():
     assert '"/ops/deploy/{run_id}/approve"' in api
     assert '"/ops/deploy/{run_id}/logs"' in api
     assert "preflight" in api
+
+
+def test_asyncpg_concat_parameters_are_explicitly_typed():
+    observability = (ROOT / "app/services/deploy_observability.py").read_text()
+    controls = (ROOT / "app/services/deploy_control.py").read_text()
+    assert "$3::text" in observability
+    assert "CONCAT_WS('; ', NULLIF(error_summary, ''), $2)" not in controls
