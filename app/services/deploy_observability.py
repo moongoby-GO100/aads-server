@@ -979,6 +979,12 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
             if response["queued_deployments"] else None
         ),
     }
+
+    response["active_port_integrity"] = check_active_port_integrity()
+    reconciled = await reconcile_stale_deploys(conn)
+    if reconciled:
+        response["auto_reconciled_deploys"] = reconciled
+
     return response
 
 
@@ -1156,3 +1162,99 @@ async def register_external_deploy(
         release_sha=sha,
     )
     return dict(row)
+
+
+def check_active_port_integrity(project: str = "AADS") -> dict[str, Any]:
+    """Check .active_port file, authorization fingerprint, and recent audit entries."""
+    repo_paths = PROJECT_REPO_PATHS.get(project, ())
+    base_dir = None
+    for p in repo_paths:
+        if p and Path(p).is_dir():
+            base_dir = Path(p)
+            break
+    if not base_dir:
+        return {"status": "skip", "reason": f"no repo path for {project}"}
+
+    port_file = base_dir / ".active_port"
+    if not port_file.exists():
+        return {"status": "missing", "file": str(port_file)}
+
+    try:
+        port_value = port_file.read_text().strip()
+        file_stat = port_file.stat()
+        mtime = datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc)
+        valid_ports = {"8100", "8102"}
+        port_valid = port_value in valid_ports
+        age_seconds = int((datetime.now(timezone.utc) - mtime).total_seconds())
+
+        result: dict[str, Any] = {
+            "status": "ok" if port_valid else "anomaly",
+            "file": str(port_file),
+            "value": port_value,
+            "port_valid": port_valid,
+            "mtime_utc": mtime.isoformat(),
+            "mtime_age_seconds": age_seconds,
+            "owner_uid": file_stat.st_uid,
+        }
+
+        auth_file = base_dir / ".active_slot_authorization"
+        if auth_file.exists():
+            auth_data: dict[str, str] = {}
+            for line in auth_file.read_text().splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    auth_data[k.strip()] = v.strip()
+            result["last_authorized_actor"] = auth_data.get("actor")
+            result["last_authorized_at"] = auth_data.get("written_at")
+            result["authorized_port"] = auth_data.get("port")
+            if auth_data.get("port") != port_value:
+                result["status"] = "anomaly"
+                result["anomaly_reason"] = f"auth_port={auth_data.get('port')} != file_port={port_value}"
+
+        audit_log = Path("/var/log/aads-control-audit.jsonl")
+        if audit_log.exists():
+            try:
+                lines = audit_log.read_text().strip().splitlines()[-3:]
+                recent = []
+                for line in lines:
+                    entry = json.loads(line)
+                    if entry.get("result") not in ("success",):
+                        recent.append(entry)
+                if recent:
+                    result["recent_audit_anomalies"] = recent
+            except Exception:
+                pass
+
+        if not port_valid:
+            logger.warning("active_port_anomaly", value=port_value, file=str(port_file))
+        return result
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+_RECONCILE_MULTIPLIER = 2
+
+async def reconcile_stale_deploys(conn: Any) -> list[dict[str, Any]]:
+    """Auto-fail deploys that exceeded 2x the stall threshold with no heartbeat."""
+    threshold = float(DEPLOY_STALL_SECONDS * _RECONCILE_MULTIPLIER)
+    rows = await conn.fetch(
+        """
+        UPDATE deploy_runs
+           SET status = 'failed',
+               phase = phase || '_stale_auto',
+               phase_completed_at = NOW(),
+               updated_at = NOW(),
+               error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''),
+                   'auto-reconciled: heartbeat exceeded ' || $1::text || 's')
+         WHERE status = ANY($2::text[])
+           AND EXTRACT(EPOCH FROM (NOW() - COALESCE(last_heartbeat_at, updated_at))) > $1
+        RETURNING id, project, component, phase,
+                  EXTRACT(EPOCH FROM (NOW() - COALESCE(last_heartbeat_at, updated_at)))::int AS stale_seconds
+        """,
+        threshold,
+        list(ACTIVE_STATUSES),
+    )
+    result = [dict(r) for r in rows]
+    for r in result:
+        logger.warning("deploy_stale_auto_reconciled", deploy_id=r["id"], stale_seconds=r.get("stale_seconds"))
+    return result
