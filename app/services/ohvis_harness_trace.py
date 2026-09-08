@@ -44,6 +44,20 @@ def reset_table_cache() -> None:
     _table_present = None
 
 
+def _derive_trace_id(graph_run_id: str) -> str:
+    """Deterministic trace id for a graph run.
+
+    Imported lazily so that this module keeps working (and stays non-fatal)
+    even if the LLMOps layer is absent, e.g. on an older image.
+    """
+    try:
+        from app.services.llmops_store import trace_id_for_graph_run
+
+        return trace_id_for_graph_run(graph_run_id)
+    except Exception:  # noqa: BLE001 — trace ids must never break the caller
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ohvis:graph_run:{graph_run_id}"))
+
+
 def _clip(value: Any, limit: int = SUMMARY_LIMIT) -> str:
     text = "" if value is None else str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -119,6 +133,11 @@ async def record_trace(
     if not graph_run_id:
         return False
 
+    # Provenance: every row of one graph run resolves to the same trace id, so
+    # the LLMOps read path (`llmops_trace_unified`) can group legacy harness
+    # rows into a single trace without a coordination round-trip.
+    resolved_trace_id = trace_id or _derive_trace_id(graph_run_id)
+
     async def _insert(target: Any) -> bool:
         if not await _table_exists(target):
             return False
@@ -129,7 +148,7 @@ async def record_trace(
             _as_uuid_text(session_id),
             _as_uuid_text(ohvis_task_id),
             provider or "internal",
-            trace_id,
+            resolved_trace_id,
             span_id,
             run_type or "chain",
             _clip(input_summary),

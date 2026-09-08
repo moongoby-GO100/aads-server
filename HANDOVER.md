@@ -1,5 +1,41 @@
 # AADS HANDOVER
 
+## 2026-09-08 11:40 KST - AADS-LANGSMITH-INTERNAL-LLMOPS-P0 (OHVIS internal LangSmith-compatible LLMOps)
+
+- CEO request:
+  - Build the internal LangSmith-compatible trace/eval LLMOps layer per `docs/reports/20260908_langsmith_self_hosted_ohvis_prd.md`. Official LangSmith self-hosted install is explicitly out of scope (no Enterprise license / K8s / ClickHouse / Redis / Blob approval).
+- **Concurrency blocker — this work is on an isolated branch, not on `main`:**
+  - `pipeline_jobs` runner `runner-4f257b43` (project AADS) is running the **same** `TASK_ID: AADS-LANGSMITH-INTERNAL-LLMOPS-P0` directly in `/root/aads/aads-server`, alongside several live `codex` processes.
+  - That runner produced a parallel implementation (`app/services/llmops_service.py`, `llmops_evaluator.py`, `llmops_masking.py`) plus four competing `migrations/163_*.sql` files, and overwrote `app/api/ohvis_llmops.py` mid-task.
+  - Per `/root/aads/AGENTS.md` rule 1 and 10 and PRD §9 ("기존 dirty worktree와 구현 커밋 섞임 → isolated worktree"), this implementation was moved to worktree `/tmp/aads-llmops-p0` on branch `feat/ohvis-llmops-p0-opus` at clean SHA `e7c7cd56`. No unrelated dirty file in the primary worktree was modified or reverted.
+- Files changed (branch `feat/ohvis-llmops-p0-opus`, 9 files):
+  - `migrations/163_ohvis_internal_llmops_v1.sql` (new): additive-only schema for `llmops_traces`, `llmops_spans`, `llmops_tool_calls`, `llmops_datasets`, `llmops_examples`, `llmops_experiments`, `llmops_scores`, `llmops_feedback` + indexes + `llmops_trace_unified` view. No DROP/TRUNCATE/DELETE/ALTER.
+  - `app/services/llmops_store.py` (new): non-fatal trace/span/tool-call writer, trace search/detail, eval-candidate selection, foundation status. Read path degrades unified view → legacy `ohvis_harness_traces` → unavailable.
+  - `app/services/llmops_eval.py` (new): 5-check rule evaluator (`rule_v1`), idempotent dataset promotion, experiment runner, experiment read.
+  - `app/services/llmops_export.py` (new): fail-closed external LangSmith gate + masking policy `mask_v1`.
+  - `app/api/ohvis_llmops.py` (new): PRD §5.6 routes under `/api/v1/ohvis/llmops`.
+  - `app/main.py`: router import + `include_router` (2 lines).
+  - `app/services/ohvis_harness.py`: 8 LLMOps tables added to `FOUNDATION_TABLES`, new `llmops` component in harness status (additive; existing fields preserved).
+  - `app/services/ohvis_harness_trace.py`: provenance hook — legacy harness writes now derive a deterministic run-scoped `trace_id` from `graph_run_id`.
+  - `tests/unit/test_ohvis_llmops.py` (new): 41 tests.
+- Verification:
+  - `python3 -m py_compile` on all 8 changed Python files: passed.
+  - `pytest tests/unit/test_ohvis_llmops.py`: **41 passed**.
+  - `pytest tests/unit/test_ohvis_harness_trace.py test_ohvis_harness.py test_goal_control_loop_static.py`: **21 passed** (no regression from the provenance hook).
+  - `git diff --check`: clean.
+  - Migration dry-run against production PostgreSQL inside `BEGIN … ROLLBACK`, applied **twice**: second pass emitted only "already exists, skipping" notices — idempotent. `llmops_trace_unified` returned 119 rows, all 119 from `ledger='harness'`, proving legacy traces are readable with zero copy.
+  - Service SQL validated against the real schema in a rolled-back transaction: trace upsert merges metadata; the partial-unique `ON CONFLICT (dataset_id, source_trace_id) WHERE source_trace_id IS NOT NULL` re-promotion returned the **same** example id with `xmax=0 → false`, so promoting one trace twice does not duplicate the eval set.
+- Backfill status:
+  - **No backfill.** Existing `ohvis_harness_traces` rows are not copied or rewritten; they are surfaced read-only through `llmops_trace_unified` with a synthetic `harness:<uuid>` trace id. Only new writes land in `llmops_traces`.
+- External export:
+  - Disabled by default and fail-closed. Requires `LANGSMITH_TRACING` + `LANGSMITH_ENDPOINT` + `LANGSMITH_API_KEY` **and** a passing masking check. Egress is deliberately not implemented pending CEO data-policy approval; `prepare_export` always returns `exported: 0`. The gate never returns the API key (host only). No secret is committed.
+- Commit / push / deploy status:
+  - Committed on branch `feat/ohvis-llmops-p0-opus` (hooks ran, no `--no-verify`). **Not pushed, not merged to `main`, not deployed.**
+  - Deploy blocked by design: `/root/aads/AGENTS.md` rule 10 requires a clean committed release worktree, and the primary worktree has unrelated dirty files plus an actively-writing competing runner. Blue/green was not attempted.
+  - Migration **not applied** to the production database — the competing runner has a different `163_*` schema, so applying either before the CEO picks a winner would create a schema conflict.
+- CEO decision required:
+  - Choose which of the two parallel implementations ships, then merge/push and apply exactly one `163_*` migration.
+
 ## 2026-09-08 08:52 KST - PC Agent reboot reconnect diagnosis and patch
 
 - CEO request:

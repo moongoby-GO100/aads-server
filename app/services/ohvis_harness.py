@@ -27,6 +27,15 @@ FOUNDATION_TABLES = (
     "ohvis_wiki_links",
     "ohvis_wiki_error_book",
     "ohvis_harness_traces",
+    # migration 163 — internal LangSmith-compatible LLMOps ledger
+    "llmops_traces",
+    "llmops_spans",
+    "llmops_tool_calls",
+    "llmops_datasets",
+    "llmops_examples",
+    "llmops_experiments",
+    "llmops_scores",
+    "llmops_feedback",
 )
 
 RISK_POLICIES: dict[str, dict[str, Any]] = {
@@ -416,6 +425,20 @@ async def get_harness_status(project: str | None = None) -> dict[str, Any]:
             "status": "pattern_foundation",
             "evidence": ["skill find", "risk policies", "recommendation endpoint"],
             "gap": "external Hermes Agent runtime is intentionally not embedded",
+        },
+        {
+            "key": "llmops",
+            "status": (
+                "implemented"
+                if db.get("foundation_tables", {}).get("llmops_traces")
+                else "migration_pending"
+            ),
+            "evidence": [
+                "migrations/163_ohvis_internal_llmops_v1.sql",
+                "/api/v1/ohvis/llmops/status",
+                "rule evaluator rule_v1",
+            ],
+            "gap": "LLM-as-judge and external LangSmith egress stay opt-in and disabled",
         },
         {
             "key": "skill_find",
