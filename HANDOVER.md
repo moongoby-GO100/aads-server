@@ -7,6 +7,7 @@
 - Android 14+ connection service uses `remoteMessaging` instead of the time-limited `dataSync` type, with inexact idle-safe restart alarms that do not require exact-alarm privilege.
 - Device reconnect replacement is socket-fenced: a late close from an old WebSocket cannot unregister the new connection. Explicit commands for an offline agent no longer fall through to the only other connected device.
 - Fresh/standard download endpoints require their exact artifact instead of silently serving a different fallback APK.
+- Release-guard assertions now track version `1.1.1` / code `6` and the Android 14+ `remoteMessaging` foreground-service contract; the release APK was rebuilt successfully after the contract update.
 
 ## 2026-09-08 18:24 KST — NAS rsync account verified and DSM command-path compatibility fixed
 

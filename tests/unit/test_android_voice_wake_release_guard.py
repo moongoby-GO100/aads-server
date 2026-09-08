@@ -11,8 +11,9 @@ def test_release_manifest_allows_voice_wake_foreground_service() -> None:
     manifest = (ANDROID / "AndroidManifest.xml").read_text(encoding="utf-8")
 
     assert "android.permission.RECORD_AUDIO" in manifest
+    assert "android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" in manifest
     assert "android.permission.FOREGROUND_SERVICE_MICROPHONE" in manifest
-    assert 'android:foregroundServiceType="dataSync|microphone"' in manifest
+    assert 'android:foregroundServiceType="dataSync|remoteMessaging|microphone"' in manifest
 
 
 def test_release_manifest_exposes_ohvis_wake_deep_links_and_shortcut() -> None:
@@ -106,5 +107,5 @@ def test_android_manifest_api_reads_version_from_gradle() -> None:
     assert '"admin_settings_route": "/ops/mobile-agent"' in device_api
     assert '"bixby_quick_command": "Open OHVIS with ohvis://wake"' in device_api
     assert '"voice_wake_capabilities": [' in device_api
-    assert 'versionName "0.1.4"' in gradle
-    assert "versionCode 5" in gradle
+    assert 'versionName "1.1.1"' in gradle
+    assert "versionCode 6" in gradle
