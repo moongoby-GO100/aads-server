@@ -29,6 +29,7 @@ def test_deploy_script_has_p1_build_preflight_guards():
     assert "--target" in script
     assert "AADS_DOCKER_TARGET" in script
     assert "AADS_INSTALL_PLAYWRIGHT" in script
+    assert 'AADS_INSTALL_PLAYWRIGHT="${AADS_INSTALL_PLAYWRIGHT:-true}"' in script
     assert "AADS_DEPLOY_CONTEXT_MANIFEST_TOP_N" in script
 
 

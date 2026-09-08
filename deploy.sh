@@ -30,7 +30,11 @@ API_MEMORY_BYTES="${AADS_API_MEMORY_BYTES:-3221225472}"
 API_MEMORY_SWAP_BYTES="${AADS_API_MEMORY_SWAP_BYTES:-5368709120}"
 AADS_DOCKER_TARGET="${AADS_DOCKER_TARGET:-runtime}"
 AADS_IMAGE_PROFILE="${AADS_IMAGE_PROFILE:-runtime}"
-AADS_INSTALL_PLAYWRIGHT="${AADS_INSTALL_PLAYWRIGHT:-false}"
+# Production capture_screenshot defaults to the server-managed Playwright
+# runtime. Keep the Dockerfile opt-in for bounded ad-hoc images, but make the
+# canonical AADS release include Chromium unless an operator explicitly opts
+# out for a non-browser profile.
+AADS_INSTALL_PLAYWRIGHT="${AADS_INSTALL_PLAYWRIGHT:-true}"
 DEPLOY_START_EPOCH=$(date +%s)
 DEPLOY_GENERATION_FILE="${STATE_DIR}/.deploy_generation"
 CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"

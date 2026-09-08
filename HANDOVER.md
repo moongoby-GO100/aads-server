@@ -1,5 +1,11 @@
 # AADS HANDOVER
 
+## 2026-09-08 16:18 KST — Server capture runtime enabled by default
+
+- The P1 capture routing fix correctly stopped implicit LOCAL_AGENT/CDP selection, but the first routed production smoke test returned `playwright 패키지가 설치되지 않았습니다` because canonical `deploy.sh bluegreen` builds defaulted `AADS_INSTALL_PLAYWRIGHT=false`.
+- Canonical AADS releases now default `AADS_INSTALL_PLAYWRIGHT=true`, so the already-locked `requirements.visual.lock` and Chromium runtime are installed in the single immutable release image. Operators can still explicitly set `AADS_INSTALL_PLAYWRIGHT=false` for non-browser profiles; the Dockerfile remains opt-in by default for bounded ad-hoc images.
+- Added a deployment guard assertion for the production default. Required verification: focused unit tests, clean release commit/push, blue/green candidate health, routed capture smoke test, same-digest standby sync, and five-minute P0/P1 monitoring.
+
 ## 2026-09-08 15:57 KST — Chat relay retry P0 (release verification pending)
 
 - Incident: session `ac5278a7-2f13-4cd7-9aa1-83d41fb23c97`, execution `2effa29d-c76a-4731-b1b2-7e38467a1b0b`. DB saved 236 characters; final status `interrupted/assistant_terminal_reconcile`, retry_count=0. This does not mean no inline retry happened.
