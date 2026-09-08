@@ -18,6 +18,16 @@ class PcAgentLauncherStartupTest(TestCase):
              mock.patch.object(launcher.sys, "executable", exe):
             self.assertEqual(launcher._extract_install_ticket(), ticket)
 
+    def test_install_ticket_is_extracted_from_source_zip_file(self) -> None:
+        ticket = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEFGH"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ticket_file = Path(temp_dir) / "install_ticket.txt"
+            ticket_file.write_text(ticket, encoding="utf-8")
+            with mock.patch.object(launcher.sys, "argv", ["launcher.py"]), \
+                 mock.patch.object(launcher.sys, "executable", "python.exe"), \
+                 mock.patch.object(launcher.Path, "cwd", return_value=Path(temp_dir)):
+                self.assertEqual(launcher._extract_install_ticket(), ticket)
+
     def test_install_ticket_exchange_returns_config(self) -> None:
         ticket = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEFGH"
 

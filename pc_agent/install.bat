@@ -7,6 +7,11 @@ echo ========================================
 echo.
 
 cd /d %~dp0
+set "SCRIPT_DIR=%~dp0"
+set "INSTALL_TICKET_FILE=%SCRIPT_DIR%install_ticket.txt"
+if exist "%INSTALL_TICKET_FILE%" (
+    set /p KAKAOBOT_INSTALL_TICKET=<"%INSTALL_TICKET_FILE%"
+)
 
 :: 1. Python 확인
 echo [1/4] Python 확인 중...
@@ -49,7 +54,6 @@ echo.
 
 :: 4. 바로가기 및 자동실행 등록
 echo [4/4] 바로가기 및 자동실행 등록 중...
-set "SCRIPT_DIR=%~dp0"
 set "DESKTOP=%USERPROFILE%\Desktop"
 powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%DESKTOP%\AADS PC Agent.lnk'); $sc.TargetPath = '%SCRIPT_DIR%run.bat'; $sc.WorkingDirectory = '%SCRIPT_DIR%'; $sc.Description = 'AADS PC Agent'; $sc.Save()"
 if errorlevel 1 (
@@ -68,6 +72,16 @@ if errorlevel 1 (
     echo [경고] 자동실행 등록 실패 - 로그온 후 직접 실행이 필요할 수 있습니다
 ) else (
     echo [OK] Windows 로그온 자동실행 등록
+)
+echo.
+
+echo [시작] PC Agent 런처 실행 중...
+set "PYTHONW=%SCRIPT_DIR%.venv\Scripts\pythonw.exe"
+set "PYTHONEXE=%SCRIPT_DIR%.venv\Scripts\python.exe"
+if exist "%PYTHONW%" (
+    start "" "%PYTHONW%" "%SCRIPT_DIR%launcher.py"
+) else (
+    start "" "%PYTHONEXE%" "%SCRIPT_DIR%launcher.py"
 )
 echo.
 

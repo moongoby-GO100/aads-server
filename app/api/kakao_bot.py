@@ -176,6 +176,27 @@ async def kakao_bot_respond(req: KakaoBotRequest):
 # ── PC Agent 배포 API ──────────────────────────────────────────────────
 
 
+def _validate_install_ticket_param(install_ticket: str | None) -> str | None:
+    if not install_ticket:
+        return None
+    ticket = install_ticket.strip()
+    if not _INSTALL_TICKET_RE.fullmatch(ticket):
+        raise HTTPException(status_code=400, detail="invalid install_ticket")
+    return ticket
+
+
+def _local_pc_agent_exe_is_current() -> bool:
+    """Return True only when the local EXE was built for the current VERSION."""
+    if not PC_AGENT_EXE_FILE.exists():
+        return False
+    if not PC_AGENT_VERSION_FILE.exists():
+        return True
+    try:
+        return PC_AGENT_EXE_FILE.stat().st_mtime >= PC_AGENT_VERSION_FILE.stat().st_mtime
+    except OSError:
+        return False
+
+
 @router.get("/agent/version")
 async def agent_version():
     """PC Agent 최신 버전 정보 반환 (enhanced: changelog, min_version, force_update)."""
@@ -203,7 +224,7 @@ async def agent_version():
 
     # 운영 배포본은 GitHub Actions가 버전별 Windows EXE Release를 생성한다.
     # 컨테이너에 로컬 EXE가 없어도 download-exe가 동일 버전 Release로 연결된다.
-    local_exe_available = PC_AGENT_EXE_FILE.exists()
+    local_exe_available = _local_pc_agent_exe_is_current()
     exe_available = version != "0.0.0"
     exe_size = "Windows EXE"
     if local_exe_available:
@@ -212,18 +233,22 @@ async def agent_version():
 
     return {
         "version": version,
-        "download_url": "/api/v1/kakao-bot/agent/download-exe",
+        "download_url": "/api/v1/kakao-bot/agent/download?format=zip",
+        "exe_download_url": "/api/v1/kakao-bot/agent/download-exe",
+        "safe_download_url": "/api/v1/kakao-bot/agent/download?format=zip",
         "force_update": force_update,
         "min_version": min_version,
         "changelog": changelog,
         "exe_available": exe_available,
-        "file_size": exe_size if exe_available else "ZIP",
-        "distribution": "local" if local_exe_available else "github_release",
+        "file_size": "ZIP",
+        "exe_file_size": exe_size if exe_available else "GitHub Release",
+        "distribution": "zip_source",
+        "exe_distribution": "local" if local_exe_available else "github_release",
         "release_date": time.strftime("%Y-%m-%d"),
     }
 
 
-def _build_agent_zip() -> bytes:
+def _build_agent_zip(install_ticket: str | None = None) -> bytes:
     """pc_agent/ 디렉토리를 메모리 내 zip으로 압축.
 
     __pycache__, .pyc, .git, dist, build_tmp 등 제외.
@@ -247,11 +272,16 @@ def _build_agent_zip() -> bytes:
             if file_path.name.startswith("RESULT_"):
                 continue
             zf.write(file_path, arcname=str(rel))
+        if install_ticket:
+            zf.writestr("install_ticket.txt", install_ticket)
     return buf.getvalue()
 
 
 @router.get("/agent/download")
-async def agent_download(format: str = Query(default=None)):
+async def agent_download(
+    format: str = Query(default=None),
+    install_ticket: str | None = None,
+):
     """PC Agent 다운로드. EXE 우선, 없으면 ZIP fallback. format=zip 이면 항상 ZIP 반환."""
     if not PC_AGENT_DIR.exists():
         raise HTTPException(status_code=404, detail="pc_agent 디렉토리가 없습니다")
@@ -260,8 +290,11 @@ async def agent_download(format: str = Query(default=None)):
     if PC_AGENT_VERSION_FILE.exists():
         version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
 
-    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요) — format=zip 이면 건너뜀
-    if PC_AGENT_EXE_FILE.exists() and format != "zip":
+    ticket = _validate_install_ticket_param(install_ticket)
+
+    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요) — format=zip 이면 건너뜀.
+    # 자동 페어링 설치는 백신 오탐 가능성이 낮은 ZIP 경로를 기본으로 사용한다.
+    if _local_pc_agent_exe_is_current() and format != "zip" and ticket is None:
         exe_bytes = PC_AGENT_EXE_FILE.read_bytes()
         return StreamingResponse(
             io.BytesIO(exe_bytes),
@@ -275,16 +308,19 @@ async def agent_download(format: str = Query(default=None)):
 
     # EXE 미빌드 시 ZIP fallback
     try:
-        zip_bytes = _build_agent_zip()
+        zip_bytes = _build_agent_zip(ticket)
     except Exception as e:
         logger.error("agent_download zip 생성 실패: %s", e)
         raise HTTPException(status_code=500, detail="zip 생성 실패")
 
+    zip_filename = f"kakaobot-agent-{version}.zip"
+    if ticket:
+        zip_filename = f"AADS-PC-Agent-Setup-{version}-auto.zip"
     return StreamingResponse(
         io.BytesIO(zip_bytes),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="kakaobot-agent-{version}.zip"',
+            "Content-Disposition": f'attachment; filename="{zip_filename}"',
             "Content-Length": str(len(zip_bytes)),
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "ETag": f'"{version}-{len(zip_bytes)}"',
@@ -310,7 +346,7 @@ async def agent_download_exe(install_ticket: str | None = None):
             raise HTTPException(status_code=400, detail="invalid install_ticket")
         filename = f"AADS-PC-Agent-Setup-{version}--ticket-{ticket}.exe"
 
-    if not exe_path.exists():
+    if not _local_pc_agent_exe_is_current():
         if version == "unknown":
             raise HTTPException(status_code=503, detail="PC Agent 버전을 확인할 수 없습니다")
         release_url = (
@@ -852,9 +888,10 @@ async def agent_install_ticket_create(current_user: dict = Depends(get_current_u
         "ticket": ticket,
         "expires_at": str(row["expires_at"]) if row else None,
         "ttl_seconds": PC_AGENT_INSTALL_TICKET_TTL_SECONDS,
-        "download_url": f"/api/v1/kakao-bot/agent/download-exe?install_ticket={ticket}",
-        "filename": f"AADS-PC-Agent-Setup--ticket-{ticket}.exe",
-        "message": "자동 페어링 설치 파일이 준비되었습니다.",
+        "download_url": f"/api/v1/kakao-bot/agent/download?format=zip&install_ticket={ticket}",
+        "exe_download_url": f"/api/v1/kakao-bot/agent/download-exe?install_ticket={ticket}",
+        "filename": f"AADS-PC-Agent-Setup-auto.zip",
+        "message": "자동 페어링 ZIP 설치 파일이 준비되었습니다. EXE가 백신에 차단되는 환경에서는 ZIP을 압축 해제한 뒤 install.bat을 실행하세요.",
     }
 
 

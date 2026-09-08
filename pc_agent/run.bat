@@ -16,9 +16,7 @@ if exist ".venv\Scripts\python.exe" (
     echo [!] 시스템 Python 사용 (install.bat 실행 권장)
 )
 
-:loop
-echo [%date% %time%] 에이전트 시작...
-%PYTHON% agent.py
-echo [%date% %time%] 에이전트 종료됨. 3초 후 재시작...
-timeout /t 3 /nobreak >nul
-goto loop
+echo [%date% %time%] 런처 시작...
+%PYTHON% launcher.py
+echo [%date% %time%] 런처가 종료되었습니다.
+pause

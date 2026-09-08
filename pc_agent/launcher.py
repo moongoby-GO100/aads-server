@@ -314,7 +314,7 @@ def ask_token_gui() -> str | None:
 
 
 def _extract_install_ticket() -> str | None:
-    """Return an install ticket from env, argv, or the downloaded EXE filename."""
+    """Return an install ticket from env, argv, the source ZIP, or EXE filename."""
     env_ticket = os.environ.get("KAKAOBOT_INSTALL_TICKET", "").strip()
     if env_ticket:
         return env_ticket
@@ -339,6 +339,17 @@ def _extract_install_ticket() -> str | None:
         match = INSTALL_TICKET_RE.search(text)
         if match:
             return match.group(1)
+
+    for base in (Path.cwd(), Path(__file__).resolve().parent):
+        try:
+            ticket_file = base / "install_ticket.txt"
+            if not ticket_file.exists():
+                continue
+            ticket = ticket_file.read_text(encoding="utf-8-sig").strip()
+            if ticket and INSTALL_TICKET_RE.fullmatch(ticket):
+                return ticket
+        except Exception:
+            continue
     return None
 
 
