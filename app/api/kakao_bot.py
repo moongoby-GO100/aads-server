@@ -26,9 +26,15 @@ router = APIRouter(prefix="/kakao-bot", tags=["kakao-bot"])
 PC_AGENT_DIR = Path(__file__).resolve().parent.parent.parent / "pc_agent"
 PC_AGENT_VERSION_FILE = PC_AGENT_DIR / "VERSION"
 PC_AGENT_EXE_FILE = PC_AGENT_DIR / "dist" / "kakaobot-setup.exe"
+# 빌드 스탬프: EXE와 함께 기록되는 "이 EXE가 빌드된 VERSION" 텍스트 파일.
+# mtime 비교는 배포/복사/touch 순서에 따라 역전될 수 있어 스탬프를 1순위로 사용한다.
+PC_AGENT_EXE_STAMP_SUFFIX = ".version"
 PC_AGENT_RELEASE_BASE = (
     "https://github.com/moongoby-GO100/aads-server/releases/download"
 )
+# GitHub Release 자산 존재 여부 probe 캐시 (url -> (checked_at, available))
+_RELEASE_ASSET_PROBE_TTL = 300.0
+_release_asset_probe_cache: dict[str, tuple[float, bool]] = {}
 # zip 제외 패턴
 _ZIP_EXCLUDE_DIRS = {"__pycache__", ".git", "build_tmp", "dist", ".mypy_cache", ".pytest_cache"}
 _ZIP_EXCLUDE_EXTS = {".pyc", ".pyo", ".exe", ".spec"}
@@ -185,21 +191,71 @@ def _validate_install_ticket_param(install_ticket: str | None) -> str | None:
     return ticket
 
 
+def _pc_agent_exe_stamp_file(exe_file: Path) -> Path:
+    """EXE 옆에 놓이는 빌드 스탬프 파일 경로."""
+    return exe_file.parent / f"{exe_file.name}{PC_AGENT_EXE_STAMP_SUFFIX}"
+
+
 def _local_pc_agent_exe_is_current(
     exe_file: Path | None = None,
     version_file: Path | None = None,
 ) -> bool:
-    """Return True only when the local EXE was built for the current VERSION."""
+    """Return True only when the local EXE was built for the current VERSION.
+
+    판정 순서:
+    1) 빌드 스탬프(`kakaobot-setup.exe.version`) 내용이 VERSION과 같으면 최신.
+       배포 중 파일 복사/touch 순서로 mtime이 역전돼도 영향받지 않는다.
+    2) 스탬프가 없으면(레거시 배포본) 기존 mtime 비교로 폴백한다.
+    """
     exe_file = exe_file or PC_AGENT_EXE_FILE
     version_file = version_file or PC_AGENT_VERSION_FILE
     if not exe_file.exists():
         return False
     if not version_file.exists():
         return True
+
+    stamp_file = _pc_agent_exe_stamp_file(exe_file)
+    if stamp_file.exists():
+        try:
+            built_version = stamp_file.read_text(encoding="utf-8").strip()
+            current_version = version_file.read_text(encoding="utf-8").strip()
+            if built_version and built_version == current_version:
+                return True
+            logger.warning(
+                "PC Agent EXE 스탬프 불일치: built=%s current=%s",
+                built_version,
+                current_version,
+            )
+            return False
+        except OSError as exc:
+            logger.warning("PC Agent EXE 스탬프 읽기 실패: %s", exc)
+
     try:
         return exe_file.stat().st_mtime >= version_file.stat().st_mtime
     except OSError:
         return False
+
+
+async def _release_asset_available(url: str) -> bool:
+    """GitHub Release 자산이 실제로 존재하는지 확인 (5분 캐시)."""
+    now = time.time()
+    cached = _release_asset_probe_cache.get(url)
+    if cached and (now - cached[0]) < _RELEASE_ASSET_PROBE_TTL:
+        return cached[1]
+
+    available = False
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+            resp = await client.head(url)
+            available = resp.status_code < 400
+    except Exception as exc:  # noqa: BLE001 - probe 실패는 폴백으로 처리
+        logger.warning("PC Agent release probe 실패(%s): %s", url, exc)
+        available = False
+
+    _release_asset_probe_cache[url] = (now, available)
+    return available
 
 
 @router.get("/agent/version")
@@ -341,16 +397,25 @@ async def agent_download_exe(install_ticket: str | None = None):
             raise HTTPException(status_code=400, detail="invalid install_ticket")
         filename = f"AADS-PC-Agent-Setup-{version}--ticket-{ticket}.exe"
 
+    exe_is_stale = False
     if not _local_pc_agent_exe_is_current(exe_path, PC_AGENT_VERSION_FILE):
         if version == "unknown":
             raise HTTPException(status_code=503, detail="PC Agent 버전을 확인할 수 없습니다")
         release_url = (
             f"{PC_AGENT_RELEASE_BASE}/pc-agent-v{version}/kakaobot-setup.exe"
         )
-        return RedirectResponse(
-            url=release_url,
-            status_code=307,
-            headers={"Cache-Control": "no-store"},
+        # 로컬 EXE가 아예 없으면 Release로 보낼 수밖에 없다.
+        # 로컬 EXE가 있으나 stale인 경우, Release 자산이 실제로 있을 때만 리다이렉트한다.
+        # (Release 미생성 상태에서 리다이렉트하면 사용자에게 GitHub 404가 노출된다.)
+        if not exe_path.exists() or await _release_asset_available(release_url):
+            return RedirectResponse(
+                url=release_url,
+                status_code=307,
+                headers={"Cache-Control": "no-store"},
+            )
+        exe_is_stale = True
+        logger.warning(
+            "PC Agent Release 자산 없음(%s) → 로컬 stale EXE 제공", release_url
         )
 
     file_size = exe_path.stat().st_size
@@ -363,14 +428,16 @@ async def agent_download_exe(install_ticket: str | None = None):
                     break
                 yield chunk
 
+    exe_headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Length": str(file_size),
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "X-PC-Agent-Exe-Stale": "true" if exe_is_stale else "false",
+    }
     return StreamingResponse(
         iter_file(),
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(file_size),
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        },
+        headers=exe_headers,
     )
 
 

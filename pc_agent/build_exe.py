@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -16,6 +17,26 @@ DIST_DIR = SCRIPT_DIR / "dist"
 ICON_FILE = SCRIPT_DIR / "icon.ico"
 
 EXE_NAME = "kakaobot-setup"
+VERSION_FILE = SCRIPT_DIR / "VERSION"
+
+
+def _write_build_stamp(exe_path: Path) -> None:
+    """EXE 옆에 빌드 버전 스탬프를 남기고 mtime을 VERSION 이후로 보정한다.
+
+    서버(`app/api/kakao_bot.py`)는 이 스탬프를 1순위로 읽어 로컬 EXE가 현재
+    VERSION용인지 판정한다. 스탬프가 없으면 mtime 비교로 폴백하므로,
+    복사/배포 순서에 따라 EXE가 VERSION보다 오래된 것으로 오판될 수 있다.
+    """
+    if not VERSION_FILE.exists():
+        print("[BUILD] VERSION 파일 없음 — 스탬프 생략")
+        return
+    version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    stamp_path = exe_path.parent / f"{exe_path.name}.version"
+    stamp_path.write_text(version, encoding="utf-8")
+    now = time.time()
+    os.utime(exe_path, (now, now))
+    os.utime(stamp_path, (now, now))
+    print(f"[BUILD] Stamp: {stamp_path} = {version}")
 
 
 def build() -> None:
@@ -73,6 +94,7 @@ def build() -> None:
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"[BUILD] Size: {size_mb:.1f} MB")
+            _write_build_stamp(exe_path)
     else:
         print(f"\n[BUILD] Failed (code {result.returncode})")
         sys.exit(1)

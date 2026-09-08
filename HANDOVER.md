@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-09-09 03:30 KST - PC Agent EXE 최신판정 스탬프화 + Release 404 폴백 차단
+
+- `app/api/kakao_bot.py`: `_local_pc_agent_exe_is_current()`가 `dist/kakaobot-setup.exe.version` 빌드 스탬프를 1순위로 비교한다. 스탬프가 없으면 기존 mtime 비교로 폴백해 레거시 배포본과 호환된다.
+- `app/api/kakao_bot.py`: stale 판정 시 무조건 GitHub Release로 307 리다이렉트하던 동작을 `_release_asset_available()` probe(3초 timeout, 5분 캐시) 뒤로 옮겼다. Release 자산이 없으면 로컬 EXE를 `X-PC-Agent-Exe-Stale: true` 헤더와 함께 제공해 사용자에게 GitHub 404가 노출되지 않는다. 로컬 EXE 자체가 없으면 기존대로 리다이렉트한다.
+- `pc_agent/build_exe.py`: 빌드 성공 시 `_write_build_stamp()`가 스탬프 파일을 쓰고 EXE/스탬프 mtime을 현재로 보정한다(mtime 역전 재발 방지).
+- `tests/unit/test_pc_agent_download.py`: 스탬프 일치/불일치, Release 없음→로컬 제공, Release 있음→리다이렉트, 빌드 스탬프 기록 회귀 5건 추가. 11 passed.
+- 운영 dist에 `kakaobot-setup.exe.version = 1.0.73` 스탬프 생성(`dist/`는 .gitignore 대상).
+- 운영 기록: `docs/operations/20260909_pc_agent_exe_stamp_and_release_fallback.md`.
+
 ## 2026-09-08 20:15 KST — Active-chat-safe Claude process reaper
 
 - `app/services/agent_sdk_service.py`: process-wide reaper now requires explicit opt-in and cleanup fails closed by default.
