@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Sequence
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -58,13 +59,16 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(api[_-]?key|auth[_-]?token|secret|password|passwd)\b\s*[:=]\s*\S+"), r"\1=***"),
 )
 
-# 테이블/뷰 존재 여부 캐시 (relation 이름 → bool)
+# 존재가 확인된 relation만 캐시한다 (부재는 캐시하지 않는다 — relation_exists 참고)
 _relation_present: dict[str, bool] = {}
+# 부재 경고를 relation당 1회로 줄이기 위한 기록
+_relation_missing_warned: set[str] = set()
 
 
 def reset_relation_cache() -> None:
     """relation 존재 캐시 초기화 (테스트/마이그레이션 직후용)."""
     _relation_present.clear()
+    _relation_missing_warned.clear()
 
 
 def mask_secrets(text: str) -> str:
@@ -114,11 +118,25 @@ def loads_json(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _note_missing(relation: str) -> None:
+    """부재는 프로세스당 1회만 경고한다 (매 쓰기마다 로그가 쌓이면 안 된다)."""
+    if relation in _relation_missing_warned:
+        return
+    _relation_missing_warned.add(relation)
+    logger.warning(
+        "%s is missing; LLMOps writes are skipped until migrations 163/164 are applied", relation
+    )
+
+
 async def relation_exists(conn: Any, relation: str) -> bool:
-    """public 스키마에 해당 테이블이 있는지 (캐시됨)."""
-    cached = _relation_present.get(relation)
-    if cached is not None:
-        return cached
+    """public 스키마에 해당 테이블이 있는지 (존재만 캐시됨).
+
+    **부재는 캐시하지 않는다.** 마이그레이션은 서버가 떠 있는 동안 적용되므로,
+    부재를 캐시하면 163/164를 적용한 뒤에도 프로세스를 재시작할 때까지 적재가
+    조용히 skip된다. 부재 상태의 재조회 비용(쓰기당 1쿼리)은 그 사고보다 싸다.
+    """
+    if _relation_present.get(relation):
+        return True
     present = bool(
         await conn.fetchval(
             """
@@ -130,12 +148,36 @@ async def relation_exists(conn: Any, relation: str) -> bool:
             relation,
         )
     )
-    _relation_present[relation] = present
-    if not present:
-        logger.warning(
-            "%s is missing; LLMOps writes are skipped until migration 163 is applied", relation
-        )
+    if present:
+        _relation_present[relation] = True
+    else:
+        _note_missing(relation)
     return present
+
+
+async def relations_exist(conn: Any, relations: Sequence[str]) -> dict[str, bool]:
+    """여러 relation의 존재 여부를 한 번의 왕복으로 확인한다.
+
+    상태 엔드포인트는 대시보드가 주기적으로 호출한다. relation당 1쿼리로 돌면
+    테이블이 늘어날 때마다 왕복이 그대로 늘어난다.
+    """
+    wanted = list(dict.fromkeys(relations))
+    rows = await conn.fetch(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema='public' AND table_name = ANY($1::text[])
+        """,
+        wanted,
+    )
+    present = {row["table_name"] for row in rows}
+    state = {relation: relation in present for relation in wanted}
+    for relation, exists in state.items():
+        if exists:
+            _relation_present[relation] = True
+        else:
+            _note_missing(relation)
+    return state
 
 
 class PoolConn:
@@ -908,7 +950,10 @@ async def get_status(project: Optional[str] = None) -> dict[str, Any]:
 
     status: dict[str, Any] = {
         "project": project,
-        "migration": "163_ohvis_internal_llmops_foundation.sql",
+        "migrations": [
+            "163_ohvis_internal_llmops_foundation.sql",
+            "164_llmops_ledger_schema_reconcile.sql",
+        ],
         "external_export": export_status(),
         "db": {"available": False},
     }
@@ -916,9 +961,14 @@ async def get_status(project: Optional[str] = None) -> dict[str, Any]:
         from app.core.db_pool import get_pool
 
         async with get_pool().acquire() as conn:
-            tables = {table: await relation_exists(conn, table) for table in LLMOPS_TABLES}
-            tables[LEGACY_TRACE_TABLE] = await relation_exists(conn, LEGACY_TRACE_TABLE)
-            db: dict[str, Any] = {"available": True, "tables": tables}
+            tables = await relations_exist(conn, (*LLMOPS_TABLES, LEGACY_TRACE_TABLE))
+            db: dict[str, Any] = {
+                "available": True,
+                "tables": tables,
+                # 원장 8개가 전부 있어야 foundation_ready다. traces 하나만 보면
+                # 부분 적용된 DB가 정상으로 보인다 (ohvis_harness와 같은 판정).
+                "foundation_ready": all(tables.get(table) for table in LLMOPS_TABLES),
+            }
             if tables.get(TRACE_TABLE):
                 db["traces"] = {
                     "total": await conn.fetchval(f"SELECT COUNT(*) FROM {TRACE_TABLE}"),

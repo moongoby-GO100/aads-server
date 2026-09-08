@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import pytest
@@ -600,15 +601,69 @@ def test_harness_trace_mirrors_into_llmops_ledger() -> None:
 
 RECONCILE = ROOT / "migrations" / "164_llmops_ledger_schema_reconcile.sql"
 
+# 원장 스키마를 건드려도 되는 마이그레이션은 이 둘뿐이다.
+# 163 = 정본 생성(additive), 164 = 이미 적용된 변형본을 정본으로 정합화.
+LEDGER_MIGRATIONS = [MIGRATION.name, RECONCILE.name]
+
+
+_LEDGER_CREATE = re.compile(
+    r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+|TEMP(?:ORARY)?\s+)?TABLE\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?\"?(llmops_\w+)",
+    re.IGNORECASE,
+)
+
+
+def _ledger_creating_migrations() -> dict[str, list[str]]:
+    """llmops_* 원장 테이블을 새로 만드는 마이그레이션 파일 → 테이블 목록."""
+    found: dict[str, list[str]] = {}
+    for path in sorted((ROOT / "migrations").glob("*.sql")):
+        tables = _LEDGER_CREATE.findall(path.read_text(encoding="utf-8"))
+        if tables:
+            found[path.name] = sorted(set(tables))
+    return found
+
 
 def test_only_one_migration_creates_the_llmops_ledger() -> None:
-    """163이 여러 변형본으로 존재하면 어떤 스키마가 정본인지 알 수 없다."""
-    creators = [
+    """163이 여러 변형본으로 존재하면 어떤 스키마가 정본인지 알 수 없다.
+
+    표기 흔들림(IF NOT EXISTS 생략, public. 접두, 대소문자, 줄바꿈)으로 검사를
+    빠져나가면 회귀 방지가 되지 않으므로 정규식으로 CREATE TABLE 자체를 본다.
+    """
+    creators = _ledger_creating_migrations()
+    assert list(creators) == [MIGRATION.name], f"llmops 원장을 만드는 파일이 여럿이다: {creators}"
+
+
+def test_a_new_ledger_migration_variant_would_fail_the_guard() -> None:
+    """가드가 실제로 잡는지 — 변형본을 흉내 낸 문자열이 전부 걸려야 한다."""
+    for variant in (
+        "CREATE TABLE llmops_traces (id UUID PRIMARY KEY);",
+        "create table if not exists public.llmops_spans (id uuid);",
+        'CREATE TABLE IF NOT EXISTS "llmops_feedback" (id uuid);',
+        "CREATE TABLE\n  IF NOT EXISTS llmops_scores (id uuid);",
+    ):
+        assert _LEDGER_CREATE.search(variant), f"가드를 빠져나가는 변형본: {variant}"
+
+
+def test_reconcile_migration_does_not_create_ledger_tables() -> None:
+    """164는 이미 있는 테이블을 정합화만 한다 — 새 원장을 만들면 정본이 둘이 된다."""
+    assert not _LEDGER_CREATE.search(RECONCILE.read_text(encoding="utf-8"))
+
+
+def test_no_migration_beyond_163_and_164_touches_the_llmops_ledger() -> None:
+    """마이그레이션 과다 회귀를 막는다.
+
+    163을 그대로 두고 165, 166…을 덧붙이면 "정본 + 패치 N개"가 되어 어떤 DB가
+    어떤 모양인지 아무도 말할 수 없게 된다. 원장을 또 손대야 한다면 그건 164에
+    합치거나 163을 고쳐야 한다는 뜻이고, 새 파일을 늘리는 순간 이 테스트가 깨진다.
+    """
+    touching = [
         path.name
         for path in sorted((ROOT / "migrations").glob("*.sql"))
-        if "CREATE TABLE IF NOT EXISTS llmops_traces" in path.read_text(encoding="utf-8")
+        if "llmops_" in path.read_text(encoding="utf-8")
     ]
-    assert creators == [MIGRATION.name], f"llmops_traces를 만드는 파일이 여럿이다: {creators}"
+    assert touching == LEDGER_MIGRATIONS, (
+        f"llmops 원장을 건드리는 마이그레이션이 {LEDGER_MIGRATIONS} 외에 있다: {touching}"
+    )
 
 
 def test_reconcile_migration_exists_because_163_cannot_reshape_existing_tables() -> None:
@@ -662,6 +717,52 @@ def test_reconcile_migration_creates_the_index_promotion_conflicts_on() -> None:
     assert "(dataset_id, source_ref) WHERE source_ref IS NOT NULL" in sql
 
 
+# ── 정본 스택 단일성 ────────────────────────────────────────────────────────
+
+
+# upstream 정본. llmops_store가 저장/조회 계약을 혼자 소유하고,
+# evaluator/export는 그 위에 얹힌다.
+CANONICAL_LLMOPS_MODULES = {
+    "llmops_store.py",
+    "llmops_evaluator.py",
+    "llmops_export.py",
+}
+
+# 같은 역할로 만들어졌다가 폐기된 변형본들. 다시 살아나면 어느 쪽이 쓰이는지
+# import 순서에 달리게 되므로 이름 자체를 금지한다.
+RETIRED_LLMOPS_MODULES = ("llmops_service", "llmops_eval", "llmops_masking")
+
+
+def test_llmops_store_is_the_only_ledger_module() -> None:
+    """폐기된 변형본이 되살아나면 정본이 둘이 된다."""
+    present = {path.name for path in (ROOT / "app" / "services").glob("llmops_*.py")}
+    assert present == CANONICAL_LLMOPS_MODULES, f"llmops 서비스 모듈 구성이 바뀌었다: {present}"
+
+
+def test_nothing_references_a_retired_llmops_module() -> None:
+    """폐기 모듈은 파일뿐 아니라 참조도 남으면 안 된다 (죽은 import 경로)."""
+    import re as _re
+
+    patterns = {name: _re.compile(rf"{name}\b") for name in RETIRED_LLMOPS_MODULES}
+    offenders: list[str] = []
+    for path in sorted((ROOT / "app").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for name, pattern in patterns.items():
+            if pattern.search(source):
+                offenders.append(f"{path.relative_to(ROOT)} → {name}")
+    assert not offenders, f"폐기된 llmops 변형본 참조: {offenders}"
+
+
+def test_evaluator_and_export_build_on_the_store_contract() -> None:
+    """평가/내보내기가 자기 저장 계약을 따로 들고 있으면 다시 갈라진다."""
+    for module in ("llmops_evaluator.py", "llmops_export.py"):
+        source = (ROOT / "app" / "services" / module).read_text(encoding="utf-8")
+        assert "from app.services.llmops_store import" in source, f"{module}가 store를 우회한다"
+
+    api_source = (ROOT / "app" / "api" / "ohvis_llmops.py").read_text(encoding="utf-8")
+    assert "from app.services import llmops_evaluator, llmops_store" in api_source
+
+
 # ── harness 상태 판정 ───────────────────────────────────────────────────────
 
 
@@ -694,10 +795,159 @@ def test_foundation_table_probe_uses_a_single_round_trip() -> None:
     assert state["llmops_spans"] is False
 
 
-def test_harness_reports_llmops_ready_only_when_every_table_exists() -> None:
-    """테이블 하나만 보고 implemented라고 하면 부분 적용 DB가 정상으로 보인다."""
-    source = (ROOT / "app" / "services" / "ohvis_harness.py").read_text(encoding="utf-8")
+class HarnessProbePool:
+    """지정한 테이블만 존재하는 DB를 흉내내는 풀. 왕복 횟수를 센다."""
 
-    assert 'if all(db.get("foundation_tables", {}).get(t) for t in LLMOPS_TABLES)' in source
-    assert '"foundation_ready"' in source
-    assert "migrations/164_llmops_ledger_schema_reconcile.sql" in source
+    def __init__(self, present: set[str]):
+        self.present = set(present)
+        self.fetch_calls = 0
+
+    def acquire(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def fetch(self, query: str, *args):
+        self.fetch_calls += 1
+        assert "ANY($1::text[])" in query, "테이블 존재 확인이 단일 왕복이 아니다"
+        return [{"table_name": name} for name in args[0] if name in self.present]
+
+    async def fetchval(self, query: str, *args):
+        if "information_schema.tables" in query:
+            return args[0] in self.present
+        return 0
+
+
+def _llmops_component(present: set[str], monkeypatch) -> dict:
+    from app.core import db_pool
+    from app.services.ohvis_harness import get_harness_status
+
+    pool = HarnessProbePool(present)
+    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
+    status = asyncio.run(get_harness_status())
+    component = next(c for c in status["components"] if c["key"] == "llmops")
+    component["_fetch_calls"] = pool.fetch_calls
+    return component
+
+
+def test_harness_reports_llmops_ready_only_when_every_table_exists(monkeypatch) -> None:
+    """테이블 하나만 보고 implemented라고 하면 부분 적용 DB가 정상으로 보인다."""
+    from app.services.ohvis_harness import LLMOPS_TABLES
+
+    full = _llmops_component(set(LLMOPS_TABLES), monkeypatch)
+    assert full["status"] == "foundation_ready"
+
+    # 163의 첫 테이블만 만들어진 채로 멈춘 DB — 예전 판정은 여기서 정상이라고 했다.
+    partial = _llmops_component({"llmops_traces"}, monkeypatch)
+    assert partial["status"] == "migration_pending"
+
+    # 8개 중 하나만 빠져도 준비 완료가 아니다.
+    almost = _llmops_component(set(LLMOPS_TABLES) - {"llmops_feedback"}, monkeypatch)
+    assert almost["status"] == "migration_pending"
+
+    empty = _llmops_component(set(), monkeypatch)
+    assert empty["status"] == "migration_pending"
+
+
+def test_harness_status_probes_every_foundation_table_in_one_round_trip(monkeypatch) -> None:
+    """상태 엔드포인트 1회 호출이 테이블 수만큼 왕복하면 안 된다."""
+    from app.services.ohvis_harness import FOUNDATION_TABLES, LLMOPS_TABLES
+
+    component = _llmops_component(set(FOUNDATION_TABLES), monkeypatch)
+    assert component["_fetch_calls"] == 1, "테이블당 1쿼리로 회귀했다"
+    assert len(FOUNDATION_TABLES) > len(LLMOPS_TABLES) > 1
+
+
+def test_harness_llmops_evidence_names_both_ledger_migrations(monkeypatch) -> None:
+    """운영 DB를 정본으로 맞추려면 163만으로는 부족하다는 사실이 상태에 드러나야 한다."""
+    from app.services.ohvis_harness import LLMOPS_TABLES
+
+    component = _llmops_component(set(LLMOPS_TABLES), monkeypatch)
+    evidence = " ".join(component["evidence"])
+    for migration in LEDGER_MIGRATIONS:
+        assert migration in evidence
+
+
+# ── store 상태/캐시 ─────────────────────────────────────────────────────────
+
+
+def test_store_status_probes_every_table_in_one_round_trip(monkeypatch) -> None:
+    """/ohvis/llmops/status도 harness와 같은 규칙을 따른다 (테이블당 1쿼리 금지)."""
+    pool = HarnessProbePool(set(llmops_store.LLMOPS_TABLES) | {llmops_store.LEGACY_TRACE_TABLE})
+    from app.core import db_pool
+
+    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
+    status = asyncio.run(llmops_store.get_status(project="AADS"))
+
+    assert pool.fetch_calls == 1, "테이블당 1쿼리로 회귀했다"
+    assert status["db"]["available"] is True
+    assert status["db"]["foundation_ready"] is True
+    assert status["migrations"] == list(LEDGER_MIGRATIONS)
+
+
+def test_store_status_is_not_ready_when_a_single_table_is_missing(monkeypatch) -> None:
+    """traces 하나만 있으면 준비 완료가 아니다 — harness 판정과 어긋나면 안 된다."""
+    from app.core import db_pool
+
+    pool = HarnessProbePool({"llmops_traces"})
+    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
+    status = asyncio.run(llmops_store.get_status())
+
+    assert status["db"]["foundation_ready"] is False
+    assert status["db"]["tables"]["llmops_traces"] is True
+    assert status["db"]["tables"]["llmops_spans"] is False
+
+
+def test_missing_relation_is_rechecked_after_the_migration_lands() -> None:
+    """부재를 캐시하면 163/164 적용 후에도 재시작 전까지 적재가 조용히 멈춘다."""
+
+    class SwitchingConn:
+        def __init__(self):
+            self.exists = False
+            self.probes = 0
+
+        async def fetchval(self, query: str, *args):
+            assert "information_schema.tables" in query
+            self.probes += 1
+            return self.exists
+
+    conn = SwitchingConn()
+    assert asyncio.run(llmops_store.relation_exists(conn, "llmops_traces")) is False
+    assert asyncio.run(llmops_store.relation_exists(conn, "llmops_traces")) is False
+    assert conn.probes == 2, "부재가 캐시되어 재조회하지 않았다"
+
+    conn.exists = True
+    assert asyncio.run(llmops_store.relation_exists(conn, "llmops_traces")) is True
+
+    # 존재는 캐시된다 — 정상 경로에서 쓰기마다 왕복을 늘리지 않는다.
+    before = conn.probes
+    assert asyncio.run(llmops_store.relation_exists(conn, "llmops_traces")) is True
+    assert conn.probes == before
+
+
+def test_batch_probe_does_not_cache_absence() -> None:
+    """단일 왕복 프로브도 같은 규칙이다 — 없는 테이블을 없다고 굳히지 않는다."""
+
+    class BatchConn:
+        def __init__(self, present):
+            self.present = set(present)
+
+        async def fetch(self, query: str, *args):
+            assert "ANY($1::text[])" in query
+            return [{"table_name": name} for name in args[0] if name in self.present]
+
+        async def fetchval(self, query: str, *args):
+            assert "information_schema.tables" in query
+            return args[0] in self.present
+
+    conn = BatchConn({"llmops_traces"})
+    state = asyncio.run(llmops_store.relations_exist(conn, llmops_store.LLMOPS_TABLES))
+    assert state["llmops_traces"] is True
+    assert state["llmops_spans"] is False
+
+    migrated = BatchConn(set(llmops_store.LLMOPS_TABLES))
+    assert asyncio.run(llmops_store.relation_exists(migrated, "llmops_spans")) is True
