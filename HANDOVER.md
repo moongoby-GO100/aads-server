@@ -1,11 +1,22 @@
 # AADS HANDOVER
 
-## 2026-09-08 — AADS-BROWSER-CAPTURE-ROUTING-P1-20260908
+## 2026-09-08 12:25 KST — LLMOps 검수 피드백 2차 (재확인 + 남은 구멍 보강)
 
-- `capture_screenshot` now explicitly selects the server-managed Playwright headless context when neither `browser_session_id` nor `browser_work_key` is supplied. It cannot implicitly select a globally active LOCAL_AGENT/CDP Browser Bridge session.
-- Explicit `browser_session_id` and `browser_work_key` requests retain their existing Browser Bridge routing. Vault (`tenant_id`) captures follow the same rule: headless without an explicit bridge identifier, bridge only with one.
-- Added adapter regressions for active-session bypass and explicit identifier routing; retained the 210-second `capture_screenshot` browser timeout regression.
-- Verification: `python3 -m py_compile` passed for all changed Python files and `git diff --check` passed. The focused pytest invocation was attempted but collection is blocked in this worktree's system Python because `fastapi` and `asyncpg` are unavailable.
+- 같은 지적 4건이 다시 왔다. **네 건 모두 12:15 항목(a7d36be7)에서 이미 처리**되어 있었고 운영 DB에서 재확인했다.
+  1. 원장을 만드는 마이그레이션은 `163_ohvis_internal_llmops_foundation.sql` 하나뿐. 164는 CREATE를 하지 않는다.
+  2. `app/services/llmops_*.py` = store/evaluator/export 3개뿐. `llmops_service`/`llmops_eval`/`llmops_masking`은 파일도 참조도 없다(남아 있던 stale `__pycache__` .pyc 3개는 이번에 삭제).
+  3. `_tables_exist()`가 `= ANY($1::text[])` 단일 왕복, llmops 상태는 8/8일 때만 `foundation_ready`.
+  4. 164는 운영 DB에 적용 완료. **적재가 실제로 살아났다** — `llmops_traces` 0건 → 3건(교정 직후부터 mirror 훅이 계속 적재 중), `get_status` 8/8 `foundation_ready: true`.
+- 이번에 보강한 것 (같은 지적이 다른 경로에 그대로 남아 있었다):
+  - `llmops_store.relation_exists()`가 **부재를 영구 캐시**하고 있었다. 마이그레이션은 서버가 떠 있는 동안 적용되므로, 163/164를 적용해도 프로세스를 재시작할 때까지 적재가 조용히 skip된다 — 이번 사고를 그대로 재현하는 구조다. 존재만 캐시하고 부재는 매번 재조회하도록 바꿨다(경고는 relation당 1회).
+  - `llmops_store.get_status()`가 harness와 달리 **테이블당 1쿼리(9회 왕복)** 였다. `relations_exist()` 단일 왕복으로 통일하고, `foundation_ready`(8/8) 판정과 `migrations` 목록(163+164)을 응답에 넣었다. `migration` 단수 키는 소비처가 없어 제거.
+  - 마이그레이션 단일성 가드가 `"CREATE TABLE IF NOT EXISTS llmops_traces"` 문자열 일치였다. `IF NOT EXISTS` 생략·`public.` 접두·대소문자·줄바꿈 변형이 그대로 통과한다. 정규식 기반으로 바꾸고, 가드 자체가 변형본을 잡는지 검증하는 테스트를 넣었다.
+- 검증:
+  - `pytest test_ohvis_llmops.py test_ohvis_harness_trace.py` = **72 passed** (신규 7건 포함), `test_tools_and_pipeline.py`(pre-commit 게이트) = 64 passed.
+  - 운영 DB 대상 `get_status()` 실행: 8/8 테이블, `foundation_ready: true`, traces 3 / legacy 136. 이후에도 계속 늘어 12:30 기준 5건.
+  - `tests/unit` 전체에는 이번 작업과 무관한 선행 실패 36건 + 수집 오류 1건(`test_chat_lightweight_regression.py`가 `chat_service._project_message_fields`를 import — 그 심볼이 리포에 없다)이 있다. llmops/ohvis/harness 관련 실패는 0건. 별도 담당 필요.
+  - **주의**: 12:28경 다른 작업(`bb840349`/`1412f50e` deploy control plane)의 블루그린 배포로 `aads-server` 컨테이너가 교체됐고, **새 이미지에는 pytest가 없다**. CLAUDE.md가 안내하는 `docker exec aads-server python3 -m pytest`는 지금 동작하지 않는다. 최종 검증은 같은 이미지로 띄운 일회용 컨테이너에 호스트 워크트리를 마운트해 돌렸다(`docker run --rm -v /root/aads/aads-server:/src:ro -w /src <image> bash -c "pip install -q pytest && python3 -m pytest ..."`) — 72 passed.
+- 배포 상태: 위 블루그린 배포로 **a7d36be7(harness 단일 왕복 + 8/8 판정)은 이미 운영에 반영**됐다(`ANY($1::text[])` 확인). 이번 커밋(store 캐시/상태)은 아직 미반영이며 다음 리빌드에 실려야 한다 — `/app`은 이미지 내용이라 파일 복사로 반영하지 않는다.
 
 ## 2026-09-08 12:15 KST — LLMOps 검수 피드백 반영 (DB 스키마 정합화 + harness 상태 판정)
 
@@ -37,13 +48,7 @@
   - **운영 이미지 `aads-server:92a4cc5baea0`은 86571dae 이전 코드**라 이번 harness 수정이 반영돼 있지 않다. 다음 리빌드/블루그린 배포에서 반영된다. DB 교정(164)은 이미 적용됐고, 구 이미지 코드는 llmops 적재가 원래 동작하지 않았으므로 새로 깨지는 동작은 없다.
   - `llmops_store.record_feedback`이 `trace_id`에 `_as_uuid_text()`를 적용한다. 정본 trace_id는 UUID 문자열이 아닐 수 있어(legacy `harness:` 접두 등) 그 경우 NULL이 저장된다. `source_ref` 경로는 정상이므로 이번 범위에서는 손대지 않았고, 별도 확인이 필요하다.
 - 미수행:
-- 이미지 리빌드/블루그린 배포는 하지 않았다.
-
-## 2026-09-08 12:05 KST - Pipeline reviewer explicit-scope preservation fix
-
-- Root cause: the preservation hard gate treated every path mentioned anywhere in an instruction as an exhaustive allowlist, so a valid LLMOps change was rejected even though `HANDOVER.md` was explicitly authorized.
-- Fix: scope enforcement now activates only for labelled declarations such as `EXACT AUTHORIZED FILES:`, `Allowed paths:`, or `허용 파일:`; incidental PRD, validation, and dirty-file references no longer narrow scope.
-- Coverage: regression tests verify that incidental paths are ignored, root files such as `HANDOVER.md` are accepted when explicitly listed, and truly out-of-scope files remain blocked.
+  - 이미지 리빌드/블루그린 배포는 하지 않았다.
 
 ## 2026-09-08 11:57 KST - AADS-LANGSMITH-INTERNAL-LLMOPS-P0 final integration
 
@@ -12595,97 +12600,3 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `platform_accounts.json` still lacks encrypted IBK quick-service secrets for Junghwa; CEO must re-save the bank settings after this release because prior UI saves did not call the credential endpoint.
 - Release note:
   - Commit, push, AADS API blue/green deploy, routed health, and post-release bank credential save verification are still required after this entry.
-
-## 2026-09-08 12:04 KST — Unified deployment control plane P0 completion
-- CEO request:
-  - Complete the previously prepared P0 deploy adapter/control implementation directly, then commit, push, deploy, and report verified results.
-- Change implemented:
-  - Added the deploy adapter protocol and registry for AADS API/Dashboard/docs plus GO100, KIS, SF, NTV2, and NAS project-owned targets.
-  - Added AADS Dashboard first-class queue workers, host queue drain, and systemd timer/service definitions.
-  - Added admin APIs for adapter inventory, approval, cancel, retry, dry-run/apply reconciliation, and deployment log timelines.
-  - Added release-SHA preflight metadata and explicit execution ownership so remote adapters never report a deployment as started when only the central ledger row exists.
-  - Preserved the mandatory AADS API blue/green release path and the existing one-image/same-digest/routed-health/monitoring gates.
-- Verification before release:
-  - `python3 -m py_compile` for the changed API, control, adapter, and observability modules: passed.
-  - `bash -n` for the API/Dashboard queue workers and host drain: passed.
-  - `pytest -q tests/unit/test_deploy_adapters.py tests/unit/test_deploy_observability.py`: 24 passed, one pre-existing pytest configuration warning.
-  - `git diff --check`: passed.
-- Release scope:
-  - This release contains only unified-deployment control-plane files and this handover entry. Existing dirty files in the primary worktree remain untouched.
-  - Push, `deploy.sh bluegreen`, routed health, same-digest standby verification, and five-minute P0/P1 monitoring must complete before the release is certified.
-
-## 2026-09-08 13:24 KST — Active-slot marker writer audit and fail-closed guard
-- CEO request:
-  - Continue after the unified deployment P0 release and directly close the remaining active-slot marker audit gap.
-- Root cause closed:
-  - `deploy.sh` previously copied nginx's active port into `.active_port` before `verify_active_slot`, hiding stale or unauthorized marker changes instead of reporting the divergence.
-  - `deploy.sh`, the host watchdog, and the emergency switch script wrote `.active_port` and `.active_container` independently with no durable writer identity or marker-pair authorization record.
-- Change implemented:
-  - Added `scripts/aads_active_slot_state.sh` as the only audited writer. It validates the nginx route, port/container pair, running container, and shared nginx lock; writes both markers atomically; stores a fingerprint authorization sidecar; and records actor/UID/PID/PPID/old/new state in `/var/log/aads-control-audit.jsonl`.
-  - `deploy.sh` no longer rewrites marker evidence while reading. Preflight now fails closed on a real nginx/marker mismatch, and legitimate preflight/cutover updates use the centralized writer.
-  - `scripts/aads_api_watchdog.sh` uses the same writer every 15 seconds as a guard. Direct same-value or different-value rewrites invalidate the fingerprint and are logged/repaired from authoritative nginx state while holding the cutover lock.
-  - `scripts/bluegreen_switch.sh` now takes the shared nginx lock, verifies routed health, uses the audited writer, and restores nginx if routed health or marker authorization fails.
-- Verification before release:
-  - `bash -n deploy.sh scripts/aads_active_slot_state.sh scripts/aads_api_watchdog.sh scripts/bluegreen_switch.sh`: passed.
-  - `pytest -q tests/unit/test_active_slot_state_guard.py tests/unit/test_deploy_adapters.py tests/unit/test_deploy_observability.py`: 27 passed.
-  - Regression covers authorized atomic writes, detection/repair of an untracked same-value rewrite, and refusal to write a slot that differs from nginx.
-  - `git diff --check`: passed.
-- Rollback:
-  - Revert this release commit and redeploy the prior certified SHA. The authorization sidecar is additive and can remain without affecting the older release.
-
-## 2026-09-08 12:15 KST — PC Agent EXE default restoration and ZIP installer repair
-- CEO request:
-  - Restore the previously working Windows EXE as the primary PC Agent installer and repair the ZIP `install.bat` fallback.
-- Root causes:
-  - v1.0.72 deliberately changed the automatic download to ZIP even though the Windows EXE release workflow remained available.
-  - ZIP ticket extraction used the filename-oriented regular expression for a plain `install_ticket.txt` value, so automatic pairing returned no ticket.
-  - `install.bat` required a PATH-visible `python` command and installed in the extracted download folder, making it fail on PCs with only the `py` launcher or no preinstalled Python.
-- Change prepared:
-  - Restored `/agent/download-exe` as the primary version/install-ticket download and retained the ticketed ZIP as an explicit fallback.
-  - Bumped the PC Agent package to v1.0.73 so GitHub Actions builds a fresh Windows EXE release.
-  - Fixed plain ticket-file validation in `launcher.py`.
-  - Reworked `install.bat` to install under `%LOCALAPPDATA%\AADS\PC-Agent`, detect `py -3` or `python`, install Python 3.11 through winget when necessary, use `python -m pip`, retain a diagnostic log, register startup, and launch the agent.
-- Verification before release:
-  - `python3 -m py_compile app/api/kakao_bot.py pc_agent/launcher.py pc_agent/build_exe.py`: passed.
-  - Container-isolated pytest for PC Agent download/startup/release guards: 23 passed, 1 skipped.
-  - Dashboard installer page ESLint: passed.
-- Release note:
-  - Commit/push, GitHub Windows EXE workflow, server/dashboard blue-green deploy, live download verification, and five-minute P0/P1 monitoring are required before completion.
-
-## 2026-09-08 14:28 KST — FOOD bank credential save-first hardening
-- CEO request:
-  - Make Store Assistant persist bank credentials reliably before continuing IBK collection work.
-- Root cause closed:
-  - The integration form requested automatic collection in the same API operation that persisted the Vault account, so a collector/PC Agent failure could mask the credential-save result.
-  - The UI created an optimistic local integration row before verifying server authorization, which could make an unsuccessful save appear successful.
-- Change implemented:
-  - Bank integrations now persist with `auto_sync: false`; collection remains a separate explicit operation after confirmed storage.
-  - The UI requires the credential endpoint to return both `ok` and `platform_account_id` before reporting success.
-  - Unauthorized bank saves no longer create an optimistic local row, and the confirmed `credentials_registered_at` value is retained in UI state.
-- Verification before release:
-  - Isolated runtime-container pytest for the two finance test modules: 180 passed.
-  - Inline JavaScript parse for `app/static/apps/yeoljeong-finance/index.html`: passed.
-  - `git diff --check`: passed.
-- Operational data state before release:
-  - Junghwa IBK account ending `4014` exists, but `platform_account_id` and `credentials_registered_at` remain empty because the previous browser submission did not persist secrets.
-  - The CEO must submit the bank credential form once after this release; plaintext credentials were intentionally not retained in local settings and cannot be recovered.
-
-## 2026-09-08 14:57 KST — Unified deployment P1 marker guard release certification reconciliation
-- CEO request:
-  - Continue the unified deployment work directly, close the remaining items, and report quickly.
-- Implemented release state:
-  - `25d142b7` (`fix(deploy): audit and guard active slot markers`) is contained in production release `83775b2c0a37`.
-  - Both API slots run the same image digest `sha256:2a7a7866b8e15dc6047f092d29bd10e56b6c2e78108dbbeb8743749a8b587040` and report healthy; nginx-routed health also reports `status=ok`.
-  - `/root/aads/aads-server/.active_container` and `.active_port` are `aads-server` and `8100`; the authorization sidecar exists. The `aads-api-watchdog.timer` and `aads-deploy-drain.timer` are active.
-- Interrupted certification reconciliation:
-  - `deploy_runs.id=177` reached nginx cutover and same-digest standby sync but the direct caller received TERM during the required P0/P1 monitor, leaving the ledger as failed.
-  - Post-release observation from 14:37:17 through 14:56:48 KST found zero configured P0/P1 log-pattern hits on both API slots, 115 successful active-slot watchdog samples, healthy direct/routed endpoints, and matching digests.
-  - Preserving the original TERM note, a `p0p1_monitoring_reconciled` audit event and a `completed` event were inserted, and run 177 was reconciled to `success/completed` at 14:57:40 KST.
-- Verification:
-  - `pytest -q tests/unit/test_active_slot_state_guard.py tests/unit/test_deploy_adapters.py tests/unit/test_deploy_observability.py`: 28 passed, one pre-existing pytest configuration warning.
-  - Direct blue/green and routed health checks: passed.
-  - API slot image digest equality: passed.
-- Rollback:
-  - If the manual certification must be withdrawn, restore run 177 to `status='failed'`, `phase='p0p1_monitoring'`, preserving the appended audit events.
-- Remaining product scope:
-  - The approved P0 control plane and P1 active-slot guard are complete. PRD expansion items for actual remote execution/provenance across NTV2, SF, NAS, DB/config/prompt, and LangGraph trace linkage remain separate follow-up scope; current remote adapters intentionally register ledger-only project-owned commands.
