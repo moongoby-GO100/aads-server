@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-09-08 17:31 KST — Chat follow-up implemented; release 191 building
+
+- Commit `80c15d59a56a` pushed to origin/main with commit/push hooks; production main fast-forwarded without touching unrelated staged `docker-compose.yml` or finance/untracked work.
+- Actual rollout: `aads-chat-release-80c15d59.service`, independent cgroup, canonical `deploy.sh bluegreen` from clean `/root/aads/releases/deploy-worker-lifecycle-20260908`. DB deploy_run `191` is `running/build_candidate_image`; queued `181` was superseded by this release. Log: `logs/chat-release-80c15d59.log`.
+- Validation completed: 18 focused deployment tests plus 36 deploy-observability/chat retry/status projection tests = 54 passed. Runtime-image test fallback lacked pytest; `.venv-playwright/bin/python -m pytest` successfully ran the latter 36 (one existing FastAPI deprecation warning). Shell syntax and whitespace passed.
+- Real systemd lifecycle probe: parent oneshot `aads-release-lifecycle-probe-parent2` was inactive/dead while its independently launched Type=exec child remained active/running in `/system.slice/aads-release-lifecycle-probe-child2.service`. Probe runs only sleep and expires naturally.
+- Public `/api/v1/health` returned HTTP 200/status=ok. This report's execution `e081ce3c-c352-442e-98e1-791a4df6ed7c` still owns a live lease on old blue; keeping the report open can itself prevent final standby drain. Independent rollout continues after this response closes.
+- NOT complete: new image cutover, matching standby digest/markers, five-minute P0/P1 certification and production auto-resume/final response evidence. Do not report interruption rate improvement yet. No manual production message cleanup or forced execution termination. Rollback route is the previous healthy `6ab3466f9aab` image; honor live stream drain.
+
 ## 2026-09-08 17:27 KST — Deploy queue worker lifecycle repair (certification pending)
 
 - Follow-up of chat interruption rollout: DB run 179 succeeded on `6ab3466f9aab`; run 180 (`9c1f84966bcb`) was superseded by queued run 181 (`950f8b26`). Repeated child attempts failed during initialization; therefore the slot-marker fix was NOT yet deployed.
