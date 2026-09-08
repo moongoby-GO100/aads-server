@@ -35,7 +35,12 @@
   - Migration **not applied** to the production database — the competing runner has a different `163_*` schema, so applying either before the CEO picks a winner would create a schema conflict.
 - CEO decision required:
   - Choose which of the two parallel implementations ships, then merge/push and apply exactly one `163_*` migration.
+## 2026-09-08 - FOOD integration DB delete and bank credential fail-closed
 
+- Added authenticated `DELETE /yeoljeong-finance/accounts/{account_id}` backed by the existing platform-account ledger delete path (JSON removal plus PostgreSQL soft delete).
+- The FOOD integration list now waits for the server DB delete to succeed before removing the local card; failed authorization/API calls keep the card visible for recovery.
+- Bank credential entry now fails closed when the operator lacks automation-admin access or the Vault/API write fails, preventing local-only "saved" state.
+- Focused verification: six finance service/API/static-contract tests passed in the AADS runtime container. No production account was deleted during verification.
 ## 2026-09-08 08:52 KST - PC Agent reboot reconnect diagnosis and patch
 
 - CEO request:

@@ -571,6 +571,12 @@ async def upsert_account(
     return response
 
 
+@router.delete("/accounts/{account_id}")
+async def delete_account(account_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    await run_in_threadpool(svc.delete_account, account_id, current_user)
+    return {"ok": True}
+
+
 @router.get("/settlements")
 async def list_settlements(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"settlements": await run_in_threadpool(svc.list_settlements, current_user, business_id)}

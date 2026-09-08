@@ -691,3 +691,48 @@ def test_integration_form_persists_bank_credentials_to_bank_account_vault():
     assert "/credentials" in save_block
     assert "account_password: data.accountPassword" in save_block
     assert "business_registration_no: data.businessRegistrationNo" in save_block
+
+
+@pytest.mark.asyncio
+async def test_delete_account_endpoint_delegates_to_service(monkeypatch):
+    calls = []
+
+    def fake_delete(account_id, current_user):
+        calls.append((account_id, current_user))
+
+    monkeypatch.setattr(api.svc, "delete_account", fake_delete)
+    admin = {"email": "owner@example.com", "is_admin": True}
+
+    result = await api.delete_account("acct-delete-me", current_user=admin)
+
+    assert result == {"ok": True}
+    assert calls == [("acct-delete-me", admin)]
+
+
+def test_integration_delete_waits_for_server_db_before_local_removal():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    delete_block = html.split("async function deleteIntegrationAccount", 1)[1].split(
+        "async function refreshServerAccounts",
+        1,
+    )[0]
+
+    api_call = "await financeApi(`/accounts/${encodeURIComponent(serverAccountId)}`, { method: \"DELETE\" });"
+    local_remove = "state.settings.integrations = settings().integrations.filter"
+    assert api_call in delete_block
+    assert local_remove in delete_block
+    assert delete_block.index(api_call) < delete_block.index(local_remove)
+    assert "총괄 운영관리자 로그인 후 서버 DB 계정을 삭제할 수 있습니다." in delete_block
+
+
+def test_bank_credential_save_is_fail_closed_without_server_authorization():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    save_block = html.split("async function saveIntegrationConnection", 1)[1].split(
+        "async function runIntegrationAudit",
+        1,
+    )[0]
+
+    assert "isBankCredentialService && hasBankCredentialInput && !canManageAutomation()" in save_block
+    assert "은행 인증정보 서버 저장 실패" in save_block
+    assert save_block.count("return false;") >= 3

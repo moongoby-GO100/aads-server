@@ -5124,6 +5124,32 @@ def test_save_ibk_bank_credentials_accepts_quick_lookup_without_login_id(tmp_pat
     assert "login_password" not in credentials
 
 
+def test_delete_account_removes_platform_account_and_requires_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    service._write(
+        "platform_accounts",
+        [
+            {
+                "id": "acct-delete-me",
+                "service": "ibk_business",
+                "business_id": "biz-junghwa",
+                "branch": "중화점",
+                "username": "quick-user",
+            }
+        ],
+    )
+
+    service.delete_account("acct-delete-me", ADMIN_USER)
+
+    assert service._read("platform_accounts") == []
+    with pytest.raises(Exception) as missing:
+        service.delete_account("acct-delete-me", ADMIN_USER)
+    assert getattr(missing.value, "status_code", None) == 404
+    with pytest.raises(Exception) as forbidden:
+        service.delete_account("another-account", STAFF_USER)
+    assert getattr(forbidden.value, "status_code", None) == 403
+
+
 def test_create_bank_account_requires_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     with pytest.raises(Exception) as exc:

@@ -8702,7 +8702,7 @@
               <h3>${escapeHtml(item.label || integrationLabels[item.service] || item.service)}</h3>
               <span class="badge ${status[1]}">${escapeHtml(status[0])}</span>
             </div>
-            <button class="icon danger" data-delete-integration="${escapeHtml(item.id)}" title="외부계정 삭제">-</button>
+            <button type="button" class="icon danger" data-delete-integration="${escapeHtml(item.id)}" title="외부계정 삭제">삭제</button>
           </header>
           <div class="meta-grid">
             <span>구분: ${escapeHtml(catalog.category || "기타")} · ${escapeHtml(integrationLabels[item.service] || item.service)}</span>
@@ -9515,6 +9515,12 @@
       }
       if (previewIntegration) markIntegrationRunning(previewIntegration, `${integrationLabels[previewIntegration.service] || previewIntegration.service} 저장 후 연동 실행 중`);
       const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(vaultUsername || hasBankCredentialInput);
+      if (isBankCredentialService && hasBankCredentialInput && !canManageAutomation()) {
+        const accessMessage = "은행 인증정보는 총괄 운영관리자 로그인 후 서버 Vault에만 저장할 수 있습니다. 로그인·권한을 확인한 뒤 다시 저장하십시오.";
+        setIntegrationSubmitFeedback(form, accessMessage, false);
+        showToast(accessMessage);
+        return false;
+      }
       if (shouldUseServerVault && !canManageAutomation()) {
         serverVaultWarning = "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다. 입력값은 로컬 연동 목록에 먼저 저장했습니다.";
         setIntegrationSubmitFeedback(form, serverVaultWarning, false);
@@ -9654,9 +9660,21 @@
               serverAccount = retryResult.account;
               pendingAutoSync = retryResult.sync || null;
             } catch (retryErr) {
+              if (isBankCredentialService && hasBankCredentialInput) {
+                const failureMessage = `은행 인증정보 서버 저장 실패: ${retryErr.message}`;
+                setIntegrationSubmitFeedback(form, failureMessage, false);
+                showToast(failureMessage);
+                return false;
+              }
               showToast(`서버 저장 실패: ${retryErr.message}`);
             }
           } else {
+            if (isBankCredentialService && hasBankCredentialInput) {
+              const failureMessage = `은행 인증정보 서버 저장 실패: ${err.message}`;
+              setIntegrationSubmitFeedback(form, failureMessage, false);
+              showToast(failureMessage);
+              return false;
+            }
             showToast(`서버 저장 실패: ${err.message}`);
           }
         }
@@ -11051,6 +11069,27 @@
       saveState();
       syncSettingsToServer();
       renderAll();
+    }
+
+    async function deleteIntegrationAccount(integrationId) {
+      const item = settings().integrations.find(candidate => candidate.id === integrationId);
+      if (!item) throw new Error("삭제할 외부계정을 찾지 못했습니다.");
+      if (!confirm("선택한 외부계정 연결 정보를 서버 DB에서도 삭제하시겠습니까?")) return false;
+
+      const serverAccountId = String(item.serverAccountId || item.server_account_id || "").trim();
+      if (serverAccountId) {
+        if (!hasServerAuth() || !canManageAutomation()) {
+          throw new Error("총괄 운영관리자 로그인 후 서버 DB 계정을 삭제할 수 있습니다.");
+        }
+        await financeApi(`/accounts/${encodeURIComponent(serverAccountId)}`, { method: "DELETE" });
+      }
+
+      state.settings.integrations = settings().integrations.filter(candidate => candidate.id !== integrationId);
+      saveState();
+      if (hasServerAuth() && canManageSettings()) await persistSettingsToServer();
+      renderAll();
+      showToast(serverAccountId ? "외부계정을 서버 DB와 연동목록에서 삭제했습니다." : "로컬 연동목록에서 삭제했습니다.");
+      return true;
     }
 
     async function refreshServerAccounts() {
@@ -12701,20 +12740,7 @@
           showToast("직원 기본정보를 삭제했습니다.");
         }
         if (integrationId) {
-          if (!confirm("선택한 외부계정 연결 정보를 삭제하시겠습니까?")) return;
-          const deletedItem = settings().integrations.find(candidate => candidate.id === integrationId);
-          const serverAccountId = deletedItem?.serverAccountId || deletedItem?.server_account_id || "";
-          state.settings.integrations = settings().integrations.filter(item => item.id !== integrationId);
-          saveState();
-          syncSettingsToServer();
-          renderAll();
-          if (hasServerAuth() && serverAccountId) {
-            financeApi(`/accounts/${encodeURIComponent(serverAccountId)}`, { method: "DELETE" })
-              .then(() => showToast("외부계정을 서버에서 삭제했습니다."))
-              .catch(err => showToast(`서버 계정 삭제 실패: ${err.message} — 로컬에서는 제거됨`));
-          } else {
-            showToast("외부계정 연결 정보를 삭제했습니다.");
-          }
+          deleteIntegrationAccount(integrationId).catch(err => showToast(`외부계정 삭제 실패: ${err.message}`));
         }
         if (editIntegrationId) {
           openIntegrationEdit(editIntegrationId);

@@ -3404,6 +3404,18 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     return public
 
 
+def delete_account(account_id: str, user: dict) -> None:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="외부계정 삭제 권한이 없습니다")
+    k = str(account_id or "").strip()
+    if not k:
+        raise HTTPException(status_code=400, detail="삭제할 계정 ID가 없습니다")
+    rows = _read("platform_accounts")
+    if not any(str(r.get("id") or "") == k for r in rows):
+        raise HTTPException(status_code=404, detail="삭제할 외부계정을 찾지 못했습니다")
+    _delete("platform_accounts", k)
+
+
 def list_settlements(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="정산 원장 조회 권한이 없습니다")
