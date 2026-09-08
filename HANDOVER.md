@@ -1,5 +1,13 @@
 # AADS HANDOVER
 
+## 2026-09-09 06:19 KST — Android Agent 기능·제어 범위 전수 문서화 및 디스크 정리
+
+- `docs/reports/20260909_ANDROID_AGENT_FULL_CAPABILITY_AND_CONTROL_BOUNDARY.md`: 운영 APK v1.1.1, 62개 등록 명령/41개 고유 핸들러, release/debug Manifest, WebSocket/API, 사용자 권한·Accessibility·Device Admin·Device Owner·ADB/root 계층을 전수 대조했다.
+- 핵심 발견: 현재 운영 release APK는 고권한 permission과 Accessibility/Notification Listener/Device Admin 컴포넌트를 제외해 등록된 command capability와 실제 실행 가능 기능이 불일치한다. 운영 APK는 debug signing config를 사용한다.
+- 2026-09-09 05:52 KST 실측에서 Android Agent 온라인 0대, Android pairing 31건/미폐기 21건, Samsung SM-F966N 마지막 token 사용 2026-09-09 03:31:51 KST였다. 따라서 실기기 permission/app-launch/screen-control 왕복은 미실행이며 재연결 후 검증 절차를 문서에 남겼다.
+- 실행 중 컨테이너·현재/직전 release 이미지·볼륨·DB는 보존하고 비참조 구형 AADS 이미지 4개만 삭제했다. 루트 디스크는 176GB/193GB(92%)에서 2026-09-09 06:19 KST 기준 160GB/193GB(84%)로 개선됐다.
+- 문서만 추가했으며 APK 코드·DB·서비스·배포는 변경하지 않았다.
+
 ## 2026-09-09 03:30 KST - PC Agent EXE 최신판정 스탬프화 + Release 404 폴백 차단
 
 - `app/api/kakao_bot.py`: `_local_pc_agent_exe_is_current()`가 `dist/kakaobot-setup.exe.version` 빌드 스탬프를 1순위로 비교한다. 스탬프가 없으면 기존 mtime 비교로 폴백해 레거시 배포본과 호환된다.
