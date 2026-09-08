@@ -185,14 +185,19 @@ def _validate_install_ticket_param(install_ticket: str | None) -> str | None:
     return ticket
 
 
-def _local_pc_agent_exe_is_current() -> bool:
+def _local_pc_agent_exe_is_current(
+    exe_file: Path | None = None,
+    version_file: Path | None = None,
+) -> bool:
     """Return True only when the local EXE was built for the current VERSION."""
-    if not PC_AGENT_EXE_FILE.exists():
+    exe_file = exe_file or PC_AGENT_EXE_FILE
+    version_file = version_file or PC_AGENT_VERSION_FILE
+    if not exe_file.exists():
         return False
-    if not PC_AGENT_VERSION_FILE.exists():
+    if not version_file.exists():
         return True
     try:
-        return PC_AGENT_EXE_FILE.stat().st_mtime >= PC_AGENT_VERSION_FILE.stat().st_mtime
+        return exe_file.stat().st_mtime >= version_file.stat().st_mtime
     except OSError:
         return False
 
@@ -233,16 +238,16 @@ async def agent_version():
 
     return {
         "version": version,
-        "download_url": "/api/v1/kakao-bot/agent/download?format=zip",
+        "download_url": "/api/v1/kakao-bot/agent/download-exe",
         "exe_download_url": "/api/v1/kakao-bot/agent/download-exe",
         "safe_download_url": "/api/v1/kakao-bot/agent/download?format=zip",
         "force_update": force_update,
         "min_version": min_version,
         "changelog": changelog,
         "exe_available": exe_available,
-        "file_size": "ZIP",
+        "file_size": exe_size if exe_available else "Windows EXE",
         "exe_file_size": exe_size if exe_available else "GitHub Release",
-        "distribution": "zip_source",
+        "distribution": "windows_exe",
         "exe_distribution": "local" if local_exe_available else "github_release",
         "release_date": time.strftime("%Y-%m-%d"),
     }
@@ -293,7 +298,6 @@ async def agent_download(
     ticket = _validate_install_ticket_param(install_ticket)
 
     # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요) — format=zip 이면 건너뜀.
-    # 자동 페어링 설치는 백신 오탐 가능성이 낮은 ZIP 경로를 기본으로 사용한다.
     if _local_pc_agent_exe_is_current() and format != "zip" and ticket is None:
         exe_bytes = PC_AGENT_EXE_FILE.read_bytes()
         return StreamingResponse(
@@ -346,7 +350,7 @@ async def agent_download_exe(install_ticket: str | None = None):
             raise HTTPException(status_code=400, detail="invalid install_ticket")
         filename = f"AADS-PC-Agent-Setup-{version}--ticket-{ticket}.exe"
 
-    if not _local_pc_agent_exe_is_current():
+    if not _local_pc_agent_exe_is_current(exe_path, PC_AGENT_VERSION_FILE):
         if version == "unknown":
             raise HTTPException(status_code=503, detail="PC Agent 버전을 확인할 수 없습니다")
         release_url = (
@@ -888,10 +892,11 @@ async def agent_install_ticket_create(current_user: dict = Depends(get_current_u
         "ticket": ticket,
         "expires_at": str(row["expires_at"]) if row else None,
         "ttl_seconds": PC_AGENT_INSTALL_TICKET_TTL_SECONDS,
-        "download_url": f"/api/v1/kakao-bot/agent/download?format=zip&install_ticket={ticket}",
+        "download_url": f"/api/v1/kakao-bot/agent/download-exe?install_ticket={ticket}",
         "exe_download_url": f"/api/v1/kakao-bot/agent/download-exe?install_ticket={ticket}",
-        "filename": f"AADS-PC-Agent-Setup-auto.zip",
-        "message": "자동 페어링 ZIP 설치 파일이 준비되었습니다. EXE가 백신에 차단되는 환경에서는 ZIP을 압축 해제한 뒤 install.bat을 실행하세요.",
+        "safe_download_url": f"/api/v1/kakao-bot/agent/download?format=zip&install_ticket={ticket}",
+        "filename": "AADS-PC-Agent-Setup.exe",
+        "message": "토큰 입력 없이 연결되는 Windows EXE 설치 파일이 준비되었습니다.",
     }
 
 

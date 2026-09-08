@@ -53,6 +53,7 @@ MAX_CRASHES_BEFORE_REDOWNLOAD = 3
 MAX_REDOWNLOADS_PER_HOUR = 3
 SELF_UPDATE_EXIT_CODE = 42
 INSTALL_TICKET_RE = re.compile(r"(?:--install-ticket[= ]|--ticket-)([A-Za-z0-9_-]{32,96})")
+INSTALL_TICKET_VALUE_RE = re.compile(r"^[A-Za-z0-9_-]{32,96}$")
 
 # ---------------------------------------------------------------------------
 # 로깅 설정
@@ -346,7 +347,7 @@ def _extract_install_ticket() -> str | None:
             if not ticket_file.exists():
                 continue
             ticket = ticket_file.read_text(encoding="utf-8-sig").strip()
-            if ticket and INSTALL_TICKET_RE.fullmatch(ticket):
+            if ticket and INSTALL_TICKET_VALUE_RE.fullmatch(ticket):
                 return ticket
         except Exception:
             continue

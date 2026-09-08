@@ -12606,3 +12606,22 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Release scope:
   - This release contains only unified-deployment control-plane files and this handover entry. Existing dirty files in the primary worktree remain untouched.
   - Push, `deploy.sh bluegreen`, routed health, same-digest standby verification, and five-minute P0/P1 monitoring must complete before the release is certified.
+
+## 2026-09-08 12:15 KST — PC Agent EXE default restoration and ZIP installer repair
+- CEO request:
+  - Restore the previously working Windows EXE as the primary PC Agent installer and repair the ZIP `install.bat` fallback.
+- Root causes:
+  - v1.0.72 deliberately changed the automatic download to ZIP even though the Windows EXE release workflow remained available.
+  - ZIP ticket extraction used the filename-oriented regular expression for a plain `install_ticket.txt` value, so automatic pairing returned no ticket.
+  - `install.bat` required a PATH-visible `python` command and installed in the extracted download folder, making it fail on PCs with only the `py` launcher or no preinstalled Python.
+- Change prepared:
+  - Restored `/agent/download-exe` as the primary version/install-ticket download and retained the ticketed ZIP as an explicit fallback.
+  - Bumped the PC Agent package to v1.0.73 so GitHub Actions builds a fresh Windows EXE release.
+  - Fixed plain ticket-file validation in `launcher.py`.
+  - Reworked `install.bat` to install under `%LOCALAPPDATA%\AADS\PC-Agent`, detect `py -3` or `python`, install Python 3.11 through winget when necessary, use `python -m pip`, retain a diagnostic log, register startup, and launch the agent.
+- Verification before release:
+  - `python3 -m py_compile app/api/kakao_bot.py pc_agent/launcher.py pc_agent/build_exe.py`: passed.
+  - Container-isolated pytest for PC Agent download/startup/release guards: 23 passed, 1 skipped.
+  - Dashboard installer page ESLint: passed.
+- Release note:
+  - Commit/push, GitHub Windows EXE workflow, server/dashboard blue-green deploy, live download verification, and five-minute P0/P1 monitoring are required before completion.

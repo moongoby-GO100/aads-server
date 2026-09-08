@@ -8,6 +8,18 @@ from fastapi.responses import RedirectResponse
 from app.api import kakao_bot
 
 
+def test_zip_installer_bootstraps_python_and_uses_stable_install_path() -> None:
+    script = (Path(__file__).resolve().parents[2] / "pc_agent" / "install.bat").read_text(
+        encoding="utf-8"
+    )
+
+    assert "%LOCALAPPDATA%\\AADS\\PC-Agent" in script
+    assert "where py" in script
+    assert "Python.Python.3.11" in script
+    assert '".venv\\Scripts\\python.exe" -m pip install' in script
+    assert "AADS-PC-Agent-Autostart.cmd" in script
+
+
 @pytest.mark.asyncio
 async def test_agent_download_exe_redirects_to_matching_release_when_local_exe_missing(
     monkeypatch: pytest.MonkeyPatch,
@@ -42,11 +54,11 @@ async def test_agent_version_advertises_installable_exe_release(
     result = await kakao_bot.agent_version()
 
     assert result["version"] == "1.0.55"
-    assert result["download_url"].endswith("/agent/download?format=zip")
+    assert result["download_url"].endswith("/agent/download-exe")
     assert result["exe_download_url"].endswith("/agent/download-exe")
     assert result["safe_download_url"].endswith("/agent/download?format=zip")
     assert result["exe_available"] is True
-    assert result["distribution"] == "zip_source"
+    assert result["distribution"] == "windows_exe"
     assert result["exe_distribution"] == "github_release"
 
 
