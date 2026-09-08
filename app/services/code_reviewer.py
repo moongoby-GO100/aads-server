@@ -27,6 +27,19 @@ _PATH_TOKEN_RE = re.compile(
     r"((?:app|scripts|migrations|docs|tests|src|components|pages|lib|services|api|utils|config|public)/"
     r"[A-Za-z0-9._/\-]+)"
 )
+_SCOPE_DECLARATION_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?"
+    r"(?:exact\s+authorized\s+(?:files?|paths?)|authorized\s+(?:files?|paths?)|"
+    r"allowed(?:\s+(?:files?|paths?|scope))?|file\s+scope|path\s+scope|"
+    r"허용\s*(?:파일|경로|범위)|수정\s*허용\s*(?:파일|경로))"
+    r"\s*:\s*(.*)$",
+    re.IGNORECASE,
+)
+_SCOPE_PATH_RE = re.compile(
+    r"(?:^|[\s,`'\"(])"
+    r"((?:/?[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|"
+    r"[A-Za-z0-9_.-]+\.(?:py|pyi|js|jsx|ts|tsx|sql|md|json|ya?ml|toml|sh|html|css))"
+)
 _DELETED_SYMBOL_RE = re.compile(
     r"^-\s*((?:async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
     re.MULTILINE,
@@ -359,6 +372,53 @@ def _extract_instruction_paths(instruction: str) -> set[str]:
     return paths
 
 
+def _normalize_scope_path(path: str) -> str:
+    """Convert an explicitly authorized path to the repo-relative form used by git."""
+    normalized = path.strip().rstrip(".,:;)").lstrip("./")
+    for repo_marker in (
+        "aads-server/",
+        "aads-dashboard/",
+        "kis-autotrade-v4/",
+        "shortflow/",
+        "newtalk-v2/",
+        "webapp/",
+    ):
+        if repo_marker in normalized:
+            normalized = normalized.split(repo_marker, 1)[1]
+            break
+    return normalized
+
+
+def _extract_explicit_scope_paths(instruction: str) -> set[str]:
+    """Return paths only from a labelled file/path allowlist declaration."""
+    paths: set[str] = set()
+    in_scope_block = False
+
+    for line in (instruction or "").splitlines():
+        declaration = _SCOPE_DECLARATION_RE.match(line)
+        if declaration:
+            in_scope_block = True
+            candidate_text = declaration.group(1)
+        elif in_scope_block:
+            candidate_text = line.strip()
+            if not candidate_text:
+                in_scope_block = False
+                continue
+        else:
+            continue
+
+        matches = list(_SCOPE_PATH_RE.finditer(candidate_text))
+        if in_scope_block and not declaration and not matches:
+            in_scope_block = False
+            continue
+        for match in matches:
+            normalized = _normalize_scope_path(match.group(1))
+            if normalized:
+                paths.add(normalized)
+
+    return paths
+
+
 def _diff_line_counts(diff: str) -> tuple[int, int]:
     additions = 0
     deletions = 0
@@ -396,7 +456,7 @@ def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Opti
             + ", ".join(symbol_matches[:10])
         )
 
-    allowed_paths = _extract_instruction_paths(instruction)
+    allowed_paths = _extract_explicit_scope_paths(instruction)
     changed_paths = [str(path) for path in (files_changed or _extract_changed_files(diff))]
     if allowed_paths and changed_paths:
         out_of_scope = [

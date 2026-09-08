@@ -71,7 +71,7 @@ async def _review_code_diff_retries_parse_failure_then_recovers():
         verdict = await reviewer.review_code_diff(
             project="AADS",
             job_id="runner-test-parse-recovers",
-            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-print('a')\n+print('b')\n",
+            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n print('a')\n+print('b')\n",
             instruction="테스트",
             files_changed=["a.py"],
         )
@@ -110,7 +110,7 @@ async def _review_code_diff_gives_up_after_max_parse_attempts():
         verdict = await reviewer.review_code_diff(
             project="AADS",
             job_id="runner-test-parse-exhausted",
-            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-print('a')\n+print('b')\n",
+            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n print('a')\n+print('b')\n",
             instruction="테스트",
             files_changed=["a.py"],
         )

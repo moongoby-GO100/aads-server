@@ -103,7 +103,7 @@ async def _review_code_diff_marks_low_score_as_code_quality_flag():
         verdict = await reviewer.review_code_diff(
             project="AADS",
             job_id="runner-test-quality",
-            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-print('a')\n+raise RuntimeError('x')\n",
+            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n print('a')\n+raise RuntimeError('x')\n",
             instruction="테스트",
             files_changed=["a.py"],
         )
@@ -139,7 +139,7 @@ async def _review_code_diff_holds_when_review_models_return_no_response():
         verdict = await reviewer.review_code_diff(
             project="AADS",
             job_id="runner-test-no-review-response",
-            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-print('a')\n+print('b')\n",
+            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n print('a')\n+print('b')\n",
             instruction="테스트",
             files_changed=["a.py"],
         )
@@ -175,7 +175,7 @@ async def _review_code_diff_holds_when_review_response_is_unparseable():
         verdict = await reviewer.review_code_diff(
             project="AADS",
             job_id="runner-test-parser-failure",
-            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-print('a')\n+print('b')\n",
+            diff="diff --git a/a.py b/a.py\nindex 1111111..2222222 100644\n--- a/a.py\n+++ b/a.py\n@@ -1 +1,2 @@\n print('a')\n+print('b')\n",
             instruction="테스트",
             files_changed=["a.py"],
         )
@@ -185,3 +185,60 @@ async def _review_code_diff_holds_when_review_response_is_unparseable():
     assert verdict.failure_stage == "review_json_parse"
     assert verdict.needs_retry is True
     mock_save.assert_awaited_once()
+
+
+def test_preservation_gate_ignores_incidental_instruction_paths():
+    reviewer = _load_reviewer()
+    instruction = """Use PRD: docs/reports/20260908_langsmith_self_hosted_ohvis_prd.md.
+Preserve unrelated dirty files and untracked scripts/reports.
+Update HANDOVER.md after implementation.
+"""
+    diff = """diff --git a/app/main.py b/app/main.py
+index 1111111..2222222 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -1 +1,2 @@
+ existing = True
++feature = True
+"""
+
+    verdict = reviewer._precheck_preservation_gate(
+        diff,
+        instruction,
+        ["app/main.py", "HANDOVER.md"],
+    )
+
+    assert verdict is None
+
+
+def test_preservation_gate_uses_explicit_authorized_files_including_root_files():
+    reviewer = _load_reviewer()
+    instruction = """EXACT AUTHORIZED FILES:
+app/main.py
+HANDOVER.md
+"""
+    diff = """diff --git a/HANDOVER.md b/HANDOVER.md
+index 1111111..2222222 100644
+--- a/HANDOVER.md
++++ b/HANDOVER.md
+@@ -1 +1,2 @@
+ existing
++new entry
+"""
+
+    accepted = reviewer._precheck_preservation_gate(
+        diff,
+        instruction,
+        ["app/main.py", "HANDOVER.md"],
+    )
+    rejected = reviewer._precheck_preservation_gate(
+        diff,
+        instruction,
+        ["app/main.py", "HANDOVER.md", "app/secret.py"],
+    )
+
+    assert accepted is None
+    assert rejected is not None
+    assert rejected.flag_category == "PRESERVATION_HARD_GATE"
+    assert rejected.feedback["allowed_paths"] == ["HANDOVER.md", "app/main.py"]
+    assert rejected.feedback["out_of_scope_files"] == ["app/secret.py"]

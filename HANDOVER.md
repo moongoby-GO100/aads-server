@@ -30,7 +30,13 @@
   - **운영 이미지 `aads-server:92a4cc5baea0`은 86571dae 이전 코드**라 이번 harness 수정이 반영돼 있지 않다. 다음 리빌드/블루그린 배포에서 반영된다. DB 교정(164)은 이미 적용됐고, 구 이미지 코드는 llmops 적재가 원래 동작하지 않았으므로 새로 깨지는 동작은 없다.
   - `llmops_store.record_feedback`이 `trace_id`에 `_as_uuid_text()`를 적용한다. 정본 trace_id는 UUID 문자열이 아닐 수 있어(legacy `harness:` 접두 등) 그 경우 NULL이 저장된다. `source_ref` 경로는 정상이므로 이번 범위에서는 손대지 않았고, 별도 확인이 필요하다.
 - 미수행:
-  - 이미지 리빌드/블루그린 배포는 하지 않았다.
+- 이미지 리빌드/블루그린 배포는 하지 않았다.
+
+## 2026-09-08 12:05 KST - Pipeline reviewer explicit-scope preservation fix
+
+- Root cause: the preservation hard gate treated every path mentioned anywhere in an instruction as an exhaustive allowlist, so a valid LLMOps change was rejected even though `HANDOVER.md` was explicitly authorized.
+- Fix: scope enforcement now activates only for labelled declarations such as `EXACT AUTHORIZED FILES:`, `Allowed paths:`, or `허용 파일:`; incidental PRD, validation, and dirty-file references no longer narrow scope.
+- Coverage: regression tests verify that incidental paths are ignored, root files such as `HANDOVER.md` are accepted when explicitly listed, and truly out-of-scope files remain blocked.
 
 ## 2026-09-08 11:57 KST - AADS-LANGSMITH-INTERNAL-LLMOPS-P0 final integration
 
