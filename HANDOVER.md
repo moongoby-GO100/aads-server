@@ -1,5 +1,37 @@
 # AADS HANDOVER
 
+## 2026-09-08 12:15 KST — LLMOps 검수 피드백 반영 (DB 스키마 정합화 + harness 상태 판정)
+
+- 검수 지적 4건과 처리:
+  1. **마이그레이션 과다** → 86571dae에서 이미 `163_ohvis_internal_llmops_foundation.sql` 하나로 정리됨. 회귀 방지 테스트(`test_only_one_migration_creates_the_llmops_ledger`)를 추가해 163 변형본이 다시 생기면 실패하게 했다.
+  2. **`llmops_service.py` vs `llmops_store.py` 충돌** → 86571dae의 `llmops_store` 스택(store + evaluator + export)이 정본이다. 병렬로 작업하던 `llmops_service`/`llmops_masking` 변형은 폐기했다(로컬 브랜치 기록도 남기지 않음).
+  3. **`ohvis_harness.py`의 llmops 상태 체크 리스크** → 두 가지를 고쳤다.
+     - FOUNDATION_TABLES 존재 확인이 테이블당 1쿼리(16회 왕복)였다. 주기 호출되는 상태 엔드포인트라 `= ANY($1::text[])` **단일 왕복**으로 바꿨다.
+     - `llmops_traces` 하나만 보고 `implemented`를 반환했다. 부분 적용된 DB가 정상으로 보이므로 **8개 테이블이 전부 있을 때만 `foundation_ready`**로 바꾸고 evidence에 164를 추가했다.
+  4. **변경 파일 외 영향** → 아래 스키마 불일치가 실제 위험이었다.
+- 실제 문제 (검수에서 드러난 것보다 심각):
+  - 163이 여러 변형본으로 작성되던 중, **자식 테이블이 `llmops_traces(id)` UUID를 참조하는 변형본이 운영 DB에 먼저 적용**됐다.
+  - 163은 `CREATE TABLE IF NOT EXISTS`라서 이미 만들어진 테이블 모양을 고치지 못한다. 그 결과 정본 `llmops_store`의 TEXT 계약(`trace_id TEXT`)이 운영 DB와 맞지 않아 **적재 경로가 통째로 실패**하고 있었다(예외는 전부 흡수되어 조용히 실패, `llmops_traces` 0건).
+- 변경:
+  - `migrations/164_llmops_ledger_schema_reconcile.sql` 신설 — 선행 적용된 변형본을 정본 계약으로 교정.
+    - `llmops_traces.trace_id` 추가/백필/UNIQUE/NOT NULL, `graph_run_id` NOT NULL 복원.
+    - `llmops_spans/tool_calls/feedback.trace_id`, `llmops_examples/scores.source_trace_id`의 UUID FK를 떼고 TEXT로 변환.
+    - `promote_trace_to_dataset`의 `ON CONFLICT (dataset_id, source_ref)` 추론에 필요한 `idx_llmops_examples_dataset_source` 생성.
+    - ADD COLUMN / ALTER TYPE / DROP CONSTRAINT만 사용한다. 행을 지우지 않고, 정본 163만 적용된 DB에서는 전부 no-op이다.
+  - `app/services/ohvis_harness.py`: `_tables_exist()` 단일 왕복 프로브 추가, `LLMOPS_TABLES` 상수 분리, llmops 컴포넌트 상태 판정 교정.
+  - `tests/unit/test_ohvis_llmops.py`: 163 단일성/164 비파괴·재실행 안전성·TEXT 교정 범위, harness 단일 왕복, 상태 판정 테스트 8건 추가.
+  - `tests/unit/test_tools_and_pipeline.py`: `test_report_quality_rejects_thin_analysis` 선행 실패 수정 — 9f8edcd9(AADS-CRF v2.0)이 재시도 프롬프트를 8섹션 플로우로 바꿨는데 테스트가 옛 문구(`문제점`/`완료기준`)를 그대로 검사하고 있었다. pre-commit 게이트 테스트라 커밋을 막고 있었다.
+- 검증:
+  - 운영 DB에 163 → 164 적용 완료, **두 파일 모두 재실행 no-op 확인**(APPLY + REPLAY OK).
+  - 정본 스택 실 DB 종단 검증: `record_trace`(error/rate_limit 분류) → `record_span` → `record_feedback` → `get_trace`(spans 1, tool_calls 1) → `list_traces`(llmops+legacy) → `promote_trace_to_dataset` → `find_promotion_candidates` → `ohvis_harness_trace.record_trace` **mirror 훅으로 llmops_traces 적재 확인**(총 2건) → `get_status` 8/8 테이블. 교정 전에는 이 경로 전체가 실패했다.
+  - 검증용 행은 삭제. ledger는 163 seed dataset 2건만 남았고 `ohvis_harness_traces` 128건은 그대로다.
+  - `pytest test_ohvis_llmops.py test_ohvis_harness_trace.py test_tools_and_pipeline.py` = **124 passed** (aads-server 컨테이너).
+- 주의 (다음 담당자):
+  - **운영 이미지 `aads-server:92a4cc5baea0`은 86571dae 이전 코드**라 이번 harness 수정이 반영돼 있지 않다. 다음 리빌드/블루그린 배포에서 반영된다. DB 교정(164)은 이미 적용됐고, 구 이미지 코드는 llmops 적재가 원래 동작하지 않았으므로 새로 깨지는 동작은 없다.
+  - `llmops_store.record_feedback`이 `trace_id`에 `_as_uuid_text()`를 적용한다. 정본 trace_id는 UUID 문자열이 아닐 수 있어(legacy `harness:` 접두 등) 그 경우 NULL이 저장된다. `source_ref` 경로는 정상이므로 이번 범위에서는 손대지 않았고, 별도 확인이 필요하다.
+- 미수행:
+  - 이미지 리빌드/블루그린 배포는 하지 않았다.
+
 ## 2026-09-08 11:57 KST - AADS-LANGSMITH-INTERNAL-LLMOPS-P0 final integration
 
 - Supersedes the earlier same-day partial/isolated checkpoints below.

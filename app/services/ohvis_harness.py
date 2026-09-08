@@ -18,16 +18,9 @@ from typing import Any
 
 PROJECTS = ("AADS", "KIS", "GO100", "SF", "NTV2", "NAS", "CEO")
 
-FOUNDATION_TABLES = (
-    "ops_skill_library",
-    "ops_skill_versions",
-    "ops_skill_runs",
-    "ohvis_wiki_sources",
-    "ohvis_wiki_pages",
-    "ohvis_wiki_links",
-    "ohvis_wiki_error_book",
-    "ohvis_harness_traces",
-    # migration 163 — internal LangSmith-compatible LLMOps ledger
+# migration 163 (+ 164 정합화) — internal LangSmith-compatible LLMOps ledger.
+# app.services.llmops_store.LLMOPS_TABLES와 같은 집합을 가리킨다.
+LLMOPS_TABLES = (
     "llmops_traces",
     "llmops_spans",
     "llmops_tool_calls",
@@ -37,6 +30,17 @@ FOUNDATION_TABLES = (
     "llmops_scores",
     "llmops_feedback",
 )
+
+FOUNDATION_TABLES = (
+    "ops_skill_library",
+    "ops_skill_versions",
+    "ops_skill_runs",
+    "ohvis_wiki_sources",
+    "ohvis_wiki_pages",
+    "ohvis_wiki_links",
+    "ohvis_wiki_error_book",
+    "ohvis_harness_traces",
+) + LLMOPS_TABLES
 
 RISK_POLICIES: dict[str, dict[str, Any]] = {
     "read": {
@@ -232,6 +236,24 @@ async def _table_exists(conn: Any, table: str) -> bool:
     return bool(value)
 
 
+async def _tables_exist(conn: Any, tables: tuple[str, ...]) -> dict[str, bool]:
+    """여러 테이블의 존재 여부를 한 번의 왕복으로 확인한다.
+
+    상태 엔드포인트는 대시보드가 주기적으로 호출한다. 테이블당 1쿼리로 돌면
+    FOUNDATION_TABLES가 늘어날 때마다 왕복이 그대로 늘어나므로 한 번에 묻는다.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema='public' AND table_name = ANY($1::text[])
+        """,
+        list(tables),
+    )
+    present = {row["table_name"] for row in rows}
+    return {table: table in present for table in tables}
+
+
 async def _safe_count(conn: Any, table: str, where: str = "", *args: Any) -> int | None:
     if not await _table_exists(conn, table):
         return None
@@ -358,7 +380,7 @@ async def get_harness_status(project: str | None = None) -> dict[str, Any]:
         from app.core.db_pool import get_pool
 
         async with get_pool().acquire() as conn:
-            table_state = {table: await _table_exists(conn, table) for table in FOUNDATION_TABLES}
+            table_state = await _tables_exist(conn, FOUNDATION_TABLES)
             db = {
                 "available": True,
                 "foundation_tables": table_state,
@@ -427,14 +449,18 @@ async def get_harness_status(project: str | None = None) -> dict[str, Any]:
             "gap": "external Hermes Agent runtime is intentionally not embedded",
         },
         {
+            # 상태는 "8개 테이블이 전부 있다"까지만 말한다. llmops_traces 하나만
+            # 보면 부분 적용된 DB가 정상으로 보이고, 테이블 존재가 적재 동작을
+            # 보증하지도 않는다. 실제 동작은 /ohvis/llmops/status가 건수까지 본다.
             "key": "llmops",
             "status": (
-                "implemented"
-                if db.get("foundation_tables", {}).get("llmops_traces")
+                "foundation_ready"
+                if all(db.get("foundation_tables", {}).get(t) for t in LLMOPS_TABLES)
                 else "migration_pending"
             ),
             "evidence": [
                 "migrations/163_ohvis_internal_llmops_foundation.sql",
+                "migrations/164_llmops_ledger_schema_reconcile.sql",
                 "/api/v1/ohvis/llmops/status",
                 "rule evaluator rule_v1",
             ],

@@ -391,8 +391,11 @@ class TestOutputValidator:
 
         assert result.is_valid is False
         assert result.violation_type == "REPORT_STRUCTURE_WEAK"
-        assert "문제점" in result.retry_prompt
-        assert "완료기준" in result.retry_prompt
+        # AADS-CRF v2.0(9f8edcd9)에서 재시도 지시가 CEO 8섹션 플로우로 바뀌었다.
+        # 재시도 프롬프트는 무엇을 다시 쓸지 구조로 알려줘야 한다.
+        assert "## 결과" in result.retry_prompt
+        assert "## 검증" in result.retry_prompt
+        assert "다음 단계" in result.retry_prompt
 
     def test_report_quality_accepts_structured_analysis(self):
         from app.services.output_validator import validate_response

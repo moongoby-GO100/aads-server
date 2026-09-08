@@ -593,3 +593,111 @@ def test_harness_trace_mirrors_into_llmops_ledger() -> None:
     assert "_mirror_to_llmops" in source
     assert "from app.services.llmops_store import record_trace as llmops_record_trace" in source
     assert "llmops mirror skipped (non-fatal)" in source
+
+
+# ── 마이그레이션 단일성과 정합화 (164) ──────────────────────────────────────
+
+
+RECONCILE = ROOT / "migrations" / "164_llmops_ledger_schema_reconcile.sql"
+
+
+def test_only_one_migration_creates_the_llmops_ledger() -> None:
+    """163이 여러 변형본으로 존재하면 어떤 스키마가 정본인지 알 수 없다."""
+    creators = [
+        path.name
+        for path in sorted((ROOT / "migrations").glob("*.sql"))
+        if "CREATE TABLE IF NOT EXISTS llmops_traces" in path.read_text(encoding="utf-8")
+    ]
+    assert creators == [MIGRATION.name], f"llmops_traces를 만드는 파일이 여럿이다: {creators}"
+
+
+def test_reconcile_migration_exists_because_163_cannot_reshape_existing_tables() -> None:
+    """163은 CREATE TABLE IF NOT EXISTS라서 먼저 만들어진 테이블 모양을 못 고친다.
+
+    변형본이 적용된 DB에서는 자식 테이블의 trace 참조가 UUID FK로 남아 있어
+    llmops_store의 TEXT 계약이 통째로 실패한다. 164가 그 간극을 메운다.
+    """
+    sql = RECONCILE.read_text(encoding="utf-8")
+    compact = "".join(sql.split())
+    for table, column in (
+        ("llmops_spans", "trace_id"),
+        ("llmops_tool_calls", "trace_id"),
+        ("llmops_feedback", "trace_id"),
+        ("llmops_examples", "source_trace_id"),
+        ("llmops_scores", "source_trace_id"),
+    ):
+        assert f"('{table}','{column}')" in compact, f"{table}.{column} 미교정"
+    assert "TYPE TEXT USING" in sql
+    assert "DROP CONSTRAINT" in sql
+
+
+def test_reconcile_migration_never_destroys_data() -> None:
+    lines = [line.split("--", 1)[0] for line in RECONCILE.read_text(encoding="utf-8").splitlines()]
+    sql = "\n".join(lines).upper()
+    for forbidden in ("DROP TABLE", "TRUNCATE", "DELETE FROM", "DROP COLUMN", "DROP VIEW"):
+        assert forbidden not in sql, f"파괴적 SQL 발견: {forbidden}"
+
+
+def test_reconcile_migration_is_replay_safe() -> None:
+    """재실행 시 no-op — 무조건 실행되는 ALTER는 전부 가드가 있어야 한다."""
+    import re as _re
+
+    sql = RECONCILE.read_text(encoding="utf-8")
+    for statement in _re.findall(r"^\s*(ALTER TABLE [^\n;]+)", sql, _re.MULTILINE):
+        upper = statement.upper()
+        assert "IF NOT EXISTS" in upper or "SET NOT NULL" in upper, (
+            f"가드 없는 문장: {statement.strip()[:80]}"
+        )
+    for statement in _re.findall(r"^\s*(CREATE (?:UNIQUE )?INDEX [^\n;]+)", sql, _re.MULTILINE):
+        assert "IF NOT EXISTS" in statement.upper(), f"가드 없는 인덱스: {statement.strip()[:80]}"
+
+
+def test_reconcile_migration_creates_the_index_promotion_conflicts_on() -> None:
+    """promote_trace_to_dataset의 ON CONFLICT 추론이 이 인덱스에 의존한다."""
+    store_source = (ROOT / "app" / "services" / "llmops_store.py").read_text(encoding="utf-8")
+    assert "ON CONFLICT (dataset_id, source_ref)" in store_source
+
+    sql = RECONCILE.read_text(encoding="utf-8")
+    assert "idx_llmops_examples_dataset_source" in sql
+    assert "(dataset_id, source_ref) WHERE source_ref IS NOT NULL" in sql
+
+
+# ── harness 상태 판정 ───────────────────────────────────────────────────────
+
+
+def test_harness_and_store_agree_on_the_llmops_table_set() -> None:
+    from app.services.ohvis_harness import FOUNDATION_TABLES, LLMOPS_TABLES
+
+    assert set(LLMOPS_TABLES) == set(llmops_store.LLMOPS_TABLES)
+    for table in LLMOPS_TABLES:
+        assert table in FOUNDATION_TABLES
+
+
+def test_foundation_table_probe_uses_a_single_round_trip() -> None:
+    """상태 엔드포인트는 주기 호출된다. 테이블 수만큼 왕복하면 안 된다."""
+    from app.services.ohvis_harness import FOUNDATION_TABLES, _tables_exist
+
+    class ProbeConn:
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch(self, query, *args):
+            self.calls += 1
+            assert "ANY($1::text[])" in query
+            return [{"table_name": "llmops_traces"}]
+
+    conn = ProbeConn()
+    state = asyncio.run(_tables_exist(conn, FOUNDATION_TABLES))
+
+    assert conn.calls == 1
+    assert state["llmops_traces"] is True
+    assert state["llmops_spans"] is False
+
+
+def test_harness_reports_llmops_ready_only_when_every_table_exists() -> None:
+    """테이블 하나만 보고 implemented라고 하면 부분 적용 DB가 정상으로 보인다."""
+    source = (ROOT / "app" / "services" / "ohvis_harness.py").read_text(encoding="utf-8")
+
+    assert 'if all(db.get("foundation_tables", {}).get(t) for t in LLMOPS_TABLES)' in source
+    assert '"foundation_ready"' in source
+    assert "migrations/164_llmops_ledger_schema_reconcile.sql" in source
