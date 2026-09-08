@@ -63,6 +63,25 @@ async def test_agent_version_advertises_installable_exe_release(
 
 
 @pytest.mark.asyncio
+async def test_agent_download_default_never_falls_back_to_zip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("1.0.73", encoding="utf-8")
+    monkeypatch.setattr(kakao_bot, "PC_AGENT_VERSION_FILE", version_file)
+    monkeypatch.setattr(kakao_bot, "PC_AGENT_DIR", tmp_path)
+
+    response = await kakao_bot.agent_download()
+
+    assert isinstance(response, RedirectResponse)
+    assert response.status_code == 307
+    assert response.headers["location"].endswith(
+        "/pc-agent-v1.0.73/kakaobot-setup.exe"
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_download_exe_embeds_install_ticket_in_filename(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

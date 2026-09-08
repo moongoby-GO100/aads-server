@@ -287,7 +287,7 @@ async def agent_download(
     format: str = Query(default=None),
     install_ticket: str | None = None,
 ):
-    """PC Agent 다운로드. EXE 우선, 없으면 ZIP fallback. format=zip 이면 항상 ZIP 반환."""
+    """PC Agent 다운로드. format=zip만 ZIP이며 기본 요청은 항상 EXE를 반환한다."""
     if not PC_AGENT_DIR.exists():
         raise HTTPException(status_code=404, detail="pc_agent 디렉토리가 없습니다")
 
@@ -295,22 +295,13 @@ async def agent_download(
     if PC_AGENT_VERSION_FILE.exists():
         version = PC_AGENT_VERSION_FILE.read_text(encoding="utf-8").strip()
 
+    # 구버전 대시보드/브라우저 캐시가 범용 URL을 호출해도 ZIP으로 폴백하지 않는다.
+    # ZIP은 사용자가 보조 버튼에서 format=zip을 명시했을 때만 제공한다.
+    if format != "zip":
+        return await agent_download_exe(install_ticket=install_ticket)
+
     ticket = _validate_install_ticket_param(install_ticket)
 
-    # EXE가 있으면 EXE 직접 제공 (Python 설치 불필요) — format=zip 이면 건너뜀.
-    if _local_pc_agent_exe_is_current() and format != "zip" and ticket is None:
-        exe_bytes = PC_AGENT_EXE_FILE.read_bytes()
-        return StreamingResponse(
-            io.BytesIO(exe_bytes),
-            media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f'attachment; filename="kakaobot-setup-{version}.exe"',
-                "Content-Length": str(len(exe_bytes)),
-                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            },
-        )
-
-    # EXE 미빌드 시 ZIP fallback
     try:
         zip_bytes = _build_agent_zip(ticket)
     except Exception as e:

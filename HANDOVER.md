@@ -1,5 +1,12 @@
 # AADS HANDOVER
 
+## 2026-09-08 19:45 KST — PC Agent default download fail-closed to EXE
+
+- Fixed the compatibility `/api/v1/kakao-bot/agent/download` route so every request without explicit `format=zip` returns or redirects to the versioned Windows EXE.
+- ZIP remains available only through the adjacent dashboard ZIP button and the explicit `?format=zip` API request.
+- This protects browsers with cached pre-fix dashboard JavaScript, which still call the compatibility route and previously received a ZIP whenever the API image lacked a current local EXE.
+- Added a regression test proving that a missing local EXE redirects the default request to the matching GitHub Release EXE instead of falling back to ZIP.
+
 ## 2026-09-08 19:18 KST — Chat owner/recovery P0 v2 prepared in isolated worktree
 
 - Scope: AADS chat ownership/resume only. Worktree `/tmp/aads-chat-recovery.mfZ92G` was created from `origin/main`; the main checkout's finance runtime lock and unrelated report remain untouched.
