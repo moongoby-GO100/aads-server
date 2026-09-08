@@ -157,6 +157,7 @@ def test_recent_completed_deployments_include_display_times():
                 "bg_sync_status": "synced",
             }],
             "FROM deploy_recent_durations": [],
+            "recent_terminal_deploy_history": [],
             "FROM deploy_phase_events": [],
             "legacy_started_without_terminal_match": [],
             "ROUND(AVG(duration_s)": [],
@@ -170,6 +171,43 @@ def test_recent_completed_deployments_include_display_times():
     assert completed["started_at"] == now
     assert completed["completed_at"] == now
     assert completed["release_title"] == "release title"
+
+
+def test_recent_deployments_include_failed_run_id_and_status():
+    now = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        {"deploy_runs", "deploy_history", "pipeline_jobs"},
+        {
+            "FROM deploy_runs dr": [],
+            "recent_terminal_deploy_history": [{
+                "id": 196,
+                "project": "AADS",
+                "release_sha": "deadbeef",
+                "status": "failed",
+                "phase": "build_candidate_image",
+                "requested_at": now,
+                "phase_started_at": now,
+                "phase_completed_at": now,
+                "updated_at": now,
+                "request_payload": {},
+                "image_digest": None,
+                "standby_digest": None,
+                "bg_sync_status": "unknown",
+            }],
+            "FROM deploy_recent_durations": [],
+            "FROM deploy_phase_events": [],
+            "legacy_started_without_terminal_match": [],
+            "ROUND(AVG(duration_s)": [],
+            "FROM pipeline_jobs": [],
+        },
+    )
+
+    result = asyncio.run(get_deploy_status(conn))
+
+    recent = result["recent_deployments"][0]
+    assert recent["id"] == 196
+    assert recent["status"] == "failed"
+    assert recent["completed_at"] == now
 
 
 def test_project_deployments_include_projects_from_pipeline_history():
@@ -191,6 +229,7 @@ def test_project_deployments_include_projects_from_pipeline_history():
                 "duration_ms": 120000,
             }],
             "FROM deploy_recent_durations": [],
+            "recent_terminal_deploy_history": [],
             "FROM deploy_phase_events": [],
             "legacy_started_without_terminal_match": [],
             "ROUND(AVG(duration_s)": [],

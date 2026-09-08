@@ -495,6 +495,26 @@ async def _load_recent_completed_deployments(conn: Any) -> list[dict[str, Any]]:
     return _apply_deploy_time_aliases(_apply_release_metadata(rows))
 
 
+async def _load_recent_deployments(conn: Any) -> list[dict[str, Any]]:
+    """Return recent terminal runs, including failures that never became releases."""
+    rows = _dict_rows(await conn.fetch(
+        """
+        /* recent_terminal_deploy_history */
+        SELECT dr.*,
+               CASE WHEN dr.image_digest IS NOT NULL
+                         AND dr.image_digest = dr.standby_digest THEN 'synced'
+                    WHEN dr.standby_digest IS NULL THEN 'unknown'
+                    ELSE 'mismatch' END AS bg_sync_status
+        FROM deploy_runs AS dr
+        WHERE dr.status IN ('completed', 'success', 'failed', 'error',
+                            'blocked', 'superseded', 'cancelled')
+        ORDER BY COALESCE(dr.phase_completed_at, dr.updated_at, dr.created_at) DESC, dr.id DESC
+        LIMIT 20
+        """
+    ))
+    return _apply_deploy_time_aliases(_apply_release_metadata(rows))
+
+
 def _annotate_active_runs(active: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
     for row in active:
         heartbeat_age = _seconds_since(row.get("last_heartbeat_at") or row.get("updated_at"), now)
@@ -653,7 +673,7 @@ async def _load_project_deployments(
             """
             /* project_deploy_overview_latest_runs */
             SELECT DISTINCT ON (upper(project))
-                   upper(project) AS project,
+                   id, upper(project) AS project,
                    status, phase, release_sha, requested_at, created_at,
                    phase_started_at, phase_completed_at, updated_at,
                    duration_ms, release_title, release_summary, request_payload
@@ -869,6 +889,7 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         "active_deployments": [],
         "queued_deployments": [],
         "recent_completed_deployments": [],
+        "recent_deployments": [],
         "recent_durations_per_project": [],
         "phase_timeline": [],
         "stale_zombie_signals": [],
@@ -890,6 +911,7 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         response["active_deployments"] = active
         response["queued_deployments"] = queued
         response["recent_completed_deployments"] = await _load_recent_completed_deployments(conn)
+        response["recent_deployments"] = await _load_recent_deployments(conn)
         response["recent_durations_per_project"] = await _load_recent_durations(conn)
         response["phase_timeline"] = await _load_phase_timeline(conn)
         response["bg_digest_sync"] = [
