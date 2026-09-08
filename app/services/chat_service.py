@@ -12855,6 +12855,26 @@ async def send_message_stream(
             )
         except Exception as _bg_err:
             logger.debug("bg_fact_extraction_launch_error", error=str(_bg_err))
+        # F-LLMOps: Chat trace -> llmops_traces
+        try:
+            from app.services.llmops_chat_hook import record_chat_trace
+            _lv = locals()
+            _bg_asyncio.create_task(record_chat_trace(
+                session_id=session_id,
+                execution_id=_lv.get('_execution_id_str'),
+                project=_normalized_project,
+                user_message=content or "",
+                ai_response=full_response or "",
+                model=_lv.get('model_used'),
+                duration_sec=_duration_sec,
+                cost=_lv.get('cost'),
+                tokens_in=_lv.get('tokens_in', 0),
+                tokens_out=_lv.get('tokens_out', 0),
+                tools_called=tools_called,
+                intent=_lv.get('intent'),
+            ))
+        except Exception:
+            pass
         # F8: CEO Pattern Tracking
         try:
             from app.services.ceo_pattern_tracker import track_interaction
