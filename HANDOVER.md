@@ -12723,3 +12723,17 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - `deploy.sh` now reuses an existing `aads-server:<release SHA>` image only when its OCI revision label exactly matches the requested release SHA.
 - A tag/revision mismatch fails closed instead of silently overwriting an immutable release tag.
 - This prevents interrupted blue/green retries from issuing another image build for the same release SHA while preserving candidate health, short nginx lock, same-digest standby sync, rollback, and five-minute P0/P1 monitoring gates.
+
+## 2026-09-09 04:55 KST — Cross-project legacy chat document link recovery
+
+- Root cause:
+  - The GO100 session saved `docs/PRD-WAVE-ENGINE-MODULARIZATION.md` on `contabo14`, but the chat UI normalized the generic relative path as `project=AADS&base_path=/app/docs` because the filename did not contain a GO100 project hint.
+  - The AADS API therefore checked a nonexistent local `/app/docs/PRD-WAVE-ENGINE-MODULARIZATION.md` and returned 404 although the 818-line source document existed in GO100.
+- Change:
+  - `app/api/project_docs.py` now preserves the requested AADS lookup first, then repairs legacy AADS `/app/docs` and `/app/reports` links against only the allowlisted equivalent roots for GO100/KIS/SF/NTV2.
+  - The fallback remains subject to the existing relative-path and sensitive-file guards.
+  - Added regression coverage for a generic, non-prefixed GO100 PRD filename.
+- Verification required for release:
+  - Run the focused project-docs unit tests and Python compile/diff checks.
+  - Call the exact legacy `/project-docs/content` query and confirm it resolves to project `GO100`, 818 lines, and the GO100 remote path.
+  - Deploy through `deploy.sh bluegreen`, verify routed health and same-digest standby, then complete the five-minute P0/P1 monitoring window.

@@ -253,6 +253,23 @@ def _content_location_candidates(project: str, base_path: str, file_path: str) -
         if hinted_base:
             candidates.append((hinted_project, hinted_base, normalized_file))
 
+    # Older chat replies normalized every relative ``docs/...`` or ``reports/...``
+    # path as an AADS link, even when the active workspace was GO100/KIS/SF/NTV2.
+    # A filename hint repairs branded names (for example GO100-*.md), but generic
+    # names such as PRD-WAVE-ENGINE-MODULARIZATION.md have no project prefix. Keep
+    # the originally requested AADS location first, then try only the equivalent
+    # allowlisted document root for each external project. This makes legacy links
+    # recoverable without enabling arbitrary cross-project path traversal.
+    if normalized_project == "AADS" and normalized_base in {"/app/docs", "/app/reports"}:
+        fallback_projects = list(LEGACY_AADS_PROJECT_BASES)
+        if hinted_project in fallback_projects:
+            fallback_projects.remove(hinted_project)
+            fallback_projects.insert(0, hinted_project)
+        for fallback_project in fallback_projects:
+            fallback_base = LEGACY_AADS_PROJECT_BASES[fallback_project].get(normalized_base)
+            if fallback_base:
+                candidates.append((fallback_project, fallback_base, normalized_file))
+
     projects = [normalized_project]
     if hinted_project and hinted_project not in projects:
         projects.append(hinted_project)

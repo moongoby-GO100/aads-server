@@ -136,6 +136,33 @@ async def test_project_docs_content_repairs_legacy_aads_go100_route(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_project_docs_content_repairs_generic_legacy_aads_go100_route(monkeypatch):
+    filename = "PRD-WAVE-ENGINE-MODULARIZATION.md"
+
+    async def fake_run_cmd(cmd, timeout=10):
+        remote_cmd = cmd[-1]
+        expected_path = f"/root/kis-autotrade-v4/docs/{filename}"
+        if "test -f" in remote_cmd and expected_path in remote_cmd:
+            return "exists"
+        if remote_cmd == f"cat {expected_path}":
+            return "# GO100 wave engine PRD"
+        return ""
+
+    monkeypatch.setattr(project_docs, "_run_cmd", fake_run_cmd)
+
+    response = await project_docs.get_doc_content(
+        project="AADS",
+        base_path="/app/docs",
+        file_path=filename,
+    )
+
+    assert response["project"] == "GO100"
+    assert response["file_path"] == filename
+    assert response["full_path"] == f"/root/kis-autotrade-v4/docs/{filename}"
+    assert response["content"] == "# GO100 wave engine PRD"
+
+
+@pytest.mark.asyncio
 async def test_project_docs_content_falls_back_from_go100_reports_to_docs_reports(monkeypatch):
     async def fake_run_cmd(cmd, timeout=10):
         remote_cmd = cmd[-1]
