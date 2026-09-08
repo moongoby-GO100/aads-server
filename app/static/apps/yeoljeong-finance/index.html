@@ -6052,6 +6052,11 @@
       return `${Math.round(Number(value) || 0).toLocaleString("ko-KR")}원`;
     }
 
+    function formatDateTime(value) {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? String(value || "") : parsed.toLocaleString("ko-KR");
+    }
+
     function formatHour(value) {
       return `${(Number(value) || 0).toFixed(1)}h`;
     }
@@ -8632,20 +8637,33 @@
         </article>
       `).join("") : `<div class="empty">선택한 사업자에 연결된 운영지점이 없습니다.</div>`;
 
-      els.accountList.innerHTML = filteredAccounts.length ? filteredAccounts.map(item => `
+      els.accountList.innerHTML = filteredAccounts.length ? filteredAccounts.map(item => {
+        const credentialsRegistered = Boolean(item.platformAccountId || item.platform_account_id || item.credentialsRegisteredAt || item.credentials_registered_at);
+        const credentialUsername = item.credentialUsername || item.credential_username || "";
+        const credentialsRegisteredAt = item.credentialsRegisteredAt || item.credentials_registered_at || "";
+        const isShinhan = /신한/.test(`${item.bank || item.bank_name || ""}`);
+        return `
         <article class="master-card">
           <header>
             <div>
-              <h3>${escapeHtml(item.bank)} · ${escapeHtml(item.name)}</h3>
-              <span class="badge info">${escapeHtml(businessName(item.businessId))}</span>
+              <h3>${escapeHtml(item.bank || item.bank_name)} · ${escapeHtml(item.name || item.accountAlias || item.account_alias || item.account_holder || "운영계좌")}</h3>
+              <span class="badge info">${escapeHtml(businessName(item.businessId || item.business_id))}</span>
+              ${credentialsRegistered ? '<span class="badge good">인증정보 등록됨</span>' : '<span class="badge warn">인증정보 미등록</span>'}
             </div>
-            <button class="icon danger" data-delete-account="${escapeHtml(item.id)}" title="계좌 삭제">-</button>
+            <div style="display:flex; gap:6px; flex-wrap:wrap">
+              <button type="button" data-bank-credentials="${escapeHtml(item.id)}">${credentialsRegistered ? "인증정보 수정" : "인증정보 등록"}</button>
+              <button class="icon danger" data-delete-account="${escapeHtml(item.id)}" title="계좌 삭제">-</button>
+            </div>
           </header>
           <div class="meta-grid">
-            <span style="grid-column:1/-1">계좌번호: ${escapeHtml(item.accountNo)}</span>
+            <span style="grid-column:1/-1">계좌번호: ${escapeHtml(item.accountNo || item.account_number_masked || "미등록")}</span>
+            ${credentialUsername ? `<span>로그인 아이디: ${escapeHtml(credentialUsername)}</span>` : ""}
+            ${credentialsRegisteredAt ? `<span>등록일시: ${escapeHtml(formatDateTime(credentialsRegisteredAt))}</span>` : ""}
+            ${isShinhan ? '<span class="badge warn" style="grid-column:1/-1">비밀번호 오류 차단 상태 · 수집 실행 없이 인증정보만 수정 가능</span>' : ""}
           </div>
         </article>
-      `).join("") : `<div class="empty">선택한 사업자의 은행 계좌를 등록하십시오.</div>`;
+      `;
+      }).join("") : `<div class="empty">선택한 사업자의 은행 계좌를 등록하십시오.</div>`;
 
       els.staffList.innerHTML = filteredStaff.length ? filteredStaff.map(item => `
         <article class="master-card">
@@ -9132,6 +9150,131 @@
         }
       };
       return specs[action] || specs.connect;
+    }
+
+    function bankServiceForAccount(account) {
+      const bankText = `${account?.bank || account?.bank_name || account?.institutionCode || account?.institution_code || ""}`.toLowerCase();
+      if (bankText.includes("신한") || bankText.includes("shinhan") || bankText.includes("088")) return "shinhan_business";
+      if (bankText.includes("ibk") || bankText.includes("기업") || bankText.includes("003")) return "ibk_business";
+      return "";
+    }
+
+    function bankCredentialFormHtml(account) {
+      const service = bankServiceForAccount(account);
+      const isShinhan = service === "shinhan_business";
+      const registered = Boolean(account.platformAccountId || account.platform_account_id || account.credentialsRegisteredAt || account.credentials_registered_at);
+      const username = account.credentialUsername || account.credential_username || "";
+      const registeredAt = account.credentialsRegisteredAt || account.credentials_registered_at || "";
+      const accountLabel = [
+        account.bank || account.bank_name || "은행",
+        account.name || account.accountAlias || account.account_alias || account.account_holder || "운영계좌",
+        account.accountNo || account.account_number_masked || ""
+      ].filter(Boolean).join(" · ");
+      const inputField = (name, label, type = "text", placeholder = "", attrs = "") => `<div class="field"><label for="bank-credential-${escapeHtml(name)}">${escapeHtml(label)}</label>
+            <input id="bank-credential-${escapeHtml(name)}" name="${escapeHtml(name)}" type="${escapeHtml(type)}" placeholder="${escapeHtml(placeholder)}"${attrs ? ` ${attrs}` : ""}><span class="field-note" data-field-note="${escapeHtml(name)}"></span>
+          </div>`;
+      const selectField = (name, label, options, selected = "") => `<div class="field"><label for="bank-credential-${escapeHtml(name)}">${escapeHtml(label)}</label>
+            <select id="bank-credential-${escapeHtml(name)}" name="${escapeHtml(name)}">${options.map(([value, text]) => `<option value="${escapeHtml(value)}"${selectedOption(value, selected)}>${escapeHtml(text)}</option>`).join("")}</select><span class="field-note" data-field-note="${escapeHtml(name)}"></span>
+          </div>`;
+      return `<form class="auth-form integration-setup-form" data-bank-credential-form data-bank-account-id="${escapeHtml(account.id)}" autocomplete="off">
+        <div class="integration-setup-band">
+          <h3>은행 빠른조회 인증정보</h3>
+          <p>${escapeHtml(accountLabel)} 계좌의 로그인·조회 정보를 서버 Vault에 암호화 저장합니다. 저장 후 평문은 다시 표시하지 않습니다.</p>
+        </div>
+        <div class="detail-grid">
+          ${integrationDetailCard("상태", registered ? "인증정보 등록됨" : "인증정보 미등록")}
+          ${integrationDetailCard("은행", account.bank || account.bank_name || "미등록")}
+          ${integrationDetailCard("계좌", account.accountNo || account.account_number_masked || "미등록")}
+          ${integrationDetailCard("최근 등록", registeredAt ? formatDateTime(registeredAt) : "미등록")}
+        </div>
+        ${isShinhan ? '<div class="integration-status-note">신한은행은 비밀번호 오류 차단 상태입니다. 지금은 인증정보 수정만 가능하며 수집 실행은 재설정 후 진행합니다.</div>' : ""}
+        <div class="credential-grid">
+          ${inputField("login_id", "은행 로그인 아이디", "text", username || "IBK/은행 로그인 ID", 'autocomplete="username" autocapitalize="none" spellcheck="false"')}
+          ${inputField("login_password", "은행 로그인 비밀번호", "password", registered ? "변경 시에만 새 비밀번호 입력" : "신한은 필수, IBK는 계정형일 때 입력", `autocomplete="off" data-lpignore="true"${isShinhan ? " required" : ""}`)}
+          ${inputField("account_no", "조회 계좌번호 전체", "password", "하이픈 없이 전체 계좌번호", 'autocomplete="off" inputmode="numeric" data-lpignore="true" required')}
+          ${inputField("account_password", "계좌 비밀번호", "password", "계좌 비밀번호", 'autocomplete="off" inputmode="numeric" maxlength="12" data-lpignore="true" required')}
+          ${inputField("business_registration_no", "사업자등록번호", "password", "사업자등록번호 10자리", 'autocomplete="off" inputmode="numeric" data-lpignore="true" required')}
+          ${inputField("certificate_password", "인증서 비밀번호", "password", "필요 시 입력", 'autocomplete="off" data-lpignore="true"')}
+          ${inputField("auth_owner", "인증 담당자", "text", "대표/회계 담당자")}
+          ${selectField("mfa_method", "추가 인증 방식", [["", "미지정"], ["none", "없음"], ["sms", "SMS"], ["otp", "OTP"], ["certificate", "공동/금융인증서"], ["ars", "ARS"]])}
+          ${inputField("credential_expires_at", "인증 만료일", "date")}
+        </div>
+        <div class="integration-status-note" data-bank-credential-status>저장하면 등록 필드 개수와 마스킹 메타만 표시됩니다.</div>
+        <div class="drawer-actions"><button type="button" data-integration-detail="integration-guide">설정 가이드</button><button type="submit" class="primary">인증정보 저장</button></div>
+      </form>`;
+    }
+
+    function openBankCredentialForm(accountId) {
+      const account = settings().accounts.find(item => String(item.id) === String(accountId));
+      if (!account || !els.integrationDetailModal || !els.integrationDetailTitle || !els.integrationDetailBody) {
+        showToast("인증정보를 등록할 은행 계좌를 찾지 못했습니다.");
+        return;
+      }
+      els.integrationDetailTitle.textContent = "은행 인증정보 등록";
+      els.integrationDetailSubtitle.textContent = "계좌별 빠른조회 자격증명을 서버 Vault에 암호화 저장합니다.";
+      els.integrationDetailBody.innerHTML = bankCredentialFormHtml(account);
+      els.integrationDetailModal.classList.remove("hidden");
+      els.integrationDetailBody.querySelector("input[name='login_id']")?.focus();
+    }
+
+    function mergeBankCredentialResult(accountId, bankAccount) {
+      const target = settings().accounts.find(item => String(item.id) === String(accountId));
+      if (!target || !bankAccount) return;
+      target.platformAccountId = bankAccount.platform_account_id || bankAccount.platformAccountId || target.platformAccountId || "";
+      target.credentialService = bankAccount.credential_service || bankAccount.credentialService || target.credentialService || "";
+      target.credentialUsername = bankAccount.credential_username || bankAccount.credentialUsername || target.credentialUsername || "";
+      target.credentialsRegisteredAt = bankAccount.credentials_registered_at || bankAccount.credentialsRegisteredAt || target.credentialsRegisteredAt || "";
+      target.connectionType = bankAccount.connection_type || bankAccount.connectionType || target.connectionType || "";
+      target.connectorType = bankAccount.connector_type || bankAccount.connectorType || target.connectorType || "";
+      target.status = bankAccount.status || target.status || "";
+      target.accountNo = bankAccount.account_number_masked || bankAccount.accountNo || target.accountNo || "";
+      target.bank = bankAccount.bank_name || bankAccount.bank || target.bank || "";
+      target.name = bankAccount.account_alias || bankAccount.name || target.name || "";
+      target.businessId = bankAccount.business_id || bankAccount.businessId || target.businessId || "";
+      saveState();
+    }
+
+    async function saveBankAccountCredentials(form) {
+      if (!canManageAutomation()) {
+        showToast("총괄 운영관리자 로그인 후 은행 인증정보를 저장할 수 있습니다.");
+        return false;
+      }
+      const accountId = form.dataset.bankAccountId || "";
+      if (!accountId) throw new Error("은행계좌 식별값이 없습니다.");
+      const data = Object.fromEntries(new FormData(form).entries());
+      const payload = {
+        login_id: String(data.login_id || "").trim(),
+        username: String(data.login_id || "").trim(),
+        login_password: String(data.login_password || ""),
+        account_no: String(data.account_no || "").trim(),
+        account_password: String(data.account_password || ""),
+        business_registration_no: String(data.business_registration_no || "").trim(),
+        certificate_password: String(data.certificate_password || ""),
+        auth_owner: String(data.auth_owner || "").trim(),
+        mfa_method: String(data.mfa_method || "").trim(),
+        credential_expires_at: String(data.credential_expires_at || "").trim()
+      };
+      const statusNote = form.querySelector("[data-bank-credential-status]");
+      const submitButton = form.querySelector("button[type='submit']");
+      if (statusNote) statusNote.textContent = "서버 Vault에 암호화 저장 중입니다.";
+      if (submitButton) submitButton.disabled = true;
+      try {
+        const result = await financeApi(`/bank-accounts/${encodeURIComponent(accountId)}/credentials`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        mergeBankCredentialResult(accountId, result.bank_account || {});
+        form.reset();
+        renderAll();
+        const count = Array.isArray(result.registered_fields) ? result.registered_fields.length : 0;
+        const message = `은행 인증정보 저장 완료: 등록 필드 ${count}개`;
+        if (statusNote) statusNote.textContent = message;
+        showToast(message);
+        return true;
+      } finally {
+        if (submitButton) submitButton.disabled = false;
+      }
     }
 
     function openIntegrationDetail(action = "connect", defaultService = "") {
@@ -12212,6 +12355,16 @@
             showToast(err.message);
           });
       });
+      document.body.addEventListener("submit", event => {
+        const bankCredentialForm = event.target.closest("[data-bank-credential-form]");
+        if (!bankCredentialForm) return;
+        event.preventDefault();
+        saveBankAccountCredentials(bankCredentialForm).catch(err => {
+          const statusNote = bankCredentialForm.querySelector("[data-bank-credential-status]");
+          if (statusNote) statusNote.textContent = `인증정보 저장 실패: ${err.message || err}`;
+          showToast(`인증정보 저장 실패: ${err.message || err}`);
+        });
+      });
 
       els.clearEntryBtn.addEventListener("click", () => {
         els.entryForm.reset();
@@ -12319,6 +12472,7 @@
         const editBusinessId = event.target.dataset.editBusiness;
         const editBranchId = event.target.dataset.editBranch;
         const accountId = event.target.dataset.deleteAccount;
+        const bankCredentialId = event.target.dataset.bankCredentials;
         const staffId = event.target.dataset.deleteStaff;
         const integrationId = event.target.dataset.deleteIntegration;
         const editIntegrationId = event.target.dataset.editIntegration;
@@ -12535,6 +12689,9 @@
           syncSettingsToServer();
           renderAll();
           showToast("계좌를 삭제했습니다.");
+        }
+        if (bankCredentialId) {
+          openBankCredentialForm(bankCredentialId);
         }
         if (staffId) {
           state.settings.staff = settings().staff.filter(item => item.id !== staffId);

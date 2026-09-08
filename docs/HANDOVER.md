@@ -625,3 +625,20 @@ CEO 지시: "기획문서, 기술문서, 아키텍처 버전업 + 즉시 구현 
 MCP 원격 쓰기 도구(`write_remote_file`/`patch_remote_file`)는 **활성 API 컨테이너 내부**(`aads-server-green:/app`)에
 기록되며 호스트 저장소에 자동 반영되지 않는다. 반드시 `docker cp <container>:/app/... /root/aads/aads-server/...`로
 전파한 뒤 커밋해야 한다. 또한 컨테이너 `/app/docs`는 read-only이므로 `scripts/`에 쓴 뒤 전파해야 한다.
+
+## 2026-09-08 09:52 KST - FOOD 매장비서 Phase 1-3 PRD·목업·Tool 셋업 보고서
+
+- 요청: 매장비서 현재 개발 상태를 파악하고, 승인 전 1단계 설계/기술스택/PRD HTML, 2단계 화면 목업, 3단계 Tool 셋업 및 연동 계획을 먼저 진행해 보고.
+- 확인: 현재 세션 Pipeline Runner 충돌 없음. `yeoljeong_*` DB 테이블 16개, 매장비서 API route 56개, 서비스 공개 함수 31개 확인. DB 기준 사업자 4건, 지점 5건, 플랫폼 계정 43건, 배달 매출 3,797건, 정산 3,535건, 리뷰 5,075건, 은행 계좌 6건, 은행 거래 0건 확인.
+- 조치: `app/static/reports/20260908_store_assistant_phase123_prd_mockup_tooling.html` 신규 작성. CEO 범위인 배민, 쿠팡이츠, 요기요, 땡겨요, 당근마켓, POS, 리뷰/부정리뷰/답변, 정산/입금대사, 은행/카드/마켓봄/온라인매입, 회계/세무, 직원/전자계약/급여/4대보험을 Phase 1-3 산출물로 정리했다.
+- 조치: 기존 문서 인덱스 `app/static/reports/20260716_yeoljeong_store_assistant_docs_index.html`에 신규 Phase 1-3 보고서 링크를 추가했다.
+- 검증: HTML 파싱, 로컬 HTTP 200, 캡처 검증을 수행할 예정. 이번 항목은 승인 전 보고서 작성이며 운영 코드, DB 스키마, 배포는 변경하지 않았다.
+- 남은 이슈: CEO가 말한 3개 사업자와 DB에 존재하는 4개 사업자의 정합성 확인이 필요하다. 4단계 구축과 5단계 기능점검은 승인 후 진행한다.
+
+## 2026-09-08 10:06 KST - FOOD 은행 인증정보 UI static 서빙 연결 보강
+
+- 요청: Pipeline Runner `runner-c79c1fbe`/`runner-4cdbee73` 실패 후 매장비서 연동설정에 입력한 은행 인증정보가 DB/보안 원장에 저장되지 않는 원인을 진단하고 조치.
+- 원인: 백엔드 `POST /api/v1/yeoljeong-finance/bank-accounts/{account_id}/credentials` API는 `3afe45d0` 이후 존재했으나, 실제 API 서버가 서빙하는 `app/static/apps/yeoljeong-finance/index.html`에는 은행 계좌 카드의 인증정보 등록 버튼, credential modal, JSON `Content-Type` 저장 이벤트 연결이 빠져 있었다.
+- 조치: `app/static/apps/yeoljeong-finance/index.html`에 은행 계좌별 인증정보 등록/수정 버튼, Vault 저장 전용 모달, `saveBankAccountCredentials()` JSON POST, 저장 결과 merge, 신한 차단 안내 문구를 추가했다. 비밀값은 화면 재표시 없이 서버 API로만 전송한다.
+- 검증: `node -e` 정적 `<script>` 파싱 성공(`static-js-ok 427087`). `python -m py_compile app/api/yeoljeong_finance.py app/services/yeoljeong_finance_service.py` 성공. 운영 URL `http://127.0.0.1:8100/static/apps/yeoljeong-finance/index.html` HTTP 200 및 `bankCredentialFormHtml` 포함 확인. 인증 없는 credential API 호출은 HTTP 401로 보호됨을 확인.
+- 남은 이슈: pytest 실행은 현재 로컬/컨테이너 환경에 `pytest`가 없어 미실행. 실제 IBK 중화점 credential 저장 E2E는 CEO가 입력값을 화면에서 다시 저장한 뒤 진행해야 한다.
