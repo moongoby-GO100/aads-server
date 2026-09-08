@@ -9,6 +9,14 @@
 - Production baseline at 19:17 KST: six-hour status counts 77 completed / 31 interrupted / 6 retrying / 4 running; five `resume_exhausted` rows had retry count 0. These are baseline values, not proof of improvement.
 - Commit, push, Blue/Green rollout, same-digest standby synchronization, routed health, and five-minute P0/P1 monitoring must be recorded after they actually complete.
 
+## 2026-09-08 19:14 KST — runner-ce06a4ec preservation precheck false positive
+
+- DB `code_reviews` confirms deterministic precheck FLAG: three private functions were marked deleted even though the full saved diff re-adds them with epoch parameters/reindent. It was not a test-failure verdict or a finance-lock scope rejection.
+- Isolated branch `fix/reviewer-symbol-preservation-ce06`: reviewer now pairs unique same-file private definitions; real removals, public/dunder APIs, classes, routes, cross-file moves, ambiguous duplicates, deletion ratio and scope gates stay enforced. Semantic review remains mandatory.
+- Validation: `python -m pytest tests/unit/test_code_reviewer_flag_classification.py tests/unit/test_code_reviewer_parse_retry.py -q` using main `.venv`: **23 passed**. `py_compile` and `git diff --check` pass. Replayed complete saved diff: old matcher reports three removals; fixed preservation precheck returns None (not automatic approval).
+- Report: `docs/reports/20260908_runner_ce06_preservation_gate_diagnosis.md`. `health_check` returned HEALTHY for contabo116. Original job remains error; dependent `runner-b39811b1` is cancelled/blocked_dependency.
+- Chat patch integration is deferred because `/tmp/aads-chat-recovery.mfZ92G` has independently owned dirty `app/main.py`/`chat_service.py` and other sessions have chat ledger claims. Preserved main HANDOVER/finance/report dirty files. No DB mutations, job-state overrides or production deployment; original instruction reserves deployment for a separate release job. This entry and the focused correction are prepared for commit/push on the isolated branch; actual delivery SHA/status are verified separately.
+
 ## 2026-09-08 — Android Agent install/reconnect P0/P1 hardening
 
 - Restored the host `android_agent/dist` read-only mount in the API service so the Android manifest and APK download routes can see built artifacts after Blue/Green releases.

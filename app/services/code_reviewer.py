@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
@@ -432,6 +433,37 @@ def _diff_line_counts(diff: str) -> tuple[int, int]:
     return additions, deletions
 
 
+def _removed_preservation_symbols(diff: str) -> list[str]:
+    """Keep hard gates for removals, without calling private edits deletions.
+
+    Match a private function only when it occurs exactly once on each side
+    of the same file diff. This covers signature edits and indentation moves;
+    it does not certify behavior, which still goes through the normal review.
+    Public APIs, classes, routes and ambiguous duplicate names remain gated.
+    """
+    removed: list[str] = []
+    for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        deletions = _DELETED_SYMBOL_RE.findall(file_diff)
+        # Only additions may cancel a removed declaration.
+        additions = _DELETED_SYMBOL_RE.findall(
+            "\n".join(
+                "-" + line[1:] for line in file_diff.splitlines()
+                if line.startswith("+") and not line.startswith("+++")
+            )
+        )
+        deleted_counts, added_counts = Counter(deletions), Counter(additions)
+        for symbol in deletions:
+            private_function = re.fullmatch(r"(?:async def|def) _(?!_)[A-Za-z0-9_]+", symbol)
+            preserved = (
+                file_diff.startswith("diff --git ")
+                and private_function
+                and deleted_counts[symbol] == added_counts[symbol] == 1
+            )
+            if not preserved:
+                removed.append(symbol)
+    return removed
+
+
 def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Optional[list]) -> Optional[ReviewVerdict]:
     additions, deletions = _diff_line_counts(diff)
     issues: list[str] = []
@@ -448,7 +480,7 @@ def _precheck_preservation_gate(diff: str, instruction: str, files_changed: Opti
     elif additions == 0 and deletions > 0:
         issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
 
-    symbol_matches = _DELETED_SYMBOL_RE.findall(diff or "")
+    symbol_matches = _removed_preservation_symbols(diff)
     if symbol_matches:
         feedback["deleted_symbols"] = symbol_matches[:20]
         issues.append(

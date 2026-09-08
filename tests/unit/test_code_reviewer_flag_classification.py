@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import sys
 import types
+import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -242,3 +243,86 @@ index 1111111..2222222 100644
     assert rejected.flag_category == "PRESERVATION_HARD_GATE"
     assert rejected.feedback["allowed_paths"] == ["HANDOVER.md", "app/main.py"]
     assert rejected.feedback["out_of_scope_files"] == ["app/secret.py"]
+
+
+def _symbol_diff(old, new, path="app/main.py"):
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        "@@ -1,1 +1,4 @@\n"
+        f"-{old}\n+{new}\n+    owner = epoch\n+    alive = True\n+    return owner\n"
+    )
+
+
+@pytest.mark.parametrize("old,new", [
+    ("    def _on_resume_done(task):", "    def _on_resume_done(task, epoch=epoch):"),
+    ("    def _on_auto_resume_done(task):", "    def _on_auto_resume_done(task, epoch=epoch):"),
+    ("        async def _resume_lease_pump():", "    async def _resume_lease_pump():"),
+])
+def test_private_callback_edit_is_not_symbol_removal(old, new):
+    reviewer = _load_reviewer()
+    assert reviewer._precheck_preservation_gate(_symbol_diff(old, new), "", None) is None
+
+
+@pytest.mark.parametrize("old,new", [
+    ("def _removed():", "def _different():"),
+    ("def public_api():", "def public_api(epoch):"),
+    ("class PublicType:", "class PublicType(Base):"),
+    ('@router.get("/old")', '@router.get("/new")'),
+    ("async def _worker():", "def _worker():"),
+    ("def __call__(self):", "def __call__(self, epoch):"),
+])
+def test_real_or_public_contract_changes_remain_gated(old, new):
+    reviewer = _load_reviewer()
+    verdict = reviewer._precheck_preservation_gate(_symbol_diff(old, new), "", None)
+    assert verdict is not None
+    assert verdict.flag_category == "PRESERVATION_HARD_GATE"
+
+
+def test_private_readdition_in_another_file_cannot_hide_deletion():
+    reviewer = _load_reviewer()
+    diff = _symbol_diff("def _worker():", "value = 1")
+    diff += _symbol_diff("value = 0", "def _worker():", "app/other.py")
+    assert reviewer._removed_preservation_symbols(diff) == ["def _worker"]
+
+
+def test_duplicate_private_names_are_ambiguous_and_remain_gated():
+    reviewer = _load_reviewer()
+    diff = _symbol_diff("def _worker():", "def _worker(epoch):")
+    diff += "-    def _worker():\n+    def _worker(epoch):\n"
+    assert reviewer._removed_preservation_symbols(diff) == ["def _worker", "def _worker"]
+
+
+def test_private_edits_do_not_bypass_deletion_ratio_or_scope_gates():
+    reviewer = _load_reviewer()
+    diff = _symbol_diff("def _worker():", "def _worker(epoch):")
+    for candidate, instruction in [
+        (diff + "-old = 1\n-old = 2\n-old = 3\n", ""),
+        (diff, "EXACT AUTHORIZED FILES: app/other.py"),
+    ]:
+        verdict = reviewer._precheck_preservation_gate(candidate, instruction, None)
+        assert verdict is not None
+        assert verdict.flag_category == "PRESERVATION_HARD_GATE"
+
+
+def test_private_signature_change_still_requires_semantic_review():
+    async def run():
+        reviewer = _load_reviewer()
+        client = types.ModuleType("app.core.anthropic_client")
+        client.call_llm_with_fallback = AsyncMock(return_value='{"verdict":"FLAG",'
+            '"correctness":0.1,"security":0.1,"quality":0.1,'
+            '"issues":["behavior changed"],"summary":"reject"}')
+        with patch.dict(sys.modules, {
+            "app": types.ModuleType("app"),
+            "app.core": types.ModuleType("app.core"),
+            "app.core.anthropic_client": client,
+        }), patch.object(reviewer, "_get_review_models", new=AsyncMock(return_value=["qwen-turbo"])), \
+                patch.object(reviewer, "_save_review_result", new=AsyncMock()):
+            verdict = await reviewer.review_code_diff(
+                "AADS", "runner-test-signature-review",
+                _symbol_diff("def _worker():", "def _worker(epoch):"), "", ["app/main.py"],
+            )
+        client.call_llm_with_fallback.assert_awaited_once()
+        assert verdict.verdict == "FLAG"
+        assert verdict.flag_category == "CODE_QUALITY"
+
+    asyncio.run(run())
