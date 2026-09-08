@@ -106,6 +106,48 @@ class _PingFailureWebSocket:
         self.close_calls.append((code, reason))
 
 
+class _HeartbeatThenTimeoutWebSocket:
+    def __init__(self) -> None:
+        self.close_calls: list[tuple[int, str]] = []
+        self.sent: list[dict[str, object]] = []
+        self._messages = [
+            {
+                "type": "register",
+                "id": "register-1",
+                "payload": {"hostname": "ceo-pc", "os_info": "Windows", "version": "1.0.71"},
+            },
+            {
+                "type": "heartbeat",
+                "id": "heartbeat-1",
+                "payload": {
+                    "hostname": "ceo-pc",
+                    "version": "1.0.71",
+                    "node_role": "interactive",
+                    "agent_pid": 1234,
+                    "agent_uptime_seconds": 42,
+                    "agent_start_count": 3,
+                    "launcher_or_parent_pid": 1200,
+                    "watchdog_task": {"registered": True},
+                    "startup_registration": {"registered": True},
+                },
+            },
+        ]
+
+    async def accept(self) -> None:
+        return None
+
+    async def receive_json(self) -> dict[str, object]:
+        if self._messages:
+            return self._messages.pop(0)
+        raise asyncio.TimeoutError()
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        self.sent.append(payload)
+
+    async def close(self, code: int, reason: str) -> None:
+        self.close_calls.append((code, reason))
+
+
 def _setup_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_agent_connections", {})
     monkeypatch.setattr(pc_agent, "_pending_reload_disconnects", [])
@@ -116,6 +158,18 @@ def _setup_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent.pc_agent_manager, "update_heartbeat", Mock())
     monkeypatch.setattr(pc_agent.pc_agent_manager, "receive_result", Mock())
     monkeypatch.setattr(pc_agent.pc_agent_manager, "broadcast_frame", AsyncMock())
+
+
+def test_code_1005_is_classified_as_abnormal_close() -> None:
+    classification = pc_agent._classify_disconnect_cause(
+        close_code=1005,
+        close_reason="",
+        uptime_seconds=120.0,
+        exc_type="WebSocketDisconnect",
+    )
+
+    assert classification["cause"] == "abnormal_close"
+    assert classification["severity"] == "warning"
 
 
 @pytest.mark.asyncio
@@ -171,6 +225,7 @@ async def test_list_agents_returns_peer_snapshot_when_local_registry_empty(monke
 @pytest.mark.asyncio
 async def test_list_agents_hides_unowned_legacy_agents_for_regular_user(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent, "_request_peer_fallback_json", AsyncMock(return_value=None))
     monkeypatch.setattr(pc_agent, "_latest_known_pc_agents_from_events", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         pc_agent.pc_agent_manager,
@@ -194,6 +249,7 @@ async def test_list_agents_hides_unowned_legacy_agents_for_regular_user(monkeypa
 @pytest.mark.asyncio
 async def test_list_agents_shows_legacy_agents_for_admin_principal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pc_agent, "_flush_pending_reload_disconnects", AsyncMock())
+    monkeypatch.setattr(pc_agent, "_request_peer_fallback_json", AsyncMock(return_value=None))
     monkeypatch.setattr(pc_agent, "_latest_known_pc_agents_from_events", AsyncMock(return_value=[]))
     monkeypatch.setattr(pc_agent, "ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setattr(
@@ -285,6 +341,34 @@ async def test_ws_pc_agent_records_heartbeat_timeout_and_closes_socket(monkeypat
     assert disconnected_calls[-1].kwargs["reason"] == "heartbeat_timeout"
     assert disconnected_calls[-1].kwargs["metadata"]["close_reason"] == "heartbeat_timeout"
     assert ws.close_calls[-1] == (1011, "heartbeat_timeout")
+
+
+@pytest.mark.asyncio
+async def test_ws_pc_agent_records_runtime_heartbeat_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_record = AsyncMock()
+    ws = _HeartbeatThenTimeoutWebSocket()
+
+    _setup_manager(monkeypatch)
+    monkeypatch.setattr(pc_agent, "_record_agent_event", mock_record)
+
+    def _fake_create_task(coro):
+        coro.close()
+        return _DummyTask()
+
+    monkeypatch.setattr(pc_agent.asyncio, "create_task", _fake_create_task)
+
+    await pc_agent.ws_pc_agent(ws, "ceo-pc", token="token-ok")
+
+    heartbeat_calls = [
+        recorded
+        for recorded in mock_record.await_args_list
+        if recorded.args[:2] == ("ceo-pc", "heartbeat_status")
+    ]
+
+    assert heartbeat_calls
+    metadata = heartbeat_calls[-1].kwargs["metadata"]
+    assert metadata["version"] == "1.0.71"
+    assert metadata["watchdog_task"]["registered"] is True
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+v1.0.71: PC 재부팅/서버 재시작 후 WebSocket 1005 끊김을 비정상 종료로 분류하고 heartbeat telemetry를 서버에 기록해 자동 재연결 진단 누락을 방지
 v1.0.70: 은행 work_key target_url/url_pattern strict 매칭 경로의 정규식 import 누락을 수정해 신한 탭 대신 AADS 탭을 평가하는 실패를 방지
 v1.0.69: browser_eval이 work_key와 target_url/url_pattern hint를 Runtime.evaluate target 선택까지 전달해 은행 전용 세션에서 다른 탭 평가를 방지
 v1.0.68: 은행 work_key에 요청 은행 URL target이 없으면 다른 탭 fallback을 금지하고 stale target 회복으로 새 은행 세션 생성

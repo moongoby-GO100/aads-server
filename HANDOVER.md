@@ -12445,3 +12445,22 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Remaining scope:
   - GO100/KIS/SF/NTV2/NAS remote deploy adapters still need project-specific implementation after this central DB/API/UI foundation is deployed.
   - Commit, push, AADS API blue/green deploy, and dashboard deploy are being handled after this entry.
+
+## 2026-09-08 09:03 KST — PC Agent reboot/reconnect diagnostics release
+- CEO request:
+  - Apply the PC Agent reconnect fix to production and report currently connected PCs.
+- Change prepared:
+  - Updated `app/api/pc_agent.py` to accept a new WebSocket before closing any stale same-agent connection, preventing fast reconnects from being rejected before registration.
+  - Reclassified WebSocket close code `1005` as `abnormal_close` instead of normal close so reboot/server-restart disconnect loops are visible.
+  - Added heartbeat runtime telemetry persistence for hostname, version, PID, uptime, watchdog task, and startup registration status.
+  - Updated `pc_agent/agent.py` heartbeat payload and bumped PC Agent package metadata to `v1.0.71`.
+  - Added regression coverage in `tests/unit/test_pc_agent_api_disconnects.py`.
+- Verification before release:
+  - `python3 -m py_compile app/api/pc_agent.py pc_agent/agent.py`: passed.
+  - `.venv/bin/python -m py_compile app/api/pc_agent.py pc_agent/agent.py`: passed.
+  - `docker exec aads-server python -m py_compile /app/app/api/pc_agent.py /app/pc_agent/agent.py`: passed.
+  - `git diff --check -- app/api/pc_agent.py pc_agent/CHANGELOG pc_agent/VERSION pc_agent/agent.py tests/unit/test_pc_agent_api_disconnects.py`: passed.
+  - Full pytest execution is blocked in the current local/container environments because local Python lacks FastAPI and the runtime container lacks pytest.
+- Release notes:
+  - Only PC Agent related files should be staged for this release. Existing finance data/runtime dirty files are unrelated and must remain untouched.
+  - After blue/green deploy, verify `/api/v1/pc-agent/status`, `/api/v1/pc-agent/agents`, routed API health, container health, and five-minute P0/P1 logs before reporting completion.

@@ -539,7 +539,11 @@ class PCAgent:
                 await ws.send(json.dumps({
                     "type": "heartbeat",
                     "id": str(uuid.uuid4()),
-                    "payload": {},
+                    "payload": {
+                        "hostname": self.hostname,
+                        "version": self._get_version(),
+                        **self._runtime_telemetry(),
+                    },
                 }))
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
             except Exception:

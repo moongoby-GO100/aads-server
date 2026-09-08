@@ -183,10 +183,10 @@ def _classify_disconnect_cause(
         else:
             cause = "heartbeat_timeout"
             severity = "warning"
-    elif code in (1000, 1001, 1005):
+    elif code in (1000, 1001):
         cause = "normal_close"
         severity = "info"
-    elif code in (1006,):
+    elif code in (1005, 1006):
         cause = "abnormal_close"
         severity = "warning"
     elif "hot_reload" in reason:
@@ -534,8 +534,13 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
     connect_lock = _agent_connect_locks[agent_id]
 
     async with connect_lock:
+        # Accept the new WebSocket before touching a stale connection. During
+        # hot reload or fast reconnect Starlette can otherwise reject the new
+        # socket with "Need to call accept first", which leaves an already
+        # running Windows agent unable to re-register.
+        await websocket.accept()
         old_ws = _agent_connections.pop(agent_id, None)
-        if old_ws is not None:
+        if old_ws is not None and old_ws is not websocket:
             try:
                 await old_ws.close(code=4010, reason="replaced_by_new")
             except Exception:
@@ -544,7 +549,6 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             await _record_agent_event(agent_id, "replaced", reason="replaced_by_new")
             await asyncio.sleep(0.1)  # 이전 연결 정리 시간 확보
 
-        await websocket.accept()
     _agent_connections[agent_id] = websocket
     connected_at = datetime.utcnow()
     logger.info("pc_agent_ws_connected agent_id=%s total=%d", agent_id, len(_agent_connections))
@@ -697,6 +701,24 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
 
             if msg.type == "heartbeat":
                 pc_agent_manager.update_heartbeat(agent_id)
+                heartbeat_payload = msg.payload or {}
+                if heartbeat_payload:
+                    await _record_agent_event(
+                        agent_id,
+                        "heartbeat_status",
+                        metadata={
+                            "device_type": "pc",
+                            "hostname": heartbeat_payload.get("hostname", ""),
+                            "version": heartbeat_payload.get("version", ""),
+                            "node_role": heartbeat_payload.get("node_role", ""),
+                            "agent_pid": heartbeat_payload.get("agent_pid"),
+                            "agent_uptime_seconds": heartbeat_payload.get("agent_uptime_seconds"),
+                            "agent_start_count": heartbeat_payload.get("agent_start_count"),
+                            "launcher_or_parent_pid": heartbeat_payload.get("launcher_or_parent_pid"),
+                            "watchdog_task": heartbeat_payload.get("watchdog_task"),
+                            "startup_registration": heartbeat_payload.get("startup_registration"),
+                        },
+                    )
                 await websocket.send_json(
                     {"type": "heartbeat", "id": msg.id, "payload": {}}
                 )
