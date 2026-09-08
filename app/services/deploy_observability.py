@@ -980,3 +980,179 @@ async def get_deploy_status(conn: Any) -> dict[str, Any]:
         ),
     }
     return response
+
+
+async def acquire_deploy_slot(
+    conn: Any,
+    *,
+    project: str,
+    component: str = DEFAULT_COMPONENT,
+    run_id: int,
+) -> dict[str, Any]:
+    """Atomically check whether *run_id* may start rolling out.
+
+    Returns ``{"acquired": True, ...}`` when no non-stale active deploy
+    exists for the same ``(project, component)`` pair, or
+    ``{"acquired": False, "blocker_id": ..., ...}`` otherwise.
+
+    The caller (deploy worker) must hold this result before transitioning
+    a queued row to *running*.  This prevents concurrent workers for the
+    same target — the root cause of deploys #207–#213 racing each other.
+    """
+    project_key = _normalize_project(project)
+    component_key = _normalize_slug(component, default=DEFAULT_COMPONENT, field_name="component")
+    now = datetime.now(timezone.utc)
+    stale_threshold = DEPLOY_STALL_SECONDS
+
+    blocker = await conn.fetchrow(
+        """
+        SELECT id, status, phase, deploy_pid,
+               EXTRACT(EPOCH FROM ($4::timestamptz - COALESCE(last_heartbeat_at, updated_at)))::bigint
+                   AS heartbeat_age_seconds
+          FROM deploy_runs
+         WHERE project = $1
+           AND component = $2
+           AND status = ANY($3::text[])
+           AND id != $5
+         ORDER BY created_at DESC
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED
+        """,
+        project_key,
+        component_key,
+        list(ACTIVE_STATUSES),
+        now,
+        int(run_id),
+    )
+
+    if blocker is None:
+        return {"acquired": True, "run_id": run_id, "project": project_key, "component": component_key}
+
+    blocker_dict = dict(blocker)
+    heartbeat_age = int(blocker_dict.get("heartbeat_age_seconds") or 0)
+
+    if heartbeat_age >= stale_threshold:
+        detail = (
+            f"stale deploy reconciled before new deploy: "
+            f"pid={blocker_dict.get('deploy_pid')} heartbeat_age={heartbeat_age}s"
+        )
+        await conn.execute(
+            """
+            UPDATE deploy_runs
+               SET status = 'failed',
+                   phase_completed_at = NOW(),
+                   updated_at = NOW(),
+                   error_summary = CONCAT_WS('; ', NULLIF(error_summary, ''), $2::text)
+             WHERE id = $1
+               AND status = ANY($3::text[])
+            """,
+            int(blocker_dict["id"]),
+            detail,
+            list(ACTIVE_STATUSES),
+        )
+        logger.warning(
+            "deploy_slot_reclaimed",
+            stale_id=blocker_dict["id"],
+            heartbeat_age=heartbeat_age,
+            new_run_id=run_id,
+        )
+        return {
+            "acquired": True,
+            "run_id": run_id,
+            "project": project_key,
+            "component": component_key,
+            "reclaimed_from": blocker_dict["id"],
+        }
+
+    return {
+        "acquired": False,
+        "run_id": run_id,
+        "blocker_id": blocker_dict["id"],
+        "blocker_status": blocker_dict.get("status"),
+        "blocker_phase": blocker_dict.get("phase"),
+        "blocker_heartbeat_age": heartbeat_age,
+        "project": project_key,
+        "component": component_key,
+    }
+
+
+async def register_external_deploy(
+    conn: Any,
+    *,
+    project: str,
+    release_sha: str,
+    component: str = DEFAULT_COMPONENT,
+    runner_job_id: str | None = None,
+    status: str = "success",
+    phase: str = "completed",
+    requested_by: str = "pipeline_runner",
+    request_source: str = "pipeline_runner_approve",
+    duration_ms: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record a completed external-project deploy in the central ledger.
+
+    Called by the pipeline runner after a non-AADS job finishes push +
+    restart + verify so that the deploy shows up in the dashboard's
+    project-wide deployment view and recent history.
+    """
+    project_key = _normalize_project(project)
+    sha = _normalize_release_sha(release_sha)
+    component_key = _normalize_slug(component, default=DEFAULT_COMPONENT, field_name="component")
+    deploy_type = _default_deploy_type(project_key, component_key)
+    actor = (requested_by or "pipeline_runner").strip()[:120]
+    source = (request_source or "pipeline_runner_approve").strip()[:80]
+    payload = dict(metadata or {})
+    payload.setdefault("component", component_key)
+    payload.setdefault("deploy_type", deploy_type)
+
+    git_meta = _git_release_metadata(project_key, sha)
+    release_title = git_meta.get("release_title") or payload.get("title") or None
+    release_summary = git_meta.get("release_summary") or payload.get("summary") or None
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO deploy_runs(
+            project, component, deploy_type, target_env, release_sha,
+            runner_job_id, status, phase,
+            phase_started_at, phase_completed_at,
+            duration_ms, queue_position,
+            requested_by, request_source, commit_status, push_status,
+            auto_start, request_payload, requested_at, last_heartbeat_at,
+            release_title, release_summary, approval_policy,
+            created_at, updated_at
+        )
+        VALUES(
+            $1, $2, $3, 'production', $4,
+            NULLIF($5, ''), $6, $7,
+            NOW(), NOW(),
+            $8, 0,
+            $9, $10, 'committed', 'pushed',
+            true, $11::jsonb, NOW(), NOW(),
+            $12, $13, 'auto_if_green',
+            NOW(), NOW()
+        )
+        RETURNING *
+        """,
+        project_key,
+        component_key,
+        deploy_type,
+        sha,
+        (runner_job_id or "").strip(),
+        status[:40],
+        phase[:120],
+        duration_ms,
+        actor,
+        source,
+        json.dumps(payload, ensure_ascii=False, default=str),
+        (release_title or "")[:180] or None,
+        (release_summary or "")[:240] or None,
+    )
+    logger.info(
+        "external_deploy_registered",
+        project=project_key,
+        deploy_run_id=row["id"],
+        runner_job_id=runner_job_id,
+        release_sha=sha,
+    )
+    return dict(row)

@@ -1013,6 +1013,33 @@ class PipelineCJob:
             self.status = "done"
             await self._save_to_db()
 
+            # Phase 7b: 중앙 배포 원장에 등록 (비-AADS)
+            _deploy_run_id = None
+            try:
+                _last_commit_line = (verify.get("last_commit") or "").strip()
+                _release_sha = _last_commit_line.split()[0] if _last_commit_line else ""
+                if _release_sha and len(_release_sha) >= 7:
+                    from app.core.db_pool import get_pool
+                    from app.services.deploy_observability import register_external_deploy
+                    _pool = get_pool()
+                    async with _pool.acquire() as _conn:
+                        _ext_row = await register_external_deploy(
+                            _conn,
+                            project=self.project,
+                            release_sha=_release_sha,
+                            runner_job_id=self.job_id,
+                            status="success",
+                            phase="completed",
+                            metadata={
+                                "chat_session_id": self.chat_session_id,
+                                "verify_summary": verify.get("summary", ""),
+                            },
+                        )
+                        _deploy_run_id = _ext_row.get("id")
+                    self._log("deploy_ledger", f"중앙 원장 등록: deploy_run_id={_deploy_run_id}")
+            except Exception as _ledger_err:
+                logger.warning(f"pipeline_c_external_deploy_register job={self.job_id}: {_ledger_err}")
+
             # 채팅방에 최종 완료 보고
             await self._post_to_chat(
                 f"✅ **[Pipeline Runner 완료]** `{self.job_id}`\n"
