@@ -193,7 +193,7 @@ require_release_image_within_limit() {
 
 build_release_image() {
     local build_max_wait existing_revision
-    build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-1200}"
+    build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-2400}"
     if [[ ! "$build_max_wait" =~ ^[0-9]+$ ]] || [[ "$build_max_wait" -lt 300 ]]; then
         build_max_wait="1200"
     fi
