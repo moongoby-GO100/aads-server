@@ -1,5 +1,16 @@
 # AADS HANDOVER
 
+## 2026-09-08 16:40 KST — Chat recovery blocked by stale Docker slot-marker mounts
+
+- Scope: continue the CEO-approved chat interruption fix and API blue/green rollout; preserve unrelated staged compose, finance, and dashboard changes using a clean release worktree.
+- Confirmed root cause: host markers route to `aads-server-green:8102`, but `docker exec aads-server-green cat /app/.active_container /app/.active_port` read `aads-server:8100`. The audited writer used temporary-file rename, which replaces the inode pinned by single-file Docker bind mounts. `app.main` scanner follows `/tmp/aads_execution_resume_owner=true`, while chat_service checks the stale bind mount and logs `resume_deferred_inactive_slot` repeatedly without making a model call.
+- DB evidence: executions `9b1e5e74-7bbd-4dab-834d-6f0323d7da74`, `2bf914ef-70f0-44a6-adbb-8f06bbe66763`, `6b7fb198-0c11-423e-b3c2-c0f67328a28c`, and `8d19325d-c7fc-403f-99ca-a8c91cb8bb3d` repeatedly acquired owner epochs while remaining retrying. Do not interpret claims as actual model retries.
+- Fix: `scripts/aads_active_slot_state.sh` keeps mounted inodes, writes without an initial truncate, fsyncs, and explicitly propagates write failures. `deploy.sh` checks candidate-visible markers while holding only the short switch lock; failures restore nginx and old slot markers. Standby certification also checks marker visibility. Failed routed checks no longer stop a candidate that may have accepted streams.
+- Regression verification: focused pytest suite passed 122 tests (one existing FastAPI deprecation warning). Hard-link pinned-inode test covers blue→green→blue and authorization. Container marker gate accepts matching markers and rejects stale markers. `bash -n` and `git diff --check` passed.
+- Previous 9426e6f7 patch additionally verified in disposable PostgreSQL 15: old intent promotion reproduces `idx_one_assistant_per_execution`; fixed retry/interim/final saves retain one assistant row; wrong owner/epoch, expired lease, terminal execution, and late retry cannot overwrite the preserved/final response. Five lifecycle checks passed; temporary DB stopped. Production DB was read only.
+- Diagnosis correction: execution `b0fbaeed` records last tool `todo_write`, last event `error`, missing done, and later supersede, but this alone does not establish todo_write as the transport failure's root cause. This session's earlier `2effa29d` incident is separately documented above/below with the partial-save/status-poll chain.
+- Operational state at this entry: 28f5a103 active cutover exists, same-digest standby certification failed on a live blue-slot stream. A separate canonical 6ab3466f deployment is waiting for that stream to drain. Do not bypass drain, restart an active API, or claim release certification. Commit/push and queued release status will be recorded after execution.
+
 ## 2026-09-08 16:18 KST — Server capture runtime enabled by default
 
 - The P1 capture routing fix correctly stopped implicit LOCAL_AGENT/CDP selection, but the first routed production smoke test returned `playwright 패키지가 설치되지 않았습니다` because canonical `deploy.sh bluegreen` builds defaulted `AADS_INSTALL_PLAYWRIGHT=false`.

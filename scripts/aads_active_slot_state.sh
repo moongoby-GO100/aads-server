@@ -72,15 +72,30 @@ authorized_fingerprint() {
     awk -F= '$1 == "fingerprint" {print $2; exit}' "$AUTH_FILE"
 }
 
-atomic_write() {
+write_mounted_marker() {
     local target="$1"
     local value="$2"
-    local temp
     mkdir -p "$(dirname "$target")"
-    temp="$(mktemp "${target}.tmp.XXXXXX")"
-    printf '%s\n' "$value" > "$temp"
-    chmod 0644 "$temp"
-    mv -f "$temp" "$target"
+    # These files are individually bind-mounted into both API slots. Rename
+    # replaces the host inode but leaves containers pinned to the old value.
+    # The nginx switch lock serializes writers; preserve the mounted inode.
+    # Do not truncate before writing: an empty marker would make legacy
+    # readers fall back to the single-instance default during a cutover.
+    python3 - "$target" "$value" <<'PY'
+import os
+import sys
+
+payload = (sys.argv[2] + "\n").encode("utf-8")
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT, 0o644)
+try:
+    if os.write(fd, payload) != len(payload):
+        raise OSError("short slot marker write")
+    os.ftruncate(fd, len(payload))
+    os.fchmod(fd, 0o644)
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
 }
 
 write_authorization() {
@@ -146,9 +161,9 @@ write_state() {
     if [[ "$old_port" == "$port" && "$old_container" == "$container" && -n "$fingerprint" && "$fingerprint" == "$authorized" ]]; then
         return 0
     fi
-    atomic_write "$ACTIVE_PORT_FILE" "$port"
-    atomic_write "$ACTIVE_CONTAINER_FILE" "$container"
-    write_authorization "$port" "$container" "$actor"
+    write_mounted_marker "$ACTIVE_PORT_FILE" "$port" || return 1
+    write_mounted_marker "$ACTIVE_CONTAINER_FILE" "$container" || return 1
+    write_authorization "$port" "$container" "$actor" || return 1
     if [[ "$old_port" == "$port" && "$old_container" == "$container" && -n "$authorized" && "$fingerprint" != "$authorized" ]]; then
         audit "$actor" "active-slot-write" "repaired_unauthorized_mutation" "state=${port}/${container}; previous_fingerprint=${authorized}; observed_fingerprint=${fingerprint}; ${detail}"
     else

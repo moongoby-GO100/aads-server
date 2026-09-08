@@ -1437,6 +1437,17 @@ wait_port_health() {
     return 1
 }
 
+verify_container_slot_markers() {
+    local container="$1" expected_port="$2" expected_container="$3"
+    local observed
+    observed="$(docker exec "$container" sh -c 'cat "$AADS_ACTIVE_PORT_FILE" "$AADS_ACTIVE_CONTAINER_FILE"' 2>/dev/null)" || return 1
+    if [[ "$observed" != "${expected_port}"$'\n'"${expected_container}" ]]; then
+        echo "[deploy.sh] ❌ mounted slot markers disagree: ${container}; expected=${expected_port}/${expected_container}; observed=${observed//$'\n'/\/}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ mounted slot markers verified: ${container} sees ${expected_port}/${expected_container}"
+}
+
 nginx_config_test() {
     if command -v nginx >/dev/null 2>&1; then
         nginx -t
@@ -1649,6 +1660,7 @@ sync_standby_slot_after_drain() {
                 audit_control "standby-sync" "${old_container}:${old_port}" "failed" "active/standby image digest mismatch"
                 return 1
             fi
+            verify_container_slot_markers "$old_container" "$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE")" "$active_container" || return 1
             docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             echo "[deploy.sh] standby sync complete: ${old_container}:${old_port}"
             audit_control "standby-sync" "${old_container}:${old_port}" "success" "same release image and healthy"
@@ -2068,7 +2080,9 @@ case "$MODE" in
 
         # ④ 전환 후 검증
         sleep 2
-        if curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1 \
+        if write_active_slot_state "$NEW_PORT" "$NEW_CONTAINER" "deploy.sh" "bluegreen cutover verification" \
+            && verify_container_slot_markers "$NEW_CONTAINER" "$NEW_PORT" "$NEW_CONTAINER" \
+            && curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1 \
             && curl -sf -H "Host: ${DOWNTIME_PROBE_HOST}" "http://127.0.0.1/api/v1/health" >/dev/null 2>&1; then
             echo "[deploy.sh] ④ ✅ 전환 검증 성공"
             audit_control "nginx-switch" "${OLD_CONTAINER}:${OLD_PORT}->${NEW_CONTAINER}:${NEW_PORT}" "success" "direct and nginx-routed health verified"
@@ -2077,7 +2091,9 @@ case "$MODE" in
             echo "[deploy.sh] ⚠️ 전환 후 검증 실패 — 이전 서버로 복원"
             cp "${UPSTREAM_CONF}.pre_deploy" "$UPSTREAM_CONF"
             nginx_reload
-            docker stop "$NEW_CONTAINER" 2>/dev/null || true
+            write_active_slot_state "$OLD_PORT" "$OLD_CONTAINER" "deploy.sh" "bluegreen verification rollback"
+            docker exec "$OLD_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
+            docker exec "$NEW_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
             notify "❌ Blue-Green 실패: 전환 검증 실패 — 복원 완료"
             deploy_phase_end "nginx_cutover" "failed" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"
             record_deploy "failed" "$MODE" "post-switch health verification failed for ${NEW_CONTAINER}:${NEW_PORT}"

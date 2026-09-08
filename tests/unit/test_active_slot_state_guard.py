@@ -45,7 +45,7 @@ def _run(env: dict[str, str], *args: str, check: bool = True) -> subprocess.Comp
     )
 
 
-def test_writer_authorizes_atomic_marker_pair(tmp_path: Path):
+def test_writer_authorizes_marker_pair(tmp_path: Path):
     env = _env(tmp_path)
     _run(env, "write", "8100", "aads-server", "pytest", "initial")
 
@@ -56,6 +56,42 @@ def test_writer_authorizes_atomic_marker_pair(tmp_path: Path):
     assert "fingerprint=" in authorization
     assert "actor=pytest" in authorization
     assert _run(env, "check", "pytest-guard").returncode == 0
+
+
+def test_cutover_preserves_pinned_inodes_and_rollback_visibility(tmp_path: Path):
+    env = _env(tmp_path)
+    _run(env, "write", "8100", "aads-server", "pytest")
+    state = Path(env["AADS_DEPLOY_STATE_DIR"])
+    # Hard links model the inode pinned by a Docker single-file bind mount.
+    aliases = {}
+    for name in (".active_port", ".active_container"):
+        alias = tmp_path / (name + ".mounted")
+        os.link(state / name, alias)
+        aliases[name] = alias
+    upstream = Path(env["AADS_UPSTREAM_CONF"])
+    original = upstream.read_text()
+    upstream.write_text(original.replace("8100", "SWAP").replace("8102", "8100").replace("SWAP", "8102"))
+    _run(env, "write", "8102", "aads-server-green", "pytest")
+    assert aliases[".active_port"].read_text().strip() == "8102"
+    assert aliases[".active_container"].read_text().strip() == "aads-server-green"
+    for name, alias in aliases.items():
+        assert alias.stat().st_ino == (state / name).stat().st_ino
+    upstream.write_text(original)
+    _run(env, "write", "8100", "aads-server", "pytest")
+    assert aliases[".active_port"].read_text().strip() == "8100"
+    assert aliases[".active_container"].read_text().strip() == "aads-server"
+    assert _run(env, "check", "pytest-guard").returncode == 0
+
+
+def test_container_marker_gate_rejects_stale_mount(tmp_path: Path):
+    script = DEPLOY.read_text()
+    function = "verify_container_slot_markers() {" + script.split("verify_container_slot_markers() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    for output, expected_rc in (("8102\\naads-server-green\\n", 0), ("8100\\naads-server\\n", 1)):
+        completed = subprocess.run(
+            ["bash", "-c", "docker() { printf '" + output + "'; };\n" + function + "verify_container_slot_markers candidate 8102 aads-server-green"],
+            capture_output=True, text=True,
+        )
+        assert completed.returncode == expected_rc, completed.stdout + completed.stderr
 
 
 def test_guard_detects_and_repairs_untracked_rewrite(tmp_path: Path):
