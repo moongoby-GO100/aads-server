@@ -466,7 +466,7 @@ deploy_observe_update() {
     err_sql="$(sql_escape "$err")"
     current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
     candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
-    image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-$ACTIVE_CONTAINER}" --format '{{.Image}}' 2>/dev/null || true)")"
+    image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-${ACTIVE_CONTAINER:-}}" --format '{{.Image}}' 2>/dev/null || true)")"
     standby_sql="$(sql_escape "$(docker inspect "${OLD_CONTAINER:-}" --format '{{.Image}}' 2>/dev/null || true)")"
     deploy_db_exec "
         UPDATE deploy_runs
@@ -866,7 +866,7 @@ deploy_phase_end() {
     err_sql="$(sql_escape "$err")"
     current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
     candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
-    image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-$ACTIVE_CONTAINER}" --format '{{.Image}}' 2>/dev/null || true)")"
+    image_sql="$(sql_escape "$(docker inspect "${NEW_CONTAINER:-${ACTIVE_CONTAINER:-}}" --format '{{.Image}}' 2>/dev/null || true)")"
     standby_sql="$(sql_escape "$(docker inspect "${OLD_CONTAINER:-}" --format '{{.Image}}' 2>/dev/null || true)")"
     if [[ -n "${DEPLOY_PHASE_METADATA_JSON:-}" ]]; then
         metadata_expr="NULLIF('$(sql_escape "$DEPLOY_PHASE_METADATA_JSON")', '')::jsonb"

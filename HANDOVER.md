@@ -1,5 +1,14 @@
 # AADS HANDOVER
 
+## 2026-09-08 17:27 KST — Deploy queue worker lifecycle repair (certification pending)
+
+- Follow-up of chat interruption rollout: DB run 179 succeeded on `6ab3466f9aab`; run 180 (`9c1f84966bcb`) was superseded by queued run 181 (`950f8b26`). Repeated child attempts failed during initialization; therefore the slot-marker fix was NOT yet deployed.
+- Evidence: `aads-deploy-drain.service` is Type=oneshot with default KillMode=control-group. Its launcher used setsid/nohup, which leaves workers inside the drain service cgroup. Drain completion coincided with TERM failures. Error handlers also referenced unset ACTIVE_CONTAINER before slot discovery and obscured startup failures. Logs: `logs/deploy-queue-worker-20260908-102320-950f8b260fc0d73a3344b5518d4f1e0a6b10e61e.log`.
+- Live markers: host 8100/aads-server, blue container 8102/aads-server-green, green container 8100/aads-server. Both containers healthy with image ID `sha256:4e7dd29fa3c003409aa20c7060d1e5851afb5cc9c678f243e7fa5fa1e68c9313`; health alone does not certify recovery ownership.
+- Fix: launch queued API rollout in an independent transient systemd service with explicit environment and persistent log; fail closed if service startup fails. Keep setsid fallback only for non-systemd hosts. Make both early observability functions safe before ACTIVE_CONTAINER is initialized.
+- Validation: 18 focused tests passed (service dispatch arguments/failure cleanup, early failure persistence, mounted inode guard, build/stream guards); shell syntax and diff whitespace passed. Broader chat tests use a disposable production-image container because host venv lacks asyncpg/FastAPI.
+- Isolated worktree `/root/aads/releases/deploy-worker-lifecycle-20260908` preserves unrelated staged compose/finance/dashboard work. Commit/push, rollout, same-digest/marker checks and five-minute monitoring remain pending until a later entry records actual evidence. No production messages or execution rows were manually changed.
+
 ## 2026-09-08 16:43 KST — Chat slot-marker release queued (not certified)
 
 - Implementation commit `9c1f84966bcb` was committed with hooks and pushed to origin/main; production checkout fast-forwarded while preserving unrelated staged `docker-compose.yml` and finance/untracked changes.

@@ -89,7 +89,24 @@ WORKER_BODY='
     echo "[$(date --iso-8601=seconds)] deploy queue worker done sha=${latest_sha}"
 '
 
-if command -v setsid >/dev/null 2>&1; then
+if [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
+    # setsid/nohup do not escape a systemd oneshot's cgroup. The drain service
+    # exits immediately after dispatch and kills remaining children by default.
+    # Give the release its own service and pass only its required environment.
+    unit="aads-api-release-${latest_sha:0:12}-$$"
+    if ! systemd-run --quiet --collect --unit="$unit" \
+        --property=Type=exec \
+        --property="StandardOutput=append:${log_file}" \
+        --property="StandardError=append:${log_file}" \
+        --setenv="MODE=$MODE" --setenv="STATE_DIR=$STATE_DIR" \
+        --setenv="REPO_DIR=$REPO_DIR" --setenv="LOCKFILE=$LOCKFILE" \
+        --setenv="latest_sha=$latest_sha" --setenv="worktree=$worktree" \
+        /bin/bash -c "$WORKER_BODY"; then
+        cleanup_failed_worktree
+        echo "deploy queue worker service start failed: ${unit}" >&2
+        exit 1
+    fi
+elif command -v setsid >/dev/null 2>&1; then
     setsid -f bash -c "$WORKER_BODY" >"$log_file" 2>&1 < /dev/null
 else
     nohup bash -c "$WORKER_BODY" >"$log_file" 2>&1 < /dev/null &
