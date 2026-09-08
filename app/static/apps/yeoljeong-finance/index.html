@@ -9346,6 +9346,15 @@
       const businessRegistrationNoMasked = String(data.businessRegistrationNoMasked || "").trim()
         || maskDigits(data.businessRegistrationNo)
         || String(existingIntegration?.businessRegistrationNoMasked || "").trim();
+      const isBankCredentialService = bankLedgerServices.has(data.service);
+      const hasBankCredentialInput = Boolean(
+        String(data.accountNo || "").trim()
+        || String(data.accountPassword || "").trim()
+        || String(data.businessRegistrationNo || "").trim()
+        || String(data.clientSecret || "").trim()
+      );
+      const vaultUsername = String(data.username || "").trim()
+        || (isBankCredentialService ? `${data.service}:${data.businessId}:${branchIdForName(data.branch || "") || "all"}:${accountNoMasked || "account"}` : "");
       let serverAccount = null;
       let pendingAutoSync = null;
       let syncNotice = "";
@@ -9362,7 +9371,7 @@
         form.dataset.editIntegrationId = previewIntegration.id;
       }
       if (previewIntegration) markIntegrationRunning(previewIntegration, `${integrationLabels[previewIntegration.service] || previewIntegration.service} 저장 후 연동 실행 중`);
-      const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(String(data.username || "").trim());
+      const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(vaultUsername || hasBankCredentialInput);
       if (shouldUseServerVault && !canManageAutomation()) {
         serverVaultWarning = "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다. 입력값은 로컬 연동 목록에 먼저 저장했습니다.";
         setIntegrationSubmitFeedback(form, serverVaultWarning, false);
@@ -9376,7 +9385,7 @@
             service: data.service,
             label: String(data.label || "").trim(),
             login_url: loginUrl,
-            username: String(data.username || "").trim(),
+            username: vaultUsername,
             password: data.password || "",
             api_key: data.apiKey || "",
             client_secret: data.clientSecret || "",
@@ -9442,6 +9451,24 @@
               body: JSON.stringify(bankPayload)
             });
             bankAccountRecord = bankResult.bank_account || null;
+            if (bankAccountRecord?.id && hasBankCredentialInput) {
+              const credentialResult = await financeApi(`/bank-accounts/${encodeURIComponent(bankAccountRecord.id)}/credentials`, {
+                method: "POST",
+                body: JSON.stringify({
+                  login_id: vaultUsername,
+                  username: vaultUsername,
+                  login_password: data.password || "",
+                  account_no: data.accountNo || "",
+                  account_password: data.accountPassword || "",
+                  business_registration_no: data.businessRegistrationNo || "",
+                  certificate_password: data.clientSecret || "",
+                  auth_owner: data.authOwner || "",
+                  mfa_method: data.mfaMethod || "",
+                  credential_expires_at: data.credentialExpiresAt || ""
+                })
+              });
+              if (credentialResult?.bank_account) bankAccountRecord = credentialResult.bank_account;
+            }
             await refreshBankAccounts({ silent: true });
           }
         } catch (err) {

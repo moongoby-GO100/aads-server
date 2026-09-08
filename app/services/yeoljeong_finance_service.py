@@ -3341,16 +3341,14 @@ def upsert_account(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, A
     if not secret_payload:
         _migrate_platform_account_secrets([record])
     if service in BANK_QUICK_SERVICE_CONFIG and collection_mode == "bank-quick-service":
-        missing = [
-            label
-            for label, key in (
-                ("로그인 비밀번호", "password"),
-                ("조회용 계좌번호", "account_no"),
-                ("계좌비밀번호", "account_password"),
-                ("사업자번호", "business_registration_no"),
-            )
-            if not _has_secret_value(record, key)
+        required_secret_fields = [
+            ("조회용 계좌번호", "account_no"),
+            ("계좌비밀번호", "account_password"),
+            ("사업자번호", "business_registration_no"),
         ]
+        if service == "shinhan_business":
+            required_secret_fields.insert(0, ("로그인 비밀번호", "password"))
+        missing = [label for label, key in required_secret_fields if not _has_secret_value(record, key)]
         if missing:
             raise HTTPException(status_code=400, detail=f"은행 간편/빠른조회 필수값을 확인하십시오: {', '.join(missing)}")
     bank_quick_config = BANK_QUICK_SERVICE_CONFIG.get(service) or {}
@@ -4968,13 +4966,24 @@ def save_bank_credentials(account_id: str, payload: dict[str, Any], user: dict[s
     if service_code not in BANK_QUICK_SERVICE_CONFIG:
         raise HTTPException(status_code=400, detail="간편/빠른조회를 지원하지 않는 은행계좌입니다")
 
-    login_id = str(payload.get("login_id") or payload.get("username") or "").strip()
-    if not login_id:
-        raise HTTPException(status_code=400, detail="은행 로그인 아이디가 필요합니다")
-
     business_id = str(account.get("business_id") or "").strip()
     branch_id = str(account.get("branch_id") or "").strip()
     quick_config = BANK_QUICK_SERVICE_CONFIG[service_code]
+    account_mask = str(account.get("account_number_masked") or "").strip()
+    login_id = str(payload.get("login_id") or payload.get("username") or "").strip()
+    if not login_id:
+        login_id = "|".join(
+            part
+            for part in (
+                service_code,
+                business_id,
+                branch_id,
+                account_mask,
+            )
+            if part
+        )
+    if not login_id:
+        raise HTTPException(status_code=400, detail="은행 인증정보 식별값을 만들 수 없습니다")
 
     account_payload: dict[str, Any] = {
         "service": service_code,
@@ -5825,11 +5834,12 @@ def _collect_bank_via_browser(
     )
     if service_code in {"shinhan_business", "ibk_business"} and bank_credentials.get("quick_account_configured") == "1":
         required_fields = {
-            "login_password": "로그인 비밀번호",
             "account_no": "조회용 계좌번호",
             "account_password": "계좌비밀번호",
             "business_registration_no": "사업자번호",
         }
+        if service_code == "shinhan_business":
+            required_fields = {"login_password": "로그인 비밀번호", **required_fields}
         missing_labels = [
             label
             for field, label in required_fields.items()

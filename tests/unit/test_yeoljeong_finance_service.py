@@ -5073,6 +5073,57 @@ def test_create_auto_browser_bank_account_is_idempotent_by_scope_service_and_mas
     assert len(service._read_file_rows("bank_accounts")) == 1
 
 
+def test_save_ibk_bank_credentials_accepts_quick_lookup_without_login_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_encrypt_secret", lambda value: f"encrypted:{value}")
+    monkeypatch.setattr(service, "_decrypt_secret", lambda value: value.removeprefix("encrypted:"))
+    account = service.create_bank_account(
+        {
+            "business_id": "biz-junghwa",
+            "branch_id": "branch-junghwa",
+            "bank_name": "IBK기업은행",
+            "account_number_masked": "********4014",
+            "connection_type": "browser",
+            "connector_type": "bank-browser",
+            "institution_code": "ibk_business",
+            "status": "active",
+            "auto_sync": True,
+        },
+        ADMIN_USER,
+    )
+
+    result = service.save_bank_credentials(
+        account["id"],
+        {
+            "account_no": "12345678901234",
+            "account_password": "4321",
+            "business_registration_no": "7108604499",
+        },
+        ADMIN_USER,
+    )
+
+    assert result["ok"] is True
+    assert result["service"] == "ibk_business"
+    assert result["bank_account"]["status"] == "active"
+    assert result["bank_account"]["platform_account_id"]
+    platform_account = service._read("platform_accounts")[0]
+    assert platform_account["username"].startswith("ibk_business|biz-junghwa|branch-junghwa")
+    assert platform_account["account_no_enc"] == "encrypted:12345678901234"
+    assert platform_account["account_password_enc"] == "encrypted:4321"
+    assert platform_account["business_registration_no_enc"] == "encrypted:7108604499"
+    assert "account_no" not in platform_account
+
+    credentials = service._bank_quick_credentials_for_account(
+        result["bank_account"],
+        business_id="biz-junghwa",
+        branch_id="branch-junghwa",
+    )
+    assert credentials["account_no"] == "12345678901234"
+    assert credentials["account_password"] == "4321"
+    assert credentials["business_registration_no"] == "7108604499"
+    assert "login_password" not in credentials
+
+
 def test_create_bank_account_requires_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
     with pytest.raises(Exception) as exc:

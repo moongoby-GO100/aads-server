@@ -12477,3 +12477,23 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `python3 -m py_compile app/api/project_docs.py`: passed.
 - Release note:
   - Commit and AADS API blue/green deploy are required before the new source-path bases are available in production.
+
+## 2026-09-08 09:53 KST — FOOD bank credential UI persistence and IBK quick lookup fix
+- CEO request:
+  - Continue the unfinished bank credential work, fix errors immediately, verify, and provide a final completion report.
+- Change implemented:
+  - `app/static/apps/yeoljeong-finance/index.html`: the integration settings save flow now creates/locates a bank account and then calls `POST /bank-accounts/{id}/credentials` with bank quick-service credentials.
+  - `app/static/apps/yeoljeong-finance/index.html`: bank integrations can persist credentials even when the bank quick-service screen does not use a separate login ID.
+  - `app/services/yeoljeong_finance_service.py`: IBK quick-service credential registration now creates an internal identifier from service/business/branch/masked-account when no login ID is supplied.
+  - `app/services/yeoljeong_finance_service.py`: IBK quick-service no longer requires a login password; it requires account number, account password, and business registration number. Shinhan still requires login password as before.
+- Verification:
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py -k 'save_ibk_bank_credentials or upsert_bank_quick_service_requires_account_password_and_business_no or ibk_quick_service' -q`: 3 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_api.py -k 'bank_account_and_ledger_http_flow or bank_account_rejects_extra_sensitive_field or integration_form_persists_bank_credentials' -q`: 3 passed.
+  - `.venv-playwright/bin/python -m pytest tests/unit/test_yeoljeong_finance_service.py tests/unit/test_yeoljeong_finance_api.py tests/unit/test_yeoljeong_bank_browser_connector.py -k 'bank or ibk or shinhan or integration_form_persists_bank_credentials' -q`: 124 passed.
+  - `node` inline script parse for `app/static/apps/yeoljeong-finance/index.html`: passed.
+  - `python3 -m py_compile app/services/yeoljeong_finance_service.py app/api/yeoljeong_finance.py`: passed.
+- Current operational data state:
+  - `bank_accounts.json` has the Junghwa IBK account row ending `4014`.
+  - `platform_accounts.json` still lacks encrypted IBK quick-service secrets for Junghwa; CEO must re-save the bank settings after this release because prior UI saves did not call the credential endpoint.
+- Release note:
+  - Commit, push, AADS API blue/green deploy, routed health, and post-release bank credential save verification are still required after this entry.

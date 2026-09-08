@@ -675,3 +675,19 @@ def test_bank_account_rejects_extra_sensitive_field(tmp_path, monkeypatch):
     )
     # extra="forbid" blocks credential-shaped fields at the schema boundary.
     assert resp.status_code == 422
+
+
+def test_integration_form_persists_bank_credentials_to_bank_account_vault():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    save_block = html.split("async function saveIntegrationConnection", 1)[1].split(
+        "async function runIntegrationAudit",
+        1,
+    )[0]
+
+    assert "const isBankCredentialService = bankLedgerServices.has(data.service);" in save_block
+    assert "const vaultUsername =" in save_block
+    assert "hasBankCredentialInput" in save_block
+    assert "/credentials" in save_block
+    assert "account_password: data.accountPassword" in save_block
+    assert "business_registration_no: data.businessRegistrationNo" in save_block
