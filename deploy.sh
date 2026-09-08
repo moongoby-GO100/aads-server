@@ -192,10 +192,29 @@ require_release_image_within_limit() {
 }
 
 build_release_image() {
-    local build_max_wait
+    local build_max_wait existing_revision
     build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-1200}"
     if [[ ! "$build_max_wait" =~ ^[0-9]+$ ]] || [[ "$build_max_wait" -lt 300 ]]; then
         build_max_wait="1200"
+    fi
+    # A release SHA is immutable: if its image already exists, verify the
+    # revision label and reuse it instead of issuing another build.  A tag
+    # pointing at a different revision is an integrity error and must never be
+    # overwritten silently.
+    if docker image inspect "aads-server:${AADS_RELEASE_SHA}" >/dev/null 2>&1; then
+        existing_revision="$(docker image inspect "aads-server:${AADS_RELEASE_SHA}" \
+            --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+        if [[ "$existing_revision" != "$AADS_RELEASE_SHA" ]]; then
+            echo "[deploy.sh] ❌ immutable image tag mismatch: tag=${AADS_RELEASE_SHA} label=${existing_revision:-missing}"
+            audit_control "release-image-reuse" "aads-server:${AADS_RELEASE_SHA}" "blocked" \
+                "revision_label=${existing_revision:-missing}"
+            return 1
+        fi
+        require_release_image_within_limit
+        echo "[deploy.sh] ✅ immutable release image reuse: aads-server:${AADS_RELEASE_SHA}"
+        audit_control "release-image-reuse" "aads-server:${AADS_RELEASE_SHA}" "success" \
+            "revision_label=${existing_revision}"
+        return 0
     fi
     require_build_disk_free
     require_dependency_lock_freshness

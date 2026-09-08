@@ -12708,3 +12708,9 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - FOOD reuses an existing `aads-server:<release_sha>` image and replaces only `yeoljeong-finance` with `--no-deps --no-build`; DB/config/prompt SQL is commit-range scoped and rejects DROP/TRUNCATE.
 - Verification: adapter/observability unit tests 29 passed; shell syntax, Python compile, and diff check passed. Runtime inventory: FOOD, NTV2 frontend, SF worker/dashboard health passed. NAS SSH remains externally unavailable (`183.96.69.193:22` timeout); remote dirty gates currently block NTV2 (4 paths) and SF (24 paths).
 - Live enqueue smoke exposed and fixed an asyncpg ambiguous `CONCAT_WS` parameter in supersede/control SQL by adding explicit `::text` casts.
+
+## 2026-09-08 — Blue/green immutable image reuse gate
+
+- `deploy.sh` now reuses an existing `aads-server:<release SHA>` image only when its OCI revision label exactly matches the requested release SHA.
+- A tag/revision mismatch fails closed instead of silently overwriting an immutable release tag.
+- This prevents interrupted blue/green retries from issuing another image build for the same release SHA while preserving candidate health, short nginx lock, same-digest standby sync, rollback, and five-minute P0/P1 monitoring gates.
