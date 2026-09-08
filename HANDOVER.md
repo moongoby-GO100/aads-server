@@ -12662,3 +12662,23 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - Operational data state before release:
   - Junghwa IBK account ending `4014` exists, but `platform_account_id` and `credentials_registered_at` remain empty because the previous browser submission did not persist secrets.
   - The CEO must submit the bank credential form once after this release; plaintext credentials were intentionally not retained in local settings and cannot be recovered.
+
+## 2026-09-08 14:57 KST — Unified deployment P1 marker guard release certification reconciliation
+- CEO request:
+  - Continue the unified deployment work directly, close the remaining items, and report quickly.
+- Implemented release state:
+  - `25d142b7` (`fix(deploy): audit and guard active slot markers`) is contained in production release `83775b2c0a37`.
+  - Both API slots run the same image digest `sha256:2a7a7866b8e15dc6047f092d29bd10e56b6c2e78108dbbeb8743749a8b587040` and report healthy; nginx-routed health also reports `status=ok`.
+  - `/root/aads/aads-server/.active_container` and `.active_port` are `aads-server` and `8100`; the authorization sidecar exists. The `aads-api-watchdog.timer` and `aads-deploy-drain.timer` are active.
+- Interrupted certification reconciliation:
+  - `deploy_runs.id=177` reached nginx cutover and same-digest standby sync but the direct caller received TERM during the required P0/P1 monitor, leaving the ledger as failed.
+  - Post-release observation from 14:37:17 through 14:56:48 KST found zero configured P0/P1 log-pattern hits on both API slots, 115 successful active-slot watchdog samples, healthy direct/routed endpoints, and matching digests.
+  - Preserving the original TERM note, a `p0p1_monitoring_reconciled` audit event and a `completed` event were inserted, and run 177 was reconciled to `success/completed` at 14:57:40 KST.
+- Verification:
+  - `pytest -q tests/unit/test_active_slot_state_guard.py tests/unit/test_deploy_adapters.py tests/unit/test_deploy_observability.py`: 28 passed, one pre-existing pytest configuration warning.
+  - Direct blue/green and routed health checks: passed.
+  - API slot image digest equality: passed.
+- Rollback:
+  - If the manual certification must be withdrawn, restore run 177 to `status='failed'`, `phase='p0p1_monitoring'`, preserving the appended audit events.
+- Remaining product scope:
+  - The approved P0 control plane and P1 active-slot guard are complete. PRD expansion items for actual remote execution/provenance across NTV2, SF, NAS, DB/config/prompt, and LangGraph trace linkage remain separate follow-up scope; current remote adapters intentionally register ledger-only project-owned commands.
