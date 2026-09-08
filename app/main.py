@@ -3253,13 +3253,20 @@ _MONITOR_KEY_PATHS = (
     "/api/v1/approval",
 )
 
+# External trace ingest has its own scoped, hashed service credential.  Keep
+# this exact-path exception narrow so the surrounding LLMOps/admin routes still
+# require the normal AADS JWT middleware.
+_SERVICE_AUTH_EXACT_PATHS = {
+    "/api/v1/ohvis/llmops/trace-ingest",
+}
+
 
 @app.middleware("http")
 async def jwt_auth_middleware(request: Request, call_next):
     path = request.url.path
 
     # 1) 면제 경로
-    if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
+    if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES) or path in _SERVICE_AUTH_EXACT_PATHS:
         return await call_next(request)
 
     # 2) 모니터 키 인증 경로 (별도 인증 체계)

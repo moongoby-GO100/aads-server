@@ -11,11 +11,15 @@
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import re
+import secrets
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -28,6 +32,7 @@ EXAMPLE_TABLE = "llmops_examples"
 EXPERIMENT_TABLE = "llmops_experiments"
 SCORE_TABLE = "llmops_scores"
 FEEDBACK_TABLE = "llmops_feedback"
+INGEST_CLIENT_TABLE = "llmops_ingest_clients"
 LEGACY_TRACE_TABLE = "ohvis_harness_traces"
 
 LLMOPS_TABLES = (
@@ -46,6 +51,13 @@ ERROR_LIMIT = 1000
 MAX_LIMIT = 200
 DEFAULT_FAILURE_DATASET = "aads-failed-traces"
 QUALITY_FLOOR = 0.4
+INGEST_SCHEMA_VERSION = "1.0"
+MAX_INGEST_PAYLOAD_BYTES = 65_536
+MAX_INGEST_TOOL_CALLS = 50
+
+_SENSITIVE_METADATA_KEY = re.compile(
+    r"(?i)(authorization|cookie|password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token)"
+)
 
 # 요약 저장 전 마스킹 — 원문에 섞여 들어온 시크릿이 DB나 외부 export로 새지 않게 한다.
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -116,6 +128,172 @@ def loads_json(value: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def ingest_token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def redact_ingest_value(value: Any, *, depth: int = 0) -> Any:
+    """Recursively redact external metadata before it reaches the ledger."""
+    if depth > 8:
+        return "[truncated]"
+    if isinstance(value, dict):
+        return {
+            str(key)[:120]: (
+                "[redacted]"
+                if _SENSITIVE_METADATA_KEY.search(str(key))
+                else redact_ingest_value(item, depth=depth + 1)
+            )
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, list):
+        return [redact_ingest_value(item, depth=depth + 1) for item in value[:100]]
+    if isinstance(value, str):
+        return clip(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return clip(value)
+
+
+def validate_ingest_payload_size(payload: dict[str, Any]) -> None:
+    encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    if len(encoded) > MAX_INGEST_PAYLOAD_BYTES:
+        raise ValueError("payload_too_large")
+
+
+async def authenticate_ingest_client(token: str) -> dict[str, str] | None:
+    """Resolve an active client while comparing token digests in constant time."""
+    if not token:
+        return None
+    from app.core.db_pool import get_pool
+
+    digest = ingest_token_digest(token)
+    rows = await get_pool().fetch(
+        f"SELECT client_id, project, token_hash FROM {INGEST_CLIENT_TABLE} WHERE is_active = TRUE"
+    )
+    matched: dict[str, str] | None = None
+    for row in rows:
+        if hmac.compare_digest(str(row["token_hash"]), digest):
+            matched = {"client_id": str(row["client_id"]), "project": str(row["project"])}
+    return matched
+
+
+async def mark_ingest_client_used(client_id: str) -> None:
+    from app.core.db_pool import get_pool
+
+    await get_pool().execute(
+        f"UPDATE {INGEST_CLIENT_TABLE} SET last_used_at = NOW(), updated_at = NOW() WHERE client_id = $1",
+        client_id,
+    )
+
+
+async def provision_ingest_client(*, client_id: str, project: str, created_by: str) -> dict[str, Any]:
+    """Create/rotate a client and return the raw credential exactly once."""
+    from app.core.db_pool import get_pool
+
+    raw_token = "ohvis_ingest_" + secrets.token_urlsafe(32)
+    row = await get_pool().fetchrow(
+        f"""
+        INSERT INTO {INGEST_CLIENT_TABLE} (client_id, project, token_hash, is_active, created_by)
+        VALUES ($1, $2, $3, TRUE, $4)
+        ON CONFLICT (client_id) DO UPDATE SET
+            project = EXCLUDED.project,
+            token_hash = EXCLUDED.token_hash,
+            is_active = TRUE,
+            created_by = EXCLUDED.created_by,
+            rotated_at = NOW(),
+            revoked_at = NULL,
+            updated_at = NOW()
+        RETURNING client_id, project, created_at, rotated_at
+        """,
+        client_id,
+        project,
+        ingest_token_digest(raw_token),
+        created_by,
+    )
+    return {
+        "client_id": str(row["client_id"]),
+        "project": str(row["project"]),
+        "token": raw_token,
+        "token_notice": "shown_once",
+        "created_at": row["created_at"],
+        "rotated_at": row["rotated_at"],
+    }
+
+
+async def revoke_ingest_client(client_id: str) -> bool:
+    from app.core.db_pool import get_pool
+
+    result = await get_pool().execute(
+        f"UPDATE {INGEST_CLIENT_TABLE} SET is_active = FALSE, revoked_at = NOW(), updated_at = NOW() "
+        "WHERE client_id = $1 AND is_active = TRUE",
+        client_id,
+    )
+    return result.endswith(" 1")
+
+
+async def ingest_external_trace(payload: dict[str, Any], *, client_id: str) -> dict[str, Any]:
+    """Atomically ingest one external trace; a replay performs no child writes."""
+    from app.core.db_pool import get_pool
+
+    validate_ingest_payload_size(payload)
+    project = str(payload["project"])
+    external_trace_id = str(payload["external_trace_id"])
+    trace_key = f"external:{project}:{external_trace_id}"
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", trace_key)
+            existing = await conn.fetchrow(
+                f"SELECT id::text AS id, created_at FROM {TRACE_TABLE} WHERE trace_key = $1",
+                trace_key,
+            )
+            if existing:
+                return {
+                    "accepted": True,
+                    "deduplicated": True,
+                    "external_trace_id": external_trace_id,
+                    "trace_id": str(existing["id"]),
+                    "project": project,
+                    "schema_version": INGEST_SCHEMA_VERSION,
+                    "ingested_at": existing["created_at"],
+                }
+
+            safe_metadata = redact_ingest_value(payload.get("metadata") or {})
+            safe_metadata["ingest_client_id"] = client_id
+            safe_metadata["ingest_schema_version"] = INGEST_SCHEMA_VERSION
+            trace_id = await record_trace(
+                graph_run_id=str(payload.get("graph_run_id") or external_trace_id),
+                project=project,
+                session_id=payload.get("session_id"),
+                source="external_ingest",
+                run_type=str(payload.get("run_type") or "chain"),
+                status=str(payload.get("status") or "success"),
+                model=payload.get("model"),
+                input_summary=payload.get("input_summary") or "",
+                output_summary=payload.get("output_summary") or "",
+                latency_ms=payload.get("latency_ms"),
+                cost_usd=payload.get("cost_usd"),
+                quality_score=payload.get("quality_score"),
+                error=payload.get("error"),
+                external_trace_id=external_trace_id,
+                tags=list(payload.get("tags") or []),
+                metadata=safe_metadata,
+                trace_key=trace_key,
+                tool_calls=redact_ingest_value(payload.get("tool_calls") or []),
+                conn=conn,
+            )
+            if not trace_id:
+                raise RuntimeError("trace_store_unavailable")
+            return {
+                "accepted": True,
+                "deduplicated": False,
+                "external_trace_id": external_trace_id,
+                "trace_id": trace_id,
+                "project": project,
+                "schema_version": INGEST_SCHEMA_VERSION,
+                "ingested_at": datetime.now(timezone.utc),
+            }
 
 
 def _note_missing(relation: str) -> None:

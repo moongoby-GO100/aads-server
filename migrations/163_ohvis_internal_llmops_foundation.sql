@@ -263,3 +263,23 @@ SET title = EXCLUDED.title,
     metadata = EXCLUDED.metadata,
     enabled = TRUE,
     updated_at = NOW();
+-- Dedicated service credentials for authenticated external trace ingest.
+-- Raw tokens are returned once by the admin API and are never stored.
+CREATE TABLE IF NOT EXISTS llmops_ingest_clients (
+    client_id TEXT PRIMARY KEY,
+    project TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by TEXT,
+    last_used_at TIMESTAMPTZ,
+    rotated_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_llmops_ingest_clients_project CHECK (project IN ('GO100')),
+    CONSTRAINT ck_llmops_ingest_clients_token_hash CHECK (token_hash ~ '^[0-9a-f]{64}$')
+);
+
+CREATE INDEX IF NOT EXISTS idx_llmops_ingest_clients_active_project
+    ON llmops_ingest_clients (project, client_id)
+    WHERE is_active = TRUE;

@@ -12779,7 +12779,6 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - `pipeline_jobs`에 동일 지시서의 중복 러너 `runner-5744f732`(queued, 08:02:35+09)가 있다. 신규 잡을 제출하지 않았으며, 동일 파일 동시 편집 위험이 있으니 취소를 권한다.
   - ledger `dirty` 적체 1,709건 — 커밋 시 정합화되지 않는 구조적 문제. 범위 밖이라 조작하지 않았다.
   - 상세: `docs/reports/20260909_llmops_status_e2e_followup.md`
-
 ## 2026-09-09 — OHVIS LLMOps 상태 총계 2차 검증 (runner-5744f732)
 
 - 기준: `8bed9728`(= `origin/main`, 1차 `runner-0457960f` 작업이 커밋·푸시된 상태)에서 시작한 clean 워크트리 `/tmp/aads-wt-runner-5744f732`.
@@ -12800,3 +12799,19 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
 - 비용: **측정하지 않음(unmeasured).** 외부 LLM Judge·LangSmith SaaS·유료 호출 없음.
 - 미해결: ①커밋/푸시/빌드/배포·GitHub URL·배포 SHA·deploy_run_id·5분 P0/P1 인증은 이 러너 권한 밖 — **"배포됨"으로 보고하지 않았다.** ②배포 후 `verify_llmops_e2e.py`가 rc=0인지 재검증, 이어서 `--write` 추가형 워크플로 확인. ③`/ops/evals` 신규 인증 브라우저 스크린샷 미확보(**브라우저 갭**) — 기존 `/root/aads/verification/llmops-20260909/`·`/tmp/aads-llmops-dashboard-final-release.log`는 이전 시점 산출물이라 새 근거로 쓰지 않았고, 대체 근거는 위 HTTP/API/DB 실측이다. ④ledger `dirty` 적체는 범위 밖이라 조작하지 않았다.
 - 상세: `docs/reports/20260909_llmops_status_e2e_followup.md` §8–13
+
+## 2026-09-09 08:37 KST — OHVIS authenticated trace-ingest receiver
+
+- Added an AADS-only, versioned `POST /api/v1/ohvis/llmops/trace-ingest`
+  receiver for GO100's original trace IDs.
+- Added dedicated hashed service credentials with admin-only provision, rotate,
+  and revoke endpoints. No plaintext credential is committed or logged.
+- Added deterministic `external:{project}:{external_trace_id}` idempotency with
+  a transaction advisory lock; replay returns the same central trace and skips
+  tool-call writes.
+- Added recursive secret redaction, bounded request fields, a 64 KiB total
+  payload limit, and focused auth/scope/version/replay tests.
+- Extended canonical foundation migration `163_ohvis_internal_llmops_foundation.sql` and added contract document
+  `docs/reports/20260909_ohvis_authenticated_trace_ingest_contract.md`.
+- GO100 sender/outbox and permanent credential placement remain deliberately
+  out of scope because the active project is AADS.

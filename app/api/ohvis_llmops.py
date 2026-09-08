@@ -14,11 +14,12 @@ POST /api/v1/ohvis/llmops/feedback             — trace 피드백 기록
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.auth import require_internal_admin
 from app.services import llmops_evaluator, llmops_store
 
 router = APIRouter()
@@ -50,9 +51,140 @@ class FeedbackRequest(BaseModel):
     created_by: Optional[str] = Field(None, max_length=120)
 
 
+class TraceIngestToolCall(BaseModel):
+    tool_name: str = Field(..., min_length=1, max_length=120)
+    risk_tier: str = Field("read", max_length=30)
+    approval_state: str = Field("not_required", max_length=30)
+    status: str = Field("success", max_length=30)
+    sequence: int = Field(0, ge=0, le=10_000)
+    input_summary: str = Field("", max_length=2000)
+    output_summary: str = Field("", max_length=2000)
+    latency_ms: Optional[int] = Field(None, ge=0, le=86_400_000)
+    error: Optional[str] = Field(None, max_length=1000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TraceIngestRequest(BaseModel):
+    schema_version: Literal["1.0"]
+    project: Literal["GO100"]
+    external_trace_id: str = Field(..., min_length=1, max_length=200)
+    graph_run_id: Optional[str] = Field(None, max_length=200)
+    session_id: Optional[str] = Field(None, max_length=64)
+    run_type: str = Field("chain", max_length=60)
+    status: Literal["success", "error", "cancelled", "running"] = "success"
+    model: Optional[str] = Field(None, max_length=120)
+    input_summary: str = Field("", max_length=2000)
+    output_summary: str = Field("", max_length=2000)
+    latency_ms: Optional[int] = Field(None, ge=0, le=86_400_000)
+    cost_usd: Optional[float] = Field(None, ge=0, le=1_000_000)
+    quality_score: Optional[float] = Field(None, ge=0, le=1)
+    error: Optional[str] = Field(None, max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=30)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[TraceIngestToolCall] = Field(default_factory=list, max_length=llmops_store.MAX_INGEST_TOOL_CALLS)
+
+    @field_validator("external_trace_id")
+    @classmethod
+    def validate_external_trace_id(cls, value: str) -> str:
+        if value != value.strip() or any(ord(char) < 32 for char in value):
+            raise ValueError("external_trace_id must be an exact printable identifier")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str]) -> list[str]:
+        if any(not item or len(item) > 60 for item in values):
+            raise ValueError("tags must be 1..60 characters")
+        return values
+
+    @model_validator(mode="after")
+    def validate_total_size(self):
+        try:
+            llmops_store.validate_ingest_payload_size(self.model_dump(mode="json"))
+        except ValueError as exc:
+            raise ValueError("payload exceeds 65536 bytes") from exc
+        return self
+
+
+class IngestClientRequest(BaseModel):
+    client_id: str = Field(..., min_length=3, max_length=80, pattern=r"^[a-z0-9][a-z0-9._-]+$")
+    project: Literal["GO100"]
+
+
 @router.get("/ohvis/llmops/status", tags=["ohvis-llmops"])
 async def llmops_status(project: Optional[str] = Query(None, max_length=40)):
     return await llmops_store.get_status(project=project)
+
+
+def _bearer_token(authorization: Optional[str]) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="trace ingest credential required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="trace ingest credential required")
+    return token
+
+
+@router.post("/ohvis/llmops/trace-ingest", tags=["ohvis-llmops-ingest"])
+async def llmops_trace_ingest(
+    req: TraceIngestRequest,
+    authorization: Optional[str] = Header(None),
+):
+    client = await llmops_store.authenticate_ingest_client(_bearer_token(authorization))
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid trace ingest credential",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if client["project"] != req.project:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="credential project scope mismatch")
+    result = await llmops_store.ingest_external_trace(req.model_dump(mode="json"), client_id=client["client_id"])
+    await llmops_store.mark_ingest_client_used(client["client_id"])
+    return result
+
+
+@router.post(
+    "/ohvis/llmops/ingest-clients",
+    tags=["ohvis-llmops-ingest"],
+    dependencies=[Depends(require_internal_admin)],
+)
+async def llmops_provision_ingest_client(req: IngestClientRequest):
+    return await llmops_store.provision_ingest_client(
+        client_id=req.client_id,
+        project=req.project,
+        created_by="internal-admin",
+    )
+
+
+@router.post(
+    "/ohvis/llmops/ingest-clients/{client_id}/rotate",
+    tags=["ohvis-llmops-ingest"],
+    dependencies=[Depends(require_internal_admin)],
+)
+async def llmops_rotate_ingest_client(client_id: str):
+    req = IngestClientRequest(client_id=client_id, project="GO100")
+    return await llmops_store.provision_ingest_client(
+        client_id=req.client_id,
+        project=req.project,
+        created_by="internal-admin",
+    )
+
+
+@router.delete(
+    "/ohvis/llmops/ingest-clients/{client_id}",
+    tags=["ohvis-llmops-ingest"],
+    dependencies=[Depends(require_internal_admin)],
+)
+async def llmops_revoke_ingest_client(client_id: str):
+    revoked = await llmops_store.revoke_ingest_client(client_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="active ingest client not found")
+    return {"revoked": True, "client_id": client_id}
 
 
 @router.get("/ohvis/llmops/traces", tags=["ohvis-llmops"])
