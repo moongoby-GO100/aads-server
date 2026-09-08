@@ -736,3 +736,20 @@ def test_bank_credential_save_is_fail_closed_without_server_authorization():
     assert "isBankCredentialService && hasBankCredentialInput && !canManageAutomation()" in save_block
     assert "은행 인증정보 서버 저장 실패" in save_block
     assert save_block.count("return false;") >= 3
+
+
+def test_bank_credential_save_finishes_before_collection_and_requires_server_confirmation():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    save_block = html.split("async function saveIntegrationConnection", 1)[1].split(
+        "async function runIntegrationAudit",
+        1,
+    )[0]
+
+    assert "auto_sync: !isBankCredentialService" in save_block
+    assert "!credentialResult?.ok || !credentialResult?.platform_account_id" in save_block
+    assert "은행 인증정보 저장 확인값을 받지 못했습니다." in save_block
+    assert "은행 인증정보를 서버 Vault에 암호화 저장했습니다." in save_block
+    permission_check = save_block.index("isBankCredentialService && hasBankCredentialInput && !canManageAutomation()")
+    optimistic_insert = save_block.index("state.settings.integrations = [")
+    assert permission_check < optimistic_insert

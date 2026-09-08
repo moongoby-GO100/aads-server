@@ -9479,7 +9479,6 @@
         showToast("비밀번호 확인값이 일치하지 않습니다.");
         return false;
       }
-      setIntegrationSubmitFeedback(form, "저장값을 서버 Vault에 저장하고 연동 실행을 시작합니다.", true);
       const loginUrl = String(data.loginUrl || "").trim() || catalog.loginUrl || "";
       const collectionMode = data.collectionMode || catalog.collectionMode || "browser-automation";
       const memo = String(data.memo || "").trim() || catalog.memo || "";
@@ -9498,22 +9497,20 @@
       );
       const vaultUsername = String(data.username || "").trim()
         || (isBankCredentialService ? `${data.service}:${data.businessId}:${branchIdForName(data.branch || "") || "all"}:${accountNoMasked || "account"}` : "");
+      setIntegrationSubmitFeedback(
+        form,
+        isBankCredentialService ? "은행 인증정보를 서버 Vault에 먼저 저장합니다." : "저장값을 서버 Vault에 저장하고 연동 실행을 시작합니다.",
+        true
+      );
       let serverAccount = null;
       let pendingAutoSync = null;
       let syncNotice = "";
+      let bankCredentialSaveNotice = "";
       let serverVaultWarning = "";
       let serverPersistenceWarning = "";
       let bankAccountRecord = null;
       const previewIntegration = existingIntegration || previewIntegrationFromForm(form);
       const optimisticIntegrationId = existingIntegration?.id || previewIntegration?.id || "";
-      if (!existingIntegration && previewIntegration) {
-        state.settings.integrations = [
-          previewIntegration,
-          ...settings().integrations.filter(item => item.id !== previewIntegration.id)
-        ];
-        form.dataset.editIntegrationId = previewIntegration.id;
-      }
-      if (previewIntegration) markIntegrationRunning(previewIntegration, `${integrationLabels[previewIntegration.service] || previewIntegration.service} 저장 후 연동 실행 중`);
       const shouldUseServerVault = serverVaultServices.has(data.service) && Boolean(vaultUsername || hasBankCredentialInput);
       if (isBankCredentialService && hasBankCredentialInput && !canManageAutomation()) {
         const accessMessage = "은행 인증정보는 총괄 운영관리자 로그인 후 서버 Vault에만 저장할 수 있습니다. 로그인·권한을 확인한 뒤 다시 저장하십시오.";
@@ -9521,6 +9518,14 @@
         showToast(accessMessage);
         return false;
       }
+      if (!existingIntegration && previewIntegration) {
+        state.settings.integrations = [
+          previewIntegration,
+          ...settings().integrations.filter(item => item.id !== previewIntegration.id)
+        ];
+        form.dataset.editIntegrationId = previewIntegration.id;
+      }
+      if (previewIntegration) markIntegrationRunning(previewIntegration, `${integrationLabels[previewIntegration.service] || previewIntegration.service} 저장 중`);
       if (shouldUseServerVault && !canManageAutomation()) {
         serverVaultWarning = "총괄 운영관리자 로그인 또는 권한 갱신 후 서버 Vault 저장이 가능합니다. 입력값은 로컬 연동 목록에 먼저 저장했습니다.";
         setIntegrationSubmitFeedback(form, serverVaultWarning, false);
@@ -9561,7 +9566,9 @@
             permission_scope: data.permissionScope || existingIntegration?.permissionScope || "",
             failure_fallback: data.failureFallback || existingIntegration?.failureFallback || "",
             memo,
-            auto_sync: true
+            // 은행 인증정보 저장과 브라우저 수집은 분리한다. 수집기 장애가
+            // Vault 저장 응답을 실패시키거나 저장 여부를 가리지 않게 한다.
+            auto_sync: !isBankCredentialService
           };
           let result = await financeApi("/accounts", {
             method: "POST",
@@ -9616,7 +9623,11 @@
                   credential_expires_at: data.credentialExpiresAt || ""
                 })
               });
+              if (!credentialResult?.ok || !credentialResult?.platform_account_id) {
+                throw new Error("은행 인증정보 저장 확인값을 받지 못했습니다.");
+              }
               if (credentialResult?.bank_account) bankAccountRecord = credentialResult.bank_account;
+              bankCredentialSaveNotice = "은행 인증정보를 서버 Vault에 암호화 저장했습니다. 자동수집은 저장과 분리되어 별도로 실행됩니다.";
             }
             await refreshBankAccounts({ silent: true });
           }
@@ -9654,7 +9665,7 @@
                 permission_scope: data.permissionScope || existingIntegration?.permissionScope || "",
                 failure_fallback: data.failureFallback || existingIntegration?.failureFallback || "",
                 memo,
-                auto_sync: true
+                auto_sync: !isBankCredentialService
               };
               const retryResult = await financeApi("/accounts", { method: "POST", body: JSON.stringify(retryPayload) });
               serverAccount = retryResult.account;
@@ -9683,6 +9694,7 @@
         id: optimisticIntegrationId || uid(),
         serverAccountId: serverAccount?.id || existingIntegration?.serverAccountId || "",
         bankAccountId: bankAccountRecord?.id || existingIntegration?.bankAccountId || "",
+        credentialsRegisteredAt: bankAccountRecord?.credentials_registered_at || existingIntegration?.credentialsRegisteredAt || "",
         service: data.service,
         label: String(data.label || "").trim(),
         category: catalog.category || "기타",
@@ -9776,7 +9788,7 @@
       }
       renderAll();
       const finalNotice = [
-        syncNotice || nextIntegration.portalMessage || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")),
+        bankCredentialSaveNotice || syncNotice || nextIntegration.portalMessage || (existingIntegration ? "외부계정 연결 정보를 수정했습니다." : (serverAccount ? "외부계정 연결 정보를 Vault에 저장했습니다." : "외부계정 연결 정보를 저장했습니다.")),
         serverVaultWarning,
         serverPersistenceWarning
       ].filter(Boolean).join(" · ");

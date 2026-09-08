@@ -12644,3 +12644,21 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   - Dashboard installer page ESLint: passed.
 - Release note:
   - Commit/push, GitHub Windows EXE workflow, server/dashboard blue-green deploy, live download verification, and five-minute P0/P1 monitoring are required before completion.
+
+## 2026-09-08 14:28 KST — FOOD bank credential save-first hardening
+- CEO request:
+  - Make Store Assistant persist bank credentials reliably before continuing IBK collection work.
+- Root cause closed:
+  - The integration form requested automatic collection in the same API operation that persisted the Vault account, so a collector/PC Agent failure could mask the credential-save result.
+  - The UI created an optimistic local integration row before verifying server authorization, which could make an unsuccessful save appear successful.
+- Change implemented:
+  - Bank integrations now persist with `auto_sync: false`; collection remains a separate explicit operation after confirmed storage.
+  - The UI requires the credential endpoint to return both `ok` and `platform_account_id` before reporting success.
+  - Unauthorized bank saves no longer create an optimistic local row, and the confirmed `credentials_registered_at` value is retained in UI state.
+- Verification before release:
+  - Isolated runtime-container pytest for the two finance test modules: 180 passed.
+  - Inline JavaScript parse for `app/static/apps/yeoljeong-finance/index.html`: passed.
+  - `git diff --check`: passed.
+- Operational data state before release:
+  - Junghwa IBK account ending `4014` exists, but `platform_account_id` and `credentials_registered_at` remain empty because the previous browser submission did not persist secrets.
+  - The CEO must submit the bank credential form once after this release; plaintext credentials were intentionally not retained in local settings and cannot be recovered.
