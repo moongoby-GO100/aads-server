@@ -8,6 +8,14 @@
 - Device reconnect replacement is socket-fenced: a late close from an old WebSocket cannot unregister the new connection. Explicit commands for an offline agent no longer fall through to the only other connected device.
 - Fresh/standard download endpoints require their exact artifact instead of silently serving a different fallback APK.
 
+## 2026-09-08 18:24 KST — NAS rsync account verified and DSM command-path compatibility fixed
+
+- CEO enabled the DSM rsync account for `newtalk`; visual confirmation was followed by a non-mutating end-to-end check from cafe24_114 to NAS.
+- Verified `183.96.69.193:2222` reachable, SSH public-key authentication succeeds, `/volume1/newtalk_server_backup` exists and is writable, and rsync dry-run completes without creating or changing a remote file.
+- Root cause of the remaining denial: Synology's remote command handling rejected the bare `rsync --server` command even though `/bin/rsync` was executable. `nas_final_check_and_deploy.sh` now pins `--rsync-path=/bin/rsync`.
+- Validation: `bash -n`, `git diff --check`, and the full five-step script all passed. Ping remains unanswered but is non-blocking because TCP/2222 and SSH succeed.
+- NewTalk-114 commit `ac53415` was pushed to `origin/main`. No NAS deployment, service restart, Docker action, or real file transfer was performed.
+
 ## 2026-09-08 17:31 KST — Chat follow-up implemented; release 191 building
 
 - Commit `80c15d59a56a` pushed to origin/main with commit/push hooks; production main fast-forwarded without touching unrelated staged `docker-compose.yml` or finance/untracked work.
