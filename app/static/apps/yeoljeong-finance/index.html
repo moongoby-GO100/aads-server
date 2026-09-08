@@ -12701,11 +12701,20 @@
           showToast("직원 기본정보를 삭제했습니다.");
         }
         if (integrationId) {
+          if (!confirm("선택한 외부계정 연결 정보를 삭제하시겠습니까?")) return;
+          const deletedItem = settings().integrations.find(candidate => candidate.id === integrationId);
+          const serverAccountId = deletedItem?.serverAccountId || deletedItem?.server_account_id || "";
           state.settings.integrations = settings().integrations.filter(item => item.id !== integrationId);
           saveState();
           syncSettingsToServer();
           renderAll();
-          showToast("외부계정 연결 정보를 삭제했습니다.");
+          if (hasServerAuth() && serverAccountId) {
+            financeApi(`/accounts/${encodeURIComponent(serverAccountId)}`, { method: "DELETE" })
+              .then(() => showToast("외부계정을 서버에서 삭제했습니다."))
+              .catch(err => showToast(`서버 계정 삭제 실패: ${err.message} — 로컬에서는 제거됨`));
+          } else {
+            showToast("외부계정 연결 정보를 삭제했습니다.");
+          }
         }
         if (editIntegrationId) {
           openIntegrationEdit(editIntegrationId);
