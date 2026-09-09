@@ -608,6 +608,8 @@ class JobSubmitRequest(BaseModel):
     worker_model_reason: str = Field("", max_length=500, description="직접 모델 지정 사유")
     parallel_group: str = Field("", description="병렬 실행 그룹 — 같은 그룹 내 작업은 동시 실행")
     depends_on: str = Field("", description="의존 작업 job_id ��� 해당 작업 완료 후에만 실행")
+    goal_id: str = Field("", description="명시적 목표 연결 (선택) — 생략 시 지시서의 GOAL_ID: 메타데이터를 사용")
+    milestone_id: str = Field("", description="명시적 마일스톤 연결 (선택) — goal_id 와 함께 검증된다")
 
     @field_validator('project')
     @classmethod
@@ -682,6 +684,15 @@ async def check_project_lock(conn, project: str, exclude_job_id: str | None = No
     return (row["cnt"] or 0) >= max_concurrent
 
 
+def _schedule_goal_reconcile(job_id: str) -> None:
+    """종결 쓰기 직후 목표 링크 정합화를 예약한다 (best-effort, 커넥션 안전)."""
+    try:
+        from app.services.pipeline_runner_service import schedule_goal_link_reconcile
+        schedule_goal_link_reconcile(job_id)
+    except Exception as exc:  # noqa: BLE001 — 정합화 실패가 작업 흐름을 막지 않는다
+        logger.warning("pipeline_runner.goal_reconcile_schedule_fail", job_id=job_id, error=str(exc))
+
+
 async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
     """실패한 작업에 의존하는 모든 queued 작업을 재귀적으로 blocked 처리.
     P1-A: 고아 방지 — 의존 트리 전체를 한 번에 정리."""
@@ -700,6 +711,8 @@ async def cascade_cleanup_orphans(conn, failed_job_id: str) -> int:
         for r in result:
             total += 1
             to_process.append(r["job_id"])
+            # 의존성 고아 정리도 종결 쓰기다 — 목표 링크를 함께 정합화한다.
+            _schedule_goal_reconcile(r["job_id"])
             logger.info("pipeline_runner.orphan_cascade_cleaned",
                         orphan_job_id=r["job_id"], parent=current_id)
     if total:
@@ -733,6 +746,7 @@ async def promote_next_queued(conn, project: str) -> str | None:
                     row["job_id"],
                     f"orphaned_dependency: parent {dep} was {dep_row['status']}",
                 )
+                _schedule_goal_reconcile(row["job_id"])
                 logger.info("pipeline_runner.orphan_auto_cleaned",
                             job_id=row["job_id"], parent=dep, parent_status=dep_row["status"])
                 continue
@@ -1064,10 +1078,16 @@ async def submit_job(
     if req.worker_model and not req.worker_model_reason:
         msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
-    # Goal auto-link (best-effort): 프로젝트 활성 목표 마일스톤에 연결 (runner는 외부 프로세스라 API 제출 시점에 수행)
+    # Goal link (best-effort): 명시적 goal_id/milestone_id 또는 지시서 GOAL_ID: 메타데이터가
+    # 있을 때만 연결한다. 근거가 없으면 활성 목표에 조용히 붙이지 않는다.
     try:
         from app.services.pipeline_runner_service import _auto_link_job_to_goal
-        await _auto_link_job_to_goal(job_id, req.project)
+        await _auto_link_job_to_goal(
+            job_id, req.project,
+            goal_id=req.goal_id or None,
+            milestone_id=req.milestone_id or None,
+            instruction=req.instruction,
+        )
     except Exception as exc:
         logger.warning("pipeline_runner.goal_auto_link_fail", job_id=job_id, error=str(exc))
     return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
@@ -1407,12 +1427,13 @@ async def notify_completion(job_id: str):
                 promoted_job_id = await promote_next_queued(conn, project)
         except Exception as e:
             logger.warning("pipeline_runner.promote_fail", project=project, error=str(e))
-        if status == "done":
-            try:
-                from app.services.pipeline_runner_service import _update_linked_goal_state
-                await _update_linked_goal_state(job_id, "done")
-            except Exception as exc:
-                logger.warning("pipeline_runner.goal_state_update_fail", job_id=job_id, error=str(exc))
+        # done 뿐 아니라 error/rejected/rejected_done 도 종결이다 — 예전에는 done
+        # 에서만 반영해서 실패·반려 작업의 링크가 queued 로 남았다.
+        try:
+            from app.services.pipeline_runner_service import _update_linked_goal_state
+            await _update_linked_goal_state(job_id, status)
+        except Exception as exc:
+            logger.warning("pipeline_runner.goal_state_update_fail", job_id=job_id, error=str(exc))
 
     session_id = row["chat_session_id"]
     if not session_id or not _UUID_RE.match(session_id):
@@ -1820,6 +1841,8 @@ class BatchSubmitRequest(BaseModel):
     jobs: list[BatchJobItem] = Field(..., min_length=1, max_length=20)
     parallel_group: str = Field("", description="전체 배치에 적용할 병렬 그룹")
     max_cycles: int = Field(3, ge=1, le=10)
+    goal_id: str = Field("", description="배치 전체에 적용할 명시적 목표 연결 (선택)")
+    milestone_id: str = Field("", description="배치 전체에 적용할 명시적 마일스톤 연결 (선택)")
 
     @field_validator('project')
     @classmethod
@@ -2033,7 +2056,12 @@ async def submit_batch(
 
                     try:
                         from app.services.pipeline_runner_service import _auto_link_job_to_goal
-                        await _auto_link_job_to_goal(job_id, req.project)
+                        await _auto_link_job_to_goal(
+                            job_id, req.project,
+                            goal_id=req.goal_id or None,
+                            milestone_id=req.milestone_id or None,
+                            instruction=item.instruction,
+                        )
                     except Exception as exc:
                         logger.warning("pipeline_runner.goal_auto_link_fail", job_id=job_id, error=str(exc))
                     for path in item_target_files:

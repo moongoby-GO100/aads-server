@@ -147,25 +147,100 @@ async def _update_linked_goal_state(job_id: str, status: str = "done") -> None:
         logger.warning("goal_completion_check_failed job=%s: %s", job_id, exc)
 
 
-async def _auto_link_job_to_goal(job_id: str, project: str) -> None:
-    """Auto-link a new pipeline job to the project's active goal's in-progress milestone."""
+async def _reconcile_job_goal_links(job_id: str) -> None:
+    """작업의 **현재 DB 상태**를 읽어 연결된 목표에 한 번 반영한다 (best-effort).
+
+    `_save_to_db` 를 거치지 않고 pipeline_jobs 를 직접 UPDATE 하는 경로
+    (terminate/cancel/watchdog/의존성 고아 정리/QA)가 이 함수를 호출한다.
+    상태를 인자로 받지 않고 DB에서 다시 읽으므로, 호출부가 상태 문자열을
+    제각각 매핑하다 어긋나는 일이 없다.
+    """
     try:
+        from app.core.db_pool import get_pool
+        from app.services.goal_manager import is_terminal_task_status
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            status = await conn.fetchval(
+                "SELECT status FROM pipeline_jobs WHERE job_id = $1", job_id,
+            )
+        if not status or not is_terminal_task_status(status):
+            return
+        await _update_linked_goal_state(job_id, status)
+    except Exception as exc:  # noqa: BLE001 — 목표 정합화 실패가 작업 종료를 막지 않는다
+        logger.warning("goal_link_reconcile_failed job=%s: %s", job_id, exc)
+
+
+# 백그라운드 정합화 태스크 강참조 보관 — 참조가 없으면 GC 가 태스크를 회수한다.
+_goal_reconcile_tasks: set = set()
+
+
+def schedule_goal_link_reconcile(job_id: str) -> None:
+    """DB 커넥션을 점유한 채로 호출해도 안전한 정합화 예약.
+
+    `_reconcile_job_goal_links` 는 자체 커넥션을 잡으므로, 호출부가 이미
+    `pool.acquire()` 안이라면 중첩 acquire 가 된다. 종결 UPDATE 는 이미 커밋된
+    뒤이므로 태스크로 넘겨 커넥션 밖에서 실행한다 (best-effort, 1회).
+    """
+    try:
+        task = asyncio.create_task(_reconcile_job_goal_links(job_id))
+        _goal_reconcile_tasks.add(task)
+        task.add_done_callback(_goal_reconcile_tasks.discard)
+    except RuntimeError as exc:  # 이벤트 루프 없음 — 동기 컨텍스트
+        logger.debug("goal_link_reconcile_not_scheduled job=%s: %s", job_id, exc)
+
+
+async def _auto_link_job_to_goal(
+    job_id: str,
+    project: str,
+    goal_id: Optional[str] = None,
+    milestone_id: Optional[str] = None,
+    instruction: Optional[str] = None,
+) -> None:
+    """명시적 goal 컨텍스트가 있을 때만 작업을 목표에 연결한다.
+
+    구 동작은 "프로젝트의 첫 active 목표"에 무조건 붙였고, 그래서 목표와 무관한
+    작업까지 활성 목표에 매달렸다(P0 결함 #1). 이제 근거는 둘 중 하나뿐이다.
+
+      * 호출자가 넘긴 goal_id/milestone_id
+      * 지시서 메타데이터 `GOAL_ID: <uuid>` / `MILESTONE_ID: <uuid>`
+
+    근거가 없으면 **연결하지 않는다**. 함수 이름/기존 인자 순서는 그대로 두어
+    기존 호출부(3곳)를 깨지 않는다.
+    """
+    try:
+        from app.services.goal_binding import resolve_goal_binding
         from app.services.goal_manager import goal_state_machine
+
         pool = await goal_state_machine._pool()
         async with pool.acquire() as conn:
-            goal = await conn.fetchrow(
-                "SELECT id FROM goals WHERE project = $1 AND status = 'active' ORDER BY created_at LIMIT 1",
-                project,
+            if instruction is None:
+                instruction = await conn.fetchval(
+                    "SELECT instruction FROM pipeline_jobs WHERE job_id = $1", job_id,
+                )
+            decision = await resolve_goal_binding(
+                conn, project,
+                goal_id=goal_id, milestone_id=milestone_id, instruction=instruction,
             )
-            if not goal:
-                return
+
+        if not decision["bound"]:
+            logger.info(
+                "goal_link_skipped: job=%s project=%s reason=%s",
+                job_id, project, decision["reason"],
+            )
+            return
+
         await goal_state_machine.link_task(
-            goal_id=str(goal["id"]),
-            milestone_id=None,
+            goal_id=decision["goal_id"],
+            milestone_id=decision["milestone_id"],
             task_type="pipeline_job",
             task_id=job_id,
+            bind_source=decision["bind_source"],
         )
-        logger.info("goal_auto_linked: job=%s goal=%s project=%s", job_id, goal["id"], project)
+        logger.info(
+            "goal_explicitly_linked: job=%s goal=%s project=%s source=%s",
+            job_id, decision["goal_id"], project, decision["bind_source"],
+        )
     except Exception as exc:
         logger.warning("goal_auto_link_failed job=%s: %s", job_id, exc)
 
@@ -2318,12 +2393,14 @@ async def cancel_pipeline(job_id: str) -> dict:
                 "WHERE job_id=$1",
                 job_id,
             )
-            return {
-                "status": "cancelled",
-                "job_id": job_id,
-                "killed_pids": [],
-                "message": f"DB 상태 취소 처리 완료 (메모리에 없어 프로세스 kill 미수행, 필요 시 수동 kill)",
-            }
+        # 종결 상태를 durable 하게 쓴 직후 정확히 한 번 목표 링크를 정합화한다.
+        await _reconcile_job_goal_links(job_id)
+        return {
+            "status": "cancelled",
+            "job_id": job_id,
+            "killed_pids": [],
+            "message": "DB 상태 취소 처리 완료 (메모리에 없어 프로세스 kill 미수행, 필요 시 수동 kill)",
+        }
     except Exception as e:
         return {"error": f"취소 실패: {e}"}
 
@@ -2895,6 +2972,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
                     except Exception:
                         pass
 
+            await _reconcile_job_goal_links(job_id)
             logger.info(f"pipeline_c_resume_polling: job={job_id} completed (exit={_exit_str})")
             return
 
@@ -2912,6 +2990,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
             )
     except Exception:
         pass
+    await _reconcile_job_goal_links(job_id)
     logger.warning(f"pipeline_c_resume_polling: job={job_id} timed out")
 
 
@@ -3017,6 +3096,7 @@ async def _check_stalled_jobs():
                         )
                     job.status = "error"
                     job.phase = "error"
+                    await _reconcile_job_goal_links(job.job_id)
                     _active_jobs.pop(job.job_id, None)
                     _stall_chat_count.pop(job.job_id, None)
                     logger.warning(f"pipeline_c_watchdog_auto_killed job={job.job_id} after {stall_minutes}min")

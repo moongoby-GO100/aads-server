@@ -13,7 +13,45 @@ logger = logging.getLogger(__name__)
 
 
 _DONE_TASK_STATUSES = {"completed", "done", "approved", "deployed"}
-_FAILED_TASK_STATUSES = {"failed", "error", "cancelled", "rejected_done"}
+_FAILED_TASK_STATUSES = {
+    "failed", "error", "cancelled", "rejected_done",
+    # P0: pipeline_jobs 가 실제로 남기는 종결 상태/단계(phase) 별칭.
+    # 이들이 빠져 있어서 종결된 작업의 링크가 queued/running 으로 남았다.
+    "rejected", "terminated", "review_failed", "blocked_dependency",
+    "timeout", "timed_out", "aborted", "orphaned",
+}
+
+# 철자 흔들림 정규화 — 종결 판정 이전에 적용한다.
+_TASK_STATUS_ALIASES = {
+    "canceled": "cancelled",
+    "cancelling": "cancelled",
+    "errored": "error",
+    "failure": "failed",
+    "success": "completed",
+    "succeeded": "completed",
+    "complete": "completed",
+    "killed": "terminated",
+}
+
+
+def normalize_task_status(status: str) -> str:
+    """작업 상태를 goal_task_links 어휘(completed/failed/원문)로 정규화한다.
+
+    Goal Control Loop 전체가 이 한 곳만 쓴다 — 호출부마다 따로 매핑하면
+    terminate/cancel 경로처럼 일부만 반영되는 결함이 다시 생긴다.
+    """
+    normalized = str(status or "").strip().lower()
+    normalized = _TASK_STATUS_ALIASES.get(normalized, normalized)
+    if normalized in _DONE_TASK_STATUSES:
+        return "completed"
+    if normalized in _FAILED_TASK_STATUSES:
+        return "failed"
+    return normalized or "pending"
+
+
+def is_terminal_task_status(status: str) -> bool:
+    """정규화 후 completed/failed 로 확정되는 상태인지."""
+    return normalize_task_status(status) in ("completed", "failed")
 
 # 목표 진행이 기존 구현 보존 정책을 지키는지 스스로 감사하기 위한 기본 intent
 _GOAL_POLICY_INTENT = "goal_control"
@@ -236,9 +274,19 @@ class GoalStateMachine:
         milestone_id: Optional[str],
         task_type: str,
         task_id: str,
+        bind_source: Optional[str] = None,
     ) -> dict[str, Any]:
+        """작업을 목표/마일스톤에 연결한다.
+
+        `bind_source` 는 **왜 이 연결이 생겼는지**(request/directive/explicit)를
+        남기는 provenance 다. 생략하면 explicit 로 본다. 컬럼이 아직 없는
+        (마이그레이션 165 미적용) 환경에서는 조용히 건너뛴다.
+        """
+        from app.services.goal_binding import BIND_SOURCE_EXPLICIT, has_supersession_columns
+
         pool = await self._pool()
         link_id = str(uuid.uuid4())
+        effective_bind_source = bind_source or BIND_SOURCE_EXPLICIT
         async with pool.acquire() as conn:
             if milestone_id is None:
                 milestone_row = await conn.fetchrow(
@@ -281,6 +329,15 @@ class GoalStateMachine:
                 """,
                 goal_id, task_type, task_id, current_status,
             )
+            if await has_supersession_columns(conn):
+                await conn.execute(
+                    """
+                    UPDATE goal_task_links
+                    SET bind_source = $4, updated_at = NOW()
+                    WHERE goal_id = $1::uuid AND task_type = $2 AND task_id = $3
+                    """,
+                    goal_id, task_type, task_id, effective_bind_source,
+                )
         if milestone_id:
             await self.check_milestone_completion(milestone_id)
         await self._trace(
@@ -293,9 +350,15 @@ class GoalStateMachine:
                 "task_id": task_id,
                 "milestone_id": milestone_id,
                 "link_id": link_id,
+                "bind_source": effective_bind_source,
             },
         )
-        return {"link_id": link_id, "milestone_id": milestone_id, "status": current_status}
+        return {
+            "link_id": link_id,
+            "milestone_id": milestone_id,
+            "status": current_status,
+            "bind_source": effective_bind_source,
+        }
 
     async def update_task_status(self, task_type: str, task_id: str, status: str) -> dict[str, Any]:
         pool = await self._pool()
@@ -305,14 +368,26 @@ class GoalStateMachine:
                 "UPDATE goal_task_links SET status = $3 WHERE task_type = $1 AND task_id = $2",
                 task_type, task_id, normalized,
             )
-            links = await conn.fetch(
-                """
-                SELECT DISTINCT milestone_id, goal_id
-                FROM goal_task_links
-                WHERE task_type = $1 AND task_id = $2
-                """,
-                task_type, task_id,
-            )
+            # supersede 된 링크는 이미 대체되었으므로 마일스톤/목표를 막지 않는다.
+            from app.services.goal_binding import has_supersession_columns
+            if await has_supersession_columns(conn):
+                links = await conn.fetch(
+                    """
+                    SELECT DISTINCT milestone_id, goal_id
+                    FROM goal_task_links
+                    WHERE task_type = $1 AND task_id = $2 AND superseded_by IS NULL
+                    """,
+                    task_type, task_id,
+                )
+            else:
+                links = await conn.fetch(
+                    """
+                    SELECT DISTINCT milestone_id, goal_id
+                    FROM goal_task_links
+                    WHERE task_type = $1 AND task_id = $2
+                    """,
+                    task_type, task_id,
+                )
             results = []
             for link in links:
                 if normalized == "failed" and link["milestone_id"]:
@@ -353,13 +428,31 @@ class GoalStateMachine:
         )
         return {"updated": len(results), "milestones_checked": results}
 
+    async def _active_milestone_links(self, conn: Any, milestone_id: str) -> list:
+        """마일스톤의 **판정 대상** 링크만 돌려준다.
+
+        supersede 된 링크(재시도로 대체된 과거 실패 시도)는 완료 판정에서 제외한다.
+        대체되지 않은 실패는 그대로 남아 마일스톤을 blocked 로 유지한다 (D).
+        """
+        from app.services.goal_binding import has_supersession_columns
+
+        if await has_supersession_columns(conn):
+            return await conn.fetch(
+                """
+                SELECT task_type, task_id, status FROM goal_task_links
+                WHERE milestone_id = $1::uuid AND superseded_by IS NULL
+                """,
+                milestone_id,
+            )
+        return await conn.fetch(
+            "SELECT task_type, task_id, status FROM goal_task_links WHERE milestone_id = $1::uuid",
+            milestone_id,
+        )
+
     async def check_milestone_completion(self, milestone_id: str) -> dict[str, Any]:
         pool = await self._pool()
         async with pool.acquire() as conn:
-            links = await conn.fetch(
-                "SELECT task_type, task_id, status FROM goal_task_links WHERE milestone_id = $1::uuid",
-                milestone_id,
-            )
+            links = await self._active_milestone_links(conn, milestone_id)
             if not links:
                 return {"milestone_id": milestone_id, "completed": False, "reason": "no_linked_tasks"}
 
@@ -600,6 +693,38 @@ class GoalStateMachine:
 
             await self._update_goal_progress(goal_id)
 
+    async def _in_progress_milestone_credit(self, conn: Any, goal_id: str) -> float:
+        """진행 중 마일스톤들의 링크 완료 비율 합계(마일스톤 환산 점수).
+
+        supersede 된 링크는 분모/분자 모두에서 빠진다. 링크가 없는 마일스톤은
+        0점 — 링크 없는 마일스톤이 진행률을 밀어올려 조기 완료로 보이면 안 된다.
+        """
+        from app.services.goal_binding import has_supersession_columns
+
+        superseded_filter = (
+            " AND l.superseded_by IS NULL" if await has_supersession_columns(conn) else ""
+        )
+        rows = await conn.fetch(
+            f"""
+            SELECT m.id,
+                   COUNT(l.id) AS total_links,
+                   COUNT(l.id) FILTER (WHERE l.status = 'completed') AS done_links
+            FROM milestones m
+            LEFT JOIN goal_task_links l
+                   ON l.milestone_id = m.id{superseded_filter}
+            WHERE m.goal_id = $1::uuid AND m.status = 'in_progress'
+            GROUP BY m.id
+            """,
+            goal_id,
+        )
+        credit = 0.0
+        for row in rows:
+            total_links = int(row["total_links"] or 0)
+            if total_links <= 0:
+                continue
+            credit += int(row["done_links"] or 0) / total_links
+        return credit
+
     async def _update_goal_progress(self, goal_id: str) -> None:
         pool = await self._pool()
         async with pool.acquire() as conn:
@@ -614,6 +739,13 @@ class GoalStateMachine:
             total = stats["total"] if stats else 0
             completed = stats["completed"] if stats else 0
             progress = round(completed / total, 2) if total > 0 else 0.0
+
+            # P0 결함 #3: 연결 작업이 실제로 끝났는데도 진행률이 0.0 으로 남았다.
+            # 마일스톤이 아직 완료되지 않았어도, 진행 중 마일스톤의 완료된 링크만큼
+            # 부분 점수를 준다. 전부 완료 시 1.0, 아무것도 없으면 0.0 은 그대로다.
+            if total > 0 and completed < total:
+                partial = await self._in_progress_milestone_credit(conn, goal_id)
+                progress = round(min((completed + partial) / total, 0.99), 2)
 
             if total > 0 and total == completed:
                 await conn.execute(
@@ -771,12 +903,8 @@ class GoalStateMachine:
         return {"goal_id": goal_id, "updated": list(updates.keys())}
 
     def _normalize_task_status(self, status: str) -> str:
-        normalized = str(status or "").strip().lower()
-        if normalized in _DONE_TASK_STATUSES:
-            return "completed"
-        if normalized in _FAILED_TASK_STATUSES:
-            return "failed"
-        return normalized or "pending"
+        """모듈 단일 정규화 함수에 위임한다 (기존 호출부 호환 유지)."""
+        return normalize_task_status(status)
 
 
 goal_state_machine = GoalStateMachine()

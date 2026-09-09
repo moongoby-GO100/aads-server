@@ -6067,6 +6067,9 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             row = await conn.fetchrow("SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1", task_id)
             if row and row["status"] in ("running", "queued", "awaiting_approval"):
                 await conn.execute("UPDATE pipeline_jobs SET status = 'error', error_message = $2, updated_at = NOW() WHERE job_id = $1", task_id, reason)
+                # 강제종료도 종결 — 목표 링크 정합화를 예약한다 (커넥션 점유 중이라 예약형).
+                from app.services.pipeline_runner_service import schedule_goal_link_reconcile
+                schedule_goal_link_reconcile(task_id)
                 return json.dumps({"terminated": task_id, "reason": reason}, ensure_ascii=False)
             return json.dumps({"error": f"종료할 수 없는 상태: {row['status'] if row else '작업 없음'}"}, ensure_ascii=False)
     # ── 멀티에이전트/토론 도구 ────────────────────────────────────────────

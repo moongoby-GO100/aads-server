@@ -3611,6 +3611,10 @@ class ToolExecutor:
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
                     asyncio.create_task(emit_task_completed(task_id, "error"))
+                    # 강제종료도 종결이다 — 목표 링크가 queued 로 남지 않게 정합화한다
+                    # (runner-a16e637f: terminated 인데 링크는 queued 로 남았던 결함).
+                    from app.services.pipeline_runner_service import schedule_goal_link_reconcile
+                    schedule_goal_link_reconcile(task_id)
                     result = {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
                     if pid_cleanup is not None:
                         result["process_cleanup"] = pid_cleanup

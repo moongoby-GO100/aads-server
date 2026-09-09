@@ -12815,3 +12815,41 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   `docs/reports/20260909_ohvis_authenticated_trace_ingest_contract.md`.
 - GO100 sender/outbox and permanent credential placement remain deliberately
   out of scope because the active project is AADS.
+
+## 2026-09-09 09:xx KST — Goal Control P0 정합성 복구 (명시적 바인딩 / 종결 정합화 / 진행률)
+
+- **암묵적 자동 연결 제거**: `_auto_link_job_to_goal` 이 "프로젝트의 첫 active 목표"에
+  무조건 붙이던 동작을 없애고, ①submit 의 `goal_id`/`milestone_id` 필드 또는
+  ②지시서 메타데이터 `GOAL_ID:`/`MILESTONE_ID:` 가 있을 때만 연결한다. 근거가 없으면
+  연결하지 않는다. 함수명·인자 순서·기존 3개 호출부는 그대로라 하위 호환된다.
+  검증은 `app/services/goal_binding.py` (project 일치 + 목표 open + 마일스톤 소속).
+- **종결 정합화 중앙화**: 상태 정규화를 `goal_manager.normalize_task_status()` 한 곳으로
+  모으고 `terminated/rejected/review_failed/blocked_dependency/timeout` 등 별칭을 추가했다.
+  `_save_to_db` 를 우회해 pipeline_jobs 를 직접 종결시키던 경로 전부에 정합화를 1회씩 배선:
+  terminate_task(tool_executor·ceo_chat_tools), cancel_pipeline, 폴링재개 완료/타임아웃,
+  watchdog 자동종료, 의존성 고아 정리 2곳, QA 상태 갱신. 승인 경로는 `done` 에서만 반영하던
+  것을 모든 종결 상태로 확장했다. 커넥션 점유 중인 호출부는 중첩 acquire 를 피해
+  `schedule_goal_link_reconcile()` 로 예약한다.
+- **정합화 서비스/엔드포인트/CLI**: `app/services/goal_link_reconciler.py` +
+  `GET /api/v1/goals/links/audit`, `POST /api/v1/goals/links/reconcile`,
+  `scripts/reconcile_goal_links.py`. **기본 dry-run**, 상한(limit) 있음, **행을 삭제하지 않는다**.
+  분류: stale_status / orphan_no_job / misbound_project / supersedable_retry /
+  unverified_legacy_binding. 마지막 범주(근거 없는 과거 바인딩)는 **보고만** 하고 자동 수리하지 않는다.
+- **재시도 supersession**: 같은 마일스톤 안에서 동일 instruction(해시 일치)의 **이후** 작업이
+  성공했을 때만 과거 실패를 `superseded_by` 로 표시해 완료 판정에서 제외한다. 대체되지 않은
+  실패는 그대로 남아 마일스톤을 blocked 로 유지한다.
+- **진행률**: 진행 중 마일스톤의 완료 링크 비율만큼 부분 점수를 준다(상한 0.99).
+  1.0/completed 는 전 마일스톤 완료로만 도달하므로 조기 자동진행은 생기지 않는다.
+- **마이그레이션** `165_goal_link_binding_provenance.sql`: 컬럼 추가(bind_source, bind_evidence,
+  superseded_by, superseded_at, reconciled_at, updated_at) + 기존 행 `legacy_auto` 백필 + 인덱스.
+  전부 `IF NOT EXISTS`/조건부 UPDATE 로 멱등이며 DROP/DELETE 가 없다.
+- **프로덕션 실측(읽기 전용, 수리 미실행)**: stale_status 55, orphan_no_job 179,
+  misbound_project 0, supersedable_retry 0. 목표별로는 "채팅 시스템 안정화 및 응답 가독성 개선"
+  링크 42건 중 orphan 22 / stale 18. 보고된 오연결은 **동일 프로젝트 내** 흡착이라
+  project 불일치로는 잡히지 않으며, `unverified_legacy_binding` 으로 보고만 한다.
+- **테스트**: `tests/unit/test_goal_link_integrity.py` 신규 50건 + 기존
+  `test_goal_control_loop_static.py` 10건 = 60 passed. 전체 유닛 스위트는
+  1642 passed / 91 failed 로 origin/main 기준선과 동일(회귀 없음).
+- **미실행(의도적)**: 프로덕션 DB 쓰기 없음, 마이그레이션 미적용, 배포/재시작 없음
+  (API bluegreen 배포 큐가 이미 활성). 리뷰 후 적용 순서는 ①마이그레이션 165
+  ②`--audit-only` ③`--apply` dry-run 확인 ④수리 이다.

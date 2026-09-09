@@ -235,6 +235,9 @@ async def _update_pipeline_status(job_id: str, new_status: str) -> None:
                 new_status,
                 job_id,
             )
+        # 종결 상태면 연결된 목표 링크도 함께 정합화한다 (best-effort).
+        from app.services.pipeline_runner_service import _reconcile_job_goal_links
+        await _reconcile_job_goal_links(job_id)
     except Exception as e:
         logger.warning(f"qa_update_pipeline_status error: {e}")
 
