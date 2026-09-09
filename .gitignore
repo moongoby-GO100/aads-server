@@ -70,6 +70,7 @@ playwright/.auth/
 .tmp-*/
 app/data/yeoljeong_finance/contracts.json
 app/data/yeoljeong_finance/.delivery_sync.lock
+app/data/yeoljeong_finance/.bank_auto_collect.lock
 app/data/yeoljeong_finance/delivery_*.json
 app/data/yeoljeong_finance/delivery_auth_challenges/
 app/data/yeoljeong_finance/browser_collection_stage_logs.jsonl
