@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import UploadFile
+from openpyxl import Workbook
 
 
 _SERVICE_PATH = Path(__file__).resolve().parents[2] / "app" / "services" / "yeoljeong_finance_service.py"
@@ -4937,6 +4938,7 @@ STAFF_USER = {"email": "staff@example.com", "is_admin": False}
 
 def _make_bank_account(monkeypatch, tmp_path, **overrides):
     monkeypatch.setenv("YEOLJEONG_FINANCE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(service, "_db_available", lambda: False)
     payload = {
         "business_id": "biz-mia",
         "branch_id": "branch-gangbuk-mia",
@@ -5405,3 +5407,167 @@ def test_import_bank_transaction_csv_maps_korean_bank_headers(tmp_path, monkeypa
     assert {row["direction"] for row in ledger} == {"in", "out"}
     assert sum(row["amount"] for row in ledger if row["direction"] == "in") == 120000
     assert sum(row["amount"] for row in ledger if row["direction"] == "out") == 45000
+
+
+def _bank_upload_payload(account, filename, content_type):
+    return {
+        "business_id": "biz-mia",
+        "branch_id": "branch-gangbuk-mia",
+        "bank_account_id": account["id"],
+        "source": "shinhan_business",
+        "filename": filename,
+        "content_type": content_type,
+    }
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "cp949", "euc-kr"])
+def test_import_bank_transaction_file_decodes_csv_encodings(tmp_path, monkeypatch, encoding):
+    account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+    data = "안내 문구\n거래일자;적요;입금액;출금액\n2026-09-01;카드정산;50000;\n".encode(encoding)
+
+    result = service.import_bank_transaction_file(
+        _bank_upload_payload(account, "statement.csv", "text/csv"), data, ADMIN_USER
+    )
+
+    assert result["format"] == "csv"
+    assert result["parsed_rows"] == 1
+    assert result["imported_rows"] == 1
+
+
+def test_import_bank_transaction_file_reads_korean_xlsx_after_notice_rows(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["신한은행 거래내역 안내"])
+    sheet.append(["조회기간", "2026-09-01 ~ 2026-09-09"])
+    sheet.append(["거래일시", "적요", "입금액", "출금액", "잔액"])
+    sheet.append(["2026-09-02 13:10", "배달정산", 80000, None, 90000])
+    output = BytesIO()
+    workbook.save(output)
+
+    first = service.import_bank_transaction_file(
+        _bank_upload_payload(
+            account, "거래내역.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        output.getvalue(),
+        ADMIN_USER,
+    )
+    second = service.import_bank_transaction_file(
+        _bank_upload_payload(
+            account, "거래내역.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        output.getvalue(),
+        ADMIN_USER,
+    )
+
+    assert first["sheet_count"] == 1
+    assert first["parsed_rows"] == first["imported_rows"] == 1
+    assert second["imported_rows"] == 0
+    assert second["duplicate_rows"] == 1
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "data", "status"),
+    [
+        ("empty.csv", "text/csv", b"", 400),
+        ("broken.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b"not-a-zip", 400),
+        ("statement.pdf", "application/pdf", b"data", 400),
+        ("legacy.xls", "application/vnd.ms-excel", b"data", 400),
+        ("large.csv", "text/csv", b"x" * (10 * 1024 * 1024 + 1), 413),
+    ],
+)
+def test_import_bank_transaction_file_rejects_invalid_files(
+    tmp_path, monkeypatch, filename, content_type, data, status
+):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    with pytest.raises(Exception) as exc:
+        service.import_bank_transaction_file(
+            _bank_upload_payload(account, filename, content_type), data, ADMIN_USER
+        )
+    assert getattr(exc.value, "status_code", None) == status
+
+
+def test_import_bank_transaction_file_rejects_missing_headers_auth_and_scope(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path)
+    payload = _bank_upload_payload(account, "statement.csv", "text/csv")
+    with pytest.raises(Exception) as missing:
+        service.import_bank_transaction_file(payload, "이름,메모\n가게,내용\n".encode(), ADMIN_USER)
+    assert getattr(missing.value, "status_code", None) == 400
+    with pytest.raises(Exception) as forbidden:
+        service.import_bank_transaction_file(payload, "거래일자,입금액\n2026-09-01,1\n".encode(), STAFF_USER)
+    assert getattr(forbidden.value, "status_code", None) == 403
+    payload["branch_id"] = "branch-junghwa"
+    with pytest.raises(Exception) as scope_error:
+        service.import_bank_transaction_file(payload, "거래일자,입금액\n2026-09-01,1\n".encode(), ADMIN_USER)
+    assert getattr(scope_error.value, "status_code", None) == 400
+
+
+def test_bank_file_headers_with_spaces_are_canonicalized_for_parsing(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+
+    result = service.import_bank_transaction_file(
+        _bank_upload_payload(account, "spaced.csv", "text/csv"),
+        "거래 일자,거래 시간,입금 금액,적 요\n2026-09-03,11:20,12345,배민 정산\n".encode(),
+        ADMIN_USER,
+    )
+
+    assert result["imported_rows"] == 1
+    assert result["transactions"][0]["occurred_at"] == "2026-09-03 11:20:00"
+    assert result["transactions"][0]["amount"] == 12345
+
+
+def test_bank_file_deduplication_is_scoped_to_bank_account(tmp_path, monkeypatch):
+    first_account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+    second_account = _make_bank_account(
+        monkeypatch,
+        tmp_path,
+        account_number="110-999-888777",
+        account_alias="미아점 보조계좌",
+        connection_type="csv",
+    )
+    data = "거래일자,적요,입금액\n2026-09-04,카드정산,50000\n".encode()
+
+    first = service.import_bank_transaction_file(
+        _bank_upload_payload(first_account, "first.csv", "text/csv"), data, ADMIN_USER
+    )
+    duplicate = service.import_bank_transaction_file(
+        _bank_upload_payload(first_account, "first-again.csv", "text/csv"), data, ADMIN_USER
+    )
+    second = service.import_bank_transaction_file(
+        _bank_upload_payload(second_account, "second.csv", "text/csv"), data, ADMIN_USER
+    )
+
+    assert first["imported_rows"] == 1
+    assert duplicate["imported_rows"] == 0
+    assert duplicate["duplicate_rows"] == 1
+    assert second["imported_rows"] == 1
+    assert first["transactions"][0]["source_hash"] != second["transactions"][0]["source_hash"]
+
+
+def test_bank_db_value_coercion_matches_operational_column_types():
+    occurred = "2026-09-09 13:20:00"
+
+    assert service._coerce_bank_db_value(occurred, "text") == occurred
+    assert service._coerce_bank_db_value(occurred, "date").isoformat() == "2026-09-09"
+    assert service._coerce_bank_db_value(occurred, "timestamptz").isoformat().startswith("2026-09-09T13:20:00")
+    assert service._coerce_bank_db_value("42", "int8") == 42
+
+
+def test_bank_upload_backfills_db_when_legacy_file_already_has_row(tmp_path, monkeypatch):
+    account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+    payload = _bank_upload_payload(account, "legacy.csv", "text/csv")
+    data = "거래일자,적요,입금액\n2026-09-05,레거시정산,50000\n".encode()
+    legacy = service.import_bank_transaction_file(payload, data, ADMIN_USER)
+    source_hash = legacy["transactions"][0]["source_hash"]
+
+    monkeypatch.setattr(service, "_db_available", lambda: True)
+
+    def fake_run_db(coroutine):
+        coroutine.close()
+        return {source_hash}
+
+    monkeypatch.setattr(service, "_run_db", fake_run_db)
+    backfilled = service.import_bank_transaction_file(payload, data, ADMIN_USER)
+
+    assert backfilled["imported_rows"] == 1
+    assert len(service._read_file_rows("bank_transactions")) == 1

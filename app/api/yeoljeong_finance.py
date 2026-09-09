@@ -6,7 +6,7 @@ import threading
 from functools import partial
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -816,6 +816,42 @@ async def import_bank_transaction_csv(
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     return await run_in_threadpool(svc.import_bank_transaction_csv, payload.model_dump(), current_user)
+
+
+@router.post("/bank-transactions/upload")
+async def upload_bank_transaction_file(
+    business_id: str = Form(...),
+    branch_id: str = Form(""),
+    bank_account_id: str = Form(...),
+    source: str = Form("file-upload"),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    filename = file.filename or "bank-transactions.csv"
+    content_type = file.content_type or ""
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > svc.BANK_STATEMENT_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="은행 파일은 10MB 이하여야 합니다")
+            chunks.append(chunk)
+    finally:
+        await file.close()
+    return await run_in_threadpool(
+        svc.import_bank_transaction_file,
+        {
+            "business_id": business_id,
+            "branch_id": branch_id,
+            "bank_account_id": bank_account_id,
+            "source": source,
+            "filename": filename,
+            "content_type": content_type,
+        },
+        b"".join(chunks),
+        current_user,
+    )
 
 
 @router.get("/bank-summary")

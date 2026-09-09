@@ -12,6 +12,7 @@ import binascii
 import csv
 import fcntl
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -21,13 +22,16 @@ import shutil
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile
+from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
 from app.services.browser_collection_audit import SITE_STAGE_LOG_SCHEMA, append_site_stage_log
 
@@ -2852,12 +2856,9 @@ def _decode_csv(content: bytes) -> str:
 
 
 def _csv_delimiter(text: str) -> str:
-    first_line = next((line for line in text.splitlines() if line.strip()), "")
-    if first_line.count("\t") > first_line.count(","):
-        return "\t"
-    if first_line.count(";") > first_line.count(","):
-        return ";"
-    return ","
+    sample_lines = [line for line in text.splitlines()[:30] if line.strip()]
+    counts = {delimiter: max((line.count(delimiter) for line in sample_lines), default=0) for delimiter in (",", "\t", ";")}
+    return max(counts, key=counts.get)
 
 
 def _first_present(row: dict[str, str], *keys: str) -> str:
@@ -4511,6 +4512,21 @@ BANK_TRANSACTIONS_LEDGER = "bank_transactions"
 BANK_CONNECTION_TYPES = ("open_banking", "csv", "manual", "mock", "browser")
 BANK_ACCOUNT_STATUSES = ("active", "paused", "error", "needs_auth")
 BANK_TRANSACTION_DIRECTIONS = ("in", "out")
+BANK_STATEMENT_MAX_BYTES = 10 * 1024 * 1024
+BANK_STATEMENT_MAX_ROWS = 50_000
+BANK_STATEMENT_MAX_COLUMNS = 100
+BANK_STATEMENT_MAX_EXPANDED_BYTES = 100 * 1024 * 1024
+BANK_STATEMENT_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
+BANK_STATEMENT_MIME_TYPES = {
+    ".csv": {"", "application/octet-stream", "text/csv", "text/plain", "application/csv", "application/vnd.ms-excel"},
+    ".xlsx": {"", "application/octet-stream", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    ".xlsm": {"", "application/octet-stream", "application/vnd.ms-excel.sheet.macroenabled.12"},
+}
+BANK_DATE_HEADERS = {"거래일시", "거래일자", "거래일", "일시", "일자", "날짜", "date", "datetime"}
+BANK_AMOUNT_HEADERS = {
+    "입금액", "입금", "입금금액", "맡기신금액", "받으신금액", "출금액", "출금", "출금금액",
+    "찾으신금액", "지급금액", "거래금액", "금액", "amount", "deposit", "credit", "withdrawal", "debit",
+}
 BANK_CONFIGURED_COLLECTION_TYPES = ("csv", "manual", "mock", "browser")
 BANK_SERVICE_CODE_ALIASES: dict[str, tuple[str, str]] = {
     "shinhan_business": ("088", "신한은행"),
@@ -5101,6 +5117,90 @@ def _bank_transaction_source_hash(record: dict[str, Any]) -> str:
     return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
 
 
+def _coerce_bank_db_value(value: Any, pg_type: str) -> Any:
+    """Coerce a bank-ledger value to the codec expected by the live PostgreSQL column."""
+    if value is None:
+        return None
+    if pg_type in {"text", "varchar", "bpchar"}:
+        return str(value)
+    if value == "":
+        return None if pg_type in {"date", "timestamp", "timestamptz", "uuid"} else value
+    if pg_type == "uuid":
+        return value if isinstance(value, UUID) else UUID(str(value))
+    if pg_type == "date":
+        parsed = _pg_ts(value)
+        return parsed.date() if parsed else None
+    if pg_type in {"timestamp", "timestamptz"}:
+        return _pg_ts(value)
+    if pg_type in {"int2", "int4", "int8"}:
+        return int(value)
+    return value
+
+
+async def _db_insert_bank_transactions(records: list[dict[str, Any]]) -> set[str] | None:
+    """Insert canonical rows into the operational ledger using its installed columns."""
+    if not records:
+        return set()
+    import asyncpg
+
+    table = "yeoljeong_bank_transactions"
+    allowed_values = {
+        "id": lambda row: row.get("id"),
+        "business_id": lambda row: row.get("business_id"),
+        "branch_id": lambda row: row.get("branch_id"),
+        "bank_account_id": lambda row: row.get("bank_account_id"),
+        "occurred_at": lambda row: row.get("occurred_at"),
+        "occurred_date": lambda row: row.get("occurred_at"),
+        "posted_at": lambda row: row.get("posted_at"),
+        "direction": lambda row: row.get("direction"),
+        "amount": lambda row: row.get("amount"),
+        "balance": lambda row: row.get("balance"),
+        "counterparty": lambda row: row.get("counterparty"),
+        "memo": lambda row: row.get("memo"),
+        "raw_memo": lambda row: row.get("raw_memo"),
+        "category": lambda row: row.get("category"),
+        "platform_match": lambda row: row.get("platform_match"),
+        "settlement_match": lambda row: row.get("settlement_match"),
+        "source": lambda row: row.get("source"),
+        "source_hash": lambda row: row.get("source_hash"),
+        "imported_at": lambda row: row.get("imported_at"),
+        "created_at": lambda row: row.get("imported_at"),
+        "updated_at": lambda row: row.get("imported_at"),
+    }
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        column_rows = await conn.fetch(
+            """
+            SELECT column_name, data_type, udt_name
+              FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = $1
+            """,
+            table,
+        )
+        column_types = {str(row["column_name"]): str(row["udt_name"] or row["data_type"] or "") for row in column_rows}
+        required_columns = {"id", "business_id", "bank_account_id", "occurred_at", "direction", "amount", "source_hash"}
+        if not required_columns.issubset(column_types):
+            return None
+        columns = [name for name in allowed_values if name in column_types]
+        placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
+        query = (
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "
+            "ON CONFLICT DO NOTHING RETURNING source_hash"
+        )
+        inserted_hashes: set[str] = set()
+        async with conn.transaction():
+            for record in records:
+                values: list[Any] = []
+                for column in columns:
+                    values.append(_coerce_bank_db_value(allowed_values[column](record), column_types[column]))
+                inserted = await conn.fetchval(query, *values)
+                if inserted:
+                    inserted_hashes.add(str(inserted))
+        return inserted_hashes
+    finally:
+        await conn.close()
+
+
 def _normalize_bank_transaction(
     entry: dict[str, Any],
     *,
@@ -5154,11 +5254,15 @@ def record_bank_transactions(payload: dict[str, Any], user: dict[str, Any]) -> d
     account = _find_bank_account(accounts, bank_account_id)
     if account is None or str(account.get("business_id") or "") != business_id:
         raise HTTPException(status_code=404, detail="등록된 은행계좌를 찾지 못했습니다")
+    if branch_id and not _bank_account_matches_scope(account, business_id, branch_id):
+        raise HTTPException(status_code=400, detail="선택한 은행계좌와 지점 범위가 일치하지 않습니다")
     entries = payload.get("transactions") or payload.get("rows") or []
     if not isinstance(entries, list):
         raise HTTPException(status_code=400, detail="transactions는 배열이어야 합니다")
     existing = _read_file_rows(BANK_TRANSACTIONS_LEDGER)
     existing_hashes = {str(row.get("source_hash") or "") for row in existing}
+    db_enabled = _db_available()
+    candidate_hashes: set[str] = set()
     now = _now()
     imported: list[dict[str, Any]] = []
     duplicate_rows = 0
@@ -5173,13 +5277,23 @@ def record_bank_transactions(payload: dict[str, Any], user: dict[str, Any]) -> d
             source=str(payload.get("source") or "manual"),
             now=now,
         )
-        if record["source_hash"] in existing_hashes:
+        if record["source_hash"] in candidate_hashes or (not db_enabled and record["source_hash"] in existing_hashes):
             duplicate_rows += 1
             continue
-        existing_hashes.add(record["source_hash"])
+        candidate_hashes.add(record["source_hash"])
         imported.append(record)
+    if imported and db_enabled:
+        db_inserted_hashes = _run_db(_db_insert_bank_transactions(imported))
+        if db_inserted_hashes is None:
+            raise HTTPException(status_code=503, detail="은행거래 DB 원장 반영에 실패했습니다")
+        db_duplicate_rows = len(imported) - len(db_inserted_hashes)
+        if db_duplicate_rows:
+            duplicate_rows += db_duplicate_rows
+            imported = [row for row in imported if row["source_hash"] in db_inserted_hashes]
     if imported:
-        _write_secure_file_rows(BANK_TRANSACTIONS_LEDGER, imported + existing)
+        mirror_rows = [row for row in imported if row["source_hash"] not in existing_hashes]
+        if mirror_rows:
+            _write_secure_file_rows(BANK_TRANSACTIONS_LEDGER, mirror_rows + existing)
         for row in accounts:
             if str(row.get("id") or "") == bank_account_id:
                 row["last_synced_at"] = now
@@ -5247,7 +5361,6 @@ def _bank_transaction_from_csv_row(raw: dict[str, str], *, source: str) -> dict[
         or raw.get("counterparty")
         or ""
     )
-    raw_fingerprint = json.dumps({"source": source, "row": raw}, ensure_ascii=False, sort_keys=True)
     return {
         "occurred_at": occurred_at,
         "posted_at": raw.get("기산일") or raw.get("처리일") or "",
@@ -5259,8 +5372,153 @@ def _bank_transaction_from_csv_row(raw: dict[str, str], *, source: str) -> dict[
         "raw_memo": memo or " / ".join(value for value in raw.values() if value),
         "category": raw.get("분류") or raw.get("카테고리") or "",
         "source": source,
-        "source_hash": hashlib.sha256(raw_fingerprint.encode("utf-8")).hexdigest(),
     }
+
+
+def _bank_header_key(value: Any) -> str:
+    return re.sub(r"[\s\n\r\t()\[\]{}_-]+", "", str(value or "").strip()).lower()
+
+
+_BANK_CANONICAL_HEADER_BY_KEY = {
+    _bank_header_key(header): header
+    for header in (
+        *BANK_DATE_HEADERS,
+        *BANK_AMOUNT_HEADERS,
+        "거래시간", "시간", "입출금", "구분", "거래구분", "direction",
+        "적요", "거래내용", "내용", "기재내용", "메모", "memo",
+        "보낸분/받는분", "보낸분", "받는분", "거래처", "상대계좌예금주", "counterparty",
+        "기산일", "처리일", "잔액", "balance", "분류", "카테고리",
+    )
+}
+
+
+def _bank_canonical_header(value: Any) -> str:
+    original = str(value or "").strip()
+    return _BANK_CANONICAL_HEADER_BY_KEY.get(_bank_header_key(original), original)
+
+
+def _bank_header_indexes(row: tuple[Any, ...] | list[Any]) -> tuple[list[str], bool]:
+    headers = [_bank_canonical_header(value) for value in row]
+    keys = {_bank_header_key(value) for value in headers if value not in (None, "")}
+    date_keys = {_bank_header_key(value) for value in BANK_DATE_HEADERS}
+    amount_keys = {_bank_header_key(value) for value in BANK_AMOUNT_HEADERS}
+    return headers, bool(keys & date_keys) and bool(keys & amount_keys)
+
+
+def _bank_rows_from_table(rows: Any, *, source: str) -> list[dict[str, Any]]:
+    header: list[str] | None = None
+    transactions: list[dict[str, Any]] = []
+    for row_number, values in enumerate(rows, start=1):
+        if row_number > BANK_STATEMENT_MAX_ROWS + 1:
+            raise HTTPException(status_code=400, detail=f"은행 파일은 최대 {BANK_STATEMENT_MAX_ROWS:,}행까지 지원합니다")
+        cells = list(values)
+        if len(cells) > BANK_STATEMENT_MAX_COLUMNS:
+            raise HTTPException(status_code=400, detail=f"은행 파일은 최대 {BANK_STATEMENT_MAX_COLUMNS}열까지 지원합니다")
+        if header is None:
+            candidate, valid = _bank_header_indexes(cells)
+            if valid:
+                header = candidate
+            continue
+        raw = {
+            key: str(cells[index] if index < len(cells) and cells[index] is not None else "").strip()
+            for index, key in enumerate(header)
+            if key
+        }
+        if any(raw.values()):
+            transactions.append(_bank_transaction_from_csv_row(raw, source=source))
+    if header is None:
+        raise HTTPException(status_code=400, detail="은행 파일에 거래일과 금액 필수 헤더가 필요합니다")
+    return transactions
+
+
+def _validate_bank_statement_file(filename: Any, content_type: Any, data: bytes) -> tuple[str, str]:
+    safe_name = Path(str(filename or "bank-transactions.csv")).name
+    extension = Path(safe_name).suffix.lower()
+    if extension == ".xls":
+        raise HTTPException(status_code=400, detail=".xls 파일은 .xlsx 또는 CSV로 저장한 뒤 업로드하십시오")
+    if extension not in BANK_STATEMENT_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="은행 파일은 CSV, XLSX, XLSM 형식만 지원합니다")
+    mime = str(content_type or "").split(";", 1)[0].strip().lower()
+    if mime not in BANK_STATEMENT_MIME_TYPES[extension]:
+        raise HTTPException(status_code=400, detail="파일 확장자와 MIME 형식이 일치하지 않습니다")
+    if not data:
+        raise HTTPException(status_code=400, detail="빈 은행 파일은 업로드할 수 없습니다")
+    if len(data) > BANK_STATEMENT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="은행 파일은 10MB 이하여야 합니다")
+    return safe_name, extension
+
+
+def _validate_excel_archive(data: bytes) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            total_size = 0
+            for item in archive.infolist():
+                total_size += item.file_size
+                if total_size > BANK_STATEMENT_MAX_EXPANDED_BYTES:
+                    raise HTTPException(status_code=400, detail="압축 해제 크기가 너무 큰 Excel 파일입니다")
+                if item.file_size > 1_000_000 and item.compress_size > 0 and item.file_size / item.compress_size > 200:
+                    raise HTTPException(status_code=400, detail="비정상 압축률의 Excel 파일입니다")
+    except HTTPException:
+        raise
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise HTTPException(status_code=400, detail="손상되었거나 암호화된 Excel 파일입니다") from exc
+
+
+def import_bank_transaction_file(
+    payload: dict[str, Any], data: bytes, user: dict[str, Any]
+) -> dict[str, Any]:
+    """Parse a bank statement from bytes and persist through the canonical ledger path."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="은행거래 파일 반영 권한이 없습니다")
+    filename, extension = _validate_bank_statement_file(payload.get("filename"), payload.get("content_type"), data)
+    source = str(payload.get("source") or "file-upload").strip() or "file-upload"
+    sheet_count = 1
+    if extension == ".csv":
+        decoded = _decode_csv(data)
+        delimiter = _csv_delimiter(decoded)
+        transactions = _bank_rows_from_table(csv.reader(decoded.splitlines(), delimiter=delimiter), source=source)
+    else:
+        _validate_excel_archive(data)
+        try:
+            workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_vba=False)
+        except (InvalidFileException, OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+            raise HTTPException(status_code=400, detail="손상되었거나 암호화된 Excel 파일입니다") from exc
+        try:
+            sheet_count = len(workbook.worksheets)
+            transactions = []
+            header_error: HTTPException | None = None
+            for sheet in workbook.worksheets:
+                if sheet.max_row > BANK_STATEMENT_MAX_ROWS + 1 or sheet.max_column > BANK_STATEMENT_MAX_COLUMNS:
+                    raise HTTPException(status_code=400, detail="Excel 행 또는 열 상한을 초과했습니다")
+                try:
+                    transactions.extend(_bank_rows_from_table(sheet.iter_rows(values_only=True), source=source))
+                except HTTPException as exc:
+                    if "필수 헤더" not in str(exc.detail):
+                        raise
+                    header_error = exc
+            if not transactions and header_error:
+                raise header_error
+        finally:
+            workbook.close()
+    result = record_bank_transactions(
+        {
+            "business_id": payload.get("business_id") or MIA_BUSINESS_ID,
+            "branch_id": payload.get("branch_id") or "",
+            "bank_account_id": payload.get("bank_account_id") or "",
+            "source": source,
+            "transactions": transactions,
+        },
+        user,
+    )
+    metadata = {
+        "filename": filename,
+        "format": extension.removeprefix("."),
+        "sheet_count": sheet_count,
+        "parsed_rows": len(transactions),
+        "imported_rows": result["import"]["imported_rows"],
+        "duplicate_rows": result["import"]["duplicate_rows"],
+    }
+    return {**result, **metadata, "import": {**result["import"], **metadata, "source": source}}
 
 
 def import_bank_transaction_csv(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:

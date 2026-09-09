@@ -4281,7 +4281,7 @@
               <div class="panel-head"><div><h2 class="panel-title">수기 증빙 등록</h2><p class="muted">주문 프로그램이 없는 매입처를 위한 영수증/거래명세서 OCR 흐름</p></div><button type="button" data-integration-detail="receipt-upload">사진 등록</button></div>
               <div class="panel-body">
                 <div class="integration-action-grid">
-                  <article class="manual-card"><b>은행 엑셀/CSV</b><span>신한·IBK 빠른조회에서 내려받은 거래내역을 붙여넣으면 거래원장에 반영합니다.</span><button type="button" data-open-import="shinhan_business">은행 CSV 반영</button></article>
+                  <article class="manual-card"><b>은행 파일 업로드</b><span>신한·IBK 빠른조회에서 내려받은 CSV/XLSX/XLSM 거래내역을 선택 계좌의 거래원장에 반영합니다.</span><button type="button" data-open-import="shinhan_business">은행 파일 업로드</button></article>
                   <article class="manual-card"><b>카드/PG 리포트</b><span>승인·취소·정산 리포트를 업로드해 입금 대사를 보완합니다.</span><button type="button" data-open-import="card_pg">카드 리포트 반영</button></article>
                 </div>
               </div>
@@ -4580,7 +4580,7 @@
       <div class="panel-body grid">
         <div class="file-row">
           <label>파일
-            <input id="fileInput" type="file" accept=".csv,.json,.html,.htm,.txt,.jpg,.jpeg,.png,.pdf,application/json,text/csv,text/html,text/plain,image/*,application/pdf">
+            <input id="fileInput" type="file" accept=".csv,.xlsx,.xlsm,.json,.html,.htm,.txt,.jpg,.jpeg,.png,.pdf,application/json,text/csv,text/html,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroenabled.12,image/*,application/pdf">
           </label>
           <button id="loadFileBtn" class="primary">불러오기</button>
         </div>
@@ -4657,6 +4657,7 @@
           <textarea id="evidenceMemo" placeholder="예: 7월 식자재 거래명세서, 홈택스 매입 전자세금계산서"></textarea>
         </label>
         <div style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
+          <button id="uploadBankFileBtn" type="button">은행파일 DB 반영</button>
           <button id="uploadEvidenceBtn" class="primary">증빙 서버 등록</button>
         </div>
         <label>CSV/엑셀/배민 화면 표 붙여넣기
@@ -11643,6 +11644,82 @@
       showToast(`${useBankLedger ? "은행 원장" : "은행/카드 거래"} ${records.length}건 반영 / 중복 ${payload.import?.duplicate_rows || 0}건 제외`);
     }
 
+    async function uploadBankFileToServer() {
+      if (!canManageAutomation()) {
+        showToast("총괄 운영관리자 로그인 후 은행 파일을 반영할 수 있습니다.");
+        return;
+      }
+      const service = els.evidenceService?.value || "";
+      if (!bankLedgerServices.has(service)) {
+        showToast("은행 서비스를 선택하십시오.");
+        return;
+      }
+      const bankAccountId = els.bankAccountSelect?.value || "";
+      if (!bankAccountId) {
+        renderBankAccountSelect();
+        showToast("등록 은행계좌를 선택하십시오.");
+        return;
+      }
+      const file = els.fileInput.files[0];
+      if (!file) {
+        showToast("반영할 은행 파일을 선택하십시오.");
+        return;
+      }
+      const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
+      if (![".csv", ".xlsx", ".xlsm"].includes(extension)) {
+        showToast(extension === ".xls" ? ".xls 파일은 .xlsx 또는 CSV로 저장한 뒤 업로드하십시오." : "CSV, XLSX, XLSM 은행 파일만 반영할 수 있습니다.");
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        showToast("은행 파일은 10MB 이하여야 합니다.");
+        return;
+      }
+      const scope = selectedAutomationScope();
+      const formData = new FormData();
+      formData.append("business_id", scope.business_id);
+      formData.append("branch_id", branchIdForName(scope.branch));
+      formData.append("bank_account_id", bankAccountId);
+      formData.append("source", service);
+      formData.append("file", file, file.name);
+      const button = els.uploadBankFileBtn;
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = "은행파일 반영 중...";
+      try {
+        const response = await fetch("/api/v1/yeoljeong-finance/bank-transactions/upload", {
+          method: "POST",
+          headers: apiAuthOnlyHeaders(),
+          body: formData
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || payload.message || `은행파일 반영 ${response.status}`);
+        const records = (payload.transactions || []).map(row => ({
+          id: row.id || uid(),
+          date: String(row.occurred_at || "").slice(0, 10),
+          branch: scope.branch,
+          type: row.direction === "out" ? "expense" : "bank",
+          vendor: row.counterparty || row.memo || "은행거래",
+          channel: "은행원장",
+          amount: Number(row.amount || 0),
+          status: "confirmed",
+          memo: row.memo || row.raw_memo || ""
+        }));
+        if (records.length) {
+          state.entries.push(...records);
+          saveState();
+        }
+        await refreshBankAccounts({ silent: true });
+        renderAll();
+        setView("entries");
+        showToast(`은행 원장 ${payload.imported_rows || 0}건 반영 / 중복 ${payload.duplicate_rows || 0}건 제외`);
+      } catch (err) {
+        showToast(`은행파일 반영 실패: ${err.message}. 파일·계좌 범위를 확인한 뒤 다시 시도하십시오.`);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+
     async function importSettlementCsvToServer() {
       if (!canManageAutomation()) {
         showToast("총괄 운영관리자 로그인 후 서버 자동정리를 실행할 수 있습니다.");
@@ -12807,6 +12884,7 @@
           : "shinhan_business";
         importTransactionCsvToServer(selectedService).catch(err => showToast(err.message));
       });
+      els.uploadBankFileBtn?.addEventListener("click", uploadBankFileToServer);
 
       els.pasteShiftCsvBtn.addEventListener("click", () => {
         const parsed = parseCsv(els.csvText.value).map(shiftFromRecord);
@@ -12825,8 +12903,13 @@
         const lowerName = file.name.toLowerCase();
         const isJson = lowerName.endsWith(".json") || file.type === "application/json";
         const isCsv = lowerName.endsWith(".csv") || file.type === "text/csv";
+        const isBankExcel = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xlsm");
         const isHtml = lowerName.endsWith(".html") || lowerName.endsWith(".htm") || file.type === "text/html";
         const isText = lowerName.endsWith(".txt") || file.type === "text/plain";
+        if (isBankExcel) {
+          showToast("Excel 은행파일을 선택했습니다. 은행 서비스·계좌를 확인한 뒤 ‘은행파일 DB 반영’을 누르십시오.");
+          return;
+        }
         if (!isJson && !isCsv && !isHtml && !isText) {
           const branch = Array.from(selectedBusinessBranchNames())[0] || settings().branches[0]?.name || "";
           state.entries.push({

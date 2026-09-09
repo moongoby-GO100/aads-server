@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import BackgroundTasks, FastAPI, UploadFile
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 
 from app.api import yeoljeong_finance as api
 
@@ -584,6 +585,7 @@ def test_bank_account_and_ledger_http_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
     monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
+    monkeypatch.setattr(api.svc, "_db_available", lambda: False)
     admin = {"email": "owner@example.com", "is_admin": True}
 
     app = FastAPI()
@@ -657,6 +659,124 @@ def test_bank_account_and_ledger_http_flow(tmp_path, monkeypatch):
     )
     assert csv_import.status_code == 200
     assert csv_import.json()["import"]["imported_rows"] == 1
+
+
+def test_bank_transaction_multipart_upload_http_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
+    monkeypatch.setattr(api.svc, "_db_available", lambda: False)
+    admin = {"email": "owner@example.com", "is_admin": True}
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[api.get_current_user] = lambda: admin
+    client = TestClient(app)
+    account = client.post(
+        "/yeoljeong-finance/bank-accounts",
+        json={
+            "business_id": "biz-mia",
+            "branch_id": "branch-gangbuk-mia",
+            "bank_name": "신한은행",
+            "account_number": "110-123-456789",
+            "connection_type": "csv",
+        },
+    ).json()["bank_account"]
+    form = {
+        "business_id": "biz-mia",
+        "branch_id": "branch-gangbuk-mia",
+        "bank_account_id": account["id"],
+        "source": "shinhan_business",
+    }
+    uploaded = client.post(
+        "/yeoljeong-finance/bank-transactions/upload",
+        data=form,
+        files={"file": ("bank.csv", "안내\n거래일자,적요,입금액\n2026-09-09,정산,70000\n".encode(), "text/csv")},
+    )
+    duplicate = client.post(
+        "/yeoljeong-finance/bank-transactions/upload",
+        data=form,
+        files={"file": ("bank.csv", "안내\n거래일자,적요,입금액\n2026-09-09,정산,70000\n".encode(), "text/csv")},
+    )
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["은행 거래내역"])
+    sheet.append(["거래 일자", "거래 시간", "적 요", "출금 금액"])
+    sheet.append(["2026-09-10", "09:30", "식자재", 12000])
+    excel = BytesIO()
+    workbook.save(excel)
+    xlsx_uploaded = client.post(
+        "/yeoljeong-finance/bank-transactions/upload",
+        data=form,
+        files={
+            "file": (
+                "bank.xlsx",
+                excel.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert uploaded.status_code == 200
+    assert uploaded.json()["filename"] == "bank.csv"
+    assert uploaded.json()["parsed_rows"] == uploaded.json()["imported_rows"] == 1
+    assert duplicate.json()["duplicate_rows"] == 1
+    assert xlsx_uploaded.status_code == 200
+    assert xlsx_uploaded.json()["format"] == "xlsx"
+    assert xlsx_uploaded.json()["imported_rows"] == 1
+
+
+def test_bank_transaction_multipart_upload_rejects_auth_extension_and_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
+    monkeypatch.setattr(api.svc, "_db_available", lambda: False)
+    current_user = {"email": "owner@example.com", "is_admin": True}
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[api.get_current_user] = lambda: current_user
+    client = TestClient(app)
+    account = api.svc.create_bank_account(
+        {"business_id": "biz-mia", "branch_id": "branch-gangbuk-mia", "bank_name": "신한은행"},
+        current_user,
+    )
+    form = {"business_id": "biz-mia", "branch_id": "branch-gangbuk-mia", "bank_account_id": account["id"]}
+    bad_extension = client.post(
+        "/yeoljeong-finance/bank-transactions/upload",
+        data=form,
+        files={"file": ("bank.pdf", b"data", "application/pdf")},
+    )
+    too_large = client.post(
+        "/yeoljeong-finance/bank-transactions/upload",
+        data=form,
+        files={"file": ("bank.csv", b"x" * (10 * 1024 * 1024 + 1), "text/csv")},
+    )
+    current_user["is_admin"] = False
+    forbidden = client.post(
+        "/yeoljeong-finance/bank-transactions/upload",
+        data=form,
+        files={"file": ("bank.csv", "거래일자,입금액\n2026-09-09,1\n".encode(), "text/csv")},
+    )
+
+    assert bad_extension.status_code == 400
+    assert too_large.status_code == 413
+    assert forbidden.status_code == 403
+
+
+def test_bank_file_upload_ui_uses_multipart_without_reading_excel_as_text():
+    html_path = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "yeoljeong-finance" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    upload_block = html.split("async function uploadBankFileToServer()", 1)[1].split(
+        "async function importSettlementCsvToServer", 1
+    )[0]
+    load_block = html.split('els.loadFileBtn.addEventListener("click"', 1)[1].split("async function init()", 1)[0]
+
+    assert 'id="uploadBankFileBtn"' in html
+    assert ".xlsx,.xlsm" in html
+    assert 'new FormData()' in upload_block
+    assert 'bank-transactions/upload' in upload_block
+    assert 'button.disabled = true' in upload_block
+    assert '은행파일 반영 실패' in upload_block
+    assert 'state.entries.push' in upload_block
+    excel_branch = load_block.split("if (isBankExcel)", 1)[1].split("if (!isJson", 1)[0]
+    assert "file.text()" not in excel_branch
 
 
 def test_bank_account_rejects_extra_sensitive_field(tmp_path, monkeypatch):
