@@ -13123,3 +13123,20 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 최초 Pipeline Runner 승인 커밋은 detached HEAD에서 실패했다. 변경분을 보존한
   복구 브랜치에서 검증·커밋·푸시하고 API 및 dashboard blue/green 배포를 수행하는
   후속 절차로 전환했다. 실제 release SHA와 운영 검증 결과는 완료 보고에 기록한다.
+
+## 2026-09-09 17:45 KST — 매장비서 은행 CSV/XLSX 원장 업로드 승인
+
+- 매장비서 은행자료 화면에 CSV/XLSX/XLSM 파일 선택, 계좌 범위 지정, 업로드 진행·실패
+  복구 안내를 추가하고 `POST /api/v1/yeoljeong-finance/bank-transactions/upload`로
+  PostgreSQL 정본 원장에 반영하도록 연결했다.
+- CSV UTF-8-SIG/CP949/EUC-KR 및 XLSX/XLSM을 지원하며, 10MB·50,000행·100열 제한,
+  확장자/MIME·압축률·필수 헤더·권한·사업자/지점/계좌 scope 검증을 fail-closed로 적용했다.
+- 거래 중복키는 서버가 `business_id + bank_account_id` 범위를 포함해 재계산한다.
+  동일 계좌 재업로드는 중복 처리하고, 다른 계좌의 동일 거래는 별도 원장 행으로 보존한다.
+- 운영 DB의 text/date/timestamptz 컬럼 타입을 조회해 값 타입을 맞추고, 기본값 없는
+  NOT NULL 컬럼 누락 또는 NULL 바인딩은 저장 전에 차단하도록 보완했다.
+- API·서비스 회귀 테스트는 199건 모두 통과했고 Python compile 및 `git diff --check`도
+  통과했다. 기능 커밋은 `9a813259`과 후속 보완 `1094f6ff`이다.
+- CEO 승인에 따라 clean release SHA로 push 후 `deploy.sh bluegreen`을 실행한다.
+  실제 release SHA, 슬롯/digest, 외부 화면·API 확인과 5분 P0/P1 모니터링 결과는 배포
+  완료 후 본 항목의 후속 기록 및 프로젝트 handover 정본에 남긴다.
