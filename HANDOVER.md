@@ -12815,3 +12815,102 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   `docs/reports/20260909_ohvis_authenticated_trace_ingest_contract.md`.
 - GO100 sender/outbox and permanent credential placement remain deliberately
   out of scope because the active project is AADS.
+
+## 2026-09-09 09:15 KST — Goal Control P0 무결성 복구 (명시적 목표 바인딩 / 종료 상태 재조정 / 진행률 회복)
+
+운영 실측(2026-09-09 08:50 KST)에서 확인된 4개 결함을 **추가/최소 변경**으로 수정했다.
+GoalStateMachine·Goals API·OHVIS harness·배포 큐의 기존 동작은 그대로 보존한다.
+이 작업에서 **운영 DB 쓰기와 배포는 수행하지 않았다** (bluegreen 배포 큐 가동 중).
+
+### 무엇이 잘못돼 있었나 (실측)
+- `_auto_link_job_to_goal` 이 `project` 만 보고 첫 `active` 목표를 골라 붙였다.
+  그 결과 OHVIS trace 수신기 등 무관한 AADS 작업 37건이 목표
+  `1a00d8d3-1126-4a6e-8ed2-8a43f5502250` ("채팅 시스템 안정화 및 응답 가독성 개선")에 묶였다.
+- `pipeline_jobs` 가 종료돼도 링크가 `queued/pending/running` 으로 남았다
+  (예: `runner-a16e637f`, `runner-5744f732`, `runner-b695e29f`).
+- 전체 `goal_task_links` 231행 중 179행은 `pipeline_jobs` 행 자체가 없는 고아였고,
+  43행은 작업이 종료됐는데 링크가 밀린 stale 이었다 (09:12 KST 실측).
+- `goals.progress` 는 0.0 에 고정돼 있었다.
+
+### 변경 요약
+- **신규 `app/services/goal_binding.py`** — 상태 정규화와 목표 바인딩 파싱의 **단일 출처**.
+  `done/approved/deployed → completed`, `error/cancelled/rejected_done/terminated/
+  review_failed/blocked_dependency/timeout → failed`,
+  `review_hold/awaiting_approval → action_required`(재검수로 살아나므로 실패로 굳히지 않는다).
+  `phase` 를 함께 보므로 `status='error', phase='terminated'` 같은 별칭도 놓치지 않는다.
+- **명시적 바인딩** — `POST /pipeline/jobs` 에 선택 필드 `goal_id`/`milestone_id` 추가(기본 빈 문자열),
+  또는 지시서 메타데이터 `GOAL_ID: <uuid>` / `MILESTONE_ID: <uuid>`.
+  근거가 없으면 **어떤 목표에도 붙이지 않는다**. 지정된 목표는 작업과 같은 프로젝트여야 하고
+  `draft/active` 여야 한다 — 아니면 거부한다. 기존 클라이언트는 필드를 안 보내도 그대로 동작한다.
+- **종료 전파 일원화** — `_update_linked_goal_state(job_id, status, phase)` 가 유일한 퍼널이고,
+  `PipelineCJob._save_to_db` 를 거치지 않는 durable write(복구 스윕/폴링 재개/watchdog 자동종료/
+  강제취소/결과수거/`terminate_task`/의존성 cascade/CEO 승인·거부) 뒤에는
+  `_reconcile_job_goal_links(job_id)` 가 저장된 실제 상태를 다시 읽어 반영한다(멱등).
+  `/pipeline/jobs/{id}/notify` 는 이제 `done` 뿐 아니라 **모든** 종료 상태를 반영한다.
+- **재시도 승계** — 같은 `instruction_hash` 로 **나중에 생성돼 성공한** 작업이 있을 때만
+  과거 실패 링크에 `superseded_by` 를 기록해 차단을 푼다. 대체되지 않은 실패는 계속
+  마일스톤을 `blocked` 로 유지한다. 과거 실패를 일괄 `failed` 로 굳히지 않는다.
+- **재조정기 `app/services/goal_link_reconciler.py` + `POST /api/v1/goals/reconcile`** —
+  `dry_run=true` 가 기본이라 아무것도 쓰지 않고 stale/misbound/orphan/legacy_unverified 건수만 보고한다.
+  `dry_run=false` 는 `limit`(기본 200) 범위에서만 복구하고, **행을 삭제하지 않는다**.
+  고아는 `link_state='orphan'` 격리, 교차 프로젝트 오연결만 `link_state='detached'` 회수한다.
+  "프로젝트만 보고 붙은" 레거시 링크는 결정적 근거가 아니므로 **보고만** 하고,
+  운영자가 `detach_legacy=true` 를 명시할 때만 회수한다.
+- **진행률 재계산** — 재조정 후 영향받은 마일스톤/목표에 대해 기존
+  `check_milestone_completion` / `_update_goal_progress` 를 그대로 호출한다.
+  다음 마일스톤·다음 목표 개시 기준은 변경하지 않았다(조기 승격 없음).
+- **migration `166_goal_link_binding_provenance.sql`** — 전부 `IF NOT EXISTS`, 멱등, 삭제 없음.
+  `pipeline_jobs.goal_id/milestone_id`, `goal_task_links.{bind_source,bound_by,link_state,
+  detach_reason,superseded_by,superseded_at,last_job_status,reconciled_at,updated_at}` 추가.
+  기존 행은 `bind_source='legacy_auto_project'` 로만 표시한다(값 변경 없음).
+  마이그레이션 미적용 이미지에서도 죽지 않도록 `link_optional_columns()` 가 컬럼 존재를 1회 확인한다.
+
+### 검증 SQL (before / after)
+```sql
+-- [BEFORE] 종료됐는데 링크가 밀린 행 (09:12 KST 실측: 43행)
+SELECT l.task_id, l.status AS link_status, j.status AS job_status, j.phase
+FROM goal_task_links l JOIN pipeline_jobs j ON j.job_id = l.task_id
+WHERE l.task_type = 'pipeline_job'
+  AND j.status IN ('done','error','cancelled','rejected_done','rejected','approved')
+  AND l.status NOT IN ('completed','failed')
+ORDER BY j.updated_at DESC;
+
+-- [BEFORE] pipeline_jobs 행이 없는 고아 링크 (실측: 179행)
+SELECT count(*) FROM goal_task_links l
+LEFT JOIN pipeline_jobs j ON j.job_id = l.task_id
+WHERE l.task_type = 'pipeline_job' AND j.job_id IS NULL;
+
+-- [BEFORE] 활성 AADS 목표의 진행률
+SELECT id, title, status, progress FROM goals
+WHERE id = '1a00d8d3-1126-4a6e-8ed2-8a43f5502250';
+
+-- [AFTER] 마이그레이션 적용 확인 (멱등 — 두 번 돌려도 같은 결과)
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'goal_task_links'
+  AND column_name IN ('bind_source','link_state','superseded_by','detach_reason')
+ORDER BY column_name;   -- 4행
+
+-- [AFTER] 계보 분포 — 신규 연결은 explicit_* 만 늘어야 한다
+SELECT bind_source, link_state, count(*) FROM goal_task_links GROUP BY 1,2 ORDER BY 3 DESC;
+
+-- [AFTER] dry-run 재조정 뒤 남은 stale 건수 (복구 후 0 이어야 한다)
+SELECT count(*) FROM goal_task_links l JOIN pipeline_jobs j ON j.job_id = l.task_id
+WHERE l.task_type = 'pipeline_job' AND COALESCE(l.link_state,'active') = 'active'
+  AND j.status IN ('done','error','cancelled','rejected_done','rejected','approved')
+  AND l.status NOT IN ('completed','failed','action_required');
+
+-- [AFTER] 승계된 실패는 마일스톤을 막지 않는다
+SELECT task_id, status, superseded_by, superseded_at FROM goal_task_links
+WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
+```
+
+운영 반영 순서(별도 승인 후): ① migration 166 적용 → ② `POST /api/v1/goals/reconcile?project=AADS&dry_run=true`
+로 건수 확인 → ③ 건수 검토 후 `dry_run=false&limit=200` 로 제한 복구 → ④ 위 AFTER 쿼리 재확인.
+
+### 미해결 리스크
+- 레거시 오연결 37건은 **자동 회수하지 않았다**. "프로젝트만 보고 붙었다"는 사실만으로는
+  그 링크가 틀렸다는 결정적 근거가 아니기 때문이다. 운영자가 목록을 보고
+  `detach_legacy=true` 로 승인해야 한다.
+- 승계 판정은 `instruction_hash` 에 의존한다. 지시서를 고쳐서 재시도한 작업은 해시가 달라
+  자동 승계되지 않고 계속 blocked 로 남는다(의도된 보수적 동작).
+- 이 커밋은 배포되지 않았다. 배포·5분 P0/P1 모니터링·브라우저 E2E 는 별도 승인 필요.

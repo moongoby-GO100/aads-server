@@ -3607,6 +3607,13 @@ class ToolExecutor:
                         "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
                         task_id, f" | 강제종료: {reason}",
                     )
+                    # 강제 종료도 durable 종료 write 다 — 목표 링크를 함께 재조정한다.
+                    # (이전에는 terminate 후에도 goal_task_links 가 queued 로 남았다)
+                    try:
+                        from app.services.pipeline_runner_service import _reconcile_job_goal_links
+                        await _reconcile_job_goal_links(task_id)
+                    except Exception as _gerr:  # noqa: BLE001 — 종료 자체를 막지 않는다
+                        logger.warning("terminate_goal_reconcile_failed task=%s: %s", task_id, _gerr)
                     # Note: 원격 프로세스는 Watchdog이 다음 사이클에서 정리
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))

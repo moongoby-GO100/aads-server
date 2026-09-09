@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 import asyncpg
 
 from app.core.project_config import PROJECT_MAP
+from app.services.goal_binding import is_terminal_job_state, parse_goal_binding
 
 logger = logging.getLogger(__name__)
 
@@ -137,37 +138,123 @@ _RESTART_CMD: Dict[str, str] = {
     "AADS":  "bash /root/aads/aads-server/deploy.sh bluegreen",  # Blue-Green 무중단 배포
 }
 
-async def _update_linked_goal_state(job_id: str, status: str = "done") -> None:
-    """Best-effort goal advancement after a linked pipeline job reaches a terminal state."""
+async def _update_linked_goal_state(
+    job_id: str, status: str = "done", phase: Optional[str] = None,
+) -> None:
+    """Best-effort goal advancement after a linked pipeline job reaches a terminal state.
+
+    모든 종료 전이(done / rejected_done / cancelled / error / terminated /
+    review_failed / blocked_dependency …)는 이 함수 **하나로만** 목표 그래프에
+    반영된다. 정규화는 goal_binding.normalize_job_state 가 단독으로 담당한다.
+    """
     try:
         from app.services.goal_manager import goal_state_machine
 
-        await goal_state_machine.update_task_status("pipeline_job", job_id, status)
+        await goal_state_machine.update_task_status("pipeline_job", job_id, status, phase)
     except Exception as exc:
         logger.warning("goal_completion_check_failed job=%s: %s", job_id, exc)
 
 
-async def _auto_link_job_to_goal(job_id: str, project: str) -> None:
-    """Auto-link a new pipeline job to the project's active goal's in-progress milestone."""
+async def _reconcile_job_goal_links(job_id: str) -> None:
+    """DB 에 직접 종료 상태를 쓴 경로에서, 저장된 실제 상태로 목표 링크를 재조정한다.
+
+    복구 스윕 / watchdog 자동종료 / 폴링 재개 / 강제취소처럼 PipelineCJob._save_to_db
+    를 거치지 않는 durable write 뒤에 호출한다. 상태를 다시 읽어오므로 호출이
+    중복돼도 결과가 같다(멱등). 실패해도 러너 흐름을 막지 않는다.
+    """
+    try:
+        from app.core.db_pool import get_pool
+
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT status, phase FROM pipeline_jobs WHERE job_id = $1", job_id,
+            )
+        if not row:
+            return
+        if not is_terminal_job_state(row["status"], row["phase"]):
+            return
+        await _update_linked_goal_state(job_id, row["status"], row["phase"])
+    except Exception as exc:  # noqa: BLE001 — 재조정 실패는 비치명적
+        logger.warning("goal_link_reconcile_failed job=%s: %s", job_id, exc)
+
+
+async def _auto_link_job_to_goal(
+    job_id: str,
+    project: str,
+    instruction: Optional[str] = None,
+    goal_id: Optional[str] = None,
+    milestone_id: Optional[str] = None,
+) -> Optional[str]:
+    """작업을 **명시적으로 지정된** 목표에만 연결한다.
+
+    이전 구현은 `project` 의 첫 active 목표를 골라 붙였다. 그래서 OHVIS trace
+    수신기처럼 목표와 무관한 AADS 작업까지 "채팅 시스템 안정화" 목표에 묶여
+    마일스톤 판정이 오염됐다. 이제는 다음 근거가 있을 때만 연결한다:
+
+      1) 호출자가 넘긴 goal_id/milestone_id (제출 API 필드, pipeline_jobs 에 보존)
+      2) 지시서 메타데이터 `GOAL_ID: <uuid>` / `MILESTONE_ID: <uuid>`
+
+    근거가 없으면 **아무 목표에도 붙이지 않고** None 을 돌려준다(하위호환: 기존
+    호출부는 반환값을 쓰지 않으며 예외도 나지 않는다). 지정된 목표는 작업과 같은
+    프로젝트여야 하고 draft/active 상태여야 한다 — 아니면 거부하고 연결하지 않는다.
+    """
+    binding = parse_goal_binding(instruction, goal_id=goal_id, milestone_id=milestone_id)
+    if not binding.is_explicit:
+        logger.debug("goal_link_skipped_no_explicit_context job=%s project=%s", job_id, project)
+        return None
     try:
         from app.services.goal_manager import goal_state_machine
+
         pool = await goal_state_machine._pool()
         async with pool.acquire() as conn:
             goal = await conn.fetchrow(
-                "SELECT id FROM goals WHERE project = $1 AND status = 'active' ORDER BY created_at LIMIT 1",
-                project,
+                "SELECT id, project, status FROM goals WHERE id = $1::uuid", binding.goal_id,
             )
             if not goal:
-                return
+                logger.warning("goal_link_rejected_not_found job=%s goal=%s", job_id, binding.goal_id)
+                return None
+            if goal["project"] != project:
+                logger.warning(
+                    "goal_link_rejected_cross_project job=%s goal=%s goal_project=%s job_project=%s",
+                    job_id, binding.goal_id, goal["project"], project,
+                )
+                return None
+            if goal["status"] not in ("draft", "active"):
+                logger.warning(
+                    "goal_link_rejected_inactive job=%s goal=%s status=%s",
+                    job_id, binding.goal_id, goal["status"],
+                )
+                return None
+            resolved_milestone = binding.milestone_id
+            if resolved_milestone:
+                owns = await conn.fetchval(
+                    "SELECT 1 FROM milestones WHERE id = $1::uuid AND goal_id = $2::uuid",
+                    resolved_milestone, binding.goal_id,
+                )
+                if not owns:
+                    logger.warning(
+                        "goal_link_milestone_mismatch job=%s goal=%s milestone=%s",
+                        job_id, binding.goal_id, resolved_milestone,
+                    )
+                    resolved_milestone = None
+
         await goal_state_machine.link_task(
-            goal_id=str(goal["id"]),
-            milestone_id=None,
+            goal_id=binding.goal_id,
+            milestone_id=resolved_milestone,
             task_type="pipeline_job",
             task_id=job_id,
+            bind_source=binding.source,
+            bound_by=f"pipeline_job:{job_id}",
         )
-        logger.info("goal_auto_linked: job=%s goal=%s project=%s", job_id, goal["id"], project)
+        logger.info(
+            "goal_linked_explicit: job=%s goal=%s milestone=%s source=%s project=%s",
+            job_id, binding.goal_id, resolved_milestone, binding.source, project,
+        )
+        return binding.goal_id
     except Exception as exc:
-        logger.warning("goal_auto_link_failed job=%s: %s", job_id, exc)
+        logger.warning("goal_link_failed job=%s: %s", job_id, exc)
+        return None
 
 
 # 활성 작업 저장 (메모리)
@@ -538,7 +625,9 @@ class PipelineCJob:
 
             # Goal auto-link: 프로젝트 활성 목표의 진행중 마일스톤에 자동 연결
             try:
-                await _auto_link_job_to_goal(self.job_id, self.project)
+                await _auto_link_job_to_goal(
+                    self.job_id, self.project, instruction=self.instruction,
+                )
             except Exception:
                 pass
 
@@ -2020,7 +2109,7 @@ class PipelineCJob:
                 except Exception:
                     pass
             if self.status in _TERMINAL_JOB_STATUSES:
-                await _update_linked_goal_state(self.job_id, self.status)
+                await _update_linked_goal_state(self.job_id, self.status, self.phase)
         except Exception as e:
             logger.error(f"pipeline_c_save_db_error job={self.job_id}: {e}")
 
@@ -2318,6 +2407,7 @@ async def cancel_pipeline(job_id: str) -> dict:
                 "WHERE job_id=$1",
                 job_id,
             )
+            await _reconcile_job_goal_links(job_id)
             return {
                 "status": "cancelled",
                 "job_id": job_id,
@@ -2412,6 +2502,9 @@ async def recover_interrupted_jobs():
             )
             if orphan_count and orphan_count != "UPDATE 0":
                 logger.info(f"pipeline_c_recovery: orphan pipeline_jobs cleaned: {orphan_count}")
+                # 고아 정리도 durable 종료 write 다 — 목표 링크를 같이 재조정한다.
+                for orow in orphan_rows:
+                    await _reconcile_job_goal_links(orow["job_id"])
                 # 채팅방에 중단 알림 전송 (같은 세션에 최근 1시간 내 동일 중단 메시지 있으면 중복 방지)
                 for orow in orphan_rows:
                     sid = orow.get("chat_session_id")
@@ -2515,6 +2608,7 @@ async def recover_interrupted_jobs():
                             _djob_id, _status,
                             f" | 서버재시작후 결과수거: exit={_exit_code_str} output={len(_result_text)}자",
                         )
+                        await _reconcile_job_goal_links(_djob_id)
 
                         # 채팅방에 결과 보고
                         if _dsid:
@@ -2574,6 +2668,7 @@ async def recover_interrupted_jobs():
                                 """,
                                 _djob_id,
                             )
+                            await _reconcile_job_goal_links(_djob_id)
                             logger.warning(f"pipeline_c_recovery: detached job {_djob_id} timed out ({_age:.0f}s)")
                         else:
                             # 아직 실행 중일 수 있음 — 폴링 재개
@@ -2595,6 +2690,7 @@ async def recover_interrupted_jobs():
                         """,
                         _djob_id, f" | 복구 실패: {str(_derr)[:200]}",
                     )
+                    await _reconcile_job_goal_links(_djob_id)
 
             # ── Phase 0b: 장기 방치 awaiting_approval → 채팅 AI 재트리거 (텔레그램 제거) ──
             stale_approval_rows = await conn.fetch(
@@ -2790,6 +2886,7 @@ async def recover_interrupted_jobs():
                     job_id,
                     f" | 재시작 복구: {summary}",
                 )
+                await _reconcile_job_goal_links(job_id)
 
                 # 채팅방에 복구 완료 메시지
                 chat_sid = row["chat_session_id"]
@@ -2873,6 +2970,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
                     "UPDATE pipeline_jobs SET status=$2, phase=$2, review_feedback=COALESCE(review_feedback,'')||$3, updated_at=now() WHERE job_id=$1",
                     job_id, _st, f" | 폴링재개후 완료: exit={_exit_str}",
                 )
+                await _reconcile_job_goal_links(job_id)
                 if chat_session_id:
                     _emoji = "✅" if _ok else "⚠️"
                     await conn.execute(
@@ -2910,6 +3008,7 @@ async def _resume_detached_polling(job_id: str, project: str, chat_session_id: s
                 "UPDATE pipeline_jobs SET status='error', phase='error', review_feedback=COALESCE(review_feedback,'')||' | 폴링재개후 타임아웃', updated_at=now() WHERE job_id=$1",
                 job_id,
             )
+        await _reconcile_job_goal_links(job_id)
     except Exception:
         pass
     logger.warning(f"pipeline_c_resume_polling: job={job_id} timed out")
@@ -3015,6 +3114,7 @@ async def _check_stalled_jobs():
                             "WHERE job_id=$1",
                             job.job_id, f" | watchdog 자동종료: {stall_minutes}분 스톨"
                         )
+                    await _reconcile_job_goal_links(job.job_id)
                     job.status = "error"
                     job.phase = "error"
                     _active_jobs.pop(job.job_id, None)
@@ -3125,6 +3225,8 @@ async def _collect_orphan_results():
                     if not _claimed_row:
                         logger.info("watchdog_orphan_duplicate_skipped: job=%s", _jid)
                         continue
+                    # 결과 수거를 claim 한 슬롯만 목표 링크를 재조정한다 (중복 반영 방지).
+                    await _reconcile_job_goal_links(_jid)
 
                     _sid = _claimed_row.get("chat_session_id") or row.get("chat_session_id")
                     if _sid:

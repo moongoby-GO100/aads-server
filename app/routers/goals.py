@@ -45,6 +45,9 @@ class TaskStatusRequest(BaseModel):
     task_type: str
     task_id: str
     status: str
+    # phase 는 선택 — terminated/review_failed/blocked_dependency 같은 별칭을
+    # status 와 함께 넘기면 정규화가 실패 상태를 놓치지 않는다 (하위호환).
+    phase: Optional[str] = None
 
 
 @router.get("/goals")
@@ -149,6 +152,33 @@ async def update_task_status(req: TaskStatusRequest):
         task_type=req.task_type,
         task_id=req.task_id,
         status=req.status,
+        phase=req.phase,
+    )
+
+
+@router.post("/goals/reconcile")
+async def reconcile_goal_links(
+    project: Optional[str] = Query(None, description="프로젝트 코드 (미지정 시 전체)"),
+    dry_run: bool = Query(True, description="true(기본)면 계획만 반환하고 DB 를 쓰지 않는다"),
+    limit: int = Query(200, ge=1, le=2000, description="한 번에 수정할 최대 링크 수"),
+    detach_legacy: bool = Query(
+        False,
+        description="프로젝트만 보고 붙은 레거시 링크까지 회수 — 운영자가 명시할 때만",
+    ),
+):
+    """goal_task_links 를 pipeline_jobs 기준으로 재조정한다.
+
+    stale / misbound / orphan / legacy_unverified 건수를 보고하고,
+    dry_run=false 일 때만 limit 범위 안에서 복구한다. 행을 삭제하지 않으며,
+    같은 입력으로 다시 돌리면 repaired=0 이다(멱등).
+    """
+    from app.services.goal_link_reconciler import reconcile
+
+    return await reconcile(
+        project,
+        dry_run=dry_run,
+        limit=limit,
+        detach_legacy=detach_legacy,
     )
 
 
