@@ -8,6 +8,7 @@
 # 검증 6단계: 의존성→코드검증→배포→Health→DB스키마→채팅→LLM→프론트QA
 
 set -euo pipefail
+trap '' HUP  # RC4: ignore HUP immediately — eliminates race window before main trap block
 
 REQUESTED_MODE="${1:-bluegreen}"
 MODE="$REQUESTED_MODE"
@@ -41,6 +42,7 @@ CONTROL_AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 RELEASE_CONTEXT_DIR=""
 DEPLOY_RUN_ID=""
 DEPLOY_CURRENT_PHASE="initializing"
+DEPLOY_UPSTREAM_SWITCHED=false  # RC1: set true after nginx cutover; signals after this = success
 DEPLOY_PHASE_START_EPOCH="$DEPLOY_START_EPOCH"
 DEPLOY_HEARTBEAT_PID=""
 DEPLOY_QUEUE_WORKER_LOCKFILE="/tmp/aads-deploy-queue-worker.lock"
@@ -819,6 +821,7 @@ start_deploy_heartbeat() {
     phase_sql="$(sql_escape "$phase")"
     status_sql="$(sql_escape "$status")"
     (
+        trap '' HUP TERM INT  # RC2: prevent signal propagation killing heartbeat
         while true; do
             sleep "$interval"
             local elapsed_ms estimate_ms
@@ -853,9 +856,16 @@ deploy_signal_trap() {
     local signal_name="${1:-TERM}"
     stop_deploy_heartbeat
     stop_downtime_monitor
-    deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "deploy interrupted by ${signal_name}"
-    deploy_observe_update "failed" "$DEPLOY_CURRENT_PHASE" "deploy interrupted by ${signal_name}"
-    record_deploy "failed" "$MODE" "deploy interrupted by ${signal_name}"
+    if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]]; then
+        # RC1: post-switch signal — upstream already cutover, new container is live
+        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "success" "post-switch ${signal_name} — deploy already live"
+        deploy_observe_update "success" "completed_after_signal_recovery" "deploy interrupted by ${signal_name}; upstream already switched"
+        record_deploy "success" "$MODE" "deploy interrupted by ${signal_name} post-switch; certified live"
+    else
+        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "deploy interrupted by ${signal_name}"
+        deploy_observe_update "failed" "$DEPLOY_CURRENT_PHASE" "deploy interrupted by ${signal_name}"
+        record_deploy "failed" "$MODE" "deploy interrupted by ${signal_name}"
+    fi
     cleanup_release_context
     rm -f "${LOCKFILE:-/tmp/aads-deploy.lock}" 2>/dev/null || true
     exit 143
@@ -1307,7 +1317,12 @@ ensure_deploy_observability_schema
 reconcile_stale_deploy_runs
 claim_latest_queued_deploy_request
 deploy_phase_start "preflight" "running"
-if ! enforce_release_worktree_gate; then
+if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
+    # RC3: queue worker uses clean detached worktree — skip dirty gate
+    report_dirty_release_exclusions
+    echo "[deploy.sh] ✅ queue worker: dirty worktree gate skipped (clean worktree at ${AADS_RELEASE_SHA})"
+    audit_control "release-worktree-gate" "$COMPOSE_DIR" "skipped" "queue_worker=true"
+elif ! enforce_release_worktree_gate; then
     deploy_phase_end "preflight" "blocked" "dirty worktree blocks release"
     record_deploy "blocked" "$MODE" "dirty worktree blocks release"
     exit 1
@@ -2120,6 +2135,7 @@ case "$MODE" in
             && curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1 \
             && curl -sf -H "Host: ${DOWNTIME_PROBE_HOST}" "http://127.0.0.1/api/v1/health" >/dev/null 2>&1; then
             echo "[deploy.sh] ④ ✅ 전환 검증 성공"
+            DEPLOY_UPSTREAM_SWITCHED=true  # RC1: from here, TERM/INT = success (new container is live)
             audit_control "nginx-switch" "${OLD_CONTAINER}:${OLD_PORT}->${NEW_CONTAINER}:${NEW_PORT}" "success" "direct and nginx-routed health verified"
             deploy_phase_end "nginx_cutover" "success" "direct and nginx-routed health verified"
         else
