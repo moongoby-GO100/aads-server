@@ -3000,10 +3000,10 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             _deploy_redirect = "/root/aads/aads-server/deploy.sh bluegreen"
         if _deploy_redirect:
             logger.warning(
-                "aads_control_audit actor=ceo_chat action=redirected target=deploy.sh original_prefix=%s",
+                "aads_control_audit actor=ceo_chat action=queue_dispatch original_prefix=%s",
                 " ".join(cmd_tokens[:4])[:120],
             )
-            command = _deploy_redirect
+            command = "bash /root/aads/aads-server/scripts/start_aads_deploy_queue_worker.sh bluegreen"
 
         workdir = get_workdir("AADS") or "/root"
         full_cmd = f"cd {shlex.quote(workdir)} && {command}"

@@ -1027,7 +1027,7 @@ deploy_error_trap() {
 trap 'deploy_error_trap "$LINENO" "$BASH_COMMAND"' ERR
 trap 'deploy_signal_trap TERM' TERM
 trap 'deploy_signal_trap INT' INT
-trap 'deploy_signal_trap HUP' HUP
+trap '' HUP
 
 get_active_port() {
     local port=""
