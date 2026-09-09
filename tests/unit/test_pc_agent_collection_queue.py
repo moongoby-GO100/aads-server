@@ -1,6 +1,198 @@
+import asyncio
 import importlib
 import json
 from datetime import datetime, timedelta, timezone
+
+import pytest
+
+
+def test_async_queue_api_uses_db_inside_running_event_loop(tmp_path, monkeypatch):
+    queue_path = tmp_path / "queue.json"
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+    calls: list[str] = []
+
+    async def fake_enqueue(item):
+        calls.append("enqueue")
+        return item
+
+    async def fake_claim_next_db(*, agent_id, now_value):
+        calls.append(f"claim:{agent_id}")
+        return {"id": "claimed", "status": "running"}
+
+    async def fake_complete_db(**kwargs):
+        calls.append(f"complete:{kwargs['status']}")
+        return {"id": kwargs["item_id"], "status": kwargs["status"]}
+
+    async def fake_snapshot_db(*, limit):
+        calls.append(f"snapshot:{limit}")
+        return [{"id": "db-row"}]
+
+    monkeypatch.setattr(queue_module, "_enqueue_db", fake_enqueue)
+    monkeypatch.setattr(queue_module, "_claim_next_db", fake_claim_next_db)
+    monkeypatch.setattr(queue_module, "_complete_db", fake_complete_db)
+    monkeypatch.setattr(queue_module, "_snapshot_db", fake_snapshot_db)
+
+    async def scenario():
+        queued = await queue_module.enqueue_collection_item_async({"service": "baemin"})
+        claimed = await queue_module.claim_next_collection_item_async(agent_id="agent-1")
+        completed = await queue_module.complete_collection_item_async(
+            claimed["id"], status="succeeded"
+        )
+        snapshot = await queue_module.queue_snapshot_async(25)
+        return queued, claimed, completed, snapshot
+
+    queued, claimed, completed, snapshot = asyncio.run(scenario())
+
+    assert queued["service"] == "baemin"
+    assert claimed["status"] == "running"
+    assert completed["status"] == "succeeded"
+    assert snapshot == [{"id": "db-row"}]
+    assert calls == ["enqueue", "claim:agent-1", "complete:succeeded", "snapshot:25"]
+    assert not queue_path.exists()
+
+
+def test_sync_db_api_fails_closed_inside_running_event_loop(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match=r"use the \*_async queue API"):
+            queue_module.queue_snapshot()
+
+    asyncio.run(scenario())
+
+
+def test_async_db_error_does_not_fall_back_to_json(tmp_path, monkeypatch):
+    queue_path = tmp_path / "queue.json"
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+
+    async def fail_snapshot(*, limit):
+        raise ConnectionError("database unavailable")
+
+    monkeypatch.setattr(queue_module, "_snapshot_db", fail_snapshot)
+
+    with pytest.raises(ConnectionError, match="database unavailable"):
+        asyncio.run(queue_module.queue_snapshot_async())
+    assert not queue_path.exists()
+
+
+@pytest.mark.parametrize("contents", ["{not-json", '{"unexpected": "object"}'])
+def test_db_reconciliation_fails_closed_for_invalid_json_queue(
+    tmp_path, monkeypatch, contents
+):
+    queue_path = tmp_path / "queue.json"
+    queue_path.write_text(contents, encoding="utf-8")
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+
+    with pytest.raises(RuntimeError, match="Cannot reconcile"):
+        asyncio.run(queue_module.reconcile_json_queue_to_db())
+
+
+def test_json_to_db_reconciliation_is_idempotent_and_removes_secrets(tmp_path, monkeypatch):
+    queue_path = tmp_path / "queue.json"
+    monkeypatch.setenv("AADS_PC_AGENT_COLLECTION_QUEUE_PATH", str(queue_path))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
+
+    import app.services.pc_agent_collection_queue as queue_module
+
+    queue_module = importlib.reload(queue_module)
+    source = queue_module.normalize_queue_item(
+        {
+            "id": "7dc5272e-95dd-4a5c-9681-21b4fbbe2181",
+            "queue_type": "bank",
+            "service": "ibk_business",
+            "business_id": "biz-junghwa",
+            "work_key": "ibk-junghwa",
+            "status": "action_required",
+            "created_at": "2026-09-09T09:00:00+09:00",
+            "updated_at": "2026-09-09T10:00:00+09:00",
+            "payload": {
+                "bank_account_id": "account-1",
+                "login_password": "must-not-migrate",
+                "nested": {"access_token": "must-not-migrate", "safe": "kept"},
+            },
+            "result": {"approved_input": "must-not-migrate", "count": 3},
+        }
+    )
+    queue_path.write_text(json.dumps([source], ensure_ascii=False), encoding="utf-8")
+
+    stored: dict[str, tuple] = {}
+
+    class FakeTransaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def transaction(self):
+            return FakeTransaction()
+
+        async def execute(self, query):
+            assert "pg_advisory_xact_lock" in query
+
+        async def fetchrow(self, query, *args):
+            job_key = args[2]
+            if job_key in stored:
+                return None
+            stored[job_key] = args
+            return {"id": args[0]}
+
+    class FakeAcquire:
+        async def __aenter__(self):
+            return FakeConnection()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakePool:
+        def acquire(self):
+            return FakeAcquire()
+
+    async def fake_ensure_pool():
+        return FakePool()
+
+    monkeypatch.setattr(queue_module, "_ensure_pool", fake_ensure_pool)
+
+    first = asyncio.run(queue_module.reconcile_json_queue_to_db())
+    second = asyncio.run(queue_module.reconcile_json_queue_to_db())
+
+    assert first == {
+        "db_enabled": True,
+        "json_rows": 1,
+        "imported": 1,
+        "skipped": 0,
+        "secrets_removed": 3,
+    }
+    assert second["imported"] == 0
+    assert second["skipped"] == 1
+    stored_args = next(iter(stored.values()))
+    assert str(stored_args[0]) == source["id"]
+    assert stored_args[26] == source["created_at"]
+    assert stored_args[27] == source["updated_at"]
+    migrated_payload = json.loads(stored_args[19])
+    migrated_result = json.loads(stored_args[20])
+    assert migrated_payload == {"bank_account_id": "account-1", "nested": {"safe": "kept"}}
+    assert migrated_result == {"count": 3}
 
 
 def test_global_queue_latest_only_supersedes_same_resource(tmp_path, monkeypatch):

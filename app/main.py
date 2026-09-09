@@ -1892,7 +1892,10 @@ async def lifespan(app: FastAPI):
         async def _run_pc_agent_global_collection_queue(reason: str = "pc_agent_global_queue_drain"):
             try:
                 from app.services.pc_agent_manager import pc_agent_manager
-                from app.services.pc_agent_collection_queue import FINANCIAL_RESOURCE_KEY, queue_snapshot
+                from app.services.pc_agent_collection_queue import (
+                    FINANCIAL_RESOURCE_KEY,
+                    queue_snapshot_async,
+                )
                 import asyncio
                 import json
                 import subprocess
@@ -1911,7 +1914,7 @@ async def lifespan(app: FastAPI):
                 due_financial_agent_id = ""
                 try:
                     now_kst = datetime.now(KST)
-                    for item in queue_snapshot(100):
+                    for item in await queue_snapshot_async(100):
                         if str(item.get("status") or "") != "queued":
                             continue
                         if not str(item.get("resource_key") or "").startswith(f"{FINANCIAL_RESOURCE_KEY}|"):

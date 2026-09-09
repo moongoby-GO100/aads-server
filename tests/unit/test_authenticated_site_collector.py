@@ -94,7 +94,7 @@ async def test_create_and_resume_collector_job_preserves_work_key(collector_modu
         },
     )
     job = created["job"]
-    blocked = collector.mark_collection_job_action_required(
+    blocked = await collector.mark_collection_job_action_required(
         job_id=job["id"],
         challenge_kind="otp",
         page_url="https://studio.example/login",
@@ -102,7 +102,7 @@ async def test_create_and_resume_collector_job_preserves_work_key(collector_modu
         evidence=["인증번호"],
         approval_scope={"origin": "https://studio.example", "otp": "do-not-store"},
     )
-    resumed = collector.resume_collection_job(
+    resumed = await collector.resume_collection_job(
         job_id=job["id"],
         resolution="user_input_completed",
         note="OTP entered by user in the live browser",
@@ -126,7 +126,7 @@ async def test_create_and_resume_collector_job_preserves_work_key(collector_modu
     assert resumed["job"]["challenge"]["resolved_by_user"] is True
     assert resumed["job"]["challenge"]["physical_input_completed"] is True
     assert resumed["job"]["challenge"]["auto_bypass_allowed"] is False
-    assert collector.list_jobs(project_key="SF")["count"] == 1
+    assert (await collector.list_jobs(project_key="SF"))["count"] == 1
 
 
 def test_collector_recipe_dry_run_maps_webview2_to_pc_agent(collector_modules):
@@ -293,7 +293,7 @@ async def test_challenge_deny_policy_blocks_resume_automation(collector_modules)
             "recipe_id": "kis.secure.collect",
         },
     )
-    result = collector.mark_collection_job_action_required(
+    result = await collector.mark_collection_job_action_required(
         job_id=created["job"]["id"],
         challenge_kind="captcha",
         page_url="https://securities.example/login",
@@ -331,19 +331,19 @@ async def test_user_approved_automation_requires_responsibility_acceptance(colle
             "recipe_id": "meta.business.collect",
         },
     )
-    blocked = collector.mark_collection_job_action_required(
+    blocked = await collector.mark_collection_job_action_required(
         job_id=created["job"]["id"],
         challenge_kind="captcha",
         page_url="https://business.facebook.com/login",
     )
 
     with pytest.raises(ValueError, match="collector_responsibility_acceptance_required"):
-        collector.resume_collection_job(
+        await collector.resume_collection_job(
             job_id=created["job"]["id"],
             resolution="user_approved_automation",
         )
 
-    resumed = collector.resume_collection_job(
+    resumed = await collector.resume_collection_job(
         job_id=created["job"]["id"],
         resolution="user_approved_automation",
         note="User approved responsible same-session automation",
@@ -387,26 +387,26 @@ async def test_otp_challenge_rejects_user_approved_automation_and_requires_physi
             "recipe_id": "shinhan.easyview.collect",
         },
     )
-    blocked = collector.mark_collection_job_action_required(
+    blocked = await collector.mark_collection_job_action_required(
         job_id=created["job"]["id"],
         challenge_kind="otp",
         page_url="https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
     )
 
     with pytest.raises(ValueError, match="collector_user_approved_automation_not_allowed_for_challenge"):
-        collector.resume_collection_job(
+        await collector.resume_collection_job(
             job_id=created["job"]["id"],
             resolution="user_approved_automation",
             responsibility_accepted=True,
         )
 
     with pytest.raises(ValueError, match="collector_physical_input_completion_required"):
-        collector.resume_collection_job(
+        await collector.resume_collection_job(
             job_id=created["job"]["id"],
             resolution="user_input_completed",
         )
 
-    resumed = collector.resume_collection_job(
+    resumed = await collector.resume_collection_job(
         job_id=created["job"]["id"],
         resolution="user_input_completed",
         note="OTP entered directly by user",

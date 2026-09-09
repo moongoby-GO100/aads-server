@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,20 @@ FINANCIAL_QUEUE_PROJECTS = {"BANKING"}
 FINANCIAL_QUEUE_TYPES = {"bank", "financial"}
 FINANCIAL_RESOURCE_KEY = "financial_exclusive"
 _RESOURCE_KEY_SAFE_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
+_SENSITIVE_KEY_MARKERS = (
+    "password",
+    "passwd",
+    "passcode",
+    "secret",
+    "token",
+    "credential",
+    "approved_input",
+    "otp",
+    "captcha",
+    "resident_registration",
+)
+logger = logging.getLogger(__name__)
+_DB_RECONCILED = False
 
 
 def _now() -> datetime:
@@ -192,14 +207,22 @@ def normalize_queue_item(item: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _read_json_queue() -> list[dict[str, Any]]:
+def _read_json_queue(*, strict: bool = False) -> list[dict[str, Any]]:
     if not QUEUE_PATH.exists():
         return []
     try:
         parsed = json.loads(QUEUE_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if strict:
+            raise RuntimeError(
+                f"Cannot reconcile malformed legacy queue file: {QUEUE_PATH}"
+            ) from exc
         return []
     if not isinstance(parsed, list):
+        if strict:
+            raise RuntimeError(
+                f"Cannot reconcile legacy queue file with non-list root: {QUEUE_PATH}"
+            )
         return []
     return [normalize_queue_item(item) for item in parsed if isinstance(item, dict)]
 
@@ -215,7 +238,158 @@ def _db_enabled() -> bool:
     return bool(os.getenv("DATABASE_URL") or os.getenv("YEOLJEONG_FINANCE_DATABASE_URL"))
 
 
+def _sanitize_migration_value(value: Any) -> tuple[Any, int]:
+    """Remove credential-like values before legacy JSON rows enter PostgreSQL."""
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        removed = 0
+        for key, nested in value.items():
+            normalized_key = str(key).strip().lower().replace("-", "_")
+            if any(marker in normalized_key for marker in _SENSITIVE_KEY_MARKERS):
+                removed += 1
+                continue
+            cleaned_value, nested_removed = _sanitize_migration_value(nested)
+            cleaned[str(key)] = cleaned_value
+            removed += nested_removed
+        return cleaned, removed
+    if isinstance(value, list):
+        cleaned_list = []
+        removed = 0
+        for nested in value:
+            cleaned_value, nested_removed = _sanitize_migration_value(nested)
+            cleaned_list.append(cleaned_value)
+            removed += nested_removed
+        return cleaned_list, removed
+    return value, 0
+
+
+async def reconcile_json_queue_to_db() -> dict[str, Any]:
+    """Idempotently import legacy JSON queue rows without copying secrets.
+
+    PostgreSQL remains authoritative: an existing job_key is never overwritten and
+    an active row for the same resource prevents importing a second active job.
+    """
+    if not _db_enabled():
+        return {"db_enabled": False, "json_rows": 0, "imported": 0, "skipped": 0, "secrets_removed": 0}
+
+    rows = _read_json_queue(strict=True)
+    if not rows:
+        return {"db_enabled": True, "json_rows": 0, "imported": 0, "skipped": 0, "secrets_removed": 0}
+
+    pool = await _ensure_pool()
+    imported = 0
+    skipped = 0
+    secrets_removed = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('pc_agent_collection_queue_json_reconcile'))"
+            )
+            for source in rows:
+                sanitized_payload, payload_removed = _sanitize_migration_value(source.get("payload") or {})
+                sanitized_result, result_removed = _sanitize_migration_value(source.get("result") or {})
+                secrets_removed += payload_removed + result_removed
+                item = normalize_queue_item(
+                    {**source, "payload": sanitized_payload, "result": sanitized_result}
+                )
+                try:
+                    item_uuid = uuid.UUID(item["id"])
+                    tenant_uuid = uuid.UUID(item["tenant_id"]) if item.get("tenant_id") else None
+                except (TypeError, ValueError, AttributeError):
+                    skipped += 1
+                    logger.error("pc_agent_queue_reconcile_invalid_uuid item_id=%s", item.get("id"))
+                    continue
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO pc_agent_collection_queue (
+                        id, tenant_id, job_key, queue_type, site_key, service,
+                        business_id, branch, work_key, resource_key, runtime,
+                        priority, min_interval_seconds, latest_only, status,
+                        next_run_at, lease_agent_id, attempt_count, max_attempts,
+                        payload, result, error_code, message, created_by,
+                        started_at, finished_at, created_at, updated_at
+                    )
+                    SELECT
+                        $1, $2, $3, $4, $5, $6,
+                        $7, $8, $9, $10, $11,
+                        $12, $13, $14, $15,
+                        $16::timestamptz, $17, $18, $19,
+                        $20::jsonb, $21::jsonb, $22, $23, $24,
+                        NULLIF($25, '')::timestamptz, NULLIF($26, '')::timestamptz,
+                        $27::timestamptz, $28::timestamptz
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                          FROM pc_agent_collection_queue active
+                         WHERE active.resource_key = $10
+                           AND active.job_key <> $3
+                           AND active.status IN ('queued', 'running', 'action_required')
+                           AND $15 IN ('queued', 'running', 'action_required')
+                    )
+                    ON CONFLICT (job_key) DO NOTHING
+                    RETURNING id
+                    """,
+                    item_uuid,
+                    tenant_uuid,
+                    item["job_key"],
+                    item["queue_type"],
+                    item["site_key"],
+                    item["service"],
+                    item["business_id"],
+                    item["branch"],
+                    item["work_key"],
+                    item["resource_key"],
+                    item["runtime"],
+                    item["priority"],
+                    item["min_interval_seconds"],
+                    item["latest_only"],
+                    item["status"],
+                    item["next_run_at"],
+                    item["lease_agent_id"],
+                    item["attempt_count"],
+                    item["max_attempts"],
+                    json.dumps(item["payload"], ensure_ascii=False),
+                    json.dumps(item["result"], ensure_ascii=False),
+                    item["error_code"],
+                    item["message"],
+                    item["created_by"],
+                    item["started_at"],
+                    item["finished_at"],
+                    item["created_at"],
+                    item["updated_at"],
+                )
+                if row:
+                    imported += 1
+                else:
+                    skipped += 1
+    logger.info(
+        "pc_agent_queue_reconciled json_rows=%d imported=%d skipped=%d secrets_removed=%d",
+        len(rows),
+        imported,
+        skipped,
+        secrets_removed,
+    )
+    return {
+        "db_enabled": True,
+        "json_rows": len(rows),
+        "imported": imported,
+        "skipped": skipped,
+        "secrets_removed": secrets_removed,
+    }
+
+
+async def ensure_queue_storage_ready() -> dict[str, Any]:
+    global _DB_RECONCILED
+    if not _db_enabled():
+        return {"db_enabled": False, "json_rows": 0, "imported": 0, "skipped": 0, "secrets_removed": 0}
+    if _DB_RECONCILED:
+        return {"db_enabled": True, "already_reconciled": True}
+    result = await reconcile_json_queue_to_db()
+    _DB_RECONCILED = True
+    return result
+
+
 async def _enqueue_db(item: dict[str, Any]) -> dict[str, Any]:
+    await ensure_queue_storage_ready()
     pool = await _ensure_pool()
 
     tenant_uuid = uuid.UUID(item["tenant_id"]) if item.get("tenant_id") else None
@@ -340,14 +514,11 @@ def _run_db(coro: Any) -> Any | None:
         close = getattr(coro, "close", None)
         if callable(close):
             close()
-        return None
-    try:
-        return asyncio.run(coro)
-    except Exception:
-        close = getattr(coro, "close", None)
-        if callable(close):
-            close()
-        return None
+        raise RuntimeError(
+            "PostgreSQL queue operation called through synchronous API inside an active event loop; "
+            "use the *_async queue API"
+        )
+    return asyncio.run(coro)
 
 
 def enqueue_collection_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -397,8 +568,24 @@ def enqueue_collection_item(item: dict[str, Any]) -> dict[str, Any]:
     return item_out
 
 
+async def enqueue_collection_item_async(item: dict[str, Any]) -> dict[str, Any]:
+    if _db_enabled():
+        return await _enqueue_db(normalize_queue_item(item))
+    return enqueue_collection_item(item)
+
+
 def enqueue_collection_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     queued = [enqueue_collection_item(item) for item in items]
+    return {
+        "queued": True,
+        "count": len(queued),
+        "items": queued,
+        "job_ids": [item.get("id") for item in queued],
+    }
+
+
+async def enqueue_collection_items_async(items: list[dict[str, Any]]) -> dict[str, Any]:
+    queued = [await enqueue_collection_item_async(item) for item in items]
     return {
         "queued": True,
         "count": len(queued),
@@ -502,7 +689,17 @@ def claim_next_collection_item(*, agent_id: str = "", now: datetime | None = Non
     return item
 
 
+async def claim_next_collection_item_async(
+    *, agent_id: str = "", now: datetime | None = None
+) -> dict[str, Any] | None:
+    now_value = now or _now()
+    if _db_enabled():
+        return await _claim_next_db(agent_id=agent_id, now_value=now_value)
+    return claim_next_collection_item(agent_id=agent_id, now=now_value)
+
+
 async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any] | None:
+    await ensure_queue_storage_ready()
     pool = await _ensure_pool()
 
     async with pool.acquire() as conn:
@@ -634,6 +831,35 @@ def complete_collection_item(
     return item
 
 
+async def complete_collection_item_async(
+    item_id: str,
+    *,
+    status: str,
+    result: dict[str, Any] | None = None,
+    error_code: str = "",
+    message: str = "",
+    next_run_at: str = "",
+) -> dict[str, Any] | None:
+    final_status = status if status in TERMINAL_STATUSES | {"action_required", "queued"} else "failed"
+    if _db_enabled():
+        return await _complete_db(
+            item_id=item_id,
+            status=final_status,
+            result=result or {},
+            error_code=error_code,
+            message=message,
+            next_run_at=next_run_at,
+        )
+    return complete_collection_item(
+        item_id,
+        status=final_status,
+        result=result,
+        error_code=error_code,
+        message=message,
+        next_run_at=next_run_at,
+    )
+
+
 async def _complete_db(
     *,
     item_id: str,
@@ -643,6 +869,7 @@ async def _complete_db(
     message: str,
     next_run_at: str,
 ) -> dict[str, Any] | None:
+    await ensure_queue_storage_ready()
     pool = await _ensure_pool()
 
     async with pool.acquire() as conn:
@@ -678,7 +905,14 @@ def queue_snapshot(limit: int = 50) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
+async def queue_snapshot_async(limit: int = 50) -> list[dict[str, Any]]:
+    if _db_enabled():
+        return await _snapshot_db(limit=limit)
+    return queue_snapshot(limit=limit)
+
+
 async def _snapshot_db(*, limit: int) -> list[dict[str, Any]]:
+    await ensure_queue_storage_ready()
     pool = await _ensure_pool()
 
     async with pool.acquire() as conn:

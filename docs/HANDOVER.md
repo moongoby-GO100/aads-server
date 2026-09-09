@@ -1,5 +1,8 @@
 # AADS HANDOVER
-최종 업데이트: 2026-09-08
+최종 업데이트: 2026-09-09
+
+## 2026-09-09
+- AADS-FOOD-PC-AGENT-QUEUE-DB-CANONICAL-P0-20260909: FOOD PC Agent 전역 수집 큐가 PostgreSQL 설정 상태에서도 실행 중 asyncio loop에서는 동기 `_run_db()`가 `None`을 반환해 JSON 파일로 조용히 분기되고, 운영 DB `pc_agent_collection_queue`는 비어 있던 결함을 수정했다. 큐 서비스에 enqueue/claim/complete/snapshot 비동기 API를 추가하고 FastAPI lifespan 및 authenticated-site-collector API 경로를 전환했다. PostgreSQL 설정 상태의 동기 API 이벤트루프 호출과 DB 오류는 JSON으로 폴백하지 않고 명시적으로 실패한다. 기존 JSON 큐는 ID·상태·시각·결과를 보존하되 비밀번호·토큰·인증정보·승인 입력값 등 민감 키를 제거한 뒤 PostgreSQL에 멱등 이관하며, 동일 job_key 또는 동일 resource의 다른 active DB 작업은 덮어쓰거나 중복 생성하지 않는다. 11:11 KST 사전 실측은 JSON 19건, 민감 키 25개(`approved_input` 19개, 로그인/계좌 secret 상태 키 각 3개), DB 0건이었다. 검증: 운영 이미지 기반 일회성 컨테이너에서 `tests/unit/test_pc_agent_collection_queue.py`, `tests/unit/test_authenticated_site_collector.py`, `tests/unit/test_yeoljeong_auto_collect.py` 합계 77 passed. 커밋·푸시·blue/green 배포·실 DB 이관·5분 모니터링 결과는 릴리스 완료 후 이 항목에 보강한다.
 
 ## 2026-09-08
 - AADS-UNIFIED-DEPLOY-HISTORY-CARD-P0-20260908: 채팅 배포 카드에서 `deploy_runs.id`와 대기/진행/지연/완료/실패 상태를 즉시 구분하도록 API에 최근 terminal 배포 이력(`recent_deployments`)과 프로젝트 최신 `id`를 추가했다. Dashboard는 `배포 #ID`, 한글 상태, 시작/종료/경과시간, 변경 파일·요약을 표시하고 AADS/FOOD/GO100/KIS/SF/NTV2/NAS 7개 프로젝트 슬롯을 고정 노출한다. 운영 DB 실측에서 `deploy_runs` 196건은 모두 AADS였고 `pipeline_jobs.deployed_at`은 전 프로젝트 0건이므로, 타 프로젝트 runner 완료를 실제 배포 완료로 오인하지 않도록 분리했다. 통합 수집 설계는 `docs/reports/20260908_unified_deploy_history_visibility_prd.md`에 기록했다. 검증: backend unit 12 passed, Dashboard production build 성공, 대상 ESLint 0 errors(기존 warning 3건). 커밋/푸시/blue-green 배포와 운영 화면 캡처 결과는 릴리스 완료 후 보강한다.

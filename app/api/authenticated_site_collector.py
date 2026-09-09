@@ -221,7 +221,7 @@ async def api_list_collector_jobs(
     limit: int = Query(default=50, ge=1, le=200),
     context: TenantContext = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return list_jobs(project_key=project_key, status=status, limit=limit)
+    return await list_jobs(project_key=project_key, status=status, limit=limit)
 
 
 @router.post("/jobs")
@@ -245,7 +245,7 @@ async def api_mark_collector_challenge_action_required(
     body: CollectorChallengeIn,
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
-    result = mark_collection_job_action_required(
+    result = await mark_collection_job_action_required(
         job_id=job_id,
         challenge_kind=body.challenge_kind,
         page_url=body.page_url,
@@ -265,7 +265,7 @@ async def api_resume_collector_job(
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
     try:
-        result = resume_collection_job(
+        result = await resume_collection_job(
             job_id=job_id,
             resolution=body.resolution,
             note=body.note,

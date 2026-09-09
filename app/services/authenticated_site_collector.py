@@ -727,7 +727,7 @@ async def _upsert_db_profile(*, tenant_id: str, user_id: str, profile: dict[str,
 async def collector_overview(*, tenant_id: str) -> dict[str, Any]:
     profile_result = await list_site_profiles(tenant_id=tenant_id)
     sites = profile_result["sites"]
-    jobs = list_jobs(project_key=None, status=None, limit=200)["jobs"]
+    jobs = (await list_jobs(project_key=None, status=None, limit=200))["jobs"]
     status_counts: dict[str, int] = {}
     for job in jobs:
         status = str(job.get("status") or "unknown")
@@ -801,13 +801,14 @@ def _job_out(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _find_job(job_id: str) -> dict[str, Any] | None:
-    return next((row for row in queue_module.queue_snapshot(limit=200) if str(row.get("id")) == str(job_id)), None)
+async def _find_job(job_id: str) -> dict[str, Any] | None:
+    rows = await queue_module.queue_snapshot_async(limit=200)
+    return next((row for row in rows if str(row.get("id")) == str(job_id)), None)
 
 
-def list_jobs(*, project_key: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
+async def list_jobs(*, project_key: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
     project = _normalize_project_key(project_key) if project_key else None
-    rows = queue_module.queue_snapshot(limit=max(1, min(int(limit), 200)))
+    rows = await queue_module.queue_snapshot_async(limit=max(1, min(int(limit), 200)))
     jobs = []
     for row in rows:
         if row.get("queue_type") != "browser_recipe":
@@ -834,7 +835,7 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
     work_key = normalize_work_key(raw_work_key or f"{project_key.lower()}-{site_key}")
     runtime_contract = collector_runtime_contract_for_profile(profile)
     execution_runtime = runtime_contract["execution_runtime"]
-    item = queue_module.enqueue_collection_item(
+    item = await queue_module.enqueue_collection_item_async(
         {
             "tenant_id": tenant_id,
             "queue_type": "browser_recipe",
@@ -881,7 +882,7 @@ async def create_collection_job(*, tenant_id: str, user_id: str, payload: dict[s
     return {"status": "created", "job": _job_out(item)}
 
 
-def mark_collection_job_action_required(
+async def mark_collection_job_action_required(
     *,
     job_id: str,
     challenge_kind: str,
@@ -890,14 +891,14 @@ def mark_collection_job_action_required(
     evidence: list[str] | None = None,
     approval_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    existing = _find_job(job_id)
+    existing = await _find_job(job_id)
     if not existing:
         return None
     kind = _normalize_enum(challenge_kind, CHALLENGE_KINDS, "captcha")
     payload = _json_dict(existing.get("payload"))
     policy = _normalize_challenge_policy(payload.get("challenge_policy"))
     if policy["mode"] == "deny":
-        item = queue_module.complete_collection_item(
+        item = await queue_module.complete_collection_item_async(
             job_id,
             status="failed",
             result={
@@ -929,7 +930,7 @@ def mark_collection_job_action_required(
         "allowed_resolutions": policy["allowed_resolutions"],
         **_challenge_resolution_contract(kind, policy),
     }
-    item = queue_module.complete_collection_item(
+    item = await queue_module.complete_collection_item_async(
         job_id,
         status="action_required",
         result={"challenge_gate": gate},
@@ -946,7 +947,7 @@ def mark_collection_job_action_required(
     return {"status": "action_required", "same_work_key": True, "job": _job_out(item)}
 
 
-def resume_collection_job(
+async def resume_collection_job(
     *,
     job_id: str,
     resolution: str,
@@ -954,7 +955,7 @@ def resume_collection_job(
     responsibility_accepted: bool = False,
     physical_input_completed: bool = False,
 ) -> dict[str, Any] | None:
-    existing = _find_job(job_id)
+    existing = await _find_job(job_id)
     if not existing:
         return None
     if existing.get("status") != "action_required":
@@ -972,7 +973,7 @@ def resume_collection_job(
         raise ValueError("collector_physical_input_completion_required")
 
     resumed_by_user = normalized_resolution != "user_approved_automation"
-    item = queue_module.complete_collection_item(
+    item = await queue_module.complete_collection_item_async(
         job_id,
         status="queued",
         result=mask_sensitive_value(
