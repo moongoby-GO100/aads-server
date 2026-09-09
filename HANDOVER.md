@@ -13167,3 +13167,11 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - JSON 이관의 nullable datetime은 asyncpg에 datetime 객체로 직접 바인딩한다.
 - 공개 함수·클래스 및 파일 삭제는 없으며, 커밋·푸시·blue/green 배포·운영 DB 이관과
   5분 P0/P1 관측 결과는 실제 완료 후 보강한다.
+
+## 2026-09-09 22:50 KST — FOOD PC Agent 큐 드레인 exit=1 핫픽스 (chat 4ff0cc14)
+- 증상: `pc_agent_global_collection_queue_done ... exit=1` 3분마다 반복. stderr `RuntimeError: Event loop is closed` → `asyncpg InterfaceError: another operation is in progress` (`queue_snapshot` → `_run_db` → `_snapshot_db`).
+- 원인: `app/services/pc_agent_collection_queue.py::_run_db`가 호출마다 `asyncio.run()`으로 새 루프를 만들지만 `app.core.db_pool`의 전역 asyncpg 풀은 첫 루프에 묶여 캐시됨. 두 번째 동기 호출부터 닫힌 루프의 풀을 재사용 → 실패. 0b477650(큐 DB canonical 전환) 이후 발생.
+- 수정: `_run_db`가 코루틴 실행 후 같은 루프 안에서 `close_pool()`을 호출해 풀을 해제(다음 호출은 새 풀 생성). 회귀 테스트 `test_sync_db_api_releases_pool_between_asyncio_run_calls`.
+- 대안 설계(미채택, 보존): 전용 `_SYNC_LOOP` + `_ensure_sync_pool` 방식. `git stash@{0}`(deploy-autostash-20260909-224340) 및 `/root/aads/_parked/test_pc_agent_collection_queue_sync_loop.py.20260909-2250`에 보존. 해당 테스트 파일은 구현이 없어 suite를 깨므로 트리에서 제거.
+- 반영: 호스트 커밋 + 컨테이너(aads-server, aads-server-green) `docker cp` 핫패치 후 `--drain-global-queue` 수동 실행 exit=0 확인. 다음 이미지 빌드에 포함 필요.
+- 별도 관찰: PC Agent 62405e70-e98 1006 끊김 알림은 16:02:51 KST 이벤트(uptime 3217.5s)가 22:30:37 KST에 지연 전달된 것. 에이전트는 22:30:40 재연결 후 정상.
