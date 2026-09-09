@@ -54,6 +54,7 @@ QUALITY_FLOOR = 0.4
 INGEST_SCHEMA_VERSION = "1.0"
 MAX_INGEST_PAYLOAD_BYTES = 65_536
 MAX_INGEST_TOOL_CALLS = 50
+TRACE_KEY_LIMIT = 200
 
 _SENSITIVE_METADATA_KEY = re.compile(
     r"(?i)(authorization|cookie|password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token)"
@@ -132,6 +133,15 @@ def loads_json(value: Any) -> dict[str, Any]:
 
 def ingest_token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def external_trace_key(project: str, external_trace_id: str) -> str:
+    """Build one bounded key for locking, lookup, and storage."""
+    raw_key = f"external:{project}:{external_trace_id}"
+    if len(raw_key) <= TRACE_KEY_LIMIT:
+        return raw_key
+    digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    return f"external:{project}:sha256:{digest}"
 
 
 def redact_ingest_value(value: Any, *, depth: int = 0) -> Any:
@@ -240,10 +250,10 @@ async def ingest_external_trace(payload: dict[str, Any], *, client_id: str) -> d
     validate_ingest_payload_size(payload)
     project = str(payload["project"])
     external_trace_id = str(payload["external_trace_id"])
-    trace_key = f"external:{project}:{external_trace_id}"
+    trace_key = external_trace_key(project, external_trace_id)
     async with get_pool().acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", trace_key)
+        async with conn.transaction(isolation="read_committed"):
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", trace_key)
             existing = await conn.fetchrow(
                 f"SELECT id::text AS id, created_at FROM {TRACE_TABLE} WHERE trace_key = $1",
                 trace_key,
@@ -282,6 +292,7 @@ async def ingest_external_trace(payload: dict[str, Any], *, client_id: str) -> d
                 trace_key=trace_key,
                 tool_calls=redact_ingest_value(payload.get("tool_calls") or []),
                 conn=conn,
+                strict=True,
             )
             if not trace_id:
                 raise RuntimeError("trace_store_unavailable")
@@ -455,6 +466,7 @@ async def record_trace(
     trace_key: Optional[str] = None,
     tool_calls: Optional[list[Any]] = None,
     conn: Any = None,
+    strict: bool = False,
 ) -> Optional[str]:
     """trace 1건을 기록하고 trace id를 돌려준다. 실패/skip이면 None (예외 없음).
 
@@ -472,7 +484,7 @@ async def record_trace(
                 return None
             trace_id = await target.fetchval(
                 _INSERT_TRACE_SQL,
-                (str(trace_key)[:200] if trace_key else None),
+                (str(trace_key)[:TRACE_KEY_LIMIT] if trace_key else None),
                 str(graph_run_id)[:200],
                 (project or None),
                 _as_uuid_text(session_id),
@@ -494,9 +506,11 @@ async def record_trace(
                 None,
             )
             if trace_id and tool_calls:
-                await record_tool_calls(target, str(trace_id), tool_calls)
+                await record_tool_calls(target, str(trace_id), tool_calls, strict=strict)
             return str(trace_id) if trace_id else None
     except Exception as exc:  # noqa: BLE001 — trace는 절대 호출부를 깨뜨리지 않는다
+        if strict:
+            raise
         logger.warning("llmops trace insert failed (non-fatal): %s", str(exc)[:200])
         return None
 
@@ -523,7 +537,13 @@ def normalize_tool_call(call: Any, index: int = 0) -> dict[str, Any]:
     }
 
 
-async def record_tool_calls(conn: Any, trace_id: str, tool_calls: list[Any]) -> int:
+async def record_tool_calls(
+    conn: Any,
+    trace_id: str,
+    tool_calls: list[Any],
+    *,
+    strict: bool = False,
+) -> int:
     """trace에 딸린 tool call들을 기록한다. 실패해도 예외를 올리지 않는다."""
     if not await relation_exists(conn, TOOL_CALL_TABLE):
         return 0
@@ -553,6 +573,8 @@ async def record_tool_calls(conn: Any, trace_id: str, tool_calls: list[Any]) -> 
             )
             inserted += 1
         except Exception as exc:  # noqa: BLE001
+            if strict:
+                raise
             logger.warning("llmops tool_call insert failed (non-fatal): %s", str(exc)[:200])
     return inserted
 

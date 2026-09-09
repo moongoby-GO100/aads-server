@@ -14,6 +14,7 @@ POST /api/v1/ohvis/llmops/feedback             — trace 피드백 기록
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -23,6 +24,7 @@ from app.auth import require_internal_admin
 from app.services import llmops_evaluator, llmops_store
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class DatasetFromTraceRequest(BaseModel):
@@ -129,22 +131,51 @@ def _bearer_token(authorization: Optional[str]) -> str:
     return token
 
 
-@router.post("/ohvis/llmops/trace-ingest", tags=["ohvis-llmops-ingest"])
-async def llmops_trace_ingest(
-    req: TraceIngestRequest,
+async def require_trace_ingest_client(
     authorization: Optional[str] = Header(None),
-):
-    client = await llmops_store.authenticate_ingest_client(_bearer_token(authorization))
+) -> dict[str, str]:
+    """Authenticate the sender before FastAPI validates the request body."""
+    token = _bearer_token(authorization)
+    try:
+        client = await llmops_store.authenticate_ingest_client(token)
+    except Exception as exc:
+        logger.warning("trace ingest authentication unavailable: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="trace ingest authentication temporarily unavailable",
+            headers={"Retry-After": "1"},
+        ) from exc
     if client is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid trace ingest credential",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    return client
+
+
+@router.post("/ohvis/llmops/trace-ingest", tags=["ohvis-llmops-ingest"])
+async def llmops_trace_ingest(
+    req: TraceIngestRequest,
+    client: dict[str, str] = Depends(require_trace_ingest_client),
+):
     if client["project"] != req.project:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="credential project scope mismatch")
-    result = await llmops_store.ingest_external_trace(req.model_dump(mode="json"), client_id=client["client_id"])
-    await llmops_store.mark_ingest_client_used(client["client_id"])
+    try:
+        result = await llmops_store.ingest_external_trace(
+            req.model_dump(mode="json"), client_id=client["client_id"]
+        )
+    except Exception as exc:
+        logger.warning("trace ingest store unavailable: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="trace ingest temporarily unavailable",
+            headers={"Retry-After": "1"},
+        ) from exc
+    try:
+        await llmops_store.mark_ingest_client_used(client["client_id"])
+    except Exception as exc:
+        logger.warning("trace ingest client usage stamp failed: %s", type(exc).__name__)
     return result
 
 

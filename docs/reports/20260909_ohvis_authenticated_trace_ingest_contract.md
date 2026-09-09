@@ -1,6 +1,6 @@
 # OHVIS authenticated trace-ingest contract v1.0
 
-Status: AADS receiver implementation complete; GO100 sender connection pending.
+Status: AADS receiver hardened and ready for release; GO100 sender connection pending.
 
 ## Endpoint
 
@@ -10,6 +10,11 @@ The endpoint is exempted from the user JWT middleware by exact path only and
 performs its own mandatory service credential verification. Use
 `Authorization: Bearer <one-time-provisioned-ingest-token>` and
 `Content-Type: application/json`.
+
+Authentication runs before request-body validation. A request without a valid
+service credential therefore returns `401` even when its JSON body is missing
+or malformed; unauthenticated callers cannot use validation responses to probe
+the ingest schema.
 
 ## Request v1.0
 
@@ -31,10 +36,18 @@ The successful response contains `accepted`, `deduplicated`,
 `external_trace_id`, central `trace_id`, `project`, `schema_version`, and
 `ingested_at`. A replay uses the deterministic key
 `external:{project}:{external_trace_id}`, returns the same central trace ID,
-and does not insert duplicate tool calls.
+and does not insert duplicate tool calls. Short composite keys remain readable;
+keys over 200 characters use a deterministic SHA-256 suffix. Locking, lookup,
+and storage use that same bounded key while `external_trace_id` retains the
+complete original identifier.
+
+The trace row and all child tool-call rows are written inside one transaction.
+External ingest uses strict writes: a child-write failure aborts and rolls back
+the complete request instead of committing a partial trace.
 
 Errors: missing/invalid credential `401`, credential/project mismatch `403`,
-unsupported schema or malformed/oversized input `422`.
+unsupported schema or malformed/oversized input `422`, and temporary auth/store
+failure `503` with `Retry-After`. Internal exception details are not returned.
 
 ## Credential lifecycle
 

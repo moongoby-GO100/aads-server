@@ -4,7 +4,8 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.api import ohvis_llmops
@@ -29,7 +30,7 @@ class FakeConn:
         self.trace = None
         self.executed = []
 
-    def transaction(self):
+    def transaction(self, **_kwargs):
         return AsyncContext()
 
     async def execute(self, query, *args):
@@ -108,7 +109,7 @@ def test_authentication_is_hashed_and_scoped(monkeypatch):
 
 def test_missing_and_invalid_auth_are_401(monkeypatch):
     with pytest.raises(HTTPException) as missing:
-        asyncio.run(ohvis_llmops.llmops_trace_ingest(payload(), authorization=None))
+        asyncio.run(ohvis_llmops.require_trace_ingest_client(authorization=None))
     assert missing.value.status_code == 401
 
     async def no_client(_token):
@@ -116,18 +117,116 @@ def test_missing_and_invalid_auth_are_401(monkeypatch):
 
     monkeypatch.setattr(llmops_store, "authenticate_ingest_client", no_client)
     with pytest.raises(HTTPException) as invalid:
-        asyncio.run(ohvis_llmops.llmops_trace_ingest(payload(), authorization="Bearer wrong"))
+        asyncio.run(ohvis_llmops.require_trace_ingest_client(authorization="Bearer wrong"))
     assert invalid.value.status_code == 401
+
+
+def test_auth_store_failure_is_sanitized_503(monkeypatch):
+    async def unavailable(_token):
+        raise RuntimeError("database detail must not leak")
+
+    monkeypatch.setattr(llmops_store, "authenticate_ingest_client", unavailable)
+    with pytest.raises(HTTPException) as failed:
+        asyncio.run(
+            ohvis_llmops.require_trace_ingest_client(
+                authorization="Bearer syntactically-valid-token"
+            )
+        )
+
+    assert failed.value.status_code == 503
+    assert "database detail" not in str(failed.value.detail)
+
+
+def test_missing_auth_precedes_body_validation():
+    app = FastAPI()
+    app.include_router(ohvis_llmops.router, prefix="/api/v1")
+
+    async def reject_missing_auth():
+        raise HTTPException(status_code=401, detail="trace ingest credential required")
+
+    app.dependency_overrides[ohvis_llmops.require_trace_ingest_client] = reject_missing_auth
+    response = TestClient(app).post("/api/v1/ohvis/llmops/trace-ingest", json={})
+
+    assert response.status_code == 401
 
 
 def test_scope_mismatch_is_403(monkeypatch):
     async def wrong_scope(_token):
         return {"client_id": "sf-client", "project": "SF"}
 
-    monkeypatch.setattr(llmops_store, "authenticate_ingest_client", wrong_scope)
     with pytest.raises(HTTPException) as mismatch:
-        asyncio.run(ohvis_llmops.llmops_trace_ingest(payload(), authorization="Bearer token"))
+        asyncio.run(
+            ohvis_llmops.llmops_trace_ingest(
+                payload(), client=asyncio.run(wrong_scope("token"))
+            )
+        )
     assert mismatch.value.status_code == 403
+
+
+def test_long_external_ids_use_distinct_bounded_idempotency_keys(monkeypatch):
+    conn = FakeConn()
+    pool = FakePool(conn)
+    import app.core.db_pool as db_pool
+    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
+    calls = []
+
+    async def record_trace(**kwargs):
+        calls.append(kwargs)
+        conn.trace = {"id": kwargs["external_trace_id"], "created_at": "2026-09-09T00:00:00Z"}
+        return kwargs["external_trace_id"]
+
+    monkeypatch.setattr(llmops_store, "record_trace", record_trace)
+    external_id = "x" * 200
+    body = payload(external_trace_id=external_id).model_dump(mode="json")
+    first = asyncio.run(llmops_store.ingest_external_trace(body, client_id="go100-primary"))
+    replay = asyncio.run(llmops_store.ingest_external_trace(body, client_id="go100-primary"))
+
+    expected_key = llmops_store.external_trace_key("GO100", external_id)
+    assert calls[0]["trace_key"] == expected_key
+    assert len(expected_key) <= llmops_store.TRACE_KEY_LIMIT
+    assert expected_key != llmops_store.external_trace_key("GO100", "x" * 199 + "y")
+    assert conn.executed[0][1][0] == expected_key
+    assert first["trace_id"] == replay["trace_id"] == external_id
+    assert replay["deduplicated"] is True
+
+
+def test_external_ingest_requests_strict_atomic_child_writes(monkeypatch):
+    conn = FakeConn()
+    pool = FakePool(conn)
+    import app.core.db_pool as db_pool
+    monkeypatch.setattr(db_pool, "get_pool", lambda: pool)
+    observed = {}
+
+    async def record_trace(**kwargs):
+        observed.update(kwargs)
+        return "central-1"
+
+    monkeypatch.setattr(llmops_store, "record_trace", record_trace)
+    asyncio.run(
+        llmops_store.ingest_external_trace(
+            payload().model_dump(mode="json"), client_id="go100-primary"
+        )
+    )
+
+    assert observed["conn"] is conn
+    assert observed["strict"] is True
+
+
+def test_store_failure_is_sanitized_retryable_503(monkeypatch):
+    async def unavailable(*_args, **_kwargs):
+        raise RuntimeError("database detail must not leak")
+
+    monkeypatch.setattr(llmops_store, "ingest_external_trace", unavailable)
+    with pytest.raises(HTTPException) as failed:
+        asyncio.run(
+            ohvis_llmops.llmops_trace_ingest(
+                payload(), client={"client_id": "go100-primary", "project": "GO100"}
+            )
+        )
+
+    assert failed.value.status_code == 503
+    assert failed.value.headers["Retry-After"] == "1"
+    assert "database detail" not in str(failed.value.detail)
 
 
 def test_ingest_replay_returns_same_id_without_second_write(monkeypatch):

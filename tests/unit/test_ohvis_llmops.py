@@ -137,6 +137,17 @@ def test_trace_insert_populates_required_trace_id() -> None:
     assert "gen_random_uuid()::text" in llmops_store._INSERT_TRACE_SQL
 
 
+def test_record_trace_preserves_bounded_trace_key(monkeypatch) -> None:
+    conn = FakeConn(table_exists=True)
+    _patch_pool(monkeypatch, conn)
+    trace_key = llmops_store.external_trace_key("GO100", "x" * 200)
+
+    asyncio.run(record_trace(graph_run_id="x" * 200, trace_key=trace_key))
+
+    _query, args = conn.fetchvals[0]
+    assert args[0] == trace_key
+
+
 def test_migration_seed_uses_upsert() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
     assert "ON CONFLICT (slug) DO UPDATE" in sql
@@ -199,6 +210,14 @@ def test_record_trace_never_raises_on_pool_or_insert_failure(monkeypatch) -> Non
     reset_relation_cache()
     _patch_pool(monkeypatch, FakeConn(table_exists=True, raise_on_write=True))
     assert asyncio.run(record_trace(graph_run_id="run:x")) is None
+
+
+def test_record_trace_strict_mode_propagates_insert_failure(monkeypatch) -> None:
+    conn = FakeConn(table_exists=True, raise_on_write=True)
+    _patch_pool(monkeypatch, conn)
+
+    with pytest.raises(RuntimeError, match="insert boom"):
+        asyncio.run(record_trace(graph_run_id="run:x", strict=True))
 
 
 def test_record_trace_requires_graph_run_id(monkeypatch) -> None:

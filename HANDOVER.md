@@ -1,5 +1,15 @@
 # AADS HANDOVER
 
+## 2026-09-09 09:34 KST — OHVIS trace-ingest direct hardening
+
+- Terminated duplicate pre-write runner `runner-e5216af3` so direct work would not race the same canonical files; no active API process was restarted.
+- `app/api/ohvis_llmops.py`: moved external ingest authentication into a FastAPI dependency, ensuring missing/invalid credentials return 401 before body validation.
+- `app/services/llmops_store.py`: added one deterministic bounded idempotency-key builder used by advisory locking, lookup, and storage, preserving complete 200-character GO100 IDs separately; enabled strict transactional trace/tool-call writes for external ingest while keeping existing internal trace recording non-fatal.
+- `tests/unit/test_ohvis_trace_ingest.py`: added malformed-body authentication-order, maximum-length ID replay, and strict-write regression coverage. Existing public `record_tool_calls` remains present.
+- `docs/reports/20260909_ohvis_authenticated_trace_ingest_contract.md`: documented authentication ordering, full-key preservation, and atomic-write guarantees.
+- Verification in an isolated disposable container based on production image `de80a95ea249`: OHVIS/LLMOps suites **111 passed**; Python compile and `git diff --check` passed. Host test execution was unavailable because host Python lacks FastAPI/asyncpg; the disposable container supplied dev dependencies only and did not touch running slots.
+- At this entry time the change was not yet committed, pushed, or deployed. Production release must use `deploy.sh bluegreen`, produce one image for the release SHA, start slots with `--no-build`, verify candidate health before the nginx lock, synchronize the standby to the same digest, roll back routed-health failures, and complete five-minute P0/P1 monitoring.
+
 ## 2026-09-09 06:19 KST — Android Agent 기능·제어 범위 전수 문서화 및 디스크 정리
 
 - `docs/reports/20260909_ANDROID_AGENT_FULL_CAPABILITY_AND_CONTROL_BOUNDARY.md`: 운영 APK v1.1.1, 62개 등록 명령/41개 고유 핸들러, release/debug Manifest, WebSocket/API, 사용자 권한·Accessibility·Device Admin·Device Owner·ADB/root 계층을 전수 대조했다.
