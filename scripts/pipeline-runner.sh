@@ -2108,61 +2108,39 @@ deploy_job() {
 
     case "$project" in
         AADS)
-            # 1) aads-server: 배포 방식 자동 선택 (Hot-Reload 우선)
-            local _needs_build="false"
+            # API 릴리스는 승인된 격리 worktree의 immutable blue/green 경로만
+            # 사용한다. 공유 main worktree와 hot-reload는 릴리스 SHA/이미지 증거를
+            # 분리시키므로 금지한다.
             if [[ "$target_repo" == "aads-dashboard" ]]; then
                 log "  SKIP aads-server deploy — dashboard-targeted AADS job"
             else
-                if git -C /root/aads/aads-server diff HEAD~1 --name-only 2>/dev/null | grep -qE '(Dockerfile|requirements|docker-compose)'; then
-                    _needs_build="true"
+                local _release_relevant="false"
+                if [[ "$_py_changed" == "true" ]]; then
+                    _release_relevant="true"
+                elif git -C "$worktree_dir" diff-tree --no-commit-id --name-only -r "$current_sha" 2>/dev/null \
+                    | grep -qE '^(app/|scripts/|migrations/|deploy\.sh|Dockerfile|docker-compose|requirements|pyproject\.toml)'; then
+                    _release_relevant="true"
                 fi
 
-                if [[ "$_needs_build" == "true" ]]; then
-                    # Dockerfile/requirements/docker-compose 변경 → Blue-Green 무중단 배포
-                    log "  BLUEGREEN aads-server 무중단 배포 시작 (빌드 파일 변경 감지)"
+                if [[ "$_release_relevant" == "true" ]]; then
                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
-                    if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_deploy_log" 2>&1; then
+                    log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
+                    if AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+                       AADS_DEPLOY_STATE_DIR="$main_workdir" \
+                       bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
-                        log "  BLUEGREEN aads-server 완료"
+                        log "  BLUEGREEN aads-server 완료 — deploy.sh certification gates passed"
                     else
                         local _aads_deploy_tail
                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
-                        log "  ERROR: bluegreen 실패 — 기존 서비스 유지 (SSE 스트림 보호): ${_aads_deploy_tail//$'\n'/ }"
+                        log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
                         post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
                         db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
                     fi
                     rm -f "$_aads_deploy_log" 2>/dev/null || true
-                elif [[ "$_py_changed" == "true" ]]; then
-                    # Python 코드만 변경 → Hot-Reload (0초 무중단)
-                    log "  HOT-RELOAD: .py 변경 감지 — reload-api.sh 실행 (0초 무중단)"
-                    local _aads_reload_log="/tmp/pipeline-reload-aads-${job_id}.log"
-                    if bash /root/aads/aads-server/scripts/reload-api.sh >"$_aads_reload_log" 2>&1; then
-                        tail -5 "$_aads_reload_log" 2>/dev/null || true
-                        log "  HOT-RELOAD: 완료 (무중단)"
-                    else
-                        local _reload_tail
-                        _reload_tail=$(tail -10 "$_aads_reload_log" 2>/dev/null | head -c 1000)
-                        log "  HOT-RELOAD: 실패 — fallback: deploy.sh bluegreen (무중단)"
-                        local _aads_fallback_log="/tmp/pipeline-reload-fallback-aads-${job_id}.log"
-                        if bash /root/aads/aads-server/deploy.sh bluegreen >"$_aads_fallback_log" 2>&1; then
-                            tail -10 "$_aads_fallback_log" 2>/dev/null || true
-                        else
-                            local _fallback_tail
-                            _fallback_tail=$(tail -20 "$_aads_fallback_log" 2>/dev/null | head -c 1500)
-                            log "  ERROR: hot-reload fallback bluegreen 실패: ${_fallback_tail//$'\n'/ }"
-                            post_to_chat "$session_id" "🔴 [Runner] AADS hot-reload 및 fallback 배포 실패: ${_fallback_tail:0:500}"
-                            _build_fail="${_build_fail:+${_build_fail};}aads-server:reload_and_bluegreen_failed"
-                            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-reload] ' || $(sql_escape "${_reload_tail}
-${_fallback_tail}") WHERE job_id='${job_id}';"
-                        fi
-                        rm -f "$_aads_fallback_log" 2>/dev/null || true
-                    fi
-                    rm -f "$_aads_reload_log" 2>/dev/null || true
                 else
-                    # 비Python 변경 (yml/md/yaml/sh/bak 등) → 서버 재시작 불필요
-                    # SIGTERM 방지: deploy.sh code는 SIGTERM을 보내 SSE 스트림을 끊으므로 사용 금지
-                    log "  SKIP-DEPLOY: 비Python 변경 — aads-server 재시작 불필요 (yml/md/yaml/sh 등)"
+                    log "  SKIP-DEPLOY: 런타임 무관 변경 — aads-server 릴리스 불필요 (docs/tests only)"
                 fi
             fi
             # HEARTBEAT: aads-server 배포 완료 후 갱신 (dashboard 빌드 전)
@@ -2458,9 +2436,11 @@ ${_fallback_tail}") WHERE job_id='${job_id}';"
                             log "  ROLLBACK_DEPLOY: dashboard deploy 실패 — 기존 서비스 유지"
                         fi
                     else
-                        # 롤백도 무중단 배포 사용 (SSE 스트림 보호)
-                        if bash /root/aads/aads-server/deploy.sh bluegreen 2>&1 | tail -10; then
-                            log "  ROLLBACK_DEPLOY: bluegreen 성공"
+                        # 롤백/revert 커밋도 격리 worktree에서 동일한 인증 경로로 배포한다.
+                        if AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
+                           AADS_DEPLOY_STATE_DIR="$main_workdir" \
+                           bash "$worktree_dir/deploy.sh" bluegreen 2>&1 | tail -10; then
+                            log "  ROLLBACK_DEPLOY: isolated bluegreen 성공"
                         else
                             log "  ROLLBACK_DEPLOY: bluegreen 실패 — 기존 서비스 유지"
                         fi

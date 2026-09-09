@@ -1,5 +1,21 @@
 # AADS HANDOVER
 
+## 2026-09-10 00:39 KST — PRESERVATION_HARD_GATE 후속 조치 및 Runner 릴리스 경로 교정
+
+- `runner-1ee3c3b8`은 공개 상태 정규화 메서드의 인자를 변경하고 기존 migration 150을
+  수정한 산출물이라 `PRESERVATION_HARD_GATE`가 차단했다. 해당 산출물은 main에 반영하지 않았다.
+- 최신 `origin/main`의 `521cefe2`/`12e2f6d1` 구현은 기존 공개 API·마이그레이션을 보존하고,
+  별도 `release_evidence` 모듈과 추가 전용 migration 170/171로 대체한다.
+- Runner의 AADS API 배포에서 공유 worktree `reload-api.sh` 및 공유 `deploy.sh` 경로를 제거했다.
+  승인 커밋의 격리 worktree에서 `AADS_DEPLOY_SOURCE_DIR`/`AADS_DEPLOY_STATE_DIR`을 분리해
+  `deploy.sh bluegreen`만 실행한다. 롤백도 동일 경로를 사용한다.
+- cutover 뒤 TERM/HUP가 와도 미완료 standby sync·QA·5분 모니터링을 성공으로 오인하지 않도록
+  `interrupted_post_switch` 실패 상태로 닫는다. standby drain 기본 상한은 600초로 복원했다.
+- Runner primary/local 템플릿을 byte-identical로 맞추고, 격리 blue/green·롤백·시그널
+  fail-closed 회귀 테스트를 추가했다.
+- 롤백: 이 항목의 커밋을 `git revert`한 뒤 인증된 `deploy.sh bluegreen`으로 재배포한다.
+  DB 스키마나 데이터는 이 후속 조치에서 직접 변경하지 않는다.
+
 ## 2026-09-10 00:18 KST — Goal release 링크 실데이터 호환 보강
 
 - 운영 원장 대조에서 채팅 안정화 목표의 활성 링크가 `task_type=release`,

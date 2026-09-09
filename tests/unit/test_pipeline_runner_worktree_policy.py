@@ -80,3 +80,22 @@ def test_local_pipeline_runner_template_stays_synced_with_primary_runner():
     local_template = (ROOT / "scripts" / "pipeline-runner.sh.local").read_text(encoding="utf-8")
 
     assert local_template == primary
+
+
+def test_aads_api_release_uses_the_approved_isolated_bluegreen_path_only():
+    script = _runner_script()
+    aads_case = script.split("        AADS)", 1)[1].split("        KIS)", 1)[0]
+
+    assert 'AADS_DEPLOY_SOURCE_DIR="$worktree_dir"' in aads_case
+    assert 'AADS_DEPLOY_STATE_DIR="$main_workdir"' in aads_case
+    assert 'bash "$worktree_dir/deploy.sh" bluegreen' in aads_case
+    assert "/root/aads/aads-server/scripts/reload-api.sh" not in aads_case
+    assert "bash /root/aads/aads-server/deploy.sh bluegreen" not in aads_case
+    assert "diff-tree --no-commit-id --name-only -r \"$current_sha\"" in aads_case
+
+
+def test_aads_rollback_uses_the_same_isolated_release_path():
+    script = _runner_script()
+
+    assert script.count('bash "$worktree_dir/deploy.sh" bluegreen') >= 2
+    assert "ROLLBACK_DEPLOY: isolated bluegreen 성공" in script

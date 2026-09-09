@@ -115,3 +115,12 @@ def test_release_contract_allows_bounded_standby_sync_timeout():
 
     assert "AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-[0-9]+" in verifier
     assert "standby sync must have a bounded default timeout" in verifier
+
+
+def test_post_cutover_signal_cannot_certify_an_incomplete_release():
+    deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
+    trap_body = deploy_script.split("deploy_signal_trap()", 1)[1].split("deploy_process_alive()", 1)[0]
+
+    assert 'deploy_observe_update "failed" "interrupted_post_switch"' in trap_body
+    assert "completed_after_signal_recovery" not in trap_body
+    assert "certified live" not in trap_body

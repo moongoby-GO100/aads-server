@@ -881,10 +881,11 @@ deploy_signal_trap() {
     stop_deploy_heartbeat
     stop_downtime_monitor
     if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]]; then
-        # RC1: post-switch signal — upstream already cutover, new container is live
-        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "success" "post-switch ${signal_name} — deploy already live"
-        deploy_observe_update "success" "completed_after_signal_recovery" "deploy interrupted by ${signal_name}; upstream already switched"
-        record_deploy "success" "$MODE" "deploy interrupted by ${signal_name} post-switch; certified live"
+        # Cutover alone is not release certification. Standby synchronization,
+        # QA, and the five-minute P0/P1 monitor may still be incomplete.
+        deploy_phase_end "$DEPLOY_CURRENT_PHASE" "failed" "post-switch ${signal_name} — release uncertified"
+        deploy_observe_update "failed" "interrupted_post_switch" "deploy interrupted by ${signal_name}; certification incomplete"
+        record_deploy "failed" "$MODE" "deploy interrupted by ${signal_name} post-switch; certification incomplete"
     elif [[ "$DEPLOY_CURRENT_PHASE" == "initializing" || "$DEPLOY_CURRENT_PHASE" == "preflight" ]]; then
         deploy_phase_end "$DEPLOY_CURRENT_PHASE" "cancelled" "pre-build ${signal_name} — no container changes"
         deploy_observe_update "cancelled" "$DEPLOY_CURRENT_PHASE" "deploy superseded by ${signal_name} in ${DEPLOY_CURRENT_PHASE}"
@@ -1677,13 +1678,13 @@ sync_standby_slot_after_drain() {
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
 
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300}"
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
         local active="0"
         local zero_seen=0
         if [[ ! "$drain_max" =~ ^[0-9]+$ ]]; then
-            drain_max="300"
+            drain_max="600"
         fi
         if [[ ! "$drain_interval" =~ ^[0-9]+$ ]] || [[ "$drain_interval" -lt 5 ]]; then
             drain_interval="5"
