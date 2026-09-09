@@ -1361,11 +1361,13 @@ TOOL_DEFINITIONS: List[Dict] = [
     {
         "name": "run_remote_command",
         "description": (
-            "원격 서버에서 화이트리스트 명령 실행 (SSH). 출력 최대 50KB.\n"
-            "허용 명령: ls, cat, grep, find, git, docker, pip, python, systemctl, "
-            "supervisorctl, nginx, journalctl, curl, du, ps, top, df, free, "
-            "crontab -l, kill/pkill 등.\n"
-            "차단: rm -rf, sudo, force push, hard reset, bash -c, 파이프 체인(; && ||).\n"
+            "원격 서버에서 셸 명령 실행 (SSH). 출력 최대 50KB.\n"
+            "화이트리스트는 CEO 지시로 전면 해제됨 — sudo, 파이프/체인(| ; && ||), "
+            "bash -c, 리다이렉트 모두 허용.\n"
+            "차단(3종 파괴 명령만): 'rm -rf /', 'mkfs /dev/sda|vda', fork bomb.\n"
+            "AADS 전용 가드: supervisorctl로 aads-api 제어, aads-server 컨테이너 "
+            "stop/kill/rm, nginx -s stop은 차단. docker compose down/--force-recreate/"
+            "서비스명 없는 up도 차단이며 up·build·restart는 deploy.sh bluegreen으로 자동 전환됨.\n"
             "예: run_remote_command(project='KIS', command='git status --short')"
         ),
         "input_schema": {
