@@ -8,6 +8,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_worker_lock_uses_runtime_bash_pid():
+    source = (ROOT / "scripts/start_aads_deploy_queue_worker.sh").read_text()
+    worker_body = source.split("WORKER_BODY='", 1)[1].split("'\n\nif [[ -d", 1)[0]
+
+    assert 'echo "$BASHPID" > "$LOCKFILE"' in worker_body
+    assert 'echo "$$" > "$LOCKFILE"' not in worker_body
+
+
 @pytest.mark.parametrize("start_code", [0, 1])
 def test_systemd_dispatch_preserves_arguments_and_fails_closed(tmp_path, start_code):
     source = (ROOT / "scripts/start_aads_deploy_queue_worker.sh").read_text()

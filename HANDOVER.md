@@ -12999,3 +12999,7 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   사용하는지 고정했다. Goal P0 집중 테스트와 함께 58건이 통과했다.
 - 운영 배포 완료 후 실제 모델 응답, active/standby 동일 digest, routed health 및
   5분 P0/P1 모니터링 결과를 이 릴리스의 최종 근거로 사용한다.
+- 첫 배포 큐 등록에서 systemd-run worker가 `$$`를 문자 `$`로 lock 파일에
+  기록해 같은 SHA worker가 중복 생성되는 현상을 실측했다. worker 본문은
+  런타임 셸의 숫자 PID인 `$BASHPID`를 기록하도록 보강하고 정적 회귀 테스트를
+  추가했다. 운영에서는 중복 worker 3개를 중지하고 최초 worker 1개만 보존했다.

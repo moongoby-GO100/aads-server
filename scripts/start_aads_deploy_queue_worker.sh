@@ -72,7 +72,10 @@ git -C "$REPO_DIR" worktree add --detach "$worktree" "$latest_sha"
 export MODE STATE_DIR REPO_DIR LOCKFILE latest_sha worktree
 WORKER_BODY='
     set -euo pipefail
-    echo "$$" > "$LOCKFILE"
+    # systemd-run expands $$ while constructing ExecStart, which previously
+    # wrote the literal "$" to the lock file. BASHPID is resolved by the
+    # worker shell itself and remains a numeric, kill-checkable owner PID.
+    echo "$BASHPID" > "$LOCKFILE"
     cleanup() {
         git -C "$REPO_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
         rm -f "$LOCKFILE" 2>/dev/null || true
