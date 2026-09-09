@@ -13140,3 +13140,20 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - CEO 승인에 따라 clean release SHA로 push 후 `deploy.sh bluegreen`을 실행한다.
   실제 release SHA, 슬롯/digest, 외부 화면·API 확인과 5분 P0/P1 모니터링 결과는 배포
   완료 후 본 항목의 후속 기록 및 프로젝트 handover 정본에 남긴다.
+
+## 2026-09-09 18:00 KST — 매장비서 mockup-v2 보존형 디자인 릴리스 후보
+
+- 기존 매장비서 운영 화면의 인증·실DB 조회·등록/수정·은행 파일 업로드·직원·계약·
+  근태·급여 흐름을 교체하지 않고, `mockup-v2.html` 디자인을 별도 CSS/JavaScript
+  모듈로 추가하는 보존형 구현을 승인했다.
+- `index.html`에는 모듈 로드 태그 2줄만 추가했다. 기존 DOM ID 267개, 함수 312개,
+  event/action 69개, view 23개, 기존 fetch URL 6개는 모두 유지됐다.
+- 통합 홈·재고/발주·회계/세무·승인/알림/감사는 등록된 실제 API prefix를 사용하며,
+  `business_id`와 `branch_id` 범위를 전달한다. 데이터가 없을 때 샘플 수치를 만들지
+  않고 0·빈 상태·연동 준비 상태로 표시한다.
+- 러너 보존 회귀 4건, HTML/JavaScript 구문 검사, router prefix 정합성 및
+  `git diff --check`를 통과했다. 360/768/1440 화면 검증은 운영 배포 후 공개 URL
+  캡처로 수행한다.
+- 릴리스 후보는 최신 `origin/main`에서 격리 통합한다. push·blue/green 배포·동일
+  digest 확인·외부 화면/API 검증·5분 P0/P1 관측 결과는 프로젝트 handover 정본과
+  최종 보고에 실제 식별자로 기록한다.
