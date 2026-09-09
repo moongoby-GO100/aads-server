@@ -86,3 +86,25 @@ def test_preservation_symbols_remain_available() -> None:
 def test_aggregate_sales_rows_rejects_unknown_period() -> None:
     with pytest.raises(ValueError, match="unsupported sales period"):
         service._aggregate_sales_rows([], "quarterly")
+
+
+def test_expense_range_returns_date_objects_not_strings() -> None:
+    from datetime import date
+
+    start, end = service._expense_range("2026-09-01", "2026-09-09")
+    assert (start, end) == (date(2026, 9, 1), date(2026, 9, 9))
+    assert not isinstance(start, str) and not isinstance(end, str)
+
+
+def test_expense_range_defaults_to_current_month_kst() -> None:
+    today = service._today_kst()
+    start, end = service._expense_range()
+    assert start == today.replace(day=1)
+    assert end == today
+
+
+def test_expense_range_rejects_inverted_or_invalid_dates() -> None:
+    with pytest.raises(ValueError, match="after date_to"):
+        service._expense_range("2026-09-10", "2026-09-01")
+    with pytest.raises(ValueError):
+        service._expense_range("not-a-date", "2026-09-01")

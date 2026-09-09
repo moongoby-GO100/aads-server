@@ -299,12 +299,18 @@ def get_settlement_summary(business_id: str = "") -> list[dict[str, Any]]:
     return _run_async(_run())
 
 
-def get_expense_summary(business_id: str = "", date_from: str = "", date_to: str = "") -> list[dict[str, Any]]:
+def _expense_range(date_from: str = "", date_to: str = "") -> tuple[date, date]:
+    """Coerce ISO date strings to date objects (asyncpg rejects str for ::date)."""
     today = _today_kst()
-    if not date_from:
-        date_from = today.replace(day=1).isoformat()
-    if not date_to:
-        date_to = today.isoformat()
+    start = date.fromisoformat(date_from) if date_from else today.replace(day=1)
+    end = date.fromisoformat(date_to) if date_to else today
+    if start > end:
+        raise ValueError(f"date_from {start} is after date_to {end}")
+    return start, end
+
+
+def get_expense_summary(business_id: str = "", date_from: str = "", date_to: str = "") -> list[dict[str, Any]]:
+    date_from, date_to = _expense_range(date_from, date_to)
     biz, biz_args = _business_filter(business_id, 3)
 
     async def _run() -> list[dict[str, Any]]:
