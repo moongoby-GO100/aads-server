@@ -13112,9 +13112,14 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - `app/static/reports/data/wooriro-046970-ohlcv-20260810-20260908.csv`와
   `app/static/reports/wooriro-046970-manifest.json`에 무조정 가격 원천·수집시각·계산
   lineage와 revision 정책을 보존했다.
+- 공개 직전 2026-09-09 장 마감값(6,570원, 5,926,739주)을 재확인해
+  `20260909_wooriro_046970_stock_direction_supplement_v2.html`과 9월 9일까지의
+  OHLCV CSV를 추가했다. v1 장중판은 감사 이력으로 보존하고 manifest에서 v2가
+  supersede하도록 연결했다.
 - 코그콤·Re:Column 보고서와 재사용 가이드에 공식 SNS, 대표 공개활동, 게시 활동성,
   고객/시장 반응, 커뮤니티 평판, 경쟁 메시지 비교의 필수 조사 규칙을 보강했다.
 - 집중 정적 테스트는 HTML 파싱, 접근성 표식, 재무 교차합계, OHLCV 지표 결정성,
   URL encoding/XSS 안전흐름, 양방향 링크, 표적 secret/직접 외부 LLM 호출 검사를 포함한다.
-- 사용자 지시에 따라 커밋·푸시·빌드·배포와 운영 HTTP/화면/슬롯 검증은 이 작업에서
-  수행하지 않았다. 비용이 발생하는 LLM/API 호출도 없었다.
+- 최초 Pipeline Runner 승인 커밋은 detached HEAD에서 실패했다. 변경분을 보존한
+  복구 브랜치에서 검증·커밋·푸시하고 API 및 dashboard blue/green 배포를 수행하는
+  후속 절차로 전환했다. 실제 release SHA와 운영 검증 결과는 완료 보고에 기록한다.

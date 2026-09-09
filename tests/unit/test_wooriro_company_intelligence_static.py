@@ -12,9 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "app/static/reports"
 BASELINE = REPORTS / "20260909_wooriro_046970_company_intelligence_baseline.html"
 SUPPLEMENT = REPORTS / "20260909_wooriro_046970_stock_direction_supplement_v1.html"
+SUPPLEMENT_V2 = REPORTS / "20260909_wooriro_046970_stock_direction_supplement_v2.html"
 HUB = REPORTS / "wooriro-046970-intelligence-hub.html"
 MANIFEST = REPORTS / "wooriro-046970-manifest.json"
 OHLCV = REPORTS / "data/wooriro-046970-ohlcv-20260810-20260908.csv"
+OHLCV_V2 = REPORTS / "data/wooriro-046970-ohlcv-20260810-20260909.csv"
 
 
 class AuditParser(HTMLParser):
@@ -58,7 +60,7 @@ def _rows() -> list[dict[str, str]]:
 
 
 def test_html_parsing_links_and_static_accessibility_contract() -> None:
-    for path in (BASELINE, SUPPLEMENT, HUB):
+    for path in (BASELINE, SUPPLEMENT, SUPPLEMENT_V2, HUB):
         text, parser = _parse(path)
         assert parser.has_lang and parser.has_viewport and parser.has_main and parser.has_h1
         assert "@media(max-width:" in text or "@media (max-width:" in text
@@ -79,11 +81,14 @@ def test_manifest_bidirectional_version_and_lineage_contract() -> None:
     assert manifest["baseline"]["immutable"] is True
     assert manifest["baseline"]["version"] == "1.0.0"
     assert manifest["publication_policy"]["arbitrary_topic_auto_publish"] is False
+    assert manifest["supplements"][-1]["version"] == "2.0.0"
+    assert manifest["supplements"][-1]["supersedes"] == "1.0.0"
     for path in (BASELINE, SUPPLEMENT, HUB):
         assert path.name in HUB.read_text(encoding="utf-8") or path == HUB
     assert BASELINE.name in SUPPLEMENT.read_text(encoding="utf-8")
     assert SUPPLEMENT.name in BASELINE.read_text(encoding="utf-8")
-    assert any(item["id"] == "ohlcv" and item["adjusted"] is False for item in manifest["lineage"])
+    assert SUPPLEMENT_V2.name in HUB.read_text(encoding="utf-8")
+    assert any(item["id"] == "ohlcv-v2" and item["adjusted"] is False for item in manifest["lineage"])
 
 
 def test_financial_cross_totals_and_ratios_are_reproducible() -> None:
@@ -115,6 +120,28 @@ def test_ohlcv_indicators_are_deterministic() -> None:
     assert round(sample_sd * math.sqrt(252) * 100, 2) == 68.62
 
 
+def test_close_corrected_v2_indicators_are_deterministic() -> None:
+    with OHLCV_V2.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 22
+    assert rows[-1]["date"] == "2026-09-09"
+    assert rows[-1]["close"] == "6570"
+    closes = [float(row["close"]) for row in rows]
+    volumes = [float(row["volume"]) for row in rows]
+    assert sum(closes[-5:]) / 5 == 5209
+    assert sum(closes[-10:]) / 10 == 5077.5
+    assert sum(closes[-20:]) / 20 == 4835.5
+    assert round((closes[-1] / closes[-6] - 1) * 100, 2) == 32.73
+    assert round((closes[-1] / closes[-11] - 1) * 100, 2) == 46.49
+    assert round(sum(volumes[-20:]) / 20) == 1001392
+    log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    mean = sum(log_returns) / len(log_returns)
+    sample_sd = math.sqrt(sum((item - mean) ** 2 for item in log_returns) / (len(log_returns) - 1))
+    assert round(sample_sd * math.sqrt(252) * 100, 2) == 112.39
+    v2 = SUPPLEMENT_V2.read_text(encoding="utf-8")
+    assert "6,570원" in v2 and "5,926,739주" in v2 and "112.39%" in v2
+
+
 def test_prefill_is_encoded_not_auto_submitted_and_has_recovery() -> None:
     hub = HUB.read_text(encoding="utf-8")
     chat = (ROOT / "aads-dashboard/src/app/chat/page.tsx").read_text(encoding="utf-8")
@@ -124,6 +151,7 @@ def test_prefill_is_encoded_not_auto_submitted_and_has_recovery() -> None:
     assert 'params.get("source") !== "company-intelligence"' in chat
     assert '.slice(0, 4000)' in chat
     assert "sessionStorage.setItem" in chat and "window.history.replaceState" in chat
+    assert "sessionStorage.getItem" in chat
     assert "sendMessage(" not in hub and ".submit()" not in hub
     assert "sessionStorage.getItem" not in hub  # public page never imports authenticated content
 
