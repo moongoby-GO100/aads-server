@@ -588,6 +588,7 @@ async def lifespan(app: FastAPI):
                 from app.core.db_pool import get_pool
                 from app.services.goal_link_reconciler import reconcile
                 from app.services.goal_manager import goal_state_machine
+                from app.services.release_evidence import reconcile_release_links
 
                 # Active-slot routing is the first fence. A PostgreSQL advisory
                 # lock is the second fence so a cutover overlap cannot mutate the
@@ -609,10 +610,22 @@ async def lifespan(app: FastAPI):
                     detach_legacy=False,
                     actor="goal_control_scheduler",
                 )
+                # Release evidence runs inside the same advisory-lock fence and
+                # reads only DB state (no git in the container).  It promotes a
+                # link to completed solely when the job's commit is recorded as
+                # exact/ancestor provenance of a certified deploy_run, then hands
+                # milestone completion back to the state machine below.
+                released = await reconcile_release_links(
+                    "AADS",
+                    dry_run=False,
+                    limit=200,
+                    actor="goal_control_scheduler",
+                )
                 advanced = await goal_state_machine.advance_active_goals("AADS")
                 logger.info(
                     "goal_control_cycle_done",
                     repaired=reconciled.get("repaired", 0),
+                    release_completed=released.get("completed", 0),
                     checked=advanced.get("checked", 0),
                     advanced=advanced.get("advanced", 0),
                 )

@@ -1,5 +1,122 @@
 # AADS HANDOVER
 
+## 2026-09-09 22:56 KST — Goal 릴리스 증거 다리 (runner-4747e595 재작업, P0)
+
+### 거부 사유와 대응
+| 거부 사유 | 대응 |
+| --- | --- |
+| `.dockerignore` 가 `.git` 을 제외해 컨테이너에 `/app/.git` 이 없다. 런타임 `git rev-parse` / `merge-base` 는 절대 성립하지 않는다 | 런타임 코드에서 Git 호출을 **전부 제거**했다. `app/services/release_evidence.py` 는 `subprocess`/`git` 을 쓰지 않는다. 계보는 Git 이 살아 있는 호스트 배포 경로에서 미리 계산해 DB 에 저장한다 |
+| `deploy_runs.release_sha` 는 대부분 12자 축약이라 모호하다 | `deploy_release_provenance` 가 40자 full SHA 두 개(task/release)만 저장한다. 스키마 CHECK `~ '^[0-9a-f]{40}$'` 로 접두사 저장을 원천 차단하고, 훅은 40자가 아닌 후보를 Git 에 묻지도 않고 거부한다(fail closed) |
+| 기존 테스트가 소스 문자열만 확인하고 DB 재조정/멱등/자동전진을 행동으로 증명하지 못한다 | `tests/unit/test_goal_release_evidence.py` 57건 — 인메모리 가짜 DB 위에서 재조정을 **실제 실행**해 행 상태 변화로 검증하고, 배포 훅은 **진짜 임시 git 저장소**를 만들어 실행해 검증한다 |
+
+### 구현
+- **`migrations/170_goal_release_evidence_provenance.sql`** (신규, 멱등)
+  `deploy_release_provenance(deploy_run_id, project, component, task_sha, release_sha, relationship, resolved_by, resolved_at)`.
+  UNIQUE `(deploy_run_id, task_sha)`, CHECK `relationship IN ('exact','ancestor')`,
+  두 SHA 모두 40자 hex 강제, `relationship='exact'` 이면 `task_sha = release_sha` 강제.
+  `goal_task_links` 에 `release_deploy_run_id / release_sha / release_relationship / release_verified_at` 추가.
+- **`scripts/record-release-provenance.sh`** (신규, 배포 시점 훅)
+  깨끗한 릴리스 워크트리에서 `HEAD` 를 40자로 해석하고, 후보 커밋을 `exact` / `ancestor`
+  (`git merge-base --is-ancestor`) 로 분류한다. 생성되는 INSERT 는 **인증 게이트를 SQL 안에**
+  들고 다닌다 — `EXISTS (deploy_runs: status='success' AND phase='completed' AND
+  image_digest IS NOT NULL AND standby_digest IS NOT NULL AND image_digest = standby_digest)`.
+  따라서 인증 전에 실수로 실행돼도 0행이다. `ON CONFLICT DO NOTHING` 으로 멱등.
+  `--emit-sql-only` 는 DB 없이 SQL 만 출력해 감사/테스트에 쓴다.
+- **`deploy.sh`** — Phase 7(P0/P1 5분 모니터링) 통과 + `deploy_runs` 가 success/completed 로
+  굳은 **뒤에만** 훅을 호출한다(Phase 8). 이미지 재빌드/컨테이너 재시작 없음, nginx 전환 락은
+  이미 해제된 뒤라 락 범위 불변, DB 실행 펜싱(advisory lock) 그대로.
+- **`app/services/release_evidence.py`** (신규, 런타임 — Git 미사용)
+  인증 배포 + 계보로 `goal_task_links` 를 완료 승격한다. 실패한 작업은 릴리스에 들어갔어도
+  승격하지 않는다. `goals`/`milestones` 를 **직접 쓰지 않고**
+  `check_milestone_completion` / `_update_goal_progress` 로만 전진시킨다.
+  상관 ID 가 붙은 `goal_release_evidence` trace 를 남긴다.
+- **`app/services/goal_manager.py`** — `goal_advance_gate()` 추가.
+  마일스톤 0개 목표(`no_milestones`)와 부모가 열려 있는 후속 목표(`parent_incomplete`)는
+  상태를 바꾸지 않고 조용히 건너뛴다. 사이클마다 `goal_advance` trace 를 찍던 루프가 사라지고,
+  사유별 건수는 사이클당 한 줄인 `goals_advance_sweep` 요약 trace 에만 집계된다.
+- **`migrations/171_goal_ohvis_orchestration_milestones.sql`** (신규, 멱등)
+  "오비스 자율 오케스트레이션 완성"(현재 `active` / 마일스톤 0건 / progress 0)에 순서 있는
+  마일스톤 4개를 `pending` 으로 시드하고, 부모를 "채팅 시스템 안정화 및 응답 가독성 개선"
+  으로 건다. **정당한 이력(링크·완료/진행 마일스톤·progress>0·completed_at)이 하나도 없을
+  때에만** `draft` 로 되돌린다 — 실제 진행은 절대 지우지 않는다.
+- **`app/main.py`** — 기존 goal control 사이클의 advisory lock 안에서 재조정을 호출한다(펜싱 유지).
+- **`app/routers/goals.py`** — `POST /api/v1/goals/release-evidence` (기본 `dry_run=true`).
+- **`scripts/verify-bluegreen-release-contract.sh`** — 훅이 존재/실행가능하고 deploy.sh 에
+  배선돼 있으며 **P0/P1 게이트 이후**에 호출되는지, INSERT 가 digest 게이트와 `ON CONFLICT`
+  와 40자 검사를 갖는지, `.dockerignore` 가 여전히 `.git` 을 제외하는지 검사한다.
+
+### STEP 0 기존 구현 조사
+| 항목 | 분류 | 근거 |
+| --- | --- | --- |
+| `GoalStateMachine.check_milestone_completion` / `_advance_after_milestone` / `_update_goal_progress` | 유지 | 완료 판정 권한을 그대로 둔다. 새 모듈은 링크까지만 만지고 이 메서드들을 호출한다 |
+| `GoalStateMachine.advance_goal` | 수정 | 게이트 early-return 추가. 기존 in_progress/pending/완료 경로는 그대로 |
+| `GoalStateMachine.advance_active_goals` | 수정 | 반환값에 `advanced`/`gated` 추가(기존 키 `checked`/`results` 유지) |
+| `goal_link_reconciler.reconcile` | 유지 | 손대지 않았다. 릴리스 증거는 별도 모듈로 **추가** |
+| `deploy_release_manifests` (migration 150/162) | 유지 | 비밀 아닌 릴리스 메타데이터용. 계보는 목적이 달라 별도 테이블로 추가 |
+| `deploy.sh` 최종 성공 블록 | 유지+추가 | 기존 문장 변경 없이 Phase 8 훅 호출만 뒤에 덧붙였다 |
+| 삭제 | 없음 | 이 작업에서 삭제한 함수/엔드포인트/테이블/컬럼은 없다 |
+
+지시서에 없는 파일 변경 2건 — 사유: **R-QUALITY(실패 테스트 방치 금지)**.
+`tests/unit/test_deploy_observability.py`, `tests/unit/test_deploy_stream_reconcile.py` 의
+실패 3건은 pristine `origin/main` 에서도 동일하게 실패하던 **선행 결함**이다.
+① `AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600` 단언이 커밋 `ee9aeeef`(600→300초)와 어긋났다 →
+값 대신 "상한이 존재한다"를 고정. ② `script.index("record_deploy \"success\"")` 가 시그널
+트랩의 첫 등장을 재고 있었다 → `rindex` 로 최종 성공 기록 위치를 재도록 수정.
+
+### 검증 체크리스트
+- **구현 목표**: 컨테이너에 Git 이 없어도 인증된 릴리스 계보로 목표 마일스톤이 자동 전진한다.
+- **완료 기준**: 신규 행동 테스트 전건 통과 + 전체 스위트 신규 실패 0건.
+- **실패 기준**: 런타임 코드에 git 의존이 남거나, 미인증 배포/축약 SHA 로 링크가 승격되거나,
+  두 번째 실행이 0건이 아니거나, `goals`/`milestones` 를 직접 완료로 쓰면 실패.
+
+| 항목 | 결과 |
+| --- | --- |
+| 신규 행동 테스트 | `pytest tests/unit/test_goal_release_evidence.py -q` → **57 passed** |
+| 목표·배포 관련 회귀 | `test_goal_release_evidence / test_goal_link_integrity / test_goal_control_loop_static / test_deploy_stream_reconcile / test_deploy_safe / test_deploy_observability / test_deploy_build_guards / test_deploy_adapters / test_deploy_worker_lifecycle` → **179 passed** |
+| 전체 단위 스위트 (브랜치) | **94 failed, 1785 passed, 27 errors** |
+| 전체 단위 스위트 (pristine `origin/main` 기준선) | **97 failed, 1725 passed, 27 errors** |
+| 회귀 판정 | 실패 **-3**(내가 고친 선행 결함), 통과 **+60**(신규 57 + 복구 3). 신규 실패 0건 |
+| Ruff (pre-commit 규칙 F821,F811) | 변경 파일 전부 통과 |
+| bash 문법 | `deploy.sh`, `record-release-provenance.sh`, `verify-bluegreen-release-contract.sh` 전부 `bash -n` 통과 |
+| 릴리스 계약 | `verify-bluegreen-release-contract.sh` 가 이 워크트리를 통과하고, 훅 배선을 제거한 사본은 실패한다(테스트로 고정) |
+
+- **서비스 재시작 확인 / 에러 로그 / 브라우저 E2E**: **미실행**. 이 작업은 승인 전
+  push·build·deploy·restart·DB 변경이 금지돼 있다. 코드는 격리 워크트리
+  `/tmp/aads-wt-goal-release-evidence` 에만 있고 실행 중인 컨테이너에 반영되지 않았으므로
+  런타임 검증 대상이 존재하지 않는다. ⚠️ 브라우저 E2E 미실행 — 승인 후 배포 검증에서 수행한다.
+- **미적용 사항**: migration 170/171 은 아직 실행하지 않았다(DB 변경 금지). 트랜잭션
+  ROLLBACK 구문 검사조차 프로덕션 테이블에 락을 잡으므로 승인 후 첫 단계로 미뤘다.
+
+### 승인 후 운영 검증 순서
+1. `docker exec -i aads-postgres psql -U aads -d aads -v ON_ERROR_STOP=1` 로 migration 170 → 171 적용
+   (둘 다 멱등, 행 삭제 없음).
+2. `bash /root/aads/aads-server/deploy.sh bluegreen` — Phase 8 로그에서
+   `[provenance] resolved exact=… ancestor=…` 와 `recorded rows=…` 확인.
+3. `curl -s -X POST 'https://aads.newtalk.kr/api/v1/goals/release-evidence?project=AADS&dry_run=true'`
+   → `planned`/`counts` 확인.
+4. `dry_run=false` 로 1회 실행 후 **같은 명령을 다시 실행** → 두 번째는 `completed=0` (멱등 실측).
+5. `SELECT title, status, progress FROM goals WHERE project='AADS'` 로 후속 목표가
+   마일스톤 4개를 갖고 부모가 열려 있는 동안 시작하지 않는지 확인.
+6. 배포 후 5분 P0/P1 모니터링 신규 에러 0건.
+
+### 롤백
+- **코드**: `git revert <commit>` 후 `deploy.sh bluegreen`. 훅이 사라지면 계보 기록만
+  멈추고 목표는 전진하지 않을 뿐이다(fail closed) — 잘못 전진하지 않는다.
+- **스키마**: 되돌릴 필요 없다(순수 추가). 굳이 되돌리려면
+  `DROP TABLE deploy_release_provenance;` 와 `ALTER TABLE goal_task_links DROP COLUMN
+  release_deploy_run_id, DROP COLUMN release_sha, DROP COLUMN release_relationship,
+  DROP COLUMN release_verified_at;`. 기존 링크/작업/배포 이력은 영향받지 않는다.
+- **목표 시드(171)**: 시드된 마일스톤 4건은 제목으로 식별해 삭제할 수 있고,
+  `parent_goal_id = NULL` 로 되돌리면 부모 게이트가 해제된다. 기존 목표/링크는 미변경.
+- **긴급 무력화**: 재배포 없이 멈추려면 `app/main.py` 의 `reconcile_release_links` 호출만
+  제거하면 된다 — 나머지 경로는 전부 읽기 전용 조회이거나 명시적 API 호출이다.
+
+### 커밋
+- 브랜치: `fix/goal-release-evidence-durable-20260909`
+  (워크트리 `/tmp/aads-wt-goal-release-evidence`, `origin/main` = `0e15f47f` 기준)
+- 커밋 URL: 바로 아래 후속 항목에 실제 SHA 로 기록한다. **승인 전 push 금지**이므로 현재는
+  로컬 커밋만 존재하며 GitHub URL 은 push 후에 해석된다.
+
 ## 2026-09-09 15:47 KST — OHVIS 논문 포트폴리오 설계·Dataset v1 PRD
 
 - CEO 지시에 따라 `app/static/reports/20260909_ohvis_research_portfolio_design_prd.html`을 신규 작성했다. 대표논문 1편, 세 개 실증 트랙, 후속 논문군, 연구질문·가설·변수·연구방법, `OHVIS Research Dataset v1` PRD, 데이터·라벨·시스템 설계, 연구윤리, 10개 교육 모듈, 12주 로드맵과 완료 기준을 하나의 HTML 정본으로 통합했다.

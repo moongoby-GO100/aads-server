@@ -2418,5 +2418,24 @@ for _final_retry in 1 2 3; do
     deploy_db_exec "UPDATE deploy_runs SET status='success', phase='completed', updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=NULL WHERE id=${DEPLOY_RUN_ID} AND status != 'success';" >/dev/null 2>&1 && break
     sleep 2
 done
+
+# ── Phase 8: 릴리스 계보 기록 (goal 릴리스 증거의 유일한 출처) ──
+# 여기서만 기록하는 이유: 이 지점은 Phase 1~7(헬스체크·DB스키마·채팅·LLM·프론트QA·
+# P0/P1 5분 모니터링)을 모두 통과하고 deploy_runs 가 success/completed 로 굳은
+# 뒤다. 그리고 여기는 호스트의 깨끗한 릴리스 워크트리라 Git 히스토리가 아직 살아
+# 있다 — 컨테이너 안에는 .dockerignore 때문에 /app/.git 이 없어 런타임에는 계보를
+# 계산할 방법이 없다. 이미지를 다시 만들거나 컨테이너를 재시작하지 않으며,
+# nginx 전환 락은 이미 해제된 뒤라 락 범위가 바뀌지 않는다.
+# 실패해도 배포는 이미 인증됐으므로 비치명적으로 넘어간다: 증거가 없으면 목표가
+# 전진하지 않을 뿐이고, 잘못 전진하지는 않는다(fail closed).
+if [[ -x "${COMPOSE_DIR}/scripts/record-release-provenance.sh" ]] && [[ -n "${DEPLOY_RUN_ID:-}" ]]; then
+    "${COMPOSE_DIR}/scripts/record-release-provenance.sh" \
+        --repo "$COMPOSE_DIR" \
+        --deploy-run-id "$DEPLOY_RUN_ID" \
+        --project "AADS" \
+        --component "api" \
+        --release-ref "HEAD" || echo "[deploy.sh] ⚠️ release provenance not recorded (non-fatal)"
+fi
+
 start_deploy_queue_worker "post_success"
 exit 0

@@ -182,6 +182,25 @@ async def reconcile_goal_links(
     )
 
 
+@router.post("/goals/release-evidence")
+async def reconcile_release_evidence(
+    project: Optional[str] = Query(None, description="프로젝트 코드 (미지정 시 전체)"),
+    dry_run: bool = Query(True, description="true(기본)면 계획만 반환하고 DB 를 쓰지 않는다"),
+    limit: int = Query(200, ge=1, le=2000, description="한 번에 검사할 최대 링크 수"),
+):
+    """인증된 배포에 포함된 작업 커밋으로 goal_task_links 를 완료 승격한다.
+
+    증거는 deploy_release_provenance(배포 시점에 Git 으로 해석한 40자 full SHA)와
+    deploy_runs 인증 조건(success/completed + image_digest=standby_digest)뿐이다.
+    런타임은 Git 을 쓰지 않는다 — 컨테이너에 /app/.git 이 없기 때문이다.
+    마일스톤/목표 완료는 GoalStateMachine 이 판정하며, 같은 입력으로 다시 돌리면
+    completed=0 이다(멱등).
+    """
+    from app.services.release_evidence import reconcile_release_links
+
+    return await reconcile_release_links(project, dry_run=dry_run, limit=limit)
+
+
 @router.put("/goals/{goal_id}")
 async def update_goal(goal_id: str, req: GoalUpdateRequest):
     from app.services.goal_manager import goal_state_machine

@@ -87,6 +87,36 @@ def stale_block_recovery_status(
         return None
     return "in_progress" if is_next_open else "pending"
 
+
+def goal_advance_gate(
+    *,
+    milestone_count: int,
+    parent_goal_id: Optional[str],
+    parent_status: Optional[str],
+) -> Optional[str]:
+    """Return why a goal must not be advanced yet, or ``None`` to proceed.
+
+    Two gates, both observed in production on 2026-09-09:
+
+    ``no_milestones``
+        "오비스 자율 오케스트레이션 완성" was auto-activated with zero milestones.
+        Every sweep re-entered :meth:`advance_goal`, found nothing to do and still
+        wrote a ``goal_advance`` trace — an endless trace loop with no progress.
+        A goal with no milestones has nothing to advance, so it is skipped
+        silently instead of being traced on every cycle.
+
+    ``parent_incomplete``
+        A follow-up goal must not start its own timeline while its parent goal is
+        still open.  Skipping is *not* a state change: the goal keeps whatever
+        status and progress it already earned.
+    """
+    if milestone_count <= 0:
+        return "no_milestones"
+    if parent_goal_id and parent_status not in (None, "completed", "cancelled"):
+        return "parent_incomplete"
+    return None
+
+
 # 목표 진행이 기존 구현 보존 정책을 지키는지 스스로 감사하기 위한 기본 intent
 _GOAL_POLICY_INTENT = "goal_control"
 
@@ -698,7 +728,15 @@ class GoalStateMachine:
         pool = await self._pool()
         async with pool.acquire() as conn:
             goal = await conn.fetchrow(
-                "SELECT id, project, title, status FROM goals WHERE id = $1::uuid",
+                """
+                SELECT g.id, g.project, g.title, g.status,
+                       g.parent_goal_id::text AS parent_goal_id,
+                       p.status               AS parent_status,
+                       (SELECT COUNT(*) FROM milestones m WHERE m.goal_id = g.id) AS milestone_count
+                FROM goals g
+                LEFT JOIN goals p ON p.id = g.parent_goal_id
+                WHERE g.id = $1::uuid
+                """,
                 goal_id,
             )
             if not goal:
@@ -721,6 +759,24 @@ class GoalStateMachine:
                     output_summary=f"advanced=False status={goal['status']}",
                 )
                 return {"goal_id": goal_id, "status": goal["status"], "advanced": False}
+
+            # 진행 불가 사유가 확정적이면 상태를 바꾸지도, trace 를 남기지도 않는다.
+            # (마일스톤 0개 목표가 매 사이클마다 goal_advance trace 를 찍던 루프 차단)
+            blocked_reason = goal_advance_gate(
+                milestone_count=int(goal["milestone_count"] or 0),
+                parent_goal_id=goal["parent_goal_id"],
+                parent_status=goal["parent_status"],
+            )
+            if blocked_reason:
+                logger.debug(
+                    "goal_advance_gated goal=%s reason=%s", goal_id, blocked_reason,
+                )
+                return {
+                    "goal_id": goal_id,
+                    "status": goal["status"],
+                    "advanced": False,
+                    "gated": blocked_reason,
+                }
 
             current = await conn.fetchrow(
                 """
@@ -818,14 +874,20 @@ class GoalStateMachine:
                 )
         results = [await self.advance_goal(str(row["id"])) for row in rows]
         advanced = sum(1 for item in results if item.get("advanced"))
+        # 게이트에 걸린 목표는 개별 trace 를 남기지 않는다. 대신 사이클당 한 줄인
+        # 이 요약 trace 에 사유별 건수만 집계해 운영자가 원인을 볼 수 있게 한다.
+        gated: dict[str, int] = {}
+        for item in results:
+            if item.get("gated"):
+                gated[item["gated"]] = gated.get(item["gated"], 0) + 1
         await self._trace(
             "goals_advance_sweep",
             project=project,
             input_summary=f"advance_active_goals project={project or 'ALL'}",
-            output_summary=f"checked={len(results)} advanced={advanced}",
-            metadata={"checked": len(results), "advanced": advanced},
+            output_summary=f"checked={len(results)} advanced={advanced} gated={sum(gated.values())}",
+            metadata={"checked": len(results), "advanced": advanced, "gated": gated},
         )
-        return {"checked": len(results), "results": results}
+        return {"checked": len(results), "advanced": advanced, "gated": gated, "results": results}
 
     async def _advance_after_milestone(self, goal_id: str, completed_milestone_id: str) -> None:
         pool = await self._pool()

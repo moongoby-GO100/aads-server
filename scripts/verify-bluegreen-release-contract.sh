@@ -41,6 +41,28 @@ grep -q 'AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-1800' "$deploy_file" \
     || fail "target slot drain must have a bounded default timeout"
 grep -q 'DEPLOY_FLOCKFILE="/tmp/aads-deploy.flock"' "$deploy_file" \
     || fail "deploy entry flock is missing"
+
+# ── 릴리스 계보(goal 릴리스 증거) 계약 ──────────────────────────────────────
+# 런타임 컨테이너에는 /app/.git 이 없다. 계보를 기록할 수 있는 유일한 지점은
+# 호스트의 이 배포 경로이므로, 훅이 사라지면 목표 자동전진이 조용히 멈춘다.
+provenance_hook="${root_dir}/scripts/record-release-provenance.sh"
+[[ -x "$provenance_hook" ]] \
+    || fail "missing executable ${provenance_hook}"
+grep -q 'record-release-provenance.sh' "$deploy_file" \
+    || fail "release provenance hook is not wired into deploy.sh"
+# 훅 호출은 P0/P1 모니터링 게이트 통과 이후여야 한다 — 인증 전 기록 금지.
+hook_line="$(grep -n 'scripts/record-release-provenance.sh' "$deploy_file" | tail -1 | cut -d: -f1)"
+monitor_line="$(grep -n 'deploy_phase_end "p0p1_monitoring" "success"' "$deploy_file" | tail -1 | cut -d: -f1)"
+[[ -n "$hook_line" && -n "$monitor_line" && "$hook_line" -gt "$monitor_line" ]] \
+    || fail "release provenance must be recorded after the P0/P1 monitoring gate"
+grep -q "d.image_digest = d.standby_digest" "$provenance_hook" \
+    || fail "provenance INSERT must carry the certified-deploy digest gate"
+grep -q "ON CONFLICT (deploy_run_id, task_sha) DO NOTHING" "$provenance_hook" \
+    || fail "provenance INSERT must be idempotent"
+grep -q '\^\[0-9a-f\]{40}\$' "$provenance_hook" \
+    || fail "provenance must reject anything that is not a full 40-char SHA"
+grep -qx '\.git' "${root_dir}/.dockerignore" \
+    || fail ".dockerignore must keep excluding .git — runtime git provenance is not a supported path"
 api_sections="$(
     awk '
       /^  aads-server:$/ {in_api=1}
