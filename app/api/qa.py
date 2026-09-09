@@ -235,6 +235,9 @@ async def _update_pipeline_status(job_id: str, new_status: str) -> None:
                 new_status,
                 job_id,
             )
+        # 종료 상태로 바뀌었으면 목표 링크도 같이 맞춘다 (멱등, best-effort).
+        from app.services.goal_link_reconciler import sync_job_status_if_terminal
+        await sync_job_status_if_terminal(job_id, new_status, source="qa_pipeline")
     except Exception as e:
         logger.warning(f"qa_update_pipeline_status error: {e}")
 

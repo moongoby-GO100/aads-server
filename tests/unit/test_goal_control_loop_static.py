@@ -27,9 +27,16 @@ def test_goal_manager_links_tasks_idempotently_and_updates_terminal_statuses() -
 def test_pipeline_runner_updates_linked_goals_for_all_terminal_states() -> None:
     source = (ROOT / "app" / "services" / "pipeline_runner_service.py").read_text(encoding="utf-8")
 
-    assert 'async def _update_linked_goal_state(job_id: str, status: str = "done")' in source
+    # 하위호환 진입점은 이름/기본값을 유지한다 (phase 는 선택 인자로 추가).
+    assert 'async def _update_linked_goal_state(' in source
+    assert 'status: str = "done"' in source
     assert "self.status in _TERMINAL_JOB_STATUSES" in source
-    assert 'update_task_status("pipeline_job", job_id, status)' in source
+    # 정규화/전파는 goal_link_reconciler.sync_job_status 한 곳으로 모았다.
+    assert "from app.services.goal_link_reconciler import sync_job_status" in source
+    assert 'await sync_job_status(job_id, status, phase, source="pipeline_runner_service")' in source
+
+    reconciler = (ROOT / "app" / "services" / "goal_link_reconciler.py").read_text(encoding="utf-8")
+    assert 'update_task_status(\n            "pipeline_job", job_id, status or "", phase,\n        )' in reconciler
 
 
 def test_goal_manager_records_harness_traces_at_low_risk_points() -> None:

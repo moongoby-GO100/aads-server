@@ -6067,6 +6067,9 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             row = await conn.fetchrow("SELECT job_id, status FROM pipeline_jobs WHERE job_id = $1", task_id)
             if row and row["status"] in ("running", "queued", "awaiting_approval"):
                 await conn.execute("UPDATE pipeline_jobs SET status = 'error', error_message = $2, updated_at = NOW() WHERE job_id = $1", task_id, reason)
+                # 강제 종료도 durable 종료 write — 목표 링크를 즉시 맞춘다 (멱등, best-effort).
+                from app.services.goal_link_reconciler import sync_job_status
+                await sync_job_status(task_id, "error", "terminated", source="ceo_terminate_task")
                 return json.dumps({"terminated": task_id, "reason": reason}, ensure_ascii=False)
             return json.dumps({"error": f"종료할 수 없는 상태: {row['status'] if row else '작업 없음'}"}, ensure_ascii=False)
     # ── 멀티에이전트/토론 도구 ────────────────────────────────────────────

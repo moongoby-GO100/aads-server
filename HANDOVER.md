@@ -12815,3 +12815,38 @@ $a## 2026-09-07 11:30 KST — Disk cleanup and goal auto-link activation (ops on
   `docs/reports/20260909_ohvis_authenticated_trace_ingest_contract.md`.
 - GO100 sender/outbox and permanent credential placement remain deliberately
   out of scope because the active project is AADS.
+
+## 2026-09-09 09:2x KST — Goal Control P0 무결성 복구 (명시적 목표 바인딩 · 종료 상태 재조정 · 진행률 복구)
+
+- **배경(운영 실측)**: `goal_task_links` 39건(AADS) / 185건(GO100) 중 고아 27/152건, 종료 상태 불일치 9/27건. `_auto_link_job_to_goal` 이 "프로젝트의 첫 active 목표"만 보고 붙여서 OHVIS trace 수신기 등 무관한 작업이 `채팅 시스템 안정화 및 응답 가독성 개선` 목표에 매달렸고, 종료된 작업의 링크가 queued/running 으로 남아 `goals.progress` 가 0.0 에 고정돼 있었다.
+- **A. 종료 상태 정규화 일원화**: 신규 `app/services/goal_binding.py` 가 done/approved/deployed → `completed`, error/cancelled/rejected/rejected_done/terminated/review_failed/blocked_dependency/timeout → `failed`, review_hold/awaiting_approval → `action_required` 를 한 곳에서 판정한다(phase 별칭 포함, 상태를 악화 방향으로만 반영). `goal_manager._normalize_task_status` 와 러너의 `_TERMINAL_JOB_STATUSES` 가 이 모듈을 재사용한다(기존 5개 종료 상태는 그대로 포함).
+- **A. durable write 이후 1회/멱등 전파**: `goal_link_reconciler.sync_job_status()` 가 유일한 진입점이다. 배선 지점 — 러너 `_save_to_db`/강제취소/폴링재개 완료·타임아웃/watchdog 자동종료/고아 결과 수거, API `/pipeline/jobs/{id}/notify`(이제 done 뿐 아니라 **모든 종료 상태**)·승인/거부·고아 캐스케이드·의존 고아 정리, `tool_executor._terminate_task`, CEO 채팅 `terminate_task`, `qa._update_pipeline_status`, `pipeline_cleanup` 중복 병합. 같은 상태로 여러 번 불러도 결과가 같다(`status IS DISTINCT FROM` 가드).
+- **B. 암묵 자동연결 제거**: `_auto_link_job_to_goal` 은 `bind_job_to_goal` 로 대체(옛 이름은 하위호환 래퍼로 유지). 이제 ①제출 API 의 `goal_id`/`milestone_id` 선택 필드 또는 ②지시서 헤더 `GOAL_ID:` / `MILESTONE_ID:` 가 있을 때만 연결한다. **명시적 근거가 없으면 어떤 목표에도 붙이지 않는다.** `link_task` 는 목표 존재·종결 여부·작업/목표 프로젝트 일치·마일스톤 소속을 검증하고 위반 시 `project_mismatch` 등 error 를 돌려준다. 기존 요청 스키마/응답은 그대로라 하위호환이다.
+- **C. 재조정 서비스/CLI/엔드포인트**: `app/services/goal_link_reconciler.py` + `scripts/goal_link_reconcile.py` + `POST /api/v1/goals/links/reconcile`. 기본 dry-run, 행 삭제 없음. 판정: stale 상태, 고아(작업 행 없음 — `cleanup_stale_jobs` 가 1시간 지난 종료 작업을 지우므로 정상 발생. 이미 종료 판정이 남은 고아는 완료 기여분을 유지하고 손대지 않는다), 프로젝트 불일치(즉시 detach), 계보 미상(**보고만**, `include_unverified=true` 명시 시에만 detach), 재시도 승계.
+- **D. 승계(retry supersession)**: 같은 `instruction_hash` 로 **나중에** 제출돼 성공한 작업이 있을 때만 과거 실패 링크를 `superseded_by` 로 표시하고 진행 판정에서 제외한다. 대체가 없으면 실패는 그대로 blocked/action_required 로 보인다. 중복 approved 병합처럼 대체 관계가 그 자리에서 확정되는 경우 `mark_superseded()` 로 즉시 기록한다.
+- **E. 진행률/선점 방지**: 진행률 = (완료 마일스톤 + 진행 중 마일스톤의 유효 링크 완료 비율) / 전체, 부분 진행분은 0.99 를 넘지 못한다(완료는 여전히 "모든 마일스톤 completed"로만). 마일스톤이 없는 목표는 목표 직결 링크 비율을 쓴다. 유효 링크가 하나도 없으면 마일스톤을 완료시키지 않고(`no_effective_tasks`), 다음 마일스톤 개시 전에 직전 마일스톤이 실제로 `completed` 인지 DB 로 재확인한다.
+- **G. 마이그레이션**: `migrations/165_goal_link_binding_and_supersession.sql` — 전부 `ADD COLUMN IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` (goal_task_links: link_state/bind_source/superseded_by/superseded_at/supersede_reason/reconciled_at/reconcile_note/updated_at, pipeline_jobs: goal_id/milestone_id). DROP/TRUNCATE/DELETE 없음. 컬럼 미적용 환경에서도 `goal_manager._link_provenance_ready()` 가 레거시 SQL 로 자동 강등하므로 배포 순서에 안전하다.
+- **검증 SQL (before, 2026-09-09 09:0x KST 실측)**:
+  ```sql
+  -- 링크 정합성 요약 (프로젝트별)
+  SELECT g.project,
+         count(*) FILTER (WHERE j.job_id IS NULL) AS orphan_links,
+         count(*) FILTER (WHERE j.job_id IS NOT NULL AND l.status <> CASE
+                WHEN j.status IN ('done','approved','deployed','completed') THEN 'completed'
+                WHEN j.status IN ('error','failed','cancelled','rejected','rejected_done','terminated')
+                  OR j.phase IN ('review_failed','blocked_dependency','terminated','cancelled') THEN 'failed'
+                ELSE l.status END) AS stale_links,
+         count(*) FILTER (WHERE j.job_id IS NOT NULL AND upper(j.project) <> upper(g.project)) AS cross_project_links,
+         count(*) AS total_links
+  FROM goal_task_links l
+  LEFT JOIN pipeline_jobs j ON j.job_id = l.task_id AND l.task_type='pipeline_job'
+  LEFT JOIN goals g ON g.id = l.goal_id
+  GROUP BY g.project ORDER BY 1;
+  -- before: AADS 27/9/0/39, GO100 152/27/0/185
+  SELECT id, project, title, status, progress FROM goals WHERE project='AADS' ORDER BY created_at;
+  -- before: 채팅 시스템 안정화 및 응답 가독성 개선 = active, progress 0
+  ```
+  **after(배포 후 실행 예정)**: ①위 두 쿼리 재실행 ②`POST /api/v1/goals/links/reconcile {"project":"AADS","dry_run":true}` 로 계획 확인 → ③검토 후 `dry_run:false` 로 제한 적용 → ④재실행 시 `planned=0` (멱등) 확인 ⑤`SELECT link_state, count(*) FROM goal_task_links GROUP BY 1;` 로 회수 내역 확인.
+- **테스트**: `tests/unit/test_goal_control_p0_integrity.py` 45건 신규 + 기존 `test_goal_control_loop_static.py` 9건(러너 진입점 어서션을 중앙화된 경로로 갱신) → 54 passed. 목표/파이프라인/러너/QA/정리/executor 선택 실행 = **225 passed, 9 failed** 이고, 같은 선택의 origin/main 기준선도 **180 passed, 9 failed** 로 실패 목록이 완전히 동일(모두 기존 환경 결함: langgraph 미설치, MCP 브리지, tool_archive). `py_compile`·`ruff check --select F821,F811`·`git diff --check` 통과. 마이그레이션은 `BEGIN; … ROLLBACK;` 로 운영 DB에 **쓰기 없이** 구문/적용 가능성만 검증했고(컬럼 8+2개 생성 후 롤백, 잔여 0건) `lock_timeout=2s` 로 운영 차단 위험을 막았다.
+- **운영 DB 쓰기 0건, 배포 0건.** 활성 blue/green 배포 큐(deploy_runs 230 verifying / 231 queued)를 건드리지 않았고, 재조정은 dry-run 계획만 제공한다(실제 적용은 CEO 검토 후 별도 실행).
+- **미해결/위험**: ①과거 암묵 연결(AADS 39건 중 계보 미상 다수)은 이번 커밋에서 **자동으로 회수되지 않는다** — `include_unverified=true` 를 CEO가 승인해야 detach 된다. ②`temporal_controller._check_goal` 은 별도 경로로 마일스톤을 진행시키며 이번 범위에서 손대지 않았다(유효 링크 필터 미적용 — 후속 정합 필요). ③동일 task card 로 **중복 러너**(runner-c82a610a 프로세스가 종료 표시 후에도 살아서 `/tmp/aads-wt-runner-3e7a7512` 를 동시 편집)가 확인돼, 이 작업은 별도 워크트리 `/tmp/aads-wt-goal-3e7a7512` 에서 origin/main 기준으로 격리 수행했다.

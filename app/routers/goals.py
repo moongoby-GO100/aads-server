@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
@@ -45,6 +45,17 @@ class TaskStatusRequest(BaseModel):
     task_type: str
     task_id: str
     status: str
+    phase: Optional[str] = None
+
+
+class LinkReconcileRequest(BaseModel):
+    """재조정 요청 — 기본값은 항상 안전한 dry-run."""
+
+    project: Optional[str] = None
+    dry_run: bool = True
+    limit: int = Field(500, ge=1, le=5000)
+    scan_limit: int = Field(2000, ge=1, le=20000)
+    include_unverified: bool = False
 
 
 @router.get("/goals")
@@ -110,14 +121,36 @@ async def add_milestone(goal_id: str, req: MilestoneCreateRequest):
 
 @router.post("/goals/{goal_id}/link-task")
 async def link_task(goal_id: str, req: LinkTaskRequest):
+    from app.services.goal_binding import BIND_SOURCE_EXPLICIT_API
     from app.services.goal_manager import goal_state_machine
     result = await goal_state_machine.link_task(
         goal_id=goal_id,
         milestone_id=req.milestone_id,
         task_type=req.task_type,
         task_id=req.task_id,
+        bind_source=BIND_SOURCE_EXPLICIT_API,
     )
+    # 검증 실패(프로젝트 불일치/목표 없음 등)는 조용히 무시하지 않고 400 으로 알린다.
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result)
     return result
+
+
+@router.post("/goals/links/reconcile")
+async def reconcile_links(req: LinkReconcileRequest):
+    """goal_task_links ↔ pipeline_jobs 재조정 (기본 dry-run, 멱등).
+
+    dry_run=true(기본)면 어떤 행도 쓰지 않고 stale/orphan/misbound/승계 계획만 돌려준다.
+    apply 하려면 dry_run=false 를 명시해야 하고, 행 삭제는 어떤 경우에도 하지 않는다.
+    """
+    from app.services.goal_link_reconciler import reconcile_goal_links
+    return await reconcile_goal_links(
+        req.project,
+        dry_run=req.dry_run,
+        limit=req.limit,
+        scan_limit=req.scan_limit,
+        include_unverified=req.include_unverified,
+    )
 
 
 @router.post("/goals/{goal_id}/check-completion")
@@ -149,6 +182,7 @@ async def update_task_status(req: TaskStatusRequest):
         task_type=req.task_type,
         task_id=req.task_id,
         status=req.status,
+        phase=req.phase,
     )
 
 

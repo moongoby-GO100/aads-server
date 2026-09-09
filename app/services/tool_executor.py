@@ -3611,6 +3611,9 @@ class ToolExecutor:
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
                     asyncio.create_task(emit_task_completed(task_id, "error"))
+                    # 강제 종료도 durable 종료 write — 목표 링크를 즉시 맞춘다 (멱등, best-effort).
+                    from app.services.goal_link_reconciler import sync_job_status
+                    await sync_job_status(task_id, "error", "terminated", source="terminate_task")
                     result = {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
                     if pid_cleanup is not None:
                         result["process_cleanup"] = pid_cleanup
