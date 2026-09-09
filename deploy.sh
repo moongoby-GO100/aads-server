@@ -329,9 +329,9 @@ reconcile_stale_deploy_runs() {
         return 0
     fi
     local stale_after_minutes rows
-    stale_after_minutes="${AADS_DEPLOY_STALE_AFTER_MINUTES:-5}"
+    stale_after_minutes="${AADS_DEPLOY_STALE_AFTER_MINUTES:-15}"
     if [[ ! "$stale_after_minutes" =~ ^[0-9]+$ ]] || [[ "$stale_after_minutes" -lt 2 ]]; then
-        stale_after_minutes="5"
+        stale_after_minutes="15"
     fi
     rows="$(
         deploy_db_exec "
