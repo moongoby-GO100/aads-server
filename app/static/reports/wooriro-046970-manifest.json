@@ -15,6 +15,13 @@
       "topic": "우리로의 주가 방향 관점에서 분석해줘",
       "path": "/static/reports/20260909_wooriro_046970_stock_direction_supplement_v1.html",
       "data_cutoff": "2026-09-09T09:23:00+09:00"
+    },
+    {
+      "version": "2.0.0",
+      "topic": "우리로의 주가 방향 관점에서 분석해줘 — 2026-09-09 종가 보정",
+      "path": "/static/reports/20260909_wooriro_046970_stock_direction_supplement_v2.html",
+      "data_cutoff": "2026-09-09T15:32:00+09:00",
+      "supersedes": "1.0.0"
     }
   ],
   "lineage": [
@@ -22,7 +29,8 @@
     {"id": "dart-2026h1", "grade": "independently_verified", "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260812000311"},
     {"id": "kind", "grade": "independently_verified", "url": "https://kind.krx.co.kr/"},
     {"id": "company", "grade": "company_claim", "url": "http://www.wooriro.com/"},
-    {"id": "ohlcv", "grade": "independently_observed", "path": "/static/reports/data/wooriro-046970-ohlcv-20260810-20260908.csv", "adjusted": false, "note": "Investing.com daily table; K/M volume displays were normalized to shares, retain the source display precision, and may differ slightly from alternate vendors."}
+    {"id": "ohlcv-v1", "grade": "independently_observed", "path": "/static/reports/data/wooriro-046970-ohlcv-20260810-20260908.csv", "adjusted": false, "note": "Investing.com daily table through 2026-09-08; K/M volume displays were normalized to shares, retain the source display precision, and may differ slightly from alternate vendors."},
+    {"id": "ohlcv-v2", "grade": "independently_observed", "path": "/static/reports/data/wooriro-046970-ohlcv-20260810-20260909.csv", "adjusted": false, "note": "v1 series plus the 2026-09-09 completed OHLCV independently observed at 15:32 KST on 매일경제 마켓."}
   ],
   "publication_policy": {
     "arbitrary_topic_auto_publish": false,
