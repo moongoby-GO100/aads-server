@@ -13003,3 +13003,27 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   기록해 같은 SHA worker가 중복 생성되는 현상을 실측했다. worker 본문은
   런타임 셸의 숫자 PID인 `$BASHPID`를 기록하도록 보강하고 정적 회귀 테스트를
   추가했다. 운영에서는 중복 worker 3개를 중지하고 최초 worker 1개만 보존했다.
+
+## 2026-09-09 11:53 KST — Goal Control P0 운영 릴리스 인증
+
+- Goal Control P0와 모델 cooldown 보강, deploy queue worker 단일화가 포함된
+  릴리스 `634a8a6f3af8`을 API 전용 `deploy.sh bluegreen`으로 배포했다.
+- 배포 원장 `deploy_runs.id=257`은 2026-09-09 11:52:41 KST에 `success/completed`로
+  종료됐다. 활성 슬롯은 `aads-server-green:8102`, 대기 슬롯은
+  `aads-server:8100`이며 두 컨테이너 모두 image digest
+  `sha256:26bb023e9d0ca5b4905bc44907bd9d9010419376f830fc7e44454aeac72ab0c7`로
+  일치하고 healthy다.
+- 후보 health 후 nginx를 전환했고 routed `/api/v1/health` HTTP 200, DB 스키마,
+  채팅 테이블, LLM health를 통과했다. 프론트 변경은 없어 QA를 건너뛰었으며,
+  5분(300초) P0/P1 로그 관측에서 의심 로그가 없었다.
+- migration 166 운영 스키마 11개 컬럼을 확인했다. 새 active 슬롯에서 AADS
+  goal-link 재조정 dry-run 결과는 `scanned=47`, `planned=0`, `repaired=0`이었다.
+- 깨끗한 격리 worktree에서 Goal/모델 선택/deploy worker 집중 회귀 62건이
+  모두 통과했다.
+- 중앙 `call_llm_with_fallback()` 최소 실호출은 1,639ms에 `OK`를 반환했다.
+  DB cooldown 중인 OAuth 1번 슬롯은 선택에서 제외됐고, 2번 슬롯은 Anthropic
+  조직 정책 403으로 실패했으나 LiteLLM 최종 폴백이 응답 가용성을 유지했다.
+  따라서 중앙 호출 경로는 가용하지만 Anthropic 직접 가용성은 별도 계정 정책
+  조치가 필요하다. 유료 호출 비용은 미측정이다.
+- 후속 `origin/main`의 `24292edf`는 FOOD 수집 큐 수정으로 이 Goal 릴리스와
+  무관하며, 본 인증 과정에서 재배포하지 않았다.
