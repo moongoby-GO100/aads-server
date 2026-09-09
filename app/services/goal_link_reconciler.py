@@ -33,7 +33,9 @@ from app.services.goal_binding import (
     BIND_SOURCE_UNKNOWN,
     LINK_STATE_DETACHED,
     LINK_STATE_ORPHAN,
+    LINK_STATUS_COMPLETED,
     normalize_job_state,
+    normalize_job_state_for_project,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ async def _load_candidates(conn, project: Optional[str], limit: int) -> list[dic
                l.task_type,
                l.task_id,
                l.status            AS link_status,
+               l.release_deploy_run_id,
                COALESCE(l.link_state, 'active')   AS link_state,
                COALESCE(l.bind_source, 'unknown') AS bind_source,
                l.superseded_by,
@@ -149,7 +152,16 @@ def plan_actions(candidates: list[dict[str, Any]], *, detach_legacy: bool = Fals
             # 레거시라도 상태가 밀려 있으면 아래 stale 판정을 계속 받는다.
 
         # 4) 링크 상태가 작업 실제 상태와 어긋남
-        expected = normalize_job_state(row.get("job_status"), row.get("job_phase"))
+        expected = normalize_job_state_for_project(
+            row.get("job_status"), row.get("job_phase"), row.get("job_project"),
+        )
+        if (
+            expected == "pending"
+            and row.get("link_status") == LINK_STATUS_COMPLETED
+            and row.get("release_deploy_run_id") is not None
+        ):
+            # 인증 근거로 완료된 링크는 일반 작업 상태 재조정이 되돌리지 않는다.
+            continue
         if expected != (row.get("link_status") or ""):
             actions.append({
                 "kind": "stale",

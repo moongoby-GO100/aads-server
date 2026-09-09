@@ -17,6 +17,7 @@ from app.services.goal_binding import (
     LINK_STATE_ORPHAN,
     is_terminal_job_state,
     normalize_job_state,
+    normalize_job_state_for_project,
     parse_goal_binding,
 )
 from app.services.goal_link_reconciler import plan_actions, summarize
@@ -65,6 +66,38 @@ def test_review_hold_is_terminal_for_reconciliation_but_not_a_failure():
 def test_running_job_is_not_terminal():
     assert is_terminal_job_state("running", "claude_code_work") is False
     assert is_terminal_job_state("queued", "queued") is False
+
+
+@pytest.mark.parametrize("status", ["approved", "done", "deployed", "completed"])
+def test_aads_done_states_wait_for_release_certification(status):
+    assert normalize_job_state(status) == "completed"
+    assert normalize_job_state_for_project(status, None, "AADS") == "pending"
+    assert normalize_job_state_for_project(status, "release_certified", "AADS") == "completed"
+
+
+def test_release_gate_preserves_other_projects_and_failed_phases():
+    assert normalize_job_state_for_project("approved", None, "GO100") == "completed"
+    assert normalize_job_state_for_project("approved", "review_failed", "AADS") == "failed"
+
+
+def test_reconciler_downgrades_only_uncertified_aads_completion():
+    base = {
+        "link_id": "link-1",
+        "task_id": "runner-1",
+        "goal_id": GOAL_A,
+        "milestone_id": MILESTONE_A,
+        "task_type": "pipeline_job",
+        "link_state": "active",
+        "bind_source": BIND_SOURCE_EXPLICIT_API,
+        "job_status": "approved",
+        "job_phase": "approved",
+        "job_project": "AADS",
+        "goal_project": "AADS",
+        "link_status": "completed",
+    }
+    uncertified = plan_actions([{**base, "release_deploy_run_id": None}])
+    assert any(a.get("kind") == "stale" and a.get("to_status") == "pending" for a in uncertified)
+    assert plan_actions([{**base, "release_deploy_run_id": 42}]) == []
 
 
 # ─── 명시적 바인딩 (요구사항 B) ─────────────────────────────────────────────
@@ -291,7 +324,12 @@ def test_already_detached_or_orphan_links_are_left_alone():
 
 def test_correct_link_produces_no_action():
     assert plan_actions([_link(link_status="failed")]) == []
-    assert plan_actions([_link(link_status="completed", job_status="done", job_phase="done")]) == []
+    assert plan_actions([_link(
+        link_status="completed",
+        job_status="done",
+        job_phase="done",
+        release_deploy_run_id=42,
+    )]) == []
 
 
 def test_reconciliation_plan_is_idempotent_for_the_repaired_state():

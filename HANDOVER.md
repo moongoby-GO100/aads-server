@@ -1,5 +1,22 @@
 # AADS HANDOVER
 
+## 2026-09-10 01:11 KST — runner-1ee3c3b8 보존 게이트 재작업
+
+- 실패 원인은 기능 테스트가 아니라 리뷰 전 보존 하드게이트였다. DB `code_reviews` 기준
+  추가 183줄/삭제 106줄과 공개 함수 `normalize_job_state` 삭제가 감지되어
+  `PRESERVATION_HARD_GATE`로 차단됐으며, 해당 산출물은 main에 반영되지 않았다.
+- 기존 `normalize_job_state(status, phase)` 공개 시그니처와 비AADS 동작을 그대로
+  유지한 채 `normalize_job_state_for_project`를 추가했다. AADS의
+  approved/done/deployed/completed는 인증 전 `pending`, 실패 phase는 `failed`다.
+- GoalStateMachine의 연결·상태전파·마일스톤 재검사와 goal_link_reconciler가 프로젝트
+  게이트를 공유한다. `release_deploy_run_id`가 없는 과거 조기 completed 링크는 pending으로
+  교정하고, 인증 근거가 기록된 completed 링크는 일반 재조정이 되돌리지 않는다.
+- 운영 DB에는 release 증거 컬럼 4개가 모두 있으며, 현재 완료 계열 AADS pipeline_job 링크는
+  0건이라 이번 보정 시점에 소급 변경할 운영 행은 없다. provenance는 4행/배포 2건이다.
+- 검증: 관련 Goal/Release/Reviewer 테스트 149건 통과, `py_compile`, `git diff --check`,
+  실제 `_precheck_preservation_gate` 통과. 롤백은 이 커밋을 `git revert`한다.
+- 범위: 코드/테스트/HANDOVER만 변경. 운영 DB 쓰기, push, 배포는 수행하지 않았다.
+
 ## 2026-09-10 00:39 KST — PRESERVATION_HARD_GATE 후속 조치 및 Runner 릴리스 경로 교정
 
 - `runner-1ee3c3b8`의 DB 보존 `git_diff`에서 공개 함수

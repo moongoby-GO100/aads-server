@@ -48,6 +48,12 @@ TERMINAL_JOB_STATUSES = frozenset(DONE_JOB_STATUSES | FAILED_JOB_STATUSES | {"re
 LINK_STATUS_COMPLETED = "completed"
 LINK_STATUS_FAILED = "failed"
 LINK_STATUS_ACTION_REQUIRED = "action_required"
+LINK_STATUS_PENDING = "pending"
+
+# AADS 작업 승인은 배포 인증이 아니다. 기존 normalize_job_state 공개 계약은
+# 그대로 두고, 프로젝트를 아는 호출부만 이 추가 게이트를 사용한다.
+RELEASE_GATED_PROJECTS = frozenset({"AADS"})
+RELEASE_CERTIFIED_PHASE = "release_certified"
 
 # goal_task_links.link_state (migration 165)
 LINK_STATE_ACTIVE = "active"
@@ -86,6 +92,41 @@ def normalize_job_state(status: Optional[str], phase: Optional[str] = None) -> s
     if normalized in ACTION_REQUIRED_JOB_STATUSES or phase_normalized in ACTION_REQUIRED_JOB_STATUSES:
         return LINK_STATUS_ACTION_REQUIRED
     return normalized or "pending"
+
+
+def normalize_job_state_for_project(
+    status: Optional[str],
+    phase: Optional[str] = None,
+    project: Optional[str] = None,
+) -> str:
+    """프로젝트별 릴리스 게이트를 적용한 링크 상태를 반환한다.
+
+    기존 :func:`normalize_job_state` 시그니처와 비프로덕션 프로젝트 동작은
+    보존한다. AADS의 완료 계열 상태는 인증 phase 전까지 ``pending``이며,
+    실패 phase는 완료보다 우선한다.
+    """
+    normalized = normalize_job_state(status, phase)
+    phase_normalized = (phase or "").strip().lower()
+    project_normalized = (project or "").strip().upper()
+    if project_normalized not in RELEASE_GATED_PROJECTS:
+        return normalized
+    if phase_normalized in FAILED_JOB_STATUSES:
+        return LINK_STATUS_FAILED
+    if normalized == LINK_STATUS_COMPLETED and phase_normalized != RELEASE_CERTIFIED_PHASE:
+        return LINK_STATUS_PENDING
+    return normalized
+
+
+def release_gate_withheld(
+    status: Optional[str],
+    phase: Optional[str] = None,
+    project: Optional[str] = None,
+) -> bool:
+    """릴리스 게이트 때문에 완료 상태가 pending으로 보류됐는지 판정한다."""
+    return (
+        normalize_job_state(status, phase) == LINK_STATUS_COMPLETED
+        and normalize_job_state_for_project(status, phase, project) == LINK_STATUS_PENDING
+    )
 
 
 def is_terminal_job_state(status: Optional[str], phase: Optional[str] = None) -> bool:

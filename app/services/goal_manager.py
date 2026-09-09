@@ -15,6 +15,8 @@ from app.services.goal_binding import (
     FAILED_JOB_STATUSES,
     LINK_STATE_ACTIVE,
     normalize_job_state,
+    normalize_job_state_for_project,
+    release_gate_withheld,
 )
 
 logger = logging.getLogger(__name__)
@@ -381,11 +383,13 @@ class GoalStateMachine:
             current_status = "pending"
             if task_type == "pipeline_job":
                 job = await conn.fetchrow(
-                    "SELECT status, phase FROM pipeline_jobs WHERE job_id = $1",
+                    "SELECT status, phase, project FROM pipeline_jobs WHERE job_id = $1",
                     task_id,
                 )
                 if job:
-                    current_status = self._normalize_task_status_with_phase(job["status"], job["phase"])
+                    current_status = self._normalize_task_status_with_phase(
+                        job["status"], job["phase"], self._row_project(job),
+                    )
 
             columns = await link_optional_columns(conn)
             await conn.execute(
@@ -416,11 +420,22 @@ class GoalStateMachine:
                 set_parts.append("last_job_status = $4")
             if "updated_at" in columns:
                 set_parts.append("updated_at = NOW()")
+            preserve_certified = ""
+            if release_gate_withheld(
+                job["status"] if task_type == "pipeline_job" and job else None,
+                job["phase"] if task_type == "pipeline_job" and job else None,
+                self._row_project(job) if task_type == "pipeline_job" and job else None,
+            ):
+                if "release_deploy_run_id" in columns:
+                    preserve_certified = " AND release_deploy_run_id IS NULL"
+                else:
+                    preserve_certified = " AND status IS DISTINCT FROM 'completed'"
             await conn.execute(
                 f"""
                 UPDATE goal_task_links
                 SET {', '.join(set_parts)}
                 WHERE goal_id = $1::uuid AND task_type = $2 AND task_id = $3
+                  {preserve_certified}
                 """,
                 goal_id, task_type, task_id, current_status, *extra_params,
             )
@@ -446,21 +461,40 @@ class GoalStateMachine:
 
     async def update_task_status_with_phase(
         self, task_type: str, task_id: str, status: str, phase: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> dict[str, Any]:
         pool = await self._pool()
-        normalized = self._normalize_task_status_with_phase(status, phase)
         async with pool.acquire() as conn:
+            resolved_project = project
+            if resolved_project is None and task_type == "pipeline_job":
+                try:
+                    resolved_project = await conn.fetchval(
+                        "SELECT project FROM pipeline_jobs WHERE job_id = $1", task_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 구 스키마/테스트 더블 호환
+                    logger.warning(
+                        "goal_task_project_lookup_failed task=%s: %s", task_id, str(exc)[:200],
+                    )
+            normalized = self._normalize_task_status_with_phase(
+                status, phase, resolved_project,
+            )
             columns = await link_optional_columns(conn)
             status_sets = ["status = $3"]
             if "last_job_status" in columns:
                 status_sets.append("last_job_status = $3")
             if "updated_at" in columns:
                 status_sets.append("updated_at = NOW()")
+            preserve_certified = ""
+            if release_gate_withheld(status, phase, resolved_project):
+                if "release_deploy_run_id" in columns:
+                    preserve_certified = " AND release_deploy_run_id IS NULL"
+                else:
+                    preserve_certified = " AND status IS DISTINCT FROM 'completed'"
             await conn.execute(
                 f"""
                 UPDATE goal_task_links SET {', '.join(status_sets)}
                 WHERE task_type = $1 AND task_id = $2
-                  {active_link_predicate(columns)}
+                  {active_link_predicate(columns)}{preserve_certified}
                 """,
                 task_type, task_id, normalized,
             )
@@ -582,11 +616,13 @@ class GoalStateMachine:
                         }
                     if link["task_type"] == "pipeline_job":
                         row = await conn.fetchrow(
-                            "SELECT status, phase FROM pipeline_jobs WHERE job_id = $1",
+                            "SELECT status, phase, project FROM pipeline_jobs WHERE job_id = $1",
                             link["task_id"],
                         )
                         normalized = (
-                            self._normalize_task_status_with_phase(row["status"], row["phase"])
+                            self._normalize_task_status_with_phase(
+                                row["status"], row["phase"], self._row_project(row),
+                            )
                             if row else "pending"
                         )
                         if normalized == "completed":
@@ -1094,15 +1130,23 @@ class GoalStateMachine:
         """기존 단일 인자 정규화 계약을 유지한다."""
         return self._normalize_task_status_with_phase(status)
 
+    @staticmethod
+    def _row_project(row: Any) -> Optional[str]:
+        """asyncpg Record와 기존 테스트 dict에서 project를 안전하게 읽는다."""
+        try:
+            return row["project"]
+        except (KeyError, IndexError, TypeError):
+            return None
+
     def _normalize_task_status_with_phase(
-        self, status: str, phase: Optional[str] = None,
+        self, status: str, phase: Optional[str] = None, project: Optional[str] = None,
     ) -> str:
         """pipeline_jobs (status, phase) → 링크 상태.
 
         정규화 규칙은 goal_binding.normalize_job_state 하나만 쓴다. phase 를 함께
         받아 terminated/review_failed/blocked_dependency 같은 별칭도 failed 로 접는다.
         """
-        return normalize_job_state(status, phase)
+        return normalize_job_state_for_project(status, phase, project)
 
     async def _mark_superseded_failures(self, conn, milestone_id: str) -> int:
         """재시도로 대체된 실패 링크에 승계 근거를 기록한다 (결정론적).
