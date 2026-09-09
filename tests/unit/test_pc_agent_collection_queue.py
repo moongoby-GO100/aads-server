@@ -187,8 +187,11 @@ def test_json_to_db_reconciliation_is_idempotent_and_removes_secrets(tmp_path, m
     assert second["skipped"] == 1
     stored_args = next(iter(stored.values()))
     assert str(stored_args[0]) == source["id"]
-    assert stored_args[26] == source["created_at"]
-    assert stored_args[27] == source["updated_at"]
+    assert stored_args[15].isoformat() == source["next_run_at"]
+    assert stored_args[24] is None
+    assert stored_args[25] is None
+    assert stored_args[26].isoformat() == source["created_at"]
+    assert stored_args[27].isoformat() == source["updated_at"]
     migrated_payload = json.loads(stored_args[19])
     migrated_result = json.loads(stored_args[20])
     assert migrated_payload == {"bank_account_id": "account-1", "nested": {"safe": "kept"}}

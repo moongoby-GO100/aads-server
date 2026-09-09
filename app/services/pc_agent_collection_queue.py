@@ -299,6 +299,11 @@ async def reconcile_json_queue_to_db() -> dict[str, Any]:
                     skipped += 1
                     logger.error("pc_agent_queue_reconcile_invalid_uuid item_id=%s", item.get("id"))
                     continue
+                next_run_at = _parse_dt(item.get("next_run_at")) or _now()
+                started_at = _parse_dt(item.get("started_at"))
+                finished_at = _parse_dt(item.get("finished_at"))
+                created_at = _parse_dt(item.get("created_at")) or _now()
+                updated_at = _parse_dt(item.get("updated_at")) or created_at
                 row = await conn.fetchrow(
                     """
                     INSERT INTO pc_agent_collection_queue (
@@ -343,7 +348,7 @@ async def reconcile_json_queue_to_db() -> dict[str, Any]:
                     item["min_interval_seconds"],
                     item["latest_only"],
                     item["status"],
-                    item["next_run_at"],
+                    next_run_at,
                     item["lease_agent_id"],
                     item["attempt_count"],
                     item["max_attempts"],
@@ -352,10 +357,10 @@ async def reconcile_json_queue_to_db() -> dict[str, Any]:
                     item["error_code"],
                     item["message"],
                     item["created_by"],
-                    item["started_at"],
-                    item["finished_at"],
-                    item["created_at"],
-                    item["updated_at"],
+                    started_at,
+                    finished_at,
+                    created_at,
+                    updated_at,
                 )
                 if row:
                     imported += 1
