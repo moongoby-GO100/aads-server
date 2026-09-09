@@ -13053,3 +13053,8 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   조치가 필요하다. 유료 호출 비용은 미측정이다.
 - 후속 `origin/main`의 `24292edf`는 FOOD 수집 큐 수정으로 이 Goal 릴리스와
   무관하며, 본 인증 과정에서 재배포하지 않았다.
+# 2026-09-09 Goal Control closed-loop follow-up
+
+- Added an active-slot-only `goal_control_cycle` scheduler that periodically reconciles AADS goal links and advances the existing `GoalStateMachine` without replacing its public APIs.
+- Changed chat execution-resume ownership resolution to trust the shared `.active_container`/`.active_port` state before the container-local `/tmp` marker, preventing a stale former-active slot from claiming recovery leases after cutover.
+- Added static regression coverage for scheduler registration and active-slot ownership precedence.

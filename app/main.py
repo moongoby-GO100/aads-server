@@ -574,6 +574,60 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("model_registry_periodic_sync_failed", error=str(e))
 
+        async def _run_goal_control_cycle():
+            """Reconcile goal evidence and advance active AADS goals.
+
+            The scheduler wrapper below executes this only on the routed API slot.
+            The reconciler is idempotent and never deletes links; the state machine
+            remains the single authority for milestone completion and advancement.
+            """
+            lock_conn = None
+            lock_acquired = False
+            try:
+                from app.core.db_pool import get_pool
+                from app.services.goal_link_reconciler import reconcile
+                from app.services.goal_manager import goal_state_machine
+
+                # Active-slot routing is the first fence. A PostgreSQL advisory
+                # lock is the second fence so a cutover overlap cannot mutate the
+                # same goal timeline from two API processes.
+                lock_conn = await get_pool().acquire()
+                lock_acquired = bool(
+                    await lock_conn.fetchval(
+                        "SELECT pg_try_advisory_lock(hashtext('aads_goal_control_cycle'))"
+                    )
+                )
+                if not lock_acquired:
+                    logger.info("goal_control_cycle_skipped_lock_held")
+                    return
+
+                reconciled = await reconcile(
+                    "AADS",
+                    dry_run=False,
+                    limit=200,
+                    detach_legacy=False,
+                    actor="goal_control_scheduler",
+                )
+                advanced = await goal_state_machine.advance_active_goals("AADS")
+                logger.info(
+                    "goal_control_cycle_done",
+                    repaired=reconciled.get("repaired", 0),
+                    checked=advanced.get("checked", 0),
+                    advanced=advanced.get("advanced", 0),
+                )
+            except Exception as e:
+                logger.warning("goal_control_cycle_failed", error=str(e))
+            finally:
+                if lock_conn is not None:
+                    if lock_acquired:
+                        try:
+                            await lock_conn.execute(
+                                "SELECT pg_advisory_unlock(hashtext('aads_goal_control_cycle'))"
+                            )
+                        except Exception as unlock_error:
+                            logger.warning("goal_control_cycle_unlock_failed", error=str(unlock_error))
+                    await get_pool().release(lock_conn)
+
         async def _run_rate_limit_recovery():
             """만료된 rate_limited_until 자동 클리어 + 비활성 키 재활성화 + 모델 재활성화."""
             try:
@@ -1086,6 +1140,17 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_run_rate_limit_recovery, "interval", seconds=60, id="rate_limit_recovery")
         # 90초마다 stale execution 자동 정리 (세션 차단 방지)
         scheduler.add_job(_run_stale_execution_cleanup, "interval", seconds=90, id="stale_execution_watchdog")
+        # Goal Control Loop: terminal runner status reconciliation and deterministic
+        # milestone advancement. max_instances/coalesce prevent overlapping sweeps.
+        scheduler.add_job(
+            _run_goal_control_cycle,
+            "interval",
+            seconds=max(30, int(os.getenv("AADS_GOAL_CONTROL_INTERVAL_SECONDS", "60"))),
+            id="goal_control_cycle",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         # 최신 LLM catalog 반영 — 기본 6시간 주기
         scheduler.add_job(
             _run_periodic_model_registry_sync,
@@ -2424,11 +2489,16 @@ async def lifespan(app: FastAPI):
         process. The active container marker is updated by deploy.sh.
 
         Priority:
-          1. /tmp/aads_execution_resume_owner file, written by deploy.sh or startup self-heal
-          2. .active_container file comparison, with AADS_EXECUTION_RESUME_FORCE_OWNER override
-          3. .active_port file comparison as a legacy fallback
+          1. .active_container file comparison, with AADS_EXECUTION_RESUME_FORCE_OWNER override
+          2. .active_port file comparison as a legacy fallback
+          3. /tmp/aads_execution_resume_owner file, written by deploy.sh or startup self-heal
           4. AADS_ENABLE_EXECUTION_RESUME_SCANNER env override
           5. True, preserving the single-container default
+
+        The shared active-slot files are authoritative. The marker under /tmp is
+        container-local and can remain ``true`` after a cutover if a best-effort
+        ``docker exec`` update is missed. Reading that marker first allowed an old
+        active slot to keep claiming recovery leases while it was the standby.
         """
         expected_container = os.getenv("AADS_CONTAINER_NAME", "").strip()
         expected_port = os.getenv("AADS_PUBLIC_PORT", "").strip()
@@ -2436,14 +2506,6 @@ async def lifespan(app: FastAPI):
         active_container_file = os.getenv("AADS_ACTIVE_CONTAINER_FILE", "/app/.active_container")
         active_port_file = os.getenv("AADS_ACTIVE_PORT_FILE", "/app/.active_port")
         owner_flag_file = os.getenv("AADS_RESUME_OWNER_FILE", "/tmp/aads_execution_resume_owner")
-
-        try:
-            with open(owner_flag_file, "r", encoding="utf-8") as fh:
-                owner_flag = fh.read().strip().lower()
-            if owner_flag:
-                return owner_flag in {"1", "true", "yes", "on", "active"}, "marker"
-        except Exception:
-            pass
 
         if expected_container:
             try:
@@ -2467,6 +2529,14 @@ async def lifespan(app: FastAPI):
                     return active_port == expected_port, "active_port"
             except Exception:
                 pass
+
+        try:
+            with open(owner_flag_file, "r", encoding="utf-8") as fh:
+                owner_flag = fh.read().strip().lower()
+            if owner_flag:
+                return owner_flag in {"1", "true", "yes", "on", "active"}, "marker"
+        except Exception:
+            pass
 
         override = os.getenv("AADS_ENABLE_EXECUTION_RESUME_SCANNER")
         if override is not None:

@@ -130,3 +130,26 @@ def test_goal_schema_has_idempotent_task_link_index() -> None:
 
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_goal_task_links_goal_task" in sql
     assert "ON goal_task_links(goal_id, task_type, task_id)" in sql
+
+
+def test_goal_control_cycle_is_registered_on_active_only_scheduler() -> None:
+    source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+
+    assert "async def _run_goal_control_cycle():" in source
+    assert "await reconcile(" in source
+    assert 'advance_active_goals("AADS")' in source
+    assert "pg_try_advisory_lock(hashtext('aads_goal_control_cycle'))" in source
+    assert "pg_advisory_unlock(hashtext('aads_goal_control_cycle'))" in source
+    assert 'id="goal_control_cycle"' in source
+    assert "max_instances=1" in source
+    assert "coalesce=True" in source
+
+
+def test_resume_owner_prefers_shared_slot_marker_over_stale_local_marker() -> None:
+    source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    body = source.split("def _resolve_execution_resume_owner", 1)[1].split(
+        "def _selfheal_execution_resume_owner_marker", 1
+    )[0]
+
+    assert body.index("if expected_container:") < body.index("with open(owner_flag_file")
+    assert body.index("if expected_port:") < body.index("with open(owner_flag_file")
