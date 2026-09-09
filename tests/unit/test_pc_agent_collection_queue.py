@@ -151,6 +151,7 @@ def test_json_to_db_reconciliation_is_idempotent_and_removes_secrets(tmp_path, m
             assert "pg_advisory_xact_lock" in query
 
         async def fetchrow(self, query, *args):
+            assert "$25::timestamptz, $26::timestamptz" in query
             job_key = args[2]
             if job_key in stored:
                 return None

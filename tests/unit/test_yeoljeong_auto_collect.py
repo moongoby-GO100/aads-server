@@ -1787,6 +1787,8 @@ def test_drain_global_queue_claims_and_completes(monkeypatch):
         "claim_next_collection_item",
         lambda agent_id="": {
             "id": "queue-1",
+            "owner_instance": "blue-8100",
+            "owner_epoch": 7,
             "service": "coupangeats",
             "business_id": "biz-mia",
             "branch": "미아점",
@@ -1824,6 +1826,8 @@ def test_drain_global_queue_claims_and_completes(monkeypatch):
     assert result["status"] == "succeeded"
     assert completed[0][0] == "queue-1"
     assert completed[0][1]["status"] == "succeeded"
+    assert completed[0][1]["owner_instance"] == "blue-8100"
+    assert completed[0][1]["owner_epoch"] == 7
 
 
 def test_drain_bank_queue_cancels_non_collectable_account_before_browser(monkeypatch):

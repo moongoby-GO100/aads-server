@@ -305,6 +305,38 @@ async def test_challenge_deny_policy_blocks_resume_automation(collector_modules)
     assert result["job"]["challenge"]["auto_bypass_allowed"] is False
 
 
+async def test_running_challenge_completion_forwards_claim_fence(collector_modules, monkeypatch):
+    collector, queue_module = collector_modules
+    completed: dict[str, object] = {}
+
+    async def find_job(_job_id):
+        return {
+            "id": "job-fenced",
+            "status": "running",
+            "work_key": "same-work",
+            "attempt_count": 4,
+            "owner_instance": "green-8102",
+            "owner_epoch": 12,
+            "payload": {"challenge_policy": {"mode": "user_intervention"}},
+        }
+
+    async def complete(item_id, **kwargs):
+        completed.update({"item_id": item_id, **kwargs})
+        return {"id": item_id, "status": kwargs["status"], "result": kwargs["result"]}
+
+    monkeypatch.setattr(collector, "_find_job", find_job)
+    monkeypatch.setattr(queue_module, "complete_collection_item_async", complete)
+
+    result = await collector.mark_collection_job_action_required(
+        job_id="job-fenced", challenge_kind="captcha"
+    )
+
+    assert result is not None
+    assert completed["owner_instance"] == "green-8102"
+    assert completed["owner_epoch"] == 12
+    assert completed["status"] == "action_required"
+
+
 async def test_user_approved_automation_requires_responsibility_acceptance(collector_modules):
     collector, _queue_module = collector_modules
     tenant_id = "00000000-0000-0000-0000-000000000001"

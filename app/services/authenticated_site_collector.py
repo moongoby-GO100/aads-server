@@ -895,6 +895,14 @@ async def mark_collection_job_action_required(
     if not existing:
         return None
     kind = _normalize_enum(challenge_kind, CHALLENGE_KINDS, "captcha")
+    claim_fence = (
+        {
+            "owner_instance": str(existing.get("owner_instance") or ""),
+            "owner_epoch": existing.get("owner_epoch"),
+        }
+        if existing.get("status") == "running"
+        else {}
+    )
     payload = _json_dict(existing.get("payload"))
     policy = _normalize_challenge_policy(payload.get("challenge_policy"))
     if policy["mode"] == "deny":
@@ -911,6 +919,7 @@ async def mark_collection_job_action_required(
             },
             error_code="COLLECTOR_CHALLENGE_BLOCKED_BY_POLICY",
             message="Challenge automation is blocked by this site profile policy.",
+            **claim_fence,
         )
         return {"status": "failed", "same_work_key": True, "job": _job_out(item)} if item else None
 
@@ -941,6 +950,7 @@ async def mark_collection_job_action_required(
             max_length=1000,
         ),
         next_run_at=CHALLENGE_HOLD_UNTIL,
+        **claim_fence,
     )
     if not item:
         return None

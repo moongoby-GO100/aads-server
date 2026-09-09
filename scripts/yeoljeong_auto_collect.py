@@ -1256,6 +1256,10 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
     if not item:
         return {"global_queue": True, "claimed": False, "status": "idle"}
     payload = dict(item.get("payload") or {})
+    claim_fence = {
+        "owner_instance": str(item.get("owner_instance") or ""),
+        "owner_epoch": item.get("owner_epoch"),
+    }
     required_agent_id = str(payload.get("required_browser_agent_id") or "").strip()
     excluded_agent_ids = {
         str(value or "").strip()
@@ -1274,6 +1278,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
             error_code="PC_AGENT_NOT_ALLOWED",
             message="현재 PC Agent는 이 은행 수집 작업에 허용되지 않아 재큐잉했습니다.",
             next_run_at=datetime.now(KST).isoformat(timespec="seconds"),
+            **claim_fence,
         )
         return {
             "global_queue": True,
@@ -1301,6 +1306,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
                 },
                 error_code="BANK_ACCOUNT_NOT_COLLECTABLE",
                 message="은행 자동수집 필수 데이터가 없는 계좌라 브라우저 접속 전 제외했습니다.",
+                **claim_fence,
             )
             return {
                 "global_queue": True,
@@ -1334,6 +1340,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
                 error_code=str(security_preflight.get("error_code") or "SHINHAN_SECURITY_PROGRAM_NOT_READY"),
                 message="PC 보안프로그램 실행 확인 실패로 은행 브라우저 접속 전 재시도 대기합니다.",
                 next_run_at=next_run_at,
+                **claim_fence,
             )
             return {
                 "global_queue": True,
@@ -1361,6 +1368,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
             error_code=error_code,
             message=f"completed={state.get('completed', 0)} pending={state.get('pending', 0)}",
             next_run_at=_blocked_queue_next_run_at(state),
+            **claim_fence,
         )
         return {
             "global_queue": True,
@@ -1382,6 +1390,7 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
             result={},
             error_code="GLOBAL_QUEUE_RUN_FAILED",
             message=str(exc)[:300],
+            **claim_fence,
         )
         return {
             "global_queue": True,

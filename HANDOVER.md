@@ -13157,3 +13157,13 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 릴리스 후보는 최신 `origin/main`에서 격리 통합한다. push·blue/green 배포·동일
   digest 확인·외부 화면/API 검증·5분 P0/P1 관측 결과는 프로젝트 handover 정본과
   최종 보고에 실제 식별자로 기록한다.
+
+## 2026-09-09 — FOOD PC Agent 큐 PostgreSQL fencing 보정
+
+- 보존 하드게이트로 차단된 `runner-c8e57d5c`의 재작성안은 반영하지 않았다. 후속
+  `runner-3f2b3176`의 additive R5를 최신 `origin/main`에 격리 통합하고, 실행 중 claim의
+  무토큰 완료 우회와 완료 후 lease 소유권 잔존을 추가 차단했다.
+- 기존 migration 168 충돌을 피하도록 lease fencing migration은 169를 사용한다.
+- JSON 이관의 nullable datetime은 asyncpg에 datetime 객체로 직접 바인딩한다.
+- 공개 함수·클래스 및 파일 삭제는 없으며, 커밋·푸시·blue/green 배포·운영 DB 이관과
+  5분 P0/P1 관측 결과는 실제 완료 후 보강한다.

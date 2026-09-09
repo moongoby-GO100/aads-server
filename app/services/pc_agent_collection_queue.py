@@ -46,6 +46,23 @@ def _now_text() -> str:
     return _now().isoformat(timespec="seconds")
 
 
+def _queue_owner_instance(agent_id: str = "") -> str:
+    """Return the stable process identity used to fence a claimed lease."""
+    return _clean_key(
+        os.getenv("AADS_INSTANCE_ID"),
+        _clean_key(os.getenv("AADS_CONTAINER_NAME"), _clean_key(agent_id, "local")),
+    )
+
+
+def _lease_seconds() -> int:
+    return _as_int(
+        os.getenv("YEOLJEONG_QUEUE_LEASE_SECONDS"),
+        default=1800,
+        minimum=60,
+        maximum=86400,
+    )
+
+
 def _parse_dt(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -127,7 +144,9 @@ def build_resource_key(item: dict[str, Any]) -> str:
     site_key = _clean_key(item.get("site_key"), _clean_key(item.get("service"), "site"))
     work_key = _clean_key(item.get("work_key"), site_key)
     runtime = _clean_key(item.get("runtime"), "pc_agent")
-    return f"{runtime}|{site_key}|{work_key}"
+    tenant = _clean_key(item.get("tenant_id"), "")
+    prefix = f"{_resource_key_part(tenant)}|" if tenant else ""
+    return f"{prefix}{runtime}|{site_key}|{work_key}"
 
 
 def _is_financial_resource_key(value: Any) -> bool:
@@ -320,7 +339,7 @@ async def reconcile_json_queue_to_db() -> dict[str, Any]:
                         $12, $13, $14, $15,
                         $16::timestamptz, $17, $18, $19,
                         $20::jsonb, $21::jsonb, $22, $23, $24,
-                        NULLIF($25, '')::timestamptz, NULLIF($26, '')::timestamptz,
+                        $25::timestamptz, $26::timestamptz,
                         $27::timestamptz, $28::timestamptz
                     WHERE NOT EXISTS (
                         SELECT 1
@@ -497,7 +516,10 @@ def _row_to_item(row: Any) -> dict[str, Any]:
     for key in ("id", "tenant_id"):
         if item.get(key) is not None:
             item[key] = str(item[key])
-    for key in ("created_at", "updated_at", "next_run_at", "started_at", "finished_at"):
+    for key in (
+        "created_at", "updated_at", "next_run_at", "started_at", "finished_at",
+        "lease_expires_at",
+    ):
         if item.get(key):
             item[key] = item[key].isoformat()
     item["payload"] = _json_dict(item.get("payload"))
@@ -713,11 +735,20 @@ async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any
             UPDATE pc_agent_collection_queue
                SET status = 'queued',
                    message = 'auto-recovered: stale running without lease_agent_id',
+                   owner_instance = '',
+                   lease_expires_at = NULL,
                    updated_at = NOW()
              WHERE status = 'running'
-               AND COALESCE(lease_agent_id, '') = ''
-               AND updated_at <= $1
+               AND (
+                    (lease_expires_at IS NOT NULL AND lease_expires_at <= $1)
+                    OR (
+                        lease_expires_at IS NULL
+                        AND COALESCE(lease_agent_id, '') = ''
+                        AND updated_at <= $2
+                    )
+               )
             """,
+            now_value,
             now_value - timedelta(seconds=_stale_running_seconds()),
         )
         row = await conn.fetchrow(
@@ -785,6 +816,9 @@ async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any
             UPDATE pc_agent_collection_queue q
                SET status = 'running',
                    lease_agent_id = $2,
+                   owner_instance = $3,
+                   owner_epoch = q.owner_epoch + 1,
+                   lease_expires_at = $1 + make_interval(secs => $4),
                    attempt_count = q.attempt_count + 1,
                    started_at = NOW(),
                    updated_at = NOW()
@@ -794,6 +828,8 @@ async def _claim_next_db(*, agent_id: str, now_value: datetime) -> dict[str, Any
             """,
             now_value,
             agent_id,
+            _queue_owner_instance(agent_id),
+            _lease_seconds(),
         )
     return _row_to_item(row) if row else None
 
@@ -806,6 +842,8 @@ def complete_collection_item(
     error_code: str = "",
     message: str = "",
     next_run_at: str = "",
+    owner_instance: str = "",
+    owner_epoch: int | None = None,
 ) -> dict[str, Any] | None:
     final_status = status if status in TERMINAL_STATUSES | {"action_required", "queued"} else "failed"
     db_item = _run_db(
@@ -816,6 +854,8 @@ def complete_collection_item(
             error_code=error_code,
             message=message,
             next_run_at=next_run_at,
+            owner_instance=owner_instance,
+            owner_epoch=owner_epoch,
         )
     )
     if isinstance(db_item, dict):
@@ -844,6 +884,8 @@ async def complete_collection_item_async(
     error_code: str = "",
     message: str = "",
     next_run_at: str = "",
+    owner_instance: str = "",
+    owner_epoch: int | None = None,
 ) -> dict[str, Any] | None:
     final_status = status if status in TERMINAL_STATUSES | {"action_required", "queued"} else "failed"
     if _db_enabled():
@@ -854,6 +896,8 @@ async def complete_collection_item_async(
             error_code=error_code,
             message=message,
             next_run_at=next_run_at,
+            owner_instance=owner_instance,
+            owner_epoch=owner_epoch,
         )
     return complete_collection_item(
         item_id,
@@ -862,6 +906,8 @@ async def complete_collection_item_async(
         error_code=error_code,
         message=message,
         next_run_at=next_run_at,
+        owner_instance=owner_instance,
+        owner_epoch=owner_epoch,
     )
 
 
@@ -873,6 +919,8 @@ async def _complete_db(
     error_code: str,
     message: str,
     next_run_at: str,
+    owner_instance: str = "",
+    owner_epoch: int | None = None,
 ) -> dict[str, Any] | None:
     await ensure_queue_storage_ready()
     pool = await _ensure_pool()
@@ -887,8 +935,15 @@ async def _complete_db(
                    message = $5,
                    next_run_at = COALESCE(NULLIF($6, '')::timestamptz, next_run_at),
                    finished_at = CASE WHEN $2 IN ('succeeded','failed','cancelled','superseded','action_required') THEN NOW() ELSE finished_at END,
+                   lease_agent_id = '',
+                   owner_instance = '',
+                   lease_expires_at = NULL,
                    updated_at = NOW()
              WHERE id = $1
+               AND (
+                    (status <> 'running' AND NULLIF($7, '') IS NULL AND $8 IS NULL)
+                    OR (owner_instance = $7 AND owner_epoch = $8)
+               )
             RETURNING *
             """,
             uuid.UUID(str(item_id)),
@@ -897,6 +952,8 @@ async def _complete_db(
             error_code,
             message,
             next_run_at,
+            owner_instance,
+            owner_epoch,
         )
     return _row_to_item(row) if row else None
 
