@@ -1232,7 +1232,7 @@ def check_active_port_integrity(project: str = "AADS") -> dict[str, Any]:
         return {"status": "error", "error": str(exc)}
 
 
-_RECONCILE_MULTIPLIER = 2
+_RECONCILE_MULTIPLIER = 4
 
 async def reconcile_stale_deploys(conn: Any) -> list[dict[str, Any]]:
     """Auto-fail deploys that exceeded 2x the stall threshold with no heartbeat."""

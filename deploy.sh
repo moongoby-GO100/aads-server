@@ -1676,7 +1676,7 @@ sync_standby_slot_after_drain() {
         curl -sf -X POST "http://127.0.0.1:${old_port}/api/v1/pc-agent/graceful-shutdown" \
             -H "Content-Type: application/json" 2>/dev/null || true
 
-        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-600}"
+        local drain_max="${AADS_DEPLOY_STANDBY_SYNC_MAX_WAIT:-300}"
         local drain_interval="${AADS_DEPLOY_STANDBY_SYNC_POLL_SECONDS:-5}"
         local elapsed=0
         local active="0"
@@ -2405,5 +2405,10 @@ notify "✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${
 stop_downtime_monitor
 deploy_observe_update "success" "completed" ""
 record_deploy "success" "$MODE" ""
+# RC8: ensure final success persisted — override stale_auto if deploy_db_exec failed mid-run
+for _final_retry in 1 2 3; do
+    deploy_db_exec "UPDATE deploy_runs SET status='success', phase='completed', updated_at=NOW(), last_heartbeat_at=NOW(), error_summary=NULL WHERE id=${DEPLOY_RUN_ID} AND status != 'success';" >/dev/null 2>&1 && break
+    sleep 2
+done
 start_deploy_queue_worker "post_success"
 exit 0
