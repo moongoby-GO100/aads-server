@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="코그콤과 Re:Column의 회사, 제품, 사업모델, 고객, 경쟁사, 리스크 및 제휴 가능성을 분석한 공개용 기업조사보고서">
+  <title>코그콤 · Re:Column 기업분석 보고서 | 2026</title>
+  <style>
+    :root {
+      --ink:#122033; --muted:#65758b; --paper:#f5f8fb; --card:#ffffff;
+      --line:#dfe7ef; --navy:#0c233d; --blue:#246bfd; --cyan:#11a8b8;
+      --mint:#dff8f3; --amber:#f59e0b; --amber-bg:#fff7df;
+      --red:#dc3c52; --red-bg:#fff0f2; --green:#07866f; --green-bg:#eafaf6;
+      --shadow:0 20px 55px rgba(16,39,67,.10); --radius:22px;
+    }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:Pretendard,"Noto Sans KR",system-ui,-apple-system,sans-serif; line-height:1.68; word-break:keep-all; }
+    a { color:var(--blue); text-decoration:none; overflow-wrap:anywhere; }
+    a:hover { text-decoration:underline; }
+    button { font:inherit; }
+    .topbar { position:sticky; top:0; z-index:50; height:64px; background:rgba(9,29,52,.94); color:#fff; backdrop-filter:blur(15px); border-bottom:1px solid rgba(255,255,255,.12); }
+    .topbar-inner { max-width:1440px; height:100%; margin:auto; padding:0 24px; display:flex; align-items:center; gap:22px; }
+    .brand { display:flex; align-items:center; gap:10px; min-width:max-content; font-weight:850; letter-spacing:-.03em; }
+    .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:11px; background:linear-gradient(135deg,var(--blue),var(--cyan)); font-size:14px; }
+    .nav { flex:1; display:flex; gap:6px; overflow:auto; scrollbar-width:none; }
+    .nav a { color:#c8d6e7; padding:9px 11px; border-radius:10px; font-size:13px; white-space:nowrap; }
+    .nav a:hover,.nav a.active { color:#fff; background:rgba(255,255,255,.11); text-decoration:none; }
+    .print { border:1px solid rgba(255,255,255,.26); color:#fff; background:transparent; padding:8px 12px; border-radius:10px; cursor:pointer; white-space:nowrap; }
+    .hero { background:
+      radial-gradient(circle at 86% 18%,rgba(53,213,206,.22),transparent 28%),
+      radial-gradient(circle at 20% 0%,rgba(69,111,255,.27),transparent 34%),
+      linear-gradient(145deg,#081d34 0%,#102c4a 62%,#0b3d4b 100%); color:#fff; overflow:hidden; }
+    .hero-inner { max-width:1240px; margin:auto; padding:88px 28px 70px; position:relative; }
+    .eyebrow { display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:760; letter-spacing:.09em; text-transform:uppercase; color:#9fe8e2; }
+    .eyebrow:before { content:""; width:25px; height:2px; background:#52d3ca; }
+    h1 { margin:18px 0 18px; max-width:900px; font-size:clamp(42px,6vw,78px); line-height:1.03; letter-spacing:-.055em; }
+    .hero-lead { max-width:860px; margin:0; color:#d7e3f0; font-size:clamp(17px,2vw,22px); line-height:1.65; }
+    .verdict { margin-top:36px; max-width:930px; padding:23px 25px; border:1px solid rgba(132,230,219,.34); border-radius:18px; background:rgba(6,21,39,.45); box-shadow:inset 4px 0 #5de0d3; }
+    .verdict strong { color:#7ff0df; font-size:18px; }
+    .meta-row { margin-top:30px; display:flex; flex-wrap:wrap; gap:11px; }
+    .pill { display:inline-flex; align-items:center; padding:7px 11px; border:1px solid rgba(255,255,255,.17); background:rgba(255,255,255,.08); color:#dce8f4; border-radius:999px; font-size:12px; }
+    main { max-width:1240px; margin:0 auto; padding:36px 28px 100px; }
+    .legend { margin:-56px 0 46px; position:relative; z-index:4; display:grid; grid-template-columns:repeat(3,1fr); background:#fff; border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
+    .legend > div { padding:20px 22px; border-right:1px solid var(--line); }
+    .legend > div:last-child { border:0; }
+    .tag { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border-radius:999px; font-size:11px; font-weight:800; line-height:1.2; vertical-align:middle; }
+    .verified { color:var(--green); background:var(--green-bg); }
+    .claimed { color:#9b6500; background:var(--amber-bg); }
+    .unknown { color:var(--red); background:var(--red-bg); }
+    section { scroll-margin-top:88px; margin:72px 0; }
+    .section-kicker { color:var(--blue); font-weight:850; font-size:12px; letter-spacing:.12em; text-transform:uppercase; }
+    h2 { margin:7px 0 12px; font-size:clamp(30px,4vw,46px); line-height:1.17; letter-spacing:-.045em; }
+    h3 { margin:0 0 9px; font-size:20px; letter-spacing:-.025em; }
+    h4 { margin:0 0 6px; font-size:16px; }
+    .section-intro { max-width:850px; margin:0 0 28px; color:var(--muted); font-size:17px; }
+    .grid-2,.grid-3,.grid-4 { display:grid; gap:18px; }
+    .grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .grid-4 { grid-template-columns:repeat(4,minmax(0,1fr)); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:25px; box-shadow:0 9px 28px rgba(16,42,70,.045); }
+    .card p:last-child,.card ul:last-child { margin-bottom:0; }
+    .card-accent { background:linear-gradient(145deg,#fff 0%,#f3fbfc 100%); border-color:#cce9e9; }
+    .number { display:inline-grid; place-items:center; width:34px; height:34px; margin-bottom:14px; border-radius:11px; color:#fff; background:linear-gradient(135deg,var(--blue),var(--cyan)); font-weight:850; }
+    .metric { min-height:155px; }
+    .metric b { display:block; margin:8px 0 4px; font-size:28px; letter-spacing:-.04em; }
+    .metric p { margin:0; color:var(--muted); font-size:14px; }
+    .metric small { display:block; color:#8b99aa; margin-top:10px; }
+    .callout { padding:24px 26px; border-radius:18px; background:#eaf1ff; border-left:5px solid var(--blue); }
+    .callout.warn { background:var(--amber-bg); border-color:var(--amber); }
+    .callout.risk { background:var(--red-bg); border-color:var(--red); }
+    .clean { margin:10px 0 0; padding-left:20px; }
+    .clean li { margin:6px 0; }
+    .timeline { position:relative; padding-left:28px; }
+    .timeline:before { content:""; position:absolute; left:7px; top:8px; bottom:8px; width:2px; background:linear-gradient(var(--blue),var(--cyan)); }
+    .event { position:relative; padding:0 0 24px 18px; }
+    .event:before { content:""; position:absolute; left:-27px; top:7px; width:11px; height:11px; border:3px solid #fff; border-radius:50%; background:var(--blue); box-shadow:0 0 0 2px var(--blue); }
+    .event time { color:var(--blue); font-weight:850; font-size:13px; }
+    .event p { margin:3px 0 0; color:var(--muted); }
+    .flow { display:grid; grid-template-columns:repeat(6,1fr); gap:11px; align-items:stretch; }
+    .flow-step { position:relative; min-height:142px; padding:18px 16px; border-radius:18px; background:#fff; border:1px solid var(--line); }
+    .flow-step:not(:last-child):after { content:"→"; position:absolute; right:-13px; top:50%; z-index:2; color:var(--blue); font-weight:900; }
+    .flow-step b { display:block; color:var(--blue); font-size:12px; margin-bottom:8px; }
+    .flow-step span { display:block; color:var(--muted); font-size:13px; margin-top:6px; }
+    .product { display:flex; flex-direction:column; min-height:300px; }
+    .product .icon { width:48px; height:48px; display:grid; place-items:center; border-radius:14px; background:#edf3ff; color:var(--blue); font-weight:900; }
+    .product .use { margin-top:auto; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    .table-wrap { overflow-x:auto; background:#fff; border:1px solid var(--line); border-radius:18px; }
+    table { width:100%; border-collapse:collapse; min-width:760px; }
+    th { padding:14px 16px; color:#fff; background:var(--navy); text-align:left; font-size:13px; }
+    td { padding:15px 16px; border-bottom:1px solid var(--line); vertical-align:top; font-size:14px; }
+    tbody tr:last-child td { border-bottom:0; }
+    tbody tr:hover { background:#f8fbfe; }
+    .good { color:var(--green); font-weight:750; }
+    .mid { color:#986500; font-weight:750; }
+    .low { color:var(--red); font-weight:750; }
+    .score-row { display:grid; grid-template-columns:150px 1fr 44px; gap:13px; align-items:center; margin:13px 0; }
+    .bar { height:10px; overflow:hidden; border-radius:999px; background:#e6edf4; }
+    .bar span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--blue),var(--cyan)); }
+    .score-row b { text-align:right; }
+    .ecosystem { display:grid; grid-template-columns:1fr 1.25fr 1fr; gap:18px; align-items:stretch; }
+    .eco-col { display:flex; flex-direction:column; gap:12px; }
+    .eco-node { padding:18px; text-align:center; border:1px solid var(--line); border-radius:16px; background:#fff; }
+    .eco-core { display:grid; place-items:center; padding:30px; text-align:center; color:#fff; border-radius:24px; background:linear-gradient(145deg,#153f71,var(--cyan)); box-shadow:var(--shadow); }
+    .swot { display:grid; grid-template-columns:repeat(2,1fr); gap:2px; overflow:hidden; border-radius:22px; background:var(--line); }
+    .swot > div { min-height:230px; padding:26px; background:#fff; }
+    .swot h3 { display:flex; align-items:center; gap:9px; }
+    .swot strong { display:grid; place-items:center; width:29px; height:29px; border-radius:9px; background:var(--navy); color:#fff; }
+    .risk-item { display:grid; grid-template-columns:78px 1fr; gap:16px; padding:18px 0; border-bottom:1px solid var(--line); }
+    .risk-item:last-child { border-bottom:0; }
+    .priority { height:max-content; padding:5px 9px; border-radius:999px; text-align:center; font-size:11px; font-weight:850; }
+    .p0 { color:#fff; background:var(--red); } .p1 { color:#855300; background:#ffecb7; } .p2 { color:#11539e; background:#dbeafe; }
+    .checklist { counter-reset:item; list-style:none; padding:0; }
+    .checklist li { position:relative; counter-increment:item; padding:13px 15px 13px 48px; margin:9px 0; background:#fff; border:1px solid var(--line); border-radius:13px; }
+    .checklist li:before { content:counter(item); position:absolute; left:14px; top:12px; width:25px; height:25px; display:grid; place-items:center; color:#fff; background:var(--blue); border-radius:8px; font-size:12px; font-weight:850; }
+    .sources { font-size:14px; }
+    .source { padding:15px 0; border-bottom:1px solid var(--line); }
+    .source:last-child { border-bottom:0; }
+    .source b { display:block; }
+    .source span { color:var(--muted); }
+    .footer { margin-top:80px; padding:32px 0 0; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    .template-note { padding:28px; color:#fff; border-radius:24px; background:linear-gradient(145deg,#0c233d,#194d67); }
+    .template-note h3 { font-size:25px; }
+    .template-note code { padding:2px 6px; color:#b8fff6; background:rgba(255,255,255,.08); border-radius:5px; }
+    .template-note b,.template-note code { overflow-wrap:anywhere; word-break:break-word; }
+    sup a { color:inherit; text-decoration:underline; }
+    @media (max-width:980px) {
+      .grid-4 { grid-template-columns:repeat(2,1fr); }
+      .grid-3 { grid-template-columns:repeat(2,1fr); }
+      .flow { grid-template-columns:repeat(3,1fr); }
+      .flow-step:nth-child(3):after { display:none; }
+      .ecosystem { grid-template-columns:1fr; }
+      .eco-core { min-height:190px; order:-1; }
+    }
+    @media (max-width:680px) {
+      body { word-break:normal; }
+      .topbar { height:58px; }
+      .topbar-inner { padding:0 14px; }
+      .brand span:last-child { display:none; }
+      .print { display:none; }
+      .hero-inner { padding:68px 20px 78px; }
+      main { padding:28px 16px 70px; }
+      .legend { grid-template-columns:1fr; margin-top:-54px; }
+      .legend > div { border-right:0; border-bottom:1px solid var(--line); }
+      .grid-2,.grid-3,.grid-4 { grid-template-columns:1fr; }
+      .flow { grid-template-columns:1fr; }
+      .flow-step:not(:last-child):after { content:"↓"; right:auto; left:50%; top:auto; bottom:-18px; }
+      .swot { grid-template-columns:1fr; }
+      .score-row { grid-template-columns:105px 1fr 36px; font-size:13px; }
+      .risk-item { grid-template-columns:1fr; gap:8px; }
+    }
+    @media print {
+      body { background:#fff; font-size:10.5pt; }
+      .topbar,.print { display:none!important; }
+      .hero { print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+      .hero-inner { padding:42px 30px 56px; }
+      main { max-width:none; padding:20px 28px; }
+      section { margin:40px 0; break-inside:auto; }
+      .card,.table-wrap,.callout,.template-note { box-shadow:none; break-inside:avoid; }
+      a { color:inherit; }
+      .nav { display:none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="brand-mark">RC</span><span>기업 인텔리전스 리포트</span></div>
+      <nav class="nav" aria-label="보고서 목차">
+        <a href="#summary">요약</a><a href="#company">기업</a><a href="#product">제품</a>
+        <a href="#business">사업모델</a><a href="#customers">고객</a><a href="#competition">경쟁</a>
+        <a href="#risk">리스크</a><a href="#recommendation">권고</a><a href="#sources">출처</a>
+      </nav>
+      <button class="print" type="button" onclick="window.print()">PDF·인쇄</button>
+    </div>
+  </header>
+
+  <div class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">Company Intelligence · 2026.09</div>
+      <h1>코그콤<br><span style="color:#77e5da">Re:Column</span></h1>
+      <p class="hero-lead">엑셀·문서 중심의 반복 업무를 데이터 변환, 검증, 문서 생성, 협업, 시각화까지 하나의 노코드 워크플로우로 연결하는 한국 B2B 업무자동화 기업 분석</p>
+      <div class="verdict">
+        <strong>종합 판정 — “PoC·제휴 후보로 유망, 전사 핵심데이터 도입·투자는 조건부”</strong><br>
+        실무자의 기존 엑셀 양식을 보존하면서 자동화하는 제품 포지셔닝과 다수의 산업별 사례가 강점입니다. 반면 재무, 고객 유지율, SLA, 보안 인증, 데이터 처리 구조는 공개 근거가 부족하므로 계약 전 기술·법무 실사가 필수입니다.
+      </div>
+      <div class="meta-row">
+        <span class="pill">분석 기준 2026-09-09 14:17 KST</span>
+        <span class="pill">공개자료 기반</span>
+        <span class="pill">공식·공공·마켓플레이스·특허 교차검증</span>
+        <span class="pill">외부 공개용 v1.0</span>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <div class="legend" aria-label="근거 등급">
+      <div><span class="tag verified">● 독립 확인</span><br><small>공공기관·마켓플레이스·특허·법인정보 등 외부 근거 존재</small></div>
+      <div><span class="tag claimed">● 회사 공개</span><br><small>공식 사이트·자사 고객사례의 주장. 별도 원자료 검증 필요</small></div>
+      <div><span class="tag unknown">● 미확인</span><br><small>재무·계약·보안 자료 등 공개되지 않아 실사 질문으로 분리</small></div>
+    </div>
+
+    <section id="summary">
+      <div class="section-kicker">01 · Executive brief</div>
+      <h2>경영진이 먼저 볼 결론</h2>
+      <p class="section-intro">Re:Column은 “엑셀을 없애는 시스템”이 아니라 “현업이 이미 쓰는 엑셀과 문서를 자동화 파이프라인의 입·출력으로 유지하는 시스템”입니다. 이 전환비용 절감이 가장 분명한 경쟁력입니다.</p>
+      <div class="grid-4">
+        <article class="card metric"><span class="tag verified">독립 확인</span><b>2020.08.13</b><p>㈜코그콤 법인 설립일</p><small>NICE Bizinfo·NextUnicorn</small></article>
+        <article class="card metric"><span class="tag claimed">회사 공개</span><b>50+</b><p>공식 홈페이지가 제시하는 고객사 수</p><small>고객명·유지율 전체 목록 미공개</small></article>
+        <article class="card metric"><span class="tag verified">독립 확인</span><b>KR 출원 1건</b><p>데이터·문서 통합 관련 공개 특허</p><small>2025-06-17 공개, 심사 중</small></article>
+        <article class="card metric"><span class="tag verified">독립 확인</span><b>견적형</b><p>네이버클라우드 엔터프라이즈 플랜</p><small>정가·계약 단위는 비공개</small></article>
+      </div>
+      <div class="grid-2" style="margin-top:18px">
+        <article class="card card-accent">
+          <h3>투자·제휴 논리</h3>
+          <ul class="clean">
+            <li><b>명확한 비효율:</b> 기업 현장에 남아 있는 엑셀 취합·대조·재가공 업무를 직접 겨냥합니다.</li>
+            <li><b>현업 친화 도입:</b> 기존 서식과 프로세스를 보존해 ERP 전면교체보다 마찰이 낮습니다.</li>
+            <li><b>서비스 결합:</b> 컨설턴트가 프로세스를 분석하고 워크플로우를 세팅해 초기 성공률을 높이는 구조입니다.</li>
+            <li><b>확장 경로:</b> SaaS, 온프레미스, 클라우드 마켓플레이스, 바우처, 산업별 템플릿으로 확장 가능합니다.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>의사결정을 멈추게 하는 4가지</h3>
+          <ul class="clean">
+            <li><b>재무 미공개:</b> 매출·손익·현금보유·투자유치 내역을 확인할 공개 재무자료가 없습니다.</li>
+            <li><b>성과 표본 편향:</b> 시간절감 수치는 자사 사례 중심이며 전 고객 분포·이탈률은 없습니다.</li>
+            <li><b>보안 증빙 부족:</b> ISMS/ISO 27001/SOC 2, 침투테스트, RTO/RPO, SLA 공개 근거가 없습니다.</li>
+            <li><b>핵심인력 집중:</b> 소규모 기업으로 추정되나 실제 조직·지원 인력·키맨 의존도는 미확인입니다.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="company">
+      <div class="section-kicker">02 · Company</div>
+      <h2>회사 식별과 성장 궤적</h2>
+      <div class="grid-2">
+        <article class="card">
+          <h3>법인 프로필</h3>
+          <div class="table-wrap" style="border:0;border-radius:0">
+            <table style="min-width:0">
+              <tbody>
+                <tr><td>법인</td><td><b>주식회사 코그콤(COGCOM)</b> <span class="tag verified">확인</span></td></tr>
+                <tr><td>대표</td><td>정치훈</td></tr>
+                <tr><td>설립</td><td>2020년 8월 13일</td></tr>
+                <tr><td>업종</td><td>컴퓨터 프로그래밍 서비스업(J62010)</td></tr>
+                <tr><td>주소</td><td>서울 송파구 송파대로 201, 송파테라타워2 B동 1221호</td></tr>
+                <tr><td>사업자번호</td><td>378-86-01944</td></tr>
+                <tr><td>제품</td><td>Re:Column, 펭귄AI(대학 연구행정)</td></tr>
+                <tr><td>기업형태</td><td>중소기업·벤처기업·특허보유기업 <span class="tag verified">NICE</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+        <article class="card">
+          <h3>주요 연혁</h3>
+          <div class="timeline">
+            <div class="event"><time>2020</time><p>법인 설립.</p></div>
+            <div class="event"><time>2021</time><p>IBK 혁신기술 테스트베드 참여기업 선정 사실이 공식 뉴스룸에 소개됨. <span class="tag claimed">회사 공개</span></p></div>
+            <div class="event"><time>2022–2023</time><p>강원대 업무협약·서울AI허브 소개·벤츠코리아 문서/데이터 자동화 사례가 공공 자료에 등장. <span class="tag verified">교차확인</span></p></div>
+            <div class="event"><time>2024</time><p>솔루션 바우처 공급기업, 한국전자전 참가, 네이버클라우드 오픈이노베이션 선정 보도.</p></div>
+            <div class="event"><time>2025</time><p>이노비즈 인증 보도, 스타트업 아우토반 코리아 선정, 데이터·문서 통합 특허 공개. <span class="tag verified">외부확인</span></p></div>
+            <div class="event"><time>2026</time><p>네이버클라우드 비즈마켓 정식 판매 확인. 데이터바우처·수출바우처·SVC 피칭 1위·마곡 오픈이노베이션은 회사 뉴스룸 및 언론 보도 기준.</p></div>
+          </div>
+        </article>
+      </div>
+      <div class="callout warn" style="margin-top:18px">
+        <b>주의:</b> “마켓플레이스 등록·지원사업 선정·MOU·PoC”는 제품성·영업 접근성을 보여주는 신호이지만, 반복 매출이나 유료 전환, 장기 유지율을 곧바로 입증하지는 않습니다. 계약 매출과 실제 사용량은 별도 확인해야 합니다.
+      </div>
+    </section>
+
+    <section id="positioning">
+      <div class="section-kicker">03 · Positioning</div>
+      <h2>무엇을 해결하는 회사인가</h2>
+      <p class="section-intro">핵심 고객은 ERP·WMS·CRM을 전혀 쓰지 않는 회사가 아니라, 이미 여러 시스템을 쓰면서도 시스템 사이의 마지막 20%를 엑셀·메일·메신저로 처리하는 조직입니다.</p>
+      <div class="flow" aria-label="리컬럼 가치사슬">
+        <div class="flow-step"><b>01 INPUT</b><h4>흩어진 입력</h4><span>Excel, PDF, 이미지, DB, 웹, 이메일·메신저 텍스트</span></div>
+        <div class="flow-step"><b>02 STANDARDIZE</b><h4>표준화</h4><span>열 매핑, 형식 변환, OCR, 분류, 정보추출</span></div>
+        <div class="flow-step"><b>03 AUTOMATE</b><h4>워크플로우</h4><span>Join, Union, 계산, 조건분기, 스케줄 실행</span></div>
+        <div class="flow-step"><b>04 VERIFY</b><h4>검증</h4><span>두 파일·시스템 간 셀/항목 차이 탐지</span></div>
+        <div class="flow-step"><b>05 OUTPUT</b><h4>산출물</h4><span>기존 Excel 서식, 견적서, 정산서, 결과서</span></div>
+        <div class="flow-step"><b>06 COLLABORATE</b><h4>운영</h4><span>권한, 변경이력, 댓글, 승인, 대시보드</span></div>
+      </div>
+      <div class="grid-3" style="margin-top:18px">
+        <article class="card"><h3>핵심 구매자</h3><p>경영지원·재무·영업운영·물류·MD·생산품질 책임자. “사람이 매번 같은 엑셀을 만드는 비용”을 예산 문제로 보는 관리자입니다.</p></article>
+        <article class="card"><h3>핵심 사용자</h3><p>엑셀 숙련도는 높지만 개발자는 아닌 실무자. 완전히 새로운 도구보다 익숙한 결과물을 선호하고, 오류 대조와 마감 압박이 큽니다.</p></article>
+        <article class="card"><h3>대체재</h3><p>사내 엑셀 매크로·VBA, 개발자 스크립트, RPA, ETL/데이터 준비 도구, ERP 커스터마이징, 외주 수작업이 모두 실질적 경쟁자입니다.</p></article>
+      </div>
+    </section>
+
+    <section id="product">
+      <div class="section-kicker">04 · Product deep dive</div>
+      <h2>제품 7개 영역 상세 분석</h2>
+      <p class="section-intro">공식 웹사이트가 공개한 현재 제품 메뉴와 실제 사용 시나리오를 기준으로 재구성했습니다. 90%·99%·100% 같은 수치는 회사 홍보 수치이며 독립 벤치마크가 아닙니다.</p>
+      <div class="grid-3">
+        <article class="card product"><div class="icon">01</div><h3>워크플로우</h3><p>서로 다른 엑셀 양식 통합, 수식·분류·집계, 웹 자료 수집, ERP/BI 업로드 구조 변환을 한 번의 실행으로 묶습니다.</p><div class="use"><b>대표 업무</b><br>다채널 매출 취합 · 출고/발주 변환 · 월간 보고서 · 웹 공고 수집</div></article>
+        <article class="card product"><div class="icon">02</div><h3>엑셀 서식</h3><p>데이터가 늘거나 항목이 바뀌어도 고객의 기존 색상, 병합, 표, 계산식, 출력 규격을 결과 파일에 재현하는 것이 핵심입니다.</p><div class="use"><b>대표 업무</b><br>제조시험성적서 · 검수표 · 매출보고서 · 정산서</div></article>
+        <article class="card product"><div class="icon">03</div><h3>데이터 검증</h3><p>발주서와 청구서, ERP와 영업자료처럼 두 데이터셋을 위치·항목 기준으로 비교해 누락, 단가, 수량, 중복 차이를 표시합니다.</p><div class="use"><b>대표 업무</b><br>매입 정산 · 이중청구 탐지 · 지점 실적 대사 · 마감 검증</div></article>
+        <article class="card product"><div class="icon">04</div><h3>문서 폼</h3><p>사용자가 조건값을 입력하면 사전에 정의한 규칙으로 견적서·제조 결과서·UTM·발주서를 생성하고 이력을 관리합니다.</p><div class="use"><b>대표 업무</b><br>복잡 견적 · 공정 결과서 · 마케팅 링크 · 메신저 주문 정형화</div></article>
+        <article class="card product"><div class="icon">05</div><h3>이메일 유효성</h3><p>주소 형식과 도메인 오류를 사전 검증하고 신규·기존 고객 DB를 정제·병합해 캠페인 반송 위험을 낮추는 기능입니다.</p><div class="use"><b>대표 업무</b><br>CRM 정제 · 캠페인 대상 생성 · 중복 제거 · 발신평판 보호</div></article>
+        <article class="card product"><div class="icon">06</div><h3>협업·권한</h3><p>프로젝트별 보기·편집·승인 권한, 변경 이력, 타임라인, 댓글, 데이터 공유로 자동화 이후의 검토 업무까지 연결합니다.</p><div class="use"><b>대표 업무</b><br>팀/외부사 권한분리 · 승인흐름 · 감사추적 · 버전관리</div></article>
+        <article class="card product"><div class="icon">07</div><h3>시각화</h3><p>워크플로우 결과로 차트와 대시보드를 갱신해 채널별 매출, 캠페인, 재고·출고 실적을 반복 보고합니다.</p><div class="use"><b>대표 업무</b><br>주·월 실적 · 채널 성과 · 재고 현황 · 경영 리포트</div></article>
+        <article class="card product card-accent"><div class="icon">AI</div><h3>확장 중인 AI 계층</h3><p>서울AI허브 자료와 제품 번들에서 OCR, PDF 분류, 정보추출, 요약, 키워드, AI Agent가 확인됩니다. 최근 공식 메시지는 Copilot이 업무를 해석해 데이터 구조와 자동화 흐름을 제안하는 방향입니다.</p><div class="use"><b>실사 포인트</b><br>사용 모델 · RAG 범위 · 정확도 · 환각 통제 · 고객데이터 학습 여부</div></article>
+        <article class="card product"><div class="icon">DEP</div><h3>배포 형태</h3><p>공식 LinkedIn에서는 클라우드 SaaS와 온프레미스를 모두 지원한다고 설명합니다. 마켓플레이스에서는 엔터프라이즈 견적형으로 판매됩니다.</p><div class="use"><b>실사 포인트</b><br>싱글/멀티테넌트 · 네트워크 격리 · 업데이트 책임 · 최소 계약기간</div></article>
+      </div>
+    </section>
+
+    <section id="verticals">
+      <div class="section-kicker">05 · Vertical solutions</div>
+      <h2>산업별 제품화 수준</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>산업</th><th>핵심 데이터 문제</th><th>Re:Column 적용</th><th>가치가 생기는 지점</th></tr></thead>
+          <tbody>
+            <tr><td><b>이커머스</b></td><td>판매채널별 주문·매출·광고 파일 형식 불일치</td><td>통합, ERP/회계 업로드 변환, 프로모션 출고, 성과 대시보드</td><td>채널 수가 늘수록 자동화 ROI가 커짐</td></tr>
+            <tr><td><b>유통·물류</b></td><td>거래처 발주서, 물류사 송장, 정산서가 제각각</td><td>발주·청구·정산서 생성, 메신저 주문 정형화, 입출고 대사</td><td>오류 비용과 월말 마감시간 동시 절감</td></tr>
+            <tr><td><b>리테일</b></td><td>매장마다 다른 재고·매출·발주 양식</td><td>본사 표준화, 매장 결과 재배포, 실적·재고 시각화</td><td>매장 수 증가에도 취합 인력 선형 증가 억제</td></tr>
+            <tr><td><b>제조</b></td><td>공정·검사 결과와 복잡한 문서 서식</td><td>시험성적서·검수표 자동 생성, 조건 규칙, 변경 서식 대응</td><td>문서 정확성과 납기, 추적성 향상</td></tr>
+            <tr><td><b>연구·공공</b></td><td>논문·문서·이미지 등 비정형 자료와 행정 반복</td><td>OCR/PDF 분류, 정보추출, 연구행정 자동화, 웹 수집</td><td>비정형 자료의 DB화 및 검색 기반 마련</td></tr>
+            <tr><td><b>영업·마케팅</b></td><td>리드 중복, 이메일 오류, UTM·성과보고 불일치</td><td>CRM 정제, 이메일 검증, UTM 생성, 캠페인 대시보드</td><td>실행 속도·데이터 품질·보고 일관성 향상</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="business">
+      <div class="section-kicker">06 · Business model</div>
+      <h2>사업모델과 수익 엔진</h2>
+      <p class="section-intro">공개 가격표는 없지만, 확인된 판매 방식과 제품 특성으로 볼 때 “엔터프라이즈 SaaS 구독 + 초기 업무분석/구축 + 커스텀·온프레미스 + 공공지원 채널”의 복합 모델이 가장 타당합니다. 아래에서 확인 사실과 분석 추론을 구분했습니다.</p>
+      <div class="grid-3">
+        <article class="card"><span class="tag verified">확인</span><h3 style="margin-top:12px">엔터프라이즈 견적</h3><p>네이버클라우드 비즈마켓은 엔터프라이즈 플랜을 “견적 문의”로 제시합니다. 복잡도·사용량·지원범위에 따른 계약형 판매로 보입니다.</p></article>
+        <article class="card"><span class="tag claimed">회사 공개</span><h3 style="margin-top:12px">컨설팅형 온보딩</h3><p>컨설턴트가 고객 업무를 분석하고 워크플로우를 세팅한다고 명시합니다. 초기 분석·구축비 또는 구독에 포함된 전문서비스가 발생할 가능성이 큽니다.</p></article>
+        <article class="card"><span class="tag claimed">회사 공개</span><h3 style="margin-top:12px">SaaS + 온프레미스</h3><p>클라우드로 빠르게 PoC하고 보안 요구가 높은 고객에는 온프레미스를 제공하는 이중 배포 전략입니다.</p></article>
+        <article class="card"><span class="tag verified">확인</span><h3 style="margin-top:12px">클라우드 채널</h3><p>네이버클라우드 판매자·이용 가능 상태는 독립 확인했습니다. Microsoft Azure 등록은 회사 뉴스룸 주장으로, 실제 리스팅과 계약범위는 재확인이 필요합니다.</p></article>
+        <article class="card"><span class="tag claimed">공개 보도</span><h3 style="margin-top:12px">바우처·공공사업</h3><p>솔루션·데이터·AI 청년창업·수출 바우처 공급기업 보도는 고객의 초기 구매부담을 낮추고 공공·중소기업 리드를 만듭니다.</p></article>
+        <article class="card"><span class="tag unknown">미확인</span><h3 style="margin-top:12px">업셀·사용량 과금</h3><p>사용자 수, 실행량, 데이터 용량, 워크플로우 수, AI/OCR 처리량 중 무엇이 과금축인지 공개되지 않았습니다. NRR을 좌우하는 핵심 실사항목입니다.</p></article>
+      </div>
+      <div class="callout" style="margin-top:20px">
+        <b>경제성 구조:</b> 초기에는 컨설턴트 투입으로 매출총이익률이 낮을 수 있지만, 산업별 템플릿과 Copilot이 세팅 시간을 줄이면 구축 매출을 반복 구독으로 전환할 수 있습니다. 반대로 매 고객별 커스터마이징이 계속 크다면 SaaS보다 SI형 인력사업에 가까워질 위험이 있습니다.
+      </div>
+    </section>
+
+    <section id="customers">
+      <div class="section-kicker">07 · Customers & evidence</div>
+      <h2>고객 증거와 성과의 질</h2>
+      <div class="grid-2">
+        <article class="card card-accent">
+          <span class="tag claimed">회사 고객사례</span>
+          <h3 style="margin-top:13px">듀이트리 — 다채널 매출보고</h3>
+          <p>H&amp;B·온라인·PX·해외 판매 파일을 한 양식으로 통합하고 성장률·점유율 계산까지 자동화. 공식 사례는 최대 반나절 걸리던 업무가 10분 이내로 줄고, 실무자 1명이 전체 과정을 처리하게 됐다고 설명합니다.</p>
+          <p><b>증거 평가:</b> 실명 고객과 구체 프로세스는 강점이지만, 전후 로그·사용기간·담당자 인터뷰 원문은 공개되지 않았습니다.</p>
+        </article>
+        <article class="card">
+          <span class="tag verified">공공 백서</span>
+          <h3 style="margin-top:13px">벤츠코리아·강원대학교</h3>
+          <p>서울AI허브 2023 기업정보집은 벤츠코리아에 문서/데이터 통합 업무자동화, 강원대에 논문 정보관리 자동화 서비스를 제공한다고 기재합니다. 강원대 교육용 라이선스 제공은 언론 보도에서도 확인됩니다.</p>
+          <p><b>증거 평가:</b> 외부 기관 문서로 교차확인됐으나 계약규모·유료 여부·현재 유지 여부는 미확인입니다.</p>
+        </article>
+      </div>
+      <div class="table-wrap" style="margin-top:18px">
+        <table>
+          <thead><tr><th>공개 사례군</th><th>공식 사이트가 제시한 결과</th><th>확인 수준</th><th>실사 시 받을 자료</th></tr></thead>
+          <tbody>
+            <tr><td>뷰티·다채널 커머스</td><td>매출보고 5~10분, ERP 연계, 정산 자동화</td><td><span class="mid">회사 주장</span></td><td>최근 6개월 실행 로그, 오류율, 실제 사용자 추천서</td></tr>
+            <tr><td>유통기업</td><td>1주일 청구서 업무를 10분 이내로 단축</td><td><span class="mid">회사 주장</span></td><td>업무량·인원·예외처리율 전후 비교</td></tr>
+            <tr><td>패션·프로모션</td><td>사은품 출고 자동화</td><td><span class="mid">회사 주장</span></td><td>SKU/채널 수, 반품·취소 예외 로직</td></tr>
+            <tr><td>제조</td><td>Word 시험성적서 자동화</td><td><span class="mid">회사 주장</span></td><td>승인 이력, 규격 변경 대응, 전자서명·감사 추적</td></tr>
+            <tr><td>대학·연구</td><td>논문 정보관리·교육용 라이선스</td><td><span class="good">외부 확인</span></td><td>활성 사용자, 운영기간, 연구데이터 보호 방식</td></tr>
+            <tr><td>공공·포렌식</td><td>대검찰청 AI 디지털포렌식 기술개발 용역 보도</td><td><span class="low">계약 원문 미확인</span></td><td>나라장터 계약번호·범위·완료확인서</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="strengths">
+      <div class="section-kicker">08 · Differentiation</div>
+      <h2>코그콤이 특히 강한 지점</h2>
+      <div class="grid-3">
+        <article class="card card-accent"><div class="number">1</div><h3>엑셀 공존 전략</h3><p>엑셀을 폐기시키지 않고 입력·출력 인터페이스로 활용합니다. 조직의 변화관리 비용을 낮추고 ERP 사이의 틈을 빠르게 메웁니다.</p></article>
+        <article class="card card-accent"><div class="number">2</div><h3>끝단까지 연결</h3><p>데이터 전처리만이 아니라 검증, 기존 서식 출력, 공유, 승인, 시각화까지 현업 업무의 마무리를 제품 범위에 넣었습니다.</p></article>
+        <article class="card card-accent"><div class="number">3</div><h3>한국 업무 맥락</h3><p>카카오톡 발주, 쇼핑몰별 파일, 제조시험성적서, 한글 견적·정산 양식 등 글로벌 도구가 템플릿으로 바로 제공하지 않는 문제를 다룹니다.</p></article>
+        <article class="card"><div class="number">4</div><h3>컨설팅 기반 성공 설계</h3><p>고객에게 빈 캔버스를 주는 대신 업무 분석과 워크플로우 세팅을 함께 제공합니다. 초기 도입 실패를 줄이는 대신 서비스 원가 관리가 중요합니다.</p></article>
+        <article class="card"><div class="number">5</div><h3>다중 배포·판매 채널</h3><p>SaaS·온프레미스, 네이버클라우드, 정부 바우처, 오픈이노베이션을 결합해 중소기업부터 보안 민감 기관까지 접근할 수 있습니다.</p></article>
+        <article class="card"><div class="number">6</div><h3>IP와 AI 확장성</h3><p>비정형 데이터를 정형화하고 DB를 형성하는 특허 출원과 OCR·정보추출·RAG/Copilot 방향은 “AI 이전의 데이터 준비” 시장과 맞닿습니다.</p></article>
+      </div>
+    </section>
+
+    <section id="ecosystem">
+      <div class="section-kicker">09 · Ecosystem</div>
+      <h2>관련 기업·기관 생태계</h2>
+      <div class="ecosystem">
+        <div class="eco-col">
+          <div class="eco-node"><b>네이버클라우드</b><br><small>마켓플레이스 판매·클라우드 채널</small></div>
+          <div class="eco-node"><b>Microsoft Azure</b><br><small>회사 발표상 마켓플레이스·글로벌 채널</small></div>
+          <div class="eco-node"><b>서울AI허브</b><br><small>입주·육성·기업정보 공신력</small></div>
+          <div class="eco-node"><b>정부 바우처 기관</b><br><small>중소기업 도입비 지원·리드 창출</small></div>
+        </div>
+        <div class="eco-core"><div><small>CORE COMPANY</small><h3 style="font-size:32px;margin:10px 0">COGCOM<br>Re:Column</h3><p style="margin:0;color:#d6f8f4">데이터 표준화 → 업무자동화 → 문서·협업 → AI Ready</p></div></div>
+        <div class="eco-col">
+          <div class="eco-node"><b>Mercedes-Benz Korea</b><br><small>고객·오픈이노베이션·PoC 신호</small></div>
+          <div class="eco-node"><b>강원대학교</b><br><small>연구행정·교육용 라이선스</small></div>
+          <div class="eco-node"><b>이커머스·뷰티 고객</b><br><small>다채널 매출·정산·출고 레퍼런스</small></div>
+          <div class="eco-node"><b>중동 Al Fardan</b><br><small>MOU 기반 해외 확장, 매출화는 미확인</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="competition">
+      <div class="section-kicker">10 · Competitive landscape</div>
+      <h2>경쟁기업 비교</h2>
+      <p class="section-intro">Re:Column은 단일 범주보다 RPA, 데이터 준비, BI, iPaaS 사이에 걸쳐 있습니다. 아래 평가는 2026년 9월 공개 제품문서와 Re:Column 공개 기능을 비교한 분석입니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>기업·제품</th><th>주력</th><th>상대적 강점</th><th>Re:Column의 승부처</th><th>위협도</th></tr></thead>
+          <tbody>
+            <tr><td><b>Microsoft<br>Power Automate</b></td><td>M365·Dataverse·클라우드/데스크톱 RPA</td><td>광범위 커넥터, 생태계, 글로벌 운영·가격 투명성</td><td>한국식 엑셀 양식·컨설턴트 구축·빠른 산업 템플릿</td><td><span class="low">매우 높음</span></td></tr>
+            <tr><td><b>UiPath</b></td><td>전사 RPA·문서이해·에이전트 오케스트레이션</td><td>엔터프라이즈 거버넌스, 로봇·프로세스 생태계, 온프레미스</td><td>도입 복잡도와 총비용이 과한 중견·중소 현업팀</td><td><span class="low">높음</span></td></tr>
+            <tr><td><b>Alteryx</b></td><td>노코드 데이터 준비·분석·워크플로우</td><td>고급 분석, 데이터 연결, 데이터 전문가 생산성</td><td>분석가보다 경영지원 실무자, 문서 서식·업무 마감</td><td><span class="low">높음</span></td></tr>
+            <tr><td><b>KNIME</b></td><td>오픈 데이터·AI 워크플로우, Hub 배포</td><td>무료 데스크톱, 확장성, 데이터과학 생태계, 투명한 시작가격</td><td>코드·노드 설계 부담 없이 구축을 맡기려는 고객</td><td><span class="mid">중간</span></td></tr>
+            <tr><td><b>Tableau Prep</b></td><td>분석 전 데이터 정제·계보·시각화 연계</td><td>Tableau BI 통합, 100+ 연결, 시각적 데이터 준비</td><td>엑셀 결과 문서·발주/정산·메신저 입력까지의 E2E 처리</td><td><span class="mid">중간</span></td></tr>
+            <tr><td><b>VBA·사내 Python</b></td><td>개별 업무 자동화</td><td>낮은 현금비용, 완전한 커스터마이징</td><td>담당자 퇴사·버전 충돌·권한·감사·유지보수 문제 해결</td><td><span class="low">상시 높음</span></td></tr>
+            <tr><td><b>ERP·SI 추가개발</b></td><td>핵심 시스템 내부 커스터마이징</td><td>단일 시스템 통제, 기존 계약·조직 신뢰</td><td>여러 외부 채널과 비정형 파일을 빠르게 연결하는 보완재</td><td><span class="mid">구매예산 경쟁</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid-2" style="margin-top:18px">
+        <article class="card"><h3>경쟁을 피해야 할 영역</h3><p>범용 API 커넥터 수, 글로벌 인증 개수, 초대형 무인봇 운영, 복잡한 데이터과학 기능으로 정면 승부하면 규모 열세가 큽니다.</p></article>
+        <article class="card card-accent"><h3>집중해야 할 영역</h3><p>“한국 현업의 지저분한 엑셀·문서·메신저 → 검증된 회사 표준문서”라는 좁고 반복적인 문제를 산업 템플릿과 빠른 구축으로 압도해야 합니다.</p></article>
+      </div>
+    </section>
+
+    <section id="swot">
+      <div class="section-kicker">11 · SWOT</div>
+      <h2>전략 진단</h2>
+      <div class="swot">
+        <div><h3><strong>S</strong> Strengths</h3><ul class="clean"><li>기존 엑셀 서식 보존</li><li>데이터부터 문서·협업까지 E2E</li><li>한국 산업별 구체 사례</li><li>SaaS·온프레미스 선택</li><li>클라우드 마켓·공공지원 채널</li></ul></div>
+        <div><h3><strong>W</strong> Weaknesses</h3><ul class="clean"><li>공개 가격·재무·조직정보 부족</li><li>서비스형 구축 의존 가능성</li><li>대형사 대비 커넥터·생태계 열세</li><li>성과 지표가 자사 사례 중심</li><li>보안·SLA 공개 문서 미흡</li></ul></div>
+        <div><h3><strong>O</strong> Opportunities</h3><ul class="clean"><li>AI 도입 전 데이터 표준화 수요</li><li>레거시 ERP 사이의 마지막 구간 자동화</li><li>이커머스·유통·제조 템플릿 확장</li><li>Copilot 기반 구축시간 단축</li><li>바우처·마켓플레이스 해외 확장</li></ul></div>
+        <div><h3><strong>T</strong> Threats</h3><ul class="clean"><li>Microsoft·UiPath의 번들·AI 강화</li><li>생성형 AI의 직접 엑셀 자동화</li><li>고객별 예외 증가에 따른 원가 악화</li><li>핵심인력·지원용량 집중 위험</li><li>기업 데이터 사고 시 신뢰 훼손</li></ul></div>
+      </div>
+    </section>
+
+    <section id="risk">
+      <div class="section-kicker">12 · Risk & due diligence</div>
+      <h2>계약 전 반드시 확인할 위험</h2>
+      <div class="card">
+        <div class="risk-item"><span class="priority p0">P0 보안</span><div><h3>보안 인증·아키텍처가 공개되지 않음</h3><p>ISMS, ISO 27001, SOC 2, 정기 침투테스트, 암호화 키 관리, 백업 복구, 데이터 리전, 서브프로세서 자료를 확인하지 못했습니다. 홈페이지 HTML 응답에는 2026-09-09 실측상 HSTS·CSP·X-Frame-Options 등 주요 브라우저 보안 헤더가 보이지 않았고, API 응답에는 일부 헤더가 존재했습니다. 제품 보안 전체를 이 한 번의 관측으로 단정할 수는 없으나 실사 신호입니다.</p></div></div>
+        <div class="risk-item"><span class="priority p0">P0 법무</span><div><h3>공개 개인정보처리방침·약관의 최신성</h3><p>개인정보처리방침은 2022-05-31 시행본으로 표시되고 Google 외 인프라·분석·상담 수탁자, 국외이전, 기업 업로드 데이터의 처리 역할 등이 충분히 드러나지 않습니다. 이용약관에는 배송·반품 등 물리적 재화 템플릿 문구가 남아 있어 B2B SaaS 계약과의 정합성 점검이 필요합니다.</p></div></div>
+        <div class="risk-item"><span class="priority p0">P0 재무</span><div><h3>생존성·수익성 판단자료 부족</h3><p>최근 3개년 매출, ARR/MRR, 매출총이익률, 현금소진, 부채, 투자유치, 고객집중도 자료가 공개되지 않았습니다. 외부 핵심업무를 맡기기 전 계속기업·지원인력 리스크를 확인해야 합니다.</p></div></div>
+        <div class="risk-item"><span class="priority p1">P1 제품</span><div><h3>홍보 수치의 정의와 표본</h3><p>90% 시간절감, 99% 서식 재현, 100% 오류검증·보안만족·업무완결성 수치의 표본수, 측정방법, 예외범위가 공개되지 않았습니다. PoC에서 고객 데이터로 재측정해야 합니다.</p></div></div>
+        <div class="risk-item"><span class="priority p1">P1 운영</span><div><h3>예외처리·지원·벤더 종속</h3><p>입력 양식 변경, 부분 실패, 재처리, 승인 취소, 대량 처리, 장애 시 수동 전환, 고객의 워크플로우 소유권·반출 형식을 계약서에 고정해야 합니다.</p></div></div>
+        <div class="risk-item"><span class="priority p2">P2 IP</span><div><h3>특허는 등록이 아니라 출원 공개 상태</h3><p>KR20250088299A는 2025-06-17 공개됐고 현재 Google Patents 기준 Pending입니다. 보호범위·거절 가능성·해외 패밀리 출원은 변리사 확인이 필요합니다.</p></div></div>
+      </div>
+      <div class="callout risk" style="margin-top:18px"><b>판정 기준:</b> 위 항목은 회사의 문제가 발생했다고 단정하는 내용이 아니라, 공개 근거가 없어 구매자·투자자가 확인해야 하는 실사 공백입니다.</div>
+    </section>
+
+    <section id="scoring">
+      <div class="section-kicker">13 · Analyst scorecard</div>
+      <h2>분석가 평가표</h2>
+      <p class="section-intro">아래 점수는 기업의 공식 KPI가 아니라 공개 근거의 질, 차별성, 시장성, 도입 위험을 종합한 본 보고서의 판단 점수입니다. 실사자료 수령 시 재산정해야 합니다.</p>
+      <div class="grid-2">
+        <article class="card">
+          <div class="score-row"><span>문제 명확성</span><div class="bar"><span style="width:90%"></span></div><b>9.0</b></div>
+          <div class="score-row"><span>제품 차별성</span><div class="bar"><span style="width:76%"></span></div><b>7.6</b></div>
+          <div class="score-row"><span>고객 증거</span><div class="bar"><span style="width:68%"></span></div><b>6.8</b></div>
+          <div class="score-row"><span>판매 채널</span><div class="bar"><span style="width:78%"></span></div><b>7.8</b></div>
+        </article>
+        <article class="card">
+          <div class="score-row"><span>가격 투명성</span><div class="bar"><span style="width:35%"></span></div><b>3.5</b></div>
+          <div class="score-row"><span>재무 투명성</span><div class="bar"><span style="width:25%"></span></div><b>2.5</b></div>
+          <div class="score-row"><span>보안 공개성</span><div class="bar"><span style="width:38%"></span></div><b>3.8</b></div>
+          <div class="score-row"><span>확장 잠재력</span><div class="bar"><span style="width:78%"></span></div><b>7.8</b></div>
+        </article>
+      </div>
+      <p style="color:var(--muted);font-size:13px">척도: 0–10. “공개성” 저점은 능력 부재가 아니라 공개 증빙 부족을 반영합니다.</p>
+    </section>
+
+    <section id="recommendation">
+      <div class="section-kicker">14 · Recommendation</div>
+      <h2>권고안: 작은 PoC로 크게 검증</h2>
+      <div class="grid-3">
+        <article class="card"><span class="tag verified">1–2주</span><h3 style="margin-top:12px">1. 데이터·업무 진단</h3><p>반복 빈도가 높고 규칙이 명확한 한 업무를 고릅니다. 입력 3종, 출력 1종, 예외 10개 이상을 익명화해 기준 데이터셋을 만듭니다.</p></article>
+        <article class="card"><span class="tag verified">2–4주</span><h3 style="margin-top:12px">2. 병행 PoC</h3><p>기존 수작업을 중단하지 않고 Re:Column과 병행 실행합니다. 처리시간, 일치율, 예외율, 수정횟수, 사용자 개입시간을 기록합니다.</p></article>
+        <article class="card card-accent"><span class="tag verified">의사결정</span><h3 style="margin-top:12px">3. 조건부 확대</h3><p>정확도·복구·보안·TCO 게이트를 모두 통과한 뒤 유사 업무로 확장합니다. 처음부터 전사 ERP 대체 프로젝트로 만들지 않습니다.</p></article>
+      </div>
+      <div class="table-wrap" style="margin-top:18px">
+        <table>
+          <thead><tr><th>검증축</th><th>측정 방법</th><th>권장 통과 기준</th><th>실패 시</th></tr></thead>
+          <tbody>
+            <tr><td>정확도</td><td>골든데이터와 셀·행·문서 단위 대조</td><td>필수 필드 100%, 전체 ≥99.5%</td><td>오류유형별 규칙 보완 후 재시험</td></tr>
+            <tr><td>시간</td><td>사람 개입시간과 총 리드타임 분리 측정</td><td>사람 개입 ≥70% 절감</td><td>자동화 대상 재선정</td></tr>
+            <tr><td>예외복구</td><td>양식 변경·누락·중복·네트워크 실패 주입</td><td>데이터 손실 0, 재실행·롤백 가능</td><td>운영 투입 보류</td></tr>
+            <tr><td>감사성</td><td>누가·언제·무엇을 변경했는지 추적</td><td>입력→규칙→출력 계보 100%</td><td>권한·로그 계약 보강</td></tr>
+            <tr><td>보안</td><td>DPA, 아키텍처, 인증, 침투테스트, 삭제증명 검토</td><td>내부 보안·법무 승인</td><td>익명데이터 한정 또는 온프레미스</td></tr>
+            <tr><td>경제성</td><td>3년 TCO = 구독+구축+운영+예외처리</td><td>회수기간 ≤12개월</td><td>범위 축소·가격 재협상</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="questions">
+      <div class="section-kicker">15 · Due diligence checklist</div>
+      <h2>대표·영업·기술팀에 물을 질문</h2>
+      <div class="grid-2">
+        <article>
+          <h3>사업·재무</h3>
+          <ol class="checklist">
+            <li>최근 3년 매출, ARR, 구독/구축 매출 비중과 매출총이익률은?</li>
+            <li>유료 고객 수, 12개월 GRR/NRR, 상위 5개 고객 매출집중도는?</li>
+            <li>평균 계약금액, 구축기간, 무료 PoC→유료 전환율은?</li>
+            <li>신규 고객 한 곳에 필요한 컨설턴트 시간과 회수기간은?</li>
+            <li>투자유치, 현금보유, 월 소진액과 18개월 인력계획은?</li>
+          </ol>
+          <h3 style="margin-top:28px">제품·운영</h3>
+          <ol class="checklist">
+            <li>워크플로우 버전관리, 테스트·승인·롤백·재처리 방식은?</li>
+            <li>지원 파일 크기·행 수·동시 실행·API 제한과 실제 최대 사례는?</li>
+            <li>양식 변경 자동 감지와 실패 알림, 사람이 개입하는 예외율은?</li>
+            <li>표준 커넥터 목록과 ERP/WMS/CRM 연동 책임 범위는?</li>
+            <li>해지 시 데이터·워크플로우·로그를 어떤 형식으로 반출하는가?</li>
+          </ol>
+        </article>
+        <article>
+          <h3>보안·법무</h3>
+          <ol class="checklist">
+            <li>클라우드·온프레미스 아키텍처, 리전, 테넌트 격리 방식은?</li>
+            <li>전송·저장 암호화, KMS, 관리자 접근승인과 고객별 키 지원은?</li>
+            <li>ISMS/ISO/SOC, 최근 침투테스트와 주요 취약점 조치증빙은?</li>
+            <li>서브프로세서, 국외이전, AI 모델 제공자와 고객데이터 학습 여부는?</li>
+            <li>백업주기, RPO/RTO, SLA, 사고통지 시간과 사이버보험은?</li>
+          </ol>
+          <h3 style="margin-top:28px">고객 증거</h3>
+          <ol class="checklist">
+            <li>동일 산업·유사 규모 고객 3곳의 레퍼런스 콜이 가능한가?</li>
+            <li>“90% 절감”의 시작·종료 시점, 표본, 중앙값, 예외 포함 기준은?</li>
+            <li>월간 성공/실패 실행 수와 장애·지원 티켓의 중앙 해결시간은?</li>
+            <li>계약 종료·이탈 고객의 상위 사유와 개선 조치는?</li>
+            <li>특허의 심사 상태, 등록 가능성, 해외 출원·FTO 검토는?</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <section id="aads">
+      <div class="section-kicker">16 · Strategic fit</div>
+      <h2>AADS 관점의 활용 가능성</h2>
+      <div class="grid-3">
+        <article class="card card-accent"><h3>도입 후보</h3><p>각 프로젝트에서 반복되는 외부 엑셀 수집·표준화·결과 보고 업무를 Re:Column에 맡기고, AADS는 지시·승인·감사·에이전트 오케스트레이션을 담당하는 분업입니다.</p></article>
+        <article class="card"><h3>제휴 후보</h3><p>AADS의 AI 에이전트가 업무 규칙과 예외를 설계하고 Re:Column이 결정론적 데이터 워크플로우를 실행하는 공동 패키지입니다. AI의 유연성과 데이터 처리의 재현성을 결합할 수 있습니다.</p></article>
+        <article class="card"><h3>벤치마킹 후보</h3><p>“현업 산출물 보존”, “컨설턴트가 초기 흐름 세팅”, “결과 이후 협업까지 연결”하는 방식은 AADS 작업·문서·승인 UX에도 유효합니다.</p></article>
+      </div>
+      <div class="callout warn" style="margin-top:18px"><b>경계:</b> AADS 핵심 대화·에이전트 실행 원장과 민감 프로젝트 데이터를 곧바로 외부 SaaS에 넣지 않습니다. 익명 샘플 PoC → 보안실사 → DPA/SLA → 제한된 실데이터 순으로 확대해야 합니다.</div>
+    </section>
+
+    <section id="template">
+      <div class="section-kicker">17 · Reusable format</div>
+      <h2>앞으로 모든 회사에 재사용하는 구조</h2>
+      <div class="template-note">
+        <h3>Company Intelligence Standard v1.0</h3>
+        <p>이 문서는 회사명만 바꾸는 홍보 템플릿이 아니라, <b>식별 → 제품 → 수익 → 고객증거 → 경쟁 → 리스크 → 실사 → 실행 권고</b> 순으로 판단을 재현하는 템플릿입니다.</p>
+        <p><code>verified</code> 독립 확인 · <code>claimed</code> 회사 공개 · <code>unknown</code> 미확인을 모든 기업 보고서에서 동일하게 사용합니다. 숫자는 출처와 기준일을 붙이고, 비공개 값은 추정으로 채우지 않습니다.</p>
+        <p style="margin-bottom:0">재사용 제작 지침: <b>docs/reports/20260909_company_research_html_template_guide.md</b></p>
+      </div>
+    </section>
+
+    <section id="sources">
+      <div class="section-kicker">18 · Sources & methodology</div>
+      <h2>출처와 조사 방법</h2>
+      <p class="section-intro">2026-09-09 14:17 KST 기준 공개 웹자료를 대조했습니다. 기업·제품 수치는 공식 원문을 우선하되, 회사 측 수치는 독립검증과 분리했습니다. 기사·SNS는 계약·성과의 보조 신호로만 사용했습니다.</p>
+      <div class="card sources">
+        <div class="source"><b>[1] Re:Column 공식 홈페이지·제품·솔루션·고객사례·개인정보처리방침·이용약관</b><span>제품 기능, 산업 시나리오, 고객 주장, 법인 표기, 공개 정책 · </span><a href="https://www.recolumn.com/" target="_blank" rel="noopener">recolumn.com</a></div>
+        <div class="source"><b>[2] NAVER Cloud Marketplace — 리컬럼</b><span>판매자 코그콤, 이용 가능, 엔터프라이즈 견적형, 기술지원 연락처 · </span><a href="https://www.ncloud.com/marketplace/recolumn" target="_blank" rel="noopener">공식 마켓플레이스</a></div>
+        <div class="source"><b>[3] 서울AI허브 소속기업 현황 — ㈜코그콤</b><span>주력사업, Re:Column·펭귄AI, OCR·정보표준화·AI 기술 설명 · </span><a href="https://www.seoulaihub.kr/partner/partner_detail.asp?act=view&amp;bd_num=00000001952020000026" target="_blank" rel="noopener">서울AI허브</a></div>
+        <div class="source"><b>[4] 서울AI허브 2023 기업정보집</b><span>기능도, 벤츠코리아·강원대 제공 사례, RPA·분석·보고서 방향 · </span><a href="https://www.seoulaihub.kr/down/2023_ko.pdf" target="_blank" rel="noopener">PDF</a></div>
+        <div class="source"><b>[5] Google Patents — KR20250088299A</b><span>출원인 코그콤, 발명자 정치훈, 출원·공개일, Pending 상태 · </span><a href="https://patents.google.com/patent/KR20250088299A/ko" target="_blank" rel="noopener">특허 원문</a></div>
+        <div class="source"><b>[6] NICE Bizinfo — ㈜코그콤</b><span>설립일, 대표, 주소, 업종, 중소·벤처·특허보유기업 식별 · </span><a href="https://www.nicebizinfo.com/ep/EP0100M002GE.nice?kiscode=LS4496" target="_blank" rel="noopener">기업정보</a></div>
+        <div class="source"><b>[7] NextUnicorn — 주식회사 코그콤</b><span>설립일·대표·주소·기술분야 보조 확인 · </span><a href="https://www.nextunicorn.kr/company/a53addb420c3a175?tab=service" target="_blank" rel="noopener">기업 프로필</a></div>
+        <div class="source"><b>[8] Startup Autobahn Korea 및 2025 선정 보도</b><span>프로그램 성격과 코그콤 선정 외부 확인 · </span><a href="https://startup-autobahn.co.kr/" target="_blank" rel="noopener">공식 프로그램</a> · <a href="https://m.newspim.com/news/view/20250919000227" target="_blank" rel="noopener">선정 보도</a></div>
+        <div class="source"><b>[9] Microsoft Power Automate 공식 가격·라이선스</b><span>Premium $15/사용자/월, Process $150/봇/월, Hosted Process $215/봇/월(연간결제 표시 기준) · </span><a href="https://www.microsoft.com/en-us/power-platform/products/power-automate/pricing" target="_blank" rel="noopener">Microsoft</a></div>
+        <div class="source"><b>[10] UiPath 공식 제품·가격</b><span>Basic 시작가 $25/월, Standard·Enterprise 견적, 에이전트·RPA·거버넌스 범위 · </span><a href="https://www.uipath.com/pricing" target="_blank" rel="noopener">UiPath</a></div>
+        <div class="source"><b>[11] Alteryx 공식 가격·Designer Cloud</b><span>Starter $250/사용자/월, 노코드 데이터 준비·분석·자동화 · </span><a href="https://www.alteryx.com/products/pricing/designer-cloud" target="_blank" rel="noopener">Alteryx</a></div>
+        <div class="source"><b>[12] KNIME 공식 가격</b><span>무료·Pro·Team·Business Hub 구조, 워크플로우 배포·권한·거버넌스 · </span><a href="https://www.knime.com/knime-hub-pricing" target="_blank" rel="noopener">KNIME</a></div>
+        <div class="source"><b>[13] Tableau Prep 공식 제품</b><span>노코드 데이터 정제, 100+ 연결, Prep Conductor·계보·Tableau 연계 · </span><a href="https://www.tableau.com/products/prep" target="_blank" rel="noopener">Tableau</a></div>
+      </div>
+      <div class="callout" style="margin-top:18px">
+        <b>제한:</b> 비상장사의 감사 재무제표, 유료 계약서, 보안 심사자료, 제품 관리자 콘솔, 전 고객 사용 로그에는 접근하지 않았습니다. 따라서 본 보고서는 공개자료 기반 1차 스크리닝이며 법률·회계·투자 자문을 대체하지 않습니다.
+      </div>
+    </section>
+
+    <footer class="footer">
+      <b>코그콤 · Re:Column 기업분석 보고서 v1.0</b><br>
+      작성 기준 2026-09-09 14:17 KST · 공개 근거 기반 · AADS Company Intelligence Standard<br>
+      외부 공유 시 출처 링크와 “회사 공개/미확인” 표기를 유지하십시오.
+    </footer>
+  </main>
+  <script>
+    const links=[...document.querySelectorAll('.nav a')];
+    const sections=links.map(a=>document.querySelector(a.getAttribute('href'))).filter(Boolean);
+    const observer=new IntersectionObserver(entries=>{
+      entries.filter(e=>e.isIntersecting).forEach(entry=>{
+        links.forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+entry.target.id));
+      });
+    },{rootMargin:'-25% 0px -65% 0px'});
+    sections.forEach(s=>observer.observe(s));
+  </script>
+</body>
+</html>

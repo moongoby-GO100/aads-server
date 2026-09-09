@@ -13058,3 +13058,25 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - Added an active-slot-only `goal_control_cycle` scheduler that periodically reconciles AADS goal links and advances the existing `GoalStateMachine` without replacing its public APIs.
 - Changed chat execution-resume ownership resolution to trust the shared `.active_container`/`.active_port` state before the container-local `/tmp` marker, preventing a stale former-active slot from claiming recovery leases after cutover.
 - Added static regression coverage for scheduler registration and active-slot ownership precedence.
+
+## 2026-09-09 14:43 KST — 코그콤·Re:Column 공개 기업분석 보고서
+
+- `app/static/reports/20260909_recolumn_cogcom_company_analysis.html`에 코그콤의
+  법인·제품 7개 영역·산업별 적용·사업모델·고객 증거·관련 생태계·경쟁기업·SWOT·
+  보안/법무/재무 실사·30일 PoC·AADS 제휴 가능성을 포함한 외부 공유용 보고서를 추가했다.
+- 회사 공개 수치와 독립 확인 사실, 공개자료로 확인하지 못한 항목을 각각
+  `회사 공개`·`독립 확인`·`미확인`으로 분리했고, 14개 원문 링크와 조사 한계를
+  보고서 안에 기록했다.
+- `docs/reports/20260909_company_research_html_template_guide.md`에 이후 기업조사에
+  재사용할 조사 순서, 근거 등급, 목차, 반응형/인쇄 디자인, 검증·갱신 규칙을 남겼다.
+- 공개 URL은
+  `https://fb.newtalk.kr/static/reports/20260909_recolumn_cogcom_company_analysis.html`이며
+  로그인 없이 HTTP 200으로 열린다. 정적 디렉터리가 운영 서버에 마운트되어 있어 API
+  이미지 빌드·컨테이너 재시작·nginx 전환 없이 반영됐다.
+- HTML 파서, JavaScript 구문, `git diff --check`, 시크릿 패턴 검사를 통과했다.
+  Playwright 실측에서 데스크톱 1,440px와 모바일 390px 모두 제목과 18개 섹션을
+  렌더링했고, 모바일 가로 오버플로를 660px에서 390px로 수정했다.
+- 외부 링크 14개 중 10개는 자동 요청 HTTP 200, 3개 경쟁사 사이트는 봇 차단 HTTP 403,
+  NICE 링크는 접근제한 안내 페이지로 리다이렉트됐다. 403은 보고서 원문 링크 자체를
+  제거하지 않고 사람 브라우저 확인 대상으로 남겼다.
+- 이번 변경은 정적 HTML·문서만 추가하므로 API blue/green 배포는 수행하지 않았다.
