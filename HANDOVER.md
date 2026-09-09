@@ -2,8 +2,9 @@
 
 ## 2026-09-10 00:39 KST — PRESERVATION_HARD_GATE 후속 조치 및 Runner 릴리스 경로 교정
 
-- `runner-1ee3c3b8`은 공개 상태 정규화 메서드의 인자를 변경하고 기존 migration 150을
-  수정한 산출물이라 `PRESERVATION_HARD_GATE`가 차단했다. 해당 산출물은 main에 반영하지 않았다.
+- `runner-1ee3c3b8`의 DB 보존 `git_diff`에서 공개 함수
+  `normalize_job_state(status, phase)` 선언 삭제가 검출되어 `PRESERVATION_HARD_GATE`가
+  차단했다. 해당 산출물은 main에 반영하지 않았다.
 - 최신 `origin/main`의 `521cefe2`/`12e2f6d1` 구현은 기존 공개 API·마이그레이션을 보존하고,
   별도 `release_evidence` 모듈과 추가 전용 migration 170/171로 대체한다.
 - Runner의 AADS API 배포에서 공유 worktree `reload-api.sh` 및 공유 `deploy.sh` 경로를 제거했다.
