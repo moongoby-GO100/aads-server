@@ -1704,17 +1704,23 @@ sync_standby_slot_after_drain() {
         done
 
         if [[ "${active:-0}" != "0" && -n "${active:-}" ]]; then
+            # RC7: the standby slot no longer receives nginx traffic (cutover is done).
+            # Force-draining it would kill live CEO chat turns still owned by this slot,
+            # and returning 1 marked an already-live release as "failed".
+            # Defer the standby resync instead: the release stays certified and the
+            # standby slot is refreshed on the next deploy.
             set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-unknown}" "$elapsed" "$drain_max"
-            echo "[deploy.sh] standby sync ERROR: ${old_container}:${old_port} still has active streams=${active}"
-            docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-            audit_control "standby-sync" "${old_container}:${old_port}" "failed" "drain timeout active=${active}"
-            return 1
+            echo "[deploy.sh] standby sync DEFERRED: ${old_container}:${old_port} still has active streams=${active}; release stays certified"
+            audit_control "standby-sync" "${old_container}:${old_port}" "deferred" "drain timeout active=${active}; standby resync postponed"
+            return 0
         fi
         set_deploy_stream_phase_metadata "$old_container" "$old_port" "${active:-0}" "$elapsed" "$drain_max"
 
         if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
+            # RC7: ownership change after drain is not a release failure — the slot was
+            # re-activated by a newer deploy generation. Skip, do not fail the release.
             audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "ownership changed after drain"
-            return 1
+            return 0
         fi
 
         echo "[deploy.sh] standby sync PC Agent reconnect trigger on drained old slot :${old_port}"
