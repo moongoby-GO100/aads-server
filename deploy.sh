@@ -842,7 +842,8 @@ start_deploy_heartbeat() {
     phase_sql="$(sql_escape "$phase")"
     status_sql="$(sql_escape "$status")"
     (
-        trap '' HUP TERM INT  # RC2: prevent signal propagation killing heartbeat
+        trap '' HUP INT        # RC2: prevent HUP/INT propagation killing heartbeat
+        trap 'exit 0' TERM    # allow graceful stop from stop_deploy_heartbeat
         while true; do
             sleep "$interval"
             local elapsed_ms estimate_ms
