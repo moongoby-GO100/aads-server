@@ -93,7 +93,7 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
 
         if action_type == "remote_command":
             from app.api.ceo_chat_tools import tool_run_remote_command
-            project = action_config.get("project", "KIS")
+            project = action_config.get("project", "GO100")
             command = action_config.get("command", "")
             result = await tool_run_remote_command(project, command)
 
@@ -104,7 +104,7 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
 
         elif action_type == "db_query":
             from app.api.ceo_chat_tools_db import query_project_database
-            project = action_config.get("project", "KIS")
+            project = action_config.get("project", "GO100")
             query = action_config.get("query", "")
             r = await query_project_database(project, query, limit=10)
             result = str(r)

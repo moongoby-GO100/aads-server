@@ -122,7 +122,7 @@ async def put_system_memory(
 def _normalize_task_id_for_db(task_id: str, project: str) -> str:
     """T-107: DB 저장 시 접두사 ID로 정규화 (AADS-095, KIS-168 등)"""
     PREFIX_MAP = {
-        "AADS": "AADS", "KIS": "KIS", "GO100": "GO100",
+        "AADS": "AADS", "KIS": "GO100", "GO100": "GO100",
         "ShortFlow": "SF", "NewTalk": "NT", "SALES": "SALES", "NAS": "NAS",
     }
     task_id = (

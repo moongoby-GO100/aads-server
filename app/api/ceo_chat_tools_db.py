@@ -1,10 +1,10 @@
 """
 AADS-190: 프로젝트별 원격 DB 쿼리 도구.
-CEO 채팅에서 KIS/GO100/SF/NTV2 등 외부 프로젝트 DB에 SELECT 쿼리 실행.
+CEO 채팅에서 GO100/SF/NTV2 등 외부 프로젝트 DB에 SELECT 쿼리 실행.
 
 DB 매핑:
-- KIS: PostgreSQL 16 (contabo14, 5.104.86.14:5432, kisautotrade)
-- GO100: KIS와 동일 DB (kisautotrade)
+- GO100: PostgreSQL 16 (contabo14, 5.104.86.14:5432, kisautotrade)
+- KIS: GO100으로 통합됨 (레거시 별칭, 동일 DB로 리다이렉트)
 - SF: MariaDB (cafe24_114, SSH 터널 → localhost:3306, autoda)
 - NTV2: MySQL 8.0 Docker (cafe24_114, SSH 터널 → localhost:3307, newtalk_v2)
 
@@ -36,22 +36,21 @@ logger = logging.getLogger(__name__)
 
 # ─── 프로젝트별 DB 설정 ──────────────────────────────────────────────────────
 
-_SUPPORTED_PROJECTS = ("AADS", "KIS", "GO100", "SF", "NTV2")
+_SUPPORTED_PROJECTS = ("AADS", "GO100", "SF", "NTV2")
 
-# GO100은 KIS와 동일 DB — 별칭 매핑
-_PROJECT_ALIAS = {"GO100": "KIS"}
+# KIS는 GO100으로 통합됨 — 레거시 요청 리다이렉트용 별칭 매핑
+_PROJECT_ALIAS = {"KIS": "GO100"}
 
 # DB 엔진 타입 (환경변수 {PROJECT}_DB_TYPE으로 오버라이드 가능)
 _DEFAULT_DB_TYPE: Dict[str, str] = {
     "AADS": "postgresql",  # 내부 DB (Docker postgres)
-    "KIS": "postgresql",
-    "GO100": "postgresql",  # KIS 별칭
+    "GO100": "postgresql",
     "SF": "mysql",
     "NTV2": "mysql",
 }
 
 _DEFAULT_DB_ENDPOINT: Dict[str, Tuple[str, str]] = {
-    "KIS": (get_server_host("contabo14"), "5432"),
+    "GO100": (get_server_host("contabo14"), "5432"),
     "SF": ("127.0.0.1", "3306"),
     "NTV2": ("127.0.0.1", "3307"),
 }
@@ -804,7 +803,7 @@ async def query_project_database(
     프로젝트별 원격 DB에 SELECT 쿼리 실행.
 
     Args:
-        project: KIS, GO100, SF, NTV2
+        project: GO100, SF, NTV2
         query: SELECT SQL 쿼리
         limit: 반환 행 수 (기본 100, 최대 1000)
         db_name: DB 이름 (미지정 시 프로젝트 메인 DB)
@@ -813,6 +812,7 @@ async def query_project_database(
         {"project": str, "rows": list, "row_count": int, "columns": list}
     """
     project = project.upper().strip()
+    project = _PROJECT_ALIAS.get(project, project)  # 레거시 별칭 리다이렉트 (예: KIS→GO100)
     if project not in _SUPPORTED_PROJECTS:
         return {"error": f"지원 프로젝트: {', '.join(_SUPPORTED_PROJECTS)}"}
 

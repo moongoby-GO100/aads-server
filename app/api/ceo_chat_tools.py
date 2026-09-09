@@ -440,14 +440,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── SSH 원격 파일 접근 도구 (AADS-165) ────────────────────────────────────
     {
         "name": "list_remote_dir",
-        "description": "원격 서버의 디렉터리 구조 탐색. 프로젝트명으로 서버·WORKDIR 자동 매핑.\n예: list_remote_dir(project='KIS', path='backend/app', keyword='executor')",
+        "description": "원격 서버의 디렉터리 구조 탐색. 프로젝트명으로 서버·WORKDIR 자동 매핑.\n예: list_remote_dir(project='GO100', path='backend/app', keyword='executor')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "프로젝트명 (AADS, KIS, GO100, SF, NTV2)",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "description": "프로젝트명 (AADS, GO100, SF, NTV2)",
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "path": {
                     "type": "string",
@@ -469,14 +469,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "read_remote_file",
-        "description": "원격 서버의 파일 내용 읽기 (코드 분석 1순위 도구). 프로젝트명으로 서버·WORKDIR 자동 매핑. offset/limit으로 부분 읽기 지원.\n예: read_remote_file(project='KIS', file_path='backend/app/main.py')",
+        "description": "원격 서버의 파일 내용 읽기 (코드 분석 1순위 도구). 프로젝트명으로 서버·WORKDIR 자동 매핑. offset/limit으로 부분 읽기 지원.\n예: read_remote_file(project='GO100', file_path='backend/app/main.py')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "프로젝트명 (AADS, KIS, GO100, SF, NTV2)",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "description": "프로젝트명 (AADS, GO100, SF, NTV2)",
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "file_path": {
                     "type": "string",
@@ -953,14 +953,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Pipeline Runner 도구 (호스트 독립 실행 — 권장) ─────────────────────
     {
         "name": "pipeline_runner_submit",
-        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→contabo116, KIS/GO100→contabo14, SF/NTV2→cafe24_114.\n예: pipeline_runner_submit(project='KIS', instruction='order_executor.py null check 추가')",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출.\n각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향.\n서버매핑: AADS→contabo116, GO100→contabo14, SF/NTV2→cafe24_114.\n예: pipeline_runner_submit(project='GO100', instruction='order_executor.py null check 추가')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                    "enum": ["GO100", "SF", "NTV2", "AADS"],
                 },
                 "instruction": {
                     "type": "string",
@@ -1011,7 +1011,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["KIS", "GO100", "SF", "NTV2", "AADS"],
+                    "enum": ["GO100", "SF", "NTV2", "AADS"],
                 },
                 "jobs": {
                     "type": "array",
@@ -1117,13 +1117,13 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── F12: Timeline Memory ─────────────────────────────────────────────
     {
         "name": "query_timeline",
-        "description": "프로젝트별 시간순 이력 조회 (memory_facts 기반). 이벤트/결정/변경 이력을 타임라인 형태로 표시.\n예: query_timeline(project='KIS', period='7d', category='decision')",
+        "description": "프로젝트별 시간순 이력 조회 (memory_facts 기반). 이벤트/결정/변경 이력을 타임라인 형태로 표시.\n예: query_timeline(project='GO100', period='7d', category='decision')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "프로젝트명 (KIS, AADS, GO100, SF, NTV2 등)",
+                    "description": "프로젝트명 (AADS, GO100, SF, NTV2 등)",
                 },
                 "period": {
                     "type": "string",
@@ -1200,7 +1200,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "단계(phase) 내 태스크는 병렬 실행, 단계 간은 순차 실행. "
             "에이전트 간 발견사항 자동 공유 + 결과 종합.\n"
             "역할: researcher(조사), developer(코드수정), qa(테스트), devops(배포), architect(설계).\n"
-            "예: run_agent_team(name='KIS 수정', phases=[\n"
+            "예: run_agent_team(name='GO100 수정', phases=[\n"
             "  {name:'조사', tasks:[{task:'에러로그확인', role:'researcher'}, {task:'코드분석', role:'researcher'}]},\n"
             "  {name:'수정', tasks:[{task:'버그수정', role:'developer'}]},\n"
             "  {name:'검증', tasks:[{task:'문법확인', role:'qa'}]}\n"
@@ -1211,7 +1211,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "팀/작업 이름 (예: 'KIS 주문 버그 수정')",
+                    "description": "팀/작업 이름 (예: 'GO100 주문 버그 수정')",
                 },
                 "phases": {
                     "type": "array",
@@ -1264,7 +1264,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "전략적 의사결정이 필요한 질문에 대해 기술/비즈니스/리스크 3관점으로 병렬 분석 후 종합.\n"
             "CEO가 '토론해봐', '다관점 분석', '장단점 비교', '어떻게 해야 할까' 등을 요청할 때 사용.\n"
             "소요: 10~30초, 비용: ~$1~2/토론 (Sonnet x3~4)\n"
-            "예: run_debate(question='KIS에 새 전략을 추가해야 할까?')"
+            "예: run_debate(question='GO100에 새 전략을 추가해야 할까?')"
         ),
         "input_schema": {
             "type": "object",
@@ -1300,7 +1300,7 @@ TOOL_DEFINITIONS: List[Dict] = [
         "description": (
             "원격 서버에 파일 쓰기 (SSH). 쓰기 전 자동 .bak_aads 백업 생성.\n"
             "보안: .env/.ssh/credentials 등 민감 파일 차단. 최대 1MB.\n"
-            "예: write_remote_file(project='KIS', file_path='backend/config.py', content='...')"
+            "예: write_remote_file(project='GO100', file_path='backend/config.py', content='...')"
         ),
         "input_schema": {
             "type": "object",
@@ -1308,7 +1308,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "file_path": {
                     "type": "string",
@@ -1340,7 +1340,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "file_path": {
                     "type": "string",
@@ -1368,7 +1368,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "AADS 전용 가드: supervisorctl로 aads-api 제어, aads-server 컨테이너 "
             "stop/kill/rm, nginx -s stop은 차단. docker compose down/--force-recreate/"
             "서비스명 없는 up도 차단이며 up·build·restart는 deploy.sh bluegreen으로 자동 전환됨.\n"
-            "예: run_remote_command(project='KIS', command='git status --short')"
+            "예: run_remote_command(project='GO100', command='git status --short')"
         ),
         "input_schema": {
             "type": "object",
@@ -1376,7 +1376,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "command": {
                     "type": "string",
@@ -1389,14 +1389,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     # ── Git 원격 도구 ────────────────────────────────────────────────────
     {
         "name": "git_remote_status",
-        "description": "원격 서버의 git 작업 트리 상태 조회 (git status --short).\n예: git_remote_status(project='KIS')",
+        "description": "원격 서버의 git 작업 트리 상태 조회 (git status --short).\n예: git_remote_status(project='GO100')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
             },
             "required": ["project"],
@@ -1404,14 +1404,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "git_remote_add",
-        "description": "원격 서버에서 git add (스테이징).\n예: git_remote_add(project='KIS', files='backend/') 또는 files='.' (전체)",
+        "description": "원격 서버에서 git add (스테이징).\n예: git_remote_add(project='GO100', files='backend/') 또는 files='.' (전체)",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "files": {
                     "type": "string",
@@ -1423,14 +1423,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "git_remote_commit",
-        "description": "원격 서버에서 git commit. 메시지는 shlex 이스케이프 적용.\n예: git_remote_commit(project='KIS', message='fix: order executor null check')",
+        "description": "원격 서버에서 git commit. 메시지는 shlex 이스케이프 적용.\n예: git_remote_commit(project='GO100', message='fix: order executor null check')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "message": {
                     "type": "string",
@@ -1442,14 +1442,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "git_remote_push",
-        "description": "원격 서버에서 git push. force push 차단.\n예: git_remote_push(project='KIS') 또는 git_remote_push(project='KIS', branch='main')",
+        "description": "원격 서버에서 git push. force push 차단.\n예: git_remote_push(project='GO100') 또는 git_remote_push(project='GO100', branch='main')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "branch": {
                     "type": "string",
@@ -1461,14 +1461,14 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "git_remote_create_branch",
-        "description": "원격 서버에서 새 브랜치 생성 및 체크아웃.\n예: git_remote_create_branch(project='KIS', branch_name='feature/order-fix')",
+        "description": "원격 서버에서 새 브랜치 생성 및 체크아웃.\n예: git_remote_create_branch(project='GO100', branch_name='feature/order-fix')",
         "input_schema": {
             "type": "object",
             "properties": {
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["AADS", "KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["AADS", "GO100", "SF", "NTV2"],
                 },
                 "branch_name": {
                     "type": "string",
@@ -1483,11 +1483,11 @@ TOOL_DEFINITIONS: List[Dict] = [
         "name": "query_project_database",
         "description": (
             "프로젝트별 원격 DB에 SELECT 쿼리 실행.\n"
-            "- KIS/GO100: PostgreSQL (contabo14)\n"
+            "- GO100: PostgreSQL (contabo14)\n"
             "- SF: MariaDB (cafe24_114, SSH 터널)\n"
             "- NTV2: MySQL 8.0 (cafe24_114, SSH 터널)\n"
             "보안: SELECT/WITH/EXPLAIN만 허용. DML/DDL 차단. password/token 컬럼 자동 마스킹.\n"
-            "예: query_project_database(project='KIS', query='SELECT * FROM users LIMIT 5')"
+            "예: query_project_database(project='GO100', query='SELECT * FROM users LIMIT 5')"
         ),
         "input_schema": {
             "type": "object",
@@ -1495,7 +1495,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "project": {
                     "type": "string",
                     "description": "대상 프로젝트",
-                    "enum": ["KIS", "GO100", "SF", "NTV2"],
+                    "enum": ["GO100", "SF", "NTV2"],
                 },
                 "query": {
                     "type": "string",
@@ -1749,7 +1749,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "프로젝트 필터 (선택, 예: AADS, KIS, GO100, SF, NTV2)",
+                    "description": "프로젝트 필터 (선택, 예: AADS, GO100, SF, NTV2)",
                 },
                 "service": {
                     "type": "string",

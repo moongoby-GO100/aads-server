@@ -85,7 +85,7 @@ def _now_kst() -> str:
 
 
 # ─── T-089: VALID_PROJECTS 화이트리스트 ────────────────────────────────────
-VALID_PROJECTS = {'AADS', 'KIS', 'GO100', 'ShortFlow', 'NewTalk', 'NAS', 'SALES'}
+VALID_PROJECTS = {'AADS', 'GO100', 'ShortFlow', 'NewTalk', 'NAS', 'SALES'}
 
 
 def _validate_project_name(raw: str) -> str:
@@ -98,7 +98,7 @@ def _validate_project_name(raw: str) -> str:
     upper = cleaned.upper()
     MAPPING = {
         'AADS': 'AADS', 'AADS-SERVER': 'AADS', 'AADS-DASHBOARD': 'AADS',
-        'KIS': 'KIS', 'KIS-AUTOTRADE-V41': 'KIS', 'KIS-AUTOTRADE-V4.1': 'KIS',
+        'KIS': 'GO100', 'KIS-AUTOTRADE-V41': 'GO100', 'KIS-AUTOTRADE-V4.1': 'GO100',
         'GO100': 'GO100', 'SHORTFLOW': 'ShortFlow', 'SF': 'ShortFlow',
         'NEWTALK': 'NewTalk', 'NAS': 'NAS', 'SALES': 'SALES',
     }
@@ -115,10 +115,10 @@ _PROJECT_NORM_MAP = {
     "aads": "AADS",
     "aads-server": "AADS",
     "aads_server": "AADS",
-    "kis": "KIS",
-    "kis-autotrade-v41": "KIS",
-    "kis-autotrade-v4.1": "KIS",
-    "kis-v41": "KIS",
+    "kis": "GO100",
+    "kis-autotrade-v41": "GO100",
+    "kis-autotrade-v4.1": "GO100",
+    "kis-v41": "GO100",
     "go100": "GO100",
     "shortflow": "ShortFlow",
     "sf": "ShortFlow",
@@ -749,7 +749,7 @@ def _find_report_file(filename: str) -> Optional[Path]:
 
 
 VALID_PROJECT_NAMES = frozenset({
-    "AADS", "KIS", "GO100", "ShortFlow", "NewTalk", "NAS", "SALES",
+    "AADS", "GO100", "ShortFlow", "NewTalk", "NAS", "SALES",
     "aads-server", "aads-dashboard",
 })
 
@@ -757,7 +757,7 @@ VALID_PROJECT_NAMES = frozenset({
 def validate_project_name(project: str) -> str:
     """프로젝트명 유효성 검사 — 한글 문장 등 비정상 값은 AADS로 대체 (T-082)
 
-    허용값: AADS, KIS, GO100, ShortFlow, NewTalk, NAS, SALES, aads-server, aads-dashboard
+    허용값: AADS, GO100, ShortFlow, NewTalk, NAS, SALES, aads-server, aads-dashboard
     """
     if not project or len(project) > 30:
         return "AADS"
@@ -772,10 +772,10 @@ def validate_project_name(project: str) -> str:
 
 def _project_from_task_id(task_id: str):
     """T-107: task_id에서 프로젝트 직접 판별.
-    AADS-095 → 'AADS', KIS-168 → 'KIS', T-095 → None (기존 _classify_project 폴백 필요)
+    AADS-095 → 'AADS', KIS-168 → 'GO100' (레거시 별칭), T-095 → None (기존 _classify_project 폴백 필요)
     """
     REVERSE_MAP = {
-        "AADS": "AADS", "KIS": "KIS", "GO100": "GO100",
+        "AADS": "AADS", "KIS": "GO100", "GO100": "GO100",
         "SF": "ShortFlow", "NT": "NewTalk", "SALES": "SALES", "NAS": "NAS",
     }
     for prefix, project in REVERSE_MAP.items():
@@ -797,7 +797,7 @@ def _classify_project(filename: str, content: str) -> str:
     # 1단계: 파일명 접두사 매칭 (최우선)
     fname = filename.upper()
     if fname.startswith("KIS_"):
-        return _validate_project_name("KIS")
+        return _validate_project_name("GO100")
     if fname.startswith("GO100_"):
         return _validate_project_name("GO100")
     if fname.startswith("SF_"):
@@ -827,11 +827,11 @@ def _classify_project(filename: str, content: str) -> str:
             return _validate_project_name("AADS")
 
     # 3단계: 프로젝트 고유 키워드 매칭
-    # KIS
+    # KIS (GO100으로 통합됨)
     kis_keywords = ['kis', 'autotrade', '자동매매', '피라미딩', 'desk', '한국투자',
                     'fractal trend', 'pyramiding']
     if any(kw.lower() in content_lower for kw in kis_keywords):
-        return _validate_project_name("KIS")
+        return _validate_project_name("GO100")
 
     # GO100
     go100_keywords = ['go100', '지오백', '100세']

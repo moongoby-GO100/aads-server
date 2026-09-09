@@ -109,7 +109,7 @@ def _tenant_id(context: TenantContext) -> str:
     return str(context["tenant"]["id"])  # type: ignore[index]
 
 # H6 + M4: 허용 프로젝트 화이트리스트
-_VALID_PROJECTS = {"AADS", "KIS", "GO100", "SF", "NTV2"}
+_VALID_PROJECTS = {"AADS", "GO100", "SF", "NTV2"}
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 _JOB_ID_RE = re.compile(r'^runner-[0-9a-zA-Z_-]+$')
 _ACTIVE_PIPELINE_STATUSES = (
