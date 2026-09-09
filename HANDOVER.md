@@ -12986,3 +12986,16 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
   238행을 삭제하지 않고 계보 라벨만 채우는 경로까지 성공 후 전부 롤백했다.
 - 이 항목 작성 시점에는 운영 DB 영구 반영·커밋 push·blue/green 배포·5분
   P0/P1 모니터링이 아직 진행 전이다. 완료 후 실제 run/SHA/digest를 별도 기록한다.
+
+## 2026-09-09 11:19 KST — Goal Control P0 모델 가용성 게이트 보강
+
+- Goal Control P0 변경은 `origin/main`에 포함되고 운영 DB migration 166도 적용된
+  상태임을 확인했다. AADS 재조정 dry-run은 `planned=0`, `repaired=0`이었다.
+- 모델 실호출에서 DB가 rate-limited로 표시한 OAuth 1번 슬롯을 동기 메모리 캐시가
+  다시 선택해 429를 반복하는 결함을 재현했다. `call_llm_with_fallback`과
+  `call_llm_messages_with_fallback`이 매 논리 호출마다
+  `get_oauth_tokens_async()`로 DB의 cooldown을 반영하도록 변경했다.
+- 새 회귀 테스트 2건을 추가해 텍스트/메시지 호출 모두 DB가 반환한 건강한 토큰만
+  사용하는지 고정했다. Goal P0 집중 테스트와 함께 58건이 통과했다.
+- 운영 배포 완료 후 실제 모델 응답, active/standby 동일 digest, routed health 및
+  5분 P0/P1 모니터링 결과를 이 릴리스의 최종 근거로 사용한다.

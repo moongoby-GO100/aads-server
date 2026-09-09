@@ -9,8 +9,8 @@ Claude 실패 시 qwen3-235b/LiteLLM 체인으로 자동 폴백.
 from __future__ import annotations
 
 import asyncio
-import os
 import logging
+import os
 import random
 import time
 from typing import Optional
@@ -20,8 +20,10 @@ import httpx
 from anthropic import AsyncAnthropic
 
 from app.core.auth_provider import (
-    get_available_tokens, get_litellm_config,
-    create_anthropic_client, mark_token_rate_limited,
+    create_anthropic_client,
+    get_litellm_config,
+    get_oauth_tokens_async,
+    mark_token_rate_limited,
 )
 
 logger = logging.getLogger(__name__)
@@ -270,7 +272,11 @@ async def call_llm_with_fallback(
 
     from app.services.oauth_usage_tracker import log_usage
 
-    keys_to_try = get_available_tokens()
+    # DB is the source of truth for operator-managed cooldowns.  The previous
+    # synchronous cache could still contain a token that /health/api-keys had
+    # already reported as rate-limited, causing every background call to spend
+    # up to 90 seconds retrying that token before trying the healthy slot.
+    keys_to_try = await get_oauth_tokens_async()
     for key in keys_to_try:
         last_error: Optional[Exception] = None
         _429_count = 0
@@ -546,7 +552,10 @@ async def call_llm_messages_with_fallback(**kwargs) -> object:
 
     from app.services.oauth_usage_tracker import log_usage
 
-    keys_to_try = get_available_tokens()
+    # Refresh the DB-backed availability set for every logical model call so
+    # persisted cooldowns survive process restarts and health probes cannot
+    # accidentally re-enable a cooled-down token in the runtime cache.
+    keys_to_try = await get_oauth_tokens_async()
     last_error: Optional[Exception] = None
 
     for key in keys_to_try:
