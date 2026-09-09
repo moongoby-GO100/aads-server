@@ -77,6 +77,22 @@ def test_status_parameter_has_one_explicit_postgres_type():
     assert "CASE WHEN $8::varchar(24)" in service_source
 
 
+def test_every_completed_session_has_an_idempotent_database_checkpoint():
+    migration = Path("migrations/168_global_handover_session_auto_checkpoint.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "trg_chat_message_handover_checkpoint" in migration
+    assert "AFTER INSERT OR UPDATE OF role, content, intent ON chat_messages" in migration
+    assert "'session:' || v_message.session_id::text" in migration
+    assert "source_kind = EXCLUDED.source_kind" in migration
+    assert "project_handover_entries.body IS DISTINCT FROM EXCLUDED.body" in migration
+    assert "SELECT DISTINCT ON (session_id) id" in migration
+    assert "streaming_placeholder" in migration
+    assert "DROP TABLE" not in migration.upper()
+    assert "TRUNCATE" not in migration.upper()
+
+
 @pytest.mark.asyncio
 async def test_write_rejects_oversized_metadata_before_database_access():
     with pytest.raises(ValueError, match="metadata exceeds"):
