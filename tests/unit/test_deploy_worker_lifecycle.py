@@ -16,6 +16,14 @@ def test_worker_lock_uses_runtime_bash_pid():
     assert 'echo "$$" > "$LOCKFILE"' not in worker_body
 
 
+def test_worker_runs_deploy_in_foreground_before_worktree_cleanup():
+    source = (ROOT / "scripts/start_aads_deploy_queue_worker.sh").read_text()
+    worker_body = source.split("WORKER_BODY='", 1)[1].split("'\n\nif [[ -d", 1)[0]
+
+    assert "AADS_DEPLOY_DETACHED=1" in worker_body
+    assert 'bash "$worktree/deploy.sh" "$MODE"' in worker_body
+
+
 @pytest.mark.parametrize("start_code", [0, 1])
 def test_systemd_dispatch_preserves_arguments_and_fails_closed(tmp_path, start_code):
     source = (ROOT / "scripts/start_aads_deploy_queue_worker.sh").read_text()

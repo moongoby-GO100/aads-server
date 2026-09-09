@@ -85,6 +85,7 @@ WORKER_BODY='
     echo "[$(date --iso-8601=seconds)] deploy queue worker start sha=${latest_sha}"
     env \
         AADS_DEPLOY_QUEUE_WORKER=true \
+        AADS_DEPLOY_DETACHED=1 \
         AADS_DEPLOY_SOURCE_DIR="$worktree" \
         AADS_DEPLOY_STATE_DIR="$STATE_DIR" \
         AADS_RELEASE_SHA="$latest_sha" \
