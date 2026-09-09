@@ -1,6 +1,9 @@
+import asyncio
 import base64
-import os
 import importlib.util
+import os
+import sys
+import types
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -5549,8 +5552,93 @@ def test_bank_db_value_coercion_matches_operational_column_types():
 
     assert service._coerce_bank_db_value(occurred, "text") == occurred
     assert service._coerce_bank_db_value(occurred, "date").isoformat() == "2026-09-09"
-    assert service._coerce_bank_db_value(occurred, "timestamptz").isoformat().startswith("2026-09-09T13:20:00")
+    assert isinstance(service._coerce_bank_db_value(occurred, "timestamptz"), datetime)
     assert service._coerce_bank_db_value("42", "int8") == 42
+
+
+def test_bank_db_insert_binds_live_text_date_and_timestamptz_types(monkeypatch):
+    captured = []
+
+    class Transaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Connection:
+        async def fetch(self, *_args):
+            text_columns = {
+                "id", "business_id", "branch_id", "bank_account_id", "occurred_at",
+                "posted_at", "direction", "source_hash",
+            }
+            timestamp_columns = {"imported_at", "created_at", "updated_at"}
+            names = [
+                "id", "business_id", "branch_id", "bank_account_id", "occurred_at", "occurred_date", "posted_at",
+                "direction", "amount", "source_hash", "imported_at", "created_at", "updated_at",
+            ]
+            return [
+                {
+                    "column_name": name,
+                    "data_type": "text",
+                    "udt_name": (
+                        "text" if name in text_columns else
+                        "date" if name == "occurred_date" else
+                        "timestamptz" if name in timestamp_columns else "int8"
+                    ),
+                    "is_nullable": "NO",
+                    "column_default": None,
+                    "identity_generation": None,
+                    "is_generated": "NEVER",
+                }
+                for name in names
+            ]
+
+        def transaction(self):
+            return Transaction()
+
+        async def fetchval(self, query, *values):
+            captured.append((query, values))
+            return values[9]
+
+        async def close(self):
+            return None
+
+    async def connect(*_args, **_kwargs):
+        return Connection()
+
+    monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=connect))
+    monkeypatch.setattr(service, "_db_url", lambda: "postgresql://test")
+    record = {
+        "id": "tx-1", "business_id": "biz-mia", "branch_id": "branch-gangbuk-mia",
+        "bank_account_id": "account-1", "occurred_at": "2026-09-09 13:20:00",
+        "posted_at": "2026-09-10", "direction": "in", "amount": 42000,
+        "source_hash": "hash-1", "imported_at": "2026-09-09T13:21:00+00:00",
+    }
+
+    assert asyncio.run(service._db_insert_bank_transactions([record])) == {"hash-1"}
+    values = captured[0][1]
+    assert all(isinstance(values[index], str) for index in (0, 1, 2, 3, 4, 6, 7, 9))
+    assert isinstance(values[5], date) and not isinstance(values[5], datetime)
+    assert all(isinstance(values[index], datetime) for index in (10, 11, 12))
+
+
+def test_bank_transaction_ignores_supplied_source_hash(tmp_path, monkeypatch):
+    first_account = _make_bank_account(monkeypatch, tmp_path, connection_type="csv")
+    second_account = _make_bank_account(
+        monkeypatch, tmp_path, account_number="110-000-000002", account_alias="보조", connection_type="csv"
+    )
+    row = {"occurred_at": "2026-09-09", "direction": "in", "amount": 1000, "source_hash": "attacker-value"}
+
+    first = service.record_bank_transactions(
+        {**_bank_upload_payload(first_account, "unused.csv", "text/csv"), "transactions": [row]}, ADMIN_USER
+    )
+    second = service.record_bank_transactions(
+        {**_bank_upload_payload(second_account, "unused.csv", "text/csv"), "transactions": [row]}, ADMIN_USER
+    )
+
+    assert first["transactions"][0]["source_hash"] != "attacker-value"
+    assert first["transactions"][0]["source_hash"] != second["transactions"][0]["source_hash"]
 
 
 def test_bank_upload_backfills_db_when_legacy_file_already_has_row(tmp_path, monkeypatch):

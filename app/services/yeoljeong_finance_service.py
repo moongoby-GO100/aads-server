@@ -5171,7 +5171,8 @@ async def _db_insert_bank_transactions(records: list[dict[str, Any]]) -> set[str
     try:
         column_rows = await conn.fetch(
             """
-            SELECT column_name, data_type, udt_name
+            SELECT column_name, data_type, udt_name, is_nullable, column_default,
+                   identity_generation, is_generated
               FROM information_schema.columns
              WHERE table_schema = 'public' AND table_name = $1
             """,
@@ -5181,18 +5182,43 @@ async def _db_insert_bank_transactions(records: list[dict[str, Any]]) -> set[str
         required_columns = {"id", "business_id", "bank_account_id", "occurred_at", "direction", "amount", "source_hash"}
         if not required_columns.issubset(column_types):
             return None
+        unsupported_required = {
+            str(row["column_name"])
+            for row in column_rows
+            if str(row.get("is_nullable") or "").upper() == "NO"
+            and row.get("column_default") is None
+            and not row.get("identity_generation")
+            and str(row.get("is_generated") or "NEVER").upper() == "NEVER"
+            and str(row["column_name"]) not in allowed_values
+        }
+        if unsupported_required:
+            return None
         columns = [name for name in allowed_values if name in column_types]
+        non_nullable = {
+            str(row["column_name"])
+            for row in column_rows
+            if str(row.get("is_nullable") or "").upper() == "NO"
+            and row.get("column_default") is None
+            and not row.get("identity_generation")
+            and str(row.get("is_generated") or "NEVER").upper() == "NEVER"
+        }
         placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
         query = (
             f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "
             "ON CONFLICT DO NOTHING RETURNING source_hash"
         )
+        prepared_values: list[list[Any]] = []
+        for record in records:
+            values = [
+                _coerce_bank_db_value(allowed_values[column](record), column_types[column])
+                for column in columns
+            ]
+            if any(value is None for column, value in zip(columns, values) if column in non_nullable):
+                return None
+            prepared_values.append(values)
         inserted_hashes: set[str] = set()
         async with conn.transaction():
-            for record in records:
-                values: list[Any] = []
-                for column in columns:
-                    values.append(_coerce_bank_db_value(allowed_values[column](record), column_types[column]))
+            for values in prepared_values:
                 inserted = await conn.fetchval(query, *values)
                 if inserted:
                     inserted_hashes.add(str(inserted))
@@ -5237,8 +5263,9 @@ def _normalize_bank_transaction(
         "source": str(entry.get("source") or source or "manual").strip(),
         "imported_at": now,
     }
-    provided_hash = str(entry.get("source_hash") or "").strip()
-    record["source_hash"] = provided_hash or _bank_transaction_source_hash(record)
+    # Incoming hashes are untrusted and older hashes were not account-scoped.
+    # Always derive the canonical key after the server has fixed the scope.
+    record["source_hash"] = _bank_transaction_source_hash(record)
     return record
 
 
@@ -5530,15 +5557,10 @@ def import_bank_transaction_csv(payload: dict[str, Any], user: dict[str, Any]) -
     filename = Path(str(payload.get("filename") or "bank-transactions.csv")).name
     source = str(payload.get("source") or "csv").strip() or "csv"
     decoded = _decode_csv(csv_text.encode("utf-8-sig"))
-    reader = csv.DictReader(decoded.splitlines(), delimiter=_csv_delimiter(decoded))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="은행 거래 CSV 헤더가 필요합니다")
-    transactions: list[dict[str, Any]] = []
-    for source_row in reader:
-        raw = {str(key or "").strip(): str(value or "").strip() for key, value in source_row.items()}
-        if not any(raw.values()):
-            continue
-        transactions.append(_bank_transaction_from_csv_row(raw, source=source))
+    transactions = _bank_rows_from_table(
+        csv.reader(decoded.splitlines(), delimiter=_csv_delimiter(decoded)),
+        source=source,
+    )
     result = record_bank_transactions(
         {
             "business_id": payload.get("business_id") or MIA_BUSINESS_ID,
