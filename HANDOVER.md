@@ -12924,3 +12924,22 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 승계 판정은 `instruction_hash` 에 의존한다. 지시서를 고쳐서 재시도한 작업은 해시가 달라
   자동 승계되지 않고 계속 blocked 로 남는다(의도된 보수적 동작).
 - 이 커밋은 배포되지 않았다. 배포·5분 P0/P1 모니터링·브라우저 E2E 는 별도 승인 필요.
+
+## 2026-09-09 09:45 KST — Goal Control P0 직접 검수 보정
+
+- 보존성 검수에서 지적된 기존 호출 계약을 유지하도록 공개/공용 함수는 원래
+  시그니처를 그대로 둔 래퍼로 복구하고, phase·provenance 확장은 새 내부 헬퍼로
+  분리했다. 대상은 `GoalStateMachine.link_task`, `update_task_status`,
+  `_normalize_task_status`, `_update_linked_goal_state`, `_auto_link_job_to_goal`,
+  `cascade_cleanup_orphans`이다.
+- 최신 `origin/main`(`cfc02d62`)에서 격리 worktree로 재적용했으며, OHVIS trace
+  ingest 변경과 Goal Control 변경을 함께 비교해 삭제로 오인하던 기준점 문제를
+  제거했다. 보존성 precheck 결과는 `None`(하드게이트 통과)이다.
+- 집중 회귀는 135건 중 134건 통과했다. 실패 1건
+  (`test_pipeline_runner_allows_codex_56_cli_models_without_fallback`)은 동일
+  `origin/main`에서도 재현되는 기존 스크립트 문자열 순서 기대값 불일치이며 이번
+  변경 범위 밖이다. Goal/정책/리뷰 핵심 묶음은 86/86 통과했다.
+- migration 166은 운영 DB에 `BEGIN ... ROLLBACK`으로 사전 검증했다. 기존 링크
+  238행을 삭제하지 않고 계보 라벨만 채우는 경로까지 성공 후 전부 롤백했다.
+- 이 항목 작성 시점에는 운영 DB 영구 반영·커밋 push·blue/green 배포·5분
+  P0/P1 모니터링이 아직 진행 전이다. 완료 후 실제 run/SHA/digest를 별도 기록한다.
