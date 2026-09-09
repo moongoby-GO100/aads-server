@@ -1257,6 +1257,22 @@ cleanup_deploy() {
 }
 trap cleanup_deploy EXIT
 
+# A queued deploy may wait while another release changes the routed API slot.
+# Re-read and re-authorize the slot only after this process owns the deploy
+# lock, otherwise the stale pre-lock snapshot can make the live slot look like
+# the standby target and eventually recreate it under active traffic.
+refresh_active_slot_after_deploy_lock() {
+    ACTIVE_PORT="$(get_active_port)"
+    ACTIVE_CONTAINER="$(get_active_container)"
+    HEALTH_URL="http://localhost:${ACTIVE_PORT}/api/v1/health"
+    verify_active_slot "$ACTIVE_PORT"
+    write_active_slot_state \
+        "$ACTIVE_PORT" "$ACTIVE_CONTAINER" \
+        "deploy.sh" "post-lock marker revalidation"
+}
+
+refresh_active_slot_after_deploy_lock
+
 # nginx upstream is shared by backend and dashboard blue-green deploys. Only
 # the routing cutover is serialized; image build and health checks run without
 # this lock so a long build cannot block another safe release.

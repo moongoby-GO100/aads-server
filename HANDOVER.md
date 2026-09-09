@@ -1,5 +1,26 @@
 # AADS HANDOVER
 
+## 2026-09-09 14:53 KST — Queued blue/green active-slot TOCTOU guard
+
+- Incident: queued deploy run `262` captured active port `8100` before acquiring
+  the deploy flock. While it waited, another release routed traffic to `8102`
+  and updated the canonical markers. Run `262` then treated live `8102` as its
+  standby target and waited on 9 healthy streams in `target_slot_drain`.
+- Safety action: the stale deploy exited on `TERM` before any candidate rebuild;
+  nginx remained routed to healthy `8102`, and both API containers remained up.
+- `deploy.sh`: after acquiring the deploy flock and installing cleanup handling,
+  re-read `.active_port`, derive the container and health URL, verify the pair
+  against nginx, and re-authorize the marker before creating a deploy generation
+  or selecting a blue/green target. This closes the lock-wait TOCTOU window.
+- `tests/unit/test_active_slot_state_guard.py`: added an ordering and contract
+  regression proving post-lock refresh occurs before generation/target selection.
+- Validation: `bash -n deploy.sh` passed; the active-slot test file passed 7 tests;
+  the deploy/lease focused suite passed 58 tests; `git diff --check` passed.
+- Release requirement: commit and push the isolated clean worktree, wait for the
+  already-running release `263` to finish, then deploy this SHA with
+  `deploy.sh bluegreen`. Certification still requires same-digest standby and a
+  clean five-minute P0/P1 monitoring window.
+
 ## 2026-09-09 13:00 KST — Goal Control stale-block recovery
 
 - Root cause: Goal link reconciliation correctly quarantined legacy/missing jobs as

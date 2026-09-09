@@ -140,3 +140,17 @@ def test_all_api_slot_mutators_use_the_audited_writer():
     assert "AADS_SLOT_STATE_LOCK_HELD=true" in watchdog
     assert 'STATE_WRITER="${COMPOSE_DIR}/scripts/aads_active_slot_state.sh"' in manual
     assert "routed health failed — rollback" in manual
+
+
+def test_deploy_revalidates_active_slot_after_acquiring_deploy_lock():
+    deploy = DEPLOY.read_text()
+    lock_owned = deploy.index("trap cleanup_deploy EXIT")
+    refresh_call = deploy.index("refresh_active_slot_after_deploy_lock\n", lock_owned)
+    generation = deploy.index("DEPLOY_GENERATION=", refresh_call)
+
+    assert lock_owned < refresh_call < generation
+    function = deploy.split("refresh_active_slot_after_deploy_lock() {", 1)[1].split("\n}", 1)[0]
+    assert 'ACTIVE_PORT="$(get_active_port)"' in function
+    assert 'ACTIVE_CONTAINER="$(get_active_container)"' in function
+    assert 'verify_active_slot "$ACTIVE_PORT"' in function
+    assert '"post-lock marker revalidation"' in function
